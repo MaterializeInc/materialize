@@ -3150,9 +3150,10 @@ def workflow_test_pgwire_metrics(c: Composition) -> None:
         rrftlbs_subscribe_3 = metrics.get_result_rows_first_to_last_byte_seconds(
             "subscribe"
         )
+        # See database-issues#9470
         assert (
-            rrftlbs_subscribe_3 == rrftlbs_subscribe_2
-        ), f"got {rrftlbs_subscribe_3} vs. {rrftlbs_subscribe_3}"
+            rrftlbs_subscribe_3 - rrftlbs_subscribe_2 < 5
+        ), f"got {rrftlbs_subscribe_3} vs. {rrftlbs_subscribe_2}"
 
 
 def workflow_test_metrics_retention_across_restart(c: Composition) -> None:

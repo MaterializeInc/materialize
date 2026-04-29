@@ -379,17 +379,23 @@ def run_cargo_nextest(
                 container_id = subprocess.check_output(
                     ["docker", "create", image], text=True
                 ).strip()
-                target_dir = os.getenv("CARGO_TARGET_DIR", "target") + "/ci"
-                os.makedirs(target_dir, exist_ok=True)
-                subprocess.run(
-                    [
-                        "docker",
-                        "cp",
-                        f"{container_id}:/usr/local/bin/clusterd",
-                        target_dir,
-                    ],
-                    check=True,
-                )
+                try:
+                    target_dir = os.getenv("CARGO_TARGET_DIR", "target") + "/ci"
+                    os.makedirs(target_dir, exist_ok=True)
+                    subprocess.run(
+                        [
+                            "docker",
+                            "cp",
+                            f"{container_id}:/usr/local/bin/clusterd",
+                            target_dir,
+                        ],
+                        check=True,
+                    )
+                finally:
+                    subprocess.run(
+                        ["docker", "rm", container_id],
+                        check=False,
+                    )
             except subprocess.CalledProcessError as e:
                 print(f"Failed to get clusterd image: {e}")
                 target_dir = os.getenv("CARGO_TARGET_DIR", "target")
