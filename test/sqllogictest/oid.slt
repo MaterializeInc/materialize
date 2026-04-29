@@ -91,6 +91,7 @@ SELECT oid, name FROM mz_roles WHERE id LIKE 's%' OR id LIKE 'g%' ORDER BY oid
 16663  mz_monitor
 16664  mz_monitor_redacted
 16984  mz_analytics
+17076  mz_jwt_sync
 
 # Only look at OIDs less than 20000 so that we don't consider system objects allocated at run time.
 query TT
