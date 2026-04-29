@@ -259,9 +259,11 @@ where
         if rollups_to_remove_from_state.is_empty() {
             // If there are no rollups to remove from state (either the work has already
             // been done, or the there aren't enough rollups <= seqno_since to have any
-            // to delete), we can safely exit.
+            // to delete), we can safely exit. We still call remove_rollups to clear
+            // active_gc if it was set, so the next GC isn't suppressed.
+            let (_removed, maintenance) = machine.remove_rollups(&[]).await;
             machine.applier.metrics.gc.noop.inc();
-            return (RoutineMaintenance::default(), gc_results);
+            return (maintenance, gc_results);
         }
 
         debug!(

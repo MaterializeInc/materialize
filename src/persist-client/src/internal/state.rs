@@ -1423,13 +1423,21 @@ where
         &mut self,
         remove_rollups: &[(SeqNo, PartialRollupKey)],
     ) -> ControlFlow<NoOpStateTransition<Vec<SeqNo>>, Vec<SeqNo>> {
-        if remove_rollups.is_empty() || self.is_tombstone() {
+        if self.is_tombstone() {
             return Break(NoOpStateTransition(vec![]));
         }
 
-        //This state transition is called at the end of the GC process, so we
-        //need to unset the `active_gc` field.
-        self.active_gc = None;
+        // This state transition is called at the end of the GC process, so we
+        // need to unset the `active_gc` field.
+        let active_gc_was_set = self.active_gc.take().is_some();
+
+        if remove_rollups.is_empty() {
+            return if active_gc_was_set {
+                Continue(vec![])
+            } else {
+                Break(NoOpStateTransition(vec![]))
+            };
+        }
 
         let mut removed = vec![];
         for (seqno, key) in remove_rollups {
