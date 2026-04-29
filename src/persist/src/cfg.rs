@@ -33,10 +33,7 @@ use crate::s3::{S3Blob, S3BlobConfig};
 
 /// Adds the full set of all mz_persist `Config`s.
 pub fn all_dyn_configs(configs: ConfigSet) -> ConfigSet {
-    configs
-        .add(&crate::indexed::columnar::arrow::ENABLE_ARROW_LGALLOC_CC_SIZES)
-        .add(&crate::indexed::columnar::arrow::ENABLE_ARROW_LGALLOC_NONCC_SIZES)
-        .add(&crate::postgres::USE_POSTGRES_TUNED_QUERIES)
+    configs.add(&crate::postgres::USE_POSTGRES_TUNED_QUERIES)
 }
 
 /// Config for an implementation of [Blob].
@@ -90,7 +87,6 @@ impl BlobConfig {
         url: &SensitiveUrl,
         knobs: Box<dyn BlobKnobs>,
         metrics: S3BlobMetrics,
-        cfg: Arc<ConfigSet>,
     ) -> Result<Self, ExternalError> {
         let mut query_params = url.query_pairs().collect::<BTreeMap<_, _>>();
 
@@ -182,7 +178,6 @@ impl BlobConfig {
                             metrics,
                             url.clone().into_redacted(),
                             knobs,
-                            cfg,
                         )?))
                     } else {
                         Err(anyhow!("unknown persist blob scheme: {}", url.as_str()))
