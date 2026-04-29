@@ -74,7 +74,7 @@ pub fn pack_mysql_row(
             Some(idx) => idx,
             None => {
                 return Err(decode_error(
-                    "upstream row is missing column",
+                    "extra column description",
                     col_desc,
                     table_desc,
                     gtid_set,
