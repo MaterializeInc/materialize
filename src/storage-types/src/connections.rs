@@ -2437,8 +2437,15 @@ impl SqlServerConnectionDetails<InlinedConnection> {
 
         let tunnel = match &self.tunnel {
             Tunnel::Direct => {
-                resolve_address(&self.host, enforce_external_addresses).await?;
-                mz_sql_server_util::config::TunnelConfig::Direct
+                let resolved_addresses: Vec<SocketAddr> =
+                    resolve_address(&self.host, enforce_external_addresses)
+                        .await?
+                        .into_iter()
+                        .map(|ip| SocketAddr::new(ip, self.port))
+                        .collect();
+                mz_sql_server_util::config::TunnelConfig::Direct {
+                    resolved_addresses: resolved_addresses.into_boxed_slice(),
+                }
             }
             Tunnel::Ssh(SshTunnel {
                 connection_id,

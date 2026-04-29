@@ -63,10 +63,13 @@ impl Client {
         // Setup our tunnelling and return any resources that need to be kept
         // alive for the duration of the connection.
         let (tcp, resources): (_, Option<Box<dyn Any + Send + Sync>>) = match &config.tunnel {
-            TunnelConfig::Direct => {
-                let tcp = TcpStream::connect(config.inner.get_addr())
-                    .await
-                    .context("direct")?;
+            TunnelConfig::Direct { resolved_addresses } => {
+                let tcp = if resolved_addresses.is_empty() {
+                    TcpStream::connect(config.inner.get_addr()).await
+                } else {
+                    TcpStream::connect(resolved_addresses.as_ref()).await
+                }
+                .context("direct")?;
                 (tcp, None)
             }
             TunnelConfig::Ssh {
