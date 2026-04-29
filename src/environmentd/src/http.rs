@@ -282,9 +282,10 @@ impl HttpServer {
                     allowed_roles,
                 });
             if let listeners::AuthenticatorKind::None = authenticator_kind {
-                ws_router = ws_router.layer(middleware::from_fn(move |req, next| async move {
-                    x_materialize_user_header_auth(req, next, allowed_roles).await
-                }));
+                ws_router = ws_router.layer(middleware::from_fn_with_state(
+                    allowed_roles,
+                    x_materialize_user_header_auth,
+                ));
             }
             router = router.merge(ws_router);
         }
@@ -554,9 +555,10 @@ impl HttpServer {
                 router = router.merge(login_router).layer(session_layer);
             }
             listeners::AuthenticatorKind::None => {
-                base_router = base_router.layer(middleware::from_fn(move |req, next| async move {
-                    x_materialize_user_header_auth(req, next, allowed_roles).await
-                }));
+                base_router = base_router.layer(middleware::from_fn_with_state(
+                    allowed_roles,
+                    x_materialize_user_header_auth,
+                ));
             }
             _ => {}
         }
@@ -663,9 +665,9 @@ pub async fn handle_leader_skip_catchup(
 }
 
 async fn x_materialize_user_header_auth(
+    State(allowed_roles): State<AllowedRoles>,
     mut req: Request,
     next: Next,
-    allowed_roles: AllowedRoles,
 ) -> impl IntoResponse {
     // TODO migrate teleport to basic auth and remove this.
     if let Some(username) = req.headers().get("x-materialize-user").map(|h| h.to_str()) {
