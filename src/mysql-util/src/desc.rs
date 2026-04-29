@@ -108,30 +108,21 @@ impl MySqlTableDesc {
                     // corresponding column in `other.columns` if the column was dropped upstream.
                     continue;
                 }
-                other
-                    .columns
-                    .iter()
-                    .find(|c| c.name == self_column.name)
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "column {} no longer present in table {}",
-                            self_column.name,
-                            self.name
-                        )
-                    })?
+                other.columns.iter().find(|c| c.name == self_column.name)
             } else {
-                other_columns.next().ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "column {} no longer present in table {}",
-                        self_column.name,
-                        self.name
-                    )
-                })?
+                other_columns.next()
             };
             if self_column.column_type.is_none() {
                 // This is an excluded column and can be ignored.
                 continue;
             }
+            let other_column = other_column.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "column {} no longer present in table {}",
+                    self_column.name,
+                    self.name
+                )
+            })?;
             if !self_column.is_compatible(other_column) {
                 bail!(
                     "column {} in table {} has been altered",
