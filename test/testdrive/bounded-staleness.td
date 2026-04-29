@@ -18,3 +18,22 @@
 > RESET transaction_isolation
 
 > DROP TABLE bs_t
+
+# --- error path: bounded staleness exceeded -----------------------------------
+#
+# Under a tiny bound, freshly-created collections may not have advanced their
+# upper frontier within the staleness window, exercising the
+# BoundedStalenessExceeded error path. The test depends on the timing of
+# frontier advancement; if it becomes flaky in CI, replace with a deterministic
+# stall primitive when one is available.
+
+> CREATE TABLE bs_slow (a int);
+
+> SET transaction_isolation = 'bounded staleness 1ms'
+
+! SELECT count(*) FROM bs_slow
+contains: cannot serve query under bounded staleness
+
+> RESET transaction_isolation
+
+> DROP TABLE bs_slow
