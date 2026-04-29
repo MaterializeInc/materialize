@@ -1595,6 +1595,7 @@ class FlipFlagsAction(Action):
         self.flags_with_values["enable_cast_elimination"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_upsert_v2"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_coalesce_case_transform"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_compute_sync_mv_sink"] = BOOLEAN_FLAG_VALUES
 
         # If you are adding a new config flag in Materialize, consider using it
         # here instead of just marking it as uninteresting to silence the
