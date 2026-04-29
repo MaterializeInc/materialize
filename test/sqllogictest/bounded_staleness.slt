@@ -1,0 +1,103 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Bounded staleness isolation — SQL-surface coverage.
+
+mode cockroach
+
+reset-server
+
+# --- parse and SHOW round-trip -----------------------------------------------
+
+statement ok
+SET transaction_isolation TO 'bounded staleness 5s'
+
+query T
+SHOW transaction_isolation
+----
+bounded staleness 5s
+
+statement ok
+SET transaction_isolation TO 'bounded staleness 250ms'
+
+query T
+SHOW transaction_isolation
+----
+bounded staleness 250ms
+
+statement ok
+RESET transaction_isolation
+
+# --- rejected values ----------------------------------------------------------
+
+statement error invalid value for parameter "transaction_isolation"
+SET transaction_isolation TO 'bounded staleness 0s'
+
+statement error invalid value for parameter "transaction_isolation"
+SET transaction_isolation TO 'bounded staleness 0ms'
+
+statement error invalid value for parameter "transaction_isolation"
+SET transaction_isolation TO 'bounded staleness banana'
+
+statement error invalid value for parameter "transaction_isolation"
+SET transaction_isolation TO 'bounded staleness'
+
+# 1-hour cap is strict (>); 1h passes, 2h fails.
+
+statement ok
+SET transaction_isolation TO 'bounded staleness 1h'
+
+statement ok
+RESET transaction_isolation
+
+statement error invalid value for parameter "transaction_isolation"
+SET transaction_isolation TO 'bounded staleness 2h'
+
+# --- mutual exclusion with real_time_recency ----------------------------------
+
+statement ok
+SET transaction_isolation TO 'bounded staleness 1s'
+
+statement error real_time_recency cannot be combined with bounded staleness isolation
+SET real_time_recency TO on
+
+statement ok
+RESET transaction_isolation
+
+statement ok
+SET real_time_recency TO on
+
+statement error real_time_recency cannot be combined with bounded staleness isolation
+SET transaction_isolation TO 'bounded staleness 1s'
+
+statement ok
+RESET real_time_recency
+
+# --- writes are rejected ------------------------------------------------------
+
+statement ok
+CREATE TABLE bs_writes (a int)
+
+statement ok
+SET transaction_isolation TO 'bounded staleness 1s'
+
+statement error writes are not permitted under bounded staleness isolation
+INSERT INTO bs_writes VALUES (1)
+
+statement error writes are not permitted under bounded staleness isolation
+DELETE FROM bs_writes
+
+statement error writes are not permitted under bounded staleness isolation
+UPDATE bs_writes SET a = a + 1
+
+statement ok
+RESET transaction_isolation
+
+statement ok
+DROP TABLE bs_writes
