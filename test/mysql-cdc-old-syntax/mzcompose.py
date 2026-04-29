@@ -41,7 +41,9 @@ from materialize.source_table_migration import (
 
 
 def create_mysql(mysql_version: str) -> MySql:
-    return MySql(version=mysql_version)
+    return MySql(
+        version=mysql_version, additional_args=["--binlog_row_metadata=MINIMAL"]
+    )
 
 
 def create_mysql_replica(mysql_version: str) -> MySql:
@@ -53,6 +55,7 @@ def create_mysql_replica(mysql_version: str) -> MySql:
             "--enforce_gtid_consistency=ON",
             "--skip-replica-start",
             "--server-id=2",
+            "--binlog_row_metadata=MINIMAL",
         ],
     )
 

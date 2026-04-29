@@ -7,9 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::fmt::Write;
 use std::str::FromStr;
 
-use itertools::{EitherOrBoth, Itertools};
 use mysql_common::value::convert::from_value_opt;
 use mysql_common::{Row as MySqlRow, Value};
 
@@ -28,44 +28,175 @@ pub fn pack_mysql_row(
     row_container: &mut Row,
     row: MySqlRow,
     table_desc: &MySqlTableDesc,
+    gtid_set: Option<&str>,
+    binlog_full_metadata: bool,
 ) -> Result<Row, MySqlError> {
     let mut packer = row_container.packer();
-    let row_values = row.unwrap();
 
-    for values in table_desc.columns.iter().zip_longest(row_values) {
-        let (col_desc, value) = match values {
-            EitherOrBoth::Both(col_desc, value) => (col_desc, value),
-            EitherOrBoth::Left(col_desc) => {
-                tracing::error!(
-                    "mysql: extra column description {col_desc:?} for table {}",
-                    table_desc.name
-                );
-                Err(MySqlError::ValueDecodeError {
-                    column_name: col_desc.name.clone(),
-                    qualified_table_name: format!("{}.{}", table_desc.schema_name, table_desc.name),
-                    error: "extra column description".to_string(),
-                })?
-            }
-            EitherOrBoth::Right(_) => {
-                // If there are extra columns on the upstream table we can safely ignore them
-                break;
-            }
+    // If a column name begins with '@', then the binlog does not have full row metadata,
+    // meaning that full column names are not available and we need to rely on the order
+    // of the columns in the upstream table matching the order of the columns in the row.
+    // This is a fallback for MySQL servers that do not have `binlog_row_metadata` set to
+    // `FULL`. If the first column name does not begin with '@', then we can assume that
+    // full metadata is available and we can match columns by name.
+    let fallback_names = row
+        .columns_ref()
+        .first()
+        .is_some_and(|col| col.name_ref().starts_with(b"@"));
+
+    if binlog_full_metadata && fallback_names {
+        // This should never happen, but if it does, it's a sign that something is very wrong with the MySQL server's binlog configuration. We want to error rather than silently producing incorrect results.
+        return Err(MySqlError::ValueDecodeError {
+            column_name: "<unknown>".to_string(),
+            qualified_table_name: format!("{}.{}", table_desc.schema_name, table_desc.name),
+            error: "Table was created with binlog_row_metadata=FULL but binlog_row_metadata has since been set to a different value, meaning we cannot reliably decode the columns".to_string(),
+        });
+    }
+
+    // For each column in `table_desc` (in descriptor order), resolve its wire
+    // index. Non-fallback rows are matched by name so a reordered upstream
+    // still decodes correctly; fallback rows have no names and are matched
+    // positionally. A `None` here means the upstream row is missing this
+    // column and is only tolerated for ignored columns.
+    for (i, col_desc) in table_desc.columns.iter().enumerate() {
+        let wire_idx = if !binlog_full_metadata {
+            (i < row.len()).then_some(i)
+        } else {
+            row.columns_ref()
+                .iter()
+                .position(|wc| wc.name_str() == col_desc.name.as_str())
         };
         if col_desc.column_type.is_none() {
             // This column is ignored, so don't decode it.
             continue;
         }
-        match pack_val_as_datum(value, col_desc, &mut packer) {
-            Err(err) => Err(MySqlError::ValueDecodeError {
-                column_name: col_desc.name.clone(),
-                qualified_table_name: format!("{}.{}", table_desc.schema_name, table_desc.name),
-                error: err.to_string(),
-            })?,
-            Ok(()) => (),
+        let wire_idx = match wire_idx {
+            Some(idx) => idx,
+            None => {
+                return Err(decode_error(
+                    "extra column description",
+                    col_desc,
+                    table_desc,
+                    gtid_set,
+                    &row,
+                ));
+            }
         };
+        let value = row
+            .as_ref(wire_idx)
+            .expect("wire_idx resolved from row")
+            .clone();
+        if let Err(err) = pack_val_as_datum(value, col_desc, &mut packer) {
+            return Err(decode_error(
+                &err.to_string(),
+                col_desc,
+                table_desc,
+                gtid_set,
+                &row,
+            ));
+        }
     }
 
     Ok(row_container.clone())
+}
+
+/// Build a `ValueDecodeError`, logging the schema, table, column, source
+/// gtid_set (if any), and a shape description of `row` at the same time.
+/// The shape string is only built here — pack_mysql_row's happy path does no
+/// per-row allocation beyond what decoding requires.
+fn decode_error(
+    err_msg: &str,
+    col_desc: &MySqlColumnDesc,
+    table_desc: &MySqlTableDesc,
+    gtid_set: Option<&str>,
+    row: &MySqlRow,
+) -> MySqlError {
+    let row_shape = describe_row_shape(row, table_desc);
+    tracing::warn!(
+        "mysql decode error for `{}`.`{}` column `{}`: {}; gtid_set={:?}; row_shape={}",
+        table_desc.schema_name,
+        table_desc.name,
+        col_desc.name,
+        err_msg,
+        gtid_set,
+        row_shape,
+    );
+    MySqlError::ValueDecodeError {
+        column_name: col_desc.name.clone(),
+        qualified_table_name: format!("{}.{}", table_desc.schema_name, table_desc.name),
+        error: err_msg.to_string(),
+    }
+}
+
+/// Describes the structural shape of a row without revealing any data values.
+/// Iterates every wire column. For each, emits the wire name, the binlog
+/// wire type, the character-set id (or `binary`), a classification relative
+/// to `table_desc` (`expected=<scalar>` for active columns, `ignored` for
+/// columns excluded from the source, `extra` for upstream columns with no
+/// descriptor entry), and a value disposition (`null` or `bytes(len=N)` /
+/// primitive kind). Intended for diagnostic logging on decode errors: MySQL
+/// serializes CHAR, VARCHAR, TEXT, JSON, BLOB, etc. all as `Value::Bytes`,
+/// so the wire type tag and the expected scalar type are what distinguish
+/// them.
+fn describe_row_shape(row: &MySqlRow, table_desc: &MySqlTableDesc) -> String {
+    // Binlogs without full row metadata use positional "@N" names, so we
+    // have to match by wire position rather than by name.
+    let fallback_names = row
+        .columns_ref()
+        .first()
+        .is_some_and(|col| col.name_ref().starts_with(b"@"));
+
+    let mut out = String::new();
+    out.push('[');
+    for (i, wire_col) in row.columns_ref().iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        let wire_name = wire_col.name_str();
+        let cs = wire_col.character_set();
+        // 63 = binary collation (binary/blob columns).
+        let cs_str = if cs == 63 {
+            "binary".to_string()
+        } else {
+            format!("charset={cs}")
+        };
+        let wire_type = format!("{:?}", wire_col.column_type());
+
+        let matched_col = if fallback_names {
+            table_desc.columns.get(i)
+        } else {
+            table_desc
+                .columns
+                .iter()
+                .find(|c| c.name.as_str() == wire_name)
+        };
+        let match_info = match matched_col {
+            Some(col) => match &col.column_type {
+                Some(ct) => format!("expected={:?}", ct.scalar_type),
+                None => "ignored".to_string(),
+            },
+            None => "extra".to_string(),
+        };
+
+        let val_desc = match row.as_ref(i) {
+            None => "absent".to_string(),
+            Some(Value::NULL) => "null".to_string(),
+            Some(Value::Bytes(b)) => format!("bytes(len={})", b.len()),
+            Some(Value::Int(_)) => "int".to_string(),
+            Some(Value::UInt(_)) => "uint".to_string(),
+            Some(Value::Float(_)) => "float".to_string(),
+            Some(Value::Double(_)) => "double".to_string(),
+            Some(Value::Date(..)) => "date".to_string(),
+            Some(Value::Time(..)) => "time".to_string(),
+        };
+
+        let _ = write!(
+            out,
+            "{{name={wire_name}, wire={wire_type}, {cs_str}, {match_info}, val={val_desc}}}"
+        );
+    }
+    out.push(']');
+    out
 }
 
 // TODO(guswynn|roshan): This function has various `.to_string()` and `format!` calls that should

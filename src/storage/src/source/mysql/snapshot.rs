@@ -417,8 +417,13 @@ pub(crate) fn render<'scope>(
                         let row: MySqlRow = row;
                         snapshot_staged += 1;
                         for (output, row_val) in outputs.iter().repeat_clone(row) {
-                            let event = match pack_mysql_row(&mut final_row, row_val, &output.desc)
-                            {
+                            let event = match pack_mysql_row(
+                                &mut final_row,
+                                row_val,
+                                &output.desc,
+                                None,
+                                output.binlog_full_metadata,
+                            ) {
                                 Ok(row) => Ok(SourceMessage {
                                     key: Row::default(),
                                     value: row,
@@ -603,6 +608,7 @@ mod tests {
             initial_gtid_set: Antichain::default(),
             resume_upper: Antichain::default(),
             export_id: mz_repr::GlobalId::User(1),
+            binlog_full_metadata: false,
         };
         let query = build_snapshot_query(&[info.clone(), info]);
         assert_eq!(

@@ -151,6 +151,7 @@ impl SourceRender for MySqlSourceConnection {
                 initial_gtid_set: gtid_set_frontier(&initial_gtid_set).expect("invalid gtid set"),
                 resume_upper,
                 export_id: id.clone(),
+                binlog_full_metadata: details.binlog_full_metadata,
             });
         }
 
@@ -257,6 +258,7 @@ struct SourceOutputInfo {
     initial_gtid_set: Antichain<GtidPartition>,
     resume_upper: Antichain<GtidPartition>,
     export_id: GlobalId,
+    binlog_full_metadata: bool,
 }
 
 #[derive(Clone, Debug, thiserror::Error)]
