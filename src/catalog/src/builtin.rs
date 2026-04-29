@@ -7111,14 +7111,24 @@ SELECT
         WHEN class_objects.type = 'view' THEN 'v'
         WHEN class_objects.type = 'materialized-view' THEN 'm'
     END relkind,
-    COALESCE(
-        (
-            SELECT count(*)::pg_catalog.int2
-            FROM mz_catalog.mz_columns
-            WHERE mz_columns.id = class_objects.id
-        ),
-        0::pg_catalog.int2
-    ) AS relnatts,
+    CASE
+        WHEN class_objects.type = 'index' THEN COALESCE(
+            (
+                SELECT count(*)::pg_catalog.int2
+                FROM mz_catalog.mz_index_columns
+                WHERE mz_index_columns.index_id = class_objects.id
+            ),
+            0::pg_catalog.int2
+        )
+        ELSE COALESCE(
+            (
+                SELECT count(*)::pg_catalog.int2
+                FROM mz_catalog.mz_columns
+                WHERE mz_columns.id = class_objects.id
+            ),
+            0::pg_catalog.int2
+        )
+    END AS relnatts,
     -- MZ doesn't support CHECK constraints so relchecks is filled with 0
     0::pg_catalog.int2 AS relchecks,
     -- MZ doesn't support creating rules so relhasrules is filled with false
@@ -7334,15 +7344,7 @@ pub static PG_INDEX: LazyLock<BuiltinView> = LazyLock::new(|| {
         sql: "SELECT
     mz_indexes.oid AS indexrelid,
     mz_relations.oid AS indrelid,
-    COALESCE(
-        (
-            SELECT count(*)::pg_catalog.int2
-            FROM mz_catalog.mz_columns
-            JOIN mz_catalog.mz_relations mri ON mz_columns.id = mri.id
-            WHERE mri.oid = mz_catalog.mz_relations.oid
-        ),
-        0::pg_catalog.int2
-    ) AS indnatts,
+    count(mz_index_columns.index_position)::pg_catalog.int2 AS indnatts,
     -- MZ doesn't support creating unique indexes so indisunique is filled with false
     false::pg_catalog.bool AS indisunique,
     false::pg_catalog.bool AS indisprimary,
