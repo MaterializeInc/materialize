@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/pure/mysql.rs
-revision: 844ad57e4b
+revision: 721951ce66
 ---
 
 # mz-sql::pure::mysql

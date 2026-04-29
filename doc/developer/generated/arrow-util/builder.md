@@ -1,6 +1,6 @@
 ---
 source: src/arrow-util/src/builder.rs
-revision: 31d0e95bbb
+revision: 2f22224ae6
 ---
 
 # builder
@@ -13,3 +13,4 @@ Duplicate column names are disambiguated by appending a numeric suffix, and each
 
 Helper functions `desc_to_schema` and `desc_to_schema_with_overrides` convert a `RelationDesc` to an Arrow `Schema`, with the override variant allowing destinations such as Iceberg to substitute custom type mappings (e.g., `UInt64` → `Decimal128`) for unsupported types.
 `ArrowBuilder::validate_desc` checks that all columns in a `RelationDesc` have supported Arrow type mappings without constructing a builder.
+`ArrowBuilder::validate_desc_for_parquet` extends this check to also reject Arrow types that are not supported by arrow-rs's `ArrowWriter` parquet writer; callers pass the same override function used with `desc_to_schema_with_overrides` so remapped types are not rejected. The private `parquet_incompatible_type` helper recurses into composite types and uses a closed allowlist — anything not explicitly permitted is rejected.
