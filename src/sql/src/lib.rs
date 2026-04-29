@@ -109,6 +109,24 @@ macro_rules! bail_never_supported {
     };
 }
 
+/// Returns a `PlanError::Internal` from the current function. Prefer this over
+/// `sql_bail!` whenever the situation reflects a Materialize bug rather than a
+/// user error (e.g., an invariant that is supposed to be enforced by the
+/// parser, name resolution, or purification).
+macro_rules! bail_internal {
+    ($($e:expr),* $(,)?) => {
+        return Err(crate::plan::error::PlanError::Internal(format!($($e),*)).into())
+    }
+}
+
+/// Constructs a `PlanError::Internal`. Prefer this over `sql_err!` whenever the
+/// situation reflects a Materialize bug rather than a user error.
+macro_rules! internal_err {
+    ($($e:expr),* $(,)?) => {
+        crate::plan::error::PlanError::Internal(format!($($e),*))
+    }
+}
+
 // TODO(benesch): delete these macros once we use structured errors everywhere.
 macro_rules! sql_bail {
     ($($e:expr),* $(,)?) => {

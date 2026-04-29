@@ -310,7 +310,13 @@ pub async fn purify_statement(
             purify_create_table_from_source(catalog, stmt, storage_configuration).await,
             None,
         ),
-        o => unreachable!("{:?} does not need to be purified", o),
+        o => (
+            Err(internal_err!(
+                "unexpected statement type in purification: {:?}",
+                o
+            )),
+            None,
+        ),
     }
 }
 
@@ -1161,8 +1167,10 @@ async fn purify_create_source(
                     .all_references()
                     .iter()
                     .any(|r| {
-                        r.load_generator_output().expect("is loadgen")
-                            != &LoadGeneratorOutput::Default
+                        matches!(
+                            r.load_generator_output(),
+                            Some(output) if output != &LoadGeneratorOutput::Default
+                        )
                     });
 
             match external_references {
@@ -1194,12 +1202,20 @@ async fn purify_create_source(
                                     table: export
                                         .meta
                                         .load_generator_desc()
-                                        .expect("is loadgen")
+                                        .ok_or_else(|| {
+                                            internal_err!(
+                                                "expected load generator source reference"
+                                            )
+                                        })?
                                         .clone(),
                                     output: export
                                         .meta
                                         .load_generator_output()
-                                        .expect("is loadgen")
+                                        .ok_or_else(|| {
+                                            internal_err!(
+                                                "expected load generator source reference"
+                                            )
+                                        })?
                                         .clone(),
                                 },
                             },
@@ -1241,10 +1257,16 @@ async fn purify_create_source(
         let name = match progress_subsource {
             Some(name) => match name {
                 DeferredItemName::Deferred(name) => name.clone(),
-                DeferredItemName::Named(_) => unreachable!("already checked for this value"),
+                // Already checked for this value above.
+                DeferredItemName::Named(_) => {
+                    sql_bail!("progress subsource name cannot be a resolved name")
+                }
             },
             None => {
-                let (item, prefix) = source_name.0.split_last().unwrap();
+                let (item, prefix) = source_name
+                    .0
+                    .split_last()
+                    .ok_or_else(|| sql_err!("source name must have at least one component"))?;
                 let item_name =
                     Ident::try_generate_name(item.to_string(), "_progress", |candidate| {
                         let mut suggested_name = prefix.to_vec();
@@ -1605,7 +1627,9 @@ async fn purify_alter_source_add_subsources(
                     Some(WithOptionValue::Sequence(normalized_excl_columns));
             }
         }
-        _ => unreachable!(),
+        // The source kind was already established earlier in this function;
+        // reaching this catch-all is an internal invariant violation.
+        _ => bail_internal!("source does not support ALTER SOURCE...ADD SUBSOURCE"),
     };
 
     Ok(PurifiedStatement::PurifiedAlterSourceAddSubsources {
@@ -1946,12 +1970,12 @@ async fn purify_create_table_from_source(
                     table: export
                         .meta
                         .load_generator_desc()
-                        .expect("is loadgen")
+                        .ok_or_else(|| internal_err!("expected load generator source reference"))?
                         .clone(),
                     output: export
                         .meta
                         .load_generator_output()
-                        .expect("is loadgen")
+                        .ok_or_else(|| internal_err!("expected load generator source reference"))?
                         .clone(),
                 },
             }
@@ -2040,7 +2064,13 @@ async fn purify_create_table_from_source(
                 }
             }
             match columns {
-                TableFromSourceColumns::Defined(_) => unreachable!(),
+                TableFromSourceColumns::Defined(_) => {
+                    // Purification is what populates the `Defined` variant;
+                    // reaching this is an internal invariant violation.
+                    bail_internal!(
+                        "column definitions cannot be explicitly set for this source type"
+                    )
+                }
                 TableFromSourceColumns::NotSpecified => {
                     *columns = TableFromSourceColumns::Defined(gen_columns);
                     *constraints = gen_constraints;
@@ -2094,7 +2124,13 @@ async fn purify_create_table_from_source(
                 }
             }
             match columns {
-                TableFromSourceColumns::Defined(_) => unreachable!(),
+                TableFromSourceColumns::Defined(_) => {
+                    // Purification is what populates the `Defined` variant;
+                    // reaching this is an internal invariant violation.
+                    bail_internal!(
+                        "column definitions cannot be explicitly set for this source type"
+                    )
+                }
                 TableFromSourceColumns::NotSpecified => {
                     *columns = TableFromSourceColumns::Defined(gen_columns);
                     *constraints = gen_constraints;
@@ -2156,7 +2192,13 @@ async fn purify_create_table_from_source(
                 TableFromSourceColumns::Named(_) => {
                     sql_bail!("columns cannot be named for SQL Server sources")
                 }
-                TableFromSourceColumns::Defined(_) => unreachable!(),
+                TableFromSourceColumns::Defined(_) => {
+                    // Purification is what populates the `Defined` variant;
+                    // reaching this is an internal invariant violation.
+                    bail_internal!(
+                        "column definitions cannot be explicitly set for this source type"
+                    )
+                }
             }
 
             with_options.push(TableFromSourceOption {
@@ -2169,7 +2211,7 @@ async fn purify_create_table_from_source(
         PurifiedExportDetails::LoadGenerator { .. } => {
             let (desc, output) = match purified_export.details {
                 PurifiedExportDetails::LoadGenerator { table, output } => (table, output),
-                _ => unreachable!("purified export details must be load generator"),
+                _ => bail_internal!("purified export details must be load generator"),
             };
             // We only determine the table description for multi-output load generator sources here,
             // whereas single-output load generators will have their relation description
@@ -2178,7 +2220,11 @@ async fn purify_create_table_from_source(
             if let Some(desc) = desc {
                 let (gen_columns, gen_constraints) = scx.relation_desc_into_table_defs(&desc)?;
                 match columns {
-                    TableFromSourceColumns::Defined(_) => unreachable!(),
+                    // Purification is what populates the `Defined` variant;
+                    // reaching this is an internal invariant violation.
+                    TableFromSourceColumns::Defined(_) => bail_internal!(
+                        "column definitions cannot be explicitly set for this source type"
+                    ),
                     TableFromSourceColumns::NotSpecified => {
                         *columns = TableFromSourceColumns::Defined(gen_columns);
                         *constraints = gen_constraints;
@@ -2303,7 +2349,10 @@ pub fn generate_subsource_statements(
     if subsources.is_empty() {
         return Ok(vec![]);
     }
-    let (_, purified_export) = subsources.iter().next().unwrap();
+    let (_, purified_export) = subsources
+        .iter()
+        .next()
+        .ok_or_else(|| internal_err!("expected at least one subsource"))?;
 
     let statements = match &purified_export.details {
         PurifiedExportDetails::Postgres { .. } => {
@@ -2328,10 +2377,15 @@ pub fn generate_subsource_statements(
             for (subsource_name, purified_export) in subsources {
                 let (desc, output) = match purified_export.details {
                     PurifiedExportDetails::LoadGenerator { table, output } => (table, output),
-                    _ => unreachable!("purified export details must be load generator"),
+                    _ => {
+                        bail_internal!("purified export details must be load generator")
+                    }
                 };
-                let desc =
-                    desc.expect("subsources cannot be generated for single-output load generators");
+                let desc = desc.ok_or_else(|| {
+                    internal_err!(
+                        "subsources cannot be generated for single-output load generators"
+                    )
+                })?;
 
                 let (columns, table_constraints) = scx.relation_desc_into_table_defs(&desc)?;
                 let details = SourceExportStatementDetails::LoadGenerator { output };
@@ -2370,10 +2424,9 @@ pub fn generate_subsource_statements(
             // TODO: as part of database-issues#8322, Kafka sources will begin
             // producing data––we'll need to understand the schema
             // of the output here.
-            assert!(
-                subsources.is_empty(),
-                "Kafka sources do not produce data-bearing subsources"
-            );
+            if !subsources.is_empty() {
+                bail_internal!("Kafka sources do not produce data-bearing subsources");
+            }
             vec![]
         }
     };

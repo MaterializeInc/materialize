@@ -241,7 +241,9 @@ pub fn plan_insert_query(
             table_name.full_name_str()
         );
     }
-    let desc = table.relation_desc().expect("table has desc");
+    let desc = table
+        .relation_desc()
+        .ok_or_else(|| sql_err!("item does not have a relation description"))?;
     let mut defaults = table
         .writable_table_details()
         .ok_or_else(|| {
@@ -633,7 +635,9 @@ pub fn plan_copy_from_rows(
         transform_ast::transform(&scx, default)?;
     }
 
-    let desc = table.relation_desc().expect("table has desc");
+    let desc = table
+        .relation_desc()
+        .ok_or_else(|| sql_err!("item does not have a relation description"))?;
     let column_types = columns
         .iter()
         .map(|x| desc.get_type(x).clone())
@@ -2010,7 +2014,9 @@ fn plan_set_expr(
                 desc: StatementDesc,
             ) -> Result<(HirRelationExpr, Scope), PlanError> {
                 let rows = vec![plan.row.iter().collect::<Vec<_>>()];
-                let desc = desc.relation_desc.expect("must exist");
+                let desc = desc.relation_desc.ok_or_else(|| {
+                    internal_err!("statement description missing relation descriptor")
+                })?;
                 let scope = Scope::from_source(None, desc.iter_names());
                 let expr = HirRelationExpr::constant(rows, desc.into_typ());
                 Ok((expr, scope))
@@ -3487,7 +3493,7 @@ fn invent_column_name(
     ecx: &ExprContext,
     expr: &Expr<Aug>,
     table_func_names: &BTreeMap<String, Ident>,
-) -> Option<ColumnName> {
+) -> Result<Option<ColumnName>, PlanError> {
     // We follow PostgreSQL exactly here, which has some complicated rules
     // around "high" and "low" quality names. Low quality names override other
     // low quality names but not high quality names.
@@ -3504,15 +3510,15 @@ fn invent_column_name(
         ecx: &ExprContext,
         expr: &Expr<Aug>,
         table_func_names: &BTreeMap<String, Ident>,
-    ) -> Option<(ColumnName, NameQuality)> {
-        match expr {
+    ) -> Result<Option<(ColumnName, NameQuality)>, PlanError> {
+        Ok(match expr {
             Expr::Identifier(names) => {
                 if let [name] = names.as_slice() {
                     if let Some(table_func_name) = table_func_names.get(name.as_str()) {
-                        return Some((
+                        return Ok(Some((
                             normalize::column_name(table_func_name.clone()),
                             NameQuality::High,
-                        ));
+                        )));
                     }
                 }
                 names
@@ -3533,7 +3539,11 @@ fn invent_column_name(
                         full_name,
                         ..
                     } => (&qualifiers.schema_spec, full_name.item.clone()),
-                    _ => unreachable!(),
+                    // Name resolution should have rejected anything other than
+                    // `Item` for a function call.
+                    _ => {
+                        bail_internal!("function name did not resolve to an item: {:?}", func.name)
+                    }
                 };
 
                 if schema == &SchemaSpecifier::from(ecx.qcx.scx.catalog.get_mz_internal_schema_id())
@@ -3553,15 +3563,16 @@ fn invent_column_name(
             Expr::Array { .. } => Some(("array".into(), NameQuality::High)),
             Expr::List { .. } => Some(("list".into(), NameQuality::High)),
             Expr::Map { .. } | Expr::MapSubquery(_) => Some(("map".into(), NameQuality::High)),
-            Expr::Cast { expr, data_type } => match invent(ecx, expr, table_func_names) {
+            Expr::Cast { expr, data_type } => match invent(ecx, expr, table_func_names)? {
                 Some((name, NameQuality::High)) => Some((name, NameQuality::High)),
                 _ => Some((data_type.unqualified_item_name().into(), NameQuality::Low)),
             },
             Expr::Case { else_result, .. } => {
-                match else_result
-                    .as_ref()
-                    .and_then(|else_result| invent(ecx, else_result, table_func_names))
-                {
+                let inner = match else_result.as_ref() {
+                    Some(else_result) => invent(ecx, else_result, table_func_names)?,
+                    None => None,
+                };
+                match inner {
                     Some((name, NameQuality::High)) => Some((name, NameQuality::High)),
                     _ => Some(("case".into(), NameQuality::Low)),
                 }
@@ -3570,13 +3581,19 @@ fn invent_column_name(
                 Some((normalize::column_name(field.clone()), NameQuality::High))
             }
             Expr::Exists { .. } => Some(("exists".into(), NameQuality::High)),
-            Expr::Subscript { expr, .. } => invent(ecx, expr, table_func_names),
+            Expr::Subscript { expr, .. } => invent(ecx, expr, table_func_names)?,
             Expr::Subquery(query) | Expr::ListSubquery(query) | Expr::ArraySubquery(query) => {
                 // A bit silly to have to plan the query here just to get its column
                 // name, since we throw away the planned expression, but fixing this
                 // requires a separate semantic analysis phase.
-                let (_expr, scope) =
-                    plan_nested_query(&mut ecx.derived_query_context(), query).ok()?;
+                //
+                // We deliberately swallow planning errors here: if the subquery
+                // doesn't plan, we just don't invent a name for it; the real
+                // planning attempt elsewhere will surface the error.
+                let Ok((_expr, scope)) = plan_nested_query(&mut ecx.derived_query_context(), query)
+                else {
+                    return Ok(None);
+                };
                 scope
                     .items
                     .first()
@@ -3584,10 +3601,10 @@ fn invent_column_name(
             }
             Expr::Row { .. } => Some(("row".into(), NameQuality::High)),
             _ => None,
-        }
+        })
     }
 
-    invent(ecx, expr, table_func_names).map(|(name, _quality)| name)
+    Ok(invent(ecx, expr, table_func_names)?.map(|(name, _quality)| name))
 }
 
 #[derive(Debug)]
@@ -3706,11 +3723,11 @@ fn expand_select_item<'a>(
             Ok(items)
         }
         SelectItem::Expr { expr, alias } => {
-            let name = alias
-                .clone()
-                .map(normalize::column_name)
-                .or_else(|| invent_column_name(ecx, expr, table_func_names))
-                .unwrap_or_else(|| UNKNOWN_COLUMN_NAME.into());
+            let name = match alias.clone().map(normalize::column_name) {
+                Some(name) => name,
+                None => invent_column_name(ecx, expr, table_func_names)?
+                    .unwrap_or_else(|| UNKNOWN_COLUMN_NAME.into()),
+            };
             Ok(vec![(ExpandedSelectItem::Expr(Cow::Borrowed(expr)), name)])
         }
     }
@@ -4094,13 +4111,25 @@ fn plan_expr_inner<'a>(
         Expr::MapSubquery(query) => plan_map_subquery(ecx, query),
         Expr::ArraySubquery(query) => plan_array_subquery(ecx, query),
         Expr::Collate { expr, collation } => plan_collate(ecx, expr, collation),
-        Expr::Nested(_) => unreachable!("Expr::Nested not desugared"),
-        Expr::InSubquery { .. } => unreachable!("Expr::InSubquery not desugared"),
-        Expr::AnyExpr { .. } => unreachable!("Expr::AnyExpr not desugared"),
-        Expr::AllExpr { .. } => unreachable!("Expr::AllExpr not desugared"),
-        Expr::AnySubquery { .. } => unreachable!("Expr::AnySubquery not desugared"),
-        Expr::AllSubquery { .. } => unreachable!("Expr::AllSubquery not desugared"),
-        Expr::Between { .. } => unreachable!("Expr::Between not desugared"),
+        Expr::Nested(_) => bail_internal!("Expr::Nested should have been desugared"),
+        Expr::InSubquery { .. } => {
+            bail_internal!("Expr::InSubquery should have been desugared")
+        }
+        Expr::AnyExpr { .. } => {
+            bail_internal!("Expr::AnyExpr should have been desugared")
+        }
+        Expr::AllExpr { .. } => {
+            bail_internal!("Expr::AllExpr should have been desugared")
+        }
+        Expr::AnySubquery { .. } => {
+            bail_internal!("Expr::AnySubquery should have been desugared")
+        }
+        Expr::AllSubquery { .. } => {
+            bail_internal!("Expr::AllSubquery should have been desugared")
+        }
+        Expr::Between { .. } => {
+            bail_internal!("Expr::Between should have been desugared")
+        }
     }
 }
 
@@ -5131,6 +5160,16 @@ fn plan_function_order_by(
     Ok((order_by_exprs, col_orders))
 }
 
+/// Returns a human-readable rendering of `name`, falling back to a debug
+/// dump of the `ResolvedItemName` if humanization fails. Used to construct
+/// user-facing error messages on already-failing paths, where we'd rather
+/// surface the raw resolved name than emit a useless `<unknown>` placeholder.
+fn humanize_or_debug(scx: &StatementContext, name: &ResolvedItemName) -> String {
+    scx.humanize_resolved_name(name)
+        .map(|n| n.to_string())
+        .unwrap_or_else(|_| format!("<error when trying to humanize `{name:?}`>"))
+}
+
 /// Common part of the planning of windowed and non-windowed aggregation functions.
 fn plan_aggregate_common(
     ecx: &ExprContext,
@@ -5158,7 +5197,7 @@ fn plan_aggregate_common(
 
     let impls = match resolve_func(ecx, name, args)? {
         Func::Aggregate(impls) => impls,
-        _ => unreachable!("plan_aggregate_common called on non-aggregate function,"),
+        _ => bail_internal!("plan_aggregate_common called on non-aggregate function"),
     };
 
     // We follow PostgreSQL's rule here for mapping `count(*)` into the
@@ -5175,10 +5214,7 @@ fn plan_aggregate_common(
             if args.is_empty() {
                 sql_bail!(
                     "{}(*) must be used to call a parameterless aggregate function",
-                    ecx.qcx
-                        .scx
-                        .humanize_resolved_name(name)
-                        .expect("name actually resolved")
+                    humanize_or_debug(ecx.qcx.scx, name)
                 );
             }
             let args = plan_exprs(ecx, args)?;
@@ -5246,7 +5282,12 @@ fn plan_aggregate_common(
 
 fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, PlanError> {
     let mut names = names.to_vec();
-    let col_name = normalize::column_name(names.pop().unwrap());
+    // The parser guarantees that an `Expr::Identifier` is constructed with a
+    // non-empty list of name parts, so an empty list here is an internal bug.
+    let Some(last) = names.pop() else {
+        bail_internal!("empty identifier");
+    };
+    let col_name = normalize::column_name(last);
 
     // If the name is qualified, it must refer to a column in a table.
     if !names.is_empty() {
@@ -5526,25 +5567,19 @@ fn plan_function<'a>(
     };
 
     if over.is_some() {
-        unreachable!("If there is an OVER clause, we should have returned already above.");
+        bail_internal!("OVER clause should have been handled by the window function path above");
     }
 
     if *distinct {
         sql_bail!(
             "DISTINCT specified, but {} is not an aggregate function",
-            ecx.qcx
-                .scx
-                .humanize_resolved_name(name)
-                .expect("already resolved")
+            humanize_or_debug(ecx.qcx.scx, name)
         );
     }
     if filter.is_some() {
         sql_bail!(
             "FILTER specified, but {} is not an aggregate function",
-            ecx.qcx
-                .scx
-                .humanize_resolved_name(name)
-                .expect("already resolved")
+            humanize_or_debug(ecx.qcx.scx, name)
         );
     }
 
@@ -5552,20 +5587,14 @@ fn plan_function<'a>(
         FunctionArgs::Star => {
             sql_bail!(
                 "* argument is invalid with non-aggregate function {}",
-                ecx.qcx
-                    .scx
-                    .humanize_resolved_name(name)
-                    .expect("already resolved")
+                humanize_or_debug(ecx.qcx.scx, name)
             )
         }
         FunctionArgs::Args { args, order_by } => {
             if !order_by.is_empty() {
                 sql_bail!(
                     "ORDER BY specified, but {} is not an aggregate function",
-                    ecx.qcx
-                        .scx
-                        .humanize_resolved_name(name)
-                        .expect("already resolved")
+                    humanize_or_debug(ecx.qcx.scx, name)
                 );
             }
             plan_exprs(ecx, args)?
@@ -6010,7 +6039,7 @@ pub fn scalar_type_from_sql(
         ResolvedDataType::Named { id, modifiers, .. } => {
             scalar_type_from_catalog(scx.catalog, *id, modifiers)
         }
-        ResolvedDataType::Error => unreachable!("should have been caught in name resolution"),
+        ResolvedDataType::Error => bail_internal!("should have been caught in name resolution"),
     }
 }
 
@@ -6606,7 +6635,7 @@ impl<'a> QueryContext<'a> {
 
                 Ok((expr, scope))
             }
-            ResolvedItemName::Error => unreachable!("should have been caught in name resolution"),
+            ResolvedItemName::Error => bail_internal!("should have been caught in name resolution"),
         }
     }
 
