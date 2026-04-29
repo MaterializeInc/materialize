@@ -11,6 +11,7 @@
 
 use std::time::Duration;
 
+use hyper_tls::HttpsConnector;
 use launchdarkly_server_sdk as ld;
 use mz_build_info::BuildInfo;
 use mz_dyncfg::{ConfigSet, ConfigUpdates, ConfigVal};
@@ -49,21 +50,13 @@ where
         let _ = dyn_into_flag(entry.val())?;
     }
     let ld_client = if let Some(key) = launchdarkly_sdk_key {
-        let transport = launchdarkly_sdk_transport::HyperTransport::builder()
-            .connect_timeout(Duration::from_secs(10))
-            .read_timeout(Duration::from_secs(300))
-            .build_https()
-            .expect("failed to create HTTPS transport");
-
-        let mut data_source = ld::StreamingDataSourceBuilder::new();
-        data_source.transport(transport.clone());
-
-        let mut event_processor = ld::EventProcessorBuilder::new();
-        event_processor.transport(transport);
-
         let config = ld::ConfigBuilder::new(key)
-            .data_source(&data_source)
-            .event_processor(&event_processor)
+            .event_processor(
+                ld::EventProcessorBuilder::new().https_connector(HttpsConnector::new()),
+            )
+            .data_source(
+                ld::StreamingDataSourceBuilder::new().https_connector(HttpsConnector::new()),
+            )
             .build()
             .expect("valid config");
         let client = ld::Client::build(config)?;
