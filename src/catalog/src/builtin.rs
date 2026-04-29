@@ -2246,7 +2246,11 @@ pub static MZ_POSTGRES_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| Builti
     ontology: Some(Ontology {
         entity_name: "postgres_source",
         description: "Postgres source-level details",
-        links: &[],
+        links: &[OntologyLink {
+            name: "details_of",
+            target: "source",
+            properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "one_to_one"}"#,
+        }],
     }),
 });
 pub static MZ_POSTGRES_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -3588,7 +3592,11 @@ WHERE data->>'kind' = 'NetworkPolicy'",
         ontology: Some(Ontology {
             entity_name: "network_policy",
             description: "Network access policies",
-            links: &[],
+            links: &[OntologyLink {
+                name: "owned_by",
+                target: "role",
+                properties_json: r#"{"kind": "foreign_key", "source_column": "owner_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+            }],
         }),
     }
 });
@@ -3612,7 +3620,7 @@ pub static MZ_NETWORK_POLICY_RULES: LazyLock<BuiltinMaterializedView> = LazyLock
             ),
             (
                 "policy_id",
-                "The ID the network policy the rule is part of. Corresponds to `mz_network_policy_rules.id`.",
+                "The ID the network policy the rule is part of. Corresponds to `mz_internal.mz_network_policies.id`.",
             ),
             (
                 "action",
@@ -3648,7 +3656,11 @@ WHERE data->>'kind' = 'NetworkPolicy'",
         ontology: Some(Ontology {
             entity_name: "network_policy_rule",
             description: "Individual rules within a network policy",
-            links: &[],
+            links: &[OntologyLink {
+                name: "belongs_to_policy",
+                target: "network_policy",
+                properties_json: r#"{"kind": "foreign_key", "source_column": "policy_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+            }],
         }),
     }
 });
@@ -4318,7 +4330,11 @@ pub static MZ_CLUSTER_SCHEDULES: LazyLock<BuiltinTable> = LazyLock::new(|| Built
     ontology: Some(Ontology {
         entity_name: "cluster_schedule",
         description: "Cluster scheduling configuration",
-        links: &[],
+        links: &[OntologyLink {
+            name: "belongs_to_cluster",
+            target: "cluster",
+            properties_json: r#"{"kind": "foreign_key", "source_column": "cluster_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+        }],
     }),
 });
 
@@ -4858,7 +4874,11 @@ pub static MZ_AWS_PRIVATELINK_CONNECTION_STATUSES: LazyLock<BuiltinView> = LazyL
         ontology: Some(Ontology {
             entity_name: "privatelink_status",
             description: "PrivateLink connection health status",
-            links: &[],
+            links: &[OntologyLink {
+                name: "status_of",
+                target: "connection",
+                properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "one_to_one"}"#,
+            }],
         }),
     }
 });
@@ -5051,7 +5071,11 @@ pub static MZ_SESSION_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| Builti
     ontology: Some(Ontology {
         entity_name: "session_history",
         description: "Historical session connection events",
-        links: &[],
+        links: &[OntologyLink {
+            name: "history_of",
+            target: "session",
+            properties_json: r#"{"kind": "foreign_key", "source_column": "session_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+        }],
     }),
 });
 
@@ -6008,7 +6032,11 @@ pub static MZ_AWS_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| Builtin
     ontology: Some(Ontology {
         entity_name: "aws_connection",
         description: "AWS connection configuration details",
-        links: &[],
+        links: &[OntologyLink {
+            name: "details_of",
+            target: "connection",
+            properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "one_to_one"}"#,
+        }],
     }),
 });
 
@@ -6293,7 +6321,11 @@ OPTIONS (AGGREGATE INPUT GROUP SIZE = 1)",
     ontology: Some(Ontology {
         entity_name: "wallclock_global_lag_history",
         description: "Historical global wallclock lag",
-        links: &[],
+        links: &[OntologyLink {
+            name: "lag_of",
+            target: "object_global_id",
+            properties_json: r#"{"kind": "foreign_key", "source_column": "object_id", "target_column": "global_id", "cardinality": "many_to_one"}"#,
+        }],
     }),
 });
 
@@ -6500,7 +6532,18 @@ pub static MZ_SUBSCRIPTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTa
     ontology: Some(Ontology {
         entity_name: "subscription",
         description: "Active SUBSCRIBE operations",
-        links: &[],
+        links: &[
+            OntologyLink {
+                name: "uses_session",
+                target: "session",
+                properties_json: r#"{"kind": "foreign_key", "source_column": "session_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+            },
+            OntologyLink {
+                name: "belongs_to_cluster",
+                target: "cluster",
+                properties_json: r#"{"kind": "foreign_key", "source_column": "cluster_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+            },
+        ],
     }),
 });
 
@@ -6543,7 +6586,11 @@ pub static MZ_SESSIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     ontology: Some(Ontology {
         entity_name: "session",
         description: "Currently active sessions",
-        links: &[],
+        links: &[OntologyLink {
+            name: "logged_in_as",
+            target: "role",
+            properties_json: r#"{"kind": "foreign_key", "source_column": "role_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+        }],
     }),
 });
 
@@ -6701,7 +6748,11 @@ pub static MZ_SOURCE_REFERENCES: LazyLock<BuiltinTable> = LazyLock::new(|| Built
     ontology: Some(Ontology {
         entity_name: "source_reference",
         description: "External references tracked by sources",
-        links: &[],
+        links: &[OntologyLink {
+            name: "references_source",
+            target: "source",
+            properties_json: r#"{"kind": "foreign_key", "source_column": "source_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+        }],
     }),
 });
 
@@ -6731,7 +6782,11 @@ pub static MZ_WEBHOOKS_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| Builti
     ontology: Some(Ontology {
         entity_name: "webhook_source",
         description: "Webhook source configuration",
-        links: &[],
+        links: &[OntologyLink {
+            name: "details_of",
+            target: "source",
+            properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "one_to_one"}"#,
+        }],
     }),
 });
 
@@ -6837,7 +6892,18 @@ pub static MZ_REPLACEMENTS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTab
     ontology: Some(Ontology {
         entity_name: "replacement",
         description: "A record of an object replacement (ALTER ... SWAP)",
-        links: &[],
+        links: &[
+            OntologyLink {
+                name: "replacement_object",
+                target: "object",
+                properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "many_to_one"}"#,
+            },
+            OntologyLink {
+                name: "replacement_target",
+                target: "object",
+                properties_json: r#"{"kind": "foreign_key", "source_column": "target_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+            },
+        ],
     }),
 });
 
@@ -7237,7 +7303,28 @@ pub static MZ_OBJECT_FULLY_QUALIFIED_NAMES: LazyLock<BuiltinView> = LazyLock::ne
     ontology: Some(Ontology {
         entity_name: "object_fqn",
         description: "Fully qualified name (database.schema.name) for objects",
-        links: &[],
+        links: &[
+            OntologyLink {
+                name: "details_of",
+                target: "object",
+                properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "one_to_one"}"#,
+            },
+            OntologyLink {
+                name: "in_schema",
+                target: "schema",
+                properties_json: r#"{"kind": "foreign_key", "source_column": "schema_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+            },
+            OntologyLink {
+                name: "in_database",
+                target: "database",
+                properties_json: r#"{"kind": "foreign_key", "source_column": "database_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+            },
+            OntologyLink {
+                name: "belongs_to_cluster",
+                target: "cluster",
+                properties_json: r#"{"kind": "foreign_key", "source_column": "cluster_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+            },
+        ],
     }),
 });
 
@@ -8239,7 +8326,11 @@ GROUP BY
     ontology: Some(Ontology {
         entity_name: "records_per_dataflow",
         description: "Record counts aggregated per dataflow",
-        links: &[],
+        links: &[OntologyLink {
+            name: "details_of",
+            target: "dataflow",
+            properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "one_to_one"}"#,
+        }],
     }),
 });
 
@@ -9803,7 +9894,11 @@ HAVING pg_catalog.sum(count) != 0",
     ontology: Some(Ontology {
         entity_name: "compute_error_count",
         description: "Error counts per compute collection",
-        links: &[],
+        links: &[OntologyLink {
+            name: "errors_in",
+            target: "compute_export",
+            properties_json: r#"{"kind": "foreign_key", "source_column": "export_id", "target_column": "export_id", "cardinality": "one_to_one"}"#,
+        }],
     }),
 });
 
@@ -10101,7 +10196,11 @@ GROUP BY channel_id",
     ontology: Some(Ontology {
         entity_name: "message_count",
         description: "Inter-worker message counts",
-        links: &[],
+        links: &[OntologyLink {
+            name: "counts_for",
+            target: "dataflow_channel",
+            properties_json: r#"{"kind": "foreign_key", "source_column": "channel_id", "target_column": "id", "cardinality": "one_to_one"}"#,
+        }],
     }),
 });
 
@@ -10478,7 +10577,11 @@ WHERE worker_id = 0::uint8",
     ontology: Some(Ontology {
         entity_name: "arrangement_sharing",
         description: "Arrangement sharing between operators",
-        links: &[],
+        links: &[OntologyLink {
+            name: "shared_by",
+            target: "dataflow_operator",
+            properties_json: r#"{"kind": "foreign_key", "source_column": "operator_id", "target_column": "id", "cardinality": "one_to_one"}"#,
+        }],
     }),
 });
 
@@ -14639,7 +14742,18 @@ FROM mz_cluster_deployment_lineage"#,
     ontology: Some(Ontology {
         entity_name: "cluster_deployment",
         description: "Cluster deployment lineage information",
-        links: &[],
+        links: &[
+            OntologyLink {
+                name: "deployment_of",
+                target: "cluster",
+                properties_json: r#"{"kind": "foreign_key", "source_column": "cluster_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+            },
+            OntologyLink {
+                name: "current_deployment",
+                target: "cluster",
+                properties_json: r#"{"kind": "foreign_key", "source_column": "current_deployment_cluster_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+            },
+        ],
     }),
 });
 

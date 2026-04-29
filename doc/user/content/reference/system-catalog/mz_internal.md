@@ -839,7 +839,7 @@ in the system.
 | Field            | Type       | Meaning                                                                                                |
 | -----------------| ----------------------| --------                                                                                    |
 | `name`           | [`text`]   | The name of the network policy rule. Can be combined with `policy_id` to form a unique identifier. |
-| `policy_id`      | [`text`]   | The ID the network policy the rule is part of. Corresponds to [`mz_network_policy_rules.id`](#mz_network_policy_rules).     |
+| `policy_id`      | [`text`]   | The ID the network policy the rule is part of. Corresponds to [`mz_internal.mz_network_policies.id`](#mz_network_policies).     |
 | `action`         | [`text`]   | The action of the rule. `allow` is the only supported action.                                                    |
 | `address`        | [`text`]   | The address the rule will take action on.                                                              |
 | `direction`      | [`text`]   | The direction of traffic the rule applies to. `ingress` is the only supported direction. |

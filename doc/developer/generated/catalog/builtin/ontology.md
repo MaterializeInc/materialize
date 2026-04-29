@@ -61,6 +61,13 @@ Common keys in the properties JSONB:
 | `nullable` | `true` if the FK column can be NULL (optional relationship). |
 | `source_id_type` | Semantic ID type of the source column (e.g., `CatalogItemId`, `GlobalId`). |
 | `requires_mapping` | Mapping table needed to bridge ID namespaces (e.g., `mz_internal.mz_object_global_ids`). |
+| `from_type` | Source semantic ID type for `maps_to` links (e.g., `CatalogItemId`). |
+| `to_type` | Target semantic ID type for `maps_to` links (e.g., `GlobalId`). |
+| `via` | Intermediate table or view used to perform a mapping or indirect join. |
+| `metric` | Name of the metric or statistic measured by a `measures` link (e.g., `cpu_time_ns`, `materialization_lag`). |
+| `discriminator_column` | Column on the `union` view that identifies the member type (e.g., `type`). |
+| `discriminator_value` | Value in `discriminator_column` that selects the specific member entity. |
+| `note` | Free-text clarification for unusual join semantics or caveats. |
 
 ## For LLMs
 
@@ -107,7 +114,7 @@ types differ, bridge through `mz_internal.mz_object_global_ids`.
 - ~117 entity types (mz_catalog + mz_internal + mz_introspection)
 - 20 semantic types
 - ~450 column properties
-- ~106 named relationships
+- ~150 named relationships
 
 ## Related files
 

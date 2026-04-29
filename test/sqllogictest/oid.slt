@@ -1181,7 +1181,7 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17073  parse_catalog_create_sql
 17074  redact_sql
 17075  repeat_row_non_negative
-17076  mz_ontology_entity_types
-17077  mz_ontology_semantic_types
-17078  mz_ontology_properties
-17079  mz_ontology_link_types
+17077  mz_ontology_entity_types
+17078  mz_ontology_semantic_types
+17079  mz_ontology_properties
+17080  mz_ontology_link_types
