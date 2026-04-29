@@ -75,7 +75,11 @@ impl MySqlTableDesc {
     /// exceptions:
     /// - `self`'s columns are a prefix of `other`'s columns.
     /// - `self`'s keys are all present in `other`
-    pub fn determine_compatibility(&self, other: &MySqlTableDesc) -> Result<(), anyhow::Error> {
+    pub fn determine_compatibility(
+        &self,
+        other: &MySqlTableDesc,
+        full_metadata: bool,
+    ) -> Result<(), anyhow::Error> {
         if self == other {
             return Ok(());
         }
@@ -90,12 +94,29 @@ impl MySqlTableDesc {
             );
         }
 
-        // `columns` is ordered by the ordinal_position of each column in the table,
-        // so as long as `self.columns` is a compatible prefix of `other.columns`, we can
-        // ignore extra columns from `other.columns`.
+        // In the case that we don't have full binlog row metadata, `columns` is ordered by the
+        // ordinal_position of each column in the table, so as long as `self.columns` is a
+        // compatible prefix of `other.columns`, we can ignore extra columns from `other.columns`.
+        //
+        // If we do have full metadata, then we can match columns by name and just check that all
+        // columns in `self.columns` are present and compatible with columns in `other.columns`.
         let mut other_columns = other.columns.iter();
-        for self_column in &self.columns {
-            let other_column = other_columns.next().ok_or_else(|| {
+        for self_column in self.columns.iter() {
+            let other_column = if full_metadata {
+                if self_column.column_type.is_none() {
+                    // This is an excluded column and can be ignored, as it may not have a
+                    // corresponding column in `other.columns` if the column was dropped upstream.
+                    continue;
+                }
+                other.columns.iter().find(|c| c.name == self_column.name)
+            } else {
+                other_columns.next()
+            };
+            if self_column.column_type.is_none() {
+                // This is an excluded column and can be ignored.
+                continue;
+            }
+            let other_column = other_column.ok_or_else(|| {
                 anyhow::anyhow!(
                     "column {} no longer present in table {}",
                     self_column.name,
@@ -110,7 +131,6 @@ impl MySqlTableDesc {
                 );
             }
         }
-
         // Our keys are all still present in exactly the same shape.
         // TODO: Implement a more relaxed key compatibility check:
         // We should check that for all keys that we know about there exists an upstream key whose
