@@ -28,7 +28,6 @@ use mz_persist_client::batch::{Batch, ProtoBatch};
 use mz_persist_client::write::WriteHandle;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::StorageDiff;
-use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
 use timely::PartialOrder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
@@ -43,6 +42,7 @@ use tracing::trace;
 
 use crate::compute_state::ComputeState;
 use crate::render::StartSignal;
+use crate::render::errors::DataflowErrorSer;
 use crate::sink::correction::{ChannelLogging, Correction, CorrectionLogger};
 use crate::sink::materialized_view::{
     BatchDescription, BatchesStream, DescsStream, DesiredStreams, OkErr, PersistApi,
@@ -56,7 +56,7 @@ pub(super) fn persist_sink<'s>(
     sink_id: GlobalId,
     target: &mz_storage_types::controller::CollectionMetadata,
     ok_collection: VecCollection<'s, Timestamp, Row, Diff>,
-    err_collection: VecCollection<'s, Timestamp, DataflowError, Diff>,
+    err_collection: VecCollection<'s, Timestamp, DataflowErrorSer, Diff>,
     as_of: Antichain<Timestamp>,
     compute_state: &mut ComputeState,
     start_signal: StartSignal,
@@ -464,11 +464,11 @@ mod write {
         /// Positive contributions from the `desired` ok input.
         desired_ok: Vec<(Row, Timestamp, Diff)>,
         /// Positive contributions from the `desired` err input.
-        desired_err: Vec<(DataflowError, Timestamp, Diff)>,
+        desired_err: Vec<(DataflowErrorSer, Timestamp, Diff)>,
         /// Negative contributions from the `persist` ok input.
         persist_ok: Vec<(Row, Timestamp, Diff)>,
         /// Negative contributions from the `persist` err input.
-        persist_err: Vec<(DataflowError, Timestamp, Diff)>,
+        persist_err: Vec<(DataflowErrorSer, Timestamp, Diff)>,
         /// The new persist frontier, if it advanced this activation.
         persist_frontier: Option<Antichain<Timestamp>>,
         /// Whether a consolidation of the corrections buffer should be forced.
@@ -553,7 +553,7 @@ mod write {
         // It is important that we exchange the `desired` and `persist` data the same way, so
         // updates that cancel each other out end up on the same worker.
         let exchange_ok = |(d, _, _): &(Row, Timestamp, Diff)| d.hashed();
-        let exchange_err = |(d, _, _): &(DataflowError, Timestamp, Diff)| d.hashed();
+        let exchange_err = |(d, _, _): &(DataflowErrorSer, Timestamp, Diff)| d.hashed();
 
         // Data inputs are created before the output, so they are not connected to it.
         let mut desired_ok_input = builder.new_input(desired.ok, Exchange::new(exchange_ok));
@@ -574,7 +574,7 @@ mod write {
         // Construct corrections on the Timely thread (reads ConfigSet), then move to the
         // Tokio task. The ChannelLogging sends events back to the Timely thread.
         let worker_metrics = sink_metrics.for_worker(worker_id);
-        let mut corrections: OkErr<Correction<Row>, Correction<DataflowError>> = OkErr::new(
+        let mut corrections: OkErr<Correction<Row>, Correction<DataflowErrorSer>> = OkErr::new(
             Correction::new(
                 sink_metrics.clone(),
                 worker_metrics.clone(),
@@ -721,7 +721,7 @@ mod write {
     /// negative contributions, so the buffer contains `desired - persist`, i.e. the updates that
     /// need to be written to bring the shard in line with `desired`.
     async fn apply_command(
-        corrections: &mut OkErr<Correction<Row>, Correction<DataflowError>>,
+        corrections: &mut OkErr<Correction<Row>, Correction<DataflowErrorSer>>,
         writer: &mut WriteHandle<SourceData, (), Timestamp, StorageDiff>,
         cmd: WriteCommand,
         resp_tx: &mpsc::UnboundedSender<WriteResponse>,
@@ -764,7 +764,7 @@ mod write {
                 let errs = corrections
                     .err
                     .updates_before(&desc.upper)
-                    .map(|(d, t, r)| ((SourceData(Err(d)), ()), t, r.into_inner()));
+                    .map(|(d, t, r)| ((SourceData(Err(d.deserialize())), ()), t, r.into_inner()));
                 let mut updates = oks.chain(errs).peekable();
 
                 if updates.peek().is_none() {
