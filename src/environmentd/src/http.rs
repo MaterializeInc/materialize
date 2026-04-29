@@ -547,7 +547,8 @@ impl HttpServer {
                 let login_router = Router::new()
                     .route("/api/login", routing::post(handle_login))
                     .route("/api/logout", routing::post(handle_logout))
-                    .layer(Extension(adapter_client_rx));
+                    .layer(Extension(adapter_client_rx))
+                    .layer(Extension(allowed_roles));
                 router = router.merge(login_router).layer(session_layer);
             }
             listeners::AuthenticatorKind::None => {
@@ -881,8 +882,20 @@ impl IntoResponse for AuthError {
 pub async fn handle_login(
     session: Option<Extension<TowerSession>>,
     Extension(adapter_client_rx): Extension<Delayed<Client>>,
+    Extension(allowed_roles): Extension<AllowedRoles>,
     Json(LoginCredentials { username, password }): Json<LoginCredentials>,
 ) -> impl IntoResponse {
+    // Enforce the listener's allowed_roles policy before doing any
+    // authentication work, mirroring the check performed in `auth` for
+    // header-based credentials. Without this, a session-based caller could
+    // log in as a role that header-based callers are forbidden to use.
+    if let Err(err) = check_role_allowed(&username, allowed_roles) {
+        warn!(
+            ?err,
+            "HTTP login rejected: role not allowed on this listener"
+        );
+        return StatusCode::UNAUTHORIZED;
+    }
     let Ok(adapter_client) = adapter_client_rx.clone().await else {
         return StatusCode::INTERNAL_SERVER_ERROR;
     };
@@ -956,6 +969,12 @@ async fn http_auth(
             maybe_get_authenticated_session(req.extensions().get::<TowerSession>()).await
     {
         let user = ensure_session_unexpired(session, session_data).await?;
+        // Defense-in-depth: re-check the listener's `allowed_roles` policy on
+        // every session-authenticated request. The same check runs at
+        // `/api/login`, but enforcing it here too prevents a session minted
+        // under a more permissive configuration (or a future bug in the login
+        // path) from bypassing role restrictions.
+        check_role_allowed(&user.name, allowed_roles)?;
         // Need this to set the user of the Adapter client.
         req.extensions_mut().insert(user);
         return Ok(next.run(req).await);
@@ -1075,8 +1094,16 @@ async fn init_ws(
             warn!("Unexpected bearer or basic auth provided when using user header");
             anyhow::bail!("unexpected")
         }
-        (Some(ExistingUser::Session(user)), None)
-        | (Some(ExistingUser::XMaterializeUserHeader(user)), None) => user,
+        (Some(ExistingUser::Session(user)), None) => {
+            // Defense-in-depth: re-enforce the listener's `allowed_roles`
+            // policy on session-authenticated WebSocket connections. The same
+            // check runs at `/api/login`, but enforcing it here too prevents a
+            // session minted under a more permissive configuration (or a
+            // future bug in the login path) from bypassing role restrictions.
+            check_role_allowed(&user.name, allowed_roles)?;
+            user
+        }
+        (Some(ExistingUser::XMaterializeUserHeader(user)), None) => user,
         (_, Some(creds)) => {
             let authenticator = get_authenticator(
                 authenticator_kind,
