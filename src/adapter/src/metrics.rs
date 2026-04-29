@@ -25,6 +25,7 @@ pub struct Metrics {
     pub queue_busy_seconds: Histogram,
     pub determine_timestamp: IntCounterVec,
     pub timestamp_difference_for_strict_serializable_ms: HistogramVec,
+    pub timestamp_difference_for_bounded_staleness_ms: HistogramVec,
     pub commands: IntCounterVec,
     pub storage_usage_collection_time_seconds: Histogram,
     pub subscribe_outputs: IntCounterVec,
@@ -92,6 +93,12 @@ impl Metrics {
             timestamp_difference_for_strict_serializable_ms: registry.register(metric!(
                 name: "mz_timestamp_difference_for_strict_serializable_ms",
                 help: "Difference in timestamp in milliseconds for running in strict serializable vs serializable isolation level.",
+                var_labels:["compute_instance"],
+                buckets: histogram_milliseconds_buckets(1., 8000.),
+            )),
+            timestamp_difference_for_bounded_staleness_ms: registry.register(metric!(
+                name: "mz_timestamp_difference_for_bounded_staleness_ms",
+                help: "How much older bounded-staleness timestamps are compared to serializable, in milliseconds. Measures the actual staleness incurred.",
                 var_labels:["compute_instance"],
                 buckets: histogram_milliseconds_buckets(1., 8000.),
             )),
@@ -263,6 +270,9 @@ impl Metrics {
             timestamp_difference_for_strict_serializable_ms: self
                 .timestamp_difference_for_strict_serializable_ms
                 .clone(),
+            timestamp_difference_for_bounded_staleness_ms: self
+                .timestamp_difference_for_bounded_staleness_ms
+                .clone(),
             optimization_notices: self.optimization_notices.clone(),
             statement_logging_records: self.statement_logging_records.clone(),
             statement_logging_unsampled_bytes: self.statement_logging_unsampled_bytes.clone(),
@@ -279,6 +289,7 @@ pub struct SessionMetrics {
     query_total: IntCounterVec,
     determine_timestamp: IntCounterVec,
     timestamp_difference_for_strict_serializable_ms: HistogramVec,
+    timestamp_difference_for_bounded_staleness_ms: HistogramVec,
     optimization_notices: IntCounterVec,
     statement_logging_records: IntCounterVec,
     statement_logging_unsampled_bytes: IntCounter,
@@ -307,6 +318,14 @@ impl SessionMetrics {
         label_values: &[&str],
     ) -> Histogram {
         self.timestamp_difference_for_strict_serializable_ms
+            .with_label_values(label_values)
+    }
+
+    pub(crate) fn timestamp_difference_for_bounded_staleness_ms(
+        &self,
+        label_values: &[&str],
+    ) -> Histogram {
+        self.timestamp_difference_for_bounded_staleness_ms
             .with_label_values(label_values)
     }
 
