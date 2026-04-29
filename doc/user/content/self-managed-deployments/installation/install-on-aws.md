@@ -25,11 +25,11 @@ deploys a complete Materialize environment on AWS using the modular Terraform
 setup from this repository.
 
 
-{{< warning >}}
+{{< note >}}
 
 {{< self-managed/terraform-disclaimer >}}
 
-{{< /warning >}}
+{{< /note >}}
 
 
 ## What Gets Created
@@ -114,11 +114,11 @@ An active AWS account with appropriate permissions to create:
 
 ## Getting started: Simple example
 
-{{< warning >}}
+{{< note >}}
 
 {{< self-managed/terraform-disclaimer >}}
 
-{{< /warning >}}
+{{< /note >}}
 
 {{< tip >}}
 

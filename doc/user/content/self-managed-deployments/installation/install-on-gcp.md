@@ -20,11 +20,11 @@ integrated with existing DevOps tooling.
 deploys a complete Materialize environment on GCP using the modular Terraform
 setup from this repository.
 
-{{< warning >}}
+{{< note >}}
 
 {{< self-managed/terraform-disclaimer >}}
 
-{{< /warning >}}
+{{< /note >}}
 
 ## What Gets Created
 
@@ -110,11 +110,11 @@ A Google account with permission to:
 
 ## Getting started: Simple example
 
-{{< warning >}}
+{{< note >}}
 
 {{< self-managed/terraform-disclaimer >}}
 
-{{< /warning >}}
+{{< /note >}}
 
 {{< tip >}}
 

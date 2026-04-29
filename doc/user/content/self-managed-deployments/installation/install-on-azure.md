@@ -19,11 +19,11 @@ integrated with existing DevOps tooling.
 deploys a complete Materialize environment on Azure using the modular Terraform
 setup from this repository.
 
-{{< warning >}}
+{{< note >}}
 
 {{< self-managed/terraform-disclaimer >}}
 
-{{< /warning >}}
+{{< /note >}}
 
 ## What Gets Created
 
@@ -112,11 +112,11 @@ An active Azure subscription with appropriate permissions to create:
 
 ## Getting started: Simple example
 
-{{< warning >}}
+{{< note >}}
 
 {{< self-managed/terraform-disclaimer >}}
 
-{{< /warning >}}
+{{< /note >}}
 
 
 {{< tip >}}
