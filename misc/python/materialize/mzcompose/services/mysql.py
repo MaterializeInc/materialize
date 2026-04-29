@@ -14,14 +14,14 @@ from materialize.mzcompose.service import (
 )
 
 
-def create_mysql_server_args(server_id: str, is_master: bool) -> list[str]:
+def create_mysql_server_args(server_id: str, is_master: bool, binlog_row_metadata: str = "full") -> list[str]:
     args = [
         "--log-bin=mysql-bin",
         "--gtid_mode=ON",
         "--enforce_gtid_consistency=ON",
         "--binlog-format=row",
         "--binlog-row-image=full",
-        "--binlog-row-metadata=full",
+        f"--binlog-row-metadata={binlog_row_metadata}",
         f"--server-id={server_id}",
         "--max-connections=500",
     ]
