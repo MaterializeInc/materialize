@@ -520,6 +520,18 @@ pub trait TimestampProvider {
             });
         }
 
+        // BoundedStaleness freshness math assumes the EpochMilliseconds timeline,
+        // where timestamps are wall-clock milliseconds. Reject queries whose
+        // timeline doesn't satisfy this contract.
+        if let IsolationLevel::BoundedStaleness(_) = isolation_level {
+            if !matches!(timeline, Some(Timeline::EpochMilliseconds)) {
+                return Err(AdapterError::Unstructured(::anyhow::anyhow!(
+                    "bounded staleness isolation requires the EpochMilliseconds timeline; \
+                     this query touches a different timeline"
+                )));
+            }
+        }
+
         let raw_determination = Self::determine_timestamp_via_constraints(
             session,
             &read_holds,
