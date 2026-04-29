@@ -83,6 +83,7 @@ pub(crate) fn render<'scope>(
                     stat.set_offset_known(0);
                     stat.set_offset_committed(0);
                 }
+                return Ok(());
             }
             let conn_config = connection
                 .resolve_config(
