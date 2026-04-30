@@ -178,7 +178,7 @@ pub struct Ontology {
 }
 
 /// Cardinality of an ontology link.
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Cardinality {
     OneToOne,
@@ -193,58 +193,223 @@ fn is_false(v: &bool) -> bool {
 /// Typed properties for an ontology link. Serialized to the `properties` JSONB
 /// column in `mz_ontology_link_types`. The `kind` field is inlined from the
 /// enum variant name via `#[serde(tag = "kind")]`.
-#[derive(Clone, Debug, Hash, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, serde::Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LinkProperties {
-    /// A foreign-key relationship: the source column references the target column.
+    /// A foreign-key relationship: `source_column` in the source entity
+    /// references `target_column` in the target entity.
     ForeignKey {
+        /// Column in the source entity that holds the reference.
+        source_column: &'static str,
+        /// Column in the target entity being referenced (usually `id`).
+        target_column: &'static str,
+        /// How many source rows may reference a single target row.
+        cardinality: Cardinality,
+        /// Semantic type of the source column, if it carries an ID that
+        /// requires type-aware resolution (e.g. `CatalogItemId`, `GlobalId`).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        source_id_type: Option<mz_repr::SemanticType>,
+        /// Intermediate mapping relation needed when `source_id_type` does not
+        /// directly match the target entity's ID type (e.g.
+        /// `mz_internal.mz_object_global_ids` to go from `GlobalId` to catalog
+        /// object).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        requires_mapping: Option<&'static str>,
+        /// True when the source column may be NULL (the reference is optional).
+        #[serde(default, skip_serializing_if = "is_false")]
+        nullable: bool,
+        /// Free-form annotation for cases that need extra context.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        note: Option<&'static str>,
+    },
+    /// A union relationship: the source entity is a superset view that includes
+    /// the target entity, optionally filtered by a discriminator column/value.
+    Union {
+        /// Column used to discriminate between subtypes (e.g. `type`).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        discriminator_column: Option<&'static str>,
+        /// Value of `discriminator_column` that selects the target entity.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        discriminator_value: Option<&'static str>,
+        /// Free-form annotation for cases that need extra context.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        note: Option<&'static str>,
+    },
+    /// A mapping relationship: the source entity maps to the target entity,
+    /// optionally via an intermediate table and/or with an ID-type conversion.
+    MapsTo {
+        /// Column in the source entity that holds the ID to map from.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        source_column: Option<&'static str>,
+        /// Column in the target entity being mapped to.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        target_column: Option<&'static str>,
+        /// Intermediate relation used to perform the mapping.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        via: Option<&'static str>,
+        /// Semantic type of the source ID before mapping.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        from_type: Option<mz_repr::SemanticType>,
+        /// Semantic type of the target ID after mapping.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        to_type: Option<mz_repr::SemanticType>,
+        /// Free-form annotation for cases that need extra context.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        note: Option<&'static str>,
+    },
+    /// A dependency relationship: the source entity directly depends on the
+    /// target entity (e.g. a materialization that references an object).
+    DependsOn {
+        /// Column in the source entity that holds the dependency ID.
+        source_column: &'static str,
+        /// Column in the target entity being depended upon (usually `id`).
+        target_column: &'static str,
+        /// Semantic type of the source column.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        source_id_type: Option<mz_repr::SemanticType>,
+    },
+    /// A metric relationship: the source entity records measurements of a named
+    /// metric on the target entity.
+    Measures {
+        /// Column in the source entity that references the target entity.
+        source_column: &'static str,
+        /// Column in the target entity being measured (usually `id`).
+        target_column: &'static str,
+        /// Name of the metric being measured (e.g. `cpu_time_ns`).
+        metric: &'static str,
+        /// Semantic type of the source column, if ID-type resolution is needed.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        source_id_type: Option<mz_repr::SemanticType>,
+        /// Intermediate mapping relation needed when the source ID type differs
+        /// from the target entity's ID type.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        requires_mapping: Option<&'static str>,
+        /// Free-form annotation for cases that need extra context.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        note: Option<&'static str>,
+    },
+}
+
+impl LinkProperties {
+    /// Basic foreign-key link with no optional fields set.
+    pub const fn fk(
         source_column: &'static str,
         target_column: &'static str,
         cardinality: Cardinality,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        source_id_type: Option<mz_repr::SemanticType>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        requires_mapping: Option<&'static str>,
-        #[serde(default, skip_serializing_if = "is_false")]
-        nullable: bool,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        note: Option<&'static str>,
-    },
-    /// A union relationship: the source entity is a superset that includes the
-    /// target entity, optionally filtered by a discriminator column/value.
-    Union {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        discriminator_column: Option<&'static str>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        discriminator_value: Option<&'static str>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        note: Option<&'static str>,
-    },
-    /// A mapping relationship: the source entity maps to the target entity via
-    /// an intermediate table, optionally changing ID type.
-    MapsTo {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        via: Option<&'static str>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        from_type: Option<mz_repr::SemanticType>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        to_type: Option<mz_repr::SemanticType>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        note: Option<&'static str>,
-    },
-    /// A metric relationship: the source entity measures a named metric on the
-    /// target entity.
-    Measures {
+    ) -> Self {
+        Self::ForeignKey {
+            source_column,
+            target_column,
+            cardinality,
+            source_id_type: None,
+            requires_mapping: None,
+            nullable: false,
+            note: None,
+        }
+    }
+
+    /// Foreign-key link where the source column may be NULL.
+    pub const fn fk_nullable(
+        source_column: &'static str,
+        target_column: &'static str,
+        cardinality: Cardinality,
+    ) -> Self {
+        Self::ForeignKey {
+            source_column,
+            target_column,
+            cardinality,
+            source_id_type: None,
+            requires_mapping: None,
+            nullable: true,
+            note: None,
+        }
+    }
+
+    /// Foreign-key link whose source column carries a typed ID (e.g.
+    /// `CatalogItemId`) but does not require an intermediate mapping table.
+    pub const fn fk_typed(
+        source_column: &'static str,
+        target_column: &'static str,
+        cardinality: Cardinality,
+        source_id_type: mz_repr::SemanticType,
+    ) -> Self {
+        Self::ForeignKey {
+            source_column,
+            target_column,
+            cardinality,
+            source_id_type: Some(source_id_type),
+            requires_mapping: None,
+            nullable: false,
+            note: None,
+        }
+    }
+
+    /// Foreign-key link whose source column carries a typed ID that requires
+    /// an intermediate mapping table to resolve (e.g. `GlobalId` →
+    /// `mz_internal.mz_object_global_ids`).
+    pub const fn fk_mapped(
+        source_column: &'static str,
+        target_column: &'static str,
+        cardinality: Cardinality,
+        source_id_type: mz_repr::SemanticType,
+        requires_mapping: &'static str,
+    ) -> Self {
+        Self::ForeignKey {
+            source_column,
+            target_column,
+            cardinality,
+            source_id_type: Some(source_id_type),
+            requires_mapping: Some(requires_mapping),
+            nullable: false,
+            note: None,
+        }
+    }
+
+    /// Union link filtered by a discriminator column/value pair.
+    pub const fn union_disc(
+        discriminator_column: &'static str,
+        discriminator_value: &'static str,
+    ) -> Self {
+        Self::Union {
+            discriminator_column: Some(discriminator_column),
+            discriminator_value: Some(discriminator_value),
+            note: None,
+        }
+    }
+
+    /// Basic measures link with no optional fields set.
+    pub const fn measures(
         source_column: &'static str,
         target_column: &'static str,
         metric: &'static str,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        source_id_type: Option<mz_repr::SemanticType>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        requires_mapping: Option<&'static str>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        note: Option<&'static str>,
-    },
+    ) -> Self {
+        Self::Measures {
+            source_column,
+            target_column,
+            metric,
+            source_id_type: None,
+            requires_mapping: None,
+            note: None,
+        }
+    }
+
+    /// Measures link whose source ID requires an intermediate mapping table.
+    pub const fn measures_mapped(
+        source_column: &'static str,
+        target_column: &'static str,
+        metric: &'static str,
+        source_id_type: mz_repr::SemanticType,
+        requires_mapping: &'static str,
+    ) -> Self {
+        Self::Measures {
+            source_column,
+            target_column,
+            metric,
+            source_id_type: Some(source_id_type),
+            requires_mapping: Some(requires_mapping),
+            note: None,
+        }
+    }
 }
 
 /// A relationship link in the ontology.
@@ -2181,11 +2346,11 @@ pub static MZ_ICEBERG_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTa
     ontology: Some(Ontology {
         entity_name: "iceberg_sink",
         description: "Iceberg-specific sink configuration (namespace, table)",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "details_of",
             target: "sink",
-            properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "one_to_one"}"#,
-        }],
+            properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+        }] },
     }),
 });
 
@@ -2214,11 +2379,11 @@ pub static MZ_KAFKA_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTabl
     ontology: Some(Ontology {
         entity_name: "kafka_sink",
         description: "Kafka-specific sink configuration (topic)",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "details_of",
             target: "sink",
-            properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "one_to_one"}"#,
-        }],
+            properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+        }] },
     }),
 });
 pub static MZ_KAFKA_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -2253,11 +2418,11 @@ pub static MZ_KAFKA_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| Built
     ontology: Some(Ontology {
         entity_name: "kafka_connection",
         description: "Kafka-specific connection configuration (brokers, progress topic)",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "details_of",
             target: "connection",
-            properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "one_to_one"}"#,
-        }],
+            properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+        }] },
     }),
 });
 pub static MZ_KAFKA_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -2292,11 +2457,11 @@ pub static MZ_KAFKA_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTa
     ontology: Some(Ontology {
         entity_name: "kafka_source",
         description: "Kafka-specific source configuration (topic, group ID)",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "details_of",
             target: "source",
-            properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "one_to_one"}"#,
-        }],
+            properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+        }] },
     }),
 });
 pub static MZ_POSTGRES_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -2331,11 +2496,11 @@ pub static MZ_POSTGRES_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| Builti
     ontology: Some(Ontology {
         entity_name: "postgres_source",
         description: "Postgres source-level details",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "details_of",
             target: "source",
-            properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "one_to_one"}"#,
-        }],
+            properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+        }] },
     }),
 });
 pub static MZ_POSTGRES_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -2370,11 +2535,11 @@ pub static MZ_POSTGRES_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| 
     ontology: Some(Ontology {
         entity_name: "postgres_source_table",
         description: "Postgres source table-level details",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "describes_source_table",
             target: "table",
-            properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "one_to_one"}"#,
-        }],
+            properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+        }] },
     }),
 });
 pub static MZ_MYSQL_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -2409,11 +2574,11 @@ pub static MZ_MYSQL_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| Bui
     ontology: Some(Ontology {
         entity_name: "mysql_source_table",
         description: "MySQL source table-level details",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "describes_source_table",
             target: "table",
-            properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "one_to_one"}"#,
-        }],
+            properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+        }] },
     }),
 });
 pub static MZ_SQL_SERVER_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -2448,11 +2613,11 @@ pub static MZ_SQL_SERVER_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|
     ontology: Some(Ontology {
         entity_name: "sql_server_source_table",
         description: "SQL Server source table-level details",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "describes_source_table",
             target: "table",
-            properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "one_to_one"}"#,
-        }],
+            properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+        }] },
     }),
 });
 pub static MZ_KAFKA_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -2494,11 +2659,11 @@ pub static MZ_KAFKA_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| Bui
     ontology: Some(Ontology {
         entity_name: "kafka_source_table",
         description: "Kafka source table-level details",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "describes_source_table",
             target: "table",
-            properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "one_to_one"}"#,
-        }],
+            properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+        }] },
     }),
 });
 pub static MZ_OBJECT_DEPENDENCIES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -2532,18 +2697,18 @@ pub static MZ_OBJECT_DEPENDENCIES: LazyLock<BuiltinTable> = LazyLock::new(|| Bui
     ontology: Some(Ontology {
         entity_name: "object_dependency",
         description: "A dependency edge: one object depends on another",
-        links: &[
+        links: &const { [
             OntologyLink {
                 name: "dependent_object",
                 target: "object",
-                properties_json: r#"{"source_id_type": "CatalogItemId", "kind": "foreign_key", "source_column": "object_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk_typed("object_id", "id", Cardinality::ManyToOne, mz_repr::SemanticType::CatalogItemId),
             },
             OntologyLink {
                 name: "referenced_object",
                 target: "object",
-                properties_json: r#"{"source_id_type": "CatalogItemId", "kind": "foreign_key", "source_column": "referenced_object_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk_typed("referenced_object_id", "id", Cardinality::ManyToOne, mz_repr::SemanticType::CatalogItemId),
             },
-        ],
+        ] },
     }),
 });
 pub static MZ_COMPUTE_DEPENDENCIES: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource {
@@ -2578,18 +2743,18 @@ pub static MZ_COMPUTE_DEPENDENCIES: LazyLock<BuiltinSource> = LazyLock::new(|| B
     ontology: Some(Ontology {
         entity_name: "compute_dependency",
         description: "Dependency edge within compute dataflows",
-        links: &[
+        links: &const { [
             OntologyLink {
                 name: "dependent_compute_object",
                 target: "object",
-                properties_json: r#"{"source_id_type": "GlobalId", "requires_mapping": "mz_internal.mz_object_global_ids", "kind": "foreign_key", "source_column": "object_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk_mapped("object_id", "id", Cardinality::ManyToOne, mz_repr::SemanticType::GlobalId, "mz_internal.mz_object_global_ids"),
             },
             OntologyLink {
                 name: "compute_dependency_target",
                 target: "object",
-                properties_json: r#"{"source_id_type": "GlobalId", "requires_mapping": "mz_internal.mz_object_global_ids", "kind": "foreign_key", "source_column": "dependency_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk_mapped("dependency_id", "id", Cardinality::ManyToOne, mz_repr::SemanticType::GlobalId, "mz_internal.mz_object_global_ids"),
             },
-        ],
+        ] },
     }),
 });
 
@@ -2650,11 +2815,11 @@ WHERE data->>'kind' = 'Database'",
         ontology: Some(Ontology {
             entity_name: "database",
             description: "A top-level namespace that contains schemas",
-            links: &[OntologyLink {
+            links: &const { [OntologyLink {
                 name: "owned_by",
                 target: "role",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "owner_id", "target_column": "id", "cardinality": "many_to_one"}"#,
-            }],
+                properties: LinkProperties::fk("owner_id", "id", Cardinality::ManyToOne),
+            }] },
         }),
     }
 });
@@ -2728,18 +2893,18 @@ WHERE data->>'kind' = 'Schema'",
         ontology: Some(Ontology {
             entity_name: "schema",
             description: "A namespace within a database that contains objects",
-            links: &[
+            links: &const { [
                 OntologyLink {
                     name: "in_database",
                     target: "database",
-                    properties_json: r#"{"kind": "foreign_key", "source_column": "database_id", "target_column": "id", "cardinality": "many_to_one", "nullable": true}"#,
+                    properties: LinkProperties::fk_nullable("database_id", "id", Cardinality::ManyToOne),
                 },
                 OntologyLink {
                     name: "owned_by",
                     target: "role",
-                    properties_json: r#"{"kind": "foreign_key", "source_column": "owner_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                    properties: LinkProperties::fk("owner_id", "id", Cardinality::ManyToOne),
                 },
-            ],
+            ] },
         }),
     }
 });
@@ -2790,11 +2955,19 @@ pub static MZ_COLUMNS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     ontology: Some(Ontology {
         entity_name: "column",
         description: "A column of a relation, with its name, position, type, and nullability",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "belongs_to_relation",
             target: "object",
-            properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "many_to_one", "note": "id in mz_columns is the relation ID, not a unique column ID"}"#,
-        }],
+            properties: LinkProperties::ForeignKey {
+                source_column: "id",
+                target_column: "id",
+                cardinality: Cardinality::ManyToOne,
+                source_id_type: None,
+                requires_mapping: None,
+                nullable: false,
+                note: Some("id in mz_columns is the relation ID, not a unique column ID"),
+            },
+        }] },
     }),
 });
 pub static MZ_INDEXES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -2864,23 +3037,23 @@ pub static MZ_INDEXES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     ontology: Some(Ontology {
         entity_name: "index",
         description: "An in-memory index on a relation for fast lookups",
-        links: &[
+        links: &const { [
             OntologyLink {
                 name: "owned_by",
                 target: "role",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "owner_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk("owner_id", "id", Cardinality::ManyToOne),
             },
             OntologyLink {
                 name: "runs_on_cluster",
                 target: "cluster",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "cluster_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk("cluster_id", "id", Cardinality::ManyToOne),
             },
             OntologyLink {
                 name: "indexes_relation",
                 target: "relation",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "on_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk("on_id", "id", Cardinality::ManyToOne),
             },
-        ],
+        ] },
     }),
 });
 pub static MZ_INDEX_COLUMNS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -2925,11 +3098,11 @@ pub static MZ_INDEX_COLUMNS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTa
     ontology: Some(Ontology {
         entity_name: "index_column",
         description: "A column or expression in an index, with its position",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "belongs_to_index",
             target: "index",
-            properties_json: r#"{"kind": "foreign_key", "source_column": "index_id", "target_column": "id", "cardinality": "many_to_one"}"#,
-        }],
+            properties: LinkProperties::fk("index_id", "id", Cardinality::ManyToOne),
+        }] },
     }),
 });
 pub static MZ_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -3004,23 +3177,23 @@ pub static MZ_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     ontology: Some(Ontology {
         entity_name: "table",
         description: "A user-writable table that can be inserted into and updated",
-        links: &[
+        links: &const { [
             OntologyLink {
                 name: "in_schema",
                 target: "schema",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "schema_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk("schema_id", "id", Cardinality::ManyToOne),
             },
             OntologyLink {
                 name: "owned_by",
                 target: "role",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "owner_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk("owner_id", "id", Cardinality::ManyToOne),
             },
             OntologyLink {
                 name: "created_by_source",
                 target: "source",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "source_id", "target_column": "id", "cardinality": "many_to_one", "nullable": true}"#,
+                properties: LinkProperties::fk_nullable("source_id", "id", Cardinality::ManyToOne),
             },
-        ],
+        ] },
     }),
 });
 
@@ -3103,18 +3276,18 @@ WHERE
         ontology: Some(Ontology {
             entity_name: "connection",
             description: "A reusable connection configuration to an external system",
-            links: &[
+            links: &const { [
                 OntologyLink {
                     name: "in_schema",
                     target: "schema",
-                    properties_json: r#"{"kind": "foreign_key", "source_column": "schema_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                    properties: LinkProperties::fk("schema_id", "id", Cardinality::ManyToOne),
                 },
                 OntologyLink {
                     name: "owned_by",
                     target: "role",
-                    properties_json: r#"{"kind": "foreign_key", "source_column": "owner_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                    properties: LinkProperties::fk("owner_id", "id", Cardinality::ManyToOne),
                 },
-            ],
+            ] },
         }),
     }
 });
@@ -3148,11 +3321,11 @@ pub static MZ_SSH_TUNNEL_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| 
     ontology: Some(Ontology {
         entity_name: "ssh_tunnel",
         description: "SSH tunnel connection with public keys",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "details_of",
             target: "connection",
-            properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "one_to_one"}"#,
-        }],
+            properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+        }] },
     }),
 });
 pub static MZ_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -3262,28 +3435,28 @@ pub static MZ_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     ontology: Some(Ontology {
         entity_name: "source",
         description: "An external data source ingested into Materialize (e.g., Kafka, Postgres)",
-        links: &[
+        links: &const { [
             OntologyLink {
                 name: "in_schema",
                 target: "schema",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "schema_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk("schema_id", "id", Cardinality::ManyToOne),
             },
             OntologyLink {
                 name: "owned_by",
                 target: "role",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "owner_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk("owner_id", "id", Cardinality::ManyToOne),
             },
             OntologyLink {
                 name: "runs_on_cluster",
                 target: "cluster",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "cluster_id", "target_column": "id", "cardinality": "many_to_one", "nullable": true}"#,
+                properties: LinkProperties::fk_nullable("cluster_id", "id", Cardinality::ManyToOne),
             },
             OntologyLink {
                 name: "uses_connection",
                 target: "connection",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "connection_id", "target_column": "id", "cardinality": "many_to_one", "nullable": true}"#,
+                properties: LinkProperties::fk_nullable("connection_id", "id", Cardinality::ManyToOne),
             },
-        ],
+        ] },
     }),
 });
 pub static MZ_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| {
@@ -3389,28 +3562,28 @@ pub static MZ_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| {
         ontology: Some(Ontology {
             entity_name: "sink",
             description: "An export of data from Materialize to an external system",
-            links: &[
+            links: &const { [
                 OntologyLink {
                     name: "in_schema",
                     target: "schema",
-                    properties_json: r#"{"kind": "foreign_key", "source_column": "schema_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                    properties: LinkProperties::fk("schema_id", "id", Cardinality::ManyToOne),
                 },
                 OntologyLink {
                     name: "owned_by",
                     target: "role",
-                    properties_json: r#"{"kind": "foreign_key", "source_column": "owner_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                    properties: LinkProperties::fk("owner_id", "id", Cardinality::ManyToOne),
                 },
                 OntologyLink {
                     name: "runs_on_cluster",
                     target: "cluster",
-                    properties_json: r#"{"kind": "foreign_key", "source_column": "cluster_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                    properties: LinkProperties::fk("cluster_id", "id", Cardinality::ManyToOne),
                 },
                 OntologyLink {
                     name: "uses_connection",
                     target: "connection",
-                    properties_json: r#"{"kind": "foreign_key", "source_column": "connection_id", "target_column": "id", "cardinality": "many_to_one", "nullable": true}"#,
+                    properties: LinkProperties::fk_nullable("connection_id", "id", Cardinality::ManyToOne),
                 },
-            ],
+            ] },
         }),
     }
 });
@@ -3483,18 +3656,18 @@ pub static MZ_VIEWS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     ontology: Some(Ontology {
         entity_name: "view",
         description: "A non-materialized view defined by a SQL query",
-        links: &[
+        links: &const { [
             OntologyLink {
                 name: "in_schema",
                 target: "schema",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "schema_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk("schema_id", "id", Cardinality::ManyToOne),
             },
             OntologyLink {
                 name: "owned_by",
                 target: "role",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "owner_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk("owner_id", "id", Cardinality::ManyToOne),
             },
-        ],
+        ] },
     }),
 });
 
@@ -3624,11 +3797,11 @@ SELECT * FROM builtin_mvs").into_boxed_str()),
         ontology: Some(Ontology {
             entity_name: "mv",
             description: "A materialized view maintained incrementally on a cluster",
-            links: &[
-                OntologyLink { name: "in_schema", target: "schema", properties_json: r#"{"kind": "foreign_key", "source_column": "schema_id", "target_column": "id", "cardinality": "many_to_one"}"# },
-                OntologyLink { name: "owned_by", target: "role", properties_json: r#"{"kind": "foreign_key", "source_column": "owner_id", "target_column": "id", "cardinality": "many_to_one"}"# },
-                OntologyLink { name: "runs_on_cluster", target: "cluster", properties_json: r#"{"kind": "foreign_key", "source_column": "cluster_id", "target_column": "id", "cardinality": "many_to_one"}"# },
-            ],
+            links: &const { [
+                OntologyLink { name: "in_schema", target: "schema", properties: LinkProperties::fk("schema_id", "id", Cardinality::ManyToOne) },
+                OntologyLink { name: "owned_by", target: "role", properties: LinkProperties::fk("owner_id", "id", Cardinality::ManyToOne) },
+                OntologyLink { name: "runs_on_cluster", target: "cluster", properties: LinkProperties::fk("cluster_id", "id", Cardinality::ManyToOne) },
+            ] },
         }),
     }
 });
@@ -3746,18 +3919,18 @@ pub static MZ_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     ontology: Some(Ontology {
         entity_name: "type",
         description: "A named data type (base, array, list, map, or pseudo)",
-        links: &[
+        links: &const { [
             OntologyLink {
                 name: "in_schema",
                 target: "schema",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "schema_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk("schema_id", "id", Cardinality::ManyToOne),
             },
             OntologyLink {
                 name: "owned_by",
                 target: "role",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "owner_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk("owner_id", "id", Cardinality::ManyToOne),
             },
-        ],
+        ] },
     }),
 });
 
@@ -3821,11 +3994,11 @@ WHERE data->>'kind' = 'NetworkPolicy'",
         ontology: Some(Ontology {
             entity_name: "network_policy",
             description: "Network access policies",
-            links: &[OntologyLink {
+            links: &const { [OntologyLink {
                 name: "owned_by",
                 target: "role",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "owner_id", "target_column": "id", "cardinality": "many_to_one"}"#,
-            }],
+                properties: LinkProperties::fk("owner_id", "id", Cardinality::ManyToOne),
+            }] },
         }),
     }
 });
@@ -3885,11 +4058,11 @@ WHERE data->>'kind' = 'NetworkPolicy'",
         ontology: Some(Ontology {
             entity_name: "network_policy_rule",
             description: "Individual rules within a network policy",
-            links: &[OntologyLink {
+            links: &const { [OntologyLink {
                 name: "belongs_to_policy",
                 target: "network_policy",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "policy_id", "target_column": "id", "cardinality": "many_to_one"}"#,
-            }],
+                properties: LinkProperties::fk("policy_id", "id", Cardinality::ManyToOne),
+            }] },
         }),
     }
 });
@@ -3947,18 +4120,18 @@ pub static MZ_ARRAY_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTabl
     ontology: Some(Ontology {
         entity_name: "array_type",
         description: "An array type with its element type",
-        links: &[
+        links: &const { [
             OntologyLink {
                 name: "detail_of",
                 target: "type",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "one_to_one"}"#,
+                properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
             },
             OntologyLink {
                 name: "has_element_type",
                 target: "type",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "element_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk("element_id", "id", Cardinality::ManyToOne),
             },
-        ],
+        ] },
     }),
 });
 pub static MZ_BASE_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -3978,7 +4151,7 @@ pub static MZ_BASE_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable
     ontology: Some(Ontology {
         entity_name: "base_type",
         description: "A primitive/base data type",
-        links: &[],
+        links: &const { [] },
     }),
 });
 pub static MZ_LIST_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -4018,18 +4191,18 @@ pub static MZ_LIST_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable
     ontology: Some(Ontology {
         entity_name: "list_type",
         description: "A list type with its element type",
-        links: &[
+        links: &const { [
             OntologyLink {
                 name: "detail_of",
                 target: "type",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "one_to_one"}"#,
+                properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
             },
             OntologyLink {
                 name: "has_element_type",
                 target: "type",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "element_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk("element_id", "id", Cardinality::ManyToOne),
             },
-        ],
+        ] },
     }),
 });
 pub static MZ_MAP_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -4087,23 +4260,23 @@ pub static MZ_MAP_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable 
     ontology: Some(Ontology {
         entity_name: "map_type",
         description: "A map type with its key and value types",
-        links: &[
+        links: &const { [
             OntologyLink {
                 name: "detail_of",
                 target: "type",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "one_to_one"}"#,
+                properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
             },
             OntologyLink {
                 name: "has_key_type",
                 target: "type",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "key_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk("key_id", "id", Cardinality::ManyToOne),
             },
             OntologyLink {
                 name: "has_value_type",
                 target: "type",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "value_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk("value_id", "id", Cardinality::ManyToOne),
             },
-        ],
+        ] },
     }),
 });
 pub static MZ_ROLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -4140,7 +4313,7 @@ pub static MZ_ROLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     ontology: Some(Ontology {
         entity_name: "role",
         description: "A user or role for authentication and access control",
-        links: &[],
+        links: &const { [] },
     }),
 });
 
@@ -4200,23 +4373,23 @@ WHERE data->>'kind' = 'Role'",
         ontology: Some(Ontology {
             entity_name: "role_membership",
             description: "A membership grant: one role is a member of another role",
-            links: &[
+            links: &const { [
                 OntologyLink {
                     name: "group_role",
                     target: "role",
-                    properties_json: r#"{"kind": "foreign_key", "source_column": "role_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                    properties: LinkProperties::fk("role_id", "id", Cardinality::ManyToOne),
                 },
                 OntologyLink {
                     name: "member_role",
                     target: "role",
-                    properties_json: r#"{"kind": "foreign_key", "source_column": "member", "target_column": "id", "cardinality": "many_to_one"}"#,
+                    properties: LinkProperties::fk("member", "id", Cardinality::ManyToOne),
                 },
                 OntologyLink {
                     name: "granted_by",
                     target: "role",
-                    properties_json: r#"{"kind": "foreign_key", "source_column": "grantor", "target_column": "id", "cardinality": "many_to_one"}"#,
+                    properties: LinkProperties::fk("grantor", "id", Cardinality::ManyToOne),
                 },
-            ],
+            ] },
         }),
     }
 });
@@ -4253,11 +4426,11 @@ pub static MZ_ROLE_PARAMETERS: LazyLock<BuiltinTable> = LazyLock::new(|| Builtin
     ontology: Some(Ontology {
         entity_name: "role_parameter",
         description: "A session parameter default set for a role",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "default_parameter_setting_of",
             target: "role",
-            properties_json: r#"{"kind": "foreign_key", "source_column": "role_id", "target_column": "id", "cardinality": "many_to_one"}"#,
-        }],
+            properties: LinkProperties::fk("role_id", "id", Cardinality::ManyToOne),
+        }] },
     }),
 });
 pub static MZ_ROLE_AUTH: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -4317,7 +4490,7 @@ pub static MZ_PSEUDO_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTab
     ontology: Some(Ontology {
         entity_name: "pseudo_type",
         description: "A pseudo-type used in function signatures",
-        links: &[],
+        links: &const { [] },
     }),
 });
 pub static MZ_FUNCTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| {
@@ -4393,28 +4566,28 @@ pub static MZ_FUNCTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| {
         ontology: Some(Ontology {
             entity_name: "function",
             description: "A built-in or user-defined function",
-            links: &[
+            links: &const { [
                 OntologyLink {
                     name: "in_schema",
                     target: "schema",
-                    properties_json: r#"{"kind": "foreign_key", "source_column": "schema_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                    properties: LinkProperties::fk("schema_id", "id", Cardinality::ManyToOne),
                 },
                 OntologyLink {
                     name: "owned_by",
                     target: "role",
-                    properties_json: r#"{"kind": "foreign_key", "source_column": "owner_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                    properties: LinkProperties::fk("owner_id", "id", Cardinality::ManyToOne),
                 },
                 OntologyLink {
                     name: "returns_type",
                     target: "type",
-                    properties_json: r#"{"kind": "foreign_key", "source_column": "return_type_id", "target_column": "id", "cardinality": "many_to_one", "nullable": true}"#,
+                    properties: LinkProperties::fk_nullable("return_type_id", "id", Cardinality::ManyToOne),
                 },
                 OntologyLink {
                     name: "has_variadic_arg_type",
                     target: "type",
-                    properties_json: r#"{"kind": "foreign_key", "source_column": "variadic_argument_type_id", "target_column": "id", "cardinality": "many_to_one", "nullable": true}"#,
+                    properties: LinkProperties::fk_nullable("variadic_argument_type_id", "id", Cardinality::ManyToOne),
                 },
-            ],
+            ] },
         }),
     }
 });
@@ -4441,11 +4614,11 @@ pub static MZ_OPERATORS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable 
     ontology: Some(Ontology {
         entity_name: "operator",
         description: "A built-in SQL operator",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "returns_type",
             target: "type",
-            properties_json: r#"{"kind": "foreign_key", "source_column": "return_type_id", "target_column": "id", "cardinality": "many_to_one", "nullable": true}"#,
-        }],
+            properties: LinkProperties::fk_nullable("return_type_id", "id", Cardinality::ManyToOne),
+        }] },
     }),
 });
 pub static MZ_AGGREGATES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -4463,7 +4636,7 @@ pub static MZ_AGGREGATES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable
     ontology: Some(Ontology {
         entity_name: "aggregate",
         description: "Aggregate function metadata",
-        links: &[],
+        links: &const { [] },
     }),
 });
 
@@ -4551,18 +4724,18 @@ pub static MZ_CLUSTERS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     ontology: Some(Ontology {
         entity_name: "cluster",
         description: "A compute cluster that runs dataflows for sources, sinks, MVs, and indexes",
-        links: &[
+        links: &const { [
             OntologyLink {
                 name: "owned_by",
                 target: "role",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "owner_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk("owner_id", "id", Cardinality::ManyToOne),
             },
             OntologyLink {
                 name: "has_size",
                 target: "replica_size",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "size", "target_column": "size", "cardinality": "many_to_one", "nullable": true}"#,
+                properties: LinkProperties::fk_nullable("size", "size", Cardinality::ManyToOne),
             },
-        ],
+        ] },
     }),
 });
 
@@ -4639,11 +4812,11 @@ pub static MZ_CLUSTER_SCHEDULES: LazyLock<BuiltinTable> = LazyLock::new(|| Built
     ontology: Some(Ontology {
         entity_name: "cluster_schedule",
         description: "Cluster scheduling configuration",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "belongs_to_cluster",
             target: "cluster",
-            properties_json: r#"{"kind": "foreign_key", "source_column": "cluster_id", "target_column": "id", "cardinality": "many_to_one"}"#,
-        }],
+            properties: LinkProperties::fk("cluster_id", "id", Cardinality::ManyToOne),
+        }] },
     }),
 });
 
@@ -4703,18 +4876,18 @@ WHERE
         ontology: Some(Ontology {
             entity_name: "secret",
             description: "An encrypted secret value used by connections",
-            links: &[
+            links: &const { [
                 OntologyLink {
                     name: "in_schema",
                     target: "schema",
-                    properties_json: r#"{"kind": "foreign_key", "source_column": "schema_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                    properties: LinkProperties::fk("schema_id", "id", Cardinality::ManyToOne),
                 },
                 OntologyLink {
                     name: "owned_by",
                     target: "role",
-                    properties_json: r#"{"kind": "foreign_key", "source_column": "owner_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                    properties: LinkProperties::fk("owner_id", "id", Cardinality::ManyToOne),
                 },
-            ],
+            ] },
         }),
     }
 });
@@ -4772,23 +4945,23 @@ pub static MZ_CLUSTER_REPLICAS: LazyLock<BuiltinTable> = LazyLock::new(|| Builti
     ontology: Some(Ontology {
         entity_name: "replica",
         description: "A physical replica of a cluster providing fault tolerance",
-        links: &[
+        links: &const { [
             OntologyLink {
                 name: "owned_by",
                 target: "role",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "owner_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk("owner_id", "id", Cardinality::ManyToOne),
             },
             OntologyLink {
                 name: "belongs_to_cluster",
                 target: "cluster",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "cluster_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk("cluster_id", "id", Cardinality::ManyToOne),
             },
             OntologyLink {
                 name: "has_size",
                 target: "replica_size",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "size", "target_column": "size", "cardinality": "many_to_one", "nullable": true}"#,
+                properties: LinkProperties::fk_nullable("size", "size", Cardinality::ManyToOne),
             },
-        ],
+        ] },
     }),
 });
 
@@ -4880,11 +5053,11 @@ pub static MZ_CLUSTER_REPLICA_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock
         ontology: Some(Ontology {
             entity_name: "replica_status_history",
             description: "Historical replica status events (ready, not-ready, etc.)",
-            links: &[OntologyLink {
+            links: &const { [OntologyLink {
                 name: "status_history_of_replica",
                 target: "replica",
-                properties_json: r#"{"source_id_type": "CatalogItemId", "kind": "foreign_key", "source_column": "replica_id", "target_column": "id", "cardinality": "many_to_one"}"#,
-            }],
+                properties: LinkProperties::fk_typed("replica_id", "id", Cardinality::ManyToOne, mz_repr::SemanticType::CatalogItemId),
+            }] },
         }),
     }
 });
@@ -4946,11 +5119,11 @@ ORDER BY replica_id, process_id, occurred_at DESC",
     ontology: Some(Ontology {
         entity_name: "replica_status",
         description: "Current status of each replica",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "status_of_replica",
             target: "replica",
-            properties_json: r#"{"source_id_type": "CatalogItemId", "kind": "foreign_key", "source_column": "replica_id", "target_column": "id", "cardinality": "one_to_one"}"#,
-        }],
+            properties: LinkProperties::fk_typed("replica_id", "id", Cardinality::OneToOne, mz_repr::SemanticType::CatalogItemId),
+        }] },
     }),
 });
 
@@ -5005,7 +5178,7 @@ pub static MZ_CLUSTER_REPLICA_SIZES: LazyLock<BuiltinTable> = LazyLock::new(|| B
     ontology: Some(Ontology {
         entity_name: "replica_size",
         description: "Available cluster replica sizes with CPU, memory, and credit cost",
-        links: &[],
+        links: &const { [] },
     }),
 });
 
@@ -5061,7 +5234,7 @@ pub static MZ_AUDIT_EVENTS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTab
     ontology: Some(Ontology {
         entity_name: "audit_event",
         description: "An audit log entry recording a DDL operation",
-        links: &[],
+        links: &const { [] },
     }),
 });
 
@@ -5102,18 +5275,18 @@ pub static MZ_SOURCE_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| 
     ontology: Some(Ontology {
         entity_name: "source_status_history",
         description: "Historical source status events",
-        links: &[
+        links: &const { [
             OntologyLink {
                 name: "status_history_of_source",
                 target: "source",
-                properties_json: r#"{"source_id_type": "GlobalId", "requires_mapping": "mz_internal.mz_object_global_ids", "kind": "foreign_key", "source_column": "source_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk_mapped("source_id", "id", Cardinality::ManyToOne, mz_repr::SemanticType::GlobalId, "mz_internal.mz_object_global_ids"),
             },
             OntologyLink {
                 name: "on_replica",
                 target: "replica",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "replica_id", "target_column": "id", "cardinality": "many_to_one", "nullable": true}"#,
+                properties: LinkProperties::fk_nullable("replica_id", "id", Cardinality::ManyToOne),
             },
-        ],
+        ] },
     }),
 });
 
@@ -5206,11 +5379,11 @@ pub static MZ_AWS_PRIVATELINK_CONNECTION_STATUSES: LazyLock<BuiltinView> = LazyL
         ontology: Some(Ontology {
             entity_name: "privatelink_status",
             description: "PrivateLink connection health status",
-            links: &[OntologyLink {
+            links: &const { [OntologyLink {
                 name: "status_of",
                 target: "connection",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "one_to_one"}"#,
-            }],
+                properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+            }] },
         }),
     }
 });
@@ -5297,7 +5470,7 @@ pub static MZ_SQL_TEXT: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource
     ontology: Some(Ontology {
         entity_name: "sql_text",
         description: "Raw SQL text of executed statements",
-        links: &[],
+        links: &const { [] },
     }),
 });
 
@@ -5345,7 +5518,7 @@ pub static MZ_RECENT_SQL_TEXT: LazyLock<BuiltinView> = LazyLock::new(|| {
         ontology: Some(Ontology {
             entity_name: "recent_sql_text",
             description: "Recent SQL text (indexed, last 3 days)",
-            links: &[],
+            links: &const { [] },
         }),
     }
 });
@@ -5406,11 +5579,11 @@ pub static MZ_SESSION_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| Builti
     ontology: Some(Ontology {
         entity_name: "session_history",
         description: "Historical session connection events",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "history_of",
             target: "session",
-            properties_json: r#"{"kind": "foreign_key", "source_column": "session_id", "target_column": "id", "cardinality": "many_to_one"}"#,
-        }],
+            properties: LinkProperties::fk("session_id", "id", Cardinality::ManyToOne),
+        }] },
     }),
 });
 
@@ -5736,18 +5909,26 @@ WHERE mralt.sql_hash = mrst.sql_hash",
     ontology: Some(Ontology {
         entity_name: "activity_log",
         description: "Recent query activity with execution stats",
-        links: &[
+        links: &const { [
             OntologyLink {
                 name: "session_on_cluster",
                 target: "cluster",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "cluster_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk("cluster_id", "id", Cardinality::ManyToOne),
             },
             OntologyLink {
                 name: "used_transient_index",
                 target: "object",
-                properties_json: r#"{"source_id_type": "GlobalId", "requires_mapping": "mz_internal.mz_object_global_ids", "kind": "foreign_key", "source_column": "transient_index_id", "target_column": "id", "cardinality": "many_to_one", "nullable": true}"#,
+                properties: LinkProperties::ForeignKey {
+                    source_column: "transient_index_id",
+                    target_column: "id",
+                    cardinality: Cardinality::ManyToOne,
+                    source_id_type: Some(mz_repr::SemanticType::GlobalId),
+                    requires_mapping: Some("mz_internal.mz_object_global_ids"),
+                    nullable: true,
+                    note: None,
+                },
             },
-        ],
+        ] },
     }),
 });
 
@@ -5842,7 +6023,7 @@ pub static MZ_STATEMENT_LIFECYCLE_HISTORY: LazyLock<BuiltinSource> = LazyLock::n
         ontology: Some(Ontology {
             entity_name: "statement_lifecycle",
             description: "Statement lifecycle events (parse, bind, execute)",
-            links: &[],
+            links: &const { [] },
         }),
     }
 });
@@ -6038,11 +6219,11 @@ WHERE id NOT LIKE 's%';",
     ontology: Some(Ontology {
         entity_name: "source_status",
         description: "Current source status (running, stalled, etc.)",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "status_of_source",
             target: "source",
-            properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "one_to_one"}"#,
-        }],
+            properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+        }] },
     }),
 });
 
@@ -6083,18 +6264,18 @@ pub static MZ_SINK_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| Bu
     ontology: Some(Ontology {
         entity_name: "sink_status_history",
         description: "Historical sink status events",
-        links: &[
+        links: &const { [
             OntologyLink {
                 name: "status_history_of_sink",
                 target: "sink",
-                properties_json: r#"{"source_id_type": "GlobalId", "requires_mapping": "mz_internal.mz_object_global_ids", "kind": "foreign_key", "source_column": "sink_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk_mapped("sink_id", "id", Cardinality::ManyToOne, mz_repr::SemanticType::GlobalId, "mz_internal.mz_object_global_ids"),
             },
             OntologyLink {
                 name: "on_replica",
                 target: "replica",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "replica_id", "target_column": "id", "cardinality": "many_to_one", "nullable": true}"#,
+                properties: LinkProperties::fk_nullable("replica_id", "id", Cardinality::ManyToOne),
             },
-        ],
+        ] },
     }),
 });
 
@@ -6209,11 +6390,11 @@ WHERE
     ontology: Some(Ontology {
         entity_name: "sink_status",
         description: "Current sink status",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "status_of_sink",
             target: "sink",
-            properties_json: r#"{"source_id_type": "CatalogItemId", "kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "one_to_one"}"#,
-        }],
+            properties: LinkProperties::fk_typed("id", "id", Cardinality::OneToOne, mz_repr::SemanticType::CatalogItemId),
+        }] },
     }),
 });
 
@@ -6252,7 +6433,7 @@ pub static MZ_STORAGE_USAGE_BY_SHARD: LazyLock<BuiltinTable> = LazyLock::new(|| 
     ontology: Some(Ontology {
         entity_name: "storage_usage_by_shard",
         description: "Storage usage broken down by shard",
-        links: &[],
+        links: &const { [] },
     }),
 });
 
@@ -6278,7 +6459,7 @@ pub static MZ_EGRESS_IPS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable
     ontology: Some(Ontology {
         entity_name: "egress_ip",
         description: "IP addresses used for outbound connections from Materialize",
-        links: &[],
+        links: &const { [] },
     }),
 });
 
@@ -6307,11 +6488,11 @@ pub static MZ_AWS_PRIVATELINK_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::ne
         ontology: Some(Ontology {
             entity_name: "aws_privatelink",
             description: "AWS PrivateLink connection configuration",
-            links: &[OntologyLink {
+            links: &const { [OntologyLink {
                 name: "details_of",
                 target: "connection",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "one_to_one"}"#,
-            }],
+                properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+            }] },
         }),
     }
 });
@@ -6397,11 +6578,11 @@ pub static MZ_AWS_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| Builtin
     ontology: Some(Ontology {
         entity_name: "aws_connection",
         description: "AWS connection configuration details",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "details_of",
             target: "connection",
-            properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "one_to_one"}"#,
-        }],
+            properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+        }] },
     }),
 });
 
@@ -6502,11 +6683,11 @@ ORDER BY replica_id, process_id, occurred_at DESC",
     ontology: Some(Ontology {
         entity_name: "replica_metrics",
         description: "CPU and memory metrics per replica",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "metrics_of_replica",
             target: "replica",
-            properties_json: r#"{"source_id_type": "CatalogItemId", "kind": "foreign_key", "source_column": "replica_id", "target_column": "id", "cardinality": "one_to_one"}"#,
-        }],
+            properties: LinkProperties::fk_typed("replica_id", "id", Cardinality::OneToOne, mz_repr::SemanticType::CatalogItemId),
+        }] },
     }),
 });
 
@@ -6599,11 +6780,11 @@ pub static MZ_FRONTIERS: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSourc
     ontology: Some(Ontology {
         entity_name: "frontier",
         description: "Current read/write frontiers per object (source)",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "frontier_of",
             target: "object",
-            properties_json: r#"{"source_id_type": "GlobalId", "requires_mapping": "mz_internal.mz_object_global_ids", "kind": "foreign_key", "source_column": "object_id", "target_column": "id", "cardinality": "many_to_one"}"#,
-        }],
+            properties: LinkProperties::fk_mapped("object_id", "id", Cardinality::ManyToOne, mz_repr::SemanticType::GlobalId, "mz_internal.mz_object_global_ids"),
+        }] },
     }),
 });
 
@@ -6662,18 +6843,18 @@ pub static MZ_WALLCLOCK_LAG_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| 
     ontology: Some(Ontology {
         entity_name: "wallclock_lag_history",
         description: "Historical wallclock lag per object",
-        links: &[
+        links: &const { [
             OntologyLink {
                 name: "measures_lag_of",
                 target: "object",
-                properties_json: r#"{"source_id_type": "GlobalId", "requires_mapping": "mz_internal.mz_object_global_ids", "kind": "measures", "source_column": "object_id", "target_column": "id", "metric": "wallclock_lag"}"#,
+                properties: LinkProperties::measures_mapped("object_id", "id", "wallclock_lag", mz_repr::SemanticType::GlobalId, "mz_internal.mz_object_global_ids"),
             },
             OntologyLink {
                 name: "on_replica",
                 target: "replica",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "replica_id", "target_column": "id", "cardinality": "many_to_one", "nullable": true}"#,
+                properties: LinkProperties::fk_nullable("replica_id", "id", Cardinality::ManyToOne),
             },
-        ],
+        ] },
     }),
 });
 
@@ -6728,11 +6909,11 @@ OPTIONS (AGGREGATE INPUT GROUP SIZE = 1)",
     ontology: Some(Ontology {
         entity_name: "wallclock_global_lag_history",
         description: "Historical global wallclock lag",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "lag_of",
             target: "object_global_id",
-            properties_json: r#"{"kind": "foreign_key", "source_column": "object_id", "target_column": "global_id", "cardinality": "many_to_one"}"#,
-        }],
+            properties: LinkProperties::fk("object_id", "global_id", Cardinality::ManyToOne),
+        }] },
     }),
 });
 
@@ -6809,11 +6990,11 @@ ORDER BY object_id, occurred_at DESC",
     ontology: Some(Ontology {
         entity_name: "wallclock_global_lag",
         description: "Current wallclock lag aggregated across replicas",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "measures_global_lag_of",
             target: "object",
-            properties_json: r#"{"source_id_type": "GlobalId", "requires_mapping": "mz_internal.mz_object_global_ids", "kind": "measures", "source_column": "object_id", "target_column": "id", "metric": "wallclock_lag_global"}"#,
-        }],
+            properties: LinkProperties::measures_mapped("object_id", "id", "wallclock_lag_global", mz_repr::SemanticType::GlobalId, "mz_internal.mz_object_global_ids"),
+        }] },
     }),
 });
 
@@ -6951,18 +7132,18 @@ pub static MZ_SUBSCRIPTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTa
     ontology: Some(Ontology {
         entity_name: "subscription",
         description: "Active SUBSCRIBE operations",
-        links: &[
+        links: &const { [
             OntologyLink {
                 name: "uses_session",
                 target: "session",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "session_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk("session_id", "id", Cardinality::ManyToOne),
             },
             OntologyLink {
                 name: "belongs_to_cluster",
                 target: "cluster",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "cluster_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk("cluster_id", "id", Cardinality::ManyToOne),
             },
-        ],
+        ] },
     }),
 });
 
@@ -7008,11 +7189,11 @@ pub static MZ_SESSIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     ontology: Some(Ontology {
         entity_name: "session",
         description: "Currently active sessions",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "logged_in_as",
             target: "role",
-            properties_json: r#"{"kind": "foreign_key", "source_column": "role_id", "target_column": "id", "cardinality": "many_to_one"}"#,
-        }],
+            properties: LinkProperties::fk("role_id", "id", Cardinality::ManyToOne),
+        }] },
     }),
 });
 
@@ -7076,28 +7257,28 @@ pub static MZ_DEFAULT_PRIVILEGES: LazyLock<BuiltinTable> = LazyLock::new(|| Buil
     ontology: Some(Ontology {
         entity_name: "default_privilege",
         description: "A default privilege rule applied to newly created objects",
-        links: &[
+        links: &const { [
             OntologyLink {
                 name: "default_priv_for_role",
                 target: "role",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "role_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk("role_id", "id", Cardinality::ManyToOne),
             },
             OntologyLink {
                 name: "default_priv_in_database",
                 target: "database",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "database_id", "target_column": "id", "cardinality": "many_to_one", "nullable": true}"#,
+                properties: LinkProperties::fk_nullable("database_id", "id", Cardinality::ManyToOne),
             },
             OntologyLink {
                 name: "default_priv_in_schema",
                 target: "schema",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "schema_id", "target_column": "id", "cardinality": "many_to_one", "nullable": true}"#,
+                properties: LinkProperties::fk_nullable("schema_id", "id", Cardinality::ManyToOne),
             },
             OntologyLink {
                 name: "default_priv_granted_to",
                 target: "role",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "grantee", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk("grantee", "id", Cardinality::ManyToOne),
             },
-        ],
+        ] },
     }),
 });
 
@@ -7117,7 +7298,7 @@ pub static MZ_SYSTEM_PRIVILEGES: LazyLock<BuiltinTable> = LazyLock::new(|| Built
     ontology: Some(Ontology {
         entity_name: "system_privilege",
         description: "A system-level privilege grant",
-        links: &[],
+        links: &const { [] },
     }),
 });
 
@@ -7159,11 +7340,11 @@ pub static MZ_COMMENTS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     ontology: Some(Ontology {
         entity_name: "comment",
         description: "A COMMENT ON annotation for a catalog object or column",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "comment_on",
             target: "object",
-            properties_json: r#"{"source_id_type": "CatalogItemId", "kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "many_to_one"}"#,
-        }],
+            properties: LinkProperties::fk_typed("id", "id", Cardinality::ManyToOne, mz_repr::SemanticType::CatalogItemId),
+        }] },
     }),
 });
 
@@ -7194,11 +7375,11 @@ pub static MZ_SOURCE_REFERENCES: LazyLock<BuiltinTable> = LazyLock::new(|| Built
     ontology: Some(Ontology {
         entity_name: "source_reference",
         description: "External references tracked by sources",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "references_source",
             target: "source",
-            properties_json: r#"{"kind": "foreign_key", "source_column": "source_id", "target_column": "id", "cardinality": "many_to_one"}"#,
-        }],
+            properties: LinkProperties::fk("source_id", "id", Cardinality::ManyToOne),
+        }] },
     }),
 });
 
@@ -7231,11 +7412,11 @@ pub static MZ_WEBHOOKS_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| Builti
     ontology: Some(Ontology {
         entity_name: "webhook_source",
         description: "Webhook source configuration",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "details_of",
             target: "source",
-            properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "one_to_one"}"#,
-        }],
+            properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+        }] },
     }),
 });
 
@@ -7269,7 +7450,7 @@ pub static MZ_HISTORY_RETENTION_STRATEGIES: LazyLock<BuiltinTable> = LazyLock::n
         ontology: Some(Ontology {
             entity_name: "history_retention",
             description: "History retention strategy for an object",
-            links: &[],
+            links: &const { [] },
         }),
     }
 });
@@ -7319,7 +7500,7 @@ pub static MZ_LICENSE_KEYS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTab
     ontology: Some(Ontology {
         entity_name: "license_key",
         description: "License key metadata",
-        links: &[],
+        links: &const { [] },
     }),
 });
 
@@ -7350,18 +7531,18 @@ pub static MZ_REPLACEMENTS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTab
     ontology: Some(Ontology {
         entity_name: "replacement",
         description: "A record of an object replacement (ALTER ... SWAP)",
-        links: &[
+        links: &const { [
             OntologyLink {
                 name: "replacement_object",
                 target: "object",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk("id", "id", Cardinality::ManyToOne),
             },
             OntologyLink {
                 name: "replacement_target",
                 target: "object",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "target_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk("target_id", "id", Cardinality::ManyToOne),
             },
-        ],
+        ] },
     }),
 });
 
@@ -7413,11 +7594,11 @@ pub static MZ_STORAGE_SHARDS: LazyLock<BuiltinSource> = LazyLock::new(|| Builtin
     ontology: Some(Ontology {
         entity_name: "storage_shard",
         description: "Persist shards used by storage objects",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "shard_of",
             target: "object",
-            properties_json: r#"{"source_id_type": "GlobalId", "requires_mapping": "mz_internal.mz_object_global_ids", "kind": "foreign_key", "source_column": "object_id", "target_column": "id", "cardinality": "many_to_one"}"#,
-        }],
+            properties: LinkProperties::fk_mapped("object_id", "id", Cardinality::ManyToOne, mz_repr::SemanticType::GlobalId, "mz_internal.mz_object_global_ids"),
+        }] },
     }),
 });
 
@@ -7470,11 +7651,11 @@ GROUP BY object_id, collection_timestamp",
     ontology: Some(Ontology {
         entity_name: "storage_usage",
         description: "Historical storage usage per object over time",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "storage_usage_of",
             target: "object",
-            properties_json: r#"{"kind": "foreign_key", "source_column": "object_id", "target_column": "id", "cardinality": "many_to_one"}"#,
-        }],
+            properties: LinkProperties::fk("object_id", "id", Cardinality::ManyToOne),
+        }] },
     }),
 });
 
@@ -7523,9 +7704,9 @@ GROUP BY object_id",
     ontology: Some(Ontology {
         entity_name: "recent_storage",
         description: "Most recent storage usage snapshot per object",
-        links: &[
-            OntologyLink { name: "recent_storage_of", target: "object", properties_json: r#"{"kind": "foreign_key", "source_column": "object_id", "target_column": "id", "cardinality": "one_to_one"}"# },
-        ],
+        links: &const { [
+            OntologyLink { name: "recent_storage_of", target: "object", properties: LinkProperties::fk("object_id", "id", Cardinality::OneToOne) },
+        ] },
     }),
 }
 });
@@ -7572,12 +7753,12 @@ UNION ALL SELECT id, oid, schema_id, name, 'materialized-view', owner_id, cluste
         ontology: Some(Ontology {
             entity_name: "relation",
             description: "Union of all relation types: tables, sources, views, MVs (convenience view)",
-            links: &[
-                OntologyLink { name: "union_includes", target: "table", properties_json: r#"{"kind": "union", "discriminator_column": "type", "discriminator_value": "table"}"# },
-                OntologyLink { name: "union_includes", target: "source", properties_json: r#"{"kind": "union", "discriminator_column": "type", "discriminator_value": "source"}"# },
-                OntologyLink { name: "union_includes", target: "view", properties_json: r#"{"kind": "union", "discriminator_column": "type", "discriminator_value": "view"}"# },
-                OntologyLink { name: "union_includes", target: "mv", properties_json: r#"{"kind": "union", "discriminator_column": "type", "discriminator_value": "materialized-view"}"# },
-            ],
+            links: &const { [
+                OntologyLink { name: "union_includes", target: "table", properties: LinkProperties::union_disc("type", "table") },
+                OntologyLink { name: "union_includes", target: "source", properties: LinkProperties::union_disc("type", "source") },
+                OntologyLink { name: "union_includes", target: "view", properties: LinkProperties::union_disc("type", "view") },
+                OntologyLink { name: "union_includes", target: "mv", properties: LinkProperties::union_disc("type", "materialized-view") },
+            ] },
         }),
     }
 });
@@ -7684,13 +7865,24 @@ UNION ALL
         ontology: Some(Ontology {
             entity_name: "object",
             description: "Union of all object types: relations, indexes, connections, etc. (convenience view)",
-            links: &[
-                OntologyLink { name: "union_includes", target: "relation", properties_json: r#"{"kind": "union", "note": "mz_objects includes all relations plus indexes, connections, secrets, types, functions"}"# },
-                OntologyLink { name: "union_includes", target: "index", properties_json: r#"{"kind": "union", "discriminator_column": "type", "discriminator_value": "index"}"# },
-                OntologyLink { name: "union_includes", target: "connection", properties_json: r#"{"kind": "union", "discriminator_column": "type", "discriminator_value": "connection"}"# },
-                OntologyLink { name: "union_includes", target: "secret", properties_json: r#"{"kind": "union", "discriminator_column": "type", "discriminator_value": "secret"}"# },
-                OntologyLink { name: "maps_to_global_id", target: "object", properties_json: r#"{"kind": "maps_to", "via": "mz_internal.mz_object_global_ids", "from_type": "CatalogItemId", "to_type": "GlobalId", "note": "A CatalogItemId (SQL layer) maps to one or more GlobalIds (runtime layer)."}"# },
-            ],
+            links: &const { [
+                OntologyLink { name: "union_includes", target: "relation", properties: LinkProperties::Union {
+     discriminator_column: None,
+     discriminator_value: None,
+     note: Some("mz_objects includes all relations plus indexes, connections, secrets, types, functions"),
+ } },
+                OntologyLink { name: "union_includes", target: "index", properties: LinkProperties::union_disc("type", "index") },
+                OntologyLink { name: "union_includes", target: "connection", properties: LinkProperties::union_disc("type", "connection") },
+                OntologyLink { name: "union_includes", target: "secret", properties: LinkProperties::union_disc("type", "secret") },
+                OntologyLink { name: "maps_to_global_id", target: "object", properties: LinkProperties::MapsTo {
+     source_column: None,
+     target_column: None,
+     via: Some("mz_internal.mz_object_global_ids"),
+     from_type: Some(mz_repr::SemanticType::CatalogItemId),
+     to_type: Some(mz_repr::SemanticType::GlobalId),
+     note: Some("A CatalogItemId (SQL layer) maps to one or more GlobalIds (runtime layer)."),
+ } },
+            ] },
         }),
     }
 });
@@ -7774,28 +7966,28 @@ pub static MZ_OBJECT_FULLY_QUALIFIED_NAMES: LazyLock<BuiltinView> = LazyLock::ne
     ontology: Some(Ontology {
         entity_name: "object_fqn",
         description: "Fully qualified name (database.schema.name) for objects",
-        links: &[
+        links: &const { [
             OntologyLink {
                 name: "details_of",
                 target: "object",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "one_to_one"}"#,
+                properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
             },
             OntologyLink {
                 name: "in_schema",
                 target: "schema",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "schema_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk("schema_id", "id", Cardinality::ManyToOne),
             },
             OntologyLink {
                 name: "in_database",
                 target: "database",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "database_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk("database_id", "id", Cardinality::ManyToOne),
             },
             OntologyLink {
                 name: "belongs_to_cluster",
                 target: "cluster",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "cluster_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk("cluster_id", "id", Cardinality::ManyToOne),
             },
-        ],
+        ] },
     }),
 });
 
@@ -7823,11 +8015,18 @@ pub static MZ_OBJECT_GLOBAL_IDS: LazyLock<BuiltinTable> = LazyLock::new(|| Built
     ontology: Some(Ontology {
         entity_name: "object_global_id",
         description: "Mapping between CatalogItemId (SQL layer) and GlobalId (runtime layer)",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "has_global_id",
             target: "object",
-            properties_json: r#"{"kind": "maps_to", "source_column": "id", "target_column": "id", "from_type": "CatalogItemId", "to_type": "GlobalId"}"#,
-        }],
+            properties: LinkProperties::MapsTo {
+                source_column: Some("id"),
+                target_column: Some("id"),
+                via: None,
+                from_type: Some(mz_repr::SemanticType::CatalogItemId),
+                to_type: Some(mz_repr::SemanticType::GlobalId),
+                note: None,
+            },
+        }] },
     }),
 });
 
@@ -7886,11 +8085,11 @@ pub static MZ_OBJECT_LIFETIMES: LazyLock<BuiltinView> = LazyLock::new(|| Builtin
     ontology: Some(Ontology {
         entity_name: "object_lifetime",
         description: "Computed lifetime span (created_at to dropped_at) for objects",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "lifetime_of",
             target: "object",
-            properties_json: r#"{"source_id_type": "CatalogItemId", "kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "one_to_one"}"#,
-        }],
+            properties: LinkProperties::fk_typed("id", "id", Cardinality::OneToOne, mz_repr::SemanticType::CatalogItemId),
+        }] },
     }),
 });
 
@@ -7984,11 +8183,11 @@ pub static MZ_OBJECT_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinVi
     ontology: Some(Ontology {
         entity_name: "object_history",
         description: "Historical record of object creation and drops",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "history_of",
             target: "object",
-            properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "many_to_one"}"#,
-        }],
+            properties: LinkProperties::fk("id", "id", Cardinality::ManyToOne),
+        }] },
     }),
 });
 
@@ -8037,7 +8236,7 @@ WHERE worker_id = 0::uint8",
     ontology: Some(Ontology {
         entity_name: "dataflow",
         description: "Dataflow instances",
-        links: &[],
+        links: &const { [] },
     }),
 });
 
@@ -8075,11 +8274,11 @@ WHERE worker_id = 0::uint8",
     ontology: Some(Ontology {
         entity_name: "dataflow_address",
         description: "Address (scope path) of dataflow operators",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "address_of_operator",
             target: "dataflow_operator",
-            properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "one_to_one"}"#,
-        }],
+            properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+        }] },
     }),
 });
 
@@ -8118,11 +8317,18 @@ WHERE worker_id = 0::uint8",
     ontology: Some(Ontology {
         entity_name: "dataflow_channel",
         description: "Communication channels between operators",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "channel_in_dataflow",
             target: "dataflow",
-            properties_json: r#"{"kind": "maps_to", "via": "mz_introspection.mz_dataflow_operator_dataflows", "note": "Channels do not have a direct dataflow_id. Use mz_dataflow_addresses to find the parent scope, then correlate with mz_dataflow_operator_dataflows."}"#,
-        }],
+            properties: LinkProperties::MapsTo {
+                source_column: None,
+                target_column: None,
+                via: Some("mz_introspection.mz_dataflow_operator_dataflows"),
+                from_type: None,
+                to_type: None,
+                note: Some("Channels do not have a direct dataflow_id. Use mz_dataflow_addresses to find the parent scope, then correlate with mz_dataflow_operator_dataflows."),
+            },
+        }] },
     }),
 });
 
@@ -8147,7 +8353,7 @@ WHERE worker_id = 0::uint8",
     ontology: Some(Ontology {
         entity_name: "dataflow_operator",
         description: "Operators within dataflows",
-        links: &[],
+        links: &const { [] },
     }),
 });
 
@@ -8206,7 +8412,7 @@ FROM      mz_catalog.mz_objects mo
     ontology: Some(Ontology {
         entity_name: "mappable_object",
         description: "Objects that can be mapped to dataflow operators",
-        links: &[],
+        links: &const { [] },
     }),
 });
 
@@ -8257,7 +8463,7 @@ WHERE worker_id = 0::uint8",
     ontology: Some(Ontology {
         entity_name: "lir_mapping",
         description: "LIR (low-level IR) to dataflow operator mapping",
-        links: &[],
+        links: &const { [] },
     }),
 });
 
@@ -8326,11 +8532,11 @@ WHERE worker_id = 0::uint8",
     ontology: Some(Ontology {
         entity_name: "dataflow_operator_dataflow",
         description: "Mapping of operators to their parent dataflow",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "operator_in_dataflow",
             target: "dataflow",
-            properties_json: r#"{"kind": "foreign_key", "source_column": "dataflow_id", "target_column": "id", "cardinality": "many_to_one"}"#,
-        }],
+            properties: LinkProperties::fk("dataflow_id", "id", Cardinality::ManyToOne),
+        }] },
     }),
 });
 
@@ -8374,18 +8580,18 @@ SELECT object_id, referenced_object_id FROM reach;",
         ontology: Some(Ontology {
             entity_name: "transitive_dependency",
             description: "Transitive closure of object dependencies — all direct and indirect dependencies",
-            links: &[
+            links: &const { [
                 OntologyLink {
                     name: "transitively_dependent_object",
                     target: "object",
-                    properties_json: r#"{"kind": "foreign_key", "source_column": "object_id", "target_column": "id", "cardinality": "many_to_one", "source_id_type": "CatalogItemId"}"#,
+                    properties: LinkProperties::fk_typed("object_id", "id", Cardinality::ManyToOne, mz_repr::SemanticType::CatalogItemId),
                 },
                 OntologyLink {
                     name: "transitively_referenced_object",
                     target: "object",
-                    properties_json: r#"{"kind": "foreign_key", "source_column": "referenced_object_id", "target_column": "id", "cardinality": "many_to_one", "source_id_type": "CatalogItemId"}"#,
+                    properties: LinkProperties::fk_typed("referenced_object_id", "id", Cardinality::ManyToOne, mz_repr::SemanticType::CatalogItemId),
                 },
-            ],
+            ] },
         }),
     }
 });
@@ -8421,18 +8627,25 @@ WHERE worker_id = 0::uint8",
     ontology: Some(Ontology {
         entity_name: "compute_export",
         description: "Compute exports (maintained collections)",
-        links: &[
+        links: &const { [
             OntologyLink {
                 name: "export_of",
                 target: "object",
-                properties_json: r#"{"source_id_type": "GlobalId", "requires_mapping": "mz_internal.mz_object_global_ids", "kind": "foreign_key", "source_column": "export_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk_mapped("export_id", "id", Cardinality::ManyToOne, mz_repr::SemanticType::GlobalId, "mz_internal.mz_object_global_ids"),
             },
             OntologyLink {
                 name: "introspection_uses_global_id",
                 target: "object_global_id",
-                properties_json: r#"{"kind": "maps_to", "note": "mz_introspection tables use GlobalId. To join with mz_catalog tables (which use CatalogItemId), go through mz_internal.mz_object_global_ids."}"#,
+                properties: LinkProperties::MapsTo {
+                    source_column: None,
+                    target_column: None,
+                    via: None,
+                    from_type: None,
+                    to_type: None,
+                    note: Some("mz_introspection tables use GlobalId. To join with mz_catalog tables (which use CatalogItemId), go through mz_internal.mz_object_global_ids."),
+                },
             },
-        ],
+        ] },
     }),
 });
 
@@ -8471,11 +8684,11 @@ GROUP BY export_id",
     ontology: Some(Ontology {
         entity_name: "compute_frontier",
         description: "Per-replica compute frontiers",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "compute_frontier_of",
             target: "object",
-            properties_json: r#"{"source_id_type": "GlobalId", "requires_mapping": "mz_internal.mz_object_global_ids", "kind": "foreign_key", "source_column": "export_id", "target_column": "id", "cardinality": "many_to_one"}"#,
-        }],
+            properties: LinkProperties::fk_mapped("export_id", "id", Cardinality::ManyToOne, mz_repr::SemanticType::GlobalId, "mz_internal.mz_object_global_ids"),
+        }] },
     }),
 });
 
@@ -8649,11 +8862,11 @@ GROUP BY export_id, import_id",
     ontology: Some(Ontology {
         entity_name: "compute_import_frontier",
         description: "Import frontiers for compute dependencies",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "compute_import_frontier_of",
             target: "object",
-            properties_json: r#"{"source_id_type": "GlobalId", "requires_mapping": "mz_internal.mz_object_global_ids", "kind": "foreign_key", "source_column": "export_id", "target_column": "id", "cardinality": "many_to_one"}"#,
-        }],
+            properties: LinkProperties::fk_mapped("export_id", "id", Cardinality::ManyToOne, mz_repr::SemanticType::GlobalId, "mz_internal.mz_object_global_ids"),
+        }] },
     }),
 });
 
@@ -8839,11 +9052,11 @@ GROUP BY
     ontology: Some(Ontology {
         entity_name: "records_per_dataflow",
         description: "Record counts aggregated per dataflow",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "details_of",
             target: "dataflow",
-            properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "one_to_one"}"#,
-        }],
+            properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+        }] },
     }),
 });
 
@@ -10124,7 +10337,7 @@ GROUP BY type, duration_ns",
     ontology: Some(Ontology {
         entity_name: "peek_duration",
         description: "Histogram of SELECT query durations",
-        links: &[],
+        links: &const { [] },
     }),
 });
 
@@ -10185,11 +10398,11 @@ GROUP BY id",
     ontology: Some(Ontology {
         entity_name: "scheduling_elapsed",
         description: "CPU time spent per operator",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "elapsed_for_operator",
             target: "dataflow_operator",
-            properties_json: r#"{"kind": "measures", "source_column": "id", "target_column": "id", "metric": "cpu_time_ns"}"#,
-        }],
+            properties: LinkProperties::measures("id", "id", "cpu_time_ns"),
+        }] },
     }),
 });
 
@@ -10322,7 +10535,7 @@ GROUP BY slept_for_ns, requested_ns",
     ontology: Some(Ontology {
         entity_name: "scheduling_parks",
         description: "Histogram of operator park durations",
-        links: &[],
+        links: &const { [] },
     }),
 });
 
@@ -10410,11 +10623,11 @@ HAVING pg_catalog.sum(count) != 0",
     ontology: Some(Ontology {
         entity_name: "compute_error_count",
         description: "Error counts per compute collection",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "errors_in",
             target: "compute_export",
-            properties_json: r#"{"kind": "foreign_key", "source_column": "export_id", "target_column": "export_id", "cardinality": "one_to_one"}"#,
-        }],
+            properties: LinkProperties::fk("export_id", "export_id", Cardinality::OneToOne),
+        }] },
     }),
 });
 
@@ -10473,7 +10686,7 @@ pub static MZ_COMPUTE_HYDRATION_TIMES: LazyLock<BuiltinSource> = LazyLock::new(|
     ontology: Some(Ontology {
         entity_name: "compute_hydration_time",
         description: "Time to hydrate compute objects",
-        links: &[],
+        links: &const { [] },
     }),
 });
 
@@ -10551,7 +10764,7 @@ SELECT * FROM complete_mvs",
     ontology: Some(Ontology {
         entity_name: "compute_hydration_status_view",
         description: "Computed hydration status per compute object",
-        links: &[],
+        links: &const { [] },
     }),
 });
 
@@ -10596,7 +10809,7 @@ pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES: LazyLock<BuiltinSource> = Laz
         ontology: Some(Ontology {
             entity_name: "compute_hydration_status",
             description: "Hydration status per compute operator",
-            links: &[],
+            links: &const { [] },
         }),
     }
 });
@@ -10736,11 +10949,11 @@ GROUP BY channel_id",
     ontology: Some(Ontology {
         entity_name: "message_count",
         description: "Inter-worker message counts",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "counts_for",
             target: "dataflow_channel",
-            properties_json: r#"{"kind": "foreign_key", "source_column": "channel_id", "target_column": "id", "cardinality": "one_to_one"}"#,
-        }],
+            properties: LinkProperties::fk("channel_id", "id", Cardinality::OneToOne),
+        }] },
     }),
 });
 
@@ -10783,7 +10996,7 @@ WHERE worker_id = 0::uint8",
     ontology: Some(Ontology {
         entity_name: "active_peek",
         description: "Currently executing SELECT queries",
-        links: &[],
+        links: &const { [] },
     }),
 });
 
@@ -11065,11 +11278,18 @@ GROUP BY operator_id",
     ontology: Some(Ontology {
         entity_name: "arrangement_size",
         description: "Aggregated arrangement sizes (records, batches, bytes)",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "arrangement_of_operator",
             target: "dataflow_operator",
-            properties_json: r#"{"kind": "measures", "source_column": "operator_id", "target_column": "id", "metric": "arrangement_size", "note": "Both IDs are local uint64 operator IDs within a dataflow, not GlobalIds."}"#,
-        }],
+            properties: LinkProperties::Measures {
+                source_column: "operator_id",
+                target_column: "id",
+                metric: "arrangement_size",
+                source_id_type: None,
+                requires_mapping: None,
+                note: Some("Both IDs are local uint64 operator IDs within a dataflow, not GlobalIds."),
+            },
+        }] },
     }),
 });
 
@@ -11123,11 +11343,11 @@ WHERE worker_id = 0::uint8",
     ontology: Some(Ontology {
         entity_name: "arrangement_sharing",
         description: "Arrangement sharing between operators",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "shared_by",
             target: "dataflow_operator",
-            properties_json: r#"{"kind": "foreign_key", "source_column": "operator_id", "target_column": "id", "cardinality": "one_to_one"}"#,
-        }],
+            properties: LinkProperties::fk("operator_id", "id", Cardinality::OneToOne),
+        }] },
     }),
 });
 
@@ -11183,11 +11403,11 @@ FROM
     ontology: Some(Ontology {
         entity_name: "replica_utilization",
         description: "Computed utilization metrics per replica",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "utilization_of_replica",
             target: "replica",
-            properties_json: r#"{"source_id_type": "CatalogItemId", "kind": "foreign_key", "source_column": "replica_id", "target_column": "id", "cardinality": "one_to_one"}"#,
-        }],
+            properties: LinkProperties::fk_typed("replica_id", "id", Cardinality::OneToOne, mz_repr::SemanticType::CatalogItemId),
+        }] },
     }),
 });
 
@@ -11551,7 +11771,7 @@ pub static MZ_EXPECTED_GROUP_SIZE_ADVICE: LazyLock<BuiltinView> = LazyLock::new(
     ontology: Some(Ontology {
         entity_name: "group_size_advice",
         description: "Advice on expected group sizes for reduce operators",
-        links: &[],
+        links: &const { [] },
     }),
 });
 
@@ -14507,7 +14727,7 @@ pub static MZ_CLUSTER_REPLICA_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| 
     ontology: Some(Ontology {
         entity_name: "replica_history",
         description: "Historical record of replica creation/drops",
-        links: &[],
+        links: &const { [] },
     }),
 });
 
@@ -14582,7 +14802,7 @@ FROM system_replicas"#,
     ontology: Some(Ontology {
         entity_name: "replica_name_history",
         description: "Historical replica names",
-        links: &[],
+        links: &const { [] },
     }),
 });
 
@@ -14680,18 +14900,18 @@ SELECT * FROM sinks"#,
     ontology: Some(Ontology {
         entity_name: "hydration_status",
         description: "Overall hydration status per object",
-        links: &[
+        links: &const { [
             OntologyLink {
                 name: "hydration_of",
                 target: "object",
-                properties_json: r#"{"source_id_type": "CatalogItemId", "kind": "foreign_key", "source_column": "object_id", "target_column": "id", "cardinality": "one_to_one"}"#,
+                properties: LinkProperties::fk_typed("object_id", "id", Cardinality::OneToOne, mz_repr::SemanticType::CatalogItemId),
             },
             OntologyLink {
                 name: "hydration_on_replica",
                 target: "replica",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "replica_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk("replica_id", "id", Cardinality::ManyToOne),
             },
-        ],
+        ] },
     }),
 });
 
@@ -14742,18 +14962,22 @@ JOIN mz_catalog.mz_relations r ON (r.id = d.referenced_object_id)",
     ontology: Some(Ontology {
         entity_name: "materialization_dep",
         description: "Dependencies between materializations",
-        links: &[
+        links: &const { [
             OntologyLink {
                 name: "materialization_depends_on",
                 target: "object",
-                properties_json: r#"{"source_id_type": "CatalogItemId", "kind": "depends_on", "source_column": "object_id", "target_column": "id"}"#,
+                properties: LinkProperties::DependsOn {
+                    source_column: "object_id",
+                    target_column: "id",
+                    source_id_type: Some(mz_repr::SemanticType::CatalogItemId),
+                },
             },
             OntologyLink {
                 name: "materialization_dependency",
                 target: "object",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "dependency_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk("dependency_id", "id", Cardinality::ManyToOne),
             },
-        ],
+        ] },
     }),
 });
 
@@ -14887,23 +15111,23 @@ JOIN root_times r USING (id)",
     ontology: Some(Ontology {
         entity_name: "materialization_lag",
         description: "Lag between a materialization and its inputs",
-        links: &[
+        links: &const { [
             OntologyLink {
                 name: "measures_materialization_lag",
                 target: "object",
-                properties_json: r#"{"kind": "measures", "source_column": "object_id", "target_column": "id", "metric": "materialization_lag"}"#,
+                properties: LinkProperties::measures("object_id", "id", "materialization_lag"),
             },
             OntologyLink {
                 name: "slowest_local_input",
                 target: "object",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "slowest_local_input_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk("slowest_local_input_id", "id", Cardinality::ManyToOne),
             },
             OntologyLink {
                 name: "slowest_global_input",
                 target: "object",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "slowest_global_input_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk("slowest_global_input_id", "id", Cardinality::ManyToOne),
             },
-        ],
+        ] },
     }),
 });
 
@@ -15309,18 +15533,18 @@ FROM mz_cluster_deployment_lineage"#,
     ontology: Some(Ontology {
         entity_name: "cluster_deployment",
         description: "Cluster deployment lineage information",
-        links: &[
+        links: &const { [
             OntologyLink {
                 name: "deployment_of",
                 target: "cluster",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "cluster_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk("cluster_id", "id", Cardinality::ManyToOne),
             },
             OntologyLink {
                 name: "current_deployment",
                 target: "cluster",
-                properties_json: r#"{"kind": "foreign_key", "source_column": "current_deployment_cluster_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+                properties: LinkProperties::fk("current_deployment_cluster_id", "id", Cardinality::ManyToOne),
             },
-        ],
+        ] },
     }),
 });
 
@@ -15909,11 +16133,11 @@ pub static MZ_SOURCE_STATISTICS: LazyLock<BuiltinView> = LazyLock::new(|| {
         ontology: Some(Ontology {
             entity_name: "source_statistics",
             description: "Aggregated source ingestion statistics",
-            links: &[OntologyLink {
+            links: &const { [OntologyLink {
                 name: "statistics_of_source",
                 target: "source",
-                properties_json: r#"{"kind": "measures", "source_column": "id", "target_column": "id", "metric": "ingestion_statistics"}"#,
-            }],
+                properties: LinkProperties::measures("id", "id", "ingestion_statistics"),
+            }] },
         }),
     }
 });
@@ -16004,11 +16228,11 @@ GROUP BY id, replica_id",
     ontology: Some(Ontology {
         entity_name: "sink_statistics",
         description: "Aggregated sink export statistics",
-        links: &[OntologyLink {
+        links: &const { [OntologyLink {
             name: "statistics_of_sink",
             target: "sink",
-            properties_json: r#"{"kind": "measures", "source_column": "id", "target_column": "id", "metric": "export_statistics"}"#,
-        }],
+            properties: LinkProperties::measures("id", "id", "export_statistics"),
+        }] },
     }),
 });
 
@@ -17176,9 +17400,9 @@ mod tests {
         // already have at least one FK-style link.
         //
         // Scope: only entities that have started FK annotation (at least one
-        // link with "source_column" in properties_json). Entities with only
-        // union/maps_to links, or no links at all, are not yet fully annotated
-        // and are skipped to avoid noise.
+        // link with a source_column). Entities with only union/maps_to links,
+        // or no links at all, are not yet fully annotated and are skipped to
+        // avoid noise.
         //
         // Exemptions:
         // - Column at index 0 named "id": almost always the entity's own PK,
@@ -17210,17 +17434,16 @@ mod tests {
             };
             let Some(ont) = ontology else { continue };
 
-            // Collect all source_column values declared by existing FK links.
-            // The format is always: "source_column": "colname"
+            // Collect all source_column values declared by existing links.
             let linked_cols: BTreeSet<&str> = ont
                 .links
                 .iter()
-                .filter_map(|link| {
-                    let json = link.properties_json;
-                    let key = "\"source_column\": \"";
-                    let start = json.find(key)? + key.len();
-                    let end = json[start..].find('"')? + start;
-                    Some(&json[start..end])
+                .filter_map(|link| match &link.properties {
+                    LinkProperties::ForeignKey { source_column, .. } => Some(*source_column),
+                    LinkProperties::Measures { source_column, .. } => Some(*source_column),
+                    LinkProperties::DependsOn { source_column, .. } => Some(*source_column),
+                    LinkProperties::MapsTo { source_column: Some(sc), .. } => Some(*sc),
+                    _ => None,
                 })
                 .collect();
 
@@ -17265,9 +17488,11 @@ mod tests {
             uncovered_fk_cols.join("\n"),
         );
 
-        // Validate that every source_column referenced in properties_json
-        // actually names a column in the entity's RelationDesc. This catches
-        // stale link annotations after column renames or removals.
+        // Validate that every source_column in a link actually names a column
+        // in the entity's RelationDesc. This catches stale annotations after
+        // column renames or removals. With typed LinkProperties this is mostly
+        // belt-and-suspenders since the type system enforces field presence, but
+        // we still need to verify the string value matches a real column.
         let mut bad_source_cols = Vec::new();
         for builtin in BUILTINS_STATIC.iter() {
             let (name, desc, ontology) = match builtin {
@@ -17283,15 +17508,14 @@ mod tests {
                 desc.iter_names().map(|c| c.as_str()).collect();
 
             for link in ont.links {
-                let json = link.properties_json;
-                let key = "\"source_column\": \"";
-                let Some(start) = json.find(key).map(|i| i + key.len()) else {
-                    continue;
+                let source_col = match &link.properties {
+                    LinkProperties::ForeignKey { source_column, .. } => Some(*source_column),
+                    LinkProperties::Measures { source_column, .. } => Some(*source_column),
+                    LinkProperties::DependsOn { source_column, .. } => Some(*source_column),
+                    LinkProperties::MapsTo { source_column: Some(sc), .. } => Some(*sc),
+                    _ => None,
                 };
-                let Some(end) = json[start..].find('"').map(|i| i + start) else {
-                    continue;
-                };
-                let col = &json[start..end];
+                let Some(col) = source_col else { continue };
                 if !col_names.contains(col) {
                     bad_source_cols.push(format!(
                         "entity {:?} (builtin {}) link {:?} references source_column {:?} which does not exist in the relation",
@@ -17311,6 +17535,77 @@ mod tests {
             entity_names.len() > 90,
             "expected > 90 ontology entities, found {}",
             entity_names.len()
+        );
+    }
+
+    /// Verify that `LinkProperties` serializes to the same JSON that the old
+    /// hand-written `properties_json` strings contained. One representative
+    /// case per constructor/variant is enough — the important thing is that
+    /// field names, enum tag values, and skip-if-None/false behaviour are all
+    /// correct.
+    #[mz_ore::test]
+    fn test_link_properties_serialization() {
+        let check = |props: LinkProperties, expected: &str| {
+            let got = serde_json::to_string(&props).expect("serialize");
+            let got_val: serde_json::Value = serde_json::from_str(&got).expect("parse got");
+            let exp_val: serde_json::Value = serde_json::from_str(expected).expect("parse expected");
+            assert_eq!(got_val, exp_val, "mismatch for {expected}");
+        };
+
+        // fk — basic, no optional fields
+        check(
+            LinkProperties::fk("owner_id", "id", Cardinality::ManyToOne),
+            r#"{"kind":"foreign_key","source_column":"owner_id","target_column":"id","cardinality":"many_to_one"}"#,
+        );
+        // fk — one_to_one cardinality
+        check(
+            LinkProperties::fk("id", "id", Cardinality::OneToOne),
+            r#"{"kind":"foreign_key","source_column":"id","target_column":"id","cardinality":"one_to_one"}"#,
+        );
+        // fk_nullable — nullable field present and true
+        check(
+            LinkProperties::fk_nullable("database_id", "id", Cardinality::ManyToOne),
+            r#"{"kind":"foreign_key","source_column":"database_id","target_column":"id","cardinality":"many_to_one","nullable":true}"#,
+        );
+        // fk_typed — source_id_type present, requires_mapping absent
+        check(
+            LinkProperties::fk_typed("replica_id", "id", Cardinality::ManyToOne, mz_repr::SemanticType::CatalogItemId),
+            r#"{"kind":"foreign_key","source_column":"replica_id","target_column":"id","cardinality":"many_to_one","source_id_type":"CatalogItemId"}"#,
+        );
+        // fk_mapped — source_id_type + requires_mapping both present
+        check(
+            LinkProperties::fk_mapped("object_id", "id", Cardinality::ManyToOne, mz_repr::SemanticType::GlobalId, "mz_internal.mz_object_global_ids"),
+            r#"{"kind":"foreign_key","source_column":"object_id","target_column":"id","cardinality":"many_to_one","source_id_type":"GlobalId","requires_mapping":"mz_internal.mz_object_global_ids"}"#,
+        );
+        // union_disc — discriminator fields present, note absent
+        check(
+            LinkProperties::union_disc("type", "table"),
+            r#"{"kind":"union","discriminator_column":"type","discriminator_value":"table"}"#,
+        );
+        // Union — note only, discriminator absent
+        check(
+            LinkProperties::Union { discriminator_column: None, discriminator_value: None, note: Some("example note") },
+            r#"{"kind":"union","note":"example note"}"#,
+        );
+        // measures — basic
+        check(
+            LinkProperties::measures("id", "id", "cpu_time_ns"),
+            r#"{"kind":"measures","source_column":"id","target_column":"id","metric":"cpu_time_ns"}"#,
+        );
+        // measures_mapped — source_id_type + requires_mapping present
+        check(
+            LinkProperties::measures_mapped("object_id", "id", "wallclock_lag", mz_repr::SemanticType::GlobalId, "mz_internal.mz_object_global_ids"),
+            r#"{"kind":"measures","source_column":"object_id","target_column":"id","metric":"wallclock_lag","source_id_type":"GlobalId","requires_mapping":"mz_internal.mz_object_global_ids"}"#,
+        );
+        // DependsOn
+        check(
+            LinkProperties::DependsOn { source_column: "object_id", target_column: "id", source_id_type: Some(mz_repr::SemanticType::CatalogItemId) },
+            r#"{"kind":"depends_on","source_column":"object_id","target_column":"id","source_id_type":"CatalogItemId"}"#,
+        );
+        // MapsTo — via + from_type + to_type
+        check(
+            LinkProperties::MapsTo { source_column: None, target_column: None, via: Some("mz_internal.mz_object_global_ids"), from_type: Some(mz_repr::SemanticType::CatalogItemId), to_type: Some(mz_repr::SemanticType::GlobalId), note: None },
+            r#"{"kind":"maps_to","via":"mz_internal.mz_object_global_ids","from_type":"CatalogItemId","to_type":"GlobalId"}"#,
         );
     }
 }
