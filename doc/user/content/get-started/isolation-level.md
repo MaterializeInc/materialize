@@ -16,7 +16,8 @@ The SQL standard defines four levels of transaction isolation. In order of least
 
 In Materialize, you can request any of these isolation
 levels, but they all behave the same as the Serializable isolation level. In addition to the four levels defined in the
-SQL Standard, Materialize also defines a [Strict Serializable](#strict-serializable) isolation level.
+SQL Standard, Materialize also defines a [Strict Serializable](#strict-serializable) isolation level and a
+[Bounded Staleness](#bounded-staleness) isolation level.
 
 Isolation level is a configuration parameter that can be set by the user on a session-by-session basis. The default isolation level is
 [Strict Serializable](#strict-serializable).
@@ -28,13 +29,14 @@ SET TRANSACTION_ISOLATION TO|= <isolation_level>
 ```
 
 
-| Valid Isolation Levels                      |
-| ------------------------------------------- |
-| [Read Uncommitted](#serializable)           |
-| [Read Committed](#serializable)             |
-| [Repeatable Read](#serializable)            |
-| [Serializable](#serializable)               |
-| [Strict Serializable](#strict-serializable) |
+| Valid Isolation Levels                            |
+| ------------------------------------------------- |
+| [Read Uncommitted](#serializable)                 |
+| [Read Committed](#serializable)                   |
+| [Repeatable Read](#serializable)                  |
+| [Serializable](#serializable)                     |
+| [Strict Serializable](#strict-serializable)       |
+| [Bounded Staleness `<duration>`](#bounded-staleness) |
 
 ## Examples
 
@@ -44,6 +46,10 @@ SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
 
 ```mzsql
 SET TRANSACTION_ISOLATION TO 'STRICT SERIALIZABLE';
+```
+
+```mzsql
+SET TRANSACTION_ISOLATION TO 'bounded staleness 5s';
 ```
 
 ## Serializable
@@ -168,6 +174,63 @@ made available to us (e.g., querying PostgreSQL for the replication slot's LSN).
     recency queries return at least all data visible to Materialize when our
     client connection communicates with the external system.
 
+## Bounded staleness
+
+{{< private-preview />}}
+
+The Bounded Staleness isolation level lets you trade exact freshness for predictable latency.
+A query under bounded staleness is served at a timestamp that is at most `D` stale --- but never blocks waiting for input collections to catch up.
+If no timestamp within `D` of "now" is available, the query errors immediately.
+
+This sits between [Serializable](#serializable) (no freshness bound, never blocks) and [Strict Serializable](#strict-serializable) (perfectly fresh, may block up to one timestamp tick) on the freshness/latency spectrum.
+
+### Syntax
+
+```mzsql
+SET TRANSACTION_ISOLATION TO 'bounded staleness <duration>';
+```
+
+`<duration>` is a duration string like `5s`, `500ms`, or `1m30s`. Must be greater than `0` and no more than `1h`.
+
+#### Examples
+
+```mzsql
+-- Read data no more than 5 seconds stale, never block.
+SET TRANSACTION_ISOLATION TO 'bounded staleness 5s';
+
+-- A tighter bound for dashboards.
+SET TRANSACTION_ISOLATION TO 'bounded staleness 250ms';
+```
+
+### Behavior
+
+When a query runs under bounded staleness, Materialize picks the freshest timestamp `T` at which every queried collection has data, subject to the constraint that `T` is no more than `D` stale relative to the current logical time.
+The query never blocks waiting for sources, materialized views, or indexes to advance.
+If even the freshest available timestamp is more than `D` stale, the query errors with `SQLSTATE 40001` (`serialization_failure`):
+
+```
+ERROR: cannot serve query under bounded staleness 5s; freshest available
+       timestamp is 7000ms older than the bound
+```
+
+Treat `40001` as a transient failure: retry once at the same isolation level, and if it persists fall back to `serializable` (no freshness bound) or surface a "data unavailable" state to the user.
+
+### Restrictions
+
+-   **Read-only.** Writes (`INSERT`, `UPDATE`, `DELETE`, `COPY FROM`) are not permitted under bounded staleness. The first write in a session running at this isolation level errors.
+-   **Mutually exclusive with `real_time_recency`.** Setting both errors at session-variable validation time.
+-   **Single timeline.** Bounded staleness only applies to queries on the standard wall-clock timeline. Queries that touch other timelines error at planning time.
+-   **Bound must be `> 0` and `<= 1 hour`.** A bound of zero is rejected (use Strict Serializable instead). Bounds longer than one hour are rejected to avoid silent degradation to unbounded Serializable.
+
+### When to use bounded staleness
+
+Pick bounded staleness when predictable latency matters more than perfect freshness, and "data is too stale" is a more useful signal than blocking.
+Common cases: dashboards, metric panels, alert evaluation.
+
+Prefer [Strict Serializable](#strict-serializable) when you need linearizable, end-to-end fresh reads, or when your application is willing to wait for the freshest data.
+Prefer [Serializable](#serializable) when you do not need a freshness bound at all and want the simplest, lowest-latency reads.
+Bounded staleness is read-only: if your session needs writes, use one of the other isolation levels.
+
 ## Choosing the right isolation level
 
 It may not be immediately clear which isolation level is right for you. Materialize recommends to start with the default
@@ -185,6 +248,12 @@ materialized view that was created using multiple objects) will be executed imme
 the statement may block until a consistent snapshot is available. If you know you will be executing
 single `SELECT` statement transactions in Serializable mode, then it is strongly
 recommended to use auto-commit instead of explicit transactions.
+
+If you want a freshness ceiling rather than a strict-vs.-best-effort choice, see
+[Bounded Staleness](#bounded-staleness). Under that isolation level a query is served at a
+timestamp at most `D` stale, never blocks on input frontiers, and errors immediately when the
+ceiling cannot be met. It fits read-only workloads where unpredictable latency is worse than a
+small staleness window --- the typical example is dashboards.
 
 ## Learn more
 
