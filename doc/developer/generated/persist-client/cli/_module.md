@@ -1,6 +1,6 @@
 ---
 source: src/persist-client/src/cli/args.rs
-revision: 181b1e7efc
+revision: b89a9e0ec5
 ---
 
 # persist-client::cli
