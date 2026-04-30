@@ -15,6 +15,31 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.21.0
+*Released to Materialize Cloud: 2026-04-30* <br>
+*Released to Materialize Self-Managed: 2026-05-01* <br>
+
+This release includes several bug fixes and improvements.
+
+### Bug Fixes {#v26-21-bug-fixes}
+- Fixed crash in coordinator when `CREATE CONNECTION` or `ALTER CONNECTION`
+  included invalid mTLS certificates, now returns proper error message
+  instead of panicking.
+- Fixed `EXPLAIN ANALYZE` queries failing when object names contain single
+  quotes by properly escaping names in generated SQL.
+- Fixed `SWAP` command ignoring `IF EXISTS` clause, which was parsed but not
+  applied.
+- Fixed `COPY FROM PARQUET` failing on files with unsorted map keys by sorting
+  keys during data ingestion.
+- Fixed `ALTER SOURCE` for SQL Server sources silently dropping `TEXT` and
+  `EXCLUDE COLUMNS` options by using proper column reference matching.
+- Fixed casting from `oid` to `int64` data type.
+- Fixed temporal bucketing buffer efficiency issue that was causing up to 2x
+  more buffer flushes than necessary.
+- Fixed `ALTER ROLE` command's `CREATEROLE` privilege check.
+- Fixed Console payment management UI showing 403 errors for non-admin users
+  by hiding admin-only actions and displaying helpful messaging.
+
 ## v26.20.2
 *Released to Materialize Cloud: 2026-04-16* <br>
 *Released to Materialize Self-Managed: 2026-04-17* <br>
