@@ -287,8 +287,6 @@ fn test_timestamp_selection() {
                             oracle_read_ts,
                             None, /* real_time_recency_ts */
                             &IsolationLevel::from(isolation),
-                            // `now`: reuse the test fixture's wall-clock anchor.
-                            u64::from(f.oracle),
                         )
                         .unwrap();
 

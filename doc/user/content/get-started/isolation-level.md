@@ -190,7 +190,7 @@ This sits between [Serializable](#serializable) (no freshness bound, never block
 SET TRANSACTION_ISOLATION TO 'bounded staleness <duration>';
 ```
 
-`<duration>` is a duration string like `5s`, `500ms`, or `1m30s`. Must be greater than `0` and no more than `1h`.
+`<duration>` is a duration string like `5s`, `500ms`, or `1m30s`. Must be greater than `0`.
 
 #### Examples
 
@@ -220,7 +220,7 @@ Treat `40001` as a transient failure: retry once at the same isolation level, an
 -   **Read-only.** Writes (`INSERT`, `UPDATE`, `DELETE`, `COPY FROM`) are not permitted under bounded staleness. The first write in a session running at this isolation level errors.
 -   **Mutually exclusive with `real_time_recency`.** Setting both errors at session-variable validation time.
 -   **Single timeline.** Bounded staleness only applies to queries on the standard wall-clock timeline. Queries that touch other timelines error at planning time.
--   **Bound must be `> 0` and `<= 1 hour`.** A bound of zero is rejected (use Strict Serializable instead). Bounds longer than one hour are rejected to avoid silent degradation to unbounded Serializable.
+-   **Bound must be `> 0`.** A bound of zero is rejected; use [Strict Serializable](#strict-serializable) if you need exact freshness.
 
 ### When to use bounded staleness
 

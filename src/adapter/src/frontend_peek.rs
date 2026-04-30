@@ -707,7 +707,6 @@ impl PeekClient {
                     // Simply use the inputs of the current query.
                     &input_id_bundle
                 };
-                let now = (catalog.config().now)();
                 let (determination, read_holds) = self
                     .frontend_determine_timestamp(
                         session,
@@ -717,7 +716,6 @@ impl PeekClient {
                         &timeline_context,
                         oracle_read_ts,
                         real_time_recency_ts,
-                        now,
                     )
                     .await?;
 
@@ -1513,7 +1511,6 @@ impl PeekClient {
         timeline_context: &TimelineContext,
         oracle_read_ts: Option<Timestamp>,
         real_time_recency_ts: Option<Timestamp>,
-        now: EpochMillis,
     ) -> Result<(TimestampDetermination, ReadHolds), AdapterError> {
         // this is copy-pasted from Coordinator
 
@@ -1538,7 +1535,6 @@ impl PeekClient {
             isolation_level,
             read_holds,
             upper.clone(),
-            now,
         )?;
 
         session
@@ -1569,7 +1565,6 @@ impl PeekClient {
                         &IsolationLevel::Serializable,
                         read_holds.clone(),
                         upper.clone(),
-                        now,
                     )?;
                 if let Some(serializable) = serializable_det.timestamp_context.timestamp() {
                     session
@@ -1600,7 +1595,6 @@ impl PeekClient {
                         &IsolationLevel::Serializable,
                         read_holds.clone(),
                         upper,
-                        now,
                     )?;
                 if let Some(serializable) = serializable_det.timestamp_context.timestamp() {
                     session

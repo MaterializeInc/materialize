@@ -245,20 +245,6 @@ pub const ARRANGEMENT_SIZE_HISTORY_RETENTION_PERIOD: Config<Duration> = Config::
     "How long to retain rows in mz_internal.mz_object_arrangement_size_history.",
 );
 
-/// When `true`, the `bounded staleness <duration>` isolation level anchors `T`
-/// against the timestamp oracle's `read_ts` (one oracle round-trip per query;
-/// correct under multi-node deployments). When `false` (default), anchors
-/// against the local wall clock (no oracle call; correct under a single
-/// `environmentd` or sub-tick clock skew). The active value is mirrored into a
-/// static `AtomicBool` read by `needs_linearized_read_ts` so changes take
-/// effect on subsequent queries without a per-query config lookup.
-pub const BOUNDED_STALENESS_USE_ORACLE_ANCHOR: Config<bool> = Config::new(
-    "bounded_staleness_use_oracle_anchor",
-    false,
-    "When true, bounded staleness uses the timestamp oracle's read_ts as its freshness anchor; \
-     when false, uses the local wall clock.",
-);
-
 /// Adds the full set of all adapter `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -294,5 +280,4 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&CONSOLE_OIDC_SCOPES)
         .add(&ARRANGEMENT_SIZE_HISTORY_COLLECTION_INTERVAL)
         .add(&ARRANGEMENT_SIZE_HISTORY_RETENTION_PERIOD)
-        .add(&BOUNDED_STALENESS_USE_ORACLE_ANCHOR)
 }

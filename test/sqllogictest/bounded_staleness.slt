@@ -53,16 +53,16 @@ SET transaction_isolation TO 'bounded staleness banana'
 statement error invalid value for parameter "transaction_isolation"
 SET transaction_isolation TO 'bounded staleness'
 
-# 1-hour cap is strict (>); 1h passes, 2h fails.
+# Long durations are accepted; there is no upper cap on the bound.
 
 statement ok
 SET transaction_isolation TO 'bounded staleness 1h'
 
 statement ok
-RESET transaction_isolation
+SET transaction_isolation TO 'bounded staleness 24h'
 
-statement error invalid value for parameter "transaction_isolation"
-SET transaction_isolation TO 'bounded staleness 2h'
+statement ok
+RESET transaction_isolation
 
 # --- mutual exclusion with real_time_recency ----------------------------------
 

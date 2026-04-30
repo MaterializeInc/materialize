@@ -10,7 +10,6 @@
 //! Logic for selecting timestamps for various operations on collections.
 
 use std::fmt;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -18,9 +17,7 @@ use constraints::Constraints;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
 use mz_compute_types::ComputeInstanceId;
-use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastLossy;
-use mz_ore::now::EpochMillis;
 use mz_repr::{GlobalId, Timestamp, TimestampManipulation};
 use mz_sql::plan::QueryWhen;
 use mz_sql::session::vars::IsolationLevel;
@@ -35,28 +32,6 @@ use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::read_policy::ReadHolds;
 use crate::coord::timeline::TimelineContext;
 use crate::session::Session;
-
-/// Mirror of the `bounded_staleness_use_oracle_anchor` dyncfg, kept here as a
-/// process-wide static so that `needs_linearized_read_ts` (a free function with
-/// no system-vars handle) can decide whether a bounded-staleness query should
-/// linearize against the oracle.
-///
-/// The Coordinator updates this on each system-config change via
-/// `refresh_bounded_staleness_use_oracle_anchor`.
-static BOUNDED_STALENESS_USE_ORACLE_ANCHOR_FLAG: AtomicBool = AtomicBool::new(false);
-
-/// Refresh the bounded-staleness anchor flag from a `ConfigSet`. Called by the
-/// Coordinator on every system-config update.
-pub fn refresh_bounded_staleness_use_oracle_anchor(configs: &ConfigSet) {
-    let v = mz_adapter_types::dyncfgs::BOUNDED_STALENESS_USE_ORACLE_ANCHOR.get(configs);
-    BOUNDED_STALENESS_USE_ORACLE_ANCHOR_FLAG.store(v, Ordering::Relaxed);
-}
-
-/// Whether bounded staleness should anchor against the timestamp oracle's
-/// `read_ts` (rather than wall clock). Reads the static mirror; cheap.
-pub fn bounded_staleness_use_oracle_anchor() -> bool {
-    BOUNDED_STALENESS_USE_ORACLE_ANCHOR_FLAG.load(Ordering::Relaxed)
-}
 
 /// The timeline and timestamp context of a read.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -253,22 +228,25 @@ pub trait TimestampProvider {
     fn needs_linearized_read_ts(isolation_level: &IsolationLevel, when: &QueryWhen) -> bool {
         // When we're in the context of a timeline (assumption) and one of these
         // scenarios hold, we need to use a linearized read timestamp:
-        // - The isolation level is Strict Serializable and the `when` allows us to use the
-        //   the timestamp oracle (ex: queries with no AS OF).
-        // - The `when` requires us to use the timestamp oracle (ex: read-then-write queries).
-        // - The isolation level is BoundedStaleness AND the operator has opted into
-        //   anchoring against the oracle (rather than wall clock) via the
-        //   `bounded_staleness_use_oracle_anchor` dyncfg.
-        let bounded_staleness_oracle_anchor =
-            matches!(isolation_level, IsolationLevel::BoundedStaleness(_))
-                && bounded_staleness_use_oracle_anchor();
-
+        // - The isolation level requires anchoring against the oracle:
+        //   * Strict Serializable: timestamp == oracle.read_ts.
+        //   * Strong Session Serializable: timestamp == session-local oracle.
+        //   * Bounded Staleness: timestamp >= oracle.read_ts - D. The oracle is the
+        //     only anchor that stays correct across crashes/restarts and clock
+        //     changes, and is the only one that will work in a multi-`environmentd`
+        //     deployment.
+        //   …and the `when` allows us to use the timestamp oracle (ex: queries with
+        //   no AS OF).
+        // - The `when` requires us to use the timestamp oracle (ex: read-then-write
+        //   queries).
         when.must_advance_to_timeline_ts()
             || (when.can_advance_to_timeline_ts()
-                && (matches!(
+                && matches!(
                     isolation_level,
-                    IsolationLevel::StrictSerializable | IsolationLevel::StrongSessionSerializable
-                ) || bounded_staleness_oracle_anchor))
+                    IsolationLevel::StrictSerializable
+                        | IsolationLevel::StrongSessionSerializable
+                        | IsolationLevel::BoundedStaleness(_)
+                ))
     }
 
     /// Uses constraints and preferences to determine a timestamp for a query.
@@ -284,7 +262,6 @@ pub trait TimestampProvider {
         isolation_level: &IsolationLevel,
         timeline: &Option<Timeline>,
         largest_not_in_advance_of_upper: Timestamp,
-        now: EpochMillis,
     ) -> Result<RawTimestampDetermination, AdapterError> {
         use constraints::{Constraints, Preference, Reason};
 
@@ -368,12 +345,10 @@ pub trait TimestampProvider {
             }
 
             // For BoundedStaleness, add a freshness lower bound: the chosen timestamp
-            // must not be older than `anchor - D`. The anchor is either the timestamp
-            // oracle's `read_ts` (when `bounded_staleness_use_oracle_anchor` is on,
-            // already fetched and supplied via `oracle_read_ts`) or the local wall
-            // clock (the default — no oracle round-trip). The wall-clock variant is
-            // sound under the EpochMilliseconds invariant `oracle_read_ts <= now_ms`;
-            // the oracle variant is correct under multi-node deployments.
+            // must not be older than `oracle.read_ts - D`. The oracle is the only
+            // anchor that stays correct across restarts and clock changes; see
+            // `needs_linearized_read_ts`, which returns true here so `oracle_read_ts`
+            // is always populated.
             //
             // Also add a hard upper bound at `largest_not_in_advance_of_upper`. Without
             // this, a candidate forced above the inputs' upper by the lower bound would
@@ -382,7 +357,8 @@ pub trait TimestampProvider {
             // bail. With the upper bound in place the feasibility check fires
             // `BoundedStalenessExceeded` deterministically in the coordinator.
             if let IsolationLevel::BoundedStaleness(d) = isolation_level {
-                let anchor = oracle_read_ts.unwrap_or_else(|| Timestamp::from(now));
+                let anchor = oracle_read_ts
+                    .expect("BoundedStaleness sets needs_linearized_read_ts; oracle_read_ts must be populated");
                 let bound_ms = u64::try_from(d.as_millis()).unwrap_or(u64::MAX);
                 let lower = anchor.saturating_sub(bound_ms);
                 constraints.lower.push((
@@ -518,7 +494,6 @@ pub trait TimestampProvider {
         oracle_read_ts: Option<Timestamp>,
         real_time_recency_ts: Option<Timestamp>,
         isolation_level: &IsolationLevel,
-        now: EpochMillis,
     ) -> Result<(TimestampDetermination, ReadHolds), AdapterError> {
         // First, we acquire read holds that will ensure the queried collections
         // stay queryable at the chosen timestamp.
@@ -536,7 +511,6 @@ pub trait TimestampProvider {
             isolation_level,
             read_holds,
             upper,
-            now,
         )
     }
 
@@ -551,7 +525,6 @@ pub trait TimestampProvider {
         isolation_level: &IsolationLevel,
         read_holds: ReadHolds,
         upper: Antichain<Timestamp>,
-        now: EpochMillis,
     ) -> Result<(TimestampDetermination, ReadHolds), AdapterError> {
         let timeline = Self::get_timeline(timeline_context);
         let largest_not_in_advance_of_upper = Coordinator::largest_not_in_advance_of_upper(&upper);
@@ -600,7 +573,6 @@ pub trait TimestampProvider {
             isolation_level,
             &timeline,
             largest_not_in_advance_of_upper,
-            now,
         )?;
 
         let timestamp_context = TimestampContext::from_timeline_context(
@@ -700,7 +672,6 @@ impl Coordinator {
         real_time_recency_ts: Option<mz_repr::Timestamp>,
     ) -> Result<(TimestampDetermination, ReadHolds), AdapterError> {
         let isolation_level = session.vars().transaction_isolation();
-        let now = self.now();
         let (det, read_holds) = self.determine_timestamp_for(
             session,
             id_bundle,
@@ -709,7 +680,6 @@ impl Coordinator {
             oracle_read_ts,
             real_time_recency_ts,
             isolation_level,
-            now,
         )?;
         self.metrics
             .determine_timestamp
@@ -736,7 +706,6 @@ impl Coordinator {
                     oracle_read_ts,
                     real_time_recency_ts,
                     &IsolationLevel::Serializable,
-                    now,
                 )?;
 
                 if let Some(serializable) = serializable_det.timestamp_context.timestamp() {
@@ -763,7 +732,6 @@ impl Coordinator {
                     oracle_read_ts,
                     real_time_recency_ts,
                     &IsolationLevel::Serializable,
-                    now,
                 )?;
                 if let Some(serializable) = serializable_det.timestamp_context.timestamp() {
                     self.metrics

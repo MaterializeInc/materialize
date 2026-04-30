@@ -1014,8 +1014,7 @@ impl Value for IsolationLevel {
                     return Err(invalid());
                 }
                 let d = humantime::parse_duration(rest).map_err(|_| invalid())?;
-                const MAX_BOUND: std::time::Duration = std::time::Duration::from_secs(60 * 60);
-                if d.is_zero() || d > MAX_BOUND {
+                if d.is_zero() {
                     return Err(invalid());
                 }
                 Ok(Self::BoundedStaleness(d))
@@ -1382,13 +1381,10 @@ mod bounded_staleness_tests {
     }
 
     #[mz_ore::test]
-    fn rejects_over_max_bound() {
-        // 1-hour cap; 2h must be rejected.
-        assert!(parse_iso("bounded staleness 2h").is_err());
-        assert!(parse_iso("bounded staleness 3601s").is_err());
-        // Exactly 1h is at the boundary — `d > MAX_BOUND` is strict, so it
-        // should still be accepted.
+    fn accepts_long_durations() {
+        // No upper cap; a multi-hour bound is a perfectly valid (if loose)
+        // staleness contract.
         assert!(parse_iso("bounded staleness 1h").is_ok());
-        assert!(parse_iso("bounded staleness 60m").is_ok());
+        assert!(parse_iso("bounded staleness 24h").is_ok());
     }
 }
