@@ -519,16 +519,15 @@ pub(super) fn references_system_schemas(requested_references: &Option<ExternalRe
 pub async fn ensure_binlog_full_metadata(
     conn: &mut mz_mysql_util::MySqlConn,
 ) -> Result<(), MySqlSourcePurificationError> {
-    if version_compare::compare_to(
-        mz_mysql_util::query_sys_var(conn, "version")
-            .await
-            .map_err(|err| MySqlSourcePurificationError::InvalidConnection(err.into()))?,
-        "8.0.1",
-        version_compare::Cmp::Lt,
-    )
-    .is_ok_and(|is_lt| is_lt)
-    {
-        Err(MySqlSourcePurificationError::UnsupportedMySqlVersion)?;
+    let version = mz_mysql_util::query_sys_var(conn, "version")
+        .await
+        .map_err(|err| MySqlSourcePurificationError::InvalidConnection(err.into()))?;
+    if version_compare::compare_to(&version, "8.0.1", version_compare::Cmp::Lt).map_err(|_| {
+        MySqlSourcePurificationError::UnsupportedMySqlVersion {
+            version: version.clone(),
+        }
+    })? {
+        Err(MySqlSourcePurificationError::UnsupportedMySqlVersion { version })?;
     }
     let binlog_metadata_setting = mz_mysql_util::query_sys_var(conn, "binlog_row_metadata")
         .await

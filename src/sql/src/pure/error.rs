@@ -315,9 +315,9 @@ pub enum MySqlSourcePurificationError {
     )]
     UnsupportedBinlogMetadataSetting { setting: String },
     #[error(
-        "The MySQL version is unsupported for this operation. Materialize requires MySQL 8.0.1 or later to use the \"CREATE TABLE FROM SOURCE\" syntax for MySQL sources."
+        "You are using MySQL version {version}. Materialize requires MySQL 8.0.1 or later to use the \"CREATE TABLE FROM SOURCE\" syntax for MySQL sources."
     )]
-    UnsupportedMySqlVersion,
+    UnsupportedMySqlVersion { version: String },
 }
 
 impl MySqlSourcePurificationError {
