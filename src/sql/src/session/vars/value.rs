@@ -1019,7 +1019,11 @@ impl Value for IsolationLevel {
                     return Err(invalid());
                 }
                 let d = humantime::parse_duration(rest).map_err(|_| invalid())?;
-                if d.is_zero() {
+                // Reject anything below 1ms: downstream we truncate to whole
+                // milliseconds, so e.g. `999us` would silently behave like
+                // `0ms` and degenerate to "no staleness allowed", which is
+                // exactly the case the zero-rejection meant to forbid.
+                if d < std::time::Duration::from_millis(1) {
                     return Err(invalid());
                 }
                 Ok(Self::BoundedStaleness(d))
@@ -1369,6 +1373,28 @@ mod bounded_staleness_tests {
     fn rejects_zero_duration() {
         assert!(parse_iso("bounded staleness 0s").is_err());
         assert!(parse_iso("bounded staleness 0ms").is_err());
+    }
+
+    #[mz_ore::test]
+    fn rejects_sub_millisecond_duration() {
+        // Truncated to 0ms downstream; treated as the same degenerate case as
+        // a literal zero.
+        assert!(parse_iso("bounded staleness 1us").is_err());
+        assert!(parse_iso("bounded staleness 999us").is_err());
+        assert!(parse_iso("bounded staleness 999ns").is_err());
+    }
+
+    #[mz_ore::test]
+    fn parses_multi_component_duration() {
+        // `1m30s` round-trips through humantime which formats as `1m 30s`,
+        // so the parser must accept the space-separated form.
+        let lvl = parse_iso("bounded staleness 1m30s").unwrap();
+        assert_eq!(
+            lvl,
+            IsolationLevel::BoundedStaleness(Duration::from_secs(90))
+        );
+        let formatted = lvl.format();
+        assert_eq!(parse_iso(&formatted).unwrap(), lvl);
     }
 
     #[mz_ore::test]
