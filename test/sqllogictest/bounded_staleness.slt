@@ -158,11 +158,38 @@ SELECT count(*) FROM bs_as_of AS OF 18446744073709551615
 ----
 0
 
+# `EXPLAIN TIMESTAMP` and `SUBSCRIBE` go through the same
+# `determine_timestamp_via_constraints` path. Smoke-test that they at least
+# don't panic under bounded staleness.
+
+statement ok
+EXPLAIN TIMESTAMP FOR SELECT * FROM bs_as_of
+
 statement ok
 RESET transaction_isolation
 
 statement ok
 DROP TABLE bs_as_of
+
+# --- COPY FROM is rejected as a write -----------------------------------------
+
+statement ok
+CREATE TABLE bs_copy (a int)
+
+statement ok
+SET transaction_isolation TO 'bounded staleness 1s'
+
+statement error writes are not permitted under bounded staleness isolation
+COPY bs_copy FROM stdin
+1
+2
+3
+
+statement ok
+RESET transaction_isolation
+
+statement ok
+DROP TABLE bs_copy
 
 # --- feature-flag gating ------------------------------------------------------
 

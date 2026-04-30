@@ -1944,33 +1944,28 @@ impl Coordinator {
                     session.add_notice(AdapterNotice::ClusterDoesNotExist { name });
                 } else if name.as_str() == TRANSACTION_ISOLATION_VAR_NAME {
                     let v = values.into_first().to_lowercase();
-                    if v == IsolationLevel::ReadUncommitted.as_str()
-                        || v == IsolationLevel::ReadCommitted.as_str()
-                        || v == IsolationLevel::RepeatableRead.as_str()
+                    if v == IsolationLevel::ReadUncommitted.as_variant_str()
+                        || v == IsolationLevel::ReadCommitted.as_variant_str()
+                        || v == IsolationLevel::RepeatableRead.as_variant_str()
                     {
                         session.add_notice(AdapterNotice::UnimplementedIsolationLevel {
                             isolation_level: v,
                         });
-                    } else if v == IsolationLevel::StrongSessionSerializable.as_str() {
+                    } else if v == IsolationLevel::StrongSessionSerializable.as_variant_str() {
                         session.add_notice(AdapterNotice::StrongSessionSerializable);
                     }
                 }
 
                 // Reject incompatible combinations of bounded staleness and
-                // real_time_recency after the variable has been applied.
-                let bounded_staleness = session
-                    .vars()
-                    .transaction_isolation()
-                    .is_bounded_staleness();
-                if name.as_str() == TRANSACTION_ISOLATION_VAR_NAME
-                    && bounded_staleness
+                // `real_time_recency` after the variable has been applied. Either
+                // SET name can introduce the conflict, so check both.
+                if (name.as_str() == TRANSACTION_ISOLATION_VAR_NAME
+                    || name.as_str() == vars::REAL_TIME_RECENCY.name())
+                    && session
+                        .vars()
+                        .transaction_isolation()
+                        .is_bounded_staleness()
                     && session.vars().real_time_recency()
-                {
-                    return Err(AdapterError::BoundedStalenessRealTimeRecencyConflict);
-                }
-                if name.as_str() == vars::REAL_TIME_RECENCY.name()
-                    && session.vars().real_time_recency()
-                    && bounded_staleness
                 {
                     return Err(AdapterError::BoundedStalenessRealTimeRecencyConflict);
                 }

@@ -1,6 +1,6 @@
 # Bounded staleness isolation
 
-* Associated: TBD (open issue link to be added before merge)
+* Associated: https://github.com/MaterializeInc/materialize/pull/36328
 
 ## The problem
 

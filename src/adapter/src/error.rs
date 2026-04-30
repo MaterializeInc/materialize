@@ -496,6 +496,25 @@ impl AdapterError {
             AdapterError::ImpossibleTimestampConstraints { constraints } => {
                 Some(format!("Constraints:\n{}", constraints))
             }
+            AdapterError::BoundedStalenessExceeded {
+                gap_ms,
+                slowest_input,
+                ..
+            } => {
+                let mut detail = format!(
+                    "Freshest available timestamp is {}ms older than the bound.",
+                    gap_ms,
+                );
+                if let Some(id) = slowest_input {
+                    detail.push_str(&format!(" Slowest input: {}.", id));
+                }
+                Some(detail)
+            }
+            AdapterError::BoundedStalenessTimelineUnsupported => Some(
+                "This query touches a timeline other than the EpochMilliseconds wall-clock \
+                 timeline."
+                    .into(),
+            ),
             _ => None,
         }
     }
@@ -1145,21 +1164,12 @@ impl fmt::Display for AdapterError {
             AdapterError::ImpossibleTimestampConstraints { .. } => {
                 write!(f, "could not find a valid timestamp for the query")
             }
-            AdapterError::BoundedStalenessExceeded {
-                bound,
-                gap_ms,
-                slowest_input,
-            } => {
+            AdapterError::BoundedStalenessExceeded { bound, .. } => {
                 write!(
                     f,
-                    "cannot serve query under bounded staleness {:?}; freshest available timestamp \
-                     is {}ms older than the bound",
-                    bound, gap_ms,
-                )?;
-                if let Some(id) = slowest_input {
-                    write!(f, "; slowest input: {}", id)?;
-                }
-                Ok(())
+                    "cannot serve query under bounded staleness {}",
+                    humantime::format_duration(*bound),
+                )
             }
             AdapterError::BoundedStalenessReadOnly => {
                 f.write_str("writes are not permitted under bounded staleness isolation")
@@ -1167,10 +1177,9 @@ impl fmt::Display for AdapterError {
             AdapterError::BoundedStalenessRealTimeRecencyConflict => {
                 f.write_str("real_time_recency cannot be combined with bounded staleness isolation")
             }
-            AdapterError::BoundedStalenessTimelineUnsupported => f.write_str(
-                "bounded staleness isolation requires the EpochMilliseconds timeline; \
-                 this query touches a different timeline",
-            ),
+            AdapterError::BoundedStalenessTimelineUnsupported => {
+                f.write_str("bounded staleness isolation requires the EpochMilliseconds timeline")
+            }
         }
     }
 }
