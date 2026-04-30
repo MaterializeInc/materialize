@@ -7,20 +7,22 @@ aliases:
     - /overview/isolation-level/
 ---
 
-The SQL standard defines four levels of transaction isolation. In order of least strict to most strict they are:
+Materialize accepts the following isolation levels:
 
--   Read Uncommitted
--   Read Committed
--   Repeatable Read
--   Serializable
+-   **SQL standard levels**:
+    -   **Read Uncommitted**
+    -   **Read Committed**
+    -   **Repeatable Read**
+    -   **Serializable**
 
-In Materialize, you can request any of these isolation
-levels, but they all behave the same as the Serializable isolation level. In addition to the four levels defined in the
-SQL Standard, Materialize also defines a [Strict Serializable](#strict-serializable) isolation level and a
-[Bounded Staleness](#bounded-staleness) isolation level.
+    In Materialize, all four behave as **Serializable**.
 
-Isolation level is a configuration parameter that can be set by the user on a session-by-session basis. The default isolation level is
-[Strict Serializable](#strict-serializable).
+-   **Additional levels in Materialize**:
+    -   [**Strict Serializable**](#strict-serializable) (*Default*)
+    -   [**Bounded Staleness**](#bounded-staleness) (*Private preview*)
+
+The isolation level is a configuration parameter that can be set on a
+per-session basis.
 
 ## Syntax
 
@@ -29,14 +31,14 @@ SET TRANSACTION_ISOLATION TO|= <isolation_level>
 ```
 
 
-| Valid Isolation Levels                            |
-| ------------------------------------------------- |
-| [Read Uncommitted](#serializable)                 |
-| [Read Committed](#serializable)                   |
-| [Repeatable Read](#serializable)                  |
-| [Serializable](#serializable)                     |
-| [Strict Serializable](#strict-serializable)       |
-| [Bounded Staleness `<duration>`](#bounded-staleness) |
+| Valid Isolation Levels                               | Notes                         |
+| ---------------------------------------------------- | ----------------------------- |
+| [Read Uncommitted](#serializable)                    | Behaves as **Serializable**   |
+| [Read Committed](#serializable)                      | Behaves as **Serializable**   |
+| [Repeatable Read](#serializable)                     | Behaves as **Serializable**   |
+| [Serializable](#serializable)                        |                               |
+| [Strict Serializable](#strict-serializable)          | *(default)*                   |
+| [Bounded Staleness `<duration>`](#bounded-staleness) | *(private preview)*           |
 
 ## Examples
 
