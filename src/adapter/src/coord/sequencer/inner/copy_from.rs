@@ -53,9 +53,7 @@ impl Coordinator {
             ctx.session().vars().transaction_isolation(),
             mz_sql::session::vars::IsolationLevel::BoundedStaleness(_)
         ) {
-            return ctx.retire(Err(AdapterError::Unstructured(anyhow::anyhow!(
-                "writes are not permitted under bounded staleness isolation"
-            ))));
+            return ctx.retire(Err(AdapterError::BoundedStalenessReadOnly));
         }
 
         let plan::CopyFromPlan {

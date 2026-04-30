@@ -275,6 +275,15 @@ pub enum AdapterError {
         gap_ms: u64,
         slowest_input: Option<mz_repr::GlobalId>,
     },
+    /// A write was attempted in a session whose isolation level is bounded
+    /// staleness. Bounded staleness is read-only.
+    BoundedStalenessReadOnly,
+    /// `real_time_recency = on` and bounded staleness were both requested in
+    /// the same session; they are mutually exclusive.
+    BoundedStalenessRealTimeRecencyConflict,
+    /// A bounded-staleness query touched a timeline whose timestamps are not
+    /// the `EpochMilliseconds` wall-clock timeline.
+    BoundedStalenessTimelineUnsupported,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -738,6 +747,11 @@ impl AdapterError {
             AdapterError::ImpossibleTimestampConstraints { .. } => SqlState::DATA_EXCEPTION,
             AdapterError::OidcGroupSyncFailed(_) => SqlState::INTERNAL_ERROR,
             AdapterError::BoundedStalenessExceeded { .. } => SqlState::T_R_SERIALIZATION_FAILURE,
+            AdapterError::BoundedStalenessReadOnly => SqlState::INVALID_TRANSACTION_STATE,
+            AdapterError::BoundedStalenessRealTimeRecencyConflict => {
+                SqlState::FEATURE_NOT_SUPPORTED
+            }
+            AdapterError::BoundedStalenessTimelineUnsupported => SqlState::FEATURE_NOT_SUPPORTED,
         }
     }
 
@@ -1172,6 +1186,16 @@ impl fmt::Display for AdapterError {
                 }
                 Ok(())
             }
+            AdapterError::BoundedStalenessReadOnly => {
+                f.write_str("writes are not permitted under bounded staleness isolation")
+            }
+            AdapterError::BoundedStalenessRealTimeRecencyConflict => {
+                f.write_str("real_time_recency cannot be combined with bounded staleness isolation")
+            }
+            AdapterError::BoundedStalenessTimelineUnsupported => f.write_str(
+                "bounded staleness isolation requires the EpochMilliseconds timeline; \
+                 this query touches a different timeline",
+            ),
         }
     }
 }
