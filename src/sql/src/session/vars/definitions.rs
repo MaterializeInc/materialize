@@ -2267,6 +2267,12 @@ feature_flags!(
         default: true,
         enable_for_item_parsing: false,
     },
+    {
+        name: enable_bounded_staleness_isolation,
+        desc: "the `bounded staleness <duration>` transaction isolation level",
+        default: false,
+        enable_for_item_parsing: false,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {
