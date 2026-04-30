@@ -121,7 +121,9 @@ An active AWS account with appropriate permissions to create:
 
 {{< tip >}}
 
-The simple example used in this tutorial enables [Password
+* {{% self-managed/terraform-simple-example-tip %}}
+
+* The simple example used in this tutorial enables [Password
 authentication](https://github.com/MaterializeInc/materialize-terraform-self-managed/blob/main/aws/examples/simple/main.tf#L380)
 for the Materialize instance. To use a different authentication method, update
 [`authenticator_kind`](https://github.com/MaterializeInc/materialize-terraform-self-managed/blob/main/kubernetes/modules/materialize-instance/README.md#input_authenticator_kind).
