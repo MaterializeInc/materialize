@@ -96,22 +96,27 @@ Before modifying timestamp selection or oracle interaction, verify:
    `read_ts` calls (including the fast path, if any) return `>= t`? This must
    hold across nodes, not just within the local process.
 
-### Bounded staleness depends on a wall-clock-capped timeline
+### Bounded staleness must anchor against the oracle, not wall clock
 
-The `BoundedStaleness(D)` isolation level picks `T >= now_ms - D` as the
-freshness lower bound, where `now_ms` is the `EpochMilliseconds` `NowFn`.
-The user-visible contract `oracle_read_ts(now) - T <= D` holds *only because*
-`oracle_read_ts(now) <= now_ms` for every query in the `EpochMilliseconds`
-timeline.
+The `BoundedStaleness(D)` isolation level picks `T >= oracle.read_ts - D` as
+its freshness lower bound. The oracle is the only anchor that satisfies the
+user-visible contract `oracle_read_ts(now) - T <= D` across:
 
-If we ever introduce a timeline whose timestamps are not bounded above by
-wall-clock time --- for example a logical-clock timeline detached from real
-time --- the bounded-staleness math no longer holds. In that case bounded
-staleness must be either redesigned or rejected at planning time for queries
-that touch such a timeline.
+- Crashes and restarts: a fresh `NowFn()` after a restart can regress (NTP
+  step backward, container migration), so a wall-clock anchor would let a
+  post-restart query pick `T` past a previously-served timestamp.
+- Clock changes during normal operation.
+- A future multi-`environmentd` deployment: the shared oracle reflects the
+  max clock across nodes, so a wall-clock anchor on a slow-clock node would
+  serve `T` outside the `D` contract by the inter-node skew.
+
+`needs_linearized_read_ts` returns `true` for `BoundedStaleness(_)`, so the
+oracle is consulted on every bounded-staleness query (one round-trip, the
+same one strict serializable already pays).
 
 The current implementation rejects bounded-staleness queries whose timeline
-is not `EpochMilliseconds`, in `determine_timestamp_for_inner`.
+is not `EpochMilliseconds`, in `determine_timestamp_for_inner`. The freshness
+math is currently scoped to that timeline.
 
 ## Rejected Optimizations
 

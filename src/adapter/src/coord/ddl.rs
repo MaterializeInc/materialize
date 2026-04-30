@@ -959,13 +959,8 @@ impl Coordinator {
 
     fn update_controller_config(&mut self) {
         let sys_config = self.catalog().system_config();
-        // Mirror the bounded-staleness anchor flag into the process-wide
-        // static read by `needs_linearized_read_ts`.
-        crate::coord::timestamp_selection::refresh_bounded_staleness_use_oracle_anchor(
-            sys_config.dyncfgs(),
-        );
-        let updates = sys_config.dyncfg_updates();
-        self.controller.update_configuration(updates);
+        self.controller
+            .update_configuration(sys_config.dyncfg_updates());
     }
 
     fn update_http_config(&mut self) {
