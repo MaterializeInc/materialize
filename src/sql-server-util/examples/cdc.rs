@@ -60,7 +60,10 @@ async fn main() -> Result<(), anyhow::Error> {
     config.trust_cert();
 
     // Open one client to stream changes.
-    let mz_config = Config::new(config.clone(), TunnelConfig::Direct, InTask::No);
+    let tunnel = TunnelConfig::Direct {
+        resolved_addresses: Default::default(),
+    };
+    let mz_config = Config::new(config.clone(), tunnel.clone(), InTask::No);
     let mut client_1 = Client::connect(mz_config).await?;
     tracing::info!("connection 1 successful!");
 
@@ -71,7 +74,7 @@ async fn main() -> Result<(), anyhow::Error> {
     cdc_handle.wait_for_ready().await?;
 
     // Open a second client that we can use to cleanup the underlying change tables.
-    let mz_config = Config::new(config.clone(), TunnelConfig::Direct, InTask::No);
+    let mz_config = Config::new(config.clone(), tunnel, InTask::No);
     let mut client_2 = Client::connect(mz_config).await?;
     tracing::info!("connection 2 successful!");
 
