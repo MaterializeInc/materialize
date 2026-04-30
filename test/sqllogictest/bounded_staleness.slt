@@ -13,6 +13,11 @@ mode cockroach
 
 reset-server
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_bounded_staleness_isolation = true;
+----
+COMPLETE 0
+
 # --- parse and SHOW round-trip -----------------------------------------------
 
 statement ok
