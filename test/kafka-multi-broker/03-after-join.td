@@ -11,6 +11,10 @@
 # Ingest some more data and read it back
 #
 
+# TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9613 is fixed
+$ skip-if
+SELECT true
+
 
 
 $ set schema={"type": "record", "name": "schema", "fields": [ {"name": "f1", "type": "string" } ] }

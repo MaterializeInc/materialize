@@ -28,6 +28,12 @@ def get_ancestor_overrides_for_performance_regressions(
 
     min_ancestor_mz_version_per_commit = dict()
 
+    if scenario_class_name == "CrossJoin":
+        # PR#35328 (compute: move MV sink persist I/O off Timely thread) increases clusterd memory
+        min_ancestor_mz_version_per_commit[
+            "4d8deb2de7b6a0fb8d7c9e5b0a682416bef1e5c2"
+        ] = MzVersion.parse_mz("v26.23.0")
+
     if scenario_class_name in ("OrderBy", "FastPathFilterNoIndex"):
         # PR#34930 (Bump differential, timely and related) increases latency
         min_ancestor_mz_version_per_commit[

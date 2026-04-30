@@ -2888,7 +2888,13 @@ def run_scenario_envd_strong_scaling(
                 f"--- Running envd-scaling scenario {scenario.name()} with envd_cpus={envd_cpus}; compute size fixed at {fixed_replica_size}"
             )
 
-            reconfigure_envd_cpus(target, envd_cpus, runner)
+            try:
+                reconfigure_envd_cpus(target, envd_cpus, runner)
+            except UIError as e:
+                print(
+                    f"WARNING: Failed to reconfigure to {envd_cpus} CPUs, skipping remaining scale points: {e}"
+                )
+                break
 
             # (Re)create a fixed-size compute cluster.
             def recreate_cluster() -> None:

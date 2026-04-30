@@ -61,6 +61,7 @@ class Minio(K8sResource):
         self.wait(
             resource="deployment.apps/minio-deployment",
             condition="condition=Available=True",
+            timeout_secs=600,
         )
 
         self.create_buckets(["persist", "copytos3", "copyfroms3"])

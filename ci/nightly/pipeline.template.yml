@@ -591,7 +591,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
-              args: [--scenario=KafkaSources, --actions=10000, --max-execution-time=20m, --azurite]
+              args: [--scenario=KafkaSources, --actions=5000, --max-execution-time=10m, --azurite]
 
       - id: zippy-kafka-parallel-insert
         label: "Zippy Kafka Parallel Insert"

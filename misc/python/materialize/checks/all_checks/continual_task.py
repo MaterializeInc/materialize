@@ -13,9 +13,11 @@ from materialize.checks.checks import Check
 from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
 
-# CTs were introduced in v0.127.0 and removed in v26.21.0.
+# CTs were introduced in v0.127.0, feature-flagged off in v26.21.0,
+# and fully removed from the parser in v26.23.0.
 CT_MIN_VERSION = MzVersion.parse_mz("v0.127.0-dev")
 CT_REMOVED_VERSION = MzVersion.parse_mz("v26.21.0-dev")
+CT_PARSER_REMOVED_VERSION = MzVersion.parse_mz("v26.23.0-dev")
 
 
 class ContinualTaskMigration(Check):
@@ -55,8 +57,8 @@ class ContinualTaskMigration(Check):
         ]
 
     def validate(self) -> Testdrive:
-        if self.current_version >= CT_REMOVED_VERSION:
-            # After upgrade: no CT objects should remain, CT syntax rejected.
+        if self.current_version >= CT_PARSER_REMOVED_VERSION:
+            # Parser no longer recognizes CONTINUAL keyword at all.
             return Testdrive(dedent("""
                 > SELECT count(*) FROM mz_objects WHERE type = 'continual-task';
                 0
@@ -65,6 +67,20 @@ class ContinualTaskMigration(Check):
                     INSERT INTO ct_should_fail SELECT * FROM ct_migration_mv;
                   )
                 contains:Expected DATABASE
+
+                > SELECT s FROM ct_migration_mv;
+                15
+            """))
+        elif self.current_version >= CT_REMOVED_VERSION:
+            # Feature-flagged off but parser still recognizes the syntax.
+            return Testdrive(dedent("""
+                > SELECT count(*) FROM mz_objects WHERE type = 'continual-task';
+                0
+
+                ! CREATE CONTINUAL TASK ct_should_fail (x INT) ON INPUT ct_migration_mv AS (
+                    INSERT INTO ct_should_fail SELECT * FROM ct_migration_mv;
+                  )
+                contains:CREATE CONTINUAL TASK is not available
 
                 > SELECT s FROM ct_migration_mv;
                 15

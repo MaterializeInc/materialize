@@ -15,6 +15,7 @@ anonymous_http_user
 group
 joe
 mz_analytics
+mz_jwt_sync
 mz_monitor
 mz_monitor_redacted
 mz_system
