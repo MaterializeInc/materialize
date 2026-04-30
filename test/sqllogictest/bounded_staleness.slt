@@ -106,3 +106,81 @@ RESET transaction_isolation
 
 statement ok
 DROP TABLE bs_writes
+
+# --- sub-millisecond durations are rejected ----------------------------------
+
+statement error invalid value for parameter "transaction_isolation"
+SET transaction_isolation TO 'bounded staleness 1us'
+
+statement error invalid value for parameter "transaction_isolation"
+SET transaction_isolation TO 'bounded staleness 999us'
+
+statement error invalid value for parameter "transaction_isolation"
+SET transaction_isolation TO 'bounded staleness 1ns'
+
+# --- multi-component duration round-trip --------------------------------------
+
+statement ok
+SET transaction_isolation TO 'bounded staleness 1m30s'
+
+# `humantime::format_duration` emits the canonical `1m 30s` form.
+query T
+SHOW transaction_isolation
+----
+bounded staleness 1m 30s
+
+statement ok
+SET transaction_isolation TO 'bounded staleness 1m 30s'
+
+query T
+SHOW transaction_isolation
+----
+bounded staleness 1m 30s
+
+statement ok
+RESET transaction_isolation
+
+# --- AS OF queries do not panic under bounded staleness ----------------------
+#
+# `AS OF` skips the timestamp oracle round-trip (the user has chosen `T`); a
+# previous version of the constraint solver would reach an `expect` on the
+# unset oracle anchor and panic the server. The user-chosen timestamp is the
+# sole timestamp constraint; bounded staleness adds nothing further.
+
+statement ok
+CREATE TABLE bs_as_of (a int)
+
+statement ok
+SET transaction_isolation TO 'bounded staleness 5s'
+
+query I
+SELECT count(*) FROM bs_as_of AS OF 18446744073709551615
+----
+0
+
+statement ok
+RESET transaction_isolation
+
+statement ok
+DROP TABLE bs_as_of
+
+# --- feature-flag gating ------------------------------------------------------
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_bounded_staleness_isolation;
+----
+COMPLETE 0
+
+statement error the `bounded staleness <duration>` transaction isolation level is not available
+SET transaction_isolation TO 'bounded staleness 5s'
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_bounded_staleness_isolation = true;
+----
+COMPLETE 0
+
+statement ok
+SET transaction_isolation TO 'bounded staleness 5s'
+
+statement ok
+RESET transaction_isolation

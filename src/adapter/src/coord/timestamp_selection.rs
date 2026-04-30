@@ -346,9 +346,7 @@ pub trait TimestampProvider {
 
             // For BoundedStaleness, add a freshness lower bound: the chosen timestamp
             // must not be older than `oracle.read_ts - D`. The oracle is the only
-            // anchor that stays correct across restarts and clock changes; see
-            // `needs_linearized_read_ts`, which returns true here so `oracle_read_ts`
-            // is always populated.
+            // anchor that stays correct across restarts and clock changes.
             //
             // Also add a hard upper bound at `largest_not_in_advance_of_upper`. Without
             // this, a candidate forced above the inputs' upper by the lower bound would
@@ -356,19 +354,24 @@ pub trait TimestampProvider {
             // failure mode cluster-shape-dependent rather than a clean coordinator-side
             // bail. With the upper bound in place the feasibility check fires
             // `BoundedStalenessExceeded` deterministically in the coordinator.
+            //
+            // `oracle_read_ts` is `None` for `AS OF` queries (which skip
+            // `needs_linearized_read_ts`); the user has chosen `T` explicitly, so
+            // bounded staleness adds no further constraint beyond what `AS OF` itself
+            // imposes via `Reason::QueryAsOf`.
             if let IsolationLevel::BoundedStaleness(d) = isolation_level {
-                let anchor = oracle_read_ts
-                    .expect("BoundedStaleness sets needs_linearized_read_ts; oracle_read_ts must be populated");
-                let bound_ms = u64::try_from(d.as_millis()).unwrap_or(u64::MAX);
-                let lower = anchor.saturating_sub(bound_ms);
-                constraints.lower.push((
-                    Antichain::from_elem(lower),
-                    Reason::IsolationLevel(*isolation_level),
-                ));
-                constraints.upper.push((
-                    Antichain::from_elem(largest_not_in_advance_of_upper),
-                    Reason::IsolationLevel(*isolation_level),
-                ));
+                if let Some(anchor) = oracle_read_ts {
+                    let bound_ms = u64::try_from(d.as_millis()).unwrap_or(u64::MAX);
+                    let lower = anchor.saturating_sub(bound_ms);
+                    constraints.lower.push((
+                        Antichain::from_elem(lower),
+                        Reason::IsolationLevel(*isolation_level),
+                    ));
+                    constraints.upper.push((
+                        Antichain::from_elem(largest_not_in_advance_of_upper),
+                        Reason::IsolationLevel(*isolation_level),
+                    ));
+                }
             }
 
             // If we are operating in Strong Session Serializable, we use an alternate timestamp lower bound.
@@ -450,18 +453,27 @@ pub trait TimestampProvider {
                 || constraints.upper_bound().less_than(&candidate)
             {
                 if let IsolationLevel::BoundedStaleness(d) = isolation_level {
-                    // Both bounds are populated for bounded staleness: lower is
-                    // `now - D`, upper is `largest_not_in_advance_of_upper`.
-                    // Gap = lower - upper measures how far past the bound the
-                    // freshest available timestamp is.
-                    let lower_ms = constraints.lower_bound().into_option().map_or(0, u64::from);
-                    let upper_ms = constraints.upper_bound().into_option().map_or(0, u64::from);
-                    let gap = lower_ms.saturating_sub(upper_ms);
-                    return Err(AdapterError::BoundedStalenessExceeded {
-                        bound: *d,
-                        gap_ms: gap,
-                        slowest_input: None,
-                    });
+                    // Compute the gap directly from the bounded-staleness lower
+                    // (`anchor - D`) and the inputs' upper
+                    // (`largest_not_in_advance_of_upper`), not from
+                    // `constraints.lower_bound()` / `upper_bound()` — those join
+                    // *all* reasons (e.g. `since` from read holds, `AS OF`), and
+                    // when another lower dominates the bs floor the gap reported
+                    // would not describe the bs failure. If `oracle_read_ts` is
+                    // unset (AS OF), bs added no constraint and we cannot reach
+                    // here for a bs-specific failure; fall through.
+                    if let Some(anchor) = oracle_read_ts {
+                        let bound_ms = u64::try_from(d.as_millis()).unwrap_or(u64::MAX);
+                        let bs_lower = anchor.saturating_sub(bound_ms);
+                        let lower_u64: u64 = bs_lower.into();
+                        let upper_u64: u64 = largest_not_in_advance_of_upper.into();
+                        let gap = lower_u64.saturating_sub(upper_u64);
+                        return Err(AdapterError::BoundedStalenessExceeded {
+                            bound: *d,
+                            gap_ms: gap,
+                            slowest_input: None,
+                        });
+                    }
                 }
                 return Err(AdapterError::ImpossibleTimestampConstraints {
                     constraints: constraints.display(timeline.as_ref()).to_string(),
