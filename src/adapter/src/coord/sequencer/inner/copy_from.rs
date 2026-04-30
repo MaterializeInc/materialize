@@ -49,10 +49,12 @@ impl Coordinator {
         plan: plan::CopyFromPlan,
         target_cluster: TargetCluster,
     ) {
-        if matches!(
-            ctx.session().vars().transaction_isolation(),
-            mz_sql::session::vars::IsolationLevel::BoundedStaleness(_)
-        ) {
+        if ctx
+            .session()
+            .vars()
+            .transaction_isolation()
+            .is_bounded_staleness()
+        {
             return ctx.retire(Err(AdapterError::BoundedStalenessReadOnly));
         }
 

@@ -554,10 +554,10 @@ pub trait TimestampProvider {
         // BoundedStaleness freshness math assumes the EpochMilliseconds timeline,
         // where timestamps are wall-clock milliseconds. Reject queries whose
         // timeline doesn't satisfy this contract.
-        if let IsolationLevel::BoundedStaleness(_) = isolation_level {
-            if !matches!(timeline, Some(Timeline::EpochMilliseconds)) {
-                return Err(AdapterError::BoundedStalenessTimelineUnsupported);
-            }
+        if isolation_level.is_bounded_staleness()
+            && !matches!(timeline, Some(Timeline::EpochMilliseconds))
+        {
+            return Err(AdapterError::BoundedStalenessTimelineUnsupported);
         }
 
         let raw_determination = Self::determine_timestamp_via_constraints(
@@ -716,7 +716,7 @@ impl Coordinator {
             }
         }
         if !det.respond_immediately()
-            && matches!(isolation_level, IsolationLevel::BoundedStaleness(_))
+            && isolation_level.is_bounded_staleness()
             && real_time_recency_ts.is_none()
         {
             // Note down the difference between BoundedStaleness and Serializable into a metric.

@@ -1958,21 +1958,19 @@ impl Coordinator {
 
                 // Reject incompatible combinations of bounded staleness and
                 // real_time_recency after the variable has been applied.
+                let bounded_staleness = session
+                    .vars()
+                    .transaction_isolation()
+                    .is_bounded_staleness();
                 if name.as_str() == TRANSACTION_ISOLATION_VAR_NAME
-                    && matches!(
-                        session.vars().transaction_isolation(),
-                        IsolationLevel::BoundedStaleness(_)
-                    )
+                    && bounded_staleness
                     && session.vars().real_time_recency()
                 {
                     return Err(AdapterError::BoundedStalenessRealTimeRecencyConflict);
                 }
                 if name.as_str() == vars::REAL_TIME_RECENCY.name()
                     && session.vars().real_time_recency()
-                    && matches!(
-                        session.vars().transaction_isolation(),
-                        IsolationLevel::BoundedStaleness(_)
-                    )
+                    && bounded_staleness
                 {
                     return Err(AdapterError::BoundedStalenessRealTimeRecencyConflict);
                 }
@@ -2542,10 +2540,12 @@ impl Coordinator {
             ctx.retire(Err(AdapterError::ReadOnlyTransaction));
             return;
         }
-        if matches!(
-            ctx.session().vars().transaction_isolation(),
-            IsolationLevel::BoundedStaleness(_)
-        ) {
+        if ctx
+            .session()
+            .vars()
+            .transaction_isolation()
+            .is_bounded_staleness()
+        {
             ctx.retire(Err(AdapterError::BoundedStalenessReadOnly));
             return;
         }
@@ -2645,10 +2645,12 @@ impl Coordinator {
         mut ctx: ExecuteContext,
         plan: plan::ReadThenWritePlan,
     ) {
-        if matches!(
-            ctx.session().vars().transaction_isolation(),
-            IsolationLevel::BoundedStaleness(_)
-        ) {
+        if ctx
+            .session()
+            .vars()
+            .transaction_isolation()
+            .is_bounded_staleness()
+        {
             ctx.retire(Err(AdapterError::BoundedStalenessReadOnly));
             return;
         }
