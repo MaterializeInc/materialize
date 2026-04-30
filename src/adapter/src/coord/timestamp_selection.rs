@@ -341,12 +341,23 @@ pub trait TimestampProvider {
 
             // For BoundedStaleness, add a wall-clock-derived lower bound: the chosen
             // timestamp must not be older than `now - D`. This never blocks on the oracle.
+            //
+            // Also add a hard upper bound at `largest_not_in_advance_of_upper`. Without
+            // this, a candidate forced above the inputs' upper by the lower bound would
+            // be sent to compute and block waiting for the upper to advance — making the
+            // failure mode cluster-shape-dependent rather than a clean coordinator-side
+            // bail. With the upper bound in place the feasibility check fires
+            // `BoundedStalenessExceeded` deterministically in the coordinator.
             if let IsolationLevel::BoundedStaleness(d) = isolation_level {
                 let now_ms = Timestamp::from(now);
                 let bound_ms = u64::try_from(d.as_millis()).unwrap_or(u64::MAX);
                 let lower = now_ms.saturating_sub(bound_ms);
                 constraints.lower.push((
                     Antichain::from_elem(lower),
+                    Reason::IsolationLevel(*isolation_level),
+                ));
+                constraints.upper.push((
+                    Antichain::from_elem(largest_not_in_advance_of_upper),
                     Reason::IsolationLevel(*isolation_level),
                 ));
             }
@@ -430,13 +441,21 @@ pub trait TimestampProvider {
                 || constraints.upper_bound().less_than(&candidate)
             {
                 if let IsolationLevel::BoundedStaleness(d) = isolation_level {
-                    let lower = constraints.lower_bound();
-                    let upper_bound_anti = constraints.upper_bound();
-                    let lower_ms: u64 = lower.iter().next().map(|t| u64::from(*t)).unwrap_or(0);
-                    let upper_ms: u64 = upper_bound_anti
+                    // Both bounds are populated for bounded staleness: lower is
+                    // `now - D`, upper is `largest_not_in_advance_of_upper`.
+                    // Gap = lower - upper measures how far past the bound the
+                    // freshest available timestamp is.
+                    let lower_ms = constraints
+                        .lower_bound()
                         .iter()
                         .next()
-                        .map(|t| u64::from(*t).saturating_sub(1))
+                        .map(|t| u64::from(*t))
+                        .unwrap_or(0);
+                    let upper_ms = constraints
+                        .upper_bound()
+                        .iter()
+                        .next()
+                        .map(|t| u64::from(*t))
                         .unwrap_or(0);
                     let gap = lower_ms.saturating_sub(upper_ms);
                     return Err(AdapterError::BoundedStalenessExceeded {
