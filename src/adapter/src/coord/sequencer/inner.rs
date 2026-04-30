@@ -1965,9 +1965,7 @@ impl Coordinator {
                     )
                     && session.vars().real_time_recency()
                 {
-                    return Err(AdapterError::Unstructured(anyhow::anyhow!(
-                        "real_time_recency cannot be combined with bounded staleness isolation"
-                    )));
+                    return Err(AdapterError::BoundedStalenessRealTimeRecencyConflict);
                 }
                 if name.as_str() == vars::REAL_TIME_RECENCY.name()
                     && session.vars().real_time_recency()
@@ -1976,9 +1974,7 @@ impl Coordinator {
                         IsolationLevel::BoundedStaleness(_)
                     )
                 {
-                    return Err(AdapterError::Unstructured(anyhow::anyhow!(
-                        "real_time_recency cannot be combined with bounded staleness isolation"
-                    )));
+                    return Err(AdapterError::BoundedStalenessRealTimeRecencyConflict);
                 }
             }
             None => vars.reset(self.catalog().system_config(), &name, local)?,
@@ -2550,9 +2546,7 @@ impl Coordinator {
             ctx.session().vars().transaction_isolation(),
             IsolationLevel::BoundedStaleness(_)
         ) {
-            ctx.retire(Err(AdapterError::Unstructured(anyhow::anyhow!(
-                "writes are not permitted under bounded staleness isolation"
-            ))));
+            ctx.retire(Err(AdapterError::BoundedStalenessReadOnly));
             return;
         }
 
@@ -2655,9 +2649,7 @@ impl Coordinator {
             ctx.session().vars().transaction_isolation(),
             IsolationLevel::BoundedStaleness(_)
         ) {
-            ctx.retire(Err(AdapterError::Unstructured(anyhow::anyhow!(
-                "writes are not permitted under bounded staleness isolation"
-            ))));
+            ctx.retire(Err(AdapterError::BoundedStalenessReadOnly));
             return;
         }
 

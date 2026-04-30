@@ -556,10 +556,7 @@ pub trait TimestampProvider {
         // timeline doesn't satisfy this contract.
         if let IsolationLevel::BoundedStaleness(_) = isolation_level {
             if !matches!(timeline, Some(Timeline::EpochMilliseconds)) {
-                return Err(AdapterError::Unstructured(::anyhow::anyhow!(
-                    "bounded staleness isolation requires the EpochMilliseconds timeline; \
-                     this query touches a different timeline"
-                )));
+                return Err(AdapterError::BoundedStalenessTimelineUnsupported);
             }
         }
 
