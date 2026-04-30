@@ -176,7 +176,7 @@ class DatabaseConnectorImpl(DatabaseConnector):
         connection.execute(
             f"SET cluster = {as_sanitized_literal(self.config.cluster)}".encode()
         )
-        connection.execute("SET transaction_isolation = serializable")
+        connection.execute("SET transaction_isolation = 'bounded staleness 1s'")
 
         return connection
 

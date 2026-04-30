@@ -19,8 +19,7 @@ use mz_adapter::{CollectionIdBundle, TimelineContext, TimestampProvider};
 use mz_compute_types::ComputeInstanceId;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::plan::QueryWhen;
-use mz_sql::session::vars::IsolationLevel;
-use mz_sql_parser::ast::TransactionIsolationLevel;
+use mz_sql::session::vars::{IsolationLevel, Value as VarValue, VarInput};
 use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::sources::Timeline;
 use serde::{Deserialize, Serialize};
@@ -214,7 +213,7 @@ fn test_timestamp_selection() {
             oracle: Timestamp::MIN,
             catalog_state: CatalogState::empty_test(),
         };
-        let mut isolation = TransactionIsolationLevel::StrictSerializable;
+        let mut isolation_level = IsolationLevel::StrictSerializable;
         tf.run(move |tc| -> String {
             match tc.directive.as_str() {
                 "set-compute" => {
@@ -233,33 +232,19 @@ fn test_timestamp_selection() {
                     "".into()
                 }
                 "set-isolation" => {
-                    let level = tc.input.trim().to_uppercase();
-                    isolation =
-                        if level == TransactionIsolationLevel::StrictSerializable.to_string() {
-                            TransactionIsolationLevel::StrictSerializable
-                        } else if level
-                            == TransactionIsolationLevel::StrongSessionSerializable.to_string()
-                        {
-                            TransactionIsolationLevel::StrongSessionSerializable
-                        } else if level == TransactionIsolationLevel::Serializable.to_string() {
-                            TransactionIsolationLevel::Serializable
-                        } else {
-                            panic!("unknown level {}", tc.input);
-                        };
+                    let input = tc.input.trim();
+                    isolation_level =
+                        IsolationLevel::parse(VarInput::Flat(input)).unwrap_or_else(|_| {
+                            panic!("unknown level {}", input);
+                        });
                     "".into()
                 }
                 "determine" => {
                     let det: Determine = serde_json::from_str(&tc.input).unwrap();
                     let mut session = Session::dummy();
-                    let _ = session.start_transaction(
-                        mz_ore::now::to_datetime(0),
-                        None,
-                        Some(isolation),
-                    );
+                    let _ = session.start_transaction(mz_ore::now::to_datetime(0), None, None);
 
-                    // TODO: Factor out into method, or somesuch!
                     let timeline_ctx = TimelineContext::TimestampDependent;
-                    let isolation_level = IsolationLevel::from(isolation);
                     let when = parse_query_when(&det.when);
                     let timeline = Frontiers::get_timeline(&timeline_ctx);
                     let needs_linearized_timeline =
@@ -286,8 +271,7 @@ fn test_timestamp_selection() {
                             &TimelineContext::TimestampDependent,
                             oracle_read_ts,
                             None, /* real_time_recency_ts */
-                            &IsolationLevel::from(isolation),
-                            // `now`: reuse the test fixture's wall-clock anchor.
+                            &isolation_level,
                             u64::from(f.oracle),
                         )
                         .unwrap();

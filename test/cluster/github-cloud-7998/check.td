@@ -7,11 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Verify that the serving cluster index is still queryable under serializable
-# isolation.
+# Verify that the serving cluster index is still queryable under bounded
+# staleness isolation.
 
 > SET cluster = serving
-> SET transaction_isolation = serializable
+> SET transaction_isolation = 'bounded staleness 1s'
 
 > SELECT * FROM mv1
 1

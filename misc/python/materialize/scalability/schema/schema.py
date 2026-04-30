@@ -15,7 +15,7 @@ class Source(Enum):
 
 
 class TransactionIsolation(Enum):
-    SERIALIZABLE = "serializable"
+    BOUNDED_STALENESS_1S = "bounded staleness 1s"
     STRICT_SERIALIZABLE = "strict serializable"
 
     def __str__(self) -> str:

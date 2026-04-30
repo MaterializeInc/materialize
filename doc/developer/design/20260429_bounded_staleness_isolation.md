@@ -29,10 +29,6 @@ A solution is successful when:
 5. The design preserves all existing strict-serializable correctness invariants documented in `guide-adapter.md`.
 
 ## Out of scope
-
-* Bounded staleness for read-then-write transactions.
-  Writes still require a linearized oracle write timestamp, and mixing bounded staleness with writes raises questions about commit ordering that this design does not address.
-  An attempt to issue a write inside a bounded-staleness transaction errors.
 * A wait-with-timeout variant of the failure mode.
   We expect to add a sibling behavior later, gated on a separate session variable, that waits up to a deadline before erroring.
   This document specifies error-only behavior.
@@ -90,7 +86,7 @@ The literal strings (`"bounded staleness"`, `"strict serializable"`, ...) live a
 ### Feature flags
 
 * **Master flag** (`enable_bounded_staleness_isolation`, feature-flag table in `src/sql/src/session/vars/definitions.rs`).
-  Default off.
+  Default on.
   `plan_set_variable` in `src/sql/src/plan/statement/scl.rs` parses the value being assigned; if it parses to `BoundedStaleness(_)`, the planner calls `scx.require_feature_flag(&vars::ENABLE_BOUNDED_STALENESS_ISOLATION)`, which errors when the flag is off and otherwise lets the SET proceed.
 * **Anchor toggle** (`bounded_staleness_use_oracle_anchor`, dyncfg in `src/adapter-types/src/dyncfgs.rs`).
   Default `false` (wall-clock anchor).

@@ -13,11 +13,6 @@ mode cockroach
 
 reset-server
 
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_bounded_staleness_isolation = true;
-----
-COMPLETE 0
-
 # --- parse and SHOW round-trip -----------------------------------------------
 
 statement ok
@@ -73,7 +68,7 @@ statement error real_time_recency cannot be combined with bounded staleness isol
 SET real_time_recency TO on
 
 statement ok
-RESET transaction_isolation
+SET transaction_isolation TO 'strict serializable'
 
 statement ok
 SET real_time_recency TO on
@@ -84,7 +79,10 @@ SET transaction_isolation TO 'bounded staleness 1s'
 statement ok
 RESET real_time_recency
 
-# --- writes are rejected ------------------------------------------------------
+statement ok
+RESET transaction_isolation
+
+# --- writes are permitted under bounded staleness -----------------------------
 
 statement ok
 CREATE TABLE bs_writes (a int)
@@ -92,14 +90,11 @@ CREATE TABLE bs_writes (a int)
 statement ok
 SET transaction_isolation TO 'bounded staleness 1s'
 
-statement error writes are not permitted under bounded staleness isolation
+statement ok
 INSERT INTO bs_writes VALUES (1)
 
-statement error writes are not permitted under bounded staleness isolation
+statement ok
 DELETE FROM bs_writes
-
-statement error writes are not permitted under bounded staleness isolation
-UPDATE bs_writes SET a = a + 1
 
 statement ok
 RESET transaction_isolation

@@ -49,15 +49,6 @@ impl Coordinator {
         plan: plan::CopyFromPlan,
         target_cluster: TargetCluster,
     ) {
-        if matches!(
-            ctx.session().vars().transaction_isolation(),
-            mz_sql::session::vars::IsolationLevel::BoundedStaleness(_)
-        ) {
-            return ctx.retire(Err(AdapterError::Unstructured(anyhow::anyhow!(
-                "writes are not permitted under bounded staleness isolation"
-            ))));
-        }
-
         let plan::CopyFromPlan {
             target_name: _,
             target_id,

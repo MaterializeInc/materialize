@@ -2546,16 +2546,6 @@ impl Coordinator {
             ctx.retire(Err(AdapterError::ReadOnlyTransaction));
             return;
         }
-        if matches!(
-            ctx.session().vars().transaction_isolation(),
-            IsolationLevel::BoundedStaleness(_)
-        ) {
-            ctx.retire(Err(AdapterError::Unstructured(anyhow::anyhow!(
-                "writes are not permitted under bounded staleness isolation"
-            ))));
-            return;
-        }
-
         // The structure of this code originates from a time where
         // `ReadThenWritePlan` was carrying an `MirRelationExpr` instead of an
         // optimized `MirRelationExpr`.
@@ -2651,16 +2641,6 @@ impl Coordinator {
         mut ctx: ExecuteContext,
         plan: plan::ReadThenWritePlan,
     ) {
-        if matches!(
-            ctx.session().vars().transaction_isolation(),
-            IsolationLevel::BoundedStaleness(_)
-        ) {
-            ctx.retire(Err(AdapterError::Unstructured(anyhow::anyhow!(
-                "writes are not permitted under bounded staleness isolation"
-            ))));
-            return;
-        }
-
         let mut source_ids: BTreeSet<_> = plan
             .selection
             .depends_on()

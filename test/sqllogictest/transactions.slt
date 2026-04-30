@@ -760,7 +760,7 @@ statement ok
 SELECT * FROM t
 
 statement error SET TRANSACTION ISOLATION LEVEL must be called before any query
-SET TRANSACTION_ISOLATION TO serializable
+SET TRANSACTION_ISOLATION TO 'bounded staleness 1s'
 
 statement ok
 ROLLBACK
@@ -781,7 +781,7 @@ statement ok
 BEGIN
 
 statement ok
-SET TRANSACTION_ISOLATION TO serializable
+SET TRANSACTION_ISOLATION TO 'bounded staleness 1s'
 
 statement ok
 SELECT * FROM t

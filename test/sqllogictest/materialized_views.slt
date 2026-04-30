@@ -954,7 +954,7 @@ WITH (REFRESH AT '3000-01-01 23:59')
 AS SELECT 2;
 
 statement ok
-SET transaction_isolation = 'serializable'
+SET transaction_isolation = 'bounded staleness 1s'
 
 query I
 SELECT * FROM const_mv2

@@ -56,7 +56,7 @@ statement ok
 CREATE TABLE t1( x INTEGER)
 
 statement ok
-SET transaction_isolation=serializable
+SET transaction_isolation='bounded staleness 1s'
 
 statement ok
 INSERT INTO t1 VALUES(1)

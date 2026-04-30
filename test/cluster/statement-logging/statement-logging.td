@@ -110,10 +110,10 @@ contains: column "f_nonexistent" does not exist
 true
 
 # Test that we're correctly recording transaction isolation
-> SET transaction_isolation TO serializable
+> SET transaction_isolation TO 'bounded staleness 1s'
 
-> SELECT 'serializable'
-serializable
+> SELECT 'bounded staleness'
+"bounded staleness"
 
 # Assumptions encoded here:
 # (1) "Inner" statement executions are not logged. For example,
@@ -136,7 +136,7 @@ serializable
   SELECT c.name, all_stmts.cluster_name, all_stmts.application_name, all_stmts.sample_rate, all_stmts.params, all_stmts.finished_status, all_stmts.error_message, all_stmts.result_size, all_stmts.rows_returned, all_stmts.execution_strategy, all_stmts.name LIKE 's%', all_stmts.sql, all_stmts.transaction_isolation, all_stmts.transient_index_id ~ '^t[0-9]+$',
   all_stmts.database_name, all_stmts.search_path::text
   FROM all_stmts, test_begin LEFT JOIN mz_clusters c ON c.id = all_stmts.cluster_id WHERE all_stmts.began_at >= test_begin.began_at AND all_stmts.sql NOT LIKE '%sduiahsdfuoiahsdf%'
-<null> <null> my_app 1 {} success <null> <null> <null> <null> true "SET transaction_isolation TO serializable" "strict serializable" <null> materialize {public}
+<null> <null> my_app 1 {} success <null> <null> <null> <null> true "SET transaction_isolation TO 'bounded staleness 1s'" "strict serializable" <null> materialize {public}
 <null> c my_app 1 {} success <null> 18 1 standard true "SELECT count(*) FROM t" "strict serializable" true materialize {public}
 <null> c my_app 1 {} success <null> <null> <null> <null> true "DROP CLUSTER c" "strict serializable" <null> materialize {public}
 quickstart quickstart my_app 1 {} error "division by zero" <null> <null> <null> true "SELECT 1/0" "strict serializable" <null> materialize {public}
@@ -158,7 +158,7 @@ quickstart quickstart my_app 1 {} success <null> <null> <null> <null> true "PREP
 quickstart quickstart my_app 1 {} success <null> <null> <null> <null> true "SET cluster TO c" "strict serializable" <null> materialize {public}
 mz_catalog_server mz_catalog_server my_app 1 {} success <null> 0 0 fast-path true "SHOW OBJECTS" "strict serializable" <null> materialize {public}
 mz_catalog_server mz_catalog_server my_app 1 {} success <null> 22 1 constant true "SELECT 'beginning real test!'" "strict serializable" <null> materialize {public}
-mz_catalog_server mz_catalog_server my_app 1 {} success <null> 14 1 constant true "SELECT 'serializable'" serializable <null> materialize {public}
+mz_catalog_server mz_catalog_server my_app 1 {} success <null> 22 1 constant true "SELECT 'bounded staleness'" "bounded staleness 1s" <null> materialize {public}
 mz_catalog_server mz_catalog_server my_app 1 {} success <null> 17 1 standard true "SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" "strict serializable" true materialize {public}
 
 > WITH all_stmts AS (SELECT mseh.id, mseh.began_at, mst.sql FROM mz_internal.mz_statement_execution_history mseh JOIN mz_internal.mz_prepared_statement_history mpsh ON mseh.prepared_statement_id = mpsh.id JOIN (SELECT DISTINCT sql, sql_hash, redacted_sql FROM mz_internal.mz_sql_text) mst ON mpsh.sql_hash = mst.sql_hash),
@@ -203,11 +203,11 @@ COMMIT execution-finished
 "SELECT 'beginning real test!'" execution-finished
 "SELECT 'beginning real test!'" optimization-finished
 "SELECT 'beginning real test!'" storage-dependencies-finished
-"SELECT 'serializable'" compute-dependencies-finished
-"SELECT 'serializable'" execution-began
-"SELECT 'serializable'" execution-finished
-"SELECT 'serializable'" optimization-finished
-"SELECT 'serializable'" storage-dependencies-finished
+"SELECT 'bounded staleness'" compute-dependencies-finished
+"SELECT 'bounded staleness'" execution-began
+"SELECT 'bounded staleness'" execution-finished
+"SELECT 'bounded staleness'" optimization-finished
+"SELECT 'bounded staleness'" storage-dependencies-finished
 "SELECT * FROM t" compute-dependencies-finished
 "SELECT * FROM t" execution-began
 "SELECT * FROM t" execution-finished
@@ -234,8 +234,8 @@ COMMIT execution-finished
 "SELECT f/0 FROM t" storage-dependencies-finished
 "SET cluster TO c" execution-began
 "SET cluster TO c" execution-finished
-"SET transaction_isolation TO serializable" execution-began
-"SET transaction_isolation TO serializable" execution-finished
+"SET transaction_isolation TO 'bounded staleness 1s'" execution-began
+"SET transaction_isolation TO 'bounded staleness 1s'" execution-finished
 "SELECT 1/0" compute-dependencies-finished
 "SELECT 1/0" execution-began
 "SELECT 1/0" execution-finished

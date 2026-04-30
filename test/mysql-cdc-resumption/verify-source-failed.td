@@ -14,7 +14,7 @@ true
 # This needs to be set because, depending on the timing of the mysql
 # restore, there may be no more transactions in mysql, meaning the
 # progress never ticks forward, and the query hangs.
-> SET TRANSACTION_ISOLATION TO SERIALIZABLE;
+> SET TRANSACTION_ISOLATION TO 'bounded staleness 1s';
 
 ! SELECT * FROM t1;
 contains:Source error

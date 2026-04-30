@@ -213,7 +213,7 @@ class StandaloneQuery(Action):
         conn.autocommit = True
         with conn.cursor() as cur:
             if not self.strict_serializable:
-                cur.execute("SET TRANSACTION_ISOLATION TO 'SERIALIZABLE'")
+                cur.execute("SET TRANSACTION_ISOLATION TO 'bounded staleness 1s'")
             execute_query(cur, self.query)
         conn.close()
 
@@ -238,7 +238,7 @@ class ReuseConnQuery(Action):
         self.conn.autocommit = True
         self.cur = self.conn.cursor()
         self.cur.execute(
-            f"SET TRANSACTION_ISOLATION TO '{'STRICT SERIALIZABLE' if self.strict_serializable else 'SERIALIZABLE'}'"
+            f"SET TRANSACTION_ISOLATION TO '{'STRICT SERIALIZABLE' if self.strict_serializable else 'bounded staleness 1s'}'"
         )
 
     def _run(self, conns: queue.Queue):

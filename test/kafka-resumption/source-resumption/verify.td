@@ -10,7 +10,7 @@
 # Ensure we actually ingested all the data so far
 
 # Could be run when storaged is down
-> SET transaction_isolation = serializable
+> SET transaction_isolation = 'bounded staleness 1s'
 
 > SELECT * from topic_tbl
 data         offset

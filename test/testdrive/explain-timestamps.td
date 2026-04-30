@@ -19,10 +19,10 @@ $ set-regex match=(s\d+|\d{13}|u\d+|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d\.\d\d\d\)|tr
 > EXPLAIN TIMESTAMP FOR SELECT * FROM t1
 "                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.public.t1 (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n\nbinding constraints:\nlower:\n  (Isolation level: StrictSerializable): [<> <>]\n"
 
-# Serializable also doesn't look at every object in the same time domain
-> SET TRANSACTION_ISOLATION = 'SERIALIZABLE';
+# Bounded staleness also doesn't look at every object in the same time domain
+> SET TRANSACTION_ISOLATION = 'bounded staleness 1s';
 > EXPLAIN TIMESTAMP FOR SELECT * FROM t1
-"                query timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.public.t1 (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n\nbinding constraints:\nlower:\n  (Storage inputs: [<>]): [<> <>]\n"
+"                query timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.public.t1 (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n\nbinding constraints:\nlower:\n  (Isolation level: BoundedStaleness(1s)): [<> <>]\n  (Storage inputs: [<>]): [<> <>]\nupper:\n  (Isolation level: BoundedStaleness(1s)): [<> <>]\n"
 
 
 # Real time recency shouldn't break anything

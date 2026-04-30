@@ -9,7 +9,7 @@
 
 # With clusterd down, the upper of t1 will not advance. However, the global timestamp will advance.
 # In strict serializable mode we may select a timestamp that is ahead of on of the table's upper and hang forever.
-> SET transaction_isolation = serializable
+> SET transaction_isolation = 'bounded staleness 1s'
 
 # Increased from the default because of CI flakiness.
 $ set-sql-timeout duration=180s

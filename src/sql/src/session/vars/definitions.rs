@@ -2270,7 +2270,7 @@ feature_flags!(
     {
         name: enable_bounded_staleness_isolation,
         desc: "the `bounded staleness <duration>` transaction isolation level",
-        default: false,
+        default: true,
         enable_for_item_parsing: false,
     },
 );

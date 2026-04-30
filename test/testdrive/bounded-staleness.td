@@ -9,9 +9,6 @@
 
 # Bounded staleness isolation — happy-path coverage.
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_bounded_staleness_isolation = true
-
 > CREATE TABLE bs_t (a int);
 > INSERT INTO bs_t VALUES (1), (2), (3);
 
@@ -53,8 +50,11 @@ ALTER SYSTEM SET enable_bounded_staleness_isolation = true
 > CREATE MATERIALIZED VIEW bs_mv IN CLUSTER bs_cluster AS
   SELECT count(*) FROM bs_t
 
+# Read under strict serializable so the frontier advances past the data.
+> SET transaction_isolation = 'strict serializable'
 > SELECT * FROM bs_mv
 3
+> RESET transaction_isolation
 
 > ALTER CLUSTER bs_cluster SET (REPLICATION FACTOR 0)
 

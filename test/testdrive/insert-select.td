@@ -181,9 +181,9 @@ INSERT INTO c SELECT * FROM s;
 3
 3
 
-# Test DELETE and INSERT INTO SELECT in Serializable mode.
+# Test DELETE and INSERT INTO SELECT in bounded staleness mode.
 
-> SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
+> SET TRANSACTION_ISOLATION TO 'bounded staleness 1s';
 
 > DELETE FROM t
 

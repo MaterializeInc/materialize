@@ -29,10 +29,10 @@
 > SELECT mz_unsafe.mz_sleep(3)
 <null>
 
-# Strict serializable is expected to fail, but serializable isolation should still be able to return (out of date) results
-> SET transaction_isolation = serializable;
+# Strict serializable is expected to fail, but bounded staleness should still be able to return (out of date) results
+> SET transaction_isolation = 'bounded staleness 1s';
 
-# Should return instantly since we have selected serializable isolation
+# Should return instantly since we have selected bounded staleness isolation
 > SELECT min(counter) FROM src_tbl;
 1
 

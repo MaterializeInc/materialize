@@ -35,7 +35,7 @@ determine
 10
 
 set-isolation
-serializable
+bounded staleness 1s
 ----
 
 determine
@@ -50,7 +50,7 @@ determine
   "when": "Immediately"
 }
 ----
-19
+10
 
 set-isolation
 strict serializable
