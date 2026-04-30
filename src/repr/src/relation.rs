@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 use crate::relation_and_scalar::proto_relation_type::ProtoKey;
 pub use crate::relation_and_scalar::{
     ProtoColumnMetadata, ProtoColumnName, ProtoColumnType, ProtoRelationDesc, ProtoRelationType,
-    ProtoRelationVersion,
+    ProtoRelationVersion, ProtoSemanticType,
 };
 use crate::{Datum, ReprScalarType, Row, SqlScalarType, arb_datum_for_column};
 
@@ -837,7 +837,8 @@ impl RustType<ProtoRelationVersion> for RelationVersion {
     PartialOrd,
     Ord,
     Hash,
-    serde::Serialize
+    serde::Serialize,
+    serde::Deserialize
 )]
 pub enum SemanticType {
     CatalogItemId,
@@ -887,6 +888,61 @@ impl fmt::Display for SemanticType {
             SemanticType::RedactedSqlDefinition => "RedactedSqlDefinition",
         };
         f.write_str(s)
+    }
+}
+
+impl RustType<ProtoSemanticType> for SemanticType {
+    fn into_proto(&self) -> ProtoSemanticType {
+        match self {
+            SemanticType::CatalogItemId => ProtoSemanticType::CatalogItemId,
+            SemanticType::GlobalId => ProtoSemanticType::GlobalId,
+            SemanticType::ClusterId => ProtoSemanticType::ClusterId,
+            SemanticType::ReplicaId => ProtoSemanticType::ReplicaId,
+            SemanticType::SchemaId => ProtoSemanticType::SchemaId,
+            SemanticType::DatabaseId => ProtoSemanticType::DatabaseId,
+            SemanticType::RoleId => ProtoSemanticType::RoleId,
+            SemanticType::NetworkPolicyId => ProtoSemanticType::NetworkPolicyId,
+            SemanticType::ShardId => ProtoSemanticType::ShardId,
+            SemanticType::OID => ProtoSemanticType::Oid,
+            SemanticType::ObjectType => ProtoSemanticType::ObjectType,
+            SemanticType::ConnectionType => ProtoSemanticType::ConnectionType,
+            SemanticType::SourceType => ProtoSemanticType::SourceType,
+            SemanticType::MzTimestamp => ProtoSemanticType::MzTimestamp,
+            SemanticType::WallclockTimestamp => ProtoSemanticType::WallclockTimestamp,
+            SemanticType::ByteCount => ProtoSemanticType::ByteCount,
+            SemanticType::RecordCount => ProtoSemanticType::RecordCount,
+            SemanticType::CreditRate => ProtoSemanticType::CreditRate,
+            SemanticType::SqlDefinition => ProtoSemanticType::SqlDefinition,
+            SemanticType::RedactedSqlDefinition => ProtoSemanticType::RedactedSqlDefinition,
+        }
+    }
+
+    fn from_proto(proto: ProtoSemanticType) -> Result<Self, TryFromProtoError> {
+        match proto {
+            ProtoSemanticType::Unspecified => Err(TryFromProtoError::unknown_enum_variant(
+                "ProtoSemanticType::Unspecified",
+            )),
+            ProtoSemanticType::CatalogItemId => Ok(SemanticType::CatalogItemId),
+            ProtoSemanticType::GlobalId => Ok(SemanticType::GlobalId),
+            ProtoSemanticType::ClusterId => Ok(SemanticType::ClusterId),
+            ProtoSemanticType::ReplicaId => Ok(SemanticType::ReplicaId),
+            ProtoSemanticType::SchemaId => Ok(SemanticType::SchemaId),
+            ProtoSemanticType::DatabaseId => Ok(SemanticType::DatabaseId),
+            ProtoSemanticType::RoleId => Ok(SemanticType::RoleId),
+            ProtoSemanticType::NetworkPolicyId => Ok(SemanticType::NetworkPolicyId),
+            ProtoSemanticType::ShardId => Ok(SemanticType::ShardId),
+            ProtoSemanticType::Oid => Ok(SemanticType::OID),
+            ProtoSemanticType::ObjectType => Ok(SemanticType::ObjectType),
+            ProtoSemanticType::ConnectionType => Ok(SemanticType::ConnectionType),
+            ProtoSemanticType::SourceType => Ok(SemanticType::SourceType),
+            ProtoSemanticType::MzTimestamp => Ok(SemanticType::MzTimestamp),
+            ProtoSemanticType::WallclockTimestamp => Ok(SemanticType::WallclockTimestamp),
+            ProtoSemanticType::ByteCount => Ok(SemanticType::ByteCount),
+            ProtoSemanticType::RecordCount => Ok(SemanticType::RecordCount),
+            ProtoSemanticType::CreditRate => Ok(SemanticType::CreditRate),
+            ProtoSemanticType::SqlDefinition => Ok(SemanticType::SqlDefinition),
+            ProtoSemanticType::RedactedSqlDefinition => Ok(SemanticType::RedactedSqlDefinition),
+        }
     }
 }
 
@@ -976,7 +1032,7 @@ pub struct RelationDesc {
     metadata: BTreeMap<ColumnIndex, ColumnMetadata>,
     /// Optional semantic type annotations for columns.
     /// Keyed by column index. Only populated for builtin catalog objects.
-    #[serde(skip)]
+    #[serde(default)]
     semantic_types: BTreeMap<ColumnIndex, SemanticType>,
 }
 
@@ -1008,10 +1064,17 @@ impl RustType<ProtoRelationDesc> for RelationDesc {
             metadata
         };
 
+        let semantic_types = self
+            .semantic_types
+            .iter()
+            .map(|(col_idx, st)| (u64::cast_from(col_idx.0), i32::from(st.into_proto())))
+            .collect();
+
         ProtoRelationDesc {
             typ: Some(self.typ.into_proto()),
             names,
             metadata,
+            semantic_types,
         }
     }
 
@@ -1047,10 +1110,21 @@ impl RustType<ProtoRelationDesc> for RelationDesc {
             })
             .collect::<Result<_, _>>()?;
 
+        let semantic_types = proto
+            .semantic_types
+            .into_iter()
+            .map(|(col_idx, st_i32)| {
+                let proto_st = ProtoSemanticType::try_from(st_i32)
+                    .map_err(|_| TryFromProtoError::unknown_enum_variant("ProtoSemanticType"))?;
+                let st = SemanticType::from_proto(proto_st)?;
+                Ok::<_, TryFromProtoError>((ColumnIndex(usize::cast_from(col_idx)), st))
+            })
+            .collect::<Result<_, _>>()?;
+
         Ok(RelationDesc {
             typ: proto.typ.into_rust_if_some("ProtoRelationDesc::typ")?,
             metadata,
-            semantic_types: BTreeMap::default(),
+            semantic_types,
         })
     }
 }
@@ -1281,6 +1355,15 @@ impl RelationDesc {
     /// Gets the semantic type annotation for column `i`, if any.
     pub fn get_semantic_type(&self, i: usize) -> Option<SemanticType> {
         self.semantic_types.get(&ColumnIndex(i)).copied()
+    }
+
+    /// Returns a copy of this [`RelationDesc`] with the given semantic type annotations applied.
+    pub fn with_semantic_types(
+        mut self,
+        semantic_types: BTreeMap<ColumnIndex, SemanticType>,
+    ) -> Self {
+        self.semantic_types = semantic_types;
+        self
     }
 
     /// Gets the name of the column at `idx`.
@@ -1641,7 +1724,7 @@ impl RelationDescBuilder {
     }
 
     /// Appends a column with the specified name and type, and annotates it with
-    /// a semantic type. Use this instead of chaining [`with_column`] +
+    /// a semantic type. Use this instead of chaining [`RelationDescBuilder::with_column`] +
     /// `with_semantic_type` — it is explicit about which column is annotated.
     pub fn with_column_semantic_type<N: Into<ColumnName>>(
         mut self,
@@ -1863,10 +1946,19 @@ impl VersionedRelationDesc {
 
         let relation_type = SqlRelationType { column_types, keys };
 
+        // Preserve semantic type annotations for columns that survived the version filter.
+        let semantic_types = self
+            .inner
+            .semantic_types
+            .iter()
+            .filter(|(col_idx, _)| column_metas.contains_key(col_idx))
+            .map(|(col_idx, st)| (*col_idx, *st))
+            .collect();
+
         RelationDesc {
             typ: relation_type,
             metadata: column_metas,
-            semantic_types: BTreeMap::default(),
+            semantic_types,
         }
     }
 
@@ -2259,7 +2351,8 @@ mod tests {
               "added": 0,
               "dropped": null
             }
-          }
+          },
+          "semantic_types": {}
         }
         "###);
 
@@ -2297,7 +2390,8 @@ mod tests {
               "added": 0,
               "dropped": null
             }
-          }
+          },
+          "semantic_types": {}
         }
         "###);
     }
@@ -2319,6 +2413,7 @@ mod tests {
                 ColumnName("b".into()).into_proto(),
             ],
             metadata: vec![],
+            semantic_types: Default::default(),
         };
         let desc: RelationDesc = proto.into_rust().unwrap();
 
@@ -2350,7 +2445,8 @@ mod tests {
               "added": 0,
               "dropped": null
             }
-          }
+          },
+          "semantic_types": {}
         }
         "###);
     }
@@ -2382,7 +2478,8 @@ mod tests {
             "column_types": [],
             "keys": []
           },
-          "metadata": {}
+          "metadata": {},
+          "semantic_types": {}
         }
         "###);
 
@@ -2406,7 +2503,8 @@ mod tests {
               "added": 2,
               "dropped": null
             }
-          }
+          },
+          "semantic_types": {}
         }
         "###);
     }

@@ -225,7 +225,7 @@ comment  text  The␠comment␠itself.
 query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_dependencies' ORDER BY position
 ----
-object_id  text  The␠ID␠of␠a␠compute␠object.␠Corresponds␠to␠`mz_catalog.mz_indexes.id`,␠`mz_catalog.mz_materialized_views.id`,␠or␠`mz_internal.mz_subscriptions`.
+object_id  text  The␠ID␠of␠a␠compute␠object.␠Corresponds␠to␠`mz_catalog.mz_indexes.id`,␠`mz_catalog.mz_materialized_views.id`,␠or␠`mz_internal.mz_subscriptions.id`.
 dependency_id  text  The␠ID␠of␠a␠compute␠dependency.␠Corresponds␠to␠`mz_catalog.mz_indexes.id`,␠`mz_catalog.mz_materialized_views.id`,␠`mz_catalog.mz_sources.id`,␠or␠`mz_catalog.mz_tables.id`.
 
 query TTT

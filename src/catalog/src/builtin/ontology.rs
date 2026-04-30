@@ -336,7 +336,8 @@ fn link_types_view(infos: &[Info]) -> BuiltinView {
                     Lit::Str(i.entity_name.clone()),
                     Lit::Str(l.target.to_string()),
                     Lit::Json(
-                        serde_json::to_string(&l.properties).expect("LinkProperties is serializable"),
+                        serde_json::to_string(&l.properties)
+                            .expect("LinkProperties is serializable"),
                     ),
                     Lit::Null,
                 ]
