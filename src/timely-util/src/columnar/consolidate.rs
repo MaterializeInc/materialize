@@ -28,6 +28,24 @@ use timely::container::{ContainerBuilder, PushInto};
 use crate::columnar::Column;
 use crate::columnar::builder::ColumnBuilder;
 
+/// Target size in bytes for the staging buffer chunk.
+///
+/// Larger than `timely::container::buffer::default_capacity` (8 KiB) to amortize the cost of
+/// minting aligned columnar containers. Matches `ColumnationChunker` in `crate::columnation`.
+const BUFFER_SIZE_BYTES: usize = 64 << 10;
+
+/// Number of `(D, T, R)` items that fit in [`BUFFER_SIZE_BYTES`], or 1 for oversized tuples.
+const fn chunk_capacity<C>() -> usize {
+    let size = std::mem::size_of::<C>();
+    if size == 0 {
+        BUFFER_SIZE_BYTES
+    } else if size <= BUFFER_SIZE_BYTES {
+        BUFFER_SIZE_BYTES / size
+    } else {
+        1
+    }
+}
+
 /// A container builder that consolidates `(D, T, R)` updates and emits `Column<(D, T, R)>`.
 ///
 /// Buffers updates in an internal `Vec`, calls
@@ -38,9 +56,6 @@ use crate::columnar::builder::ColumnBuilder;
 /// Does **not** maintain FIFO ordering (consolidation reorders updates).
 pub struct ConsolidatingColumnBuilder<D, T, R>
 where
-    D: Data,
-    T: Data,
-    R: Semigroup + 'static,
     (D, T, R): Columnar,
 {
     /// Pre-consolidation staging buffer.
@@ -51,9 +66,6 @@ where
 
 impl<D, T, R> Default for ConsolidatingColumnBuilder<D, T, R>
 where
-    D: Data,
-    T: Data,
-    R: Semigroup + 'static,
     (D, T, R): Columnar,
 {
     fn default() -> Self {
@@ -97,14 +109,13 @@ where
     /// Precondition: `current` is not allocated or has space for at least one element.
     #[inline]
     fn push_into(&mut self, item: (D, T, R)) {
-        let preferred_capacity = timely::container::buffer::default_capacity::<(D, T, R)>();
-        if self.current.capacity() < preferred_capacity * 2 {
-            self.current
-                .reserve(preferred_capacity * 2 - self.current.capacity());
+        let chunk = chunk_capacity::<(D, T, R)>();
+        if self.current.capacity() < chunk * 2 {
+            self.current.reserve(chunk * 2 - self.current.capacity());
         }
         self.current.push(item);
         if self.current.len() == self.current.capacity() {
-            self.consolidate_and_drain(preferred_capacity);
+            self.consolidate_and_drain(chunk);
         }
     }
 }
@@ -187,10 +198,10 @@ mod tests {
     #[mz_ore::test]
     fn consolidates_on_threshold() {
         let mut builder: ConsolidatingColumnBuilder<u64, u64, i64> = Default::default();
-        let preferred = timely::container::buffer::default_capacity::<(u64, u64, i64)>();
-        // Push enough +1/-1 pairs to exceed `preferred * 2` and trigger several consolidation
+        let chunk = chunk_capacity::<(u64, u64, i64)>();
+        // Push enough +1/-1 pairs to exceed `chunk * 2` and trigger several consolidation
         // cycles. Everything cancels.
-        for _ in 0..(preferred * 4) {
+        for _ in 0..(chunk * 4) {
             builder.push_into((7u64, 0u64, 1i64));
             builder.push_into((7u64, 0u64, -1i64));
         }
