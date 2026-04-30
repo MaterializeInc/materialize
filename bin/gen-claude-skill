@@ -54,6 +54,17 @@ if [[ -f "$OUTPUT_DIR/index.md" ]]; then
     mv "$OUTPUT_DIR/index.md" "$OUTPUT_DIR/SKILL.md"
 fi
 
+# Collapse runs of consecutive blank lines down to a single blank line.
+# Hugo emits a blank line in place of each stripped shortcode/template
+# directive, which produces long runs around <table>/<tr>/<td> blocks
+# in pages like ingest-data/mysql/* and self-managed-deployments/*.
+find "$OUTPUT_DIR" -name '*.md' -type f -print0 | while IFS= read -r -d '' f; do
+    awk '
+        /^[[:space:]]*$/ { if (blank) next; blank = 1; print ""; next }
+        { blank = 0; print }
+    ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+done
+
 # Count generated files
 FILE_COUNT=$(find "$OUTPUT_DIR" -name "*.md" | wc -l | tr -d ' ')
 
