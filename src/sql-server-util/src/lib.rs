@@ -92,21 +92,9 @@ impl Client {
                 port,
             } => {
                 let privatelink_host = mz_cloud_resources::vpc_endpoint_name(*connection_id);
-                let mut privatelink_addrs =
-                    tokio::net::lookup_host((privatelink_host.clone(), 0)).await?;
-
-                let Some(mut addr) = privatelink_addrs.next() else {
-                    return Err(SqlServerError::InvariantViolated(format!(
-                        "aws privatelink: no addresses found for host {:?}",
-                        privatelink_host
-                    )));
-                };
-
-                addr.set_port(port.clone());
-
-                let tcp = TcpStream::connect(addr)
+                let tcp = TcpStream::connect((privatelink_host.as_str(), *port))
                     .await
-                    .context(format!("aws privatelink {:?}", addr))?;
+                    .context(format!("aws privatelink {:?}", privatelink_host))?;
 
                 (tcp, None)
             }
