@@ -923,6 +923,11 @@ impl IsolationLevel {
     const BOUNDED_STALENESS: &'static str = "bounded staleness";
     const BOUNDED_STALENESS_HINT: &'static str = "bounded staleness <duration>";
 
+    /// Returns true if the isolation level is of bounded staleness.
+    pub fn is_bounded_staleness(&self) -> bool {
+        matches!(self, Self::BoundedStaleness(_))
+    }
+
     /// User-facing string representation, including the duration for
     /// `BoundedStaleness`. Round-trips through [`Value::parse`] and is what
     /// `SHOW transaction_isolation` returns.

@@ -1579,7 +1579,7 @@ impl PeekClient {
             }
         }
         if !det.respond_immediately()
-            && matches!(isolation_level, IsolationLevel::BoundedStaleness(_))
+            && isolation_level.is_bounded_staleness()
             && real_time_recency_ts.is_none()
         {
             // Note down the difference between BoundedStaleness and Serializable into a metric.
