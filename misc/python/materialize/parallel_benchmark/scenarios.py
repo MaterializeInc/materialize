@@ -85,7 +85,8 @@ class Kafka(Scenario):
                 ),
             ],
             guarantees={
-                "SELECT * FROM kafka_mv (standalone)": {"qps": 15, "p99": 400},
+                # PR#35328 (compute: move MV sink persist I/O off Timely thread) reduced qps / increased p99
+                "SELECT * FROM kafka_mv (standalone)": {"qps": 3, "p99": 2000},
             },
         )
 

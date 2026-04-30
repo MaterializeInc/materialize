@@ -28,6 +28,9 @@ def wait(
     namespace: str | None = None,
     server: str | None = None,
 ) -> None:
+    # Use a shorter per-invocation timeout so the outer retry loop can
+    # handle transient kubectl errors (e.g. slow image pulls, apiserver blips).
+    per_attempt_secs = min(timeout_secs, 60)
     cmd = [
         "kubectl",
         "wait",
@@ -35,7 +38,7 @@ def wait(
         condition,
         resource,
         "--timeout",
-        f"{timeout_secs}s",
+        f"{per_attempt_secs}s",
         "--context",
         context,
     ]
