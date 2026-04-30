@@ -445,18 +445,8 @@ pub trait TimestampProvider {
                     // `now - D`, upper is `largest_not_in_advance_of_upper`.
                     // Gap = lower - upper measures how far past the bound the
                     // freshest available timestamp is.
-                    let lower_ms = constraints
-                        .lower_bound()
-                        .iter()
-                        .next()
-                        .map(|t| u64::from(*t))
-                        .unwrap_or(0);
-                    let upper_ms = constraints
-                        .upper_bound()
-                        .iter()
-                        .next()
-                        .map(|t| u64::from(*t))
-                        .unwrap_or(0);
+                    let lower_ms = constraints.lower_bound().into_option().map_or(0, u64::from);
+                    let upper_ms = constraints.upper_bound().into_option().map_or(0, u64::from);
                     let gap = lower_ms.saturating_sub(upper_ms);
                     return Err(AdapterError::BoundedStalenessExceeded {
                         bound: *d,
