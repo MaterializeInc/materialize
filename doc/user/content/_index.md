@@ -16,16 +16,8 @@ aliases:
 {{< callout >}}
 ## What's new!
 
-- [Iceberg sinks](/releases/#iceberg-sink). Export data from Materialize into
-  Apache Iceberg tables.
-
-- [Replacement materialized views](/releases/#replacement-materialized-views).
-  Modify the definition of an existing materialized view while preserving all
-  downstream dependencies.
-
-- [ConfigMap for system parameters](/releases/#v26.9-sm-configmap). You can now
-  use a ConfigMap to dynamically update system parameters for Self-Managed
-  deployments.
+- [Faster sink performance with up to 50% lower memory
+  usage](/releases/#v26220)
 
 For more information on these and other changes, see the [Release Notes](/releases/).
 
