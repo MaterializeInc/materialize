@@ -1,6 +1,6 @@
 ---
 source: src/persist-client/src/internal/state.rs
-revision: 901d0526a1
+revision: 665d33182e
 ---
 
 # persist-client::internal::state

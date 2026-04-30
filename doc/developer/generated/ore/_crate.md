@@ -1,6 +1,6 @@
 ---
 source: src/ore/src/lib.rs
-revision: b69d9bb412
+revision: b89a9e0ec5
 ---
 
 # mz-ore
@@ -36,6 +36,7 @@ Modules are included here when they are broadly useful but too small to warrant 
 | `str` | String utilities: `StrExt`, indentation, separators |
 | `thread` | Thread-spawning wrappers that capture tracing context |
 | `time` | Duration/DateTime extensions |
+| `secure` | `SecureString`, `SecureVec`, and `zeroize` re-exports for sensitive data that must be zeroed from memory on drop |
 | `treat_as_equal` | `TreatAsEqual` newtype wrapper for loosened equality semantics |
 | `url` | `SensitiveUrl` — a URL wrapper that redacts passwords in Display |
 | `vec` | `VecExt` and `BumpVec` |
@@ -44,13 +45,12 @@ Modules are included here when they are broadly useful but too small to warrant 
 
 | Module | Feature | Purpose |
 |--------|---------|---------|
-| `assert` | `assert` | Runtime assertion macros (`soft_assert`, `soft_panic_or_log`) that log instead of panicking in release builds |
+| `assert` | `assert-no-tracing` | Runtime assertion macros (`soft_assert`, `soft_panic_or_log`) that log instead of panicking in release builds |
 | `bytes` | `bytes` | `MaybeLgBytes`, `SegmentedBytes`: arena-backed and segmented byte buffers |
 | `channel` | `async` | `mpsc` wrappers with instrumentation; `trigger` submodule for one-shot trigger channels |
 | `cli` | `cli` | Clap integration helpers |
 | `future` | `async` | `OrExt` combinator, `TimeoutFuture`, `InTask` wrapper |
 | `id_gen` | `id_gen` | Thread-safe sequential ID generators, including a `HumanReadableIdGen` |
-| `lgbytes` | `bytes` + `region` + `tracing` | `LgBytes` backed by lgalloc, with metrics |
 | `metrics` | `metrics` | Prometheus integration: `MetricsRegistry`, `metric!` macro, delete-on-drop wrappers, `MetricsFutureExt` |
 | `netio` | `network` | Async networking utilities: framed codec, DNS, socket helpers, timeouts |
 | `overflowing` | `overflowing` | `Overflowing<T>` newtype for wrapping arithmetic |
@@ -58,7 +58,6 @@ Modules are included here when they are broadly useful but too small to warrant 
 | `process` | `process` | `halting` process exit via `libc` |
 | `region` | `region` | Columnar region allocator with lgalloc support |
 | `retry` | `async` | Configurable retry with exponential backoff |
-| `secure` | `zeroize` | `SecureString`, `SecureVec`, and `zeroize` re-exports for sensitive data that must be zeroed from memory on drop |
 | `stack` | `stack` | `maybe_grow` — checked stack growth via `stacker` |
 | `task` | `async` | Tokio task/runtime spawning wrappers with tracing context propagation |
 | `test` | `test` | Test helpers: `timeout` wrappers |

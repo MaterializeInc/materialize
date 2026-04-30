@@ -1,6 +1,6 @@
 ---
 source: src/persist-cli/src/maelstrom/txn_list_append_multi.rs
-revision: 82d92a7fad
+revision: b89a9e0ec5
 ---
 
 # persistcli::maelstrom::txn_list_append_multi

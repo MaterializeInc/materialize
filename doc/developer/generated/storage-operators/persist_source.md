@@ -1,6 +1,6 @@
 ---
 source: src/storage-operators/src/persist_source.rs
-revision: 4bdb784da5
+revision: 4d8deb2de7
 ---
 
 # storage-operators::persist_source
