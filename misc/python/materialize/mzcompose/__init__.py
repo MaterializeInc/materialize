@@ -163,6 +163,11 @@ def get_variable_system_parameters(
         # -----
         # Others (ordered by name),
         VariableSystemParameter(
+            "bounded_staleness_use_oracle_anchor",
+            "false",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
             "compute_correction_v2_chain_proportionality",
             "3",
             ["2", "3"],
