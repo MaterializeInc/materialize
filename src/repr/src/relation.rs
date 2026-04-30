@@ -828,7 +828,17 @@ impl RustType<ProtoRelationVersion> for RelationVersion {
 /// describe the meaning of a column (e.g., that it contains a catalog item ID
 /// or a role ID). Possible values correspond to the entries in
 /// `SEMANTIC_TYPE_DEFS` in the `mz-catalog` crate.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    serde::Serialize
+)]
 pub enum SemanticType {
     CatalogItemId,
     GlobalId,
@@ -967,7 +977,7 @@ pub struct RelationDesc {
     /// Optional semantic type annotations for columns.
     /// Keyed by column index. Only populated for builtin catalog objects.
     #[serde(skip)]
-    semantic_types: BTreeMap<usize, SemanticType>,
+    semantic_types: BTreeMap<ColumnIndex, SemanticType>,
 }
 
 impl RustType<ProtoRelationDesc> for RelationDesc {
@@ -1270,7 +1280,7 @@ impl RelationDesc {
 
     /// Gets the semantic type annotation for column `i`, if any.
     pub fn get_semantic_type(&self, i: usize) -> Option<SemanticType> {
-        self.semantic_types.get(&i).copied()
+        self.semantic_types.get(&ColumnIndex(i)).copied()
     }
 
     /// Gets the name of the column at `idx`.
@@ -1594,7 +1604,7 @@ pub struct RelationDescBuilder {
     /// Sets of indices that are "keys" for the collection.
     keys: Vec<Vec<usize>>,
     /// Semantic type annotations for columns.
-    semantic_types: BTreeMap<usize, SemanticType>,
+    semantic_types: BTreeMap<ColumnIndex, SemanticType>,
 }
 
 impl RelationDescBuilder {
@@ -1641,7 +1651,7 @@ impl RelationDescBuilder {
     ) -> RelationDescBuilder {
         let idx = self.columns.len();
         self.columns.push((name.into(), ty));
-        self.semantic_types.insert(idx, semantic_type);
+        self.semantic_types.insert(ColumnIndex(idx), semantic_type);
         self
     }
 
