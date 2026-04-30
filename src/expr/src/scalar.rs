@@ -1272,8 +1272,8 @@ impl MirScalarExpr {
                             // The behavior of `regexp_replace` is that if the data is `NULL`, the
                             // function returns `NULL`, independently of whether the pattern or
                             // flags are correct. We need to check for this case and introduce an
-                            // if-then-else on the error path to only surface the error if the first
-                            // input is non-NULL.
+                            // if-then-else on the error path to only surface the error if both
+                            // the source and replacement inputs are non-NULL.
                             *e = match func::build_regex(pattern, &flags) {
                                 Ok(regex) => {
                                     let mut exprs = mem::take(exprs);
@@ -1286,13 +1286,17 @@ impl MirScalarExpr {
                                 }
                                 Err(err) => {
                                     let mut exprs = mem::take(exprs);
+                                    let replacement = exprs.swap_remove(2);
                                     let source = exprs.swap_remove(0);
                                     let scalar_type = e.typ(column_types).scalar_type;
                                     // We need to return `NULL` on `NULL` input, and error otherwise.
-                                    source.call_is_null().if_then_else(
-                                        MirScalarExpr::literal_null(scalar_type.clone()),
-                                        MirScalarExpr::literal(Err(err), scalar_type),
-                                    )
+                                    source
+                                        .call_is_null()
+                                        .or(replacement.call_is_null())
+                                        .if_then_else(
+                                            MirScalarExpr::literal_null(scalar_type.clone()),
+                                            MirScalarExpr::literal(Err(err), scalar_type),
+                                        )
                                 }
                             };
                         } else if *func == RegexpSplitToArray.into()
