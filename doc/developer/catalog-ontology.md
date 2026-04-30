@@ -1,8 +1,4 @@
----
-source: src/catalog/src/builtin/ontology.rs
----
-
-# catalog::builtin::ontology
+# Catalog Ontology Views
 
 Generates four built-in views in `mz_internal` that describe the structure and
 relationships of the Materialize system catalog. Designed to help LLMs,

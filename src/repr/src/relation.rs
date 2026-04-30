@@ -828,7 +828,7 @@ impl RustType<ProtoRelationVersion> for RelationVersion {
 /// describe the meaning of a column (e.g., that it contains a catalog item ID
 /// or a role ID). Possible values correspond to the entries in
 /// `SEMANTIC_TYPE_DEFS` in the `mz-catalog` crate.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
 pub enum SemanticType {
     CatalogItemId,
     GlobalId,
@@ -960,30 +960,14 @@ struct ColumnMetadata {
 /// the index in [`SqlRelationType`] that corresponds to a given column, and the
 /// version at which this column was added or dropped.
 ///
-#[derive(Clone, Debug, Serialize, Deserialize, MzReflect)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, MzReflect)]
 pub struct RelationDesc {
     typ: SqlRelationType,
     metadata: BTreeMap<ColumnIndex, ColumnMetadata>,
     /// Optional semantic type annotations for columns.
     /// Keyed by column index. Only populated for builtin catalog objects.
-    /// Excluded from Eq/Hash/serialization — it's ontology metadata, not schema.
     #[serde(skip)]
     semantic_types: BTreeMap<usize, SemanticType>,
-}
-
-impl PartialEq for RelationDesc {
-    fn eq(&self, other: &Self) -> bool {
-        self.typ == other.typ && self.metadata == other.metadata
-    }
-}
-
-impl Eq for RelationDesc {}
-
-impl std::hash::Hash for RelationDesc {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.typ.hash(state);
-        self.metadata.hash(state);
-    }
 }
 
 impl RustType<ProtoRelationDesc> for RelationDesc {
@@ -1646,15 +1630,17 @@ impl RelationDescBuilder {
         self
     }
 
-    /// Annotates the most recently added column with a semantic type.
-    ///
-    /// Possible values are enumerated in [`SemanticType`].
-    pub fn with_semantic_type(mut self, semantic_type: SemanticType) -> RelationDescBuilder {
-        let idx = self
-            .columns
-            .len()
-            .checked_sub(1)
-            .expect("no column to annotate");
+    /// Appends a column with the specified name and type, and annotates it with
+    /// a semantic type. Use this instead of chaining [`with_column`] +
+    /// `with_semantic_type` — it is explicit about which column is annotated.
+    pub fn with_column_semantic_type<N: Into<ColumnName>>(
+        mut self,
+        name: N,
+        ty: SqlColumnType,
+        semantic_type: SemanticType,
+    ) -> RelationDescBuilder {
+        let idx = self.columns.len();
+        self.columns.push((name.into(), ty));
         self.semantic_types.insert(idx, semantic_type);
         self
     }
@@ -2467,59 +2453,48 @@ mod tests {
     #[mz_ore::test]
     fn test_semantic_type_annotations() {
         let desc = RelationDesc::builder()
-            .with_column("id", SqlScalarType::String.nullable(false))
-            .with_semantic_type(SemanticType::CatalogItemId)
+            .with_column_semantic_type(
+                "id",
+                SqlScalarType::String.nullable(false),
+                SemanticType::CatalogItemId,
+            )
             .with_column("name", SqlScalarType::String.nullable(false))
-            .with_column("cluster_id", SqlScalarType::String.nullable(true))
-            .with_semantic_type(SemanticType::ClusterId)
+            .with_column_semantic_type(
+                "cluster_id",
+                SqlScalarType::String.nullable(true),
+                SemanticType::ClusterId,
+            )
             .finish();
 
-        // Annotated columns return their semantic type.
         assert_eq!(desc.get_semantic_type(0), Some(SemanticType::CatalogItemId));
         assert_eq!(desc.get_semantic_type(2), Some(SemanticType::ClusterId));
-
-        // Unannotated columns return None.
         assert_eq!(desc.get_semantic_type(1), None);
-
-        // Out-of-bounds returns None.
         assert_eq!(desc.get_semantic_type(99), None);
     }
 
     #[mz_ore::test]
-    fn test_semantic_types_excluded_from_eq_and_hash() {
-        let desc_a = RelationDesc::builder()
-            .with_column("id", SqlScalarType::String.nullable(false))
-            .with_semantic_type(SemanticType::CatalogItemId)
+    fn test_semantic_types_included_in_eq_and_hash() {
+        let desc_with = RelationDesc::builder()
+            .with_column_semantic_type(
+                "id",
+                SqlScalarType::String.nullable(false),
+                SemanticType::CatalogItemId,
+            )
             .finish();
 
-        let desc_b = RelationDesc::builder()
+        let desc_without = RelationDesc::builder()
             .with_column("id", SqlScalarType::String.nullable(false))
             .finish();
 
-        // semantic_types is excluded from Eq.
-        assert_eq!(desc_a, desc_b);
+        // semantic_types is now included in Eq and Hash.
+        assert_ne!(desc_with, desc_without);
 
-        // semantic_types is excluded from Hash.
         use std::hash::{Hash, Hasher};
         let hash = |d: &RelationDesc| {
             let mut h = std::collections::hash_map::DefaultHasher::new();
             d.hash(&mut h);
             h.finish()
         };
-        assert_eq!(hash(&desc_a), hash(&desc_b));
-    }
-
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)]
-    fn test_semantic_types_excluded_from_serialization() {
-        let desc = RelationDesc::builder()
-            .with_column("id", SqlScalarType::String.nullable(false))
-            .with_semantic_type(SemanticType::CatalogItemId)
-            .finish();
-
-        // Roundtrip through protobuf should lose semantic types (serde skip).
-        let proto = desc.into_proto();
-        let roundtripped = RelationDesc::from_proto(proto).unwrap();
-        assert_eq!(roundtripped.get_semantic_type(0), None);
+        assert_ne!(hash(&desc_with), hash(&desc_without));
     }
 }

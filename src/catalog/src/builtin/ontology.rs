@@ -107,16 +107,30 @@ fn view(
     }
 }
 
-/// Extract the first primary key from a `RelationDesc` and format it as a
-/// JSON object, e.g. `{"primary_key": ["id", "schema_id"]}`. Returns `None`
-/// if the relation has no keys defined.
+/// Extract all keys from a `RelationDesc` and format them as a JSON object:
+/// `{"primary_key": ["id"], "alternate_keys": [["oid"]]}`.
+/// `primary_key` is the first declared key; `alternate_keys` contains any
+/// additional unique keys (e.g. OID). Returns `None` if no keys are defined.
 fn pk_json(desc: &RelationDesc) -> Option<String> {
-    let keys = desc.typ().keys.first()?;
-    let cols: Vec<_> = keys
-        .iter()
-        .map(|&i| format!("\"{}\"", desc.get_name(i)))
-        .collect();
-    Some(format!("{{\"primary_key\": [{}]}}", cols.join(", ")))
+    let all_keys = &desc.typ().keys;
+    let (first, rest) = all_keys.split_first()?;
+    let fmt_key = |key: &Vec<usize>| -> String {
+        let cols: Vec<_> = key
+            .iter()
+            .map(|&i| serde_json::to_string(desc.get_name(i).as_str()).expect("valid utf-8"))
+            .collect();
+        format!("[{}]", cols.join(", "))
+    };
+    let primary = fmt_key(first);
+    if rest.is_empty() {
+        Some(format!("{{\"primary_key\": {primary}}}"))
+    } else {
+        let alts: Vec<_> = rest.iter().map(fmt_key).collect();
+        Some(format!(
+            "{{\"primary_key\": {primary}, \"alternate_keys\": [{}]}}",
+            alts.join(", ")
+        ))
+    }
 }
 
 // ── View builders ────────────────────────────────────────────
@@ -246,7 +260,7 @@ fn link_types_view(infos: &[Info]) -> BuiltinView {
                     esc(l.name),
                     esc(&i.entity_name),
                     esc(l.target),
-                    esc(l.properties_json),
+                    esc(&serde_json::to_string(&l.properties).expect("valid")),
                 )
             })
         })
