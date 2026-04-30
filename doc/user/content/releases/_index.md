@@ -15,6 +15,47 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.22.0
+*Released to Materialize Cloud: 2026-05-01* <br>
+*Released to Materialize Self-Managed: 2026-05-02* <br>
+
+This release includes Iceberg sink enhancements, MCP server improvements,
+and bug fixes.
+
+### Features {#v26.22-features}
+- **Iceberg sink interval and range types**: Iceberg sinks now support `interval` and `range` data types, expanding compatibility with complex data schemas.
+
+### Improvements {#v26.22-improvements}
+- **Enhanced MCP server functionality**: MCP servers now expose all RBAC-accessible views as data products without requiring indexes or comments.
+- **Improved Console MCP integration**: The Console now includes connection instructions for the MCP server, making it easier to configure external tool integrations.
+- **Better sink performance**: Sink operations now process data more efficiently by walking arrangements directly via cursors, reducing memory overhead and improving throughput.
+- **Faster catalog operations at scale**: Catalog synchronization now uses more efficient consolidation algorithms, reducing overhead for environments with many objects.
+- **Enhanced MCP server security**: MCP server origin validation now uses CORS allowlists instead of self-comparison checks, preventing DNS rebinding attacks.
+- **Improved MCP query handling**: MCP server now properly handles queries with trailing comments by adding newlines after user-provided SQL.
+- **Stricter MCP search path security**: MCP developer endpoint now sets a tight `search_path` to prevent bypass attacks.
+- **Better Console cursor visibility**: Fixed issue where the cursor would not appear in the Console SQL editor.
+- **Restored MCP indexed view access**: MCP servers can once again expose indexed views as data products.
+
+### Bug Fixes {#v26.22-bug-fixes}
+- Fixed incorrect results from `mz_dataflow_global_ids` view when multiple objects shared the same dataflow.
+- Fixed Iceberg upsert sinks dropping delete operations when handling more than 100,000 distinct keys.
+- Fixed `EXPLAIN OPTIMIZED PLAN` failure after renaming materialized views, indexes, or continual tasks.
+- Fixed Parquet map key handling to properly deduplicate keys and use the final value when duplicates exist.
+- Fixed subquery handling to properly account for negative diffs in accumulation logic.
+- Fixed PostgreSQL source compatibility by using only `pg_catalog.server_version_num` for version detection.
+- Fixed PostgreSQL `format_type` output to properly quote the `"char"` type (OID 18).
+- Fixed interval conversion overflow in Arrow utilities when converting microseconds to nanoseconds.
+- Fixed OpenTelemetry rate limiting filter that was incorrectly suppressing all events instead of just rate-limited ones.
+- Fixed catalog leak when dropping replacement collections without applying them.
+- Reverted problematic MySQL source versioning changes that caused compatibility issues.
+- Improved SQL name escaping in catalog operations for better reliability.
+- Enhanced security by ensuring sensitive authentication data is properly cleared from memory after use.
+- Enhanced security by ensuring TLS certificate data is properly zeroized when dropped.
+- Enhanced security by ensuring OIDC claims are automatically zeroized when going out of scope.
+- Improved query optimization by pushing `COALESCE` operations into `CASE WHEN` expressions where beneficial.
+- Removed unused `memory_request` field from replica allocation configuration.
+- Added regression test for Kafka sink handling of negative accumulations.
+
 ## v26.20.2
 *Released to Materialize Cloud: 2026-04-16* <br>
 *Released to Materialize Self-Managed: 2026-04-17* <br>
