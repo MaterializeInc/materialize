@@ -72,6 +72,40 @@ struct Info<'a> {
     ontology: &'a Ontology,
 }
 
+/// A single typed SQL literal for use inside a VALUES list.
+enum Lit {
+    /// A text string: rendered as `'escaped'`.
+    Str(String),
+    /// A JSONB value: rendered as `'escaped'::jsonb`.
+    Json(String),
+    /// SQL NULL.
+    Null,
+}
+
+impl Lit {
+    fn render(&self) -> String {
+        match self {
+            Lit::Str(s) => format!("'{}'", esc(s)),
+            Lit::Json(s) => format!("'{}'::jsonb", esc(s)),
+            Lit::Null => "NULL".to_string(),
+        }
+    }
+}
+
+/// Map a `SqlScalarType` to the SQL type name used in cast expressions.
+fn sql_type_name(ty: &SqlScalarType) -> &'static str {
+    match ty {
+        SqlScalarType::String => "text",
+        SqlScalarType::Jsonb => "jsonb",
+        SqlScalarType::Oid => "oid",
+        SqlScalarType::UInt64 => "uint8",
+        SqlScalarType::Numeric { .. } => "numeric",
+        SqlScalarType::MzTimestamp => "mz_timestamp",
+        SqlScalarType::TimestampTz { .. } => "timestamp with time zone",
+        other => panic!("unsupported SqlScalarType in ontology view: {other:?}"),
+    }
+}
+
 /// Escape single quotes for SQL string literals. Only safe for trusted
 /// compile-time constants (entity names, descriptions, link JSON from
 /// `Ontology` annotations) — never use with user-supplied input.
@@ -79,14 +113,50 @@ fn esc(s: &str) -> String {
     s.replace('\'', "''")
 }
 
-/// Build a simple ontology view from a name, OID, column defs, and SQL.
-fn view(
+/// Render rows into a SQL `VALUES (r1c1,r1c2,...),(r2c1,...)` fragment.
+/// Used when a VALUES list appears as a subquery inside a larger SQL string
+/// rather than as the top-level source of a `values_view`.
+fn values_sql(rows: &[Vec<Lit>]) -> String {
+    rows.iter()
+        .map(|row| {
+            let lits: Vec<String> = row.iter().map(Lit::render).collect();
+            format!("({})", lits.join(","))
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Build an ontology view from a static VALUES list. Each row is a `Vec<Lit>`;
+/// all escaping and type-casting is handled here so callers never touch SQL
+/// string formatting directly.
+fn values_view(
     name: &'static str,
     oid: u32,
     cols: &[(&'static str, SqlScalarType, bool)],
     keys: &[Vec<usize>],
-    sql: String,
+    rows: Vec<Vec<Lit>>,
 ) -> BuiltinView {
+    let col_names: Vec<&str> = cols.iter().map(|(n, _, _)| *n).collect();
+    let cast_exprs: Vec<String> = cols
+        .iter()
+        .map(|(n, ty, _)| format!("{n}::{}", sql_type_name(ty)))
+        .collect();
+
+    let vals: Vec<String> = rows
+        .iter()
+        .map(|row| {
+            let lits: Vec<String> = row.iter().map(Lit::render).collect();
+            format!("({})", lits.join(","))
+        })
+        .collect();
+
+    let sql = format!(
+        "SELECT {casts} FROM (VALUES {vals}) AS t({cols})",
+        casts = cast_exprs.join(","),
+        vals = vals.join(","),
+        cols = col_names.join(","),
+    );
+
     let mut b = RelationDesc::builder();
     for (n, ty, nullable) in cols {
         b = b.with_column(*n, ty.clone().nullable(*nullable));
@@ -107,13 +177,15 @@ fn view(
     }
 }
 
-/// Extract all keys from a `RelationDesc` and format them as a JSON object:
+/// Extract all keys from a `RelationDesc` and return a `Lit::Json` with shape:
 /// `{"primary_key": ["id"], "alternate_keys": [["oid"]]}`.
 /// `primary_key` is the first declared key; `alternate_keys` contains any
-/// additional unique keys (e.g. OID). Returns `None` if no keys are defined.
-fn pk_json(desc: &RelationDesc) -> Option<String> {
+/// additional unique keys. Returns `Lit::Null` if no keys are defined.
+fn pk_lit(desc: &RelationDesc) -> Lit {
     let all_keys = &desc.typ().keys;
-    let (first, rest) = all_keys.split_first()?;
+    let Some((first, rest)) = all_keys.split_first() else {
+        return Lit::Null;
+    };
     let fmt_key = |key: &Vec<usize>| -> String {
         let cols: Vec<_> = key
             .iter()
@@ -122,36 +194,33 @@ fn pk_json(desc: &RelationDesc) -> Option<String> {
         format!("[{}]", cols.join(", "))
     };
     let primary = fmt_key(first);
-    if rest.is_empty() {
-        Some(format!("{{\"primary_key\": {primary}}}"))
+    let json = if rest.is_empty() {
+        format!("{{\"primary_key\": {primary}}}")
     } else {
         let alts: Vec<_> = rest.iter().map(fmt_key).collect();
-        Some(format!(
+        format!(
             "{{\"primary_key\": {primary}, \"alternate_keys\": [{}]}}",
             alts.join(", ")
-        ))
-    }
+        )
+    };
+    Lit::Json(json)
 }
 
 // ── View builders ────────────────────────────────────────────
 
 fn entity_types_view(infos: &[Info]) -> BuiltinView {
-    let vals: Vec<_> = infos
+    let rows = infos
         .iter()
         .map(|i| {
-            let pk = pk_json(i.desc)
-                .map_or_else(|| "NULL::jsonb".into(), |j| format!("'{}'::jsonb", esc(&j)));
-            format!(
-                "('{}','{}.{}',{},'{}')",
-                esc(&i.entity_name),
-                esc(i.schema_name),
-                esc(i.table_name),
-                pk,
-                esc(i.ontology.description)
-            )
+            vec![
+                Lit::Str(i.entity_name.clone()),
+                Lit::Str(format!("{}.{}", i.schema_name, i.table_name)),
+                pk_lit(i.desc),
+                Lit::Str(i.ontology.description.to_string()),
+            ]
         })
         .collect();
-    view(
+    values_view(
         "mz_ontology_entity_types",
         oid::VIEW_MZ_ONTOLOGY_ENTITY_TYPES_OID,
         &[
@@ -161,19 +230,22 @@ fn entity_types_view(infos: &[Info]) -> BuiltinView {
             ("description", SqlScalarType::String, false),
         ],
         &[vec![0], vec![1], vec![3]],
-        format!(
-            "SELECT name::text,relation::text,properties::jsonb,description::text FROM (VALUES {}) AS t(name,relation,properties,description)",
-            vals.join(",")
-        ),
+        rows,
     )
 }
 
 fn semantic_types_view() -> BuiltinView {
-    let vals: Vec<_> = SEMANTIC_TYPE_DEFS
+    let rows = SEMANTIC_TYPE_DEFS
         .iter()
-        .map(|(n, t, d)| format!("('{}','{}','{}')", esc(&n.to_string()), esc(t), esc(d)))
+        .map(|(n, t, d)| {
+            vec![
+                Lit::Str(n.to_string()),
+                Lit::Str(t.to_string()),
+                Lit::Str(d.to_string()),
+            ]
+        })
         .collect();
-    view(
+    values_view(
         "mz_ontology_semantic_types",
         oid::VIEW_MZ_ONTOLOGY_SEMANTIC_TYPES_OID,
         &[
@@ -182,10 +254,7 @@ fn semantic_types_view() -> BuiltinView {
             ("description", SqlScalarType::String, false),
         ],
         &[vec![0], vec![2]],
-        format!(
-            "SELECT name::text,sql_type::text,description::text FROM (VALUES {}) AS t(name,sql_type,description)",
-            vals.join(",")
-        ),
+        rows,
     )
 }
 
@@ -204,38 +273,26 @@ fn semantic_types_view() -> BuiltinView {
 ///    Column descriptions come from `mz_comments`. Both are LEFT JOINed so
 ///    columns without annotations or comments still appear (with NULLs).
 fn properties_view(infos: &[Info]) -> BuiltinView {
-    let mut ent = Vec::new();
-    let mut ann = Vec::new();
+    let mut ent: Vec<Vec<Lit>> = Vec::new();
+    let mut ann: Vec<Vec<Lit>> = Vec::new();
     for i in infos {
-        ent.push(format!(
-            "('{}','{}','{}')",
-            esc(i.schema_name),
-            esc(i.table_name),
-            esc(&i.entity_name)
-        ));
+        ent.push(vec![
+            Lit::Str(i.schema_name.to_string()),
+            Lit::Str(i.table_name.to_string()),
+            Lit::Str(i.entity_name.clone()),
+        ]);
         for (idx, col) in i.desc.iter_names().enumerate() {
             if let Some(sem) = i.desc.get_semantic_type(idx) {
-                ann.push(format!(
-                    "('{}','{}','{}')",
-                    esc(&i.entity_name),
-                    esc(col.as_str()),
-                    sem
-                ));
+                ann.push(vec![
+                    Lit::Str(i.entity_name.clone()),
+                    Lit::Str(col.as_str().to_string()),
+                    Lit::Str(sem.to_string()),
+                ]);
             }
         }
     }
-    view(
-        "mz_ontology_properties",
-        oid::VIEW_MZ_ONTOLOGY_PROPERTIES_OID,
-        &[
-            ("entity_type", SqlScalarType::String, false),
-            ("column_name", SqlScalarType::String, false),
-            ("semantic_type", SqlScalarType::String, true),
-            ("description", SqlScalarType::String, true),
-        ],
-        &[],
-        format!(
-            "SELECT ent.entity_name AS entity_type,col.name AS column_name,\
+    let sql = format!(
+        "SELECT ent.entity_name AS entity_type,col.name AS column_name,\
          ann.semantic_type::text AS semantic_type,cmt.comment AS description \
          FROM (VALUES {ent}) AS ent(schema_name,table_name,entity_name) \
          JOIN mz_catalog.mz_schemas s ON s.name=ent.schema_name \
@@ -244,28 +301,49 @@ fn properties_view(infos: &[Info]) -> BuiltinView {
          LEFT JOIN mz_internal.mz_comments cmt ON cmt.id=o.id AND cmt.object_sub_id=col.position \
          LEFT JOIN (VALUES {ann}) AS ann(entity_name,column_name,semantic_type) \
          ON ann.entity_name=ent.entity_name AND ann.column_name=col.name",
-            ent = ent.join(","),
-            ann = ann.join(","),
-        ),
-    )
+        ent = values_sql(&ent),
+        ann = values_sql(&ann),
+    );
+
+    let mut b = RelationDesc::builder();
+    for (n, ty, nullable) in &[
+        ("entity_type", SqlScalarType::String, false),
+        ("column_name", SqlScalarType::String, false),
+        ("semantic_type", SqlScalarType::String, true),
+        ("description", SqlScalarType::String, true),
+    ] {
+        b = b.with_column(*n, ty.clone().nullable(*nullable));
+    }
+    BuiltinView {
+        name: "mz_ontology_properties",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_ONTOLOGY_PROPERTIES_OID,
+        desc: b.finish(),
+        column_comments: BTreeMap::new(),
+        sql: Box::leak(sql.into_boxed_str()),
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    }
 }
 
 fn link_types_view(infos: &[Info]) -> BuiltinView {
-    let vals: Vec<_> = infos
+    let rows = infos
         .iter()
         .flat_map(|i| {
             i.ontology.links.iter().map(move |l| {
-                format!(
-                    "('{}','{}','{}','{}'::jsonb,NULL::text)",
-                    esc(l.name),
-                    esc(&i.entity_name),
-                    esc(l.target),
-                    esc(&serde_json::to_string(&l.properties).expect("valid")),
-                )
+                vec![
+                    Lit::Str(l.name.to_string()),
+                    Lit::Str(i.entity_name.clone()),
+                    Lit::Str(l.target.to_string()),
+                    Lit::Json(
+                        serde_json::to_string(&l.properties).expect("LinkProperties is serializable"),
+                    ),
+                    Lit::Null,
+                ]
             })
         })
         .collect();
-    view(
+    values_view(
         "mz_ontology_link_types",
         oid::VIEW_MZ_ONTOLOGY_LINK_TYPES_OID,
         &[
@@ -276,10 +354,7 @@ fn link_types_view(infos: &[Info]) -> BuiltinView {
             ("description", SqlScalarType::String, true),
         ],
         &[],
-        format!(
-            "SELECT name::text,source_entity::text,target_entity::text,properties::jsonb,description::text FROM (VALUES {}) AS t(name,source_entity,target_entity,properties,description)",
-            vals.join(",")
-        ),
+        rows,
     )
 }
 

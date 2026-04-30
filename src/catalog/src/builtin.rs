@@ -3319,7 +3319,7 @@ pub static MZ_SSH_TUNNEL_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| 
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
-        entity_name: "ssh_tunnel",
+        entity_name: "ssh_tunnel_connection",
         description: "SSH tunnel connection with public keys",
         links: &const { [OntologyLink {
             name: "details_of",
@@ -6486,7 +6486,7 @@ pub static MZ_AWS_PRIVATELINK_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::ne
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
         ontology: Some(Ontology {
-            entity_name: "aws_privatelink",
+            entity_name: "aws_privatelink_connection",
             description: "AWS PrivateLink connection configuration",
             links: &const { [OntologyLink {
                 name: "details_of",
