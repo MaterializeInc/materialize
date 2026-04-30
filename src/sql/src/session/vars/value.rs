@@ -928,28 +928,15 @@ impl IsolationLevel {
         matches!(self, Self::BoundedStaleness(_))
     }
 
-    /// User-facing string representation, including the duration for
-    /// `BoundedStaleness`. Round-trips through [`Value::parse`] and is what
-    /// `SHOW transaction_isolation` returns.
-    pub fn as_str(&self) -> Cow<'static, str> {
-        match self {
-            Self::ReadUncommitted => Cow::Borrowed(Self::READ_UNCOMMITTED),
-            Self::ReadCommitted => Cow::Borrowed(Self::READ_COMMITTED),
-            Self::RepeatableRead => Cow::Borrowed(Self::REPEATABLE_READ),
-            Self::Serializable => Cow::Borrowed(Self::SERIALIZABLE),
-            Self::StrongSessionSerializable => Cow::Borrowed(Self::STRONG_SESSION_SERIALIZABLE),
-            Self::StrictSerializable => Cow::Borrowed(Self::STRICT_SERIALIZABLE),
-            Self::BoundedStaleness(d) => Cow::Owned(format!(
-                "{} {}",
-                Self::BOUNDED_STALENESS,
-                humantime::format_duration(*d)
-            )),
-        }
-    }
-
     /// Unit-cardinality variant identifier; the duration on `BoundedStaleness`
-    /// is intentionally omitted so this is suitable for Prometheus labels and
-    /// other contexts where one bucket per kind of isolation is wanted.
+    /// is intentionally omitted so this is suitable for Prometheus labels,
+    /// equality checks against parsed input, and other contexts where one
+    /// bucket per kind of isolation is wanted.
+    ///
+    /// For the user-facing rendering (which includes the duration on
+    /// `BoundedStaleness` and round-trips through [`Value::parse`]) use the
+    /// [`fmt::Display`] impl — that is what `SHOW transaction_isolation`
+    /// returns.
     pub fn as_variant_str(&self) -> &'static str {
         match self {
             Self::ReadUncommitted => Self::READ_UNCOMMITTED,
@@ -977,7 +964,15 @@ impl IsolationLevel {
 
 impl fmt::Display for IsolationLevel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.as_str())
+        match self {
+            Self::BoundedStaleness(d) => write!(
+                f,
+                "{} {}",
+                Self::BOUNDED_STALENESS,
+                humantime::format_duration(*d)
+            ),
+            other => f.write_str(other.as_variant_str()),
+        }
     }
 }
 
