@@ -397,9 +397,34 @@ where
             //     lookup on the persist trace.
             //   - Ineligible (persist_upper < ts < input_upper): persist
             //     hasn't caught up yet; pushed back into the batcher.
-            if stash_cap.is_some() {
-                let cap = stash_cap.as_mut().unwrap();
-
+            //
+            // We skip the seal entirely unless an eligible entry is at all
+            // possible. `seal` performs an O(N) merge of all chains
+            // regardless of how much it extracts, so calling it when nothing
+            // can be processed makes the operator quadratic in the number of
+            // wakeups (a real pathology during upstream snapshots and during
+            // rehydration when the source races ahead of persist).
+            //
+            // For an entry at `ts` to be eligible we need
+            // `ts == persist_upper && ts < input_upper`. The necessary
+            // preconditions, expressible without scanning the batcher:
+            //   1. `cap.time() <= persist_upper`. Since `cap.time()` is
+            //      maintained as a lower bound on `min(ts in batcher)`, if
+            //      `cap.time() > persist_upper` then every buffered ts is
+            //      strictly above persist_upper and none can equal it.
+            //   2. `persist_upper < input_upper`. Otherwise no `ts` that
+            //      satisfies `ts == persist_upper` can also satisfy
+            //      `ts < input_upper`.
+            //
+            // This naturally covers both the post-hydration source-snapshot
+            // case (cap == persist == input → condition 2 fails) and the
+            // rehydration-with-source-ahead case (cap > persist → condition
+            // 1 fails). It also no-ops correctly when persist has shut down
+            // (empty persist_upper makes condition 2 vacuously false).
+            if let Some(cap) = stash_cap.as_mut()
+                && !persist_upper.less_than(cap.time())
+                && PartialOrder::less_than(&persist_upper, &input_upper)
+            {
                 let sealed = batcher.seal::<CapturingBuilder<_, _>>(input_upper.clone());
                 // Frontier of data remaining in the batcher (ts >= input_upper).
                 let remaining_frontier = batcher.frontier().to_owned();
