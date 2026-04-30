@@ -10,6 +10,7 @@
 //! Logic for selecting timestamps for various operations on collections.
 
 use std::fmt;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -17,6 +18,7 @@ use constraints::Constraints;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
 use mz_compute_types::ComputeInstanceId;
+use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastLossy;
 use mz_ore::now::EpochMillis;
 use mz_repr::{GlobalId, Timestamp, TimestampManipulation};
@@ -33,6 +35,28 @@ use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::read_policy::ReadHolds;
 use crate::coord::timeline::TimelineContext;
 use crate::session::Session;
+
+/// Mirror of the `bounded_staleness_use_oracle_anchor` dyncfg, kept here as a
+/// process-wide static so that `needs_linearized_read_ts` (a free function with
+/// no system-vars handle) can decide whether a bounded-staleness query should
+/// linearize against the oracle.
+///
+/// The Coordinator updates this on each system-config change via
+/// `refresh_bounded_staleness_use_oracle_anchor`.
+static BOUNDED_STALENESS_USE_ORACLE_ANCHOR_FLAG: AtomicBool = AtomicBool::new(false);
+
+/// Refresh the bounded-staleness anchor flag from a `ConfigSet`. Called by the
+/// Coordinator on every system-config update.
+pub fn refresh_bounded_staleness_use_oracle_anchor(configs: &ConfigSet) {
+    let v = mz_adapter_types::dyncfgs::BOUNDED_STALENESS_USE_ORACLE_ANCHOR.get(configs);
+    BOUNDED_STALENESS_USE_ORACLE_ANCHOR_FLAG.store(v, Ordering::Relaxed);
+}
+
+/// Whether bounded staleness should anchor against the timestamp oracle's
+/// `read_ts` (rather than wall clock). Reads the static mirror; cheap.
+pub fn bounded_staleness_use_oracle_anchor() -> bool {
+    BOUNDED_STALENESS_USE_ORACLE_ANCHOR_FLAG.load(Ordering::Relaxed)
+}
 
 /// The timeline and timestamp context of a read.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -232,15 +256,19 @@ pub trait TimestampProvider {
         // - The isolation level is Strict Serializable and the `when` allows us to use the
         //   the timestamp oracle (ex: queries with no AS OF).
         // - The `when` requires us to use the timestamp oracle (ex: read-then-write queries).
+        // - The isolation level is BoundedStaleness AND the operator has opted into
+        //   anchoring against the oracle (rather than wall clock) via the
+        //   `bounded_staleness_use_oracle_anchor` dyncfg.
+        let bounded_staleness_oracle_anchor =
+            matches!(isolation_level, IsolationLevel::BoundedStaleness(_))
+                && bounded_staleness_use_oracle_anchor();
+
         when.must_advance_to_timeline_ts()
             || (when.can_advance_to_timeline_ts()
-                && matches!(
+                && (matches!(
                     isolation_level,
                     IsolationLevel::StrictSerializable | IsolationLevel::StrongSessionSerializable
-                ))
-        // BoundedStaleness intentionally NOT in this list: bounded staleness derives its
-        // freshness floor from wall clock, not from oracle.read_ts, and never blocks on
-        // the oracle.
+                ) || bounded_staleness_oracle_anchor))
     }
 
     /// Uses constraints and preferences to determine a timestamp for a query.
@@ -339,8 +367,13 @@ pub trait TimestampProvider {
                 ));
             }
 
-            // For BoundedStaleness, add a wall-clock-derived lower bound: the chosen
-            // timestamp must not be older than `now - D`. This never blocks on the oracle.
+            // For BoundedStaleness, add a freshness lower bound: the chosen timestamp
+            // must not be older than `anchor - D`. The anchor is either the timestamp
+            // oracle's `read_ts` (when `bounded_staleness_use_oracle_anchor` is on,
+            // already fetched and supplied via `oracle_read_ts`) or the local wall
+            // clock (the default — no oracle round-trip). The wall-clock variant is
+            // sound under the EpochMilliseconds invariant `oracle_read_ts <= now_ms`;
+            // the oracle variant is correct under multi-node deployments.
             //
             // Also add a hard upper bound at `largest_not_in_advance_of_upper`. Without
             // this, a candidate forced above the inputs' upper by the lower bound would
@@ -349,9 +382,9 @@ pub trait TimestampProvider {
             // bail. With the upper bound in place the feasibility check fires
             // `BoundedStalenessExceeded` deterministically in the coordinator.
             if let IsolationLevel::BoundedStaleness(d) = isolation_level {
-                let now_ms = Timestamp::from(now);
+                let anchor = oracle_read_ts.unwrap_or_else(|| Timestamp::from(now));
                 let bound_ms = u64::try_from(d.as_millis()).unwrap_or(u64::MAX);
-                let lower = now_ms.saturating_sub(bound_ms);
+                let lower = anchor.saturating_sub(bound_ms);
                 constraints.lower.push((
                     Antichain::from_elem(lower),
                     Reason::IsolationLevel(*isolation_level),
