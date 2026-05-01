@@ -91,12 +91,15 @@ export async function assertNoErrors(page: Page, label: string) {
 }
 
 /**
- * Fallback for pre-V2 callers without `query_key` or `--label\n` prefix.
- * Should shrink as the executeSqlV2 migration progresses.
+ * Regex labels for V1 useSqlTyped queries (which don't carry a `query_key`
+ * URL param). Matched in order — list more specific patterns before less
+ * specific ones, since `hasSuperUserPrivileges()` injects `mz_is_superuser`
+ * into many auth queries.
  */
-const LEGACY_SQL_LABELS: [string, RegExp][] = [
+const SQL_LABELS: [string, RegExp][] = [
   ["healthCheck", /mz_version/i],
   ["canCreateObjects", /mz_show_my_schema_privileges/i],
+  ["canCreateCluster", /'CREATECLUSTER'/i],
   ["rbacCheck", /mz_is_superuser/i],
 ];
 
@@ -125,13 +128,8 @@ function labelFromQueryKey(request: Request): string | undefined {
   }
 }
 
-function labelFromSqlComment(sql: string): string | undefined {
-  const match = sql.match(/^--([^\n]+)\n/);
-  return match ? match[1].trim() : undefined;
-}
-
-function labelFromLegacyRegex(sql: string): string | undefined {
-  for (const [label, pattern] of LEGACY_SQL_LABELS) {
+function labelFromSql(sql: string): string | undefined {
+  for (const [label, pattern] of SQL_LABELS) {
     if (pattern.test(sql)) return label;
   }
   return undefined;
@@ -139,10 +137,9 @@ function labelFromLegacyRegex(sql: string): string | undefined {
 
 /**
  * Labeling order:
- *   1. `query_key` URL param (V2)
- *   2. `--label\n` SQL comment prefix (V1 with queryKey)
- *   3. Legacy regex fallback
- *   4. Truncated SQL
+ *   1. `query_key` URL param (V2 executeSqlV2 callers)
+ *   2. SQL body regex match (V1 useSqlTyped)
+ *   3. Truncated SQL
  */
 function labelRequest(request: Request): string {
   const fromKey = labelFromQueryKey(request);
@@ -158,13 +155,7 @@ function labelRequest(request: Request): string {
         : [];
     if (queries.length === 0) return "unknown";
 
-    const labels = queries.map((q) => {
-      const fromComment = labelFromSqlComment(q);
-      if (fromComment) return fromComment;
-      const fromRegex = labelFromLegacyRegex(q);
-      if (fromRegex) return fromRegex;
-      return q.substring(0, 80);
-    });
+    const labels = queries.map((q) => labelFromSql(q) ?? q.substring(0, 80));
     const unique = labels.filter((l, i) => i === 0 || l !== labels[i - 1]);
     sql = unique.join(" + ");
   } catch {
@@ -321,6 +312,15 @@ async function signIn(page: Page): Promise<string> {
   await page.press("[name=password]", "Enter");
   await page.waitForSelector("[data-testid=page-layout]", { timeout: 60_000 });
   console.log("  Sign-in complete.");
+  // First-time logins on a localhost origin trigger the Quickstart welcome
+  // modal, which routes the user to the SQL Shell and prevents any other
+  // page from rendering. Dismiss it before saving storage state so the
+  // dismissal sticks for every test in the same context.
+  const closeQuickstart = page.getByRole("button", { name: /close quickstart/i });
+  if (await closeQuickstart.count()) {
+    await closeQuickstart.first().click().catch(() => {});
+    console.log("  Dismissed Quickstart welcome modal.");
+  }
   // Save storage state so new tabs in the same context are already authenticated.
   const statePath = "e2e-tests/scalability-auth-state.json";
   await page.context().storageState({ path: statePath });
@@ -570,7 +570,8 @@ function printConcurrencySummary(records: QueryRecord[]) {
 
 const HISTOGRAM_BUCKET_MS = 10_000;
 
-/** Active-request count per fixed-interval bucket — complements the single peak number. */
+/** Peak concurrent requests per fixed-interval bucket — the highest number of
+ * requests simultaneously in flight at any instant within each window. */
 function printConcurrencyHistogram(records: QueryRecord[]) {
   const completed = records.filter((r) => !r.incomplete);
   if (completed.length === 0) return;
@@ -579,33 +580,62 @@ function printConcurrencyHistogram(records: QueryRecord[]) {
     (r) => new Date(r.timestamp).getTime() - r.durationMs,
   );
   const ends = completed.map((r) => new Date(r.timestamp).getTime());
-  const windowStart = starts.reduce((m, v) => Math.min(m, v), Infinity);
-  const windowEnd = ends.reduce((m, v) => Math.max(m, v), -Infinity);
+  const windowStart = Math.min(...starts);
+  const windowEnd = Math.max(...ends);
   const bucketCount = Math.ceil(
     (windowEnd - windowStart) / HISTOGRAM_BUCKET_MS,
   );
   if (bucketCount <= 1) return;
 
-  const buckets: { bucketStart: number; active: number }[] = [];
+  // Concurrency only goes up when a request starts, so the peak in a window
+  // is the max active count sampled at the window's start (catches anything
+  // already in flight) plus every request start that falls inside it.
+  const activeIndicesAt = (t: number) =>
+    starts.reduce<number[]>((idxs, s, j) => {
+      if (s <= t && ends[j] > t) idxs.push(j);
+      return idxs;
+    }, []);
+
+  const buckets: { peak: number; sqls: string[] }[] = [];
   for (let i = 0; i < bucketCount; i++) {
     const bucketStart = windowStart + i * HISTOGRAM_BUCKET_MS;
     const bucketEnd = bucketStart + HISTOGRAM_BUCKET_MS;
-    const midpoint = (bucketStart + bucketEnd) / 2;
-    let active = 0;
-    for (let j = 0; j < starts.length; j++) {
-      if (starts[j] <= midpoint && ends[j] > midpoint) active++;
+    const samplePoints = [
+      bucketStart,
+      ...starts.filter((s) => s >= bucketStart && s < bucketEnd),
+    ];
+    let peak = 0;
+    let peakIdxs: number[] = [];
+    for (const t of samplePoints) {
+      const idxs = activeIndicesAt(t);
+      if (idxs.length > peak) {
+        peak = idxs.length;
+        peakIdxs = idxs;
+      }
     }
-    buckets.push({ bucketStart, active });
+    buckets.push({ peak, sqls: peakIdxs.map((j) => completed[j].sql) });
   }
 
-  console.log(`\n=== Concurrency (${HISTOGRAM_BUCKET_MS / 1000}s buckets) ===`);
-  const maxActive = buckets.reduce((m, b) => Math.max(m, b.active), 1);
-  for (const b of buckets) {
-    const offsetSec = Math.round((b.bucketStart - windowStart) / 1000);
-    const bar = "#".repeat(Math.round((b.active / maxActive) * 30));
+  console.log(
+    `\n=== Peak concurrent requests per ${HISTOGRAM_BUCKET_MS / 1000}s window ===`,
+  );
+  const maxPeak = Math.max(1, ...buckets.map((b) => b.peak));
+  for (let i = 0; i < buckets.length; i++) {
+    const { peak, sqls } = buckets[i];
+    const offsetSec = (i * HISTOGRAM_BUCKET_MS) / 1000;
+    const bar = "#".repeat(Math.round((peak / maxPeak) * 30));
     console.log(
-      `  +${String(offsetSec).padStart(4)}s  ${String(b.active).padStart(3)}  ${bar}`,
+      `  +${String(offsetSec).padStart(4)}s  ${String(peak).padStart(3)}  ${bar}`,
     );
+    // For buckets with actual concurrency, list which queries collided so we
+    // can see whether the spike is one repeated poll or several distinct ones.
+    if (peak > 1) {
+      const counts = new Map<string, number>();
+      for (const sql of sqls) counts.set(sql, (counts.get(sql) ?? 0) + 1);
+      for (const [sql, n] of [...counts.entries()].sort((a, b) => b[1] - a[1])) {
+        console.log(`             ${n}x ${sql}`);
+      }
+    }
   }
 }
 

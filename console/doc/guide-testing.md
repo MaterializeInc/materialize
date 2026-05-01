@@ -178,7 +178,7 @@ yarn playwright test scalability/ --project=chromium --workers=1
 
 ```shell
 export BASE_URL=https://staging.console.materialize.com
-export REGION_SLUG=aws/eu-west-1
+export REGION_SLUG=aws-eu-west-1
 export E2E_EMAIL=<your-staging-email>
 export E2E_PASSWORD=<your-staging-password>
 export CLUSTER_NAME=<cluster-name>
