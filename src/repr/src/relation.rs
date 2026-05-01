@@ -1105,10 +1105,7 @@ impl RelationDesc {
         // TODO(parkmycar): Add better validation here.
         assert_eq!(typ.column_types.len(), metadata.len());
 
-        RelationDesc {
-            typ,
-            metadata,
-        }
+        RelationDesc { typ, metadata }
     }
 
     pub fn from_names_and_types<I, T, N>(iter: I) -> Self
