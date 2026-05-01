@@ -72,6 +72,12 @@ SET transaction_isolation TO 'bounded staleness 1s'
 statement error real_time_recency cannot be combined with bounded staleness isolation
 SET real_time_recency TO on
 
+# A failed conflicting SET must not have mutated the *other* variable.
+query T
+SHOW real_time_recency
+----
+off
+
 statement ok
 RESET transaction_isolation
 
@@ -80,6 +86,14 @@ SET real_time_recency TO on
 
 statement error real_time_recency cannot be combined with bounded staleness isolation
 SET transaction_isolation TO 'bounded staleness 1s'
+
+# A failed conflicting SET must not have mutated `transaction_isolation`. The
+# mutual-exclusion check fires after `vars.set` has updated the staged value;
+# this guards against the staged value leaking into subsequent statements.
+query T
+SHOW transaction_isolation
+----
+strict serializable
 
 statement ok
 RESET real_time_recency

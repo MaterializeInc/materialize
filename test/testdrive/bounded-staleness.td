@@ -73,3 +73,46 @@ contains: cannot serve query under bounded staleness
 > DROP TABLE bs_t
 
 > DROP CLUSTER bs_cluster
+
+# --- success path: upper lags but bound is generous ---------------------------
+#
+# Regression test for the constraint-shadowing bug where the existing
+# `oracle_read_ts -> hard lower bound` push (in `determine_timestamp_via_constraints`)
+# was not excluded for bounded staleness, shadowing the intended `anchor - D`
+# slack and forcing `T >= oracle.read_ts`. With the upper bound also clamped at
+# `largest_not_in_advance_of_upper`, queries used to fail deterministically as
+# soon as the upper lagged, even when the bound was orders of magnitude larger
+# than the lag — turning bounded staleness into something stricter than strict
+# serializable. With the carve-out in place, the chosen timestamp is allowed to
+# be as old as `oracle.read_ts - D`, so a generous bound serves a stale-but-
+# fresh-enough timestamp.
+
+> CREATE CLUSTER bs_cluster SIZE 'scale=1,workers=1'
+
+> CREATE TABLE bs_t (a int)
+
+> INSERT INTO bs_t VALUES (1), (2), (3)
+
+> CREATE MATERIALIZED VIEW bs_mv IN CLUSTER bs_cluster AS
+  SELECT count(*) FROM bs_t
+
+> SELECT * FROM bs_mv
+3
+
+> ALTER CLUSTER bs_cluster SET (REPLICATION FACTOR 0)
+
+> SELECT mz_unsafe.mz_sleep(1)
+<null>
+
+> SET transaction_isolation = 'bounded staleness 1h'
+
+> SELECT * FROM bs_mv
+3
+
+> RESET transaction_isolation
+
+> DROP MATERIALIZED VIEW bs_mv
+
+> DROP TABLE bs_t
+
+> DROP CLUSTER bs_cluster
