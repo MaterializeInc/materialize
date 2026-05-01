@@ -2624,6 +2624,28 @@ impl Coordinator {
         mut ctx: ExecuteContext,
         plan: plan::ReadThenWritePlan,
     ) {
+        // Failsafe: when frontend OCC read-then-write is enabled, every
+        // DELETE / UPDATE / INSERT must be sequenced through that path —
+        // not here. The two paths take different locks (OCC takes none;
+        // this path takes write locks) and therefore do not synchronize
+        // against each other, so running them concurrently against the
+        // same table double-retracts rows that both paths' reads
+        // observed. If we reach this function while the flag is on, some
+        // call site bypassed the frontend gate (e.g. SQL `EXECUTE` of a
+        // prepared DML, which the coordinator re-dispatches via
+        // `Command::Execute` from `sequencer.rs`'s `Plan::Execute`
+        // handler). That's a routing bug; surface it loudly rather than
+        // silently corrupting data.
+        if self.frontend_read_then_write_enabled {
+            ctx.retire(Err(AdapterError::Internal(
+                "sequence_read_then_write reached the coordinator while \
+                 frontend OCC read-then-write is enabled; the frontend \
+                 gate was bypassed for this statement"
+                    .into(),
+            )));
+            return;
+        }
+
         let mut source_ids: BTreeSet<_> = plan
             .selection
             .depends_on()
