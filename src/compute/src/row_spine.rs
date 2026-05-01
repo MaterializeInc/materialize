@@ -98,270 +98,76 @@ mod spines {
     }
 }
 
-/// A `Row`-specialized container.
-mod container {
-
-    use std::cmp::Ordering;
-
+#[cfg(test)]
+mod tests {
+    use crate::row_spine::DatumContainer;
     use differential_dataflow::trace::implementations::BatchContainer;
-    use timely::container::PushInto;
+    use mz_repr::adt::date::Date;
+    use mz_repr::adt::interval::Interval;
+    use mz_repr::{Datum, Row, SqlScalarType};
 
-    use mz_repr::{Datum, Row, RowPacker, read_datum};
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: integer-to-pointer casts and `ptr::with_exposed_provenance` are not supported
+    fn test_round_trip() {
+        fn round_trip(datums: Vec<Datum>) {
+            let row = Row::pack(datums.clone());
 
-    use super::bytes_container::BytesContainer;
+            let mut container = DatumContainer::with_capacity(row.byte_len());
+            container.push_own(&row);
 
-    /// Container wrapping `BytesContainer` that traffics only in `Row`-formatted bytes.
-    ///
-    /// This type accepts only `Row`-formatted bytes in its `Push` implementation, and
-    /// in return provides a `DatumSeq` view of the bytes which can be decoded as `Datum`s.
-    pub struct DatumContainer {
-        bytes: BytesContainer,
-    }
+            // When run under miri this catches undefined bytes written to data
+            // eg by calling push_copy! on a type which contains undefined padding values
+            println!("{:?}", container.index(0).iter.data);
 
-    impl DatumContainer {
-        /// Visit contained allocations to determine their size and capacity.
-        #[inline]
-        #[allow(unused)]
-        pub fn heap_size(&self, callback: impl FnMut(usize, usize)) {
-            self.bytes.heap_size(callback)
-        }
-    }
-
-    impl BatchContainer for DatumContainer {
-        type Owned = Row;
-        type ReadItem<'a> = DatumSeq<'a>;
-
-        #[inline(always)]
-        fn into_owned<'a>(item: Self::ReadItem<'a>) -> Self::Owned {
-            item.to_row()
+            let datums2 = container.index(0).collect::<Vec<_>>();
+            assert_eq!(datums, datums2);
         }
 
-        #[inline]
-        fn clone_onto<'a>(item: Self::ReadItem<'a>, other: &mut Self::Owned) {
-            let mut packer = other.packer();
-            item.copy_into(&mut packer);
-        }
-
-        #[inline(always)]
-        fn push_ref(&mut self, item: Self::ReadItem<'_>) {
-            self.bytes.push_into(item.bytes);
-        }
-
-        #[inline(always)]
-        fn push_own(&mut self, item: &Self::Owned) {
-            self.bytes.push_into(item.data());
-        }
-
-        #[inline(always)]
-        fn clear(&mut self) {
-            self.bytes.clear();
-        }
-
-        #[inline(always)]
-        fn with_capacity(size: usize) -> Self {
-            Self {
-                bytes: BytesContainer::with_capacity(size),
-            }
-        }
-
-        #[inline(always)]
-        fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
-            Self {
-                bytes: BytesContainer::merge_capacity(&cont1.bytes, &cont2.bytes),
-            }
-        }
-
-        #[inline(always)]
-        fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> {
-            item
-        }
-
-        #[inline(always)]
-        fn index(&self, index: usize) -> Self::ReadItem<'_> {
-            DatumSeq {
-                bytes: self.bytes.index(index),
-            }
-        }
-
-        #[inline(always)]
-        fn len(&self) -> usize {
-            self.bytes.len()
-        }
-    }
-
-    impl PushInto<Row> for DatumContainer {
-        fn push_into(&mut self, item: Row) {
-            self.push_into(&item);
-        }
-    }
-
-    impl PushInto<&Row> for DatumContainer {
-        fn push_into(&mut self, item: &Row) {
-            self.push_own(item);
-        }
-    }
-
-    impl PushInto<DatumSeq<'_>> for DatumContainer {
-        fn push_into(&mut self, item: DatumSeq<'_>) {
-            self.bytes.push_into(item.as_bytes())
-        }
-    }
-
-    #[derive(Debug)]
-    pub struct DatumSeq<'a> {
-        bytes: &'a [u8],
-    }
-
-    impl<'a> DatumSeq<'a> {
-        #[inline]
-        pub fn copy_into(&self, row: &mut RowPacker) {
-            // SAFETY: `self.bytes` is a correctly formatted row.
-            unsafe { row.extend_by_slice_unchecked(self.bytes) }
-        }
-        #[inline]
-        pub fn as_bytes(&self) -> &'a [u8] {
-            self.bytes
-        }
-        #[inline]
-        pub fn to_row(&self) -> Row {
-            // SAFETY: `self.bytes` is a correctly formatted row.
-            unsafe { Row::from_bytes_unchecked(self.bytes) }
-        }
-    }
-
-    impl<'a> Copy for DatumSeq<'a> {}
-    impl<'a> Clone for DatumSeq<'a> {
-        #[inline(always)]
-        fn clone(&self) -> Self {
-            *self
-        }
-    }
-
-    impl<'a, 'b> PartialEq<DatumSeq<'a>> for DatumSeq<'b> {
-        #[inline]
-        fn eq(&self, other: &DatumSeq<'a>) -> bool {
-            self.bytes.eq(other.bytes)
-        }
-    }
-    impl<'a> PartialEq<&Row> for DatumSeq<'a> {
-        #[inline]
-        fn eq(&self, other: &&Row) -> bool {
-            self.bytes.eq(other.data())
-        }
-    }
-    impl<'a> Eq for DatumSeq<'a> {}
-    impl<'a, 'b> PartialOrd<DatumSeq<'a>> for DatumSeq<'b> {
-        #[inline]
-        fn partial_cmp(&self, other: &DatumSeq<'a>) -> Option<Ordering> {
-            Some(self.cmp(other))
-        }
-    }
-    impl<'a> Ord for DatumSeq<'a> {
-        #[inline]
-        fn cmp(&self, other: &Self) -> Ordering {
-            match self.bytes.len().cmp(&other.bytes.len()) {
-                std::cmp::Ordering::Less => std::cmp::Ordering::Less,
-                std::cmp::Ordering::Greater => std::cmp::Ordering::Greater,
-                std::cmp::Ordering::Equal => self.bytes.cmp(other.bytes),
-            }
-        }
-    }
-    impl<'a> Iterator for DatumSeq<'a> {
-        type Item = Datum<'a>;
-        #[inline]
-        fn next(&mut self) -> Option<Self::Item> {
-            if self.bytes.is_empty() {
-                None
-            } else {
-                let result = unsafe { read_datum(&mut self.bytes) };
-                Some(result)
-            }
-        }
-    }
-
-    use mz_repr::fixed_length::ToDatumIter;
-    impl<'long> ToDatumIter for DatumSeq<'long> {
-        type DatumIter<'short>
-            = DatumSeq<'short>
-        where
-            Self: 'short;
-        #[inline]
-        fn to_datum_iter<'short>(&'short self) -> Self::DatumIter<'short> {
-            *self
-        }
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use crate::row_spine::DatumContainer;
-        use differential_dataflow::trace::implementations::BatchContainer;
-        use mz_repr::adt::date::Date;
-        use mz_repr::adt::interval::Interval;
-        use mz_repr::{Datum, Row, SqlScalarType};
-
-        #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // unsupported operation: integer-to-pointer casts and `ptr::with_exposed_provenance` are not supported
-        fn test_round_trip() {
-            fn round_trip(datums: Vec<Datum>) {
-                let row = Row::pack(datums.clone());
-
-                let mut container = DatumContainer::with_capacity(row.byte_len());
-                container.push_own(&row);
-
-                // When run under miri this catches undefined bytes written to data
-                // eg by calling push_copy! on a type which contains undefined padding values
-                println!("{:?}", container.index(0).iter.data);
-
-                let datums2 = container.index(0).collect::<Vec<_>>();
-                assert_eq!(datums, datums2);
-            }
-
-            round_trip(vec![]);
-            round_trip(
-                SqlScalarType::enumerate()
-                    .iter()
-                    .flat_map(|r#type| r#type.interesting_datums())
-                    .collect(),
-            );
-            round_trip(vec![
-                Datum::Null,
-                Datum::Null,
-                Datum::False,
-                Datum::True,
-                Datum::Int16(-21),
-                Datum::Int32(-42),
-                Datum::Int64(-2_147_483_648 - 42),
-                Datum::UInt8(0),
-                Datum::UInt8(1),
-                Datum::UInt16(0),
-                Datum::UInt16(1),
-                Datum::UInt16(1 << 8),
-                Datum::UInt32(0),
-                Datum::UInt32(1),
-                Datum::UInt32(1 << 8),
-                Datum::UInt32(1 << 16),
-                Datum::UInt32(1 << 24),
-                Datum::UInt64(0),
-                Datum::UInt64(1),
-                Datum::UInt64(1 << 8),
-                Datum::UInt64(1 << 16),
-                Datum::UInt64(1 << 24),
-                Datum::UInt64(1 << 32),
-                Datum::UInt64(1 << 40),
-                Datum::UInt64(1 << 48),
-                Datum::UInt64(1 << 56),
-                Datum::Date(Date::from_pg_epoch(365 * 45 + 21).unwrap()),
-                Datum::Interval(Interval {
-                    months: 312,
-                    ..Default::default()
-                }),
-                Datum::Interval(Interval::new(0, 0, 1_012_312)),
-                Datum::Bytes(&[]),
-                Datum::Bytes(&[0, 2, 1, 255]),
-                Datum::String(""),
-                Datum::String("العَرَبِيَّة"),
-            ]);
-        }
+        round_trip(vec![]);
+        round_trip(
+            SqlScalarType::enumerate()
+                .iter()
+                .flat_map(|r#type| r#type.interesting_datums())
+                .collect(),
+        );
+        round_trip(vec![
+            Datum::Null,
+            Datum::Null,
+            Datum::False,
+            Datum::True,
+            Datum::Int16(-21),
+            Datum::Int32(-42),
+            Datum::Int64(-2_147_483_648 - 42),
+            Datum::UInt8(0),
+            Datum::UInt8(1),
+            Datum::UInt16(0),
+            Datum::UInt16(1),
+            Datum::UInt16(1 << 8),
+            Datum::UInt32(0),
+            Datum::UInt32(1),
+            Datum::UInt32(1 << 8),
+            Datum::UInt32(1 << 16),
+            Datum::UInt32(1 << 24),
+            Datum::UInt64(0),
+            Datum::UInt64(1),
+            Datum::UInt64(1 << 8),
+            Datum::UInt64(1 << 16),
+            Datum::UInt64(1 << 24),
+            Datum::UInt64(1 << 32),
+            Datum::UInt64(1 << 40),
+            Datum::UInt64(1 << 48),
+            Datum::UInt64(1 << 56),
+            Datum::Date(Date::from_pg_epoch(365 * 45 + 21).unwrap()),
+            Datum::Interval(Interval {
+                months: 312,
+                ..Default::default()
+            }),
+            Datum::Interval(Interval::new(0, 0, 1_012_312)),
+            Datum::Bytes(&[]),
+            Datum::Bytes(&[0, 2, 1, 255]),
+            Datum::String(""),
+            Datum::String("العَرَبِيَّة"),
+        ]);
     }
 }
 
@@ -768,12 +574,6 @@ mod dictionary {
                 self.inner.push(chunk)
             }
             fn done(self, description: Description<Self::Time>) -> Self::Output {
-                if let Some(codec) = &self.inner.result.keys.codec {
-                    codec.report();
-                }
-                if let Some(codec) = &self.inner.result.vals.vals.codec {
-                    codec.report();
-                }
                 self.inner.done(description)
             }
             fn seal(
@@ -851,9 +651,6 @@ mod dictionary {
                 self.inner.push(chunk)
             }
             fn done(self, description: Description<Self::Time>) -> Self::Output {
-                if let Some(codec) = &self.inner.result.keys.codec {
-                    codec.report();
-                }
                 self.inner.done(description)
             }
             fn seal(
@@ -917,9 +714,6 @@ mod dictionary {
                 self.inner.push(chunk)
             }
             fn done(self, description: Description<Self::Time>) -> Self::Output {
-                if let Some(codec) = &self.inner.result.keys.codec {
-                    codec.report();
-                }
                 self.inner.done(description)
             }
             fn seal(
@@ -961,11 +755,11 @@ mod dictionary {
         }
     }
 
-    // #[derive(Default)]
     pub struct DatumContainer {
-        /// DictionaryCodec with encoder, decoder, and stastistics.
+        /// Encoder/decoder used to translate between row bytes and the stored bytes.
+        /// `None` until enough pushes have been observed (or if compression is disabled).
         codec: Option<ColumnsCodec>,
-        /// A list of rows
+        /// The stored, possibly-encoded, row bytes.
         inner: super::bytes_container::BytesContainer,
         /// Staging buffer for ingested `Row` types.
         staging: Vec<u8>,
@@ -996,11 +790,7 @@ mod dictionary {
         }
         fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
             let codec = match (&cont1.codec, &cont2.codec) {
-                (Some(c1), Some(c2)) => {
-                    c1.report();
-                    c2.report();
-                    Some(ColumnsCodec::new_from([c1, c2]))
-                }
+                (Some(c1), Some(c2)) => Some(ColumnsCodec::new_from([c1, c2])),
                 _ => None,
             };
 
@@ -1317,8 +1107,6 @@ mod row_codec {
         /// Constructs a new instance of `Self` from accumulated statistics.
         /// These statistics should cover the data the output expects to see.
         fn new_from<'a>(stats: impl IntoIterator<Item = &'a Self>) -> Self;
-        /// Diagnostic information about the state of the codec.
-        fn report(&self) {}
 
         fn borrow_row<'a>(row: &'a Row) -> Self::DecodeIter<'a>;
     }
@@ -1333,16 +1121,12 @@ mod row_codec {
         #[derive(Default, Debug)]
         pub struct ColumnsCodec {
             columns: Vec<DictionaryCodec>,
-            bytes: usize,
-            total: usize,
         }
 
         impl ColumnsCodec {
             #[inline(always)]
             pub fn clear(&mut self) {
                 self.columns.clear();
-                self.bytes = 0;
-                self.total = 0;
             }
         }
 
@@ -1359,21 +1143,15 @@ mod row_codec {
             where
                 I: IntoIterator<Item = &'a [u8]>,
             {
-                let mut iter = iter.into_iter();
-                let mut index = 0;
-                while let Some(bytes) = iter.next() {
-                    self.total += bytes.len();
+                for (index, bytes) in iter.into_iter().enumerate() {
                     if self.columns.len() <= index {
                         self.columns.push(Default::default());
                     }
                     self.columns[index].encode(std::iter::once(bytes), output);
-                    index += 1;
                 }
-                self.bytes += output.len();
             }
 
             fn new_from<'a>(stats: impl IntoIterator<Item = &'a Self>) -> Self {
-                // Is it possible that one of the inputs has no stats?
                 let stats = stats.into_iter().collect::<Vec<_>>();
                 let cols = stats.iter().map(|s| s.columns.len()).max().unwrap_or(0);
                 let mut columns = Vec::with_capacity(cols);
@@ -1385,26 +1163,7 @@ mod row_codec {
                             .map(|s| s.columns.get(index).unwrap_or(&default)),
                     ));
                 }
-                Self {
-                    columns,
-                    total: 0,
-                    bytes: 0,
-                }
-            }
-            fn report(&self) {
-                if self.total > 500000 {
-                    //} && self.columns.iter().all(|c| c.decode.len() > 0) {
-                    println!(
-                        "REPORT: {:?} -> {:?} (x{:?})",
-                        self.total,
-                        self.bytes,
-                        self.total / self.bytes
-                    );
-                    println!("COLUMNS: {:?}", self.columns.len());
-                    for column in self.columns.iter() {
-                        column.report()
-                    }
-                }
+                Self { columns }
             }
 
             #[inline(always)]
@@ -1421,11 +1180,7 @@ mod row_codec {
             /// Construct a codec using only structurally safe tags.
             pub(in crate::row_spine) fn new_safe(&self) -> Self {
                 let columns = self.columns.iter().map(DictionaryCodec::new_safe).collect();
-                Self {
-                    columns,
-                    total: 0,
-                    bytes: 0,
-                }
+                Self { columns }
             }
         }
 
@@ -1499,8 +1254,6 @@ mod row_codec {
             encode: BTreeMap<Vec<u8>, u8>,
             pub decode: BytesMap,
             stats: (MisraGries<Vec<u8>>, [u64; 4]),
-            bytes: usize,
-            total: usize,
         }
 
         impl Codec for DictionaryCodec {
@@ -1522,9 +1275,7 @@ mod row_codec {
             where
                 I: IntoIterator<Item = &'a [u8]>,
             {
-                let pre_len = output.len();
                 for bytes in iter.into_iter() {
-                    self.total += bytes.len();
                     // If we have an index referencing `bytes`, use the index key.
                     if let Some(b) = self.encode.get(bytes) {
                         output.push(*b);
@@ -1537,7 +1288,6 @@ mod row_codec {
                     let tag_idx: usize = (tag % 4).into();
                     self.stats.1[tag_idx] |= 1 << (tag >> 2);
                 }
-                self.bytes += output.len() - pre_len;
             }
 
             /// Construct a new encoder from supplied statistics.
@@ -1576,33 +1326,7 @@ mod row_codec {
                     encode,
                     decode,
                     stats: (MisraGries::default(), [0u64; 4]),
-                    bytes: 0,
-                    total: 0,
                 }
-            }
-
-            fn report(&self) {
-                let mut tags_used = 0;
-                tags_used += self.stats.1[0].count_ones();
-                tags_used += self.stats.1[1].count_ones();
-                tags_used += self.stats.1[2].count_ones();
-                tags_used += self.stats.1[3].count_ones();
-                let mg = self.stats.0.clone().done();
-                let mut bytes = 0;
-                for (vec, _count) in mg.iter() {
-                    bytes += vec.len();
-                }
-                // if self.total > 10000 && !mg.is_empty() {
-                println!(
-                    "\t{:?}v{:?}: {:?} -> {:?} + {:?} = (x{:?})",
-                    tags_used,
-                    mg.len(),
-                    self.total,
-                    self.bytes,
-                    bytes,
-                    self.total / (self.bytes + bytes),
-                )
-                // }
             }
 
             #[inline(always)]
@@ -1643,8 +1367,6 @@ mod row_codec {
                     encode,
                     decode,
                     stats: (MisraGries::default(), [0u64; 4]),
-                    bytes: 0,
-                    total: 0,
                 }
             }
         }
