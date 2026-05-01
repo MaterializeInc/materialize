@@ -594,6 +594,30 @@ async fn handle_mcp_method(
     }
 }
 
+/// Instructions returned in the `initialize` response for each endpoint type.
+/// These guide the AI agent on how to use the server correctly.
+fn endpoint_instructions(endpoint_type: McpEndpointType) -> Option<String> {
+    match endpoint_type {
+        McpEndpointType::Agent => None,
+        McpEndpointType::Developer => Some(concat!(
+            "You are connected to the Materialize developer MCP server. ",
+            "You have read-only access to system catalog tables (mz_*, pg_catalog, information_schema) ",
+            "for troubleshooting and observability.\n\n",
+            "IMPORTANT: Before writing queries, discover table schemas using the mz_ontology tables:\n",
+            "- mz_internal.mz_ontology_entity_types: what catalog entities exist and which tables they map to\n",
+            "- mz_internal.mz_ontology_link_types: relationships between entities (foreign keys, metrics, etc.)\n",
+            "- mz_internal.mz_ontology_properties: column names, types, and descriptions for each entity\n",
+            "- mz_internal.mz_ontology_semantic_types: typed ID domains (CatalogItemId, ReplicaId, etc.)\n\n",
+            "Use these to find the correct tables, join paths, and column names instead of guessing.\n\n",
+            "Key rules:\n",
+            "- mz_source_statuses and mz_sink_statuses use `last_status_change_at` (NOT `updated_at`)\n",
+            "- mz_cluster_replica_utilization only has `replica_id` — JOIN with mz_cluster_replicas and mz_clusters to get names\n",
+            "- Do NOT query mz_introspection.mz_dataflow_arrangement_sizes — it is cluster-scoped and has uint8/text type mismatches\n",
+            "- Use SHOW COLUMNS FROM <table> to verify column names if unsure",
+        ).to_string()),
+    }
+}
+
 async fn handle_initialize(endpoint_type: McpEndpointType) -> Result<McpResult, McpRequestError> {
     Ok(McpResult::Initialize(InitializeResult {
         protocol_version: MCP_PROTOCOL_VERSION.to_string(),
@@ -602,7 +626,7 @@ async fn handle_initialize(endpoint_type: McpEndpointType) -> Result<McpResult, 
             name: format!("materialize-mcp-{}", endpoint_type),
             version: env!("CARGO_PKG_VERSION").to_string(),
         },
-        instructions: None,
+        instructions: endpoint_instructions(endpoint_type),
     }))
 }
 
@@ -699,14 +723,8 @@ async fn handle_tools_list(
                 title: Some("Query System Catalog".to_string()),
                 description: concat!(
                     "Query Materialize system catalog tables for troubleshooting and observability. ",
-                    "Only mz_*, pg_catalog, and information_schema tables are accessible.\n\n",
-                    "Key tables by scenario:\n",
-                    "- Freshness: mz_internal.mz_wallclock_global_lag_recent_history, mz_internal.mz_materialization_lag, mz_internal.mz_hydration_statuses\n",
-                    "- Memory: mz_internal.mz_cluster_replica_utilization, mz_internal.mz_cluster_replica_metrics, mz_internal.mz_dataflow_arrangement_sizes\n",
-                    "- Cluster health: mz_internal.mz_cluster_replica_statuses, mz_catalog.mz_cluster_replicas\n",
-                    "- Source/Sink health: mz_internal.mz_source_statuses, mz_internal.mz_sink_statuses, mz_internal.mz_source_statistics, mz_internal.mz_sink_statistics\n",
-                    "- Object catalog: mz_catalog.mz_objects (all objects), mz_catalog.mz_tables, mz_catalog.mz_materialized_views, mz_catalog.mz_sources, mz_catalog.mz_sinks\n\n",
-                    "Use SHOW TABLES FROM mz_internal or mz_catalog to discover more tables.",
+                    "Only mz_*, pg_catalog, and information_schema tables are accessible. ",
+                    "Use the mz_internal.mz_ontology_* tables to discover tables, columns, and join paths before writing queries.",
                 ).to_owned() + &format!(" {size_hint}"),
                 input_schema: json!({
                     "type": "object",
