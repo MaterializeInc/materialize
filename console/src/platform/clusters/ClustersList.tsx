@@ -11,17 +11,13 @@ import {
   FormLabel,
   HStack,
   Switch,
-  Table,
-  Tbody,
-  Td,
   Text,
-  Th,
-  Thead,
   Tooltip,
-  Tr,
+  VStack,
 } from "@chakra-ui/react";
+import { createColumnHelper } from "@tanstack/react-table";
 import React from "react";
-import { useNavigate } from "react-router-dom";
+import { Link as RouterLink } from "react-router-dom";
 
 import { isSystemCluster } from "~/api/materialize";
 import { ClusterWithOwnership } from "~/api/materialize/cluster/clusterList";
@@ -33,8 +29,13 @@ import { CodeBlock } from "~/components/copyableComponents";
 import DeleteObjectMenuItem from "~/components/DeleteObjectMenuItem";
 import { LoadingContainer } from "~/components/LoadingContainer";
 import OverflowMenu, { OVERFLOW_BUTTON_WIDTH } from "~/components/OverflowMenu";
-import { ClustersIcon } from "~/icons";
-import { InfoIcon } from "~/icons";
+import { sortingFunctions } from "~/components/Table/tableColumnBuilders";
+import { TablePagination } from "~/components/Table/TablePagination";
+import { TableSearch } from "~/components/Table/TableSearch";
+import { UniversalTable } from "~/components/Table/UniversalTable";
+import { useUniversalTable } from "~/components/Table/useUniversalTable";
+import TextLink from "~/components/TextLink";
+import { ClustersIcon, InfoIcon } from "~/icons";
 import {
   MainContentContainer,
   PageHeader,
@@ -67,6 +68,162 @@ const createClusterSuggestion = {
   (SIZE = '25cc');`,
 };
 
+/**
+ * Shared data threaded into cell components via TanStack's table `meta`.
+ * Read from `info.table.options.meta` and cast to this shape inside cells.
+ */
+interface ClusterTableMeta {
+  refetchClusters: () => void;
+  offlineReplicaMap: LatestOfflineReplicaMap | undefined;
+}
+
+const ClusterNameCell = ({ cluster }: { cluster: ClusterWithOwnership }) => (
+  <HStack>
+    <TextLink
+      as={RouterLink}
+      to={relativeClusterPath(cluster)}
+      textStyle="text-ui-med"
+      noOfLines={1}
+    >
+      {cluster.name}
+    </TextLink>
+    {isSystemCluster(cluster.id) && (
+      <Tooltip
+        label="This is a built-in system cluster. You are not billed for this cluster."
+        lineHeight={1.2}
+      >
+        <InfoIcon />
+      </Tooltip>
+    )}
+  </HStack>
+);
+
+const LastStatusChangeCell = ({
+  cluster,
+  offlineReplicaMap,
+}: {
+  cluster: ClusterWithOwnership;
+  offlineReplicaMap: LatestOfflineReplicaMap | undefined;
+}) => {
+  const offlineStatus = offlineReplicaMap?.get(cluster.id);
+
+  const lastStatusChangeString = cluster.latestStatusUpdate
+    ? formatDate(
+        cluster.latestStatusUpdate,
+        FRIENDLY_DATETIME_FORMAT_NO_SECONDS,
+      )
+    : "-";
+
+  return (
+    <HStack>
+      <Text noOfLines={1} paddingRight="6" position="relative">
+        {lastStatusChangeString}
+        {offlineStatus?.shouldSurfaceOom && (
+          <Tooltip
+            px={3}
+            py={2}
+            minWidth="fit-content"
+            rounded="md"
+            label={`A replica ran out of memory on ${formatDate(
+              offlineStatus.lastOfflineAt,
+              FRIENDLY_DATETIME_FORMAT_NO_SECONDS,
+            )}`}
+          >
+            <WarningIcon position="absolute" right="0" />
+          </Tooltip>
+        )}
+      </Text>
+    </HStack>
+  );
+};
+
+const ClusterActionsCell = ({
+  cluster,
+  refetchClusters,
+}: {
+  cluster: ClusterWithOwnership;
+  refetchClusters: () => void;
+}) => (
+  <OverflowMenu
+    items={[
+      {
+        visible: !isSystemCluster(cluster.id) && cluster.isOwner,
+        render: () => (
+          <>
+            {cluster.managed && <AlterClusterMenuItem cluster={cluster} />}
+            <DeleteObjectMenuItem
+              key="delete-object"
+              selectedObject={cluster}
+              onSuccessAction={refetchClusters}
+              objectType="CLUSTER"
+            />
+          </>
+        ),
+      },
+    ]}
+  />
+);
+
+const columnHelper = createColumnHelper<ClusterWithOwnership>();
+
+const columns = [
+  columnHelper.accessor("name", {
+    header: "Name",
+    sortingFn: "alphanumeric",
+    cell: (info) => <ClusterNameCell cluster={info.row.original} />,
+    meta: {
+      minWidth: { md: "280px", sm: "auto" },
+      cellProps: truncateMaxWidth,
+    },
+  }),
+  columnHelper.accessor((row) => row.replicas.length, {
+    id: "replicaCount",
+    header: "Replicas",
+    sortingFn: "basic",
+  }),
+  columnHelper.accessor(
+    (row) => {
+      const sizes = new Set(row.replicas.map((r) => r.size));
+      return sizes.size > 0 ? Array.from(sizes).join(", ") : null;
+    },
+    {
+      id: "sizes",
+      header: "Size",
+      sortingFn: sortingFunctions.nullsLast,
+      cell: (info) => info.getValue() ?? "-",
+    },
+  ),
+  columnHelper.accessor("latestStatusUpdate", {
+    id: "lastStatusChange",
+    header: "Last status change",
+    sortingFn: sortingFunctions.nullsLast,
+    cell: (info) => {
+      const meta = info.table.options.meta as ClusterTableMeta;
+      return (
+        <LastStatusChangeCell
+          cluster={info.row.original}
+          offlineReplicaMap={meta.offlineReplicaMap}
+        />
+      );
+    },
+  }),
+  columnHelper.display({
+    id: "actions",
+    header: "",
+    cell: (info) => {
+      const meta = info.table.options.meta as ClusterTableMeta;
+      return (
+        <ClusterActionsCell
+          cluster={info.row.original}
+          refetchClusters={meta.refetchClusters}
+        />
+      );
+    },
+    enableSorting: false,
+    size: OVERFLOW_BUTTON_WIDTH,
+  }),
+];
+
 const ClustersListContent = ({
   showSystemObjects,
 }: {
@@ -76,19 +233,16 @@ const ClustersListContent = ({
     includeSystemObjects: showSystemObjects,
   });
 
-  const deprioritizeSystemClusters = React.useMemo(() => {
-    const systemClusters = clusters.filter((cluster) =>
-      isSystemCluster(cluster.id),
-    );
+  const orderedClusters = React.useMemo(() => {
+    if (!clusters) return [];
+    const systemClusters = clusters.filter((c) => isSystemCluster(c.id));
     const nonSystemClusters = clusters
-      ?.filter((cluster) => !isSystemCluster(cluster.id))
+      .filter((c) => !isSystemCluster(c.id))
       .sort((a, b) => a.name.localeCompare(b.name));
-    return [...(nonSystemClusters ?? []), ...(systemClusters ?? [])];
+    return [...nonSystemClusters, ...systemClusters];
   }, [clusters]);
 
-  const isEmpty = clusters !== null && clusters.length === 0;
-
-  if (isEmpty) {
+  if (clusters !== null && clusters.length === 0) {
     return (
       <EmptyListWrapper>
         <EmptyListHeader>
@@ -116,11 +270,46 @@ const ClustersListContent = ({
     );
   }
 
+  return <ClusterTable clusters={orderedClusters} refetchClusters={refetch} />;
+};
+
+interface ClusterTableProps {
+  clusters: ClusterWithOwnership[];
+  refetchClusters: () => void;
+}
+
+const ClusterTable = ({ clusters, refetchClusters }: ClusterTableProps) => {
+  const { data: offlineReplicaMap, error: offlineReplicaError } =
+    useLatestOfflineReplica();
+
+  const meta: ClusterTableMeta = { refetchClusters, offlineReplicaMap };
+
+  const table = useUniversalTable({
+    data: clusters,
+    columns,
+    initialSorting: [{ id: "name", desc: false }],
+    pageSize: 20,
+    state: {
+      columnVisibility: {
+        lastStatusChange: !offlineReplicaError,
+      },
+    },
+    meta,
+  });
+
   return (
-    <ClusterTable
-      clusters={deprioritizeSystemClusters ?? []}
-      refetchClusters={refetch}
-    />
+    <VStack spacing={4} align="stretch">
+      <TableSearch
+        onValueChange={table.setGlobalFilter}
+        placeholder="Search clusters..."
+      />
+      <UniversalTable
+        table={table}
+        variant="linkable"
+        data-testid="cluster-table"
+      />
+      <TablePagination table={table} itemLabel="clusters" />
+    </VStack>
   );
 };
 
@@ -154,132 +343,6 @@ const ClustersListPage = () => {
         </React.Suspense>
       </AppErrorBoundary>
     </MainContentContainer>
-  );
-};
-
-const LastStatusChangeColumn = (props: {
-  latestOfflineReplicaMap: LatestOfflineReplicaMap;
-  cluster: ClusterWithOwnership;
-}) => {
-  const latestOfflineReplicaStatus = props.latestOfflineReplicaMap.get(
-    props.cluster.id,
-  );
-
-  const lastStatusChangeString = props.cluster.latestStatusUpdate
-    ? formatDate(
-        props.cluster.latestStatusUpdate,
-        FRIENDLY_DATETIME_FORMAT_NO_SECONDS,
-      )
-    : "-";
-
-  return (
-    <HStack>
-      <Text noOfLines={1} paddingRight="6" position="relative">
-        {lastStatusChangeString}
-        {latestOfflineReplicaStatus &&
-          latestOfflineReplicaStatus.shouldSurfaceOom && (
-            <Tooltip
-              px={3}
-              py={2}
-              minWidth="fit-content"
-              rounded="md"
-              label={`A replica ran out of memory on ${formatDate(
-                latestOfflineReplicaStatus.lastOfflineAt,
-                FRIENDLY_DATETIME_FORMAT_NO_SECONDS,
-              )}`}
-            >
-              <WarningIcon position="absolute" right="0" />
-            </Tooltip>
-          )}
-      </Text>
-    </HStack>
-  );
-};
-
-interface ClusterTableProps {
-  clusters: ClusterWithOwnership[];
-  refetchClusters: () => void;
-}
-
-const ClusterTable = (props: ClusterTableProps) => {
-  const navigate = useNavigate();
-  const latestOfflineReplicaResult = useLatestOfflineReplica();
-
-  return (
-    <Table variant="linkable" data-testid="cluster-table" borderRadius="xl">
-      <Thead>
-        <Tr>
-          <Th minW={{ md: "280px", sm: "auto" }}>Name</Th>
-          <Th>Replicas</Th>
-          <Th>Size</Th>
-          {!latestOfflineReplicaResult.error && (
-            <Th>
-              <Text noOfLines={1}>Last status change</Text>
-            </Th>
-          )}
-          <Th width={OVERFLOW_BUTTON_WIDTH}></Th>
-        </Tr>
-      </Thead>
-      <Tbody>
-        {props.clusters.map((c) => (
-          <Tr
-            key={c.id}
-            onClick={() => navigate(relativeClusterPath(c))}
-            cursor="pointer"
-          >
-            <Td {...truncateMaxWidth}>
-              <HStack>
-                <Text textStyle="text-ui-med" noOfLines={1}>
-                  {c.name}
-                </Text>
-                {c.id.startsWith("s") && (
-                  <Tooltip
-                    label="This is a built-in system cluster. You are not billed for this cluster."
-                    lineHeight={1.2}
-                  >
-                    <InfoIcon />
-                  </Tooltip>
-                )}
-              </HStack>
-            </Td>
-            <Td>{c.replicas.length}</Td>
-            <Td>
-              {Array.from(new Set(c.replicas.map((r) => r.size)).values()).join(
-                ", ",
-              )}
-            </Td>
-            {!latestOfflineReplicaResult.error && (
-              <Td>
-                <LastStatusChangeColumn
-                  latestOfflineReplicaMap={latestOfflineReplicaResult.data}
-                  cluster={c}
-                />
-              </Td>
-            )}
-            <Td>
-              <OverflowMenu
-                items={[
-                  {
-                    visible: !isSystemCluster(c.id) && c.isOwner,
-                    render: () => (
-                      <>
-                        {c.managed && <AlterClusterMenuItem cluster={c} />}
-                        <DeleteObjectMenuItem
-                          key="delete-object"
-                          selectedObject={c}
-                          onSuccessAction={props.refetchClusters}
-                          objectType="CLUSTER"
-                        />
-                      </>
-                    ),
-                  },
-                ]}
-              />
-            </Td>
-          </Tr>
-        ))}
-      </Tbody>
-    </Table>
   );
 };
 
