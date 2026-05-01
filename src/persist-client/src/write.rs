@@ -51,7 +51,7 @@ use crate::internal::machine::{
 use crate::internal::metrics::{BatchWriteMetrics, Metrics, ShardMetrics};
 use crate::internal::state::{BatchPart, HandleDebugState, HollowBatch, RunOrder, RunPart};
 use crate::read::ReadHandle;
-use crate::schema::PartMigration;
+use crate::schema::{CaESchema, PartMigration};
 use crate::{GarbageCollector, IsolatedRuntime, PersistConfig, ShardId, parse_id};
 
 pub(crate) const COMBINE_INLINE_WRITES: Config<bool> = Config::new(
@@ -245,8 +245,38 @@ where
         let (schema_id, maintenance) = self.machine.register_schema(key, val).await;
         maintenance.start_performing(&self.machine, &self.gc);
 
+        if let Some(id) = schema_id {
+            self.write_schemas.id = Some(id);
+            return Some(id);
+        }
+
+        // Schema registration failed because the existing schema doesn't match.
+        // This can happen during a rolling upgrade when metadata-only fields
+        // (e.g. SemanticType annotations in RelationDesc) were added to the
+        // schema without changing the underlying Arrow data types. Fall back to
+        // schema evolution, which succeeds when the Arrow types are compatible.
+        let schema_id = self.try_evolve_schema().await;
         self.write_schemas.id = schema_id;
         schema_id
+    }
+
+    async fn try_evolve_schema(&self) -> Option<SchemaId> {
+        let Schemas { key, val, .. } = &self.write_schemas;
+        let mut expected = SchemaId(0);
+        loop {
+            let (result, maintenance) = self
+                .machine
+                .compare_and_evolve_schema(expected, key, val)
+                .await;
+            maintenance.start_performing(&self.machine, &self.gc);
+            match result {
+                CaESchema::Ok(id) => return Some(id),
+                CaESchema::Incompatible => return None,
+                CaESchema::ExpectedMismatch { schema_id, .. } => {
+                    expected = schema_id;
+                }
+            }
+        }
     }
 
     /// A cached version of the shard-global `upper` frontier.
