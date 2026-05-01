@@ -7,6 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Types and traits in support of containers for row-encoded byte slices.
+//!
+//! This includes the vanilla `bytes_container` that holds byte slices in contiguous
+//! allocations, as well as a `dictionary` encoding wrapper that is able to rewrite
+//! the byte slices to use spare tags in each column to reference common values.
+
 pub use self::dictionary::DatumContainer;
 pub use self::dictionary::DatumSeq;
 pub use self::offset_opt::OffsetOptimized;
@@ -168,6 +174,33 @@ mod tests {
             Datum::String(""),
             Datum::String("العَرَبِيَّة"),
         ]);
+    }
+
+    /// Confirms the structural assumption underpinning `SAFE_TAG_BASE`: every
+    /// datum the row format produces encodes with a first byte strictly less
+    /// than `SAFE_TAG_BASE`. If `mz_repr` ever introduces a tag that crosses
+    /// the boundary, `DictionaryCodec::new_safe` would assign a dictionary tag
+    /// that collides with a literal datum first-byte, breaking decoding.
+    #[mz_ore::test]
+    fn test_safe_tag_base() {
+        use crate::row_spine::row_codec::SAFE_TAG_BASE;
+        let check = |datum: Datum| {
+            let row = Row::pack_slice(&[datum]);
+            let data = row.data();
+            assert!(!data.is_empty(), "empty encoding for {datum:?}");
+            assert!(
+                data[0] < SAFE_TAG_BASE,
+                "datum {datum:?} encodes with first byte {} >= SAFE_TAG_BASE ({}); \
+                 a new row tag has crossed the safe boundary",
+                data[0],
+                SAFE_TAG_BASE,
+            );
+        };
+        for ty in SqlScalarType::enumerate().iter() {
+            for datum in ty.interesting_datums() {
+                check(datum);
+            }
+        }
     }
 }
 
@@ -524,6 +557,22 @@ pub(crate) fn offset_list_size(data: &OffsetList, mut callback: impl FnMut(usize
 }
 
 /// A `Row`-specialized container using dictionary compression.
+///
+/// The approach is to establish for each column lists of common values, and to use "unoccupied"
+/// tags in the row encoding (e.g. where we would indicate types) to replace these common values.
+/// This substitution is opt-in, in that we don't need to do it, and in particular do not do it
+/// while we are collecting preliminary information about common values, and then start to use it
+/// once we believe we have enough information. Once we have started to use the substitutions we
+/// cannot change the meaning of a reserved byte pattern, for the container we are populating.
+///
+/// Each from-scratch container observes `STATS_THRESHOLD` records before establishing a mapping
+/// from spare tags to common values. Containers that are formed from merging other containers
+/// use those input containers' common values to populate a codec and use it immediately.
+///
+/// The dictionary behavior is controlled by the `DICTIONARY_COMPRESSION` flag, which if disabled
+/// prevents the construction of codecs, which when absent simply cause the wrapper to behave as
+/// a no-op that fails to use any spare tags for common values. The flag can be changed live, and
+/// there can be a mix of compressed and uncompressed containers.
 mod dictionary {
 
     use differential_dataflow::trace::implementations::BatchContainer;
@@ -532,6 +581,11 @@ mod dictionary {
 
     use super::row_codec::{Codec, ColumnsCodec, ColumnsIter};
 
+    /// Wrapper types that exist to support the creation of dictionary codecs.
+    ///
+    /// These types interpose at the seal() call, to traverse the data that is being sealed and
+    /// then construct codecs that are used to encode the row-shaped keys and values. There are
+    /// several variants, corresponding to the RowRow, RowVal, and Row-only spine types.
     pub mod builders {
 
         use columnation::Columnation;
@@ -1075,20 +1129,32 @@ mod row_codec {
     pub use self::misra_gries::MisraGries;
     pub use columns::{ColumnsCodec, ColumnsIter};
     pub use dictionary::DictionaryCodec;
+    #[cfg(test)]
+    pub use dictionary::SAFE_TAG_BASE;
 
+    /// A type that can encode and decode `[u8]` data specific to the `[Row]` encoding.
+    ///
+    /// The implementor must soundly decode data it encoded from valid `[Row]` data.
+    /// The implementor may be unsound if asked to decode data that was not encoded `[Row]`
+    /// data, or was encoded with a different encoder.
     pub trait Codec: Default + 'static {
         /// The iterator type returned by decoding.
         type DecodeIter<'a>: Iterator<Item = &'a [u8]> + Copy;
         /// Decodes an input byte slice into a sequence of byte slices.
         fn decode<'a>(&'a self, bytes: &'a [u8]) -> Self::DecodeIter<'a>;
         /// Encodes a sequence of byte slices into an output byte slice.
+        ///
+        /// Encode also updates `self`, informing its statistics so that future encoding
+        /// can be more efficient.
         fn encode<'a, I>(&mut self, iter: I, output: &mut Vec<u8>)
         where
             I: IntoIterator<Item = &'a [u8]>;
-        /// Constructs a new instance of `Self` from accumulated statistics.
-        /// These statistics should cover the data the output expects to see.
+        /// Constructs a new instance of `Self` from other instances.
+        ///
+        /// This method is used in the course of merging other encoded collections,
+        /// and the resulting codec should be valid for any data in each of them.
         fn new_from<'a>(stats: impl IntoIterator<Item = &'a Self>) -> Self;
-
+        /// Reveals byte slices in the row, for fast-path comparison.
         fn borrow_row<'a>(row: &'a Row) -> Self::DecodeIter<'a>;
     }
 
@@ -1217,6 +1283,20 @@ mod row_codec {
         }
     }
 
+    /// A dictionary encoding codec for `[Row]` data.
+    ///
+    /// The dictionary harvests unused tags within each column and uses them to
+    /// represent popular values within that column. There are two mechanisms it
+    /// uses to accomplish this:
+    ///
+    /// 1. Statically free tags: `SAFE_TAG_BASE` is taken as an exclusive upper bound
+    ///    on the tags that will be used by `[Row]`, and tags greater or equal to this
+    ///    value are always safe to use.
+    /// 2. Dynamically free tags: having seen an entire collection, we can use any
+    ///    tag not otherwise used by the collection, as it would not be ambiguous.
+    ///
+    /// It goes without saying that if either of these approaches are incorrect,
+    /// there are calamitous unsoundness implications.
     mod dictionary {
 
         use mz_repr::{Row, read_datum};
