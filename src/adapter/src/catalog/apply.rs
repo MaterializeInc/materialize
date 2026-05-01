@@ -46,9 +46,7 @@ use mz_ore::{instrument, soft_assert_eq_or_log, soft_assert_no_log, soft_assert_
 use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
-use mz_repr::{
-    CatalogItemId, ColumnIndex, Diff, GlobalId, RelationVersion, Timestamp, VersionedRelationDesc,
-};
+use mz_repr::{CatalogItemId, Diff, GlobalId, RelationVersion, Timestamp, VersionedRelationDesc};
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_sql::catalog::{CatalogItem as SqlCatalogItem, CatalogItemType, CatalogSchema, CatalogType};
 use mz_sql::names::{
@@ -983,15 +981,6 @@ impl CatalogState {
                 for key in &mv.desc.typ().keys {
                     desc = desc.with_key(key.clone());
                 }
-                // Copy semantic type annotations from the static builtin definition.
-                let semantic_types = (0..desc.arity())
-                    .filter_map(|i| {
-                        mv.desc
-                            .get_semantic_type(i)
-                            .map(|st| (ColumnIndex::from_raw(i), st))
-                    })
-                    .collect();
-                desc = desc.with_semantic_types(semantic_types);
                 catalog_mv.desc = VersionedRelationDesc::new(desc);
 
                 self.insert_item(
@@ -1773,7 +1762,7 @@ impl CatalogState {
                 }
             };
             match res {
-                Ok((mut item, uncached_expr)) => {
+                Ok((item, uncached_expr)) => {
                     if let Some((uncached_expr, optimizer_features)) = uncached_expr {
                         local_expression_cache.insert_uncached_expression(
                             global_id,
@@ -1799,21 +1788,6 @@ impl CatalogState {
                         MZ_SYSTEM_ROLE_ID,
                     )];
                     acl_items.extend_from_slice(&view.access);
-
-                    // Copy semantic type annotations from the static builtin definition.
-                    if let CatalogItem::View(catalog_view) = &mut item {
-                        let semantic_types = (0..catalog_view.desc.arity())
-                            .filter_map(|i| {
-                                view.desc
-                                    .get_semantic_type(i)
-                                    .map(|st| (ColumnIndex::from_raw(i), st))
-                            })
-                            .collect();
-                        catalog_view.desc = catalog_view
-                            .desc
-                            .clone()
-                            .with_semantic_types(semantic_types);
-                    }
 
                     state.insert_item(
                         id,

@@ -269,7 +269,7 @@ fn semantic_types_view() -> BuiltinView {
 ///    (column additions/removals are picked up automatically).
 ///
 /// 2. **Annotation enrichment** — A second VALUES list (`ann`) carries the
-///    semantic-type annotations from `RelationDesc` (e.g. "CatalogItemId").
+///    semantic-type annotations from `Ontology::column_semantic_types`.
 ///    Column descriptions come from `mz_comments`. Both are LEFT JOINed so
 ///    columns without annotations or comments still appear (with NULLs).
 fn properties_view(infos: &[Info]) -> BuiltinView {
@@ -281,14 +281,12 @@ fn properties_view(infos: &[Info]) -> BuiltinView {
             Lit::Str(i.table_name.to_string()),
             Lit::Str(i.entity_name.clone()),
         ]);
-        for (idx, col) in i.desc.iter_names().enumerate() {
-            if let Some(sem) = i.desc.get_semantic_type(idx) {
-                ann.push(vec![
-                    Lit::Str(i.entity_name.clone()),
-                    Lit::Str(col.as_str().to_string()),
-                    Lit::Str(sem.to_string()),
-                ]);
-            }
+        for (col_name, sem) in i.ontology.column_semantic_types {
+            ann.push(vec![
+                Lit::Str(i.entity_name.clone()),
+                Lit::Str(col_name.to_string()),
+                Lit::Str(sem.to_string()),
+            ]);
         }
     }
     let sql = format!(
