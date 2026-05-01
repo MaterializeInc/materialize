@@ -1148,6 +1148,26 @@ def validate_node_selector(
         assert "materialize.cloud/scratch-fs" not in selector
 
 
+EXPECTED_CLUSTERD_SYSCTLS = {
+    "net.ipv4.tcp_keepalive_time": "300",
+    "net.ipv4.tcp_keepalive_intvl": "30",
+    "net.ipv4.tcp_keepalive_probes": "3",
+}
+
+
+def validate_clusterd_pod(pod: dict[str, Any]) -> None:
+    """Validate always-on properties of a clusterd pod."""
+    sysctls = {
+        s["name"]: s["value"]
+        for s in pod["spec"].get("securityContext", {}).get("sysctls", [])
+    }
+    for name, expected in EXPECTED_CLUSTERD_SYSCTLS.items():
+        actual = sysctls.get(name)
+        assert (
+            actual == expected
+        ), f"Expected sysctl {name}={expected}, but got {actual}"
+
+
 def validate_container_resources(
     resources: dict[str, dict[str, str]],
     swap_enabled: bool,
@@ -1196,6 +1216,7 @@ class SwapEnabledGlobal(Modification):
 
         def check_pods() -> None:
             clusterd = get_pod_data(labels)["items"][0]
+            validate_clusterd_pod(clusterd)
 
             resources = clusterd["spec"]["containers"][0]["resources"]
             validate_container_resources(resources, self.value)
@@ -1251,6 +1272,7 @@ class StorageClass(Modification):
 
         def check_pods() -> None:
             clusterd = get_pod_data(labels)["items"][0]
+            validate_clusterd_pod(clusterd)
 
             resources = clusterd["spec"]["containers"][0]["resources"]
             validate_container_resources(resources, mods[SwapEnabledGlobal])
@@ -1366,6 +1388,7 @@ class ClusterdCpu(Modification):
 
         def check_pods() -> None:
             clusterd = get_pod_data(labels)["items"][0]
+            validate_clusterd_pod(clusterd)
             resources = clusterd["spec"]["containers"][0]["resources"]
             actual_cpu_request = resources.get("requests", {}).get("cpu")
             actual_cpu_limit = resources.get("limits", {}).get("cpu")
