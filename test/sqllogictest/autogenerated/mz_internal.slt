@@ -225,7 +225,7 @@ comment  text  The␠comment␠itself.
 query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_dependencies' ORDER BY position
 ----
-object_id  text  The␠ID␠of␠a␠compute␠object.␠Corresponds␠to␠`mz_catalog.mz_indexes.id`,␠`mz_catalog.mz_materialized_views.id`,␠or␠`mz_internal.mz_subscriptions`.
+object_id  text  The␠ID␠of␠a␠compute␠object.␠Corresponds␠to␠`mz_catalog.mz_indexes.id`,␠`mz_catalog.mz_materialized_views.id`,␠or␠`mz_internal.mz_subscriptions.id`.
 dependency_id  text  The␠ID␠of␠a␠compute␠dependency.␠Corresponds␠to␠`mz_catalog.mz_indexes.id`,␠`mz_catalog.mz_materialized_views.id`,␠`mz_catalog.mz_sources.id`,␠or␠`mz_catalog.mz_tables.id`.
 
 query TTT
@@ -464,7 +464,7 @@ query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_network_policy_rules' ORDER BY position
 ----
 name  text  The␠name␠of␠the␠network␠policy␠rule.␠Can␠be␠combined␠with␠`policy_id`␠to␠form␠a␠unique␠identifier.
-policy_id  text  The␠ID␠the␠network␠policy␠the␠rule␠is␠part␠of.␠Corresponds␠to␠`mz_network_policy_rules.id`.
+policy_id  text  The␠ID␠the␠network␠policy␠the␠rule␠is␠part␠of.␠Corresponds␠to␠`mz_internal.mz_network_policies.id`.
 action  text  The␠action␠of␠the␠rule.␠`allow`␠is␠the␠only␠supported␠action.
 address  text  The␠address␠the␠rule␠will␠take␠action␠on.
 direction  text  The␠direction␠of␠traffic␠the␠rule␠applies␠to.␠`ingress`␠is␠the␠only␠supported␠direction.
@@ -787,6 +787,10 @@ mz_object_lifetimes
 mz_object_oid_alias
 mz_object_transitive_dependencies
 mz_objects_id_namespace_types
+mz_ontology_entity_types
+mz_ontology_link_types
+mz_ontology_properties
+mz_ontology_semantic_types
 mz_optimizer_notices
 mz_pending_cluster_replicas
 mz_postgres_source_tables

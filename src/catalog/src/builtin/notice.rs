@@ -54,6 +54,7 @@ pub static MZ_OPTIMIZER_NOTICES: LazyLock<BuiltinTable> = LazyLock::new(|| {
         column_comments: BTreeMap::new(),
         is_retained_metrics_object: false,
         access: vec![MONITOR_SELECT],
+        ontology: None,
     }
 });
 
@@ -139,6 +140,7 @@ FROM
     mz_internal.mz_optimizer_notices n
 ",
     access: vec![MONITOR_SELECT],
+    ontology: None,
 });
 
 /// A redacted version of [`MZ_NOTICES`] that is made safe to be viewed by
@@ -203,6 +205,7 @@ FROM
     mz_internal.mz_notices
 ",
     access: vec![SUPPORT_SELECT, MONITOR_REDACTED_SELECT, MONITOR_SELECT],
+    ontology: None,
 });
 
 pub const MZ_NOTICES_IND: BuiltinIndex = BuiltinIndex {
