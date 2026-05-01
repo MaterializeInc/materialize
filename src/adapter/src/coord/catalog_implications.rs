@@ -1312,6 +1312,7 @@ impl Coordinator {
             .unwrap_or_terminate("unable to advance catalog upper");
 
         // Alter the table description, creating a "new" collection.
+        fail_point!("alter_table_before_storage");
         self.controller
             .storage
             .alter_table_desc(

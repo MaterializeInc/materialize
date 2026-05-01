@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
+fail.workspace = true
 chrono.workspace = true
 differential-dataflow.workspace = true
 futures.workspace = true
