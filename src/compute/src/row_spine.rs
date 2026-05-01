@@ -551,6 +551,24 @@ mod dictionary {
         use crate::row_spine::DICTIONARY_COMPRESSION;
         use crate::row_spine::spines::{RowLayout, RowRowLayout, RowValLayout};
 
+        /// Gather encoding statistics across `rows` and produce a codec from them.
+        ///
+        /// Returns `None` when dictionary compression is disabled.
+        fn build_codec<'a>(rows: impl IntoIterator<Item = &'a Row>) -> Option<ColumnsCodec> {
+            if !DICTIONARY_COMPRESSION.load(std::sync::atomic::Ordering::Relaxed) {
+                return None;
+            }
+            let mut stats = ColumnsCodec::default();
+            let mut buf = Vec::default();
+            for row in rows {
+                if !row.is_empty() {
+                    stats.encode(DatumSeq::borrow_as(row).bytes_iter(), &mut buf);
+                    buf.clear();
+                }
+            }
+            Some(ColumnsCodec::new_from([&stats]))
+        }
+
         pub struct RowRowBuilder<
             T: Lattice + Timestamp + Columnation,
             R: Ord + Semigroup + Columnation + 'static,
@@ -580,31 +598,16 @@ mod dictionary {
                 chain: &mut Vec<Self::Input>,
                 description: Description<Self::Time>,
             ) -> Self::Output {
-                let (key_codec, val_codec) = if DICTIONARY_COMPRESSION
-                    .load(std::sync::atomic::Ordering::Relaxed)
-                {
-                    let mut key_codec = ColumnsCodec::default();
-                    let mut val_codec = ColumnsCodec::default();
-                    let mut vec = Vec::default();
-                    for link in chain.iter() {
-                        for ((key, val), _, _) in link.iter() {
-                            if !key.is_empty() {
-                                key_codec.encode(DatumSeq::borrow_as(key).bytes_iter(), &mut vec);
-                                vec.clear();
-                            }
-                            if !val.is_empty() {
-                                val_codec.encode(DatumSeq::borrow_as(val).bytes_iter(), &mut vec);
-                                vec.clear();
-                            }
-                        }
-                    }
-                    (
-                        Some(ColumnsCodec::new_from([&key_codec])),
-                        Some(ColumnsCodec::new_from([&val_codec])),
-                    )
-                } else {
-                    (None, None)
-                };
+                let key_codec = build_codec(
+                    chain
+                        .iter()
+                        .flat_map(|link| link.iter().map(|((k, _), _, _)| k)),
+                );
+                let val_codec = build_codec(
+                    chain
+                        .iter()
+                        .flat_map(|link| link.iter().map(|((_, v), _, _)| v)),
+                );
 
                 use differential_dataflow::trace::implementations::BuilderInput;
 
@@ -657,22 +660,11 @@ mod dictionary {
                 chain: &mut Vec<Self::Input>,
                 description: Description<Self::Time>,
             ) -> Self::Output {
-                let key_codec = if DICTIONARY_COMPRESSION.load(std::sync::atomic::Ordering::Relaxed)
-                {
-                    let mut key_codec = ColumnsCodec::default();
-                    let mut vec = Vec::default();
-                    for link in chain.iter() {
-                        for ((key, _), _, _) in link.iter() {
-                            if !key.is_empty() {
-                                key_codec.encode(DatumSeq::borrow_as(key).bytes_iter(), &mut vec);
-                                vec.clear();
-                            }
-                        }
-                    }
-                    Some(ColumnsCodec::new_from([&key_codec]))
-                } else {
-                    None
-                };
+                let key_codec = build_codec(
+                    chain
+                        .iter()
+                        .flat_map(|link| link.iter().map(|((k, _), _, _)| k)),
+                );
 
                 use differential_dataflow::trace::implementations::BuilderInput;
 
@@ -720,22 +712,11 @@ mod dictionary {
                 chain: &mut Vec<Self::Input>,
                 description: Description<Self::Time>,
             ) -> Self::Output {
-                let key_codec = if DICTIONARY_COMPRESSION.load(std::sync::atomic::Ordering::Relaxed)
-                {
-                    let mut key_codec = ColumnsCodec::default();
-                    let mut vec = Vec::default();
-                    for link in chain.iter() {
-                        for ((key, _), _, _) in link.iter() {
-                            if !key.is_empty() {
-                                key_codec.encode(DatumSeq::borrow_as(key).bytes_iter(), &mut vec);
-                                vec.clear();
-                            }
-                        }
-                    }
-                    Some(ColumnsCodec::new_from([&key_codec]))
-                } else {
-                    None
-                };
+                let key_codec = build_codec(
+                    chain
+                        .iter()
+                        .flat_map(|link| link.iter().map(|((k, _), _, _)| k)),
+                );
 
                 use differential_dataflow::trace::implementations::BuilderInput;
 
