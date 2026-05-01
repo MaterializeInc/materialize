@@ -300,6 +300,7 @@ case "$cmd" in
                 --env METADATA_BACKEND_URL
                 # For ci-closed-issues-detect
                 --env GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN
+                --env LINEAR_READ_ONLY_TOKEN
                 # For auto_cut_release
                 --env GIT_AUTHOR_EMAIL
                 --env GIT_AUTHOR_NAME
