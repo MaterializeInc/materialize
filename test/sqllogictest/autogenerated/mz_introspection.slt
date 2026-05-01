@@ -68,7 +68,7 @@ count  numeric  The␠count␠of␠errors␠present␠in␠this␠dataflow␠exp
 query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_compute_exports' ORDER BY position
 ----
-export_id  text  The␠ID␠of␠the␠index,␠materialized␠view,␠or␠subscription␠exported␠by␠the␠dataflow.␠Corresponds␠to␠`mz_catalog.mz_indexes.id`,␠`mz_catalog.mz_materialized_views.id`,␠or␠`mz_internal.mz_subscriptions`.
+export_id  text  The␠ID␠of␠the␠index,␠materialized␠view,␠or␠subscription␠exported␠by␠the␠dataflow.␠Corresponds␠to␠`mz_catalog.mz_indexes.id`,␠`mz_catalog.mz_materialized_views.id`,␠or␠`mz_internal.mz_subscriptions.id`.
 dataflow_id  uint8  The␠ID␠of␠the␠dataflow.␠Corresponds␠to␠`mz_dataflows.id`.
 
 query TTT

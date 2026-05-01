@@ -338,7 +338,7 @@ SQL objects that don't exist in the compute layer (such as views) are omitted.
 <!-- RELATION_SPEC mz_internal.mz_compute_dependencies -->
 | Field       | Type     | Meaning                                                                                                                                                                                                                                                                                            |
 | ----------- | -------- | --------                                                                                                                                                                                                                                                                                           |
-| `object_id`     | [`text`] | The ID of a compute object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), or [`mz_internal.mz_subscriptions`](#mz_subscriptions).                                                           |
+| `object_id`     | [`text`] | The ID of a compute object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), or [`mz_internal.mz_subscriptions.id`](#mz_subscriptions).                                                        |
 | `dependency_id` | [`text`] | The ID of a compute dependency. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources), or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables). |
 
 ## `mz_compute_hydration_statuses`
@@ -658,6 +658,10 @@ system. The view can be accessed by Materialize _superusers_.
 | `object_id`             | [`text`]                     | The ID of the materialized view or index. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects). For global notices, this column is `NULL`. |
 | `created_at`            | [`timestamp with time zone`] | The time at which the notice was created. Note that some notices are re-created on `environmentd` restart.                                        |
 
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_ontology_entity_types -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_ontology_link_types -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_ontology_properties -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_ontology_semantic_types -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_optimizer_notices -->
 
 ## `mz_notices_redacted`
@@ -835,7 +839,7 @@ in the system.
 | Field            | Type       | Meaning                                                                                                |
 | -----------------| ----------------------| --------                                                                                    |
 | `name`           | [`text`]   | The name of the network policy rule. Can be combined with `policy_id` to form a unique identifier. |
-| `policy_id`      | [`text`]   | The ID the network policy the rule is part of. Corresponds to [`mz_network_policy_rules.id`](#mz_network_policy_rules).     |
+| `policy_id`      | [`text`]   | The ID the network policy the rule is part of. Corresponds to [`mz_internal.mz_network_policies.id`](#mz_network_policies).     |
 | `action`         | [`text`]   | The action of the rule. `allow` is the only supported action.                                                    |
 | `address`        | [`text`]   | The address the rule will take action on.                                                              |
 | `direction`      | [`text`]   | The direction of traffic the rule applies to. `ingress` is the only supported direction. |
