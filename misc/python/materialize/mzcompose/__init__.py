@@ -75,7 +75,6 @@ def get_minimal_system_parameters(
         "enable_case_literal_transform": "true",
         "enable_cast_elimination": "true",
         "enable_coalesce_case_transform": "true",
-        "enable_compute_active_dataflow_cancelation": "true",
         "enable_columnar_lgalloc": "false",
         "enable_columnation_lgalloc": "false",
         "enable_compute_correction_v2": "true",

@@ -1574,9 +1574,6 @@ class FlipFlagsAction(Action):
         self.flags_with_values["enable_arrangement_dictionary_compression"] = (
             BOOLEAN_FLAG_VALUES
         )
-        self.flags_with_values["enable_compute_active_dataflow_cancelation"] = (
-            BOOLEAN_FLAG_VALUES
-        )
         self.flags_with_values["enable_compute_peek_response_stash"] = (
             BOOLEAN_FLAG_VALUES
         )
