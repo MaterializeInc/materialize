@@ -84,7 +84,7 @@ use crate::plan::error::PlanError;
 use crate::plan::statement::ddl::load_generator_ast_to_generator;
 use crate::plan::{SourceReferences, StatementContext};
 use crate::pure::error::{IcebergSinkPurificationError, SqlServerSourcePurificationError};
-use crate::pure::mysql::ensure_binlog_full_metadata;
+use crate::pure::mysql::{ensure_binlog_full_metadata, is_binlog_full_metadata};
 use crate::session::vars::ENABLE_SQL_SERVER_SOURCE;
 use crate::{kafka_util, normalize};
 
@@ -1103,7 +1103,7 @@ async fn purify_create_source(
             let initial_gtid_set =
                 mz_mysql_util::query_sys_var(&mut conn, "global.gtid_executed").await?;
 
-            let binlog_full_metadata = ensure_binlog_full_metadata(&mut conn).await.is_ok();
+            let binlog_full_metadata = is_binlog_full_metadata(&mut conn).await?;
 
             let reference_client = SourceReferenceClient::MySql {
                 conn: &mut conn,
@@ -1531,7 +1531,7 @@ async fn purify_alter_source_add_subsources(
             let initial_gtid_set =
                 mz_mysql_util::query_sys_var(&mut conn, "global.gtid_executed").await?;
 
-            let binlog_full_metadata = ensure_binlog_full_metadata(&mut conn).await.is_ok();
+            let binlog_full_metadata = is_binlog_full_metadata(&mut conn).await?;
 
             let requested_references = Some(ExternalReferences::SubsetTables(external_references));
 

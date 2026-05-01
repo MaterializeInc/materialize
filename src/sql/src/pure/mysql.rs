@@ -543,3 +543,24 @@ pub async fn ensure_binlog_full_metadata(
         Ok(())
     }
 }
+
+pub async fn is_binlog_full_metadata(
+    conn: &mut mz_mysql_util::MySqlConn,
+) -> Result<bool, MySqlSourcePurificationError> {
+    match ensure_binlog_full_metadata(conn).await {
+        Ok(_) => Ok(true),
+        // If we get an InvalidConnection error, we have failed to query the upstream for
+        // version or binlog format information, which is fatal to purification.
+        // Other types of errors simply indicate that binlow_row_metadata is not full for some reason.
+        Err(MySqlSourcePurificationError::InvalidConnection(err)) => {
+            Err(MySqlSourcePurificationError::InvalidConnection(err))
+        }
+        Err(err) => {
+            tracing::info!(
+                error = ?err,
+                "unable to verify MySQL binlog format, proceeding without full metadata"
+            );
+            Ok(false)
+        }
+    }
+}
