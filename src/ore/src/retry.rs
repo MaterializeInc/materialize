@@ -770,7 +770,7 @@ mod tests {
                 // The next try should indicate a next backoff of between 0 and 10ms.
                 assert_eq!(try2.i, 1);
                 let backoff = try2.next_backoff.unwrap();
-                assert!(backoff > Duration::ZERO || backoff < Duration::from_millis(10));
+                assert!(backoff > Duration::ZERO && backoff < Duration::from_millis(10));
 
                 // The final try should indicate that the operation is complete with a next backoff
                 // of None.
@@ -814,7 +814,7 @@ mod tests {
                 // The next try should indicate a next backoff of between 0 and 10ms.
                 assert_eq!(try2.i, 1);
                 let backoff = try2.next_backoff.unwrap();
-                assert!(backoff > Duration::ZERO || backoff < Duration::from_millis(10));
+                assert!(backoff > Duration::ZERO && backoff < Duration::from_millis(10));
 
                 // The final try should indicate that the operation is complete with a next backoff
                 // of None.
