@@ -38,6 +38,10 @@ pub enum RdsTokenError {
     /// The URL could not be signed.
     #[error(transparent)]
     SigningError(#[from] SigningError),
+
+    /// The host could not be parsed as a valid URL.
+    #[error("invalid RDS endpoint: {0}")]
+    InvalidEndpoint(#[from] url::ParseError),
 }
 
 // Generate an RDS authentication token.  This should mirror what can be found
@@ -76,23 +80,27 @@ pub(crate) async fn rds_auth_token(
         .settings(signing_settings)
         .build()?;
 
-    let url = format!(
-        "https://{}:{}/?Action={}&DBUser={}",
-        host, port, DB_ACTION, username
-    );
+    let mut url = url::Url::parse(&format!("https://{}:{}/", host, port))?;
+    url.query_pairs_mut()
+        .append_pair("Action", DB_ACTION)
+        .append_pair("DBUser", username);
 
-    let signable_req =
-        SignableRequest::new("GET", &url, std::iter::empty(), SignableBody::Bytes(&[]))?;
+    let url_str = url.as_str().to_owned();
+    let signable_req = SignableRequest::new(
+        "GET",
+        &url_str,
+        std::iter::empty(),
+        SignableBody::Bytes(&[]),
+    )?;
 
     let (signing_instructions, _sig) =
         http_request::sign(signable_req, &signing_params.into())?.into_parts();
 
-    let mut url = url::Url::parse(&url).unwrap_or_else(|_| panic!("expect to parse {url}"));
     for (key, val) in signing_instructions.params() {
         url.query_pairs_mut().append_pair(key, val);
     }
 
-    Ok(url.to_string().split_off("https://".len()))
+    Ok(url.as_str()["https://".len()..].to_owned())
 }
 
 #[cfg(test)]
@@ -131,5 +139,21 @@ mod test {
             &signature,
             "mysql:3306/?Action=connect&DBUser=root&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=drjekyll%2F20250227%2Fus-east-1%2Frds-db%2Faws4_request&X-Amz-Date=20250227T210000Z&X-Amz-Expires=900&X-Amz-SignedHeaders=host&X-Amz-Signature=6eb04929394feeb9e070621ecafc731145914cc53e542d5302c251b705c4ac72"
         );
+
+        // Usernames with URL-special characters must be percent-encoded in the
+        // token, not interpolated raw into the query string.
+        for (username, reject_key) in [("root&Foo=bar", Some("Foo")), ("root#admin", None)] {
+            let token = rds_auth_token("mysql", 3306, username, &aws_config)
+                .await
+                .unwrap();
+            let parsed = url::Url::parse(&format!("https://{token}")).unwrap();
+            let pairs: std::collections::BTreeMap<_, _> = parsed.query_pairs().collect();
+            assert_eq!(pairs.get("DBUser").unwrap(), username);
+            if let Some(key) = reject_key {
+                assert!(!pairs.contains_key(key));
+            }
+        }
+
+        assert!(rds_auth_token("", 3306, "root", &aws_config).await.is_err());
     }
 }
