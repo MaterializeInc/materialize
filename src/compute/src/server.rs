@@ -253,6 +253,10 @@ impl ClusterSpec for Config {
 
     const NAME: &str = "compute";
 
+    fn metrics_registry(&self) -> &MetricsRegistry {
+        &self.metrics_registry
+    }
+
     fn run_worker(
         &self,
         timely_worker: &mut TimelyWorker,
