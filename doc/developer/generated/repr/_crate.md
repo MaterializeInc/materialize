@@ -1,6 +1,6 @@
 ---
 source: src/repr/src/lib.rs
-revision: 2982634c0d
+revision: ea77b8b38b
 ---
 
 # mz-repr
@@ -10,7 +10,7 @@ The lingua franca of Materialize: defines the core data types that all layers of
 ## Module structure
 
 * `scalar` — `Datum` (value enum), `DatumKind`, and a dual-type system: `SqlScalarType` (SQL-level, with modifiers like `VarChar`, `Char`, `Oid`) and `ReprScalarType` (repr-level, collapsed variants); `SqlScalarBaseType`/`ReprScalarBaseType` enum-kind tags; `SqlContainerType` trait; proptest strategies
-* `relation` — `RelationDesc`, `ColumnName`, and a matching dual-type split: `SqlColumnType`/`SqlRelationType` (SQL-level) and `ReprColumnType`/`ReprRelationType` (repr-level); schema evolution (`RelationDescDiff`, `VersionedRelationDesc`); `backport_nullability` for reconciling nullability across the two type layers
+* `relation` — `RelationDesc`, `ColumnName`, and a matching dual-type split: `SqlColumnType`/`SqlRelationType` (SQL-level) and `ReprColumnType`/`ReprRelationType` (repr-level); `SemanticType` (catalog ontology column annotations); schema evolution (`RelationDescDiff`, `VersionedRelationDesc`); `backport_nullability` for reconciling nullability across the two type layers
 * `relation_and_scalar` — shared protobuf definitions bridging the `relation` and `scalar` modules
 * `row` — `Row`, `RowPacker`, `RowRef`, `RowArena`, `DatumList<'a, T>` (generic over `T`, defaulting to `Datum<'a>`), `DatumMap`, `SharedRow`; Arrow columnar encoding (`encode`); abstract iteration (`iter`)
 * `update` — `Rows` (a compact contiguous-byte sequence of encoded rows), `RowsBuilder`, `SharedSlice`, `UpdateCollection`, and `UpdateCollectionBuilder`; provides the low-level storage substrate used by sorted row collections
