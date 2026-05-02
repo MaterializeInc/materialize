@@ -433,7 +433,9 @@ pub trait TimestampProvider {
             // bound through the `oracle_read_ts`, and then requires the stalest valid timestamp.
 
             if when.can_advance_to_upper()
-                && (isolation_level == &IsolationLevel::Serializable || timeline.is_none())
+                && (isolation_level == &IsolationLevel::Serializable
+                    || matches!(isolation_level, IsolationLevel::BoundedStaleness(_))
+                    || timeline.is_none())
             {
                 Preference::FreshestAvailable
             } else {
