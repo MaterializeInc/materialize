@@ -41,6 +41,7 @@ use mz_cloud_resources::crd::{
     ManagedResource,
     balancer::v1alpha1::{Balancer, Routing},
     generated::cert_manager::certificates::{Certificate, CertificatePrivateKeyAlgorithm},
+    materialize::parse_image_ref,
 };
 use mz_orchestrator_kubernetes::KubernetesImagePullPolicy;
 use mz_ore::{cli::KeyValueArg, instrument};
@@ -157,6 +158,32 @@ impl Context {
             CertificatePrivateKeyAlgorithm::Ecdsa,
             Some(256),
         )
+    }
+
+    fn pod_uid_gid(image_ref: &str) -> i64 {
+        // Distroless images (v26.19+) run as the `nonroot` user (uid/gid 65534).
+        // Older Ubuntu-based images use the `materialize` user (uid/gid 999).
+        // Note: balancerd transitioned to distroless one release earlier than
+        // environmentd/clusterd (which use V26_20_0 in generation.rs).
+        static V26_19_0: std::sync::LazyLock<semver::Version> =
+            std::sync::LazyLock::new(|| semver::Version {
+                major: 26,
+                minor: 19,
+                patch: 0,
+                pre: semver::Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
+                build: semver::BuildMetadata::new("").expect("empty string is valid buildmetadata"),
+            });
+        let is_distroless = match parse_image_ref(image_ref) {
+            Some(v) => v.cmp_precedence(&V26_19_0).is_ge(),
+            None => {
+                tracing::warn!(
+                    image_ref,
+                    "failed to parse balancerd image ref; assuming distroless"
+                );
+                true
+            }
+        };
+        if is_distroless { 65534 } else { 999 }
     }
 
     fn create_deployment_object(&self, balancer: &Balancer) -> anyhow::Result<Deployment> {
@@ -388,12 +415,15 @@ impl Context {
                     ),
                     affinity: self.config.balancerd_affinity.clone(),
                     tolerations: self.config.balancerd_tolerations.clone(),
-                    security_context: Some(PodSecurityContext {
-                        fs_group: Some(999),
-                        run_as_user: Some(999),
-                        run_as_group: Some(999),
-                        ..Default::default()
-                    }),
+                    security_context: {
+                        let uid_gid = Self::pod_uid_gid(&balancer.spec.balancerd_image_ref);
+                        Some(PodSecurityContext {
+                            fs_group: Some(uid_gid),
+                            run_as_user: Some(uid_gid),
+                            run_as_group: Some(uid_gid),
+                            ..Default::default()
+                        })
+                    },
                     scheduler_name: self.config.scheduler_name.clone(),
                     volumes: Some(volumes),
                     ..Default::default()
@@ -594,5 +624,30 @@ impl k8s_controller::Context for Context {
         self.sync_deployment_status(&client, balancer).await?;
 
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn test_pod_uid_gid() {
+        // Boundary: v26.19.0 is the first distroless version
+        assert_eq!(Context::pod_uid_gid("materialize/balancerd:v26.18.0"), 999);
+        assert_eq!(
+            Context::pod_uid_gid("materialize/balancerd:v26.19.0"),
+            65534
+        );
+        // Pre-release below threshold gets Ubuntu
+        assert_eq!(
+            Context::pod_uid_gid("materialize/balancerd:v26.19.0-dev"),
+            999
+        );
+        // Unparseable refs assume distroless
+        assert_eq!(
+            Context::pod_uid_gid("materialize/balancerd@sha256:abc"),
+            65534
+        );
     }
 }
