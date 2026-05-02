@@ -17,6 +17,7 @@ fail.workspace = true
 futures.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
+libc.workspace = true
 mz-alloc = { path = "../alloc" }
 mz-alloc-default = { path = "../alloc-default", optional = true }
 mz-build-info = { path = "../build-info" }
@@ -38,7 +39,7 @@ mz-storage-client = { path = "../storage-client" }
 mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
 mz-txn-wal = { path = "../txn-wal" }
-nix.workspace = true
+nix = { workspace = true, features = ["hostname", "signal"] }
 num_cpus.workspace = true
 serde.workspace = true
 tokio.workspace = true
