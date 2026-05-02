@@ -44,8 +44,6 @@ def check_default_members(workspace: Workspace) -> bool:
         # by default, and only pulled in by feature flags for other crates. This
         # ensures that `--no-default-features` properly disables jemalloc.
         "src/alloc-default",
-        # This crate depends on the `fivetran-sdk` submodule. We don't want
-        # users building the main binaries to need to set up this submodule.
         "src/fivetran-destination",
     }
 
@@ -64,9 +62,32 @@ def check_default_members(workspace: Workspace) -> bool:
     return success
 
 
+def check_workspace_dependencies(workspace: Workspace) -> bool:
+    """Checks that crates use workspace dependencies instead of specifying
+    versions inline when a workspace dependency is available."""
+
+    success = True
+    for name, crate in sorted(workspace.crates.items()):
+        for dep, dep_types in crate.non_workspace_deps.items():
+            if dep in workspace.workspace_dependencies:
+                print(
+                    f"{name}: {dep} should use `workspace = true` "
+                    f"(found in {', '.join(dep_types)})",
+                    file=sys.stderr,
+                )
+                success = False
+    if not success:
+        print(
+            '\nhint: replace `dep = "version"` with `dep.workspace = true` '
+            "or `dep = { workspace = true, ... }` for the above dependencies",
+            file=sys.stderr,
+        )
+    return success
+
+
 def main() -> None:
     workspace = Workspace(MZ_ROOT)
-    lints = [check_rust_versions, check_default_members]
+    lints = [check_rust_versions, check_default_members, check_workspace_dependencies]
     success = True
     for lint in lints:
         success = success and lint(workspace)

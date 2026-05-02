@@ -25,10 +25,12 @@ spec:
       labels:
         {{- include "materialize-operator.selectorLabels" . | nindent 8 }}
     spec:
+      shareProcessNamespace: true
       securityContext:
-        fsGroup: 999
-        runAsGroup: 999
-        runAsUser: 999
+        fsGroup: 65532
+        runAsGroup: 65532
+        runAsUser: 65532
+        runAsNonRoot: true
       serviceAccountName: {{ include "materialize-operator.serviceAccountName" . }}
       {{- if .Values.operator.nodeSelector }}
       nodeSelector:
@@ -87,7 +89,7 @@ spec:
         {{- if .Values.console.enabled }}
         - "--create-console"
         {{- end }}
-        - "--console-image-tag-default=26.0.0-dev.2"
+        - "--console-image-tag-default={{ .Values.operator.image.tag }}"
         {{- range $key, $value := .Values.console.imageTagMapOverride }}
         - "--console-image-tag-map={{ $key }}={{ $value }}"
         {{- end }}

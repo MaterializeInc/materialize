@@ -31,7 +31,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.catalog_item_id.rs"));
     Hash,
     Serialize,
     Deserialize,
-    MzReflect,
+    MzReflect
 )]
 pub enum CatalogItemId {
     /// System namespace.

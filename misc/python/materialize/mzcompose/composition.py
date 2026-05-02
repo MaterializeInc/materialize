@@ -17,10 +17,12 @@ documentation][user-docs].
 
 import argparse
 import copy
+import html
 import importlib
 import importlib.abc
 import importlib.util
 import inspect
+import io
 import json
 import os
 import re
@@ -28,13 +30,16 @@ import selectors
 import subprocess
 import sys
 import threading
+import threading as _threading
 import time
 import traceback
 import urllib.parse
+import xml.etree.ElementTree as ET
 from collections import OrderedDict
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from inspect import Traceback, getframeinfo, getmembers, isfunction, stack
+from pathlib import Path
 from tempfile import TemporaryFile
 from typing import IO, Any, TextIO, TypeVar, cast
 
@@ -42,8 +47,10 @@ import psycopg
 import sqlparse
 import yaml
 from psycopg import Connection, Cursor
+from psycopg.sql import Composed
 
 from materialize import MZ_ROOT, buildkite, mzbuild, spawn, ui
+from materialize.docker import image_registry
 from materialize.mzcompose import cluster_replica_size_map, loader
 from materialize.mzcompose.service import Service as MzComposeService
 from materialize.mzcompose.services.materialized import (
@@ -51,7 +58,6 @@ from materialize.mzcompose.services.materialized import (
     DeploymentStatus,
     Materialized,
 )
-from materialize.mzcompose.services.minio import minio_blob_uri
 from materialize.mzcompose.test_result import (
     FailedTestExecutionError,
     TestFailureDetails,
@@ -97,7 +103,9 @@ class WorkflowArgumentParser(argparse.ArgumentParser):
         args: Sequence[str] | None = None,
         namespace: argparse.Namespace | None = None,
     ) -> tuple[argparse.Namespace, list[str]]:
-        return super().parse_known_args(args or self.args, namespace)
+        ns, extras = super().parse_known_args(args or self.args, namespace)
+        assert ns is not None
+        return ns, extras
 
 
 class Composition:
@@ -110,22 +118,27 @@ class Composition:
         preserve_ports: bool = False,
         silent: bool = False,
         munge_services: bool = True,
+        resolve_image_specs: bool = True,
         project_name: str | None = None,
         sanity_restart_mz: bool = False,
+        host_network: bool = False,
     ):
         self.conns = {}
         self.name = name
         self.description = None
         self.repo = repo
         self.preserve_ports = preserve_ports
-        self.project_name = project_name
+        self.project_name = project_name or name
         self.silent = silent
         self.workflows: dict[str, Callable[..., None]] = {}
         self.test_results: OrderedDict[str, TestResult] = OrderedDict()
+        self.has_testdrive_junit: bool = False
         self.files = {}
         self.sources_and_sinks_ignored_from_validation = set()
         self.is_sanity_restart_mz = sanity_restart_mz
         self.current_test_case_name_override: str | None = None
+        self.host_network = host_network
+        self.resolve_image_specs = resolve_image_specs
 
         if name in self.repo.compositions:
             self.path = self.repo.compositions[name]
@@ -235,6 +248,9 @@ class Composition:
                     config["user"] = f"{os.getuid()}:{os.getgid()}"
                 del config["propagate_uid_gid"]
 
+            # See https://bugs.launchpad.net/ubuntu/+source/containerd-app/+bug/2065423
+            config["security_opt"] = ["apparmor=unconfined"]
+
             ports = config.setdefault("ports", [])
             for i, port in enumerate(ports):
                 if self.preserve_ports and not ":" in str(port):
@@ -261,6 +277,11 @@ class Composition:
             if "allow_host_ports" in config:
                 config.pop("allow_host_ports")
 
+            if self.host_network:
+                config["network_mode"] = "host"
+                if "networks" in config:
+                    del config["networks"]
+
             if self.repo.rd.coverage:
                 coverage_volume = "./coverage:/coverage"
                 if coverage_volume not in config.get("volumes", []):
@@ -282,12 +303,19 @@ class Composition:
                 else:
                     config.setdefault("environment", []).append(llvm_profile_file)
 
-        # Determine mzbuild specs and inject them into services accordingly.
-        deps = self.repo.resolve_dependencies(images)
-        for _name, config in services:
-            if "mzbuild" in config:
-                config["image"] = deps[config["mzbuild"]].spec()
-                del config["mzbuild"]
+        if self.resolve_image_specs:
+            deps = self.repo.resolve_dependencies(images)
+            for _name, config in services:
+                if "mzbuild" in config:
+                    config["image"] = deps[config["mzbuild"]].spec()
+                    del config["mzbuild"]
+        else:
+            deps = mzbuild.DependencySet([])
+            for _name, config in services:
+                if "mzbuild" in config:
+                    image = self.repo.images[config["mzbuild"]]
+                    config["image"] = image.docker_name(tag="")
+                    del config["mzbuild"]
 
         return deps
 
@@ -335,9 +363,7 @@ class Composition:
         stderr = None
         if capture_stderr:
             stderr = subprocess.PIPE if capture_stderr == True else capture_stderr
-        project_name_args = (
-            ("--project-name", self.project_name) if self.project_name else ()
-        )
+        project_name_args = ("--project-name", self.project_name)
 
         # One file per thread to make sure we don't try to read a file which is
         # not seeked to 0, leading to "empty compose file" errors
@@ -361,8 +387,8 @@ class Composition:
         ]
 
         for retry in range(1, max_tries + 1):
-            stdout_result = ""
-            stderr_result = ""
+            stdout_result = io.StringIO()
+            stderr_result = io.StringIO()
             file.seek(0)
             try:
                 if capture_and_print:
@@ -391,19 +417,21 @@ class Composition:
                     while running:
                         running = False
                         for key, val in sel.select():
-                            output = ""
+                            output = io.StringIO()
                             while True:
                                 new_output = key.fileobj.read(1024)  # type: ignore
                                 if not new_output:
                                     break
-                                output += new_output
-                            if not output:
+                                output.write(new_output)
+                            contents = output.getvalue()
+                            output.close()
+                            if not contents:
                                 continue
                             # Keep running as long as stdout or stderr have any content
                             running = True
                             if key.fileobj is p.stdout:
                                 if print_prefix:
-                                    for line in output.splitlines(keepends=True):
+                                    for line in contents.splitlines(keepends=True):
                                         print(
                                             f"{print_prefix}{line}",
                                             end="",
@@ -411,14 +439,14 @@ class Composition:
                                         )
                                 else:
                                     print(
-                                        output,
+                                        contents,
                                         end="",
                                         flush=True,
                                     )
-                                stdout_result += output
+                                stdout_result.write(contents)
                             else:
                                 if print_prefix:
-                                    for line in output.splitlines(keepends=True):
+                                    for line in contents.splitlines(keepends=True):
                                         print(
                                             f"{print_prefix}{line}",
                                             end="",
@@ -427,21 +455,28 @@ class Composition:
                                         )
                                 else:
                                     print(
-                                        output,
+                                        contents,
                                         end="",
                                         file=sys.stderr,
                                         flush=True,
                                     )
-                                stderr_result += output
+                                stderr_result.write(contents)
                     p.wait()
                     retcode = p.poll()
                     assert retcode is not None
+                    stdout_contents = stdout_result.getvalue()
+                    stdout_result.close()
+                    stderr_contents = stderr_result.getvalue()
+                    stderr_result.close()
                     if check and retcode:
                         raise subprocess.CalledProcessError(
-                            retcode, p.args, output=stdout_result, stderr=stderr_result
+                            retcode,
+                            p.args,
+                            output=stdout_contents,
+                            stderr=stderr_contents,
                         )
                     return subprocess.CompletedProcess(
-                        p.args, retcode, stdout_result, stderr_result
+                        p.args, retcode, stdout_contents, stderr_contents
                     )
                 else:
                     return subprocess.run(
@@ -770,7 +805,7 @@ class Composition:
 
     def sql(
         self,
-        sql: str,
+        sql: str | Composed,
         service: str | None = None,
         user: str = "materialize",
         database: str = "materialize",
@@ -788,6 +823,8 @@ class Composition:
             password=password,
             reuse_connection=reuse_connection,
         ) as cursor:
+            if isinstance(sql, Composed):
+                sql = sql.as_string(cursor)
             for statement in sqlparse.split(sql):
                 if print_statement:
                     print(f"> {statement}")
@@ -836,9 +873,10 @@ class Composition:
         """Run a one-off command in a service.
 
         Delegates to `docker compose run`. See that command's help for details.
-        Note that unlike `docker compose run`, any services whose definitions
-        have changed are rebuilt (like `docker compose up` would do) before the
-        command is executed.
+
+        Note that this does *not* rebuild services whose definitions have
+        changed. If you need to pick up definition changes (env vars, volumes,
+        image, etc.), call `up` with the service first.
 
         Args:
             service: The name of a service in the composition.
@@ -887,31 +925,121 @@ class Composition:
             )
         environment = {"CLUSTER_REPLICA_SIZES": json.dumps(cluster_replica_size_map())}
 
-        if persistent:
-            if not self.is_running(service):
-                self.up(Service(service, idle=True))
+        if persistent and not self.is_running(service):
+            self.up(Service(service, idle=True))
 
-            return self.exec(
-                service,
-                *args,
-                # needed for sufficient error information in the junit.xml while still printing to stdout during execution
-                capture_and_print=not quiet,
-                capture=quiet,
-                capture_stderr=quiet,
-                env_extra=environment,
+        with self._testdrive_junit(args, service=service) as td_args:
+            if persistent:
+                return self.exec(
+                    service,
+                    *td_args,
+                    capture_and_print=not quiet,
+                    capture=quiet,
+                    capture_stderr=quiet,
+                    env_extra=environment,
+                    silent=True,
+                )
+            else:
+                return self.run(
+                    service,
+                    *td_args,
+                    capture_and_print=not quiet,
+                    capture=quiet,
+                    capture_stderr=quiet,
+                    env_extra=environment,
+                    silent=True,
+                )
+
+    @contextmanager
+    def _testdrive_junit(
+        self, args: tuple[str, ...] | list[str], service: str = "testdrive"
+    ) -> Iterator[tuple[str, ...]]:
+        """Wraps a testdrive invocation to capture per-file error details via
+        testdrive's own --junit-report, replacing generic docker compose
+        failures with specific testdrive errors when available."""
+        caller_junit_path: Path | None = None
+        for a in args:
+            if "--junit-report" in a and "=" in a:
+                caller_junit_path = self.path / Path(a.split("=", 1)[1]).name
+                break
+
+        use_junit = caller_junit_path is None and not any(
+            "--rewrite-results" in a for a in args
+        )
+        junit_filename = f".td_junit_{os.getpid()}_{_threading.get_ident()}.xml"
+        # Write to /share/tmp inside the container (Docker-managed volume,
+        # always writable) rather than /workdir which may be read-only in CI.
+        container_junit_path = f"/share/tmp/{junit_filename}"
+        host_junit_path = self.path / junit_filename
+
+        try:
+            if use_junit:
+                yield (f"--junit-report={container_junit_path}", *args)
+            else:
+                yield tuple(args)
+        except CommandFailureCausedUIError:
+            if use_junit:
+                self._copy_from_service(service, container_junit_path, host_junit_path)
+                errors = self._read_testdrive_junit_errors(host_junit_path)
+                if errors:
+                    raise FailedTestExecutionError(errors)
+            elif caller_junit_path is not None:
+                # Testdrive failed and was invoked with its own --junit-report.
+                # Signal that the mzcompose-level junit should be skipped
+                # to avoid duplicate annotations.
+                self.has_testdrive_junit = True
+            raise
+        finally:
+            if use_junit:
+                try:
+                    host_junit_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+    def _copy_from_service(
+        self, service: str, container_path: str, host_path: Path
+    ) -> None:
+        try:
+            self.invoke(
+                "cp",
+                f"{service}:{container_path}",
+                str(host_path),
+                check=False,
                 silent=True,
             )
-        else:
-            return self.run(
-                service,
-                *args,
-                # needed for sufficient error information in the junit.xml while still printing to stdout during execution
-                capture_and_print=not quiet,
-                capture=quiet,
-                capture_stderr=quiet,
-                env_extra=environment,
-                silent=True,
+        except Exception:
+            pass
+
+    _TD_LOCATION_RE = re.compile(r"(\S+\.td):(\d+):\d+:")
+
+    def _read_testdrive_junit_errors(
+        self, junit_path: Path
+    ) -> list[TestFailureDetails]:
+        try:
+            tree = ET.parse(junit_path)
+        except (ET.ParseError, OSError):
+            return []
+
+        errors: list[TestFailureDetails] = []
+        for testcase in tree.iter("testcase"):
+            failure = testcase.find("failure")
+            if failure is None:
+                continue
+            file_name = testcase.get("name", "unknown")
+            failure_text = html.unescape(failure.get("message") or failure.text or "")
+            match = self._TD_LOCATION_RE.search(failure_text)
+            location = match.group(1) if match else file_name
+            line_number = int(match.group(2)) if match else None
+            errors.append(
+                TestFailureDetails(
+                    message=f"Executing {location} failed!",
+                    details=failure_text,
+                    test_case_name_override=self.current_test_case_name_override,
+                    location=location,
+                    line_number=line_number,
+                )
             )
+        return errors
 
     def exec(
         self,
@@ -961,6 +1089,43 @@ class Composition:
             silent=silent,
             print_prefix=print_prefix,
         )
+
+    def pull_images(
+        self,
+        *services: str | Service,
+        max_tries: int = 5,
+    ) -> None:
+        """Ensure images for the named services exist locally without
+        starting any containers.
+
+        Tries ``docker compose pull`` first, falling back to
+        ``docker compose build`` for any services whose images are not
+        in the registry (e.g. local development).  Unlike ``up`` with
+        ``idle=True``, no entrypoint is ever invoked, so this works
+        with distroless images that lack a shell or ``sleep``.
+
+        Args:
+            services: The names of services in the composition.
+            max_tries: Number of tries on failure.
+        """
+        service_names = [
+            service.name if isinstance(service, Service) else service
+            for service in services
+        ]
+        try:
+            self.invoke(
+                "pull",
+                *(["--quiet"] if ui.env_is_truthy("CI") else []),
+                *service_names,
+                max_tries=max_tries,
+            )
+        except UIError:
+            self.invoke(
+                "build",
+                *(["--quiet"] if ui.env_is_truthy("CI") else []),
+                *service_names,
+                max_tries=max_tries,
+            )
 
     def pull_if_variable(self, services: list[str], max_tries: int = 2) -> None:
         """Pull fresh service images in case the tag indicates the underlying image may change over time.
@@ -1025,6 +1190,8 @@ class Composition:
                 if service_name in idle:
                     service["entrypoint"] = ["sleep", "infinity"]
                     service["command"] = []
+                    service.pop("depends_on", None)
+                    service.pop("healthcheck", None)
             self.files = {}
 
         service_names = [
@@ -1058,8 +1225,7 @@ class Composition:
             exclusion_clause = f"name NOT IN ({excluded_items})"
 
         # starting sources are currently expected if no new data is produced, see database-issues#6605
-        results = self.sql_query(
-            f"""
+        results = self.sql_query(f"""
             SELECT name, status, error, details
             FROM mz_internal.mz_source_statuses
             WHERE NOT(
@@ -1067,32 +1233,27 @@ class Composition:
                 (type = 'progress' AND status = 'created')
             )
             AND {exclusion_clause}
-            """
-        )
+            """)
         for name, status, error, details in results:
             return f"Source {name} is expected to be running/created/paused, but is {status}, error: {error}, details: {details}"
 
-        results = self.sql_query(
-            f"""
+        results = self.sql_query(f"""
             SELECT name, status, error, details
             FROM mz_internal.mz_sink_statuses
             WHERE status NOT IN ('running', 'dropped')
             AND {exclusion_clause}
-            """
-        )
+            """)
         for name, status, error, details in results:
             return f"Sink {name} is expected to be running/dropped, but is {status}, error: {error}, details: {details}"
 
-        results = self.sql_query(
-            """
+        results = self.sql_query("""
             SELECT mz_clusters.name, mz_cluster_replicas.name, status, reason
             FROM mz_internal.mz_cluster_replica_statuses
             JOIN mz_cluster_replicas
             ON mz_internal.mz_cluster_replica_statuses.replica_id = mz_cluster_replicas.id
             JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id
             WHERE status NOT IN ('online', 'offline')
-            """
-        )
+            """)
         for cluster_name, replica_name, status, reason in results:
             return f"Cluster replica {cluster_name}.{replica_name} is expected to be online/offline, but is {status}, reason: {reason}"
 
@@ -1114,7 +1275,7 @@ class Composition:
             self.kill("materialized")
             with self.override(
                 Materialized(
-                    image=f"materialize/materialized:{version}",
+                    image=f"{image_registry()}/materialized:{version}",
                     environment_extra=["MZ_DEPLOY_GENERATION=1"],
                     healthcheck=LEADER_STATUS_HEALTHCHECK,
                 )
@@ -1184,7 +1345,7 @@ class Composition:
             )
 
     def metadata_store(self) -> str:
-        for name in ["cockroach", "postgres-metadata"]:
+        for name in ["cockroach", "postgres-metadata", "alloydb", "foundationdb"]:
             if name in self.compose["services"]:
                 return name
         raise RuntimeError(
@@ -1271,7 +1432,7 @@ class Composition:
             self.wait(*services, expect_exit_code=137 if signal == "SIGKILL" else None)
 
     def is_running(self, container_name: str) -> bool:
-        qualified_container_name = f"{self.name}-{container_name}-1"
+        qualified_container_name = f"{self.project_name}-{container_name}-1"
         output_str = self.invoke(
             "ps",
             "--filter",
@@ -1376,7 +1537,7 @@ class Composition:
             force: Whether to force the removal (i.e., don't error if the
                 volume does not exist).
         """
-        volumes = tuple(f"{self.name}_{v}" for v in volumes)
+        volumes = tuple(f"{self.project_name}_{v}" for v in volumes)
         spawn.runv(
             ["docker", "volume", "rm", *(["--force"] if force else []), *volumes]
         )
@@ -1405,55 +1566,42 @@ class Composition:
 
         return str(output_list[0])
 
-    def stats(
-        self,
-        service: str,
-    ) -> str:
-        """Delegates to `docker stats`
+    def mem(self, service: str) -> int:
+        """Return memory usage in bytes for the given service's container.
 
-        Args:
-            service: The service whose container's stats will be probed.
+        Uses ``docker exec`` to read the cgroup memory file from inside the
+        container, where the path is always predictable regardless of the
+        host's cgroup driver or directory layout.
         """
-
         container_id = self.container_id(service)
         assert container_id is not None
 
-        return subprocess.run(
-            [
-                "docker",
-                "stats",
-                container_id,
-                "--format",
-                "{{json .}}",
-                "--no-stream",
-                "--no-trunc",
-            ],
-            check=True,
-            stdout=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-        ).stdout
+        # Inside the container the cgroup root is always at /sys/fs/cgroup.
+        # Try v2 first, then v1.
+        for path in (
+            "/sys/fs/cgroup/memory.current",
+            "/sys/fs/cgroup/memory/memory.usage_in_bytes",
+        ):
+            try:
+                out = subprocess.check_output(
+                    ["docker", "exec", container_id, "cat", path],
+                    text=True,
+                    stderr=subprocess.DEVNULL,
+                ).strip()
+                return int(out)
+            except (subprocess.CalledProcessError, ValueError):
+                continue
 
-    def mem(self, service: str) -> int:
-        stats_str = self.stats(service)
-        stats = json.loads(stats_str)
-        assert service in stats["Name"]
-        mem_str, _ = stats["MemUsage"].split("/")  # "MemUsage":"1.542GiB / 62.8GiB"
-        mem_float = float(re.findall(r"[\d.]+", mem_str)[0])
-        if "MiB" in mem_str:
-            mem_float = mem_float * 10**6
-        elif "GiB" in mem_str:
-            mem_float = mem_float * 10**9
-        else:
-            raise RuntimeError(f"Unable to parse {mem_str}")
-        return round(mem_float)
+        raise FileNotFoundError(
+            f"Could not read cgroup memory usage from container {container_id}"
+        )
 
     def testdrive(
         self,
         input: str,
         service: str = "testdrive",
         args: list[str] = [],
-        caller: Traceback | None = None,
+        caller: Traceback | str | None = None,
         mz_service: str | None = None,
         quiet: bool = False,
         silent: bool = False,
@@ -1471,7 +1619,13 @@ class Composition:
         """
 
         caller = caller or getframeinfo(stack()[1][0])
-        args = args + [f"--source={caller.filename}:{caller.lineno}"]
+        args = args + [
+            (
+                f"--source={caller.filename}:{caller.lineno}"
+                if isinstance(caller, Traceback)
+                else f"--source={caller}"
+            )
+        ]
 
         if mz_service is not None:
             args = args + [
@@ -1483,16 +1637,17 @@ class Composition:
         if not self.is_running(service):
             self.up(Service(service, idle=True))
 
-        return self.exec(
-            service,
-            *args,
-            stdin=input,
-            capture_and_print=not quiet,
-            capture=quiet,
-            capture_stderr=quiet,
-            silent=silent,
-            print_prefix=print_prefix,
-        )
+        with self._testdrive_junit(args, service=service) as td_args:
+            return self.exec(
+                service,
+                *td_args,
+                stdin=input,
+                capture_and_print=not quiet,
+                capture=quiet,
+                capture_stderr=quiet,
+                silent=silent,
+                print_prefix=print_prefix,
+            )
 
     def enable_minio_versioning(self) -> None:
         self.up("minio", Service("mc", idle=True))
@@ -1509,110 +1664,37 @@ class Composition:
 
         self.exec("mc", "mc", "version", "enable", "persist/persist")
 
-    def backup_cockroach(self) -> None:
-        self.up(Service("mc", idle=True))
-        self.exec("mc", "mc", "mb", "--ignore-existing", "persist/crdb-backup")
-        self.exec(
-            "cockroach",
-            "cockroach",
-            "sql",
-            "--insecure",
-            "-e",
-            """
-                CREATE EXTERNAL CONNECTION backup_bucket
-                AS 's3://persist/crdb-backup?AWS_ENDPOINT=http://minio:9000/&AWS_REGION=minio&AWS_ACCESS_KEY_ID=minioadmin&AWS_SECRET_ACCESS_KEY=minioadmin';
-                BACKUP INTO 'external://backup_bucket';
-                DROP EXTERNAL CONNECTION backup_bucket;
-            """,
-        )
-
-    def restore_cockroach(
-        self, mz_service: str = "materialized", restart_mz: bool = True
-    ) -> None:
-        self.kill(mz_service)
-        self.exec(
-            "cockroach",
-            "cockroach",
-            "sql",
-            "--insecure",
-            "-e",
-            """
-                DROP DATABASE defaultdb;
-                CREATE EXTERNAL CONNECTION backup_bucket
-                AS 's3://persist/crdb-backup?AWS_ENDPOINT=http://minio:9000/&AWS_REGION=minio&AWS_ACCESS_KEY_ID=minioadmin&AWS_SECRET_ACCESS_KEY=minioadmin';
-                RESTORE DATABASE defaultdb
-                FROM LATEST IN 'external://backup_bucket';
-                DROP EXTERNAL CONNECTION backup_bucket;
-            """,
-        )
-        self.up(Service("persistcli", idle=True))
-        self.exec(
-            "persistcli",
-            "persistcli",
-            "admin",
-            "--commit",
-            "restore-blob",
-            f"--blob-uri={minio_blob_uri()}",
-            "--consensus-uri=postgres://root@cockroach:26257?options=--search_path=consensus",
-        )
-        if restart_mz:
-            self.up(mz_service)
-
-    def backup_postgres(self) -> None:
-        backup = self.exec(
-            "postgres-metadata",
-            "pg_dumpall",
-            "--user",
-            "postgres",
-            capture=True,
-        ).stdout
-        with open("backup.sql", "w") as f:
-            f.write(backup)
-
-    def restore_postgres(
-        self, mz_service: str = "materialized", restart_mz: bool = True
-    ) -> None:
-        self.kill(mz_service)
-        self.kill("postgres-metadata")
-        self.rm("postgres-metadata")
-        self.up("postgres-metadata")
-        with open("backup.sql") as f:
-            backup = f.read()
-        self.exec(
-            "postgres-metadata",
-            "psql",
-            "--user",
-            "postgres",
-            "--file",
-            "-",
-            stdin=backup,
-        )
-        self.up(Service("persistcli", idle=True))
-        self.exec(
-            "persistcli",
-            "persistcli",
-            "admin",
-            "--commit",
-            "restore-blob",
-            f"--blob-uri={minio_blob_uri()}",
-            "--consensus-uri=postgres://root@postgres-metadata:26257?options=--search_path=consensus",
-        )
-        if restart_mz:
-            self.up(mz_service)
-
     def backup(self) -> None:
-        if self.metadata_store() == "cockroach":
-            self.backup_cockroach()
+        from materialize.mzcompose.services.alloydb import AlloyDB
+        from materialize.mzcompose.services.cockroach import Cockroach
+        from materialize.mzcompose.services.postgres import PostgresMetadata
+
+        store = self.metadata_store()
+        if store == "cockroach":
+            Cockroach.backup(self)
+        elif store == "postgres-metadata":
+            PostgresMetadata.backup(self)
+        elif store == "alloydb":
+            AlloyDB.backup(self)
         else:
-            self.backup_postgres()
+            raise RuntimeError(f"Unsupported metadata store {store} for backup")
 
     def restore(
         self, mz_service: str = "materialized", restart_mz: bool = True
     ) -> None:
-        if self.metadata_store() == "cockroach":
-            self.restore_cockroach(mz_service, restart_mz)
+        from materialize.mzcompose.services.alloydb import AlloyDB
+        from materialize.mzcompose.services.cockroach import Cockroach
+        from materialize.mzcompose.services.postgres import PostgresMetadata
+
+        store = self.metadata_store()
+        if store == "cockroach":
+            Cockroach.restore(self, mz_service, restart_mz)
+        elif store == "postgres-metadata":
+            PostgresMetadata.restore(self, mz_service, restart_mz)
+        elif store == "alloydb":
+            AlloyDB.restore(self, mz_service, restart_mz)
         else:
-            self.restore_postgres(mz_service, restart_mz)
+            raise RuntimeError(f"Unsupported metadata store {store} for restore")
 
     def await_mz_deployment_status(
         self,
@@ -1621,7 +1703,12 @@ class Composition:
         timeout: int | None = None,
         sleep_time: float | None = 1.0,
     ) -> None:
-        timeout = timeout or (1800 if ui.env_is_truthy("CI_COVERAGE_ENABLED") else 900)
+        timeout_default = 1200
+        timeout = timeout or (
+            timeout_default * 2
+            if ui.env_is_truthy("CI_COVERAGE_ENABLED")
+            else timeout_default
+        )
         print(
             f"Awaiting {mz_service} deployment status {status.value} for {timeout}s",
             end="",
@@ -1667,21 +1754,65 @@ class Composition:
         )
         assert result["result"] == "Success", f"Unexpected result {result}"
 
-    def cloud_hostname(self, quiet: bool = False) -> str:
-        """Uses the mz command line tool to get the hostname of the cloud instance"""
+    def cloud_hostname(
+        self, quiet: bool = False, timeout_secs: int = 180, poll_interval: float = 2.0
+    ) -> str:
+        """Uses the mz command line tool to get the hostname of the cloud instance, waiting until the region is ready."""
         if not quiet:
             print("Obtaining hostname of cloud instance ...")
-        region_status = self.run("mz", "region", "show", capture=True, rm=True)
-        sql_line = region_status.stdout.split("\n")[2]
-        cloud_url = sql_line.split("\t")[1].strip()
-        # It is necessary to append the 'https://' protocol; otherwise, urllib can't parse it correctly.
-        cloud_hostname = urllib.parse.urlparse("https://" + cloud_url).hostname
-        return str(cloud_hostname)
+
+        deadline = time.time() + timeout_secs
+        last_msg = ""
+
+        while time.time() < deadline:
+            proc = self.run(
+                "mz",
+                "region",
+                "show",
+                capture=True,
+                capture_stderr=True,
+                rm=True,
+                check=False,
+                silent=True,
+            )
+            out = proc.stdout or ""
+            err = proc.stderr or ""
+
+            if proc.returncode == 0:
+                lines = out.splitlines()
+                if len(lines) >= 3:
+                    line = lines[2]
+                    parts = line.split("\t")
+                    if len(parts) >= 2:
+                        cloud_url = parts[1].strip()
+                        # It is necessary to append the 'https://' protocol; otherwise, urllib can't parse it correctly.
+                        hostname = urllib.parse.urlparse(
+                            "https://" + cloud_url
+                        ).hostname
+                        if hostname:
+                            return str(hostname)
+                        else:
+                            last_msg = f"failed to parse hostname from URL: {cloud_url}"
+                    else:
+                        last_msg = f"unexpected region show output (no tab in line 3): {line!r}"
+                else:
+                    last_msg = f"unexpected region show output (too few lines): {out!r}"
+            else:
+                last_msg = (out + "\n" + err).strip()
+
+            time.sleep(poll_interval)
+
+        raise UIError(
+            f"failed to obtain cloud hostname within {timeout_secs}s: {last_msg}"
+        )
 
     T = TypeVar("T")
 
     def test_parts(self, parts: list[T], process_func: Callable[[T], Any]) -> None:
         priority: dict[str, int] = {}
+
+        if not parts:
+            raise ValueError("No parts to test selected, check your parameters")
 
         # TODO(def-): Revisit if this is worth enabling, currently adds ~15 seconds to each run
         # if buildkite.is_in_buildkite():
@@ -1722,8 +1853,9 @@ class Composition:
                 test_analytics_config = create_test_analytics_config(self)
                 test_analytics = TestAnalyticsDb(test_analytics_config)
                 test_analytics.database_connector.submit_update_statements()
-        if exceptions:
+        if len(exceptions) > 1:
             print(f"Further exceptions were raised:\n{exceptions[1:]}")
+        if exceptions:
             raise exceptions[0]
 
     def verify_build_profile(self, container: str = "materialized") -> None:

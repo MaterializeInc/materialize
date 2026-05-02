@@ -1,16 +1,20 @@
 ---
 title: "COMMENT ON"
-description: "`COMMENT ON ...` adds or updates the comment of an object."
+description: "`COMMENT ON` adds or updates the comment of an object."
 menu:
   main:
     parent: 'commands'
 ---
 
-`COMMENT ON ...` adds or updates the comment of an object.
+Use `COMMENT ON` to:
+
+- Add a comment to an object.
+- Update the comment to an object.
+- Remove the comment from an object.
 
 ## Syntax
 
-{{< diagram "comment-on.svg" >}}
+{{% include-syntax file="examples/comment_on" example="syntax" %}}
 
 ## Details
 
@@ -18,14 +22,14 @@ menu:
 comment associated with it, so successive calls of `COMMENT ON` to a single object will overwrite
 the previous comment.
 
-To read the comment on an object you need to query the [mz_internal.mz_comments](/sql/system-catalog/mz_internal/#mz_comments)
+To read the comment on an object you need to query the [mz_internal.mz_comments](/reference/system-catalog/mz_internal/#mz_comments)
 catalog table.
 
 ## Privileges
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/comment-on.md" >}}
+{{% include-headless "/headless/sql-command-privileges/comment-on" %}}
 
 For more information on ownership and privileges, see [Role-based access
 control](/security/).

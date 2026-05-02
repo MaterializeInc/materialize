@@ -26,10 +26,8 @@ use tracing::{info, warn};
 use url::Url;
 use uuid::Uuid;
 
-use mz_dyncfg::ConfigSet;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
-use mz_ore::lgbytes::MetricsRegion;
 use mz_ore::metrics::MetricsRegistry;
 
 use crate::cfg::BlobKnobs;
@@ -40,15 +38,9 @@ use crate::metrics::S3BlobMetrics;
 /// Configuration for opening an [AzureBlob].
 #[derive(Clone, Debug)]
 pub struct AzureBlobConfig {
-    // The metrics struct here is a bit of a misnomer. We only need access
-    // to the LgBytes metrics, which has an Azure-specific field. For now,
-    // it saves considerable plumbing to reuse [S3BlobMetrics].
-    //
-    // TODO: spin up an AzureBlobMetrics and do the plumbing.
     metrics: S3BlobMetrics,
     client: ContainerClient,
     prefix: String,
-    cfg: Arc<ConfigSet>,
 }
 
 impl AzureBlobConfig {
@@ -66,7 +58,6 @@ impl AzureBlobConfig {
         metrics: S3BlobMetrics,
         url: Url,
         knobs: Box<dyn BlobKnobs>,
-        cfg: Arc<ConfigSet>,
     ) -> Result<Self, Error> {
         let client = if account == EMULATOR_ACCOUNT {
             info!("Connecting to Azure emulator");
@@ -130,7 +121,6 @@ impl AzureBlobConfig {
         Ok(AzureBlobConfig {
             metrics,
             client,
-            cfg,
             prefix,
         })
     }
@@ -168,9 +158,10 @@ impl AzureBlobConfig {
         let container_name = match std::env::var(Self::EXTERNAL_TESTS_AZURE_CONTAINER) {
             Ok(container) => container,
             Err(_) => {
-                if mz_ore::env::is_var_truthy("CI") {
-                    panic!("CI is supposed to run this test but something has gone wrong!");
-                }
+                assert!(
+                    !mz_ore::env::is_var_truthy("CI"),
+                    "CI is supposed to run this test but something has gone wrong!"
+                );
                 return Ok(None);
             }
         };
@@ -185,7 +176,6 @@ impl AzureBlobConfig {
             metrics,
             Url::parse(&format!("http://localhost:40111/{}", container_name)).expect("valid url"),
             Box::new(TestBlobKnobs),
-            Arc::new(ConfigSet::default()),
         )?;
 
         Ok(Some(config))
@@ -198,7 +188,6 @@ pub struct AzureBlob {
     metrics: S3BlobMetrics,
     client: ContainerClient,
     prefix: String,
-    _cfg: Arc<ConfigSet>,
 }
 
 impl AzureBlob {
@@ -220,7 +209,6 @@ impl AzureBlob {
             metrics: config.metrics,
             client: config.client,
             prefix: config.prefix,
-            _cfg: config.cfg,
         };
 
         Ok(ret)
@@ -241,55 +229,26 @@ impl Blob for AzureBlob {
         async fn fetch_chunk(
             response: GetBlobResponse,
             metrics: S3BlobMetrics,
-        ) -> Result<Bytes, ExternalError> {
+        ) -> Result<Vec<Bytes>, ExternalError> {
             let content_length = response.blob.properties.content_length;
 
-            // Here we're being quite defensive. If `content_length` comes back
-            // as 0 it's most likely incorrect. In that case we'll copy bytes
-            // of the network into a growable buffer, then copy the entire
-            // buffer into lgalloc.
-            let mut buffer = match content_length {
-                1.. => {
-                    let region = metrics
-                        .lgbytes
-                        .persist_azure
-                        .new_region(usize::cast_from(content_length));
-                    PreSizedBuffer::Sized(region)
-                }
-                0 => PreSizedBuffer::Unknown(SegmentedBytes::new()),
-            };
-
+            let mut parts: Vec<Bytes> = Vec::new();
+            let mut total_len: u64 = 0;
             let mut body = response.data;
             while let Some(value) = body.next().await {
                 let value = value
                     .map_err(|e| ExternalError::from(e.context("azure blob get body error")))?;
-
-                match &mut buffer {
-                    PreSizedBuffer::Sized(region) => region.extend_from_slice(&value),
-                    PreSizedBuffer::Unknown(segments) => segments.push(value),
-                }
+                total_len += u64::cast_from(value.len());
+                parts.push(value);
             }
-
-            // Spill our bytes to lgalloc, if they aren't already.
-            let lgbytes: Bytes = match buffer {
-                PreSizedBuffer::Sized(region) => region.into(),
-                // Now that we've collected all of the segments, we know the size of our region.
-                PreSizedBuffer::Unknown(segments) => {
-                    let mut region = metrics.lgbytes.persist_azure.new_region(segments.len());
-                    for segment in segments.into_segments() {
-                        region.extend_from_slice(segment.as_ref());
-                    }
-                    region.into()
-                }
-            };
 
             // Report if the content-length header didn't match the number of
             // bytes we read from the network.
-            if content_length != u64::cast_from(lgbytes.len()) {
+            if content_length != total_len {
                 metrics.get_invalid_resp.inc();
             }
 
-            Ok(lgbytes)
+            Ok(parts)
         }
 
         let mut requests = FuturesOrdered::new();
@@ -321,8 +280,9 @@ impl Blob for AzureBlob {
         // Await on all of our chunks.
         let mut segments = SegmentedBytes::with_capacity(requests.len());
         while let Some(body) = requests.next().await {
-            let segment = body.context("azure blob get body err")?;
-            segments.push(segment);
+            for part in body.context("azure blob get body err")? {
+                segments.push(part);
+            }
         }
 
         Ok(Some(segments))
@@ -420,13 +380,6 @@ impl Blob for AzureBlob {
     }
 }
 
-/// If possible we'll pre-allocate a chunk of memory in lgalloc and write into
-/// that as we read bytes off the network.
-enum PreSizedBuffer {
-    Sized(MetricsRegion<u8>),
-    Unknown(SegmentedBytes),
-}
-
 #[cfg(test)]
 mod tests {
     use tracing::info;
@@ -455,7 +408,6 @@ mod tests {
                 let config = AzureBlobConfig {
                     metrics: config.metrics.clone(),
                     client: config.client.clone(),
-                    cfg: Arc::new(ConfigSet::default()),
                     prefix: config.prefix.clone(),
                 };
                 AzureBlob::open(config).await

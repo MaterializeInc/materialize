@@ -147,11 +147,11 @@ materialize ""
 
 # ...and also in `\l`
 $ psql-execute command="\l"
-\                                                 List of databases
-    Name     |    Owner    | Encoding | Locale Provider | Collate | Ctype | Locale | ICU Rules | Access privileges
--------------+-------------+----------+-----------------+---------+-------+--------+-----------+-------------------
- d           | materialize | UTF8     | libc            | C       | C     |        |           |
- materialize | mz_system   | UTF8     | libc            | C       | C     |        |           |
+\                                                   List of databases
+    Name     |    Owner    | Encoding | Locale Provider | Collate | Ctype | ICU Locale | ICU Rules | Access privileges
+-------------+-------------+----------+-----------------+---------+-------+------------+-----------+-------------------
+ d           | materialize | UTF8     | libc            | C       | C     |            |           |
+ materialize | mz_system   | UTF8     | libc            | C       | C     |            |           |
 
 
 
@@ -289,7 +289,7 @@ public.bool
 > DROP DATABASE foo
 
 ! DROP OBJECT v1
-contains:Expected one of TABLE or VIEW or MATERIALIZED or SOURCE or SINK or INDEX or TYPE or ROLE or USER or CLUSTER or SECRET or CONNECTION or DATABASE or SCHEMA or FUNCTION or CONTINUAL or NETWORK, found identifier
+contains:Expected one of TABLE or VIEW or MATERIALIZED or SOURCE or SINK or INDEX or TYPE or ROLE or USER or CLUSTER or SECRET or CONNECTION or DATABASE or SCHEMA or FUNCTION or NETWORK, found identifier
 
 > SHOW OBJECTS
 name        type        comment
@@ -518,8 +518,6 @@ mz_clusters                    ""
 mz_cluster_replicas            ""
 mz_cluster_replica_sizes       ""
 mz_columns                     ""
-mz_connections                 ""
-mz_databases                   ""
 mz_default_privileges          ""
 mz_egress_ips                  ""
 mz_functions                   ""
@@ -531,15 +529,11 @@ mz_kafka_sinks                 ""
 mz_kafka_sources               ""
 mz_list_types                  ""
 mz_map_types                   ""
-mz_materialized_views          ""
 mz_operators                   ""
 mz_pseudo_types                ""
 mz_role_auth                   ""
 mz_roles                       ""
-mz_role_members                ""
 mz_role_parameters             ""
-mz_schemas                     ""
-mz_secrets                     ""
 mz_sinks                       ""
 mz_sources                     ""
 mz_ssh_tunnel_connections      ""
@@ -558,6 +552,16 @@ mz_storage_usage           ""
 mz_timezone_abbreviations  ""
 mz_timezone_names          ""
 
+> SHOW MATERIALIZED VIEWS FROM mz_catalog
+name                cluster             comment
+------------------------------------------------
+mz_connections      mz_catalog_server   ""
+mz_databases        mz_catalog_server   ""
+mz_role_members     mz_catalog_server   ""
+mz_schemas          mz_catalog_server   ""
+mz_secrets          mz_catalog_server   ""
+mz_materialized_views mz_catalog_server ""
+
 # Check default sources, tables, and views in mz_catalog_unstable.
 
 > SHOW SOURCES FROM mz_catalog_unstable
@@ -572,6 +576,7 @@ mz_timezone_names          ""
 name                                         type    cluster    comment
 -----------------------------------------------------------------------
 mz_aws_privatelink_connection_status_history source  <null>     ""
+mz_catalog_raw                               source  <null>     ""
 mz_cluster_replica_metrics_history           source  <null>     ""
 mz_cluster_replica_status_history            source  <null>     ""
 mz_compute_dependencies                      source  <null>     ""
@@ -599,23 +604,18 @@ name                                     comment
 mz_aggregates                            ""
 mz_aws_connections                       ""
 mz_cluster_schedules                     ""
-mz_cluster_workload_classes              ""
 mz_comments                              ""
-mz_continual_tasks                       ""
 mz_history_retention_strategies          ""
-mz_internal_cluster_replicas             ""
-mz_pending_cluster_replicas              ""
 mz_kafka_source_tables                   ""
 mz_license_keys                          ""
 mz_materialized_view_refresh_strategies  ""
 mz_mysql_source_tables                   ""
-mz_network_policies                      ""
-mz_network_policy_rules                  ""
 mz_object_dependencies                   ""
 mz_object_global_ids                     ""
 mz_optimizer_notices                     ""
 mz_postgres_sources                      ""
 mz_postgres_source_tables                ""
+mz_replacements                          ""
 mz_sessions                              ""
 mz_source_references                     ""
 mz_sql_server_source_tables              ""
@@ -628,6 +628,7 @@ mz_webhook_sources                       ""
 name                                     comment
 ------------------------------------------------
 mz_activity_log_thinned                  ""
+mz_builtin_materialized_views            ""
 mz_cluster_deployment_lineage            ""
 mz_cluster_replica_history               ""
 mz_cluster_replica_metrics               ""
@@ -637,12 +638,13 @@ mz_cluster_replica_utilization           ""
 mz_cluster_replica_utilization_history   ""
 mz_compute_hydration_statuses            ""
 mz_console_cluster_utilization_overview  ""
-mz_show_continual_tasks                  ""
 mz_global_frontiers                      ""
 mz_hydration_statuses                    ""
 mz_index_advice                          ""
 mz_materialization_dependencies          ""
 mz_materialization_lag                   ""
+mz_mcp_data_product_details              ""
+mz_mcp_data_products                     ""
 mz_notices                               ""
 mz_notices_redacted                      ""
 mz_object_fully_qualified_names          ""
@@ -651,6 +653,10 @@ mz_object_lifetimes                      ""
 mz_object_oid_alias                      ""
 mz_object_transitive_dependencies        ""
 mz_objects_id_namespace_types            ""
+mz_ontology_entity_types                 ""
+mz_ontology_link_types                   ""
+mz_ontology_properties                   ""
+mz_ontology_semantic_types               ""
 mz_recent_activity_log                   ""
 mz_recent_activity_log_thinned           ""
 mz_recent_activity_log_redacted          ""
@@ -707,6 +713,16 @@ pg_namespace_all_databases               ""
 pg_description_all_databases             ""
 pg_attrdef_all_databases                 ""
 pg_attribute_all_databases               ""
+pg_authid_core                           ""
+
+> SHOW MATERIALIZED VIEWS FROM mz_internal
+name                   cluster             comment
+----------------------------------------------------
+mz_cluster_workload_classes    mz_catalog_server   ""
+mz_internal_cluster_replicas   mz_catalog_server   ""
+mz_network_policies            mz_catalog_server   ""
+mz_network_policy_rules        mz_catalog_server   ""
+mz_pending_cluster_replicas    mz_catalog_server   ""
 
 # Check default sources, tables, and views in mz_introspection.
 
@@ -731,11 +747,11 @@ mz_compute_import_frontiers_per_worker       log   <null>    ""
 mz_compute_lir_mapping_per_worker            log   <null>    ""
 mz_compute_operator_durations_histogram_raw  log   <null>    ""
 mz_compute_operator_hydration_statuses_per_worker log <null> ""
+mz_cluster_prometheus_metrics     log   <null>    ""
 mz_dataflow_addresses_per_worker             log   <null>    ""
 mz_dataflow_channels_per_worker              log   <null>    ""
 mz_dataflow_operator_reachability_raw        log   <null>    ""
 mz_dataflow_operators_per_worker             log   <null>    ""
-mz_dataflow_shutdown_durations_histogram_raw log   <null>    ""
 mz_message_counts_received_raw               log   <null>    ""
 mz_message_counts_sent_raw                   log   <null>    ""
 mz_message_batch_counts_received_raw         log   <null>    ""
@@ -772,8 +788,6 @@ mz_dataflow_operator_parents_per_worker ""
 mz_dataflow_operator_reachability ""
 mz_dataflow_operator_reachability_per_worker ""
 mz_dataflow_operators ""
-mz_dataflow_shutdown_durations_histogram ""
-mz_dataflow_shutdown_durations_histogram_per_worker ""
 mz_dataflows ""
 mz_dataflows_per_worker ""
 mz_expected_group_size_advice ""
@@ -805,11 +819,11 @@ test_table ""
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-64
+53
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-263
+264
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2
@@ -854,3 +868,19 @@ $ psql-execute command="\dT"
  mz_catalog | uint4             |
  mz_catalog | uint8             |
  public     | type1             |
+
+# Test that optimizer notices don't break catalog consistency checks.
+# Creating a duplicate index generates an "identical index already
+# exists" notice with non-empty dependencies, which populates
+# notices_by_dep_id in CatalogState. The consistency check (which
+# compares in-memory vs on-disk catalog state) must not fail due to
+# this — notices_by_dep_id should be #[serde(skip)] since the on-disk
+# catalog doesn't run bootstrap.
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_mz_notices TO true;
+
+> CREATE TABLE notice_test_tbl (a int)
+
+> CREATE INDEX notice_test_idx ON notice_test_tbl (a)
+
+> CREATE INDEX notice_test_idx_dup ON notice_test_tbl (a)

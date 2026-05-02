@@ -14,9 +14,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use chrono::Utc;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryFutureExt};
+use k8s_openapi::jiff::Timestamp;
 use kube::api::{DeleteParams, ListParams, ObjectMeta, Patch, PatchParams};
 use kube::runtime::{WatchStreamExt, watcher};
 use kube::{Api, ResourceExt};
@@ -143,7 +143,7 @@ impl CloudResourceController for KubernetesOrchestrator {
                                 .conditions
                                 .and_then(|c| c.into_iter().find(|c| &c.type_ == "Available"))
                                 .and_then(|condition| Some(condition.last_transition_time.0))
-                                .unwrap_or_else(Utc::now),
+                                .unwrap_or_else(Timestamp::now),
                         })
                     } else {
                         // The Status/State is not yet populated on the VpcEndpoint, which means it was just

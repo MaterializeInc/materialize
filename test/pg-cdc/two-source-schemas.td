@@ -38,6 +38,8 @@ CREATE TABLE schema2.t1 (f1 INTEGER);
 ALTER TABLE schema2.t1 REPLICA IDENTITY FULL;
 INSERT INTO schema2.t1 VALUES (2);
 
+ANALYZE;
+
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres

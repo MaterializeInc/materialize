@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::error::Error;
-use std::fmt::{self, Debug, Display};
+use std::fmt::{self, Debug};
 
 use itertools::Itertools;
 use mz_ore::assert_none;
@@ -17,14 +17,14 @@ use mz_persist_types::schema::SchemaId;
 use mz_persist_types::stats::PartStats;
 use mz_persist_types::txn::{TxnsCodec, TxnsEntry};
 use mz_persist_types::{PersistLocation, ShardId};
-use mz_repr::{Datum, GlobalId, RelationDesc, Row, SqlScalarType};
+use mz_repr::{Datum, GlobalId, RelationDesc, Row, SqlScalarType, Timestamp};
 use mz_sql_parser::ast::UnresolvedItemName;
 use mz_timely_util::antichain::AntichainExt;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 use tracing::error;
 
-use crate::errors::DataflowError;
+use crate::errors::{CollectionMissing, DataflowError};
 use crate::instances::StorageInstanceId;
 use crate::sources::SourceData;
 
@@ -87,7 +87,7 @@ pub struct DurableCollectionMetadata {
 }
 
 #[derive(Debug)]
-pub enum StorageError<T> {
+pub enum StorageError {
     /// The source identifier was re-created after having been dropped,
     /// or installed with a different description.
     CollectionIdReused(GlobalId),
@@ -103,7 +103,7 @@ pub enum StorageError<T> {
     /// The read was at a timestamp before the collection's since
     ReadBeforeSince(GlobalId),
     /// The expected upper of one or more appends was different from the actual upper of the collection
-    InvalidUppers(Vec<InvalidUpper<T>>),
+    InvalidUppers(Vec<InvalidUpper>),
     /// The (client for) the requested cluster instance is missing.
     IngestionInstanceMissing {
         storage_instance_id: StorageInstanceId,
@@ -161,7 +161,7 @@ pub enum StorageError<T> {
     ReadOnly,
 }
 
-impl<T: Debug + Display + 'static> Error for StorageError<T> {
+impl Error for StorageError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::CollectionIdReused(_) => None,
@@ -192,7 +192,7 @@ impl<T: Debug + Display + 'static> Error for StorageError<T> {
     }
 }
 
-impl<T: fmt::Display + 'static> fmt::Display for StorageError<T> {
+impl fmt::Display for StorageError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("storage error: ")?;
         match self {
@@ -302,9 +302,9 @@ impl<T: fmt::Display + 'static> fmt::Display for StorageError<T> {
 }
 
 #[derive(Debug, Clone)]
-pub struct InvalidUpper<T> {
+pub struct InvalidUpper {
     pub id: GlobalId,
-    pub current_upper: Antichain<T>,
+    pub current_upper: Antichain<Timestamp>,
 }
 
 #[derive(Debug)]
@@ -320,15 +320,21 @@ impl fmt::Display for AlterError {
     }
 }
 
-impl<T> From<AlterError> for StorageError<T> {
+impl From<AlterError> for StorageError {
     fn from(error: AlterError) -> Self {
         Self::InvalidAlter(error)
     }
 }
 
-impl<T> From<DataflowError> for StorageError<T> {
+impl From<DataflowError> for StorageError {
     fn from(error: DataflowError) -> Self {
         Self::DataflowError(error)
+    }
+}
+
+impl From<CollectionMissing> for StorageError {
+    fn from(err: CollectionMissing) -> Self {
+        Self::IdentifierMissing(err.0)
     }
 }
 

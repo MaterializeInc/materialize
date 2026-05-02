@@ -10,6 +10,7 @@
 use std::collections::BTreeMap;
 
 use maplit::btreemap;
+use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{CatalogItem, View};
 use mz_expr::CollectionPlan;
 use mz_ore::instrument;
@@ -28,6 +29,7 @@ use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::{
     Coordinator, CreateViewExplain, CreateViewFinish, CreateViewOptimize, CreateViewStage,
     ExplainContext, ExplainPlanContext, Message, PlanValidity, StageResult, Staged,
+    infer_sql_type_for_catalog,
 };
 use crate::error::AdapterError;
 use crate::explain::explain_plan;
@@ -188,7 +190,7 @@ impl Coordinator {
 
     #[instrument]
     pub(crate) fn explain_view(
-        &mut self,
+        &self,
         ctx: &ExecuteContext,
         plan::ExplainPlanPlan {
             stage,
@@ -222,7 +224,7 @@ impl Coordinator {
                 target_cluster,
             )?,
             ExplainStage::LocalPlan => explain_plan(
-                view.optimized_expr.as_inner().clone(),
+                view.locally_optimized_expr.as_inner().clone(),
                 format,
                 &config,
                 &features,
@@ -242,7 +244,7 @@ impl Coordinator {
 
     #[instrument]
     fn create_view_validate(
-        &mut self,
+        &self,
         plan: plan::CreateViewPlan,
         resolved_ids: ResolvedIds,
         // An optional context set iff the state machine is initiated from
@@ -285,8 +287,7 @@ impl Coordinator {
             explain_ctx,
         }: CreateViewOptimize,
     ) -> Result<StageResult<Box<CreateViewStage>>, AdapterError> {
-        let id_ts = self.get_catalog_write_ts().await;
-        let (item_id, global_id) = self.catalog().allocate_user_id(id_ts).await?;
+        let (item_id, global_id) = self.allocate_user_id().await?;
 
         // Collect optimizer parameters.
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
@@ -391,6 +392,7 @@ impl Coordinator {
             ..
         }: CreateViewFinish,
     ) -> Result<StageResult<Box<CreateViewStage>>, AdapterError> {
+        let typ = infer_sql_type_for_catalog(&raw_expr, &optimized_expr);
         let ops = vec![
             catalog::Op::DropObjects(
                 drop_ids
@@ -405,8 +407,8 @@ impl Coordinator {
                     create_sql: create_sql.clone(),
                     global_id,
                     raw_expr: raw_expr.into(),
-                    desc: RelationDesc::new(optimized_expr.typ(), column_names.clone()),
-                    optimized_expr: optimized_expr.into(),
+                    desc: RelationDesc::new(typ, column_names.clone()),
+                    locally_optimized_expr: optimized_expr.into(),
                     conn_id: if temporary {
                         Some(session.conn_id().clone())
                     } else {
@@ -422,8 +424,7 @@ impl Coordinator {
         match self.catalog_transact(Some(session), ops).await {
             Ok(()) => Ok(StageResult::Response(ExecuteResponse::CreatedView)),
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
-                kind:
-                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+                kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
                 session.add_notice(AdapterNotice::ObjectAlreadyExists {
                     name: name.item,
@@ -437,7 +438,7 @@ impl Coordinator {
 
     #[instrument]
     async fn create_view_explain(
-        &mut self,
+        &self,
         session: &Session,
         CreateViewExplain {
             id,

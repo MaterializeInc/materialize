@@ -22,6 +22,7 @@ use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{CollectionPlan, Id, LetRecLimit, RowSetFinishing, func};
 // these happen to be unchanged at the moment, but there might be additions later
 use mz_expr::AggregateFunc::{FusedWindowAggregate, WindowAggregate};
+use mz_expr::func::variadic::{And, Or};
 pub use mz_expr::{
     BinaryFunc, ColumnOrder, TableFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc, WindowFrame,
 };
@@ -92,7 +93,17 @@ impl AlgExcept for Hir {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 /// Just like [`mz_expr::MirRelationExpr`], except where otherwise noted below.
 pub enum HirRelationExpr {
     Constant {
@@ -199,7 +210,17 @@ pub enum HirRelationExpr {
 /// Stored column metadata.
 pub type NameMetadata = TreatAsEqual<Option<Arc<str>>>;
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 /// Just like [`mz_expr::MirScalarExpr`], except where otherwise noted below.
 pub enum HirScalarExpr {
     /// Unlike mz_expr::MirScalarExpr, we can nest HirRelationExprs via eg Exists. This means that a
@@ -241,7 +262,17 @@ pub enum HirScalarExpr {
     Windowing(WindowExpr, NameMetadata),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 /// Represents the invocation of a window function over an optional partitioning with an optional
 /// order.
 pub struct WindowExpr {
@@ -350,7 +381,17 @@ impl VisitChildren<HirScalarExpr> for WindowExpr {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 /// A window function with its parameters.
 ///
 /// There are three types of window functions:
@@ -462,7 +503,17 @@ impl VisitChildren<HirScalarExpr> for WindowExprType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 pub struct ScalarWindowExpr {
     pub func: ScalarWindowFunc,
     pub order_by: Vec<ColumnOrder>,
@@ -501,7 +552,7 @@ impl ScalarWindowExpr {
         _inner: &SqlRelationType,
         _params: &BTreeMap<usize, SqlScalarType>,
     ) -> SqlColumnType {
-        self.func.output_type()
+        self.func.output_sql_type()
     }
 
     pub fn into_expr(self) -> mz_expr::AggregateFunc {
@@ -519,7 +570,17 @@ impl ScalarWindowExpr {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 /// Scalar Window functions
 pub enum ScalarWindowFunc {
     RowNumber,
@@ -538,7 +599,7 @@ impl Display for ScalarWindowFunc {
 }
 
 impl ScalarWindowFunc {
-    pub fn output_type(&self) -> SqlColumnType {
+    pub fn output_sql_type(&self) -> SqlColumnType {
         match self {
             ScalarWindowFunc::RowNumber => SqlScalarType::Int64.nullable(false),
             ScalarWindowFunc::Rank => SqlScalarType::Int64.nullable(false),
@@ -547,7 +608,17 @@ impl ScalarWindowFunc {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 pub struct ValueWindowExpr {
     pub func: ValueWindowFunc,
     /// If the argument list has a single element (e.g., for `first_value`), then it's that element.
@@ -597,7 +668,8 @@ impl ValueWindowExpr {
         inner: &SqlRelationType,
         params: &BTreeMap<usize, SqlScalarType>,
     ) -> SqlColumnType {
-        self.func.output_type(self.args.typ(outers, inner, params))
+        self.func
+            .output_sql_type(self.args.typ(outers, inner, params))
     }
 
     /// Converts into `mz_expr::AggregateFunc`.
@@ -642,7 +714,17 @@ impl VisitChildren<HirScalarExpr> for ValueWindowExpr {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 /// Value Window functions
 pub enum ValueWindowFunc {
     Lag,
@@ -653,7 +735,7 @@ pub enum ValueWindowFunc {
 }
 
 impl ValueWindowFunc {
-    pub fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+    pub fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         match self {
             ValueWindowFunc::Lag | ValueWindowFunc::Lead => {
                 // The input is a (value, offset, default) record, so extract the type of the first arg
@@ -670,7 +752,7 @@ impl ValueWindowFunc {
                     fields: funcs
                         .iter()
                         .zip_eq(input_types)
-                        .map(|(f, t)| (ColumnName::from(""), f.output_type(t.clone())))
+                        .map(|(f, t)| (ColumnName::from(""), f.output_sql_type(t.clone())))
                         .collect(),
                     custom_id: None,
                 }
@@ -718,7 +800,17 @@ impl ValueWindowFunc {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 pub struct AggregateWindowExpr {
     pub aggregate_expr: AggregateExpr,
     pub order_by: Vec<ColumnOrder>,
@@ -750,7 +842,7 @@ impl AggregateWindowExpr {
     ) -> SqlColumnType {
         self.aggregate_expr
             .func
-            .output_type(self.aggregate_expr.expr.typ(outers, inner, params))
+            .output_sql_type(self.aggregate_expr.expr.typ(outers, inner, params))
     }
 
     pub fn into_expr(self) -> (Box<HirScalarExpr>, mz_expr::AggregateFunc) {
@@ -853,8 +945,8 @@ impl CoercibleScalarExpr {
             sql_bail!(
                 "{} must have type {}, not type {}",
                 ecx.name,
-                ecx.humanize_scalar_type(ty, false),
-                ecx.humanize_scalar_type(&expr_ty, false),
+                ecx.humanize_sql_scalar_type(ty, false),
+                ecx.humanize_sql_scalar_type(&expr_ty, false),
             );
         }
         Ok(expr)
@@ -1058,7 +1150,18 @@ impl From<HirScalarExpr> for CoercibleScalarExpr {
 /// from the reference, using `column` as a unique identifier in that subquery level.
 /// A `level` of zero corresponds to the current scope, and levels increase to
 /// indicate subqueries further "outwards".
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize
+)]
 pub struct ColumnRef {
     // scope level, where 0 is the current scope and 1+ are outer scopes.
     pub level: usize,
@@ -1066,7 +1169,17 @@ pub struct ColumnRef {
     pub column: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 pub enum JoinKind {
     Inner,
     LeftOuter,
@@ -1096,9 +1209,33 @@ impl JoinKind {
             JoinKind::RightOuter | JoinKind::FullOuter => false,
         }
     }
+
+    pub fn can_elide_identity_left_join(&self) -> bool {
+        match self {
+            JoinKind::Inner | JoinKind::RightOuter => true,
+            JoinKind::LeftOuter | JoinKind::FullOuter => false,
+        }
+    }
+
+    pub fn can_elide_identity_right_join(&self) -> bool {
+        match self {
+            JoinKind::Inner | JoinKind::LeftOuter => true,
+            JoinKind::RightOuter | JoinKind::FullOuter => false,
+        }
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 pub struct AggregateExpr {
     pub func: AggregateFunc,
     pub expr: Box<HirScalarExpr>,
@@ -1112,7 +1249,17 @@ pub struct AggregateExpr {
 /// here than in `expr`, as these aggregates may be applied over empty
 /// result sets and should be null in those cases, whereas `expr` variants
 /// only return null values when supplied nulls as input.
-#[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 pub enum AggregateFunc {
     MaxNumeric,
     MaxInt16,
@@ -1367,7 +1514,7 @@ impl AggregateFunc {
     /// The output column type also contains nullability information, which
     /// is (without further information) true for aggregations that are not
     /// counts.
-    pub fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+    pub fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         let scalar_type = match self {
             AggregateFunc::Count => SqlScalarType::Int64,
             AggregateFunc::Any => SqlScalarType::Bool,
@@ -1438,7 +1585,7 @@ impl AggregateFunc {
                     fields: funcs
                         .iter()
                         .zip_eq(input_types)
-                        .map(|(f, t)| (ColumnName::from(""), f.output_type(t.clone())))
+                        .map(|(f, t)| (ColumnName::from(""), f.output_sql_type(t.clone())))
                         .collect(),
                     custom_id: None,
                 }
@@ -1464,6 +1611,15 @@ impl AggregateFunc {
 }
 
 impl HirRelationExpr {
+    /// Gets the SQL type of a self-contained, top-level expression.
+    pub fn top_level_typ(&self) -> SqlRelationType {
+        self.typ(&[], &BTreeMap::new())
+    }
+
+    /// Gets the SQL type of the expression.
+    ///
+    /// `outers` gives types for outer relations.
+    /// `params` gives types for parameters.
     pub fn typ(
         &self,
         outers: &[SqlRelationType],
@@ -1490,7 +1646,7 @@ impl HirRelationExpr {
                 }
                 typ
             }
-            HirRelationExpr::CallTable { func, exprs: _ } => func.output_type(),
+            HirRelationExpr::CallTable { func, exprs: _ } => func.output_sql_type(),
             HirRelationExpr::Filter { input, .. } | HirRelationExpr::TopK { input, .. } => {
                 input.typ(outers, params)
             }
@@ -1544,7 +1700,7 @@ impl HirRelationExpr {
                         .iter_mut()
                         .zip_eq(input.typ(outers, params).column_types)
                     {
-                        *base_col = base_col.union(&col).unwrap();
+                        *base_col = base_col.sql_union(&col).unwrap(); // HIR deliberately not using `union`
                     }
                 }
                 SqlRelationType::new(base_cols)
@@ -1752,7 +1908,10 @@ impl HirRelationExpr {
         on: HirScalarExpr,
         kind: JoinKind,
     ) -> HirRelationExpr {
-        if self.is_join_identity() && !right.is_correlated() && on == HirScalarExpr::literal_true()
+        if self.is_join_identity()
+            && !right.is_correlated()
+            && on == HirScalarExpr::literal_true()
+            && kind.can_elide_identity_left_join()
         {
             // The join can be elided, but we need to adjust column references
             // on the right-hand side to account for the removal of the scope
@@ -1764,7 +1923,10 @@ impl HirRelationExpr {
                 }
             });
             right
-        } else if right.is_join_identity() && on == HirScalarExpr::literal_true() {
+        } else if right.is_join_identity()
+            && on == HirScalarExpr::literal_true()
+            && kind.can_elide_identity_right_join()
+        {
             self
         } else {
             HirRelationExpr::Join {
@@ -2218,8 +2380,9 @@ impl HirRelationExpr {
     /// The HirRelationExpr is considered potentially expensive if and only if
     /// at least one of the following conditions is true:
     ///
-    ///  - It contains at least one CallTable or a Reduce operator.
     ///  - It contains at least one HirScalarExpr with a function call.
+    ///  - It contains at least one CallTable or a Reduce operator.
+    ///  - We run into a RecursionLimitError while analyzing the expression.
     ///
     /// !!!WARNING!!!: this method has an MirRelationExpr counterpart. The two
     /// should be kept in sync w.r.t. HIR ⇒ MIR lowering!
@@ -2229,7 +2392,7 @@ impl HirRelationExpr {
             use HirRelationExpr::*;
             use HirScalarExpr::*;
 
-            self.visit_children(|scalar: &HirScalarExpr| {
+            e.visit_children(|scalar: &HirScalarExpr| {
                 if let Err(_) = scalar.visit_pre(&mut |scalar: &HirScalarExpr| {
                     result |= match scalar {
                         Column(..)
@@ -2283,11 +2446,27 @@ impl HirRelationExpr {
         })?;
         Ok(contains)
     }
+
+    /// Whether the expression contains any [`UnmaterializableFunc`] call other than
+    /// [`UnmaterializableFunc::MzNow`].
+    pub fn contains_unmaterializable_except_temporal(&self) -> Result<bool, RecursionLimitError> {
+        let mut contains = false;
+        self.visit_post(&mut |expr| {
+            expr.visit_children(|expr: &HirScalarExpr| {
+                contains = contains || expr.contains_unmaterializable_except_temporal()
+            })
+        })?;
+        Ok(contains)
+    }
 }
 
 impl CollectionPlan for HirRelationExpr {
-    // !!!WARNING!!!: this method has an MirRelationExpr counterpart. The two
-    // should be kept in sync w.r.t. HIR ⇒ MIR lowering!
+    /// Collects the global collections that this HIR expression directly depends on, i.e., that it
+    /// has a `Get` for. (It does _not_ traverse view definitions transitively.)
+    /// (It does explore inside subqueries.)
+    ///
+    /// !!!WARNING!!!: this method has an MirRelationExpr counterpart. The two
+    /// should be kept in sync w.r.t. HIR ⇒ MIR lowering!
     fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>) {
         if let Self::Get {
             id: Id::Global(id), ..
@@ -3084,6 +3263,21 @@ impl HirScalarExpr {
         contains
     }
 
+    /// Whether the expression contains any [`UnmaterializableFunc`] call other than
+    /// [`UnmaterializableFunc::MzNow`].
+    pub fn contains_unmaterializable_except_temporal(&self) -> bool {
+        let mut contains = false;
+        #[allow(deprecated)]
+        self.visit_post_nolimit(&mut |e| {
+            if let Self::CallUnmaterializable(f, _) = e {
+                if *f != UnmaterializableFunc::MzNow {
+                    contains = true;
+                }
+            }
+        });
+        contains
+    }
+
     /// Constructs an unnamed column reference in the current scope.
     /// Use [`HirScalarExpr::named_column`] when a name is known.
     /// Use [`HirScalarExpr::unnamed_column`] for a `ColumnRef`.
@@ -3244,9 +3438,9 @@ impl HirScalarExpr {
         HirScalarExpr::CallUnmaterializable(func, NameMetadata::default())
     }
 
-    pub fn call_variadic(func: VariadicFunc, exprs: Vec<Self>) -> Self {
+    pub fn call_variadic<V: Into<VariadicFunc>>(func: V, exprs: Vec<Self>) -> Self {
         HirScalarExpr::CallVariadic {
-            func,
+            func: func.into(),
             exprs,
             name: NameMetadata::default(),
         }
@@ -3266,11 +3460,11 @@ impl HirScalarExpr {
     }
 
     pub fn or(self, other: Self) -> Self {
-        HirScalarExpr::call_variadic(VariadicFunc::Or, vec![self, other])
+        HirScalarExpr::call_variadic(Or, vec![self, other])
     }
 
     pub fn and(self, other: Self) -> Self {
-        HirScalarExpr::call_variadic(VariadicFunc::And, vec![self, other])
+        HirScalarExpr::call_variadic(And, vec![self, other])
     }
 
     pub fn not(self) -> Self {
@@ -3286,7 +3480,7 @@ impl HirScalarExpr {
         match args.len() {
             0 => HirScalarExpr::literal_true(), // Same as unit_of_and_or, but that's MirScalarExpr
             1 => args.swap_remove(0),
-            _ => HirScalarExpr::call_variadic(VariadicFunc::And, args),
+            _ => HirScalarExpr::call_variadic(And, args),
         }
     }
 
@@ -3295,7 +3489,7 @@ impl HirScalarExpr {
         match args.len() {
             0 => HirScalarExpr::literal_false(), // Same as unit_of_and_or, but that's MirScalarExpr
             1 => args.swap_remove(0),
-            _ => HirScalarExpr::call_variadic(VariadicFunc::Or, args),
+            _ => HirScalarExpr::call_variadic(Or, args),
         }
     }
 
@@ -3480,7 +3674,12 @@ impl HirScalarExpr {
     /// - a parameter
     /// - a window function call
     fn simplify_to_literal(self) -> Option<Row> {
-        let mut expr = self.lower_uncorrelated().ok()?;
+        let mut expr = self
+            .lower_uncorrelated(crate::plan::lowering::Config::default())
+            .ok()?;
+        // Using MIR evaluation with repr types is fine here: the
+        // result is an untyped Row, so any intermediate type
+        // canonicalization is discarded.
         expr.reduce(&[]);
         match expr {
             mz_expr::MirScalarExpr::Literal(Ok(row), _) => Some(row),
@@ -3501,9 +3700,14 @@ impl HirScalarExpr {
     /// TODO: use this everywhere instead of `simplify_to_literal`, so that we don't hide the error
     /// msg.
     fn simplify_to_literal_with_result(self) -> Result<Row, PlanError> {
-        let mut expr = self.lower_uncorrelated().map_err(|err| {
-            PlanError::ConstantExpressionSimplificationFailed(err.to_string_with_causes())
-        })?;
+        let mut expr = self
+            .lower_uncorrelated(crate::plan::lowering::Config::default())
+            .map_err(|err| {
+                PlanError::ConstantExpressionSimplificationFailed(err.to_string_with_causes())
+            })?;
+        // Using MIR evaluation with repr types is fine here: the
+        // result is an untyped Row, so any intermediate type
+        // canonicalization is discarded.
         expr.reduce(&[]);
         match expr {
             mz_expr::MirScalarExpr::Literal(Ok(row), _) => Ok(row),
@@ -3783,26 +3987,26 @@ impl AbstractExpr for HirScalarExpr {
             }
             HirScalarExpr::Parameter(n, _name) => params[n].clone().nullable(true),
             HirScalarExpr::Literal(_, typ, _name) => typ.clone(),
-            HirScalarExpr::CallUnmaterializable(func, _name) => func.output_type(),
+            HirScalarExpr::CallUnmaterializable(func, _name) => func.output_sql_type(),
             HirScalarExpr::CallUnary {
                 expr,
                 func,
                 name: _,
-            } => func.output_type(expr.typ(outers, inner, params)),
+            } => func.output_sql_type(expr.typ(outers, inner, params)),
             HirScalarExpr::CallBinary {
                 expr1,
                 expr2,
                 func,
                 name: _,
-            } => func.output_type(
+            } => func.output_sql_type(&[
                 expr1.typ(outers, inner, params),
                 expr2.typ(outers, inner, params),
-            ),
+            ]),
             HirScalarExpr::CallVariadic {
                 exprs,
                 func,
                 name: _,
-            } => func.output_type(exprs.iter().map(|e| e.typ(outers, inner, params)).collect()),
+            } => func.output_sql_type(exprs.iter().map(|e| e.typ(outers, inner, params)).collect()),
             HirScalarExpr::If {
                 cond: _,
                 then,
@@ -3811,7 +4015,7 @@ impl AbstractExpr for HirScalarExpr {
             } => {
                 let then_type = then.typ(outers, inner, params);
                 let else_type = els.typ(outers, inner, params);
-                then_type.union(&else_type).unwrap()
+                then_type.sql_union(&else_type).unwrap() // HIR deliberately not using `union`
             }
             HirScalarExpr::Exists(_, _name) => SqlScalarType::Bool.nullable(true),
             HirScalarExpr::Select(expr, _name) => {
@@ -3834,7 +4038,8 @@ impl AggregateExpr {
         inner: &SqlRelationType,
         params: &BTreeMap<usize, SqlScalarType>,
     ) -> SqlColumnType {
-        self.func.output_type(self.expr.typ(outers, inner, params))
+        self.func
+            .output_sql_type(self.expr.typ(outers, inner, params))
     }
 
     /// Returns whether the expression is COUNT(*) or not.  Note that

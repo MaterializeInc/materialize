@@ -112,6 +112,11 @@ class Worker:
                     self.num_queries[type(action)] += 1
             except QueryError as e:
                 self.num_queries[type(action)] += 1
+                # TODO(def-): Reduce number of errors for temp tables/views? At
+                # least the errors will be fast, so maybe not worth it
+                # if "temp" in e.msg:
+                #     print(e.query)
+                #     print(e.msg)
                 for error_to_ignore in action.errors_to_ignore(self.exe):
                     if error_to_ignore in e.msg:
                         self.ignored_errors[error_to_ignore][type(action)] += 1

@@ -50,6 +50,12 @@ class PostgresRecvlogical(MzComposeService):
             f"{replication_slot_name}",
             "--file",
             "-",
+            # We pass the maximum allowed fsync-interval (~24 days) to prevent
+            # this process from advancing the slot. The purpose of this reader
+            # is to just mark the slot as busy, not to move its reserved WAL
+            # forward.
+            "--fsync-interval",
+            "2147483",
             "--dbname",
             "postgres",
             "--host",
@@ -86,7 +92,9 @@ def create_postgres(
     else:
         image = f"postgres:{pg_version}"
 
-    return Postgres(image=image, extra_command=extra_command)
+    return Postgres(
+        image=image, extra_command=extra_command, volumes=["secrets:/certs:ro"]
+    )
 
 
 SERVICES = [
@@ -94,7 +102,7 @@ SERVICES = [
     Materialized(
         volumes_extra=["secrets:/share/secrets"],
         additional_system_parameter_defaults={
-            "log_filter": "mz_storage::source::postgres=trace,debug,info,warn,error"
+            "log_filter": "mz_storage::source::postgres=trace,info"
         },
         default_replication_factor=2,
     ),
@@ -300,6 +308,11 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
     matching_files = []
     for filter in args.filter:
         matching_files.extend(glob.glob(filter, root_dir=MZ_ROOT / "test" / "pg-cdc"))
+
+    if pg_version is not None:
+        # Vanilla Postgres images don't have SSL configured, skip SSL tests
+        matching_files = [f for f in matching_files if not f.startswith("pg-cdc-ssl")]
+
     sharded_files: list[str] = buildkite.shard_list(
         sorted(matching_files), lambda file: file
     )
@@ -315,6 +328,9 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
     ssl_wrong_key = c.run(
         "test-certs", "cat", "/secrets/postgres.key", capture=True
     ).stdout
+    ssl_ca_unrelated = c.run(
+        "test-certs", "cat", "/secrets/ca-selective.crt", capture=True
+    ).stdout
 
     with c.override(create_postgres(pg_version=pg_version)):
         c.up("materialized", "test-certs", "postgres")
@@ -326,6 +342,7 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
                 f"--var=ssl-key={ssl_key}",
                 f"--var=ssl-wrong-cert={ssl_wrong_cert}",
                 f"--var=ssl-wrong-key={ssl_wrong_key}",
+                f"--var=ssl-ca-unrelated={ssl_ca_unrelated}",
                 f"--var=default-replica-size=scale={Materialized.Size.DEFAULT_SIZE},workers={Materialized.Size.DEFAULT_SIZE}",
                 f"--var=default-storage-size=scale={Materialized.Size.DEFAULT_SIZE},workers=1",
                 file,
@@ -347,9 +364,7 @@ def workflow_large_scale(c: Composition, parser: WorkflowArgumentParser) -> None
 
         # Set up the Postgres server with the initial records, set up the connection to
         # the Postgres server in Materialize.
-        c.testdrive(
-            dedent(
-                """
+        c.testdrive(dedent("""
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 ALTER USER postgres WITH replication;
                 DROP SCHEMA IF EXISTS public CASCADE;
@@ -366,19 +381,15 @@ def workflow_large_scale(c: Composition, parser: WorkflowArgumentParser) -> None
                 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
                 > DROP SOURCE IF EXISTS s1 CASCADE;
-                """
-            )
-        )
+                """))
 
     def make_inserts(c: Composition, start: int, batch_num: int):
         c.testdrive(
             args=["--no-reset"],
-            input=dedent(
-                f"""
+            input=dedent(f"""
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO products (id, name, merchant_id, price, status, created_at, recordSizePayload) SELECT {start} + row_number() OVER (), 'name' || ({start} + row_number() OVER ()), ({start} + row_number() OVER ()) % 1000, ({start} + row_number() OVER ()) % 1000, ({start} + row_number() OVER ()) % 10, '2024-12-12'::DATE, repeat('x', 1000000) FROM generate_series(1, {batch_num});
-            """
-            ),
+            """),
         )
 
     num_rows = 100_000  # out of memory with 200_000 rows
@@ -387,39 +398,41 @@ def workflow_large_scale(c: Composition, parser: WorkflowArgumentParser) -> None
         batch_num = min(batch_size, num_rows - i)
         make_inserts(c, i, batch_num)
 
+    # Update pg_class.relpages so Materialize's ctid-based parallel snapshot
+    # can partition across workers from the first read.
     c.testdrive(
         args=["--no-reset"],
-        input=dedent(
-            f"""
+        input=dedent("""
+            $ postgres-execute connection=postgres://postgres:postgres@postgres
+            ANALYZE products;
+        """),
+    )
+
+    c.testdrive(
+        args=["--no-reset"],
+        input=dedent(f"""
             > CREATE SOURCE s1
               FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
             > CREATE TABLE products FROM SOURCE s1 (REFERENCE products);
             > SELECT COUNT(*) FROM products;
             {num_rows}
-            """
-        ),
+            """),
     )
 
     make_inserts(c, num_rows, 1)
 
     c.testdrive(
         args=["--no-reset"],
-        input=dedent(
-            f"""
+        input=dedent(f"""
             > SELECT COUNT(*) FROM products;
             {num_rows + 1}
-            """
-        ),
+            """),
     )
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     def process(name: str) -> None:
         if name in ("default", "large-scale"):
-            return
-
-        # TODO: Flaky, reenable when database-issues#8447 is fixed
-        if name == "silent-connection-drop":
             return
 
         c.kill("postgres")

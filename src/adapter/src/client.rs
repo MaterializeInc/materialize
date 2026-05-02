@@ -22,6 +22,7 @@ use futures::{Stream, StreamExt};
 use itertools::Itertools;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_auth::password::Password;
+use mz_auth::{Authenticated, AuthenticatorKind};
 use mz_build_info::BuildInfo;
 use mz_compute_types::ComputeInstanceId;
 use mz_ore::channel::OneshotReceiverExt;
@@ -29,41 +30,41 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::{IdAllocator, IdAllocatorInnerBitSet, MAX_ORG_ID, org_id_conn_bits};
 use mz_ore::instrument;
 use mz_ore::now::{EpochMillis, NowFn, to_datetime};
-use mz_ore::result::ResultExt;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::thread::JoinOnDropHandle;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::{CatalogItemId, ColumnIndex, Row, SqlScalarType};
+use mz_repr::user::InternalUserMetadata;
+use mz_repr::{CatalogItemId, ColumnIndex, SqlScalarType};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{EnvironmentId, SessionCatalog};
 use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::SUPPORT_USER;
-use mz_sql::session::vars::{CLUSTER, OwnedVarInput, SystemVars, Var};
+use mz_sql::session::vars::{
+    CLUSTER, ENABLE_FRONTEND_PEEK_SEQUENCING, OwnedVarInput, SystemVars, Var,
+};
 use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
 use prometheus::Histogram;
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
-use tracing::error;
+use tracing::{debug, error};
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
 use crate::command::{
-    AuthResponse, CatalogDump, CatalogSnapshot, Command, ExecuteResponse, Response,
-    SASLChallengeResponse, SASLVerifyProofResponse,
+    CatalogDump, CatalogSnapshot, Command, CopyFromStdinWriter, ExecuteResponse, Response,
+    SASLChallengeResponse, SASLVerifyProofResponse, SuperuserAttribute,
 };
-use crate::coord::{Coordinator, ExecuteContextExtra};
+use crate::coord::{Coordinator, ExecuteContextGuard};
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
-use crate::optimize::dataflows::{EvalTime, ExprPrepStyle};
-use crate::optimize::{self, Optimize};
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, SessionConfig, StateRevision, TransactionId,
 };
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::telemetry::{self, EventDetails, SegmentClientExt, StatementFailureType};
 use crate::webhook::AppendWebhookResponse;
-use crate::{AdapterNotice, AppendWebhookError, PeekResponseUnary, StartupResponse};
+use crate::{AdapterNotice, AppendWebhookError, PeekClient, PeekResponseUnary, StartupResponse};
 
 /// A handle to a running coordinator.
 ///
@@ -146,29 +147,35 @@ impl Client {
     /// Creates a new session associated with this client for the given user.
     ///
     /// It is the caller's responsibility to have authenticated the user.
-    pub fn new_session(&self, config: SessionConfig) -> Session {
+    /// We pass in an Authenticated marker as a guardrail to ensure the
+    /// user has authenticated with an authenticator before creating a session.
+    pub fn new_session(&self, config: SessionConfig, _authenticated: Authenticated) -> Session {
         // We use the system clock to determine when a session connected to Materialize. This is not
         // intended to be 100% accurate and correct, so we don't burden the timestamp oracle with
         // generating a more correct timestamp.
         Session::new(self.build_info, config, self.metrics().session_metrics())
     }
 
-    /// Preforms an authentication check for the given user.
+    /// Used by [mz_auth::AuthenticatorKind::Password]
+    /// to verify the provided user's password against the
+    /// stored credentials in the catalog.
     pub async fn authenticate(
         &self,
         user: &String,
         password: &Password,
-    ) -> Result<AuthResponse, AdapterError> {
+    ) -> Result<Authenticated, AdapterError> {
         let (tx, rx) = oneshot::channel();
         self.send(Command::AuthenticatePassword {
             role_name: user.to_string(),
             password: Some(password.clone()),
             tx,
         });
-        let response = rx.await.expect("sender dropped")?;
-        Ok(response)
+        rx.await.expect("sender dropped")?;
+        Ok(Authenticated)
     }
 
+    /// Used by [mz_auth::AuthenticatorKind::Sasl] for SASL-SCRAM authentication.
+    /// This is used prior to [Client::verify_sasl_proof].
     pub async fn generate_sasl_challenge(
         &self,
         user: &String,
@@ -184,13 +191,15 @@ impl Client {
         Ok(response)
     }
 
+    /// Used by [mz_auth::AuthenticatorKind::Sasl] for SASL-SCRAM authentication.
+    /// This is used after [Client::generate_sasl_challenge].
     pub async fn verify_sasl_proof(
         &self,
         user: &String,
         proof: &String,
         nonce: &String,
         mock_hash: &String,
-    ) -> Result<SASLVerifyProofResponse, AdapterError> {
+    ) -> Result<(SASLVerifyProofResponse, Authenticated), AdapterError> {
         let (tx, rx) = oneshot::channel();
         self.send(Command::AuthenticateVerifySASLProof {
             role_name: user.to_string(),
@@ -200,7 +209,17 @@ impl Client {
             tx,
         });
         let response = rx.await.expect("sender dropped")?;
-        Ok(response)
+        Ok((response, Authenticated))
+    }
+
+    /// Checks if a role exists and has the `LOGIN` attribute.
+    pub async fn role_can_login(&self, role_name: &str) -> Result<(), AdapterError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::CheckRoleCanLogin {
+            role_name: role_name.to_string(),
+            tx,
+        });
+        rx.await.expect("sender dropped")
     }
 
     /// Upgrades this client to a session client.
@@ -252,22 +271,47 @@ impl Client {
 
         // Create the client as soon as startup succeeds (before any await points) so its `Drop` can
         // handle termination.
+        // Build the PeekClient with controller handles returned from startup.
+        let StartupResponse {
+            role_id,
+            write_notify,
+            session_defaults,
+            catalog,
+            storage_collections,
+            transient_id_gen,
+            optimizer_metrics,
+            persist_client,
+            statement_logging_frontend,
+            superuser_attribute,
+        } = response;
+
+        let peek_client = PeekClient::new(
+            self.clone(),
+            storage_collections,
+            transient_id_gen,
+            optimizer_metrics,
+            persist_client,
+            statement_logging_frontend,
+        );
+
         let mut client = SessionClient {
             inner: Some(self.clone()),
             session: Some(session),
             timeouts: Timeout::new(),
             environment_id: self.environment_id.clone(),
             segment_client: self.segment_client.clone(),
+            peek_client,
+            enable_frontend_peek_sequencing: false, // initialized below, once we have a ConnCatalog
         };
 
-        let StartupResponse {
-            role_id,
-            write_notify,
-            session_defaults,
-            catalog,
-        } = response;
-
         let session = client.session();
+
+        // Apply the superuser attribute to the session's user if
+        // it exists.
+        if let SuperuserAttribute(Some(superuser)) = superuser_attribute {
+            session.apply_internal_user_metadata(InternalUserMetadata { superuser });
+        }
+
         session.initialize_role_metadata(role_id);
         let vars_mut = session.vars_mut();
         for (name, val) in session_defaults {
@@ -305,7 +349,7 @@ impl Client {
             // formats nicely in both `psql` and the console's SQL shell.
             session.add_notice(AdapterNotice::Welcome(format!(
                 "connected to Materialize v{}
-  Org ID: {}
+  Environment ID: {}
   Region: {}
   User: {}
   Cluster: {}
@@ -318,7 +362,7 @@ Issue a SQL query to get started. Need help?
   Join our Slack community: https://materialize.com/s/chat
     ",
                 session.vars().build_info().semver_version(),
-                self.environment_id.organization_id(),
+                self.environment_id,
                 self.environment_id.region(),
                 session.vars().user().name,
                 cluster_info,
@@ -396,6 +440,10 @@ Issue a SQL query to get started. Need help?
             }
         }
 
+        client.enable_frontend_peek_sequencing = ENABLE_FRONTEND_PEEK_SEQUENCING
+            .require(catalog.system_vars())
+            .is_ok();
+
         Ok(client)
     }
 
@@ -412,18 +460,21 @@ Issue a SQL query to get started. Need help?
     pub async fn support_execute_one(
         &self,
         sql: &str,
-    ) -> Result<Pin<Box<dyn Stream<Item = PeekResponseUnary> + Send + Sync>>, anyhow::Error> {
+    ) -> Result<Pin<Box<dyn Stream<Item = PeekResponseUnary> + Send>>, anyhow::Error> {
         // Connect to the coordinator.
         let conn_id = self.new_conn_id()?;
-        let session = self.new_session(SessionConfig {
-            conn_id,
-            uuid: Uuid::new_v4(),
-            user: SUPPORT_USER.name.clone(),
-            client_ip: None,
-            external_metadata_rx: None,
-            internal_user_metadata: None,
-            helm_chart_version: None,
-        });
+        let session = self.new_session(
+            SessionConfig {
+                conn_id,
+                uuid: Uuid::new_v4(),
+                user: SUPPORT_USER.name.clone(),
+                client_ip: None,
+                external_metadata_rx: None,
+                helm_chart_version: None,
+                authenticator_kind: AuthenticatorKind::None,
+            },
+            Authenticated,
+        );
         let mut session_client = self.startup(session).await?;
 
         // Parse the SQL statement.
@@ -439,10 +490,10 @@ Issue a SQL query to get started. Need help?
             .declare(EMPTY_PORTAL.into(), stmt, sql.to_string())
             .await?;
 
-        match session_client
+        let execute_result = session_client
             .execute(EMPTY_PORTAL.into(), futures::future::pending(), None)
-            .await?
-        {
+            .await?;
+        match execute_result {
             (ExecuteResponse::SendingRowsStreaming { mut rows, .. }, _) => {
                 // We have to only drop the session client _after_ we read the
                 // result. Otherwise the peek will get cancelled right when we
@@ -503,7 +554,7 @@ Issue a SQL query to get started. Need help?
     }
 
     #[instrument(level = "debug")]
-    fn send(&self, cmd: Command) {
+    pub(crate) fn send(&self, cmd: Command) {
         self.inner_cmd_tx
             .send((OpenTelemetryContext::obtain(), cmd))
             .expect("coordinator unexpectedly gone");
@@ -524,6 +575,13 @@ pub struct SessionClient {
     timeouts: Timeout,
     segment_client: Option<mz_segment::Client>,
     environment_id: EnvironmentId,
+    /// Client for frontend peek sequencing; populated at connection startup.
+    peek_client: PeekClient,
+    /// Whether frontend peek sequencing is enabled; initialized at connection startup.
+    // TODO(peek-seq): Currently, this is initialized only at session startup. We'll be able to
+    // check the actual feature flag value at every peek (without a Coordinator call) once we'll
+    // always have a catalog snapshot at hand.
+    pub enable_frontend_peek_sequencing: bool,
 }
 
 impl SessionClient {
@@ -664,14 +722,38 @@ impl SessionClient {
     /// Executes a previously-bound portal.
     ///
     /// Note: the provided `cancel_future` must be cancel-safe as it's polled in a `select!` loop.
+    ///
+    /// `outer_ctx_extra` is Some when we are executing as part of an outer statement, e.g., a FETCH
+    /// triggering the execution of the underlying query.
     #[mz_ore::instrument(level = "debug")]
     pub async fn execute(
         &mut self,
         portal_name: String,
         cancel_future: impl Future<Output = std::io::Error> + Send,
-        outer_ctx_extra: Option<ExecuteContextExtra>,
+        outer_ctx_extra: Option<ExecuteContextGuard>,
     ) -> Result<(ExecuteResponse, Instant), AdapterError> {
         let execute_started = Instant::now();
+
+        // Attempt peek sequencing in the session task.
+        // If unsupported, fall back to the Coordinator path.
+        // TODO(peek-seq): wire up cancel_future
+        let mut outer_ctx_extra = outer_ctx_extra;
+        let peek_result = self
+            .try_frontend_peek(&portal_name, &mut outer_ctx_extra)
+            .await?;
+        if let Some(resp) = peek_result {
+            debug!("frontend peek succeeded");
+            // Frontend peek handled the execution and retired outer_ctx_extra if it existed.
+            // No additional work needed here.
+            return Ok((resp, execute_started));
+        } else {
+            debug!("frontend peek did not happen, falling back to `Command::Execute`");
+            // If we bailed out, outer_ctx_extra is still present (if it was originally).
+            // `Command::Execute` will handle it.
+            // (This is not true if we bailed out _after_ the frontend peek sequencing has already
+            // begun its own statement logging. That case would be a bug.)
+        }
+
         let response = self
             .send_with_cancel(
                 |tx, session| Command::Execute {
@@ -795,62 +877,61 @@ impl SessionClient {
 
     /// Tells the coordinator a statement has finished execution, in the cases
     /// where we have no other reason to communicate with the coordinator.
-    pub fn retire_execute(&self, data: ExecuteContextExtra, reason: StatementEndedExecutionReason) {
-        if !data.is_trivial() {
+    pub fn retire_execute(
+        &self,
+        guard: ExecuteContextGuard,
+        reason: StatementEndedExecutionReason,
+    ) {
+        if !guard.is_trivial() {
+            let data = guard.defuse();
             let cmd = Command::RetireExecute { data, reason };
             self.inner().send(cmd);
         }
     }
 
-    /// Inserts a set of rows into the given table.
+    /// Sets up a streaming COPY FROM STDIN operation.
     ///
-    /// The rows only contain the columns positions in `columns`, so they
-    /// must be re-encoded for adding the default values for the remaining
-    /// ones.
-    pub async fn insert_rows(
+    /// Sends a command to the coordinator to create a background batch
+    /// builder task. Returns a [`CopyFromStdinWriter`] that pgwire uses
+    /// to stream decoded rows.
+    pub async fn start_copy_from_stdin(
         &mut self,
         target_id: CatalogItemId,
         target_name: String,
         columns: Vec<ColumnIndex>,
-        rows: Vec<Row>,
-        ctx_extra: ExecuteContextExtra,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        // TODO: Remove this clone once we always have the session. It's currently needed because
-        // self.session returns a mut ref, so we can't call it twice.
-        let pcx = self.session().pcx().clone();
-
-        let session_meta = self.session().meta();
-
-        let catalog = self.catalog_snapshot("insert_rows").await;
-        let conn_catalog = catalog.for_session(self.session());
-        let catalog_state = conn_catalog.state();
-
-        // Collect optimizer parameters.
-        let optimizer_config = optimize::OptimizerConfig::from(conn_catalog.system_vars());
-        let prep = ExprPrepStyle::OneShot {
-            logical_time: EvalTime::NotAvailable,
-            session: &session_meta,
-            catalog_state,
-        };
-        let mut optimizer =
-            optimize::view::Optimizer::new_with_prep_no_limit(optimizer_config.clone(), None, prep);
-
-        let result: Result<_, AdapterError> = mz_sql::plan::plan_copy_from(
-            &pcx,
-            &conn_catalog,
+        row_desc: mz_repr::RelationDesc,
+        params: mz_pgcopy::CopyFormatParams<'static>,
+    ) -> Result<CopyFromStdinWriter, AdapterError> {
+        self.send(|tx, session| Command::StartCopyFromStdin {
             target_id,
             target_name,
             columns,
-            rows,
-        )
-        .err_into()
-        .and_then(|values| optimizer.optimize(values).err_into())
-        .and_then(|values| {
-            // Copied rows must always be constants.
-            Coordinator::insert_constant(&catalog, self.session(), target_id, values.into_inner())
-        });
-        self.retire_execute(ctx_extra, (&result).into());
-        result
+            row_desc,
+            params,
+            session,
+            tx,
+        })
+        .await
+    }
+
+    /// Commits staged COPY FROM STDIN batches to a table.
+    ///
+    /// Adds the pre-built persist batches to the session's transaction
+    /// operations. The actual commit happens when the transaction ends.
+    pub fn stage_copy_from_stdin_batches(
+        &mut self,
+        target_id: CatalogItemId,
+        batches: Vec<mz_persist_client::batch::ProtoBatch>,
+    ) -> Result<(), AdapterError> {
+        use crate::session::{TransactionOps, WriteOp};
+        use mz_storage_client::client::TableData;
+
+        self.session()
+            .add_transaction_ops(TransactionOps::Writes(vec![WriteOp {
+                id: target_id,
+                rows: TableData::Batches(batches.into()),
+            }]))?;
+        Ok(())
     }
 
     /// Gets the current value of all system variables.
@@ -866,6 +947,23 @@ impl SessionClient {
         let conn_id = self.session().conn_id().clone();
         self.send_without_session(|tx| Command::SetSystemVars { vars, conn_id, tx })
             .await
+    }
+
+    /// Injects audit events into the catalog via the coordinator.
+    ///
+    /// No authorization is performed, so access to this function must be limited to internal
+    /// servers or superusers.
+    pub async fn inject_audit_events(
+        &mut self,
+        events: Vec<crate::catalog::InjectedAuditEvent>,
+    ) -> Result<(), AdapterError> {
+        let conn_id = self.session().conn_id().clone();
+        self.send_without_session(|tx| Command::InjectAuditEvents {
+            events,
+            conn_id,
+            tx,
+        })
+        .await
     }
 
     /// Terminates the client session.
@@ -960,10 +1058,12 @@ impl SessionClient {
             match cmd {
                 Command::Execute { .. } => typ = Some("execute"),
                 Command::GetWebhook { .. } => typ = Some("webhook"),
-                Command::Startup { .. }
+                Command::StartCopyFromStdin { .. }
+                | Command::Startup { .. }
                 | Command::AuthenticatePassword { .. }
                 | Command::AuthenticateGetSASLChallenge { .. }
                 | Command::AuthenticateVerifySASLProof { .. }
+                | Command::CheckRoleCanLogin { .. }
                 | Command::CatalogSnapshot { .. }
                 | Command::Commit { .. }
                 | Command::CancelRequest { .. }
@@ -973,7 +1073,22 @@ impl SessionClient {
                 | Command::Terminate { .. }
                 | Command::RetireExecute { .. }
                 | Command::CheckConsistency { .. }
-                | Command::Dump { .. } => {}
+                | Command::Dump { .. }
+                | Command::GetComputeInstanceClient { .. }
+                | Command::GetOracle { .. }
+                | Command::DetermineRealTimeRecentTimestamp { .. }
+                | Command::GetTransactionReadHoldsBundle { .. }
+                | Command::StoreTransactionReadHolds { .. }
+                | Command::ExecuteSlowPathPeek { .. }
+                | Command::ExecuteSubscribe { .. }
+                | Command::CopyToPreflight { .. }
+                | Command::ExecuteCopyTo { .. }
+                | Command::ExecuteSideEffectingFunc { .. }
+                | Command::RegisterFrontendPeek { .. }
+                | Command::UnregisterFrontendPeek { .. }
+                | Command::ExplainTimestamp { .. }
+                | Command::FrontendStatementLogging(..)
+                | Command::InjectAuditEvents { .. } => {}
             };
             cmd
         });
@@ -1044,6 +1159,28 @@ impl SessionClient {
     /// channel.
     pub async fn recv_timeout(&mut self) -> Option<TimeoutType> {
         self.timeouts.recv().await
+    }
+
+    /// Attempt to sequence a peek from the session task.
+    ///
+    /// Returns `Ok(Some(response))` if we handled the peek, or `Ok(None)` to fall back to the
+    /// Coordinator's sequencing. If it returns an error, it should be returned to the user.
+    ///
+    /// `outer_ctx_extra` is Some when we are executing as part of an outer statement, e.g., a FETCH
+    /// triggering the execution of the underlying query.
+    pub(crate) async fn try_frontend_peek(
+        &mut self,
+        portal_name: &str,
+        outer_ctx_extra: &mut Option<ExecuteContextGuard>,
+    ) -> Result<Option<ExecuteResponse>, AdapterError> {
+        if self.enable_frontend_peek_sequencing {
+            let session = self.session.as_mut().expect("SessionClient invariant");
+            self.peek_client
+                .try_frontend_peek(portal_name, session, outer_ctx_extra)
+                .await
+        } else {
+            Ok(None)
+        }
     }
 }
 

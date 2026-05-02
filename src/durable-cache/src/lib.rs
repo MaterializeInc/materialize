@@ -18,7 +18,7 @@ use std::time::Duration;
 use differential_dataflow::consolidation::{consolidate, consolidate_updates};
 use mz_ore::collections::{AssociativeExt, HashSet};
 use mz_ore::soft_panic_or_log;
-use mz_persist_client::critical::SinceHandle;
+use mz_persist_client::critical::{Opaque, SinceHandle};
 use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::read::{ListenEvent, Subscribe};
 use mz_persist_client::write::WriteHandle;
@@ -63,7 +63,7 @@ struct LocalVal<C: DurableCacheCodec> {
 
 #[derive(Debug)]
 pub struct DurableCache<C: DurableCacheCodec> {
-    since_handle: SinceHandle<C::KeyCodec, C::ValCodec, u64, i64, i64>,
+    since_handle: SinceHandle<C::KeyCodec, C::ValCodec, u64, i64>,
     write: WriteHandle<C::KeyCodec, C::ValCodec, u64, i64>,
     subscribe: Subscribe<C::KeyCodec, C::ValCodec, u64, i64>,
 
@@ -86,6 +86,7 @@ impl<C: DurableCacheCodec> DurableCache<C> {
                 // TODO: We may need to use a different critical reader
                 // id for this if we want to be able to introspect it via SQL.
                 PersistClient::CONTROLLER_CRITICAL_SINCE,
+                Opaque::encode(&i64::MIN),
                 diagnostics.clone(),
             )
             .await
@@ -169,8 +170,8 @@ impl<C: DurableCacheCodec> DurableCache<C> {
                             consolidate_updates(&mut updates);
                             updates.sort_by(|(_, _, d1), (_, _, d2)| d1.cmp(d2));
                             for ((k, v), t, d) in updates {
-                                let encoded_key = k.unwrap();
-                                let encoded_val = v.unwrap();
+                                let encoded_key = k;
+                                let encoded_val = v;
                                 let (decoded_key, decoded_val) =
                                     C::decode(&encoded_key, &encoded_val);
                                 let val = LocalVal {
@@ -364,13 +365,13 @@ impl<C: DurableCacheCodec> DurableCache<C> {
         // (See the method documentation for details.)
         // That's not needed here, so we use the since handle's opaque token to avoid any comparison
         // failures.
-        let opaque = *self.since_handle.opaque();
+        let opaque = self.since_handle.opaque().clone();
         let ret = self
             .since_handle
             .compare_and_downgrade_since(&opaque, (&opaque, &downgrade_to))
             .await;
         if let Err(e) = ret {
-            soft_panic_or_log!("found opaque value {e}, but expected {opaque}");
+            soft_panic_or_log!("found opaque value {e:?}, but expected {opaque:?}");
         }
 
         Ok(new_upper)

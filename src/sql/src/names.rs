@@ -9,6 +9,7 @@
 
 //! Structured name types for SQL objects.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::str::FromStr;
@@ -25,7 +26,7 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, GlobalId, RelationVersion};
 use mz_repr::{ColumnName, RelationVersionSelector};
 use mz_sql_parser::ast::visit_mut::VisitMutNode;
-use mz_sql_parser::ast::{CreateContinualTaskStatement, Expr, RawNetworkPolicyName, Version};
+use mz_sql_parser::ast::{Expr, RawNetworkPolicyName, Version};
 use mz_sql_parser::ident;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -54,7 +55,17 @@ use crate::plan::PlanError;
 /// `FullItemName`.
 ///
 /// [`normalize::unresolved_item_name`]: crate::normalize::unresolved_item_name
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Eq,
+    PartialEq,
+    Hash,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize
+)]
 pub struct FullItemName {
     /// The database name.
     pub database: RawDatabaseSpecifier,
@@ -116,7 +127,17 @@ static_assertions::assert_not_impl_any!(QualifiedItemName: fmt::Display);
 ///
 /// This is like a [`FullItemName`], but either the database or schema name may be
 /// omitted.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash
+)]
 pub struct PartialItemName {
     pub database: Option<String>,
     pub schema: Option<String>,
@@ -191,7 +212,17 @@ impl From<PartialItemName> for UnresolvedItemName {
 }
 
 /// A fully-qualified human readable name of a schema in the catalog.
-#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Eq,
+    PartialEq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
+)]
 pub struct FullSchemaName {
     /// The database name
     pub database: RawDatabaseSpecifier,
@@ -244,7 +275,17 @@ impl fmt::Display for PartialSchemaName {
 }
 
 /// A human readable name of a database.
-#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 pub enum RawDatabaseSpecifier {
     /// The "ambient" database, which is always present and is not named
     /// explicitly, but by omission.
@@ -273,7 +314,17 @@ impl From<Option<String>> for RawDatabaseSpecifier {
 
 /// An id of a database.
 #[derive(
-    Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Debug,
+    Clone,
+    Copy,
+    Eq,
+    PartialEq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub enum ResolvedDatabaseSpecifier {
     /// The "ambient" database, which is always present and is not named
@@ -329,7 +380,18 @@ impl From<Option<DatabaseId>> for ResolvedDatabaseSpecifier {
  * their Id.
  */
 /// An id of a schema.
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Eq,
+    PartialEq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
+)]
 pub enum SchemaSpecifier {
     /// A temporary schema
     Temporary,
@@ -431,10 +493,6 @@ pub enum ResolvedItemName {
         id: LocalId,
         name: String,
     },
-    ContinualTask {
-        id: LocalId,
-        name: PartialItemName,
-    },
     Error,
 }
 
@@ -443,7 +501,6 @@ impl ResolvedItemName {
         match self {
             ResolvedItemName::Item { full_name, .. } => full_name.to_string(),
             ResolvedItemName::Cte { name, .. } => name.clone(),
-            ResolvedItemName::ContinualTask { name, .. } => name.to_string(),
             ResolvedItemName::Error => "error in name resolution".to_string(),
         }
     }
@@ -504,19 +561,6 @@ impl AstDisplay for ResolvedItemName {
                 }
             }
             ResolvedItemName::Cte { name, .. } => f.write_node(&Ident::new_unchecked(name)),
-            ResolvedItemName::ContinualTask { name, .. } => {
-                // TODO: Remove this once PartialItemName uses Ident instead of
-                // String.
-                if let Some(database) = name.database.as_ref() {
-                    f.write_node(&Ident::new_unchecked(database));
-                    f.write_str(".");
-                }
-                if let Some(schema) = name.schema.as_ref() {
-                    f.write_node(&Ident::new_unchecked(schema));
-                    f.write_str(".");
-                }
-                f.write_node(&Ident::new_unchecked(&name.item));
-            }
             ResolvedItemName::Error => {}
         }
     }
@@ -863,7 +907,17 @@ impl AstInfo for Aug {
 
 /// The identifier for a schema.
 #[derive(
-    Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub enum SchemaId {
     User(u64),
@@ -913,7 +967,17 @@ impl FromStr for SchemaId {
 
 /// The identifier for a database.
 #[derive(
-    Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub enum DatabaseId {
     User(u64),
@@ -1081,9 +1145,6 @@ impl TryFrom<ResolvedObjectName> for ObjectId {
             ResolvedObjectName::Item(name) => match name {
                 ResolvedItemName::Item { id, .. } => Ok(ObjectId::Item(id)),
                 ResolvedItemName::Cte { .. } => Err(anyhow!("CTE does not correspond to object")),
-                ResolvedItemName::ContinualTask { .. } => {
-                    Err(anyhow!("ContinualTask does not correspond to object"))
-                }
                 ResolvedItemName::Error => Err(anyhow!("error in name resolution")),
             },
             ResolvedObjectName::NetworkPolicy(name) => Ok(ObjectId::NetworkPolicy(name.id)),
@@ -1187,8 +1248,7 @@ impl From<CommentObjectId> for ObjectId {
             | CommentObjectId::Func(item_id)
             | CommentObjectId::Connection(item_id)
             | CommentObjectId::Type(item_id)
-            | CommentObjectId::Secret(item_id)
-            | CommentObjectId::ContinualTask(item_id) => ObjectId::Item(item_id),
+            | CommentObjectId::Secret(item_id) => ObjectId::Item(item_id),
             CommentObjectId::Role(id) => ObjectId::Role(id),
             CommentObjectId::Database(id) => ObjectId::Database(id),
             CommentObjectId::Schema(id) => ObjectId::Schema(id),
@@ -1243,7 +1303,6 @@ pub enum CommentObjectId {
     Connection(CatalogItemId),
     Type(CatalogItemId),
     Secret(CatalogItemId),
-    ContinualTask(CatalogItemId),
     Role(RoleId),
     Database(DatabaseId),
     Schema((ResolvedDatabaseSpecifier, SchemaSpecifier)),
@@ -1273,7 +1332,6 @@ struct ItemResolutionConfig {
 pub struct NameResolver<'a> {
     catalog: &'a dyn SessionCatalog,
     ctes: BTreeMap<String, LocalId>,
-    continual_task: Option<(PartialItemName, LocalId)>,
     status: Result<(), PlanError>,
     ids: BTreeMap<CatalogItemId, BTreeSet<GlobalId>>,
 }
@@ -1283,7 +1341,6 @@ impl<'a> NameResolver<'a> {
         NameResolver {
             catalog,
             ctes: BTreeMap::new(),
-            continual_task: None,
             status: Ok(()),
             ids: BTreeMap::new(),
         }
@@ -1436,14 +1493,6 @@ impl<'a> NameResolver<'a> {
                     return ResolvedItemName::Cte {
                         id: *id,
                         name: norm_name,
-                    };
-                }
-            }
-            if let Some((ct_name, ct_id)) = self.continual_task.as_ref() {
-                if *ct_name == raw_name {
-                    return ResolvedItemName::ContinualTask {
-                        id: *ct_id,
-                        name: raw_name,
                     };
                 }
             }
@@ -1700,28 +1749,6 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
         result
     }
 
-    fn fold_create_continual_task_statement(
-        &mut self,
-        stmt: CreateContinualTaskStatement<Raw>,
-    ) -> CreateContinualTaskStatement<Aug> {
-        // Insert a LocalId so that using the name of the continual task in the
-        // inserts and deletes resolves.
-        match normalize::unresolved_item_name(stmt.name.name().clone()) {
-            Ok(local_name) => {
-                assert!(self.continual_task.is_none());
-                // TODO: Assign LocalIds more robustly (e.g. something like a
-                // `self.next_local_id` field).
-                self.continual_task = Some((local_name, LocalId::new(0)));
-            }
-            Err(err) => {
-                if self.status.is_ok() {
-                    self.status = Err(err);
-                }
-            }
-        };
-        mz_sql_parser::ast::fold::fold_create_continual_task_statement(self, stmt)
-    }
-
     fn fold_cte_id(&mut self, _id: <Raw as AstInfo>::CteId) -> <Aug as AstInfo>::CteId {
         panic!("this should have been handled when walking the CTE");
     }
@@ -1761,20 +1788,36 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 print_id: _,
             } => {
                 let item = self.catalog.get_item(id).at_version(*version);
-                let desc = match item.desc(full_name) {
-                    Ok(desc) => desc,
-                    Err(e) => {
-                        if self.status.is_ok() {
-                            self.status = Err(e.into());
+                let name = normalize::column_name(column_name.column.clone());
+
+                let maybe_desc = match item.type_details() {
+                    Some(details) => match details.typ.desc(self.catalog) {
+                        Ok(desc) => desc.map(Cow::Owned),
+                        Err(e) => {
+                            if self.status.is_ok() {
+                                self.status = Err(e);
+                            }
+                            return ast::ColumnName {
+                                relation: ResolvedItemName::Error,
+                                column: ResolvedColumnReference::Error,
+                            };
                         }
-                        return ast::ColumnName {
-                            relation: ResolvedItemName::Error,
-                            column: ResolvedColumnReference::Error,
-                        };
+                    },
+                    None => item.relation_desc(),
+                };
+                let Some(desc) = maybe_desc else {
+                    if self.status.is_ok() {
+                        self.status = Err(PlanError::ItemWithoutColumns {
+                            name: full_name.to_string(),
+                            item_type: item.item_type(),
+                        });
                     }
+                    return ast::ColumnName {
+                        relation: ResolvedItemName::Error,
+                        column: ResolvedColumnReference::Error,
+                    };
                 };
 
-                let name = normalize::column_name(column_name.column.clone());
                 let Some((index, _typ)) = desc.get_by_name(&name) else {
                     if self.status.is_ok() {
                         let similar = desc.iter_similar_names(&name).cloned().collect();
@@ -1795,9 +1838,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                     column: ResolvedColumnReference::Column { name, index },
                 }
             }
-            ResolvedItemName::Cte { .. }
-            | ResolvedItemName::ContinualTask { .. }
-            | ResolvedItemName::Error => ast::ColumnName {
+            ResolvedItemName::Cte { .. } | ResolvedItemName::Error => ast::ColumnName {
                 relation: ResolvedItemName::Error,
                 column: ResolvedColumnReference::Error,
             },
@@ -1840,6 +1881,21 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 return ResolvedSchemaName::Error;
             }
         };
+
+        // Special case for mz_temp: with lazy temporary schema creation, the temp
+        // schema may not exist yet. Return a resolved name with SchemaSpecifier::Temporary
+        // so that downstream code can handle it appropriately (e.g., return a proper error).
+        if norm_name.database.is_none() && norm_name.schema == mz_repr::namespaces::MZ_TEMP_SCHEMA {
+            return ResolvedSchemaName::Schema {
+                database_spec: ResolvedDatabaseSpecifier::Ambient,
+                schema_spec: SchemaSpecifier::Temporary,
+                full_name: FullSchemaName {
+                    database: RawDatabaseSpecifier::Ambient,
+                    schema: mz_repr::namespaces::MZ_TEMP_SCHEMA.to_string(),
+                },
+            };
+        }
+
         match self
             .catalog
             .resolve_schema(norm_name.database.as_deref(), norm_name.schema.as_str())
@@ -1954,7 +2010,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                                 Err(PlanError::InvalidSecret(Box::new(item_name.clone())));
                         }
                     }
-                    ResolvedItemName::Cte { .. } | ResolvedItemName::ContinualTask { .. } => {
+                    ResolvedItemName::Cte { .. } => {
                         self.status = Err(PlanError::InvalidSecret(Box::new(item_name.clone())));
                     }
                     ResolvedItemName::Error => {}
@@ -1965,7 +2021,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 let item_name = self.fold_item_name(obj);
                 match &item_name {
                     ResolvedItemName::Item { .. } => {}
-                    ResolvedItemName::Cte { .. } | ResolvedItemName::ContinualTask { .. } => {
+                    ResolvedItemName::Cte { .. } => {
                         self.status = Err(PlanError::InvalidObject(Box::new(item_name.clone())));
                     }
                     ResolvedItemName::Error => {}
@@ -1984,6 +2040,9 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             ConnectionKafkaBroker(broker) => ConnectionKafkaBroker(self.fold_kafka_broker(broker)),
             ConnectionAwsPrivatelink(privatelink) => {
                 ConnectionAwsPrivatelink(self.fold_connection_default_aws_privatelink(privatelink))
+            }
+            KafkaMatchingBrokerRule(x) => {
+                KafkaMatchingBrokerRule(self.fold_kafka_matching_broker_rule(x))
             }
             RetainHistoryFor(value) => RetainHistoryFor(self.fold_value(value)),
             Refresh(refresh) => Refresh(self.fold_refresh_option_value(refresh)),
@@ -2133,7 +2192,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                             self.status = Err(PlanError::FromValueRequiresParen);
                         }
                     }
-                    _ => {}
+                    RawItemName::Id(..) => {}
                 }
 
                 Function {

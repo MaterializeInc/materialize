@@ -121,8 +121,6 @@ optimizer_feature_flags!({
     // `DataflowDescription` in the global MIR optimization phase.
     reoptimize_imported_views: bool,
     // See the feature flag of the same name.
-    enable_reduce_reduction: bool,
-    // See the feature flag of the same name.
     enable_join_prioritize_arranged: bool,
     // See the feature flag of the same name.
     enable_projection_pushdown_after_relation_cse: bool,
@@ -130,8 +128,16 @@ optimizer_feature_flags!({
     enable_less_reduce_in_eqprop: bool,
     // See the feature flag of the same name.
     enable_dequadratic_eqprop_map: bool,
+    // See the feature flag of the same name.
     enable_fast_path_plan_insights: bool,
-    enable_repr_typecheck: bool,
+    // See the feature flag of the same name.
+    enable_cast_elimination: bool,
+    // See the feature flag of the same name.
+    enable_case_literal_transform: bool,
+    // See the feature flag of the same name.
+    enable_simplify_quantified_comparisons: bool,
+    // See the feature flag of the same name.
+    enable_coalesce_case_transform: bool,
 });
 
 /// A trait used to implement layered config construction.

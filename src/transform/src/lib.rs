@@ -29,14 +29,15 @@ use std::{fmt, iter};
 
 use mz_expr::{MirRelationExpr, MirScalarExpr};
 use mz_ore::id_gen::IdGen;
+use mz_ore::soft_panic_or_log;
 use mz_ore::stack::RecursionLimitError;
-use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 use mz_repr::GlobalId;
 use mz_repr::optimize::OptimizerFeatures;
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use tracing::error;
 
 use crate::canonicalize_mfp::CanonicalizeMfp;
+use crate::collect_notices::CollectNotices;
 use crate::column_knowledge::ColumnKnowledge;
 use crate::dataflow::DataflowMetainfo;
 use crate::demand::Demand;
@@ -54,10 +55,9 @@ use crate::reduce_elision::ReduceElision;
 use crate::reduce_reduction::ReduceReduction;
 use crate::reduction_pushdown::ReductionPushdown;
 use crate::redundant_join::RedundantJoin;
-use crate::reprtypecheck::{SharedContext as ReprSharedContext, Typecheck as ReprTypecheck};
 use crate::semijoin_idempotence::SemijoinIdempotence;
 use crate::threshold_elision::ThresholdElision;
-use crate::typecheck::{SharedContext, Typecheck};
+use crate::typecheck::{SharedTypecheckingContext, Typecheck};
 use crate::union_cancel::UnionBranchCancellation;
 use crate::will_distinct::WillDistinct;
 
@@ -66,6 +66,9 @@ pub use dataflow::optimize_dataflow;
 pub mod analysis;
 pub mod canonicalization;
 pub mod canonicalize_mfp;
+pub mod case_literal;
+pub mod coalesce_case;
+pub mod collect_notices;
 pub mod column_knowledge;
 pub mod compound;
 pub mod cse;
@@ -89,7 +92,6 @@ pub mod reduce_elision;
 pub mod reduce_reduction;
 pub mod reduction_pushdown;
 pub mod redundant_join;
-pub mod reprtypecheck;
 pub mod semijoin_idempotence;
 pub mod threshold_elision;
 pub mod typecheck;
@@ -122,14 +124,12 @@ pub struct TransformCtx<'a> {
     pub stats: &'a dyn StatisticsOracle,
     /// Features passed to the enclosing `Optimizer`.
     pub features: &'a OptimizerFeatures,
-    /// Typechecking context.
-    pub typecheck_ctx: &'a SharedContext,
     /// Representation typechecking context.
-    pub repr_typecheck_ctx: &'a ReprSharedContext,
+    pub typechecking_ctx: &'a SharedTypecheckingContext,
     /// Transforms can use this field to communicate information outside the result plans.
     pub df_meta: &'a mut DataflowMetainfo,
     /// Metrics for the optimizer.
-    pub metrics: Option<&'a OptimizerMetrics>,
+    pub metrics: Option<&'a mut OptimizerMetrics>,
     /// The last hash of the query, if known.
     pub last_hash: BTreeMap<GlobalId, u64>,
 }
@@ -145,10 +145,9 @@ impl<'a> TransformCtx<'a> {
     /// [`MirRelationExpr`].
     pub fn local(
         features: &'a OptimizerFeatures,
-        typecheck_ctx: &'a SharedContext,
-        repr_typecheck_ctx: &'a ReprSharedContext,
+        typecheck_ctx: &'a SharedTypecheckingContext,
         df_meta: &'a mut DataflowMetainfo,
-        metrics: Option<&'a OptimizerMetrics>,
+        metrics: Option<&'a mut OptimizerMetrics>,
         global_id: Option<GlobalId>,
     ) -> Self {
         Self {
@@ -156,8 +155,7 @@ impl<'a> TransformCtx<'a> {
             stats: &EmptyStatisticsOracle,
             global_id,
             features,
-            typecheck_ctx,
-            repr_typecheck_ctx,
+            typechecking_ctx: typecheck_ctx,
             df_meta,
             metrics,
             last_hash: Default::default(),
@@ -172,10 +170,9 @@ impl<'a> TransformCtx<'a> {
         indexes: &'a dyn IndexOracle,
         stats: &'a dyn StatisticsOracle,
         features: &'a OptimizerFeatures,
-        typecheck_ctx: &'a SharedContext,
-        repr_typecheck_ctx: &'a ReprSharedContext,
+        typecheck_ctx: &'a SharedTypecheckingContext,
         df_meta: &'a mut DataflowMetainfo,
-        metrics: Option<&'a OptimizerMetrics>,
+        metrics: Option<&'a mut OptimizerMetrics>,
     ) -> Self {
         Self {
             indexes,
@@ -183,19 +180,14 @@ impl<'a> TransformCtx<'a> {
             global_id: None,
             features,
             df_meta,
-            typecheck_ctx,
-            repr_typecheck_ctx,
+            typechecking_ctx: typecheck_ctx,
             metrics,
             last_hash: Default::default(),
         }
     }
 
-    fn typecheck(&self) -> SharedContext {
-        Arc::clone(self.typecheck_ctx)
-    }
-
-    fn repr_typecheck(&self) -> ReprSharedContext {
-        Arc::clone(self.repr_typecheck_ctx)
+    fn typechecking_context(&self) -> SharedTypecheckingContext {
+        Arc::clone(self.typechecking_ctx)
     }
 
     /// Lets self know the id of the object that is being optimized.
@@ -241,7 +233,7 @@ pub trait Transform: fmt::Debug {
         let duration = start.elapsed();
 
         let hash_after = args.update_last_hash(relation);
-        if let Some(metrics) = args.metrics {
+        if let Some(metrics) = &mut args.metrics {
             let transform_name = self.name();
             metrics.observe_transform_time(transform_name, duration);
             metrics.inc_transform(hash_before != hash_after, transform_name);
@@ -745,8 +737,9 @@ impl Optimizer {
     #[deprecated = "Create an Optimize instance and call `optimize` instead."]
     pub fn logical_optimizer(ctx: &mut TransformCtx) -> Self {
         let transforms: Vec<Box<dyn Transform>> = transforms![
-            Box::new(Typecheck::new(ctx.typecheck()).strict_join_equivalences()),
-            Box::new(ReprTypecheck::new(ctx.repr_typecheck()).strict_join_equivalences()); if ctx.features.enable_repr_typecheck,
+            // 0. `Transform`s that don't actually change the plan.
+            Box::new(Typecheck::new(ctx.typechecking_context()).strict_join_equivalences()),
+            Box::new(CollectNotices),
             // 1. Structure-agnostic cleanup
             Box::new(normalize()),
             Box::new(NonNullRequirements::default()),
@@ -795,11 +788,10 @@ impl Optimizer {
                 ],
             }),
             Box::new(
-                Typecheck::new(ctx.typecheck())
+                Typecheck::new(ctx.typechecking_context())
                     .disallow_new_globals()
-                    .strict_join_equivalences(),
+                    .strict_join_equivalences()
             ),
-            Box::new(ReprTypecheck::new(ctx.repr_typecheck()).disallow_new_globals().strict_join_equivalences()); if ctx.features.enable_repr_typecheck,
         ];
         Self {
             name: "logical",
@@ -817,11 +809,10 @@ impl Optimizer {
         // Implementation transformations
         let transforms: Vec<Box<dyn Transform>> = transforms![
             Box::new(
-                Typecheck::new(ctx.typecheck())
+                Typecheck::new(ctx.typechecking_context())
                     .disallow_new_globals()
                     .strict_join_equivalences(),
             ),
-            Box::new(ReprTypecheck::new(ctx.repr_typecheck()).disallow_new_globals().strict_join_equivalences()); if ctx.features.enable_repr_typecheck,
             // Considerations for the relationship between JoinImplementation and other transforms:
             // - there should be a run of LiteralConstraints before JoinImplementation lifts away
             //   the Filters from the Gets;
@@ -852,9 +843,11 @@ impl Optimizer {
             Box::new(Fixpoint {
                 name: "fixpoint_physical_01",
                 limit: 100,
-                transforms: vec![
+                transforms: transforms![
                     Box::new(EquivalencePropagation::default()),
                     Box::new(fold_constants_fixpoint(true)),
+                    Box::new(coalesce_case::CoalesceCase::default());
+                        if ctx.features.enable_coalesce_case_transform,
                     Box::new(Demand::default()),
                     // Demand might have introduced dummies, so let's also do a ProjectionPushdown.
                     Box::new(ProjectionPushdown::default()),
@@ -875,9 +868,15 @@ impl Optimizer {
             // Get as much as possible. This is because a fork in the plan involves copying the
             // data. (But we need `ProjectionPushdown` to skip joins, because it can't deal with
             // filled in JoinImplementations.)
-            Box::new(ProjectionPushdown::skip_joins()); if ctx.features.enable_projection_pushdown_after_relation_cse,
+            Box::new(ProjectionPushdown::skip_joins());
+                if ctx.features.enable_projection_pushdown_after_relation_cse,
             // Plans look nicer if we tidy MFPs again after ProjectionPushdown.
-            Box::new(CanonicalizeMfp); if ctx.features.enable_projection_pushdown_after_relation_cse,
+            Box::new(CanonicalizeMfp);
+                if ctx.features.enable_projection_pushdown_after_relation_cse,
+            // Rewrite If-chains matching a single expression against literals
+            // into a CaseLiteral lookup for O(log n) evaluation.
+            Box::new(case_literal::CaseLiteralTransform);
+                if ctx.features.enable_case_literal_transform,
             // Do a last run of constant folding. Importantly, this also runs `NormalizeLets`!
             // We need `NormalizeLets` at the end of the MIR pipeline for various reasons:
             // - The rendering expects some invariants about Let/LetRecs.
@@ -885,11 +884,11 @@ impl Optimizer {
             //   https://github.com/MaterializeInc/database-issues/issues/6371
             Box::new(fold_constants_fixpoint(true)),
             Box::new(
-                Typecheck::new(ctx.typecheck())
+                Typecheck::new(ctx.typechecking_context())
                     .disallow_new_globals()
-                    .disallow_dummy(),
+                    .disallow_dummy()
+                    .strict_join_equivalences(),
             ),
-            Box::new(ReprTypecheck::new(ctx.repr_typecheck()).disallow_new_globals().strict_join_equivalences()); if ctx.features.enable_repr_typecheck,
         ];
         Self {
             name: "physical",
@@ -904,18 +903,14 @@ impl Optimizer {
     /// The first instance of the typechecker in an optimizer pipeline should
     /// allow new globals (or it will crash when it encounters them).
     pub fn logical_cleanup_pass(ctx: &mut TransformCtx, allow_new_globals: bool) -> Self {
-        let mut typechecker = Typecheck::new(ctx.typecheck()).strict_join_equivalences();
-
         let mut repr_typechecker =
-            ReprTypecheck::new(ctx.repr_typecheck()).strict_join_equivalences();
+            Typecheck::new(ctx.typechecking_context()).strict_join_equivalences();
         if !allow_new_globals {
-            typechecker = typechecker.disallow_new_globals();
             repr_typechecker = repr_typechecker.disallow_new_globals();
         }
 
         let transforms: Vec<Box<dyn Transform>> = transforms![
-            Box::new(typechecker),
-            Box::new(repr_typechecker); if ctx.features.enable_repr_typecheck,
+            Box::new(repr_typechecker),
             // Delete unnecessary maps.
             Box::new(fusion::Fusion),
             Box::new(Fixpoint {
@@ -943,11 +938,10 @@ impl Optimizer {
                 ],
             }),
             Box::new(
-                Typecheck::new(ctx.typecheck())
+                Typecheck::new(ctx.typechecking_context())
                     .disallow_new_globals()
-                    .strict_join_equivalences(),
+                    .strict_join_equivalences()
             ),
-            Box::new(ReprTypecheck::new(ctx.repr_typecheck()).disallow_new_globals().strict_join_equivalences()); if ctx.features.enable_repr_typecheck,
         ];
         Self {
             name: "logical_cleanup",
@@ -1003,15 +997,6 @@ impl Optimizer {
         ctx: &mut TransformCtx,
     ) -> Result<mz_expr::OptimizedMirRelationExpr, TransformError> {
         let transform_result = self.transform(&mut relation, ctx);
-
-        // Make sure we are not swallowing any notice.
-        // TODO: we should actually wire up notices that come from here. This is not urgent, because
-        // currently notices can only come from the physical MIR optimizer (specifically,
-        // `LiteralConstraints`), and callers of this method are running the logical MIR optimizer.
-        soft_assert_or_log!(
-            ctx.df_meta.optimizer_notices.is_empty(),
-            "logical MIR optimization unexpectedly produced notices"
-        );
 
         match transform_result {
             Ok(_) => {

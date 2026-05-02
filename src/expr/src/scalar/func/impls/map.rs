@@ -10,14 +10,26 @@
 use std::fmt;
 
 use itertools::Itertools;
+use mz_expr_derive::sqlfunc;
 use mz_lowertest::MzReflect;
-use mz_repr::{Datum, RowArena, SqlColumnType, SqlScalarType};
+use mz_repr::{Datum, DatumMap, RowArena, SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
 
 use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
 use crate::{EvalError, MirScalarExpr};
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastMapToString {
     pub ty: SqlScalarType,
 }
@@ -38,7 +50,7 @@ impl LazyUnaryFunc for CastMapToString {
         Ok(Datum::String(temp_storage.push_string(buf)))
     }
 
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         SqlScalarType::String.nullable(input_type.nullable)
     }
 
@@ -62,6 +74,10 @@ impl LazyUnaryFunc for CastMapToString {
     fn is_monotone(&self) -> bool {
         false
     }
+
+    fn is_eliminable_cast(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for CastMapToString {
@@ -70,59 +86,26 @@ impl fmt::Display for CastMapToString {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
-pub struct MapLength;
-
-impl LazyUnaryFunc for MapLength {
-    fn eval<'a>(
-        &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
-        }
-        let count = a.unwrap_map().iter().count();
-        match count.try_into() {
-            Ok(c) => Ok(Datum::Int32(c)),
-            Err(_) => Err(EvalError::Int32OutOfRange(count.to_string().into())),
-        }
-    }
-
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Int32.nullable(input_type.nullable)
-    }
-
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
-
-    fn introduces_nulls(&self) -> bool {
-        false
-    }
-
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-
-    fn is_monotone(&self) -> bool {
-        false
-    }
+#[sqlfunc(sqlname = "map_length")]
+fn map_length<'a>(a: DatumMap<'a>) -> Result<i32, EvalError> {
+    let count = a.iter().count();
+    count
+        .try_into()
+        .map_err(|_| EvalError::Int32OutOfRange(count.to_string().into()))
 }
 
-impl fmt::Display for MapLength {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("map_length")
-    }
-}
-
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct MapBuildFromRecordList {
     pub value_type: SqlScalarType,
 }
@@ -158,7 +141,7 @@ impl LazyUnaryFunc for MapBuildFromRecordList {
         Ok(map)
     }
 
-    fn output_type(&self, _input_type: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, _input_type: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Map {
             value_type: Box::new(self.value_type.clone()),
             custom_id: None,
@@ -183,6 +166,10 @@ impl LazyUnaryFunc for MapBuildFromRecordList {
     }
 
     fn is_monotone(&self) -> bool {
+        false
+    }
+
+    fn is_eliminable_cast(&self) -> bool {
         false
     }
 }

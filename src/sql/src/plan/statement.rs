@@ -19,12 +19,10 @@ use mz_repr::{
     CatalogItemId, ColumnIndex, RelationDesc, RelationVersionSelector, SqlColumnType, SqlScalarType,
 };
 use mz_sql_parser::ast::{
-    ColumnDef, ColumnName, ConnectionDefaultAwsPrivatelink, CreateMaterializedViewStatement,
-    RawItemName, ShowStatement, StatementKind, TableConstraint, UnresolvedDatabaseName,
-    UnresolvedSchemaName,
+    ColumnDef, ColumnName, CreateMaterializedViewStatement, RawItemName, ShowStatement,
+    StatementKind, TableConstraint, UnresolvedDatabaseName, UnresolvedSchemaName,
 };
-use mz_storage_types::connections::inline::ReferencedConnection;
-use mz_storage_types::connections::{AwsPrivatelink, Connection, SshTunnel, Tunnel};
+use mz_storage_types::connections::Connection;
 
 use crate::ast::{Ident, Statement, UnresolvedItemName};
 use crate::catalog::{
@@ -39,7 +37,7 @@ use crate::names::{
 };
 use crate::normalize;
 use crate::plan::error::PlanError;
-use crate::plan::{Params, Plan, PlanContext, PlanKind, query, with_options};
+use crate::plan::{Params, Plan, PlanContext, PlanKind, query};
 use crate::session::vars::FeatureFlag;
 
 mod acl;
@@ -126,6 +124,9 @@ pub fn describe(
         Statement::AlterCluster(stmt) => ddl::describe_alter_cluster_set_options(&scx, stmt)?,
         Statement::AlterConnection(stmt) => ddl::describe_alter_connection(&scx, stmt)?,
         Statement::AlterIndex(stmt) => ddl::describe_alter_index_options(&scx, stmt)?,
+        Statement::AlterMaterializedViewApplyReplacement(stmt) => {
+            ddl::describe_alter_materialized_view_apply_replacement(&scx, stmt)?
+        }
         Statement::AlterObjectRename(stmt) => ddl::describe_alter_object_rename(&scx, stmt)?,
         Statement::AlterObjectSwap(stmt) => ddl::describe_alter_object_swap(&scx, stmt)?,
         Statement::AlterRetainHistory(stmt) => ddl::describe_alter_retain_history(&scx, stmt)?,
@@ -161,7 +162,6 @@ pub fn describe(
         Statement::CreateMaterializedView(stmt) => {
             ddl::describe_create_materialized_view(&scx, stmt)?
         }
-        Statement::CreateContinualTask(stmt) => ddl::describe_create_continual_task(&scx, stmt)?,
         Statement::CreateNetworkPolicy(stmt) => ddl::describe_create_network_policy(&scx, stmt)?,
         Statement::DropObjects(stmt) => ddl::describe_drop_objects(&scx, stmt)?,
         Statement::DropOwned(stmt) => ddl::describe_drop_owned(&scx, stmt)?,
@@ -322,6 +322,9 @@ pub fn plan(
         Statement::AlterCluster(stmt) => ddl::plan_alter_cluster(scx, stmt),
         Statement::AlterConnection(stmt) => ddl::plan_alter_connection(scx, stmt),
         Statement::AlterIndex(stmt) => ddl::plan_alter_index_options(scx, stmt),
+        Statement::AlterMaterializedViewApplyReplacement(stmt) => {
+            ddl::plan_alter_materialized_view_apply_replacement(scx, stmt)
+        }
         Statement::AlterObjectRename(stmt) => ddl::plan_alter_object_rename(scx, stmt),
         Statement::AlterObjectSwap(stmt) => ddl::plan_alter_object_swap(scx, stmt),
         Statement::AlterRetainHistory(stmt) => ddl::plan_alter_retain_history(scx, stmt),
@@ -353,7 +356,6 @@ pub fn plan(
         Statement::CreateType(stmt) => ddl::plan_create_type(scx, stmt),
         Statement::CreateView(stmt) => ddl::plan_create_view(scx, stmt),
         Statement::CreateMaterializedView(stmt) => ddl::plan_create_materialized_view(scx, stmt),
-        Statement::CreateContinualTask(stmt) => ddl::plan_create_continual_task(scx, stmt),
         Statement::CreateNetworkPolicy(stmt) => ddl::plan_create_network_policy(scx, stmt),
         Statement::DropObjects(stmt) => ddl::plan_drop_objects(scx, stmt),
         Statement::DropOwned(stmt) => ddl::plan_drop_owned(scx, stmt),
@@ -621,16 +623,12 @@ impl<'a> StatementContext<'a> {
         &self,
         name: PartialItemName,
     ) -> Result<QualifiedItemName, PlanError> {
-        if let Some(name) = name.schema {
-            if name
-                != self
-                    .get_schema(
-                        &ResolvedDatabaseSpecifier::Ambient,
-                        &SchemaSpecifier::Temporary,
-                    )
-                    .name()
-                    .schema
-            {
+        // Compare against the MZ_TEMP_SCHEMA constant directly instead of calling
+        // get_schema(), because with lazy temporary schema creation, the temp
+        // schema may not exist yet. (This is similar to what `allocate_temporary_full_name` was
+        // doing already before making temporary schemas lazy.)
+        if let Some(schema_name) = name.schema {
+            if schema_name != mz_repr::namespaces::MZ_TEMP_SCHEMA {
                 return Err(PlanError::InvalidTemporarySchema);
             }
         }
@@ -758,7 +756,6 @@ impl<'a> StatementContext<'a> {
                 Ok(self.get_item(id).at_version(*version))
             }
             ResolvedItemName::Cte { .. } => sql_bail!("non-user item"),
-            ResolvedItemName::ContinualTask { .. } => sql_bail!("non-user item"),
             ResolvedItemName::Error => unreachable!("should have been caught in name resolution"),
         }
     }
@@ -871,52 +868,14 @@ impl<'a> StatementContext<'a> {
 
     /// The returned String is more detailed when the `postgres_compat` flag is not set. However,
     /// the flag should be set in, e.g., the implementation of the `pg_typeof` function.
-    pub fn humanize_scalar_type(&self, typ: &SqlScalarType, postgres_compat: bool) -> String {
-        self.catalog.humanize_scalar_type(typ, postgres_compat)
+    pub fn humanize_sql_scalar_type(&self, typ: &SqlScalarType, postgres_compat: bool) -> String {
+        self.catalog.humanize_sql_scalar_type(typ, postgres_compat)
     }
 
     /// The returned String is more detailed when the `postgres_compat` flag is not set. However,
     /// the flag should be set in, e.g., the implementation of the `pg_typeof` function.
     pub fn humanize_column_type(&self, typ: &SqlColumnType, postgres_compat: bool) -> String {
-        self.catalog.humanize_column_type(typ, postgres_compat)
-    }
-
-    pub(crate) fn build_tunnel_definition(
-        &self,
-        ssh_tunnel: Option<with_options::Object>,
-        aws_privatelink: Option<ConnectionDefaultAwsPrivatelink<Aug>>,
-    ) -> Result<Tunnel<ReferencedConnection>, PlanError> {
-        match (ssh_tunnel, aws_privatelink) {
-            (None, None) => Ok(Tunnel::Direct),
-            (Some(ssh_tunnel), None) => {
-                let id = CatalogItemId::from(ssh_tunnel);
-                let ssh_tunnel = self.catalog.get_item(&id);
-                match ssh_tunnel.connection()? {
-                    Connection::Ssh(_connection) => Ok(Tunnel::Ssh(SshTunnel {
-                        connection_id: id,
-                        connection: id,
-                    })),
-                    _ => sql_bail!("{} is not an SSH connection", ssh_tunnel.name().item),
-                }
-            }
-            (None, Some(aws_privatelink)) => {
-                let id = aws_privatelink.connection.item_id().clone();
-                let entry = self.catalog.get_item(&id);
-                match entry.connection()? {
-                    Connection::AwsPrivatelink(_) => Ok(Tunnel::AwsPrivatelink(AwsPrivatelink {
-                        connection_id: id,
-                        // By default we do not specify an availability zone for the tunnel.
-                        availability_zone: None,
-                        // We always use the port as specified by the top-level connection.
-                        port: aws_privatelink.port,
-                    })),
-                    _ => sql_bail!("{} is not an AWS PRIVATELINK connection", entry.name().item),
-                }
-            }
-            (Some(_), Some(_)) => {
-                sql_bail!("cannot specify both SSH TUNNEL and AWS PRIVATELINK");
-            }
-        }
+        self.catalog.humanize_sql_column_type(typ, postgres_compat)
     }
 
     pub fn relation_desc_into_table_defs(
@@ -1049,6 +1008,7 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::AlterCluster(_) => DDL,
             Statement::AlterConnection(_) => DDL,
             Statement::AlterIndex(_) => DDL,
+            Statement::AlterMaterializedViewApplyReplacement(_) => DDL,
             Statement::AlterObjectRename(_) => DDL,
             Statement::AlterObjectSwap(_) => DDL,
             Statement::AlterNetworkPolicy(_) => DDL,
@@ -1066,7 +1026,6 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::CreateCluster(_) => DDL,
             Statement::CreateClusterReplica(_) => DDL,
             Statement::CreateConnection(_) => DDL,
-            Statement::CreateContinualTask(_) => DDL,
             Statement::CreateDatabase(_) => DDL,
             Statement::CreateIndex(_) => DDL,
             Statement::CreateRole(_) => DDL,

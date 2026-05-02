@@ -19,7 +19,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::num::NonZeroU32;
 use std::str::FromStr;
 use std::sync::LazyLock;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use chrono::{DateTime, Utc};
 use mz_auth::password::Password;
@@ -425,15 +425,11 @@ pub struct CatalogConfig {
     pub session_id: Uuid,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
-    /// Default timestamp interval.
-    pub timestamp_interval: Duration,
     /// Function that returns a wall clock now time; can safely be mocked to return
     /// 0.
     pub now: NowFn,
     /// Context for source and sink connections.
     pub connection_context: ConnectionContext,
-    /// Which system builtins to include. Not allowed to change dynamically.
-    pub builtins_cfg: BuiltinsConfig,
     /// Helm chart version
     pub helm_chart_version: Option<String>,
 }
@@ -507,6 +503,28 @@ pub enum PasswordAction {
     NoChange,
 }
 
+/// The authenticator that auto-provisioned a role on first login.
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Arbitrary
+)]
+pub enum AutoProvisionSource {
+    /// Role was auto-provisioned by [`mz_auth::AuthenticatorKind::Oidc`].
+    Oidc,
+    /// Role was auto-provisioned by [`mz_auth::AuthenticatorKind::Frontegg`].
+    Frontegg,
+    /// Role was auto-provisioned by [`mz_auth::AuthenticatorKind::None`]
+    None,
+}
+
 /// A raw representation of attributes belonging to a [`CatalogRole`] that we might
 /// get as input from the user. This includes the password.
 /// This struct explicitly does not implement `Serialize` or `Deserialize` to avoid
@@ -523,12 +541,24 @@ pub struct RoleAttributesRaw {
     pub superuser: Option<bool>,
     /// Whether this role is login
     pub login: Option<bool>,
+    /// The authenticator that auto-provisioned this role, if any.
+    pub auto_provision_source: Option<AutoProvisionSource>,
     // Force use of constructor.
     _private: (),
 }
 
 /// Attributes belonging to a [`CatalogRole`].
-#[derive(Debug, Clone, Eq, Serialize, Deserialize, PartialEq, Ord, PartialOrd, Arbitrary)]
+#[derive(
+    Debug,
+    Clone,
+    Eq,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Arbitrary
+)]
 pub struct RoleAttributes {
     /// Indicates whether the role has inheritance of privileges.
     pub inherit: bool,
@@ -536,6 +566,8 @@ pub struct RoleAttributes {
     pub superuser: Option<bool>,
     /// Whether this role is login
     pub login: Option<bool>,
+    /// The authenticator that auto-provisioned this role, if any.
+    pub auto_provision_source: Option<AutoProvisionSource>,
     // Force use of constructor.
     _private: (),
 }
@@ -549,6 +581,7 @@ impl RoleAttributesRaw {
             scram_iterations: None,
             superuser: None,
             login: None,
+            auto_provision_source: None,
             _private: (),
         }
     }
@@ -569,11 +602,12 @@ impl RoleAttributes {
             inherit: true,
             superuser: None,
             login: None,
+            auto_provision_source: None,
             _private: (),
         }
     }
 
-    /// Adds all attributes except password.
+    /// Adds all attributes except password and auto_provision_source.
     pub const fn with_all(mut self) -> RoleAttributes {
         self.inherit = true;
         self.superuser = Some(true);
@@ -593,6 +627,7 @@ impl From<RoleAttributesRaw> for RoleAttributes {
             inherit,
             superuser,
             login,
+            auto_provision_source,
             ..
         }: RoleAttributesRaw,
     ) -> RoleAttributes {
@@ -600,6 +635,7 @@ impl From<RoleAttributesRaw> for RoleAttributes {
             inherit,
             superuser,
             login,
+            auto_provision_source,
             _private: (),
         }
     }
@@ -611,6 +647,7 @@ impl From<RoleAttributes> for RoleAttributesRaw {
             inherit,
             superuser,
             login,
+            auto_provision_source,
             ..
         }: RoleAttributes,
     ) -> RoleAttributesRaw {
@@ -620,6 +657,7 @@ impl From<RoleAttributes> for RoleAttributesRaw {
             scram_iterations: None,
             superuser,
             login,
+            auto_provision_source,
             _private: (),
         }
     }
@@ -643,6 +681,7 @@ impl From<PlannedRoleAttributes> for RoleAttributesRaw {
             scram_iterations,
             superuser,
             login,
+            auto_provision_source: None,
             _private: (),
         }
     }
@@ -836,6 +875,9 @@ pub trait CatalogItem {
     /// catalog item is a table that accepts writes.
     fn writable_table_details(&self) -> Option<&[Expr<Aug>]>;
 
+    /// The item this catalog item replaces, if any.
+    fn replacement_target(&self) -> Option<CatalogItemId>;
+
     /// Returns the type information associated with the catalog item, if the
     /// catalog item is a type.
     fn type_details(&self) -> Option<&CatalogTypeDetails<IdReference>>;
@@ -862,16 +904,27 @@ pub trait CatalogItem {
 pub trait CatalogCollectionItem: CatalogItem + Send + Sync {
     /// Returns a description of the result set produced by the catalog item.
     ///
-    /// If the catalog item is not of a type that produces data (i.e., a sink or
-    /// an index), it returns an error.
-    fn desc(&self, name: &FullItemName) -> Result<Cow<'_, RelationDesc>, CatalogError>;
+    /// If the catalog item is not of a type that produces data (e.g., a sink or
+    /// an index), it returns `None`.
+    fn relation_desc(&self) -> Option<Cow<'_, RelationDesc>>;
 
     /// The [`GlobalId`] for this item.
     fn global_id(&self) -> GlobalId;
 }
 
 /// The type of a [`CatalogItem`].
-#[derive(Debug, Deserialize, Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Debug,
+    Deserialize,
+    Clone,
+    Copy,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub enum CatalogItemType {
     /// A table.
     Table,
@@ -893,8 +946,6 @@ pub enum CatalogItemType {
     Secret,
     /// A connection.
     Connection,
-    /// A continual task.
-    ContinualTask,
 }
 
 impl CatalogItemType {
@@ -928,7 +979,6 @@ impl CatalogItemType {
             CatalogItemType::Func => false,
             CatalogItemType::Secret => false,
             CatalogItemType::Connection => false,
-            CatalogItemType::ContinualTask => true,
         }
     }
 }
@@ -946,7 +996,6 @@ impl fmt::Display for CatalogItemType {
             CatalogItemType::Func => f.write_str("func"),
             CatalogItemType::Secret => f.write_str("secret"),
             CatalogItemType::Connection => f.write_str("connection"),
-            CatalogItemType::ContinualTask => f.write_str("continual task"),
         }
     }
 }
@@ -964,7 +1013,6 @@ impl From<CatalogItemType> for ObjectType {
             CatalogItemType::Func => ObjectType::Func,
             CatalogItemType::Secret => ObjectType::Secret,
             CatalogItemType::Connection => ObjectType::Connection,
-            CatalogItemType::ContinualTask => ObjectType::ContinualTask,
         }
     }
 }
@@ -982,7 +1030,6 @@ impl From<CatalogItemType> for mz_audit_log::ObjectType {
             CatalogItemType::Func => mz_audit_log::ObjectType::Func,
             CatalogItemType::Secret => mz_audit_log::ObjectType::Secret,
             CatalogItemType::Connection => mz_audit_log::ObjectType::Connection,
-            CatalogItemType::ContinualTask => mz_audit_log::ObjectType::ContinualTask,
         }
     }
 }
@@ -1383,13 +1430,6 @@ pub enum CatalogError {
         /// The expected type of the item.
         expected_type: CatalogItemType,
     },
-    /// Invalid attempt to depend on a non-dependable item.
-    InvalidDependency {
-        /// The invalid item's name.
-        name: String,
-        /// The invalid item's type.
-        typ: CatalogItemType,
-    },
     /// Ran out of unique IDs.
     IdExhaustion,
     /// Ran out of unique OIDs.
@@ -1451,17 +1491,6 @@ impl fmt::Display for CatalogError {
             } => {
                 write!(f, "\"{name}\" is a {actual_type} not a {expected_type}")
             }
-            Self::InvalidDependency { name, typ } => write!(
-                f,
-                "catalog item '{}' is {} {} and so cannot be depended upon",
-                name,
-                if matches!(typ, CatalogItemType::Index) {
-                    "an"
-                } else {
-                    "a"
-                },
-                typ,
-            ),
             Self::IdExhaustion => write!(f, "id counter overflows i64"),
             Self::OidExhaustion => write!(f, "oid counter overflows u32"),
             Self::TimelineAlreadyExists(name) => write!(f, "timeline '{name}' already exists"),
@@ -1498,7 +1527,18 @@ impl Error for CatalogError {}
 
 // Enum variant docs would be useless here.
 #[allow(missing_docs)]
-#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash, Copy, Deserialize, Serialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialOrd,
+    Ord,
+    PartialEq,
+    Eq,
+    Hash,
+    Copy,
+    Deserialize,
+    Serialize
+)]
 /// The types of objects stored in the catalog.
 pub enum ObjectType {
     Table,
@@ -1516,7 +1556,6 @@ pub enum ObjectType {
     Database,
     Schema,
     Func,
-    ContinualTask,
     NetworkPolicy,
 }
 
@@ -1527,8 +1566,7 @@ impl ObjectType {
             ObjectType::Table
             | ObjectType::View
             | ObjectType::MaterializedView
-            | ObjectType::Source
-            | ObjectType::ContinualTask => true,
+            | ObjectType::Source => true,
             ObjectType::Sink
             | ObjectType::Index
             | ObjectType::Type
@@ -1564,7 +1602,6 @@ impl From<mz_sql_parser::ast::ObjectType> for ObjectType {
             mz_sql_parser::ast::ObjectType::Database => ObjectType::Database,
             mz_sql_parser::ast::ObjectType::Schema => ObjectType::Schema,
             mz_sql_parser::ast::ObjectType::Func => ObjectType::Func,
-            mz_sql_parser::ast::ObjectType::ContinualTask => ObjectType::ContinualTask,
             mz_sql_parser::ast::ObjectType::NetworkPolicy => ObjectType::NetworkPolicy,
         }
     }
@@ -1588,7 +1625,6 @@ impl From<CommentObjectId> for ObjectType {
             CommentObjectId::Schema(_) => ObjectType::Schema,
             CommentObjectId::Cluster(_) => ObjectType::Cluster,
             CommentObjectId::ClusterReplica(_) => ObjectType::ClusterReplica,
-            CommentObjectId::ContinualTask(_) => ObjectType::ContinualTask,
             CommentObjectId::NetworkPolicy(_) => ObjectType::NetworkPolicy,
         }
     }
@@ -1612,13 +1648,23 @@ impl Display for ObjectType {
             ObjectType::Database => "DATABASE",
             ObjectType::Schema => "SCHEMA",
             ObjectType::Func => "FUNCTION",
-            ObjectType::ContinualTask => "CONTINUAL TASK",
             ObjectType::NetworkPolicy => "NETWORK POLICY",
         })
     }
 }
 
-#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash, Copy, Deserialize, Serialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialOrd,
+    Ord,
+    PartialEq,
+    Eq,
+    Hash,
+    Copy,
+    Deserialize,
+    Serialize
+)]
 /// The types of objects in the system.
 pub enum SystemObjectType {
     /// Catalog object type.
@@ -1843,17 +1889,6 @@ impl DefaultPrivilegeAclItem {
             acl_mode: self.acl_mode,
         }
     }
-}
-
-/// Which builtins to return in `BUILTINS::iter`.
-///
-/// All calls to `BUILTINS::iter` within the lifetime of an environmentd process
-/// must provide an equal `BuiltinsConfig`. It is not allowed to change
-/// dynamically.
-#[derive(Debug, Clone)]
-pub struct BuiltinsConfig {
-    /// If true, include system builtin continual tasks.
-    pub include_continual_tasks: bool,
 }
 
 #[cfg(test)]

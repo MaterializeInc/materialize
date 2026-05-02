@@ -17,15 +17,15 @@ name = "persistcli"
 bench = false
 
 [dependencies]
-anyhow = "1.0.100"
-arrow = { version = "55.2.0", default-features = false }
-async-trait = "0.1.89"
-axum = "0.7.5"
-bytes = { version = "1.10.1", features = ["serde"] }
-clap = { version = "4.5.23", features = ["derive", "env"] }
-differential-dataflow = "0.18.0"
-futures = "0.3.31"
-humantime = "2.2.0"
+anyhow.workspace = true
+arrow.workspace = true
+async-trait.workspace = true
+axum.workspace = true
+bytes = { workspace = true, features = ["serde"] }
+clap = { workspace = true, features = ["env"] }
+differential-dataflow.workspace = true
+futures.workspace = true
+humantime.workspace = true
 mz-dyncfg = { path = "../dyncfg" }
 mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
@@ -36,21 +36,17 @@ mz-persist-types = { path = "../persist-types" }
 mz-repr = { path = "../repr" }
 mz-timestamp-oracle = { path = "../timestamp-oracle" }
 mz-txn-wal = { path = "../txn-wal" }
-num_cpus = "1.17.0"
-num_enum = "0.7.5"
-prometheus = { version = "0.14.0", default-features = false }
-serde = { version = "1.0.219", features = ["derive", "rc"] }
-serde_json = "1.0.145"
-timely = "0.25.1"
-tokio = { version = "1.44.1", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread", "time"] }
-tracing = "0.1.37"
-url = "2.3.1"
-uuid = { version = "1.18.1", features = ["v4"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+num_cpus.workspace = true
+num_enum.workspace = true
+prometheus.workspace = true
+serde = { workspace = true, features = ["rc"] }
+serde_json.workspace = true
+timely.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+url.workspace = true
+uuid = { workspace = true, features = ["v4"] }
 
 [features]
-default = ["tokio-console", "workspace-hack"]
+default = ["tokio-console"]
 tokio-console = ["mz-ore/tokio-console"]
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]

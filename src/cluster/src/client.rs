@@ -21,15 +21,13 @@ use mz_cluster_client::client::{TimelyConfig, TryIntoProtocolNonce};
 use mz_service::client::{GenericClient, Partitionable, Partitioned};
 use mz_service::local::LocalClient;
 use timely::WorkerConfig;
-use timely::communication::Allocate;
-use timely::communication::allocator::GenericBuilder;
 use timely::communication::allocator::zero_copy::bytes_slab::BytesRefill;
 use timely::communication::initialize::WorkerGuards;
 use timely::execute::execute_from;
 use timely::worker::Worker as TimelyWorker;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
-use tracing::info;
+use tracing::{info, info_span};
 use uuid::Uuid;
 
 use crate::communication::initialize_networking;
@@ -52,9 +50,9 @@ where
 pub struct TimelyContainer<C: ClusterSpec> {
     /// Channels over which to send endpoints for wiring up a new Client
     client_txs: Vec<
-        crossbeam_channel::Sender<(
+        mpsc::UnboundedSender<(
             Uuid,
-            crossbeam_channel::Receiver<C::Command>,
+            mpsc::UnboundedReceiver<C::Command>,
             mpsc::UnboundedSender<C::Response>,
         )>,
     >,
@@ -92,7 +90,7 @@ where
         let mut command_txs = Vec::new();
         let mut response_rxs = Vec::new();
         for client_tx in &timely.client_txs {
-            let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+            let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
             let (resp_tx, resp_rx) = mpsc::unbounded_channel();
 
             client_tx
@@ -166,13 +164,16 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
     /// The cluster response type.
     type Response: fmt::Debug + Send;
 
+    /// The name of this cluster ("compute" or "storage").
+    const NAME: &str;
+
     /// Run the given Timely worker.
-    fn run_worker<A: Allocate + 'static>(
+    fn run_worker(
         &self,
-        timely_worker: &mut TimelyWorker<A>,
-        client_rx: crossbeam_channel::Receiver<(
+        timely_worker: &mut TimelyWorker,
+        client_rx: mpsc::UnboundedReceiver<(
             Uuid,
-            crossbeam_channel::Receiver<Self::Command>,
+            mpsc::UnboundedReceiver<Self::Command>,
             mpsc::UnboundedSender<Self::Response>,
         )>,
     );
@@ -185,7 +186,7 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
     ) -> Result<TimelyContainer<Self>, Error> {
         info!("Building timely container with config {config:?}");
         let (client_txs, client_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
-            .map(|_| crossbeam_channel::unbounded())
+            .map(|_| mpsc::unbounded_channel())
             .unzip();
         let client_rxs: Mutex<Vec<_>> = Mutex::new(client_rxs.into_iter().map(Some).collect());
 
@@ -201,26 +202,14 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
             }
         };
 
-        let (builders, other) = if config.enable_zero_copy {
-            use timely::communication::allocator::zero_copy::allocator_process::ProcessBuilder;
-            initialize_networking::<ProcessBuilder>(
-                config.workers,
-                config.process,
-                config.addresses.clone(),
-                refill,
-                GenericBuilder::ZeroCopyBinary,
-            )
-            .await?
-        } else {
-            initialize_networking::<timely::communication::allocator::Process>(
-                config.workers,
-                config.process,
-                config.addresses.clone(),
-                refill,
-                GenericBuilder::ZeroCopy,
-            )
-            .await?
-        };
+        let (builders, other) = initialize_networking(
+            config.workers,
+            config.process,
+            config.addresses.clone(),
+            refill,
+            config.enable_zero_copy,
+        )
+        .await?;
 
         let mut worker_config = WorkerConfig::default();
 
@@ -269,9 +258,14 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
 
         let spec = self.clone();
         let worker_guards = execute_from(builders, other, worker_config, move |timely_worker| {
-            let timely_worker_index = timely_worker.index();
+            let worker_idx = timely_worker.index();
+
+            // Per worker tracing span, lets us identify Timely clusters and workers in the logs.
+            let span = info_span!("timely", name = Self::NAME, worker_id = worker_idx);
+            let _span_guard = span.enter();
+
             let _tokio_guard = tokio_executor.enter();
-            let client_rx = client_rxs.lock().unwrap()[timely_worker_index % config.workers]
+            let client_rx = client_rxs.lock().unwrap()[worker_idx % config.workers]
                 .take()
                 .unwrap();
             spec.run_worker(timely_worker, client_rx);

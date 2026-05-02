@@ -35,7 +35,7 @@ CREATE TABLE green.t2 (y int);
 statement ok
 INSERT INTO green.t2 VALUES (4), (5), (6);
 
-statement error db error: ERROR: unknown catalog item 'blue\.t2'
+statement error unknown catalog item 'blue\.t2'
 SELECT * FROM blue.t2;
 
 statement ok
@@ -77,10 +77,10 @@ SELECT * FROM blue.t2;
 8
 9
 
-statement error db error: ERROR: unknown schema 'null'
+statement error unknown schema 'null'
 ALTER SCHEMA blue SWAP WITH NULL;
 
-statement error db error: ERROR: unknown schema 'null'
+statement error unknown schema 'null'
 ALTER SCHEMA NULL SWAP WITH green;
 
 statement ok
@@ -96,8 +96,23 @@ SELECT * FROM this_is_a_schema_with_a_super_long_name_of_exactly_255_characters_
 8
 9
 
-statement error db error: ERROR: cannot swap schemas that are in the ambient database
+statement error cannot swap schemas that are in the ambient database
 ALTER SCHEMA mz_internal SWAP WITH mz_catalog;
+
+# Temporary schema swap should fail with correct error message.
+# With lazy temporary schema creation, the temp schema may not exist yet,
+# but we still need to return the correct error (not "unknown schema").
+
+statement error cannot swap schemas that are in the ambient database
+ALTER SCHEMA mz_temp SWAP WITH blue;
+
+statement error cannot swap schemas that are in the ambient database
+ALTER SCHEMA blue SWAP WITH mz_temp;
+
+simple conn=mz_system,user=mz_system
+ALTER SCHEMA mz_temp SWAP WITH green;
+----
+db error: ERROR: cannot swap schemas that are in the ambient database
 
 statement ok
 CREATE DATABASE a;
@@ -111,10 +126,10 @@ CREATE DATABASE b;
 statement ok
 CREATE SCHEMA b.blue;
 
-statement error db error: ERROR: Expected end of statement, found dot
+statement error Expected end of statement, found dot
 ALTER SCHEMA a.green SWAP WITH b.blue;
 
-statement error db error: ERROR: unacceptable schema name 'mz_swap'
+statement error unacceptable schema name 'mz_swap'
 CREATE SCHEMA mz_swap;
 
 statement ok
@@ -139,13 +154,84 @@ SELECT name FROM mz_clusters JOIN ( SELECT cluster_id FROM mz_indexes WHERE name
 ----
 bar
 
+
+# Ensure item parsing during applying a schema swap gracefully handles persisted
+# SQL that depends on disabled feature flags.
+# Regression test for database-issues#9971.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_load_generator_counter TO true;
+----
+COMPLETE 0
+
+statement ok
+CREATE SOURCE blue.ctr FROM LOAD GENERATOR COUNTER;
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_load_generator_counter TO false;
+----
+COMPLETE 0
+
+statement ok
+ALTER SCHEMA blue SWAP WITH green;
+
+
+# Test IF EXISTS with SWAP.
+# IF EXISTS should be a no-op when the named object doesn't exist.
+
+# Cluster: IF EXISTS with non-existent cluster should succeed as a no-op.
+statement ok
+ALTER CLUSTER IF EXISTS nonexistent SWAP WITH bar;
+
+# Verify bar still exists and wasn't affected.
+query T
+SELECT name FROM mz_clusters WHERE name = 'bar';
+----
+bar
+
+# Cluster: IF EXISTS with existing cluster should still work normally.
+statement ok
+CREATE CLUSTER swap_test_a SIZE = 'scale=1,workers=1';
+
+statement ok
+CREATE CLUSTER swap_test_b SIZE = 'scale=1,workers=1';
+
+statement ok
+ALTER CLUSTER IF EXISTS swap_test_a SWAP WITH swap_test_b;
+
+statement ok
+DROP CLUSTER swap_test_a CASCADE;
+
+statement ok
+DROP CLUSTER swap_test_b CASCADE;
+
+# Schema: IF EXISTS with non-existent schema should succeed as a no-op.
+statement ok
+ALTER SCHEMA IF EXISTS nonexistent SWAP WITH green;
+
+# Schema: IF EXISTS with existing schema should still work normally.
+statement ok
+CREATE SCHEMA swap_s1;
+
+statement ok
+CREATE SCHEMA swap_s2;
+
+statement ok
+ALTER SCHEMA IF EXISTS swap_s1 SWAP WITH swap_s2;
+
+statement ok
+DROP SCHEMA swap_s1 CASCADE;
+
+statement ok
+DROP SCHEMA swap_s2 CASCADE;
+
 # Disable the feature.
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_alter_swap TO false;
 ----
 COMPLETE 0
 
-statement error db error: ERROR: the ALTER SWAP feature for objects is not available
+statement error the ALTER SWAP feature for objects is not available
 ALTER CLUSTER bar SWAP WITH foo;
 
 # Cleanup.

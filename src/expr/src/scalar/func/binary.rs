@@ -9,28 +9,35 @@
 
 //! Utilities for binary functions.
 
-use mz_repr::{Datum, DatumType, RowArena, SqlColumnType};
+use mz_ore::assert_none;
+use mz_repr::{Datum, InputDatumType, OutputDatumType, ReprColumnType, RowArena, SqlColumnType};
 
 use crate::{EvalError, MirScalarExpr};
 
 /// A description of an SQL binary function that has the ability to lazy evaluate its arguments
 // This trait will eventually be annotated with #[enum_dispatch] to autogenerate the UnaryFunc enum
-#[allow(unused)]
 pub(crate) trait LazyBinaryFunc {
     fn eval<'a>(
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
-        b: &'a MirScalarExpr,
+        exprs: &[&'a MirScalarExpr],
     ) -> Result<Datum<'a>, EvalError>;
 
     /// The output SqlColumnType of this function.
-    fn output_type(
-        &self,
-        input_type_a: SqlColumnType,
-        input_type_b: SqlColumnType,
-    ) -> SqlColumnType;
+    fn output_sql_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType;
+
+    /// A wrapper around [`Self::output_sql_type`] that works with representation types.
+    fn output_type(&self, input_types: &[ReprColumnType]) -> ReprColumnType {
+        ReprColumnType::from(
+            &self.output_sql_type(
+                &input_types
+                    .iter()
+                    .map(SqlColumnType::from_repr)
+                    .collect::<Vec<_>>(),
+            ),
+        )
+    }
 
     /// Whether this function will produce NULL on NULL input.
     fn propagates_nulls(&self) -> bool;
@@ -65,25 +72,32 @@ pub(crate) trait LazyBinaryFunc {
     fn is_infix_op(&self) -> bool;
 }
 
-#[allow(unused)]
-pub(crate) trait EagerBinaryFunc<'a> {
-    type Input1: DatumType<'a, EvalError>;
-    type Input2: DatumType<'a, EvalError>;
-    type Output: DatumType<'a, EvalError>;
+pub(crate) trait EagerBinaryFunc {
+    type Input<'a>: InputDatumType<'a, EvalError>;
+    type Output<'a>: OutputDatumType<'a, EvalError>;
 
-    fn call(&self, a: Self::Input1, b: Self::Input2, temp_storage: &'a RowArena) -> Self::Output;
+    fn call<'a>(&self, input: Self::Input<'a>, temp_storage: &'a RowArena) -> Self::Output<'a>;
 
     /// The output SqlColumnType of this function
-    fn output_type(
-        &self,
-        input_type_a: SqlColumnType,
-        input_type_b: SqlColumnType,
-    ) -> SqlColumnType;
+    fn output_sql_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType;
+
+    /// The output of this function as a representation type.
+    #[allow(dead_code)]
+    fn output_type(&self, input_types: &[ReprColumnType]) -> ReprColumnType {
+        ReprColumnType::from(
+            &self.output_sql_type(
+                &input_types
+                    .iter()
+                    .map(SqlColumnType::from_repr)
+                    .collect::<Vec<_>>(),
+            ),
+        )
+    }
 
     /// Whether this function will produce NULL on NULL input
     fn propagates_nulls(&self) -> bool {
         // If the inputs are not nullable then nulls are propagated
-        !Self::Input1::nullable() && !Self::Input2::nullable()
+        !Self::Input::nullable()
     }
 
     /// Whether this function will produce NULL on non-NULL input
@@ -111,45 +125,36 @@ pub(crate) trait EagerBinaryFunc<'a> {
     }
 }
 
-impl<T: for<'a> EagerBinaryFunc<'a>> LazyBinaryFunc for T {
+impl<T: EagerBinaryFunc> LazyBinaryFunc for T {
     fn eval<'a>(
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
-        b: &'a MirScalarExpr,
+        exprs: &[&'a MirScalarExpr],
     ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        let b = b.eval(datums, temp_storage)?;
-        let a = match T::Input1::try_from_result(Ok(a)) {
+        let mut datums = exprs
+            .into_iter()
+            .map(|expr| expr.eval(datums, temp_storage));
+        let input = match T::Input::try_from_iter(&mut datums) {
             // If we can convert to the input type then we call the function
             Ok(input) => input,
             // If we can't and we got a non-null datum something went wrong in the planner
-            Err(Ok(datum)) if !datum.is_null() => {
+            Err(Ok(Some(datum))) if !datum.is_null() => {
                 return Err(EvalError::Internal("invalid input type".into()));
             }
-            // Otherwise we just propagate NULLs and errors
-            Err(res) => return res,
-        };
-        let b = match T::Input2::try_from_result(Ok(b)) {
-            // If we can convert to the input type then we call the function
-            Ok(input) => input,
-            // If we can't and we got a non-null datum something went wrong in the planner
-            Err(Ok(datum)) if !datum.is_null() => {
-                return Err(EvalError::Internal("invalid input type".into()));
+            Err(Ok(None)) => {
+                return Err(EvalError::Internal("unexpectedly missing parameter".into()));
             }
             // Otherwise we just propagate NULLs and errors
-            Err(res) => return res,
+            Err(Ok(Some(datum))) => return Ok(datum),
+            Err(Err(res)) => return Err(res),
         };
-        self.call(a, b, temp_storage).into_result(temp_storage)
+        assert_none!(datums.next(), "No leftover input arguments");
+        self.call(input, temp_storage).into_result(temp_storage)
     }
 
-    fn output_type(
-        &self,
-        input_type_a: SqlColumnType,
-        input_type_b: SqlColumnType,
-    ) -> SqlColumnType {
-        self.output_type(input_type_a, input_type_b)
+    fn output_sql_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType {
+        self.output_sql_type(input_types)
     }
 
     fn propagates_nulls(&self) -> bool {
@@ -177,230 +182,254 @@ impl<T: for<'a> EagerBinaryFunc<'a>> LazyBinaryFunc for T {
     }
 }
 
-mod derive {
-    use crate::scalar::func::*;
+pub use derive::BinaryFunc;
 
-    derive_binary_from! {
-        AddDateInterval,
-        AddDateTime,
-        AddFloat32,
-        AddFloat64,
-        AddInt16,
-        AddInt32,
-        AddInt64,
-        AddInterval,
-        AddNumeric,
-        AddTimeInterval,
-        AddTimestampInterval,
-        AddTimestampTzInterval,
-        AddUint16,
-        AddUint32,
-        AddUint64,
-        AgeTimestamp,
-        AgeTimestampTz,
-        ArrayArrayConcat,
-        ArrayContains,
-        // ArrayContainsArray { rev: bool },
-        ArrayLength,
-        ArrayLower,
-        ArrayRemove,
-        ArrayUpper,
-        BitAndInt16,
-        BitAndInt32,
-        BitAndInt64,
-        BitAndUint16,
-        BitAndUint32,
-        BitAndUint64,
-        BitOrInt16,
-        BitOrInt32,
-        BitOrInt64,
-        BitOrUint16,
-        BitOrUint32,
-        BitOrUint64,
-        BitShiftLeftInt16,
-        BitShiftLeftInt32,
-        BitShiftLeftInt64,
-        BitShiftLeftUint16,
-        BitShiftLeftUint32,
-        BitShiftLeftUint64,
-        BitShiftRightInt16,
-        BitShiftRightInt32,
-        BitShiftRightInt64,
-        BitShiftRightUint16,
-        BitShiftRightUint32,
-        BitShiftRightUint64,
-        BitXorInt16,
-        BitXorInt32,
-        BitXorInt64,
-        BitXorUint16,
-        BitXorUint32,
-        BitXorUint64,
-        ConstantTimeEqBytes,
-        ConstantTimeEqString,
-        ConvertFrom,
-        DateBinTimestamp,
-        DateBinTimestampTz,
-        DatePartInterval(DatePartIntervalF64),
-        DatePartTime(DatePartTimeF64),
-        DatePartTimestamp(DatePartTimestampTimestampF64),
-        DatePartTimestampTz(DatePartTimestampTimestampTzF64),
-        DateTruncInterval,
-        DateTruncTimestamp(DateTruncUnitsTimestamp),
-        DateTruncTimestampTz(DateTruncUnitsTimestampTz),
-        Decode,
-        DigestBytes,
-        DigestString,
-        DivFloat32,
-        DivFloat64,
-        DivInt16,
-        DivInt32,
-        DivInt64,
-        DivInterval,
-        DivNumeric,
-        DivUint16,
-        DivUint32,
-        DivUint64,
-        ElementListConcat,
-        Encode,
-        EncodedBytesCharLength,
-        Eq,
-        ExtractDate(ExtractDateUnits),
+mod derive {
+    use std::fmt;
+
+    use mz_repr::{Datum, ReprColumnType, RowArena, SqlColumnType};
+
+    use crate::scalar::func::binary::LazyBinaryFunc;
+    use crate::scalar::func::*;
+    use crate::{EvalError, MirScalarExpr};
+
+    derive_binary! {
+        AddInt16(AddInt16),
+        AddInt32(AddInt32),
+        AddInt64(AddInt64),
+        AddUint16(AddUint16),
+        AddUint32(AddUint32),
+        AddUint64(AddUint64),
+        AddFloat32(AddFloat32),
+        AddFloat64(AddFloat64),
+        AddInterval(AddInterval),
+        AddTimestampInterval(AddTimestampInterval),
+        AddTimestampTzInterval(AddTimestampTzInterval),
+        AddDateInterval(AddDateInterval),
+        AddDateTime(AddDateTime),
+        AddTimeInterval(AddTimeInterval),
+        AddNumeric(AddNumeric),
+        AgeTimestamp(AgeTimestamp),
+        AgeTimestampTz(AgeTimestampTz),
+        BitAndInt16(BitAndInt16),
+        BitAndInt32(BitAndInt32),
+        BitAndInt64(BitAndInt64),
+        BitAndUint16(BitAndUint16),
+        BitAndUint32(BitAndUint32),
+        BitAndUint64(BitAndUint64),
+        BitOrInt16(BitOrInt16),
+        BitOrInt32(BitOrInt32),
+        BitOrInt64(BitOrInt64),
+        BitOrUint16(BitOrUint16),
+        BitOrUint32(BitOrUint32),
+        BitOrUint64(BitOrUint64),
+        BitXorInt16(BitXorInt16),
+        BitXorInt32(BitXorInt32),
+        BitXorInt64(BitXorInt64),
+        BitXorUint16(BitXorUint16),
+        BitXorUint32(BitXorUint32),
+        BitXorUint64(BitXorUint64),
+        BitShiftLeftInt16(BitShiftLeftInt16),
+        BitShiftLeftInt32(BitShiftLeftInt32),
+        BitShiftLeftInt64(BitShiftLeftInt64),
+        BitShiftLeftUint16(BitShiftLeftUint16),
+        BitShiftLeftUint32(BitShiftLeftUint32),
+        BitShiftLeftUint64(BitShiftLeftUint64),
+        BitShiftRightInt16(BitShiftRightInt16),
+        BitShiftRightInt32(BitShiftRightInt32),
+        BitShiftRightInt64(BitShiftRightInt64),
+        BitShiftRightUint16(BitShiftRightUint16),
+        BitShiftRightUint32(BitShiftRightUint32),
+        BitShiftRightUint64(BitShiftRightUint64),
+        SubInt16(SubInt16),
+        SubInt32(SubInt32),
+        SubInt64(SubInt64),
+        SubUint16(SubUint16),
+        SubUint32(SubUint32),
+        SubUint64(SubUint64),
+        SubFloat32(SubFloat32),
+        SubFloat64(SubFloat64),
+        SubInterval(SubInterval),
+        SubTimestamp(SubTimestamp),
+        SubTimestampTz(SubTimestampTz),
+        SubTimestampInterval(SubTimestampInterval),
+        SubTimestampTzInterval(SubTimestampTzInterval),
+        SubDate(SubDate),
+        SubDateInterval(SubDateInterval),
+        SubTime(SubTime),
+        SubTimeInterval(SubTimeInterval),
+        SubNumeric(SubNumeric),
+        MulInt16(MulInt16),
+        MulInt32(MulInt32),
+        MulInt64(MulInt64),
+        MulUint16(MulUint16),
+        MulUint32(MulUint32),
+        MulUint64(MulUint64),
+        MulFloat32(MulFloat32),
+        MulFloat64(MulFloat64),
+        MulNumeric(MulNumeric),
+        MulInterval(MulInterval),
+        DivInt16(DivInt16),
+        DivInt32(DivInt32),
+        DivInt64(DivInt64),
+        DivUint16(DivUint16),
+        DivUint32(DivUint32),
+        DivUint64(DivUint64),
+        DivFloat32(DivFloat32),
+        DivFloat64(DivFloat64),
+        DivNumeric(DivNumeric),
+        DivInterval(DivInterval),
+        ModInt16(ModInt16),
+        ModInt32(ModInt32),
+        ModInt64(ModInt64),
+        ModUint16(ModUint16),
+        ModUint32(ModUint32),
+        ModUint64(ModUint64),
+        ModFloat32(ModFloat32),
+        ModFloat64(ModFloat64),
+        ModNumeric(ModNumeric),
+        RoundNumeric(RoundNumericBinary),
+        Eq(Eq),
+        NotEq(NotEq),
+        Lt(Lt),
+        Lte(Lte),
+        Gt(Gt),
+        Gte(Gte),
+        LikeEscape(LikeEscape),
+        IsLikeMatchCaseInsensitive(IsLikeMatchCaseInsensitive),
+        IsLikeMatchCaseSensitive(IsLikeMatchCaseSensitive),
+        IsRegexpMatchCaseSensitive(IsRegexpMatchCaseSensitive),
+        IsRegexpMatchCaseInsensitive(IsRegexpMatchCaseInsensitive),
+        ToCharTimestamp(ToCharTimestampFormat),
+        ToCharTimestampTz(ToCharTimestampTzFormat),
+        DateBinTimestamp(DateBinTimestamp),
+        DateBinTimestampTz(DateBinTimestampTz),
         ExtractInterval(DatePartIntervalNumeric),
         ExtractTime(DatePartTimeNumeric),
         ExtractTimestamp(DatePartTimestampTimestampNumeric),
         ExtractTimestampTz(DatePartTimestampTimestampTzNumeric),
-        GetBit,
-        GetByte,
-        Gt,
-        Gte,
-        // IsLikeMatch
-        // IsRegexpMatch
-        JsonbConcat,
-        JsonbContainsJsonb,
-        JsonbContainsString,
-        JsonbDeleteInt64,
-        JsonbDeleteString,
-        // JsonbGetInt64,
-        // JsonbGetInt64Stringify,
-        // JsonbGetPath,
-        // JsonbGetPathStringify,
-        // JsonbGetString,
-        // JsonbGetStringStringify,
-        Left,
-        LikeEscape,
-        // ListContainsList
-        ListElementConcat,
-        // ListLengthMax
-        ListListConcat,
-        ListRemove,
-        LogNumeric(LogBaseNumeric),
-        Lt,
-        Lte,
-        MapContainsAllKeys,
-        MapContainsAnyKeys,
-        MapContainsKey,
-        MapContainsMap,
-        MapGetValue,
-        ModFloat32,
-        ModFloat64,
-        ModInt16,
-        ModInt32,
-        ModInt64,
-        ModNumeric,
-        ModUint16,
-        ModUint32,
-        ModUint64,
-        MulFloat32,
-        MulFloat64,
-        MulInt16,
-        MulInt32,
-        MulInt64,
-        MulInterval,
-        MulNumeric,
-        MulUint16,
-        MulUint32,
-        MulUint64,
-        MzAclItemContainsPrivilege,
-        MzRenderTypmod,
-        // Normalize,
-        NotEq,
-        ParseIdent,
-        Position,
-        Power,
-        PowerNumeric,
-        PrettySql,
-        RangeAdjacent,
-        RangeAfter,
-        RangeBefore,
-        // RangeContainsElem
-        // RangeContainsRange
-        RangeDifference,
-        RangeIntersection,
-        RangeOverlaps,
-        RangeOverleft,
-        RangeOverright,
-        RangeUnion,
-        // RegexpReplace
-        // RepeatString,
-        Right,
-        RoundNumeric(RoundNumericBinary),
-        StartsWith,
-        SubDate,
-        SubDateInterval,
-        SubFloat32,
-        SubFloat64,
-        SubInt16,
-        SubInt32,
-        SubInt64,
-        SubInterval,
-        SubNumeric,
-        SubTime,
-        SubTimeInterval,
-        SubTimestamp,
-        SubTimestampInterval,
-        SubTimestampTz,
-        SubTimestampTzInterval,
-        SubUint16,
-        SubUint32,
-        SubUint64,
+        ExtractDate(ExtractDateUnits),
+        DatePartInterval(DatePartIntervalF64),
+        DatePartTime(DatePartTimeF64),
+        DatePartTimestamp(DatePartTimestampTimestampF64),
+        DatePartTimestampTz(DatePartTimestampTimestampTzF64),
+        DateTruncTimestamp(DateTruncUnitsTimestamp),
+        DateTruncTimestampTz(DateTruncUnitsTimestampTz),
+        DateTruncInterval(DateTruncInterval),
+        TimezoneTimestampBinary(TimezoneTimestampBinary),
+        TimezoneTimestampTzBinary(TimezoneTimestampTzBinary),
+        TimezoneIntervalTimestampBinary(TimezoneIntervalTimestampBinary),
+        TimezoneIntervalTimestampTzBinary(TimezoneIntervalTimestampTzBinary),
+        TimezoneIntervalTimeBinary(TimezoneIntervalTimeBinary),
+        TimezoneOffset(TimezoneOffset),
         TextConcat(TextConcatBinary),
-        // TimezoneIntervalTime,
-        // TimezoneIntervalTimestamp,
-        // TimezoneIntervalTimestampTz,
-        TimezoneOffset,
-        // TimezoneTimestamp,
-        // TimezoneTimestampTz,
-        ToCharTimestamp(ToCharTimestampFormat),
-        ToCharTimestampTz(ToCharTimestampTzFormat),
-        Trim,
-        TrimLeading,
-        TrimTrailing,
-        UuidGenerateV5,
+        JsonbGetInt64(JsonbGetInt64),
+        JsonbGetInt64Stringify(JsonbGetInt64Stringify),
+        JsonbGetString(JsonbGetString),
+        JsonbGetStringStringify(JsonbGetStringStringify),
+        JsonbGetPath(JsonbGetPath),
+        JsonbGetPathStringify(JsonbGetPathStringify),
+        JsonbContainsString(JsonbContainsString),
+        JsonbConcat(JsonbConcat),
+        JsonbContainsJsonb(JsonbContainsJsonb),
+        JsonbDeleteInt64(JsonbDeleteInt64),
+        JsonbDeleteString(JsonbDeleteString),
+        MapContainsKey(MapContainsKey),
+        MapGetValue(MapGetValue),
+        MapContainsAllKeys(MapContainsAllKeys),
+        MapContainsAnyKeys(MapContainsAnyKeys),
+        MapContainsMap(MapContainsMap),
+        ConvertFrom(ConvertFrom),
+        Left(Left),
+        Position(Position),
+        Strpos(Strpos),
+        Right(Right),
+        RepeatString(RepeatString),
+        Normalize(Normalize),
+        Trim(Trim),
+        TrimLeading(TrimLeading),
+        TrimTrailing(TrimTrailing),
+        EncodedBytesCharLength(EncodedBytesCharLength),
+        ListLengthMax(ListLengthMax),
+        ArrayContains(ArrayContains),
+        ArrayContainsArray(ArrayContainsArray),
+        ArrayContainsArrayRev(ArrayContainsArrayRev),
+        ArrayLength(ArrayLength),
+        ArrayLower(ArrayLower),
+        ArrayRemove(ArrayRemove),
+        ArrayUpper(ArrayUpper),
+        ArrayArrayConcat(ArrayArrayConcat),
+        ListListConcat(ListListConcat),
+        ListElementConcat(ListElementConcat),
+        ElementListConcat(ElementListConcat),
+        ListRemove(ListRemove),
+        ListContainsList(ListContainsList),
+        ListContainsListRev(ListContainsListRev),
+        DigestString(DigestString),
+        DigestBytes(DigestBytes),
+        MzRenderTypmod(MzRenderTypmod),
+        Encode(Encode),
+        Decode(Decode),
+        LogNumeric(LogBaseNumeric),
+        Power(Power),
+        PowerNumeric(PowerNumeric),
+        GetBit(GetBit),
+        GetByte(GetByte),
+        ConstantTimeEqBytes(ConstantTimeEqBytes),
+        ConstantTimeEqString(ConstantTimeEqString),
+        RangeContainsDate(RangeContainsDate),
+        RangeContainsDateRev(RangeContainsDateRev),
+        RangeContainsI32(RangeContainsI32),
+        RangeContainsI32Rev(RangeContainsI32Rev),
+        RangeContainsI64(RangeContainsI64),
+        RangeContainsI64Rev(RangeContainsI64Rev),
+        RangeContainsNumeric(RangeContainsNumeric),
+        RangeContainsNumericRev(RangeContainsNumericRev),
+        RangeContainsRange(RangeContainsRange),
+        RangeContainsRangeRev(RangeContainsRangeRev),
+        RangeContainsTimestamp(RangeContainsTimestamp),
+        RangeContainsTimestampRev(RangeContainsTimestampRev),
+        RangeContainsTimestampTz(RangeContainsTimestampTz),
+        RangeContainsTimestampTzRev(RangeContainsTimestampTzRev),
+        RangeOverlaps(RangeOverlaps),
+        RangeAfter(RangeAfter),
+        RangeBefore(RangeBefore),
+        RangeOverleft(RangeOverleft),
+        RangeOverright(RangeOverright),
+        RangeAdjacent(RangeAdjacent),
+        RangeUnion(RangeUnion),
+        RangeIntersection(RangeIntersection),
+        RangeDifference(RangeDifference),
+        UuidGenerateV5(UuidGenerateV5),
+        MzAclItemContainsPrivilege(MzAclItemContainsPrivilege),
+        ParseIdent(ParseIdent),
+        PrettySql(PrettySql),
+        RegexpReplace(RegexpReplace),
+        StartsWith(StartsWith),
     }
 }
 
 #[cfg(test)]
 mod test {
     use mz_expr_derive::sqlfunc;
-    use mz_repr::SqlColumnType;
     use mz_repr::SqlScalarType;
 
+    use crate::EvalError;
     use crate::scalar::func::binary::LazyBinaryFunc;
-    use crate::{BinaryFunc, EvalError, func};
 
-    #[sqlfunc(sqlname = "INFALLIBLE", is_infix_op = true)]
+    #[sqlfunc(sqlname = "INFALLIBLE", is_infix_op = true, test = true)]
     #[allow(dead_code)]
     fn infallible1(a: f32, b: f32) -> f32 {
         a + b
     }
 
-    #[sqlfunc]
+    #[sqlfunc(test = true)]
     #[allow(dead_code)]
     fn infallible2(a: Option<f32>, b: Option<f32>) -> f32 {
         a.unwrap_or_default() + b.unwrap_or_default()
     }
 
-    #[sqlfunc]
+    #[sqlfunc(test = true)]
     #[allow(dead_code)]
     fn infallible3(a: f32, b: f32) -> Option<f32> {
         Some(a + b)
@@ -422,106 +451,106 @@ mod test {
     #[mz_ore::test]
     fn output_types_infallible() {
         assert_eq!(
-            Infallible1.output_type(
+            Infallible1.output_sql_type(&[
                 SqlScalarType::Float32.nullable(true),
                 SqlScalarType::Float32.nullable(true)
-            ),
+            ]),
             SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
-            Infallible1.output_type(
+            Infallible1.output_sql_type(&[
                 SqlScalarType::Float32.nullable(true),
                 SqlScalarType::Float32.nullable(false)
-            ),
+            ]),
             SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
-            Infallible1.output_type(
+            Infallible1.output_sql_type(&[
                 SqlScalarType::Float32.nullable(false),
                 SqlScalarType::Float32.nullable(true)
-            ),
+            ]),
             SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
-            Infallible1.output_type(
+            Infallible1.output_sql_type(&[
                 SqlScalarType::Float32.nullable(false),
                 SqlScalarType::Float32.nullable(false)
-            ),
+            ]),
             SqlScalarType::Float32.nullable(false)
         );
 
         assert_eq!(
-            Infallible2.output_type(
+            Infallible2.output_sql_type(&[
                 SqlScalarType::Float32.nullable(true),
                 SqlScalarType::Float32.nullable(true)
-            ),
+            ]),
             SqlScalarType::Float32.nullable(false)
         );
         assert_eq!(
-            Infallible2.output_type(
+            Infallible2.output_sql_type(&[
                 SqlScalarType::Float32.nullable(true),
                 SqlScalarType::Float32.nullable(false)
-            ),
+            ]),
             SqlScalarType::Float32.nullable(false)
         );
         assert_eq!(
-            Infallible2.output_type(
+            Infallible2.output_sql_type(&[
                 SqlScalarType::Float32.nullable(false),
                 SqlScalarType::Float32.nullable(true)
-            ),
+            ]),
             SqlScalarType::Float32.nullable(false)
         );
         assert_eq!(
-            Infallible2.output_type(
+            Infallible2.output_sql_type(&[
                 SqlScalarType::Float32.nullable(false),
                 SqlScalarType::Float32.nullable(false)
-            ),
+            ]),
             SqlScalarType::Float32.nullable(false)
         );
 
         assert_eq!(
-            Infallible3.output_type(
+            Infallible3.output_sql_type(&[
                 SqlScalarType::Float32.nullable(true),
                 SqlScalarType::Float32.nullable(true)
-            ),
+            ]),
             SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
-            Infallible3.output_type(
+            Infallible3.output_sql_type(&[
                 SqlScalarType::Float32.nullable(true),
                 SqlScalarType::Float32.nullable(false)
-            ),
+            ]),
             SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
-            Infallible3.output_type(
+            Infallible3.output_sql_type(&[
                 SqlScalarType::Float32.nullable(false),
                 SqlScalarType::Float32.nullable(true)
-            ),
+            ]),
             SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
-            Infallible3.output_type(
+            Infallible3.output_sql_type(&[
                 SqlScalarType::Float32.nullable(false),
                 SqlScalarType::Float32.nullable(false)
-            ),
+            ]),
             SqlScalarType::Float32.nullable(true)
         );
     }
 
-    #[sqlfunc]
+    #[sqlfunc(test = true)]
     #[allow(dead_code)]
     fn fallible1(a: f32, b: f32) -> Result<f32, EvalError> {
         Ok(a + b)
     }
 
-    #[sqlfunc]
+    #[sqlfunc(test = true)]
     #[allow(dead_code)]
     fn fallible2(a: Option<f32>, b: Option<f32>) -> Result<f32, EvalError> {
         Ok(a.unwrap_or_default() + b.unwrap_or_default())
     }
 
-    #[sqlfunc]
+    #[sqlfunc(test = true)]
     #[allow(dead_code)]
     fn fallible3(a: f32, b: f32) -> Result<Option<f32>, EvalError> {
         Ok(Some(a + b))
@@ -542,313 +571,125 @@ mod test {
     #[mz_ore::test]
     fn output_types_fallible() {
         assert_eq!(
-            Fallible1.output_type(
+            Fallible1.output_sql_type(&[
                 SqlScalarType::Float32.nullable(true),
                 SqlScalarType::Float32.nullable(true)
-            ),
+            ]),
             SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
-            Fallible1.output_type(
+            Fallible1.output_sql_type(&[
                 SqlScalarType::Float32.nullable(true),
                 SqlScalarType::Float32.nullable(false)
-            ),
+            ]),
             SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
-            Fallible1.output_type(
+            Fallible1.output_sql_type(&[
                 SqlScalarType::Float32.nullable(false),
                 SqlScalarType::Float32.nullable(true)
-            ),
+            ]),
             SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
-            Fallible1.output_type(
+            Fallible1.output_sql_type(&[
                 SqlScalarType::Float32.nullable(false),
                 SqlScalarType::Float32.nullable(false)
-            ),
+            ]),
             SqlScalarType::Float32.nullable(false)
         );
 
         assert_eq!(
-            Fallible2.output_type(
+            Fallible2.output_sql_type(&[
                 SqlScalarType::Float32.nullable(true),
                 SqlScalarType::Float32.nullable(true)
-            ),
+            ]),
             SqlScalarType::Float32.nullable(false)
         );
         assert_eq!(
-            Fallible2.output_type(
+            Fallible2.output_sql_type(&[
                 SqlScalarType::Float32.nullable(true),
                 SqlScalarType::Float32.nullable(false)
-            ),
+            ]),
             SqlScalarType::Float32.nullable(false)
         );
         assert_eq!(
-            Fallible2.output_type(
+            Fallible2.output_sql_type(&[
                 SqlScalarType::Float32.nullable(false),
                 SqlScalarType::Float32.nullable(true)
-            ),
+            ]),
             SqlScalarType::Float32.nullable(false)
         );
         assert_eq!(
-            Fallible2.output_type(
+            Fallible2.output_sql_type(&[
                 SqlScalarType::Float32.nullable(false),
                 SqlScalarType::Float32.nullable(false)
-            ),
+            ]),
             SqlScalarType::Float32.nullable(false)
         );
 
         assert_eq!(
-            Fallible3.output_type(
+            Fallible3.output_sql_type(&[
                 SqlScalarType::Float32.nullable(true),
                 SqlScalarType::Float32.nullable(true)
-            ),
+            ]),
             SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
-            Fallible3.output_type(
+            Fallible3.output_sql_type(&[
                 SqlScalarType::Float32.nullable(true),
                 SqlScalarType::Float32.nullable(false)
-            ),
+            ]),
             SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
-            Fallible3.output_type(
+            Fallible3.output_sql_type(&[
                 SqlScalarType::Float32.nullable(false),
                 SqlScalarType::Float32.nullable(true)
-            ),
+            ]),
             SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
-            Fallible3.output_type(
+            Fallible3.output_sql_type(&[
                 SqlScalarType::Float32.nullable(false),
                 SqlScalarType::Float32.nullable(false)
-            ),
+            ]),
             SqlScalarType::Float32.nullable(true)
         );
     }
 
     #[mz_ore::test]
-    fn test_equivalence_nullable() {
-        test_equivalence_inner(true);
-    }
+    fn mz_reflect_binary_func() {
+        use crate::BinaryFunc;
+        use mz_lowertest::{MzReflect, ReflectedTypeInfo};
 
-    #[mz_ore::test]
-    fn test_equivalence_non_nullable() {
-        test_equivalence_inner(false);
-    }
+        let mut rti = ReflectedTypeInfo::default();
+        BinaryFunc::add_to_reflected_type_info(&mut rti);
 
-    /// Test the equivalence of the binary functions in the `func` module with their
-    /// derived sqlfunc implementation. The `input_nullable` parameter determines
-    /// whether the input colum is marked nullable or not.
-    fn test_equivalence_inner(input_nullable: bool) {
-        #[track_caller]
-        fn check<T: LazyBinaryFunc + std::fmt::Display + std::fmt::Debug>(
-            new: T,
-            old: BinaryFunc,
-            column_a_ty: &SqlColumnType,
-            column_b_ty: &SqlColumnType,
-        ) {
-            assert_eq!(
-                new.propagates_nulls(),
-                old.propagates_nulls(),
-                "{new:?} propagates_nulls mismatch"
-            );
-            assert_eq!(
-                new.introduces_nulls(),
-                old.introduces_nulls(),
-                "{new:?} introduces_nulls mismatch"
-            );
-            assert_eq!(
-                new.could_error(),
-                old.could_error(),
-                "{new:?} could_error mismatch"
-            );
-            assert_eq!(
-                new.is_monotone(),
-                old.is_monotone(),
-                "{new:?} is_monotone mismatch"
-            );
-            assert_eq!(
-                new.is_infix_op(),
-                old.is_infix_op(),
-                "{new:?} is_infix_op mismatch"
-            );
-            assert_eq!(
-                new.output_type(column_a_ty.clone(), column_b_ty.clone()),
-                old.output_type(column_a_ty.clone(), column_b_ty.clone()),
-                "{new:?} output_type mismatch"
-            );
-            assert_eq!(new.negate(), old.negate(), "{new:?} negate mismatch");
-            assert_eq!(
-                format!("{}", new),
-                format!("{}", old),
-                "{new:?} format mismatch"
-            );
-        }
+        // Check that the enum is registered
+        let variants = rti
+            .enum_dict
+            .get("BinaryFunc")
+            .expect("BinaryFunc should be in enum_dict");
+        assert!(
+            variants.contains_key("AddInt64"),
+            "AddInt64 variant should exist"
+        );
+        assert!(variants.contains_key("Gte"), "Gte variant should exist");
 
-        let i32_ty = SqlColumnType {
-            nullable: input_nullable,
-            scalar_type: SqlScalarType::Int32,
-        };
-
-        use BinaryFunc as BF;
-
-        // TODO: We're passing unexpected column types to the functions here,
-        //   which works because most don't look at the type. We should fix this
-        //   and pass expected column types.
-        check(
-            func::RangeContainsI32,
-            BF::RangeContainsElem {
-                elem_type: SqlScalarType::Int32,
-                rev: false,
-            },
-            &i32_ty,
-            &i32_ty,
+        // Check that inner types are registered in struct_dict
+        assert!(
+            rti.struct_dict.contains_key("AddInt64"),
+            "AddInt64 should be in struct_dict"
         );
-        check(
-            func::RangeContainsI64,
-            BF::RangeContainsElem {
-                elem_type: SqlScalarType::Int64,
-                rev: false,
-            },
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::RangeContainsDate,
-            BF::RangeContainsElem {
-                elem_type: SqlScalarType::Date,
-                rev: false,
-            },
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::RangeContainsNumeric,
-            BF::RangeContainsElem {
-                elem_type: SqlScalarType::Numeric { max_scale: None },
-                rev: false,
-            },
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::RangeContainsTimestamp,
-            BF::RangeContainsElem {
-                elem_type: SqlScalarType::Timestamp { precision: None },
-                rev: false,
-            },
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::RangeContainsTimestampTz,
-            BF::RangeContainsElem {
-                elem_type: SqlScalarType::TimestampTz { precision: None },
-                rev: false,
-            },
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::RangeContainsI32Rev,
-            BF::RangeContainsElem {
-                elem_type: SqlScalarType::Int32,
-                rev: true,
-            },
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::RangeContainsI64Rev,
-            BF::RangeContainsElem {
-                elem_type: SqlScalarType::Int64,
-                rev: true,
-            },
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::RangeContainsDateRev,
-            BF::RangeContainsElem {
-                elem_type: SqlScalarType::Date,
-                rev: true,
-            },
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::RangeContainsNumericRev,
-            BF::RangeContainsElem {
-                elem_type: SqlScalarType::Numeric { max_scale: None },
-                rev: true,
-            },
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::RangeContainsTimestampRev,
-            BF::RangeContainsElem {
-                elem_type: SqlScalarType::Timestamp { precision: None },
-                rev: true,
-            },
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::RangeContainsTimestampTzRev,
-            BF::RangeContainsElem {
-                elem_type: SqlScalarType::TimestampTz { precision: None },
-                rev: true,
-            },
-            &i32_ty,
-            &i32_ty,
+        assert!(
+            rti.struct_dict.contains_key("Gte"),
+            "Gte should be in struct_dict"
         );
 
-        check(
-            func::RangeContainsRange,
-            BF::RangeContainsRange { rev: false },
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::RangeContainsRangeRev,
-            BF::RangeContainsRange { rev: true },
-            &i32_ty,
-            &i32_ty,
-        );
-
-        // JsonbGet* have a `stringify` parameter that doesn't work with the sqlfunc macro.
-        // check(func::JsonbGetInt64, BF::JsonbGetInt64, &i32_ty, &i32_ty);
-        // check(func::JsonbGetString, BF::JsonbGetString, &i32_ty, &i32_ty);
-        // check(func::JsonbGetPath, BF::JsonbGetPath, &i32_ty, &i32_ty);
-        check(
-            func::ListContainsList,
-            BF::ListContainsList { rev: false },
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::ListContainsListRev,
-            BF::ListContainsList { rev: true },
-            &i32_ty,
-            &i32_ty,
-        );
-
-        // check(func::ListLength, BF::ListLength, &i32_ty, &i32_ty);
-        check(
-            func::ArrayContainsArray,
-            BF::ArrayContainsArray { rev: false },
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::ArrayContainsArrayRev,
-            BF::ArrayContainsArray { rev: true },
-            &i32_ty,
-            &i32_ty,
-        );
+        // Verify zero-field unit structs
+        let (names, types) = rti.struct_dict.get("AddInt64").unwrap();
+        assert!(names.is_empty(), "AddInt64 should have no field names");
+        assert!(types.is_empty(), "AddInt64 should have no field types");
     }
 }

@@ -14,35 +14,39 @@ use differential_dataflow::VecCollection;
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::logging::{DifferentialEvent, DifferentialEventBuilder};
 use mz_compute_client::logging::{LogVariant, LoggingConfig};
+use mz_dyncfg::ConfigSet;
+use mz_ore::metrics::MetricsRegistry;
 use mz_repr::{Diff, Timestamp};
 use mz_storage_operators::persist_source::Subtime;
-use mz_storage_types::errors::DataflowError;
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::operator::CollectionExt;
+use mz_timely_util::scope_label::ScopeExt;
 use timely::ContainerBuilder;
-use timely::communication::Allocate;
 use timely::container::{ContainerBuilder as _, PushInto};
-use timely::dataflow::Scope;
 use timely::logging::{TimelyEvent, TimelyEventBuilder};
 use timely::logging_core::{Logger, Registry};
 use timely::order::Product;
 use timely::progress::reachability::logging::{TrackerEvent, TrackerEventBuilder};
-use timely::worker::AsWorker;
 
 use crate::arrangement::manager::TraceBundle;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::logging::compute::{ComputeEvent, ComputeEventBuilder};
 use crate::logging::{BatchLogger, EventQueue, SharedLoggingState};
+use crate::render::errors::DataflowErrorSer;
 use crate::typedefs::{ErrBatcher, ErrBuilder};
 
 /// Initialize logging dataflows.
 ///
 /// Returns a logger for compute events, and for each `LogVariant` a trace bundle usable for
 /// retrieving logged records as well as the index of the exporting dataflow.
-pub fn initialize<A: Allocate + 'static>(
-    worker: &mut timely::worker::Worker<A>,
+pub fn initialize(
+    worker: &mut timely::worker::Worker,
     config: &LoggingConfig,
+    metrics_registry: MetricsRegistry,
+    worker_config: Rc<ConfigSet>,
+    workers_per_process: usize,
+    storage_log_reader: Option<crate::server::StorageTimelyLogReader>,
 ) -> LoggingTraces {
     let interval_ms = std::cmp::max(1, config.interval.as_millis());
 
@@ -65,6 +69,10 @@ pub fn initialize<A: Allocate + 'static>(
         d_event_queue: EventQueue::new("d"),
         c_event_queue: EventQueue::new("c"),
         shared_state: Default::default(),
+        metrics_registry,
+        worker_config,
+        workers_per_process,
+        storage_log_reader,
     };
 
     // Depending on whether we should log the creation of the logging dataflows, we register the
@@ -89,8 +97,8 @@ pub fn initialize<A: Allocate + 'static>(
 
 pub(super) type ReachabilityEvent = (usize, Vec<(usize, usize, bool, Timestamp, Diff)>);
 
-struct LoggingContext<'a, A: Allocate> {
-    worker: &'a mut timely::worker::Worker<A>,
+struct LoggingContext<'a> {
+    worker: &'a mut timely::worker::Worker,
     config: &'a LoggingConfig,
     interval_ms: u128,
     now: Instant,
@@ -100,6 +108,11 @@ struct LoggingContext<'a, A: Allocate> {
     d_event_queue: EventQueue<Vec<(Duration, DifferentialEvent)>>,
     c_event_queue: EventQueue<Column<(Duration, ComputeEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
+    metrics_registry: MetricsRegistry,
+    worker_config: Rc<ConfigSet>,
+    workers_per_process: usize,
+    /// Optional reader for storage timely logging events.
+    storage_log_reader: Option<crate::server::StorageTimelyLogReader>,
 }
 
 pub(crate) struct LoggingTraces {
@@ -111,34 +124,33 @@ pub(crate) struct LoggingTraces {
     pub compute_logger: super::compute::Logger,
 }
 
-impl<A: Allocate + 'static> LoggingContext<'_, A> {
+impl LoggingContext<'_> {
     fn construct_dataflow(&mut self) -> BTreeMap<LogVariant, TraceBundle> {
         self.worker.dataflow_named("Dataflow: logging", |scope| {
+            let scope = scope.with_label();
+
             let mut collections = BTreeMap::new();
 
             let super::timely::Return {
                 collections: timely_collections,
             } = super::timely::construct(
-                scope.clone(),
+                scope,
                 self.config,
                 self.t_event_queue.clone(),
                 Rc::clone(&self.shared_state),
+                self.storage_log_reader.take(),
             );
             collections.extend(timely_collections);
 
             let super::reachability::Return {
                 collections: reachability_collections,
-            } = super::reachability::construct(
-                scope.clone(),
-                self.config,
-                self.r_event_queue.clone(),
-            );
+            } = super::reachability::construct(scope, self.config, self.r_event_queue.clone());
             collections.extend(reachability_collections);
 
             let super::differential::Return {
                 collections: differential_collections,
             } = super::differential::construct(
-                scope.clone(),
+                scope,
                 self.config,
                 self.d_event_queue.clone(),
                 Rc::clone(&self.shared_state),
@@ -149,15 +161,28 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
                 collections: compute_collections,
             } = super::compute::construct(
                 scope.clone(),
-                scope.parent.clone(),
+                scope.activations(),
                 self.config,
                 self.c_event_queue.clone(),
                 Rc::clone(&self.shared_state),
             );
             collections.extend(compute_collections);
 
+            let super::prometheus::Return {
+                collections: prometheus_collections,
+            } = super::prometheus::construct(
+                scope,
+                self.config,
+                self.metrics_registry.clone(),
+                self.now,
+                self.start_offset,
+                Rc::clone(&self.worker_config),
+                self.workers_per_process,
+            );
+            collections.extend(prometheus_collections);
+
             let errs = scope.scoped("logging errors", |scope| {
-                let collection: KeyCollection<_, DataflowError, Diff> =
+                let collection: KeyCollection<_, DataflowErrorSer, Diff> =
                     VecCollection::empty(scope).into();
                 collection
                     .mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, _>("Arrange logging err")

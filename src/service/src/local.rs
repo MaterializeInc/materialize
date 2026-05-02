@@ -14,9 +14,8 @@ use std::thread::Thread;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
-use crossbeam_channel::Sender;
 use itertools::Itertools;
-use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::client::{GenericClient, Partitionable, Partitioned};
 
@@ -27,7 +26,7 @@ use crate::client::{GenericClient, Partitionable, Partitioned};
 #[derive(Debug)]
 pub struct LocalClient<C, R> {
     rx: UnboundedReceiver<R>,
-    tx: Sender<C>,
+    tx: UnboundedSender<C>,
     thread: Thread,
 }
 
@@ -57,14 +56,14 @@ where
 
 impl<C, R> LocalClient<C, R> {
     /// Create a new instance of [`LocalClient`] from its parts.
-    pub fn new(rx: UnboundedReceiver<R>, tx: Sender<C>, thread: Thread) -> Self {
+    pub fn new(rx: UnboundedReceiver<R>, tx: UnboundedSender<C>, thread: Thread) -> Self {
         Self { rx, tx, thread }
     }
 
     /// Create a new partitioned local client from parts for each client.
     pub fn new_partitioned(
         rxs: Vec<UnboundedReceiver<R>>,
-        txs: Vec<Sender<C>>,
+        txs: Vec<UnboundedSender<C>>,
         threads: Vec<Thread>,
     ) -> Partitioned<Self, C, R>
     where

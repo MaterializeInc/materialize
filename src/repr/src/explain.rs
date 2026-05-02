@@ -392,6 +392,8 @@ pub struct PlanRenderingContext<'a, T> {
     pub humanizer: &'a dyn ExprHumanizer,
     pub annotations: BTreeMap<&'a T, Analyses>,
     pub config: &'a ExplainConfig,
+    /// IDs that must be qualified in the output.
+    pub ambiguous_ids: BTreeSet<GlobalId>,
 }
 
 impl<'a, T> PlanRenderingContext<'a, T> {
@@ -400,12 +402,23 @@ impl<'a, T> PlanRenderingContext<'a, T> {
         humanizer: &'a dyn ExprHumanizer,
         annotations: BTreeMap<&'a T, Analyses>,
         config: &'a ExplainConfig,
+        ambiguous_ids: BTreeSet<GlobalId>,
     ) -> PlanRenderingContext<'a, T> {
         PlanRenderingContext {
             indent,
             humanizer,
             annotations,
             config,
+            ambiguous_ids,
+        }
+    }
+
+    /// Unqualified names where unambiguous. Qualified names otherwise.
+    pub fn humanize_id_maybe_unqualified(&self, id: GlobalId) -> Option<String> {
+        if self.ambiguous_ids.contains(&id) {
+            self.humanizer.humanize_id(id)
+        } else {
+            self.humanizer.humanize_id_unqualified(id)
         }
     }
 }
@@ -426,7 +439,7 @@ impl<'a, T> AsRef<&'a dyn ExprHumanizer> for PlanRenderingContext<'a, T> {
 ///
 /// This will be most often used as part of the rendering context
 /// type for various `Display$Format` implementation.
-pub trait ExprHumanizer: fmt::Debug {
+pub trait ExprHumanizer: fmt::Debug + Sync {
     /// Attempts to return a human-readable string for the relation
     /// identified by `id`.
     fn humanize_id(&self, id: GlobalId) -> Option<String>;
@@ -442,30 +455,34 @@ pub trait ExprHumanizer: fmt::Debug {
     /// Used in, e.g., EXPLAIN and error msgs, in which case exact Postgres compatibility is less
     /// important than showing as much detail as possible. Also used in `pg_typeof`, where Postgres
     /// compatibility is more important.
-    fn humanize_scalar_type(&self, ty: &SqlScalarType, postgres_compat: bool) -> String;
+    fn humanize_sql_scalar_type(&self, ty: &SqlScalarType, postgres_compat: bool) -> String;
 
     /// Returns a human-readable name for the specified scalar type.
-    /// Calls `humanize_scalar_type` with the `SqlScalarType` representation of the specified type.
-    fn humanize_scalar_type_repr(&self, typ: &ReprScalarType, postgres_compat: bool) -> String {
-        self.humanize_scalar_type(&SqlScalarType::from_repr(typ), postgres_compat)
+    ///
+    /// Uses std::fmt::Display, since we don't need to worry about resolving
+    ///  custom type IDs or postgres compatibility.
+    fn humanize_scalar_type(&self, typ: &ReprScalarType) -> String {
+        typ.to_string()
     }
 
     /// Returns a human-readable name for the specified column type.
     /// Used in, e.g., EXPLAIN and error msgs, in which case exact Postgres compatibility is less
     /// important than showing as much detail as possible. Also used in `pg_typeof`, where Postgres
     /// compatibility is more important.
-    fn humanize_column_type(&self, typ: &SqlColumnType, postgres_compat: bool) -> String {
+    fn humanize_sql_column_type(&self, typ: &SqlColumnType, postgres_compat: bool) -> String {
         format!(
             "{}{}",
-            self.humanize_scalar_type(&typ.scalar_type, postgres_compat),
+            self.humanize_sql_scalar_type(&typ.scalar_type, postgres_compat),
             if typ.nullable { "?" } else { "" }
         )
     }
 
     /// Returns a human-readable name for the specified column type.
-    /// Calls `humanize_column_type` with the `SqlColumnType` representation of the specified type.
-    fn humanize_column_type_repr(&self, typ: &ReprColumnType, postgres_compat: bool) -> String {
-        self.humanize_column_type(&SqlColumnType::from_repr(typ), postgres_compat)
+    ///
+    /// Uses std::fmt::Display, since we don't need to worry about resolving
+    ///  custom type IDs or postgres compatibility.
+    fn humanize_column_type(&self, typ: &ReprColumnType) -> String {
+        typ.to_string()
     }
 
     /// Returns a vector of column names for the relation identified by `id`.
@@ -524,8 +541,8 @@ impl<'a> ExprHumanizer for ExprHumanizerExt<'a> {
         }
     }
 
-    fn humanize_scalar_type(&self, ty: &SqlScalarType, postgres_compat: bool) -> String {
-        self.inner.humanize_scalar_type(ty, postgres_compat)
+    fn humanize_sql_scalar_type(&self, ty: &SqlScalarType, postgres_compat: bool) -> String {
+        self.inner.humanize_sql_scalar_type(ty, postgres_compat)
     }
 
     fn column_names_for_id(&self, id: GlobalId) -> Option<Vec<String>> {
@@ -591,7 +608,7 @@ impl ExprHumanizer for DummyHumanizer {
         None
     }
 
-    fn humanize_scalar_type(&self, ty: &SqlScalarType, _postgres_compat: bool) -> String {
+    fn humanize_sql_scalar_type(&self, ty: &SqlScalarType, _postgres_compat: bool) -> String {
         // The debug implementation is better than nothing.
         format!("{:?}", ty)
     }
@@ -650,7 +667,7 @@ pub struct Analyses {
     pub non_negative: Option<bool>,
     pub subtree_size: Option<usize>,
     pub arity: Option<usize>,
-    pub types: Option<Option<Vec<SqlColumnType>>>,
+    pub types: Option<Option<Vec<ReprColumnType>>>,
     pub keys: Option<Vec<Vec<usize>>>,
     pub cardinality: Option<String>,
     pub column_names: Option<Vec<String>>,
@@ -702,7 +719,7 @@ impl<'a> Display for HumanizedAnalyses<'a> {
                 Some(types) => {
                     let types = types
                         .into_iter()
-                        .map(|c| self.humanizer.humanize_column_type(c, false))
+                        .map(|c| self.humanizer.humanize_column_type(c))
                         .collect::<Vec<_>>();
 
                     bracketed("(", ")", separated(", ", types)).to_string()
@@ -770,9 +787,40 @@ impl UsedIndexes {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    /// Find all IDs with colliding (unqualified) humanizations.
+    pub fn ambiguous_ids(&self, humanizer: &dyn ExprHumanizer) -> BTreeSet<GlobalId> {
+        let humanized = self
+            .0
+            .iter()
+            .flat_map(|(id, _)| humanizer.humanize_id_unqualified(*id).map(|hum| (hum, *id)));
+
+        let mut by_humanization = BTreeMap::<String, BTreeSet<GlobalId>>::new();
+        for (hum, id) in humanized {
+            by_humanization.entry(hum).or_default().insert(id);
+        }
+
+        by_humanization
+            .values()
+            .filter(|ids| ids.len() > 1)
+            .flatten()
+            .cloned()
+            .collect()
+    }
 }
 
-#[derive(Debug, Clone, Arbitrary, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(
+    Debug,
+    Clone,
+    Arbitrary,
+    Serialize,
+    Deserialize,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash
+)]
 pub enum IndexUsageType {
     /// Read the entire index.
     FullScan,
@@ -816,7 +864,18 @@ pub enum IndexUsageType {
 /// In a snapshot, one arrangement of the first input is scanned, all the other arrangements (of the
 /// first input, and of all other inputs) only get lookups.
 /// When later input batches are arriving, all inputs are fully read.
-#[derive(Debug, Clone, Arbitrary, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(
+    Debug,
+    Clone,
+    Arbitrary,
+    Serialize,
+    Deserialize,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash
+)]
 pub enum DeltaJoinIndexUsageType {
     Unknown,
     Lookup,

@@ -11,8 +11,7 @@ from textwrap import dedent
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, externally_idempotent
 
-PROTOBUF = dedent(
-    """
+PROTOBUF = dedent("""
     $ file-append path=test.proto
     syntax = "proto3";
 
@@ -27,17 +26,13 @@ PROTOBUF = dedent(
     }
 
     $ protobuf-compile-descriptors inputs=test.proto output=test.proto set-var=test-schema
-    """
-)
+    """)
 
 
 @externally_idempotent(False)
 class KafkaFormats(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            PROTOBUF
-            + dedent(
-                """
+        return Testdrive(PROTOBUF + dedent("""
                 > CREATE CLUSTER kafka_formats REPLICAS (kafka_formats_r1 (SIZE 'scale=1,workers=4'))
 
                 > SET cluster=kafka_formats
@@ -96,9 +91,7 @@ class KafkaFormats(Check):
                   VALUE FORMAT PROTOBUF MESSAGE '.Value' USING SCHEMA '${test-schema}'
                   INCLUDE KEY
                   ENVELOPE UPSERT
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -171,9 +164,7 @@ class KafkaFormats(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                r"""
+        return Testdrive(dedent(r"""
                 > SELECT COUNT(*) FROM format_bytes1
                 3
 
@@ -218,6 +209,4 @@ class KafkaFormats(Check):
                 key3A key3B value3A value3B
 
                 $ set-regex match=testdrive-format-bytes-\d+ replacement=<TOPIC>
-                """
-            )
-        )
+                """))

@@ -1,2 +1,3 @@
 edition = "2024"
 tab_spaces = 4
+merge_derives = false

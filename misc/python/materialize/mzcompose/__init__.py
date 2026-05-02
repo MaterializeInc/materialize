@@ -33,7 +33,7 @@ T = TypeVar("T")
 say = ui.speaker("C> ")
 
 
-DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.9.0"
+DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.9.4"
 
 DEFAULT_MZ_VOLUMES = [
     "mzdata:/mzdata",
@@ -44,23 +44,11 @@ DEFAULT_MZ_VOLUMES = [
 
 
 # Parameters which disable systems that periodically/unpredictably impact performance
-ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS = {
-    "enable_statement_lifecycle_logging": "false",
-    "persist_catalog_force_compaction_fuel": "0",
-    "statement_logging_default_sample_rate": "0",
-    "statement_logging_max_sample_rate": "0",
-    # Default of 128 MB increases memory usage by a lot for some small
-    # performance in benchmarks, see for example FastPathLimit scenario: 55%
-    # more memory, 5% faster
-    "persist_blob_cache_mem_limit_bytes": "1048576",
-    # This would increase the memory usage of many tests, making it harder to
-    # tell small memory increase regressions
-    "persist_blob_cache_scale_with_threads": "false",
-    # The peek response stash kicks in when results get larger, and it
-    # increases query latency. Which in turn makes benchmarking more
-    # unpredictable.
-    "enable_compute_peek_response_stash": "false",
-}
+# We try to keep this empty, so that we benchmark Materialize as we ship it. If
+# a new feature causes benchmarks to become flaky, consider that this can also
+# impact customers' experience and try to find a solution other than disabling
+# the feature here!
+ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS = {}
 
 
 def get_minimal_system_parameters(
@@ -76,26 +64,28 @@ def get_minimal_system_parameters(
         # -----
         # Others (ordered by name)
         "allow_real_time_recency": "true",
-        "constraint_based_timestamp_selection": "verify",
+        "constraint_based_timestamp_selection": "verify",  # removed from main, keeping it here for old versions
         "enable_compute_peek_response_stash": "true",
         "enable_0dt_deployment_panic_after_timeout": "true",
         "enable_0dt_deployment_sources": (
             "true" if version >= MzVersion.parse_mz("v0.132.0-dev") else "false"
         ),
         "enable_alter_swap": "true",
+        "enable_case_literal_transform": "true",
+        "enable_cast_elimination": "true",
+        "enable_coalesce_case_transform": "true",
         "enable_columnar_lgalloc": "false",
         "enable_columnation_lgalloc": "false",
         "enable_compute_correction_v2": "true",
         "enable_compute_logical_backpressure": "true",
         "enable_connection_validation_syntax": "true",
-        "enable_continual_task_create": "true",
-        "enable_continual_task_retain": "true",
-        "enable_continual_task_transform": "true",
         "enable_copy_to_expr": "true",
+        "enable_copy_from_remote": "true",
         "enable_create_table_from_source": "true",
         "enable_eager_delta_joins": "true",
         "enable_envelope_debezium_in_subscribe": "true",
         "enable_expressions_in_limit_syntax": "true",
+        "enable_iceberg_sink": "true",
         "enable_introspection_subscribes": "true",
         "enable_kafka_sink_partition_by": "true",
         "enable_lgalloc": "false",
@@ -106,10 +96,12 @@ def get_minimal_system_parameters(
         "enable_rbac_checks": "true",
         "enable_reduce_mfp_fusion": "true",
         "enable_refresh_every_mvs": "true",
-        "enable_repr_typecheck": "true",
+        "enable_replacement_materialized_views": "true",
         "enable_cluster_schedule_refresh": "true",
         "enable_sql_server_source": "true",
+        "enable_s3_tables_region_check": "false",
         "enable_statement_lifecycle_logging": "true",
+        "enable_storage_introspection_logs": "true",
         "enable_compute_temporal_bucketing": "true",
         "enable_variadic_left_join_lowering": "true",
         "enable_worker_core_affinity": "true",
@@ -138,6 +130,10 @@ def get_variable_system_parameters(
     version: MzVersion,
     force_source_table_syntax: bool,
 ) -> list[VariableSystemParameter]:
+    """Note: Only the default is tested unless we explicitly select "System Parameters: Random" in trigger-ci.
+    These defaults are applied _after_ applying the settings from `get_minimal_system_parameters`.
+    """
+
     return [
         # -----
         # To reduce CRDB load as we are struggling with it in CI (values based on load test environment):
@@ -167,6 +163,16 @@ def get_variable_system_parameters(
         # -----
         # Others (ordered by name),
         VariableSystemParameter(
+            "compute_correction_v2_chain_proportionality",
+            "3",
+            ["2", "3"],
+        ),
+        VariableSystemParameter(
+            "compute_correction_v2_chunk_size",
+            "8192",
+            ["8192", "65536", "1048576"],
+        ),
+        VariableSystemParameter(
             "compute_dataflow_max_inflight_bytes",
             "134217728",
             ["1048576", "4194304", "16777216", "67108864"],
@@ -186,16 +192,55 @@ def get_variable_system_parameters(
             ["0", "1048576", "314572800", "67108864"],
         ),
         VariableSystemParameter(
+            "compute_subscribe_snapshot_optimization",
+            "true",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
+            "enable_case_literal_transform",
+            "false",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
+            "enable_coalesce_case_transform",
+            "true",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
+            "enable_cast_elimination",
+            "true",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
+            "enable_compute_sync_mv_sink",
+            "true",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
             "enable_password_auth",
             "true",
             ["true", "false"],
         ),
         VariableSystemParameter(
-            "kafka_default_metadata_fetch_interval",
+            "enable_frontend_peek_sequencing",
+            "true" if version >= MzVersion.parse_mz("v26.9.0-dev") else "false",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
+            "enable_frontend_subscribes",
+            "true" if version >= MzVersion.parse_mz("v26.18.0-dev") else "false",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
+            "enable_upsert_v2",
+            "false",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
+            "default_timestamp_interval",
             "1s",
             ["100ms", "1s"],
         ),
-        VariableSystemParameter("mysql_offset_known_interval", "1s", ["100ms", "1s"]),
         VariableSystemParameter(
             "force_source_table_syntax",
             "true" if force_source_table_syntax else "false",
@@ -232,9 +277,6 @@ def get_variable_system_parameters(
             "persist_catalog_force_compaction_wait",
             "1s",
             ["100ms", "1s", "10s"],
-        ),
-        VariableSystemParameter(
-            "persist_encoding_enable_dictionary", "true", ["true", "false"]
         ),
         VariableSystemParameter(
             "persist_stats_audit_percent",
@@ -354,17 +396,33 @@ def get_variable_system_parameters(
             "persist_blob_cache_scale_with_threads", "true", ["true", "false"]
         ),
         VariableSystemParameter(
-            "persist_validate_part_bounds_on_read", "true", ["true", "false"]
+            "persist_state_update_lease_timeout", "1s", ["0s", "1s", "10s"]
         ),
         VariableSystemParameter(
-            "persist_validate_part_bounds_on_write", "true", ["true", "false"]
-        ),
-        VariableSystemParameter("pg_offset_known_interval", "1s", ["100ms", "1s"]),
-        VariableSystemParameter(
-            "statement_logging_default_sample_rate", "0.01", ["0", "0.01"]
+            "persist_validate_part_bounds_on_read", "false", ["true", "false"]
         ),
         VariableSystemParameter(
-            "statement_logging_max_sample_rate", "0.01", ["0", "0.01"]
+            "persist_validate_part_bounds_on_write", "false", ["true", "false"]
+        ),
+        VariableSystemParameter(
+            "statement_logging_default_sample_rate",
+            "1.0",
+            ["0", "0.01", "0.5", "0.99", "1.0"],
+        ),
+        VariableSystemParameter(
+            "statement_logging_max_data_credit",
+            "",
+            ["", "0", "1024", "1048576", "1073741824"],
+        ),
+        VariableSystemParameter(
+            "statement_logging_max_sample_rate",
+            "1.0",
+            ["0", "0.01", "0.5", "0.99", "1.0"],
+        ),
+        VariableSystemParameter(
+            "statement_logging_target_data_rate",
+            "",
+            ["", "0", "1", "1000", "2071", "1000000"],
         ),
         VariableSystemParameter("storage_reclock_to_latest", "true", ["true", "false"]),
         VariableSystemParameter(
@@ -382,9 +440,6 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter(
             "storage_use_continual_feedback_upsert", "true", ["true", "false"]
-        ),
-        VariableSystemParameter(
-            "sql_server_offset_known_interval", "1s", ["10ms", "100ms", "1s"]
         ),
         # End of list (ordered by name)
     ]
@@ -434,6 +489,7 @@ def get_default_system_parameters(
 # all. Only add it in UNINTERESTING_SYSTEM_PARAMETERS if none of the above
 # apply.
 UNINTERESTING_SYSTEM_PARAMETERS = [
+    "enable_compute_half_join2",
     "enable_mz_join_core",
     "linear_join_yielding",
     "enable_lgalloc_eager_reclamation",
@@ -452,6 +508,9 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "copy_to_s3_parquet_row_group_file_ratio",
     "copy_to_s3_arrow_builder_buffer_ratio",
     "copy_to_s3_multipart_part_size_bytes",
+    "enable_replica_targeted_materialized_views",
+    "compute_mv_sink_advance_persist_frontiers",
+    "compute_prometheus_introspection_scrape_interval",
     "enable_compute_replica_expiration",
     "enable_compute_render_fueled_as_specific_collection",
     "compute_logical_backpressure_max_retained_capabilities",
@@ -478,6 +537,9 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "persist_consensus_connection_pool_ttl_stagger",
     "crdb_connect_timeout",
     "crdb_tcp_user_timeout",
+    "crdb_keepalives_idle",
+    "crdb_keepalives_interval",
+    "crdb_keepalives_retries",
     "persist_use_critical_since_txn",
     "use_global_txn_cache_source",
     "persist_batch_builder_max_outstanding_parts",
@@ -545,6 +607,8 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "mysql_replication_heartbeat_interval",
     "postgres_fetch_slot_resume_lsn_interval",
     "pg_schema_validation_interval",
+    "pg_source_validate_timeline",
+    "sql_server_source_validate_restore_history",
     "storage_enforce_external_addresses",
     "storage_upsert_prevent_snapshot_buffering",
     "storage_rocksdb_use_merge_operator",
@@ -556,7 +620,6 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "storage_sink_ensure_topic_config",
     "sql_server_max_lsn_wait",
     "sql_server_snapshot_progress_report_interval",
-    "sql_server_cdc_poll_interval",
     "sql_server_cdc_cleanup_change_table",
     "sql_server_cdc_cleanup_change_table_max_deletes",
     "allow_user_sessions",
@@ -566,7 +629,6 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "with_0dt_caught_up_check_cutoff",
     "enable_0dt_caught_up_replica_status_check",
     "plan_insights_notice_fast_path_clusters_optimize_duration",
-    "enable_continual_task_builtins",
     "enable_expression_cache",
     "mz_metrics_lgalloc_map_refresh_interval",
     "mz_metrics_lgalloc_refresh_interval",
@@ -582,6 +644,19 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "kafka_retry_backoff_max",
     "kafka_reconnect_backoff",
     "kafka_reconnect_backoff_max",
+    "oidc_issuer",
+    "oidc_audience",
+    "oidc_authentication_claim",
+    "oidc_group_role_sync_enabled",
+    "oidc_group_claim",
+    "oidc_group_role_sync_strict",
+    "console_oidc_client_id",
+    "console_oidc_scopes",
+    "enable_mcp_agent",
+    "enable_mcp_agent_query_tool",
+    "enable_mcp_developer",
+    "mcp_max_response_size",
+    "user_id_pool_batch_size",
 ]
 
 
@@ -711,7 +786,7 @@ def cluster_replica_size_map() -> dict[str, dict[str, Any]]:
         "scale=1,workers=1,legacy": replica_size(1, 1, is_cc=False),
         "scale=1,workers=2,legacy": replica_size(1, 2, is_cc=False),
         # Intentionally not following the naming scheme
-        "free": replica_size(0, 0, disabled=True),
+        "free": replica_size(1, 1, disabled=True),
     }
 
     for i in range(0, 6):

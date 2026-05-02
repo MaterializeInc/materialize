@@ -11,10 +11,10 @@ menu:
 ## Syntax
 
 ```mzsql
-SHOW SCHEMAS [ FROM <database_name> ]
+SHOW SCHEMAS [ FROM <database_name> ];
 ```
 
-Option                        | Description
+Syntax element                | Description
 ------------------------------|------------
 **FROM** <database_name>      | If specified, only show schemas from the specified database. Defaults to the current database. For available databases, see [`SHOW DATABASES`](../show-databases).
 

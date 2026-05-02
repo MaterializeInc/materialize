@@ -37,6 +37,8 @@ INSERT INTO timestamp_table VALUES ('2011-11-11 11:11:11.123456-09');
 INSERT INTO timestamp_table VALUES ('2011-11-11 11:11:11.123456+09');
 ALTER TABLE timestamp_table REPLICA IDENTITY FULL;
 
+ANALYZE;
+
 CREATE PUBLICATION mz_source_time FOR TABLE time_table;
 
 CREATE PUBLICATION mz_source_timestamp FOR TABLE timestamp_table;

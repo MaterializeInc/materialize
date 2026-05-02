@@ -19,26 +19,23 @@ use mz_compute_types::plan::Plan;
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::soft_assert_or_log;
 use mz_repr::explain::trace_plan;
-use mz_repr::{GlobalId, SqlRelationType, Timestamp};
+use mz_repr::{GlobalId, ReprRelationType, SqlRelationType, Timestamp};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::HirRelationExpr;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
-use mz_transform::reprtypecheck::{
-    SharedContext as ReprTypecheckContext, empty_context as empty_repr_context,
-};
-use mz_transform::typecheck::{SharedContext as TypecheckContext, empty_context};
+use mz_transform::typecheck::{SharedTypecheckingContext, empty_typechecking_context};
 use mz_transform::{StatisticsOracle, TransformCtx};
 use timely::progress::Antichain;
 use tracing::debug_span;
 
 use crate::TimestampContext;
 use crate::catalog::Catalog;
+use crate::coord::infer_sql_type_for_catalog;
 use crate::coord::peek::{PeekDataflowPlan, PeekPlan, create_fast_path_plan};
 use crate::optimize::dataflows::{
-    ComputeInstanceSnapshot, DataflowBuilder, EvalTime, ExprPrepStyle, prep_relation_expr,
-    prep_scalar_expr,
+    ComputeInstanceSnapshot, DataflowBuilder, EvalTime, ExprPrep, ExprPrepOneShot,
 };
 use crate::optimize::{
     MirDataflowDescription, Optimize, OptimizeMode, OptimizerConfig, OptimizerError,
@@ -46,10 +43,8 @@ use crate::optimize::{
 };
 
 pub struct Optimizer {
-    /// A typechecking context to use throughout the optimizer pipeline.
-    typecheck_ctx: TypecheckContext,
     /// A representation typechecking context to use throughout the optimizer pipeline.
-    repr_typecheck_ctx: ReprTypecheckContext,
+    typecheck_ctx: SharedTypecheckingContext,
     /// A snapshot of the catalog state.
     catalog: Arc<Catalog>,
     /// A snapshot of the cluster that will run the dataflows.
@@ -79,8 +74,7 @@ impl Optimizer {
         metrics: OptimizerMetrics,
     ) -> Self {
         Self {
-            typecheck_ctx: empty_context(),
-            repr_typecheck_ctx: empty_repr_context(),
+            typecheck_ctx: empty_typechecking_context(),
             catalog,
             compute_instance,
             finishing,
@@ -143,6 +137,7 @@ pub struct Unresolved;
 #[derive(Clone)]
 pub struct LocalMirPlan<T = Unresolved> {
     expr: MirRelationExpr,
+    typ: SqlRelationType,
     df_meta: DataflowMetainfo,
     context: T,
 }
@@ -150,7 +145,7 @@ pub struct LocalMirPlan<T = Unresolved> {
 /// Marker type for [`LocalMirPlan`] structs representing an optimization result
 /// with attached environment context required for the next optimization stage.
 pub struct Resolved<'s> {
-    timestamp_ctx: TimestampContext<Timestamp>,
+    timestamp_ctx: TimestampContext,
     stats: Box<dyn StatisticsOracle>,
     session: &'s dyn SessionMetadata,
 }
@@ -180,25 +175,26 @@ impl Optimize<HirRelationExpr> for Optimizer {
         trace_plan!(at: "raw", &expr);
 
         // HIR ⇒ MIR lowering and decorrelation
-        let expr = expr.lower(&self.config, Some(&self.metrics))?;
+        let mir_expr = expr.clone().lower(&self.config, Some(&self.metrics))?;
 
         // MIR ⇒ MIR optimization (local)
         let mut df_meta = DataflowMetainfo::default();
         let mut transform_ctx = TransformCtx::local(
             &self.config.features,
             &self.typecheck_ctx,
-            &self.repr_typecheck_ctx,
             &mut df_meta,
-            Some(&self.metrics),
+            Some(&mut self.metrics),
             Some(self.select_id),
         );
-        let expr = optimize_mir_local(expr, &mut transform_ctx)?.into_inner();
+        let mir_expr = optimize_mir_local(mir_expr, &mut transform_ctx)?.into_inner();
+        let typ = infer_sql_type_for_catalog(&expr, &mir_expr);
 
         self.duration += time.elapsed();
 
         // Return the (sealed) plan at the end of this optimization step.
         Ok(LocalMirPlan {
-            expr,
+            expr: mir_expr,
+            typ,
             df_meta,
             context: Unresolved,
         })
@@ -210,12 +206,13 @@ impl LocalMirPlan<Unresolved> {
     /// required for the next stage.
     pub fn resolve(
         self,
-        timestamp_ctx: TimestampContext<Timestamp>,
+        timestamp_ctx: TimestampContext,
         session: &dyn SessionMetadata,
         stats: Box<dyn StatisticsOracle>,
     ) -> LocalMirPlan<Resolved<'_>> {
         LocalMirPlan {
             expr: self.expr,
+            typ: self.typ,
             df_meta: self.df_meta,
             context: Resolved {
                 timestamp_ctx,
@@ -234,6 +231,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
 
         let LocalMirPlan {
             expr,
+            typ,
             mut df_meta,
             context:
                 Resolved {
@@ -248,7 +246,6 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         // We create a dataflow and optimize it, to determine if we can avoid building it.
         // This can happen if the result optimizes to a constant, or to a `Get` expression
         // around a maintained arrangement.
-        let typ = expr.typ();
         let key = typ
             .default_key()
             .iter()
@@ -273,18 +270,6 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         )?;
         df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
 
-        // Resolve all unmaterializable function calls except mz_now(), because
-        // we don't yet have a timestamp.
-        let style = ExprPrepStyle::OneShot {
-            logical_time: EvalTime::Deferred,
-            session,
-            catalog_state: self.catalog.state(),
-        };
-        df_desc.visit_children(
-            |r| prep_relation_expr(r, style),
-            |s| prep_scalar_expr(s, style),
-        )?;
-
         // TODO: Instead of conditioning here we should really
         // reconsider how to render multi-plan peek dataflows. The main
         // difficulty here is rendering the optional finishing bit.
@@ -295,7 +280,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
                     on_id: self.select_id,
                     key,
                 },
-                typ.clone(),
+                ReprRelationType::from(&typ),
             );
         }
 
@@ -311,14 +296,14 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             .expect("unique as_of element");
 
         // Resolve all unmaterializable function calls including mz_now().
-        let style = ExprPrepStyle::OneShot {
+        let style = ExprPrepOneShot {
             logical_time: EvalTime::Time(as_of),
             session,
             catalog_state: self.catalog.state(),
         };
         df_desc.visit_children(
-            |r| prep_relation_expr(r, style),
-            |s| prep_scalar_expr(s, style),
+            |r| style.prep_relation_expr(r),
+            |s| style.prep_scalar_expr(s),
         )?;
 
         // Use the opportunity to name an `until` frontier that will prevent
@@ -343,9 +328,8 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             &*stats,
             &self.config.features,
             &self.typecheck_ctx,
-            &self.repr_typecheck_ctx,
             &mut df_meta,
-            Some(&self.metrics),
+            Some(&mut self.metrics),
         );
 
         // Let's already try creating a fast path plan. If successful, we don't need to run the
@@ -457,6 +441,11 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
 }
 
 impl GlobalLirPlan {
+    /// Returns a reference to the peek plan.
+    pub fn peek_plan(&self) -> &PeekPlan {
+        &self.peek_plan
+    }
+
     /// Unwraps the parts of the final result of the optimization pipeline.
     pub fn unapply(self) -> (PeekPlan, DataflowMetainfo, SqlRelationType) {
         (self.peek_plan, self.df_meta, self.typ)

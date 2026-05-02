@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/binary.rs
-expression: "#[sqlfunc()]\n#[allow(dead_code)]\nfn fallible2(a: Option<f32>, b: Option<f32>) -> Result<f32, EvalError> {\n    Ok(a.unwrap_or_default() + b.unwrap_or_default())\n}\n"
+expression: "#[sqlfunc(test = true)]\n#[allow(dead_code)]\nfn fallible2(a: Option<f32>, b: Option<f32>) -> Result<f32, EvalError> {\n    Ok(a.unwrap_or_default() + b.unwrap_or_default())\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -13,25 +13,22 @@ expression: "#[sqlfunc()]\n#[allow(dead_code)]\nfn fallible2(a: Option<f32>, b: 
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct Fallible2;
-impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Fallible2 {
-    type Input1 = Option<f32>;
-    type Input2 = Option<f32>;
-    type Output = Result<f32, EvalError>;
-    fn call(
+impl crate::func::binary::EagerBinaryFunc for Fallible2 {
+    type Input<'a> = (Option<f32>, Option<f32>);
+    type Output<'a> = Result<f32, EvalError>;
+    fn call<'a>(
         &self,
-        a: Self::Input1,
-        b: Self::Input2,
+        (a, b): Self::Input<'a>,
         temp_storage: &'a mz_repr::RowArena,
-    ) -> Self::Output {
+    ) -> Self::Output<'a> {
         fallible2(a, b)
     }
-    fn output_type(
+    fn output_sql_type(
         &self,
-        input_type_a: mz_repr::SqlColumnType,
-        input_type_b: mz_repr::SqlColumnType,
+        input_types: &[mz_repr::SqlColumnType],
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
         let output = Self::Output::as_column_type();
@@ -39,12 +36,11 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Fallible2 {
             self,
         );
         let nullable = output.nullable;
-        output
-            .nullable(
-                nullable
-                    || (propagates_nulls
-                        && (input_type_a.nullable || input_type_b.nullable)),
-            )
+        let non_nullable_input_is_nullable = false;
+        let inputs_nullable = input_types.iter().any(|it| it.nullable);
+        let is_null = nullable || non_nullable_input_is_nullable
+            || (propagates_nulls && inputs_nullable);
+        output.nullable(is_null)
     }
 }
 impl std::fmt::Display for Fallible2 {

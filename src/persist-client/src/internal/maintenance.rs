@@ -135,7 +135,6 @@ impl RoutineMaintenance {
                         );
                         machine.add_rollup_for_current_seqno().await
                     })
-                    .map(Result::unwrap_or_default)
                     .boxed(),
             );
         }

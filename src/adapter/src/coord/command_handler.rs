@@ -13,8 +13,10 @@
 use base64::prelude::*;
 use differential_dataflow::lattice::Lattice;
 use mz_adapter_types::dyncfgs::ALLOW_USER_SESSIONS;
+use mz_auth::AuthenticatorKind;
 use mz_auth::password::Password;
 use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
+use mz_sql::catalog::AutoProvisionSource;
 use mz_sql::session::metadata::SessionMetadata;
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
@@ -24,12 +26,14 @@ use futures::FutureExt;
 use futures::future::LocalBoxFuture;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_catalog::SYSTEM_CONN_ID;
-use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Source, Table, TableDataSource};
+use mz_catalog::memory::objects::{
+    CatalogItem, DataSourceDesc, Role, Source, Table, TableDataSource,
+};
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{instrument, soft_panic_or_log};
 use mz_repr::role_id::RoleId;
-use mz_repr::{Diff, SqlScalarType, Timestamp};
+use mz_repr::{Diff, GlobalId, SqlScalarType, Timestamp};
 use mz_sql::ast::{
     AlterConnectionAction, AlterConnectionStatement, AlterSinkAction, AlterSourceAction, AstInfo,
     ConstantVisitor, CopyRelation, CopyStatement, CreateSourceOptionName, Raw, Statement,
@@ -60,12 +64,14 @@ use opentelemetry::trace::TraceContextExt;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{Instrument, debug_span, info, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
+use uuid::Uuid;
 
 use crate::command::{
-    AuthResponse, CatalogSnapshot, Command, ExecuteResponse, SASLChallengeResponse,
-    SASLVerifyProofResponse, StartupResponse,
+    CatalogSnapshot, Command, ExecuteResponse, Response, SASLChallengeResponse,
+    SASLVerifyProofResponse, StartupResponse, SuperuserAttribute,
 };
 use crate::coord::appends::PendingWriteTxn;
+use crate::coord::peek::PendingPeek;
 use crate::coord::{
     ConnMeta, Coordinator, DeferredPlanStatement, Message, PendingTxn, PlanStatement, PlanValidity,
     PurifiedStatementReady, validate_ip_with_policy_rules,
@@ -73,13 +79,35 @@ use crate::coord::{
 use crate::error::{AdapterError, AuthenticationError};
 use crate::notice::AdapterNotice;
 use crate::session::{Session, TransactionOps, TransactionStatus};
+use crate::statement_logging::WatchSetCreation;
 use crate::util::{ClientTransmitter, ResultExt};
 use crate::webhook::{
     AppendWebhookResponse, AppendWebhookValidator, WebhookAppender, WebhookAppenderInvalidator,
 };
 use crate::{AppendWebhookError, ExecuteContext, catalog, metrics};
 
-use super::ExecuteContextExtra;
+use super::ExecuteContextGuard;
+
+/// The login status of a role, used by authentication handlers to check role
+/// existence and login permission before proceeding to credential verification.
+enum RoleLoginStatus {
+    /// The role does not exist in the catalog.
+    NotFound,
+    /// The role exists and has the LOGIN attribute.
+    CanLogin,
+    /// The role exists but does not have the LOGIN attribute.
+    NonLogin,
+}
+
+fn role_login_status(role: Option<&Role>) -> RoleLoginStatus {
+    match role {
+        None => RoleLoginStatus::NotFound,
+        Some(role) => match role.attributes.login {
+            Some(login) if login => RoleLoginStatus::CanLogin,
+            _ => RoleLoginStatus::NonLogin,
+        },
+    }
+}
 
 impl Coordinator {
     /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 58KB. This would
@@ -150,6 +178,10 @@ impl Coordinator {
                     );
                 }
 
+                Command::CheckRoleCanLogin { tx, role_name } => {
+                    self.handle_role_can_login(tx, role_name);
+                }
+
                 Command::Execute {
                     portal_name,
                     session,
@@ -160,6 +192,31 @@ impl Coordinator {
 
                     self.handle_execute(portal_name, session, tx, outer_ctx_extra)
                         .await;
+                }
+
+                Command::StartCopyFromStdin {
+                    target_id,
+                    target_name,
+                    columns,
+                    row_desc,
+                    params,
+                    session,
+                    tx,
+                } => {
+                    let otel_ctx = OpenTelemetryContext::obtain();
+                    let result = self.setup_copy_from_stdin(
+                        &session,
+                        target_id,
+                        target_name,
+                        columns,
+                        row_desc,
+                        params,
+                    );
+                    let _ = tx.send(Response {
+                        result,
+                        session,
+                        otel_ctx,
+                    });
                 }
 
                 Command::RetireExecute { data, reason } => self.retire_execution(reason, data),
@@ -208,7 +265,21 @@ impl Coordinator {
                         });
                     }
 
-                    let result = self.catalog_transact_conn(Some(&conn_id), ops).await;
+                    let result = self
+                        .catalog_transact_with_context(Some(&conn_id), None, ops)
+                        .await;
+                    let _ = tx.send(result);
+                }
+
+                Command::InjectAuditEvents {
+                    events,
+                    conn_id,
+                    tx,
+                } => {
+                    let ops = vec![catalog::Op::InjectAuditEvents { events }];
+                    let result = self
+                        .catalog_transact_with_context(Some(&conn_id), None, ops)
+                        .await;
                     let _ = tx.send(result);
                 }
 
@@ -270,10 +341,249 @@ impl Coordinator {
                 Command::Dump { tx } => {
                     let _ = tx.send(self.dump().await);
                 }
+
+                Command::GetComputeInstanceClient { instance_id, tx } => {
+                    let _ = tx.send(self.controller.compute.instance_client(instance_id));
+                }
+
+                Command::GetOracle { timeline, tx } => {
+                    let oracle = self
+                        .global_timelines
+                        .get(&timeline)
+                        .map(|timeline_state| Arc::clone(&timeline_state.oracle))
+                        .ok_or(AdapterError::ChangedPlan(
+                            "timeline has disappeared during planning".to_string(),
+                        ));
+                    let _ = tx.send(oracle);
+                }
+
+                Command::DetermineRealTimeRecentTimestamp {
+                    source_ids,
+                    real_time_recency_timeout,
+                    tx,
+                } => {
+                    let result = self
+                        .determine_real_time_recent_timestamp(
+                            source_ids.iter().copied(),
+                            real_time_recency_timeout,
+                        )
+                        .await;
+
+                    match result {
+                        Ok(Some(fut)) => {
+                            task::spawn(|| "determine real time recent timestamp", async move {
+                                let result = fut.await.map(Some).map_err(AdapterError::from);
+                                let _ = tx.send(result);
+                            });
+                        }
+                        Ok(None) => {
+                            let _ = tx.send(Ok(None));
+                        }
+                        Err(e) => {
+                            let _ = tx.send(Err(e));
+                        }
+                    }
+                }
+
+                Command::GetTransactionReadHoldsBundle { conn_id, tx } => {
+                    let read_holds = self.txn_read_holds.get(&conn_id).cloned();
+                    let _ = tx.send(read_holds);
+                }
+
+                Command::StoreTransactionReadHolds {
+                    conn_id,
+                    read_holds,
+                    tx,
+                } => {
+                    self.store_transaction_read_holds(conn_id, read_holds);
+                    let _ = tx.send(());
+                }
+
+                Command::ExecuteSlowPathPeek {
+                    dataflow_plan,
+                    determination,
+                    finishing,
+                    compute_instance,
+                    target_replica,
+                    intermediate_result_type,
+                    source_ids,
+                    conn_id,
+                    max_result_size,
+                    max_query_result_size,
+                    watch_set,
+                    tx,
+                } => {
+                    let result = self
+                        .implement_slow_path_peek(
+                            *dataflow_plan,
+                            determination,
+                            finishing,
+                            compute_instance,
+                            target_replica,
+                            intermediate_result_type,
+                            source_ids,
+                            conn_id,
+                            max_result_size,
+                            max_query_result_size,
+                            watch_set,
+                        )
+                        .await;
+                    let _ = tx.send(result);
+                }
+
+                Command::ExecuteSubscribe {
+                    df_desc,
+                    dependency_ids,
+                    cluster_id,
+                    replica_id,
+                    conn_id,
+                    session_uuid,
+                    read_holds,
+                    plan,
+                    statement_logging_id,
+                    tx,
+                } => {
+                    let mut ctx_extra = ExecuteContextGuard::new(
+                        statement_logging_id,
+                        self.internal_cmd_tx.clone(),
+                    );
+                    let result = self
+                        .implement_subscribe(
+                            &mut ctx_extra,
+                            df_desc,
+                            dependency_ids,
+                            cluster_id,
+                            replica_id,
+                            conn_id,
+                            session_uuid,
+                            read_holds,
+                            plan,
+                        )
+                        .await;
+                    let _ = tx.send(result);
+                }
+
+                Command::CopyToPreflight {
+                    s3_sink_connection,
+                    sink_id,
+                    tx,
+                } => {
+                    // Spawn a background task to perform the slow S3 preflight operations.
+                    // This avoids blocking the coordinator's main task.
+                    let connection_context = self.connection_context().clone();
+                    task::spawn(|| "copy_to_preflight", async move {
+                        let result = mz_storage_types::sinks::s3_oneshot_sink::preflight(
+                            connection_context,
+                            &s3_sink_connection.aws_connection,
+                            &s3_sink_connection.upload_info,
+                            s3_sink_connection.connection_id,
+                            sink_id,
+                        )
+                        .await
+                        .map_err(AdapterError::from);
+                        let _ = tx.send(result);
+                    });
+                }
+
+                Command::ExecuteCopyTo {
+                    df_desc,
+                    compute_instance,
+                    target_replica,
+                    source_ids,
+                    conn_id,
+                    watch_set,
+                    tx,
+                } => {
+                    // implement_copy_to spawns a background task that sends the response
+                    // through tx when the COPY TO completes (or immediately if setup fails).
+                    // We just call it and let it handle all response sending.
+                    self.implement_copy_to(
+                        *df_desc,
+                        compute_instance,
+                        target_replica,
+                        source_ids,
+                        conn_id,
+                        watch_set,
+                        tx,
+                    )
+                    .await;
+                }
+
+                Command::ExecuteSideEffectingFunc {
+                    plan,
+                    conn_id,
+                    current_role,
+                    tx,
+                } => {
+                    let result = self
+                        .execute_side_effecting_func(plan, conn_id, current_role)
+                        .await;
+                    let _ = tx.send(result);
+                }
+                Command::RegisterFrontendPeek {
+                    uuid,
+                    conn_id,
+                    cluster_id,
+                    depends_on,
+                    is_fast_path,
+                    watch_set,
+                    tx,
+                } => {
+                    self.handle_register_frontend_peek(
+                        uuid,
+                        conn_id,
+                        cluster_id,
+                        depends_on,
+                        is_fast_path,
+                        watch_set,
+                        tx,
+                    );
+                }
+                Command::UnregisterFrontendPeek { uuid, tx } => {
+                    self.handle_unregister_frontend_peek(uuid, tx);
+                }
+                Command::ExplainTimestamp {
+                    conn_id,
+                    session_wall_time,
+                    cluster_id,
+                    id_bundle,
+                    determination,
+                    tx,
+                } => {
+                    let explanation = self.explain_timestamp(
+                        &conn_id,
+                        session_wall_time,
+                        cluster_id,
+                        &id_bundle,
+                        determination,
+                    );
+                    let _ = tx.send(explanation);
+                }
+                Command::FrontendStatementLogging(event) => {
+                    self.handle_frontend_statement_logging_event(event);
+                }
             }
         }
         .instrument(debug_span!("handle_command"))
         .boxed_local()
+    }
+
+    fn handle_role_can_login(
+        &self,
+        tx: oneshot::Sender<Result<(), AdapterError>>,
+        role_name: String,
+    ) {
+        let result =
+            match role_login_status(self.catalog().try_get_role_by_name(role_name.as_str())) {
+                RoleLoginStatus::NotFound => Err(AdapterError::AuthenticationError(
+                    AuthenticationError::RoleNotFound,
+                )),
+                RoleLoginStatus::NonLogin => Err(AdapterError::AuthenticationError(
+                    AuthenticationError::NonLogin,
+                )),
+                RoleLoginStatus::CanLogin => Ok(()),
+            };
+        let _ = tx.send(result);
     }
 
     fn handle_authenticate_verify_sasl_proof(
@@ -285,41 +595,24 @@ impl Coordinator {
         mock_hash: String,
     ) {
         let role = self.catalog().try_get_role_by_name(role_name.as_str());
+        let login_status = role_login_status(role);
         let role_auth = role.and_then(|r| self.catalog().try_get_role_auth_by_id(&r.id));
-
-        let login = role
-            .as_ref()
-            .map(|r| r.attributes.login.unwrap_or(false))
-            .unwrap_or(false);
-
         let real_hash = role_auth
             .as_ref()
             .and_then(|auth| auth.password_hash.as_ref());
         let hash_ref = real_hash.map(|s| s.as_str()).unwrap_or(&mock_hash);
 
-        let role_present = role.is_some();
-        let make_auth_err = |role_present: bool, login: bool| {
-            AdapterError::AuthenticationError(if role_present && !login {
-                AuthenticationError::NonLogin
-            } else {
-                AuthenticationError::InvalidCredentials
-            })
-        };
-
         match mz_auth::hash::sasl_verify(hash_ref, &proof, &auth_message) {
             Ok(verifier) => {
                 // Success only if role exists, allows login, and a real password hash was used.
-                if login && real_hash.is_some() {
-                    let role = role.expect("login implies role exists");
-                    let _ = tx.send(Ok(SASLVerifyProofResponse {
-                        verifier,
-                        auth_resp: AuthResponse {
-                            role_id: role.id,
-                            superuser: role.attributes.superuser.unwrap_or(false),
-                        },
-                    }));
+                if matches!(login_status, RoleLoginStatus::CanLogin) && real_hash.is_some() {
+                    let _ = tx.send(Ok(SASLVerifyProofResponse { verifier }));
                 } else {
-                    let _ = tx.send(Err(make_auth_err(role_present, login)));
+                    let _ = tx.send(Err(AdapterError::AuthenticationError(match login_status {
+                        RoleLoginStatus::NonLogin => AuthenticationError::NonLogin,
+                        RoleLoginStatus::NotFound => AuthenticationError::RoleNotFound,
+                        RoleLoginStatus::CanLogin => AuthenticationError::InvalidCredentials,
+                    })));
                 }
             }
             Err(_) => {
@@ -332,7 +625,7 @@ impl Coordinator {
 
     #[mz_ore::instrument(level = "debug")]
     async fn handle_generate_sasl_challenge(
-        &mut self,
+        &self,
         tx: oneshot::Sender<Result<SASLChallengeResponse, AdapterError>>,
         role_name: String,
         client_nonce: String,
@@ -409,8 +702,8 @@ impl Coordinator {
 
     #[mz_ore::instrument(level = "debug")]
     async fn handle_authenticate_password(
-        &mut self,
-        tx: oneshot::Sender<Result<AuthResponse, AdapterError>>,
+        &self,
+        tx: oneshot::Sender<Result<(), AdapterError>>,
         role_name: String,
         password: Option<Password>,
     ) {
@@ -421,39 +714,47 @@ impl Coordinator {
             )));
             return;
         };
+        let role = self.catalog().try_get_role_by_name(role_name.as_str());
 
-        if let Some(role) = self.catalog().try_get_role_by_name(role_name.as_str()) {
-            if !role.attributes.login.unwrap_or(false) {
-                // The user is not allowed to login.
+        match role_login_status(role) {
+            RoleLoginStatus::NotFound => {
+                let _ = tx.send(Err(AdapterError::AuthenticationError(
+                    AuthenticationError::RoleNotFound,
+                )));
+                return;
+            }
+            RoleLoginStatus::NonLogin => {
                 let _ = tx.send(Err(AdapterError::AuthenticationError(
                     AuthenticationError::NonLogin,
                 )));
                 return;
             }
-            if let Some(auth) = self.catalog().try_get_role_auth_by_id(&role.id) {
-                if let Some(hash) = &auth.password_hash {
-                    let _ = match mz_auth::hash::scram256_verify(&password, hash) {
-                        Ok(_) => tx.send(Ok(AuthResponse {
-                            role_id: role.id,
-                            superuser: role.attributes.superuser.unwrap_or(false),
-                        })),
-                        Err(_) => tx.send(Err(AdapterError::AuthenticationError(
-                            AuthenticationError::InvalidCredentials,
-                        ))),
-                    };
-                    return;
-                }
-            }
-            // Authentication failed due to incorrect password or missing password hash.
-            let _ = tx.send(Err(AdapterError::AuthenticationError(
-                AuthenticationError::InvalidCredentials,
-            )));
-        } else {
-            // The user does not exist.
-            let _ = tx.send(Err(AdapterError::AuthenticationError(
-                AuthenticationError::RoleNotFound,
-            )));
+            RoleLoginStatus::CanLogin => {}
         }
+
+        let role_auth = role.and_then(|r| self.catalog().try_get_role_auth_by_id(&r.id));
+
+        if let Some(auth) = role_auth {
+            if let Some(hash) = &auth.password_hash {
+                let hash = hash.clone();
+                task::spawn_blocking(
+                    || "auth-check-hash",
+                    move || {
+                        let _ = match mz_auth::hash::scram256_verify(&password, &hash) {
+                            Ok(_) => tx.send(Ok(())),
+                            Err(_) => tx.send(Err(AdapterError::AuthenticationError(
+                                AuthenticationError::InvalidCredentials,
+                            ))),
+                        };
+                    },
+                );
+                return;
+            }
+        }
+        // Authentication failed due to missing password hash.
+        let _ = tx.send(Err(AdapterError::AuthenticationError(
+            AuthenticationError::InvalidCredentials,
+        )));
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -470,7 +771,7 @@ impl Coordinator {
     ) {
         // Early return if successful, otherwise cleanup any possible state.
         match self.handle_startup_inner(&user, &conn_id, &client_ip).await {
-            Ok((role_id, session_defaults)) => {
+            Ok((role_id, superuser_attribute, session_defaults)) => {
                 let session_type = metrics::session_type_label_value(&user);
                 self.metrics
                     .active_sessions
@@ -527,11 +828,25 @@ impl Coordinator {
                 }
                 let notify = self.builtin_table_update().background(updates);
 
+                let catalog = self.owned_catalog();
+                let build_info_human_version =
+                    catalog.state().config().build_info.human_version(None);
+
+                let statement_logging_frontend = self
+                    .statement_logging
+                    .create_frontend(build_info_human_version);
+
                 let resp = Ok(StartupResponse {
                     role_id,
                     write_notify: notify,
                     session_defaults,
-                    catalog: self.owned_catalog(),
+                    catalog,
+                    storage_collections: Arc::clone(&self.controller.storage_collections),
+                    transient_id_gen: Arc::clone(&self.transient_id_gen),
+                    optimizer_metrics: self.optimizer_metrics.clone(),
+                    persist_client: self.persist_client.clone(),
+                    statement_logging_frontend,
+                    superuser_attribute,
                 });
                 if tx.send(resp).is_err() {
                     // Failed to send to adapter, but everything is setup so we can terminate
@@ -540,12 +855,9 @@ impl Coordinator {
                 }
             }
             Err(e) => {
-                // Error during startup or sending to adapter, cleanup possible state created by
-                // handle_startup_inner. A user may have been created and it can stay; no need to
-                // delete it.
-                self.catalog_mut()
-                    .drop_temporary_schema(&conn_id)
-                    .unwrap_or_terminate("unable to drop temporary schema");
+                // Error during startup or sending to adapter. A user may have been created and
+                // it can stay; no need to delete it.
+                // Note: Temporary schemas are created lazily, so there's nothing to clean up here.
 
                 // Communicate the error back to the client. No need to
                 // handle failures to send the error back; we've already
@@ -559,26 +871,46 @@ impl Coordinator {
     async fn handle_startup_inner(
         &mut self,
         user: &User,
-        conn_id: &ConnectionId,
+        _conn_id: &ConnectionId,
         client_ip: &Option<IpAddr>,
-    ) -> Result<(RoleId, BTreeMap<String, OwnedVarInput>), AdapterError> {
+    ) -> Result<(RoleId, SuperuserAttribute, BTreeMap<String, OwnedVarInput>), AdapterError> {
         if self.catalog().try_get_role_by_name(&user.name).is_none() {
             // If the user has made it to this point, that means they have been fully authenticated.
             // This includes preventing any user, except a pre-defined set of system users, from
             // connecting to an internal port. Therefore it's ok to always create a new role for the
             // user.
-            let attributes = RoleAttributesRaw::new();
+            let mut attributes = RoleAttributesRaw::new();
+            // When auto-provisioning, we store the authenticator that was used to provision the role.
+            attributes.auto_provision_source = match user.authenticator_kind {
+                Some(AuthenticatorKind::Oidc) => Some(AutoProvisionSource::Oidc),
+                Some(AuthenticatorKind::Frontegg) => Some(AutoProvisionSource::Frontegg),
+                Some(AuthenticatorKind::None) => Some(AutoProvisionSource::None),
+                _ => {
+                    warn!(
+                        "auto-provisioning role with unexpected authenticator kind: {:?}",
+                        user.authenticator_kind
+                    );
+                    None
+                }
+            };
+
+            // Auto-provision roles with the LOGIN attribute to distinguish
+            // them as users.
+            attributes.login = Some(true);
+
             let plan = CreateRolePlan {
                 name: user.name.to_string(),
                 attributes,
             };
             self.sequence_create_role_for_startup(plan).await?;
         }
-        let role_id = self
+        let role = self
             .catalog()
             .try_get_role_by_name(&user.name)
-            .expect("created above")
-            .id;
+            .expect("created above");
+        let role_id = role.id;
+
+        let superuser_attribute = role.attributes.superuser;
 
         if role_id.is_user() && !ALLOW_USER_SESSIONS.get(self.catalog().system_config().dyncfgs()) {
             return Err(AdapterError::UserSessionsDisallowed);
@@ -661,10 +993,15 @@ impl Coordinator {
             }
         }
 
-        self.catalog_mut()
-            .create_temporary_schema(conn_id, role_id)?;
+        // Temporary schemas are now created lazily when the first temporary object is created,
+        // rather than eagerly on connection startup. This avoids expensive catalog_mut() calls
+        // for the common case where connections never create temporary objects.
 
-        Ok((role_id, session_defaults))
+        Ok((
+            role_id,
+            SuperuserAttribute(superuser_attribute),
+            session_defaults,
+        ))
     }
 
     /// Handles an execute command.
@@ -680,7 +1017,7 @@ impl Coordinator {
         // then `outer_context` should be `Some`.
         // This instructs the coordinator that the
         // outer execute should be considered finished once the inner one is.
-        outer_context: Option<ExecuteContextExtra>,
+        outer_context: Option<ExecuteContextGuard>,
     ) {
         if session.vars().emit_trace_id_notice() {
             let span_context = tracing::Span::current()
@@ -695,7 +1032,7 @@ impl Coordinator {
             }
         }
 
-        if let Err(err) = self.verify_portal(&mut session, &portal_name) {
+        if let Err(err) = Self::verify_portal(self.catalog(), &mut session, &portal_name) {
             // If statement logging hasn't started yet, we don't need
             // to add any "end" event, so just make up a no-op
             // `ExecuteContextExtra` here, via `Default::default`.
@@ -738,7 +1075,7 @@ impl Coordinator {
                     lifecycle_timestamps,
                 );
 
-                ExecuteContextExtra::new(maybe_uuid)
+                ExecuteContextGuard::new(maybe_uuid, self.internal_cmd_tx.clone())
             };
             let ctx = ExecuteContext::from_parts(tx, self.internal_cmd_tx.clone(), session, extra);
             (stmt, ctx, params)
@@ -798,13 +1135,12 @@ impl Coordinator {
         //    `handle_execute_inner` to stop further processing (no planning, etc.) of the
         //    statement.
         // 2. A few other DDL statements (`ALTER .. RENAME/SWAP`) enter the `DDL` ops which allows
-        //    any number of only these DDL statements to be executed in a transaction. At sequencing
-        //    these generate the `Op::TransactionDryRun` catalog op. When applied with
-        //    `catalog_transact`, that op will always produce the `TransactionDryRun` error. The
-        //    `catalog_transact_with_ddl_transaction` function intercepts that error and reports
-        //    success to the user, but nothing is yet committed to the real catalog. At `COMMIT` all
-        //    of the ops but without dry run are applied. The purpose of this is to allow multiple,
-        //    atomic renames in the same transaction.
+        //    any number of only these DDL statements to be executed in a transaction. During
+        //    sequencing we run an incremental catalog dry run against in-memory transaction state
+        //    and store the resulting `CatalogState` in `TransactionOps::DDL`, but nothing is yet
+        //    committed to the durable catalog. At `COMMIT`, all accumulated ops are applied in one
+        //    catalog transaction. The purpose of this is to allow multiple, atomic renames in the
+        //    same transaction.
         // 3. Some DDLs do off-thread work during purification or sequencing that is expensive or
         //    makes network calls (interfacing with secrets, optimization of views/indexes, source
         //    purification). These must guarantee correctness when they return to the main
@@ -919,6 +1255,7 @@ impl Coordinator {
                             state,
                             revision,
                             side_effects: vec![],
+                            snapshot: None,
                         }) {
                             return ctx.retire(Err(err));
                         }
@@ -929,6 +1266,7 @@ impl Coordinator {
                     | Statement::AlterConnection(_)
                     | Statement::AlterDefaultPrivileges(_)
                     | Statement::AlterIndex(_)
+                    | Statement::AlterMaterializedViewApplyReplacement(_)
                     | Statement::AlterSetCluster(_)
                     | Statement::AlterOwner(_)
                     | Statement::AlterRetainHistory(_)
@@ -947,7 +1285,6 @@ impl Coordinator {
                     | Statement::CreateDatabase(_)
                     | Statement::CreateIndex(_)
                     | Statement::CreateMaterializedView(_)
-                    | Statement::CreateContinualTask(_)
                     | Statement::CreateRole(_)
                     | Statement::CreateSchema(_)
                     | Statement::CreateSecret(_)
@@ -1170,7 +1507,9 @@ impl Coordinator {
                         if_exists: cmvs.if_exists,
                         name: cmvs.name,
                         columns: cmvs.columns,
+                        replacement_for: cmvs.replacement_for,
                         in_cluster: cmvs.in_cluster,
+                        in_cluster_replica: cmvs.in_cluster_replica,
                         query: cmvs.query,
                         with_options: cmvs.with_options,
                         as_of: None,
@@ -1287,6 +1626,14 @@ impl Coordinator {
             {
                 false
             }
+
+            // `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT` waits for the target MV to make
+            // enough progress for a clean cutover. If the target MV is stalled, it may block
+            // forever. Checks in sequencing ensure the operation fails if any of these happens
+            // concurrently:
+            //   * the target MV is dropped
+            //   * the replacement MV is dropped
+            Statement::AlterMaterializedViewApplyReplacement(_) => false,
 
             // Everything else must be serialized.
             _ => true,
@@ -1420,7 +1767,7 @@ impl Coordinator {
             // NOTE: The Drop impl of ReadHolds makes sure that the hold is
             // released when we don't use it.
             if acquire_read_holds {
-                self.store_transaction_read_holds(session, read_holds);
+                self.store_transaction_read_holds(session.conn_id().clone(), read_holds);
             }
 
             mz_now_ts
@@ -1459,12 +1806,13 @@ impl Coordinator {
         let mut maybe_ctx = None;
 
         // Cancel pending writes. There is at most one pending write per session.
-        if let Some(idx) = self.pending_writes.iter().position(|pending_write_txn| {
+        let pending_write_idx = self.pending_writes.iter().position(|pending_write_txn| {
             matches!(pending_write_txn, PendingWriteTxn::User {
                 pending_txn: PendingTxn { ctx, .. },
                 ..
             } if *ctx.session().conn_id() == conn_id)
-        }) {
+        });
+        if let Some(idx) = pending_write_idx {
             if let PendingWriteTxn::User {
                 pending_txn: PendingTxn { ctx, .. },
                 ..
@@ -1480,11 +1828,11 @@ impl Coordinator {
         }
 
         // Cancel deferred statements.
-        if let Some(idx) = self
+        let deferred_ddl_idx = self
             .serialized_ddl
             .iter()
-            .position(|deferred| *deferred.ctx.session().conn_id() == conn_id)
-        {
+            .position(|deferred| *deferred.ctx.session().conn_id() == conn_id);
+        if let Some(idx) = deferred_ddl_idx {
             let deferred = self
                 .serialized_ddl
                 .remove(idx)
@@ -1519,22 +1867,28 @@ impl Coordinator {
     /// This cleans up any state in the coordinator associated with the session.
     #[mz_ore::instrument(level = "debug")]
     async fn handle_terminate(&mut self, conn_id: ConnectionId) {
-        if !self.active_conns.contains_key(&conn_id) {
-            // If the session doesn't exist in `active_conns`, then this method will panic later on.
-            // Instead we explicitly panic here while dumping the entire Coord to the logs to help
-            // debug. This panic is very infrequent so we want as much information as possible.
-            // See https://github.com/MaterializeInc/database-issues/issues/5627.
-            panic!("unknown connection: {conn_id:?}\n\n{self:?}")
-        }
+        // If the session doesn't exist in `active_conns`, then this method will panic later on.
+        // Instead we explicitly panic here while dumping the entire Coord to the logs to help
+        // debug. This panic is very infrequent so we want as much information as possible.
+        // See https://github.com/MaterializeInc/database-issues/issues/5627.
+        assert!(
+            self.active_conns.contains_key(&conn_id),
+            "unknown connection: {conn_id:?}\n\n{self:?}"
+        );
 
         // We do not need to call clear_transaction here because there are no side effects to run
         // based on any session transaction state.
         self.clear_connection(&conn_id).await;
 
         self.drop_temp_items(&conn_id).await;
-        self.catalog_mut()
-            .drop_temporary_schema(&conn_id)
-            .unwrap_or_terminate("unable to drop temporary schema");
+        // Only call catalog_mut() if a temporary schema actually exists for this connection.
+        // This avoids an expensive Arc::make_mut clone for the common case where the connection
+        // never created any temporary objects.
+        if self.catalog().state().has_temporary_schema(&conn_id) {
+            self.catalog_mut()
+                .drop_temporary_schema(&conn_id)
+                .unwrap_or_terminate("unable to drop temporary schema");
+        }
         let conn = self.active_conns.remove(&conn_id).expect("conn must exist");
         let session_type = metrics::session_type_label_value(conn.user());
         self.metrics
@@ -1684,5 +2038,62 @@ impl Coordinator {
             }
         });
         let _ = tx.send(response);
+    }
+
+    /// Handle registration of a frontend peek, for statement logging and query cancellation
+    /// handling.
+    fn handle_register_frontend_peek(
+        &mut self,
+        uuid: Uuid,
+        conn_id: ConnectionId,
+        cluster_id: mz_controller_types::ClusterId,
+        depends_on: BTreeSet<GlobalId>,
+        is_fast_path: bool,
+        watch_set: Option<WatchSetCreation>,
+        tx: oneshot::Sender<Result<(), AdapterError>>,
+    ) {
+        let statement_logging_id = watch_set.as_ref().map(|ws| ws.logging_id);
+        if let Some(ws) = watch_set {
+            if let Err(e) = self.install_peek_watch_sets(conn_id.clone(), ws) {
+                let _ = tx.send(Err(
+                    AdapterError::concurrent_dependency_drop_from_watch_set_install_error(e),
+                ));
+                return;
+            }
+        }
+
+        // Store the peek in pending_peeks for later retrieval when results arrive
+        self.pending_peeks.insert(
+            uuid,
+            PendingPeek {
+                conn_id: conn_id.clone(),
+                cluster_id,
+                depends_on,
+                ctx_extra: ExecuteContextGuard::new(
+                    statement_logging_id,
+                    self.internal_cmd_tx.clone(),
+                ),
+                is_fast_path,
+            },
+        );
+
+        // Also track it by connection ID for cancellation support
+        self.client_pending_peeks
+            .entry(conn_id)
+            .or_default()
+            .insert(uuid, cluster_id);
+
+        let _ = tx.send(Ok(()));
+    }
+
+    /// Handle unregistration of a frontend peek that was registered but failed to issue.
+    /// This is used for cleanup when `client.peek()` fails after `RegisterFrontendPeek` succeeds.
+    fn handle_unregister_frontend_peek(&mut self, uuid: Uuid, tx: oneshot::Sender<()>) {
+        // Remove from pending_peeks (this also removes from client_pending_peeks)
+        if let Some(pending_peek) = self.remove_pending_peek(&uuid) {
+            // Retire `ExecuteContextExtra`, because the frontend will log the peek's error result.
+            let _ = pending_peek.ctx_extra.defuse();
+        }
+        let _ = tx.send(());
     }
 }

@@ -61,9 +61,8 @@ CREATE TABLE t (x int)
 > CREATE TABLE mysql_t FROM SOURCE mysql_src (REFERENCE t)
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET kafka_default_metadata_fetch_interval = '1s'
-ALTER SYSTEM SET pg_offset_known_interval = '1s'
-ALTER SYSTEM SET mysql_offset_known_interval = '1s'
+ALTER SYSTEM SET min_timestamp_interval = '500ms'
+ALTER SYSTEM SET max_timestamp_interval = '2s'
 
 > SELECT name, write_frontier::text::uint8 % 1000 = 1
   FROM mz_internal.mz_frontiers
@@ -74,9 +73,9 @@ pg_src             true
 mysql_src          true
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET kafka_default_metadata_fetch_interval = 1234
-ALTER SYSTEM SET pg_offset_known_interval = 1234
-ALTER SYSTEM SET mysql_offset_known_interval = 1234
+ALTER SOURCE kafka_src SET (TIMESTAMP INTERVAL = '1234ms')
+ALTER SOURCE pg_src SET (TIMESTAMP INTERVAL = '1234ms')
+ALTER SOURCE mysql_src SET (TIMESTAMP INTERVAL = '1234ms')
 
 > SELECT name, write_frontier::text::uint8 % 1234 = 1
   FROM mz_internal.mz_frontiers
@@ -87,9 +86,9 @@ pg_src             true
 mysql_src          true
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET kafka_default_metadata_fetch_interval = 500
-ALTER SYSTEM SET pg_offset_known_interval = 500
-ALTER SYSTEM SET mysql_offset_known_interval = 500
+ALTER SOURCE kafka_src SET (TIMESTAMP INTERVAL = '500ms')
+ALTER SOURCE pg_src SET (TIMESTAMP INTERVAL = '500ms')
+ALTER SOURCE mysql_src SET (TIMESTAMP INTERVAL = '500ms')
 
 > SELECT name, write_frontier::text::uint8 % 500 = 1
   FROM mz_internal.mz_frontiers

@@ -20,6 +20,7 @@ from typing import IO
 import requests
 
 from materialize import buildkite, spawn
+from materialize.linear import LINEAR_CLOSED_STATE_TYPES
 
 ISSUE_RE = re.compile(
     r"""
@@ -30,6 +31,9 @@ ISSUE_RE = re.compile(
     | ( database-issues\# | database-issues/issues/ ) (?P<databaseissues>[0-9]+)
     | ( terraform-aws-materialize\# | terraform-aws-materialize/issues/ ) (?P<terraformawsmaterialize>[0-9]+)
     | ( terraform-google-materialize\# | terraform-google-materialize/issues/ ) (?P<terraformgooglematerialize>[0-9]+)
+    | ( materialize-terraform-self-managed\# | materialize-terraform-self-managed/issues/ ) (?P<materializeterraformselfmanaged>[0-9]+)
+    # Linear issue identifiers like linear#SEC-308 or full Linear URLs
+    | (linear\# | linear\.app/\S+/issue/) (?P<linear>[A-Z][A-Z0-9]+-[0-9]+)
     # only match from the beginning of the line or after a space character to avoid matching Buildkite URLs
     | (^|\s) \# (?P<ambiguous>[0-9]+)
     )
@@ -45,6 +49,8 @@ GROUP_REPO = {
     "databaseissues": "MaterializeInc/database-issues",
     "terraformawsmaterialize": "MaterializeInc/terraform-aws-materialize",
     "terraformgooglematerialize": "MaterializeInc/terraform-google-materialize",
+    "materializeterraformselfmanaged": "MaterializeInc/materialize-terraform-self-managed",
+    "linear": "linear",
     "ambiguous": None,
 }
 
@@ -101,8 +107,9 @@ COMMENT_RE = re.compile(r"#|//")
 
 IGNORE_FILENAME_RE = re.compile(
     r"""
-    ( .*\.(svg|png|jpg|jpeg|avro|ico)
+    ( .*\.(svg|png|jpg|jpeg|avro|ico|woff)
     | doc/developer/design/20230223_stabilize_with_mutually_recursive.md
+    | \.(agents|claude)/skills/.*
     )
     """,
     re.VERBOSE,
@@ -114,7 +121,7 @@ FILENAME_REFERENCE_RE = re.compile(r".*\.(td|slt|test)\.gh(?P<ambiguous>[0-9]+)"
 @dataclass
 class IssueRef:
     repository: str | None
-    issue_id: int
+    issue_id: int | str
     filename: str
     line_number: int
     text: str | None
@@ -186,7 +193,7 @@ def detect_referenced_issues(filename: str) -> list[IssueRef]:
                 issue_refs.append(
                     IssueRef(
                         GROUP_REPO[group],
-                        int(issue_id),
+                        issue_id if group == "linear" else int(issue_id),
                         filename,
                         line_number,
                         text.strip(),
@@ -226,6 +233,51 @@ def is_issue_closed_on_github(repository: str | None, issue_id: int) -> bool:
     return issue_json["state"] == "closed"
 
 
+def is_issue_closed_on_linear(identifier: str) -> bool:
+    token = os.getenv("LINEAR_READ_ONLY_TOKEN")
+    if not token:
+        if not os.getenv("CI"):
+            print(
+                f"Can't check Linear issue {identifier}, set LINEAR_READ_ONLY_TOKEN environment variable"
+            )
+        return False
+
+    parts = identifier.split("-", 1)
+    if len(parts) != 2:
+        return False
+    team_key, number_str = parts
+    try:
+        number = int(number_str)
+    except ValueError:
+        return False
+
+    query = """
+    query($teamKey: String!, $number: Float!) {
+      issues(filter: { number: { eq: $number }, team: { key: { eq: $teamKey } } }) {
+        nodes {
+          state { type }
+        }
+      }
+    }
+    """
+
+    response = requests.post(
+        "https://api.linear.app/graphql",
+        headers={"Authorization": token, "Content-Type": "application/json"},
+        json={"query": query, "variables": {"teamKey": team_key, "number": number}},
+    )
+
+    if response.status_code != 200:
+        return False
+
+    result = response.json()
+    nodes = result.get("data", {}).get("issues", {}).get("nodes", [])
+    if not nodes:
+        return False
+
+    return nodes[0]["state"]["type"] in LINEAR_CLOSED_STATE_TYPES
+
+
 def filter_changed_lines(issue_refs: list[IssueRef]) -> list[IssueRef]:
     changed_lines = buildkite.find_modified_lines()
     return [
@@ -248,16 +300,34 @@ def filter_ambiguous_issues(
 
 
 def filter_closed_issues(issue_refs: list[IssueRef]) -> list[IssueRef]:
-    issues = {(issue_ref.repository, issue_ref.issue_id) for issue_ref in issue_refs}
-    closed_issues = {
-        (repository, issue)
-        for repository, issue in issues
-        if is_issue_closed_on_github(repository, issue)
+    github_issues = {
+        (ref.repository, ref.issue_id)
+        for ref in issue_refs
+        if ref.repository != "linear"
     }
+    closed_github = {
+        (repository, issue)
+        for repository, issue in github_issues
+        if isinstance(issue, int) and is_issue_closed_on_github(repository, issue)
+    }
+
+    linear_identifiers = {
+        ref.issue_id for ref in issue_refs if ref.repository == "linear"
+    }
+    closed_linear = {
+        identifier
+        for identifier in linear_identifiers
+        if is_issue_closed_on_linear(str(identifier))
+    }
+
     return [
-        issue_ref
-        for issue_ref in issue_refs
-        if (issue_ref.repository, issue_ref.issue_id) in closed_issues
+        ref
+        for ref in issue_refs
+        if (ref.repository == "linear" and ref.issue_id in closed_linear)
+        or (
+            ref.repository != "linear"
+            and (ref.repository, ref.issue_id) in closed_github
+        )
     ]
 
 
@@ -325,10 +395,16 @@ def main() -> int:
         )
 
     for issue_ref in issue_refs:
-        url = buildkite.inline_link(
-            f"https://github.com/{issue_ref.repository}/issues/{issue_ref.issue_id}",
-            f"{issue_ref.repository}#{issue_ref.issue_id}",
-        )
+        if issue_ref.repository == "linear":
+            url = buildkite.inline_link(
+                f"https://linear.app/materializeinc/issue/{issue_ref.issue_id}",
+                str(issue_ref.issue_id),
+            )
+        else:
+            url = buildkite.inline_link(
+                f"https://github.com/{issue_ref.repository}/issues/{issue_ref.issue_id}",
+                f"{issue_ref.repository}#{issue_ref.issue_id}",
+            )
         print(f"--- Issue is referenced in comment but already closed: {url}")
         if issue_ref.text is not None:
             print(f"{issue_ref.filename}:{issue_ref.line_number}:")

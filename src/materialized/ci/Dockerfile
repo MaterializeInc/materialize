@@ -10,14 +10,16 @@
 MZFROM materialized-base
 
 COPY listener_configs/ /listener_configs/
+
+USER materialize
+
+RUN /usr/lib/postgresql/16/bin/initdb -D /mzdata/postgres -U root --auth-local=trust
+
 COPY materialized entrypoint.sh /usr/local/bin/
 
 USER root
 RUN ln -s /usr/local/bin/materialized /usr/local/bin/environmentd \
   && ln -s /usr/local/bin/materialized /usr/local/bin/clusterd
-
 USER materialize
-
-RUN /usr/lib/postgresql/17/bin/initdb -D /mzdata/postgres -U root --auth-local=trust
 
 ENTRYPOINT ["tini", "--", "entrypoint.sh"]

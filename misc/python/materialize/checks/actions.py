@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 from materialize import MZ_ROOT, spawn
 from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
+from materialize.mzbuild import Profile
 
 if TYPE_CHECKING:
     from materialize.checks.scenarios import Scenario
@@ -134,7 +135,21 @@ class Validate(Action):
 class BumpVersion(Action):
     def execute(self, e: Executor) -> None:
         version = MzVersion.parse_cargo().bump_minor()
-        spawn.runv(["bin/bump-version", str(version), "--no-commit"], cwd=MZ_ROOT)
+        spawn.runv(
+            ["bin/bump-version", str(version), "--no-commit"],
+            cwd=MZ_ROOT,
+        )
+
+    def join(self, e: Executor) -> None:
+        pass
+
+
+class UseOptimizedProfile(Action):
+    """Downgrade the build profile to optimized to avoid slow RELEASE/LTO builds."""
+
+    def execute(self, e: Executor) -> None:
+        c = e.mzcompose_composition()
+        c.repo.rd.profile = Profile.OPTIMIZED
 
     def join(self, e: Executor) -> None:
         pass

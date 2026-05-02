@@ -20,7 +20,7 @@ use mz_storage_types::parameters::{
 };
 use mz_tracing::params::TracingParameters;
 
-use mz_timestamp_oracle::postgres_oracle::PostgresTimestampOracleParameters;
+use mz_timestamp_oracle::postgres_oracle::TimestampOracleParameters;
 
 /// Return the current compute configuration, derived from the system configuration.
 pub fn compute_config(config: &SystemVars) -> ComputeParameters {
@@ -164,8 +164,8 @@ pub fn caching_config(config: &SystemVars) -> mz_secrets::CachingPolicy {
     }
 }
 
-pub fn pg_timstamp_oracle_config(config: &SystemVars) -> PostgresTimestampOracleParameters {
-    PostgresTimestampOracleParameters {
+pub fn timestamp_oracle_config(config: &SystemVars) -> TimestampOracleParameters {
+    TimestampOracleParameters {
         pg_connection_pool_max_size: Some(config.pg_timestamp_oracle_connection_pool_max_size()),
         pg_connection_pool_max_wait: Some(config.pg_timestamp_oracle_connection_pool_max_wait()),
         pg_connection_pool_ttl: Some(config.pg_timestamp_oracle_connection_pool_ttl()),
@@ -177,6 +177,9 @@ pub fn pg_timstamp_oracle_config(config: &SystemVars) -> PostgresTimestampOracle
         // oracle.
         pg_connection_pool_connect_timeout: Some(config.crdb_connect_timeout()),
         pg_connection_pool_tcp_user_timeout: Some(config.crdb_tcp_user_timeout()),
+        pg_connection_pool_keepalives_idle: Some(config.crdb_keepalives_idle()),
+        pg_connection_pool_keepalives_interval: Some(config.crdb_keepalives_interval()),
+        pg_connection_pool_keepalives_retries: Some(config.crdb_keepalives_retries()),
     }
 }
 

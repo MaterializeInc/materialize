@@ -1,3 +1,4 @@
+- test_depends_on: rbac-sm/grant_roles.yml
 - name: "for-tables-created-by-blueberry"
   description: |
 
@@ -6,6 +7,10 @@
     `blue.berry@example.com` role; specifically, grants `SELECT` privileges on
     these objects to `view_manager` and `data_reader` roles.
 
+  test_setup: |
+    > GRANT "blue.berry@example.com" TO materialize
+    > GRANT view_manager TO "blue.berry@example.com";
+    > GRANT ALL PRIVILEGES ON SCHEMA mydb.sales TO "blue.berry@example.com"
   code: |
     -- For new relations created by the `"blue.berry@example.com"` role
     -- Grant `SELECT` privileges to the `view_manager` and `data_reader` roles
@@ -38,6 +43,10 @@
   description: |
 
     Verify the privileges for `view_manager`:
+  test_setup: |
+    > ALTER MATERIALIZED VIEW mydb.sales.magic OWNER TO "blue.berry@example.com"
+    $ postgres-execute connection=postgres://blue.berry%40example.com:materialize@${testdrive.materialize-sql-addr}/materialize
+    GRANT SELECT ON TABLE mydb.sales.magic TO view_manager
   code: |
     SHOW PRIVILEGES FOR view_manager where grantor = 'blue.berry@example.com';
   results: |
@@ -55,6 +64,9 @@
   description: |
 
     Verify the privileges for `data_reader`:
+  test_setup: |
+    $ postgres-execute connection=postgres://blue.berry%40example.com:materialize@${testdrive.materialize-sql-addr}/materialize
+    GRANT SELECT ON TABLE mydb.sales.magic TO data_reader
   code: |
     SHOW PRIVILEGES FOR data_reader where grantor = 'blue.berry@example.com';
   results: |
@@ -107,6 +119,8 @@
     GRANT INSERT ON TABLES TO view_manager;
     -- Although `TABLES` refers to tables, views, materialized views, and
     -- sources, the INSERT privilege will only apply to tables.
+  test_replacements:
+    <password>: materialize
 
 - name: "for-tables-created-by-view-manager-member"
   description: |
@@ -129,6 +143,7 @@
 
     The `SHOW PRIVILEGES FOR view_manager  where name = 'only_lemon';` returns 0
     rows.
+  testable_results: false
 
 
 - name: "for-tables-created-by-public"
@@ -139,12 +154,16 @@
     Then, the default privilege will apply to all objects created by
     `view_manager` and its members.
 
+  test_setup: |
+    $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+    ALTER ROLE materialize SUPERUSER;
   code: |
     ALTER DEFAULT PRIVILEGES FOR ROLE PUBLIC
     IN SCHEMA mydb.sales
     GRANT INSERT ON TABLES TO view_manager;
     -- Although `TABLES` refers to tables, views, materialized views, and
     -- sources, the `CREATE` privilege will only apply to tables.
+  testable: false  # currently can't reconnect the Materialize session with its superuser privileges
 
 - name: "for-tables-created-by-public-member"
   description: |
@@ -165,6 +184,12 @@
   description: |
 
     Verify the privileges for `view_manager`:
+  test_setup: |
+    > GRANT "lemon@example.com" TO materialize
+    > ALTER TABLE mydb.sales.shared_lemon OWNER TO "lemon@example.com"
+    > GRANT ALL PRIVILEGES ON SCHEMA mydb.sales TO "lemon@example.com"
+    $ postgres-execute connection=postgres://lemon%40example.com:materialize@${testdrive.materialize-sql-addr}/materialize
+    GRANT INSERT ON TABLE mydb.sales.shared_lemon TO view_manager;
   code: |
     SHOW PRIVILEGES FOR view_manager where name = 'shared_lemon';
 

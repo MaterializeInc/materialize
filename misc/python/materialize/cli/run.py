@@ -145,6 +145,11 @@ def main() -> int:
         action="store_true",
     )
     parser.add_argument(
+        "--foundationdb",
+        help="Build with the foundationdb feature, enabling FoundationDB as a consensus and timestamp oracle backend",
+        action="store_true",
+    )
+    parser.add_argument(
         "-p",
         "--package",
         help="Package to run tests for",
@@ -211,9 +216,7 @@ def main() -> int:
     if args.program in KNOWN_PROGRAMS:
         build_func = _cargo_build
 
-        (build_retcode, built_programs) = build_func(
-            args, extra_programs=[args.program]
-        )
+        build_retcode, built_programs = build_func(args, extra_programs=[args.program])
 
         if args.build_only:
             return build_retcode
@@ -256,10 +259,11 @@ def main() -> int:
             _handle_lingering_services(kill=args.reset)
             scratch = MZ_ROOT / "scratch"
             dbconn = _connect_sql(args.postgres)
-            for schema in ["consensus", "tsoracle", "storage"]:
-                if args.reset:
-                    _run_sql(dbconn, f"DROP SCHEMA IF EXISTS {schema} CASCADE")
-                _run_sql(dbconn, f"CREATE SCHEMA IF NOT EXISTS {schema}")
+            if dbconn:
+                for schema in ["consensus", "tsoracle", "storage"]:
+                    if args.reset:
+                        _run_sql(dbconn, f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+                    _run_sql(dbconn, f"CREATE SCHEMA IF NOT EXISTS {schema}")
             # Keep this after clearing out Postgres. Otherwise there is a race
             # where a ctrl-c could leave persist with references in Postgres to
             # files that have been deleted. There's no race if we reset in the
@@ -338,20 +342,31 @@ def main() -> int:
             # Common stack overflows in Debug mode
             if not args.release and not args.optimized:
                 env["RUST_MIN_STACK"] = RUST_MIN_STACK
+            # Always enable soft assertions in SLTs for un-redacted debug formatting and additional testing.
+            env["MZ_SOFT_ASSERTIONS"] = "1"
     elif args.program == "test":
-        (build_retcode, _) = _cargo_build(args)
+        build_retcode, _ = _cargo_build(args)
         if args.build_only:
             return build_retcode
 
-        command = _cargo_command(args, "nextest")
         try:
             subprocess.check_output(
-                command + ["--version"], env=env, stderr=subprocess.PIPE
+                _cargo_command(args, "nextest") + ["--version"],
+                env=env,
+                stderr=subprocess.PIPE,
             )
         except subprocess.CalledProcessError:
             raise UIError("cargo nextest not found, run `cargo install cargo-nextest`")
 
-        command += ["run"]
+        command = _cargo_command(args, "nextest", "run")
+
+        features = []
+        if args.foundationdb:
+            features.append("foundationdb")
+        if args.features:
+            features.extend(args.features.split(","))
+        if features:
+            command += [f"--features={','.join(features)}"]
 
         for package in args.package:
             command += ["--package", package]
@@ -438,6 +453,7 @@ def _cargo_build(
         env["RUSTFLAGS"] = (
             env.get("RUSTFLAGS", "") + " " + " ".join(rustc_flags.coverage)
         )
+        env["LLVM_PROFILE_FILE"] = "/dev/null"
     if args.sanitizer != "none":
         env["RUSTFLAGS"] = (
             env.get("RUSTFLAGS", "")
@@ -459,6 +475,8 @@ def _cargo_build(
             + " "
             + " ".join(rustc_flags.sanitizer_cflags[args.sanitizer])
         )
+    if args.foundationdb:
+        features.append("foundationdb")
     if args.features:
         features.extend(args.features.split(","))
     if features:
@@ -480,15 +498,18 @@ def _cargo_build(
     return (completed_proc.returncode, artifacts)
 
 
-def _cargo_command(args: argparse.Namespace, subcommand: str) -> list[str]:
+def _cargo_command(args: argparse.Namespace, *subcommands: str) -> list[str]:
     command = ["cargo"]
     if args.channel:
         command += [args.channel]
-    command += [subcommand]
+    command += subcommands
     if args.release:
         command += ["--release"]
     if args.optimized:
-        command += ["--profile", "optimized"]
+        command += [
+            "--cargo-profile" if subcommands == ("nextest", "run") else "--profile",
+            "optimized",
+        ]
     if args.timings:
         command += ["--timings"]
     if args.no_default_features:
@@ -524,7 +545,10 @@ def _macos_codesign(path: str) -> None:
     spawn.runv(command, env=env)
 
 
-def _connect_sql(urlstr: str) -> psycopg.Connection:
+def _connect_sql(urlstr: str) -> psycopg.Connection | None:
+    if urlstr.startswith("foundationdb:"):
+        return None
+
     hint = """Have you correctly configured CockroachDB or PostgreSQL?
 
 For CockroachDB:
@@ -533,7 +557,7 @@ For CockroachDB:
 For PostgreSQL:
     1. Install PostgreSQL
     2. Create a database: `createdb materialize`
-    3. Set the MZDEV_POSTGRES environment variable accordingly: `export MZDEV_POSTGRES=postgres://localhost/materialize`"""
+    3. Set the MZDEV_POSTGRES environment variable accordingly: `export MZDEV_POSTGRES=postgres://$(whoami)@localhost/materialize`"""
     try:
         dbconn = psycopg.connect(urlstr)
         dbconn.autocommit = True

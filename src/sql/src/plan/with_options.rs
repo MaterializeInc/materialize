@@ -17,7 +17,8 @@ use mz_repr::bytes::ByteSize;
 use mz_repr::{CatalogItemId, RelationVersionSelector, strconv};
 use mz_sql_parser::ast::{
     ClusterAlterOptionValue, ClusterScheduleOptionValue, ConnectionDefaultAwsPrivatelink, Expr,
-    Ident, KafkaBroker, NetworkPolicyRuleDefinition, RefreshOptionValue, ReplicaDefinition,
+    Ident, KafkaBroker, KafkaMatchingBrokerRule, NetworkPolicyRuleDefinition, RefreshOptionValue,
+    ReplicaDefinition,
 };
 use mz_storage_types::connections::IcebergCatalogType;
 use mz_storage_types::connections::string_or_secret::StringOrSecret;
@@ -80,7 +81,7 @@ impl TryFromValue<WithOptionValue<Aug>> for Secret {
     fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
         match StringOrSecret::try_from_value(v)? {
             StringOrSecret::Secret(id) => Ok(Secret(id)),
-            _ => sql_bail!("must provide a secret value"),
+            StringOrSecret::String(_) => sql_bail!("must provide a secret value"),
         }
     }
 
@@ -382,7 +383,18 @@ impl ImpliedValue for OptionalString {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Hash,
+    Deserialize
+)]
 pub struct OptionalDuration(pub Option<Duration>);
 
 impl From<Duration> for OptionalDuration {
@@ -689,6 +701,7 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
             | WithOptionValue::ClusterReplicas(_)
             | WithOptionValue::ConnectionKafkaBroker(_)
             | WithOptionValue::ConnectionAwsPrivatelink(_)
+            | WithOptionValue::KafkaMatchingBrokerRule(_)
             | WithOptionValue::ClusterAlterStrategy(_)
             | WithOptionValue::Refresh(_)
             | WithOptionValue::ClusterScheduleOptionValue(_)
@@ -709,7 +722,8 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
                     WithOptionValue::Expr(_) => "exprs",
                     WithOptionValue::ClusterReplicas(_) => "cluster replicas",
                     WithOptionValue::ConnectionKafkaBroker(_) => "connection kafka brokers",
-                    WithOptionValue::ConnectionAwsPrivatelink(_) => "connection kafka brokers",
+                    WithOptionValue::ConnectionAwsPrivatelink(_) => "connection privatelink",
+                    WithOptionValue::KafkaMatchingBrokerRule(_) => "matching broker rule",
                     WithOptionValue::Refresh(_) => "refresh option values",
                     WithOptionValue::ClusterScheduleOptionValue(_) => "cluster schedule",
                     WithOptionValue::NetworkPolicyRules(_) => "network policy rules",
@@ -846,9 +860,93 @@ impl TryFromValue<WithOptionValue<Aug>> for ConnectionDefaultAwsPrivatelink<Aug>
     }
 }
 
+impl TryFromValue<WithOptionValue<Aug>> for KafkaMatchingBrokerRule<Aug> {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
+        if let WithOptionValue::KafkaMatchingBrokerRule(r) = v {
+            Ok(r)
+        } else {
+            sql_bail!("cannot use value `{}` for a matching broker rule", v)
+        }
+    }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(WithOptionValue::KafkaMatchingBrokerRule(self))
+    }
+
+    fn name() -> String {
+        "matching broker rule".to_string()
+    }
+}
+
 impl ImpliedValue for ConnectionDefaultAwsPrivatelink<Aug> {
     fn implied_value() -> Result<Self, PlanError> {
         sql_bail!("must provide a value")
+    }
+}
+
+impl ImpliedValue for KafkaMatchingBrokerRule<Aug> {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide a value")
+    }
+}
+
+/// A list of broker entries that can contain both static `KafkaBroker` entries
+/// and `KafkaMatchingBrokerRule` entries (from `MATCHING` clauses in `BROKERS`).
+#[derive(Debug)]
+pub struct BrokersList {
+    pub static_entries: Vec<KafkaBroker<Aug>>,
+    pub matching_rules: Vec<KafkaMatchingBrokerRule<Aug>>,
+}
+
+impl TryFromValue<WithOptionValue<Aug>> for BrokersList {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
+        match v {
+            WithOptionValue::Sequence(entries) => {
+                let mut static_entries = vec![];
+                let mut matching_rules = vec![];
+                for entry in entries {
+                    match entry {
+                        WithOptionValue::ConnectionKafkaBroker(b) => static_entries.push(b),
+                        WithOptionValue::KafkaMatchingBrokerRule(m) => matching_rules.push(m),
+                        other => sql_bail!("unexpected value in BROKERS: {}", other),
+                    }
+                }
+                Ok(BrokersList {
+                    static_entries,
+                    matching_rules,
+                })
+            }
+            WithOptionValue::ConnectionKafkaBroker(b) => Ok(BrokersList {
+                static_entries: vec![b],
+                matching_rules: vec![],
+            }),
+            WithOptionValue::KafkaMatchingBrokerRule(m) => Ok(BrokersList {
+                static_entries: vec![],
+                matching_rules: vec![m],
+            }),
+            other => sql_bail!("cannot use {} as brokers list", other),
+        }
+    }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        let mut entries: Vec<WithOptionValue<Aug>> = vec![];
+        for b in self.static_entries {
+            entries.push(WithOptionValue::ConnectionKafkaBroker(b));
+        }
+        for m in self.matching_rules {
+            entries.push(WithOptionValue::KafkaMatchingBrokerRule(m));
+        }
+        Some(WithOptionValue::Sequence(entries))
+    }
+
+    fn name() -> String {
+        "brokers list".to_string()
+    }
+}
+
+impl ImpliedValue for BrokersList {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide a value for BROKERS")
     }
 }
 

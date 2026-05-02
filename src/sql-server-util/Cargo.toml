@@ -13,47 +13,43 @@ workspace = true
 name = "cdc"
 
 [dependencies]
-anyhow = "1.0.100"
-async-stream = "0.3.3"
-base64 = "0.22.1"
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
-columnation = "0.1.0"
-dec = "0.4.8"
-derivative = "2.2.0"
-futures = "0.3.31"
-hex = "0.4.3"
-itertools = "0.14.0"
+anyhow.workspace = true
+async-stream.workspace = true
+base64.workspace = true
+chrono.workspace = true
+columnation.workspace = true
+dec.workspace = true
+derivative.workspace = true
+futures.workspace = true
+hex.workspace = true
+itertools.workspace = true
 mz-ore = { path = "../ore", features = ["async"] }
 mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
 mz-ssh-util = { path = "../ssh-util" }
 mz-cloud-resources = { path = "../cloud-resources" }
-ordered-float = { version = "5.0.0", features = ["serde"] }
-proptest = { version = "1.7.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
-prost = { version = "0.13.5", features = ["no-recursion-limit"] }
-serde = { version = "1.0.218", features = ["derive"] }
-smallvec = { version = "1.15.1", features = ["union"] }
-static_assertions = "1.1"
-thiserror = "2.0.17"
-tiberius = { version = "0.12", features = ["chrono", "sql-browser-tokio", "tds73", "native-tls"], default-features = false }
-timely = "0.25.1"
-tokio = { version = "1.44.1", features = ["net"] }
-tokio-stream = "0.1.17"
-tokio-util = { version = "0.7.17", features = ["compat"] }
-tracing = "0.1.37"
-uuid = "1.18.1"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+ordered-float.workspace = true
+proptest.workspace = true
+proptest-derive.workspace = true
+prost.workspace = true
+serde.workspace = true
+smallvec = { workspace = true, features = ["union"] }
+static_assertions.workspace = true
+thiserror.workspace = true
+tiberius.workspace = true
+timely.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tokio-util = { workspace = true, features = ["compat"] }
+tracing.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
-tracing-subscriber = "0.3.19"
+tracing-subscriber.workspace = true
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
-prost-build = "0.13.4"
+prost-build.workspace = true
 
 [features]
-default = ["workspace-hack"]
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+default = []

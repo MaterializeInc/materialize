@@ -40,7 +40,7 @@ use crate::adt::interval::Interval;
     Hash,
     Serialize,
     Deserialize,
-    MzReflect,
+    MzReflect
 )]
 pub enum DateTimeUnits {
     Epoch,
@@ -3517,7 +3517,8 @@ mod tests {
         let time = add_arb_duration(NaiveTime::from_hms_opt(0, 0, 0).unwrap());
         let strat = proptest::collection::vec(time, 0..128);
         proptest!(|(mut times in strat)| {
-            let mut packed: Vec<_> = times.iter().copied().map(PackedNaiveTime::from_value).collect();
+            let mut packed: Vec<_> = times.iter().copied()
+                .map(PackedNaiveTime::from_value).collect();
 
             times.sort();
             packed.sort();

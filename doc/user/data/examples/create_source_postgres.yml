@@ -1,0 +1,116 @@
+- name: "syntax"
+  description: |
+    To create a source from an external PostgreSQL:
+
+  code: |
+    CREATE SOURCE [IF NOT EXISTS] <source_name>
+    [IN CLUSTER <cluster_name>]
+    FROM POSTGRES CONNECTION <connection_name> (PUBLICATION '<publication_name>')
+    ;
+  syntax_elements:
+    - name: "**IF NOT EXISTS**"
+      description: |
+        *Optional.* If specified, do not throw an error if a source with the same
+        name already exists. Instead, issue a notice and skip the source creation.
+
+    - name: "`<source_name>`"
+      description: |
+
+        The name of the source to create. Names for sources must follow the
+        [naming guidelines](/sql/identifiers/#naming-restrictions).
+
+    - name: "**IN CLUSTER** `<cluster_name>`"
+      description: |
+        *Optional.* The [cluster](/sql/create-cluster) to maintain this source. Otherwise, the source will be created in the active cluster.
+
+        {{< tip >}}
+        If possible, use a cluster dedicated just for sources. See also
+        [Operational guidelines](/manage/operational-guidelines/#sources).
+        {{< /tip >}}
+
+    - name: "`<connection_name>`"
+      description: |
+        The name of the PostgreSQL connection to use for the source. For details
+        on creating connections, check the [`CREATE
+        CONNECTION`](/sql/create-connection/#postgresql) documentation page.
+
+        A connection is **reusable** across multiple `CREATE SOURCE` statements.
+
+    - name: "`<publication_name>`"
+      description: |
+        The name of the PostgreSQL publication to associate with the source. For
+        details on creating a publication in your PostgreSQL database, see the
+        [integration guides for your
+        PostgreSQL](/ingest-data/postgres/#integration-guides).
+
+- name: "create-source"
+  description: |
+    Once you have configured the upstream PostgreSQL, network security, and
+    created the connection, you can create the source. In this example, the
+    PostgreSQL publication is `mz_source` and the connection to PostgreSQL is
+    `pg_connection`.
+
+  test_setup: |
+    > CREATE SECRET pgpass AS 'postgres'
+    > CREATE CONNECTION pg_connection TO POSTGRES(HOST postgres, DATABASE postgres, USER postgres, PASSWORD SECRET pgpass);
+    $ postgres-execute connection=postgres://postgres:postgres@postgres
+    ALTER USER postgres WITH replication;
+    DROP SCHEMA IF EXISTS public CASCADE;
+    DROP PUBLICATION IF EXISTS mz_source;
+    CREATE SCHEMA PUBLIC;
+    CREATE TABLE items (a INT);
+    ALTER TABLE items REPLICA IDENTITY FULL;
+    CREATE TABLE orders (a INT);
+    ALTER TABLE orders REPLICA IDENTITY FULL;
+    CREATE PUBLICATION mz_source FOR ALL TABLES;
+
+  code: |
+    /* This example assumes:
+    - In the upstream PostgreSQL, you have defined:
+      - replication user and password with the appropriate access.
+      - a publication named `mz_source` for the `public.items` and `public.orders` tables.
+    - In Materialize:
+      - You have created a secret for the PostgreSQL password.
+      - You have defined the connection to the upstream PostgreSQL.
+      - You have used the connection to create a source.
+
+      For example (substitute with your configuration):
+        CREATE SECRET pgpass AS '<replication user password>'; -- substitute
+        CREATE CONNECTION pg_connection TO POSTGRES (
+          HOST '<hostname>',          -- substitute
+          DATABASE <db>,              -- substitute
+          USER <replication user>,    -- substitute
+          PASSWORD SECRET pgpass
+          -- [, <network security configuration> ]
+        );
+    */
+
+    CREATE SOURCE pg_source
+    FROM POSTGRES CONNECTION pg_connection (
+      PUBLICATION 'mz_source'
+    );
+
+- name: "create-table"
+  description: |
+    After a source is created, you can create tables from the source,
+    referencing specific upstream table(s). Use a [DDL transaction block](/sql/begin/#ddl-only-transactions) to create multiple tables from the same source.
+  code: |
+    BEGIN;
+    CREATE TABLE items
+    FROM SOURCE pg_source(REFERENCE public.items)
+    ;
+    CREATE TABLE orders
+    FROM SOURCE pg_source(REFERENCE public.orders)
+    ;
+    COMMIT;
+  results: |
+
+    {{< note >}}
+
+    - Although the example creates the tables with the same name as the upstream tables, the tables in Materialize can have different names.
+    - You can create multiple tables that reference the same upstream table.
+    {{< /note >}}
+
+    For more information, see [`CREATE TABLE`](/sql/create-table/).
+
+  testable_results: false

@@ -18,7 +18,9 @@ use mz_storage_types::sources::MzOffset;
 use mz_storage_types::sources::load_generator::{
     Event, Generator, LoadGeneratorOutput, MarketingView,
 };
-use rand::{Rng, SeedableRng, distributions::Standard, rngs::SmallRng};
+use rand_8::distributions::Standard;
+use rand_8::rngs::SmallRng;
+use rand_8::{Rng, SeedableRng};
 
 const CONTROL: &str = "control";
 const EXPERIMENT: &str = "experiment";

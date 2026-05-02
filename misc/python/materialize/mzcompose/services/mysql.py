@@ -10,6 +10,7 @@
 
 from materialize.mzcompose.service import (
     Service,
+    ServiceConfig,
 )
 
 
@@ -20,7 +21,9 @@ def create_mysql_server_args(server_id: str, is_master: bool) -> list[str]:
         "--enforce_gtid_consistency=ON",
         "--binlog-format=row",
         "--binlog-row-image=full",
+        "--binlog-row-metadata=full",
         f"--server-id={server_id}",
+        "--max-connections=500",
     ]
 
     if not is_master:
@@ -32,7 +35,7 @@ def create_mysql_server_args(server_id: str, is_master: bool) -> list[str]:
 
 class MySql(Service):
     DEFAULT_ROOT_PASSWORD = "p@ssw0rd"
-    DEFAULT_VERSION = "9.4.0"
+    DEFAULT_VERSION = "9.5.0"
 
     DEFAULT_ADDITIONAL_ARGS = create_mysql_server_args(server_id="1", is_master=True)
 
@@ -44,34 +47,44 @@ class MySql(Service):
         port: int = 3306,
         volumes: list[str] = ["mydata:/var/lib/mysql-files"],
         additional_args: list[str] = DEFAULT_ADDITIONAL_ARGS,
+        use_seeded_image: bool = True,
     ) -> None:
         image = f"mysql:{version}"
+        config: ServiceConfig = {
+            "init": True,
+            "ports": [port],
+            "environment": [
+                f"MYSQL_ROOT_PASSWORD={root_password}",
+            ],
+            "command": [
+                "--secure-file-priv=/var/lib/mysql-files",
+                *additional_args,
+            ],
+            "healthcheck": {
+                "test": [
+                    "CMD",
+                    "mysqladmin",
+                    "ping",
+                    f"--password={root_password}",
+                    "--protocol=TCP",
+                ],
+                "interval": "1s",
+                # MySQL can be slow to start up
+                "start_period": "180s",
+            },
+            "volumes": volumes,
+        }
+
+        if (
+            use_seeded_image
+            and version == self.DEFAULT_VERSION
+            and root_password == self.DEFAULT_ROOT_PASSWORD
+        ):
+            config["mzbuild"] = "mysql"
+        else:
+            config["image"] = image
 
         super().__init__(
             name=name,
-            config={
-                "image": image,
-                "init": True,
-                "ports": [port],
-                "environment": [
-                    f"MYSQL_ROOT_PASSWORD={root_password}",
-                ],
-                "command": [
-                    "--secure-file-priv=/var/lib/mysql-files",
-                    *additional_args,
-                ],
-                "healthcheck": {
-                    "test": [
-                        "CMD",
-                        "mysqladmin",
-                        "ping",
-                        f"--password={root_password}",
-                        "--protocol=TCP",
-                    ],
-                    "interval": "1s",
-                    # MySQL can be slow to start up
-                    "start_period": "180s",
-                },
-                "volumes": volumes,
-            },
+            config=config,
         )

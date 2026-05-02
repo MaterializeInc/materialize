@@ -72,40 +72,6 @@ pub struct MaterializedViewOption<T: AstInfo> {
 }
 impl_display_for_with_option!(MaterializedViewOption);
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum ContinualTaskOptionName {
-    /// The `SNAPSHOT [=] ...` option.
-    Snapshot,
-}
-
-impl AstDisplay for ContinualTaskOptionName {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        match self {
-            ContinualTaskOptionName::Snapshot => f.write_str("SNAPSHOT"),
-        }
-    }
-}
-
-impl WithOptionName for ContinualTaskOptionName {
-    /// # WARNING
-    ///
-    /// Whenever implementing this trait consider very carefully whether or not
-    /// this value could contain sensitive user data. If you're uncertain, err
-    /// on the conservative side and return `true`.
-    fn redact_value(&self) -> bool {
-        match self {
-            ContinualTaskOptionName::Snapshot => false,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ContinualTaskOption<T: AstInfo> {
-    pub name: ContinualTaskOptionName,
-    pub value: Option<WithOptionValue<T>>,
-}
-impl_display_for_with_option!(ContinualTaskOption);
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Schema {
     pub schema: String,
@@ -386,6 +352,12 @@ impl_display_t!(CsrConnectionProtobuf);
 pub struct CsrSeedAvro {
     pub key_schema: Option<String>,
     pub value_schema: String,
+    /// Reference schemas for the key schema, in dependency order.
+    /// Populated during purification by fetching from the schema registry.
+    pub key_reference_schemas: Vec<String>,
+    /// Reference schemas for the value schema, in dependency order.
+    /// Populated during purification by fetching from the schema registry.
+    pub value_reference_schemas: Vec<String>,
 }
 
 impl AstDisplay for CsrSeedAvro {
@@ -395,10 +367,34 @@ impl AstDisplay for CsrSeedAvro {
             f.write_str(" KEY SCHEMA '");
             f.write_node(&display::escape_single_quote_string(key_schema));
             f.write_str("'");
+            if !self.key_reference_schemas.is_empty() {
+                f.write_str(" KEY REFERENCES (");
+                for (i, schema) in self.key_reference_schemas.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ");
+                    }
+                    f.write_str("'");
+                    f.write_node(&display::escape_single_quote_string(schema));
+                    f.write_str("'");
+                }
+                f.write_str(")");
+            }
         }
         f.write_str(" VALUE SCHEMA '");
         f.write_node(&display::escape_single_quote_string(&self.value_schema));
         f.write_str("'");
+        if !self.value_reference_schemas.is_empty() {
+            f.write_str(" VALUE REFERENCES (");
+            for (i, schema) in self.value_reference_schemas.iter().enumerate() {
+                if i > 0 {
+                    f.write_str(", ");
+                }
+                f.write_str("'");
+                f.write_node(&display::escape_single_quote_string(schema));
+                f.write_str("'");
+            }
+            f.write_str(")");
+        }
     }
 }
 impl_display!(CsrSeedAvro);
@@ -676,6 +672,26 @@ impl AstDisplay for SinkEnvelope {
 impl_display!(SinkEnvelope);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum IcebergSinkMode {
+    Upsert,
+    Append,
+}
+
+impl AstDisplay for IcebergSinkMode {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            Self::Upsert => {
+                f.write_str("UPSERT");
+            }
+            Self::Append => {
+                f.write_str("APPEND");
+            }
+        }
+    }
+}
+impl_display!(IcebergSinkMode);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SubscribeOutput<T: AstInfo> {
     Diffs,
     WithinTimestampOrderBy { order_by: Vec<OrderByExpr<T>> },
@@ -902,6 +918,22 @@ pub enum CreateConnectionType {
     SqlServer,
     MySql,
     IcebergCatalog,
+}
+
+impl CreateConnectionType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Kafka => "kafka",
+            Self::Csr => "confluent-schema-registry",
+            Self::Postgres => "postgres",
+            Self::Aws => "aws",
+            Self::AwsPrivatelink => "aws-privatelink",
+            Self::Ssh => "ssh-tunnel",
+            Self::MySql => "mysql",
+            Self::SqlServer => "sql-server",
+            Self::IcebergCatalog => "iceberg-catalog",
+        }
+    }
 }
 
 impl AstDisplay for CreateConnectionType {

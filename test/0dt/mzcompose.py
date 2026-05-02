@@ -17,7 +17,10 @@ from datetime import datetime, timedelta
 from textwrap import dedent
 from threading import Thread
 
+import psycopg
+import pymysql
 from psycopg.errors import OperationalError
+from psycopg.sql import SQL, Identifier
 
 from materialize import buildkite
 from materialize.mzcompose import get_default_system_parameters
@@ -28,12 +31,10 @@ from materialize.mzcompose.services.materialized import (
     DeploymentStatus,
     Materialized,
 )
+from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.mz import Mz
-from materialize.mzcompose.services.postgres import (
-    CockroachOrPostgresMetadata,
-    Postgres,
-)
+from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.sql_server import (
     SqlServer,
@@ -85,6 +86,81 @@ SERVICES = [
 ]
 
 
+def _wait_for_mz_count(
+    c: Composition,
+    query: str,
+    expected: int,
+    service: str,
+    timeout: int = 300,
+) -> None:
+    """Poll MZ until *query* returns *expected* count."""
+    deadline = time.time() + timeout
+    while True:
+        result = c.sql_query(query, service=service)
+        if result[0][0] == expected:
+            return
+        if time.time() > deadline:
+            raise RuntimeError(
+                f"Timed out waiting for {query} to return {expected}, got {result[0][0]}"
+            )
+        time.sleep(1)
+
+
+def _pg_direct_ingest(c: Composition, table: str, count: int, repeats: int) -> None:
+    """Bulk-load *count* × *repeats* rows into a Postgres table via COPY."""
+    conn = psycopg.connect(
+        host="localhost",
+        user="postgres",
+        password="postgres",
+        port=c.default_port("postgres"),
+    )
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        for _ in range(repeats):
+            with cur.copy(
+                SQL("COPY {} (f1) FROM STDIN").format(Identifier(table))
+            ) as copy:
+                for i in range(count):
+                    copy.write_row([i])
+    conn.close()
+
+
+def _mysql_direct_ingest(c: Composition, table: str, count: int, repeats: int) -> None:
+    """Bulk-load *count* × *repeats* rows into a MySQL table via batched INSERT."""
+    conn = pymysql.connect(
+        host="localhost",
+        user="root",
+        password=MySql.DEFAULT_ROOT_PASSWORD,
+        database="public",
+        port=c.default_port("mysql"),
+    )
+    batch_size = 10_000
+    with conn.cursor() as cur:
+        for _ in range(repeats):
+            for start in range(0, count, batch_size):
+                n = min(batch_size, count - start)
+                values = ", ".join(f"({i})" for i in range(start, start + n))
+                cur.execute(f"INSERT INTO {table} VALUES {values}")
+            conn.commit()
+    conn.close()
+
+
+def _sql_server_direct_ingest(c: Composition, insert_stmt: str, repeats: int) -> None:
+    """Execute *repeats* copies of *insert_stmt* in SQL Server via a single testdrive call."""
+    all_inserts = "\n".join([insert_stmt] * repeats)
+    c.testdrive(
+        f"""\
+$ sql-server-connect name=sql-server
+server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
+
+$ sql-server-execute name=sql-server
+USE test;
+{all_inserts}
+""",
+        quiet=True,
+    )
+
+
 def workflow_default(c: Composition) -> None:
     def process(name: str) -> None:
         if name == "default":
@@ -115,9 +191,7 @@ def workflow_read_only(c: Composition) -> None:
     setup_sql_server_testing(c)
 
     # Inserts should be reflected when writes are allowed.
-    c.testdrive(
-        dedent(
-            f"""
+    c.testdrive(dedent(f"""
         > SET CLUSTER = cluster;
         > CREATE TABLE t (a int, b int);
 
@@ -244,9 +318,7 @@ def workflow_read_only(c: Composition) -> None:
         AAA
         > SELECT * FROM webhook_source
         AAA
-        """
-        )
-    )
+        """))
 
     # Restart in a new deploy generation, which will cause Materialize to
     # boot in read-only mode.
@@ -261,9 +333,7 @@ def workflow_read_only(c: Composition) -> None:
     ):
         c.up("mz_old")
 
-        c.testdrive(
-            dedent(
-                f"""
+        c.testdrive(dedent(f"""
             $ webhook-append database=materialize schema=public name=webhook_source status=500
             BBB
 
@@ -312,7 +382,7 @@ def workflow_read_only(c: Composition) -> None:
             $ set-regex match=(s\\d+|\\d{{13}}|[ ]{{12}}0|u\\d{{1,3}}|\\(\\d+-\\d\\d-\\d\\d\\s\\d\\d:\\d\\d:\\d\\d\\.\\d\\d\\d\\)) replacement=<>
 
             > EXPLAIN TIMESTAMP FOR SELECT * FROM mv;
-            "                query timestamp: <> <>\\nlargest not in advance of upper: <> <>\\n                          upper:[<> <>]\\n                          since:[<> <>]\\n        can respond immediately: true\\n                       timeline: Some(EpochMilliseconds)\\n              session wall time: <> <>\\n\\nsource materialize.public.mv (<>, storage):\\n                  read frontier:[<> <>]\\n                 write frontier:[<> <>]\\n\\nbinding constraints:\\nlower:\\n  (StorageInput([User(6)])): [<> <>]\\n"
+            "                query timestamp: <> <>\\nlargest not in advance of upper: <> <>\\n                          upper:[<> <>]\\n                          since:[<> <>]\\n        can respond immediately: true\\n                       timeline: Some(EpochMilliseconds)\\n              session wall time: <> <>\\n\\nsource materialize.public.mv (<>, storage):\\n                  read frontier:[<> <>]\\n                 write frontier:[<> <>]\\n\\nbinding constraints:\\nlower:\\n  (Storage inputs: [<>]): [<> <>]\\n"
 
             > SELECT * FROM kafka_source_tbl
             key1A key1B value1A value1B
@@ -326,9 +396,7 @@ def workflow_read_only(c: Composition) -> None:
             <null> <null> 1 2
             > SELECT * FROM webhook_source
             AAA
-            """
-            )
-        )
+            """))
 
         c.up("mz_old")
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_old")
@@ -350,9 +418,7 @@ def workflow_read_only(c: Composition) -> None:
     ):
         c.up("mz_old")
 
-        c.testdrive(
-            dedent(
-                f"""
+        c.testdrive(dedent(f"""
             $ webhook-append database=materialize schema=public name=webhook_source
             CCC
             > SET CLUSTER = cluster;
@@ -424,9 +490,7 @@ def workflow_read_only(c: Composition) -> None:
             > SELECT * FROM webhook_source
             AAA
             CCC
-            """
-            )
-        )
+            """))
 
 
 def workflow_basic(c: Composition) -> None:
@@ -446,9 +510,7 @@ def workflow_basic(c: Composition) -> None:
     setup_sql_server_testing(c)
 
     # Inserts should be reflected when writes are allowed.
-    c.testdrive(
-        dedent(
-            f"""
+    c.testdrive(dedent(f"""
         > SET CLUSTER = cluster;
         > CREATE TABLE t (a int, b int);
 
@@ -583,9 +645,7 @@ def workflow_basic(c: Composition) -> None:
         > FETCH ALL c WITH (timeout='5s');
         <TIMESTAMP> 1 1
         > COMMIT
-        """
-        )
-    )
+        """))
 
     # Start new Materialize in a new deploy generation, which will cause
     # Materialize to boot in read-only mode.
@@ -604,9 +664,7 @@ def workflow_basic(c: Composition) -> None:
         )
     ):
         c.up(Service("testdrive", idle=True))
-        c.testdrive(
-            dedent(
-                f"""
+        c.testdrive(dedent(f"""
             $ webhook-append database=materialize schema=public name=webhook_source status=500
             BBB
 
@@ -655,7 +713,7 @@ def workflow_basic(c: Composition) -> None:
             $ set-regex match=(s\\d+|\\d{{13}}|[ ]{{12}}0|u\\d{{1,3}}|\\(\\d+-\\d\\d-\\d\\d\\s\\d\\d:\\d\\d:\\d\\d\\.\\d\\d\\d\\)) replacement=<>
 
             > EXPLAIN TIMESTAMP FOR SELECT * FROM mv;
-            "                query timestamp: <> <>\\nlargest not in advance of upper: <> <>\\n                          upper:[<> <>]\\n                          since:[<> <>]\\n        can respond immediately: true\\n                       timeline: Some(EpochMilliseconds)\\n              session wall time: <> <>\\n\\nsource materialize.public.mv (<>, storage):\\n                  read frontier:[<> <>]\\n                 write frontier:[<> <>]\\n\\nbinding constraints:\\nlower:\\n  (StorageInput([User(6)])): [<> <>]\\n"
+            "                query timestamp: <> <>\\nlargest not in advance of upper: <> <>\\n                          upper:[<> <>]\\n                          since:[<> <>]\\n        can respond immediately: true\\n                       timeline: Some(EpochMilliseconds)\\n              session wall time: <> <>\\n\\nsource materialize.public.mv (<>, storage):\\n                  read frontier:[<> <>]\\n                 write frontier:[<> <>]\\n\\nbinding constraints:\\nlower:\\n  (Storage inputs: [<>]): [<> <>]\\n"
 
             > SELECT * FROM kafka_source_tbl
             key1A key1B value1A value1B
@@ -685,15 +743,11 @@ def workflow_basic(c: Composition) -> None:
             > SUBSCRIBE (WITH a(x) AS (SELECT 'a') SELECT generate_series(1, 2), x FROM a)
             <TIMESTAMP> 1 1 a
             <TIMESTAMP> 1 2 a
-            """
-            )
-        )
+            """))
 
     # But the old Materialize can still run writes
     c.up(Service("testdrive", idle=True))
-    c.testdrive(
-        dedent(
-            f"""
+    c.testdrive(dedent(f"""
         $ webhook-append database=materialize schema=public name=webhook_source
         CCC
 
@@ -736,7 +790,7 @@ def workflow_basic(c: Composition) -> None:
         $ set-regex match=(s\\d+|\\d{{13}}|[ ]{{12}}0|u\\d{{1,3}}|\\(\\d+-\\d\\d-\\d\\d\\s\\d\\d:\\d\\d:\\d\\d\\.\\d\\d\\d\\)) replacement=<>
 
         > EXPLAIN TIMESTAMP FOR SELECT * FROM mv;
-        "                query timestamp: <> <>\\nlargest not in advance of upper: <> <>\\n                          upper:[<> <>]\\n                          since:[<> <>]\\n        can respond immediately: true\\n                       timeline: Some(EpochMilliseconds)\\n              session wall time: <> <>\\n\\nsource materialize.public.mv (<>, storage):\\n                  read frontier:[<> <>]\\n                 write frontier:[<> <>]\\n\\nbinding constraints:\\nlower:\\n  (StorageInput([User(6)])): [<> <>]\\n"
+        "                query timestamp: <> <>\\nlargest not in advance of upper: <> <>\\n                          upper:[<> <>]\\n                          since:[<> <>]\\n        can respond immediately: true\\n                       timeline: Some(EpochMilliseconds)\\n              session wall time: <> <>\\n\\nsource materialize.public.mv (<>, storage):\\n                  read frontier:[<> <>]\\n                 write frontier:[<> <>]\\n\\nbinding constraints:\\nlower:\\n  (Storage inputs: [<>]): [<> <>]\\n"
 
         > SELECT * FROM kafka_source_tbl
         key1A key1B value1A value1B
@@ -771,9 +825,7 @@ def workflow_basic(c: Composition) -> None:
         <TIMESTAMP> 1 3
         <TIMESTAMP> 1 5
         > COMMIT
-        """
-        )
-    )
+        """))
 
     with c.override(
         Testdrive(
@@ -787,9 +839,7 @@ def workflow_basic(c: Composition) -> None:
         )
     ):
         c.up(Service("testdrive", idle=True))
-        c.testdrive(
-            dedent(
-                """
+        c.testdrive(dedent("""
             $ webhook-append database=materialize schema=public name=webhook_source status=500
             DDD
 
@@ -839,9 +889,7 @@ def workflow_basic(c: Composition) -> None:
             > SUBSCRIBE (WITH a(x) AS (SELECT 'a') SELECT generate_series(1, 2), x FROM a)
             <TIMESTAMP> 1 1 a
             <TIMESTAMP> 1 2 a
-            """
-            )
-        )
+            """))
 
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
         c.promote_mz("mz_new")
@@ -881,9 +929,7 @@ def workflow_basic(c: Composition) -> None:
 
         c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
 
-        c.testdrive(
-            dedent(
-                f"""
+        c.testdrive(dedent(f"""
             $ webhook-append database=materialize schema=public name=webhook_source
             EEE
             > SET CLUSTER = cluster;
@@ -979,9 +1025,7 @@ def workflow_basic(c: Composition) -> None:
             <TIMESTAMP> 1 5
             <TIMESTAMP> 1 7
             > COMMIT
-            """
-            )
-        )
+            """))
 
 
 def workflow_kafka_source_rehydration(c: Composition) -> None:
@@ -1000,9 +1044,7 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
     repeats = 20
 
     start_time = time.time()
-    c.testdrive(
-        dedent(
-            f"""
+    c.testdrive(dedent(f"""
         > SET CLUSTER = cluster;
 
         > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL = 'PLAINTEXT';
@@ -1024,20 +1066,14 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
         > CREATE DEFAULT INDEX on kafka_source_cnt
         > SELECT * FROM kafka_source_cnt
         {count}
-        """
-        )
-    )
+        """))
     for i in range(1, repeats):
-        c.testdrive(
-            dedent(
-                f"""
+        c.testdrive(dedent(f"""
         $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka-large repeat={count}
         key{i}A,key{i}${{kafka-ingest.iteration}}:value{i}A,${{kafka-ingest.iteration}}
         > SELECT * FROM kafka_source_cnt
         {count*(i+1)}
-            """
-            )
-        )
+            """))
 
     elapsed = time.time() - start_time
     print(f"initial ingestion took {elapsed} seconds")
@@ -1094,26 +1130,18 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
 
         print("Ingesting again")
         for i in range(repeats, repeats * 2):
-            c.testdrive(
-                dedent(
-                    f"""
+            c.testdrive(dedent(f"""
                 $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka-large repeat={count}
                 key{i}A,key{i}${{kafka-ingest.iteration}}:value{i}A,${{kafka-ingest.iteration}}
-                """
-                )
-            )
+                """))
 
-        c.testdrive(
-            dedent(
-                f"""
+        c.testdrive(dedent(f"""
             > SET CLUSTER = cluster;
             > SELECT * FROM kafka_source_cnt
             {2*count*repeats}
             > SELECT count(*) FROM kafka_source_tbl
             {2*count*repeats}
-            """
-            )
-        )
+            """))
 
 
 def workflow_kafka_source_rehydration_large_initial(c: Composition) -> None:
@@ -1132,26 +1160,16 @@ def workflow_kafka_source_rehydration_large_initial(c: Composition) -> None:
     repeats = 20
 
     start_time = time.time()
-    c.testdrive(
-        dedent(
-            """
+    c.testdrive(dedent("""
         $ kafka-create-topic topic=kafka-large
-            """
-        )
-    )
+            """))
     for i in range(repeats):
-        c.testdrive(
-            dedent(
-                f"""
+        c.testdrive(dedent(f"""
             $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka-large repeat={count}
             key{i}A,key{i}${{kafka-ingest.iteration}}:value{i}A,${{kafka-ingest.iteration}}
-            """
-            )
-        )
+            """))
 
-    c.testdrive(
-        dedent(
-            f"""
+    c.testdrive(dedent(f"""
         > SET CLUSTER = cluster;
 
         > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL = 'PLAINTEXT';
@@ -1170,9 +1188,7 @@ def workflow_kafka_source_rehydration_large_initial(c: Composition) -> None:
         > CREATE DEFAULT INDEX on kafka_source_cnt
         > SELECT * FROM kafka_source_cnt
         {count*repeats}
-        """
-        )
-    )
+        """))
 
     elapsed = time.time() - start_time
     print(f"initial ingestion took {elapsed} seconds")
@@ -1229,26 +1245,18 @@ def workflow_kafka_source_rehydration_large_initial(c: Composition) -> None:
 
         print("Ingesting again")
         for i in range(repeats, repeats * 2):
-            c.testdrive(
-                dedent(
-                    f"""
+            c.testdrive(dedent(f"""
                 $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka-large repeat={count}
                 key{i}A,key{i}${{kafka-ingest.iteration}}:value{i}A,${{kafka-ingest.iteration}}
-                """
-                )
-            )
+                """))
 
-        c.testdrive(
-            dedent(
-                f"""
+        c.testdrive(dedent(f"""
             > SET CLUSTER = cluster;
             > SELECT * FROM kafka_source_cnt
             {2*count*repeats}
             > SELECT count(*) FROM kafka_source_tbl
             {2*count*repeats}
-            """
-            )
-        )
+            """))
 
 
 def workflow_pg_source_rehydration(c: Composition) -> None:
@@ -1257,20 +1265,13 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
     c.up("postgres", "mz_old", Service("testdrive", idle=True))
     setup(c)
 
-    # Too long running with 1000000
     count = 500000
     repeats = 100
+    total = count * repeats
 
-    inserts = (
-        "INSERT INTO postgres_source_table VALUES "
-        + ", ".join([f"({i})" for i in range(count)])
-        + ";"
-    )
-
-    start_time = time.time()
+    # Setup upstream Postgres table and publication
     c.testdrive(
-        dedent(
-            f"""
+        dedent("""
         > SET CLUSTER = cluster;
 
         $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -1280,8 +1281,21 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
         DROP TABLE IF EXISTS postgres_source_table;
         CREATE TABLE postgres_source_table (f1 INTEGER);
         ALTER TABLE postgres_source_table REPLICA IDENTITY FULL;
-        {inserts}
         CREATE PUBLICATION postgres_source FOR ALL TABLES;
+        """),
+        quiet=True,
+    )
+
+    # Bulk-load data via COPY FROM STDIN (much faster than testdrive INSERT)
+    start_time = time.time()
+    _pg_direct_ingest(c, "postgres_source_table", count, repeats)
+    elapsed = time.time() - start_time
+    print(f"initial ingestion took {elapsed} seconds")
+
+    # Create MZ source and wait for snapshot to complete
+    c.testdrive(
+        dedent(f"""
+        > SET CLUSTER = cluster;
 
         > CREATE SECRET pgpass AS 'postgres';
         > CREATE CONNECTION pg FOR POSTGRES
@@ -1297,27 +1311,10 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
         > CREATE VIEW postgres_source_cnt AS SELECT count(*) FROM postgres_source_table
         > CREATE DEFAULT INDEX ON postgres_source_cnt
         > SELECT * FROM postgres_source_cnt;
-        {count}
-        """
-        ),
+        {total}
+        """),
         quiet=True,
     )
-
-    for i in range(1, repeats):
-        c.testdrive(
-            dedent(
-                f"""
-        $ postgres-execute connection=postgres://postgres:postgres@postgres
-        {inserts}
-        > SELECT * FROM postgres_source_cnt
-        {count*(i+1)}
-        """
-            ),
-            quiet=True,
-        )
-
-    elapsed = time.time() - start_time
-    print(f"initial ingestion took {elapsed} seconds")
 
     with c.override(
         Materialized(
@@ -1355,7 +1352,7 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
         result = c.sql_query("SELECT * FROM postgres_source_cnt", service="mz_new")
         elapsed = time.time() - start_time
         print(f"final check took {elapsed} seconds")
-        assert result[0][0] == count * repeats, f"Wrong result: {result}"
+        assert result[0][0] == total, f"Wrong result: {result}"
         assert (
             elapsed < 4
         ), f"Took {elapsed}s to SELECT on Postgres source after 0dt upgrade, is it hydrated?"
@@ -1363,50 +1360,42 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
         result = c.sql_query(
             "SELECT count(*) FROM postgres_source_table", service="mz_new"
         )
-        assert result[0][0] == count * repeats, f"Wrong result: {result}"
+        assert result[0][0] == total, f"Wrong result: {result}"
 
+        # Verify source still works after promotion (small batch is enough)
         print("Ingesting again")
-        for i in range(repeats, repeats * 2):
-            c.testdrive(
-                dedent(
-                    f"""
-            $ postgres-execute connection=postgres://postgres:postgres@postgres
-            {inserts}
-            > SELECT * FROM postgres_source_cnt
-            {count*(i+1)}
-            """
-                ),
-                quiet=True,
-            )
+        post_repeats = 10
+        post_total = total + count * post_repeats
+        _pg_direct_ingest(c, "postgres_source_table", count, post_repeats)
+        _wait_for_mz_count(
+            c,
+            "SELECT * FROM postgres_source_cnt",
+            post_total,
+            service="mz_new",
+        )
 
         result = c.sql_query("SELECT * FROM postgres_source_cnt", service="mz_new")
-        assert result[0][0] == 2 * count * repeats, f"Wrong result: {result}"
+        assert result[0][0] == post_total, f"Wrong result: {result}"
 
         result = c.sql_query(
             "SELECT count(*) FROM postgres_source_table", service="mz_new"
         )
-        assert result[0][0] == 2 * count * repeats, f"Wrong result: {result}"
+        assert result[0][0] == post_total, f"Wrong result: {result}"
 
 
 def workflow_mysql_source_rehydration(c: Composition) -> None:
-    """Verify Postgres source rehydration in 0dt deployment"""
+    """Verify MySQL source rehydration in 0dt deployment"""
     c.down(destroy_volumes=True)
     c.up("mysql", "mz_old", Service("testdrive", idle=True))
     setup(c)
 
     count = 1000000
     repeats = 100
+    total = count * repeats
 
-    inserts = (
-        "INSERT INTO mysql_source_table VALUES "
-        + ", ".join([f"({i})" for i in range(count)])
-        + ";"
-    )
-
-    start_time = time.time()
+    # Setup upstream MySQL table and replication user
     c.testdrive(
-        dedent(
-            f"""
+        dedent(f"""
         > SET CLUSTER = cluster;
 
         $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
@@ -1418,7 +1407,20 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
         GRANT REPLICATION SLAVE ON *.* TO mysql1;
         GRANT ALL ON public.* TO mysql1;
         CREATE TABLE mysql_source_table (f1 INTEGER);
-        {inserts}
+        """),
+        quiet=True,
+    )
+
+    # Bulk-load data via batched INSERT (much faster than testdrive)
+    start_time = time.time()
+    _mysql_direct_ingest(c, "mysql_source_table", count, repeats)
+    elapsed = time.time() - start_time
+    print(f"initial ingestion took {elapsed} seconds")
+
+    # Create MZ source and wait for snapshot to complete
+    c.testdrive(
+        dedent(f"""
+        > SET CLUSTER = cluster;
 
         > CREATE SECRET mysqlpass AS 'mysql';
         > CREATE CONNECTION mysql TO MYSQL (
@@ -1432,29 +1434,10 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
         > CREATE VIEW mysql_source_cnt AS SELECT count(*) FROM mysql_source_table
         > CREATE DEFAULT INDEX ON mysql_source_cnt
         > SELECT * FROM mysql_source_cnt;
-        {count}
-        """
-        ),
+        {total}
+        """),
         quiet=True,
     )
-
-    for i in range(1, repeats):
-        c.testdrive(
-            dedent(
-                f"""
-        $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
-        $ mysql-execute name=mysql
-        USE public;
-        {inserts}
-        > SELECT * FROM mysql_source_cnt;
-        {count*(i+1)}
-        """
-            ),
-            quiet=True,
-        )
-
-    elapsed = time.time() - start_time
-    print(f"initial ingestion took {elapsed} seconds")
 
     with c.override(
         Materialized(
@@ -1492,7 +1475,7 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
         result = c.sql_query("SELECT * FROM mysql_source_cnt", service="mz_new")
         elapsed = time.time() - start_time
         print(f"final check took {elapsed} seconds")
-        assert result[0][0] == count * repeats, f"Wrong result: {result}"
+        assert result[0][0] == total, f"Wrong result: {result}"
         assert (
             elapsed < 4
         ), f"Took {elapsed}s to SELECT on MySQL source after 0dt upgrade, is it hydrated?"
@@ -1500,31 +1483,27 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
         result = c.sql_query(
             "SELECT count(*) FROM mysql_source_table", service="mz_new"
         )
-        assert result[0][0] == count * repeats, f"Wrong result: {result}"
+        assert result[0][0] == total, f"Wrong result: {result}"
 
+        # Verify source still works after promotion (small batch is enough)
         print("Ingesting again")
-        for i in range(repeats, repeats * 2):
-            c.testdrive(
-                dedent(
-                    f"""
-            $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
-            $ mysql-execute name=mysql
-            USE public;
-            {inserts}
-            > SELECT * FROM mysql_source_cnt;
-            {count*(i+1)}
-            """
-                ),
-                quiet=True,
-            )
+        post_repeats = 10
+        post_total = total + count * post_repeats
+        _mysql_direct_ingest(c, "mysql_source_table", count, post_repeats)
+        _wait_for_mz_count(
+            c,
+            "SELECT * FROM mysql_source_cnt",
+            post_total,
+            service="mz_new",
+        )
 
         result = c.sql_query("SELECT * FROM mysql_source_cnt", service="mz_new")
-        assert result[0][0] == 2 * count * repeats, f"Wrong result: {result}"
+        assert result[0][0] == post_total, f"Wrong result: {result}"
 
         result = c.sql_query(
             "SELECT count(*) FROM mysql_source_table", service="mz_new"
         )
-        assert result[0][0] == 2 * count * repeats, f"Wrong result: {result}"
+        assert result[0][0] == post_total, f"Wrong result: {result}"
 
 
 def workflow_sql_server_source_rehydration(c: Composition) -> None:
@@ -1537,17 +1516,17 @@ def workflow_sql_server_source_rehydration(c: Composition) -> None:
     # The number of row value expressions in the INSERT statement exceeds the maximum allowed number of 1000 row values.
     count = 1000
     repeats = 100
+    total = count * repeats
 
-    inserts = (
+    insert_stmt = (
         "INSERT INTO sql_server_source_table VALUES "
         + ", ".join([f"({i})" for i in range(count)])
         + ";"
     )
 
-    start_time = time.time()
+    # Setup table and enable CDC
     c.testdrive(
-        dedent(
-            f"""
+        dedent(f"""
         > SET CLUSTER = cluster;
 
         $ sql-server-connect name=sql-server
@@ -1557,7 +1536,20 @@ def workflow_sql_server_source_rehydration(c: Composition) -> None:
         USE test;
         CREATE TABLE sql_server_source_table (f1 INTEGER);
         EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'sql_server_source_table', @role_name = 'SA', @supports_net_changes = 0;
-        {inserts}
+        """),
+        quiet=True,
+    )
+
+    # Bulk-insert all data in one testdrive call (avoid per-call overhead)
+    start_time = time.time()
+    _sql_server_direct_ingest(c, insert_stmt, repeats)
+    elapsed = time.time() - start_time
+    print(f"initial ingestion took {elapsed} seconds")
+
+    # Create MZ source and wait for snapshot to complete
+    c.testdrive(
+        dedent(f"""
+        > SET CLUSTER = cluster;
 
         > CREATE SECRET sqlserverpass AS '{SqlServer.DEFAULT_SA_PASSWORD}';
         > CREATE CONNECTION sqlserver TO SQL SERVER (
@@ -1572,31 +1564,10 @@ def workflow_sql_server_source_rehydration(c: Composition) -> None:
         > CREATE VIEW sql_server_source_cnt AS SELECT count(*) FROM sql_server_source_table
         > CREATE DEFAULT INDEX ON sql_server_source_cnt
         > SELECT * FROM sql_server_source_cnt;
-        {count}
-        """
-        ),
+        {total}
+        """),
         quiet=True,
     )
-
-    for i in range(1, repeats):
-        c.testdrive(
-            dedent(
-                f"""
-        $ sql-server-connect name=sql-server
-        server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
-
-        $ sql-server-execute name=sql-server
-        USE test;
-        {inserts}
-        > SELECT * FROM sql_server_source_cnt;
-        {count*(i+1)}
-        """
-            ),
-            quiet=True,
-        )
-
-    elapsed = time.time() - start_time
-    print(f"initial ingestion took {elapsed} seconds")
 
     with c.override(
         Materialized(
@@ -1631,10 +1602,10 @@ def workflow_sql_server_source_rehydration(c: Composition) -> None:
         elapsed = time.time() - start_time
         print(f"promotion took {elapsed} seconds")
         start_time = time.time()
-        result = c.sql_query("SELECT * FROM sql_serveR_source_cnt", service="mz_new")
+        result = c.sql_query("SELECT * FROM sql_server_source_cnt", service="mz_new")
         elapsed = time.time() - start_time
         print(f"final check took {elapsed} seconds")
-        assert result[0][0] == count * repeats, f"Wrong result: {result}"
+        assert result[0][0] == total, f"Wrong result: {result}"
         assert (
             elapsed < 4
         ), f"Took {elapsed}s to SELECT on SQL Server source after 0dt upgrade, is it hydrated?"
@@ -1642,33 +1613,27 @@ def workflow_sql_server_source_rehydration(c: Composition) -> None:
         result = c.sql_query(
             "SELECT count(*) FROM sql_server_source_table", service="mz_new"
         )
-        assert result[0][0] == count * repeats, f"Wrong result: {result}"
+        assert result[0][0] == total, f"Wrong result: {result}"
 
+        # Verify source still works after promotion (small batch is enough)
         print("Ingesting again")
-        for i in range(repeats, repeats * 2):
-            c.testdrive(
-                dedent(
-                    f"""
-            $ sql-server-connect name=sql-server
-            server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
+        post_repeats = 10
+        post_total = total + count * post_repeats
+        _sql_server_direct_ingest(c, insert_stmt, post_repeats)
+        _wait_for_mz_count(
+            c,
+            "SELECT * FROM sql_server_source_cnt",
+            post_total,
+            service="mz_new",
+        )
 
-            $ sql-server-execute name=sql-server
-            USE test;
-            {inserts}
-            > SELECT * FROM sql_server_source_cnt;
-            {count*(i+1)}
-            """
-                ),
-                quiet=True,
-            )
-
-        result = c.sql_query("SELECT * FROM sql_serveR_source_cnt", service="mz_new")
-        assert result[0][0] == 2 * count * repeats, f"Wrong result: {result}"
+        result = c.sql_query("SELECT * FROM sql_server_source_cnt", service="mz_new")
+        assert result[0][0] == post_total, f"Wrong result: {result}"
 
         result = c.sql_query(
             "SELECT count(*) FROM sql_server_source_table", service="mz_new"
         )
-        assert result[0][0] == 2 * count * repeats, f"Wrong result: {result}"
+        assert result[0][0] == post_total, f"Wrong result: {result}"
 
 
 def workflow_kafka_source_failpoint(c: Composition) -> None:
@@ -1704,9 +1669,7 @@ def workflow_kafka_source_failpoint(c: Composition) -> None:
         c.up("mz_old")
         setup(c)
 
-        c.testdrive(
-            dedent(
-                """
+        c.testdrive(dedent("""
                 > SET CLUSTER = cluster;
                 > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL = 'PLAINTEXT';
 
@@ -1726,9 +1689,7 @@ def workflow_kafka_source_failpoint(c: Composition) -> None:
 
                 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'kafka_source_fp';
                 stalled
-                """
-            )
-        )
+                """))
 
     with c.override(
         Materialized(
@@ -1759,14 +1720,10 @@ def workflow_kafka_source_failpoint(c: Composition) -> None:
         )
 
         # Verify that the Kafka source's status is marked as "running" in mz_source_statuses.
-        c.testdrive(
-            dedent(
-                """
+        c.testdrive(dedent("""
                 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'kafka_source_fp';
                 running
-                """
-            )
-        )
+                """))
 
 
 def fetch_reconciliation_metrics(c: Composition, process: str) -> tuple[int, int]:
@@ -1856,19 +1813,6 @@ def workflow_builtin_schema_migrations_replacement(c: Composition) -> None:
         ),
     ):
         c.up("mz_new")
-
-        new_mz_tables_gid = c.sql_query(
-            "SELECT id FROM mz_tables WHERE name = 'mz_tables'",
-            service="mz_new",
-        )[0][0]
-        new_mv_gid = c.sql_query(
-            "SELECT id FROM mz_materialized_views WHERE name = 'mv'",
-            service="mz_new",
-        )[0][0]
-        assert new_mz_tables_gid == mz_tables_gid
-        assert new_mv_gid == mv_gid
-        # mz_internal.mz_storage_shards won't update until this instance becomes the leader
-
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
         c.promote_mz("mz_new")
         c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
@@ -2091,25 +2035,19 @@ def workflow_upsert_sources(c: Composition) -> None:
 
     setup(c)
 
-    c.testdrive(
-        dedent(
-            """
+    c.testdrive(dedent("""
         > SET CLUSTER = cluster;
 
         > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL = 'PLAINTEXT';
         > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
-            """
-        )
-    )
+            """))
 
     end_time = datetime.now() + timedelta(seconds=200)
     mz1 = "mz_old"
     mz2 = "mz_new"
 
     def worker(i: int) -> None:
-        c.testdrive(
-            dedent(
-                f"""
+        c.testdrive(dedent(f"""
             $ kafka-create-topic topic=kafka{i}
             > CREATE SOURCE kafka_source{i}
               IN CLUSTER cluster
@@ -2122,20 +2060,14 @@ def workflow_upsert_sources(c: Composition) -> None:
 
             > CREATE DEFAULT INDEX ON kafka_source_tbl{i}
             > CREATE MATERIALIZED VIEW mv{i} AS SELECT * FROM kafka_source_tbl{i}
-                """
-            )
-        )
+                """))
 
         while datetime.now() < end_time:
             try:
-                c.testdrive(
-                    dedent(
-                        f"""
+                c.testdrive(dedent(f"""
                     $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka{i} repeat=10000
                     key1A,key1B:value1A,value1B
-                    """
-                    )
-                )
+                    """))
             except:
                 pass
 
@@ -2200,9 +2132,7 @@ def workflow_ddl(c: Composition) -> None:
     setup_sql_server_testing(c)
 
     # Inserts should be reflected when writes are allowed.
-    c.testdrive(
-        dedent(
-            f"""
+    c.testdrive(dedent(f"""
         > SET CLUSTER = cluster;
         > CREATE TABLE t (a int, b int);
 
@@ -2337,9 +2267,7 @@ def workflow_ddl(c: Composition) -> None:
         > FETCH ALL c WITH (timeout='5s');
         <TIMESTAMP> 1 1
         > COMMIT
-        """
-        )
-    )
+        """))
 
     # Start new Materialize in a new deploy generation, which will cause
     # Materialize to boot in read-only mode.
@@ -2358,9 +2286,7 @@ def workflow_ddl(c: Composition) -> None:
         )
     ):
         c.up(Service("testdrive", idle=True))
-        c.testdrive(
-            dedent(
-                f"""
+        c.testdrive(dedent(f"""
             $ webhook-append database=materialize schema=public name=webhook_source status=500
             BBB
 
@@ -2409,7 +2335,7 @@ def workflow_ddl(c: Composition) -> None:
             $ set-regex match=(s\\d+|\\d{{13}}|[ ]{{12}}0|u\\d{{1,3}}|\\(\\d+-\\d\\d-\\d\\d\\s\\d\\d:\\d\\d:\\d\\d\\.\\d\\d\\d\\)) replacement=<>
 
             > EXPLAIN TIMESTAMP FOR SELECT * FROM mv;
-            "                query timestamp: <> <>\\nlargest not in advance of upper: <> <>\\n                          upper:[<> <>]\\n                          since:[<> <>]\\n        can respond immediately: true\\n                       timeline: Some(EpochMilliseconds)\\n              session wall time: <> <>\\n\\nsource materialize.public.mv (<>, storage):\\n                  read frontier:[<> <>]\\n                 write frontier:[<> <>]\\n\\nbinding constraints:\\nlower:\\n  (StorageInput([User(6)])): [<> <>]\\n"
+            "                query timestamp: <> <>\\nlargest not in advance of upper: <> <>\\n                          upper:[<> <>]\\n                          since:[<> <>]\\n        can respond immediately: true\\n                       timeline: Some(EpochMilliseconds)\\n              session wall time: <> <>\\n\\nsource materialize.public.mv (<>, storage):\\n                  read frontier:[<> <>]\\n                 write frontier:[<> <>]\\n\\nbinding constraints:\\nlower:\\n  (Storage inputs: [<>]): [<> <>]\\n"
 
             > SELECT * FROM kafka_source_tbl
             key1A key1B value1A value1B
@@ -2439,15 +2365,11 @@ def workflow_ddl(c: Composition) -> None:
             > SUBSCRIBE (WITH a(x) AS (SELECT 'a') SELECT generate_series(1, 2), x FROM a)
             <TIMESTAMP> 1 1 a
             <TIMESTAMP> 1 2 a
-            """
-            )
-        )
+            """))
 
     # Run DDLs against the old Materialize, which should restart the new one
     c.up(Service("testdrive", idle=True))
-    c.testdrive(
-        dedent(
-            f"""
+    c.testdrive(dedent(f"""
         > CREATE TABLE t1 (a INT);
 
         $ webhook-append database=materialize schema=public name=webhook_source
@@ -2494,7 +2416,7 @@ def workflow_ddl(c: Composition) -> None:
         $ set-regex match=(s\\d+|\\d{{13}}|[ ]{{12}}0|u\\d{{1,3}}|\\(\\d+-\\d\\d-\\d\\d\\s\\d\\d:\\d\\d:\\d\\d\\.\\d\\d\\d\\)) replacement=<>
 
         > EXPLAIN TIMESTAMP FOR SELECT * FROM mv;
-        "                query timestamp: <> <>\\nlargest not in advance of upper: <> <>\\n                          upper:[<> <>]\\n                          since:[<> <>]\\n        can respond immediately: true\\n                       timeline: Some(EpochMilliseconds)\\n              session wall time: <> <>\\n\\nsource materialize.public.mv (<>, storage):\\n                  read frontier:[<> <>]\\n                 write frontier:[<> <>]\\n\\nbinding constraints:\\nlower:\\n  (StorageInput([User(6)])): [<> <>]\\n"
+        "                query timestamp: <> <>\\nlargest not in advance of upper: <> <>\\n                          upper:[<> <>]\\n                          since:[<> <>]\\n        can respond immediately: true\\n                       timeline: Some(EpochMilliseconds)\\n              session wall time: <> <>\\n\\nsource materialize.public.mv (<>, storage):\\n                  read frontier:[<> <>]\\n                 write frontier:[<> <>]\\n\\nbinding constraints:\\nlower:\\n  (Storage inputs: [<>]): [<> <>]\\n"
 
         > SELECT * FROM kafka_source_tbl
         key1A key1B value1A value1B
@@ -2533,9 +2455,7 @@ def workflow_ddl(c: Composition) -> None:
         > COMMIT
 
         > CREATE TABLE t4 (a INT);
-        """
-        )
-    )
+        """))
 
     with c.override(
         Testdrive(
@@ -2549,9 +2469,7 @@ def workflow_ddl(c: Composition) -> None:
         )
     ):
         c.up(Service("testdrive", idle=True))
-        c.testdrive(
-            dedent(
-                """
+        c.testdrive(dedent("""
             $ webhook-append database=materialize schema=public name=webhook_source status=500
             DDD
 
@@ -2601,9 +2519,7 @@ def workflow_ddl(c: Composition) -> None:
             > SUBSCRIBE (WITH a(x) AS (SELECT 'a') SELECT generate_series(1, 2), x FROM a)
             <TIMESTAMP> 1 1 a
             <TIMESTAMP> 1 2 a
-            """
-            )
-        )
+            """))
 
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
         c.promote_mz("mz_new")
@@ -2643,9 +2559,7 @@ def workflow_ddl(c: Composition) -> None:
 
         c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
 
-        c.testdrive(
-            dedent(
-                f"""
+        c.testdrive(dedent(f"""
             $ webhook-append database=materialize schema=public name=webhook_source
             EEE
             > SET CLUSTER = cluster;
@@ -2741,9 +2655,7 @@ def workflow_ddl(c: Composition) -> None:
             <TIMESTAMP> 1 5
             <TIMESTAMP> 1 7
             > COMMIT
-            """
-            )
-        )
+            """))
 
 
 def workflow_stuck_collection(c: Composition) -> None:
@@ -2776,3 +2688,97 @@ def workflow_stuck_collection(c: Composition) -> None:
     c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
     c.promote_mz("mz_new")
     c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
+
+
+def workflow_ddl_detection_with_id_pool(c: Composition) -> None:
+    """Verify that DDL detection works correctly with batch-allocated user IDs.
+
+    When IdPool batch-allocates IDs, the allocator counter jumps ahead by
+    the batch size, but items are created with IDs from the pool that are
+    far below the counter. DDL detection must use the max existing item ID,
+    not the allocator counter, to correctly detect new objects.
+    """
+    c.down(destroy_volumes=True)
+    c.up(
+        "mz_old",
+    )
+
+    # Use a small pool batch size so we can trigger pool refills predictably.
+    c.sql(
+        """
+        ALTER SYSTEM SET user_id_pool_batch_size = 5;
+        ALTER SYSTEM SET cluster = quickstart;
+        """,
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+
+    # Create initial objects to trigger pool allocation. The allocator counter
+    # will jump ahead by the batch size (5), but only a few IDs will be used.
+    c.sql(
+        """
+        CREATE TABLE pool_t1 (a INT);
+        CREATE TABLE pool_t2 (a INT);
+        INSERT INTO pool_t1 VALUES (1);
+        INSERT INTO pool_t2 VALUES (2);
+        """,
+        service="mz_old",
+    )
+
+    # Start mz_new in read-only mode (deploy_generation=1).
+    c.up("mz_new")
+
+    # Wait briefly for mz_new to boot and take its initial snapshot of IDs.
+    time.sleep(5)
+
+    # Create MORE objects on mz_old from the pool. These IDs will be below
+    # the allocator counter. Without the fix, mz_new would miss these objects
+    # because their IDs are below the initial_next_user_item_id derived from
+    # the allocator counter.
+    c.sql(
+        """
+        CREATE TABLE pool_t3 (a INT);
+        CREATE TABLE pool_t4 (a INT);
+        CREATE MATERIALIZED VIEW pool_mv AS SELECT sum(a) FROM pool_t1;
+        INSERT INTO pool_t3 VALUES (3);
+        INSERT INTO pool_t4 VALUES (4);
+        """,
+        service="mz_old",
+    )
+
+    # mz_new should detect the DDL changes (new tables/view created after it
+    # booted) and restart in read-only mode, eventually reaching READY_TO_PROMOTE.
+    c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+
+    # Promote mz_new to leader.
+    c.promote_mz("mz_new")
+    c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
+
+    # Verify ALL objects are visible on mz_new, including those created
+    # after mz_new initially booted.
+    with c.override(
+        Testdrive(
+            materialize_url="postgres://materialize@mz_new:6875",
+            materialize_url_internal="postgres://materialize@mz_new:6877",
+            mz_service="mz_new",
+            materialize_params={"cluster": "quickstart"},
+            no_reset=True,
+            seed=1,
+            default_timeout=DEFAULT_TIMEOUT,
+        )
+    ):
+        c.up(Service("testdrive", idle=True))
+        c.testdrive(dedent("""
+            > SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
+            > SELECT * FROM pool_t1;
+            1
+            > SELECT * FROM pool_t2;
+            2
+            > SELECT * FROM pool_t3;
+            3
+            > SELECT * FROM pool_t4;
+            4
+            > SELECT * FROM pool_mv;
+            1
+            """))

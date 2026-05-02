@@ -16,10 +16,9 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
-
 use mz_arrow_util::builder::ArrowBuilder;
+use mz_expr::RowSetFinishing;
 use mz_expr::visit::Visit;
-use mz_expr::{MirRelationExpr, RowSetFinishing};
 use mz_ore::num::NonNeg;
 use mz_ore::soft_panic_or_log;
 use mz_ore::str::separated;
@@ -42,7 +41,7 @@ use mz_storage_types::sinks::{
     MIN_S3_SINK_FILE_SIZE, S3SinkFormat, StorageSinkConnection,
 };
 
-use crate::ast::display::AstDisplay;
+use crate::ast::display::{AstDisplay, escaped_string_literal};
 use crate::ast::{
     AstInfo, CopyDirection, CopyOption, CopyOptionName, CopyRelation, CopyStatement, CopyTarget,
     DeleteStatement, ExplainPlanStatement, ExplainStage, Explainee, Ident, InsertStatement, Query,
@@ -67,7 +66,9 @@ use crate::plan::{
     QueryContext, ReadThenWritePlan, SelectPlan, SubscribeFrom, SubscribePlan, query,
 };
 use crate::plan::{CopyFromSource, with_options};
-use crate::session::vars::{self, ENABLE_COPY_FROM_REMOTE};
+use crate::session::vars::{
+    self, DISALLOW_UNMATERIALIZABLE_FUNCTIONS_AS_OF, ENABLE_COPY_FROM_REMOTE,
+};
 
 // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
 // plans the whole query to determine its shape and parameter types,
@@ -111,7 +112,7 @@ pub fn plan_insert(
         .into_iter()
         .map(|mut expr| {
             expr.bind_parameters(scx, QueryLifetime::OneShot, params)?;
-            expr.lower_uncorrelated()
+            expr.lower_uncorrelated(scx.catalog.system_vars())
         })
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -171,7 +172,7 @@ pub fn plan_read_then_write(
     let mut assignments_outer = BTreeMap::new();
     for (idx, mut set) in assignments {
         set.bind_parameters(scx, QueryLifetime::OneShot, params)?;
-        let set = set.lower_uncorrelated()?;
+        let set = set.lower_uncorrelated(scx.catalog.system_vars())?;
         assignments_outer.insert(idx, set);
     }
 
@@ -275,6 +276,16 @@ fn plan_select_inner(
             .try_into()
             .expect("checked in offset_into_value that it is not negative")
     };
+
+    // Unmaterializable functions are evaluated based on various information (e.g., the catalog)
+    // during sequencing, without taking AS OF into account. This would be hard to fix, so for now
+    // we just disallow AS OF when there is an unmaterializable function in a query (except mz_now).
+    if scx.is_feature_flag_enabled(&DISALLOW_UNMATERIALIZABLE_FUNCTIONS_AS_OF)
+        && select.as_of.is_some()
+        && expr.contains_unmaterializable_except_temporal()?
+    {
+        bail_unsupported!("unmaterializable function (except `mz_now`) in an AS OF query");
+    }
 
     let plan = SelectPlan {
         source: expr,
@@ -630,7 +641,6 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
                 enable_cardinality_estimates: Default::default(),
                 persist_fast_path_limit: Default::default(),
                 reoptimize_imported_views: v.reoptimize_imported_views,
-                enable_reduce_reduction: Default::default(),
                 enable_join_prioritize_arranged: v.enable_join_prioritize_arranged,
                 enable_projection_pushdown_after_relation_cse: v
                     .enable_projection_pushdown_after_relation_cse,
@@ -638,7 +648,10 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
                 enable_dequadratic_eqprop_map: Default::default(),
                 enable_eq_classes_withholding_errors: Default::default(),
                 enable_fast_path_plan_insights: Default::default(),
-                enable_repr_typecheck: Default::default(),
+                enable_cast_elimination: Default::default(),
+                enable_case_literal_transform: Default::default(),
+                enable_simplify_quantified_comparisons: Default::default(),
+                enable_coalesce_case_transform: Default::default(),
             },
         })
     }
@@ -757,6 +770,12 @@ fn plan_explainee(
 
             crate::plan::Explainee::Statement(ExplaineeStatement::CreateIndex { broken, plan })
         }
+        Explainee::Subscribe(stmt, broken) => {
+            let Plan::Subscribe(plan) = plan_subscribe(scx, *stmt, params, None)? else {
+                sql_bail!("expected SubscribePlan");
+            };
+            crate::plan::Explainee::Statement(ExplaineeStatement::Subscribe { broken, plan })
+        }
     };
 
     Ok(explainee)
@@ -857,7 +876,7 @@ pub fn plan_explain_schema(
                 "EXPLAIN SCHEMA is only available for Kafka sinks with Avro schemas"
             ),
         },
-        _ => unreachable!("plan_create_sink returns a CreateSinkPlan"),
+        _ => bail_internal!("plan_sink did not produce a CreateSink plan"),
     }
 }
 
@@ -900,14 +919,17 @@ pub fn plan_explain_analyze_object(
              JOIN {from} USING (lir_id)
              JOIN mz_introspection.mz_mappable_objects mo
                ON (mlm.global_id = mo.global_id)
-       WHERE     mo.name = '{plan.explainee_name}'
+       WHERE     mo.name = {escaped explainee_name}
              AND {predicates}
        ORDER BY lir_id DESC
     */
     let mut ctes = Vec::with_capacity(4); // max 2 per ExplainAnalyzeComputationProperty
     let mut columns = vec!["REPEAT(' ', nesting * 2) || operator AS operator"];
     let mut from = vec!["mz_introspection.mz_lir_mapping mlm"];
-    let mut predicates = vec![format!("mo.name = '{}'", explainee_name)];
+    let mut predicates = vec![format!(
+        "mo.name = {}",
+        escaped_string_literal(&explainee_name)
+    )];
     let mut order_by = vec!["mlm.lir_id DESC"];
 
     match statement.properties {
@@ -1239,7 +1261,7 @@ GROUP BY om.global_id"#));
                     order_by.extend([
                         "max_operator_memory_ratio DESC",
                         "max_operator_records_ratio DESC",
-                        "worker_memory DESC",
+                        "om.worker_memory DESC",
                         "worker_records DESC",
                     ]);
 
@@ -1278,7 +1300,7 @@ GROUP BY pomt.global_id
                         "pg_size_pretty(omt.total_memory) AS total_memory",
                         "omt.total_records AS total_records",
                     ]);
-                    order_by.extend(["total_memory DESC", "total_records DESC"]);
+                    order_by.extend(["omt.total_memory DESC", "total_records DESC"]);
                 }
             }
             ExplainAnalyzeComputationProperty::Cpu => {
@@ -1492,32 +1514,6 @@ pub fn plan_explain_timestamp(
     }))
 }
 
-/// Plans and decorrelates a [`Query`]. Like [`query::plan_root_query`], but
-/// returns an [`MirRelationExpr`], which cannot include correlated expressions.
-#[deprecated = "Use `query::plan_root_query` and use `HirRelationExpr` in `~Plan` structs."]
-pub fn plan_query(
-    scx: &StatementContext,
-    query: Query<Aug>,
-    params: &Params,
-    lifetime: QueryLifetime,
-) -> Result<query::PlannedRootQuery<MirRelationExpr>, PlanError> {
-    let query::PlannedRootQuery {
-        mut expr,
-        desc,
-        finishing,
-        scope,
-    } = query::plan_root_query(scx, query, lifetime)?;
-    expr.bind_parameters(scx, lifetime, params)?;
-
-    Ok(query::PlannedRootQuery {
-        // No metrics passed! One more reason not to use this deprecated function.
-        expr: expr.lower(scx.catalog.system_vars(), None)?,
-        desc,
-        finishing,
-        scope,
-    })
-}
-
 generate_extracted_config!(SubscribeOption, (Snapshot, bool), (Progress, bool));
 
 pub fn describe_subscribe(
@@ -1527,8 +1523,14 @@ pub fn describe_subscribe(
     let relation_desc = match stmt.relation {
         SubscribeRelation::Name(name) => {
             let item = scx.get_item_by_resolved_name(&name)?;
-            item.desc(&scx.catalog.resolve_full_name(item.name()))?
-                .into_owned()
+            match item.relation_desc() {
+                Some(desc) => desc.into_owned(),
+                None => sql_bail!(
+                    "'{}' cannot be subscribed to because it is a {}",
+                    name.full_name_str(),
+                    item.item_type(),
+                ),
+            }
         }
         SubscribeRelation::Query(query) => {
             let query::PlannedRootQuery { desc, .. } =
@@ -1624,14 +1626,13 @@ pub fn plan_subscribe(
 ) -> Result<Plan, PlanError> {
     let (from, desc, scope) = match relation {
         SubscribeRelation::Name(name) => {
-            let entry = scx.get_item_by_resolved_name(&name)?;
-            let desc = match entry.desc(&scx.catalog.resolve_full_name(entry.name())) {
-                Ok(desc) => desc,
-                Err(..) => sql_bail!(
+            let item = scx.get_item_by_resolved_name(&name)?;
+            let Some(desc) = item.relation_desc() else {
+                sql_bail!(
                     "'{}' cannot be subscribed to because it is a {}",
                     name.full_name_str(),
-                    entry.item_type(),
-                ),
+                    item.item_type(),
+                );
             };
             let item_name = match name {
                 ResolvedItemName::Item { full_name, .. } => Some(full_name.into()),
@@ -1639,14 +1640,26 @@ pub fn plan_subscribe(
             };
             let scope = Scope::from_source(item_name, desc.iter().map(|(name, _type)| name));
             (
-                SubscribeFrom::Id(entry.global_id()),
+                SubscribeFrom::Id(item.global_id()),
                 desc.into_owned(),
                 scope,
             )
         }
         SubscribeRelation::Query(query) => {
             #[allow(deprecated)] // TODO(aalexandrov): Use HirRelationExpr in Subscribe
-            let query = plan_query(scx, query, params, QueryLifetime::Subscribe)?;
+            let query::PlannedRootQuery {
+                mut expr,
+                desc,
+                finishing,
+                scope,
+            } = query::plan_root_query(scx, query, QueryLifetime::Subscribe)?;
+            expr.bind_parameters(scx, QueryLifetime::Subscribe, params)?;
+            let query = query::PlannedRootQuery {
+                expr,
+                desc,
+                finishing,
+                scope,
+            };
             // There's no way to apply finishing operations to a `SUBSCRIBE` directly, so the
             // finishing should have already been turned into a `TopK` by
             // `plan_query` / `plan_root_query`, upon seeing the `QueryLifetime::Subscribe`.
@@ -1859,8 +1872,10 @@ fn plan_copy_to_expr(
             ))
         }
         CopyFormat::Parquet => {
-            // Validate that the output desc can be formatted as parquet
-            ArrowBuilder::validate_desc(&desc).map_err(|e| sql_err!("{}", e))?;
+            // Validate that the output desc can be formatted as parquet.
+            // COPY TO does not apply any type overrides, so pass `|_| None`.
+            ArrowBuilder::validate_desc_for_parquet(&desc, |_| None)
+                .map_err(|e| sql_err!("{}", e))?;
             S3SinkFormat::Parquet
         }
         CopyFormat::Binary => bail_unsupported!("FORMAT BINARY"),
@@ -2151,7 +2166,9 @@ pub fn plan_copy(
                     }
                     stmt
                 }
-                _ => sql_bail!("COPY {} {} not supported", direction, target),
+                CopyRelation::Subscribe(_) => {
+                    sql_bail!("COPY {} {} not supported", direction, target)
+                }
             };
 
             let (plan, desc) = plan_select_inner(scx, stmt, &Params::empty(), None)?;

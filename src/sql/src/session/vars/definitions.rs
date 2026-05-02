@@ -549,13 +549,6 @@ pub static MAX_ROLES: VarDefinition = VarDefinition::new(
     true,
 );
 
-pub static MAX_CONTINUAL_TASKS: VarDefinition = VarDefinition::new(
-    "max_continual_tasks",
-    value!(u32; 100),
-    "The maximum number of continual tasks in the region, across all schemas (Materialize).",
-    true,
-);
-
 pub static MAX_NETWORK_POLICIES: VarDefinition = VarDefinition::new(
     "max_network_policies",
     value!(u32; 25),
@@ -592,11 +585,10 @@ pub static MAX_QUERY_RESULT_SIZE: VarDefinition = VarDefinition::new(
     true,
 );
 
-pub static MAX_COPY_FROM_SIZE: VarDefinition = VarDefinition::new(
-    "max_copy_from_size",
-    // 1 GiB, this limit is noted in the docs, if you change it make sure to update our docs.
-    value!(u32; 1_073_741_824),
-    "The maximum size in bytes we buffer for COPY FROM statements (Materialize).",
+pub static MAX_COPY_FROM_ROW_SIZE: VarDefinition = VarDefinition::new(
+    "max_copy_from_row_size",
+    value!(ByteSize; ByteSize::mb(128)),
+    "The maximum size in bytes for a single COPY FROM STDIN row (Materialize).",
     true,
 );
 
@@ -1336,7 +1328,7 @@ pub static ENABLE_DEFAULT_CONNECTION_VALIDATION: VarDefinition = VarDefinition::
 
 pub static STATEMENT_LOGGING_MAX_DATA_CREDIT: VarDefinition = VarDefinition::new(
     "statement_logging_max_data_credit",
-    value!(Option<usize>; None),
+    value!(Option<usize>; Some(50 * 1024 * 1024)),
     // The idea is that during periods of low logging, tokens can accumulate up to this value,
     // and then be depleted during periods of high logging.
     "The maximum number of bytes that can be logged for statement logging in short burts, or NULL if unlimited (Materialize).",
@@ -1345,7 +1337,7 @@ pub static STATEMENT_LOGGING_MAX_DATA_CREDIT: VarDefinition = VarDefinition::new
 
 pub static STATEMENT_LOGGING_TARGET_DATA_RATE: VarDefinition = VarDefinition::new(
     "statement_logging_target_data_rate",
-    value!(Option<usize>; None),
+    value!(Option<usize>; Some(2071)),
     "The maximum sustained data rate of statement logging, in bytes per second, or NULL if unlimited (Materialize).",
     false,
 );
@@ -1443,11 +1435,11 @@ pub static ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE: VarDefinition = VarDefinition:
     true,
 );
 
-pub static ENABLE_REDUCE_REDUCTION: VarDefinition = VarDefinition::new(
-    "enable_reduce_reduction",
-    value!(bool; true),
-    "split complex reductions in to simpler ones and a join (Materialize).",
-    true,
+pub static DEFAULT_TIMESTAMP_INTERVAL: VarDefinition = VarDefinition::new(
+    "default_timestamp_interval",
+    value!(Duration; Duration::from_millis(1000)),
+    "The interval at which timestamps are assigned to data from sources and tables.",
+    false,
 );
 
 pub static MIN_TIMESTAMP_INTERVAL: VarDefinition = VarDefinition::new(
@@ -1776,7 +1768,7 @@ feature_flags!(
         name: enable_guard_subquery_tablefunc,
         desc: "Whether HIR -> MIR lowering should use a new tablefunc to guard subquery sizes",
         default: true,
-        enable_for_item_parsing: true,
+        enable_for_item_parsing: false,
     },
     {
         name: enable_binary_date_bin,
@@ -1882,6 +1874,18 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_repeat_row_non_negative,
+        desc: "the repeat_row_non_negative function",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_replica_targeted_materialized_views,
+        desc: "replica-targeted materialized views",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: unsafe_enable_table_check_constraint,
         desc: "CREATE TABLE with a check constraint",
         default: false,
@@ -1921,12 +1925,18 @@ feature_flags!(
         name: enable_cardinality_estimates,
         desc: "join planning with cardinality estimates",
         default: false,
-        enable_for_item_parsing: true,
+        enable_for_item_parsing: false,
     },
     {
         name: enable_connection_validation_syntax,
         desc: "CREATE CONNECTION .. WITH (VALIDATE) and VALIDATE CONNECTION syntax",
         default: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_kafka_broker_matching_rules,
+        desc: "MATCHING broker rules in BROKERS for Kafka PrivateLink connections",
+        default: false,
         enable_for_item_parsing: true,
     },
     {
@@ -1951,7 +1961,7 @@ feature_flags!(
         name: statement_logging_use_reproducible_rng,
         desc: "statement logging with reproducible RNG",
         default: false,
-        enable_for_item_parsing: true,
+        enable_for_item_parsing: false,
     },
     {
         name: enable_notices_for_index_already_exists,
@@ -1968,6 +1978,12 @@ feature_flags!(
     {
         name: enable_notices_for_index_empty_key,
         desc: "emitting notices for indexes with an empty key (doesn't affect EXPLAIN)",
+        default: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_notices_for_equals_null,
+        desc: "emitting notices for `= NULL` and `<> NULL` comparisons (doesn't affect EXPLAIN)",
         default: true,
         enable_for_item_parsing: true,
     },
@@ -2063,6 +2079,12 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
+        name: enable_storage_introspection_logs,
+        desc: "forward storage timely logging events into compute's introspection dataflow",
+        default: false,
+        enable_for_item_parsing: false,
+    },
+    {
         name: enable_copy_to_expr,
         desc: "COPY ... TO 's3://...'",
         default: true,
@@ -2129,24 +2151,6 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_continual_task_create,
-        desc: "CREATE CONTINUAL TASK",
-        default: false,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_continual_task_transform,
-        desc: "CREATE CONTINUAL TASK .. FROM TRANSFORM .. USING",
-        default: false,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_continual_task_retain,
-        desc: "CREATE CONTINUAL TASK .. FROM RETAIN .. WHILE",
-        default: false,
-        enable_for_item_parsing: true,
-    },
-    {
         name: enable_network_policies,
         desc: "ENABLE NETWORK POLICIES",
         default: true,
@@ -2161,7 +2165,7 @@ feature_flags!(
     {
         name: enable_copy_from_remote,
         desc: "Whether to allow COPY FROM <url>.",
-        default: false,
+        default: true,
         enable_for_item_parsing: false,
     },
     {
@@ -2215,13 +2219,52 @@ feature_flags!(
     {
         name: enable_iceberg_sink,
         desc: "Whether to enable the Iceberg sink.",
-        default: false,
+        default: true,
         enable_for_item_parsing: true,
     },
     {
-        name: enable_repr_typecheck,
-        desc: "Enable typechecking using representation types",
+        name: enable_frontend_peek_sequencing, // currently, changes only take effect for new sessions
+        desc: "Enables the new peek sequencing code, which does most of its work in the Adapter Frontend instead of the Coordinator main task.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_replacement_materialized_views,
+        desc: "Whether to enable replacement materialized views.",
+        default: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_cast_elimination,
+        desc: "Allow the optimizer to eliminate noop casts between values of equivalent representation types.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        // Just an escape hatch for the unlikely case that we have some user who is doing such
+        // queries. Can be removed after one week in prod.
+        // https://github.com/MaterializeInc/database-issues/issues/10004
+        name: disallow_unmaterializable_functions_as_of,
+        desc: "Prohibits calling unmaterializable functions (except `mz_now`) in AS OF queries.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_case_literal_transform,
+        desc: "Allow the optimizer to rewrite If-chains matching a single expression against literals into a CaseLiteral lookup.",
         default: false,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_simplify_quantified_comparisons,
+        desc: "Allow the optimizer to simplify quantified comparisons in JOIN ON clauses into semi/anti-join EXISTS form during HIR-to-MIR lowering.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_coalesce_case_transform,
+        desc: "Allow the optimizer to push `COALESCE` into `CASE WHEN`.",
+        default: true,
         enable_for_item_parsing: false,
     },
 );
@@ -2237,7 +2280,6 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_variadic_left_join_lowering: vars.enable_variadic_left_join_lowering(),
             enable_letrec_fixpoint_analysis: vars.enable_letrec_fixpoint_analysis(),
             enable_cardinality_estimates: vars.enable_cardinality_estimates(),
-            enable_reduce_reduction: vars.enable_reduce_reduction(),
             persist_fast_path_limit: vars.persist_fast_path_limit(),
             reoptimize_imported_views: false,
             enable_join_prioritize_arranged: vars.enable_join_prioritize_arranged(),
@@ -2247,7 +2289,88 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_dequadratic_eqprop_map: vars.enable_dequadratic_eqprop_map(),
             enable_eq_classes_withholding_errors: vars.enable_eq_classes_withholding_errors(),
             enable_fast_path_plan_insights: vars.enable_fast_path_plan_insights(),
-            enable_repr_typecheck: vars.enable_repr_typecheck(),
+            enable_cast_elimination: vars.enable_cast_elimination(),
+            enable_case_literal_transform: vars.enable_case_literal_transform(),
+            enable_simplify_quantified_comparisons: vars.enable_simplify_quantified_comparisons(),
+            enable_coalesce_case_transform: vars.enable_coalesce_case_transform(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::vars::SystemVars;
+
+    /// Ensure that all vars used for optimizer features have `enable_for_item_parsing = false`.
+    ///
+    /// This is important to ensure that plan caching works as intended during item parsing. Cached
+    /// plans include the optimizer features they were produced with, and if they don't match on
+    /// lookup, that results in a cache miss.
+    #[mz_ore::test]
+    fn optimizer_features_no_enable_for_item_parsing() {
+        // Construct a `SystemVars` where all optimizer features are `false`.
+        //
+        // We do this in a roundabout way, by first constructing all-false `OptimizerFeatures` and
+        // then assigning them to their respective system vars, to ensure we don't forget to update
+        // this test when new optimizer features are added.
+        let false_features = OptimizerFeatures::default();
+        let OptimizerFeatures {
+            enable_eq_classes_withholding_errors,
+            enable_guard_subquery_tablefunc,
+            enable_consolidate_after_union_negate,
+            enable_eager_delta_joins,
+            enable_letrec_fixpoint_analysis,
+            enable_new_outer_join_lowering,
+            enable_reduce_mfp_fusion,
+            enable_variadic_left_join_lowering,
+            enable_cardinality_estimates,
+            persist_fast_path_limit,
+            reoptimize_imported_views,
+            enable_join_prioritize_arranged,
+            enable_projection_pushdown_after_relation_cse,
+            enable_less_reduce_in_eqprop,
+            enable_dequadratic_eqprop_map,
+            enable_fast_path_plan_insights,
+            enable_cast_elimination,
+            enable_case_literal_transform,
+            enable_simplify_quantified_comparisons,
+            enable_coalesce_case_transform,
+        } = false_features;
+
+        let mut vars = SystemVars::new();
+
+        macro_rules! set_var {
+            ($var:ident) => {
+                vars.set(stringify!($var), VarInput::Flat(&$var.to_string()))
+                    .unwrap();
+            };
+        }
+
+        set_var!(enable_eq_classes_withholding_errors);
+        set_var!(enable_guard_subquery_tablefunc);
+        set_var!(enable_consolidate_after_union_negate);
+        set_var!(enable_eager_delta_joins);
+        set_var!(enable_letrec_fixpoint_analysis);
+        set_var!(enable_new_outer_join_lowering);
+        set_var!(enable_reduce_mfp_fusion);
+        set_var!(enable_variadic_left_join_lowering);
+        set_var!(enable_cardinality_estimates);
+        set_var!(persist_fast_path_limit);
+        let _ = reoptimize_imported_views; // no corresponding var
+        set_var!(enable_join_prioritize_arranged);
+        set_var!(enable_projection_pushdown_after_relation_cse);
+        set_var!(enable_less_reduce_in_eqprop);
+        set_var!(enable_dequadratic_eqprop_map);
+        set_var!(enable_fast_path_plan_insights);
+        set_var!(enable_cast_elimination);
+        set_var!(enable_case_literal_transform);
+        set_var!(enable_simplify_quantified_comparisons);
+        set_var!(enable_coalesce_case_transform);
+
+        // Enable for item parsing, then ensure we still get the same optimizer features.
+        vars.enable_for_item_parsing();
+        let features_for_item_parsing = OptimizerFeatures::from(&vars);
+        assert_eq!(features_for_item_parsing, false_features);
     }
 }

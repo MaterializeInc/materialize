@@ -30,9 +30,13 @@ from materialize.mzcompose.service import (
     ServiceConfig,
     ServiceDependency,
 )
+from materialize.mzcompose.services import foundationdb
 from materialize.mzcompose.services.azurite import azure_blob_uri
+from materialize.mzcompose.services.metadata_store import (
+    EXTERNAL_METADATA_STORE_ADDRESS,
+    METADATA_STORE,
+)
 from materialize.mzcompose.services.minio import minio_blob_uri
-from materialize.mzcompose.services.postgres import METADATA_STORE
 
 
 class MaterializeEmulator(Service):
@@ -43,7 +47,7 @@ class MaterializeEmulator(Service):
 
         config: ServiceConfig = {
             "mzbuild": name,
-            "ports": [6875, 6876, 6877, 6878, 26257],
+            "ports": [6875, 6874, 6876, 6877, 6878, 26257],
             "healthcheck": {
                 "test": ["CMD", "curl", "-f", "localhost:6878/api/readyz"],
                 "interval": "1s",
@@ -73,13 +77,13 @@ class Materialized(Service):
         default_size: int | str = Size.DEFAULT_SIZE,
         environment_id: str | None = None,
         propagate_crashes: bool = True,
-        external_metadata_store: str | bool = False,
+        external_metadata_store: str | bool = EXTERNAL_METADATA_STORE_ADDRESS,
         external_blob_store: str | bool = False,
         blob_store_is_azure: bool = False,
         unsafe_mode: bool = True,
         restart: str | None = None,
         use_default_volumes: bool = True,
-        ports: list[str] | None = None,
+        ports: list[str] | list[int] | list[str | int] | None = None,
         system_parameter_defaults: dict[str, str] | None = None,
         additional_system_parameter_defaults: dict[str, str] | None = None,
         system_parameter_version: MzVersion | None = None,
@@ -96,6 +100,7 @@ class Materialized(Service):
         bootstrap_replica_size: str | None = None,
         default_replication_factor: int = 1,
         listeners_config_path: str = f"{MZ_ROOT}/src/materialized/ci/listener_configs/testdrive.json",
+        config_sync_file_path: str | None = None,
         support_external_clusterd: bool = False,
         networks: (
             dict[str, dict[str, list[str]]] | dict[str, dict[str, str]] | None
@@ -201,7 +206,7 @@ class Materialized(Service):
 
         if external_blob_store:
             blob_store = "azurite" if blob_store_is_azure else "minio"
-            depends_graph[blob_store] = {"condition": "service_healthy"}
+            depends_graph[blob_store] = {"condition": "service_started"}
             address = blob_store if external_blob_store == True else external_blob_store
             persist_blob_url = (
                 azure_blob_uri(address)
@@ -241,25 +246,38 @@ class Materialized(Service):
             )
         )
 
+        volumes = []
+
         if external_metadata_store:
+            depends_graph[metadata_store] = {"condition": "service_healthy"}
             address = (
                 metadata_store
                 if external_metadata_store == True
                 else external_metadata_store
             )
-            depends_graph[metadata_store] = {"condition": "service_healthy"}
-            command += [
-                f"--persist-consensus-url=postgres://root@{address}:26257?options=--search_path=consensus",
-            ]
-            environment += [
-                f"MZ_TIMESTAMP_ORACLE_URL=postgres://root@{address}:26257?options=--search_path=tsoracle",
-                "MZ_NO_BUILTIN_POSTGRES=1",
-                # For older Materialize versions
-                "MZ_NO_BUILTIN_COCKROACH=1",
-                # Set the adapter stash URL for older environments that need it (versions before
-                # v0.92.0).
-                f"MZ_ADAPTER_STASH_URL=postgres://root@{address}:26257?options=--search_path=adapter",
-            ]
+            if metadata_store in ("postgres-metadata", "cockroach", "alloydb"):
+                command += [
+                    f"--persist-consensus-url=postgres://root@{address}:26257?options=--search_path=consensus",
+                ]
+                environment += [
+                    f"MZ_TIMESTAMP_ORACLE_URL=postgres://root@{address}:26257?options=--search_path=tsoracle",
+                    "MZ_NO_BUILTIN_POSTGRES=1",
+                    # For older Materialize versions
+                    "MZ_NO_BUILTIN_COCKROACH=1",
+                    # Set the adapter stash URL for older environments that need it (versions before
+                    # v0.92.0).
+                    f"MZ_ADAPTER_STASH_URL=postgres://root@{address}:26257?options=--search_path=adapter",
+                ]
+            elif metadata_store == "foundationdb":
+                command += [
+                    "--persist-consensus-url=foundationdb:?prefix=consensus",
+                    "--timestamp-oracle-url=foundationdb:?prefix=ts_oracle",
+                ]
+
+                # Generate fdb.cluster file dynamically based on the metadata store address
+                min_version = MzVersion.parse_mz("v26.9.0")
+                if image_version is None or image_version >= min_version:
+                    volumes += foundationdb.fdb_cluster_file(external_metadata_store)
 
         command += [
             "--orchestrator-process-tcp-proxy-listen-addr=0.0.0.0",
@@ -315,12 +333,16 @@ class Materialized(Service):
         if platform:
             config["platform"] = platform
 
-        volumes = []
-
         if image_version is None or image_version >= "v0.147.0-dev":
             assert os.path.exists(listeners_config_path)
             volumes.append(f"{listeners_config_path}:/listeners_config")
             environment.append("MZ_LISTENERS_CONFIG_PATH=/listeners_config")
+
+        if config_sync_file_path is not None:
+            # assert os.path.exists(str(config_sync_file_path))
+            volumes.append(f"{config_sync_file_path}:/config_sync.json")
+            environment.append("MZ_CONFIG_SYNC_FILE_PATH=/config_sync.json")
+            environment.append("MZ_CONFIG_SYNC_LOOP_INTERVAL=100ms")
 
         if image_version is None or image_version >= "v0.140.0-dev":
             if "MZ_CI_LICENSE_KEY" in os.environ:

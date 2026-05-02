@@ -180,7 +180,7 @@ query BBBBBBBBBBBBBBB
 ----
 true  false  false  true  false  false  NULL  true  NULL  NULL  NULL  NULL  NULL  NULL  NULL
 
-query error db error: ERROR: subquery1 has 0 columns available but 1 columns specified
+query error subquery1 has 0 columns available but 1 columns specified
 SELECT 1 < ALL(SELECT * FROM nullary)
 
 query error Expected subselect to return 1 column, got 0 columns
@@ -192,7 +192,7 @@ SELECT * FROM (SELECT);
 ----
 
 
-query error db error: ERROR: subquery1 has 2 columns available but 1 columns specified
+query error subquery1 has 2 columns available but 1 columns specified
 SELECT 1 < ALL(SELECT 1, 2)
 
 statement ok
@@ -704,6 +704,61 @@ Explained Query:
 
 Source materialize.public.x
 Source materialize.public.y
+
+Target cluster: quickstart
+
+EOF
+
+# Regression test: try_simplify_quantified_comparisons (= ANY -> EXISTS) must
+# also apply inside JOIN ON clauses, not just WHERE. The decorrelated plan
+# should use Filter/Distinct/Map(true) (the EXISTS semijoin pattern), not
+# Reduce with an any() aggregate (the generic scalar subquery path).
+query T multiline
+EXPLAIN DECORRELATED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT * FROM x JOIN y ON y.b = ANY(SELECT a FROM x)
+----
+With
+  cte l0 =
+    Project (#0{a}, #1{b})
+      CrossJoin
+        CrossJoin
+          Constant
+            - ()
+          Get materialize.public.x
+        CrossJoin
+          Constant
+            - ()
+          Get materialize.public.y
+  cte l1 =
+    Distinct project=[#1{b}]
+      Get l0
+  cte l2 =
+    Map (true)
+      Distinct project=[#0{b}]
+        Filter (#0{b} = #1{a})
+          CrossJoin
+            Get l1
+            Get materialize.public.x
+Return
+  Project (#0{a}, #1{b})
+    Filter #2
+      Project (#0{a}, #1{b}, #3)
+        Join on=(#1{b} = #2{b})
+          Get l0
+          Union
+            Get l2
+            CrossJoin
+              Project (#0{b})
+                Join on=(#0{b} = #1{b})
+                  Union
+                    Negate
+                      Distinct project=[#0{b}]
+                        Get l2
+                    Distinct project=[#0{b}]
+                      Get l1
+                  Get l1
+              Constant
+                - (false)
 
 Target cluster: quickstart
 

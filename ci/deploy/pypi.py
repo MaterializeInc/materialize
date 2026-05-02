@@ -52,7 +52,11 @@ def main() -> None:
 
 def get_metadata_from_setup_py(path: Path) -> tuple[str, str]:
     distribution = distutils.core.run_setup(str(path / "setup.py"))
-    return distribution.metadata.name, distribution.metadata.version
+    name = distribution.metadata.name
+    version = distribution.metadata.version
+    assert name is not None, f"missing name in {path}/setup.py"
+    assert version is not None, f"missing version in {path}/setup.py"
+    return name, version
 
 
 def get_metadata_from_pyproject(path: Path) -> tuple[str, str]:
@@ -73,7 +77,11 @@ def get_metadata_from_pyproject(path: Path) -> tuple[str, str]:
 
 
 def build_package_setup_py(path: Path) -> None:
-    spawn.runv([sys.executable, "setup.py", "build", "sdist"], cwd=path)
+    spawn.runv(
+        [sys.executable, "setup.py", "build", "sdist"],
+        cwd=path,
+        env={**os.environ, "RELEASE_BUILD": "1"},
+    )
 
 
 def build_package_pyproject(path: Path) -> None:
@@ -83,7 +91,7 @@ def build_package_pyproject(path: Path) -> None:
 def upload_to_pypi(path: Path) -> None:
     dist_files = list((path / "dist").iterdir())
     spawn.runv(
-        ["twine", "upload", *dist_files],
+        ["twine", "upload", "--verbose", *dist_files],
         env={
             **os.environ,
             "TWINE_USERNAME": "__token__",

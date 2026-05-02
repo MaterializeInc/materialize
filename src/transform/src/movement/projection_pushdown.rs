@@ -38,6 +38,7 @@ use mz_expr::{
 };
 use mz_ore::assert_none;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
+use mz_repr::ReprRelationType;
 
 use crate::{TransformCtx, TransformError};
 
@@ -485,7 +486,7 @@ impl ProjectionPushdown {
     pub fn update_projection_around_get(
         &self,
         relation: &mut MirRelationExpr,
-        applied_projections: &BTreeMap<Id, (Vec<usize>, mz_repr::SqlRelationType)>,
+        applied_projections: &BTreeMap<Id, (Vec<usize>, ReprRelationType)>,
     ) {
         relation.visit_pre_mut(|e| {
             if let MirRelationExpr::Project { input, outputs } = e {

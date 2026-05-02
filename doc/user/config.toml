@@ -65,20 +65,19 @@ weight = 12
 #
 
 [[menu.main]]
+identifier = "sql"
+name = "SQL Reference"
+weight = 75
+
+
+[[menu.main]]
 identifier = "reference"
 name = "Reference"
-weight = 80
+weight = 76
 
 #
 # Releases
 #
-
-[[menu.main]]
-identifier = "changelogs"
-name = "Changelog ↗️"
-parent = "releases"
-weight = 20
-url = "https://materialize.com/changelog/"
 
 #
 # About
@@ -100,6 +99,15 @@ name = "Responsible disclosure policy"
 parent = "about"
 url = "https://materialize.com/securitydisclosure"
 weight = 55
+
+#
+# Custom output format for Claude skill generation
+#
+[outputFormats.skill]
+  mediaType = "text/markdown"
+  baseName = "index"
+  isPlainText = true
+  notAlternative = true
 
 [markup.goldmark.renderer]
 # allow <a name="link-target">, the old syntax no longer works
@@ -129,4 +137,4 @@ include = "docs/**"
 # exclude = "**.{jpg, png}" # would exclude files with ".jpg" or ".png" suffix
 
 # Avoid deleting self-managed docs which are deployed from the self-managed-docs branches.
-exclude = "docs/{self-managed/v25.1,self-managed/v25.2}/**"
+exclude = "docs/{self-managed/v25.2}/**"

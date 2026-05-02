@@ -14,9 +14,10 @@ menu:
 ```sql
 SHOW CLUSTERS
 [LIKE <pattern> | WHERE <condition(s)>]
+;
 ```
 
-Option                        | Description
+Syntax element                | Description
 ------------------------------|------------
 **LIKE** \<pattern\>          | If specified, only show clusters that match the pattern.
 **WHERE** <condition(s)>      | If specified, only show clusters that match the condition(s).
@@ -59,7 +60,7 @@ The following characteristics apply to the `mz_catalog_server` cluster:
   * You cannot create objects in this cluster.
   * You cannot drop this cluster.
   * You can run `SELECT` or `SUBSCRIBE` queries in this cluster as long
-    as you only reference objects in the [system catalog](/sql/system-catalog/).
+    as you only reference objects in the [system catalog](/reference/system-catalog/).
 
 ### `mz_probe` system cluster
 

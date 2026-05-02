@@ -51,13 +51,11 @@
 //! trigger a restart of the dataflow.
 
 use std::collections::BTreeMap;
-use std::convert::Infallible;
 use std::fmt;
 use std::io;
 use std::rc::Rc;
 
 use differential_dataflow::AsCollection;
-use differential_dataflow::containers::TimelyStack;
 use itertools::Itertools;
 use mz_mysql_util::quote_identifier;
 use mz_ore::cast::CastFrom;
@@ -65,12 +63,13 @@ use mz_repr::Diff;
 use mz_repr::GlobalId;
 use mz_storage_types::errors::{DataflowError, SourceError};
 use mz_storage_types::sources::SourceExport;
-use mz_timely_util::containers::stack::AccountedStackBuilder;
+use mz_timely_util::containers::stack::FueledBuilder;
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::core::Partition;
-use timely::dataflow::operators::{CapabilitySet, Concat, Map, ToStream};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::operators::vec::{Map, ToStream};
+use timely::dataflow::operators::{CapabilitySet, Concat};
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
 use uuid::Uuid;
 
@@ -87,7 +86,7 @@ use mz_timely_util::order::Extrema;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::source::types::Probe;
-use crate::source::types::{SourceRender, StackedCollection};
+use crate::source::types::{FuelSize, SourceRender, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage};
 
 mod replication;
@@ -102,17 +101,19 @@ impl SourceRender for MySqlSourceConnection {
 
     /// Render the ingestion dataflow. This function only connects things together and contains no
     /// actual processing logic.
-    fn render<G: Scope<Timestamp = GtidPartition>>(
+    fn render<'scope>(
         self,
-        scope: &mut G,
+        scope: Scope<'scope, GtidPartition>,
         config: &RawSourceCreationConfig,
         resume_uppers: impl futures::Stream<Item = Antichain<GtidPartition>> + 'static,
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        Stream<G, Infallible>,
-        Stream<G, HealthStatusMessage>,
-        Option<Stream<G, Probe<GtidPartition>>>,
+        BTreeMap<
+            GlobalId,
+            StackedCollection<'scope, GtidPartition, Result<SourceMessage, DataflowError>>,
+        >,
+        StreamVec<'scope, GtidPartition, HealthStatusMessage>,
+        StreamVec<'scope, GtidPartition, Probe<GtidPartition>>,
         Vec<PressOnDropButton>,
     ) {
         // Collect the source outputs that we will be exporting.
@@ -163,31 +164,36 @@ impl SourceRender for MySqlSourceConnection {
             metrics.snapshot_metrics.clone(),
         );
 
-        let (repl_updates, uppers, repl_err, repl_token) = replication::render(
+        let (repl_updates, repl_err, repl_token) = replication::render(
             scope.clone(),
             config.clone(),
             self.clone(),
             source_outputs,
-            &rewinds,
+            rewinds,
             metrics,
         );
 
-        let (stats_err, probe_stream, stats_token) =
-            statistics::render(scope.clone(), config.clone(), self, resume_uppers);
+        let (stats_err, probe_stream, stats_token) = statistics::render(
+            scope.clone(),
+            config.clone(),
+            self,
+            resume_uppers,
+            snapshot_err.clone().concat(repl_err.clone()),
+        );
 
-        let updates = snapshot_updates.concat(&repl_updates);
+        let updates = snapshot_updates.concat(repl_updates);
         let partition_count = u64::cast_from(config.source_exports.len());
         let data_streams: Vec<_> = updates
             .inner
             .partition::<CapacityContainerBuilder<_>, _, _>(
                 partition_count,
-                |((output, data), time, diff): &(
+                |((output, data), time, diff): (
                     (usize, Result<SourceMessage, DataflowError>),
                     _,
                     Diff,
                 )| {
-                    let output = u64::cast_from(*output);
-                    (output, (data.clone(), time.clone(), diff.clone()))
+                    let output = u64::cast_from(output);
+                    (output, (data, time, diff))
                 },
             );
         let mut data_collections = BTreeMap::new();
@@ -208,8 +214,8 @@ impl SourceRender for MySqlSourceConnection {
             .to_stream(scope);
 
         let health_errs = snapshot_err
-            .concat(&repl_err)
-            .concat(&stats_err)
+            .concat(repl_err)
+            .concat(stats_err)
             .map(move |err| {
                 // This update will cause the dataflow to restart
                 let err_string = err.display_with_causes().to_string();
@@ -230,13 +236,12 @@ impl SourceRender for MySqlSourceConnection {
                     update,
                 }
             });
-        let health = health_init.concat(&health_errs);
+        let health = health_init.concat(health_errs);
 
         (
             data_collections,
-            uppers,
             health,
-            Some(probe_stream),
+            probe_stream,
             vec![snapshot_token, repl_token, stats_token],
         )
     }
@@ -330,7 +335,17 @@ impl From<DefiniteError> for DataflowError {
 /// A reference to a MySQL table. (schema_name, table_name)
 /// NOTE: We do not use `mz_sql_parser::ast:UnresolvedItemName` because the serialization
 /// behavior is not what we need for mysql.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Hash
+)]
 pub(crate) struct MySqlTableName(pub(crate) String, pub(crate) String);
 
 impl MySqlTableName {
@@ -365,10 +380,8 @@ pub(crate) struct RewindRequest {
     pub(crate) snapshot_upper: Antichain<GtidPartition>,
 }
 
-type StackedAsyncOutputHandle<T, D> = AsyncOutputHandle<
-    T,
-    AccountedStackBuilder<CapacityContainerBuilder<TimelyStack<(D, T, Diff)>>>,
->;
+type StackedAsyncOutputHandle<T, D> =
+    AsyncOutputHandle<T, FueledBuilder<CapacityContainerBuilder<Vec<(D, T, Diff)>>>>;
 
 async fn return_definite_error(
     err: DefiniteError,
@@ -384,13 +397,17 @@ async fn return_definite_error(
     >,
     definite_error_cap_set: &CapabilitySet<GtidPartition>,
 ) {
+    tracing::warn!("Returning definite error: {err}");
     for output_index in outputs {
         let update = (
             (*output_index, Err(err.clone().into())),
             GtidPartition::new_range(Uuid::minimum(), Uuid::maximum(), GtidState::MAX),
             Diff::ONE,
         );
-        data_handle.give_fueled(&data_cap_set[0], update).await;
+        let size = update.fuel_size();
+        data_handle
+            .give_fueled(&data_cap_set[0], update, size)
+            .await;
     }
     definite_error_handle.give(
         &definite_error_cap_set[0],

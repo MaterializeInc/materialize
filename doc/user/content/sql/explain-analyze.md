@@ -54,8 +54,7 @@ Parameter    | Description
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/explain-analyze.md"
->}}
+{{% include-headless "/headless/sql-command-privileges/explain-analyze" %}}
 
 ## Examples
 
@@ -174,7 +173,7 @@ For the below example, assume there are 2 workers in the cluster.
 {{< tip >}}
 
 To determine how many workers a given cluster size has, you can query
-[`mz_catalog.mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes).
+[`mz_catalog.mz_cluster_replica_sizes`](/reference/system-catalog/mz_catalog/#mz_cluster_replica_sizes).
 
 {{</ tip >}}
 
@@ -333,12 +332,12 @@ Under the hood:
 
 - For returning Memory/CPU information, `EXPLAIN ANALYZE` runs SQL queries that
 correlate [`mz_introspection` performance
-information](https://materialize.com/docs/sql/system-catalog/mz_introspection/)
+information](https://materialize.com/docs/reference/system-catalog/mz_introspection/)
 with the LIR operators in
-[`mz_introspection.mz_lir_mapping`](../../sql/system-catalog/mz_introspection/#mz_lir_mapping).
+[`mz_introspection.mz_lir_mapping`](../../reference/system-catalog/mz_introspection/#mz_lir_mapping).
 
 - For TopK hints, `EXPLAIN ANALYZE` uses
-[`mz_introspection.mz_expected_group_size_advice`](/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice)
+[`mz_introspection.mz_expected_group_size_advice`](/reference/system-catalog/mz_introspection/#mz_expected_group_size_advice)
 introspection source to offer hints on sizing `TopK` operators.
 
 You can append `AS SQL` to any `EXPLAIN ANALYZE` statement to see the SQL that

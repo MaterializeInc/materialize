@@ -12,32 +12,28 @@ mod notice;
 use bytesize::ByteSize;
 use ipnet::IpNet;
 use mz_adapter_types::compaction::CompactionWindow;
-use mz_adapter_types::dyncfgs::ENABLE_PASSWORD_AUTH;
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
     BuiltinTable, MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_AWS_CONNECTIONS,
     MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES, MZ_CLUSTER_REPLICA_SIZES, MZ_CLUSTER_REPLICAS,
-    MZ_CLUSTER_SCHEDULES, MZ_CLUSTER_WORKLOAD_CLASSES, MZ_CLUSTERS, MZ_COLUMNS, MZ_COMMENTS,
-    MZ_CONNECTIONS, MZ_CONTINUAL_TASKS, MZ_DATABASES, MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS,
-    MZ_FUNCTIONS, MZ_HISTORY_RETENTION_STRATEGIES, MZ_ICEBERG_SINKS, MZ_INDEX_COLUMNS, MZ_INDEXES,
-    MZ_INTERNAL_CLUSTER_REPLICAS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS, MZ_KAFKA_SOURCE_TABLES,
+    MZ_CLUSTER_SCHEDULES, MZ_CLUSTERS, MZ_COLUMNS, MZ_COMMENTS, MZ_DEFAULT_PRIVILEGES,
+    MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_HISTORY_RETENTION_STRATEGIES, MZ_ICEBERG_SINKS,
+    MZ_INDEX_COLUMNS, MZ_INDEXES, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS, MZ_KAFKA_SOURCE_TABLES,
     MZ_KAFKA_SOURCES, MZ_LICENSE_KEYS, MZ_LIST_TYPES, MZ_MAP_TYPES,
-    MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_MATERIALIZED_VIEWS, MZ_MYSQL_SOURCE_TABLES,
-    MZ_NETWORK_POLICIES, MZ_NETWORK_POLICY_RULES, MZ_OBJECT_DEPENDENCIES, MZ_OBJECT_GLOBAL_IDS,
-    MZ_OPERATORS, MZ_PENDING_CLUSTER_REPLICAS, MZ_POSTGRES_SOURCE_TABLES, MZ_POSTGRES_SOURCES,
-    MZ_PSEUDO_TYPES, MZ_ROLE_AUTH, MZ_ROLE_MEMBERS, MZ_ROLE_PARAMETERS, MZ_ROLES, MZ_SCHEMAS,
-    MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCE_REFERENCES, MZ_SOURCES,
-    MZ_SQL_SERVER_SOURCE_TABLES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD,
-    MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_TABLES, MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS,
-    MZ_WEBHOOKS_SOURCES,
+    MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_MYSQL_SOURCE_TABLES, MZ_OBJECT_DEPENDENCIES,
+    MZ_OBJECT_GLOBAL_IDS, MZ_OPERATORS, MZ_POSTGRES_SOURCE_TABLES, MZ_POSTGRES_SOURCES,
+    MZ_PSEUDO_TYPES, MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_ROLE_PARAMETERS, MZ_ROLES, MZ_SESSIONS,
+    MZ_SINKS, MZ_SOURCE_REFERENCES, MZ_SOURCES, MZ_SQL_SERVER_SOURCE_TABLES,
+    MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES,
+    MZ_TABLES, MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::durable::SourceReferences;
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, ClusterVariant, Connection, ContinualTask, DataSourceDesc, Func,
-    Index, MaterializedView, Sink, Table, TableDataSource, Type, View,
+    CatalogEntry, CatalogItem, ClusterVariant, Connection, DataSourceDesc, Func, Index,
+    MaterializedView, Sink, Table, TableDataSource, Type, View,
 };
 use mz_controller::clusters::{
     ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaLocation,
@@ -53,20 +49,15 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
-use mz_repr::adt::regex;
-use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::refresh_schedule::RefreshEvery;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, Datum, Diff, GlobalId, Row, RowPacker, SqlScalarType, Timestamp};
-use mz_sql::ast::{ContinualTaskStmt, CreateIndexStatement, Statement, UnresolvedItemName};
-use mz_sql::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogSchema, CatalogType, DefaultPrivilegeObject,
-    TypeCategory,
+use mz_repr::{
+    CatalogItemId, Datum, Diff, GlobalId, ReprColumnType, Row, RowPacker, SqlScalarType, Timestamp,
 };
+use mz_sql::ast::{CreateIndexStatement, Statement, UnresolvedItemName};
+use mz_sql::catalog::{CatalogCluster, CatalogType, DefaultPrivilegeObject, TypeCategory};
 use mz_sql::func::FuncImplCatalogDetails;
-use mz_sql::names::{
-    CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
-};
+use mz_sql::names::{CommentObjectId, SchemaSpecifier};
 use mz_sql::plan::{ClusterSchedule, ConnectionDetails, SshKey};
 use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SYSTEM_USER};
 use mz_sql::session::vars::SessionVars;
@@ -145,56 +136,6 @@ impl CatalogState {
         BuiltinTableUpdate::row(&*MZ_OBJECT_DEPENDENCIES, row, diff)
     }
 
-    pub(super) fn pack_database_update(
-        &self,
-        database_id: &DatabaseId,
-        diff: Diff,
-    ) -> BuiltinTableUpdate<&'static BuiltinTable> {
-        let database = self.get_database(database_id);
-        let row = self.pack_privilege_array_row(database.privileges());
-        let privileges = row.unpack_first();
-        BuiltinTableUpdate::row(
-            &*MZ_DATABASES,
-            Row::pack_slice(&[
-                Datum::String(&database.id.to_string()),
-                Datum::UInt32(database.oid),
-                Datum::String(database.name()),
-                Datum::String(&database.owner_id.to_string()),
-                privileges,
-            ]),
-            diff,
-        )
-    }
-
-    pub(super) fn pack_schema_update(
-        &self,
-        database_spec: &ResolvedDatabaseSpecifier,
-        schema_id: &SchemaId,
-        diff: Diff,
-    ) -> BuiltinTableUpdate<&'static BuiltinTable> {
-        let (database_id, schema) = match database_spec {
-            ResolvedDatabaseSpecifier::Ambient => (None, &self.ambient_schemas_by_id[schema_id]),
-            ResolvedDatabaseSpecifier::Id(id) => (
-                Some(id.to_string()),
-                &self.database_by_id[id].schemas_by_id[schema_id],
-            ),
-        };
-        let row = self.pack_privilege_array_row(schema.privileges());
-        let privileges = row.unpack_first();
-        BuiltinTableUpdate::row(
-            &*MZ_SCHEMAS,
-            Row::pack_slice(&[
-                Datum::String(&schema_id.to_string()),
-                Datum::UInt32(schema.oid),
-                Datum::from(database_id.as_deref()),
-                Datum::String(&schema.name.schema),
-                Datum::String(&schema.owner_id.to_string()),
-                privileges,
-            ]),
-            diff,
-        )
-    }
-
     pub(super) fn pack_role_auth_update(
         &self,
         id: RoleId,
@@ -231,50 +172,28 @@ impl CatalogState {
             RoleId::Public => vec![],
             id => {
                 let role = self.get_role(&id);
-                let self_managed_auth_enabled = self
-                    .system_config()
-                    .get(ENABLE_PASSWORD_AUTH.name())
-                    .ok()
-                    .map(|v| v.value() == "on")
-                    .unwrap_or(false);
-
                 let builtin_supers = [MZ_SYSTEM_ROLE_ID, MZ_SUPPORT_ROLE_ID];
 
-                // For self managed auth, we can get the actual login and superuser bits
-                // directly from the role. For cloud auth, we have to do some heuristics.
-                // We determine login status each time a role logs in, so there's no clean
-                // way to accurately determine this in the catalog. Instead we do something
-                // a little gross. For system roles, we hardcode the known roles that can
-                // log in. For user roles, we determine `rolcanlogin` based on whether the
-                // role name looks like an email address.
-                //
-                // This works for the vast majority of cases in production. Roles that users
-                // log in to come from Frontegg and therefore *must* be valid email
-                // addresses, while roles that are created via `CREATE ROLE` (e.g.,
-                // `admin`, `prod_app`) almost certainly are not named to look like email
-                // addresses.
-                //
-                // For the moment, we're comfortable with the edge cases here. If we discover
-                // that folks are regularly creating non-login roles with names that look
-                // like an email address (e.g., `admins@sysops.foocorp`), we can change
-                // course.
-
-                let cloud_login_regex = "^[^@]+@[^@]+\\.[^@]+$";
-                let matches = regex::Regex::new(cloud_login_regex, true)
-                    .expect("valid regex")
-                    .is_match(&role.name);
-
-                let rolcanlogin = if self_managed_auth_enabled {
-                    role.attributes.login.unwrap_or(false)
+                let rolcanlogin = if let Some(login) = role.attributes.login {
+                    login
                 } else {
-                    builtin_supers.contains(&role.id) || matches
+                    builtin_supers.contains(&role.id)
                 };
 
-                let rolsuper = if self_managed_auth_enabled {
-                    Datum::from(role.attributes.superuser.unwrap_or(false))
+                let rolsuper = if let Some(superuser) = role.attributes.superuser {
+                    Datum::from(superuser)
                 } else if builtin_supers.contains(&role.id) {
+                    // System roles (mz_system, mz_support) are superusers
                     Datum::from(true)
                 } else {
+                    // In cloud environments, superuser status is determined
+                    // at login, so we set `rolsuper` to `null` here because
+                    // it cannot be known beforehand. For self-managed
+                    // auth, roles created without an explicit SUPERUSER
+                    // attribute would typically have `rolsuper` set to false.
+                    // However, since we cannot reliably distinguish between
+                    // cloud and self-managed here, we conservatively use NULL
+                    // for indeterminate cases.
                     Datum::Null
                 };
 
@@ -326,29 +245,6 @@ impl CatalogState {
                 updates
             }
         }
-    }
-
-    pub(super) fn pack_role_members_update(
-        &self,
-        role_id: RoleId,
-        member_id: RoleId,
-        diff: Diff,
-    ) -> BuiltinTableUpdate<&'static BuiltinTable> {
-        let grantor_id = self
-            .get_role(&member_id)
-            .membership
-            .map
-            .get(&role_id)
-            .expect("catalog out of sync");
-        BuiltinTableUpdate::row(
-            &*MZ_ROLE_MEMBERS,
-            Row::pack_slice(&[
-                Datum::String(&role_id.to_string()),
-                Datum::String(&member_id.to_string()),
-                Datum::String(&grantor_id.to_string()),
-            ]),
-            diff,
-        )
     }
 
     pub(super) fn pack_cluster_update(
@@ -425,15 +321,6 @@ impl CatalogState {
             updates.push(BuiltinTableUpdate::row(&*MZ_CLUSTER_SCHEDULES, row, diff));
         }
 
-        updates.push(BuiltinTableUpdate::row(
-            &*MZ_CLUSTER_WORKLOAD_CLASSES,
-            Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                Datum::from(cluster.config.workload_class.as_deref()),
-            ]),
-            diff,
-        ));
-
         updates
     }
 
@@ -447,7 +334,7 @@ impl CatalogState {
         let id = cluster.replica_id(name).expect("Must exist");
         let replica = cluster.replica(id).expect("Must exist");
 
-        let (size, disk, az, internal, pending) = match &replica.config.location {
+        let (size, disk, az) = match &replica.config.location {
             // TODO(guswynn): The column should be `availability_zones`, not
             // `availability_zone`.
             ReplicaLocation::Managed(ManagedReplicaLocation {
@@ -455,30 +342,26 @@ impl CatalogState {
                 availability_zones: ManagedReplicaAvailabilityZones::FromReplica(Some(az)),
                 allocation: _,
                 billed_as: _,
-                internal,
-                pending,
+                internal: _,
+                pending: _,
             }) => (
                 Some(&**size),
                 Some(self.cluster_replica_size_has_disk(size)),
                 Some(az.as_str()),
-                *internal,
-                *pending,
             ),
             ReplicaLocation::Managed(ManagedReplicaLocation {
                 size,
                 availability_zones: _,
                 allocation: _,
                 billed_as: _,
-                internal,
-                pending,
+                internal: _,
+                pending: _,
             }) => (
                 Some(&**size),
                 Some(self.cluster_replica_size_has_disk(size)),
                 None,
-                *internal,
-                *pending,
             ),
-            _ => (None, None, None, false, false),
+            ReplicaLocation::Unmanaged(_) => (None, None, None),
         };
 
         let cluster_replica_update = BuiltinTableUpdate::row(
@@ -495,64 +378,7 @@ impl CatalogState {
             diff,
         );
 
-        let mut updates = vec![cluster_replica_update];
-
-        if internal {
-            let update = BuiltinTableUpdate::row(
-                &*MZ_INTERNAL_CLUSTER_REPLICAS,
-                Row::pack_slice(&[Datum::String(&id.to_string())]),
-                diff,
-            );
-            updates.push(update);
-        }
-
-        if pending {
-            let update = BuiltinTableUpdate::row(
-                &*MZ_PENDING_CLUSTER_REPLICAS,
-                Row::pack_slice(&[Datum::String(&id.to_string())]),
-                diff,
-            );
-            updates.push(update);
-        }
-
-        updates
-    }
-
-    pub(crate) fn pack_network_policy_update(
-        &self,
-        policy_id: &NetworkPolicyId,
-        diff: Diff,
-    ) -> Result<Vec<BuiltinTableUpdate<&'static BuiltinTable>>, Error> {
-        let policy = self.get_network_policy(policy_id);
-        let row = self.pack_privilege_array_row(&policy.privileges);
-        let privileges = row.unpack_first();
-        let mut updates = Vec::new();
-        for ref rule in policy.rules.clone() {
-            updates.push(BuiltinTableUpdate::row(
-                &*MZ_NETWORK_POLICY_RULES,
-                Row::pack_slice(&[
-                    Datum::String(&rule.name),
-                    Datum::String(&policy.id.to_string()),
-                    Datum::String(&rule.action.to_string()),
-                    Datum::String(&rule.address.to_string()),
-                    Datum::String(&rule.direction.to_string()),
-                ]),
-                diff,
-            ));
-        }
-        updates.push(BuiltinTableUpdate::row(
-            &*MZ_NETWORK_POLICIES,
-            Row::pack_slice(&[
-                Datum::String(&policy.id.to_string()),
-                Datum::String(&policy.name),
-                Datum::String(&policy.owner_id.to_string()),
-                privileges,
-                Datum::UInt32(policy.oid.clone()),
-            ]),
-            diff,
-        ));
-
-        Ok(updates)
+        vec![cluster_replica_update]
     }
 
     pub(super) fn pack_item_update(
@@ -612,25 +438,25 @@ impl CatalogState {
                                     // information is redundant because each
                                     // Postgres connection connects to only one
                                     // database.
-                                    let schema_name = external_reference[1].to_ast_string_simple();
-                                    let table_name = external_reference[2].to_ast_string_simple();
+                                    let schema_name = external_reference[1].as_str();
+                                    let table_name = external_reference[2].as_str();
 
                                     self.pack_postgres_source_tables_update(
                                         id,
-                                        &schema_name,
-                                        &table_name,
+                                        schema_name,
+                                        table_name,
                                         diff,
                                     )
                                 }
                                 "mysql" => {
                                     mz_ore::soft_assert_eq_no_log!(external_reference.len(), 2);
-                                    let schema_name = external_reference[0].to_ast_string_simple();
-                                    let table_name = external_reference[1].to_ast_string_simple();
+                                    let schema_name = external_reference[0].as_str();
+                                    let table_name = external_reference[1].as_str();
 
                                     self.pack_mysql_source_tables_update(
                                         id,
-                                        &schema_name,
-                                        &table_name,
+                                        schema_name,
+                                        table_name,
                                         diff,
                                     )
                                 }
@@ -640,13 +466,13 @@ impl CatalogState {
                                     // the database, but this information is redundant
                                     // because each SQL Server connection connects to
                                     // only one database.
-                                    let schema_name = external_reference[1].to_ast_string_simple();
-                                    let table_name = external_reference[2].to_ast_string_simple();
+                                    let schema_name = external_reference[1].as_str();
+                                    let table_name = external_reference[2].as_str();
 
                                     self.pack_sql_server_source_table_update(
                                         id,
-                                        &schema_name,
-                                        &table_name,
+                                        schema_name,
+                                        table_name,
                                         diff,
                                     )
                                 }
@@ -655,13 +481,13 @@ impl CatalogState {
                                 "load-generator" => vec![],
                                 "kafka" => {
                                     mz_ore::soft_assert_eq_no_log!(external_reference.len(), 1);
-                                    let topic = external_reference[0].to_ast_string_simple();
+                                    let topic = external_reference[0].as_str();
                                     let envelope = data_source.envelope();
                                     let (key_format, value_format) = data_source.formats();
 
                                     self.pack_kafka_source_tables_update(
                                         id,
-                                        &topic,
+                                        topic,
                                         envelope,
                                         key_format,
                                         value_format,
@@ -671,7 +497,12 @@ impl CatalogState {
                                 s => unreachable!("{s} sources do not have tables"),
                             }
                         }
-                        _ => vec![],
+                        DataSourceDesc::Ingestion { .. }
+                        | DataSourceDesc::OldSyntaxIngestion { .. }
+                        | DataSourceDesc::Introspection(_)
+                        | DataSourceDesc::Progress
+                        | DataSourceDesc::Webhook { .. }
+                        | DataSourceDesc::Catalog => vec![],
                     });
                 }
 
@@ -687,7 +518,12 @@ impl CatalogState {
                     DataSourceDesc::IngestionExport { ingestion_id, .. } => {
                         self.get_entry(&ingestion_id)
                     }
-                    _ => entry,
+                    DataSourceDesc::Ingestion { .. }
+                    | DataSourceDesc::OldSyntaxIngestion { .. }
+                    | DataSourceDesc::Introspection(_)
+                    | DataSourceDesc::Progress
+                    | DataSourceDesc::Webhook { .. }
+                    | DataSourceDesc::Catalog => entry,
                 };
 
                 let cluster_id = cluster_entry.item().cluster_id().map(|id| id.to_string());
@@ -742,25 +578,25 @@ impl CatalogState {
                                 // information is redundant because each
                                 // Postgres connection connects to only one
                                 // database.
-                                let schema_name = external_reference[1].to_ast_string_simple();
-                                let table_name = external_reference[2].to_ast_string_simple();
+                                let schema_name = external_reference[1].as_str();
+                                let table_name = external_reference[2].as_str();
 
                                 self.pack_postgres_source_tables_update(
                                     id,
-                                    &schema_name,
-                                    &table_name,
+                                    schema_name,
+                                    table_name,
                                     diff,
                                 )
                             }
                             "mysql" => {
                                 mz_ore::soft_assert_eq_no_log!(external_reference.len(), 2);
-                                let schema_name = external_reference[0].to_ast_string_simple();
-                                let table_name = external_reference[1].to_ast_string_simple();
+                                let schema_name = external_reference[0].as_str();
+                                let table_name = external_reference[1].as_str();
 
                                 self.pack_mysql_source_tables_update(
                                     id,
-                                    &schema_name,
-                                    &table_name,
+                                    schema_name,
+                                    table_name,
                                     diff,
                                 )
                             }
@@ -770,13 +606,13 @@ impl CatalogState {
                                 // the database, but this information is redundant
                                 // because each SQL Server connection connects to
                                 // only one database.
-                                let schema_name = external_reference[1].to_ast_string_simple();
-                                let table_name = external_reference[2].to_ast_string_simple();
+                                let schema_name = external_reference[1].as_str();
+                                let table_name = external_reference[2].as_str();
 
                                 self.pack_sql_server_source_table_update(
                                     id,
-                                    &schema_name,
-                                    &table_name,
+                                    schema_name,
+                                    table_name,
                                     diff,
                                 )
                             }
@@ -789,7 +625,9 @@ impl CatalogState {
                     DataSourceDesc::Webhook { .. } => {
                         vec![self.pack_webhook_source_update(id, diff)]
                     }
-                    _ => vec![],
+                    DataSourceDesc::Introspection(_)
+                    | DataSourceDesc::Progress
+                    | DataSourceDesc::Catalog => vec![],
                 });
 
                 updates
@@ -797,9 +635,9 @@ impl CatalogState {
             CatalogItem::View(view) => {
                 self.pack_view_update(id, oid, schema_id, name, owner_id, privileges, view, diff)
             }
-            CatalogItem::MaterializedView(mview) => self.pack_materialized_view_update(
-                id, oid, schema_id, name, owner_id, privileges, mview, diff,
-            ),
+            CatalogItem::MaterializedView(mview) => {
+                self.pack_materialized_view_update(id, mview, diff)
+            }
             CatalogItem::Sink(sink) => {
                 self.pack_sink_update(id, oid, schema_id, name, owner_id, sink, diff)
             }
@@ -809,15 +647,10 @@ impl CatalogState {
             CatalogItem::Func(func) => {
                 self.pack_func_update(id, schema_id, name, owner_id, func, diff)
             }
-            CatalogItem::Secret(_) => {
-                self.pack_secret_update(id, oid, schema_id, name, owner_id, privileges, diff)
+            CatalogItem::Secret(_) => vec![],
+            CatalogItem::Connection(connection) => {
+                self.pack_connection_update(id, connection, diff)
             }
-            CatalogItem::Connection(connection) => self.pack_connection_update(
-                id, oid, schema_id, name, owner_id, privileges, connection, diff,
-            ),
-            CatalogItem::ContinualTask(ct) => self.pack_continual_task_update(
-                id, oid, schema_id, name, owner_id, privileges, ct, diff,
-            ),
         };
 
         if !entry.item().is_temporary() {
@@ -828,9 +661,8 @@ impl CatalogState {
             }
         }
 
-        let full_name = self.resolve_full_name(entry.name(), entry.conn_id());
         // Always report the latest for an objects columns.
-        if let Ok(desc) = entry.desc_latest(&full_name) {
+        if let Some(desc) = entry.relation_desc_latest() {
             let defaults = match entry.item() {
                 CatalogItem::Table(Table {
                     data_source: TableDataSource::TableWrites { defaults },
@@ -1170,43 +1002,10 @@ impl CatalogState {
     fn pack_connection_update(
         &self,
         id: CatalogItemId,
-        oid: u32,
-        schema_id: &SchemaSpecifier,
-        name: &str,
-        owner_id: &RoleId,
-        privileges: Datum,
         connection: &Connection,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        let create_stmt = mz_sql::parse::parse(&connection.create_sql)
-            .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", connection.create_sql))
-            .into_element()
-            .ast;
-        let mut updates = vec![BuiltinTableUpdate::row(
-            &*MZ_CONNECTIONS,
-            Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                Datum::UInt32(oid),
-                Datum::String(&schema_id.to_string()),
-                Datum::String(name),
-                Datum::String(match connection.details {
-                    ConnectionDetails::Kafka { .. } => "kafka",
-                    ConnectionDetails::Csr { .. } => "confluent-schema-registry",
-                    ConnectionDetails::Postgres { .. } => "postgres",
-                    ConnectionDetails::Aws(..) => "aws",
-                    ConnectionDetails::AwsPrivatelink(..) => "aws-privatelink",
-                    ConnectionDetails::Ssh { .. } => "ssh-tunnel",
-                    ConnectionDetails::MySql { .. } => "mysql",
-                    ConnectionDetails::SqlServer(_) => "sql-server",
-                    ConnectionDetails::IcebergCatalog(_) => "iceberg-catalog",
-                }),
-                Datum::String(&owner_id.to_string()),
-                privileges,
-                Datum::String(&connection.create_sql),
-                Datum::String(&create_stmt.to_ast_string_redacted()),
-            ]),
-            diff,
-        )];
+        let mut updates = vec![];
         match connection.details {
             ConnectionDetails::Kafka(ref kafka) => {
                 updates.extend(self.pack_kafka_connection_update(id, kafka, diff));
@@ -1433,52 +1232,10 @@ impl CatalogState {
     fn pack_materialized_view_update(
         &self,
         id: CatalogItemId,
-        oid: u32,
-        schema_id: &SchemaSpecifier,
-        name: &str,
-        owner_id: &RoleId,
-        privileges: Datum,
         mview: &MaterializedView,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        let create_stmt = mz_sql::parse::parse(&mview.create_sql)
-            .unwrap_or_else(|e| {
-                panic!(
-                    "create_sql cannot be invalid: `{}` --- error: `{}`",
-                    mview.create_sql, e
-                )
-            })
-            .into_element()
-            .ast;
-        let query_string = match &create_stmt {
-            Statement::CreateMaterializedView(stmt) => {
-                let mut query_string = stmt.query.to_ast_string_stable();
-                // PostgreSQL appends a semicolon in `pg_matviews.definition`, we
-                // do the same for compatibility's sake.
-                query_string.push(';');
-                query_string
-            }
-            _ => unreachable!(),
-        };
-
         let mut updates = Vec::new();
-
-        updates.push(BuiltinTableUpdate::row(
-            &*MZ_MATERIALIZED_VIEWS,
-            Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                Datum::UInt32(oid),
-                Datum::String(&schema_id.to_string()),
-                Datum::String(name),
-                Datum::String(&mview.cluster_id.to_string()),
-                Datum::String(&query_string),
-                Datum::String(&owner_id.to_string()),
-                privileges,
-                Datum::String(&mview.create_sql),
-                Datum::String(&create_stmt.to_ast_string_redacted()),
-            ]),
-            diff,
-        ));
 
         if let Some(refresh_schedule) = &mview.refresh_schedule {
             // This can't be `ON COMMIT`, because that is represented by a `None` instead of an
@@ -1538,65 +1295,18 @@ impl CatalogState {
             ));
         }
 
+        if let Some(target_id) = mview.replacement_target {
+            updates.push(BuiltinTableUpdate::row(
+                &*MZ_REPLACEMENTS,
+                Row::pack_slice(&[
+                    Datum::String(&id.to_string()),
+                    Datum::String(&target_id.to_string()),
+                ]),
+                diff,
+            ));
+        }
+
         updates
-    }
-
-    fn pack_continual_task_update(
-        &self,
-        id: CatalogItemId,
-        oid: u32,
-        schema_id: &SchemaSpecifier,
-        name: &str,
-        owner_id: &RoleId,
-        privileges: Datum,
-        ct: &ContinualTask,
-        diff: Diff,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        let create_stmt = mz_sql::parse::parse(&ct.create_sql)
-            .unwrap_or_else(|e| {
-                panic!(
-                    "create_sql cannot be invalid: `{}` --- error: `{}`",
-                    ct.create_sql, e
-                )
-            })
-            .into_element()
-            .ast;
-        let query_string = match &create_stmt {
-            Statement::CreateContinualTask(stmt) => {
-                let mut query_string = String::new();
-                for stmt in &stmt.stmts {
-                    let s = match stmt {
-                        ContinualTaskStmt::Insert(stmt) => stmt.to_ast_string_stable(),
-                        ContinualTaskStmt::Delete(stmt) => stmt.to_ast_string_stable(),
-                    };
-                    if query_string.is_empty() {
-                        query_string = s;
-                    } else {
-                        query_string.push_str("; ");
-                        query_string.push_str(&s);
-                    }
-                }
-                query_string
-            }
-            _ => unreachable!(),
-        };
-
-        vec![BuiltinTableUpdate::row(
-            &*MZ_CONTINUAL_TASKS,
-            Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                Datum::UInt32(oid),
-                Datum::String(&schema_id.to_string()),
-                Datum::String(name),
-                Datum::String(&ct.cluster_id.to_string()),
-                Datum::String(&query_string),
-                Datum::String(&owner_id.to_string()),
-                privileges,
-                Datum::String(&ct.create_sql),
-                Datum::String(&create_stmt.to_ast_string_redacted()),
-            ]),
-            diff,
-        )]
     }
 
     fn pack_sink_update(
@@ -1724,17 +1434,18 @@ impl CatalogState {
             diff,
         ));
 
+        let on_entry = self.get_entry_by_global_id(&index.on);
+        let on_desc = on_entry
+            .relation_desc()
+            .expect("can only create indexes on items with a valid description");
+        let repr_col_types: Vec<ReprColumnType> = on_desc
+            .typ()
+            .column_types
+            .iter()
+            .map(ReprColumnType::from)
+            .collect();
         for (i, key) in index.keys.iter().enumerate() {
-            let on_entry = self.get_entry_by_global_id(&index.on);
-            let nullable = key
-                .typ(
-                    &on_entry
-                        .desc(&self.resolve_full_name(on_entry.name(), on_entry.conn_id()))
-                        .expect("can only create indexes on items with a valid description")
-                        .typ()
-                        .column_types,
-                )
-                .nullable;
+            let nullable = key.typ(&repr_col_types).nullable;
             let seq_in_index = u64::cast_from(i + 1);
             let key_sql = key_sqls
                 .get(i)
@@ -1988,30 +1699,6 @@ impl CatalogState {
         )
     }
 
-    fn pack_secret_update(
-        &self,
-        id: CatalogItemId,
-        oid: u32,
-        schema_id: &SchemaSpecifier,
-        name: &str,
-        owner_id: &RoleId,
-        privileges: Datum,
-        diff: Diff,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        vec![BuiltinTableUpdate::row(
-            &*MZ_SECRETS,
-            Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                Datum::UInt32(oid),
-                Datum::String(&schema_id.to_string()),
-                Datum::String(name),
-                Datum::String(&owner_id.to_string()),
-                privileges,
-            ]),
-            diff,
-        )]
-    }
-
     pub fn pack_audit_log_update(
         &self,
         event: &VersionedEvent,
@@ -2136,7 +1823,7 @@ impl CatalogState {
 
             let row = Row::pack_slice(&[
                 size.as_str().into(),
-                u64::from(alloc.scale).into(),
+                u64::cast_from(alloc.scale).into(),
                 u64::cast_from(alloc.workers).into(),
                 cpu_limit.as_nanocpus().into(),
                 memory_bytes.into(),
@@ -2283,8 +1970,7 @@ impl CatalogState {
             | CommentObjectId::Func(global_id)
             | CommentObjectId::Connection(global_id)
             | CommentObjectId::Secret(global_id)
-            | CommentObjectId::Type(global_id)
-            | CommentObjectId::ContinualTask(global_id) => global_id.to_string(),
+            | CommentObjectId::Type(global_id) => global_id.to_string(),
             CommentObjectId::Role(role_id) => role_id.to_string(),
             CommentObjectId::Database(database_id) => database_id.to_string(),
             CommentObjectId::Schema((_, schema_id)) => schema_id.to_string(),

@@ -5,7 +5,7 @@ menu:
   main:
     identifier: sql-types
     name: SQL data types
-    parent: reference
+    parent: sql
     weight: 110
 disable_list: true
 ---

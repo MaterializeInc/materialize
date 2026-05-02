@@ -7,6 +7,8 @@ menu:
     identifier: "ingest-data"
     name: "Ingest data"
     weight: 11
+aliases:
+  - /self-managed/v25.1/ingest-data/
 ---
 
 You can ingest data into Materialize from various external systems:
@@ -80,8 +82,7 @@ as it arrives, in real time.
 
 ### Modifying an existing source
 
-{{< include-md file="shared-content/alter-source-snapshot-blocking-behavior.md"
->}}
+{{% include-headless "/headless/alter-source-snapshot-blocking-behavior" %}}
 
 ## Running/steady-state
 
@@ -144,7 +145,8 @@ guidelines for upsert sources.
 
 ### Scheduling
 
-{{% best-practices/ingest-data/scheduling %}}
+{{% include-from-yaml data="best_practices_details"
+name="ingest-data-scheduling" %}}
 
 ### Dedicate a cluster for the sources
 

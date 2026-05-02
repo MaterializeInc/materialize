@@ -14,6 +14,7 @@ use std::fmt::Debug;
 use std::fs::Permissions;
 use std::future::Future;
 use std::net::{IpAddr, SocketAddr, TcpListener as StdTcpListener};
+use std::num::NonZero;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
@@ -29,7 +30,6 @@ use chrono::{DateTime, Utc};
 use futures::StreamExt;
 use futures::stream::{BoxStream, FuturesUnordered};
 use itertools::Itertools;
-use libc::{SIGABRT, SIGBUS, SIGILL, SIGSEGV, SIGTRAP};
 use maplit::btreemap;
 use mz_orchestrator::scheduling_config::ServiceSchedulingConfig;
 use mz_orchestrator::{
@@ -42,6 +42,7 @@ use mz_ore::error::ErrorExt;
 use mz_ore::netio::UnixSocketAddr;
 use mz_ore::result::ResultExt;
 use mz_ore::task::AbortOnDropHandle;
+use nix::sys::signal::Signal;
 use scopeguard::defer;
 use serde::Serialize;
 use sha1::{Digest, Sha1};
@@ -453,7 +454,7 @@ struct EnsureServiceConfig {
     /// An optional limit on the CPU that the service can use.
     pub cpu_limit: Option<CpuLimit>,
     /// The number of copies of this service to run.
-    pub scale: u16,
+    pub scale: NonZero<u16>,
     /// Arbitrary key–value pairs to attach to the service in the orchestrator
     /// backend.
     ///
@@ -599,7 +600,7 @@ impl OrchestratorWorker {
             services.get(&id).map(|states| states.len())
         };
         match old_scale {
-            Some(old) if old == usize::from(scale) => return Ok(()),
+            Some(old) if old == usize::cast_from(scale) => return Ok(()),
             Some(_) => self.drop_service(&id).await?,
             None => (),
         }
@@ -622,7 +623,7 @@ impl OrchestratorWorker {
 
             // Create the state for new processes.
             let mut process_states = vec![];
-            for i in 0..scale.into() {
+            for i in 0..usize::cast_from(scale) {
                 let listen_addrs = &peer_addrs[i];
 
                 // Fill out placeholders in the command wrapper for this process.
@@ -810,6 +811,8 @@ impl OrchestratorWorker {
         };
 
         async move {
+            // Holds AbortOnDropHandles to keep proxy tasks alive.
+            #[allow(clippy::collection_is_never_read)]
             let mut proxy_handles = vec![];
             for port in ports {
                 if let Some(tcp_listener) = port.tcp_proxy_listener {
@@ -856,11 +859,10 @@ impl OrchestratorWorker {
                     .await
                 {
                     Ok(status) => {
-                        if propagate_crashes && did_process_crash(status) {
-                            panic!(
-                                "{full_id}-{i} crashed; aborting because propagate_crashes is enabled"
-                            );
-                        }
+                        assert!(
+                            !(propagate_crashes && did_process_crash(status)),
+                            "{full_id}-{i} crashed; aborting because propagate_crashes is enabled"
+                        );
                         error!("{full_id}-{i} exited: {:?}; relaunching in 5s", status);
                     }
                     Err(e) => {
@@ -1035,10 +1037,16 @@ fn did_process_crash(status: ExitStatus) -> bool {
     // Likely not exhaustive. Feel free to add additional tests for other
     // indications of a crashed child process, as those conditions are
     // discovered.
-    matches!(
-        status.signal(),
-        Some(SIGABRT | SIGBUS | SIGSEGV | SIGTRAP | SIGILL)
-    )
+    status.signal().is_some_and(|s| {
+        matches!(
+            Signal::try_from(s),
+            Ok(Signal::SIGABRT
+                | Signal::SIGBUS
+                | Signal::SIGSEGV
+                | Signal::SIGTRAP
+                | Signal::SIGILL)
+        )
+    })
 }
 
 async fn write_pid_file(pid_file: &Path, pid: Pid) -> Result<(), anyhow::Error> {
@@ -1105,7 +1113,7 @@ async fn tcp_proxy(
                         .context("proxying")
                 }));
             }
-            Some(Err(e)) = conns.next() => {
+            Some(result) = conns.next() => if let Err(e) = result {
                 warn!("{name}: tcp proxy connection failed: {}", e.display_with_causes());
             }
         }
@@ -1174,7 +1182,7 @@ impl From<ProcessStatus> for ServiceStatus {
     }
 }
 
-fn socket_path(run_dir: &Path, port: &str, process: usize) -> String {
+fn socket_path(run_dir: &Path, port: &str, process: u16) -> String {
     let desired = run_dir
         .join(format!("{port}-{process}"))
         .to_string_lossy()
@@ -1196,16 +1204,16 @@ struct AddressedTcpListener {
     local_addr: SocketAddr,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct ProcessService {
     run_dir: PathBuf,
-    scale: u16,
+    scale: NonZero<u16>,
 }
 
 impl Service for ProcessService {
     fn addresses(&self, port: &str) -> Vec<String> {
-        (0..self.scale)
-            .map(|i| socket_path(&self.run_dir, port, i.into()))
+        (0..self.scale.get())
+            .map(|i| socket_path(&self.run_dir, port, i))
             .collect()
     }
 }

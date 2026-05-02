@@ -10,11 +10,11 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.100"
-bytesize = "2.1.0"
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
-futures = "0.3.31"
-itertools = "0.14.0"
+anyhow.workspace = true
+bytesize.workspace = true
+chrono.workspace = true
+futures.workspace = true
+itertools.workspace = true
 mz-build-info = { path = "../build-info" }
 mz-cluster-client = { path = "../cluster-client" }
 mz-compute-client = { path = "../compute-client" }
@@ -33,20 +33,16 @@ mz-storage-client = { path = "../storage-client" }
 mz-storage-controller = { path = "../storage-controller" }
 mz-storage-types = { path = "../storage-types" }
 mz-txn-wal = { path = "../txn-wal" }
-regex = "1.12.2"
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.145"
-timely = "0.25.1"
-tokio = "1.44.1"
-tracing = "0.1.37"
-uuid = { version = "1.18.1" }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+timely.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
-bytesize = "2.1.0"
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+bytesize.workspace = true
 
 [features]
-default = ["workspace-hack"]
+default = []

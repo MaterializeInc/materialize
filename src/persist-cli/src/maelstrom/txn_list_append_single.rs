@@ -26,7 +26,7 @@ use mz_persist::unreliable::{UnreliableBlob, UnreliableConsensus, UnreliableHand
 use mz_persist_client::async_runtime::IsolatedRuntime;
 use mz_persist_client::cache::StateCache;
 use mz_persist_client::cfg::PersistConfig;
-use mz_persist_client::critical::SinceHandle;
+use mz_persist_client::critical::{Opaque, SinceHandle};
 use mz_persist_client::metrics::Metrics;
 use mz_persist_client::read::{Listen, ListenEvent};
 use mz_persist_client::rpc::PubSubClientConnection;
@@ -101,10 +101,10 @@ pub struct MaelstromVal(Vec<u64>);
 /// along this timestamp.
 #[derive(Debug)]
 pub struct Transactor {
-    cads_token: u64,
+    cads_token: Opaque,
     shard_id: ShardId,
     client: PersistClient,
-    since: SinceHandle<MaelstromKey, MaelstromVal, u64, i64, u64>,
+    since: SinceHandle<MaelstromKey, MaelstromVal, u64, i64>,
     write: WriteHandle<MaelstromKey, MaelstromVal, u64, i64>,
 
     read_ts: u64,
@@ -112,11 +112,7 @@ pub struct Transactor {
     // Keep a long-lived listen, which is incrementally read as we go. Then
     // assert that it has the same data as the short-lived snapshot+listen in
     // `read`. This hopefully stresses slightly different parts of the system.
-    long_lived_updates: Vec<(
-        (Result<MaelstromKey, String>, Result<MaelstromVal, String>),
-        u64,
-        i64,
-    )>,
+    long_lived_updates: Vec<((MaelstromKey, MaelstromVal), u64, i64)>,
     long_lived_listen: Listen<MaelstromKey, MaelstromVal, u64, i64>,
 }
 
@@ -126,11 +122,13 @@ impl Transactor {
         node_id: NodeId,
         shard_id: ShardId,
     ) -> Result<Self, MaelstromError> {
-        let cads_token = node_id
-            .0
-            .trim_start_matches('n')
-            .parse::<u64>()
-            .expect("maelstrom node_id should be n followed by an integer");
+        let cads_token = Opaque::encode(
+            &node_id
+                .0
+                .trim_start_matches('n')
+                .parse::<u64>()
+                .expect("maelstrom node_id should be n followed by an integer"),
+        );
 
         let (mut write, mut read) = client
             .open(
@@ -147,6 +145,7 @@ impl Transactor {
             .open_critical_since(
                 shard_id,
                 PersistClient::CONTROLLER_CRITICAL_SINCE,
+                cads_token.clone(),
                 Diagnostics::from_purpose("maelstrom since"),
             )
             .await?;
@@ -241,11 +240,7 @@ impl Transactor {
         &mut self,
     ) -> Result<
         (
-            Vec<(
-                (Result<MaelstromKey, String>, Result<MaelstromVal, String>),
-                u64,
-                i64,
-            )>,
+            Vec<((MaelstromKey, MaelstromVal), u64, i64)>,
             Antichain<u64>,
         ),
         MaelstromError,
@@ -382,14 +377,7 @@ impl Transactor {
     async fn listen_through(
         mut listen: Listen<MaelstromKey, MaelstromVal, u64, i64>,
         frontier: &Antichain<u64>,
-    ) -> Result<
-        Vec<(
-            (Result<MaelstromKey, String>, Result<MaelstromVal, String>),
-            u64,
-            i64,
-        )>,
-        ExternalError,
-    > {
+    ) -> Result<Vec<((MaelstromKey, MaelstromVal), u64, i64)>, ExternalError> {
         let mut ret = Vec::new();
         loop {
             for event in listen.fetch_next().await {
@@ -415,11 +403,7 @@ impl Transactor {
     async fn read_long_lived(
         &mut self,
         as_of: &Antichain<u64>,
-    ) -> Vec<(
-        (Result<MaelstromKey, String>, Result<MaelstromVal, String>),
-        u64,
-        i64,
-    )> {
+    ) -> Vec<((MaelstromKey, MaelstromVal), u64, i64)> {
         while PartialOrder::less_equal(self.long_lived_listen.frontier(), as_of) {
             for event in self.long_lived_listen.fetch_next().await {
                 match event {
@@ -450,11 +434,7 @@ impl Transactor {
 
     fn extract_state_map(
         read_ts: u64,
-        updates: Vec<(
-            (Result<MaelstromKey, String>, Result<MaelstromVal, String>),
-            u64,
-            i64,
-        )>,
+        updates: Vec<((MaelstromKey, MaelstromVal), u64, i64)>,
     ) -> Result<BTreeMap<MaelstromKey, MaelstromVal>, MaelstromError> {
         let mut ret = BTreeMap::new();
         for ((k, v), _, d) in updates {
@@ -464,14 +444,6 @@ impl Transactor {
                     text: format!("invalid read at time {}", read_ts),
                 });
             }
-            let k = k.map_err(|err| MaelstromError {
-                code: ErrorCode::Crash,
-                text: format!("invalid key {}", err),
-            })?;
-            let v = v.map_err(|err| MaelstromError {
-                code: ErrorCode::Crash,
-                text: format!("invalid val {}", err),
-            })?;
             if ret.contains_key(&k) {
                 return Err(MaelstromError {
                     code: ErrorCode::Crash,
@@ -535,7 +507,7 @@ impl Transactor {
         const SINCE_LAG: u64 = 10;
         let new_since = Antichain::from_elem(self.read_ts.saturating_sub(SINCE_LAG));
 
-        let mut expected_token = self.cads_token;
+        let mut expected_token = self.cads_token.clone();
         loop {
             let res = self
                 .since
@@ -548,7 +520,7 @@ impl Transactor {
                     let since_ts = Self::extract_ts(&latest_since)?;
                     if since_ts > self.read_ts {
                         info!(
-                            "since was last updated by {}, forwarding our read_ts from {} to {}",
+                            "since was last updated by {:?}, forwarding our read_ts from {} to {}",
                             expected_token, self.read_ts, since_ts
                         );
                         self.read_ts = since_ts;
@@ -558,7 +530,7 @@ impl Transactor {
                 }
                 Some(Err(actual_token)) => {
                     debug!(
-                        "actual downgrade_since token {} didn't match expected {}, retrying",
+                        "actual downgrade_since token {:?} didn't match expected {:?}, retrying",
                         actual_token, expected_token,
                     );
                     expected_token = actual_token;
@@ -629,7 +601,6 @@ impl Service for TransactorService {
                     blob_uri,
                     Box::new(config.clone()),
                     metrics.s3_blob.clone(),
-                    Arc::clone(&config.configs),
                 )
                 .await
                 .expect("blob_uri should be valid");

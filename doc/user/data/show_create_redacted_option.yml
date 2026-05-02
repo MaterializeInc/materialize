@@ -1,7 +1,7 @@
 columns:
-  - column: Option
+  - column: Syntax element
   - column: Description
 
 rows:
-  - Option: "**REDACTED**"
+  - Syntax element: "**REDACTED**"
     Description: "If specified, literals will be redacted."

@@ -1,6 +1,6 @@
 ---
 title: "EXPLAIN PLAN"
-description: "Reference page for `EXPLAIN PLAN`. `EXPLAIN PLAN` is used to inspect the plans of `SELECT` statements, indexes, and materialized views."
+description: "Reference page for `EXPLAIN PLAN`. `EXPLAIN PLAN` is used to inspect the plans of `SELECT` statements, `SUBSCRIBE` statements, indexes, and materialized views."
 aliases:
   - /sql/explain/
 menu:
@@ -12,7 +12,7 @@ menu:
 
 |                             |                       |
 |-----------------------------|-----------------------|
-| <ul><li>`SELECT` statements </li><li>`CREATE VIEW` statements</li><li>`CREATE INDEX` statements</li><li>`CREATE MATERIALIZED VIEW` statements</li></ul>|<ul><li>Existing views</li><li>Existing indexes</li><li>Existing materialized views</li></ul> |
+| <ul><li>`SELECT` statements </li><li>`CREATE VIEW` statements</li><li>`CREATE INDEX` statements</li><li>`CREATE MATERIALIZED VIEW` statements</li><li>`SUBSCRIBE` statements</li></ul>|<ul><li>Existing views</li><li>Existing indexes</li><li>Existing materialized views</li></ul> |
 
 {{< warning >}}
 `EXPLAIN` is not part of Materialize's stable interface and is not subject to
@@ -94,6 +94,16 @@ FOR ] -- The FOR keyword is required if the PLAN keyword is specified
 ;
 ```
 {{</tab>}}
+{{< tab "FOR SUBSCRIBE">}}
+```mzsql
+EXPLAIN [ [ OPTIMIZED | PHYSICAL ] PLAN
+    [ WITH (<output_modifier> [, <output_modifier> ...]) ]
+    [ AS TEXT | AS JSON ]
+FOR ]  -- The FOR keyword is required if the PLAN keyword is specified
+    <SUBSCRIBE ...>
+;
+```
+{{</tab>}}
 {{</tabs>}}
 
 Note that the `FOR` keyword is required if the `PLAN` keyword is present. The following three statements are equivalent:
@@ -121,6 +131,7 @@ Explained object | Description
 **create_view** | Display a plan for a [`CREATE VIEW` statement](../create-view).
 **create_index** | Display a plan for a [`CREATE INDEX` statement](../create-index).
 **create_materialized_view** | Display a plan for a [`CREATE MATERIALIZED VIEW` statement](../create-materialized-view).
+**subscribe_stmt** | Display an `OPTIMIZED` or `PHYSICAL` plan for a [`SUBSCRIBE` statement](../subscribe).
 **VIEW name** | Display the `RAW` or `LOCALLY OPTIMIZED` plan for an existing view.
 **INDEX name** | Display the `OPTIMIZED` or `PHYSICAL` plan for an existing index.
 **MATERIALIZED VIEW name** | Display the `OPTIMIZED` or `PHYSICAL` plan for an existing materialized view.
@@ -146,7 +157,7 @@ Plan Stage | Description
 **DECORRELATED PLAN** | Display the decorrelated but not-yet-optimized plan.
 **LOCALLY OPTIMIZED** | Display the locally optimized plan (before view inlining and access path selection). This is the final stage for regular `CREATE VIEW` optimization.
 **OPTIMIZED PLAN** | Display the optimized plan.
-**PHYSICAL PLAN** | _(Default)_ Display the physical plan; this corresponds to the operators shown in [`mz_introspection.mz_lir_mapping`](../../sql/system-catalog/mz_introspection/#mz_lir_mapping).
+**PHYSICAL PLAN** |  Display the physical plan; this corresponds to the operators shown in [`mz_introspection.mz_lir_mapping`](../../reference/system-catalog/mz_introspection/#mz_lir_mapping). _(Default)_
 
 ### Output modifiers
 
@@ -162,7 +173,7 @@ Modifier | Description
 **node identifiers** | Annotate each subplan in a `PHYSICAL PLAN` with its node ID.
 **redacted** | Anonymize literals in the output.
 **timing** | Annotate the output with the optimization time.
-**types** | Annotate each subplan with its inferred type.
+**types** | Annotate each subplan with its inferred type, as a _representation type_. These types, written with a `r_` prefix, reflect how the types in your SQL query are actually represented inside Materialize---don't be alarmed if you wrote `VARCHAR` or `CHAR` but see `r_string`.
 **humanized expressions** | _(on by default)_ Add human-readable column names to column references. For example, `#0{id}` refers to column 0, whose name is `id`. Note that SQL-level aliasing is not considered when inferring column names, which means that the displayed column names can be ambiguous.
 **filter pushdown** | _(on by default)_ For each source, include a `pushdown` field that explains which filters [can be pushed down to the storage layer](../../transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
 
@@ -295,7 +306,7 @@ Many operators need to refer to columns in their input. These are displayed like
 `#3` for column number 3. (Columns are numbered starting from column 0). To get a better sense of
 columns assigned to `Map` operators, it might be useful to request [the `arity` output modifier](#output-modifiers).
 
-Each operator can also be annotated with additional metadata. Some details are shown in the default `EXPLAIN` output (`EXPLAIN PHYSICAL PLAN AS TEXT`), but are hidden elsewhere. <a
+Each operator can also be annotated with additional metadata. Some details are shown in the `EXPLAIN` output (`EXPLAIN PHYSICAL PLAN AS TEXT`), but are hidden elsewhere. <a
 name="explain-with-join-implementations"></a>In `EXPLAIN OPTIMIZED
 PLAN`, details about the implementation in the `Join` operator can be requested
 with [the `join implementations` output modifier](#output-modifiers) (that is,
@@ -348,7 +359,7 @@ Below the plan, a "Used indexes" section indicates which indexes will be used by
 
 Materialize offers several output formats for `EXPLAIN` and debugging.
 LIR plans as rendered in
-[`mz_introspection.mz_lir_mapping`](../../sql/system-catalog/mz_introspection/#mz_lir_mapping)
+[`mz_introspection.mz_lir_mapping`](../../reference/system-catalog/mz_introspection/#mz_lir_mapping)
 are deliberately succinct, while the plans in other formats give more
 detail.
 
@@ -361,11 +372,11 @@ actually run).
 
 {{< tabs >}}
 
-{{< tab "In fully optimized physical (LIR) plans" >}}
+{{< tab "In fully optimized physical (LIR) plans (Default)" >}}
 {{< explain-plans/operator-table data="explain_plan_operators" planType="LIR" >}}
 {{< /tab >}}
 
-{{< tab "In decorrelated and optimized plans (default EXPLAIN)" >}}
+{{< tab "In decorrelated and optimized plans" >}}
 {{< explain-plans/operator-table data="explain_plan_operators" planType="optimized" >}}
 {{< /tab >}}
 
@@ -375,7 +386,7 @@ actually run).
 
 {{< /tabs >}}
 
-Operators are sometimes marked as `Fused ...`. We write this to mean that the operator is fused with its input, i.e., the operator below it. That is, if you see a `Fused X` operator above a `Y` operator:
+Operators are sometimes marked as `Fused ...`. This indicates that the operator is fused with its input, i.e., the operator below it. That is, if you see a `Fused X` operator above a `Y` operator:
 
 ```
 →Fused X
@@ -522,6 +533,35 @@ EXPLAIN PHYSICAL PLAN FOR
 MATERIALIZED VIEW my_mat_view;
 ```
 
+### Explaining a `SUBSCRIBE` query
+
+You can also explain `SUBSCRIBE` statements to understand how data changes will be streamed.
+
+{{< note >}}
+`SUBSCRIBE` only supports `OPTIMIZED PLAN` and `PHYSICAL PLAN` stages. The `RAW`, `DECORRELATED`, and `LOCALLY OPTIMIZED` stages are not available for `SUBSCRIBE` because it takes MIR (mid-level intermediate representation) directly rather than going through HIR lowering.
+{{< /note >}}
+
+Explain the optimized plan for subscribing to a table:
+
+```mzsql
+EXPLAIN OPTIMIZED PLAN FOR
+SUBSCRIBE accounts;
+```
+
+Explain the optimized plan for subscribing to a query:
+
+```mzsql
+EXPLAIN OPTIMIZED PLAN FOR
+SUBSCRIBE (SELECT id, balance FROM accounts WHERE balance > 1000);
+```
+
+Explain the physical plan:
+
+```mzsql
+EXPLAIN PHYSICAL PLAN FOR
+SUBSCRIBE accounts;
+```
+
 ## Debugging running dataflows
 
 The [`EXPLAIN ANALYZE`](/sql/explain-analyze/) statement will let you debug memory and cpu usage (optionally with information about worker skew) for existing indexes and materialized views in terms of their physical plan operators. It can also attribute [TopK hints](/transform-data/idiomatic-materialize-sql/top-k/#query-hints-1) to individual operators.
@@ -530,4 +570,4 @@ The [`EXPLAIN ANALYZE`](/sql/explain-analyze/) statement will let you debug memo
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/explain-plan.md" >}}
+{{% include-headless "/headless/sql-command-privileges/explain-plan" %}}

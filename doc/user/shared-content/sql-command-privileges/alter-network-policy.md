@@ -1,1 +1,0 @@
-- Ownership of the network policy.

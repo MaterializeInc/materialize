@@ -25,7 +25,16 @@ use self::prelude::*;
 
 /// Specification of the desired state of the Certificate resource.
 /// https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
-#[derive(CustomResource, Serialize, Deserialize, Clone, Debug, Default, PartialEq, JsonSchema)]
+#[derive(
+    CustomResource,
+    Serialize,
+    Deserialize,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    JsonSchema
+)]
 #[kube(
     group = "cert-manager.io",
     version = "v1",

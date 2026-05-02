@@ -1,3 +1,5 @@
+- test_depends_on: rbac-sm/alter_default_privileges.yml
+
 - name: "all-roles"
   description: |
 
@@ -19,3 +21,5 @@
     serving_index_manager  |
     view_manager           |
     ```
+  test_replacements:
+    blue.berry@example.com: "blue.berry@example.com \"\"\nmaterialize"

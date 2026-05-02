@@ -12,23 +12,23 @@ Testdrive is the basic framework and language for defining product tests under
 the expected-result/actual-result (aka golden testing) paradigm. A query is
 retried until it produces the desired result.
 """
-import glob
-import os
 
-from materialize import MZ_ROOT, ci_util
+import glob
+
+from materialize import MZ_ROOT, buildkite, ci_util
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.fivetran_destination import FivetranDestination
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.metadata_store import (
+    METADATA_STORE,
+    CockroachOrPostgresMetadata,
+)
 from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.mz import Mz
-from materialize.mzcompose.services.postgres import (
-    METADATA_STORE,
-    CockroachOrPostgresMetadata,
-    Postgres,
-)
+from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -109,7 +109,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         default=["*.td"],
         help="run against the specified files",
     )
-    (args, passthrough_args) = parser.parse_known_args()
+    args, passthrough_args = parser.parse_known_args()
 
     dependencies = [
         "fivetran-destination",
@@ -232,7 +232,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 persistent=False,
             )
             # Uploading successful junit files wastes time and contains no useful information
-            os.remove(f"test/testdrive-old-kafka-src-syntax/{junit_report}")
+            if not args.rewrite_results:
+                (
+                    MZ_ROOT / "test" / "testdrive-old-kafka-src-syntax" / junit_report
+                ).unlink(missing_ok=True)
 
         c.test_parts(args.files, process)
         c.sanity_restart_mz()
@@ -288,7 +291,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="run against the specified files",
     )
 
-    (args, _) = parser.parse_known_args()
+    args, _ = parser.parse_known_args()
 
     matching_files = []
     for filter in args.files:
@@ -317,7 +320,9 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
             "privilege_checks.td",
         )
     ]
-    matching_files: list[str] = sorted(matching_files)
+    matching_files: list[str] = buildkite.shard_list(
+        sorted(matching_files), lambda f: f
+    )
 
     dependencies = [
         "fivetran-destination",

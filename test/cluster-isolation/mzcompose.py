@@ -279,8 +279,7 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
             user="mz_system",
         )
 
-        c.sql(
-            """
+        c.sql("""
             DROP CLUSTER IF EXISTS cluster1 CASCADE;
             CREATE CLUSTER cluster1 REPLICAS (replica1 (
                 STORAGECTL ADDRESSES ['clusterd_1_1:2100', 'clusterd_1_2:2100'],
@@ -288,11 +287,9 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
                 COMPUTECTL ADDRESSES ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
                 COMPUTE ADDRESSES ['clusterd_1_1:2102', 'clusterd_1_2:2102']
             ));
-            """
-        )
+            """)
 
-        c.sql(
-            """
+        c.sql("""
             DROP CLUSTER IF EXISTS cluster2 CASCADE;
             CREATE CLUSTER cluster2 REPLICAS (replica1 (
                 STORAGECTL ADDRESSES ['clusterd_2_1:2100', 'clusterd_2_2:2100'],
@@ -300,8 +297,7 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
                 COMPUTECTL ADDRESSES ['clusterd_2_1:2101', 'clusterd_2_2:2101'],
                 COMPUTE ADDRESSES ['clusterd_2_1:2102', 'clusterd_2_2:2102']
             ));
-            """
-        )
+            """)
 
         populate(c)
 

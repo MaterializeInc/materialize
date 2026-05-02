@@ -30,7 +30,7 @@ Together, these concepts form the basis for understanding how Materialize enable
 
 ### Monitoring Freshness
 
-You can monitor data freshness in Materialize by querying wallclock lag measurements from the [`mz_internal.mz_wallclock_global_lag`](/sql/system-catalog/mz_internal/#mz_wallclock_global_lag) system catalog view.
+You can monitor data freshness in Materialize by querying wallclock lag measurements from the [`mz_internal.mz_wallclock_global_lag`](/reference/system-catalog/mz_internal/#mz_wallclock_global_lag) system catalog view.
 Wallclock lag indicates how far behind real-world wall-clock time your data objects are, helping you understand freshness across your materialized views, indexes, and sources.
 
 ```sql

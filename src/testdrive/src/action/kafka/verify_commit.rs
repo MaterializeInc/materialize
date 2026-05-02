@@ -58,8 +58,7 @@ pub async fn run_verify_commit(
                     )
                 },
             )
-            .await
-            .unwrap()?;
+            .await?;
 
             let found_offset = committed_tpl.elements_for_topic(&topic)[0].offset();
             if found_offset != expected_offset {

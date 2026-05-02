@@ -6,8 +6,8 @@ menu:
   main:
     parent: 'create-source'
     identifier: cs_sql-server
-    name: SQL Server
-    weight: 20
+    name: SQL Server (Legacy Syntax)
+    weight: 23
 ---
 
 {{% create-source/intro %}}
@@ -21,21 +21,7 @@ in Materialize that specifies access and authentication parameters.
 
 ## Syntax
 
-{{< diagram "create-source-sql-server.svg" >}}
-
-### `with_options`
-
-{{< diagram "with-options-retain-history.svg" >}}
-
-Field | Use
-------|-----
-_src_name_  | The name for the source.
-**IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists. _Default._
-**IN CLUSTER** _cluster_name_ | The [cluster](/sql/create-cluster) to maintain this source.
-**CONNECTION** _connection_name_ | The name of the SQL Server connection to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#sql-server) documentation page.
-**FOR ALL TABLES** | Create subsources for all tables with CDC enabled in all schemas upstream.
-**FOR TABLES (** _table_list_ **)** | Create subsources for specific tables upstream. Requires fully-qualified table names (`<schema>.<table>`).
-**RETAIN HISTORY FOR** <br>_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
+{{% include-syntax file="examples/create_source_sql_server_legacy" example="syntax" %}}
 
 ## Creating a source
 
@@ -70,11 +56,6 @@ When you define a source, Materialize will automatically:
 1. Incrementally update any materialized or indexed views that depend on the
    source as change events stream in, as a result of `INSERT`, `UPDATE` and
    `DELETE` operations in the upstream SQL Server database.
-
-It's important to note that the schema metadata is captured when the source is
-initially created, and is validated against the upstream schema upon restart.
-If you create new tables upstream after creating a SQL Server source and want to
-replicate them to Materialize, the source must be dropped and recreated.
 
 ##### SQL Server schemas
 
@@ -121,7 +102,7 @@ ingestion progress and debugging related issues, see [Troubleshooting](/ops/trou
 
 ## Known limitations
 
-{{% include-md file="shared-content/sql-server-considerations.md" %}}
+{{% include-headless "/headless/sql-server-considerations" %}}
 
 ## Examples
 
@@ -221,7 +202,7 @@ CREATE SOURCE mz_source
 
 ### Handling errors and schema changes
 
-{{< include-md file="shared-content/schema-changes-in-progress.md" >}}
+{{% include-headless "/headless/schema-changes-in-progress" %}}
 
 To handle upstream [schema changes](#schema-changes) or errored subsources, use
 the [`DROP SOURCE`](/sql/alter-source/#context) syntax to drop the affected

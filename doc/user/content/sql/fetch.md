@@ -10,20 +10,7 @@ menu:
 
 ## Syntax
 
-{{< diagram "fetch.svg" >}}
-
-Field | Use
-------|-----
-_count_ | The number of rows to retrieve. Defaults to `1` if unspecified.
-_cursor&lowbar;name_ | The name of an open cursor.
-
-### `WITH` option
-
-The following option is valid within the `WITH` clause.
-
-Option name | Value type | Default | Describes
-------------|------------|---------|----------
-`timeout`   | `interval` | None    | When fetching from a [`SUBSCRIBE`](/sql/subscribe) cursor, complete if there are no more rows ready after this timeout. The default will cause `FETCH` to wait for at least one row to be available.
+{{% include-syntax file="examples/fetch" example="syntax" %}}
 
 ## Details
 

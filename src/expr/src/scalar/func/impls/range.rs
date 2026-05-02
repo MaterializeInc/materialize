@@ -9,6 +9,7 @@
 
 use std::fmt;
 
+use mz_expr_derive::sqlfunc;
 use mz_lowertest::MzReflect;
 use mz_repr::adt::range::Range;
 use mz_repr::{Datum, RowArena, SqlColumnType, SqlScalarType};
@@ -17,7 +18,18 @@ use serde::{Deserialize, Serialize};
 use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
 use crate::{EvalError, MirScalarExpr};
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastRangeToString {
     pub ty: SqlScalarType,
 }
@@ -38,7 +50,7 @@ impl LazyUnaryFunc for CastRangeToString {
         Ok(Datum::String(temp_storage.push_string(buf)))
     }
 
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         SqlScalarType::String.nullable(input_type.nullable)
     }
 
@@ -62,6 +74,10 @@ impl LazyUnaryFunc for CastRangeToString {
     fn is_monotone(&self) -> bool {
         false
     }
+
+    fn is_eliminable_cast(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for CastRangeToString {
@@ -70,159 +86,49 @@ impl fmt::Display for CastRangeToString {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
-pub struct RangeLower;
+#[sqlfunc(sqlname = "rangelower", is_monotone = true)]
+fn range_lower<T>(a: Range<T>) -> Option<T> {
+    a.inner.map(|inner| inner.lower.bound).flatten()
+}
 
-impl LazyUnaryFunc for RangeLower {
-    fn eval<'a>(
-        &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
-        }
-        let r = a.unwrap_range();
-        Ok(Datum::from(
-            r.inner.map(|inner| inner.lower.bound).flatten(),
-        ))
-    }
+#[sqlfunc(sqlname = "rangeupper")]
+fn range_upper<T>(a: Range<T>) -> Option<T> {
+    a.inner.map(|inner| inner.upper.bound).flatten()
+}
 
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
-        input_type
-            .scalar_type
-            .unwrap_range_element_type()
-            .clone()
-            .nullable(true)
-    }
+#[sqlfunc(sqlname = "range_empty")]
+fn range_empty<T>(a: Range<T>) -> bool {
+    a.inner.is_none()
+}
 
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
-
-    fn introduces_nulls(&self) -> bool {
-        true
-    }
-
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-
-    fn is_monotone(&self) -> bool {
-        true // Ranges are sorted by lower first.
+#[sqlfunc(sqlname = "range_lower_inc")]
+fn range_lower_inc<T>(a: Range<T>) -> bool {
+    match a.inner {
+        None => false,
+        Some(inner) => inner.lower.inclusive,
     }
 }
 
-impl fmt::Display for RangeLower {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("rangelower")
+#[sqlfunc(sqlname = "range_upper_inc")]
+fn range_upper_inc<T>(a: Range<T>) -> bool {
+    match a.inner {
+        None => false,
+        Some(inner) => inner.upper.inclusive,
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
-pub struct RangeUpper;
-
-impl LazyUnaryFunc for RangeUpper {
-    fn eval<'a>(
-        &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
-        }
-        let r = a.unwrap_range();
-        Ok(Datum::from(
-            r.inner.map(|inner| inner.upper.bound).flatten(),
-        ))
-    }
-
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
-        input_type
-            .scalar_type
-            .unwrap_range_element_type()
-            .clone()
-            .nullable(true)
-    }
-
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
-
-    fn introduces_nulls(&self) -> bool {
-        true
-    }
-
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-
-    fn is_monotone(&self) -> bool {
-        false
+#[sqlfunc(sqlname = "range_lower_inf")]
+fn range_lower_inf<T>(a: Range<T>) -> bool {
+    match a.inner {
+        None => false,
+        Some(inner) => inner.lower.bound.is_none(),
     }
 }
 
-impl fmt::Display for RangeUpper {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("rangeupper")
+#[sqlfunc(sqlname = "range_upper_inf")]
+fn range_upper_inf<T>(a: Range<T>) -> bool {
+    match a.inner {
+        None => false,
+        Some(inner) => inner.upper.bound.is_none(),
     }
 }
-
-sqlfunc!(
-    #[sqlname = "range_empty"]
-    fn range_empty(a: Range<Datum<'a>>) -> bool {
-        a.inner.is_none()
-    }
-);
-
-sqlfunc!(
-    #[sqlname = "range_lower_inc"]
-    fn range_lower_inc(a: Range<Datum<'a>>) -> bool {
-        match a.inner {
-            None => false,
-            Some(inner) => inner.lower.inclusive,
-        }
-    }
-);
-
-sqlfunc!(
-    #[sqlname = "range_upper_inc"]
-    fn range_upper_inc(a: Range<Datum<'a>>) -> bool {
-        match a.inner {
-            None => false,
-            Some(inner) => inner.upper.inclusive,
-        }
-    }
-);
-
-sqlfunc!(
-    #[sqlname = "range_lower_inf"]
-    fn range_lower_inf(a: Range<Datum<'a>>) -> bool {
-        match a.inner {
-            None => false,
-            Some(inner) => inner.lower.bound.is_none(),
-        }
-    }
-);
-
-sqlfunc!(
-    #[sqlname = "range_upper_inf"]
-    fn range_upper_inf(a: Range<Datum<'a>>) -> bool {
-        match a.inner {
-            None => false,
-            Some(inner) => inner.upper.bound.is_none(),
-        }
-    }
-);

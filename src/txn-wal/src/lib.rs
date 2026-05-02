@@ -112,6 +112,7 @@
 //! ```
 //! # use std::sync::Arc;
 //! # use mz_ore::metrics::MetricsRegistry;
+//! # use mz_persist_client::critical::Opaque;
 //! # use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 //! # use mz_txn_wal::metrics::Metrics;
 //! # use mz_txn_wal::operator::DataSubscribe;
@@ -127,7 +128,7 @@
 //! // Open a txn shard, initializing it if necessary.
 //! let txns_id = ShardId::new();
 //! let mut txns = TxnsHandle::<String, (), u64, i64>::open(
-//!     0u64, client.clone(), dyncfgs, metrics, txns_id
+//!     0u64, client.clone(), dyncfgs, metrics, txns_id, Opaque::encode(&0u64)
 //! ).await;
 //!
 //! // Register data shards to the txn set.
@@ -217,7 +218,7 @@ use mz_persist_client::write::WriteHandle;
 use mz_persist_types::codec_impls::{ShardIdSchema, VecU8Schema};
 use mz_persist_types::stats::PartStats;
 use mz_persist_types::txn::{TxnsCodec, TxnsEntry};
-use mz_persist_types::{Codec, Codec64, Opaque, StepForward};
+use mz_persist_types::{Codec, Codec64, StepForward};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tracing::{debug, error};
@@ -526,12 +527,11 @@ async fn apply_caa<K, V, T, D>(
 }
 
 #[instrument(level = "debug", fields(shard=%txns_since.shard_id(), ts=?new_since_ts))]
-pub(crate) async fn cads<T, O, C>(
-    txns_since: &mut SinceHandle<C::Key, C::Val, T, i64, O>,
+pub(crate) async fn cads<T, C>(
+    txns_since: &mut SinceHandle<C::Key, C::Val, T, i64>,
     new_since_ts: T,
 ) where
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
-    O: Opaque + Debug + Codec64,
     C: TxnsCodec,
 {
     // Fast-path, don't bother trying to CaDS if we're already past that
@@ -571,13 +571,12 @@ mod tests {
 
     use super::*;
 
-    impl<K, V, T, D, O, C> TxnsHandle<K, V, T, D, O, C>
+    impl<K, V, T, D, C> TxnsHandle<K, V, T, D, C>
     where
         K: Debug + Codec + Clone,
         V: Debug + Codec + Clone,
         T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
         D: Debug + Monoid + Ord + Codec64 + Send + Sync + Clone,
-        O: Opaque + Debug + Codec64,
         C: TxnsCodec,
     {
         /// Returns a new, empty test transaction that can involve the data shards
@@ -617,13 +616,12 @@ mod tests {
             self.txn.write(data_id, key, val, diff).await
         }
 
-        pub(crate) async fn commit_at<O, C>(
+        pub(crate) async fn commit_at<C>(
             &mut self,
-            handle: &mut TxnsHandle<K, V, T, D, O, C>,
+            handle: &mut TxnsHandle<K, V, T, D, C>,
             commit_ts: T,
         ) -> Result<TxnApply<T>, T>
         where
-            O: Opaque + Debug + Codec64,
             C: TxnsCodec,
         {
             self.txn.commit_at(handle, commit_ts).await
@@ -744,7 +742,7 @@ mod tests {
                 TxnsCache::open(&self.client, self.txns_id, Some(data_id)).await;
             let _ = cache.update_gt(&as_of).await;
             let snapshot = cache.data_snapshot(data_id, as_of);
-            let mut data_read = self
+            let mut data_read: ReadHandle<String, (), _, _> = self
                 .client
                 .open_leased_reader(
                     data_id,
@@ -762,10 +760,7 @@ mod tests {
             data_read.expire().await;
             let snapshot: Vec<_> = snapshot
                 .into_iter()
-                .map(|((k, v), t, d)| {
-                    let (k, ()) = (k.unwrap(), v.unwrap());
-                    (k, t, d)
-                })
+                .map(|((k, ()), t, d)| (k, t, d))
                 .collect();
 
             // Check that a subscribe would produce the same result.

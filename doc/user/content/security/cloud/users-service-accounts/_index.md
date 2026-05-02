@@ -21,7 +21,7 @@ resources.
 During creation of a user/service account in Materialize, the account is
 assigned an organization role:
 
-{{< include-md file="shared-content/rbac-cloud/organization-roles.md" >}}
+{{% include-headless "/headless/rbac-cloud/organization-roles" %}}
 
 ## User accounts
 
@@ -29,7 +29,7 @@ As an **Organization admin**, you can [invite new
 users](./invite-users/) via the Materialize Console. When you invite a new user,
 Materialize will email the user with an invitation link.
 
-{{< include-md file="shared-content/rbac-cloud/invite-user-note.md" >}}
+{{% include-headless "/headless/rbac-cloud/invite-user-note" %}}
 
 For instructions on inviting users to your Materialize organization, see [Invite
 users](./invite-users/).
@@ -52,7 +52,7 @@ the [Materialize Console](/console/) or via
 - The new account creation is not finished until the first time you connect with
 the account.
 
-- {{< include-md file="shared-content/rbac-cloud/service-account-creation.md" >}}
+- {{% include-headless "/headless/rbac-cloud/service-account-creation" %}}
 
 {{</ note >}}
 

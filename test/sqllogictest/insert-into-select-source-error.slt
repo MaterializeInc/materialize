@@ -1,0 +1,113 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test: INSERT INTO ... SELECT ... cannot transitively refer to sources.
+# The selection may refer to views/materialized views, but the transitive
+# dependencies must not include sources or source-export tables.
+#
+# Simple (employee, salary, type) example to reproduce the error.
+
+mode cockroach
+
+# Set up a source and a table that depends on it
+statement ok
+CREATE SOURCE emp_src FROM LOAD GENERATOR COUNTER
+
+statement ok
+CREATE TABLE employees_from_src FROM SOURCE emp_src
+
+# View over source-export table (transitively depends on source)
+statement ok
+CREATE VIEW emp_view AS SELECT counter AS salary, 'full_time'::text AS type FROM employees_from_src
+
+# Plain user table (target of INSERT)
+statement ok
+CREATE TABLE salary_exceptions (employee text, salary int, type text)
+
+# INSERT INTO ... SELECT ... from view that transitively refers to source -> error
+simple
+INSERT INTO salary_exceptions (employee, salary, type)
+SELECT 'Alice', salary, type FROM emp_view LIMIT 1
+----
+db error: ERROR: invalid selection: operation may only (transitively) refer to non-source, non-system tables
+DETAIL: source-export table '"materialize.public.employees_from_src"' may not be used in this operation; the selection may refer to views and materialized views, but transitive dependencies must not include sources or source-export tables
+
+# Same error when selecting directly from source-export table
+simple
+INSERT INTO salary_exceptions (employee, salary, type)
+SELECT 'Bob', counter, 'part_time' FROM employees_from_src LIMIT 1
+----
+db error: ERROR: invalid selection: operation may only (transitively) refer to non-source, non-system tables
+DETAIL: source-export table '"materialize.public.employees_from_src"' may not be used in this operation; the selection may refer to views and materialized views, but transitive dependencies must not include sources or source-export tables
+
+# Same error when selecting directly from the source. Use a derived table to
+# alias the single column from emp_src (SELECT * works; column name does not).
+simple
+INSERT INTO salary_exceptions (employee, salary, type)
+SELECT 'Dave', f1::int, 'contractor' FROM (SELECT * FROM emp_src LIMIT 1) AS t(f1)
+----
+db error: ERROR: invalid selection: operation may only (transitively) refer to non-source, non-system tables
+DETAIL: source '"materialize.public.emp_src"' may not be used in this operation; the selection may refer to views and materialized views, but transitive dependencies must not include sources or source-export tables
+
+# Same error: UPDATE with WHERE subquery that transitively refers to source
+simple
+UPDATE salary_exceptions SET type = 'updated' WHERE salary IN (SELECT salary FROM emp_view)
+----
+db error: ERROR: invalid selection: operation may only (transitively) refer to non-source, non-system tables
+DETAIL: source-export table '"materialize.public.employees_from_src"' may not be used in this operation; the selection may refer to views and materialized views, but transitive dependencies must not include sources or source-export tables
+
+# Same error: DELETE with WHERE subquery that transitively refers to source
+simple
+DELETE FROM salary_exceptions WHERE salary IN (SELECT salary FROM emp_view)
+----
+db error: ERROR: invalid selection: operation may only (transitively) refer to non-source, non-system tables
+DETAIL: source-export table '"materialize.public.employees_from_src"' may not be used in this operation; the selection may refer to views and materialized views, but transitive dependencies must not include sources or source-export tables
+
+# Set up a plain old table and do the same thing, it should now work
+# Valid: INSERT INTO ... SELECT ... from plain table only
+statement ok
+CREATE TABLE plain_employees (employee text, salary int, type text)
+
+statement ok
+INSERT INTO plain_employees VALUES ('Carol', 100, 'full_time')
+
+statement ok
+INSERT INTO salary_exceptions (employee, salary, type)
+SELECT employee, salary, type FROM plain_employees
+
+# Set up a basic view over a plain table, and do the same thing (insert)
+# Valid: INSERT INTO ... SELECT ... from view over plain table (no source in chain)
+statement ok
+CREATE VIEW plain_emp_view AS SELECT employee, salary, type FROM plain_employees
+
+statement ok
+INSERT INTO plain_employees VALUES ('Eve', 200, 'part_time')
+
+statement ok
+INSERT INTO salary_exceptions (employee, salary, type)
+SELECT employee, salary, type FROM plain_emp_view WHERE employee = 'Eve'
+
+# Set up a materialized view over a plain table, and do the same thing (insert)
+# Valid: INSERT INTO ... SELECT ... from materialized view over plain table (no source in chain)
+statement ok
+CREATE MATERIALIZED VIEW plain_emp_mv AS SELECT employee, salary, type FROM plain_employees
+
+statement ok
+INSERT INTO plain_employees VALUES ('Frank', 300, 'contractor')
+
+statement ok
+INSERT INTO salary_exceptions (employee, salary, type)
+SELECT employee, salary, type FROM plain_emp_mv WHERE employee = 'Frank'
+
+query TIT rowsort
+SELECT * FROM salary_exceptions
+----
+Carol 100 full_time
+Eve 200 part_time
+Frank 300 contractor

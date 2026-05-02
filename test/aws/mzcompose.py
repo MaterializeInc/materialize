@@ -20,15 +20,20 @@ import json
 import random
 
 import boto3
-from psycopg.errors import SystemError
+from psycopg.errors import InternalError_, SystemError
 
+from materialize.cloudtest.util.common import retry
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.testdrive import Testdrive
 
 AWS_EXTERNAL_ID_PREFIX = "eb5cb59b-e2fe-41f3-87ca-d2176a495345"
+# Use an AWS environment ID so that region checks apply (CloudProvider::Aws)
+AWS_ENVIRONMENT_ID = "aws-us-east-1-00000000-0000-0000-0000-000000000000-0"
 
 SERVICES = [
     Materialized(),
+    Testdrive(),
 ]
 
 
@@ -88,6 +93,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 f"--aws-connection-role-arn={connection_role_arn}",
                 f"--aws-external-id-prefix={AWS_EXTERNAL_ID_PREFIX}",
             ],
+            environment_id=AWS_ENVIRONMENT_ID,
+            system_parameter_defaults={"enable_iceberg_sink": "true"},
         )
         with c.override(materialized):
             # (Re)start Materialize and enable AWS connections.
@@ -98,6 +105,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 user="mz_system",
                 sql="""
                 ALTER SYSTEM SET enable_connection_validation_syntax = true;
+                ALTER SYSTEM SET enable_iceberg_sink = true;
+                ALTER SYSTEM SET enable_s3_tables_region_check = true;
                 """,
             )
 
@@ -105,6 +114,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 test_credentials,
                 test_assume_role,
                 test_s3tablesrest_connection,
+                test_s3tablesrest_region_mismatch,
+                test_iceberg_e2e,
             ]:
                 with c.test_case(fn.__name__):
                     fn(c, ctx)
@@ -120,51 +131,57 @@ def test_credentials(c: Composition, ctx: TestContext):
     access_key_id = access_key["AccessKey"]["AccessKeyId"]
     secret_access_key = access_key["AccessKey"]["SecretAccessKey"]
 
-    # Creating a connection with those credentials should work.
-    c.sql(
-        f"""
-        CREATE SECRET aws_secret_access_key AS '{secret_access_key}';
-        CREATE CONNECTION aws_credentials TO AWS (
-            ACCESS KEY ID = '{access_key_id}',
-            SECRET ACCESS KEY = SECRET aws_secret_access_key
-        );
-    """,
-        print_statement=False,
-    )
-    # Wait for IAM to propagate.
-    c.sleep(ctx.iam_propagation_seconds)
-    c.sql("VALIDATE CONNECTION aws_credentials")
-
-    # Corrupting the secret access key should cause authentication to fail with
-    # an invalid signature error.
-    bad_secret_access_key = codecs.encode(secret_access_key, "rot13")
-    c.sql(
-        f"ALTER SECRET aws_secret_access_key AS '{bad_secret_access_key}'",
-        print_statement=False,
-    )
     try:
+        # Creating a connection with those credentials should work.
+        c.sql(
+            f"""
+            CREATE SECRET aws_secret_access_key AS '{secret_access_key}';
+            CREATE CONNECTION aws_credentials TO AWS (
+                ACCESS KEY ID = '{access_key_id}',
+                SECRET ACCESS KEY = SECRET aws_secret_access_key
+            );
+        """,
+            print_statement=False,
+        )
+        # Wait for IAM to propagate.
+        c.sleep(ctx.iam_propagation_seconds)
         c.sql("VALIDATE CONNECTION aws_credentials")
-    except SystemError as e:
-        assert (
-            e.diag.message_primary and "SignatureDoesNotMatch" in e.diag.message_primary
-        ), e
-    else:
-        raise RuntimeError("connection validation unexpectedly succeeded")
 
-    # Changing the access key to a nonexistent access key should fail with an
-    # invalid client ID error.
-    c.sql(
-        "ALTER CONNECTION aws_credentials SET (ACCESS KEY ID = 'AKIAV2KIV5LP3RAKAZUY')",
-        print_statement=False,
-    )
-    try:
-        c.sql("VALIDATE CONNECTION aws_credentials")
-    except SystemError as e:
-        assert (
-            e.diag.message_primary and "InvalidClientTokenId" in e.diag.message_primary
-        ), e
-    else:
-        raise RuntimeError("connection validation unexpectedly succeeded")
+        # Corrupting the secret access key should cause authentication to fail with
+        # an invalid signature error.
+        bad_secret_access_key = codecs.encode(secret_access_key, "rot13")
+        c.sql(
+            f"ALTER SECRET aws_secret_access_key AS '{bad_secret_access_key}'",
+            print_statement=False,
+        )
+        try:
+            c.sql("VALIDATE CONNECTION aws_credentials")
+        except SystemError as e:
+            assert (
+                e.diag.message_primary
+                and "SignatureDoesNotMatch" in e.diag.message_primary
+            ), e
+        else:
+            raise RuntimeError("connection validation unexpectedly succeeded")
+
+        # Changing the access key to a nonexistent access key should fail with an
+        # invalid client ID error.
+        c.sql(
+            "ALTER CONNECTION aws_credentials SET (ACCESS KEY ID = 'AKIAV2KIV5LP3RAKAZUY')",
+            print_statement=False,
+        )
+        try:
+            c.sql("VALIDATE CONNECTION aws_credentials")
+        except SystemError as e:
+            assert (
+                e.diag.message_primary
+                and "InvalidClientTokenId" in e.diag.message_primary
+            ), e
+        else:
+            raise RuntimeError("connection validation unexpectedly succeeded")
+    finally:
+        ctx.iam.delete_access_key(UserName=customer_user, AccessKeyId=access_key_id)
+        ctx.iam.delete_user(UserName=customer_user)
 
 
 def test_assume_role(c: Composition, ctx: TestContext):
@@ -247,7 +264,7 @@ def test_s3tablesrest_connection(c: Composition, ctx: TestContext):
         customer_role = f"testdrive-{ctx.seed}-Customer"
         customer_role_arn = f"arn:aws:iam::{ctx.account_id}:role/{customer_role}"
         c.sql(
-            f"CREATE CONNECTION aws_assume_role_s3tablesrest TO AWS (ASSUME ROLE ARN '{customer_role_arn}')"
+            f"CREATE CONNECTION aws_assume_role_s3tablesrest TO AWS (ASSUME ROLE ARN '{customer_role_arn}', REGION 'us-east-1')"
         )
         connection_id = c.sql_query(
             "SELECT id FROM mz_connections WHERE name = 'aws_assume_role_s3tablesrest'"
@@ -286,13 +303,225 @@ def test_s3tablesrest_connection(c: Composition, ctx: TestContext):
             PolicyDocument=json.dumps(trust_policy),
         )
 
-        c.sleep(ctx.iam_propagation_seconds)
-
         c.sql(
-            f"CREATE CONNECTION s3tables TO ICEBERG CATALOG (CATALOG TYPE = 's3tablesrest', URL = 'https://s3tables.us-east-1.amazonaws.com/iceberg', WAREHOUSE = '{bucket['arn']}', AWS CONNECTION = aws_assume_role_s3tablesrest)"
+            f"CREATE CONNECTION s3tables TO ICEBERG CATALOG (CATALOG TYPE = 's3tablesrest', URL = 'https://s3tables.us-east-1.amazonaws.com/iceberg', WAREHOUSE = '{bucket['arn']}', AWS CONNECTION = aws_assume_role_s3tablesrest) WITH (VALIDATE = false)"
+        )
+
+        retry(
+            lambda: c.sql("VALIDATE CONNECTION s3tables"),
+            max_attempts=3,
+            exception_types=[SystemError, InternalError_],
+            sleep_secs=ctx.iam_propagation_seconds,
         )
     finally:
         if bucket is not None:
+            ctx.s3tables.delete_table_bucket(tableBucketARN=bucket["arn"])
+        if customer_role is not None:
+            ctx.iam.delete_role_policy(
+                RoleName=customer_role,
+                PolicyName=f"{customer_role}-s3tables-all",
+            )
+            _delete_role(ctx, customer_role)
+
+
+def test_s3tablesrest_region_mismatch(c: Composition, ctx: TestContext):
+    """Test that S3 Tables sinks fail when region doesn't match environment.
+
+    The environment is configured as aws-us-east-1, so attempting to create
+    an Iceberg sink using an S3 Tables connection pointing to us-west-2 should
+    fail with a region mismatch error during sink purification.
+    """
+    bucket = None
+    customer_role = None
+    try:
+        bucket = ctx.s3tables.create_table_bucket(
+            name=f"test-bucket-region-{ctx.seed}",
+        )
+        customer_role = f"testdrive-{ctx.seed}-CustomerRegion"
+        customer_role_arn = f"arn:aws:iam::{ctx.account_id}:role/{customer_role}"
+
+        c.sql(
+            f"CREATE CONNECTION aws_wrong_region TO AWS (ASSUME ROLE ARN '{customer_role_arn}', REGION = 'us-west-2')"
+        )
+        connection_id = c.sql_query(
+            "SELECT id FROM mz_connections WHERE name = 'aws_wrong_region'"
+        )[0][0]
+
+        principal = c.sql_query(
+            f"SELECT principal FROM mz_internal.mz_aws_connections WHERE id = '{connection_id}'"
+        )[0][0]
+
+        _create_role(ctx, customer_role, principal)
+
+        c.sleep(ctx.iam_propagation_seconds)
+
+        ctx.iam.put_role_policy(
+            RoleName=customer_role,
+            PolicyName=f"{customer_role}-s3tables-all",
+            PolicyDocument=json.dumps(
+                {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Action": ["s3tables:*"],
+                            "Resource": "*",
+                        }
+                    ],
+                }
+            ),
+        )
+
+        trust_policy = c.sql_query(
+            f"SELECT example_trust_policy FROM mz_internal.mz_aws_connections WHERE id = '{connection_id}'"
+        )[0][0]
+        ctx.iam.update_assume_role_policy(
+            RoleName=customer_role,
+            PolicyDocument=json.dumps(trust_policy),
+        )
+
+        c.sleep(ctx.iam_propagation_seconds)
+
+        # Create the ICEBERG CATALOG connection with VALIDATE = false to skip
+        # connection-time validation (which would fail at AWS level). We want
+        # to test that sink purification catches the region mismatch.
+        c.sql(
+            f"CREATE CONNECTION s3tables_wrong_region TO ICEBERG CATALOG (CATALOG TYPE = 's3tablesrest', URL = 'https://s3tables.us-west-2.amazonaws.com/iceberg', WAREHOUSE = '{bucket['arn']}', AWS CONNECTION = aws_wrong_region) WITH (VALIDATE = false)"
+        )
+
+        c.sql("CREATE TABLE sink_test_table (id INT, value TEXT)")
+        c.sql("INSERT INTO sink_test_table VALUES (1, 'test')")
+
+        # This should fail because the AWS connection is configured for us-west-2
+        # but the environment is running in us-east-1. The region check happens
+        # during sink purification.
+        try:
+            c.sql("""CREATE SINK s3tables_sink
+                    FROM sink_test_table
+                    INTO ICEBERG CATALOG CONNECTION s3tables_wrong_region (
+                        NAMESPACE 'test_namespace',
+                        TABLE 'test_table'
+                    )
+                    USING AWS CONNECTION aws_wrong_region""")
+            raise AssertionError(
+                "Expected S3 Tables sink to fail due to region mismatch"
+            )
+        except InternalError_ as e:
+            assert e.diag.message_primary is not None
+            assert (
+                "region mismatch" in e.diag.message_primary.lower()
+            ), f"Expected 'region mismatch' error but got: {e.diag.message_primary}"
+    finally:
+        if bucket is not None:
+            ctx.s3tables.delete_table_bucket(tableBucketARN=bucket["arn"])
+        if customer_role is not None:
+            try:
+                ctx.iam.delete_role_policy(
+                    RoleName=customer_role,
+                    PolicyName=f"{customer_role}-s3tables-all",
+                )
+            except Exception:
+                pass
+            _delete_role(ctx, customer_role)
+
+
+def test_iceberg_e2e(c: Composition, ctx: TestContext):
+    bucket = None
+    customer_role = None
+    try:
+        bucket = ctx.s3tables.create_table_bucket(
+            name=f"test-bucket-{ctx.seed}-e2e",
+        )
+        ctx.s3tables.create_namespace(
+            tableBucketARN=bucket["arn"], namespace=["default_namespace"]
+        )
+        customer_role = f"testdrive-{ctx.seed}-Customer"
+        customer_role_arn = f"arn:aws:iam::{ctx.account_id}:role/{customer_role}"
+        c.sql(
+            f"CREATE CONNECTION aws_assume_role_s3tablesrest_e2e TO AWS (ASSUME ROLE ARN '{customer_role_arn}', REGION 'us-east-1')"
+        )
+        connection_id = c.sql_query(
+            "SELECT id FROM mz_connections WHERE name = 'aws_assume_role_s3tablesrest_e2e'"
+        )[0][0]
+
+        principal = c.sql_query(
+            f"SELECT principal FROM mz_internal.mz_aws_connections WHERE id = '{connection_id}'"
+        )[0][0]
+
+        _create_role(ctx, customer_role, principal)
+
+        c.sleep(ctx.iam_propagation_seconds)
+
+        ctx.iam.put_role_policy(
+            RoleName=customer_role,
+            PolicyName=f"{customer_role}-s3tables-all",
+            PolicyDocument=json.dumps(
+                {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Action": ["s3tables:*", "s3:*"],
+                            "Resource": "*",
+                        }
+                    ],
+                }
+            ),
+        )
+
+        trust_policy = c.sql_query(
+            f"SELECT example_trust_policy FROM mz_internal.mz_aws_connections WHERE id = '{connection_id}'"
+        )[0][0]
+
+        # Add the test runner's principal to the trust policy so we can assume
+        # the role to get credentials for duckdb.
+        trust_policy["Statement"].append(
+            {
+                "Effect": "Allow",
+                "Principal": {"AWS": ctx.materialized_principal},
+                "Action": "sts:AssumeRole",
+            }
+        )
+
+        ctx.iam.update_assume_role_policy(
+            RoleName=customer_role,
+            PolicyDocument=json.dumps(trust_policy),
+        )
+        c.sleep(ctx.iam_propagation_seconds)
+
+        # Assume the customer role to get temporary credentials for duckdb to
+        # query the iceberg table directly.
+        assumed_role = ctx.sts.assume_role(
+            RoleArn=customer_role_arn,
+            RoleSessionName="testdrive-duckdb",
+        )
+        aws_access_key_id = assumed_role["Credentials"]["AccessKeyId"]
+        aws_secret_access_key = assumed_role["Credentials"]["SecretAccessKey"]
+        aws_session_token = assumed_role["Credentials"]["SessionToken"]
+
+        c.run_testdrive_files(
+            "--no-reset",
+            f"--var=warehouse-arn={bucket['arn']}",
+            f"--var=role-arn={customer_role_arn}",
+            f"--var=aws-access-key-id={aws_access_key_id}",
+            f"--var=aws-secret-access-key={aws_secret_access_key}",
+            f"--var=aws-session-token={aws_session_token}",
+            "aws-iceberg-e2e.td",
+        )
+    finally:
+        if bucket is not None:
+            try:
+                ctx.s3tables.delete_table(
+                    tableBucketARN=bucket["arn"],
+                    namespace="default_namespace",
+                    name="demo_table",
+                )
+            except Exception:
+                # We might not have created the table.
+                pass
+            ctx.s3tables.delete_namespace(
+                tableBucketARN=bucket["arn"], namespace="default_namespace"
+            )
             ctx.s3tables.delete_table_bucket(tableBucketARN=bucket["arn"])
         if customer_role is not None:
             ctx.iam.delete_role_policy(

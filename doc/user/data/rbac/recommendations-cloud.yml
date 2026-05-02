@@ -7,17 +7,17 @@
 - recommendation: "Restrict the assignment of **Organization Admin** role"
   description: |
 
-    {{< include-md file="shared-content/rbac-cloud/org-admin-recommendation.md" >}}
+    {{% include-headless "/headless/rbac-cloud/org-admin-recommendation" %}}
 
 - recommendation: "Restrict the granting of `CREATEROLE` privilege"
   description: |
 
-    {{< include-md file="shared-content/rbac-cloud/createrole-consideration.md" >}}
+    {{% include-headless "/headless/rbac-cloud/createrole-consideration" %}}
 
 - recommendation: "Use Reusable Roles for Privilege Assignment"
   description: |
 
-    {{< include-md file="shared-content/rbac-cloud/use-resusable-roles.md" >}}
+    {{% include-headless "/headless/rbac-cloud/use-resusable-roles" %}}
 
     See also [Manage database roles](/security/access-control/manage-roles/).
 
@@ -25,7 +25,7 @@
 
   description: |
 
-    {{< include-md file="shared-content/rbac-cloud/audit-remove-roles.md" >}}
+    {{% include-headless "/headless/rbac-cloud/audit-remove-roles" %}}
 
     See also [Show roles in
     system](/security/cloud/access-control/manage-roles/#show-roles-in-system) and [Drop

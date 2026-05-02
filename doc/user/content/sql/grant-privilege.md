@@ -92,7 +92,7 @@ TO <role_name> [, ... ];
 {{< tab "Materialized view/view/source">}}
 
 {{< note >}}
-{{< include-md file="shared-content/rbac-cloud/privilege-for-views-mat-views.md" >}}
+{{% include-headless "/headless/rbac-cloud/privilege-for-views-mat-views" %}}
 {{</ note >}}
 
 For specific materialized view(s)/view(s)/source(s):
@@ -134,7 +134,7 @@ TO <role_name> [, ... ];
 For specific secret(s):
 
 ```mzsql
-GRANT <USAGE | CREATE | ALL [PRIVILEGES]> [, ... ]
+GRANT <USAGE | ALL [PRIVILEGES]> [, ... ]
 ON SECRET <name> [, ...]
 TO <role_name> [, ... ];
 ```
@@ -142,7 +142,7 @@ TO <role_name> [, ... ];
 For all secrets or all secrets in a specific database(s):
 
 ```mzsql
-GRANT <USAGE | CREATE | ALL [PRIVILEGES]> [, ... ]
+GRANT <USAGE | ALL [PRIVILEGES]> [, ... ]
 ON ALL SECRET [IN DATABASE <name> [, <name> ...]]
 TO <role_name> [, ... ];
 ```
@@ -200,7 +200,7 @@ For all tables or all tables in a specific schema(s) or in a specific database(s
 
 {{< note >}}
 
-{{< include-md file="shared-content/rbac-cloud/grant-privilege-all-tables.md" >}}
+{{% include-headless "/headless/rbac-cloud/grant-privilege-all-tables" %}}
 
 {{</ note >}}
 
@@ -232,8 +232,7 @@ TO <role_name> [, ... ];
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/grant-privilege.md"
->}}
+{{% include-headless "/headless/sql-command-privileges/grant-privilege" %}}
 
 ## Examples
 
@@ -255,18 +254,18 @@ GRANT CREATEDB ON SYSTEM TO source_owners;
 
 ## Useful views
 
-- [`mz_internal.mz_show_system_privileges`](/sql/system-catalog/mz_internal/#mz_show_system_privileges)
-- [`mz_internal.mz_show_my_system_privileges`](/sql/system-catalog/mz_internal/#mz_show_my_system_privileges)
-- [`mz_internal.mz_show_cluster_privileges`](/sql/system-catalog/mz_internal/#mz_show_cluster_privileges)
-- [`mz_internal.mz_show_my_cluster_privileges`](/sql/system-catalog/mz_internal/#mz_show_my_cluster_privileges)
-- [`mz_internal.mz_show_database_privileges`](/sql/system-catalog/mz_internal/#mz_show_database_privileges)
-- [`mz_internal.mz_show_my_database_privileges`](/sql/system-catalog/mz_internal/#mz_show_my_database_privileges)
-- [`mz_internal.mz_show_schema_privileges`](/sql/system-catalog/mz_internal/#mz_show_schema_privileges)
-- [`mz_internal.mz_show_my_schema_privileges`](/sql/system-catalog/mz_internal/#mz_show_my_schema_privileges)
-- [`mz_internal.mz_show_object_privileges`](/sql/system-catalog/mz_internal/#mz_show_object_privileges)
-- [`mz_internal.mz_show_my_object_privileges`](/sql/system-catalog/mz_internal/#mz_show_my_object_privileges)
-- [`mz_internal.mz_show_all_privileges`](/sql/system-catalog/mz_internal/#mz_show_all_privileges)
-- [`mz_internal.mz_show_all_my_privileges`](/sql/system-catalog/mz_internal/#mz_show_all_my_privileges)
+- [`mz_internal.mz_show_system_privileges`](/reference/system-catalog/mz_internal/#mz_show_system_privileges)
+- [`mz_internal.mz_show_my_system_privileges`](/reference/system-catalog/mz_internal/#mz_show_my_system_privileges)
+- [`mz_internal.mz_show_cluster_privileges`](/reference/system-catalog/mz_internal/#mz_show_cluster_privileges)
+- [`mz_internal.mz_show_my_cluster_privileges`](/reference/system-catalog/mz_internal/#mz_show_my_cluster_privileges)
+- [`mz_internal.mz_show_database_privileges`](/reference/system-catalog/mz_internal/#mz_show_database_privileges)
+- [`mz_internal.mz_show_my_database_privileges`](/reference/system-catalog/mz_internal/#mz_show_my_database_privileges)
+- [`mz_internal.mz_show_schema_privileges`](/reference/system-catalog/mz_internal/#mz_show_schema_privileges)
+- [`mz_internal.mz_show_my_schema_privileges`](/reference/system-catalog/mz_internal/#mz_show_my_schema_privileges)
+- [`mz_internal.mz_show_object_privileges`](/reference/system-catalog/mz_internal/#mz_show_object_privileges)
+- [`mz_internal.mz_show_my_object_privileges`](/reference/system-catalog/mz_internal/#mz_show_my_object_privileges)
+- [`mz_internal.mz_show_all_privileges`](/reference/system-catalog/mz_internal/#mz_show_all_privileges)
+- [`mz_internal.mz_show_all_my_privileges`](/reference/system-catalog/mz_internal/#mz_show_all_my_privileges)
 
 ## Related pages
 
@@ -277,6 +276,6 @@ GRANT CREATEDB ON SYSTEM TO source_owners;
 - [`DROP USER`](../drop-user)
 - [`GRANT ROLE`](../grant-role)
 - [`REVOKE ROLE`](../revoke-role)
-- [`ALTER OWNER`](../alter-owner)
+- [`ALTER OWNER`](/sql/#rbac)
 - [`REVOKE PRIVILEGE`](../revoke-privilege)
 - [`ALTER DEFAULT PRIVILEGES`](../alter-default-privileges)

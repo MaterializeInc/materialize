@@ -47,7 +47,7 @@ Factors that contribute to compute usage include:
 |-------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | [Replication factor for a cluster](/sql/create-cluster/#replication-factor). |  Each replica of the cluster provisions a new pool of compute resources to perform exactly the same computations on exactly the same data.|
 | [Indexes](/concepts/indexes/) and [materialized views](/concepts/views) | As data changes (insert/update/delete), [indexes](/concepts/indexes/) and [materialized views](/concepts/views) perform incremental updates to provide up-to-date results. |
-| [Sources](/concepts/sources/) |• Sources that use upsert logic (i.e., [`ENVELOPE UPSERT`](/sql/create-sink/kafka/#upsert) or [`ENVELOPE DEBEZIUM` Kafka sources](/sql/create-sink/kafka/#debezium)) can lead to high memory and disk utilization.<br>• Other sources consume a negligible amount of resources in steady state. |
+| [Sources](/concepts/sources/) |• Sources that use upsert logic (i.e., [`ENVELOPE UPSERT`](/sql/create-sink/kafka/) or [`ENVELOPE DEBEZIUM` Kafka sources](/sql/create-sink/kafka/)) can lead to high memory and disk utilization.<br>• Other sources consume a negligible amount of resources in steady state. |
 | [`SELECT`s](/sql/select/) and [`SUBSCRIBE`s](/sql/subscribe/)  |• [`SELECT`s](/sql/select/) and [`SUBSCRIBE`s](/sql/subscribe/) that do not use indexes and materialized views perform work. <br>• [`SELECT`s](/sql/select/) and [`SUBSCRIBE`s](/sql/subscribe/) that use indexes and materialized views are computationally **free**.|
 | [Sinks](/concepts/sinks/) | Only small CPU/memory costs.|
 
@@ -58,6 +58,6 @@ datasets plus the size of any materialized views, with some overhead from
 uncompacted data and system metrics.
 
 Most data in Materialize is continually compacted, with the exception of
-[append-only sources](/sql/create-source/#append-only-envelope). As such, the
+[append-only sources](/sql/create-source/kafka/#append-only-envelope). As such, the
 total state stored in Materialize tends to grow at a rate that is more similar
 to OLTP databases than cloud data warehouses.

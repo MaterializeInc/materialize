@@ -72,9 +72,15 @@ NO_COLOR=1 bin/ci-builder run stable --detach --name "kail" kail --context "$K8S
 TEST_CMD="bin/pytest ${run_args[*]}"
 
 ci_uncollapsed_heading "cloudtest: Running \`$TEST_CMD\`"
-TEST_RESULT=0
 
 cleanup() {
+  # Keep running, even on failures
+  set +e
+  # Don't run the cleanup function twice
+  trap - EXIT
+  # Keep running cleanup, even if we get cancelled
+  trap '' SIGTERM SIGINT
+
   echo "--- Post command steps"
   # Buildkite exposes no way to check if a test timed out (and wasn't cancelled manually), so we have to calculate it ourselves
   START_TIME=$(date -d "$STEP_START_TIMESTAMP" +%s)
@@ -88,17 +94,18 @@ cleanup() {
       ci_uncollapsed_heading "cloudtest: Fetching binaries for coverage"
       mkdir -p coverage/
       chmod 777 coverage/
-      kubectl cp environmentd-0:/usr/local/bin/environmentd coverage/environmentd || true
-      kubectl cp environmentd-0:/coverage coverage/ || true
+      kubectl cp environmentd-0:/usr/local/bin/environmentd coverage/environmentd
+      kubectl cp environmentd-0:/coverage coverage/
       for pod in $(kubectl get pods -o name | grep -E 'cluster-'); do
-        kubectl cp "$pod":/coverage coverage/ || true # Could get deleted
-        kubectl cp "$pod":/usr/local/bin/clusterd coverage/clusterd || true
+        kubectl cp "$pod":/coverage coverage/ # Could get deleted
+        kubectl cp "$pod":/usr/local/bin/clusterd coverage/clusterd
       done
 
       ci_unimportant_heading "cloudtest: Generate coverage information"
       if [ -n "$(find . -name '*.profraw')" ]; then
-          find . -name '*.profraw' -exec bin/ci-builder run stable rust-profdata merge -sparse -o coverage/"$BUILDKITE_JOB_ID".profdata {} +
-          find . -name '*.profraw' -delete
+          rm -f coverage/"$BUILDKITE_JOB_ID".profdata
+          rm -f coverage/"$BUILDKITE_JOB_ID"-*.lcov || true
+          bin/ci-builder run stable bin/ci-validate-profraws coverage/"$BUILDKITE_JOB_ID".profdata
 
           ARGS=()
           for program in clusterd environmentd; do
@@ -107,10 +114,8 @@ cleanup() {
                 ARGS+=("-a" coverage/"$BUILDKITE_JOB_ID"-"$program".lcov)
               fi
           done
-          rm coverage/"$BUILDKITE_JOB_ID".profdata
           if [ "${#ARGS[@]}" != 0 ]; then
             bin/ci-builder run stable lcov "${ARGS[@]}" -o coverage/"$BUILDKITE_JOB_ID".lcov
-            rm coverage/"$BUILDKITE_JOB_ID"-*.lcov
             bin/ci-builder run stable zstd coverage/"$BUILDKITE_JOB_ID".lcov
             buildkite-agent artifact upload coverage/"$BUILDKITE_JOB_ID".lcov.zst
             rm -rf coverage
@@ -127,11 +132,11 @@ cleanup() {
 
   ci_unimportant_heading "cloudtest: Uploading logs..."
   for pod in $(kubectl get pods -o name | grep -v -E 'kubernetes|minio|cockroach|redpanda'); do
-    kubectl logs --prefix=true "$pod" &>> kubectl-get-logs.log || true
-    kubectl logs --previous --prefix=true "$pod" &>> kubectl-get-logs-previous.log || true
+    kubectl logs --prefix=true "$pod" &>> kubectl-get-logs.log
+    kubectl logs --previous --prefix=true "$pod" &>> kubectl-get-logs-previous.log
   done
-  kubectl get events > kubectl-get-events.log || true
-  kubectl get all > kubectl-get-all.log || true
+  kubectl get events > kubectl-get-events.log
+  kubectl get all > kubectl-get-all.log
   kubectl describe all | awk '
     BEGIN { redact=0 }
     /^[[:space:]]*Environment:/ {
@@ -149,12 +154,12 @@ cleanup() {
       }
     }
     { print }
-  ' > kubectl-describe-all.log || true
-  kubectl get pods -o wide > kubectl-pods-with-nodes.log || true
+  ' > kubectl-describe-all.log
+  kubectl get pods -o wide > kubectl-pods-with-nodes.log
 
-  kubectl -n kube-system get events > kubectl-get-events-kube-system.log || true
-  kubectl -n kube-system get all > kubectl-get-all-kube-system.log || true
-  kubectl -n kube-system describe all > kubectl-describe-all-kube-system.log || true
+  kubectl -n kube-system get events > kubectl-get-events-kube-system.log
+  kubectl -n kube-system get all > kubectl-get-all-kube-system.log
+  kubectl -n kube-system describe all > kubectl-describe-all-kube-system.log
 
   # shellcheck disable=SC2024
   sudo journalctl --merge --since "$STEP_START_TIMESTAMP" > journalctl-merge.log
@@ -185,15 +190,22 @@ cleanup() {
   sudo systemctl restart docker
   docker ps --all --quiet | xargs --no-run-if-empty docker rm --force --volumes
 
-  # Don't run the cleanup function twice
-  trap - EXIT SIGTERM SIGINT
   exit "$CI_ANNOTATE_ERRORS_RESULT"
 }
 
 trap cleanup EXIT SIGTERM SIGINT
 
+# When cancelled, always count as failed!
+TEST_RESULT=1
 # sed command to filter out ANSI command codes in run.log, while keeping them in Buildkite's view
-{ stdbuf --output=L --error=L bin/ci-builder run stable bin/pytest "${run_args[@]}" |& tee >(sed -r "s/\x1B\[[0-9;]*[A-Za-z]//g" > run.log); } || TEST_RESULT=$?
+{
+  set -o pipefail
+  stdbuf --output=L --error=L bin/ci-builder run stable bin/pytest "${run_args[@]}" |& tee >(sed -r "s/\x1B\[[0-9;]*[A-Za-z]//g" > run.log);
+} &
+pid=$!
+
+wait "$pid"
+TEST_RESULT=$?
 if [ "$TEST_RESULT" != "0" ]; then
     # Give the logs some time to log panics, otherwise they might be missing later
     sleep 10

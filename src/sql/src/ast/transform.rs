@@ -202,8 +202,17 @@ pub fn create_stmt_rename_refs(
         Statement::CreateView(CreateViewStatement {
             definition: ViewDefinition { query, .. },
             ..
-        })
-        | Statement::CreateMaterializedView(CreateMaterializedViewStatement { query, .. }) => {
+        }) => {
+            rewrite_query(from_name, to_item_name, query)?;
+        }
+        Statement::CreateMaterializedView(CreateMaterializedViewStatement {
+            replacement_for,
+            query,
+            ..
+        }) => {
+            if let Some(target) = replacement_for {
+                maybe_update_item_name(target.name_mut());
+            }
             rewrite_query(from_name, to_item_name, query)?;
         }
         Statement::CreateSource(_)
@@ -481,7 +490,7 @@ impl<'ast> VisitMut<'ast, Raw> for CreateSqlIdReplacer<'_> {
             RawItemName::Id(id, _, _) => {
                 let old_id = match id.parse() {
                     Ok(old_id) => old_id,
-                    Err(_) => panic!("invalid persisted global id {id}"),
+                    Err(e) => panic!("invalid persisted global id {id}: {e}"),
                 };
                 if let Some(new_id) = self.ids.get(&old_id) {
                     *id = new_id.to_string();

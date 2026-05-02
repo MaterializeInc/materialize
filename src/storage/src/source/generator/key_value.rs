@@ -21,32 +21,32 @@ use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::load_generator::{KeyValueLoadGenerator, LoadGeneratorOutput};
 use mz_storage_types::sources::{MzOffset, SourceTimestamp};
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
-use mz_timely_util::containers::stack::AccountedStackBuilder;
-use rand::rngs::StdRng;
-use rand::{RngCore, SeedableRng};
+use mz_timely_util::containers::stack::FueledBuilder;
+use rand_8::rngs::StdRng;
+use rand_8::{RngCore, SeedableRng};
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::operators::ToStream;
 use timely::dataflow::operators::core::Partition;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::operators::vec::ToStream;
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::{Antichain, Timestamp};
 use tracing::info;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::source::types::{SignaledFuture, StackedCollection};
+use crate::source::types::{FuelSize, SignaledFuture, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage};
 
-pub fn render<G: Scope<Timestamp = MzOffset>>(
+pub fn render<'scope>(
     key_value: KeyValueLoadGenerator,
-    scope: &mut G,
+    scope: Scope<'scope, MzOffset>,
     config: RawSourceCreationConfig,
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
     start_signal: impl std::future::Future<Output = ()> + 'static,
     output_map: BTreeMap<LoadGeneratorOutput, Vec<usize>>,
     idx_to_exportid: BTreeMap<usize, GlobalId>,
 ) -> (
-    BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-    Stream<G, Infallible>,
-    Stream<G, HealthStatusMessage>,
+    BTreeMap<GlobalId, StackedCollection<'scope, MzOffset, Result<SourceMessage, DataflowError>>>,
+    StreamVec<'scope, MzOffset, Infallible>,
+    StreamVec<'scope, MzOffset, HealthStatusMessage>,
     Vec<PressOnDropButton>,
 ) {
     // known and comitted offsets are recorded in the stats operator
@@ -55,18 +55,26 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
 
     let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
-    let (data_output, stream) = builder.new_output::<AccountedStackBuilder<_>>();
+    let (data_output, stream) = builder.new_output::<FueledBuilder<
+        CapacityContainerBuilder<
+            Vec<(
+                (usize, Result<SourceMessage, DataflowError>),
+                MzOffset,
+                Diff,
+            )>,
+        >,
+    >>();
     let export_ids: Vec<_> = config.source_exports.keys().copied().collect();
     let partition_count = u64::cast_from(export_ids.len());
     let data_streams: Vec<_> = stream.partition::<CapacityContainerBuilder<_>, _, _>(
         partition_count,
-        |((output, data), time, diff): &(
+        |((output, data), time, diff): (
             (usize, Result<SourceMessage, DataflowError>),
             MzOffset,
             Diff,
         )| {
-            let output = u64::cast_from(*output);
-            (output, (data.clone(), time.clone(), diff.clone()))
+            let output = u64::cast_from(output);
+            (output, (data, time, diff))
         },
     );
     let mut data_collections = BTreeMap::new();
@@ -195,7 +203,8 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
                     for sp in local_partitions.iter_mut() {
                         let mut emitted_all_exports = 0;
                         for u in sp.produce_batch(&mut value_buffer, &output_indexes) {
-                            data_output.give_fueled(&cap, u).await;
+                            let size = u.fuel_size();
+                            data_output.give_fueled(&cap, u, size).await;
                             emitted_all_exports += 1;
                         }
                         // emitted_all_indexes is going to be some multiple of num_outputs;
@@ -242,7 +251,8 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
                             up.produce_batch(&mut value_buffer, &output_indexes);
                         upper_offset = new_upper;
                         for u in iter {
-                            data_output.give_fueled(&cap, u).await;
+                            let size = u.fuel_size();
+                            data_output.give_fueled(&cap, u, size).await;
                         }
                     }
                     cap.downgrade(&MzOffset::from(upper_offset));
@@ -543,8 +553,8 @@ impl UpdateProducer {
     }
 }
 
-pub fn render_statistics_operator<G: Scope<Timestamp = MzOffset>>(
-    scope: &G,
+pub fn render_statistics_operator<'scope>(
+    scope: Scope<'scope, MzOffset>,
     config: &RawSourceCreationConfig,
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
 ) -> PressOnDropButton {

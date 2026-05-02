@@ -12,11 +12,15 @@ MZFROM ubuntu-base
 RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -y install --no-install-recommends postgresql-client && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Install the Protobuf compiler from protobuf-src.
-COPY testdrive protobuf-bin /usr/local/bin/
+COPY protobuf-bin /usr/local/bin/
 COPY protobuf-include /usr/local/include
 RUN chmod +x /usr/local/bin/protoc
 ENV PROTOC /usr/local/bin/protoc
 ENV PROTOC_INCLUDE /usr/local/include
+# Install libduckdb.so that was downloaded
+COPY duckdb-download/*/*/libduckdb.so /usr/local/lib/
+RUN ldconfig
+ENV LD_LIBRARY_PATH=/usr/local/lib
 
 WORKDIR /workdir
 
@@ -25,3 +29,6 @@ RUN mkdir -p /mzdata && chmod 777 /mzdata
 
 VOLUME /share/tmp
 VOLUME /mzdata
+
+# Install testdrive binary last since it changes most frequently.
+COPY testdrive /usr/local/bin/

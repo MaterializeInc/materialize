@@ -41,49 +41,99 @@ class GitHubIssueWithInvalidRegexp(ObservedBaseError, WithIssue):
         return f"Invalid regex in ci-regexp: {self.regex_pattern}"
 
     def to_markdown(self) -> str:
-        return f'<a href="{self.issue_url}">{self.issue_title} (#{self.issue_number})</a>: Invalid regex in ci-regexp: {self.regex_pattern}, ignoring'
+        issue_ref = (
+            self.issue_number
+            if isinstance(self.issue_number, str)
+            else f"#{self.issue_number}"
+        )
+        return f'<a href="{self.issue_url}">{self.issue_title} ({issue_ref})</a>: Invalid regex in ci-regexp: {self.regex_pattern}, ignoring'
 
 
-def get_known_issues_from_github_page(
-    token: str | None, repo: str, page: int = 1
-) -> Any:
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
+def _search_issues_graphql(token: str, repo: str) -> list[dict[str, Any]]:
+    query = """
+    query($searchQuery: String!, $cursor: String) {
+      search(query: $searchQuery, type: ISSUE, first: 100, after: $cursor) {
+        issueCount
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          ... on Issue {
+            number
+            title
+            body
+            url
+            state
+            repository {
+              nameWithOwner
+            }
+          }
+        }
+      }
     }
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
+    """
 
-    response = requests.get(
-        f'https://api.github.com/search/issues?q=repo:{repo}%20type:issue%20in:body%20"ci-regexp%3A"&per_page=100&page={page}',
-        headers=headers,
-    )
+    search_query = f'repo:{repo} type:issue in:body "ci-regexp:"'
+    all_issues: list[dict[str, Any]] = []
+    cursor = None
 
-    if response.status_code != 200:
-        raise ValueError(f"Bad return code from GitHub: {response.status_code}")
+    while True:
+        variables: dict[str, Any] = {"searchQuery": search_query}
+        if cursor:
+            variables["cursor"] = cursor
 
-    issues_json = response.json()
-    assert issues_json["incomplete_results"] == False
-    return issues_json
+        response = requests.post(
+            "https://api.github.com/graphql",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            json={"query": query, "variables": variables},
+        )
+
+        if response.status_code != 200:
+            rate_limit = response.headers.get("X-RateLimit-Remaining", "unknown")
+            rate_limit_reset = response.headers.get("X-RateLimit-Reset", "unknown")
+            raise ValueError(
+                f"Bad return code from GitHub GraphQL: {response.status_code}, "
+                f"rate_limit_remaining={rate_limit}, "
+                f"rate_limit_reset={rate_limit_reset}, "
+                f"response={response.text[:500]}, "
+                f"has_token=True"
+            )
+
+        result = response.json()
+        if "errors" in result:
+            raise ValueError(f"GitHub GraphQL errors: {result['errors']}")
+
+        search_data = result["data"]["search"]
+        for node in search_data["nodes"]:
+            if node is None:
+                continue
+            all_issues.append(node)
+
+        if not search_data["pageInfo"]["hasNextPage"]:
+            break
+        cursor = search_data["pageInfo"]["endCursor"]
+
+    return all_issues
 
 
 def get_known_issues_from_github(
     token: str | None = os.getenv("GITHUB_TOKEN"),
     repo: str = "MaterializeInc/database-issues",
 ) -> tuple[list[KnownGitHubIssue], list[GitHubIssueWithInvalidRegexp]]:
-    page = 1
-    issues_json = get_known_issues_from_github_page(token, repo, page)
-    while issues_json["total_count"] > len(issues_json["items"]):
-        page += 1
-        next_page_json = get_known_issues_from_github_page(token, repo, page)
-        if not next_page_json["items"]:
-            break
-        issues_json["items"].extend(next_page_json["items"])
+    if not token:
+        raise ValueError(
+            "No GitHub token provided. Set GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN or GITHUB_TOKEN."
+        )
+    issues = _search_issues_graphql(token, repo)
 
     known_issues = []
     issues_with_invalid_regex = []
 
-    for issue in issues_json["items"]:
+    for issue in issues:
         matches = CI_RE.findall(issue["body"])
         matches_apply_to = CI_APPLY_TO.findall(issue["body"])
         matches_location = CI_LOCATION.findall(issue["body"])
@@ -93,7 +143,7 @@ def get_known_issues_from_github(
             issues_with_invalid_regex.append(
                 GitHubIssueWithInvalidRegexp(
                     internal_error_type="GITHUB_INVALID_REGEXP",
-                    issue_url=issue["html_url"],
+                    issue_url=issue["url"],
                     issue_title=issue["title"],
                     issue_number=issue["number"],
                     regex_pattern=f"Multiple regexes, but only one supported: {[match.strip() for match in matches]}",
@@ -105,7 +155,7 @@ def get_known_issues_from_github(
             issues_with_invalid_regex.append(
                 GitHubIssueWithInvalidRegexp(
                     internal_error_type="GITHUB_INVALID_IGNORE_FAILURE",
-                    issue_url=issue["html_url"],
+                    issue_url=issue["url"],
                     issue_title=issue["title"],
                     issue_number=issue["number"],
                     regex_pattern=f"Multiple ci-ignore-failures, but only one supported: {[match.strip() for match in matches_ignore_failure]}",
@@ -120,7 +170,7 @@ def get_known_issues_from_github(
             issues_with_invalid_regex.append(
                 GitHubIssueWithInvalidRegexp(
                     internal_error_type="GITHUB_INVALID_IGNORE_FAILURE",
-                    issue_url=issue["html_url"],
+                    issue_url=issue["url"],
                     issue_title=issue["title"],
                     issue_number=issue["number"],
                     regex_pattern=f"Multiple ci-locations, but only one supported: {[match.strip() for match in matches_location]}",
@@ -142,7 +192,7 @@ def get_known_issues_from_github(
             issues_with_invalid_regex.append(
                 GitHubIssueWithInvalidRegexp(
                     internal_error_type="GITHUB_INVALID_REGEXP",
-                    issue_url=issue["html_url"],
+                    issue_url=issue["url"],
                     issue_title=issue["title"],
                     issue_number=issue["number"],
                     regex_pattern=matches[0].strip(),

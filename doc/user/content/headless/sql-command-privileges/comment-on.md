@@ -1,0 +1,5 @@
+---
+headless: true
+---
+- Ownership of the object being commented on (unless the object is a role).
+- To comment on a role, you must have the `CREATEROLE` privilege.

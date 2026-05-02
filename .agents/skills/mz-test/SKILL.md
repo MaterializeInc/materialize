@@ -1,0 +1,188 @@
+---
+name: mz-test
+description: >
+  General guide for running tests and choosing the right test framework in
+  Materialize. Trigger when the user wants to "run tests", "run testdrive",
+  "run sqllogictest", "run mzcompose", "run cargo test", "run pgtest",
+  "rewrite test results", "add a test", "reproduce a bug", "write a regression
+  test", or mentions testing, testdrive, sqllogictest, mzcompose, pgtest,
+  cargo test, nextest, flaky tests, or test failures. Use this skill even if the
+  user just says "test this" or "how do I verify this works" without naming a
+  specific framework. For deep guidance on specific frameworks, see the dedicated
+  skills: mz-platform-checks (upgrade/restart survival), mz-parallel-workload
+  (concurrent stress testing), and mz-limits-test (scaling to many objects).
+---
+
+# Testing Materialize
+
+## Unit tests
+
+Run unit tests with `cargo test`.
+If available, use `cargo nextest` instead.
+If these complain about `METADATA_BACKEND_URL`, then use `bin/cargo-test` instead.
+When using `-p`, our packages typically have an `mz-` suffix, e.g., `mz-adapter`.
+Rewrite datadriven test expectations with `REWRITE=1 cargo test ...`.
+Do not manually update `*.snap` files.
+Use `cargo test` followed by `cargo insta accept` to update snapshot files.
+
+Some tests require access to a metadata store.
+Set environment variables to `COCKROACH_URL=postgres://root@localhost:26257 METADATA_BACKEND_URL=postgres://root@localhost:26257`.
+
+Control log output during tests with `MZ_TEST_LOG_FILTER=<level>`, e.g. `MZ_TEST_LOG_FILTER=debug cargo test ...`.
+
+The first run includes a cargo build step that can take several minutes.
+Use a bash timeout of at least 600000ms (10 min) for test commands.
+
+## sqllogictest
+
+Run sqllogictest files with:
+
+```
+bin/sqllogictest --optimized -- PATH
+```
+
+`PATH` is relative to the repo root, usually a file in `test/sqllogictest/`.
+Rewrite expected results with `bin/sqllogictest -- --rewrite-results PATH`.
+For large test files, `--optimized` significantly improves execution speed at the cost of longer compile time.
+You can use `-v` for printing each query before it is run, e.g. to figure out where we are crashing.
+
+## Testdrive
+
+Run testdrive files with:
+
+```
+bin/mzcompose --find testdrive run default -- FILENAME.td
+```
+
+`FILENAME.td` is a file in `test/testdrive/`, relative to that directory (not the repo root).
+
+Some compositions (e.g. platform-checks, upgrade, pg-cdc multi-version) run the
+same `.td` file against multiple Materialize versions. When a change alters
+version-sensitive output (e.g. the result of a `SHOW`, a system-catalog query,
+or the exact text of an error message), gate the affected lines with version
+guards so each version asserts on the output it actually produces:
+
+```
+>[version<2602300] SHOW some_setting
+old_default
+
+>[version>=2602300] SHOW some_setting
+new_default
+
+![version<2602300] SELECT * FROM t1_update;
+contains:Invalid data in source, saw retractions
+
+![version>=2602300] SELECT * FROM t1_update;
+contains:negative record multiplicity
+```
+
+The `[version...]` guard goes immediately after the directive sigil (`>` for a
+query expecting success, `!` for one expecting an error, etc.) and before the
+SQL. The version is encoded as `MMmmmpp` (e.g. `26.23.0` → `2602300`); see
+`src/build-info/src/lib.rs::version_num`. Existing examples:
+`test/pg-cdc-old-syntax/privileges.td`,
+`test/pg-cdc/publication-with-publish-option.td`.
+
+## pgtest
+
+Run pgtest files with:
+
+```
+bin/cargo-test -p mz-environmentd pgtest
+```
+
+Run a specific pgtest file: `bin/cargo-test -p mz-environmentd test_pgtest_FILE_NAME`.
+
+## mzcompose
+
+`NAME` is any directory containing an `mzcompose.py` file.
+
+Run mzcompose compositions with:
+
+```
+bin/mzcompose --find NAME run WORKFLOW
+```
+
+`default` is a valid workflow in many compositions, provided a `workflow_default` exists that iterates over all workflows.
+Not all compositions have a `workflow_default`.
+
+Other useful commands:
+
+* `bin/mzcompose --find NAME list` — list available compositions
+* `bin/mzcompose --find NAME list-workflows` — list workflows for a composition
+* `bin/mzcompose --find NAME logs` — view container logs
+* `bin/mzcompose --find NAME down` — stop a composition
+
+Many tests expect to start with fresh state.
+Run `bin/mzcompose --find NAME down` between test runs, not just at the end of a session.
+
+mzcompose builds optimized binaries by default, which are nearly as fast to run as release and much faster to link than debug builds.
+
+* `--release` builds full release binaries, which can be slow.
+  Instead of building release locally, let CI build the binary by creating a (draft) pull request and waiting for the build jobs to finish.
+  Afterward, `mzcompose` will attempt to download the binaries instead of building them locally.
+* `--dev` builds non-optimized debug binaries locally.
+
+## Reproducing bugs
+
+Reproducing bugs is a manual process.
+Ask the user for reproduction instructions, or point them to the GitHub issue or the Buildkite annotation under "Test details & reproducer".
+
+Many tests expect fresh state.
+Always run `bin/mzcompose --find NAME down` before attempting to reproduce.
+
+For flaky tests, the user can run in a loop until failure:
+
+```
+while true; do
+    bin/mzcompose --find testdrive down && \
+    bin/mzcompose --find testdrive run default FILENAME.td || break
+done
+```
+
+If a flake cannot be reproduced locally, suggest the user trigger CI runs manually via https://ci.dev.materialize.com/trigger
+Removing the "Target Branch" generates a random identifier, allowing parallel runs.
+10-20 runs to reproduce a flake is fine.
+
+## Additional logging for flaky tests
+
+Add logging through `log_filter` in the test's `mzcompose.py`:
+
+```python
+Materialized(
+    additional_system_parameter_defaults={
+        # TODO: Remove when database-issues#NNNN is fixed
+        "log_filter": "mz_storage::source::postgres=trace"
+    },
+)
+```
+
+If the flake might occur anywhere, extend `get_minimal_system_parameters` in `misc/python/materialize/mzcompose/__init__.py` with a `log_filter`.
+Always add a TODO comment referencing the issue.
+
+## Adding a test
+
+Determine the right framework based on what you're testing:
+
+* **SQL correctness, types, functions** (no external systems, no concurrency): sqllogictest (`.slt` in `test/sqllogictest/`).
+  Use `mode cockroach`, test NULLs and edge cases.
+  Do NOT modify files in `test/sqllogictest/sqlite` or `test/sqllogictest/cockroach` (upstream).
+  When adding new tests to slt files, prefer adding them to an existing slt file rather than creating new slt files, if you are able to quickly find an existing slt file where the new tests fit naturally.
+* **Sources/sinks, Kafka, catalog, pgwire** (external systems): testdrive (`.td` in `test/testdrive/`).
+  Frameworks like `pg-cdc`, `mysql-cdc`, `sql-server-cdc`, `kafka-*` have targeted setups but also run testdrive files.
+* **Raw pgwire messages** (COPY, extended protocol): pgtest (`.pt` in `test/pgtest/`).
+  Wire new files in `src/environmentd/tests/pgwire.rs`.
+* **Pure logic, decoding, pure functions**: Rust `#[mz_ore::test]` (or `#[mz_ore::test(tokio::test)]` for async).
+* **Restart/upgrade issues**: Platform Checks.
+  See `doc/developer/platform-checks.md`, especially the "Writing a Check" section.
+  Do not use the old Legacy Upgrade tests.
+* **Panics or unexpected query errors under concurrency**: extend Parallel Workload actions in `misc/python/materialize/parallel_workload/action.py`.
+* **Many objects / limits**: add a `Generator` subclass in `test/limits/mzcompose.py`.
+* **OOM / bounded memory**: add a `Scenario` in `test/bounded-memory/mzcompose.py`.
+* **Performance micro-benchmarks**: Feature Benchmark scenarios in `misc/python/materialize/feature_benchmark/scenarios`.
+  See `doc/developer/feature-benchmark.md`.
+
+In most cases, appending to an existing `.slt` or `.td` file is sufficient.
+For functional issues, aim for at least two different test frameworks that can independently detect the regression.
+
+Read `doc/developer/guide-testing.md` for more detail on test frameworks.

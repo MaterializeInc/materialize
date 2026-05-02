@@ -1,0 +1,19 @@
+- name: "syntax"
+  code: |
+    string_agg ( <value>, <delimiter>
+      [ORDER BY <col_ref> [ASC | DESC] [NULLS FIRST | NULLS LAST] [, ...]]
+    )
+    [FILTER (WHERE <filter_clause>)]
+  syntax_elements:
+    - name: "`<value>`"
+      description: |
+        The values to concatenate.
+    - name: "`<delimiter>`"
+      description: |
+        The value to precede each concatenated value.
+    - name: "**ORDER BY** `<col_ref>` [**ASC** | **DESC**] [**NULLS FIRST** | **NULLS LAST**] [, ...]"
+      description: |
+        Optional. Specifies the ordering of values within the aggregation. If not specified, incoming rows are not guaranteed any order.
+    - name: "**FILTER** (WHERE `<filter_clause>`)"
+      description: |
+        Optional. Specifies which rows are sent to the aggregate function. Rows for which the `<filter_clause>` evaluates to true contribute to the aggregation. See [Aggregate function filters](/sql/functions/filters) for details.

@@ -12,18 +12,6 @@ from collections.abc import Callable
 from materialize.output_consistency.operation.operation_param import OperationParam
 
 
-def index_of_param_by_type(
-    params: list[OperationParam], type_to_match: type[OperationParam]
-) -> int | None:
-    return index_of_param(params, lambda p: isinstance(p, type_to_match))
-
-
-def index_of_param_by_equality(
-    params: list[OperationParam], param_to_match: OperationParam
-) -> int | None:
-    return index_of_param(params, lambda p: p == param_to_match)
-
-
 def index_of_param(
     params: list[OperationParam], match_fn: Callable[[OperationParam], bool]
 ) -> int | None:

@@ -15,9 +15,13 @@ A few types of Materialize collections are durably written to storage: [material
 
 Internally, each collection is stored as a set of **runs** of data, each of which is sorted and then partitioned up into individual **parts**, and those parts are written to object storage and fetched only when necessary to satisfy a query. Materialize will also periodically **compact** the data it stores, to consolidate small parts into larger ones or discard deleted rows.
 
-Using the `PARTITION BY` option, you can specify the internal ordering that
-Materialize will use to sort, partition, and store these runs of data.
-A well-chosen partitioning can unlock optimizations like [filter pushdown](#filter-pushdown), which in turn can make queries and other operations more efficient.
+For [materialized views](/sql/create-materialized-view/) and
+[tables](/sql/create-table) (including read-only tables created from sources),
+you can use the `PARTITION BY` option to specify the internal ordering that
+Materialize will use to sort, partition, and store these runs of data. A
+well-chosen partitioning can unlock optimizations like [filter
+pushdown](#filter-pushdown), which in turn can make queries and other operations
+more efficient.
 
 {{< note >}}
 The `PARTITION BY` option has no impact on the order in which records are returned by queries.
@@ -26,7 +30,7 @@ If you want to return results in a specific order, use an `ORDER BY` clause on y
 
 ## Syntax
 
-The option `PARTITION BY <column list>` declares that a [materialized view](/sql/create-materialized-view/#with_options) or [table](/sql/create-table/#with_options) should be partitioned by the listed columns.
+The option `PARTITION BY <column list>` declares that a [materialized view](/sql/create-materialized-view/#syntax) or [table](/sql/create-table/#syntax) should be partitioned by the listed columns.
 For example, a table that stores an append-only collection of events may want to partition the data by time:
 
 ```mzsql
@@ -61,7 +65,6 @@ Materialize currently imposes some restrictions on the list of columns in the `P
     - `boolean` and `uuid`;
     - `record` types where all fields types are supported.
 
-We intend to relax some of these restrictions in the future.
 
 ## Filter pushdown
 

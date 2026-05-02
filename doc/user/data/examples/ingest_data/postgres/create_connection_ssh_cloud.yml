@@ -11,6 +11,10 @@
         PORT <SSH_BASTION_PORT>,
         USER '<SSH_BASTION_USER>'
     );
+  test_replacements:
+    <SSH_BASTION_HOST>: ssh-bastion-host
+    <SSH_BASTION_PORT>: 22
+    <SSH_BASTION_USER>: mz
 
 - name: "create-ssh-tunnel-connection-options"
   description: |-
@@ -24,8 +28,12 @@
 - name: "get-public-keys-general"
   description: |
     Get Materialize's public keys for the SSH tunnel connection:
+  test_setup: |
+    $ set-regex match=.* replacement=X
   code: |
     SELECT * FROM mz_ssh_tunnel_connections;
+  test_results: |
+    X X X
 
 - name: "get-public-keys-aurora-rds-self-hosted"
   description: |
@@ -40,6 +48,8 @@
         mz_ssh_tunnel_connections USING(id)
     WHERE
         mz_connections.name = 'ssh_connection';
+  test_results: |
+    X X X X
 
 - name: "login-to-ssh-bastion-host"
   description: |
@@ -49,6 +59,7 @@
   code: |
     echo "ssh-ed25519 AAAA...76RH materialize" >> ~/.ssh/authorized_keys
     echo "ssh-ed25519 AAAA...hLYV materialize" >> ~/.ssh/authorized_keys
+  testable: false
 
 - name: "validate-ssh-tunnel-connection"
   description: |
@@ -56,10 +67,13 @@
     connection you created using the [`VALIDATE
     CONNECTION`](/sql/validate-connection) command:
 
+  test_setup: |
+    $ unset-regex
   code: |
     VALIDATE CONNECTION ssh_connection;
   results: |
     If no validation error is returned, move to the next step.
+  testable_results: false
 
 - name: "create-secret"
   description: |
@@ -69,12 +83,25 @@
 
   code: |
     CREATE SECRET pgpass AS '<PASSWORD>';
+  test_replacements:
+    <PASSWORD>: postgres
 
 - name: "create-connection"
   description: |
 
     Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create another connection object, this time with database access and authentication details for Materialize to use:
 
+  test_setup: |
+    $ postgres-execute connection=postgres://postgres:postgres@postgres
+    DROP USER IF EXISTS materialize;
+    CREATE USER materialize WITH SUPERUSER PASSWORD 'postgres';
+    ALTER USER materialize WITH replication;
+    DROP SCHEMA IF EXISTS public CASCADE;
+    DROP PUBLICATION IF EXISTS mz_source;
+    CREATE SCHEMA PUBLIC;
+    CREATE TABLE items (a INT);
+    ALTER TABLE items REPLICA IDENTITY FULL;
+    CREATE PUBLICATION mz_source FOR ALL TABLES;
   code: |
     CREATE CONNECTION pg_connection TO POSTGRES (
       HOST '<host>',
@@ -84,6 +111,9 @@
       DATABASE '<database>',
       SSH TUNNEL ssh_connection
       );
+  test_replacements:
+    <host>: postgres
+    <database>: postgres
 
 - name: "create-connection-options-general"
   description: |

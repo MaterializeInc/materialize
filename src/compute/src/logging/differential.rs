@@ -28,7 +28,7 @@ use timely::dataflow::operators::InputCapability;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::operator::empty;
 use timely::dataflow::operators::generic::{OutputBuilder, Session};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, StreamVec};
 
 use crate::extensions::arrange::MzArrangeCore;
 use crate::logging::compute::{ArrangementHeapSizeOperatorDrop, ComputeEvent};
@@ -52,8 +52,8 @@ pub(super) struct Return {
 /// * `config`: Logging configuration
 /// * `event_queue`: The source to read log events from.
 /// * `shared_state`: Shared state across all logging dataflow fragments.
-pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
-    mut scope: G,
+pub(super) fn construct(
+    scope: Scope<'_, Timestamp>,
     config: &mz_compute_client::logging::LoggingConfig,
     event_queue: EventQueue<Vec<(Duration, DifferentialEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
@@ -63,13 +63,12 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
     scope.scoped("differential logging", move |scope| {
         let enable_logging = config.enable_logging;
         let (logs, token) = if enable_logging {
-            event_queue.links
-                .mz_replay(
-                    scope,
-                    "differential logs",
-                    config.interval,
-                    event_queue.activator,
-                )
+            event_queue.links.mz_replay(
+                scope,
+                "differential logs",
+                config.interval,
+                event_queue.activator,
+            )
         } else {
             let token: Rc<dyn std::any::Any> = Rc::new(Box::new(()));
             (empty(scope), token)
@@ -79,7 +78,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         // logging streams.
         let mut demux =
             OperatorBuilder::new("Differential Logging Demux".to_string(), scope.clone());
-        let mut input = demux.new_input(&logs, Pipeline);
+        let mut input = demux.new_input(logs, Pipeline);
         let (batches_out, batches) = demux.new_output();
         let (records_out, records) = demux.new_output();
         let (sharing_out, sharing) = demux.new_output();
@@ -134,9 +133,16 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
 
         // We're lucky and the differential logs all have the same stream format, so just implement
         // the call once.
-        let stream_to_collection = |input: &Stream<_, ((usize, ()), Timestamp, Diff)>, log| {
-            let worker_id = scope.index();
-            consolidate_and_pack::<_, KeyBatcher<_, _, _>, ColumnBuilder<_>, _, _>(
+        fn stream_to_collection<'scope>(
+            input: StreamVec<'scope, Timestamp, ((usize, ()), Timestamp, Diff)>,
+            log: DifferentialLog,
+            worker_id: usize,
+        ) -> timely::dataflow::Stream<
+            'scope,
+            Timestamp,
+            mz_timely_util::columnar::Column<((mz_repr::Row, mz_repr::Row), Timestamp, Diff)>,
+        > {
+            consolidate_and_pack::<KeyBatcher<_, _, _>, ColumnBuilder<_>, _, _>(
                 input,
                 log,
                 move |data, packer, session| {
@@ -149,16 +155,18 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
                     }
                 },
             )
-        };
+        }
+        let worker_id = scope.index();
 
         // Encode the contents of each logging stream into its expected `Row` format.
-        let arrangement_batches = stream_to_collection(&batches, ArrangementBatches);
-        let arrangement_records = stream_to_collection(&records, ArrangementRecords);
-        let sharing = stream_to_collection(&sharing, Sharing);
-        let batcher_records = stream_to_collection(&batcher_records, BatcherRecords);
-        let batcher_size = stream_to_collection(&batcher_size, BatcherSize);
-        let batcher_capacity = stream_to_collection(&batcher_capacity, BatcherCapacity);
-        let batcher_allocations = stream_to_collection(&batcher_allocations, BatcherAllocations);
+        let arrangement_batches = stream_to_collection(batches, ArrangementBatches, worker_id);
+        let arrangement_records = stream_to_collection(records, ArrangementRecords, worker_id);
+        let sharing = stream_to_collection(sharing, Sharing, worker_id);
+        let batcher_records = stream_to_collection(batcher_records, BatcherRecords, worker_id);
+        let batcher_size = stream_to_collection(batcher_size, BatcherSize, worker_id);
+        let batcher_capacity = stream_to_collection(batcher_capacity, BatcherCapacity, worker_id);
+        let batcher_allocations =
+            stream_to_collection(batcher_allocations, BatcherAllocations, worker_id);
 
         use DifferentialLog::*;
         let logs = [
@@ -176,11 +184,16 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         for (variant, collection) in logs {
             let variant = LogVariant::Differential(variant);
             if config.index_logs.contains_key(&variant) {
+                let exchange = ExchangeCore::<ColumnBuilder<_>, _>::new_core(
+                    columnar_exchange::<mz_repr::Row, mz_repr::Row, Timestamp, mz_repr::Diff>,
+                );
                 let trace = collection
-                    .mz_arrange_core::<_, Col2ValBatcher<_, _, _, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
-                        ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<mz_repr::Row, mz_repr::Row, Timestamp, mz_repr::Diff>),
-                        &format!("Arrange {variant:?}"),
-                    )
+                    .mz_arrange_core::<
+                        _,
+                        Col2ValBatcher<_, _, _, _>,
+                        RowRowBuilder<_, _>,
+                        RowRowSpine<_, _>,
+                    >(exchange, &format!("Arrange {variant:?}"))
                     .trace;
                 let collection = LogCollection {
                     trace,
@@ -190,7 +203,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             }
         }
 
-        Return { collections, }
+        Return { collections }
     })
 }
 
@@ -254,7 +267,7 @@ impl DemuxHandler<'_, '_, '_> {
             Drop(e) => self.handle_drop(e),
             TraceShare(e) => self.handle_trace_share(e),
             Batcher(e) => self.handle_batcher_event(e),
-            _ => (),
+            MergeShortfall(_) => (),
         }
     }
 

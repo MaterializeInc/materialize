@@ -55,7 +55,6 @@ pub struct Applier<K, V, T, D> {
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) shard_metrics: Arc<ShardMetrics>,
     pub(crate) state_versions: Arc<StateVersions>,
-    shared_states: Arc<StateCache>,
     pubsub_sender: Arc<dyn PubSubSender>,
     pub(crate) shard_id: ShardId,
 
@@ -78,7 +77,6 @@ impl<K, V, T: Clone, D> Clone for Applier<K, V, T, D> {
             metrics: Arc::clone(&self.metrics),
             shard_metrics: Arc::clone(&self.shard_metrics),
             state_versions: Arc::clone(&self.state_versions),
-            shared_states: Arc::clone(&self.shared_states),
             pubsub_sender: Arc::clone(&self.pubsub_sender),
             shard_id: self.shard_id,
             state: Arc::clone(&self.state),
@@ -119,7 +117,6 @@ where
             metrics,
             shard_metrics,
             state_versions,
-            shared_states,
             pubsub_sender,
             shard_id,
             state,
@@ -423,6 +420,12 @@ where
         shard_metrics: &ShardMetrics,
         state_versions: &StateVersions,
     ) -> ApplyCmdResult<K, V, T, D, R, E> {
+        // While it's safe for more than one cmd to try and update the state, only one of those
+        // concurrent requests could actually succeed. This call will wait until previous requests
+        // have completed or timed out, and holding the resulting permit will delay other cmds until
+        // this attempt completes or times out.
+        let _permit_opt = state.lease_for_update().await;
+
         let computed_next_state = state
             .read_lock(&metrics.locks.applier_read_noncacheable, |state| {
                 Self::compute_next_state_locked(state, work_fn, metrics, cmd, cfg)
@@ -440,7 +443,6 @@ where
         };
 
         let NextState {
-            expected,
             diff,
             state,
             expiry_metrics,
@@ -464,18 +466,11 @@ where
         // retry even indeterminate errors. See
         // [Self::apply_unbatched_idempotent_cmd].
         let cas_res = state_versions
-            .try_compare_and_set_current(&cmd.name, shard_metrics, Some(expected), &state, &diff)
+            .try_compare_and_set_current(&cmd.name, shard_metrics, &state, &diff)
             .await;
 
         match cas_res {
             Ok((CaSResult::Committed, diff)) => {
-                assert!(
-                    expected <= state.seqno,
-                    "state seqno regressed: {} vs {}",
-                    expected,
-                    state.seqno
-                );
-
                 metrics
                     .lease
                     .timeout_read
@@ -498,7 +493,7 @@ where
                 ApplyCmdResult::Committed((diff, state, work_ret, maintenance))
             }
             Ok((CaSResult::ExpectationMismatch, _diff)) => {
-                ApplyCmdResult::ExpectationMismatch(expected)
+                ApplyCmdResult::ExpectationMismatch(state.seqno())
             }
             Err(err) => ApplyCmdResult::Indeterminate(err),
         }
@@ -603,8 +598,12 @@ where
             }
         }
 
+        assert_eq!(
+            expected.next(),
+            new_state.seqno(),
+            "successive states should have successive seqnos"
+        );
         Ok(NextState {
-            expected,
             diff,
             state: new_state,
             expiry_metrics,
@@ -721,7 +720,6 @@ enum ApplyCmdResult<K, V, T, D, R, E> {
 }
 
 struct NextState<K, V, T, D, R> {
-    expected: SeqNo,
     diff: StateDiff<T>,
     state: TypedState<K, V, T, D>,
     expiry_metrics: ExpiryMetrics,

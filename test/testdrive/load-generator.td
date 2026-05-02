@@ -94,8 +94,11 @@ regex:.*FOR SCHEMAS.*unsupported
 > SHOW CREATE SOURCE auction_house
 "materialize.public.auction_house" "CREATE SOURCE materialize.public.auction_house\nIN CLUSTER ${arg.single-replica-cluster}\nFROM LOAD GENERATOR AUCTION (AS OF = 300, UP TO = 301);"
 
-> SHOW CREATE TABLE accounts
+>[version<2600700] SHOW CREATE TABLE accounts
 materialize.public.accounts "CREATE TABLE materialize.public.accounts (id pg_catalog.int8 NOT NULL, org_id pg_catalog.int8 NOT NULL, balance pg_catalog.int8 NOT NULL, UNIQUE (id)) FROM SOURCE materialize.public.auction_house (REFERENCE = mz_load_generators.auction.accounts) WITH (DETAILS = '1a040a021002');"
+
+>[version>=2600700] SHOW CREATE TABLE accounts
+materialize.public.accounts "CREATE TABLE\n    materialize.public.accounts\n        (\n            id pg_catalog.int8 NOT NULL,\n            org_id pg_catalog.int8 NOT NULL,\n            balance pg_catalog.int8 NOT NULL,\n            UNIQUE (id)\n        )\nFROM SOURCE materialize.public.auction_house (REFERENCE = mz_load_generators.auction.accounts)\nWITH (DETAILS = '1a040a021002');"
 
 > SHOW SOURCES
 auction_house           load-generator ${arg.single-replica-cluster}    ""
@@ -151,8 +154,11 @@ users                   ""
 
 $ set-regex match="DETAILS = '[a-f0-9]+'" replacement=<DETAILS>
 
-> SHOW CREATE TABLE accounts
+>[version<2600700] SHOW CREATE TABLE accounts
 materialize.public.accounts "CREATE TABLE materialize.public.accounts (id pg_catalog.int8 NOT NULL, org_id pg_catalog.int8 NOT NULL, balance pg_catalog.int8 NOT NULL, UNIQUE (id)) FROM SOURCE materialize.public.auction_house (REFERENCE = mz_load_generators.auction.accounts) WITH (<DETAILS>);"
+
+>[version>=2600700] SHOW CREATE TABLE accounts
+materialize.public.accounts "CREATE TABLE\n    materialize.public.accounts\n        (\n            id pg_catalog.int8 NOT NULL,\n            org_id pg_catalog.int8 NOT NULL,\n            balance pg_catalog.int8 NOT NULL,\n            UNIQUE (id)\n        )\nFROM SOURCE materialize.public.auction_house (REFERENCE = mz_load_generators.auction.accounts)\nWITH (<DETAILS>);"
 
 # CLOCK load generator source
 
@@ -227,7 +233,7 @@ $ set-regex match=\d+ replacement=<NUMBER>
 # Ensure we report the write frontier of the progress subsource
 $ set-regex match=(\s{12}0|\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d\.\d\d\d\)|true|false) replacement=<>
 > EXPLAIN TIMESTAMP FOR SELECT * FROM another.auction_house
-"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.another.auction_house (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n\nbinding constraints:\nlower:\n  (IsolationLevel(StrictSerializable)): [<> <>]\n"
+"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.another.auction_house (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n\nbinding constraints:\nlower:\n  (Isolation level: StrictSerializable): [<> <>]\n"
 
 > DROP SOURCE auction_house CASCADE
 > DROP SOURCE another.auction_house CASCADE

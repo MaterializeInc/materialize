@@ -53,9 +53,9 @@ Alternatively:
 Emulator](/get-started/install-materialize-emulator/). However, the Materialize
 Emulator does not provide the full experience of using Materialize.
 
-- You can run against your [Self-managed Materialize].
+- You can run against your [Self-managed
+  Materialize](/self-managed-deployments/).
 
-[Self-managed Materialize]: https://materialize.com/docs/self-managed/v25.2/
 
 ## Step 0. Open the SQL Shell
 
@@ -559,7 +559,7 @@ views incrementally update the view results. Materialized views persist the
 query results in durable storage and is available across clusters while indexes
 maintain the view results in memory within a single cluster.
 
-{{% views-indexes/table-usage-pattern %}}
+{{% include-from-yaml data="index_view_details" name="table-usage-pattern" %}}
 
 The quickstart used an index since:
 

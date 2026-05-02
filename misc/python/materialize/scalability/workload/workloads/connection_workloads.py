@@ -9,6 +9,8 @@
 from materialize.scalability.operation.operation_data import OperationData
 from materialize.scalability.operation.operations.operations import (
     Connect,
+    ConnectPassword,
+    ConnectSasl,
     Disconnect,
     SelectOne,
 )
@@ -28,3 +30,29 @@ class EstablishConnectionWorkload(WorkloadWithContext, ConnectionWorkload):
 
     def operations(self) -> list["Operation"]:
         return [OperationChainWithDataExchange([Connect(), SelectOne(), Disconnect()])]
+
+
+class EstablishPasswordConnectionWorkload(WorkloadWithContext, ConnectionWorkload):
+    def amend_data_before_execution(self, data: OperationData) -> None:
+        data.push("endpoint", self.endpoint)
+        data.push("schema", self.schema)
+        data.remove("cursor")
+
+    def operations(self) -> list["Operation"]:
+        return [
+            OperationChainWithDataExchange(
+                [ConnectPassword(), SelectOne(), Disconnect()]
+            )
+        ]
+
+
+class EstablishSaslConnectionWorkload(WorkloadWithContext, ConnectionWorkload):
+    def amend_data_before_execution(self, data: OperationData) -> None:
+        data.push("endpoint", self.endpoint)
+        data.push("schema", self.schema)
+        data.remove("cursor")
+
+    def operations(self) -> list["Operation"]:
+        return [
+            OperationChainWithDataExchange([ConnectSasl(), SelectOne(), Disconnect()])
+        ]

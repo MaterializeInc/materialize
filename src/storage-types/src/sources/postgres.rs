@@ -9,7 +9,6 @@
 
 //! Types related to postgres sources
 
-use mz_expr::MirScalarExpr;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::{CatalogItemId, GlobalId, RelationDesc, SqlScalarType};
@@ -185,7 +184,7 @@ pub enum CastType {
 pub struct PostgresSourceExportDetails {
     /// The cast expressions to convert the incoming string encoded rows to
     /// their target types
-    pub column_casts: Vec<(CastType, MirScalarExpr)>,
+    pub column_casts: Vec<(CastType, crate::sources::casts::StorageScalarExpr)>,
     pub table: PostgresTableDesc,
 }
 

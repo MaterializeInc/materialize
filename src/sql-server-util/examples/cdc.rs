@@ -42,7 +42,7 @@ use futures::StreamExt;
 use mz_ore::future::InTask;
 use mz_sql_server_util::cdc::CdcEvent;
 use mz_sql_server_util::config::TunnelConfig;
-use mz_sql_server_util::{Client, Config};
+use mz_sql_server_util::{Client, Config, LoggingSqlServerCdcMetrics};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -60,17 +60,21 @@ async fn main() -> Result<(), anyhow::Error> {
     config.trust_cert();
 
     // Open one client to stream changes.
-    let mz_config = Config::new(config.clone(), TunnelConfig::Direct, InTask::No);
+    let tunnel = TunnelConfig::Direct {
+        resolved_addresses: Default::default(),
+    };
+    let mz_config = Config::new(config.clone(), tunnel.clone(), InTask::No);
     let mut client_1 = Client::connect(mz_config).await?;
     tracing::info!("connection 1 successful!");
 
     let capture_instances = ["materialize_t1", "materialize_t2"];
-    let mut cdc_handle = client_1.cdc(capture_instances);
+    let metrics = LoggingSqlServerCdcMetrics;
+    let mut cdc_handle = client_1.cdc(capture_instances, metrics);
 
     cdc_handle.wait_for_ready().await?;
 
     // Open a second client that we can use to cleanup the underlying change tables.
-    let mz_config = Config::new(config.clone(), TunnelConfig::Direct, InTask::No);
+    let mz_config = Config::new(config.clone(), tunnel, InTask::No);
     let mut client_2 = Client::connect(mz_config).await?;
     tracing::info!("connection 2 successful!");
 
@@ -121,14 +125,14 @@ async fn main() -> Result<(), anyhow::Error> {
             CdcEvent::Progress { next_lsn } => {
                 tracing::info!("progress: received all data < {next_lsn}");
                 for instance in capture_instances {
-                    let result = mz_sql_server_util::inspect::cleanup_change_table(
+                    mz_sql_server_util::inspect::cleanup_change_table(
                         &mut client_2,
                         instance,
                         &next_lsn,
                         1000,
                     )
                     .await?;
-                    tracing::info!(?result, "cleanup: {instance} data < {next_lsn}");
+                    tracing::info!("cleanup: {instance} data < {next_lsn}");
                 }
             }
             CdcEvent::SchemaUpdate {

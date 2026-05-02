@@ -62,8 +62,8 @@ operators:
   - operator: Project
     plan_types: "optimized,raw"
     description: |
-      Produces a subset of the [columns](#explain-plan-columns) in the input
-      rows. See also [column numbering](#explain-plan-columns).
+      Produces a subset of the [columns](/sql/explain-plan/#explain-plan-columns) in the input
+      rows. See also [column numbering](/sql/explain-plan/#explain-plan-columns).
     uses_memory: False
     memory_details: ""
     expansive: False
@@ -229,7 +229,7 @@ operators:
     memory_details: |
       `SUM`, `COUNT`, and most other aggregations use a moderate amount of memory (proportional either to twice the output size or to input size + output size).
       `MIN` and `MAX` aggregates can use significantly more memory. This can be improved by including group size hints in the query, see
-      [`mz_introspection.mz_expected_group_size_advice`](/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice).
+      [`mz_introspection.mz_expected_group_size_advice`](/reference/system-catalog/mz_introspection/#mz_expected_group_size_advice).
     expansive: False
     example: "`Reduce group_by=[#0] aggregates=[max((#0 * #1))]`"
 
@@ -244,7 +244,7 @@ operators:
 
       2. `Accumulable GroupAggregate` (e.g., `SUM`, `COUNT`) corresponds to several easy to implement aggregations that can be executed simultaneously and efficiently.
 
-      3. `Hierarchical GroupAggregate` (e.g., `MIN`, `MAX`) corresponds to an aggregation requiring a tower of arrangements. These can be either monotonic (more efficient) or bucketed. These may benefit from a hint; [see `mz_introspection.mz_expected_group_size_advice`](/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice).
+      3. `Hierarchical GroupAggregate` (e.g., `MIN`, `MAX`) corresponds to an aggregation requiring a tower of arrangements. These can be either monotonic (more efficient) or bucketed. These may benefit from a hint; [see `mz_introspection.mz_expected_group_size_advice`](/reference/system-catalog/mz_introspection/#mz_expected_group_size_advice).
          These may either be bucketed or monotonic (more efficient).
          These may consolidate their output, which will increase memory usage.
 
@@ -259,7 +259,7 @@ operators:
     memory_details: |
       `Distinct` and `Accumulable` aggregates use a moderate amount of memory (proportional to twice the output size).
       `MIN` and `MAX` aggregates can use significantly more memory. This can be improved by including group size hints in the query, see
-      [`mz_introspection.mz_expected_group_size_advice`](/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice).
+      [`mz_introspection.mz_expected_group_size_advice`](/reference/system-catalog/mz_introspection/#mz_expected_group_size_advice).
       `Non-incremental` aggregates use memory proportional to the input + output size.
       `Collated` aggregates use memory that is the sum of their constituents, plus some memory for the join at the end.
     expansive: False
@@ -283,7 +283,7 @@ operators:
     memory_details: |
       `SUM`, `COUNT`, and most other aggregations use a moderate amount of memory (proportional either to twice the output size or to input size + output size).
       `MIN` and `MAX` aggregates can use significantly more memory. This can be improved by including group size hints in the query, see
-      [`mz_introspection.mz_expected_group_size_advice`](/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice).
+      [`mz_introspection.mz_expected_group_size_advice`](/reference/system-catalog/mz_introspection/#mz_expected_group_size_advice).
     expansive: False
     example: "`Reduce group_by=[#0] aggregates=[max((#0 * #1))]`"
 
@@ -315,7 +315,7 @@ operators:
     memory_details: |
       Can use significant amount as the operator can significantly overestimate
       the group sizes. Consult
-      [`mz_introspection.mz_expected_group_size_advice`](/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice).
+      [`mz_introspection.mz_expected_group_size_advice`](/reference/system-catalog/mz_introspection/#mz_expected_group_size_advice).
     expansive: False
     example: "`TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5`"
 
@@ -335,7 +335,7 @@ operators:
     memory_details: |
       `Monotonic Top1` and `Monotonic TopK` use a moderate amount of memory. `Non-monotonic TopK` uses significantly more memory as the operator can significantly overestimate
       the group sizes. Consult
-      [`mz_introspection.mz_expected_group_size_advice`](/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice).
+      [`mz_introspection.mz_expected_group_size_advice`](/reference/system-catalog/mz_introspection/#mz_expected_group_size_advice).
     expansive: False
     example: |
       ```mzsql
@@ -442,4 +442,4 @@ operators:
     uses_memory: False
     memory_details: ""
     expansive: False
-    example: "[See above](#reading-plans)"
+    example: "[See Reading plans](/sql/explain-plan/#reading-plans)"

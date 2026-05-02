@@ -1,0 +1,18 @@
+- name: "syntax"
+  code: |
+    CREATE SOURCE [IF NOT EXISTS] <src_name>
+    [IN CLUSTER <cluster_name>]
+    FROM SQL SERVER CONNECTION <connection_name>
+  syntax_elements:
+    - name: "`<src_name>`"
+      description: |
+        The name for the source.
+    - name: "**IF NOT EXISTS**"
+      description: |
+        Optional. If specified, do not throw an error if a source with the same name already exists. Instead, issue a notice and skip the source creation.
+    - name: "**IN CLUSTER** `<cluster_name>`"
+      description: |
+        Optional. The [cluster](/sql/create-cluster) to maintain this source.
+    - name: "**CONNECTION** `<connection_name>`"
+      description: |
+        The name of the SQL Server connection to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#sql-server) documentation page.

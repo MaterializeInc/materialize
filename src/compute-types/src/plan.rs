@@ -23,7 +23,7 @@ use mz_ore::str::Indent;
 use mz_repr::explain::text::text_string_at;
 use mz_repr::explain::{DummyHumanizer, ExplainConfig, ExprHumanizer, PlanRenderingContext};
 use mz_repr::optimize::OptimizerFeatures;
-use mz_repr::{Diff, GlobalId, Row};
+use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use serde::{Deserialize, Serialize};
 
 use crate::dataflows::DataflowDescription;
@@ -54,7 +54,17 @@ pub mod transform;
 /// columns not explicitly captured by the key, and how to return to the original
 /// row from the concatenation of key and value. Further explanation is available
 /// in the documentation for `KeyValRowMapping`.
-#[derive(Clone, Debug, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    Deserialize,
+    Eq,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub struct AvailableCollections {
     /// Whether the collection exists in unarranged form.
     pub raw: bool,
@@ -96,7 +106,18 @@ impl AvailableCollections {
 }
 
 /// An identifier for an LIR node.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, Columnar)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    Columnar
+)]
 pub struct LirId(u64);
 
 impl LirId {
@@ -119,20 +140,20 @@ impl std::fmt::Display for LirId {
 
 /// A rendering plan with as much conditional logic as possible removed.
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-pub struct Plan<T = mz_repr::Timestamp> {
+pub struct Plan {
     /// A dataflow-local identifier.
     pub lir_id: LirId,
     /// The underlying operator.
-    pub node: PlanNode<T>,
+    pub node: PlanNode,
 }
 
 /// The actual AST node of the `Plan`.
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-pub enum PlanNode<T = mz_repr::Timestamp> {
+pub enum PlanNode {
     /// A collection containing a pre-determined collection.
     Constant {
         /// Explicit update triples for the collection.
-        rows: Result<Vec<(Row, T, Diff)>, EvalError>,
+        rows: Result<Vec<(Row, Timestamp, Diff)>, EvalError>,
     },
     /// A reference to a bound collection.
     ///
@@ -165,10 +186,10 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
         /// The local identifier to be used, available to `body` as `Id::Local(id)`.
         id: LocalId,
         /// The collection that should be bound to `id`.
-        value: Box<Plan<T>>,
+        value: Box<Plan>,
         /// The collection that results, which is allowed to contain `Get` stages
         /// that reference `Id::Local(id)`.
-        body: Box<Plan<T>>,
+        body: Box<Plan>,
     },
     /// Binds `values` to `ids`, evaluates them potentially recursively, and returns `body`.
     ///
@@ -180,12 +201,12 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
         /// The local identifiers to be used, available to `body` as `Id::Local(id)`.
         ids: Vec<LocalId>,
         /// The collection that should be bound to `id`.
-        values: Vec<Plan<T>>,
+        values: Vec<Plan>,
         /// Maximum number of iterations. See further info on the MIR `LetRec`.
         limits: Vec<Option<LetRecLimit>>,
         /// The collection that results, which is allowed to contain `Get` stages
         /// that reference `Id::Local(id)`.
-        body: Box<Plan<T>>,
+        body: Box<Plan>,
     },
     /// Map, Filter, and Project operators.
     ///
@@ -194,7 +215,7 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
     /// and sometimes reduce stages are not able to absorb this operator.
     Mfp {
         /// The input collection.
-        input: Box<Plan<T>>,
+        input: Box<Plan>,
         /// Linear operator to apply to each record.
         mfp: MapFilterProject,
         /// Whether the input is from an arrangement, and if so,
@@ -218,7 +239,7 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
         /// if any
         input_key: Option<Vec<MirScalarExpr>>,
         /// The input collection.
-        input: Box<Plan<T>>,
+        input: Box<Plan>,
         /// Expressions that for each row prepare the arguments to `func`.
         exprs: Vec<MirScalarExpr>,
         /// The variable-record emitting function.
@@ -233,7 +254,7 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
     /// strategy we will use, and any pushed down per-record work.
     Join {
         /// An ordered list of inputs that will be joined.
-        inputs: Vec<Plan<T>>,
+        inputs: Vec<Plan>,
         /// Detailed information about the implementation of the join.
         ///
         /// This includes information about the implementation strategy, but also
@@ -247,7 +268,7 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
         /// if any
         input_key: Option<Vec<MirScalarExpr>>,
         /// The input collection.
-        input: Box<Plan<T>>,
+        input: Box<Plan>,
         /// A plan for changing input records into key, value pairs.
         key_val_plan: KeyValPlan,
         /// A plan for performing the reduce.
@@ -266,7 +287,7 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
     /// Key-based "Top K" operator, retaining the first K records in each group.
     TopK {
         /// The input collection.
-        input: Box<Plan<T>>,
+        input: Box<Plan>,
         /// A plan for performing the Top-K.
         ///
         /// The implementation of reduction has several different strategies based
@@ -277,7 +298,7 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
     /// Inverts the sign of each update.
     Negate {
         /// The input collection.
-        input: Box<Plan<T>>,
+        input: Box<Plan>,
     },
     /// Filters records that accumulate negatively.
     ///
@@ -285,7 +306,7 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
     /// resources proportional to the number of records with non-zero accumulation.
     Threshold {
         /// The input collection.
-        input: Box<Plan<T>>,
+        input: Box<Plan>,
         /// A plan for performing the threshold.
         ///
         /// The implementation of reduction has several different strategies based
@@ -301,7 +322,7 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
     /// implementing the "distinct" operator.
     Union {
         /// The input collections
-        inputs: Vec<Plan<T>>,
+        inputs: Vec<Plan>,
         /// Whether to consolidate the output, e.g., cancel negated records.
         consolidate_output: bool,
     },
@@ -315,7 +336,7 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
         /// The key that must be used to access the input.
         input_key: Option<Vec<MirScalarExpr>>,
         /// The input collection.
-        input: Box<Plan<T>>,
+        input: Box<Plan>,
         /// The MFP that must be applied to the input.
         input_mfp: MapFilterProject,
         /// A list of arrangement keys, and possibly a raw collection,
@@ -325,9 +346,9 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
     },
 }
 
-impl<T> PlanNode<T> {
+impl PlanNode {
     /// Iterates through references to child expressions.
-    pub fn children(&self) -> impl Iterator<Item = &Plan<T>> {
+    pub fn children(&self) -> impl Iterator<Item = &Plan> {
         let mut first = None;
         let mut second = None;
         let mut rest = None;
@@ -366,7 +387,7 @@ impl<T> PlanNode<T> {
     }
 
     /// Iterates through mutable references to child expressions.
-    pub fn children_mut(&mut self) -> impl Iterator<Item = &mut Plan<T>> {
+    pub fn children_mut(&mut self) -> impl Iterator<Item = &mut Plan> {
         let mut first = None;
         let mut second = None;
         let mut rest = None;
@@ -405,9 +426,9 @@ impl<T> PlanNode<T> {
     }
 }
 
-impl<T> PlanNode<T> {
+impl PlanNode {
     /// Attach an `lir_id` to a `PlanNode` to make a complete `Plan`.
-    pub fn as_plan(self, lir_id: LirId) -> Plan<T> {
+    pub fn as_plan(self, lir_id: LirId) -> Plan {
         Plan { lir_id, node: self }
     }
 }
@@ -416,17 +437,23 @@ impl Plan {
     /// Pretty-print this [Plan] to a string.
     pub fn pretty(&self) -> String {
         let config = ExplainConfig::default();
-        self.explain(&config, None)
+        self.debug_explain(&config, None)
     }
 
     /// Pretty-print this [Plan] to a string using a custom
     /// [ExplainConfig] and an optionally provided [ExprHumanizer].
-    pub fn explain(&self, config: &ExplainConfig, humanizer: Option<&dyn ExprHumanizer>) -> String {
+    /// This is intended for debugging and tests, not users.
+    pub fn debug_explain(
+        &self,
+        config: &ExplainConfig,
+        humanizer: Option<&dyn ExprHumanizer>,
+    ) -> String {
         text_string_at(self, || PlanRenderingContext {
             indent: Indent::default(),
             humanizer: humanizer.unwrap_or(&DummyHumanizer),
             annotations: BTreeMap::default(),
             config,
+            ambiguous_ids: BTreeSet::default(),
         })
     }
 }
@@ -442,7 +469,7 @@ pub enum GetPlan {
     Collection(MapFilterProject),
 }
 
-impl<T: timely::progress::Timestamp> Plan<T> {
+impl Plan {
     /// Convert the dataflow description into one that uses render plans.
     #[mz_ore::instrument(
         target = "optimizer",
@@ -475,9 +502,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
             let monotonic_ids = dataflow
                 .source_imports
                 .iter()
-                .filter_map(
-                    |(id, (_, monotonic, _upper))| if *monotonic { Some(*id) } else { None },
-                )
+                .filter_map(|(id, source_import)| source_import.monotonic.then_some(*id))
                 .chain(
                     dataflow
                         .index_imports
@@ -533,7 +558,8 @@ impl<T: timely::progress::Timestamp> Plan<T> {
     fn refine_source_mfps(dataflow: &mut DataflowDescription<Self>) {
         // Extract MFPs from Get operators for sources, and extract what we can for the source.
         // For each source, we want to find `&mut MapFilterProject` for each `Get` expression.
-        for (source_id, (source, _monotonic, _upper)) in dataflow.source_imports.iter_mut() {
+        for (source_id, source_import) in dataflow.source_imports.iter_mut() {
+            let source = &mut source_import.desc;
             let mut identity_present = false;
             let mut mfps = Vec::new();
             for build_desc in dataflow.objects_to_build.iter_mut() {
@@ -635,9 +661,6 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                     PlanNode::Reduce { plan, .. } => {
                         // Upgrade non-monotonic hierarchical plans to monotonic with mandatory consolidation.
                         match plan {
-                            ReducePlan::Collation(collation) => {
-                                collation.as_monotonic(true);
-                            }
                             ReducePlan::Hierarchical(hierarchical) => {
                                 hierarchical.as_monotonic(true);
                             }
@@ -681,7 +704,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
         // a single-time dataflow.
         assert!(dataflow.is_single_time());
 
-        let transform = transform::RelaxMustConsolidate::<T>::new();
+        let transform = transform::RelaxMustConsolidate;
         for build_desc in dataflow.objects_to_build.iter_mut() {
             transform
                 .transform(config, &mut build_desc.plan)
@@ -692,7 +715,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
     }
 }
 
-impl<T> CollectionPlan for PlanNode<T> {
+impl CollectionPlan for PlanNode {
     fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>) {
         match self {
             PlanNode::Constant { rows: _ } => (),
@@ -770,7 +793,7 @@ impl<T> CollectionPlan for PlanNode<T> {
     }
 }
 
-impl<T> CollectionPlan for Plan<T> {
+impl CollectionPlan for Plan {
     fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>) {
         self.node.depends_on_into(out);
     }

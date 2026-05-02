@@ -1,0 +1,10 @@
+- name: "syntax"
+  code: |
+    GRANT <role_name> [, ...] TO <grantee> [, ...]
+  syntax_elements:
+    - name: "`<role_name>`"
+      description: |
+        The name of the role being granted.
+    - name: "`<grantee>`"
+      description: |
+        The name of the receiving role; i.e., the grantee.

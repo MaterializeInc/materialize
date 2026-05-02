@@ -435,7 +435,7 @@ impl<'a> Transaction<'a> {
         owner_id: RoleId,
         config: ClusterConfig,
         temporary_oids: &HashSet<u32>,
-    ) -> Result<(), CatalogError> {
+    ) -> Result<ClusterId, CatalogError> {
         let cluster_id = self.get_and_increment_id(SYSTEM_CLUSTER_ID_ALLOC_KEY.to_string())?;
         let cluster_id = ClusterId::system(cluster_id).ok_or(SqlCatalogError::IdExhaustion)?;
         self.insert_cluster(
@@ -446,7 +446,8 @@ impl<'a> Transaction<'a> {
             privileges,
             config,
             temporary_oids,
-        )
+        )?;
+        Ok(cluster_id)
     }
 
     fn insert_cluster(
@@ -859,12 +860,12 @@ impl<'a> Transaction<'a> {
             LogVariant::Compute(ComputeLog::ArrangementHeapSize) => 24,
             LogVariant::Compute(ComputeLog::ArrangementHeapCapacity) => 25,
             LogVariant::Compute(ComputeLog::ArrangementHeapAllocations) => 26,
-            LogVariant::Compute(ComputeLog::ShutdownDuration) => 27,
             LogVariant::Compute(ComputeLog::ErrorCount) => 28,
             LogVariant::Compute(ComputeLog::HydrationTime) => 29,
             LogVariant::Compute(ComputeLog::LirMapping) => 30,
             LogVariant::Compute(ComputeLog::DataflowGlobal) => 31,
             LogVariant::Compute(ComputeLog::OperatorHydrationStatus) => 32,
+            LogVariant::Compute(ComputeLog::PrometheusMetrics) => 33,
         };
 
         let mut id: u64 = u64::from(cluster_variant) << 56;
@@ -1021,6 +1022,39 @@ impl<'a> Transaction<'a> {
     pub fn allocate_oid(&mut self, temporary_oids: &HashSet<u32>) -> Result<u32, CatalogError> {
         self.allocate_oids(1, temporary_oids)
             .map(|oids| oids.into_element())
+    }
+
+    /// Exports the current state of this transaction as a [`Snapshot`].
+    ///
+    /// This merges each `TableTransaction`'s initial data with its pending
+    /// changes to produce the current view, then converts back to proto types.
+    /// Used to persist transaction state between incremental DDL dry runs so
+    /// the next dry run's fresh `Transaction` starts in sync with the
+    /// accumulated `CatalogState`.
+    pub fn current_snapshot(&self) -> Snapshot {
+        Snapshot {
+            databases: self.databases.current_items_proto(),
+            schemas: self.schemas.current_items_proto(),
+            roles: self.roles.current_items_proto(),
+            role_auth: self.role_auth.current_items_proto(),
+            items: self.items.current_items_proto(),
+            comments: self.comments.current_items_proto(),
+            clusters: self.clusters.current_items_proto(),
+            network_policies: self.network_policies.current_items_proto(),
+            cluster_replicas: self.cluster_replicas.current_items_proto(),
+            introspection_sources: self.introspection_sources.current_items_proto(),
+            id_allocator: self.id_allocator.current_items_proto(),
+            configs: self.configs.current_items_proto(),
+            settings: self.settings.current_items_proto(),
+            system_object_mappings: self.system_gid_mapping.current_items_proto(),
+            system_configurations: self.system_configurations.current_items_proto(),
+            default_privileges: self.default_privileges.current_items_proto(),
+            source_references: self.source_references.current_items_proto(),
+            system_privileges: self.system_privileges.current_items_proto(),
+            storage_collection_metadata: self.storage_collection_metadata.current_items_proto(),
+            unfinalized_shards: self.unfinalized_shards.current_items_proto(),
+            txn_wal_shard: self.txn_wal_shard.current_items_proto(),
+        }
     }
 
     pub(crate) fn insert_id_allocator(
@@ -2150,6 +2184,13 @@ impl<'a> Transaction<'a> {
             .map(|(k, v)| DurableType::from_key_value(k.clone(), v.clone()))
     }
 
+    pub fn get_databases(&self) -> impl Iterator<Item = Database> + use<'_> {
+        self.databases
+            .items()
+            .into_iter()
+            .map(|(k, v)| DurableType::from_key_value(k.clone(), v.clone()))
+    }
+
     pub fn get_roles(&self) -> impl Iterator<Item = Role> + use<'_> {
         self.roles
             .items()
@@ -2506,7 +2547,7 @@ impl<'a> Transaction<'a> {
             unfinalized_shards,
             txn_wal_shard,
             audit_log_updates,
-            upper,
+            upper: _,
         } = &mut txn_batch;
         // Consolidate in memory because it will likely be faster than consolidating after the
         // transaction has been made durable.
@@ -2533,12 +2574,6 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(txn_wal_shard);
         differential_dataflow::consolidation::consolidate_updates(audit_log_updates);
 
-        assert!(
-            commit_ts >= *upper,
-            "expected commit ts, {}, to be greater than or equal to upper, {}",
-            commit_ts,
-            upper
-        );
         let upper = durable_catalog
             .commit_transaction(txn_batch, commit_ts)
             .await?;
@@ -2589,7 +2624,7 @@ use crate::durable::async_trait;
 use super::objects::{RoleAuthKey, RoleAuthValue};
 
 #[async_trait]
-impl StorageTxn<mz_repr::Timestamp> for Transaction<'_> {
+impl StorageTxn for Transaction<'_> {
     fn get_collection_metadata(&self) -> BTreeMap<GlobalId, ShardId> {
         self.storage_collection_metadata
             .items()
@@ -2606,7 +2641,7 @@ impl StorageTxn<mz_repr::Timestamp> for Transaction<'_> {
     fn insert_collection_metadata(
         &mut self,
         metadata: BTreeMap<GlobalId, ShardId>,
-    ) -> Result<(), StorageError<mz_repr::Timestamp>> {
+    ) -> Result<(), StorageError> {
         for (id, shard) in metadata {
             self.storage_collection_metadata
                 .insert(
@@ -2654,10 +2689,7 @@ impl StorageTxn<mz_repr::Timestamp> for Transaction<'_> {
             .collect()
     }
 
-    fn insert_unfinalized_shards(
-        &mut self,
-        s: BTreeSet<ShardId>,
-    ) -> Result<(), StorageError<mz_repr::Timestamp>> {
+    fn insert_unfinalized_shards(&mut self, s: BTreeSet<ShardId>) -> Result<(), StorageError> {
         for shard in s {
             match self
                 .unfinalized_shards
@@ -2687,10 +2719,7 @@ impl StorageTxn<mz_repr::Timestamp> for Transaction<'_> {
             .map(|TxnWalShardValue { shard }| *shard)
     }
 
-    fn write_txn_wal_shard(
-        &mut self,
-        shard: ShardId,
-    ) -> Result<(), StorageError<mz_repr::Timestamp>> {
+    fn write_txn_wal_shard(&mut self, shard: ShardId) -> Result<(), StorageError> {
         self.txn_wal_shard
             .insert((), TxnWalShardValue { shard }, self.op_id)
             .map_err(|err| match err {
@@ -3093,6 +3122,22 @@ where
         let mut items = BTreeMap::new();
         self.for_values(|k, v| {
             items.insert(k.clone(), v.clone());
+        });
+        items
+    }
+
+    /// Returns the current items as proto-typed key-value pairs, suitable for
+    /// constructing a [`Snapshot`]. This merges `initial` and `pending` to
+    /// produce the current view and converts back to proto types.
+    fn current_items_proto<KP, VP>(&self) -> BTreeMap<KP, VP>
+    where
+        K: RustType<KP>,
+        V: RustType<VP>,
+        KP: Ord,
+    {
+        let mut items = BTreeMap::new();
+        self.for_values(|k, v| {
+            items.insert(k.into_proto(), v.into_proto());
         });
         items
     }

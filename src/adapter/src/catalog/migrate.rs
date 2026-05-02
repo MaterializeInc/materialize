@@ -7,11 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use base64::prelude::*;
 use maplit::btreeset;
-use mz_catalog::builtin::BuiltinTable;
+use mz_catalog::builtin::{BUILTINS, BuiltinTable};
+use mz_catalog::durable::objects::{SystemObjectDescription, SystemObjectMapping};
 use mz_catalog::durable::{MOCK_AUTHENTICATION_NONCE_KEY, Transaction};
 use mz_catalog::memory::objects::{BootstrapStateUpdateKind, StateUpdate};
 use mz_ore::collections::CollectionExt;
@@ -24,7 +25,7 @@ use mz_sql::ast::{
     CreateSinkOptionName, CreateViewStatement, CteBlock, DeferredItemName, IfExistsBehavior, Query,
     SetExpr, SqlServerConfigOptionName, ViewDefinition,
 };
-use mz_sql::catalog::SessionCatalog;
+use mz_sql::catalog::{CatalogItemType, SessionCatalog};
 use mz_sql::names::{FullItemName, QualifiedItemName};
 use mz_sql::normalize;
 use mz_sql::session::vars::{FORCE_SOURCE_TABLE_SYNTAX, Var, VarInput};
@@ -41,6 +42,7 @@ use uuid::Uuid;
 use crate::catalog::open::into_consolidatable_updates_startup;
 use crate::catalog::state::LocalExpressionCache;
 use crate::catalog::{BuiltinTableUpdate, CatalogState, ConnCatalog};
+use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
 
 /// Catalog key of the `migration_version` setting.
 ///
@@ -117,6 +119,7 @@ where
 
 pub(crate) struct MigrateResult {
     pub(crate) builtin_table_updates: Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
+    pub(crate) catalog_updates: Vec<ParsedStateUpdate>,
     pub(crate) post_item_updates: Vec<(BootstrapStateUpdateKind, Timestamp, Diff)>,
 }
 
@@ -138,7 +141,7 @@ pub(crate) async fn migrate(
         catalog_version
     );
 
-    rewrite_ast_items(tx, |_tx, _id, stmt| {
+    rewrite_ast_items(tx, |tx, _id, stmt| {
         // Add per-item AST migrations below.
         //
         // Each migration should be a function that takes `stmt` (the AST
@@ -149,6 +152,7 @@ pub(crate) async fn migrate(
         // arbitrary changes to the catalog.
         ast_rewrite_create_sink_partition_strategy(stmt)?;
         ast_rewrite_sql_server_constraints(stmt)?;
+        ast_rewrite_add_missing_index_ids(tx, stmt)?;
         Ok(())
     })?;
 
@@ -192,9 +196,8 @@ pub(crate) async fn migrate(
             .expect("known parameter");
     }
 
-    let mut ast_builtin_table_updates = state
-        .apply_updates_for_bootstrap(item_updates, local_expr_cache)
-        .await;
+    let (mut ast_builtin_table_updates, mut ast_catalog_updates) =
+        state.apply_updates(item_updates, local_expr_cache).await;
 
     info!("migrating from catalog version {:?}", catalog_version);
 
@@ -238,18 +241,20 @@ pub(crate) async fn migrate(
     // input and stages arbitrary transformations to the catalog on `tx`.
 
     let op_item_updates = tx.get_and_commit_op_updates();
-    let item_builtin_table_updates = state
-        .apply_updates_for_bootstrap(op_item_updates, local_expr_cache)
-        .await;
+    let (item_builtin_table_updates, item_catalog_updates) =
+        state.apply_updates(op_item_updates, local_expr_cache).await;
 
     ast_builtin_table_updates.extend(item_builtin_table_updates);
+    ast_catalog_updates.extend(item_catalog_updates);
 
     info!(
         "migration from catalog version {:?} complete",
         catalog_version
     );
+
     Ok(MigrateResult {
         builtin_table_updates: ast_builtin_table_updates,
+        catalog_updates: ast_catalog_updates,
         post_item_updates,
     })
 }
@@ -825,9 +830,55 @@ pub(crate) fn durable_migrate(
         .is_none()
     {
         let mut nonce = [0u8; 24];
-        let _ = openssl::rand::rand_bytes(&mut nonce).expect("failed to generate nonce");
+        openssl::rand::rand_bytes(&mut nonce).expect("failed to generate nonce");
         let nonce = BASE64_STANDARD.encode(nonce);
         tx.set_setting(MOCK_AUTHENTICATION_NONCE_KEY.to_string(), Some(nonce))?;
+    }
+
+    migrate_builtin_tables_to_mvs(tx)?;
+
+    Ok(())
+}
+
+/// Update system object mappings for builtins whose type changed from table to materialized view.
+///
+/// Required for the work of making builtin tables views over `mz_catalog_raw`.
+fn migrate_builtin_tables_to_mvs(tx: &mut Transaction) -> Result<(), anyhow::Error> {
+    // Collect `(schema, name)` of all builtin MVs.
+    let expected_mvs: BTreeSet<_> = BUILTINS::materialized_views()
+        .map(|mv| (mv.schema, mv.name))
+        .collect();
+
+    // Find persisted mappings for builtin tables that must be migrated.
+    let mut to_remove = BTreeSet::new();
+    let mut to_add = Vec::new();
+    for mapping in tx.get_system_object_mappings() {
+        let desc = &mapping.description;
+        if desc.object_type != CatalogItemType::Table {
+            continue;
+        }
+
+        let key = (&*desc.schema_name, &*desc.object_name);
+        if expected_mvs.contains(&key) {
+            info!(
+                "migrate: builtin {}.{} changed type from table to MV",
+                desc.schema_name, desc.object_name,
+            );
+            to_remove.insert(desc.clone());
+            to_add.push(SystemObjectMapping {
+                description: SystemObjectDescription {
+                    schema_name: desc.schema_name.clone(),
+                    object_type: CatalogItemType::MaterializedView,
+                    object_name: desc.object_name.clone(),
+                },
+                unique_identifier: mapping.unique_identifier,
+            });
+        }
+    }
+
+    if !to_remove.is_empty() {
+        tx.remove_system_object_mappings(to_remove)?;
+        tx.set_system_object_mappings(to_add)?;
     }
 
     Ok(())
@@ -938,6 +989,53 @@ fn ast_rewrite_sql_server_constraints(stmt: &mut Statement<Raw>) -> Result<(), a
         initial_lsn,
     };
     *deets = hex::encode(new_value.into_proto().encode_to_vec());
+
+    Ok(())
+}
+
+/// Add missing item IDs to the ON clauses of CREATE INDEX statements.
+fn ast_rewrite_add_missing_index_ids(
+    tx: &Transaction<'_>,
+    stmt: &mut Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    let Statement::CreateIndex(stmt) = stmt else {
+        return Ok(());
+    };
+
+    let unresolved_name = match stmt.on_name.clone() {
+        mz_sql::ast::RawItemName::Name(name) => name,
+        // ID already present; nothing to do.
+        mz_sql::ast::RawItemName::Id(..) => return Ok(()),
+    };
+
+    let parts = &unresolved_name.0;
+    let (db_name, schema_name, item_name) = match parts.len() {
+        3 => (Some(&parts[0]), &parts[1], &parts[2]),
+        2 => (None, &parts[0], &parts[1]),
+        _ => panic!("invalid unresolved name: {unresolved_name:?}"),
+    };
+
+    let db_id = db_name.map(|x| {
+        let db = tx.get_databases().find(|db| db.name == x.as_str());
+        let db = db.unwrap_or_else(|| panic!("missing database: {x}"));
+        db.id
+    });
+    let schema_id = {
+        let schema = tx
+            .get_schemas()
+            .find(|s| s.name == schema_name.as_str() && s.database_id == db_id);
+        let schema = schema.unwrap_or_else(|| panic!("missing schema: {schema_name}, {db_id:?}"));
+        schema.id
+    };
+    let item_id = {
+        let item = tx
+            .get_items()
+            .find(|i| i.name == item_name.as_str() && i.schema_id == schema_id);
+        let item = item.unwrap_or_else(|| panic!("missing item: {item_name}, {schema_id:?}"));
+        item.id
+    };
+
+    stmt.on_name = mz_sql::ast::RawItemName::Id(item_id.to_string(), unresolved_name, None);
 
     Ok(())
 }

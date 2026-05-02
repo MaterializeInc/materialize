@@ -148,8 +148,13 @@ impl<C: ConnectionAccess> DataEncoding<C> {
             Self::Json => RelationDesc::builder()
                 .with_column("data", SqlScalarType::Jsonb.nullable(false))
                 .finish(),
-            Self::Avro(AvroEncoding { schema, .. }) => {
-                let parsed_schema = avro::parse_schema(schema).context("validating avro schema")?;
+            Self::Avro(AvroEncoding {
+                schema,
+                reference_schemas,
+                ..
+            }) => {
+                let parsed_schema = avro::parse_schema(schema, reference_schemas)
+                    .context("validating avro schema")?;
                 avro::schema_to_relationdesc(parsed_schema).context("validating avro schema")?
             }
             Self::Protobuf(ProtobufEncoding {
@@ -247,6 +252,10 @@ impl<C: ConnectionAccess> AlterCompatible for DataEncoding<C> {
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct AvroEncoding<C: ConnectionAccess = InlinedConnection> {
     pub schema: String,
+    /// Schemas for types referenced by the main schema, in dependency order.
+    /// These are fetched from the schema registry when the source is created.
+    #[serde(default)]
+    pub reference_schemas: Vec<String>,
     pub csr_connection: Option<C::Csr>,
     pub confluent_wire_format: bool,
 }
@@ -257,11 +266,13 @@ impl<R: ConnectionResolver> IntoInlineConnection<AvroEncoding, R>
     fn into_inline_connection(self, r: R) -> AvroEncoding {
         let AvroEncoding {
             schema,
+            reference_schemas,
             csr_connection,
             confluent_wire_format,
         } = self;
         AvroEncoding {
             schema,
+            reference_schemas,
             csr_connection: csr_connection.map(|csr| r.resolve_connection(csr).unwrap_csr()),
             confluent_wire_format,
         }
@@ -276,12 +287,17 @@ impl<C: ConnectionAccess> AlterCompatible for AvroEncoding<C> {
 
         let AvroEncoding {
             schema,
+            reference_schemas,
             csr_connection,
             confluent_wire_format,
         } = self;
 
         let compatibility_checks = [
             (schema == &other.schema, "schema"),
+            (
+                reference_schemas == &other.reference_schemas,
+                "reference_schemas",
+            ),
             (
                 match (csr_connection, &other.csr_connection) {
                     (Some(s), Some(o)) => s.alter_compatible(id, o).is_ok(),

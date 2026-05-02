@@ -29,8 +29,8 @@ from materialize.mzcompose.composition import (
     Service,
     WorkflowArgumentParser,
 )
+from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.mz import Mz
-from materialize.mzcompose.services.postgres import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.sql_logic_test import SqlLogicTest
 from materialize.ui import CommandFailureCausedUIError
 
@@ -185,7 +185,7 @@ def run_sqllogictest(
         if failed_files:
             if ui.env_is_truthy("CI"):
                 diff = spawn.capture(["git", "diff", "-C", MZ_ROOT])
-                if diff:
+                if diff.strip():
                     with open(
                         MZ_ROOT / f"slt{buildkite.get_parallelism_index() + 1}.diff",
                         "w",
@@ -194,7 +194,7 @@ def run_sqllogictest(
                 else:
                     print("Rewriting results did not result in a diff")
                 print(
-                    f"Rewrite SLT files locally with: bin/sqllogictest --optimized -- --rewrite-results {' '.join([file for step, file in failed_files])}"
+                    f"Rewrite SLT files locally with: bin/sqllogictest --optimized -- --rewrite-results --replica-size={args.replica_size} --replicas={args.replicas} {' '.join([file for step, file in failed_files])}"
                 )
                 print(f"Or apply directly: git apply <<'EOF'\n{diff}EOF")
         if errors:
@@ -238,7 +238,6 @@ class SltRunStepConfig:
         ]
         command = [
             "sqllogictest",
-            "-v",
             *([] if rewrite_results else self.flags),
             *sqllogictest_config,
             file,
@@ -416,6 +415,7 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/regressions.slt",
         "test/sqllogictest/regtype.slt",
         "test/sqllogictest/returning.slt",
+        "test/sqllogictest/replacement-materialized-views.slt",
         "test/sqllogictest/role.slt",
         "test/sqllogictest/role_create.slt",
         "test/sqllogictest/role_membership.slt",
@@ -684,6 +684,8 @@ def compileSlowSltConfig() -> SltRunConfig:
         "test/sqllogictest/introspection/singlereplica_attribution_sources.slt",
         "test/sqllogictest/timedomain.slt",
         "test/sqllogictest/transactions.slt",
+        # depends on log sources
+        "test/sqllogictest/github-10045-10046-10052.slt",
         # depends on unmaterializable functions
         "test/sqllogictest/regclass.slt",
         "test/sqllogictest/regproc.slt",
@@ -703,6 +705,7 @@ def compileSlowSltConfig() -> SltRunConfig:
         "test/sqllogictest/managed_cluster.slt",
         "test/sqllogictest/web-console.slt",
         "test/sqllogictest/show_clusters.slt",
+        "test/sqllogictest/replacement-materialized-views.slt",
     }
     tests_no_auto_index_selects = {
         # pg_typeof contains public schema name in views
@@ -712,6 +715,8 @@ def compileSlowSltConfig() -> SltRunConfig:
         "test/sqllogictest/typeof.slt",
         # https://github.com/MaterializeInc/database-issues/issues/9513#issuecomment-3128051157
         "test/sqllogictest/temporal.slt",
+        # The extra statements make it more flaky from timing issues, when expecting a refresh to not yet have happened.
+        "test/sqllogictest/materialized_views.slt",
     }
 
     tests = file_util.resolve_paths_with_wildcard(tests)

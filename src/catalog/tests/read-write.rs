@@ -7,7 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+#![recursion_limit = "256"]
+
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use insta::assert_debug_snapshot;
 use itertools::Itertools;
@@ -15,11 +18,12 @@ use mz_audit_log::{EventDetails, EventType, EventV1, IdNameV1, VersionedEvent};
 use mz_catalog::durable::objects::serialization::proto;
 use mz_catalog::durable::objects::{DurableType, IdAlloc};
 use mz_catalog::durable::{
-    CatalogError, DurableCatalogError, FenceError, Item, TestCatalogStateBuilder,
-    USER_ITEM_ALLOC_KEY, test_bootstrap_args,
+    CatalogError, Database, DurableCatalogError, FenceError, Item, Metrics,
+    TestCatalogStateBuilder, USER_ITEM_ALLOC_KEY, test_bootstrap_args,
 };
 use mz_ore::assert_ok;
 use mz_ore::collections::HashSet;
+use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::PersistClient;
 use mz_proto::RustType;
@@ -30,13 +34,13 @@ use mz_sql::names::{DatabaseId, ResolvedDatabaseSpecifier, SchemaId};
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-async fn test_persist_confirm_leadership() {
+async fn test_persist_advance_upper_fencing() {
     let persist_client = PersistClient::new_for_tests().await;
     let state_builder = TestCatalogStateBuilder::new(persist_client);
-    test_confirm_leadership(state_builder).await;
+    test_advance_upper_fencing(state_builder).await;
 }
 
-async fn test_confirm_leadership(state_builder: TestCatalogStateBuilder) {
+async fn test_advance_upper_fencing(state_builder: TestCatalogStateBuilder) {
     let state_builder = state_builder.with_default_deploy_generation();
     let mut state1 = state_builder
         .clone()
@@ -46,7 +50,8 @@ async fn test_confirm_leadership(state_builder: TestCatalogStateBuilder) {
         .await
         .unwrap()
         .0;
-    assert_ok!(state1.confirm_leadership().await);
+    let ts = state1.current_upper().await.step_forward();
+    assert_ok!(state1.advance_upper(ts).await);
 
     let mut state2 = state_builder
         .unwrap_build()
@@ -55,9 +60,11 @@ async fn test_confirm_leadership(state_builder: TestCatalogStateBuilder) {
         .await
         .unwrap()
         .0;
-    assert_ok!(state2.confirm_leadership().await);
+    let ts = state2.current_upper().await.step_forward();
+    assert_ok!(state2.advance_upper(ts).await);
 
-    let err = state1.confirm_leadership().await.unwrap_err();
+    let ts = ts.step_forward();
+    let err = state1.advance_upper(ts).await.unwrap_err();
     assert!(matches!(
         err,
         CatalogError::Durable(DurableCatalogError::Fence(FenceError::Epoch { .. }))
@@ -403,7 +410,7 @@ async fn test_non_writer_commits(state_builder: TestCatalogStateBuilder) {
         let roles = writer_state.snapshot().await.unwrap().roles;
         let role = roles
             .get(&proto::RoleKey {
-                id: Some(role_id.into_proto()),
+                id: role_id.into_proto(),
             })
             .unwrap();
         assert_eq!(role_name, &role.name);
@@ -432,16 +439,14 @@ async fn test_non_writer_commits(state_builder: TestCatalogStateBuilder) {
         // writes from writer catalogs, so it should not see the new role.
         let roles = snapshot.roles;
         let role = roles.get(&proto::RoleKey {
-            id: Some(role_id.into_proto()),
+            id: role_id.into_proto(),
         });
         assert_eq!(None, role);
 
         let dbs = snapshot.databases;
         let db = dbs
             .get(&proto::DatabaseKey {
-                id: Some(proto::DatabaseId {
-                    value: Some(proto::database_id::Value::User(db_id)),
-                }),
+                id: proto::DatabaseId::User(db_id),
             })
             .unwrap();
         assert_eq!(db_name, &db.name);
@@ -453,4 +458,286 @@ async fn test_non_writer_commits(state_builder: TestCatalogStateBuilder) {
         let commit_ts = txn.upper();
         txn.commit(commit_ts).await.unwrap();
     }
+}
+
+/// Verifies that computing next IDs from max existing catalog items gives
+/// the correct baseline for DDL detection, even when the allocator counter
+/// has been advanced far ahead by batch allocation (as IdPool does).
+///
+/// This is a regression test for the 0dt DDL detection bug where
+/// `get_next_ids()` in preflight.rs used the allocator counter instead
+/// of the max existing item ID, causing it to miss objects created from
+/// a pre-allocated ID pool.
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn test_persist_ddl_detection_with_batch_allocated_ids() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
+    let state_builder = state_builder.with_default_deploy_generation();
+
+    let mut state = state_builder
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap()
+        .0;
+    // Drain initial updates.
+    let _ = state
+        .sync_to_current_updates()
+        .await
+        .expect("sync to current updates failed");
+
+    // Simulate IdPool batch allocation: reserve 500 IDs at once.
+    // This advances the allocator counter by 500, but we only create
+    // a few items using the first IDs from that batch.
+    let commit_ts = state.current_upper().await;
+    let batch_ids = state
+        .allocate_id(USER_ITEM_ALLOC_KEY, 500, commit_ts)
+        .await
+        .unwrap();
+    assert_eq!(batch_ids.len(), 500);
+    let first_id = batch_ids[0];
+
+    // The allocator counter is now far ahead.
+    let allocator_next = state.get_next_id(USER_ITEM_ALLOC_KEY).await.unwrap();
+    assert_eq!(allocator_next, first_id + 500);
+
+    // Insert only 3 items using the first IDs from the batch.
+    let mut txn = state.transaction().await.unwrap();
+    for i in 0..3u64 {
+        let id = first_id + i;
+        txn.insert_item(
+            CatalogItemId::User(id),
+            20_000 + u32::try_from(i).unwrap(),
+            GlobalId::User(id),
+            SchemaId::User(1),
+            &format!("item_{i}"),
+            format!("CREATE VIEW v{i} AS SELECT {i}"),
+            RoleId::User(1),
+            vec![],
+            BTreeMap::new(),
+        )
+        .unwrap();
+    }
+    let _ = txn.get_and_commit_op_updates();
+    let commit_ts = txn.upper();
+    txn.commit(commit_ts).await.unwrap();
+
+    // Now verify the two approaches to computing the next ID baseline.
+    let txn = state.transaction().await.unwrap();
+
+    // Approach used by the fix: max existing item ID + 1.
+    let max_based_next = txn
+        .get_items()
+        .filter_map(|item| match item.id {
+            CatalogItemId::User(id) => Some(id),
+            _ => None,
+        })
+        .max()
+        .map(|id| id + 1)
+        .unwrap_or(0);
+
+    // The max-based approach gives first_id + 3 (just past the 3 items).
+    assert_eq!(max_based_next, first_id + 3);
+
+    // The allocator counter is still at first_id + 500.
+    assert_eq!(allocator_next, first_id + 500);
+
+    // The gap is the bug: using the allocator counter as baseline would
+    // miss any items with IDs in [first_id .. first_id + 500) that are
+    // created after the baseline is captured.
+    assert!(
+        max_based_next < allocator_next,
+        "max-based next ({max_based_next}) must be below allocator counter \
+         ({allocator_next}) to demonstrate the batch allocation gap"
+    );
+
+    Box::new(state).expire().await;
+}
+
+/// Regression test for incident-970: quadratic consolidation during catalog sync.
+///
+/// When a reader syncs through K timestamps, apply_updates() was calling
+/// consolidate() on the entire snapshot for each timestamp, resulting in
+/// O(K * N log N) work instead of O(N log N). This test verifies that syncing
+/// through many timestamps only consolidates the snapshot a constant number of
+/// times, not once per timestamp.
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn test_persist_sync_consolidation_not_quadratic() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+    let state_builder =
+        TestCatalogStateBuilder::new(persist_client).with_default_deploy_generation();
+    // Share metrics between writer and reader so we can observe consolidation counts.
+    let state_builder = state_builder.with_metrics(Arc::clone(&metrics));
+
+    // Open a writer catalog.
+    let mut writer = state_builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap()
+        .0;
+    let _ = writer.sync_to_current_updates().await.unwrap();
+
+    // Open a read-only catalog, caught up to the current upper.
+    let mut reader = state_builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open_read_only(&test_bootstrap_args())
+        .await
+        .unwrap();
+    let _ = reader.sync_to_current_updates().await.unwrap();
+
+    // Writer creates many databases, each in its own transaction at a distinct
+    // timestamp. This mirrors the incident scenario where DDL happened across
+    // many timestamps while a read-only envd was restarting.
+    let num_timestamps: u64 = 100;
+    for i in 0..num_timestamps {
+        let mut txn = writer.transaction().await.unwrap();
+        txn.insert_user_database(
+            &format!("db_{i}"),
+            RoleId::User(1),
+            Vec::new(),
+            &HashSet::new(),
+        )
+        .unwrap();
+        let _ = txn.get_and_commit_op_updates();
+        let commit_ts = txn.upper();
+        txn.commit(commit_ts).await.unwrap();
+    }
+
+    // Record the consolidation counter before the reader syncs.
+    let consolidations_before = metrics.snapshot_consolidations.get();
+
+    // Reader syncs through all timestamps. With the quadratic bug, this would
+    // call consolidate() once per timestamp (num_timestamps times). With the
+    // fix, it should consolidate only once after processing all timestamps.
+    let updates = reader.sync_to_current_updates().await.unwrap();
+    let consolidations_after = metrics.snapshot_consolidations.get();
+    let consolidations_during_sync = consolidations_after - consolidations_before;
+
+    // Verify correctness: reader received updates and can see all databases.
+    assert!(
+        !updates.is_empty(),
+        "reader should have received updates from writer"
+    );
+    let snapshot = reader.snapshot().await.unwrap();
+    for i in 0..num_timestamps {
+        let db_name = format!("db_{i}");
+        let found = snapshot.databases.values().any(|db| db.name == db_name);
+        assert!(found, "database {db_name} not found in reader snapshot");
+    }
+
+    // The key assertion: consolidation should happen O(log N) times during
+    // the sync (from the doubling strategy), NOT once per timestamp (which
+    // would be num_timestamps = 100). We allow a generous bound here.
+    assert!(
+        consolidations_during_sync < 10,
+        "sync through {num_timestamps} timestamps triggered {consolidations_during_sync} \
+         snapshot consolidations, suggesting quadratic behavior (expected < 10)"
+    );
+
+    Box::new(writer).expire().await;
+    Box::new(reader).expire().await;
+}
+
+/// Verify that the reader's snapshot stays bounded during sync catch-up, even
+/// when the writer churns the same object many times across timestamps. Without
+/// the doubling consolidation in `sync_inner`, the snapshot would grow with
+/// every retract+insert pair; with it, the snapshot stays within ~3x the live
+/// catalog size.
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn test_persist_sync_snapshot_stays_bounded_under_churn() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+    let state_builder = TestCatalogStateBuilder::new(persist_client)
+        .with_default_deploy_generation()
+        .with_metrics(Arc::clone(&metrics));
+
+    // Open writer, create one database to churn.
+    let mut writer = state_builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap()
+        .0;
+    let _ = writer.sync_to_current_updates().await.unwrap();
+
+    let mut txn = writer.transaction().await.unwrap();
+    let (db_id, db_oid) = txn
+        .insert_user_database("churn_db", RoleId::User(1), Vec::new(), &HashSet::new())
+        .unwrap();
+    let _ = txn.get_and_commit_op_updates();
+    let commit_ts = txn.upper();
+    txn.commit(commit_ts).await.unwrap();
+
+    // Open reader, sync to current state.
+    let mut reader = state_builder
+        .unwrap_build()
+        .await
+        .open_read_only(&test_bootstrap_args())
+        .await
+        .unwrap();
+    let _ = reader.sync_to_current_updates().await.unwrap();
+    let peak_before = metrics.snapshot_max_entries.get();
+
+    // Rename the same database 200 times, each in its own transaction.
+    let num_renames: u64 = 200;
+    let mut db = Database {
+        id: db_id,
+        oid: db_oid,
+        name: "churn_db".to_string(),
+        owner_id: RoleId::User(1),
+        privileges: Vec::new(),
+    };
+    for i in 0..num_renames {
+        let mut txn = writer.transaction().await.unwrap();
+        db.name = format!("churn_db_{i}");
+        txn.update_database(db.id, db.clone()).unwrap();
+        let _ = txn.get_and_commit_op_updates();
+        let commit_ts = txn.upper();
+        txn.commit(commit_ts).await.unwrap();
+    }
+
+    // Reader syncs through all 200 renames.
+    let _ = reader.sync_to_current_updates().await.unwrap();
+
+    // Verify correctness: only one database, with the final name.
+    let snapshot = reader.snapshot().await.unwrap();
+    let churn_dbs: Vec<_> = snapshot
+        .databases
+        .values()
+        .filter(|d| d.name.starts_with("churn_db"))
+        .collect();
+    assert_eq!(churn_dbs.len(), 1, "{churn_dbs:#?}");
+    assert_eq!(churn_dbs[0].name, format!("churn_db_{}", num_renames - 1));
+
+    // The key assertion: the snapshot high-water mark should stay bounded,
+    // not grow proportionally to num_renames. The doubling consolidation
+    // keeps it within ~3x the live catalog size.
+    let peak_after = metrics.snapshot_max_entries.get();
+    let peak_delta = peak_after - peak_before;
+    // With doubling consolidation, the snapshot stays bounded. Without
+    // consolidation this would grow by ~387 for 200 renames; with it, the
+    // delta should be much smaller. We use 3x to allow headroom for
+    // variance in how persist batches deliveries.
+    let bounded = peak_before * 3;
+    assert!(
+        peak_delta < bounded,
+        "peak unconsolidated snapshot grew by {peak_delta} over {num_renames} \
+         renames (peak_before={peak_before}, peak_after={peak_after}); \
+         expected < {bounded}"
+    );
+
+    Box::new(writer).expire().await;
+    Box::new(reader).expire().await;
 }

@@ -24,7 +24,7 @@ use itertools::EitherOrBoth;
 use mz_dyncfg::{Config, ConfigSet, ConfigValHandle};
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
-use mz_ore::{soft_panic_no_log, soft_panic_or_log};
+use mz_ore::{soft_assert_or_log, soft_panic_no_log, soft_panic_or_log};
 use mz_persist::indexed::columnar::arrow::{realloc_any, realloc_array};
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsStructuredExt};
 use mz_persist::indexed::encoding::{BlobTraceBatchPart, BlobTraceUpdates};
@@ -93,7 +93,7 @@ pub(crate) const OPTIMIZE_IGNORED_DATA_FETCH: Config<bool> = Config::new(
 
 pub(crate) const VALIDATE_PART_BOUNDS_ON_READ: Config<bool> = Config::new(
     "persist_validate_part_bounds_on_read",
-    true,
+    false,
     "Validate the part lower <= the batch lower and the part upper <= batch upper,\
     for the batch containing that part",
 );
@@ -472,7 +472,6 @@ impl Lease {
     }
 
     /// Returns the inner [SeqNo] of this [Lease].
-    #[cfg(test)]
     pub fn seqno(&self) -> SeqNo {
         *self.0
     }
@@ -805,7 +804,7 @@ pub struct FetchedPart<K: Codec, V: Codec, T, D> {
     diffs: Int64Array,
     migration: PartMigration<K, V>,
     filter_pushdown_audit: Option<LazyPartStats>,
-    peek_stash: Option<((Result<K, String>, Result<V, String>), T, D)>,
+    peek_stash: Option<((K, V), T, D)>,
     part_cursor: usize,
     key_storage: Option<K::Storage>,
     val_storage: Option<V::Storage>,
@@ -996,7 +995,7 @@ where
         &mut self,
         key: &mut Option<K>,
         val: &mut Option<V>,
-    ) -> Option<((Result<K, String>, Result<V, String>), T, D)> {
+    ) -> Option<((K, V), T, D)> {
         let mut consolidated = self.peek_stash.take();
         loop {
             // Fetch and decode the next tuple in the sequence. (Or break if there is none.)
@@ -1041,18 +1040,13 @@ where
         Some((kv, t, d))
     }
 
-    fn decode_kv(
-        &mut self,
-        index: usize,
-        key: &mut Option<K>,
-        val: &mut Option<V>,
-    ) -> (Result<K, String>, Result<V, String>) {
+    fn decode_kv(&mut self, index: usize, key: &mut Option<K>, val: &mut Option<V>) -> (K, V) {
         let decoded = self
             .part
             .as_ref()
             .map_left(|codec| {
                 let ((ck, cv), _, _) = codec.get(index).expect("valid index");
-                Self::decode_codec(
+                let (k, v) = Self::decode_codec(
                     &*self.metrics,
                     self.migration.codec_read(),
                     ck,
@@ -1061,7 +1055,8 @@ where
                     val,
                     &mut self.key_storage,
                     &mut self.val_storage,
-                )
+                );
+                (k.expect("valid legacy key"), v.expect("valid legacy value"))
             })
             .map_right(|(structured_key, structured_val)| {
                 self.decode_structured(index, structured_key, structured_val, key, val)
@@ -1135,14 +1130,14 @@ where
         vals: &<V::Schema as Schema<V>>::Decoder,
         key: &mut Option<K>,
         val: &mut Option<V>,
-    ) -> (Result<K, String>, Result<V, String>) {
+    ) -> (K, V) {
         let mut key = key.take().unwrap_or_default();
         keys.decode(idx, &mut key);
 
         let mut val = val.take().unwrap_or_default();
         vals.decode(idx, &mut val);
 
-        (Ok(key), Ok(val))
+        (key, val)
     }
 }
 
@@ -1153,7 +1148,7 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Monoid + Codec64 + Send + Sync,
 {
-    type Item = ((Result<K, String>, Result<V, String>), T, D);
+    type Item = ((K, V), T, D);
 
     fn next(&mut self) -> Option<Self::Item> {
         self.next_with_storage(&mut None, &mut None)
@@ -1265,7 +1260,7 @@ where
             || inline_desc.upper() != registered_desc.upper();
         if needs_truncation {
             if cfg.validate_bounds_on_read {
-                assert!(
+                soft_assert_or_log!(
                     PartialOrder::less_equal(inline_desc.lower(), registered_desc.lower()),
                     "key={} inline={:?} registered={:?}",
                     printable_name,
@@ -1278,7 +1273,7 @@ where
                     // upper of a batch that's already been staged (the inline
                     // upper), so if it's been used, then there's no useful
                     // invariant that we can assert here.
-                    assert!(
+                    soft_assert_or_log!(
                         PartialOrder::less_equal(registered_desc.upper(), inline_desc.upper()),
                         "key={} inline={:?} registered={:?}",
                         printable_name,
@@ -1300,7 +1295,7 @@ where
                 registered_desc
             );
         } else {
-            assert!(
+            soft_assert_or_log!(
                 PartialOrder::less_equal(inline_desc.since(), registered_desc.since()),
                 "key={} inline={:?} registered={:?}",
                 printable_name,

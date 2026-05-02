@@ -24,10 +24,10 @@ For each threshold level, use the following table as a guide to set up your own 
 
 Metric | Warning | Alert | Description
 -- | -- | -- | --
-Memory utilization | 80% | 90% | Average [memory utilization](https://materialize.com/docs/sql/system-catalog/mz_internal/#mz_cluster_replica_utilization), (defined using heap_percent) for a cluster in the last *15 minutes*.
+Memory utilization | 80% | 90% | Average [memory utilization](https://materialize.com/docs/reference/system-catalog/mz_internal/#mz_cluster_replica_utilization), (defined using heap_percent) for a cluster in the last *15 minutes*.
 Source status | - | On Change | Source status change in the last *1 minute*.
 Cluster status | - | On Change | Cluster replica status change in the last *1 minute*.
-Freshness | > 5s | > 1m | Average [lag behind an input](/sql/system-catalog/mz_internal/#mz_materialization_lag) in the last *15 minutes*.
+Freshness | > 5s | > 1m | Average [lag behind an input](/reference/system-catalog/mz_internal/#mz_materialization_lag) in the last *15 minutes*.
 
 {{<note>}}
 Customers on legacy cluster sizes should still monitor their Memory usage. Please [contact support](/support/) for questions.
@@ -44,7 +44,7 @@ Credits | Consumption rate increase by X% | Consumption rate increase by Y% | Av
 
 ## Maintenance window
 
-Materialize has a [release and a maintenance window almost every week](/releases/) at a defined [schedule](/releases/#materialize-cloud-upgrade-schedule).
+Materialize has a release and a maintenance window almost every week at a defined [schedule](/releases/schedule/#cloud-upgrade-schedule).
 
 During an upgrade, clients may experience brief connection interruptions, but the service otherwise remains fully available. Alerts may get triggered during this brief period of time. For this case, you can configure your monitoring tool to avoid unnecessary alerts as follows:
 

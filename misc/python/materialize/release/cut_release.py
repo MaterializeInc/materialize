@@ -10,12 +10,8 @@
 """Cut a new release and push the tag to the upstream Materialize repository."""
 
 import argparse
-import os
 import re
-import shutil
-import subprocess
 import sys
-import time
 
 from semver.version import Version
 
@@ -50,51 +46,22 @@ def main():
         type=str,
         required=True,
     )
+    parser.add_argument(
+        "--dry-run",
+        help="Only bump versions and update docs, skip git commit/tag/push",
+        action="store_true",
+    )
 
     args = parser.parse_args()
     version = f"v{args.version}"
     current_branch = get_branch_name()
 
+    print("Checking if Docker is running")
+    spawn.capture(["docker", "info"])
+
     try:
         print(f"Checking out SHA {args.sha}")
         checkout(args.sha)
-        print("Cloning console repo")
-        console_dir = MZ_ROOT / "console"
-        if os.path.exists(console_dir):
-            shutil.rmtree(console_dir)
-        try:
-            spawn.runv(
-                [
-                    "git",
-                    "clone",
-                    "https://github.com/MaterializeInc/console",
-                    console_dir,
-                ],
-                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
-            )
-        except subprocess.CalledProcessError:
-            spawn.runv(
-                ["git", "clone", "git@github.com:MaterializeInc/console", console_dir],
-                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
-            )
-
-        print(f"Bumping console version to {version}")
-        spawn.runv(["git", "tag", "-a", version, "-m", version], cwd=console_dir)
-        spawn.runv(["git", "push", "origin", version], cwd=console_dir)
-
-        print("Waiting for console version to be released on DockerHub (~15 min)")
-        console_image = f"materialize/console:{version[1:]}"
-        time.sleep(15 * 60)
-        while True:
-            try:
-                spawn.runv(["docker", "manifest", "inspect", console_image])
-            except subprocess.CalledProcessError:
-                print(f"{console_image} not yet on DockerHub, sleeping 1 min")
-                time.sleep(60)
-                continue
-            break
-        print(f"{console_image} found on DockerHub")
-
         print(f"Bumping version to {version}")
         spawn.runv(
             [
@@ -107,16 +74,11 @@ def main():
                 "--sbom",
             ]
         )
-        spawn.runv(
-            [
-                "sed",
-                "-i",
-                f"s#FROM materialize/console:.* AS console#FROM {console_image} AS console#",
-                "misc/images/materialized-base/Dockerfile",
-            ]
-        )
         # Commit here instead of in bump-version so we have access to the correct git author
         spawn.runv(["git", "commit", "-am", f"release: bump to version {version}"])
+        if args.dry_run:
+            print("Dry run: skipping tag, and push")
+            return
         print("Tagging version")
         tag_annotated(version)
         print("Pushing tag to Materialize repo")

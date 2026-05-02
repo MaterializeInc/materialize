@@ -181,6 +181,9 @@ class ServiceConfig(TypedDict, total=False):
     dns: list[str] | None
     """The DNS servers to use for the container."""
 
+    security_opt: list[str] | None
+    """Additional security options to apply to the container."""
+
 
 class Service:
     """A Docker Compose service in a `Composition`.

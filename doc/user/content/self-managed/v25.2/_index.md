@@ -39,7 +39,7 @@ aliases:
   - /lts/sql/prepare/
   - /lts/sql/show-columns/
   - /lts/sql/show-create-sink/
-  - /lts/sql/system-catalog/
+  - /lts/reference/system-catalog/
   - /lts/sql/types/interval/
   - /lts/support/
   - /lts/integrations/

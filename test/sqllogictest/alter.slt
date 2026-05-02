@@ -62,13 +62,13 @@ d   kafka   (empty)
 statement ok
 CREATE CLUSTER other_cluster SIZE 'scale=1,workers=1', REPLICATION FACTOR 0
 
-query error db error: ERROR: ALTER \.\.\. SET CLUSTER syntax is not available
+query error ALTER \.\.\. SET CLUSTER syntax is not available
 ALTER MATERIALIZED VIEW does_not_exist SET CLUSTER quickstart
 
-query error db error: ERROR: ALTER \.\.\. SET CLUSTER syntax is not available
+query error ALTER \.\.\. SET CLUSTER syntax is not available
 ALTER SOURCE does_not_exist SET CLUSTER quickstart
 
-query error db error: ERROR: ALTER \.\.\. SET CLUSTER syntax is not available
+query error ALTER \.\.\. SET CLUSTER syntax is not available
 ALTER SINK does_not_exist SET CLUSTER quickstart
 
 simple conn=mz_system,user=mz_system
@@ -85,19 +85,19 @@ CREATE MATERIALIZED VIEW mv AS SELECT 1
 statement ok
 ALTER MATERIALIZED VIEW mv SET CLUSTER quickstart
 
-query error db error: ERROR: unknown cluster 'does_not_exist'
+query error unknown cluster 'does_not_exist'
 ALTER MATERIALIZED VIEW mv SET CLUSTER does_not_exist
 
-query error db error: ERROR: ALTER SET CLUSTER are not supported
+query error ALTER SET CLUSTER are not supported
 ALTER MATERIALIZED VIEW mv SET CLUSTER other_cluster
 
-query error db error: ERROR: ALTER VIEW SET CLUSTER is not supported, for more information consult the documentation at https://materialize\.com/docs/sql/alter\-set\-cluster/
+query error ALTER VIEW SET CLUSTER is not supported, for more information consult the documentation at https://materialize\.com/docs/sql/alter\-set\-cluster/
 ALTER VIEW mv SET CLUSTER quickstart
 
-query error db error: ERROR: v is a view not a materialized view
+query error v is a view not a materialized view
 ALTER MATERIALIZED VIEW v SET CLUSTER quickstart
 
-query error db error: ERROR: ALTER SINK SET CLUSTER not yet supported, see https://github\.com/MaterializeInc/materialize/discussions/29606 for more details
+query error ALTER SINK SET CLUSTER not yet supported, see https://github\.com/MaterializeInc/materialize/discussions/29606 for more details
 ALTER SINK v SET CLUSTER quickstart
 
 statement ok
@@ -181,7 +181,7 @@ ALTER INDEX i SET (RETAIN HISTORY = FOR '1000 hours')
 query T
 SELECT create_sql FROM (SHOW CREATE INDEX i)
 ----
-CREATE INDEX i IN CLUSTER quickstart ON materialize.public.t (a) WITH (RETAIN HISTORY = FOR '1000 hours');
+CREATE INDEX i⏎IN CLUSTER quickstart⏎ON materialize.public.t (a)⏎WITH (RETAIN HISTORY = FOR '1000 hours');
 
 statement ok
 ALTER INDEX i RESET (RETAIN HISTORY)
@@ -190,3 +190,96 @@ query T
 SELECT create_sql FROM (SHOW CREATE INDEX i)
 ----
 CREATE INDEX i IN CLUSTER quickstart ON materialize.public.t (a);
+
+# Test ALTER SOURCE SET/RESET (TIMESTAMP INTERVAL).
+# This exercises the AlterSource -> Altered implication path in
+# catalog_implications, which calls alter_ingestion_source_desc.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET min_timestamp_interval = '100ms';
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET max_timestamp_interval = '10s';
+----
+COMPLETE 0
+
+statement ok
+ALTER SOURCE s SET (TIMESTAMP INTERVAL '2s')
+
+query T
+SELECT create_sql FROM (SHOW CREATE SOURCE s)
+----
+CREATE SOURCE materialize.public.s⏎IN CLUSTER quickstart⏎FROM LOAD GENERATOR COUNTER⏎WITH (TIMESTAMP INTERVAL = '2s');
+
+statement ok
+ALTER SOURCE s SET (TIMESTAMP INTERVAL '500ms')
+
+query T
+SELECT create_sql FROM (SHOW CREATE SOURCE s)
+----
+CREATE SOURCE materialize.public.s⏎IN CLUSTER quickstart⏎FROM LOAD GENERATOR COUNTER⏎WITH (TIMESTAMP INTERVAL = '500ms');
+
+statement ok
+ALTER SOURCE s RESET (TIMESTAMP INTERVAL)
+
+query T
+SELECT create_sql FROM (SHOW CREATE SOURCE s)
+----
+CREATE SOURCE materialize.public.s IN CLUSTER quickstart FROM LOAD GENERATOR COUNTER;
+
+# Regression tests: ALTER MATERIALIZED VIEW SET CLUSTER and
+# ALTER MATERIALIZED VIEW / INDEX SET (RETAIN HISTORY ...) retract+add
+# the catalog item via `apply_item_update`. `parse_item_inner` must carry
+# the optimized_plan / physical_plan / dataflow_metainfo fields forward
+# from the previous catalog entry, so that EXPLAIN can still show them.
+# See also the analogous RENAME test in rename.slt.
+
+statement ok
+CREATE TABLE t_alter_plans (a int)
+
+statement ok
+CREATE MATERIALIZED VIEW mv_alter_plans AS SELECT a + 1 AS b FROM t_alter_plans
+
+statement ok
+CREATE DEFAULT INDEX idx_alter_plans ON mv_alter_plans
+
+statement ok
+ALTER MATERIALIZED VIEW mv_alter_plans SET CLUSTER quickstart
+
+statement ok
+EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW mv_alter_plans
+
+statement ok
+EXPLAIN PHYSICAL PLAN FOR MATERIALIZED VIEW mv_alter_plans
+
+statement ok
+ALTER MATERIALIZED VIEW mv_alter_plans SET (RETAIN HISTORY FOR '1m')
+
+statement ok
+EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW mv_alter_plans
+
+statement ok
+EXPLAIN PHYSICAL PLAN FOR MATERIALIZED VIEW mv_alter_plans
+
+statement ok
+ALTER MATERIALIZED VIEW mv_alter_plans RESET (RETAIN HISTORY)
+
+statement ok
+EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW mv_alter_plans
+
+statement ok
+ALTER INDEX idx_alter_plans SET (RETAIN HISTORY FOR '1m')
+
+statement ok
+EXPLAIN OPTIMIZED PLAN FOR INDEX idx_alter_plans
+
+statement ok
+EXPLAIN PHYSICAL PLAN FOR INDEX idx_alter_plans
+
+statement ok
+ALTER INDEX idx_alter_plans RESET (RETAIN HISTORY)
+
+statement ok
+EXPLAIN OPTIMIZED PLAN FOR INDEX idx_alter_plans

@@ -55,10 +55,10 @@ use crate::plan::{PlanError, QueryContext};
 /// effects.
 ///
 /// See the module docs for details.
-#[derive(Debug, EnumKind)]
+#[derive(Debug, EnumKind, Clone)]
 #[enum_kind(SefKind)]
 pub enum SideEffectingFunc {
-    /// The `pg_cancel_backend` function, .
+    /// The `pg_cancel_backend` function.
     PgCancelBackend {
         // The ID of the connection to cancel.
         connection_id: u32,
@@ -104,7 +104,7 @@ pub fn plan_select_if_side_effecting(
     let mut args = vec![];
     for mut arg in sef_call.args {
         arg.bind_parameters(scx, QueryLifetime::OneShot, params)?;
-        let arg = arg.lower_uncorrelated()?;
+        let arg = arg.lower_uncorrelated(scx.catalog.system_vars())?;
         args.push(arg);
     }
     let mut datums = vec![];

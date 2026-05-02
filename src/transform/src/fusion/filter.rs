@@ -13,16 +13,19 @@
 //!
 //! ```rust
 //! use mz_expr::{MirRelationExpr, MirScalarExpr};
-//! use mz_repr::{SqlColumnType, Datum, SqlRelationType, SqlScalarType};
+//! use mz_repr::{ReprColumnType, ReprRelationType, ReprScalarType};
 //! use mz_repr::optimize::OptimizerFeatures;
-//! use mz_transform::{reprtypecheck, typecheck, Transform, TransformCtx};
+//! use mz_transform::{typecheck, Transform, TransformCtx};
 //! use mz_transform::dataflow::DataflowMetainfo;
 //!
 //! use mz_transform::fusion::filter::Filter;
 //!
-//! let input = MirRelationExpr::constant(vec![], SqlRelationType::new(vec![
-//!     SqlScalarType::Bool.nullable(false),
-//! ]));
+//! let input = MirRelationExpr::Constant {
+//!     rows: Ok(vec![]),
+//!     typ: ReprRelationType::new(vec![
+//!         ReprColumnType { scalar_type: ReprScalarType::Bool, nullable: false },
+//!     ]),
+//! };
 //!
 //! let predicate0 = MirScalarExpr::column(0);
 //! let predicate1 = MirScalarExpr::column(0);
@@ -35,10 +38,9 @@
 //!     .filter(vec![predicate2.clone()]);
 //!
 //! let features = OptimizerFeatures::default();
-//! let typecheck_ctx = typecheck::empty_context();
-//! let repr_typecheck_ctx = reprtypecheck::empty_context();
+//! let typecheck_ctx = typecheck::empty_typechecking_context();
 //! let mut df_meta = DataflowMetainfo::default();
-//! let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &repr_typecheck_ctx, &mut df_meta, None, None);
+//! let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta, None, None);
 //!
 //! // Filter.transform() will deduplicate any predicates
 //! Filter.transform(&mut expr, &mut transform_ctx);
@@ -88,7 +90,7 @@ impl Filter {
             } = &mut **input
             {
                 predicates.append(p2);
-                *input = Box::new(inner.take_dangerous());
+                **input = inner.take_dangerous();
             }
 
             mz_expr::canonicalize::canonicalize_predicates(predicates, &input.typ().column_types);

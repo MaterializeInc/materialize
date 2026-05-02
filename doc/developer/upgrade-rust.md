@@ -25,7 +25,7 @@ Anyone is welcome to upgrade the version of Rust! Below is the list of things yo
    what version it previously was, and what version it got bumped to.
     * The [Releases](https://github.com/rust-lang/rust/releases) page for the Rust repository
       should mention if it's been changed. But the only way to know for sure it to
-      [git blame the `UNICODE_VERSION` const](https://github.com/rust-lang/rust/blame/master/library/core/src/unicode/unicode_data.rs).
+      [git blame the `UNICODE_VERSION` const](https://github.com/rust-lang/rust/blame/main/library/core/src/unicode/unicode_data.rs).
 7. **Before merging the PR**, run [Nightly](https://buildkite.com/materialize/nightly) to catch any performance
    regressions that may be caused by the upgrade. If there are minor performance regressions, it's most likely
    okay to proceed, but in general it's easier to make that decision while the PR is still open as

@@ -223,19 +223,16 @@ where
     Tr: TraceReader<Time = Timestamp> + 'static,
 {
     /// Import a trace restricted to a specific time interval `[since, until)`.
-    pub fn import_frontier_core<G>(
+    pub fn import_frontier_core<'scope>(
         &mut self,
-        scope: &G,
+        scope: Scope<'scope, Tr::Time>,
         name: &str,
         since: Antichain<Tr::Time>,
         until: Antichain<Tr::Time>,
     ) -> (
-        Arranged<G, TraceFrontier<TraceAgent<Tr>>>,
+        Arranged<'scope, TraceFrontier<TraceAgent<Tr>>>,
         ShutdownButton<CapabilitySet<Tr::Time>>,
-    )
-    where
-        G: Scope<Timestamp = Tr::Time>,
-    {
+    ) {
         self.trace.import_frontier_core(scope, name, since, until)
     }
 }

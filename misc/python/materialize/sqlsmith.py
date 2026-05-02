@@ -79,7 +79,7 @@ known_errors = [
     "result exceeds max size of",  # Seems expected with huge queries
     "expected expression, but found reserved keyword",  # Should fix, but only happens rarely with subqueries
     "Expected right parenthesis, found left parenthesis",  # Should fix, but only happens rarely with cast+coalesce
-    "invalid selection: operation may only refer to user-defined tables",  # Seems expected when using catalog tables
+    "invalid selection: operation may only (transitively) refer to non-source, non-system tables",  # Seems expected when using catalog tables
     "Unsupported temporal predicate",  # Expected, see https://github.com/MaterializeInc/database-issues/issues/5288
     "Unsupported temporal operation: NotEq",
     "Unsupported binary temporal operation: NotEq",
@@ -141,4 +141,5 @@ known_errors = [
     "Window function performance issue: `reduce_unnest_list_fusion` failed",  # TODO: Remove when database-issues#9644 is fixed
     "WITH ORDINALITY or ROWS FROM with ",
     "invalid normalization form",  # Expected with https://github.com/MaterializeInc/materialize/pull/33507
+    "invalid catalog JSON",  # `parse_catalog_*` function invoked with an invalid JSON object
 ]

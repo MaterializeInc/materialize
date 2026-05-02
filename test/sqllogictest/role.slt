@@ -24,6 +24,7 @@ SELECT id, name, inherit FROM mz_roles WHERE id LIKE 's%' OR id LIKE 'g%'
 s1  mz_system  true
 s2  mz_support  true
 s3  mz_analytics  true
+s4  mz_jwt_sync  true
 g1  mz_monitor  true
 g2  mz_monitor_redacted  true
 
@@ -60,9 +61,6 @@ COMPLETE 0
 statement error non inherit roles not yet supported
 CREATE ROLE foo NOINHERIT
 
-statement error db error: ERROR: SUPERUSER, PASSWORD, and LOGIN attributes is not supported in this environment. For more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
-CREATE ROLE foo LOGIN
-
 simple
 CREATE ROLE foo SUPERUSER
 ----
@@ -93,6 +91,7 @@ SELECT name, inherit FROM mz_roles
 ----
 materialize  true
 mz_analytics  true
+mz_jwt_sync  true
 mz_monitor  true
 mz_monitor_redacted  true
 mz_support  true
@@ -109,6 +108,7 @@ SELECT name FROM mz_roles
 ----
 materialize
 mz_analytics
+mz_jwt_sync
 mz_monitor
 mz_monitor_redacted
 mz_support
@@ -124,6 +124,7 @@ SELECT name FROM mz_roles
 ----
 materialize
 mz_analytics
+mz_jwt_sync
 mz_monitor
 mz_monitor_redacted
 mz_support
@@ -138,6 +139,7 @@ SELECT name FROM mz_roles
 ----
 materialize
 mz_analytics
+mz_jwt_sync
 mz_monitor
 mz_monitor_redacted
 mz_support
@@ -155,6 +157,7 @@ mz_monitor
 mz_support
 materialize
 mz_analytics
+mz_jwt_sync
 mz_monitor_redacted
 
 statement ok
@@ -179,10 +182,28 @@ CREATE ROLE mz_foo
 statement ok
 CREATE ROLE foo
 
+query TBB rowsort
+SELECT name, inherit, rolcanlogin FROM mz_roles WHERE name = 'foo'
+----
+foo true false
+
+# Verify ALTER ROLE ... WITH LOGIN attribute
+statement ok
+ALTER ROLE foo WITH LOGIN
+
 query TB rowsort
-SELECT name, inherit FROM mz_roles WHERE name = 'foo'
+SELECT name, rolcanlogin FROM mz_roles WHERE name = 'foo'
 ----
 foo true
+
+# Verify ALTER ROLE ... WITH NOLOGIN attribute
+statement ok
+ALTER ROLE foo WITH NOLOGIN
+
+query TB rowsort
+SELECT name, rolcanlogin FROM mz_roles WHERE name = 'foo'
+----
+foo false
 
 statement error non inherit roles not yet supported
 ALTER ROLE foo NOINHERIT
@@ -320,7 +341,7 @@ COMPLETE 0
 simple conn=mz_system,user=mz_system
 SELECT rolsuper, rolcanlogin FROM mz_roles WHERE name = 'password_user'
 ----
-f,t
+NULL,t
 COMPLETE 1
 
 simple conn=mz_system,user=mz_system
@@ -556,3 +577,76 @@ DROP ROLE role_without_password
 
 statement ok
 DROP ROLE role_with_password
+
+# Ensure `pg_authid` queries are efficient as long as they don't require the
+# `has_system_privilege` columns.
+#
+# The query used here is the default `auth_query` used by pgbouncer. We want to
+# make sure not to regress performance of this query.
+query T multiline
+EXPLAIN
+  SELECT
+    rolname,
+    CASE WHEN rolvaliduntil < '2025-12-16' THEN NULL ELSE rolpassword END
+  FROM pg_authid
+  WHERE rolname='user' AND rolcanlogin
+----
+Explained Query (fast path):
+  →Map/Filter/Project
+    Project: #0, #11
+    Filter: #4{rolcanlogin}
+    Map: case when (#9{rolvaliduntil} < 2025-12-16 00:00:00 UTC) then null else #8{rolpassword} end
+      →Index Lookup on mz_internal.pg_authid_core (using mz_internal.pg_authid_core_ind)
+        Lookup values: ("user")
+
+Used Indexes:
+  - mz_internal.pg_authid_core_ind (lookup)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+# Regression test for invalid retractions in mz_roles
+# when enable_password_auth changes (database-issues#10042)
+# and roles are created / dropped.
+
+# Enable password auth
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_password_auth TO true;
+----
+COMPLETE 0
+
+# Create a role with an explicit LOGIN attribute
+simple conn=mz_system,user=mz_system
+CREATE ROLE test_retraction_role WITH LOGIN;
+----
+COMPLETE 0
+
+# Verify querying mz_roles does not error
+query TB
+SELECT name, rolcanlogin FROM mz_roles WHERE name = 'test_retraction_role'
+----
+test_retraction_role true
+
+# Disable password auth
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_password_auth TO false;
+----
+COMPLETE 0
+
+# Drop the role
+simple conn=mz_system,user=mz_system
+DROP ROLE test_retraction_role;
+----
+COMPLETE 0
+
+# Query mz_roles. This should NOT cause a retraction error
+query T
+SELECT name FROM mz_roles WHERE name = 'test_retraction_role'
+----
+
+# Reset password auth to off for remaining tests
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_password_auth TO false;
+----
+COMPLETE 0

@@ -6,7 +6,7 @@ rows:
     Description: |
       **A dedicated cluster(s)** for [sources](/concepts/sources/).
 
-      {{% best-practices/architecture/upsert-source %}}
+      {{% include-from-yaml data="best_practices_details" name="architecture-upsert-source" %}}
 
   - "Tier": "**Compute/Transform + Serving cluster**"
     Description: |

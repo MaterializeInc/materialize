@@ -10,6 +10,21 @@
 use std::path::PathBuf;
 
 fn main() {
+    // `libduckdb-sys` copies the downloaded shared library into
+    // `target/<profile>/deps`. Ensure `target/debug/testdrive` can resolve it
+    // at runtime when launched directly.
+    if let Ok(target_os) = std::env::var("CARGO_CFG_TARGET_OS") {
+        match target_os.as_str() {
+            "macos" => {
+                println!("cargo:rustc-link-arg-bin=testdrive=-Wl,-rpath,@executable_path/deps");
+            }
+            "linux" => {
+                println!("cargo:rustc-link-arg-bin=testdrive=-Wl,-rpath,$ORIGIN/deps");
+            }
+            _ => {}
+        }
+    }
+
     let mut config = prost_build::Config::new();
     config
         .protoc_executable(mz_build_tools::protoc())
@@ -21,21 +36,24 @@ fn main() {
         // that get mistreated as doc tests.
         .disable_comments(["."]);
 
-    // Bazel places the `fivetran-sdk` submodule in a slightly different place.
     let includes_directories = &[
-        PathBuf::from("../../misc/fivetran-sdk"),
+        PathBuf::from("../../src/fivetran-destination/proto"),
         mz_build_tools::protoc_include(),
     ];
 
     const ATTR: &str = "#[derive(::serde::Serialize, ::serde::Deserialize)]";
 
-    tonic_build::configure()
+    tonic_prost_build::configure()
         // Enabling `emit_rerun_if_changed` will rerun the build script when
         // anything in the include directory (..) changes. This causes quite a
         // bit of spurious recompilation, so we disable it. The default behavior
         // is to re-run if any file in the crate changes; that's still a bit too
         // broad, but it's better.
         .emit_rerun_if_changed(false)
-        .compile_protos_with_config(config, &["destination_sdk.proto"], includes_directories)
+        .compile_with_config(
+            config,
+            &[PathBuf::from("destination_sdk.proto")],
+            includes_directories,
+        )
         .unwrap();
 }

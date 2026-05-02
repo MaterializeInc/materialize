@@ -10,18 +10,14 @@ publish = false
 workspace = true
 
 [dependencies]
-base64 = "0.22.1"
+base64.workspace = true
 mz-ore = { path = "../ore", features = ["test"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
-serde = "1.0.219"
-proptest-derive = "0.5.1"
-proptest = "1.7.0"
-static_assertions = "1.1"
-openssl = { version = "0.10.75", features = ["vendored"] }
-itertools = "0.14.0"
+serde.workspace = true
+proptest-derive.workspace = true
+proptest.workspace = true
+static_assertions.workspace = true
+aws-lc-rs.workspace = true
+itertools.workspace = true
 
 [features]
-default = ["workspace-hack"]
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+default = []

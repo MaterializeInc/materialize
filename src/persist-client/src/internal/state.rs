@@ -41,7 +41,7 @@ use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::arrow::{ArrayBound, ProtoArrayData};
 use mz_persist_types::columnar::{ColumnEncoder, Schema};
 use mz_persist_types::schema::{SchemaId, backward_compatible};
-use mz_persist_types::{Codec, Codec64, Opaque};
+use mz_persist_types::{Codec, Codec64};
 use mz_proto::ProtoType;
 use mz_proto::RustType;
 use proptest_derive::Arbitrary;
@@ -54,7 +54,7 @@ use timely::progress::{Antichain, Timestamp};
 use tracing::info;
 use uuid::Uuid;
 
-use crate::critical::CriticalReaderId;
+use crate::critical::{CriticalReaderId, Opaque};
 use crate::error::InvalidUsage;
 use crate::internal::encoding::{
     LazyInlineBatchPart, LazyPartStats, LazyProto, MetadataMap, parse_id,
@@ -106,7 +106,7 @@ pub(crate) const ROLLUP_FALLBACK_THRESHOLD_MS: Config<usize> = Config::new(
 /// We musn't enable this until we are fully deployed on the new version.
 pub(crate) const ROLLUP_USE_ACTIVE_ROLLUP: Config<bool> = Config::new(
     "persist_rollup_use_active_rollup",
-    false,
+    true,
     "Whether to use the new active rollup tracking mechanism.",
 );
 
@@ -200,24 +200,12 @@ pub struct LeasedReaderState<T> {
     pub debug: HandleDebugState,
 }
 
-#[derive(Arbitrary, Clone, Debug, PartialEq, Serialize)]
-#[serde(into = "u64")]
-pub struct OpaqueState(pub [u8; 8]);
-
-impl From<OpaqueState> for u64 {
-    fn from(value: OpaqueState) -> Self {
-        u64::from_le_bytes(value.0)
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CriticalReaderState<T> {
     /// The since capability of this reader.
     pub since: Antichain<T>,
     /// An opaque token matched on by compare_and_downgrade_since.
-    pub opaque: OpaqueState,
-    /// The [Codec64] used to encode [Self::opaque].
-    pub opaque_codec: String,
+    pub opaque: Opaque,
     /// For debugging.
     pub debug: HandleDebugState,
 }
@@ -694,9 +682,12 @@ impl<T: Timestamp + Codec64 + Sync> RunPart<T> {
                     yield Cow::Borrowed(p);
                 }
                 RunPart::Many(r) => {
-                    let fetched = r.get(shard_id, blob, metrics).await.ok_or_else(|| MissingBlob(r.key.complete(&shard_id)))?;
+                    let fetched = r.get(shard_id, blob, metrics).await
+                        .ok_or_else(|| MissingBlob(r.key.complete(&shard_id)))?;
                     for run_part in fetched.parts {
-                        for await batch_part in run_part.part_stream(shard_id, blob, metrics).boxed() {
+                        for await batch_part in
+                            run_part.part_stream(shard_id, blob, metrics).boxed()
+                        {
                             yield Cow::Owned(batch_part?.into_owned());
                         }
                     }
@@ -1292,14 +1283,18 @@ pub enum HollowBlobRef<'a, T> {
 }
 
 /// A rollup that is currently being computed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Arbitrary, Serialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Arbitrary, Serialize
+)]
 pub struct ActiveRollup {
     pub seqno: SeqNo,
     pub start_ms: u64,
 }
 
 /// A garbage collection request that is currently being computed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Arbitrary, Serialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Arbitrary, Serialize
+)]
 pub struct ActiveGc {
     pub seqno: SeqNo,
     pub start_ms: u64,
@@ -1428,13 +1423,21 @@ where
         &mut self,
         remove_rollups: &[(SeqNo, PartialRollupKey)],
     ) -> ControlFlow<NoOpStateTransition<Vec<SeqNo>>, Vec<SeqNo>> {
-        if remove_rollups.is_empty() || self.is_tombstone() {
+        if self.is_tombstone() {
             return Break(NoOpStateTransition(vec![]));
         }
 
-        //This state transition is called at the end of the GC process, so we
-        //need to unset the `active_gc` field.
-        self.active_gc = None;
+        // This state transition is called at the end of the GC process, so we
+        // need to unset the `active_gc` field.
+        let active_gc_was_set = self.active_gc.take().is_some();
+
+        if remove_rollups.is_empty() {
+            return if active_gc_was_set {
+                Continue(vec![])
+            } else {
+                Break(NoOpStateTransition(vec![]))
+            };
+        }
 
         let mut removed = vec![];
         for (seqno, key) in remove_rollups {
@@ -1499,10 +1502,11 @@ where
         Continue((reader_state, self.seqno_since(seqno)))
     }
 
-    pub fn register_critical_reader<O: Opaque + Codec64>(
+    pub fn register_critical_reader(
         &mut self,
         hostname: &str,
         reader_id: &CriticalReaderId,
+        opaque: Opaque,
         purpose: &str,
     ) -> ControlFlow<NoOpStateTransition<CriticalReaderState<T>>, CriticalReaderState<T>> {
         let state = CriticalReaderState {
@@ -1511,8 +1515,7 @@ where
                 purpose: purpose.to_owned(),
             },
             since: self.trace.since().clone(),
-            opaque: OpaqueState(Codec64::encode(&O::initial())),
-            opaque_codec: O::codec_name(),
+            opaque,
         };
 
         // We expire all readers if the upper and since both advance to the
@@ -1877,7 +1880,7 @@ where
         &mut self,
         reader_id: &LeasedReaderId,
         seqno: SeqNo,
-        outstanding_seqno: Option<SeqNo>,
+        outstanding_seqno: SeqNo,
         new_since: &Antichain<T>,
         heartbeat_timestamp_ms: u64,
     ) -> ControlFlow<NoOpStateTransition<Since<T>>, Since<T>> {
@@ -1905,18 +1908,15 @@ where
             reader_state.last_heartbeat_timestamp_ms,
         );
 
-        let seqno = match outstanding_seqno {
-            Some(outstanding_seqno) => {
-                assert!(
-                    outstanding_seqno >= reader_state.seqno,
-                    "SeqNos cannot go backward; however, oldest leased SeqNo ({:?}) \
+        let seqno = {
+            assert!(
+                outstanding_seqno >= reader_state.seqno,
+                "SeqNos cannot go backward; however, oldest leased SeqNo ({:?}) \
                     is behind current reader_state ({:?})",
-                    outstanding_seqno,
-                    reader_state.seqno,
-                );
-                std::cmp::min(outstanding_seqno, seqno)
-            }
-            None => seqno,
+                outstanding_seqno,
+                reader_state.seqno,
+            );
+            std::cmp::min(outstanding_seqno, seqno)
         };
 
         reader_state.seqno = seqno;
@@ -1934,14 +1934,14 @@ where
         Continue(Since(reader_current_since))
     }
 
-    pub fn compare_and_downgrade_since<O: Opaque + Codec64>(
+    pub fn compare_and_downgrade_since(
         &mut self,
         reader_id: &CriticalReaderId,
-        expected_opaque: &O,
-        (new_opaque, new_since): (&O, &Antichain<T>),
+        expected_opaque: &Opaque,
+        (new_opaque, new_since): (&Opaque, &Antichain<T>),
     ) -> ControlFlow<
-        NoOpStateTransition<Result<Since<T>, (O, Since<T>)>>,
-        Result<Since<T>, (O, Since<T>)>,
+        NoOpStateTransition<Result<Since<T>, (Opaque, Since<T>)>>,
+        Result<Since<T>, (Opaque, Since<T>)>,
     > {
         // We expire all readers if the upper and since both advance to the
         // empty antichain. Gracefully handle this. At the same time,
@@ -1955,18 +1955,17 @@ where
         }
 
         let reader_state = self.critical_reader(reader_id);
-        assert_eq!(reader_state.opaque_codec, O::codec_name());
 
-        if &O::decode(reader_state.opaque.0) != expected_opaque {
+        if reader_state.opaque != *expected_opaque {
             // No-op, but still commit the state change so that this gets
             // linearized.
             return Continue(Err((
-                Codec64::decode(reader_state.opaque.0),
+                reader_state.opaque.clone(),
                 Since(reader_state.since.clone()),
             )));
         }
 
-        reader_state.opaque = OpaqueState(Codec64::encode(new_opaque));
+        reader_state.opaque = new_opaque.clone();
         if PartialOrder::less_equal(&reader_state.since, new_since) {
             reader_state.since.clone_from(new_since);
             self.update_since();
@@ -1976,33 +1975,6 @@ where
             // advanced. we may someday need to revisit this branch when it's possible
             // for two `since` frontiers to be incomparable.
             Continue(Ok(Since(reader_state.since.clone())))
-        }
-    }
-
-    pub fn heartbeat_leased_reader(
-        &mut self,
-        reader_id: &LeasedReaderId,
-        heartbeat_timestamp_ms: u64,
-    ) -> ControlFlow<NoOpStateTransition<bool>, bool> {
-        // We expire all readers if the upper and since both advance to the
-        // empty antichain. Gracefully handle this. At the same time,
-        // short-circuit the cmd application so we don't needlessly create new
-        // SeqNos.
-        if self.is_tombstone() {
-            return Break(NoOpStateTransition(false));
-        }
-
-        match self.leased_readers.get_mut(reader_id) {
-            Some(reader_state) => {
-                reader_state.last_heartbeat_timestamp_ms = std::cmp::max(
-                    heartbeat_timestamp_ms,
-                    reader_state.last_heartbeat_timestamp_ms,
-                );
-                Continue(true)
-            }
-            // No-op, but we still commit the state change so that this gets
-            // linearized (maybe we're looking at old state).
-            None => Continue(false),
         }
     }
 
@@ -3053,19 +3025,19 @@ pub(crate) mod tests {
         )
     }
 
-    pub fn any_critical_reader_state<T: Arbitrary>() -> impl Strategy<Value = CriticalReaderState<T>>
+    pub fn any_critical_reader_state<T>() -> impl Strategy<Value = CriticalReaderState<T>>
+    where
+        T: Arbitrary,
     {
         Strategy::prop_map(
             (
                 any::<Option<T>>(),
-                any::<OpaqueState>(),
-                any::<String>(),
+                any::<Opaque>(),
                 any::<HandleDebugState>(),
             ),
-            |(since, opaque, opaque_codec, debug)| CriticalReaderState {
+            |(since, opaque, debug)| CriticalReaderState {
                 since: since.map_or_else(Antichain::new, Antichain::from_elem),
                 opaque,
-                opaque_codec,
                 debug,
             },
         )
@@ -3231,7 +3203,7 @@ pub(crate) mod tests {
             state.collections.downgrade_since(
                 &reader,
                 seqno,
-                None,
+                seqno,
                 &Antichain::from_elem(2),
                 now()
             ),
@@ -3243,7 +3215,7 @@ pub(crate) mod tests {
             state.collections.downgrade_since(
                 &reader,
                 seqno,
-                None,
+                seqno,
                 &Antichain::from_elem(2),
                 now()
             ),
@@ -3255,7 +3227,7 @@ pub(crate) mod tests {
             state.collections.downgrade_since(
                 &reader,
                 seqno,
-                None,
+                seqno,
                 &Antichain::from_elem(1),
                 now()
             ),
@@ -3280,7 +3252,7 @@ pub(crate) mod tests {
             state.collections.downgrade_since(
                 &reader2,
                 seqno,
-                None,
+                seqno,
                 &Antichain::from_elem(3),
                 now()
             ),
@@ -3292,7 +3264,7 @@ pub(crate) mod tests {
             state.collections.downgrade_since(
                 &reader,
                 seqno,
-                None,
+                seqno,
                 &Antichain::from_elem(5),
                 now()
             ),
@@ -3324,7 +3296,7 @@ pub(crate) mod tests {
             state.collections.downgrade_since(
                 &reader3,
                 seqno,
-                None,
+                seqno,
                 &Antichain::from_elem(10),
                 now()
             ),
@@ -3366,56 +3338,72 @@ pub(crate) mod tests {
         let reader = CriticalReaderId::new();
         let _ = state
             .collections
-            .register_critical_reader::<u64>("", &reader, "");
+            .register_critical_reader("", &reader, Opaque::encode(&0u64), "");
 
         // The shard global since == 0 initially.
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(0));
         // The initial opaque value should be set.
         assert_eq!(
-            u64::decode(state.collections.critical_reader(&reader).opaque.0),
-            u64::initial()
+            state
+                .collections
+                .critical_reader(&reader)
+                .opaque
+                .decode::<u64>(),
+            u64::MIN
         );
 
         // Greater
         assert_eq!(
-            state.collections.compare_and_downgrade_since::<u64>(
+            state.collections.compare_and_downgrade_since(
                 &reader,
-                &u64::initial(),
-                (&1, &Antichain::from_elem(2)),
+                &Opaque::encode(&0u64),
+                (&Opaque::encode(&1u64), &Antichain::from_elem(2)),
             ),
             Continue(Ok(Since(Antichain::from_elem(2))))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
         assert_eq!(
-            u64::decode(state.collections.critical_reader(&reader).opaque.0),
+            state
+                .collections
+                .critical_reader(&reader)
+                .opaque
+                .decode::<u64>(),
             1
         );
         // Equal (no-op)
         assert_eq!(
-            state.collections.compare_and_downgrade_since::<u64>(
+            state.collections.compare_and_downgrade_since(
                 &reader,
-                &1,
-                (&2, &Antichain::from_elem(2)),
+                &Opaque::encode(&1u64),
+                (&Opaque::encode(&2u64), &Antichain::from_elem(2)),
             ),
             Continue(Ok(Since(Antichain::from_elem(2))))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
         assert_eq!(
-            u64::decode(state.collections.critical_reader(&reader).opaque.0),
+            state
+                .collections
+                .critical_reader(&reader)
+                .opaque
+                .decode::<u64>(),
             2
         );
         // Less (no-op)
         assert_eq!(
-            state.collections.compare_and_downgrade_since::<u64>(
+            state.collections.compare_and_downgrade_since(
                 &reader,
-                &2,
-                (&3, &Antichain::from_elem(1)),
+                &Opaque::encode(&2u64),
+                (&Opaque::encode(&3u64), &Antichain::from_elem(1)),
             ),
             Continue(Ok(Since(Antichain::from_elem(2))))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
         assert_eq!(
-            u64::decode(state.collections.critical_reader(&reader).opaque.0),
+            state
+                .collections
+                .critical_reader(&reader)
+                .opaque
+                .decode::<u64>(),
             3
         );
     }
@@ -3624,7 +3612,7 @@ pub(crate) mod tests {
             state.collections.downgrade_since(
                 &reader,
                 SeqNo::minimum(),
-                None,
+                SeqNo::minimum(),
                 &Antichain::from_elem(2),
                 now()
             ),
@@ -4406,6 +4394,7 @@ pub(crate) mod tests {
                     .expect_compare_and_append_batch(&mut [], current, current + 1)
                     .await;
             })
+            .into_tokio_handle()
             .await
         }
 

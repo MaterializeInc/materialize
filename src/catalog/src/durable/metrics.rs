@@ -11,7 +11,8 @@
 
 use mz_ore::metric;
 use mz_ore::metrics::{IntCounter, MetricsRegistry};
-use prometheus::{Counter, IntGaugeVec};
+use mz_ore::stats::histogram_seconds_buckets;
+use prometheus::{Counter, Histogram, IntGauge, IntGaugeVec};
 
 #[derive(Debug, Clone)]
 pub struct Metrics {
@@ -23,6 +24,9 @@ pub struct Metrics {
     pub syncs: IntCounter,
     pub sync_latency_seconds: Counter,
     pub collection_entries: IntGaugeVec,
+    pub allocate_id_seconds: Histogram,
+    pub snapshot_consolidations: IntCounter,
+    pub snapshot_max_entries: IntGauge,
 }
 
 impl Metrics {
@@ -61,6 +65,20 @@ impl Metrics {
                 name: "mz_catalog_collection_entries",
                 help: "Total number of entries, after consolidation, per catalog collection.",
                 var_labels: ["collection"],
+            )),
+            allocate_id_seconds: registry.register(metric!(
+                name: "mz_catalog_allocate_id_seconds",
+                help: "The time it takes to allocate IDs in the durable catalog.",
+                buckets: histogram_seconds_buckets(0.001, 32.0),
+            )),
+            snapshot_consolidations: registry.register(metric!(
+                name: "mz_catalog_snapshot_consolidations",
+                help: "Count of snapshot consolidation passes.",
+            )),
+            snapshot_max_entries: registry.register(metric!(
+                name: "mz_catalog_snapshot_max_entries",
+                help: "High-water mark of entries in the unconsolidated in-memory \
+                       snapshot since process start.",
             )),
         }
     }

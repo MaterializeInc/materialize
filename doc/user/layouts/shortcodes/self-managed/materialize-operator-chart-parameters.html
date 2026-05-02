@@ -1,8 +1,8 @@
 {{- $headings := slice -}}
-{{ range $.Site.Data.self_managed.materialize_operator_chart_parameter.parameters }}
+{{ range $.Site.Data.self_managed.materialize_operator_chart_parameter }}
 
 
-{{ $parts := split .parameter "." }}
+{{ $parts := split .key "." }}
 {{ $heading := index $parts 0 }}
 
 {{ if not (in $headings $heading) }}
@@ -13,10 +13,10 @@
 
 {{ end }}
 
-#### {{ .parameter }}
+#### {{ .key }}
 
-**Default**: <code>{{ .default | $.Page.RenderString }}</code>
+**Default**: {{ .default | $.Page.RenderString }}
 
-{{.description  | $.Page.RenderString }}
+{{ or .description .autodescription  | $.Page.RenderString }}
 
 {{ end }} {{/* End of the loop over the parameters */}}

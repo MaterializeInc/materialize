@@ -15,11 +15,10 @@ use mz_ore::cast::CastFrom;
 use mz_storage_client::client::StorageCommand;
 use mz_storage_client::metrics::HistoryMetrics;
 use mz_storage_types::parameters::StorageParameters;
-use timely::order::TotalOrder;
 
 /// A history of storage commands.
 #[derive(Debug)]
-pub(crate) struct CommandHistory<T> {
+pub(crate) struct CommandHistory {
     /// The number of commands at the last time we compacted the history.
     reduced_count: usize,
     /// The sequence of commands that should be applied.
@@ -27,12 +26,12 @@ pub(crate) struct CommandHistory<T> {
     /// This list may not be "compact" in that there can be commands that could be optimized or
     /// removed given the context of other commands, for example compaction commands that can be
     /// unified, or run commands that can be dropped due to allowed compaction.
-    commands: Vec<StorageCommand<T>>,
+    commands: Vec<StorageCommand>,
     /// Tracked metrics.
     metrics: HistoryMetrics,
 }
 
-impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
+impl CommandHistory {
     /// Constructs a new command history.
     pub fn new(metrics: HistoryMetrics) -> Self {
         metrics.reset();
@@ -45,14 +44,14 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
     }
 
     /// Returns an iterator over the contained storage commands.
-    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &StorageCommand<T>> {
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &StorageCommand> {
         self.commands.iter()
     }
 
     /// Adds a command to the history.
     ///
     /// This action will reduce the history every time it doubles.
-    pub fn push(&mut self, command: StorageCommand<T>) {
+    pub fn push(&mut self, command: StorageCommand) {
         self.commands.push(command);
 
         if self.commands.len() > 2 * self.reduced_count {
@@ -243,7 +242,7 @@ mod tests {
 
     use super::*;
 
-    fn history() -> CommandHistory<u64> {
+    fn history() -> CommandHistory {
         let registry = MetricsRegistry::new();
         let controller_metrics = ControllerMetrics::new(&registry);
         let metrics = StorageControllerMetrics::new(&registry, controller_metrics)
@@ -324,7 +323,7 @@ mod tests {
         }
     }
 
-    fn sink_description() -> StorageSinkDesc<CollectionMetadata, u64> {
+    fn sink_description() -> StorageSinkDesc<CollectionMetadata> {
         StorageSinkDesc {
             from: GlobalId::System(1),
             from_desc: RelationDesc::new(
@@ -370,7 +369,7 @@ mod tests {
             with_snapshot: Default::default(),
             version: Default::default(),
             envelope: SinkEnvelope::Upsert,
-            as_of: Antichain::from_elem(0),
+            as_of: Antichain::from_elem(0.into()),
             from_storage_metadata: CollectionMetadata {
                 persist_location: PersistLocation {
                     blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
@@ -401,6 +400,7 @@ mod tests {
                 ),
                 txns_shard: Default::default(),
             },
+            commit_interval: Default::default(),
         }
     }
 
@@ -437,9 +437,9 @@ mod tests {
                 id: GlobalId::User(1),
                 description: ingestion_description(1, [2], 3),
             })),
-            StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::from_elem(1)),
-            StorageCommand::AllowCompaction(GlobalId::User(2), Antichain::from_elem(2)),
-            StorageCommand::AllowCompaction(GlobalId::User(3), Antichain::from_elem(3)),
+            StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::from_elem(1.into())),
+            StorageCommand::AllowCompaction(GlobalId::User(2), Antichain::from_elem(2.into())),
+            StorageCommand::AllowCompaction(GlobalId::User(3), Antichain::from_elem(3.into())),
         ];
 
         for cmd in commands.clone() {
@@ -506,7 +506,7 @@ mod tests {
                 id: GlobalId::User(1),
                 description: sink_desc.clone(),
             })),
-            StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::from_elem(42)),
+            StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::from_elem(42.into())),
         ];
 
         for cmd in commands {
@@ -531,8 +531,8 @@ mod tests {
 
         let commands = [
             StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::new()),
-            StorageCommand::AllowCompaction(GlobalId::User(2), Antichain::from_elem(1)),
-            StorageCommand::AllowCompaction(GlobalId::User(2), Antichain::from_elem(2)),
+            StorageCommand::AllowCompaction(GlobalId::User(2), Antichain::from_elem(1.into())),
+            StorageCommand::AllowCompaction(GlobalId::User(2), Antichain::from_elem(2.into())),
         ];
 
         for cmd in commands {

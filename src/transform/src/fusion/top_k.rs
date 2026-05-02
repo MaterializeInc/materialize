@@ -10,6 +10,7 @@
 //! Fuses a sequence of `TopK` operators in to one `TopK` operator
 
 use mz_expr::MirRelationExpr;
+use mz_repr::ReprScalarType;
 
 use crate::TransformCtx;
 
@@ -107,7 +108,7 @@ impl TopK {
                         };
                         *limit = Some(mz_expr::MirScalarExpr::literal_ok(
                             mz_repr::Datum::Int64(new_limit),
-                            mz_repr::SqlScalarType::Int64,
+                            ReprScalarType::Int64,
                         ));
                     }
 

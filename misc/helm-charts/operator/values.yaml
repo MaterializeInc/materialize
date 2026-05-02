@@ -13,7 +13,7 @@ operator:
     # -- The Docker repository for the operator image
     repository: materialize/orchestratord
     # -- The tag/version of the operator image to be used
-    tag: v26.0.0-rc.1
+    tag: v26.22.0
     # -- Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images
     pullPolicy: IfNotPresent
 
@@ -26,7 +26,7 @@ operator:
     enableLicenseKeyChecks: false
 
   # -- Additional columns to display when printing the Materialize CRD in table format.
-  additionalMaterializeCRDColumns:
+  additionalMaterializeCRDColumns: {}
     ## Example:
     #- description: "Metadata from the context annotator"
     #  jsonPath: ".metadata.annotations['materialize\\.cloud/analytics-context']"
@@ -62,7 +62,7 @@ operator:
         # TODO: Add any other additions for GCP-specific configurations
 
   clusters:
-    # Configure sizes such that the pod QoS class is not Guaranteed,
+    # -- Configure sizes such that the pod QoS class is not Guaranteed,
     # as is required for swap to be enabled.
     # Disk doesn't make much sense with swap, as swap performs better than
     # lgalloc, so it also gets disabled.
@@ -187,11 +187,18 @@ operator:
       analytics: 0
 
   # -- Node selector to use for the operator pod
-  nodeSelector:
+  # @notationType -- k8s/nodeSelector
+  # @default -- ``{}``
+  nodeSelector: {}
   # -- Affinity to use for the operator pod
-  affinity:
+  # @notationType -- k8s/affinity
+  # @default -- ``{}``
+  affinity: {}
   # -- Tolerations to use for the operator pod
-  tolerations:
+  # @notationType -- k8s/tolerations
+  # @default -- ``{}``
+  tolerations: {}
+  # @notationType -- k8s/resources
   resources:
     # -- Resources requested by the operator for CPU and memory
     requests:
@@ -209,15 +216,25 @@ operator:
 
 environmentd:
   # -- Node selector to use for environmentd pods spawned by the operator
+  # @notationType -- k8s/nodeSelector
+  # @default -- ``{}``
   nodeSelector: {}
   # -- Affinity to use for environmentd pods spawned by the operator
-  affinity:
+  # @notationType -- k8s/affinity
+  # @default -- ``{}``
+  affinity: {}
   # -- Tolerations to use for environmentd pods spawned by the operator
-  tolerations:
-  # -- Default resources if not set in the Materialize CR
+  # @notationType -- k8s/tolerations
+  # @default -- ``{}``
+  tolerations: {}
+  # @notationType -- k8s/resources
   defaultResources:
+    # -- Default resource limits for environmentd's CPU and memory
+    # if not set in the Materialize CR
     limits:
       memory: "4Gi"
+    # -- Default resources requested for environmentd's CPU and memory
+    # if not set in the Materialize CR
     requests:
       cpu: "1"
       # Setting the memory request to slightly less than limit
@@ -226,33 +243,53 @@ environmentd:
 
 clusterd:
   # -- Node selector to use for all clusterd pods spawned by the operator
+  # @notationType -- k8s/nodeSelector
+  # @default -- ``{}``
   nodeSelector: {}
   # -- Additional node selector to use for clusterd pods when using an LVM scratch disk.
   # This will be merged with the values in `nodeSelector`.
+  # @notationType -- k8s/nodeSelector
+  # @default -- ``{"materialize.cloud/scratch-fs": "true"}``
   scratchfsNodeSelector:
     materialize.cloud/scratch-fs: "true"
   # -- Additional node selector to use for clusterd pods when using swap.
   # This will be merged with the values in `nodeSelector`.
+  # @notationType -- k8s/nodeSelector
+  # @default -- ``{"materialize.cloud/swap": "true"}``
   swapNodeSelector:
     materialize.cloud/swap: "true"
   # -- Affinity to use for clusterd pods spawned by the operator
-  affinity:
+  # @notationType -- k8s/affinity
+  # @default -- ``{}``
+  affinity: {}
   # -- Tolerations to use for clusterd pods spawned by the operator
-  tolerations:
+  # @notationType -- k8s/tolerations
+  # @default -- ``{}``
+  tolerations: {}
 
 balancerd:
   # -- Flag to indicate whether to create balancerd pods for the environments
   enabled: true
   # -- Node selector to use for balancerd pods spawned by the operator
-  nodeSelector:
+  # @notationType -- k8s/nodeSelector
+  # @default -- ``{}``
+  nodeSelector: {}
   # -- Affinity to use for balancerd pods spawned by the operator
-  affinity:
+  # @notationType -- k8s/affinity
+  # @default -- ``{}``
+  affinity: {}
   # -- Tolerations to use for balancerd pods spawned by the operator
-  tolerations:
-  # -- Default resources if not set in the Materialize CR
+  # @notationType -- k8s/tolerations
+  # @default -- ``{}``
+  tolerations: {}
+  # @notationType -- k8s/resources
   defaultResources:
+    # -- Default resource limits for balancerd's CPU and memory
+    # if not set in the Materialize CR
     limits:
       memory: "256Mi"
+    # -- Default resources requested for balancerd's CPU and memory
+    # if not set in the Materialize CR
     requests:
       cpu: "500m"
       memory: "256Mi"
@@ -263,15 +300,25 @@ console:
   # -- Override the mapping of environmentd versions to console versions
   imageTagMapOverride: {}
   # -- Node selector to use for console pods spawned by the operator
-  nodeSelector:
+  # @notationType -- k8s/nodeSelector
+  # @default -- ``{}``
+  nodeSelector: {}
   # -- Affinity to use for console pods spawned by the operator
-  affinity:
+  # @notationType -- k8s/affinity
+  # @default -- ``{}``
+  affinity: {}
   # -- Tolerations to use for console pods spawned by the operator
-  tolerations:
-  # -- Default resources if not set in the Materialize CR
+  # @notationType -- k8s/tolerations
+  # @default -- ``{}``
+  tolerations: {}
+  # @notationType -- k8s/resources
   defaultResources:
+    # -- Default resource limits for the console's CPU and memory
+    # if not set in the Materialize CR
     limits:
       memory: "256Mi"
+    # -- Default resources requested for the console's CPU and memory
+    # if not set in the Materialize CR
     requests:
       cpu: "500m"
       memory: "256Mi"
@@ -314,18 +361,20 @@ telemetry:
 networkPolicies:
   # -- Whether to enable network policies for securing communication between pods
   enabled: false
-  # -- Whether to enable internal communication between Materialize pods
   internal:
+    # -- Whether to enable network policies for internal communication between Materialize pods
     enabled: false
-  # -- Whether to enable ingress to the SQL and HTTP interfaces
-  # on environmentd or balancerd
   ingress:
+    # -- Whether to enable ingress network policies to the SQL and HTTP interfaces
+    # on environmentd and balancerd
     enabled: false
+    # -- CIDR blocks to allow ingress from
     cidrs:
     - 0.0.0.0/0
-  # -- egress from Materialize pods to sources and sinks
   egress:
+    # -- Whether to enable egress network policies to sources and sinks
     enabled: false
+    # -- CIDR blocks to allow egress to
     cidrs:
     - 0.0.0.0/0
 

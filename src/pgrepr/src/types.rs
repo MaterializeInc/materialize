@@ -241,7 +241,7 @@ impl TypeConstraint for IntervalConstraints {
             Ok(None)
         } else {
             // https://github.com/postgres/postgres/blob/27b77ecf9/src/include/utils/timestamp.h#L53-L54
-            let range = typmod >> 16 & 0x7fff;
+            let range = (typmod >> 16) & 0x7fff;
             let precision = typmod & 0xffff;
             if precision > MAX_INTERVAL_PRECISION {
                 return Err(format!(
@@ -560,9 +560,8 @@ impl Type {
             postgres_types::Type::NUMERIC => Type::Numeric { constraints: None },
             postgres_types::Type::OID => Type::Oid,
             postgres_types::Type::TEXT => Type::Text,
-            postgres_types::Type::BPCHAR | postgres_types::Type::CHAR => {
-                Type::BpChar { length: None }
-            }
+            postgres_types::Type::BPCHAR => Type::BpChar { length: None },
+            postgres_types::Type::CHAR => Type::Char,
             postgres_types::Type::VARCHAR => Type::VarChar { max_length: None },
             postgres_types::Type::TIME => Type::Time { precision: None },
             postgres_types::Type::TIMETZ => Type::TimeTz { precision: None },
@@ -577,6 +576,7 @@ impl Type {
             postgres_types::Type::BPCHAR_ARRAY => {
                 Type::Array(Box::new(Type::BpChar { length: None }))
             }
+            postgres_types::Type::CHAR_ARRAY => Type::Array(Box::new(Type::Char)),
             postgres_types::Type::DATE_ARRAY => Type::Array(Box::new(Type::Date)),
             postgres_types::Type::FLOAT4_ARRAY => Type::Array(Box::new(Type::Float4)),
             postgres_types::Type::FLOAT8_ARRAY => Type::Array(Box::new(Type::Float8)),
@@ -828,6 +828,8 @@ impl Type {
             &postgres_types::Type::VARCHAR_ARRAY => "character varying[]",
             &postgres_types::Type::BOOL => "boolean",
             &postgres_types::Type::BPCHAR => "character",
+            &postgres_types::Type::CHAR => "\"char\"",
+            &postgres_types::Type::CHAR_ARRAY => "\"char\"[]",
             &postgres_types::Type::FLOAT4 => "real",
             &postgres_types::Type::FLOAT8 => "double precision",
             &postgres_types::Type::INT2 => "smallint",
@@ -955,8 +957,8 @@ impl Type {
             Type::Text => -1,
             Type::BpChar { .. } => -1,
             Type::VarChar { .. } => -1,
-            Type::Time { .. } => 4,
-            Type::TimeTz { .. } => 4,
+            Type::Time { .. } => 8,
+            Type::TimeTz { .. } => 12,
             Type::Timestamp { .. } => 8,
             Type::TimestampTz { .. } => 8,
             Type::Uuid => 16,

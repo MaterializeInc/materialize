@@ -15,7 +15,7 @@ operational after an upgrade. See also the newer platform-checks' upgrade scenar
 import random
 
 from materialize import buildkite
-from materialize.docker import image_of_release_version_exists
+from materialize.docker import image_of_release_version_exists, image_registry
 from materialize.mz_version import MzVersion
 from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
@@ -41,7 +41,7 @@ SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
-    Postgres(),
+    Postgres(volumes=["secrets:/certs:ro"]),
     MySql(),
     Cockroach(setup_materialize=True, in_memory=True),
     # Overridden below
@@ -142,7 +142,7 @@ def get_all_and_latest_two_minor_mz_versions(
 ) -> tuple[list[MzVersion], list[MzVersion]]:
     current_version = MzVersion.parse_cargo()
     if use_versions_from_docs:
-        version_list = VersionsFromDocs(respect_released_tag=False)
+        version_list = VersionsFromDocs(respect_released_tag=False, skip_rc=True)
         all_versions = [v for v in version_list.all_versions() if v < current_version]
         tested_versions = version_list.minor_versions()[-2:]
     else:
@@ -201,7 +201,7 @@ def test_upgrade_from_version(
         )
         mz_from = Materialized(
             name=mz_service,
-            image=f"materialize/materialized:{from_version}",
+            image=f"{image_registry()}/materialized:{from_version}",
             options=[
                 opt
                 for start_version, opt in mz_options.items()
@@ -273,7 +273,7 @@ def test_upgrade_from_version(
             with c.override(
                 Materialized(
                     name=mz_service,
-                    image=f"materialize/materialized:{version}",
+                    image=f"{image_registry()}/materialized:{version}",
                     options=[
                         opt
                         for start_version, opt in mz_options.items()

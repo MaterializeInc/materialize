@@ -15,11 +15,14 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, LazyLock};
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_compute_client::logging::LogVariant;
+use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::plan::Plan as ComputePlan;
 use mz_controller::clusters::{ClusterRole, ClusterStatus, ReplicaConfig, ReplicaLogging};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};
@@ -40,9 +43,9 @@ use mz_sql::ast::{
 };
 use mz_sql::catalog::{
     CatalogClusterReplica, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
-    CatalogItemType as SqlCatalogItemType, CatalogItemType, CatalogSchema, CatalogTypeDetails,
-    DefaultPrivilegeAclItem, DefaultPrivilegeObject, IdReference, RoleAttributes, RoleMembership,
-    RoleVars, SystemObjectType,
+    CatalogItemType as SqlCatalogItemType, CatalogItemType, CatalogSchema, CatalogType,
+    CatalogTypeDetails, DefaultPrivilegeAclItem, DefaultPrivilegeObject, IdReference,
+    RoleAttributes, RoleMembership, RoleVars, SystemObjectType,
 };
 use mz_sql::names::{
     Aug, CommentObjectId, DatabaseId, DependencyIds, FullItemName, QualifiedItemName,
@@ -64,6 +67,8 @@ use mz_storage_types::sources::{
     GenericSourceConnection, SourceConnection, SourceDesc, SourceEnvelope, SourceExportDataConfig,
     SourceExportDetails, Timeline,
 };
+use mz_transform::dataflow::DataflowMetainfo;
+use mz_transform::notice::OptimizerNotice;
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
@@ -71,6 +76,7 @@ use tracing::debug;
 
 use crate::builtin::{MZ_CATALOG_SERVER_CLUSTER, MZ_SYSTEM_CLUSTER};
 use crate::durable;
+use crate::durable::objects::item_type;
 
 /// Used to update `self` from the input value while consuming the input value.
 pub trait UpdateFrom<T>: From<T> {
@@ -664,9 +670,6 @@ pub struct CatalogEntry {
 /// because that would be rebinding the [`GlobalId`] of the pTVC. Instead we
 /// allocate a new [`GlobalId`] to refer to the new version of the table, and
 /// then the [`CatalogEntry`] tracks the [`GlobalId`] for each version.
-///
-/// TODO(ct): Add a note here if we end up using this for associating continual
-/// tasks with a single catalog item.
 #[derive(Clone, Debug)]
 pub struct CatalogCollectionEntry {
     pub entry: CatalogEntry,
@@ -674,18 +677,14 @@ pub struct CatalogCollectionEntry {
 }
 
 impl CatalogCollectionEntry {
-    pub fn desc(&self, name: &FullItemName) -> Result<Cow<'_, RelationDesc>, SqlCatalogError> {
-        self.item().desc(name, self.version)
-    }
-
-    pub fn desc_opt(&self) -> Option<Cow<'_, RelationDesc>> {
-        self.item().desc_opt(self.version)
+    pub fn relation_desc(&self) -> Option<Cow<'_, RelationDesc>> {
+        self.item().relation_desc(self.version)
     }
 }
 
 impl mz_sql::catalog::CatalogCollectionItem for CatalogCollectionEntry {
-    fn desc(&self, name: &FullItemName) -> Result<Cow<'_, RelationDesc>, SqlCatalogError> {
-        CatalogCollectionEntry::desc(self, name)
+    fn relation_desc(&self) -> Option<Cow<'_, RelationDesc>> {
+        self.item().relation_desc(self.version)
     }
 
     fn global_id(&self) -> GlobalId {
@@ -750,6 +749,10 @@ impl mz_sql::catalog::CatalogItem for CatalogCollectionEntry {
 
     fn writable_table_details(&self) -> Option<&[Expr<Aug>]> {
         self.entry.writable_table_details()
+    }
+
+    fn replacement_target(&self) -> Option<CatalogItemId> {
+        self.entry.replacement_target()
     }
 
     fn type_details(&self) -> Option<&CatalogTypeDetails<IdReference>> {
@@ -837,7 +840,6 @@ pub enum CatalogItem {
     Func(Func),
     Secret(Secret),
     Connection(Connection),
-    ContinualTask(ContinualTask),
 }
 
 impl From<CatalogEntry> for durable::Item {
@@ -946,7 +948,7 @@ pub enum TableDataSource {
     },
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum DataSourceDesc {
     /// Receives data from an external system
     Ingestion {
@@ -991,6 +993,14 @@ pub enum DataSourceDesc {
         /// The cluster which this source is associated with.
         cluster_id: ClusterId,
     },
+    /// Exposes the contents of the catalog shard.
+    Catalog,
+}
+
+impl From<IntrospectionType> for DataSourceDesc {
+    fn from(typ: IntrospectionType) -> Self {
+        Self::Introspection(typ)
+    }
 }
 
 impl DataSourceDesc {
@@ -1016,7 +1026,8 @@ impl DataSourceDesc {
             },
             DataSourceDesc::Introspection(_)
             | DataSourceDesc::Webhook { .. }
-            | DataSourceDesc::Progress => (None, None),
+            | DataSourceDesc::Progress
+            | DataSourceDesc::Catalog => (None, None),
         }
     }
 
@@ -1063,7 +1074,8 @@ impl DataSourceDesc {
             }
             DataSourceDesc::Introspection(_)
             | DataSourceDesc::Webhook { .. }
-            | DataSourceDesc::Progress => None,
+            | DataSourceDesc::Progress
+            | DataSourceDesc::Catalog => None,
         }
     }
 }
@@ -1192,7 +1204,7 @@ impl Source {
             | DataSourceDesc::OldSyntaxIngestion { desc, .. } => desc.connection.name(),
             DataSourceDesc::Progress => "progress",
             DataSourceDesc::IngestionExport { .. } => "subsource",
-            DataSourceDesc::Introspection(_) => "source",
+            DataSourceDesc::Introspection(_) | DataSourceDesc::Catalog => "source",
             DataSourceDesc::Webhook { .. } => "webhook",
         }
     }
@@ -1205,7 +1217,8 @@ impl Source {
             DataSourceDesc::IngestionExport { .. }
             | DataSourceDesc::Introspection(_)
             | DataSourceDesc::Webhook { .. }
-            | DataSourceDesc::Progress => None,
+            | DataSourceDesc::Progress
+            | DataSourceDesc::Catalog => None,
         }
     }
 
@@ -1217,7 +1230,7 @@ impl Source {
     /// The expensive resource that each source consumes is persist shards. To
     /// prevent abuse, we want to prevent users from creating sources that use an
     /// unbounded number of persist shards. But we also don't want to count
-    /// persist shards that are mandated by teh system (e.g., the progress
+    /// persist shards that are mandated by the system (e.g., the progress
     /// shard) so that future versions of Materialize can introduce additional
     /// per-source shards (e.g., a per-source status shard) without impacting
     /// the limit calculation.
@@ -1249,9 +1262,11 @@ impl Source {
             //  use a data shard.
             DataSourceDesc::IngestionExport { .. } => 1,
             DataSourceDesc::Webhook { .. } => 1,
-            // Introspection and progress subsources are not under the user's control, so shouldn't
-            // count toward their quota.
-            DataSourceDesc::Introspection(_) | DataSourceDesc::Progress => 0,
+            // Introspection, catalog, and progress subsources are not under the user's control, so
+            // shouldn't count toward their quota.
+            DataSourceDesc::Introspection(_)
+            | DataSourceDesc::Progress
+            | DataSourceDesc::Catalog => 0,
         }
     }
 }
@@ -1293,6 +1308,8 @@ pub struct Sink {
     pub resolved_ids: ResolvedIds,
     /// Cluster this sink runs on.
     pub cluster_id: ClusterId,
+    /// Commit interval for the sink.
+    pub commit_interval: Option<Duration>,
 }
 
 impl Sink {
@@ -1305,6 +1322,7 @@ impl Sink {
         match &self.envelope {
             SinkEnvelope::Debezium => Some("debezium"),
             SinkEnvelope::Upsert => Some("upsert"),
+            SinkEnvelope::Append => Some("append"),
         }
     }
 
@@ -1315,7 +1333,7 @@ impl Sink {
     pub fn combined_format(&self) -> Option<Cow<'_, str>> {
         match &self.connection {
             StorageSinkConnection::Kafka(connection) => Some(connection.format.get_format_name()),
-            _ => None,
+            StorageSinkConnection::Iceberg(_) => None,
         }
     }
 
@@ -1331,7 +1349,7 @@ impl Sink {
                 let value_format = connection.format.value_format.get_format_name();
                 Some((key_format, value_format))
             }
-            _ => None,
+            StorageSinkConnection::Iceberg(_) => None,
         }
     }
 
@@ -1354,7 +1372,7 @@ pub struct View {
     /// Unoptimized high-level expression from parsing the `create_sql`.
     pub raw_expr: Arc<HirRelationExpr>,
     /// Optimized mid-level expression from (locally) optimizing the `raw_expr`.
-    pub optimized_expr: Arc<OptimizedMirRelationExpr>,
+    pub locally_optimized_expr: Arc<OptimizedMirRelationExpr>,
     /// Columns of this view.
     pub desc: RelationDesc,
     /// If created in the `TEMPORARY` schema, the [`ConnectionId`] for that session.
@@ -1382,15 +1400,19 @@ pub struct MaterializedView {
     /// Raw high-level expression from planning, derived from the `create_sql`.
     pub raw_expr: Arc<HirRelationExpr>,
     /// Optimized mid-level expression, derived from the `raw_expr`.
-    pub optimized_expr: Arc<OptimizedMirRelationExpr>,
+    pub locally_optimized_expr: Arc<OptimizedMirRelationExpr>,
     /// [`VersionedRelationDesc`] of this materialized view, derived from the `create_sql`.
     pub desc: VersionedRelationDesc,
     /// Other catalog items that this materialized view references, determined at name resolution.
     pub resolved_ids: ResolvedIds,
     /// All of the catalog objects that are referenced by this view.
     pub dependencies: DependencyIds,
+    /// ID of the materialized view this materialized view is intended to replace.
+    pub replacement_target: Option<CatalogItemId>,
     /// Cluster that this materialized view runs on.
     pub cluster_id: ClusterId,
+    /// If set, only install this materialized view's dataflow on the specified replica.
+    pub target_replica: Option<ReplicaId>,
     /// Column indexes that we assert are not `NULL`.
     ///
     /// TODO(parkmycar): Switch this to use the `ColumnIdx` type.
@@ -1404,6 +1426,19 @@ pub struct MaterializedView {
     /// Note: This doesn't change upon restarts.
     /// (The dataflow's initial `as_of` can be different.)
     pub initial_as_of: Option<Antichain<mz_repr::Timestamp>>,
+    // The catalog `dump` method uses serde to serialize catalog state, e.g., Testdrive catalog
+    // consistency checks do two dumps and compare them. One of these states comes from the durable
+    // catalog, but the following fields are not restored when the consistency check loads the
+    // durable catalog, hence we need `#[serde(skip)]`.
+    /// Optimized global MIR plan, set after global optimization.
+    #[serde(skip)]
+    pub optimized_plan: Option<Arc<DataflowDescription<OptimizedMirRelationExpr>>>,
+    /// Physical (LIR) plan, set after physical optimization.
+    #[serde(skip)]
+    pub physical_plan: Option<Arc<DataflowDescription<ComputePlan>>>,
+    /// Dataflow metainfo (optimizer notices, etc.), set after optimization.
+    #[serde(skip)]
+    pub dataflow_metainfo: Option<DataflowMetainfo<Arc<OptimizerNotice>>>,
 }
 
 impl MaterializedView {
@@ -1444,6 +1479,72 @@ impl MaterializedView {
         self.desc
             .at_version(RelationVersionSelector::Specific(*version))
     }
+
+    /// Apply the given replacement materialized view to this [`MaterializedView`].
+    pub fn apply_replacement(&mut self, replacement: Self) {
+        let target_id = replacement
+            .replacement_target
+            .expect("replacement has target");
+
+        fn parse(create_sql: &str) -> mz_sql::ast::CreateMaterializedViewStatement<Raw> {
+            let res = mz_sql::parse::parse(create_sql).unwrap_or_else(|e| {
+                panic!("invalid create_sql persisted in catalog: {e}\n{create_sql}");
+            });
+            if let Statement::CreateMaterializedView(cmvs) = res.into_element().ast {
+                cmvs
+            } else {
+                panic!("invalid MV create_sql persisted in catalog\n{create_sql}");
+            }
+        }
+
+        let old_stmt = parse(&self.create_sql);
+        let rpl_stmt = parse(&replacement.create_sql);
+        let new_stmt = mz_sql::ast::CreateMaterializedViewStatement {
+            if_exists: old_stmt.if_exists,
+            name: old_stmt.name,
+            columns: rpl_stmt.columns,
+            replacement_for: None,
+            in_cluster: rpl_stmt.in_cluster,
+            in_cluster_replica: rpl_stmt.in_cluster_replica,
+            query: rpl_stmt.query,
+            as_of: rpl_stmt.as_of,
+            with_options: rpl_stmt.with_options,
+        };
+        let create_sql = new_stmt.to_ast_string_stable();
+
+        let mut collections = std::mem::take(&mut self.collections);
+        // Note: We can't use `self.desc.latest_version` here because a replacement doesn't
+        // necessary evolve the relation schema, so that version might be lower than the actual
+        // latest version.
+        let latest_version = collections.keys().max().expect("at least one version");
+        let new_version = latest_version.bump();
+        collections.insert(new_version, replacement.global_id_writes());
+
+        let mut resolved_ids = replacement.resolved_ids;
+        resolved_ids.remove_item(&target_id);
+        let mut dependencies = replacement.dependencies;
+        dependencies.0.remove(&target_id);
+
+        *self = Self {
+            create_sql,
+            collections,
+            raw_expr: replacement.raw_expr,
+            locally_optimized_expr: replacement.locally_optimized_expr,
+            desc: replacement.desc,
+            resolved_ids,
+            dependencies,
+            replacement_target: None,
+            cluster_id: replacement.cluster_id,
+            target_replica: replacement.target_replica,
+            non_null_assertions: replacement.non_null_assertions,
+            custom_logical_compaction_window: replacement.custom_logical_compaction_window,
+            refresh_schedule: replacement.refresh_schedule,
+            initial_as_of: replacement.initial_as_of,
+            optimized_plan: replacement.optimized_plan,
+            physical_plan: replacement.physical_plan,
+            dataflow_metainfo: replacement.dataflow_metainfo,
+        };
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1469,6 +1570,19 @@ pub struct Index {
     ///
     /// ['metrics_retention']: mz_sql::session::vars::METRICS_RETENTION
     pub is_retained_metrics_object: bool,
+    // The catalog `dump` method uses serde to serialize catalog state, e.g., Testdrive catalog
+    // consistency checks do two dumps and compare them. One of these states comes from the durable
+    // catalog, but the following fields are not restored when the consistency check loads the
+    // durable catalog, hence we need `#[serde(skip)]`.
+    /// Optimized global MIR plan, set after global optimization.
+    #[serde(skip)]
+    pub optimized_plan: Option<Arc<DataflowDescription<OptimizedMirRelationExpr>>>,
+    /// Physical (LIR) plan, set after physical optimization.
+    #[serde(skip)]
+    pub physical_plan: Option<Arc<DataflowDescription<ComputePlan>>>,
+    /// Dataflow metainfo (optimizer notices, etc.), set after optimization.
+    #[serde(skip)]
+    pub dataflow_metainfo: Option<DataflowMetainfo<Arc<OptimizerNotice>>>,
 }
 
 impl Index {
@@ -1486,7 +1600,6 @@ pub struct Type {
     pub global_id: GlobalId,
     #[serde(skip)]
     pub details: CatalogTypeDetails<IdReference>,
-    pub desc: Option<RelationDesc>,
     /// Other catalog objects referenced by this type.
     pub resolved_ids: ResolvedIds,
 }
@@ -1522,39 +1635,6 @@ pub struct Connection {
 
 impl Connection {
     /// The single [`GlobalId`] used to reference this connection.
-    pub fn global_id(&self) -> GlobalId {
-        self.global_id
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ContinualTask {
-    /// Parse-able SQL that defines this continual task.
-    pub create_sql: String,
-    /// [`GlobalId`] used to reference this continual task from outside the catalog.
-    pub global_id: GlobalId,
-    /// [`GlobalId`] of the collection that we read into this continual task.
-    pub input_id: GlobalId,
-    pub with_snapshot: bool,
-    /// ContinualTasks are self-referential. We make this work by using a
-    /// placeholder `LocalId` for the CT itself through name resolution and
-    /// planning. Then we fill in the real `GlobalId` before constructing this
-    /// catalog item.
-    pub raw_expr: Arc<HirRelationExpr>,
-    /// Columns for this continual task.
-    pub desc: RelationDesc,
-    /// Other catalog items that this continual task references, determined at name resolution.
-    pub resolved_ids: ResolvedIds,
-    /// All of the catalog objects that are referenced by this continual task.
-    pub dependencies: DependencyIds,
-    /// Cluster that this continual task runs on.
-    pub cluster_id: ClusterId,
-    /// See the comment on [MaterializedView::initial_as_of].
-    pub initial_as_of: Option<Antichain<mz_repr::Timestamp>>,
-}
-
-impl ContinualTask {
-    /// The single [`GlobalId`] used to reference this continual task.
     pub fn global_id(&self) -> GlobalId {
         self.global_id
     }
@@ -1641,7 +1721,6 @@ impl CatalogItem {
             CatalogItem::Func(_) => CatalogItemType::Func,
             CatalogItem::Secret(_) => CatalogItemType::Secret,
             CatalogItem::Connection(_) => CatalogItemType::Connection,
-            CatalogItem::ContinualTask(_) => CatalogItemType::ContinualTask,
         }
     }
 
@@ -1655,7 +1734,6 @@ impl CatalogItem {
             CatalogItem::MaterializedView(mv) => {
                 return itertools::Either::Left(mv.collections.values().copied());
             }
-            CatalogItem::ContinualTask(ct) => ct.global_id,
             CatalogItem::Index(index) => index.global_id,
             CatalogItem::Func(func) => func.global_id,
             CatalogItem::Type(ty) => ty.global_id,
@@ -1678,7 +1756,6 @@ impl CatalogItem {
             CatalogItem::Sink(sink) => sink.global_id,
             CatalogItem::View(view) => view.global_id,
             CatalogItem::MaterializedView(mv) => mv.global_id_writes(),
-            CatalogItem::ContinualTask(ct) => ct.global_id,
             CatalogItem::Index(index) => index.global_id,
             CatalogItem::Func(func) => func.global_id,
             CatalogItem::Type(ty) => ty.global_id,
@@ -1688,14 +1765,66 @@ impl CatalogItem {
         }
     }
 
+    /// Returns the optimized global MIR plan, if this item has one.
+    pub fn optimized_plan(&self) -> Option<&Arc<DataflowDescription<OptimizedMirRelationExpr>>> {
+        match self {
+            CatalogItem::Index(idx) => idx.optimized_plan.as_ref(),
+            CatalogItem::MaterializedView(mv) => mv.optimized_plan.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// Returns the physical (LIR) plan, if this item has one.
+    pub fn physical_plan(&self) -> Option<&Arc<DataflowDescription<ComputePlan>>> {
+        match self {
+            CatalogItem::Index(idx) => idx.physical_plan.as_ref(),
+            CatalogItem::MaterializedView(mv) => mv.physical_plan.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// Returns the dataflow metainfo, if this item has one.
+    pub fn dataflow_metainfo(&self) -> Option<&DataflowMetainfo<Arc<OptimizerNotice>>> {
+        match self {
+            CatalogItem::Index(idx) => idx.dataflow_metainfo.as_ref(),
+            CatalogItem::MaterializedView(mv) => mv.dataflow_metainfo.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// Returns mutable references to the plan fields (`optimized_plan`,
+    /// `physical_plan`, `dataflow_metainfo`) on plan-bearing items
+    /// (`Index`, `MaterializedView`), or `None` for
+    /// other item kinds.
+    pub fn plan_fields_mut(
+        &mut self,
+    ) -> Option<(
+        &mut Option<Arc<DataflowDescription<OptimizedMirRelationExpr>>>,
+        &mut Option<Arc<DataflowDescription<ComputePlan>>>,
+        &mut Option<DataflowMetainfo<Arc<OptimizerNotice>>>,
+    )> {
+        match self {
+            CatalogItem::Index(idx) => Some((
+                &mut idx.optimized_plan,
+                &mut idx.physical_plan,
+                &mut idx.dataflow_metainfo,
+            )),
+            CatalogItem::MaterializedView(mv) => Some((
+                &mut mv.optimized_plan,
+                &mut mv.physical_plan,
+                &mut mv.dataflow_metainfo,
+            )),
+            _ => None,
+        }
+    }
+
     /// Whether this item represents a storage collection.
     pub fn is_storage_collection(&self) -> bool {
         match self {
             CatalogItem::Table(_)
             | CatalogItem::Source(_)
             | CatalogItem::MaterializedView(_)
-            | CatalogItem::Sink(_)
-            | CatalogItem::ContinualTask(_) => true,
+            | CatalogItem::Sink(_) => true,
             CatalogItem::Log(_)
             | CatalogItem::View(_)
             | CatalogItem::Index(_)
@@ -1706,19 +1835,15 @@ impl CatalogItem {
         }
     }
 
-    pub fn desc(
-        &self,
-        name: &FullItemName,
-        version: RelationVersionSelector,
-    ) -> Result<Cow<'_, RelationDesc>, SqlCatalogError> {
-        self.desc_opt(version)
-            .ok_or_else(|| SqlCatalogError::InvalidDependency {
-                name: name.to_string(),
-                typ: self.typ(),
-            })
-    }
-
-    pub fn desc_opt(&self, version: RelationVersionSelector) -> Option<Cow<'_, RelationDesc>> {
+    /// Returns the [`RelationDesc`] for items that yield rows, at the requested
+    /// version.
+    ///
+    /// Some item types honor `version` so callers can ask for the schema that
+    /// matches a specific [`GlobalId`] or historical definition. Other relation
+    /// types ignore `version` because they have a single shape. Non-relational
+    /// items ( for example functions, indexes, sinks, secrets, and connections)
+    /// return `None`.
+    pub fn relation_desc(&self, version: RelationVersionSelector) -> Option<Cow<'_, RelationDesc>> {
         match &self {
             CatalogItem::Source(src) => Some(Cow::Borrowed(&src.desc)),
             CatalogItem::Log(log) => Some(Cow::Owned(log.variant.desc())),
@@ -1727,13 +1852,12 @@ impl CatalogItem {
             CatalogItem::MaterializedView(mview) => {
                 Some(Cow::Owned(mview.desc.at_version(version)))
             }
-            CatalogItem::Type(typ) => typ.desc.as_ref().map(Cow::Borrowed),
-            CatalogItem::ContinualTask(ct) => Some(Cow::Borrowed(&ct.desc)),
             CatalogItem::Func(_)
             | CatalogItem::Index(_)
             | CatalogItem::Sink(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => None,
+            | CatalogItem::Connection(_)
+            | CatalogItem::Type(_) => None,
         }
     }
 
@@ -1762,7 +1886,8 @@ impl CatalogItem {
                 DataSourceDesc::IngestionExport { .. }
                 | DataSourceDesc::Introspection(_)
                 | DataSourceDesc::Webhook { .. }
-                | DataSourceDesc::Progress => Ok(None),
+                | DataSourceDesc::Progress
+                | DataSourceDesc::Catalog => Ok(None),
             },
             _ => Err(SqlCatalogError::UnexpectedType {
                 name: entry.name().item.to_string(),
@@ -1799,7 +1924,6 @@ impl CatalogItem {
             CatalogItem::MaterializedView(mview) => &mview.resolved_ids,
             CatalogItem::Secret(_) => &*EMPTY,
             CatalogItem::Connection(connection) => &connection.resolved_ids,
-            CatalogItem::ContinualTask(ct) => &ct.resolved_ids,
         }
     }
 
@@ -1824,7 +1948,6 @@ impl CatalogItem {
             CatalogItem::MaterializedView(mview) => {
                 uses.extend(mview.dependencies.0.iter().copied())
             }
-            CatalogItem::ContinualTask(ct) => uses.extend(ct.dependencies.0.iter().copied()),
             CatalogItem::Secret(_) => {}
             CatalogItem::Connection(_) => {}
         }
@@ -1845,8 +1968,25 @@ impl CatalogItem {
             | CatalogItem::Secret(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
-            | CatalogItem::Connection(_)
-            | CatalogItem::ContinualTask(_) => None,
+            | CatalogItem::Connection(_) => None,
+        }
+    }
+
+    /// Sets the connection ID that this item belongs to, which makes it a
+    /// temporary item.
+    pub fn set_conn_id(&mut self, conn_id: Option<ConnectionId>) {
+        match self {
+            CatalogItem::View(view) => view.conn_id = conn_id,
+            CatalogItem::Index(index) => index.conn_id = conn_id,
+            CatalogItem::Table(table) => table.conn_id = conn_id,
+            CatalogItem::Log(_)
+            | CatalogItem::Source(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::MaterializedView(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Connection(_) => (),
         }
     }
 
@@ -1926,11 +2066,6 @@ impl CatalogItem {
                 Ok(CatalogItem::Type(i))
             }
             CatalogItem::Func(i) => Ok(CatalogItem::Func(i.clone())),
-            CatalogItem::ContinualTask(i) => {
-                let mut i = i.clone();
-                i.create_sql = do_rewrite(i.create_sql)?;
-                Ok(CatalogItem::ContinualTask(i))
-            }
         }
     }
 
@@ -2001,14 +2136,70 @@ impl CatalogItem {
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Connection(i))
             }
-            CatalogItem::ContinualTask(i) => {
-                let mut i = i.clone();
-                i.create_sql = do_rewrite(i.create_sql)?;
-                Ok(CatalogItem::ContinualTask(i))
-            }
         }
     }
 
+    /// Returns a clone of `self` with all instances of `old_id` replaced with `new_id`.
+    pub fn replace_item_refs(&self, old_id: CatalogItemId, new_id: CatalogItemId) -> CatalogItem {
+        let do_rewrite = |create_sql: String| -> String {
+            let mut create_stmt = mz_sql::parse::parse(&create_sql)
+                .expect("invalid create sql persisted to catalog")
+                .into_element()
+                .ast;
+            mz_sql::ast::transform::create_stmt_replace_ids(
+                &mut create_stmt,
+                &[(old_id, new_id)].into(),
+            );
+            create_stmt.to_ast_string_stable()
+        };
+
+        match self {
+            CatalogItem::Table(i) => {
+                let mut i = i.clone();
+                i.create_sql = i.create_sql.map(do_rewrite);
+                CatalogItem::Table(i)
+            }
+            CatalogItem::Log(i) => CatalogItem::Log(i.clone()),
+            CatalogItem::Source(i) => {
+                let mut i = i.clone();
+                i.create_sql = i.create_sql.map(do_rewrite);
+                CatalogItem::Source(i)
+            }
+            CatalogItem::Sink(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql);
+                CatalogItem::Sink(i)
+            }
+            CatalogItem::View(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql);
+                CatalogItem::View(i)
+            }
+            CatalogItem::MaterializedView(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql);
+                CatalogItem::MaterializedView(i)
+            }
+            CatalogItem::Index(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql);
+                CatalogItem::Index(i)
+            }
+            CatalogItem::Secret(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql);
+                CatalogItem::Secret(i)
+            }
+            CatalogItem::Func(_) | CatalogItem::Type(_) => {
+                unreachable!("references of {}s cannot be replaced", self.typ())
+            }
+            CatalogItem::Connection(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql);
+                CatalogItem::Connection(i)
+            }
+        }
+    }
     /// Updates the retain history for an item. Returns the previous retain history value. Returns
     /// an error if this item does not support retain history.
     pub fn update_retain_history(
@@ -2076,6 +2267,57 @@ impl CatalogItem {
         Ok(res)
     }
 
+    /// Updates the timestamp interval for a source. Returns an error if this item is not a source.
+    pub fn update_timestamp_interval(
+        &mut self,
+        value: Option<Value>,
+        interval: Duration,
+    ) -> Result<(), ()> {
+        let update = |ast: &mut Statement<Raw>| {
+            match ast {
+                Statement::CreateSource(stmt) => {
+                    let pos = stmt.with_options.iter().rposition(|o| {
+                        o.name == mz_sql_parser::ast::CreateSourceOptionName::TimestampInterval
+                    });
+                    if let Some(value) = value {
+                        let next = mz_sql_parser::ast::CreateSourceOption {
+                            name: mz_sql_parser::ast::CreateSourceOptionName::TimestampInterval,
+                            value: Some(WithOptionValue::Value(value)),
+                        };
+                        if let Some(idx) = pos {
+                            stmt.with_options[idx] = next;
+                        } else {
+                            stmt.with_options.push(next);
+                        }
+                    } else {
+                        if let Some(idx) = pos {
+                            stmt.with_options.swap_remove(idx);
+                        }
+                    }
+                }
+                _ => return Err(()),
+            };
+            Ok(())
+        };
+
+        self.update_sql(update)?;
+
+        // Update the in-memory SourceDesc timestamp_interval.
+        match self {
+            CatalogItem::Source(source) => {
+                match &mut source.data_source {
+                    DataSourceDesc::Ingestion { desc, .. }
+                    | DataSourceDesc::OldSyntaxIngestion { desc, .. } => {
+                        desc.timestamp_interval = interval;
+                    }
+                    _ => return Err(()),
+                }
+                Ok(())
+            }
+            _ => Err(()),
+        }
+    }
+
     pub fn add_column(
         &mut self,
         name: ColumnName,
@@ -2131,8 +2373,7 @@ impl CatalogItem {
             | CatalogItem::MaterializedView(MaterializedView { create_sql, .. })
             | CatalogItem::Index(Index { create_sql, .. })
             | CatalogItem::Secret(Secret { create_sql, .. })
-            | CatalogItem::Connection(Connection { create_sql, .. })
-            | CatalogItem::ContinualTask(ContinualTask { create_sql, .. }) => Some(create_sql),
+            | CatalogItem::Connection(Connection { create_sql, .. }) => Some(create_sql),
             CatalogItem::Func(_) | CatalogItem::Log(_) => None,
         };
         let Some(create_sql) = create_sql else {
@@ -2167,8 +2408,7 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_)
-            | CatalogItem::ContinualTask(_) => None,
+            | CatalogItem::Connection(_) => None,
         }
     }
 
@@ -2184,10 +2424,11 @@ impl CatalogItem {
                 // cross-referencing the items
                 DataSourceDesc::IngestionExport { .. } => None,
                 DataSourceDesc::Webhook { cluster_id, .. } => Some(*cluster_id),
-                DataSourceDesc::Introspection(_) | DataSourceDesc::Progress => None,
+                DataSourceDesc::Introspection(_)
+                | DataSourceDesc::Progress
+                | DataSourceDesc::Catalog => None,
             },
             CatalogItem::Sink(sink) => Some(sink.cluster_id),
-            CatalogItem::ContinualTask(ct) => Some(ct.cluster_id),
             CatalogItem::Table(_)
             | CatalogItem::Log(_)
             | CatalogItem::View(_)
@@ -2212,8 +2453,7 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_)
-            | CatalogItem::ContinualTask(_) => None,
+            | CatalogItem::Connection(_) => None,
         }
     }
 
@@ -2234,8 +2474,7 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_)
-            | CatalogItem::ContinualTask(_) => return None,
+            | CatalogItem::Connection(_) => return None,
         };
         Some(cw)
     }
@@ -2252,8 +2491,7 @@ impl CatalogItem {
             CatalogItem::Table(_)
             | CatalogItem::Source(_)
             | CatalogItem::Index(_)
-            | CatalogItem::MaterializedView(_)
-            | CatalogItem::ContinualTask(_) => self.custom_logical_compaction_window(),
+            | CatalogItem::MaterializedView(_) => self.custom_logical_compaction_window(),
             CatalogItem::Log(_)
             | CatalogItem::View(_)
             | CatalogItem::Sink(_)
@@ -2280,8 +2518,7 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_)
-            | CatalogItem::ContinualTask(_) => false,
+            | CatalogItem::Connection(_) => false,
         }
     }
 
@@ -2338,9 +2575,6 @@ impl CatalogItem {
                 BTreeMap::new(),
             ),
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
-            CatalogItem::ContinualTask(ct) => {
-                (ct.create_sql.clone(), ct.global_id, BTreeMap::new())
-            }
         }
     }
 
@@ -2386,7 +2620,6 @@ impl CatalogItem {
                 (connection.create_sql, connection.global_id, BTreeMap::new())
             }
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
-            CatalogItem::ContinualTask(ct) => (ct.create_sql, ct.global_id, BTreeMap::new()),
         }
     }
 
@@ -2405,7 +2638,6 @@ impl CatalogItem {
             CatalogItem::Func(func) => return Some(func.global_id),
             CatalogItem::Secret(secret) => return Some(secret.global_id),
             CatalogItem::Connection(conn) => return Some(conn.global_id),
-            CatalogItem::ContinualTask(ct) => return Some(ct.global_id),
         };
         match version {
             RelationVersionSelector::Latest => collections.values().last().copied(),
@@ -2415,26 +2647,20 @@ impl CatalogItem {
 }
 
 impl CatalogEntry {
-    /// Reports the latest [`RelationDesc`] of the rows produced by this [`CatalogEntry`],
-    /// returning an error if this [`CatalogEntry`] does not produce rows.
-    ///
-    /// If you need to get the [`RelationDesc`] for a specific version, see [`CatalogItem::desc`].
-    pub fn desc_latest(
-        &self,
-        name: &FullItemName,
-    ) -> Result<Cow<'_, RelationDesc>, SqlCatalogError> {
-        self.item.desc(name, RelationVersionSelector::Latest)
-    }
-
     /// Reports the latest [`RelationDesc`] of the rows produced by this [`CatalogEntry`], if it
     /// produces rows.
-    pub fn desc_opt_latest(&self) -> Option<Cow<'_, RelationDesc>> {
-        self.item.desc_opt(RelationVersionSelector::Latest)
+    pub fn relation_desc_latest(&self) -> Option<Cow<'_, RelationDesc>> {
+        self.item.relation_desc(RelationVersionSelector::Latest)
     }
 
     /// Reports if the item has columns.
     pub fn has_columns(&self) -> bool {
-        self.desc_opt_latest().is_some()
+        match self.item() {
+            CatalogItem::Type(Type { details, .. }) => {
+                matches!(details.typ, CatalogType::Record { .. })
+            }
+            _ => self.relation_desc_latest().is_some(),
+        }
     }
 
     /// Returns the [`mz_sql::func::Func`] associated with this `CatalogEntry`.
@@ -2604,7 +2830,8 @@ impl CatalogEntry {
                 DataSourceDesc::IngestionExport { .. }
                 | DataSourceDesc::Introspection(_)
                 | DataSourceDesc::Progress
-                | DataSourceDesc::Webhook { .. } => None,
+                | DataSourceDesc::Webhook { .. }
+                | DataSourceDesc::Catalog => None,
             },
             CatalogItem::Table(_)
             | CatalogItem::Log(_)
@@ -2615,8 +2842,7 @@ impl CatalogEntry {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_)
-            | CatalogItem::ContinualTask(_) => None,
+            | CatalogItem::Connection(_) => None,
         }
     }
 
@@ -2650,11 +2876,6 @@ impl CatalogEntry {
         matches!(self.item(), CatalogItem::Index(_))
     }
 
-    /// Reports whether this catalog entry is a continual task.
-    pub fn is_continual_task(&self) -> bool {
-        matches!(self.item(), CatalogItem::ContinualTask(_))
-    }
-
     /// Reports whether this catalog entry can be treated as a relation, it can produce rows.
     pub fn is_relation(&self) -> bool {
         mz_sql::catalog::ObjectType::from(self.item_type()).is_relation()
@@ -2678,6 +2899,12 @@ impl CatalogEntry {
     /// Returns the `CatalogItem` associated with this catalog entry.
     pub fn item(&self) -> &CatalogItem {
         &self.item
+    }
+
+    /// Returns a mutable reference to the `CatalogItem` associated with this
+    /// catalog entry.
+    pub fn item_mut(&mut self) -> &mut CatalogItem {
+        &mut self.item
     }
 
     /// Returns the [`CatalogItemId`] of this catalog entry.
@@ -2728,6 +2955,23 @@ impl CatalogEntry {
     /// Returns the privileges of the entry.
     pub fn privileges(&self) -> &PrivilegeMap {
         &self.privileges
+    }
+
+    /// Returns the comment object ID for this entry.
+    pub fn comment_object_id(&self) -> CommentObjectId {
+        use CatalogItemType::*;
+        match self.item_type() {
+            Table => CommentObjectId::Table(self.id),
+            Source => CommentObjectId::Source(self.id),
+            Sink => CommentObjectId::Sink(self.id),
+            View => CommentObjectId::View(self.id),
+            MaterializedView => CommentObjectId::MaterializedView(self.id),
+            Index => CommentObjectId::Index(self.id),
+            Func => CommentObjectId::Func(self.id),
+            Connection => CommentObjectId::Connection(self.id),
+            Type => CommentObjectId::Type(self.id),
+            Secret => CommentObjectId::Secret(self.id),
+        }
     }
 }
 
@@ -3250,14 +3494,14 @@ impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
     fn managed_size(&self) -> Option<&str> {
         match &self.config.variant {
             ClusterVariant::Managed(ClusterVariantManaged { size, .. }) => Some(size),
-            _ => None,
+            ClusterVariant::Unmanaged => None,
         }
     }
 
     fn schedule(&self) -> Option<&ClusterSchedule> {
         match &self.config.variant {
             ClusterVariant::Managed(ClusterVariantManaged { schedule, .. }) => Some(schedule),
-            _ => None,
+            ClusterVariant::Unmanaged => None,
         }
     }
 
@@ -3339,7 +3583,6 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::Connection(Connection { create_sql, .. }) => create_sql,
             CatalogItem::Func(_) => "<builtin>",
             CatalogItem::Log(_) => "<builtin>",
-            CatalogItem::ContinualTask(ContinualTask { create_sql, .. }) => create_sql,
         }
     }
 
@@ -3362,6 +3605,14 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         }) = self.item()
         {
             Some(defaults.as_slice())
+        } else {
+            None
+        }
+    }
+
+    fn replacement_target(&self) -> Option<CatalogItemId> {
+        if let CatalogItem::MaterializedView(mv) = self.item() {
+            mv.replacement_target
         } else {
             None
         }
@@ -3444,7 +3695,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 }
 
 /// A single update to the catalog state.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct StateUpdate {
     pub kind: StateUpdateKind,
     pub ts: Timestamp,
@@ -3454,7 +3705,7 @@ pub struct StateUpdate {
 /// The contents of a single state update.
 ///
 /// Variants are listed in dependency order.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StateUpdateKind {
     Role(durable::objects::Role),
     RoleAuth(durable::objects::RoleAuth),
@@ -3469,8 +3720,9 @@ pub enum StateUpdateKind {
     ClusterReplica(durable::objects::ClusterReplica),
     SourceReferences(durable::objects::SourceReferences),
     SystemObjectMapping(durable::objects::SystemObjectMapping),
-    // Temporary items are not actually updated via the durable catalog, but this allows us to
-    // model them the same way as all other items.
+    // Temporary items are not actually updated via the durable catalog, but
+    // this allows us to model them the same way as all other items in parts of
+    // the pipeline.
     TemporaryItem(TemporaryItem),
     Item(durable::objects::Item),
     Comment(durable::objects::Comment),
@@ -3508,26 +3760,43 @@ impl TryFrom<Diff> for StateDiff {
 }
 
 /// Information needed to process an update to a temporary item.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct TemporaryItem {
     pub id: CatalogItemId,
     pub oid: u32,
-    pub name: QualifiedItemName,
-    pub item: CatalogItem,
+    pub global_id: GlobalId,
+    pub schema_id: SchemaId,
+    pub name: String,
+    pub conn_id: Option<ConnectionId>,
+    pub create_sql: String,
     pub owner_id: RoleId,
-    pub privileges: PrivilegeMap,
+    pub privileges: Vec<MzAclItem>,
+    pub extra_versions: BTreeMap<RelationVersion, GlobalId>,
 }
 
 impl From<CatalogEntry> for TemporaryItem {
     fn from(entry: CatalogEntry) -> Self {
+        let conn_id = entry.conn_id().cloned();
+        let (create_sql, global_id, extra_versions) = entry.item.to_serialized();
+
         TemporaryItem {
             id: entry.id,
             oid: entry.oid,
-            name: entry.name,
-            item: entry.item,
+            global_id,
+            schema_id: entry.name.qualifiers.schema_spec.into(),
+            name: entry.name.item,
+            conn_id,
+            create_sql,
             owner_id: entry.owner_id,
-            privileges: entry.privileges,
+            privileges: entry.privileges.into_all_values().collect(),
+            extra_versions,
         }
+    }
+}
+
+impl TemporaryItem {
+    pub fn item_type(&self) -> CatalogItemType {
+        item_type(&self.create_sql)
     }
 }
 

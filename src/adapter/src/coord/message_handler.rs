@@ -181,15 +181,13 @@ impl Coordinator {
             }
             Message::PrivateLinkVpcEndpointEvents(events) => {
                 if !self.controller.read_only() {
-                    self.controller
-                            .storage
-                            .append_introspection_updates(
-                                mz_storage_client::controller::IntrospectionType::PrivatelinkConnectionStatusHistory,
-                                events
-                                    .into_iter()
-                                    .map(|e| (mz_repr::Row::from(e), Diff::ONE))
-                                    .collect(),
-                            );
+                    self.controller.storage.append_introspection_updates(
+                        IntrospectionType::PrivatelinkConnectionStatusHistory,
+                        events
+                            .into_iter()
+                            .map(|e| (mz_repr::Row::from(e), Diff::ONE))
+                            .collect(),
+                    );
                 }
             }
             Message::CheckSchedulingPolicies => {
@@ -207,7 +205,7 @@ impl Coordinator {
     }
 
     #[mz_ore::instrument(level = "debug")]
-    pub async fn storage_usage_fetch(&mut self) {
+    pub async fn storage_usage_fetch(&self) {
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let client = self.storage_usage_client.clone();
 
@@ -262,7 +260,12 @@ impl Coordinator {
             .collect();
 
         match self.catalog_transact_inner(None, ops).await {
-            Ok(table_updates) => {
+            Ok((table_updates, catalog_updates)) => {
+                assert!(
+                    catalog_updates.is_empty(),
+                    "applying builtin table updates does not produce catalog implications"
+                );
+
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
                 let task_span =
                     info_span!(parent: None, "coord::storage_usage_update::table_updates");
@@ -314,7 +317,7 @@ impl Coordinator {
             EpochMillis::try_from(self.storage_usage_collection_interval.as_millis())
                 .expect("storage usage collection interval must fit into u64");
         let offset =
-            rngs::SmallRng::from_seed(seed).gen_range(0..storage_usage_collection_interval_ms);
+            rngs::SmallRng::from_seed(seed).random_range(0..storage_usage_collection_interval_ms);
         let now_ts: EpochMillis = self.peek_local_write_ts().await.into();
 
         // 2) Determine the amount of ms between now and the next collection time.
@@ -405,6 +408,10 @@ impl Coordinator {
                         }
                         WatchSetResponse::AlterSinkReady(ctx) => {
                             self.sequence_alter_sink_finish(ctx).await;
+                        }
+                        WatchSetResponse::AlterMaterializedViewReady(ctx) => {
+                            self.sequence_alter_materialized_view_apply_replacement_finish(ctx)
+                                .await;
                         }
                     }
                 }
@@ -541,14 +548,18 @@ impl Coordinator {
         // WARNING: If we support `ALTER SECRET`, we'll need to also check
         // for connectors that were altered while we were purifying.
         if let Err(e) = plan_validity.check(self.catalog()) {
-            let _ = self.secrets_controller.delete(connection_id).await;
+            if self.secrets_controller.delete(connection_id).await.is_ok() {
+                self.caching_secrets_reader.invalidate(connection_id);
+            }
             return ctx.retire(Err(e));
         }
 
         let plan = match result {
             Ok(ok) => ok,
             Err(e) => {
-                let _ = self.secrets_controller.delete(connection_id).await;
+                if self.secrets_controller.delete(connection_id).await.is_ok() {
+                    self.caching_secrets_reader.invalidate(connection_id);
+                }
                 return ctx.retire(Err(e));
             }
         };

@@ -3,6 +3,8 @@
     CREATE CLUSTER source_cluster (SIZE = '25cc');
     CREATE CLUSTER compute_cluster (SIZE = '25cc');
     CREATE CLUSTER serving_cluster (SIZE = '25cc');
+  test_replacements:
+    25cc: scale=1,workers=1
 
 - name: "create-db-schema"
   code: |

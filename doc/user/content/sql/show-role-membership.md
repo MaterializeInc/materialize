@@ -14,10 +14,10 @@ control](/security/) (RBAC).
 ## Syntax
 
 ```mzsql
-SHOW ROLE MEMBERSHIP [ FOR <role_name> ]
+SHOW ROLE MEMBERSHIP [ FOR <role_name> ];
 ```
 
-Option                     | Description
+Syntax element             | Description
 ---------------------------|------------
 **FOR** <role_name>        | If specified, only show membership for the specified role.
 

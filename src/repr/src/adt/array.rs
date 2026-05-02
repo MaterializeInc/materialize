@@ -20,7 +20,9 @@ use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
+use crate::Datum;
 use crate::row::DatumList;
+use crate::scalar::SqlScalarType;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.array.rs"));
 
@@ -28,23 +30,46 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.array.rs"));
 pub const MAX_ARRAY_DIMENSIONS: u8 = 6;
 
 /// A variable-length multi-dimensional array.
+///
+/// The type parameter `T` represents the element type of the array. It is a
+/// phantom parameter propagated through the inner [`DatumList`] — the actual
+/// elements are stored as serialized bytes and `T` is not enforced at
+/// runtime. It is up to the caller to ensure `T` matches the actual element
+/// type. The default `T = Datum<'a>` means existing code that writes
+/// `Array<'a>` continues to work unchanged.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
-pub struct Array<'a> {
+pub struct Array<'a, T = Datum<'a>> {
     /// The elements in the array.
-    pub(crate) elements: DatumList<'a>,
+    pub(crate) elements: DatumList<'a, T>,
     /// The dimensions of the array.
     pub(crate) dims: ArrayDimensions<'a>,
 }
 
-impl<'a> Array<'a> {
+impl<'a, T> Array<'a, T> {
     /// Returns the dimensions of the array.
     pub fn dims(&self) -> ArrayDimensions<'a> {
         self.dims
     }
 
     /// Returns the elements of the array.
-    pub fn elements(&self) -> DatumList<'a> {
+    pub fn elements(&self) -> DatumList<'a, T> {
         self.elements
+    }
+
+    /// Returns true if this array's dimensions are valid for the Int2Vector type.
+    /// Int2Vector is 1-D; empty arrays use 0 dimensions (PostgreSQL convention).
+    pub fn has_int2vector_dims(&self) -> bool {
+        self.dims().len() == 1
+            || (self.dims().len() == 0 && self.elements().iter().next().is_none())
+    }
+}
+
+impl<'a> crate::scalar::SqlContainerType for Array<'a, Datum<'a>> {
+    fn unwrap_element_type(container: &SqlScalarType) -> &SqlScalarType {
+        container.unwrap_array_element_type()
+    }
+    fn wrap_element_type(element: SqlScalarType) -> SqlScalarType {
+        SqlScalarType::Array(Box::new(element))
     }
 }
 
@@ -52,6 +77,12 @@ impl<'a> Array<'a> {
 #[derive(Clone, Copy, Eq, PartialEq, Hash)]
 pub struct ArrayDimensions<'a> {
     pub(crate) data: &'a [u8],
+}
+
+impl Default for ArrayDimensions<'static> {
+    fn default() -> Self {
+        Self { data: &[] }
+    }
 }
 
 impl ArrayDimensions<'_> {
@@ -163,7 +194,7 @@ impl ArrayDimension {
     PartialOrd,
     Serialize,
     Deserialize,
-    MzReflect,
+    MzReflect
 )]
 pub enum InvalidArrayError {
     /// The number of dimensions in the array exceeds [`MAX_ARRAY_DIMENSIONS]`.
@@ -289,11 +320,85 @@ impl FixedSizeCodec<ArrayDimension> for PackedArrayDimension {
 
 #[cfg(test)]
 mod tests {
+    use std::iter::empty;
+
     use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
+    use crate::Datum;
+    use crate::row::Row;
+
     use super::*;
+
+    #[mz_ore::test]
+    fn test_has_int2vector_dims() {
+        // 1-D array with elements: valid for int2vector
+        let mut row = Row::default();
+        row.packer()
+            .try_push_array(
+                &[ArrayDimension {
+                    lower_bound: 1,
+                    length: 2,
+                }],
+                [Datum::Int16(1), Datum::Int16(2)],
+            )
+            .unwrap();
+        let arr = row.unpack_first().unwrap_array();
+        assert!(
+            arr.has_int2vector_dims(),
+            "1-D array should have int2vector dims"
+        );
+
+        // 1-D empty array (length 0): valid
+        let mut row = Row::default();
+        row.packer()
+            .try_push_array(
+                &[ArrayDimension {
+                    lower_bound: 1,
+                    length: 0,
+                }],
+                empty::<Datum>(),
+            )
+            .unwrap();
+        let arr = row.unpack_first().unwrap_array();
+        assert!(
+            arr.has_int2vector_dims(),
+            "1-D empty array should have int2vector dims"
+        );
+
+        // 0-D empty array (PostgreSQL convention for empty): valid
+        let mut row = Row::default();
+        row.packer().try_push_array(&[], empty::<Datum>()).unwrap();
+        let arr = row.unpack_first().unwrap_array();
+        assert!(
+            arr.has_int2vector_dims(),
+            "0-D empty array should have int2vector dims"
+        );
+
+        // 2-D array: invalid for int2vector
+        let mut row = Row::default();
+        row.packer()
+            .try_push_array(
+                &[
+                    ArrayDimension {
+                        lower_bound: 1,
+                        length: 1,
+                    },
+                    ArrayDimension {
+                        lower_bound: 1,
+                        length: 2,
+                    },
+                ],
+                [Datum::Int16(1), Datum::Int16(2)],
+            )
+            .unwrap();
+        let arr = row.unpack_first().unwrap_array();
+        assert!(
+            !arr.has_int2vector_dims(),
+            "2-D array should not have int2vector dims"
+        );
+    }
 
     proptest! {
         #[mz_ore::test]

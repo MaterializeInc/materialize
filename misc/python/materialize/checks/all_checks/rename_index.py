@@ -14,16 +14,12 @@ from materialize.checks.checks import Check
 
 class RenameIndex(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > CREATE TABLE rename_index_table (f1 INTEGER,f2 INTEGER);
                 > CREATE INDEX rename_index_index1 ON rename_index_table (f2);
                 > INSERT INTO rename_index_table VALUES (1,1);
                 > CREATE MATERIALIZED VIEW rename_index_view1 AS SELECT f2 FROM rename_index_table WHERE f2 > 0;
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -47,9 +43,7 @@ class RenameIndex(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                f"""
+        return Testdrive(dedent(f"""
                 > SHOW INDEXES ON rename_index_table;
                 rename_index_index2 rename_index_table {self._default_cluster()} {{f2}} ""
                 rename_index_index3 rename_index_table {self._default_cluster()} {{f2}} ""
@@ -74,6 +68,4 @@ class RenameIndex(Check):
                 3
                 4
                 5
-           """
-            )
-        )
+           """))

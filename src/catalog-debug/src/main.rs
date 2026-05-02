@@ -70,6 +70,10 @@ use tracing::{Instrument, error};
 pub const BUILD_INFO: BuildInfo = build_info!();
 pub static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));
 
+fn parse_json(s: &str) -> Result<serde_json::Value, serde_json::Error> {
+    serde_json::from_str(s)
+}
+
 #[derive(Parser, Debug)]
 #[clap(name = "catalog", next_line_help = true, version = VERSION.as_str())]
 pub struct Args {
@@ -139,8 +143,10 @@ enum Action {
         /// The name of the catalog collection to edit.
         collection: String,
         /// The JSON-encoded key that identifies the item to edit.
+        #[clap(value_parser = parse_json)]
         key: serde_json::Value,
         /// The new JSON-encoded value for the item.
+        #[clap(value_parser = parse_json)]
         value: serde_json::Value,
     },
     /// Deletes a single item in a collection in the catalog
@@ -148,6 +154,7 @@ enum Action {
         /// The name of the catalog collection to edit.
         collection: String,
         /// The JSON-encoded key that identifies the item to delete.
+        #[clap(value_parser = parse_json)]
         key: serde_json::Value,
     },
     /// Checks if the specified catalog could be upgraded from its state to the
@@ -281,12 +288,16 @@ macro_rules! for_collection {
         match $collection_type {
             CollectionType::AuditLog => $fn::<AuditLogCollection>($($arg),*).await?,
             CollectionType::ComputeInstance => $fn::<ClusterCollection>($($arg),*).await?,
-            CollectionType::ComputeIntrospectionSourceIndex => $fn::<ClusterIntrospectionSourceIndexCollection>($($arg),*).await?,
+            CollectionType::ComputeIntrospectionSourceIndex => {
+                $fn::<ClusterIntrospectionSourceIndexCollection>($($arg),*).await?
+            }
             CollectionType::ComputeReplicas => $fn::<ClusterReplicaCollection>($($arg),*).await?,
             CollectionType::Comments => $fn::<CommentCollection>($($arg),*).await?,
             CollectionType::Config => $fn::<ConfigCollection>($($arg),*).await?,
             CollectionType::Database => $fn::<DatabaseCollection>($($arg),*).await?,
-            CollectionType::DefaultPrivileges => $fn::<DefaultPrivilegeCollection>($($arg),*).await?,
+            CollectionType::DefaultPrivileges => {
+                $fn::<DefaultPrivilegeCollection>($($arg),*).await?
+            }
             CollectionType::IdAlloc => $fn::<IdAllocatorCollection>($($arg),*).await?,
             CollectionType::Item => $fn::<ItemCollection>($($arg),*).await?,
             CollectionType::NetworkPolicy => $fn::<NetworkPolicyCollection>($($arg),*).await?,
@@ -295,11 +306,21 @@ macro_rules! for_collection {
             CollectionType::Schema => $fn::<SchemaCollection>($($arg),*).await?,
             CollectionType::Setting => $fn::<SettingCollection>($($arg),*).await?,
             CollectionType::SourceReferences => $fn::<SourceReferencesCollection>($($arg),*).await?,
-            CollectionType::SystemConfiguration => $fn::<SystemConfigurationCollection>($($arg),*).await?,
-            CollectionType::SystemGidMapping => $fn::<SystemItemMappingCollection>($($arg),*).await?,
-            CollectionType::SystemPrivileges => $fn::<SystemPrivilegeCollection>($($arg),*).await?,
-            CollectionType::StorageCollectionMetadata => $fn::<StorageCollectionMetadataCollection>($($arg),*).await?,
-            CollectionType::UnfinalizedShard => $fn::<UnfinalizedShardsCollection>($($arg),*).await?,
+            CollectionType::SystemConfiguration => {
+                $fn::<SystemConfigurationCollection>($($arg),*).await?
+            }
+            CollectionType::SystemGidMapping => {
+                $fn::<SystemItemMappingCollection>($($arg),*).await?
+            }
+            CollectionType::SystemPrivileges => {
+                $fn::<SystemPrivilegeCollection>($($arg),*).await?
+            }
+            CollectionType::StorageCollectionMetadata => {
+                $fn::<StorageCollectionMetadataCollection>($($arg),*).await?
+            }
+            CollectionType::UnfinalizedShard => {
+                $fn::<UnfinalizedShardsCollection>($($arg),*).await?
+            }
             CollectionType::TxnWalShard => $fn::<TxnWalShardCollection>($($arg),*).await?,
         }
     };
@@ -604,7 +625,6 @@ async fn upgrade_check(
             unsafe_mode: true,
             all_features: false,
             build_info: &BUILD_INFO,
-            deploy_generation: args.deploy_generation.unwrap_or(0),
             environment_id: args.environment_id.clone(),
             read_only,
             now,
@@ -681,7 +701,6 @@ async fn upgrade_check(
             // TODO(alter_table): Handle multiple versions of tables.
             CatalogItem::Table(table) => Some((table.global_id_writes(), table.desc.latest())),
             CatalogItem::Source(source) => Some((source.global_id(), source.desc.clone())),
-            CatalogItem::ContinualTask(ct) => Some((ct.global_id(), ct.desc.clone())),
             CatalogItem::MaterializedView(mv) => Some((mv.global_id_writes(), mv.desc.latest())),
             CatalogItem::Log(_)
             | CatalogItem::View(_)
@@ -697,9 +716,7 @@ async fn upgrade_check(
     for (gid, item_desc) in storage_entries {
         // If a new version adds a BuiltinTable or BuiltinSource, we won't have created the shard
         // yet so there isn't anything to check.
-        let maybe_shard_id = state
-            .storage_metadata()
-            .get_collection_shard::<Timestamp>(gid);
+        let maybe_shard_id = state.storage_metadata().get_collection_shard(gid);
         let shard_id = match maybe_shard_id {
             Ok(shard_id) => shard_id,
             Err(StorageError::IdentifierMissing(_)) => {

@@ -18,7 +18,17 @@ pub struct PgLegacyChar(pub u8);
 
 /// A Rust type representing a PostgreSQL object identifier (OID).
 #[derive(
-    Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Arbitrary,
+    Debug,
+    Clone,
+    Copy,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct Oid(pub u32);
 

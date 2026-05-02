@@ -10,27 +10,24 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.100"
-async-trait = { version = "0.1.89" }
-clap = { version = "4.5.23", features = ["derive", "env"] }
-openssl = { version = "0.10.75", features = ["vendored"] }
-schemars = { version = "1.0.4" }
-scopeguard = "1.2.0"
-serde = { version = "1.0.219", features = ["derive"] }
-socket2 = "0.5.10"
-tokio-stream = "0.1.17"
-proxy-header = "0.1.2"
-tracing = "0.1.37"
-futures = "0.3.31"
+anyhow.workspace = true
+async-trait.workspace = true
+clap = { workspace = true, features = ["env"] }
+openssl.workspace = true
+schemars.workspace = true
+scopeguard.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+socket2.workspace = true
+tokio-stream.workspace = true
+proxy-header.workspace = true
+tracing.workspace = true
+futures.workspace = true
 mz-dyncfg = { path = "../dyncfg", default-features = false }
 mz-ore = { path = "../ore", default-features = false, features = ["async", "network", "test"] }
-tokio = "1.44.1"
-tokio-metrics = "0.4.5"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
-uuid = { version = "1.18.1", features = ["v4"] }
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+tokio.workspace = true
+tokio-metrics.workspace = true
+uuid = { workspace = true, features = ["v4"] }
 
 [features]
-default = ["workspace-hack"]
+default = []

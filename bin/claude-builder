@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# Runs Claude Code using bin/ci-builder, limiting its actions to inside a
+# Docker container which has access to the current working directory. Persists
+# ~/{.claude/,.claude.json}. Skips all Claude Code permissions checks, but
+# doesn't hand any secrets into the Docker container. Main limitation: Can't
+# run further Docker containers, so no mzcompose available! Forwarding the
+# docker socket would be a security risk.
+
+set -euo pipefail
+"$(dirname "$0")"/ci-builder run stable --no-secrets bash -lc '
+    export HOME=/tmp
+    export NPM_CONFIG_UPDATE_NOTIFIER=false npm_config_update_notifier=false NO_UPDATE_NOTIFIER=1
+    if [ ! -e "/tmp/.claude/skills/materialize-docs" ]; then
+        (npx -q -y skills add MaterializeInc/agent-skills -g -a claude-code --copy -y --skill materialize-docs) >/dev/null 2>&1 || true
+    fi
+    exec npx -q -y @anthropic-ai/claude-code@latest --dangerously-skip-permissions "$@"
+' -- "$@"

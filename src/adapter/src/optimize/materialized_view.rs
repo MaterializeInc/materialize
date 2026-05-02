@@ -25,7 +25,6 @@
 //!
 //! See also MaterializeInc/materialize#22940.
 
-use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -36,20 +35,18 @@ use mz_compute_types::sinks::{
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_repr::explain::trace_plan;
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::{ColumnName, GlobalId, RelationDesc};
+use mz_repr::{ColumnName, GlobalId, RelationDesc, SqlRelationType};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::HirRelationExpr;
 use mz_transform::TransformCtx;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
-use mz_transform::reprtypecheck::{
-    SharedContext as ReprTypecheckContext, empty_context as empty_repr_context,
-};
-use mz_transform::typecheck::{SharedContext as TypecheckContext, empty_context};
+use mz_transform::typecheck::{SharedTypecheckingContext, empty_typechecking_context};
 use timely::progress::Antichain;
 
+use crate::coord::infer_sql_type_for_catalog;
 use crate::optimize::dataflows::{
-    ComputeInstanceSnapshot, DataflowBuilder, ExprPrepStyle, prep_relation_expr, prep_scalar_expr,
+    ComputeInstanceSnapshot, DataflowBuilder, ExprPrep, ExprPrepMaintained,
 };
 use crate::optimize::{
     LirDataflowDescription, MirDataflowDescription, Optimize, OptimizeMode, OptimizerCatalog,
@@ -57,10 +54,8 @@ use crate::optimize::{
 };
 
 pub struct Optimizer {
-    /// A typechecking context to use throughout the optimizer pipeline.
-    typecheck_ctx: TypecheckContext,
     /// A representation typechecking context to use throughout the optimizer pipeline.
-    repr_typecheck_ctx: ReprTypecheckContext,
+    typecheck_ctx: SharedTypecheckingContext,
     /// A snapshot of the catalog state.
     catalog: Arc<dyn OptimizerCatalog>,
     /// A snapshot of the cluster that will run the dataflows.
@@ -84,24 +79,6 @@ pub struct Optimizer {
     metrics: OptimizerMetrics,
     /// The time spent performing optimization so far.
     duration: Duration,
-    /// Overrides monotonicity for the given source collections.
-    ///
-    /// This is here only for continual tasks, which at runtime introduce
-    /// synthetic retractions to "input sources". If/when we split a CT
-    /// optimizer out of the MV optimizer, this can be removed.
-    ///
-    /// TODO(ct3): There are other differences between a GlobalId used as a CT
-    /// input vs as a normal collection, such as the statistical size estimates.
-    /// Plus, at the moment, it is not possible to use the same GlobalId as both
-    /// an "input" and a "reference" in a CT. So, better than this approach
-    /// would be for the optimizer itself to somehow understand the distinction
-    /// between a CT input and a normal collection.
-    ///
-    /// In the meantime, it might be desirable to refactor the MV optimizer to
-    /// have a small amount of knowledge about CTs, in particular producing the
-    /// CT sink connection directly. This would allow us to replace this field
-    /// with something derived directly from that sink connection.
-    force_source_non_monotonic: BTreeSet<GlobalId>,
 }
 
 impl Optimizer {
@@ -116,11 +93,9 @@ impl Optimizer {
         debug_name: String,
         config: OptimizerConfig,
         metrics: OptimizerMetrics,
-        force_source_non_monotonic: BTreeSet<GlobalId>,
     ) -> Self {
         Self {
-            typecheck_ctx: empty_context(),
-            repr_typecheck_ctx: empty_repr_context(),
+            typecheck_ctx: empty_typechecking_context(),
             catalog,
             compute_instance,
             sink_id,
@@ -132,7 +107,6 @@ impl Optimizer {
             config,
             metrics,
             duration: Default::default(),
-            force_source_non_monotonic,
         }
     }
 }
@@ -143,6 +117,7 @@ impl Optimizer {
 pub struct LocalMirPlan {
     expr: MirRelationExpr,
     df_meta: DataflowMetainfo,
+    typ: SqlRelationType,
 }
 
 /// The (sealed intermediate) result after:
@@ -196,24 +171,28 @@ impl Optimize<HirRelationExpr> for Optimizer {
         trace_plan!(at: "raw", &expr);
 
         // HIR ⇒ MIR lowering and decorrelation
-        let expr = expr.lower(&self.config, Some(&self.metrics))?;
+        let mir_expr = expr.clone().lower(&self.config, Some(&self.metrics))?;
 
         // MIR ⇒ MIR optimization (local)
         let mut df_meta = DataflowMetainfo::default();
         let mut transform_ctx = TransformCtx::local(
             &self.config.features,
             &self.typecheck_ctx,
-            &self.repr_typecheck_ctx,
             &mut df_meta,
-            Some(&self.metrics),
+            Some(&mut self.metrics),
             Some(self.view_id),
         );
-        let expr = optimize_mir_local(expr, &mut transform_ctx)?.into_inner();
+        let mir_expr = optimize_mir_local(mir_expr, &mut transform_ctx)?.into_inner();
+        let typ = infer_sql_type_for_catalog(&expr, &mir_expr);
 
         self.duration += time.elapsed();
 
         // Return the (sealed) plan at the end of this optimization step.
-        Ok(LocalMirPlan { expr, df_meta })
+        Ok(LocalMirPlan {
+            expr: mir_expr,
+            df_meta,
+            typ,
+        })
     }
 }
 
@@ -225,13 +204,16 @@ impl LocalMirPlan {
 
 /// This is needed only because the pipeline in the bootstrap code starts from an
 /// [`OptimizedMirRelationExpr`] attached to a [`mz_catalog::memory::objects::CatalogItem`].
-impl Optimize<OptimizedMirRelationExpr> for Optimizer {
+impl Optimize<(OptimizedMirRelationExpr, SqlRelationType)> for Optimizer {
     type To = GlobalMirPlan;
 
-    fn optimize(&mut self, expr: OptimizedMirRelationExpr) -> Result<Self::To, OptimizerError> {
+    fn optimize(
+        &mut self,
+        (expr, typ): (OptimizedMirRelationExpr, SqlRelationType),
+    ) -> Result<Self::To, OptimizerError> {
         let expr = expr.into_inner();
         let df_meta = DataflowMetainfo::default();
-        self.optimize(LocalMirPlan { expr, df_meta })
+        self.optimize(LocalMirPlan { expr, df_meta, typ })
     }
 }
 
@@ -244,7 +226,7 @@ impl Optimize<LocalMirPlan> for Optimizer {
         let expr = OptimizedMirRelationExpr(plan.expr);
         let mut df_meta = plan.df_meta;
 
-        let mut rel_typ = expr.typ();
+        let mut rel_typ = plan.typ;
         for &i in self.non_null_assertions.iter() {
             rel_typ.column_types[i].nullable = false;
         }
@@ -281,10 +263,10 @@ impl Optimize<LocalMirPlan> for Optimizer {
         df_desc.export_sink(self.sink_id, sink_description);
 
         // Prepare expressions in the assembled dataflow.
-        let style = ExprPrepStyle::Maintained;
+        let style = ExprPrepMaintained;
         df_desc.visit_children(
-            |r| prep_relation_expr(r, style),
-            |s| prep_scalar_expr(s, style),
+            |r| style.prep_relation_expr(r),
+            |s| style.prep_scalar_expr(s),
         )?;
 
         // Construct TransformCtx for global optimization.
@@ -293,16 +275,9 @@ impl Optimize<LocalMirPlan> for Optimizer {
             &mz_transform::EmptyStatisticsOracle, // TODO: wire proper stats
             &self.config.features,
             &self.typecheck_ctx,
-            &self.repr_typecheck_ctx,
             &mut df_meta,
-            Some(&self.metrics),
+            Some(&mut self.metrics),
         );
-        // Apply source monotonicity overrides.
-        for id in self.force_source_non_monotonic.iter() {
-            if let Some((_desc, monotonic, _upper)) = df_desc.source_imports.get_mut(id) {
-                *monotonic = false;
-            }
-        }
         // Run global optimization.
         mz_transform::optimize_dataflow(&mut df_desc, &mut transform_ctx, false)?;
 

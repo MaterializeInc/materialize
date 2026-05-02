@@ -36,7 +36,17 @@ pub struct Char<S: AsRef<str>>(pub S);
 ///
 /// [`SqlScalarType::Char`]: crate::SqlScalarType::Char
 #[derive(
-    Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, MzReflect,
+    Debug,
+    Clone,
+    Copy,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize,
+    MzReflect
 )]
 pub struct CharLength(pub(crate) u32);
 

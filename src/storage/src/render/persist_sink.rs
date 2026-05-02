@@ -120,8 +120,9 @@ use serde::{Deserialize, Serialize};
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{Broadcast, Capability, CapabilitySet, Inspect};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::operators::vec::Broadcast;
+use timely::dataflow::operators::{Capability, CapabilitySet, Inspect};
+use timely::dataflow::{Scope, Stream, StreamVec};
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::Semaphore;
 use tracing::trace;
@@ -273,22 +274,19 @@ struct FinishedBatch {
 /// `desired_collection`, and passes the data through to `write_batches`.
 /// This is done to avoid a clone of the underlying data so that both
 /// operators can have the collection as input.
-pub(crate) fn render<G>(
-    scope: &G,
+pub(crate) fn render<'scope>(
+    scope: Scope<'scope, mz_repr::Timestamp>,
     collection_id: GlobalId,
     target: CollectionMetadata,
-    desired_collection: VecCollection<G, Result<Row, DataflowError>, Diff>,
+    desired_collection: VecCollection<'scope, mz_repr::Timestamp, Result<Row, DataflowError>, Diff>,
     storage_state: &StorageState,
     metrics: SourcePersistSinkMetrics,
     busy_signal: Arc<Semaphore>,
 ) -> (
-    Stream<G, ()>,
-    Stream<G, Rc<anyhow::Error>>,
+    StreamVec<'scope, mz_repr::Timestamp, ()>,
+    StreamVec<'scope, mz_repr::Timestamp, Rc<anyhow::Error>>,
     Vec<PressOnDropButton>,
-)
-where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
-{
+) {
     let persist_clients = Arc::clone(&storage_state.persist_clients);
 
     let operator_name = format!("persist_sink({})", collection_id);
@@ -298,7 +296,7 @@ where
         collection_id,
         &operator_name,
         &target,
-        &desired_collection,
+        desired_collection,
         Arc::clone(&persist_clients),
     );
 
@@ -307,8 +305,8 @@ where
         collection_id.clone(),
         &operator_name,
         &target,
-        &batch_descriptions,
-        &passthrough_desired_stream.as_collection(),
+        batch_descriptions.clone(),
+        passthrough_desired_stream.as_collection(),
         Arc::clone(&persist_clients),
         storage_state,
         Arc::clone(&busy_signal),
@@ -319,8 +317,8 @@ where
         collection_id.clone(),
         operator_name,
         &target,
-        &batch_descriptions,
-        &written_batches,
+        batch_descriptions,
+        written_batches,
         persist_clients,
         storage_state,
         metrics,
@@ -342,21 +340,22 @@ where
 /// description in the stream, even in case of multiple timely workers. Use
 /// `broadcast()` to, ahem, broadcast, the one description to all downstream
 /// write operators/workers.
-fn mint_batch_descriptions<G>(
-    scope: &G,
+fn mint_batch_descriptions<'scope>(
+    scope: Scope<'scope, mz_repr::Timestamp>,
     collection_id: GlobalId,
     operator_name: &str,
     target: &CollectionMetadata,
-    desired_collection: &VecCollection<G, Result<Row, DataflowError>, Diff>,
+    desired_collection: VecCollection<'scope, mz_repr::Timestamp, Result<Row, DataflowError>, Diff>,
     persist_clients: Arc<PersistClientCache>,
 ) -> (
-    Stream<G, (Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>,
-    Stream<G, (Result<Row, DataflowError>, mz_repr::Timestamp, Diff)>,
+    StreamVec<
+        'scope,
+        mz_repr::Timestamp,
+        (Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>),
+    >,
+    StreamVec<'scope, mz_repr::Timestamp, (Result<Row, DataflowError>, mz_repr::Timestamp, Diff)>,
     PressOnDropButton,
-)
-where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
-{
+) {
     let persist_location = target.persist_location.clone();
     let shard_id = target.data_shard;
     let target_relation_desc = target.relation_desc.clone();
@@ -377,13 +376,14 @@ where
         scope.clone(),
     );
 
-    let (output, output_stream) = mint_op.new_output::<CapacityContainerBuilder<_>>();
-    let (data_output, data_output_stream) = mint_op.new_output::<CapacityContainerBuilder<_>>();
+    let (output, output_stream) = mint_op.new_output::<CapacityContainerBuilder<Vec<_>>>();
+    let (data_output, data_output_stream) =
+        mint_op.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
     // The description and the data-passthrough outputs are both driven by this input, so
     // they use a standard input connection.
     let mut desired_input =
-        mint_op.new_input_for_many(&desired_collection.inner, Pipeline, [&output, &data_output]);
+        mint_op.new_input_for_many(desired_collection.inner, Pipeline, [&output, &data_output]);
 
     let shutdown_button = mint_op.build(move |capabilities| async move {
         // Non-active workers should just pass the data through.
@@ -524,23 +524,24 @@ where
 /// This operator assumes that the `desired_collection` comes pre-sharded.
 ///
 /// This also and updates various metrics.
-fn write_batches<G>(
-    scope: &G,
+fn write_batches<'scope>(
+    scope: Scope<'scope, mz_repr::Timestamp>,
     collection_id: GlobalId,
     operator_name: &str,
     target: &CollectionMetadata,
-    batch_descriptions: &Stream<G, (Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>,
-    desired_collection: &VecCollection<G, Result<Row, DataflowError>, Diff>,
+    batch_descriptions: Stream<
+        'scope,
+        mz_repr::Timestamp,
+        Vec<(Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>,
+    >,
+    desired_collection: VecCollection<'scope, mz_repr::Timestamp, Result<Row, DataflowError>, Diff>,
     persist_clients: Arc<PersistClientCache>,
     storage_state: &StorageState,
     busy_signal: Arc<Semaphore>,
 ) -> (
-    Stream<G, HollowBatchAndMetadata<mz_repr::Timestamp>>,
+    StreamVec<'scope, mz_repr::Timestamp, HollowBatchAndMetadata<mz_repr::Timestamp>>,
     PressOnDropButton,
-)
-where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
-{
+) {
     let worker_index = scope.index();
 
     let persist_location = target.persist_location.clone();
@@ -556,11 +557,11 @@ where
     let mut write_op =
         AsyncOperatorBuilder::new(format!("{} write_batches", operator_name), scope.clone());
 
-    let (output, output_stream) = write_op.new_output::<CapacityContainerBuilder<_>>();
+    let (output, output_stream) = write_op.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
     let mut descriptions_input =
-        write_op.new_input_for(&batch_descriptions.broadcast(), Pipeline, &output);
-    let mut desired_input = write_op.new_disconnected_input(&desired_collection.inner, Pipeline);
+        write_op.new_input_for(batch_descriptions.broadcast(), Pipeline, &output);
+    let mut desired_input = write_op.new_disconnected_input(desired_collection.inner, Pipeline);
 
     // This operator accepts the current and desired update streams for a `persist` shard.
     // It attempts to write out updates, starting from the current's upper frontier, that
@@ -846,9 +847,11 @@ where
         }
     });
 
-    if collection_id.is_user() {
-        output_stream.inspect(|d| trace!("batch: {:?}", d));
-    }
+    let output_stream = if collection_id.is_user() {
+        output_stream.inspect(|d| trace!("batch: {:?}", d))
+    } else {
+        output_stream
+    };
 
     (output_stream, shutdown_button.press_on_drop())
 }
@@ -862,25 +865,26 @@ where
 /// This also keeps the shared frontier that is stored in `compute_state` in
 /// sync with the upper of the persist shard, and updates various metrics
 /// and statistics objects.
-fn append_batches<G>(
-    scope: &G,
+fn append_batches<'scope>(
+    scope: Scope<'scope, mz_repr::Timestamp>,
     collection_id: GlobalId,
     operator_name: String,
     target: &CollectionMetadata,
-    batch_descriptions: &Stream<G, (Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>,
-    batches: &Stream<G, HollowBatchAndMetadata<mz_repr::Timestamp>>,
+    batch_descriptions: Stream<
+        'scope,
+        mz_repr::Timestamp,
+        Vec<(Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>,
+    >,
+    batches: StreamVec<'scope, mz_repr::Timestamp, HollowBatchAndMetadata<mz_repr::Timestamp>>,
     persist_clients: Arc<PersistClientCache>,
     storage_state: &StorageState,
     metrics: SourcePersistSinkMetrics,
     busy_signal: Arc<Semaphore>,
 ) -> (
-    Stream<G, ()>,
-    Stream<G, Rc<anyhow::Error>>,
+    StreamVec<'scope, mz_repr::Timestamp, ()>,
+    StreamVec<'scope, mz_repr::Timestamp, Rc<anyhow::Error>>,
     PressOnDropButton,
-)
-where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
-{
+) {
     let persist_location = target.persist_location.clone();
     let shard_id = target.data_shard;
     let target_relation_desc = target.relation_desc.clone();
@@ -925,7 +929,7 @@ where
         .clone();
 
     // An output whose frontier tracks the last successful compare and append of this operator
-    let (_upper_output, upper_stream) = append_op.new_output::<CapacityContainerBuilder<_>>();
+    let (_upper_output, upper_stream) = append_op.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
     // This operator accepts the batch descriptions and tokens that represent
     // written batches. Written batches get appended to persist when we learn
@@ -1112,7 +1116,18 @@ where
             let validate_part_bounds_on_write = write.validate_part_bounds_on_write();
             let mut todo = VecDeque::new();
 
-            if !validate_part_bounds_on_write {
+            if validate_part_bounds_on_write {
+                // Persist will expect each batch's bounds to match the append-time bounds; write them separately.
+                for done_batch_metadata in done_batches.drain(..) {
+                    in_flight_descriptions.remove(&done_batch_metadata);
+                    let batch_set = in_flight_batches
+                        .remove(&done_batch_metadata)
+                        .unwrap_or_default();
+                    todo.push_back((done_batch_metadata, batch_set));
+                }
+            } else {
+                // Persist should allow batches to be written as part of a single append even when the bounds don't
+                // match exactly; group all eligible batches together.
                 let mut combined_batch_metadata = None;
                 let mut combined_batch_set = BatchSet::default();
                 for done_batch_metadata in done_batches.drain(..) {
@@ -1129,14 +1144,6 @@ where
                 }
                 if let Some(done_batch_metadata) = combined_batch_metadata {
                     todo.push_back((done_batch_metadata, combined_batch_set))
-                }
-            } else {
-                for done_batch_metadata in done_batches.drain(..) {
-                    in_flight_descriptions.remove(&done_batch_metadata);
-                    let batch_set = in_flight_batches
-                        .remove(&done_batch_metadata)
-                        .unwrap_or_default();
-                    todo.push_back((done_batch_metadata, batch_set));
                 }
             };
 
@@ -1190,7 +1197,11 @@ where
                             // select!, which would require cancel safety of
                             // `wait_for_upper_past()`, which it doesn't
                             // advertise.
-                            let _ = tokio::time::timeout(Duration::from_secs(1), read_only_rx.changed()).await;
+                            let _ = tokio::time::timeout(
+                                Duration::from_secs(1),
+                                read_only_rx.changed(),
+                            )
+                            .await;
 
                             if !*read_only_rx.borrow() {
                                 if collection_id.is_user() {
@@ -1296,8 +1307,10 @@ where
                     Ok(()) => {
                         // Only update these metrics when we know that _we_ were
                         // successful.
+                        let committed =
+                            batch_metrics.inserts + batch_metrics.retractions;
                         source_statistics
-                            .inc_updates_committed_by(batch_metrics.inserts + batch_metrics.retractions);
+                            .inc_updates_committed_by(committed);
                         metrics.processed_batches.inc();
                         metrics.row_inserts.inc_by(batch_metrics.inserts);
                         metrics.row_retractions.inc_by(batch_metrics.retractions);
@@ -1341,7 +1354,8 @@ where
                             // First, construct a new batch description with the
                             // lower advanced to the current shard upper.
                             let new_batch_lower = mismatch.current.clone();
-                            let new_done_batch_metadata = (new_batch_lower.clone(), batch_upper.clone());
+                            let new_done_batch_metadata =
+                                (new_batch_lower.clone(), batch_upper.clone());
 
                             // Retain any batches that are still in advance of
                             // the new lower, and delete any batches that are

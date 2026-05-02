@@ -2756,7 +2756,7 @@ SELECT has_cluster_privilege('joe', 'c', 'fake privilege')
 query error role "fake_role" does not exist
 SELECT has_connection_privilege('fake_role', 'conn', 'USAGE')
 
-query error db error: ERROR: connection "fake_connection" does not exist
+query error connection "fake_connection" does not exist
 SELECT has_connection_privilege('joe', 'fake_connection', 'USAGE')
 
 query error unrecognized privilege type: "fake privilege"
@@ -2789,7 +2789,7 @@ SELECT has_schema_privilege('joe', 'sch', 'fake privilege')
 query error role "fake_role" does not exist
 SELECT has_secret_privilege('fake_role', 'se', 'USAGE')
 
-query error db error: ERROR: secret "fake_secret" does not exist
+query error secret "fake_secret" does not exist
 SELECT has_secret_privilege('joe', 'fake_secret', 'USAGE')
 
 query error unrecognized privilege type: "fake privilege"
@@ -2800,7 +2800,7 @@ SELECT has_secret_privilege('joe', 'se', 'fake privilege')
 query error role "fake_role" does not exist
 SELECT has_table_privilege('fake_role', 't', 'SELECT')
 
-query error db error: ERROR: relation "fake_table" does not exist
+query error relation "fake_table" does not exist
 SELECT has_table_privilege('joe', 'fake_table', 'SELECT')
 
 query error unrecognized privilege type: "fake privilege"
@@ -2811,7 +2811,7 @@ SELECT has_table_privilege('joe', 't', 'fake privilege')
 query error role "fake_role" does not exist
 SELECT has_type_privilege('fake_role', 'ty', 'USAGE')
 
-query error db error: ERROR: type "fake_type" does not exist
+query error type "fake_type" does not exist
 SELECT has_type_privilege('joe', 'fake_type', 'USAGE')
 
 query error unrecognized privilege type: "fake privilege"
@@ -3557,7 +3557,7 @@ COMPLETE 0
 
 ## Tables
 
-query error db error: ERROR: relation "t3" does not exist
+query error relation "t3" does not exist
 SELECT has_table_privilege('t3', 'SELECT')
 
 query B
@@ -3637,7 +3637,7 @@ REVOKE USAGE ON ALL TYPES FROM PUBLIC
 ----
 COMPLETE 0
 
-query error db error: ERROR: type "ty1" does not exist
+query error type "ty1" does not exist
 SELECT has_type_privilege('ty1', 'USAGE')
 
 query B
@@ -4861,3 +4861,42 @@ GRANT SELECT ON t TO mz_monitor
 ----
 db error: ERROR: role name "mz_monitor" is reserved
 DETAIL: The role prefixes "mz_" and "pg_" are reserved for system roles.
+
+statement ok
+CREATE TABLE t0(c0 INT4 LIST NOT NULL, c1 NAME NOT NULL);
+
+statement ok
+INSERT INTO t0 VALUES (LIST[1,2,3], 'foo');
+
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/10074.
+#
+# TODO: Bad error msg, because we handle ExprContext names badly when inner contexts are created by `with_name`. See
+# https://github.com/MaterializeInc/database-issues/issues/10074
+statement error db error: ERROR: static function definition \(or its outer context 'mz_internal\.mz_role_oid'\) does not allow subqueries
+UPDATE t0 SET c1=has_secret_privilege(t0.c1, '30 minutes') WHERE (t0.c1 BETWEEN t0.c1 AND t0.c1);
+
+query B
+SELECT has_secret_privilege(t0.c1, 'USAGE') FROM t0 LIMIT 1;
+----
+NULL
+
+# Go wild on nesting.
+query B
+SELECT
+    has_secret_privilege(
+        t0.c1,
+        CASE
+            WHEN
+                        (
+                            SELECT has_secret_privilege(t0.c1, 'USAGE') FROM t0
+                            LIMIT 1
+                        )
+                            IS NULL
+                    THEN 'USAGE'
+                ELSE has_secret_privilege(t0.c1, 'USAGE')::text
+        END
+    )
+FROM t0
+LIMIT 3;
+----
+NULL

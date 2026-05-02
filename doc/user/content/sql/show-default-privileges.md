@@ -12,12 +12,12 @@ menu:
 ## Syntax
 
 ```sql
-SHOW DEFAULT PRIVILEGES [ON <object_type>] [FOR <role_name>]
+SHOW DEFAULT PRIVILEGES [ON <object_type>] [FOR <role_name>];
 ```
 
 
-Option                       | Description
------------------------------|--------------------------------------------------
+Syntax element               | Description
+-----------------------------|--------------------------------------
 **ON** <object_type>         | If specified, only show default privileges for the specified object type. Accepted object types: <div style="display: flex;"> <ul style="margin-right: 20px;"> <li><strong>CLUSTERS</strong></li> <li><strong>CONNECTION</strong></li> <li><strong>DATABASES</strong></li> <li><strong>SCHEMAS</strong></li> </ul> <ul> <li><strong>SECRETS</strong></li> <li><strong>TABLES</strong></li> <li><strong>TYPES</strong></li> </ul> </div>
 **FOR** <role_name>          | If specified, only show default privileges granted directly or indirectly to the specified role. For available role names, see [`SHOW ROLES`](/sql/show-roles).
 

@@ -23,8 +23,22 @@
                                                 database=database,
                                                 type='source') -%}
 
+  {{ validate_source_schema_isolation(schema, database) }}
+
+  {%- set cluster = config.get('cluster', target.cluster) -%}
+  {{ validate_source_cluster_isolation(cluster) }}
+
   {% if old_relation %}
-    {{ adapter.drop_relation(old_relation) }}
+    {% if var('strict_mode', False) %}
+      {# In strict_mode, skip recreation if relation exists #}
+      {{ log("Relation " ~ old_relation ~ " already exists, skipping creation.", info=True) }}
+      {% call statement('main') -%}
+        SELECT 1
+      {%- endcall %}
+      {{ return({'relations': [target_relation]}) }}
+    {% else %}
+      {{ adapter.drop_relation(old_relation) }}
+    {% endif %}
   {% endif %}
 
   {{ run_hooks(pre_hooks, inside_transaction=False) }}
@@ -33,6 +47,14 @@
   {% call statement('main') -%}
     {{ materialize__create_source(target_relation, sql) }}
   {%- endcall %}
+
+  {# In strict_mode, disallow index creation on sources #}
+  {% if var('strict_mode', False) and config.get('indexes') %}
+    {{ exceptions.raise_compiler_error(
+      "Cannot create indexes on sources when strict_mode is enabled. " ~
+      "Create indexes on the source_tables built from this source instead."
+    ) }}
+  {% endif %}
 
   {{ create_indexes(target_relation) }}
   {% do persist_docs(target_relation, model) %}

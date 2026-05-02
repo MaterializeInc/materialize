@@ -16,15 +16,16 @@
 
 set -euo pipefail
 
-NIGHTLY_RUST_DATE=2025-08-11
+NIGHTLY_RUST_DATE=2026-04-02
 
+workdir=$(pwd)
 cd "$(dirname "$0")/.."
 
 . misc/shlib/shlib.bash
 
 if [[ $# -lt 2 ]]
 then
-    echo "usage: $0 <command> <stable|nightly|min> [<args>...]
+    echo "usage: $0 <command> <stable|nightly|min|console> [<args>...]
 
 Manages the ci-builder Docker image, which contains the dependencies required
 to build, test, and deploy the code in this repository.
@@ -58,6 +59,10 @@ case "$flavor" in
         rust_version=nightly
         rust_date=/$NIGHTLY_RUST_DATE
         ;;
+    console)
+        docker_target=ci-builder-console
+        rust_version=$(sed -n 's/rust-version = "\(.*\)"/\1/p' Cargo.toml)
+        ;;
     *)
         printf "unknown CI builder flavor %q\n" "$flavor"
         exit 1
@@ -71,7 +76,7 @@ cid_file=ci/builder/.${flavor%%-*}.cidfile
 
 rust_components=rustc,cargo,rust-std-$arch_gcc-unknown-linux-gnu,llvm-tools-preview
 if [[ $rust_version = nightly ]]; then
-    rust_components+=,miri-preview
+    rust_components+=,miri-preview,rustfmt-preview
 else
     rust_components+=,clippy-preview,rustfmt-preview
 fi
@@ -108,22 +113,26 @@ case "$arch_gcc" in
     *) die "unknown host architecture \"$arch\"" ;;
 esac
 
+docker_build_args="\
+--build-arg ARCH_GCC=$arch_gcc \
+--build-arg ARCH_GO=$arch_go \
+--build-arg RUST_VERSION=$rust_version \
+--build-arg RUST_DATE=$rust_date \
+--build-arg RUST_COMPONENTS=$rust_components \
+--build-arg RUST_CPU_TARGET=$rust_cpu_target \
+--build-arg RUST_TARGET_FEATURES=$rust_target_features"
+
 uid=$(id -u)
 gid=$(id -g)
 [[ "$uid" -lt 500 ]] && uid=501
 [[ "$gid" -lt 500 ]] && gid=$uid
 
 build() {
+    # shellcheck disable=SC2086 # intentional splitting of build args string
     docker buildx build --pull \
         --cache-from=materialize/ci-builder:"$cache_tag" \
         --cache-to=type=inline,mode=max \
-        --build-arg "ARCH_GCC=$arch_gcc" \
-        --build-arg "ARCH_GO=$arch_go" \
-        --build-arg "RUST_VERSION=$rust_version" \
-        --build-arg "RUST_DATE=$rust_date" \
-        --build-arg "RUST_COMPONENTS=$rust_components" \
-        --build-arg "RUST_CPU_TARGET=$rust_cpu_target" \
-        --build-arg "RUST_TARGET_FEATURES=$rust_target_features" \
+        $docker_build_args \
         --tag materialize/ci-builder:"$tag" \
         --tag ghcr.io/materializeinc/materialize/ci-builder:"$tag" \
         --tag materialize/ci-builder:"$cache_tag" \
@@ -144,18 +153,14 @@ fi
 # a chicken-and-egg problem: mzbuild depends on the Python packages that are
 # *inside* this image. See materialize.git.expand_globs in the Python code for
 # details on this computation.
-files=$(cat \
-        <(git diff --name-only -z 4b825dc642cb6eb9a060e54bf8d69288fbee4904 ci/builder) \
+tag=$({
+    cat \
+        <(git diff --name-only -z 4b825dc642cb6eb9a060e54bf8d69288fbee4904 ci/builder bin/ci-builder) \
         <(git ls-files --others --exclude-standard -z ci/builder) \
-    | LC_ALL=C sort -z \
-    | xargs -0 "$shasum")
-files+="
-rust-version:$rust_version
-rust-date:$rust_date
-arch:$arch_gcc
-flavor:$flavor
-"
-tag=$(echo "$files" | python3 -c '
+        | LC_ALL=C sort -z \
+        | xargs -0 "$shasum"
+    printf '%s\n' "flavor:$flavor" "build-args:$docker_build_args"
+} | python3 -c '
 import base64
 import hashlib
 import sys
@@ -191,6 +196,7 @@ case "$cmd" in
         detach_container=false
         interactive=false
         tty=false
+        secrets=true
         container_name_param=""
 
         while [[ $# -gt 0 ]]; do
@@ -212,6 +218,10 @@ case "$cmd" in
                     tty=true
                     shift # past argument
                     ;;
+                --no-secrets)
+                    secrets=false
+                    shift # past argument
+                    ;;
                 *)
                     docker_command+=("$1")
                     shift # past argument
@@ -219,72 +229,114 @@ case "$cmd" in
             esac
         done
 
-        mkdir -p target-xcompile ~/.kube
+        claude_dir=$HOME/.claude
+        codex_dir=$HOME/.codex
+        npm_dir=$HOME/.npm-builder
+        mkdir -p "$(pwd)/target-xcompile" ~/.kube "$claude_dir" "$codex_dir" "$npm_dir"
+
         args=(
             --cidfile "$cid_file"
             --rm --interactive
             --init
             --volume "$(pwd)/target-xcompile:/mnt/build"
-            --volume "$(pwd):$(pwd)"
-            --workdir "$(pwd)"
+            --volume "$claude_dir:/tmp/.claude"
+            --volume "$HOME/.claude.json:/tmp/.claude.json"
+            --volume "$codex_dir:/tmp/.codex"
+            --volume "$npm_dir:/tmp/.npm"
+            --volume "$workdir:$workdir"
+            --workdir "$workdir"
             --env XDG_CACHE_HOME=/mnt/build/cache
-            --env AWS_ACCESS_KEY_ID
-            --env AWS_DEFAULT_REGION
-            --env AWS_SECRET_ACCESS_KEY
-            --env AWS_SESSION_TOKEN
-            --env CANARY_LOADTEST_APP_PASSWORD
-            --env CANARY_LOADTEST_PASSWORD
-            --env CLOUDTEST_CLUSTER_DEFINITION_FILE
-            --env COMMON_ANCESTOR_OVERRIDE
-            --env CONFLUENT_CLOUD_QA_CANARY_KAFKA_PASSWORD
-            --env CONFLUENT_CLOUD_QA_CANARY_KAFKA_USERNAME
-            --env AZURE_SERVICE_ACCOUNT_USERNAME
-            --env AZURE_SERVICE_ACCOUNT_PASSWORD
-            --env AZURE_SERVICE_ACCOUNT_TENANT
-            --env GCP_SERVICE_ACCOUNT_JSON
-            --env GITHUB_TOKEN
-            --env GITHUB_GHCR_TOKEN
-            --env GPG_KEY
-            --env LAUNCHDARKLY_API_TOKEN
-            --env LAUNCHDARKLY_SDK_KEY
-            --env NIGHTLY_CANARY_APP_PASSWORD
-            --env MZ_CI_LICENSE_KEY
-            --env MZ_CLI_APP_PASSWORD
             --env MZ_SOFT_ASSERTIONS
             --env NO_COLOR
-            --env NPM_TOKEN
-            --env POLAR_SIGNALS_API_TOKEN
-            --env PRODUCTION_ANALYTICS_USERNAME
-            --env PRODUCTION_ANALYTICS_APP_PASSWORD
-            --env PYPI_TOKEN
             --env RUST_MIN_STACK
             --env MZ_DEV_BUILD_SHA
             --env MZ_GHCR
-            # For Miri with nightly Rust
-            --env ZOOKEEPER_ADDR
-            --env KAFKA_ADDRS
-            --env SCHEMA_REGISTRY_URL
-            --env STEP_START_TIMESTAMP_WITH_TZ
-            --env POSTGRES_URL
-            --env METADATA_BACKEND_URL
-            # For ci-closed-issues-detect
-            --env GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN
-            # For auto_cut_release
-            --env GIT_AUTHOR_EMAIL
-            --env GIT_AUTHOR_NAME
-            --env GIT_COMMITTER_EMAIL
-            --env GIT_COMMITTER_NAME
-            # For cloud canary
-            --env REDPANDA_CLOUD_CLIENT_ID
-            --env REDPANDA_CLOUD_CLIENT_SECRET
-            --env QA_BENCHMARKING_APP_PASSWORD
-            # For self managed docs
             --env BUILDKITE_BRANCH
             --env BUILDKITE_ORGANIZATION_SLUG
             --env BUILDKITE_PULL_REQUEST
-            --env DOCKERHUB_USERNAME
-            --env DOCKERHUB_ACCESS_TOKEN
         )
+
+        if [[ $secrets == "true" ]]; then
+            args+=(
+                --env AWS_ACCESS_KEY_ID
+                --env AWS_DEFAULT_REGION
+                --env AWS_SECRET_ACCESS_KEY
+                --env AWS_SESSION_TOKEN
+                --env CANARY_LOADTEST_APP_PASSWORD
+                --env CANARY_LOADTEST_PASSWORD
+                --env CLOUDTEST_CLUSTER_DEFINITION_FILE
+                --env COMMON_ANCESTOR_OVERRIDE
+                --env CONFLUENT_CLOUD_QA_CANARY_CSR_PASSWORD
+                --env CONFLUENT_CLOUD_QA_CANARY_CSR_USERNAME
+                --env CONFLUENT_CLOUD_QA_CANARY_KAFKA_PASSWORD
+                --env CONFLUENT_CLOUD_QA_CANARY_KAFKA_USERNAME
+                --env AZURE_SERVICE_ACCOUNT_USERNAME
+                --env AZURE_SERVICE_ACCOUNT_PASSWORD
+                --env AZURE_SERVICE_ACCOUNT_TENANT
+                --env GCP_SERVICE_ACCOUNT_JSON
+                --env GITHUB_TOKEN
+                --env GITHUB_GHCR_TOKEN
+                --env GPG_KEY
+                --env LAUNCHDARKLY_API_TOKEN
+                --env LAUNCHDARKLY_SDK_KEY
+                --env NIGHTLY_CANARY_APP_PASSWORD
+                --env MZ_CI_LICENSE_KEY
+                --env MZ_CLI_APP_PASSWORD
+                --env NPM_TOKEN
+                --env POLAR_SIGNALS_API_TOKEN
+                --env PRODUCTION_ANALYTICS_USERNAME
+                --env PRODUCTION_ANALYTICS_APP_PASSWORD
+                --env PYPI_TOKEN
+                --env QA_CLUSTER_SPEC_SHEET_POSTGRES_HOSTNAME
+                --env QA_CLUSTER_SPEC_SHEET_POSTGRES_PASSWORD
+                --env QA_CLUSTER_SPEC_SHEET_MYSQL_HOSTNAME
+                --env QA_CLUSTER_SPEC_SHEET_MYSQL_PASSWORD
+                # For Miri with nightly Rust
+                --env ZOOKEEPER_ADDR
+                --env KAFKA_ADDRS
+                --env SCHEMA_REGISTRY_URL
+                --env STEP_START_TIMESTAMP_WITH_TZ
+                --env POSTGRES_URL
+                --env METADATA_BACKEND_URL
+                # For ci-closed-issues-detect
+                --env GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN
+                --env LINEAR_READ_ONLY_TOKEN
+                # For auto_cut_release
+                --env GIT_AUTHOR_EMAIL
+                --env GIT_AUTHOR_NAME
+                --env GIT_COMMITTER_EMAIL
+                --env GIT_COMMITTER_NAME
+                # For cloud canary
+                --env REDPANDA_CLOUD_CLIENT_ID
+                --env REDPANDA_CLOUD_CLIENT_SECRET
+                --env QA_BENCHMARKING_APP_PASSWORD
+                # For self managed docs
+                --env DOCKERHUB_USERNAME
+                --env DOCKERHUB_ACCESS_TOKEN
+                # For configuring the metadata store
+                --env EXTERNAL_METADATA_STORE
+                # For console
+                --env CONSOLE_E2E_TEST_STAGING_PASSWORD
+                --env CONSOLE_E2E_TEST_PRODUCTION_PASSWORD
+                --env E2E_TEST_STAGING_FRONTEGG_CLIENT_ID
+                --env E2E_TEST_STAGING_ORB_API_KEY
+                --env E2E_TEST_LICENSE_KEY
+                --env CLOUD_DEPLOY_KEY
+                --env VERCEL_TOKEN
+                --env VERCEL_ORG_ID
+                --env VERCEL_PROJECT_ID
+            )
+            for env in $(printenv | grep -E '^(BUILDKITE|MZCOMPOSE|CI)' | sed 's/=.*//'); do
+                args+=(--env "$env")
+            done
+            # Forward the host's SSH agent, if available.
+            if [[ "${SSH_AUTH_SOCK:-}" ]]; then
+                args+=(
+                    --volume "$SSH_AUTH_SOCK:/tmp/ssh-agent.sock"
+                    --env "SSH_AUTH_SOCK=/tmp/ssh-agent.sock"
+                )
+            fi
+        fi
 
         if [[ $detach_container == "true" ]]; then
             args+=("--detach")
@@ -302,9 +354,6 @@ case "$cmd" in
             args+=("--name=$container_name_param")
         fi
 
-        for env in $(printenv | grep -E '^(BUILDKITE|MZCOMPOSE|CI)' | sed 's/=.*//'); do
-            args+=(--env "$env")
-        done
         if [[ -t 1 ]]; then
             args+=(--tty)
         fi
@@ -315,13 +364,6 @@ case "$cmd" in
             --volume "$HOME/.kube:/kube"
             --env "KUBECONFIG=/kube/config"
         )
-        # Forward the host's SSH agent, if available.
-        if [[ "${SSH_AUTH_SOCK:-}" ]]; then
-            args+=(
-                --volume "$SSH_AUTH_SOCK:/tmp/ssh-agent.sock"
-                --env "SSH_AUTH_SOCK=/tmp/ssh-agent.sock"
-            )
-        fi
         # Forward the GitHub output file, if available.
         if [[ "${GITHUB_OUTPUT:-}" ]]; then
             args+=(
@@ -330,32 +372,29 @@ case "$cmd" in
             )
         fi
         if [[ "$(uname -s)" = Linux ]]; then
-            # Allow Docker-in-Docker by mounting the Docker socket in the
-            # container. Host networking allows us to see ports created by
-            # containers that we launch.
             args+=(
-                --volume "/var/run/docker.sock:/var/run/docker.sock"
                 --user "$(id -u):$(stat -c %g /var/run/docker.sock)"
-                --network host
-                --env "DOCKER_TLS_VERIFY=${DOCKER_TLS_VERIFY-}"
-                --env "DOCKER_HOST=${DOCKER_HOST-}"
             )
 
-            # Forward Docker daemon certificates, if requested.
-            if [[ "${DOCKER_CERT_PATH:-}" ]]; then
+            if [[ $secrets == "true" ]]; then
+                # Allow Docker-in-Docker by mounting the Docker socket in the
+                # container. Host networking allows us to see ports created by
+                # containers that we launch.
                 args+=(
-                    --volume "$DOCKER_CERT_PATH:/docker-certs"
-                    --env "DOCKER_CERT_PATH=/docker-certs"
+                    --volume "/var/run/docker.sock:/var/run/docker.sock"
+                    --network host
+                    --env "DOCKER_TLS_VERIFY=${DOCKER_TLS_VERIFY-}"
+                    --env "DOCKER_HOST=${DOCKER_HOST-}"
                 )
-            fi
 
-            # Forward Docker configuration too, if available.
-            docker_dir=${DOCKER_CONFIG:-$HOME/.docker}
-            if [[ -d "$docker_dir" ]]; then
-                args+=(
-                    --volume "$docker_dir:/docker"
-                    --env "DOCKER_CONFIG=/docker"
-                )
+                # Forward Docker configuration too, if available.
+                docker_dir=${DOCKER_CONFIG:-$HOME/.docker}
+                if [[ -d "$docker_dir" ]]; then
+                    args+=(
+                        --volume "$docker_dir:/docker"
+                        --env "DOCKER_CONFIG=/docker"
+                    )
+                fi
             fi
 
             # Override the Docker daemon we use to run the builder itself, if

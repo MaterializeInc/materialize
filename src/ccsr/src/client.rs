@@ -7,13 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
+use std::hash::Hash;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 use proptest_derive::Arbitrary;
 use reqwest::{Method, Response, Url};
 use serde::de::DeserializeOwned;
@@ -109,6 +109,35 @@ impl Client {
         })
     }
 
+    /// Gets the latest version of the specified subject along with its direct references.
+    /// Returns the subject and a list of subject names that this subject directly references.
+    pub async fn get_subject_with_references(
+        &self,
+        subject: &str,
+    ) -> Result<(Subject, Vec<SubjectVersion>), GetBySubjectError> {
+        let req = self.make_request(Method::GET, &["subjects", subject, "versions", "latest"]);
+        let res: GetBySubjectResponse = send_request(req).await?;
+        let referenced_subjects: Vec<_> = res
+            .references
+            .into_iter()
+            .map(|r| SubjectVersion {
+                subject: r.subject,
+                version: r.version,
+            })
+            .collect();
+        Ok((
+            Subject {
+                schema: Schema {
+                    id: res.id,
+                    raw: res.schema,
+                },
+                version: res.version,
+                name: res.subject,
+            },
+            referenced_subjects,
+        ))
+    }
+
     /// Gets the config set for the specified subject
     pub async fn get_subject_config(
         &self,
@@ -122,7 +151,7 @@ impl Client {
     /// Gets the latest version of the specified subject as well as all other
     /// subjects referenced by that subject (recursively).
     ///
-    /// The dependencies are returned in alphabetical order by subject name.
+    /// The dependencies are returned in dependency order, with dependencies first.
     pub async fn get_subject_and_references(
         &self,
         subject: &str,
@@ -133,14 +162,16 @@ impl Client {
 
     /// Gets a subject and all other subjects referenced by that subject (recursively)
     ///
-    /// The dependencies are returned in alphabetical order by subject name.
+    /// The dependencies are returned in dependency order, with dependencies first.
+    #[allow(clippy::disallowed_types)]
     async fn get_subject_and_references_by_version(
         &self,
         subject: &str,
         version: String,
     ) -> Result<(Subject, Vec<Subject>), GetBySubjectError> {
         let mut subjects = vec![];
-        let mut seen = BTreeSet::new();
+        // HashMap are used as we strictly need lookup, not ordering.
+        let mut graph = std::collections::HashMap::new();
         let mut subjects_queue = vec![(subject.to_owned(), version)];
         while let Some((subject, version)) = subjects_queue.pop() {
             let req = self.make_request(Method::GET, &["subjects", &subject, "versions", &version]);
@@ -153,18 +184,62 @@ impl Client {
                 version: res.version,
                 name: res.subject.clone(),
             });
-            seen.insert(res.subject);
+            let subject_key = SubjectVersion {
+                subject: res.subject,
+                version: res.version,
+            };
+
+            let dependents: Vec<_> = res
+                .references
+                .into_iter()
+                .map(|reference| SubjectVersion {
+                    subject: reference.subject,
+                    version: reference.version,
+                })
+                .collect();
+
+            graph
+                .entry(subject_key)
+                .or_insert_with(Vec::new)
+                .extend(dependents.iter().cloned());
             subjects_queue.extend(
-                res.references
+                dependents
                     .into_iter()
-                    .filter(|r| !seen.contains(&r.subject))
-                    .map(|r| (r.subject, r.version.to_string())),
+                    // Add dependents into the graph before adding to the queue as the same
+                    // named type may be encountered multiple times, but we only want to look it up
+                    // once.
+                    .filter(|dep| match graph.entry(dep.clone()) {
+                        std::collections::hash_map::Entry::Occupied(_) => false,
+                        std::collections::hash_map::Entry::Vacant(vacant) => {
+                            vacant.insert(vec![]);
+                            true
+                        }
+                    })
+                    .map(|dep| (dep.subject, dep.version.to_string())),
             );
         }
         assert!(subjects.len() > 0, "Request should error if no subjects");
 
         let primary = subjects.remove(0);
-        subjects.sort_by(|a, b| a.name.cmp(&b.name));
+
+        let ordered =
+            topological_sort(&graph).map_err(|_| GetBySubjectError::SchemaReferenceCycle)?;
+
+        subjects.sort_by(|a, b| {
+            let a = SubjectVersion {
+                subject: a.name.clone(),
+                version: a.version,
+            };
+            let b = SubjectVersion {
+                subject: b.name.clone(),
+                version: b.version,
+            };
+            ordered
+                .get(&b)
+                .unwrap_or_else(|| panic!("b {b:?}"))
+                .cmp(ordered.get(&a).unwrap_or_else(|| panic!("a {a:?}")))
+        });
+
         Ok((primary, subjects))
     }
 
@@ -226,7 +301,7 @@ impl Client {
     /// Gets the latest version of the first subject found associated with the scheme with
     /// the given id, as well as all other subjects referenced by that subject (recursively).
     ///
-    /// The dependencies are returned in alphabetical order by subject name.
+    /// The dependencies are returned in dependency order, with dependencies first.
     pub async fn get_subject_and_references_by_id(
         &self,
         id: i32,
@@ -258,6 +333,57 @@ impl Client {
             }
             _ => Err(GetBySubjectError::SubjectNotFound),
         }
+    }
+}
+
+/// Generates a topological ordering for a DAG.  If a cycle is detected in any returns an error.
+/// This can operator on a disconnected graph containing multiple DAGs.
+#[allow(clippy::disallowed_types)]
+pub fn topological_sort<T: Hash + Eq>(
+    graph: &std::collections::HashMap<T, Vec<T>>,
+) -> Result<std::collections::HashMap<&T, i32>, anyhow::Error> {
+    let mut referenced_by: std::collections::HashMap<&T, std::collections::HashSet<&T>> =
+        std::collections::HashMap::new();
+    for (subject, references) in graph.iter() {
+        for reference in references {
+            referenced_by.entry(reference).or_default().insert(subject);
+        }
+    }
+
+    // Start with nodes that have no incoming edges (empty referenced_by sets).
+    // Also include nodes in graph that aren't in referenced_by at all (roots).
+    let mut queue: Vec<_> = graph
+        .keys()
+        .filter(|key| {
+            referenced_by
+                .get(*key)
+                .map_or(true, |subjects| subjects.is_empty())
+        })
+        .collect();
+
+    let mut ordered = std::collections::HashMap::new();
+    let mut n = 0;
+    while let Some(subj_ver) = queue.pop() {
+        if let Some(refs) = graph.get(subj_ver) {
+            for ref_ver in refs {
+                let Some(subjects) = referenced_by.get_mut(ref_ver) else {
+                    continue;
+                };
+                subjects.remove(&subj_ver);
+                if subjects.is_empty() {
+                    referenced_by.remove_entry(ref_ver);
+                    queue.push(ref_ver);
+                }
+            }
+        }
+        ordered.insert(subj_ver, n);
+        n += 1;
+    }
+
+    if referenced_by.is_empty() {
+        Ok(ordered)
+    } else {
+        Err(anyhow!("Cycled detected during topoligical sort"))
     }
 }
 
@@ -354,8 +480,8 @@ pub enum GetByIdError {
     Server { code: i32, message: String },
 }
 
-#[derive(Debug, Deserialize)]
-struct SubjectVersion {
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SubjectVersion {
     /// The name of the subject
     pub subject: String,
     /// The version of the schema
@@ -476,6 +602,8 @@ pub enum GetBySubjectError {
     Transport(reqwest::Error),
     /// An internal server error occurred.
     Server { code: i32, message: String },
+    /// Cycle detected in schemas
+    SchemaReferenceCycle,
 }
 
 impl From<UnhandledError> for GetBySubjectError {
@@ -496,7 +624,8 @@ impl Error for GetBySubjectError {
         match self {
             GetBySubjectError::SubjectNotFound
             | GetBySubjectError::VersionNotFound(_)
-            | GetBySubjectError::Server { .. } => None,
+            | GetBySubjectError::Server { .. }
+            | GetBySubjectError::SchemaReferenceCycle => None,
             GetBySubjectError::Transport(err) => Some(err),
         }
     }
@@ -512,6 +641,9 @@ impl fmt::Display for GetBySubjectError {
             GetBySubjectError::Transport(err) => write!(f, "transport: {}", err),
             GetBySubjectError::Server { code, message } => {
                 write!(f, "server error {}: {}", code, message)
+            }
+            GetBySubjectError::SchemaReferenceCycle => {
+                write!(f, "cycle detected in schema references")
             }
         }
     }
@@ -784,5 +916,471 @@ enum UnhandledError {
 impl From<reqwest::Error> for UnhandledError {
     fn from(err: reqwest::Error) -> UnhandledError {
         UnhandledError::Transport(err)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::disallowed_types)]
+    use super::*;
+    use std::collections::HashMap;
+
+    /// Helper to create a SubjectVersion
+    fn sv(subject: &str, version: i32) -> SubjectVersion {
+        SubjectVersion {
+            subject: subject.to_string(),
+            version,
+        }
+    }
+
+    /// Helper to build a graph from a list of edges. Each edge is (from, to) meaning "from"
+    /// depends on "to".
+    ///
+    /// We take the root separately to build a graph without edges.
+    fn build_graph(
+        edges: &[(SubjectVersion, Option<SubjectVersion>)],
+    ) -> HashMap<SubjectVersion, Vec<SubjectVersion>> {
+        let mut graph: HashMap<SubjectVersion, Vec<SubjectVersion>> = HashMap::new();
+
+        // Add edges: from depends on to
+        for (from, to) in edges {
+            let deps = graph.entry(from.clone()).or_default();
+            if let Some(to) = to {
+                deps.push(to.clone());
+            }
+        }
+
+        graph
+    }
+
+    /// Verify that all edges are respected in the ordering.
+    /// For edge (from, to) where 'from' depends on 'to':
+    /// - 'from' should be processed before 'to' (lower order number)
+    /// - This is because the algorithm processes from roots (nothing depends on them)
+    ///   towards leaves (they don't depend on anything)
+    fn verify_edge_ordering(
+        ordered: &HashMap<&SubjectVersion, i32>,
+        edges: &[(SubjectVersion, Option<SubjectVersion>)],
+    ) {
+        for (from, to) in edges {
+            if let Some(to) = to {
+                let from_order = ordered.get(from).expect("from node should be in ordering");
+                let to_order = ordered.get(to).expect("to node should be in ordering");
+
+                // 'from' depends on 'to', so 'from' is processed first (lower order number)
+                // The algorithm starts at roots (nodes nothing depends on) and works toward leaves
+                assert!(
+                    from_order < to_order,
+                    "{:?} (order {}) depends on {:?} (order {}), so should be processed first",
+                    from,
+                    from_order,
+                    to,
+                    to_order
+                );
+            }
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_topological_sort_empty_graph() {
+        let graph: HashMap<SubjectVersion, Vec<SubjectVersion>> = HashMap::new();
+
+        let ordered = topological_sort(&graph).unwrap();
+
+        assert!(ordered.is_empty());
+    }
+
+    #[mz_ore::test]
+    fn test_topological_sort_single_node() {
+        // Single node with no dependencies
+        let a = sv("a", 1);
+        let graph = build_graph(&[(a.clone(), None)]);
+
+        let ordered = topological_sort(&graph).unwrap();
+
+        assert_eq!(ordered.len(), 1);
+        assert!(ordered.contains_key(&a));
+    }
+
+    #[mz_ore::test]
+    fn test_topological_sort_linear_chain() {
+        // A -> B -> C -> D
+        let a = sv("a", 1);
+        let b = sv("b", 1);
+        let c = sv("c", 1);
+        let d = sv("d", 1);
+
+        let edges = vec![
+            (a.clone(), Some(b.clone())),
+            (b.clone(), Some(c.clone())),
+            (c.clone(), Some(d.clone())),
+            (d.clone(), None),
+        ];
+        let graph = build_graph(&edges);
+
+        let ordered = topological_sort(&graph).unwrap();
+
+        assert_eq!(ordered.len(), 4);
+        verify_edge_ordering(&ordered, &edges);
+    }
+
+    #[mz_ore::test]
+    fn test_topological_sort_diamond() {
+        // Classic diamond pattern:
+        //     A
+        //    / \
+        //   B   C
+        //    \ /
+        //     D
+        // A depends on B and C, both B and C depend on D
+        let a = sv("a", 1);
+        let b = sv("b", 1);
+        let c = sv("c", 1);
+        let d = sv("d", 1);
+
+        let edges = vec![
+            (a.clone(), Some(b.clone())),
+            (a.clone(), Some(c.clone())),
+            (b.clone(), Some(d.clone())),
+            (c.clone(), Some(d.clone())),
+            (d.clone(), None),
+        ];
+        let graph = build_graph(&edges);
+
+        let ordered = topological_sort(&graph).unwrap();
+
+        assert_eq!(ordered.len(), 4);
+        verify_edge_ordering(&ordered, &edges);
+
+        // A must come before B and C, and B and C must come before D
+        assert!(ordered[&a] < ordered[&d]);
+    }
+
+    #[mz_ore::test]
+    fn test_topological_sort_wide_graph() {
+        // Wide graph: A depends on B, C, D, E, F (many dependencies)
+        let a = sv("a", 1);
+        let b = sv("b", 1);
+        let c = sv("c", 1);
+        let d = sv("d", 1);
+        let e = sv("e", 1);
+        let f = sv("f", 1);
+
+        let edges = vec![
+            (a.clone(), Some(b.clone())),
+            (a.clone(), Some(c.clone())),
+            (a.clone(), Some(d.clone())),
+            (a.clone(), Some(e.clone())),
+            (a.clone(), Some(f.clone())),
+            (b.clone(), None),
+            (c.clone(), None),
+            (d.clone(), None),
+            (e.clone(), None),
+            (f.clone(), None),
+        ];
+        let graph = build_graph(&edges);
+
+        let ordered = topological_sort(&graph).unwrap();
+
+        assert_eq!(ordered.len(), 6);
+        verify_edge_ordering(&ordered, &edges);
+    }
+
+    #[mz_ore::test]
+    fn test_topological_sort_complex_dag() {
+        // Complex DAG:
+        //       A
+        //      /|\
+        //     B C D
+        //     |/| |
+        //     E F G
+        //      \|/
+        //       H
+        // A -> B, C, D
+        // B -> E
+        // C -> E, F
+        // D -> G
+        // E -> H
+        // F -> H
+        // G -> H
+        let a = sv("a", 1);
+        let b = sv("b", 1);
+        let c = sv("c", 1);
+        let d = sv("d", 1);
+        let e = sv("e", 1);
+        let f = sv("f", 1);
+        let g = sv("g", 1);
+        let h = sv("h", 1);
+
+        let edges = vec![
+            (a.clone(), Some(b.clone())),
+            (a.clone(), Some(c.clone())),
+            (a.clone(), Some(d.clone())),
+            (b.clone(), Some(e.clone())),
+            (c.clone(), Some(e.clone())),
+            (c.clone(), Some(f.clone())),
+            (d.clone(), Some(g.clone())),
+            (e.clone(), Some(h.clone())),
+            (f.clone(), Some(h.clone())),
+            (g.clone(), Some(h.clone())),
+            (h.clone(), None),
+        ];
+        let graph = build_graph(&edges);
+
+        let ordered = topological_sort(&graph).unwrap();
+
+        assert_eq!(ordered.len(), 8);
+        verify_edge_ordering(&ordered, &edges);
+    }
+
+    #[mz_ore::test]
+    fn test_topological_sort_with_versions() {
+        // Same subject, different versions
+        //        A2
+        //       / |
+        //      A1 |
+        //       \ |
+        //        B1
+        let a_v1 = sv("a", 1);
+        let a_v2 = sv("a", 2);
+        let b_v1 = sv("b", 1);
+
+        // a_v2 depends on a_v1, and both depend on b_v1
+        let edges = vec![
+            (a_v2.clone(), Some(a_v1.clone())),
+            (a_v2.clone(), Some(b_v1.clone())),
+            (a_v1.clone(), Some(b_v1.clone())),
+            (b_v1.clone(), None),
+        ];
+        let graph = build_graph(&edges);
+
+        let ordered = topological_sort(&graph).unwrap();
+
+        assert_eq!(ordered.len(), 3);
+        verify_edge_ordering(&ordered, &edges);
+    }
+
+    #[mz_ore::test]
+    fn test_topological_sort_multi_level_diamond() {
+        // Double diamond:
+        //       A
+        //      / \
+        //     B   C
+        //      \ /
+        //       D
+        //      / \
+        //     E   F
+        //      \ /
+        //       G
+        let a = sv("a", 1);
+        let b = sv("b", 1);
+        let c = sv("c", 1);
+        let d = sv("d", 1);
+        let e = sv("e", 1);
+        let f = sv("f", 1);
+        let g = sv("g", 1);
+
+        let edges = vec![
+            (a.clone(), Some(b.clone())),
+            (a.clone(), Some(c.clone())),
+            (b.clone(), Some(d.clone())),
+            (c.clone(), Some(d.clone())),
+            (d.clone(), Some(e.clone())),
+            (d.clone(), Some(f.clone())),
+            (e.clone(), Some(g.clone())),
+            (f.clone(), Some(g.clone())),
+            (g.clone(), None),
+        ];
+        let graph = build_graph(&edges);
+
+        let ordered = topological_sort(&graph).unwrap();
+
+        assert_eq!(ordered.len(), 7);
+        verify_edge_ordering(&ordered, &edges);
+    }
+
+    #[mz_ore::test]
+    fn test_topological_sort_shared_dependency_at_multiple_levels() {
+        // Shared dependency accessed at multiple levels:
+        //     A
+        //    /|\
+        //   B C |
+        //   |/  |
+        //   D   |
+        //    \ /
+        //     E
+        //     |
+        //     F
+        let a = sv("a", 1);
+        let b = sv("b", 1);
+        let c = sv("c", 1);
+        let d = sv("d", 1);
+        let e = sv("e", 1);
+        let f = sv("f", 1);
+
+        let edges = vec![
+            (a.clone(), Some(b.clone())),
+            (a.clone(), Some(c.clone())),
+            (a.clone(), Some(e.clone())),
+            (b.clone(), Some(d.clone())),
+            (c.clone(), Some(d.clone())),
+            (d.clone(), Some(e.clone())),
+            (e.clone(), Some(f.clone())),
+            (f.clone(), None),
+        ];
+        let graph = build_graph(&edges);
+
+        let ordered = topological_sort(&graph).expect("no cycle");
+
+        assert_eq!(ordered.len(), 6);
+        verify_edge_ordering(&ordered, &edges);
+    }
+
+    #[mz_ore::test]
+    fn test_topological_sort_lattice_structure() {
+        // Can you tell I had Claude help make up tests?
+        // Lattice structure (more complex than diamond):
+        //       A
+        //      /|\
+        //     B C D
+        //     |\|/|
+        //     | X |
+        //     |/|\|
+        //     E F G
+        //      \|/
+        //       H
+        // A -> B, C, D
+        // B -> E, F
+        // C -> E, F, G
+        // D -> F, G
+        // E -> H
+        // F -> H
+        // G -> H
+        let a = sv("a", 1);
+        let b = sv("b", 1);
+        let c = sv("c", 1);
+        let d = sv("d", 1);
+        let e = sv("e", 1);
+        let f = sv("f", 1);
+        let g = sv("g", 1);
+        let h = sv("h", 1);
+
+        let edges = vec![
+            (a.clone(), Some(b.clone())),
+            (a.clone(), Some(c.clone())),
+            (a.clone(), Some(d.clone())),
+            (b.clone(), Some(e.clone())),
+            (b.clone(), Some(f.clone())),
+            (c.clone(), Some(e.clone())),
+            (c.clone(), Some(f.clone())),
+            (c.clone(), Some(g.clone())),
+            (d.clone(), Some(f.clone())),
+            (d.clone(), Some(g.clone())),
+            (e.clone(), Some(h.clone())),
+            (f.clone(), Some(h.clone())),
+            (g.clone(), Some(h.clone())),
+            (h.clone(), None),
+        ];
+        let graph = build_graph(&edges);
+
+        let ordered = topological_sort(&graph).unwrap();
+
+        assert_eq!(ordered.len(), 8);
+        verify_edge_ordering(&ordered, &edges);
+    }
+
+    #[mz_ore::test]
+    fn test_topological_sort_binary_tree() {
+        // Full binary tree structure (inverted, dependencies flow down):
+        //        A
+        //       / \
+        //      B   C
+        //     /|   |\
+        //    D E   F G
+        let a = sv("a", 1);
+        let b = sv("b", 1);
+        let c = sv("c", 1);
+        let d = sv("d", 1);
+        let e = sv("e", 1);
+        let f = sv("f", 1);
+        let g = sv("g", 1);
+
+        let edges = vec![
+            (a.clone(), Some(b.clone())),
+            (a.clone(), Some(c.clone())),
+            (b.clone(), Some(d.clone())),
+            (b.clone(), Some(e.clone())),
+            (c.clone(), Some(f.clone())),
+            (c.clone(), Some(g.clone())),
+            (d.clone(), None),
+            (e.clone(), None),
+            (f.clone(), None),
+            (g.clone(), None),
+        ];
+        let graph = build_graph(&edges);
+
+        let ordered = topological_sort(&graph).unwrap();
+
+        assert_eq!(ordered.len(), 7);
+        verify_edge_ordering(&ordered, &edges);
+    }
+
+    #[mz_ore::test]
+    fn test_topological_sort_simple_cycle() {
+        // Simple cycle: A -> B -> A
+        let a = sv("a", 1);
+        let b = sv("b", 1);
+
+        let mut graph: HashMap<SubjectVersion, Vec<SubjectVersion>> = HashMap::new();
+        graph.insert(a.clone(), vec![b.clone()]);
+        graph.insert(b.clone(), vec![a.clone()]);
+
+        let sort_result = topological_sort(&graph);
+
+        assert!(sort_result.is_err(), "Expected sort to detect cycle");
+    }
+
+    #[mz_ore::test]
+    fn test_topological_sort_cycle_with_entry_point() {
+        // Cycle with entry point: A -> B -> C -> B (B and C form a cycle)
+        let a = sv("a", 1);
+        let b = sv("b", 1);
+        let c = sv("c", 1);
+
+        let mut graph: HashMap<SubjectVersion, Vec<SubjectVersion>> = HashMap::new();
+        graph.insert(a.clone(), vec![b.clone()]);
+        graph.insert(b.clone(), vec![c.clone()]);
+        graph.insert(c.clone(), vec![b.clone()]); // C points back to B
+
+        let sort_result = topological_sort(&graph);
+        assert!(sort_result.is_err(), "Expected sort to detect cycle");
+    }
+
+    #[mz_ore::test]
+    fn test_topological_sort_self_reference() {
+        // Self-referencing node: A -> A
+        let a = sv("a", 1);
+
+        let mut graph: HashMap<SubjectVersion, Vec<SubjectVersion>> = HashMap::new();
+        graph.insert(a.clone(), vec![a.clone()]);
+
+        let sort_result = topological_sort(&graph);
+        assert!(sort_result.is_err(), "Expected sort to detect cycle");
+    }
+
+    #[mz_ore::test]
+    fn test_topological_sort_three_node_cycle() {
+        // Three node cycle: A -> B -> C -> A
+        let a = sv("a", 1);
+        let b = sv("b", 1);
+        let c = sv("c", 1);
+
+        let mut graph: HashMap<SubjectVersion, Vec<SubjectVersion>> = HashMap::new();
+        graph.insert(a.clone(), vec![b.clone()]);
+        graph.insert(b.clone(), vec![c.clone()]);
+        graph.insert(c.clone(), vec![a.clone()]);
+
+        let sort_result = topological_sort(&graph);
+        assert!(sort_result.is_err(), "Expected sort to detect cycle");
     }
 }

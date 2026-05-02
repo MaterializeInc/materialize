@@ -10,7 +10,7 @@ menu:
 
 ## Signatures
 
-{{< diagram "func-csv-extract.svg" >}}
+{{% include-syntax file="examples/sql_functions/csv_extract" example="syntax" %}}
 
 Parameter | Type | Description
 ----------|------|------------

@@ -40,7 +40,6 @@
 //! (at the minimum timestamp) and send it again at the correct GTID.
 
 use std::collections::BTreeMap;
-use std::convert::Infallible;
 use std::num::NonZeroU64;
 use std::pin::pin;
 use std::sync::Arc;
@@ -52,13 +51,13 @@ use mysql_async::prelude::Queryable;
 use mysql_async::{BinlogStream, BinlogStreamRequest, GnoInterval, Sid};
 use mz_ore::future::InTask;
 use mz_ssh_util::tunnel_manager::ManagedSshTunnelHandle;
-use mz_timely_util::containers::stack::AccountedStackBuilder;
+use mz_timely_util::containers::stack::FueledBuilder;
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Concat;
 use timely::dataflow::operators::core::Map;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::{Antichain, Timestamp};
 use tracing::trace;
 use uuid::Uuid;
@@ -100,28 +99,26 @@ static REPLICATION_SERVER_ID_OFFSET: u32 = 524000;
 
 /// Renders the replication dataflow. See the module documentation for more
 /// information.
-pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
-    scope: G,
+pub(crate) fn render<'scope>(
+    scope: Scope<'scope, GtidPartition>,
     config: RawSourceCreationConfig,
     connection: MySqlSourceConnection,
     source_outputs: Vec<SourceOutputInfo>,
-    rewind_stream: &Stream<G, RewindRequest>,
+    rewind_stream: StreamVec<'scope, GtidPartition, RewindRequest>,
     metrics: MySqlSourceMetrics,
 ) -> (
-    StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
-    Stream<G, Infallible>,
-    Stream<G, ReplicationError>,
+    StackedCollection<'scope, GtidPartition, (usize, Result<SourceMessage, DataflowError>)>,
+    StreamVec<'scope, GtidPartition, ReplicationError>,
     PressOnDropButton,
 ) {
     let op_name = format!("MySqlReplicationReader({})", config.id);
     let mut builder = AsyncOperatorBuilder::new(op_name, scope);
 
     let repl_reader_id = u64::cast_from(config.responsible_worker(REPL_READER));
-    let (mut data_output, data_stream) = builder.new_output::<AccountedStackBuilder<_>>();
-    let (_upper_output, upper_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (mut data_output, data_stream) = builder.new_output::<FueledBuilder<_>>();
     // Captures DefiniteErrors that affect the entire source, including all outputs
     let (definite_error_handle, definite_errors) =
-        builder.new_output::<CapacityContainerBuilder<_>>();
+        builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
     let mut rewind_input = builder.new_input_for(
         rewind_stream,
         Exchange::new(move |_| repl_reader_id),
@@ -139,8 +136,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
         let busy_signal = Arc::clone(&config.busy_signal);
         Box::pin(SignaledFuture::new(busy_signal, async move {
             let (id, worker_id) = (config.id, config.worker_id);
-            let [data_cap_set, upper_cap_set, definite_error_cap_set]: &mut [_; 3] =
-                caps.try_into().unwrap();
+            let [data_cap_set, definite_error_cap_set]: &mut [_; 2] = caps.try_into().unwrap();
 
             // Only run the replication reader on the worker responsible for it.
             if !config.responsible_for(REPL_READER) {
@@ -171,6 +167,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 Ok(frontier) => frontier,
                 Err(err) => {
                     let err = DefiniteError::UnsupportedGtidState(err.to_string());
+                    tracing::warn!(%id, "Unable to determine GTID frontier from @@gtid_purged: {err}");
                     return Ok(
                         // If GTID intervals in the binlog are not available in a monotonic consecutive
                         // order this breaks all of our assumptions and there is nothing else we can do.
@@ -255,7 +252,6 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
             };
 
             data_cap_set.downgrade(&*resume_upper);
-            upper_cap_set.downgrade(&*resume_upper);
             trace!(%id, "timely-{worker_id} replication reader started at {:?}", resume_upper);
 
             let mut rewinds = BTreeMap::new();
@@ -323,7 +319,6 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 &metrics,
                 &mut data_output,
                 data_cap_set,
-                upper_cap_set,
                 rewinds,
             );
 
@@ -387,9 +382,6 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                             )
                             .await);
                         }
-                        let new_upper = progress_partitions.frontier();
-                        repl_context.downgrade_progress_cap_set("xid_event", new_upper);
-
                         // Store the information of the active transaction for the subsequent events
                         active_tx = Some((source_id, tx_id));
                     }
@@ -472,14 +464,9 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 
     // TODO: Split row decoding into a separate operator that can be distributed across all workers
 
-    let errors = definite_errors.concat(&transient_errors.map(ReplicationError::from));
+    let errors = definite_errors.concat(transient_errors.map(ReplicationError::from));
 
-    (
-        data_stream.as_collection(),
-        upper_stream,
-        errors,
-        button.press_on_drop(),
-    )
+    (data_stream.as_collection(), errors, button.press_on_drop())
 }
 
 /// Produces the replication stream from the MySQL server. This will return all transactions

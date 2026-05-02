@@ -10,18 +10,19 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.100"
-async-trait = "0.1.89"
-base64 = "0.22.1"
-byteorder = "1.4.3"
-bytes = "1.10.1"
-bytesize = "2.1.0"
-enum-kinds = "0.5.1"
-futures = "0.3.31"
-itertools = "0.14.0"
+anyhow.workspace = true
+async-trait.workspace = true
+base64.workspace = true
+byteorder.workspace = true
+bytes.workspace = true
+bytesize.workspace = true
+csv-core.workspace = true
+enum-kinds.workspace = true
+futures.workspace = true
+itertools.workspace = true
 mz-adapter = { path = "../adapter" }
 mz-adapter-types = { path = "../adapter-types" }
-mz-auth = { path = "../auth" }
+mz-auth = { path = "../auth", default-features = false }
 mz-authenticator = { path = "../authenticator" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-ore = { path = "../ore", features = ["tracing"] }
@@ -31,19 +32,15 @@ mz-pgwire-common = { path = "../pgwire-common" }
 mz-repr = { path = "../repr" }
 mz-server-core = { path = "../server-core" }
 mz-sql = { path = "../sql" }
-openssl = { version = "0.10.75", features = ["vendored"] }
-postgres = { version = "0.19.5" }
-tokio = "1.44.1"
-tokio-stream = "0.1.17"
-tokio-openssl = "0.6.5"
-tokio-util = { version = "0.7.17", features = ["codec"] }
-tokio-metrics = "0.4.5"
-tracing = "0.1.37"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
-uuid = { version = "1.18.1", features = ["v4"] }
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+openssl.workspace = true
+postgres.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tokio-openssl.workspace = true
+tokio-util = { workspace = true, features = ["codec"] }
+tokio-metrics.workspace = true
+tracing.workspace = true
+uuid = { workspace = true, features = ["v4"] }
 
 [features]
-default = ["workspace-hack"]
+default = []

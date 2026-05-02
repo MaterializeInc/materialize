@@ -140,7 +140,27 @@ impl Default for Codec {
 impl Encoder<BackendMessage> for Codec {
     type Error = io::Error;
 
+    /// Encode a backend message into `dst`.
+    /// If this function returns an error result, `dst` is left unmodified.
     fn encode(&mut self, msg: BackendMessage, dst: &mut BytesMut) -> Result<(), io::Error> {
+        // Record the starting position so we can truncate on error.
+        // This prevents partial messages from being left in the buffer,
+        // which could be sent to the client and cause "lost synchronization" errors.
+        let start = dst.len();
+        match self.encode_inner(msg, dst) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                dst.truncate(start);
+                Err(e)
+            }
+        }
+    }
+}
+
+impl Codec {
+    /// This is the meat of the encoding logic. It's a separate function so that errors returned by
+    /// `?` can be handled in the outer `encode` function.
+    fn encode_inner(&self, msg: BackendMessage, dst: &mut BytesMut) -> Result<(), io::Error> {
         // Write type byte.
         let byte = match &msg {
             BackendMessage::AuthenticationCleartextPassword => b'R',
@@ -198,7 +218,7 @@ impl Encoder<BackendMessage> for Codec {
         // Overwrite length placeholder with true length.
         let len = i32::try_from(len).map_err(|_| {
             io::Error::new(
-                io::ErrorKind::Other,
+                io::ErrorKind::InvalidData,
                 "length of encoded message does not fit into an i32",
             )
         })?;

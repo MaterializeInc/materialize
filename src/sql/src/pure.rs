@@ -19,7 +19,9 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use itertools::Itertools;
-use mz_ccsr::{Client, GetByIdError, GetBySubjectError, Schema as CcsrSchema};
+use mz_adapter_types::dyncfgs::ENABLE_S3_TABLES_REGION_CHECK;
+use mz_ccsr::{Client, GetBySubjectError};
+use mz_cloud_provider::CloudProvider;
 use mz_controller_types::ClusterId;
 use mz_kafka_util::client::MzClientContext;
 use mz_mysql_util::MySqlTableDesc;
@@ -27,8 +29,8 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::iter::IteratorExt;
+use mz_ore::soft_panic_or_log;
 use mz_ore::str::StrExt;
-use mz_ore::{assert_none, soft_panic_or_log};
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_proto::RustType;
 use mz_repr::{CatalogItemId, RelationDesc, RelationVersionSelector, Timestamp, strconv};
@@ -308,7 +310,13 @@ pub async fn purify_statement(
             purify_create_table_from_source(catalog, stmt, storage_configuration).await,
             None,
         ),
-        o => unreachable!("{:?} does not need to be purified", o),
+        o => (
+            Err(internal_err!(
+                "unexpected statement type in purification: {:?}",
+                o
+            )),
+            None,
+        ),
     }
 }
 
@@ -365,11 +373,10 @@ pub(crate) fn purify_create_sink_avro_doc_on_options(
             let item = catalog
                 .get_item(object_id)
                 .at_version(RelationVersionSelector::Latest);
-            let full_name = catalog.resolve_full_name(item.name());
             let full_resolved_name = ResolvedItemName::Item {
                 id: *object_id,
                 qualifiers: item.name().qualifiers.clone(),
-                full_name: full_name.clone(),
+                full_name: catalog.resolve_full_name(item.name()),
                 print_id: !matches!(
                     item.item_type(),
                     CatalogItemType::Func | CatalogItemType::Type
@@ -398,10 +405,14 @@ pub(crate) fn purify_create_sink_avro_doc_on_options(
                 // Attach comment for each column in the item, if the user has
                 // not already provided an overriding `DOC ON` option for the
                 // column.
-                if let Ok(desc) = item.desc(&full_name) {
+                let column_descs = match item.type_details() {
+                    Some(details) => details.typ.desc(catalog).unwrap_or_default(),
+                    None => item.relation_desc().map(|d| d.into_owned()),
+                };
+
+                if let Some(desc) = column_descs {
                     for (pos, column_name) in desc.iter_names().enumerate() {
-                        let comment = comments_map.get(&Some(pos + 1));
-                        if let Some(comment_str) = comment {
+                        if let Some(comment_str) = comments_map.get(&Some(pos + 1)) {
                             let doc_on_column_key = AvroDocOn {
                                 identifier: DocOnIdentifier::Column(ColumnName {
                                     relation: full_resolved_name.clone(),
@@ -447,10 +458,14 @@ async fn purify_create_sink(
         if_not_exists: _,
         from,
         envelope: _,
+        mode: _,
     } = &mut create_sink_stmt;
 
     // The list of options that the user is allowed to specify.
-    const USER_ALLOWED_WITH_OPTIONS: &[CreateSinkOptionName] = &[CreateSinkOptionName::Snapshot];
+    const USER_ALLOWED_WITH_OPTIONS: &[CreateSinkOptionName] = &[
+        CreateSinkOptionName::Snapshot,
+        CreateSinkOptionName::CommitInterval,
+    ];
 
     if let Some(op) = with_options
         .iter()
@@ -560,12 +575,40 @@ async fn purify_create_sink(
                 }
             };
 
+            // For S3 Tables connections in the Materialize Cloud product, verify the
+            // AWS region matches the environment's region. This check only applies when
+            // the enable_s3_tables_region_check dyncfg is set.
+            if let Some(s3tables) = connection.s3tables_catalog() {
+                let enable_region_check =
+                    ENABLE_S3_TABLES_REGION_CHECK.get(scx.catalog.system_vars().dyncfgs());
+                if enable_region_check {
+                    let env_id = &catalog.config().environment_id;
+                    if matches!(env_id.cloud_provider(), CloudProvider::Aws) {
+                        let env_region = env_id.cloud_provider_region();
+                        // Later on we default to "us-east-1" if the region is not set on the S3 Tables
+                        // connection, so we need to do the same check here.
+                        let s3_tables_region = s3tables
+                            .aws_connection
+                            .connection
+                            .region
+                            .clone()
+                            .unwrap_or_else(|| "us-east-1".to_string());
+                        if s3_tables_region != env_region {
+                            Err(IcebergSinkPurificationError::S3TablesRegionMismatch {
+                                s3_tables_region,
+                                environment_region: env_region.to_string(),
+                            })?;
+                        }
+                    }
+                }
+            }
+
             let _catalog = connection
                 .connect(storage_configuration, InTask::No)
                 .await
                 .map_err(|e| IcebergSinkPurificationError::CatalogError(Arc::new(e)))?;
 
-            let sdk_config = aws_connection
+            let _sdk_config = aws_connection
                 .load_sdk_config(
                     &storage_configuration.connection_context,
                     aws_conn_id.clone(),
@@ -573,11 +616,6 @@ async fn purify_create_sink(
                 )
                 .await
                 .map_err(|e| IcebergSinkPurificationError::AwsSdkContextError(Arc::new(e)))?;
-
-            let sts_client = aws_sdk_sts::Client::new(&sdk_config);
-            let _ = sts_client.get_caller_identity().send().await.map_err(|e| {
-                IcebergSinkPurificationError::StsIdentityError(Arc::new(e.into_service_error()))
-            })?;
         }
     }
 
@@ -1129,8 +1167,10 @@ async fn purify_create_source(
                     .all_references()
                     .iter()
                     .any(|r| {
-                        r.load_generator_output().expect("is loadgen")
-                            != &LoadGeneratorOutput::Default
+                        matches!(
+                            r.load_generator_output(),
+                            Some(output) if output != &LoadGeneratorOutput::Default
+                        )
                     });
 
             match external_references {
@@ -1162,12 +1202,20 @@ async fn purify_create_source(
                                     table: export
                                         .meta
                                         .load_generator_desc()
-                                        .expect("is loadgen")
+                                        .ok_or_else(|| {
+                                            internal_err!(
+                                                "expected load generator source reference"
+                                            )
+                                        })?
                                         .clone(),
                                     output: export
                                         .meta
                                         .load_generator_output()
-                                        .expect("is loadgen")
+                                        .ok_or_else(|| {
+                                            internal_err!(
+                                                "expected load generator source reference"
+                                            )
+                                        })?
                                         .clone(),
                                 },
                             },
@@ -1209,10 +1257,16 @@ async fn purify_create_source(
         let name = match progress_subsource {
             Some(name) => match name {
                 DeferredItemName::Deferred(name) => name.clone(),
-                DeferredItemName::Named(_) => unreachable!("already checked for this value"),
+                // Already checked for this value above.
+                DeferredItemName::Named(_) => {
+                    sql_bail!("progress subsource name cannot be a resolved name")
+                }
             },
             None => {
-                let (item, prefix) = source_name.0.split_last().unwrap();
+                let (item, prefix) = source_name
+                    .0
+                    .split_last()
+                    .ok_or_else(|| sql_err!("source name must have at least one component"))?;
                 let item_name =
                     Ident::try_generate_name(item.to_string(), "_progress", |candidate| {
                         let mut suggested_name = prefix.to_vec();
@@ -1405,7 +1459,9 @@ async fn purify_alter_source_add_subsources(
         details,
         seen: _,
     } = options.clone().try_into()?;
-    assert_none!(details, "details cannot be explicitly set");
+    if details.is_some() {
+        sql_bail!("DETAILS option cannot be explicitly set");
+    }
 
     let mut requested_subsource_map = BTreeMap::new();
 
@@ -1571,7 +1627,9 @@ async fn purify_alter_source_add_subsources(
                     Some(WithOptionValue::Sequence(normalized_excl_columns));
             }
         }
-        _ => unreachable!(),
+        // The source kind was already established earlier in this function;
+        // reaching this catch-all is an internal invariant violation.
+        _ => bail_internal!("source does not support ALTER SOURCE...ADD SUBSOURCE"),
     };
 
     Ok(PurifiedStatement::PurifiedAlterSourceAddSubsources {
@@ -1727,7 +1785,9 @@ async fn purify_create_table_from_source(
         partition_by: _,
         seen: _,
     } = with_options.clone().try_into()?;
-    assert_none!(details, "details cannot be explicitly set");
+    if details.is_some() {
+        sql_bail!("DETAILS option cannot be explicitly set");
+    }
 
     // Our text column values are unqualified (just column names), but the purification methods below
     // expect to match the fully-qualified names against the full set of tables in upstream, so we
@@ -1910,12 +1970,12 @@ async fn purify_create_table_from_source(
                     table: export
                         .meta
                         .load_generator_desc()
-                        .expect("is loadgen")
+                        .ok_or_else(|| internal_err!("expected load generator source reference"))?
                         .clone(),
                     output: export
                         .meta
                         .load_generator_output()
-                        .expect("is loadgen")
+                        .ok_or_else(|| internal_err!("expected load generator source reference"))?
                         .clone(),
                 },
             }
@@ -2004,7 +2064,13 @@ async fn purify_create_table_from_source(
                 }
             }
             match columns {
-                TableFromSourceColumns::Defined(_) => unreachable!(),
+                TableFromSourceColumns::Defined(_) => {
+                    // Purification is what populates the `Defined` variant;
+                    // reaching this is an internal invariant violation.
+                    bail_internal!(
+                        "column definitions cannot be explicitly set for this source type"
+                    )
+                }
                 TableFromSourceColumns::NotSpecified => {
                     *columns = TableFromSourceColumns::Defined(gen_columns);
                     *constraints = gen_constraints;
@@ -2058,7 +2124,13 @@ async fn purify_create_table_from_source(
                 }
             }
             match columns {
-                TableFromSourceColumns::Defined(_) => unreachable!(),
+                TableFromSourceColumns::Defined(_) => {
+                    // Purification is what populates the `Defined` variant;
+                    // reaching this is an internal invariant violation.
+                    bail_internal!(
+                        "column definitions cannot be explicitly set for this source type"
+                    )
+                }
                 TableFromSourceColumns::NotSpecified => {
                     *columns = TableFromSourceColumns::Defined(gen_columns);
                     *constraints = gen_constraints;
@@ -2120,7 +2192,13 @@ async fn purify_create_table_from_source(
                 TableFromSourceColumns::Named(_) => {
                     sql_bail!("columns cannot be named for SQL Server sources")
                 }
-                TableFromSourceColumns::Defined(_) => unreachable!(),
+                TableFromSourceColumns::Defined(_) => {
+                    // Purification is what populates the `Defined` variant;
+                    // reaching this is an internal invariant violation.
+                    bail_internal!(
+                        "column definitions cannot be explicitly set for this source type"
+                    )
+                }
             }
 
             with_options.push(TableFromSourceOption {
@@ -2133,7 +2211,7 @@ async fn purify_create_table_from_source(
         PurifiedExportDetails::LoadGenerator { .. } => {
             let (desc, output) = match purified_export.details {
                 PurifiedExportDetails::LoadGenerator { table, output } => (table, output),
-                _ => unreachable!("purified export details must be load generator"),
+                _ => bail_internal!("purified export details must be load generator"),
             };
             // We only determine the table description for multi-output load generator sources here,
             // whereas single-output load generators will have their relation description
@@ -2142,7 +2220,11 @@ async fn purify_create_table_from_source(
             if let Some(desc) = desc {
                 let (gen_columns, gen_constraints) = scx.relation_desc_into_table_defs(&desc)?;
                 match columns {
-                    TableFromSourceColumns::Defined(_) => unreachable!(),
+                    // Purification is what populates the `Defined` variant;
+                    // reaching this is an internal invariant violation.
+                    TableFromSourceColumns::Defined(_) => bail_internal!(
+                        "column definitions cannot be explicitly set for this source type"
+                    ),
                     TableFromSourceColumns::NotSpecified => {
                         *columns = TableFromSourceColumns::Defined(gen_columns);
                         *constraints = gen_constraints;
@@ -2267,7 +2349,10 @@ pub fn generate_subsource_statements(
     if subsources.is_empty() {
         return Ok(vec![]);
     }
-    let (_, purified_export) = subsources.iter().next().unwrap();
+    let (_, purified_export) = subsources
+        .iter()
+        .next()
+        .ok_or_else(|| internal_err!("expected at least one subsource"))?;
 
     let statements = match &purified_export.details {
         PurifiedExportDetails::Postgres { .. } => {
@@ -2292,10 +2377,15 @@ pub fn generate_subsource_statements(
             for (subsource_name, purified_export) in subsources {
                 let (desc, output) = match purified_export.details {
                     PurifiedExportDetails::LoadGenerator { table, output } => (table, output),
-                    _ => unreachable!("purified export details must be load generator"),
+                    _ => {
+                        bail_internal!("purified export details must be load generator")
+                    }
                 };
-                let desc =
-                    desc.expect("subsources cannot be generated for single-output load generators");
+                let desc = desc.ok_or_else(|| {
+                    internal_err!(
+                        "subsources cannot be generated for single-output load generators"
+                    )
+                })?;
 
                 let (columns, table_constraints) = scx.relation_desc_into_table_defs(&desc)?;
                 let details = SourceExportStatementDetails::LoadGenerator { output };
@@ -2334,10 +2424,9 @@ pub fn generate_subsource_statements(
             // TODO: as part of database-issues#8322, Kafka sources will begin
             // producing data––we'll need to understand the schema
             // of the output here.
-            assert!(
-                subsources.is_empty(),
-                "Kafka sources do not produce data-bearing subsources"
-            );
+            if !subsources.is_empty() {
+                bail_internal!("Kafka sources do not produce data-bearing subsources");
+            }
             vec![]
         }
     };
@@ -2424,6 +2513,8 @@ async fn purify_csr_connection_avro(
         let Schema {
             key_schema,
             value_schema,
+            key_reference_schemas,
+            value_reference_schemas,
         } = get_remote_csr_schema(
             &ccsr_client,
             key_strategy.clone().unwrap_or_default(),
@@ -2438,6 +2529,8 @@ async fn purify_csr_connection_avro(
         *seed = Some(CsrSeedAvro {
             key_schema,
             value_schema,
+            key_reference_schemas,
+            value_reference_schemas,
         })
     }
 
@@ -2448,17 +2541,33 @@ async fn purify_csr_connection_avro(
 pub struct Schema {
     pub key_schema: Option<String>,
     pub value_schema: String,
+    /// Reference schemas for the key schema, in dependency order.
+    pub key_reference_schemas: Vec<String>,
+    /// Reference schemas for the value schema, in dependency order.
+    pub value_reference_schemas: Vec<String>,
+}
+
+/// Result of fetching a schema, including any referenced schemas.
+struct SchemaWithReferences {
+    /// The primary schema.
+    schema: String,
+    /// Reference schemas in dependency order.
+    references: Vec<String>,
 }
 
 async fn get_schema_with_strategy(
     client: &Client,
     strategy: ReaderSchemaSelectionStrategy,
     subject: &str,
-) -> Result<Option<String>, PlanError> {
+) -> Result<Option<SchemaWithReferences>, PlanError> {
     match strategy {
         ReaderSchemaSelectionStrategy::Latest => {
-            match client.get_schema_by_subject(subject).await {
-                Ok(CcsrSchema { raw, .. }) => Ok(Some(raw)),
+            // Use get_subject_and_references to also fetch referenced schemas
+            match client.get_subject_and_references(subject).await {
+                Ok((primary, dependencies)) => Ok(Some(SchemaWithReferences {
+                    schema: primary.schema.raw,
+                    references: dependencies.into_iter().map(|s| s.schema.raw).collect(),
+                })),
                 Err(GetBySubjectError::SubjectNotFound)
                 | Err(GetBySubjectError::VersionNotFound(_)) => Ok(None),
                 Err(e) => Err(PlanError::FetchingCsrSchemaFailed {
@@ -2467,15 +2576,27 @@ async fn get_schema_with_strategy(
                 }),
             }
         }
-        ReaderSchemaSelectionStrategy::Inline(raw) => Ok(Some(raw)),
-        ReaderSchemaSelectionStrategy::ById(id) => match client.get_schema_by_id(id).await {
-            Ok(CcsrSchema { raw, .. }) => Ok(Some(raw)),
-            Err(GetByIdError::SchemaNotFound) => Ok(None),
-            Err(e) => Err(PlanError::FetchingCsrSchemaFailed {
-                schema_lookup: format!("ID {}", id),
-                cause: Arc::new(e),
-            }),
-        },
+        // It's possible that CSR was provided with an inline strategy, but without a subject
+        // or schema id to look up, there isn't a clean way to lookup references for the schema.
+        // This could be done with extra work, but at this point, it isn't clear this is needed.
+        ReaderSchemaSelectionStrategy::Inline(raw) => Ok(Some(SchemaWithReferences {
+            schema: raw,
+            references: vec![],
+        })),
+        ReaderSchemaSelectionStrategy::ById(id) => {
+            match client.get_subject_and_references_by_id(id).await {
+                Ok((primary, dependencies)) => Ok(Some(SchemaWithReferences {
+                    schema: primary.schema.raw,
+                    references: dependencies.into_iter().map(|s| s.schema.raw).collect(),
+                })),
+                Err(GetBySubjectError::SubjectNotFound)
+                | Err(GetBySubjectError::VersionNotFound(_)) => Ok(None),
+                Err(e) => Err(PlanError::FetchingCsrSchemaFailed {
+                    schema_lookup: format!("subject {}", subject.quoted()),
+                    cause: Arc::new(e),
+                }),
+            }
+        }
     }
 }
 
@@ -2486,14 +2607,17 @@ async fn get_remote_csr_schema(
     topic: &str,
 ) -> Result<Schema, PlanError> {
     let value_schema_name = format!("{}-value", topic);
-    let value_schema =
+    let value_result =
         get_schema_with_strategy(ccsr_client, value_strategy, &value_schema_name).await?;
-    let value_schema = value_schema.ok_or_else(|| anyhow!("No value schema found"))?;
-    let subject = format!("{}-key", topic);
-    let key_schema = get_schema_with_strategy(ccsr_client, key_strategy, &subject).await?;
+    let value_result = value_result.ok_or_else(|| anyhow!("No value schema found"))?;
+
+    let key_subject = format!("{}-key", topic);
+    let key_result = get_schema_with_strategy(ccsr_client, key_strategy, &key_subject).await?;
     Ok(Schema {
-        key_schema,
-        value_schema,
+        key_schema: key_result.as_ref().map(|r| r.schema.clone()),
+        value_schema: value_result.schema,
+        key_reference_schemas: key_result.map(|r| r.references).unwrap_or_default(),
+        value_reference_schemas: value_result.references,
     })
 }
 
@@ -2512,6 +2636,12 @@ async fn compile_proto(
 
     // Compile .proto files into a file descriptor set.
     let mut source_tree = VirtualSourceTree::new();
+
+    // Add well-known types (e.g., google/protobuf/timestamp.proto) to the source
+    // tree. These are implicitly available to protoc but are typically not
+    // registered in the schema registry.
+    source_tree.as_mut().map_well_known_types();
+
     for subject in iter::once(&primary_subject).chain(dependency_subjects.iter()) {
         source_tree.as_mut().add_file(
             Path::new(&subject.name),

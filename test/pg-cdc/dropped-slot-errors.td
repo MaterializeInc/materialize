@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# TODO: Reenable when database-issues#8127 is fixed
+$ skip-if
+SELECT true
+
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true
 

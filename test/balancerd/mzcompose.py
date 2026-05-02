@@ -13,11 +13,11 @@ Uses the frontegg-mock instead of a real frontend backend.
 """
 
 import contextlib
-import datetime
 import json
 import socket
 import ssl
 import struct
+import subprocess
 import time
 import uuid
 from collections.abc import Callable
@@ -331,6 +331,36 @@ def workflow_http(c: Composition) -> None:
     # because there's no CNAME. Does docker-compose support this somehow?
 
 
+def create_proxy_protocol_v2_header(
+    client_ip: str, client_port: int, server_ip: str, server_port: int
+) -> bytes:
+    """Create a PROXY Protocol v2 header for IPv4 TCP."""
+    # Signature for Proxy Protocol v2
+    signature = b"\r\n\r\n\x00\r\nQUIT\n"
+    # Version and command (0x21 means version 2, PROXY command)
+    version_and_command = 0x21
+    # Address family and protocol (0x11 means INET (IPv4) + STREAM (TCP))
+    family_and_protocol = 0x11
+    # Source and destination address are sent as bytes.
+    src_addr = socket.inet_aton(client_ip)
+    dst_addr = socket.inet_aton(server_ip)
+    # Pack ports into 2-byte unsigned integers
+    src_port = struct.pack("!H", client_port)
+    dst_port = struct.pack("!H", server_port)
+    # Length of the address information (IPv4(4*2) + ports(1*2) = 12 bytes)
+    addr_len = struct.pack("!H", 12)
+    # Construct the final Proxy Protocol v2 header
+    return (
+        signature
+        + struct.pack("!BB", version_and_command, family_and_protocol)
+        + addr_len
+        + src_addr
+        + dst_addr
+        + src_port
+        + dst_port
+    )
+
+
 def workflow_ip_forwarding(c: Composition) -> None:
     """Test that forwarding the client IP through the balancer works over both HTTP and SQL."""
     c.up("balancerd", "frontegg-mock", "materialized")
@@ -345,18 +375,18 @@ def workflow_ip_forwarding(c: Composition) -> None:
 
     # We want to make sure the request we're making through the balancer does not use the balancers
     # ip for the sessions.
-    # https://stackoverflow.com/questions/5281341/get-local-network-interface-addresses-using-only-proc
-    balancer_ip = [
-        ip
-        for ip in c.exec(
-            "balancerd",
-            "awk",
-            r"/32 host/ { print i } {i=$2}",
-            "/proc/net/fib_trie",
-            capture=True,
-        ).stdout.split("\n")
-        if ip != "127.0.0.1"
-    ][0]
+    container_id = c.container_id("balancerd")
+    assert container_id is not None
+    balancer_ip = subprocess.check_output(
+        [
+            "docker",
+            "inspect",
+            "-f",
+            "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+            container_id,
+        ],
+        text=True,
+    ).strip()
 
     r = requests.post(
         f"https://localhost:{balancer_port}/api/sql",
@@ -383,36 +413,6 @@ def workflow_ip_forwarding(c: Composition) -> None:
         session_ip != balancer_ip
     ), f"requests from ({session_ip}) proxied by balancer should not use balancer ip ({balancer_ip}) in session"
 
-    def create_proxy_protocol_v2_header(
-        client_ip: str, client_port: int, server_ip: str, server_port: int
-    ):
-        # Signature for Proxy Protocol v2
-        signature = b"\r\n\r\n\x00\r\nQUIT\n"
-        # Version and command (0x21 means version 2, PROXY command)
-        version_and_command = 0x21
-        # Address family and protocol (0x11 means INET (IPv4) + STREAM (TCP))
-        family_and_protocol = 0x11
-        # Source and destination address are sent as bytes.
-        src_addr = socket.inet_aton(client_ip)
-        dst_addr = socket.inet_aton(server_ip)
-        # Pack ports into 2-byte unsigned integers
-        src_port = struct.pack("!H", client_port)
-        dst_port = struct.pack("!H", server_port)
-        # Length of the address information (IPv4(4*2) + ports(1*2) = 12 bytes)
-        addr_len = struct.pack("!H", 12)
-        # Construct the final Proxy Protocol v2 header
-        header = (
-            signature
-            + struct.pack("!BB", version_and_command, family_and_protocol)
-            + addr_len
-            + src_addr
-            + dst_addr
-            + src_port
-            + dst_port
-        )
-
-        return header
-
     with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
         sock.connect(("127.0.0.1", materialize_port))
 
@@ -428,16 +428,14 @@ def workflow_ip_forwarding(c: Composition) -> None:
         }
         json_data = json.dumps(json_data)
         content_length = len(json_data.encode())
-        http_sql_query_request = dedent(
-            f"""\
+        http_sql_query_request = dedent(f"""\
             POST /api/sql HTTP/1.1\r
             Host: 127.0.0.1:{materialize_port}\r
             Authorization: Basic {OTHER_USER}:{app_password(OTHER_USER)}\r
             Content-Type: application/json\r
             Content-Length: {content_length}\r
             \r
-            {json_data}"""
-        )
+            {json_data}""")
         sock.sendall(proxy_header + http_sql_query_request.encode())
 
         # read and parse the response
@@ -522,6 +520,7 @@ def workflow_long_query(c: Composition) -> None:
         assert (
             "server closed the connection unexpectedly" in msg
             or "EOF detected" in msg
+            or "unexpected eof while reading" in msg
             or "frame size too big" in msg
         )
     except:
@@ -609,6 +608,7 @@ def workflow_balancerd_restarted(c: Composition) -> None:
         msg = str(e)
         assert (
             "EOF detected" in msg
+            or "unexpected eof while reading" in msg
             or "failed to lookup address information: Name or service not known" in msg
         )
     except:
@@ -765,15 +765,50 @@ def workflow_pgwire_with_sni(c: Composition) -> None:
     cursor.execute("select 1;")
 
 
-def retry(fn: Callable, timeout: int) -> None:
-    end_time = (
-        datetime.datetime.now() + datetime.timedelta(seconds=timeout)
-    ).timestamp()
-    while time.time() < end_time:
-        try:
-            fn()
-            return
-        except:
-            pass
-        time.sleep(1)
-    fn()
+def workflow_split_proxy_header(c: Composition) -> None:
+    """Test that a PROXY v2 header split across TCP segments is handled correctly.
+
+    Regression test: when a PROXY v2 header arrives in multiple TCP segments
+    (e.g., due to Nagle's algorithm or network segmentation between balancerd
+    and environmentd), the server must wait for the complete header before
+    proceeding with HTTP request handling. Without the fix, the partial header
+    bytes remain in the stream and corrupt the subsequent HTTP parsing.
+    """
+    c.up("balancerd", "frontegg-mock", "materialized")
+    materialize_port = c.port("materialized", 6878)
+
+    proxy_hdr = create_proxy_protocol_v2_header("2.2.2.2", 2222, "127.0.0.1", 2222)
+    json_data = json.dumps({"query": "SELECT 42 AS answer"})
+    content_length = len(json_data.encode())
+    http_request = dedent(f"""\
+        POST /api/sql HTTP/1.1\r
+        Host: 127.0.0.1:{materialize_port}\r
+        Authorization: Basic {OTHER_USER}:{app_password(OTHER_USER)}\r
+        Content-Type: application/json\r
+        Content-Length: {content_length}\r
+        \r
+        {json_data}""").encode()
+
+    # Split the 28-byte proxy header at byte 8 (middle of the 12-byte
+    # signature). Send the first fragment, wait for the server to peek
+    # it, then send the rest along with the HTTP request.
+    split_point = 8
+    with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
+        sock.connect(("127.0.0.1", materialize_port))
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+        sock.sendall(proxy_hdr[:split_point])
+        time.sleep(0.2)
+        sock.sendall(proxy_hdr[split_point:] + http_request)
+
+        sock.settimeout(10)
+        tcp_resp = sock.recv(8192)
+        body_separator = b"\r\n\r\n"
+        resp_split = tcp_resp.split(body_separator)
+        assert (
+            len(resp_split) > 1
+        ), f"expected response with header and body, found: {resp_split}"
+        body = resp_split[1]
+        assert (
+            json.loads(body)["results"][0]["rows"][0][0] == "42"
+        ), f"unexpected response body: {body}"

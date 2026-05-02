@@ -8723,3 +8723,24 @@ query T
 SELECT '(,)'::tstzrange - '(1970-01-01 00:00:01,)'::tstzrange
 ----
 (,"1970-01-01 00:00:01+00"]
+
+# Test over tables with disallowed types
+statement ok
+CREATE TABLE t_disallowed_types(c0 UINT2, c1 FLOAT4);
+
+# Test over empty tables
+query error range type over uint2 is not supported
+SELECT (('[1,100)')@>(t_disallowed_types.c0)) IS TRUE FROM t_disallowed_types;
+
+query error range type over real is not supported
+SELECT (('[1,100)')@>(t_disallowed_types.c1)) IS TRUE FROM t_disallowed_types;
+
+# Test over tables with data
+statement ok
+INSERT INTO t_disallowed_types VALUES (1, 1.0);
+
+query error range type over uint2 is not supported
+SELECT (('[1,100)')@>(t_disallowed_types.c0)) IS TRUE FROM t_disallowed_types;
+
+query error range type over real is not supported
+SELECT (('[1,100)')@>(t_disallowed_types.c1)) IS TRUE FROM t_disallowed_types;

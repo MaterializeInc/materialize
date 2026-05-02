@@ -27,7 +27,7 @@ use crate::catalog::{
 };
 use crate::names::{
     CommentObjectId, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
-    SystemObjectId,
+    SchemaSpecifier, SystemObjectId,
 };
 use crate::plan::{self, PlanKind};
 use crate::plan::{
@@ -337,7 +337,11 @@ pub fn check_usage(
 pub fn check_plan(
     catalog: &impl SessionCatalog,
     // Function mapping a connection ID to an authenticated role. The roles may have been dropped concurrently.
-    active_conns: impl FnOnce(u32) -> Option<RoleId>,
+    // Only required for Plan::SideEffectingFunc; can be None for other plan types.
+    // TODO(peek-seq): Remove this when deleting the old peek sequencing. The logic here that uses
+    // `active_conns` is mirrored in `execute_side_effecting_func`, which is what the frontend peek
+    // sequencing uses.
+    active_conns: Option<impl FnOnce(u32) -> Option<RoleId>>,
     session: &dyn SessionMetadata,
     plan: &Plan,
     target_cluster_id: Option<ClusterId>,
@@ -377,7 +381,7 @@ pub fn is_rbac_enabled_for_session(
 fn generate_rbac_requirements(
     catalog: &impl SessionCatalog,
     plan: &Plan,
-    active_conns: impl FnOnce(u32) -> Option<RoleId>,
+    active_conns: Option<impl FnOnce(u32) -> Option<RoleId>>,
     target_cluster_id: Option<ClusterId>,
     role_id: RoleId,
 ) -> RbacRequirements {
@@ -605,29 +609,6 @@ fn generate_rbac_requirements(
                 ),
                 (
                     SystemObjectId::Object(materialized_view.cluster_id.into()),
-                    AclMode::CREATE,
-                    role_id,
-                ),
-            ],
-            item_usage: &CREATE_ITEM_USAGE,
-            ..Default::default()
-        },
-        Plan::CreateContinualTask(plan::CreateContinualTaskPlan {
-            name,
-            placeholder_id: _,
-            desc: _,
-            input_id: _,
-            with_snapshot: _,
-            continual_task,
-        }) => RbacRequirements {
-            privileges: vec![
-                (
-                    SystemObjectId::Object(name.qualifiers.clone().into()),
-                    AclMode::CREATE,
-                    role_id,
-                ),
-                (
-                    SystemObjectId::Object(continual_task.cluster_id.into()),
                     AclMode::CREATE,
                     role_id,
                 ),
@@ -1050,6 +1031,15 @@ fn generate_rbac_requirements(
             item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
+        Plan::AlterSourceTimestampInterval(plan::AlterSourceTimestampIntervalPlan {
+            id,
+            value: _,
+            interval: _,
+        }) => RbacRequirements {
+            ownership: vec![ObjectId::Item(*id)],
+            item_usage: &CREATE_ITEM_USAGE,
+            ..Default::default()
+        },
         Plan::AlterConnection(plan::AlterConnectionPlan { id, action: _ }) => RbacRequirements {
             ownership: vec![ObjectId::Item(*id)],
             ..Default::default()
@@ -1183,22 +1173,30 @@ fn generate_rbac_requirements(
         }) => match option {
             // Only superusers can alter the superuserness of a role.
             plan::PlannedAlterRoleOption::Attributes(attributes)
-                if attributes.superuser.unwrap_or(false) =>
+                if attributes.superuser.is_some() =>
             {
                 RbacRequirements {
                     superuser_action: Some("alter superuser role".to_string()),
                     ..Default::default()
                 }
             }
-            // Roles are allowed to change their own password.
-            plan::PlannedAlterRoleOption::Attributes(attributes)
-                if attributes.password.is_some() && role_id == *id =>
-            {
-                RbacRequirements::default()
-            }
+            // Roles are allowed to change their own password, but only if
+            // password is the sole attribute being changed.
+            plan::PlannedAlterRoleOption::Attributes(plan::PlannedRoleAttributes {
+                password,
+                // scram_iterations and nopassword are password-related, so
+                // they're fine to change alongside the password.
+                scram_iterations: _,
+                nopassword: _,
+                // superuser is already handled by the match arm above, so it
+                // will always be None here.
+                superuser: None,
+                inherit: None,
+                login: None,
+            }) if password.is_some() && role_id == *id => RbacRequirements::default(),
             // But no one elses...
             plan::PlannedAlterRoleOption::Attributes(attributes)
-                if attributes.password.is_some() =>
+                if attributes.password.is_some() && role_id != *id =>
             {
                 RbacRequirements {
                     superuser_action: Some("alter password of role".to_string()),
@@ -1261,6 +1259,13 @@ fn generate_rbac_requirements(
         }
         Plan::AlterTableAddColumn(plan::AlterTablePlan { relation_id, .. }) => RbacRequirements {
             ownership: vec![ObjectId::Item(*relation_id)],
+            item_usage: &CREATE_ITEM_USAGE,
+            ..Default::default()
+        },
+        Plan::AlterMaterializedViewApplyReplacement(
+            plan::AlterMaterializedViewApplyReplacementPlan { id, replacement_id },
+        ) => RbacRequirements {
+            ownership: vec![ObjectId::Item(*id), ObjectId::Item(*replacement_id)],
             item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
@@ -1464,11 +1469,12 @@ fn generate_rbac_requirements(
         },
         Plan::SideEffectingFunc(func) => {
             let role_membership = match func {
-                SideEffectingFunc::PgCancelBackend { connection_id } => {
-                    active_conns(*connection_id)
-                        .map(|x| [x].into())
-                        .unwrap_or_default()
-                }
+                SideEffectingFunc::PgCancelBackend { connection_id } => active_conns
+                    .expect("active_conns is required for Plan::SideEffectingFunc")(
+                    *connection_id
+                )
+                .map(|x| [x].into())
+                .unwrap_or_default(),
             };
             RbacRequirements {
                 role_membership,
@@ -1658,9 +1664,7 @@ fn generate_read_privileges_inner(
                 privileges.push((SystemObjectId::Object(schema_id), AclMode::USAGE, role_id))
             }
             match item.item_type() {
-                CatalogItemType::View
-                | CatalogItemType::MaterializedView
-                | CatalogItemType::ContinualTask => {
+                CatalogItemType::View | CatalogItemType::MaterializedView => {
                     privileges.push((SystemObjectId::Object(id.into()), AclMode::SELECT, role_id));
                     views.push((item.references().items().copied(), item.owner_id()));
                 }
@@ -1737,6 +1741,16 @@ fn check_object_privileges(
     let mut role_memberships: BTreeMap<RoleId, BTreeSet<RoleId>> = BTreeMap::new();
     role_memberships.insert(current_role_id, role_membership);
     for (object_id, acl_mode, role_id) in privileges {
+        // Temporary schemas are owned by the connection that created them,
+        // so users implicitly have all privileges on their own temp schema.
+        // The schema may not exist yet (lazy creation), so we skip the check.
+        if matches!(
+            &object_id,
+            SystemObjectId::Object(ObjectId::Schema((_, SchemaSpecifier::Temporary)))
+        ) {
+            continue;
+        }
+
         let role_membership = role_memberships
             .entry(role_id)
             .or_insert_with_key(|role_id| catalog.collect_role_membership(role_id));
@@ -1791,7 +1805,6 @@ pub const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
         SystemObjectType::Object(ObjectType::Database) => USAGE_CREATE_ACL_MODE,
         SystemObjectType::Object(ObjectType::Schema) => USAGE_CREATE_ACL_MODE,
         SystemObjectType::Object(ObjectType::Func) => EMPTY_ACL_MODE,
-        SystemObjectType::Object(ObjectType::ContinualTask) => AclMode::SELECT,
         SystemObjectType::System => ALL_SYSTEM_PRIVILEGES,
     }
 }
@@ -1809,8 +1822,7 @@ const fn default_builtin_object_acl_mode(object_type: ObjectType) -> AclMode {
         ObjectType::Table
         | ObjectType::View
         | ObjectType::MaterializedView
-        | ObjectType::Source
-        | ObjectType::ContinualTask => AclMode::SELECT,
+        | ObjectType::Source => AclMode::SELECT,
         ObjectType::Type | ObjectType::Schema => AclMode::USAGE,
         ObjectType::Sink
         | ObjectType::Index

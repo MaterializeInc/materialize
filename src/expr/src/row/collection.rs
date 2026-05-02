@@ -9,17 +9,15 @@
 
 //! Defines types for working with collections of [`Row`].
 
-use std::cell::RefCell;
-use std::cmp::Reverse;
-use std::collections::BinaryHeap;
 use std::num::NonZeroUsize;
-use std::sync::Arc;
 
-use bytes::Bytes;
-use mz_repr::{DatumVec, IntoRowIterator, Row, RowIterator, RowRef};
+use itertools::Itertools;
+use mz_repr::{
+    DatumVec, IntoRowIterator, Row, RowIterator, RowRef, Rows, RowsBuilder, SharedSlice,
+};
 use serde::{Deserialize, Serialize};
 
-use crate::ColumnOrder;
+use crate::{ColumnOrder, RowComparator};
 
 /// Collection of runs of sorted [`Row`]s represented as a single blob.
 ///
@@ -28,32 +26,53 @@ use crate::ColumnOrder;
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RowCollection {
     /// Contiguous blob of encoded Rows.
-    encoded: Bytes,
+    rows: Rows,
     /// Metadata about an individual Row in the blob.
-    metadata: Arc<[EncodedRowMetadata]>,
-    /// Ends of non-empty, sorted runs of rows in index into `metadata`.
-    runs: Vec<usize>,
+    diffs: SharedSlice<NonZeroUsize>,
+}
+
+#[derive(Debug)]
+pub struct RowCollectionBuilder {
+    rows: RowsBuilder,
+    diffs: Vec<NonZeroUsize>,
+}
+
+impl RowCollectionBuilder {
+    pub fn push(&mut self, row: &RowRef, diff: NonZeroUsize) {
+        self.rows.push(row);
+        self.diffs.push(diff);
+    }
+
+    pub fn build(self) -> RowCollection {
+        RowCollection {
+            rows: self.rows.build(),
+            diffs: self.diffs.into(),
+        }
+    }
 }
 
 impl RowCollection {
+    /// Create a new [`RowCollection`] from a collection of [`Row`]s.
+    ///
+    /// The order in which elements are pushed will be preserved.
+    pub fn builder(byte_len_hint: usize, len_hint: usize) -> RowCollectionBuilder {
+        RowCollectionBuilder {
+            rows: Rows::builder(byte_len_hint, len_hint),
+            diffs: Vec::with_capacity(len_hint),
+        }
+    }
+
     /// Create a new [`RowCollection`] from a collection of [`Row`]s. Sorts data by `order_by`.
     ///
     /// Note that all row collections to be merged must be constructed with the same `order_by`
     /// to ensure a consistent sort order. Anything else is undefined behavior.
     // TODO: Remember the `order_by` and assert that it is the same for all collections.
     pub fn new(mut rows: Vec<(Row, NonZeroUsize)>, order_by: &[ColumnOrder]) -> Self {
+        let comparator = RowComparator::new(order_by);
         // Sort data to maintain sortedness invariants.
-        if order_by.is_empty() {
-            // Skip row decoding if not required.
-            rows.sort();
-        } else {
-            let (mut datum_vec1, mut datum_vec2) = (DatumVec::new(), DatumVec::new());
-            rows.sort_by(|(row1, _diff1), (row2, _diff2)| {
-                let borrow1 = datum_vec1.borrow_with(row1);
-                let borrow2 = datum_vec2.borrow_with(row2);
-                crate::compare_columns(order_by, &borrow1, &borrow2, || row1.cmp(row2))
-            });
-        }
+        rows.sort_by(|(row1, _diff1), (row2, _diff2)| {
+            comparator.compare_rows(row1, row2, || row1.cmp(row2))
+        });
 
         // Pre-sizing our buffer should allow us to make just 1 allocation, and
         // use the perfect amount of memory.
@@ -62,54 +81,40 @@ impl RowCollection {
         // is faster, so feel free to change this if you'd like.
         let encoded_size = rows.iter().map(|(row, _diff)| row.data_len()).sum();
 
-        let mut encoded = Vec::<u8>::with_capacity(encoded_size);
-        let mut metadata = Vec::<EncodedRowMetadata>::with_capacity(rows.len());
-        let runs = (!rows.is_empty())
-            .then(|| vec![rows.len()])
-            .unwrap_or_default();
-
+        let mut builder = Self::builder(encoded_size, rows.len());
         for (row, diff) in rows {
-            encoded.extend(row.data());
-            metadata.push(EncodedRowMetadata {
-                offset: encoded.len(),
-                diff,
-            });
+            builder.push(row.as_row_ref(), diff);
         }
-
-        RowCollection {
-            encoded: Bytes::from(encoded),
-            metadata: metadata.into(),
-            runs,
-        }
+        builder.build()
     }
 
-    /// Merge another [`RowCollection`] into `self`.
-    pub fn merge(&mut self, other: &RowCollection) {
-        if other.count(0, None) == 0 {
+    fn iter(&self) -> impl Iterator<Item = (&RowRef, NonZeroUsize)> {
+        self.rows.iter().zip_eq(self.diffs.iter().copied())
+    }
+
+    /// Concatenate another [`RowCollection`] onto `self`, copying and reallocating both sets of rows.
+    ///
+    /// This does not reorder the rows; the output will be sorted only if the inputs are.
+    pub fn concat(&mut self, other: &RowCollection) {
+        if other.count() == 0 {
             return;
         }
 
         // TODO(parkmycar): Using SegmentedBytes here would be nice.
-        let mut new_bytes = vec![0; self.encoded.len() + other.encoded.len()];
-        new_bytes[..self.encoded.len()].copy_from_slice(&self.encoded[..]);
-        new_bytes[self.encoded.len()..].copy_from_slice(&other.encoded[..]);
-
-        let mapped_metas = other.metadata.iter().map(|meta| EncodedRowMetadata {
-            offset: meta.offset + self.encoded.len(),
-            diff: meta.diff,
-        });
-        let self_len = self.metadata.len();
-
-        self.metadata = self.metadata.iter().cloned().chain(mapped_metas).collect();
-        self.encoded = Bytes::from(new_bytes);
-        self.runs.extend(other.runs.iter().map(|f| f + self_len));
+        let byte_len = self.rows.byte_len() + other.rows.byte_len();
+        let len = self.rows.len() + other.rows.len();
+        let mut builder = Self::builder(byte_len, len);
+        for (row, diff) in self.iter().chain(other.iter()) {
+            builder.push(row, diff);
+        }
+        *self = builder.build();
     }
 
-    /// Total count of [`Row`]s represented by this collection, considering a
-    /// possible `OFFSET` and `LIMIT`.
-    pub fn count(&self, offset: usize, limit: Option<usize>) -> usize {
-        let mut total: usize = self.metadata.iter().map(|meta| meta.diff.get()).sum();
-
+    /// Adjust a row count for the provided offset and limit.
+    ///
+    /// This is only marginally related to row collections, but many callers need to make
+    /// this adjustment.
+    pub fn offset_limit(mut total: usize, offset: usize, limit: Option<usize>) -> usize {
         // Consider a possible OFFSET.
         total = total.saturating_sub(offset);
 
@@ -121,130 +126,69 @@ impl RowCollection {
         total
     }
 
+    /// Total count of [`Row`]s represented by this collection.
+    pub fn count(&self) -> usize {
+        self.diffs.iter().map(|u| u.get()).sum()
+    }
+
     /// Total count of ([`Row`], `EncodedRowMetadata`) pairs in this collection.
     pub fn entries(&self) -> usize {
-        self.metadata.len()
+        self.rows.len()
     }
 
     /// Returns the number of bytes this [`RowCollection`] uses.
     pub fn byte_len(&self) -> usize {
-        let row_data_size = self.encoded.len();
-        let metadata_size = self
-            .metadata
-            .len()
-            .saturating_mul(std::mem::size_of::<EncodedRowMetadata>());
-
-        row_data_size.saturating_add(metadata_size)
+        // Count both the bytes in the byte array and the size of the offsets themselves.
+        let row_data_size = self
+            .rows
+            .byte_len()
+            .saturating_add(self.rows.len().saturating_mul(size_of::<usize>()));
+        let diff_size = self.diffs.len().saturating_mul(size_of::<NonZeroUsize>());
+        row_data_size.saturating_add(diff_size)
     }
 
     /// Returns a [`RowRef`] for the entry at `idx`, if one exists.
-    pub fn get(&self, idx: usize) -> Option<(&RowRef, &EncodedRowMetadata)> {
-        let (lower_offset, upper) = match idx {
-            0 => (0, self.metadata.get(idx)?),
-            _ => {
-                let lower = self.metadata.get(idx - 1).map(|m| m.offset)?;
-                let upper = self.metadata.get(idx)?;
-                (lower, upper)
-            }
-        };
-
-        let slice = &self.encoded[lower_offset..upper.offset];
-        let row = RowRef::from_slice(slice);
-
-        Some((row, upper))
+    pub fn get(&self, idx: usize) -> Option<(&RowRef, &NonZeroUsize)> {
+        Some((self.rows.get(idx)?, self.diffs.get(idx)?))
     }
 
-    /// "Sorts" the [`RowCollection`] by the column order in `order_by`. Returns a sorted view over
-    /// the collection.
-    pub fn sorted_view(self, order_by: &[ColumnOrder]) -> SortedRowCollection {
-        if order_by.is_empty() {
-            self.sorted_view_inner(&Ord::cmp)
-        } else {
-            let left_datum_vec = RefCell::new(mz_repr::DatumVec::new());
-            let right_datum_vec = RefCell::new(mz_repr::DatumVec::new());
-
-            let cmp = &|left: &RowRef, right: &RowRef| {
-                let (mut left_datum_vec, mut right_datum_vec) =
-                    (left_datum_vec.borrow_mut(), right_datum_vec.borrow_mut());
-                let left_datums = left_datum_vec.borrow_with(left);
-                let right_datums = right_datum_vec.borrow_with(right);
-                crate::compare_columns(order_by, &left_datums, &right_datums, || left.cmp(right))
-            };
-            self.sorted_view_inner(cmp)
-        }
+    /// "Sorts" the [`RowCollection`] by the column order in `order_by`. The output will be sorted
+    /// if the inputs were all sorted by the given order; otherwise, the order is unspecified.
+    /// In either case, the output will be a [RowCollection] that contains the full contents of all
+    /// the input collections.
+    pub fn merge_sorted(runs: &[Self], order_by: &[ColumnOrder]) -> RowCollection {
+        let comparator = RowComparator::new(order_by);
+        Self::merge_sorted_inner(runs, |a, b| comparator.compare_rows(a, b, || a.cmp(b)))
     }
 
-    fn sorted_view_inner<F>(self, cmp: &F) -> SortedRowCollection
+    fn merge_sorted_inner<F>(runs: &[Self], cmp: F) -> RowCollection
     where
         F: Fn(&RowRef, &RowRef) -> std::cmp::Ordering,
     {
-        let mut heap = BinaryHeap::with_capacity(self.runs.len());
-
-        for index in 0..self.runs.len() {
-            let start = (index > 0).then(|| self.runs[index - 1]).unwrap_or(0);
-            let end = self.runs[index];
-
-            heap.push(Reverse(RunIter {
-                collection: &self,
-                cmp,
-                range: start..end,
-            }));
+        let mut metadata_len = 0;
+        let mut encoded_len = 0;
+        for collection in runs.iter() {
+            metadata_len += collection.rows.len();
+            encoded_len += collection.rows.byte_len();
         }
 
-        let mut view = Vec::with_capacity(self.metadata.len());
+        let mut builder = Self::builder(encoded_len, metadata_len);
 
-        while let Some(Reverse(mut run)) = heap.pop() {
-            if let Some(next) = run.range.next() {
-                view.push(next);
-                if !run.range.is_empty() {
-                    heap.push(Reverse(run));
-                }
-            }
+        for (row, diff) in
+            mz_ore::iter::merge_iters_by(runs.iter().map(|r| r.iter()), |(r0, _), (r1, _)| {
+                cmp(r0, r1)
+            })
+        {
+            builder.push(row, diff);
         }
-
-        SortedRowCollection {
-            collection: self,
-            sorted_view: view.into(),
-        }
-    }
-}
-
-/// Inner type of [`RowCollection`], describes a single Row.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
-pub struct EncodedRowMetadata {
-    /// Offset into the binary blob of encoded rows.
-    ///
-    /// TODO(parkmycar): Consider making this a `u32`.
-    offset: usize,
-    /// Diff for the Row.
-    ///
-    /// TODO(parkmycar): Consider making this a smaller type, note that some compute introspection
-    /// collections, e.g. `mz_scheduling_elapsed_raw`, encodes nano seconds in the diff field which
-    /// requires a u64.
-    diff: NonZeroUsize,
-}
-
-/// Provides a sorted view of a [`RowCollection`].
-#[derive(Debug, Clone)]
-pub struct SortedRowCollection {
-    /// The inner [`RowCollection`].
-    collection: RowCollection,
-    /// Indexes into the inner collection that represent the sorted order.
-    sorted_view: Arc<[usize]>,
-}
-
-impl SortedRowCollection {
-    pub fn get(&self, idx: usize) -> Option<(&RowRef, &EncodedRowMetadata)> {
-        self.sorted_view
-            .get(idx)
-            .and_then(|inner_idx| self.collection.get(*inner_idx))
+        builder.build()
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct SortedRowCollectionIter {
+pub struct RowCollectionIter {
     /// Collection we're iterating over.
-    collection: SortedRowCollection,
+    collection: RowCollection,
 
     /// Index for the row we're currently referencing.
     row_idx: usize,
@@ -265,14 +209,14 @@ pub struct SortedRowCollectionIter {
     projection_buf: (DatumVec, Row),
 }
 
-impl SortedRowCollectionIter {
-    /// Returns the inner `SortedRowCollection`.
-    pub fn into_inner(self) -> SortedRowCollection {
+impl RowCollectionIter {
+    /// Returns the inner `RowCollection`.
+    pub fn into_inner(self) -> RowCollection {
         self.collection
     }
 
     /// Immediately applies an offset to this iterator.
-    pub fn apply_offset(mut self, offset: usize) -> SortedRowCollectionIter {
+    pub fn apply_offset(mut self, offset: usize) -> RowCollectionIter {
         Self::advance_by(
             &self.collection,
             &mut self.row_idx,
@@ -287,13 +231,13 @@ impl SortedRowCollectionIter {
     }
 
     /// Sets the limit for this iterator.
-    pub fn with_limit(mut self, limit: usize) -> SortedRowCollectionIter {
+    pub fn with_limit(mut self, limit: usize) -> RowCollectionIter {
         self.limit = Some(limit);
         self
     }
 
     /// Specify the columns that should be yielded.
-    pub fn with_projection(mut self, projection: Vec<usize>) -> SortedRowCollectionIter {
+    pub fn with_projection(mut self, projection: Vec<usize>) -> RowCollectionIter {
         // Omit the projection if it would be a no-op to avoid a relatively expensive memcpy.
         if let Some((row, _)) = self.collection.get(0) {
             let cols = row.into_iter().enumerate().map(|(idx, _datum)| idx);
@@ -310,7 +254,7 @@ impl SortedRowCollectionIter {
     ///
     /// Advances the internal pointers by the specified amount.
     fn advance_by(
-        collection: &SortedRowCollection,
+        collection: &RowCollection,
         row_idx: &mut usize,
         diff_idx: &mut usize,
         mut count: usize,
@@ -320,7 +264,7 @@ impl SortedRowCollectionIter {
                 return;
             };
 
-            let remaining_diff = row_meta.diff.get() - *diff_idx;
+            let remaining_diff = row_meta.get() - *diff_idx;
             if remaining_diff <= count {
                 *diff_idx = 0;
                 *row_idx += 1;
@@ -357,7 +301,7 @@ impl SortedRowCollectionIter {
     }
 }
 
-impl RowIterator for SortedRowCollectionIter {
+impl RowIterator for RowCollectionIter {
     fn next(&mut self) -> Option<&RowRef> {
         // Bail if we've reached our limit.
         if let Some(0) = self.limit {
@@ -406,7 +350,7 @@ impl RowIterator for SortedRowCollectionIter {
     }
 
     fn count(&self) -> usize {
-        self.collection.collection.count(self.offset, self.limit)
+        RowCollection::offset_limit(self.collection.count(), self.offset, self.limit)
     }
 
     fn box_clone(&self) -> Box<dyn RowIterator> {
@@ -414,11 +358,11 @@ impl RowIterator for SortedRowCollectionIter {
     }
 }
 
-impl IntoRowIterator for SortedRowCollection {
-    type Iter = SortedRowCollectionIter;
+impl IntoRowIterator for RowCollection {
+    type Iter = RowCollectionIter;
 
     fn into_row_iter(self) -> Self::Iter {
-        SortedRowCollectionIter {
+        RowCollectionIter {
             collection: self,
             row_idx: 0,
             diff_idx: 0,
@@ -430,44 +374,6 @@ impl IntoRowIterator for SortedRowCollection {
         }
     }
 }
-
-/// Iterator-like struct to help with extracting rows in sorted order from `RowCollection`.
-struct RunIter<'a, F> {
-    collection: &'a RowCollection,
-    cmp: &'a F,
-    range: std::ops::Range<usize>,
-}
-
-impl<'a, F> PartialOrd for RunIter<'a, F>
-where
-    F: Fn(&RowRef, &RowRef) -> std::cmp::Ordering,
-{
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl<'a, F> Ord for RunIter<'a, F>
-where
-    F: Fn(&RowRef, &RowRef) -> std::cmp::Ordering,
-{
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        let left = self.collection.get(self.range.start).unwrap().0;
-        let right = self.collection.get(other.range.start).unwrap().0;
-        (self.cmp)(left, right)
-    }
-}
-
-impl<'a, F> PartialEq for RunIter<'a, F>
-where
-    F: Fn(&RowRef, &RowRef) -> std::cmp::Ordering,
-{
-    fn eq(&self, other: &Self) -> bool {
-        self.cmp(other) == std::cmp::Ordering::Equal
-    }
-}
-
-impl<'a, F> Eq for RunIter<'a, F> where F: Fn(&RowRef, &RowRef) -> std::cmp::Ordering {}
 
 #[cfg(test)]
 mod tests {
@@ -482,22 +388,17 @@ mod tests {
 
     impl<'a, T: IntoIterator<Item = &'a Row>> From<T> for RowCollection {
         fn from(rows: T) -> Self {
-            let mut encoded = Vec::<u8>::new();
-            let mut metadata = Vec::<EncodedRowMetadata>::new();
+            let mut encoded = Rows::builder(0, 0);
+            let mut diffs = vec![];
 
             for row in rows {
-                encoded.extend(row.data());
-                metadata.push(EncodedRowMetadata {
-                    offset: encoded.len(),
-                    diff: NonZeroUsize::MIN,
-                });
+                encoded.push(row.as_row_ref());
+                diffs.push(NonZeroUsize::MIN);
             }
-            let runs = vec![metadata.len()];
 
             RowCollection {
-                encoded: Bytes::from(encoded),
-                metadata: metadata.into(),
-                runs,
+                rows: encoded.build(),
+                diffs: diffs.into(),
             }
         }
     }
@@ -524,9 +425,9 @@ mod tests {
         let mut a_col = RowCollection::from([&a]);
         let b_col = RowCollection::from([&b]);
 
-        a_col.merge(&b_col);
+        a_col.concat(&b_col);
 
-        assert_eq!(a_col.count(0, None), 2);
+        assert_eq!(a_col.count(), 2);
         assert_eq!(a_col.get(0).map(|(r, _)| r), Some(a.borrow()));
         assert_eq!(a_col.get(1).map(|(r, _)| r), Some(b.borrow()));
     }
@@ -538,19 +439,18 @@ mod tests {
         let c = Row::pack_slice(&[Datum::True, Datum::String("hello world"), Datum::Int16(42)]);
         let d = Row::pack_slice(&[Datum::MzTimestamp(mz_repr::Timestamp::new(9))]);
 
-        let col = {
+        let cols = {
             let mut part = [&a, &b];
             part.sort_by(|a, b| a.cmp(b));
-            let mut part1 = RowCollection::from(part);
+            let part1 = RowCollection::from(part);
             let mut part = [&c, &d];
             part.sort_by(|a, b| a.cmp(b));
             let part2 = RowCollection::from(part);
-            part1.merge(&part2);
-            part1
+            vec![part1, part2]
         };
         let mut rows = [a, b, c, d];
 
-        let sorted_view = col.sorted_view(&[]);
+        let sorted_view = RowCollection::merge_sorted(&cols, &[]);
         rows.sort_by(|a, b| a.cmp(b));
 
         for i in 0..rows.len() {
@@ -565,12 +465,14 @@ mod tests {
     fn test_sorted_iter() {
         let a = Row::pack_slice(&[Datum::String("hello world")]);
         let b = Row::pack_slice(&[Datum::UInt32(42)]);
-        let mut col = RowCollection::new(vec![(a.clone(), NonZeroUsize::new(3).unwrap())], &[]);
-        col.merge(&RowCollection::new(
-            vec![(b.clone(), NonZeroUsize::new(2).unwrap())],
+        let col = RowCollection::new(vec![(a.clone(), NonZeroUsize::new(3).unwrap())], &[]);
+        let col = RowCollection::merge_sorted(
+            &[
+                col,
+                RowCollection::new(vec![(b.clone(), NonZeroUsize::new(2).unwrap())], &[]),
+            ],
             &[],
-        ));
-        let col = col.sorted_view(&[]);
+        );
         let mut iter = col.into_row_iter();
 
         // Peek shouldn't advance the iterator.
@@ -592,12 +494,14 @@ mod tests {
     fn test_sorted_iter_offset() {
         let a = Row::pack_slice(&[Datum::String("hello world")]);
         let b = Row::pack_slice(&[Datum::UInt32(42)]);
-        let mut col = RowCollection::new(vec![(a.clone(), NonZeroUsize::new(3).unwrap())], &[]);
-        col.merge(&RowCollection::new(
-            vec![(b.clone(), NonZeroUsize::new(2).unwrap())],
+        let col = RowCollection::new(vec![(a.clone(), NonZeroUsize::new(3).unwrap())], &[]);
+        let col = RowCollection::merge_sorted(
+            &[
+                col,
+                RowCollection::new(vec![(b.clone(), NonZeroUsize::new(2).unwrap())], &[]),
+            ],
             &[],
-        ));
-        let col = col.sorted_view(&[]);
+        );
 
         // Test with a reasonable offset that does not span rows.
         let mut iter = col.into_row_iter().apply_offset(1);
@@ -634,12 +538,14 @@ mod tests {
     fn test_sorted_iter_limit() {
         let a = Row::pack_slice(&[Datum::String("hello world")]);
         let b = Row::pack_slice(&[Datum::UInt32(42)]);
-        let mut col = RowCollection::new(vec![(a.clone(), NonZeroUsize::new(3).unwrap())], &[]);
-        col.merge(&RowCollection::new(
-            vec![(b.clone(), NonZeroUsize::new(2).unwrap())],
+        let col = RowCollection::new(vec![(a.clone(), NonZeroUsize::new(3).unwrap())], &[]);
+        let col = RowCollection::merge_sorted(
+            &[
+                col,
+                RowCollection::new(vec![(b.clone(), NonZeroUsize::new(2).unwrap())], &[]),
+            ],
             &[],
-        ));
-        let col = col.sorted_view(&[]);
+        );
 
         // Test with a limit that spans only the first row.
         let mut iter = col.into_row_iter().with_limit(1);
@@ -687,7 +593,6 @@ mod tests {
     fn test_mapped_row_iterator() {
         let a = Row::pack_slice(&[Datum::String("hello world")]);
         let col = RowCollection::new(vec![(a.clone(), NonZeroUsize::new(3).unwrap())], &[]);
-        let col = col.sorted_view(&[]);
 
         // Make sure we can call `.map` on a `dyn RowIterator`.
         let iter: Box<dyn RowIterator> = Box::new(col.into_row_iter());
@@ -704,7 +609,6 @@ mod tests {
     fn test_projected_row_iterator() {
         let a = Row::pack_slice(&[Datum::String("hello world"), Datum::Int16(42)]);
         let col = RowCollection::new(vec![(a.clone(), NonZeroUsize::new(2).unwrap())], &[]);
-        let col = col.sorted_view(&[]);
 
         // Project away the first column.
         let mut iter = col.into_row_iter().with_projection(vec![1]);
@@ -759,7 +663,6 @@ mod tests {
             ],
             &[],
         );
-        let col = col.sorted_view(&[]);
 
         // How many total rows there are.
         let iter = col.into_row_iter();
@@ -827,7 +730,7 @@ mod tests {
             let mut a_col = RowCollection::from(&a);
             let b_col = RowCollection::from(&b);
 
-            a_col.merge(&b_col);
+            a_col.concat(&b_col);
 
             let all_rows = a.iter().chain(b.iter());
             for (idx, row) in all_rows.enumerate() {
@@ -852,10 +755,11 @@ mod tests {
         fn row_collection_sort(mut a: Vec<Row>, mut b: Vec<Row>) {
             a.sort_by(|a, b| a.cmp(b));
             b.sort_by(|a, b| a.cmp(b));
-            let mut col = RowCollection::from(&a);
-            col.merge(&RowCollection::from(&b));
 
-            let sorted_view = col.sorted_view(&[]);
+            let sorted_view = RowCollection::merge_sorted(
+                &[RowCollection::from(&a), RowCollection::from(&b)],
+                &[],
+            );
 
             a.append(&mut b);
             a.sort_by(|a, b| a.cmp(b));

@@ -10,20 +10,16 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.100"
-itertools = "0.14.0"
+anyhow.workspace = true
+itertools.workspace = true
 mz-ore-build = { path = "../ore-build", default-features = false }
-quote = "1.0.42"
-syn = { version = "2.0.106", features = ["extra-traits", "full", "parsing"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+quote.workspace = true
+syn.workspace = true
 
 [dev-dependencies]
-datadriven = "0.8.0"
+datadriven.workspace = true
 mz-ore = { path = "../ore", default-features = false, features = ["test"] }
-tempfile = "3.23.0"
+tempfile.workspace = true
 
 [features]
-default = ["workspace-hack"]
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+default = []

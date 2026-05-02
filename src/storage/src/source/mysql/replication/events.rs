@@ -17,7 +17,7 @@ use mz_storage_types::sources::mysql::GtidPartition;
 use timely::progress::Timestamp;
 use tracing::trace;
 
-use crate::source::types::SourceMessage;
+use crate::source::types::{FuelSize, SourceMessage};
 
 use super::super::schemas::verify_schemas;
 use super::super::{DefiniteError, MySqlTableName, TransientError};
@@ -93,20 +93,17 @@ pub(super) async fn handle_query_event(
                 for (err_output, err) in
                     verify_schemas(&mut *conn, btreemap! { &table => info }).await?
                 {
-                    trace!(%id, "timely-{worker_id} DDL change \
+                    tracing::warn!(%id, "timely-{worker_id} DDL change \
                            verification error for {table:?}[{}]: {err:?}",
                            err_output.output_index);
                     let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
-                    ctx.data_output
-                        .give_fueled(
-                            &gtid_cap,
-                            (
-                                (err_output.output_index, Err(err.into())),
-                                new_gtid.clone(),
-                                Diff::ONE,
-                            ),
-                        )
-                        .await;
+                    let update = (
+                        (err_output.output_index, Err(err.into())),
+                        new_gtid.clone(),
+                        Diff::ONE,
+                    );
+                    let size = update.fuel_size();
+                    ctx.data_output.give_fueled(&gtid_cap, update, size).await;
                     ctx.errored_outputs.insert(err_output.output_index);
                 }
             }
@@ -135,19 +132,16 @@ pub(super) async fn handle_query_event(
             let schema_errors = verify_schemas(&mut *conn, expected).await?;
             is_complete_event = true;
             for (dropped_output, err) in schema_errors {
-                trace!(%id, "timely-{worker_id} DDL change \
+                tracing::info!(%id, "timely-{worker_id} DDL change \
                            dropped output: {dropped_output:?}: {err:?}");
                 let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
-                ctx.data_output
-                    .give_fueled(
-                        &gtid_cap,
-                        (
-                            (dropped_output.output_index, Err(err.into())),
-                            new_gtid.clone(),
-                            Diff::ONE,
-                        ),
-                    )
-                    .await;
+                let update = (
+                    (dropped_output.output_index, Err(err.into())),
+                    new_gtid.clone(),
+                    Diff::ONE,
+                );
+                let size = std::mem::size_of_val(&update);
+                ctx.data_output.give_fueled(&gtid_cap, update, size).await;
                 ctx.errored_outputs.insert(dropped_output.output_index);
             }
         }
@@ -172,21 +166,18 @@ pub(super) async fn handle_query_event(
                 if let Some(info) = ctx.table_info.get(&table) {
                     let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
                     for output in info {
-                        ctx.data_output
-                            .give_fueled(
-                                &gtid_cap,
-                                (
-                                    (
-                                        output.output_index,
-                                        Err(DataflowError::from(DefiniteError::TableTruncated(
-                                            table.to_string(),
-                                        ))),
-                                    ),
-                                    new_gtid.clone(),
-                                    Diff::ONE,
-                                ),
-                            )
-                            .await;
+                        let update = (
+                            (
+                                output.output_index,
+                                Err(DataflowError::from(DefiniteError::TableTruncated(
+                                    table.to_string(),
+                                ))),
+                            ),
+                            new_gtid.clone(),
+                            Diff::ONE,
+                        );
+                        let size = update.fuel_size();
+                        ctx.data_output.give_fueled(&gtid_cap, update, size).await;
                         ctx.errored_outputs.insert(output.output_index);
                     }
                 }
@@ -329,9 +320,9 @@ pub(super) async fn handle_rows_event(
                 } else {
                     retractions += 1;
                 }
-                ctx.data_output
-                    .give_fueled(&gtid_cap, (data, new_gtid.clone(), diff))
-                    .await;
+                let update = (data, new_gtid.clone(), diff);
+                let size = update.fuel_size();
+                ctx.data_output.give_fueled(&gtid_cap, update, size).await;
             }
         }
     }
@@ -345,7 +336,8 @@ pub(super) async fn handle_rows_event(
     if !event_buffer.is_empty() {
         for d in event_buffer.drain(..) {
             let (rewind_data_cap, _) = ctx.rewinds.get(&d.0.0).unwrap();
-            ctx.data_output.give_fueled(rewind_data_cap, d).await;
+            let size = d.fuel_size();
+            ctx.data_output.give_fueled(rewind_data_cap, d, size).await;
         }
     }
 

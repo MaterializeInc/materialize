@@ -236,7 +236,18 @@ impl AlterCompatible for MySqlSourceExportDetails {
 }
 
 /// Represents a MySQL transaction id
-#[derive(Debug, Clone, Copy, Ord, PartialOrd, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Ord,
+    PartialOrd,
+    Eq,
+    PartialEq,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 pub enum GtidState {
     // NOTE: The ordering of the variants is important for the derived order implementation
     /// Represents a MySQL server source-id that has not yet presented a GTID

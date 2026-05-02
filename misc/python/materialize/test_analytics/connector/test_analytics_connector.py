@@ -212,15 +212,13 @@ class DatabaseConnectorImpl(DatabaseConnector):
         return self.cached_settings
 
     def _query_settings(self, cursor: Cursor) -> TestAnalyticsSettings:
-        cursor.execute(
-            """
+        cursor.execute("""
             SELECT
                 uploads_enabled,
                 min_required_data_version_for_uploads,
                 only_notify_about_communication_failures_on_main
             FROM config;
-            """
-        )
+            """)
 
         rows = cursor.fetchall()
         assert len(rows) == 1, f"Expected exactly one row, got {len(rows)}"

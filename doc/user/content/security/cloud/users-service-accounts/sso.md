@@ -60,9 +60,9 @@ To make Materialize metadata available to Datadog, you must configure and run th
 
 * Select the organization role for the user:
 
-  {{< include-md file="shared-content/rbac-cloud/organization-roles.md" >}}
+  {{% include-headless "/headless/rbac-cloud/organization-roles" %}}
 
 
 ## Next steps
 
-{{< include-md file="shared-content/rbac-cloud/account-creation-next-steps.md" >}}
+{{% include-headless "/headless/rbac-cloud/account-creation-next-steps" %}}

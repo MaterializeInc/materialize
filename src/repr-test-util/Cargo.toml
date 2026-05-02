@@ -10,19 +10,15 @@ publish = false
 workspace = true
 
 [dependencies]
-chrono = { version = "0.4.39", default-features = false, features = ["serde", "std"] }
-itertools = "0.14.0"
+chrono.workspace = true
+itertools.workspace = true
 mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore" }
 mz-repr = { path = "../repr" }
-proc-macro2 = "1.0.103"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+proc-macro2.workspace = true
 
 [dev-dependencies]
-datadriven = "0.8.0"
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+datadriven.workspace = true
 
 [features]
-default = ["workspace-hack"]
+default = []

@@ -48,14 +48,13 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_eq_or_log;
 use mz_ore::task::AbortOnDropHandle;
-use mz_repr::GlobalId;
+use mz_repr::{GlobalId, Timestamp};
 use mz_service::client::GenericClient;
 use timely::PartialOrder;
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
 use tracing::debug;
 
-use crate::controller::ComputeControllerTimestamp;
 use crate::metrics::ReplicaMetrics;
 use crate::protocol::command::ComputeCommand;
 use crate::protocol::response::{ComputeResponse, FrontiersResponse};
@@ -66,11 +65,11 @@ type Token = Arc<()>;
 
 /// A client enforcing sequential dataflow hydration.
 #[derive(Debug)]
-pub(super) struct SequentialHydration<T> {
+pub(super) struct SequentialHydration {
     /// A sender for commands to the wrapped client.
-    command_tx: mpsc::UnboundedSender<ComputeCommand<T>>,
+    command_tx: mpsc::UnboundedSender<ComputeCommand>,
     /// A receiver for responses from the wrapped client.
-    response_rx: mpsc::UnboundedReceiver<Result<ComputeResponse<T>, anyhow::Error>>,
+    response_rx: mpsc::UnboundedReceiver<Result<ComputeResponse, anyhow::Error>>,
     /// Dynamic system configuration.
     dyncfg: Arc<ConfigSet>,
     /// Tracked metrics.
@@ -80,7 +79,7 @@ pub(super) struct SequentialHydration<T> {
     /// Entries are inserted in response to observed `CreateDataflow` commands.
     /// Entries are removed in response to `Frontiers` commands that report collection
     /// hydration, or in response to `AllowCompaction` commands that specify the empty frontier.
-    collections: BTreeMap<GlobalId, Collection<T>>,
+    collections: BTreeMap<GlobalId, Collection>,
     /// A queue of scheduled collections that are awaiting hydration.
     hydration_queue: VecDeque<GlobalId>,
     /// A token held by hydrating collections.
@@ -92,14 +91,11 @@ pub(super) struct SequentialHydration<T> {
     _forwarder_task: AbortOnDropHandle<()>,
 }
 
-impl<T> SequentialHydration<T>
-where
-    T: ComputeControllerTimestamp,
-{
+impl SequentialHydration {
     /// Create a new `SequentialHydration` client.
     pub fn new<C>(client: C, dyncfg: Arc<ConfigSet>, metrics: ReplicaMetrics) -> Self
     where
-        C: ComputeClient<T> + 'static,
+        C: ComputeClient + 'static,
     {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
         let (response_tx, response_rx) = mpsc::unbounded_channel();
@@ -126,7 +122,7 @@ where
     }
 
     /// Absorb a command and send resulting commands to the wrapped client.
-    fn absorb_command(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
+    fn absorb_command(&mut self, cmd: ComputeCommand) -> Result<(), anyhow::Error> {
         // Whether to forward this command to the wrapped client.
         let mut forward = true;
 
@@ -169,7 +165,7 @@ where
     }
 
     /// Observe a response and send resulting commands to the wrapped client.
-    fn observe_response(&mut self, resp: &ComputeResponse<T>) -> Result<(), anyhow::Error> {
+    fn observe_response(&mut self, resp: &ComputeResponse) -> Result<(), anyhow::Error> {
         if let ComputeResponse::Frontiers(
             id,
             FrontiersResponse {
@@ -244,11 +240,8 @@ where
 }
 
 #[async_trait]
-impl<T> GenericClient<ComputeCommand<T>, ComputeResponse<T>> for SequentialHydration<T>
-where
-    T: ComputeControllerTimestamp,
-{
-    async fn send(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
+impl GenericClient<ComputeCommand, ComputeResponse> for SequentialHydration {
+    async fn send(&mut self, cmd: ComputeCommand) -> Result<(), anyhow::Error> {
         self.absorb_command(cmd)
     }
 
@@ -257,7 +250,7 @@ where
     /// This method is cancel safe. If `recv` is used as the event in a [`tokio::select!`]
     /// statement and some other branch completes first, it is guaranteed that no messages were
     /// received by this client.
-    async fn recv(&mut self) -> Result<Option<ComputeResponse<T>>, anyhow::Error> {
+    async fn recv(&mut self) -> Result<Option<ComputeResponse>, anyhow::Error> {
         // `mpsc::UnboundedReceiver::recv` is documented as cancel safe.
         match self.response_rx.recv().await {
             Some(Ok(response)) => {
@@ -272,16 +265,16 @@ where
 
 /// Information about a tracked collection.
 #[derive(Debug)]
-struct Collection<T> {
+struct Collection {
     /// The as-of frontier at collection creation.
-    as_of: Antichain<T>,
+    as_of: Antichain<Timestamp>,
     /// The current state of the collection.
     state: State,
 }
 
-impl<T> Collection<T> {
+impl Collection {
     /// Create a new `Collection`.
-    fn new(as_of: Antichain<T>) -> Self {
+    fn new(as_of: Antichain<Timestamp>) -> Self {
         Self {
             as_of,
             state: State::Created,
@@ -317,12 +310,12 @@ enum State {
 /// This functions is run in its own task and exists to allow `SequentialHydration::recv` to be
 /// cancel safe even though it needs to send commands to the wrapped client, which isn't cancel
 /// safe.
-async fn forward_messages<C, T>(
+async fn forward_messages<C>(
     mut client: C,
-    mut rx: mpsc::UnboundedReceiver<ComputeCommand<T>>,
-    tx: mpsc::UnboundedSender<Result<ComputeResponse<T>, anyhow::Error>>,
+    mut rx: mpsc::UnboundedReceiver<ComputeCommand>,
+    tx: mpsc::UnboundedSender<Result<ComputeResponse, anyhow::Error>>,
 ) where
-    C: ComputeClient<T>,
+    C: ComputeClient,
 {
     loop {
         tokio::select! {

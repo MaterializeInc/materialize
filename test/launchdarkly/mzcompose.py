@@ -33,7 +33,7 @@ from launchdarkly_api.model.variation import Variation  # type: ignore
 from materialize.mzcompose import DEFAULT_MZ_ENVIRONMENT_ID, DEFAULT_ORG_ID
 from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.postgres import CockroachOrPostgresMetadata
+from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.ui import UIError
 
@@ -232,15 +232,11 @@ def workflow_default(c: Composition) -> None:
         c.testdrive("\n".join(["> SHOW max_result_size", "1GB"]))
         c.stop("materialized")
     except launchdarkly_api.ApiException as e:
-        raise UIError(
-            dedent(
-                f"""
+        raise UIError(dedent(f"""
                 Error when calling the Launch Darkly API.
                 - Status: {e.status},
                 - Reason: {e.reason},
-                """
-            )
-        )
+                """))
     finally:
         try:
             ld_client.delete_flag(LD_FEATURE_FLAG_KEY)

@@ -51,6 +51,7 @@ from materialize.github import (
     for_github_re,
     get_known_issues_from_github,
 )
+from materialize.linear import get_known_issues_from_linear
 from materialize.observed_error import ObservedBaseError, WithIssue
 from materialize.test_analytics.config.test_analytics_db_config import (
     create_test_analytics_config_with_hostname,
@@ -84,6 +85,7 @@ ERROR_RE = re.compile(
     | fatal\ runtime\ error: # stack overflow
     | \[SQLsmith\] # Unknown errors are logged
     | \[SQLancer\] # Unknown errors are logged
+    | \[SQLancer\+\+\] # Unknown errors are logged
     | environmentd:\ fatal: # startup failure
     | clusterd:\ fatal: # startup failure
     | error:\ Found\ argument\ '.*'\ which\ wasn't\ expected,\ or\ isn't\ valid\ in\ this\ context
@@ -92,6 +94,7 @@ ERROR_RE = re.compile(
     | SUMMARY:\ .*Sanitizer
     | primary\ source\ \w+\ seemingly\ dropped\ before\ subsource
     | :\ test\ timed\ out
+    | very\ slow\ coordinator\ message
     # Only notifying on unexpected failures. INT, TRAP, BUS, FPE, SEGV, PIPE
     | \ ANOM_ABEND\ .*\ sig=(2|5|7|8|11|13)
     # \s\S is any character including newlines, so this matches multiline strings
@@ -107,6 +110,7 @@ ERROR_RE = re.compile(
     | source-table-migration\ issue
     # sql logic tests
     | Rewrite\ SLT\ files\ locally\ with:\ [\s\S]*? ^EOF$
+    | ^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z\s+thread\ '.*?'\ panicked\ at\ .*\n.*
     # rdkafka assertions
     | Assertion\ `.*'\ failed\.
     | Invalid\ data\ in\ source\ errors,\ saw\ retractions
@@ -158,7 +162,9 @@ IGNORE_RE = re.compile(
     # Expected when CRDB is corrupted
     | restart-materialized-1\ .*relation\ "consensus"\ does\ not\ exist
     # Will print a separate panic line which will be handled and contains the relevant information (new style)
-    | internal\ error:\ unexpected\ panic\ during\ query\ optimization
+    | internal\ error:\ .*\ unexpected\ panic\ during\ query\ optimization
+    # RQG WMR optimizer soft panic, see database-issues#8741
+    | Arrangements\ depended\ on\ by\ a\ non-delta\ join\ are\ absent
     # redpanda INFO logging
     | [Ll]arger\ sizes\ prevent\ running\ out\ of\ memory
     # Old versions won't support new parameters
@@ -175,7 +181,7 @@ IGNORE_RE = re.compile(
     # For tests we purposely trigger this error
     | skip-version-upgrade-materialized.* \| .* incompatible\ persist\ version\ \d+\.\d+\.\d+(-dev)?,\ current:\ \d+\.\d+\.\d+(-dev\.\d+)?,\ make\ sure\ to\ upgrade\ the\ catalog\ one\ version\ forward\ at\ a\ time
     # For 0dt upgrades
-    | halting\ process:\ (unable\ to\ confirm\ leadership|fenced\ out\ old\ deployment;\ rebooting\ as\ leader|this\ deployment\ has\ been\ fenced\ out|dependency\ since\ frontier\ is\ empty\ while\ dependent\ upper\ is\ not\ empty|code\ at\ version\ .*\ cannot\ read\ data\ with\ version)
+    | halting\ process:\ (unable\ to\ advance\ catalog\ upper|fenced\ out\ old\ deployment;\ rebooting\ as\ leader|this\ deployment\ has\ been\ fenced\ out|dependency\ since\ frontier\ is\ empty\ while\ dependent\ upper\ is\ not\ empty|code\ at\ version\ .*\ cannot\ read\ data\ with\ version)
     | zippy-materialized.* \| .* halting\ process:\ Server\ started\ with\ requested\ generation
     | there\ have\ been\ DDL\ that\ we\ need\ to\ react\ to;\ rebooting\ in\ read-only\ mode
     # Don't care for ssh problems
@@ -183,15 +189,25 @@ IGNORE_RE = re.compile(
     # Expected in Terraform tests if something else failed during the setup
     | mz-debug:\ fatal:\ failed\ to\ read\ kubeconfig
     # Fences without incrementing deploy generation
-    | txn-wal-fencing-mz_first-.* \| .* unable\ to\ confirm\ leadership
+    | txn-wal-fencing-mz_first-.* \| .* unable\ to\ advance\ catalog\ upper
     | txn-wal-fencing-mz_first-.* \| .* fenced\ by\ envd
     # 0dt platform-checks have two envds running in parallel, thus high load, tests still succeed, so ignore noise
     | platform-checks-mz_.* \| .* was\ expired\ due\ to\ inactivity\.\ Did\ the\ machine\ go\ to\ sleep\?
     # This can happen in "K8s recovery: envd on failing node", but the test still succeeds, old environmentd will just be crashed, see database-issues#8749
-    | \[pod/environmentd-0/environmentd\]\ .*\ (unable\ to\ confirm\ leadership|fenced\ out\ old\ deployment;\ rebooting\ as\ leader|this\ deployment\ has\ been\ fenced\ out)
+    | \[pod/environmentd-0/environmentd\]\ .*\ (unable\ to\ advance\ catalog\ upper|fenced\ out\ old\ deployment;\ rebooting\ as\ leader|this\ deployment\ has\ been\ fenced\ out)
     | cannot\ load\ unknown\ system\ parameter
     # Occurs in Orchestratord test when restarting
     | comm="containerd"\ exe="/usr/local/bin/containerd"\ sig=11
+    # TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9970 is fixed
+    | limits-materialized-.* \| .* very\ slow\ coordinator\ message
+    | zippy-materialized.* \| .* very\ slow\ coordinator\ message
+    | sqlsmith-mz.* \| .* very\ slow\ coordinator\ message
+    | sqlsmith-mz.* \| .* panicked\ at\ src/ore/src/overflowing.rs.*\ Overflow
+    # Expected on AWS in RQG because of build
+    | comm="check"\ exe="/usr/bin/qemu-
+    # Handled by panic already
+    | sqlancer.* \| .*internal\ error:\ entered\ unreachable\ code
+    | sqlancer.* \| .*\("internal\ error:\ invalid\ input\ type"\)
     )
     """,
     re.VERBOSE | re.MULTILINE,
@@ -278,18 +294,12 @@ class ObservedError(ObservedBaseError):
 
         assert self.additional_collapsed_error_details_header is not None
 
-        return (
-            "\n"
-            + dedent(
-                f"""
+        return "\n" + dedent(f"""
                 <details>
                     <summary>{self.additional_collapsed_error_details_header}</summary>
                     <pre>{self.additional_collapsed_error_details}</pre>
                 </details>
-            """
-            ).strip()
-            + "\n\n"
-        )
+            """).strip() + "\n\n"
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
@@ -298,18 +308,26 @@ class ObservedErrorWithIssue(ObservedError, WithIssue):
     issue_ignore_failure: bool
 
     def _get_issue_presentation(self) -> str:
-        issue_presentation = f"#{self.issue_number}"
+        issue_presentation = (
+            self.issue_number
+            if isinstance(self.issue_number, str)
+            else f"#{self.issue_number}"
+        )
         if self.issue_is_closed:
             issue_presentation = f"{issue_presentation}, closed"
 
         return issue_presentation
 
+    def _get_issue_id(self) -> str:
+        if isinstance(self.issue_number, str):
+            return self.issue_number
+        return f"database-issues/{self.issue_number}"
+
     def to_text(self) -> str:
         return f"{self.error_type} {self.issue_title} ({self._get_issue_presentation()}) in {self.location}: {self.error_message_as_text()}{self.error_details_as_text()}"
 
     def to_markdown(self) -> str:
-        filters = [{"id": "issue", "value": f"database-issues/{self.issue_number} "}]
-        ci_failures_url = f"https://ci-failures.dev.materialize.com/?key=test-failures&tfFilters={urllib.parse.quote(json.dumps(filters), safe='')}"
+        ci_failures_url = f"https://ci.dev.materialize.com/#failures?issue={urllib.parse.quote(self._get_issue_id(), safe='')}"
         return f'<a href="{ci_failures_url}">{self.error_type}</a> <a href="{self.issue_url}">{self.issue_title} ({self._get_issue_presentation()})</a> in {self.location_as_markdown()}:\n{self.error_message_as_markdown()}{self.error_details_as_markdown()}{self.additional_collapsed_error_details_as_markdown()}'
 
 
@@ -319,8 +337,7 @@ class ObservedErrorWithLocation(ObservedError):
         return f"{self.error_type} in {self.location}: {self.error_message_as_text()}{self.error_details_as_text()}"
 
     def to_markdown(self) -> str:
-        filters = [{"id": "content", "value": self.error_message_as_text()[:2000]}]
-        ci_failures_url = f"https://ci-failures.dev.materialize.com/?key=test-failures&tfFilters={urllib.parse.quote(json.dumps(filters), safe='')}"
+        ci_failures_url = f"https://ci.dev.materialize.com/#failures?content={urllib.parse.quote(self.error_message_as_text()[:2000], safe='')}"
         return f'<a href="{ci_failures_url}">{self.error_type}</a> in {self.location_as_markdown()}:\n{self.error_message_as_markdown()}{self.error_details_as_markdown()}{self.additional_collapsed_error_details_as_markdown()}'
 
 
@@ -542,9 +559,14 @@ def annotate_logged_errors(
     token = os.getenv("GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN") or os.getenv(
         "GITHUB_TOKEN"
     )
-    (known_issues, issues_with_invalid_regex) = get_known_issues_from_github(token)
+    known_issues, issues_with_invalid_regex = get_known_issues_from_github(token)
+    linear_known_issues, linear_issues_with_invalid_regex = (
+        get_known_issues_from_linear()
+    )
+    known_issues.extend(linear_known_issues)
     unknown_errors: list[ObservedBaseError] = []
     unknown_errors.extend(issues_with_invalid_regex)
+    unknown_errors.extend(linear_issues_with_invalid_regex)
 
     job = os.getenv("BUILDKITE_JOB_ID")
 
@@ -552,7 +574,7 @@ def annotate_logged_errors(
     ignore_failure: bool = False
 
     # Keep track of known errors so we log each only once
-    already_reported_issue_numbers: set[int] = set()
+    already_reported_issue_numbers: set[int | str] = set()
 
     def handle_error(
         error_message: str,
@@ -568,7 +590,7 @@ def annotate_logged_errors(
 
         for issue in known_issues:
             match = issue.regex.search(for_github_re(search_string))
-            if match and issue.info["state"] == "open":
+            if match and issue.info["state"] == "OPEN":
                 if issue.apply_to and issue.apply_to not in (
                     step_key.lower(),
                     buildkite_label.lower().rstrip("01234567889 "),
@@ -584,7 +606,7 @@ def annotate_logged_errors(
                             error_details=error_details,
                             error_type="Known issue",
                             internal_error_type="KNOWN_ISSUE",
-                            issue_url=issue.info["html_url"],
+                            issue_url=issue.info["url"],
                             issue_title=issue.info["title"],
                             issue_number=issue.info["number"],
                             issue_is_closed=False,
@@ -600,7 +622,7 @@ def annotate_logged_errors(
         else:
             for issue in known_issues:
                 match = issue.regex.search(for_github_re(search_string))
-                if match and issue.info["state"] == "closed":
+                if match and issue.info["state"] == "CLOSED":
                     if issue.apply_to and issue.apply_to not in (
                         step_key.lower(),
                         buildkite_label.lower(),
@@ -614,7 +636,7 @@ def annotate_logged_errors(
                                 error_details=error_details,
                                 error_type="Potential regression",
                                 internal_error_type="POTENTIAL_REGRESSION",
-                                issue_url=issue.info["html_url"],
+                                issue_url=issue.info["url"],
                                 issue_title=issue.info["title"],
                                 issue_number=issue.info["number"],
                                 issue_is_closed=True,
@@ -1086,7 +1108,11 @@ def store_annotation_in_test_analytics(
             error_type=error.internal_error_type,
             message=error.to_text(),
             issue=(
-                f"database-issues/{error.issue_number}"
+                (
+                    error.issue_number
+                    if isinstance(error.issue_number, str)
+                    else f"database-issues/{error.issue_number}"
+                )
                 if isinstance(error, WithIssue)
                 else None
             ),

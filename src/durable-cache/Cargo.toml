@@ -10,27 +10,23 @@ publish = false
 workspace = true
 
 [dependencies]
-async-trait = "0.1.89"
-bytes = { version = "1.10.1" }
-differential-dataflow = "0.18.0"
-futures = "0.3.31"
-itertools = { version = "0.14.0" }
+async-trait.workspace = true
+bytes.workspace = true
+differential-dataflow.workspace = true
+futures.workspace = true
+itertools.workspace = true
 mz-ore = { path = "../ore", features = ["process"] }
 mz-dyncfg = { path = "../dyncfg" }
 mz-persist-types = { path = "../persist-types" }
 mz-persist-client = { path = "../persist-client" }
 mz-timely-util = { path = "../timely-util" }
-prometheus = { version = "0.14.0", default-features = false }
-prost = { version = "0.13.5", features = ["no-recursion-limit"] }
-serde = { version = "1.0.219", features = ["derive", "rc"] }
-timely = "0.25.1"
-tokio = { version = "1.44.1", default-features = false, features = ["rt", "rt-multi-thread"] }
-tracing = "0.1.37"
-uuid = { version = "1.18.1", features = ["v4"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+prometheus.workspace = true
+prost.workspace = true
+serde = { workspace = true, features = ["rc"] }
+timely.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid = { workspace = true, features = ["v4"] }
 
 [features]
-default = ["workspace-hack"]
+default = []

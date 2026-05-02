@@ -76,19 +76,19 @@ Run testdrive against all files in `test/testdrive` using Confluent Platform and
 Localstack:
 
 ```
-./mzcompose --dev run default
+./mzcompose run default
 ```
 
 Run using Redpanda instead of the Confluent Platform:
 
 ```
-./mzcompose --dev run default --redpanda
+./mzcompose run default --redpanda
 ```
 
 Run testdrive against a single file:
 
 ```
-./mzcompose --dev run default FILE.td
+./mzcompose run default FILE.td
 ```
 
 ## Running tests locally without mzcompose
@@ -488,7 +488,6 @@ message SimpleId {
 The following variables are defined for every test. Many correspond to the command-line options passed to `testdrive`:
 
 #### `testdrive.kafka-addr`
-#### `testdrive.kafka-addr-resolved`
 
 #### `testdrive.schema-registry-url`
 
@@ -643,6 +642,50 @@ BEGIN TRANSACTION INSERT INTO t1 VALUES (1); INSERT INTO t2 VALUES (2); COMMIT;
 
 The output of the queries is not validated in any way. An error during execution will cause the test to fail.
 
+## Connecting to DuckDB
+
+Testdrive supports connecting to an in-memory DuckDB instance with the Iceberg and HTTPFS extensions pre-loaded. This is useful for testing Iceberg table functionality by querying tables from DuckDB and comparing results with Materialize.
+
+Connections are created lazily on first use and cached by name for reuse across multiple commands.
+
+#### `$ duckdb-execute name=...`
+
+Executes SQL statements against a named DuckDB connection. Each line in the command body is executed as a separate statement. The output is not validated, but an error will cause the test to fail.
+
+```
+$ duckdb-execute name=duckdb
+CREATE TABLE test_table (id INTEGER, name VARCHAR);
+INSERT INTO test_table VALUES (1, 'Alice'), (2, 'Bob');
+```
+
+#### `$ duckdb-query name=... [sort-rows=true]`
+
+Executes a query against a named DuckDB connection and verifies the output. The first line of the command body is the SQL query. The remaining lines are the expected output, with columns separated by spaces.
+
+```
+$ duckdb-query name=duckdb
+SELECT * FROM test_table
+1 Alice
+2 Bob
+```
+
+If `sort-rows=true` is specified, both the expected and actual rows are sorted before comparison. This is useful for queries that may return rows in a non-deterministic order:
+
+```
+$ duckdb-query name=duckdb sort-rows=true
+SELECT * FROM test_table ORDER BY id
+1 Alice
+2 Bob
+```
+
+NULL values are displayed as `<null>`:
+
+```
+$ duckdb-query name=duckdb
+SELECT NULL
+<null>
+```
+
 ## Sleeping in the test
 
 #### `$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="Ns"`
@@ -694,6 +737,15 @@ file the specified number of times, rather than just once.
 Deletes the specified file from within the temporary directory.
 
 ## Actions on S3
+
+#### `$ s3-file-upload bucket=... key=...`
+
+Upload a single file to an S3 bucket. The body of the directive is the file content.
+
+#### `$ s3-file-upload bucket=... key-prefix=... count=N`
+
+Upload N files to an S3 bucket, with keys `{key-prefix}0` through `{key-prefix}{N-1}`.
+Use `key-suffix=...` (e.g. `key-suffix=.csv`) to append an extension to each key.
 
 #### `$ s3-verify-data address=s3://...`
 
@@ -933,41 +985,43 @@ a version of Materialize that is able to execute the SQL constructs contained th
 
 ```
 $ skip-if
-SELECT mz_version_num() < 2601;
+SELECT mz_version_num() < 2600203;
 ```
+
+The above example references v26.2.3
 
 ## Run an action/query conditionally on version
 
 ```
->[version>=13000] SELECT 1;
+>[version>=2600203] SELECT 1;
 1
 ```
 
-The `[version>=13000]` property allows running the action or query only when we are connected to a Materialize instance with a compatible version. The supported comparison operators are `>`, `>=`, `=`, `<=` and `<`. The version number is the same as returned from [`mz_version_num()`](https://materialize.com/docs/sql/functions/#system-information-functions) and has the same format `XXYYYZZ`, where `XX` is the major version, `YYY` is the minor version and `ZZ` is the patch version. So in the example we are only running the `SELECT 1` query if the Materialize instance is of version `v0.130.0` or higher. For lower versions no query is run and no comparison of results is performed subsequently.
+The `[version>=2600203]` property allows running the action or query only when we are connected to a Materialize instance with a compatible version. The supported comparison operators are `>`, `>=`, `=`, `<=` and `<`. The version number is the same as returned from [`mz_version_num()`](https://materialize.com/docs/sql/functions/#system-information-functions) and has the same format `XXYYYZZ`, where `XX` is the major version, `YYY` is the minor version and `ZZ` is the patch version. So in the example we are only running the `SELECT 1` query if the Materialize instance is of version `v26.2.3` or higher. For lower versions no query is run and no comparison of results is performed subsequently.
 
 You can bound the version above and below using the following syntax:
 
 ```
->[13500<=version<14300] SELECT 1;
+>[2600203<=version<2600300] SELECT 1;
 1
 ```
 
 You can use `<` or `<=` freely. The following are equivalent:
 
 ```
->[version>14300] SELECT 1;
+>[version>2600300] SELECT 1;
 1
->[14300<version] SELECT 1;
+>[2600300<version] SELECT 1;
 1
 ```
 
-If you change the result of a query in version `v0.148.0-dev` for example, you have to keep the old version working in Platform Checks as well as Testdrive/MySQL CDC/Postgres CDC with old syntax for migration tests, since they may run the code with both an older Materialize version and the currently tested one. To do that, you can duplicate the query and version-gate it accordingly:
+If you change the result of a query in version `v26.3.0-dev` for example, you have to keep the old version working in Platform Checks as well as Testdrive/MySQL CDC/Postgres CDC with old syntax for migration tests, since they may run the code with both an older Materialize version and the currently tested one. To do that, you can duplicate the query and version-gate it accordingly:
 
 ```
-?[version<14800] EXPLAIN SELECT * FROM t1 AS a1, t1 AS a2 WHERE a1.f1 IS NOT NULL;
+?[version<2600300] EXPLAIN SELECT * FROM t1 AS a1, t1 AS a2 WHERE a1.f1 IS NOT NULL;
 [OLD QUERY PLAN HERE]
 
-?[version>=14800] EXPLAIN SELECT * FROM t1 AS a1, t1 AS a2 WHERE a1.f1 IS NOT NULL;
+?[version>=2600300] EXPLAIN SELECT * FROM t1 AS a1, t1 AS a2 WHERE a1.f1 IS NOT NULL;
 [NEW QUERY PLAN HERE]
 ```
 

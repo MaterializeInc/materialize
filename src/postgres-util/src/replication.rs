@@ -8,6 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use std::str::FromStr;
+
+use mz_sql_parser::ast::{Ident, display::AstDisplay};
 use tokio_postgres::{
     Client,
     types::{Oid, PgLsn},
@@ -105,8 +107,8 @@ pub async fn bypass_rls_attribute(client: &Client) -> Result<bool, PostgresError
 /// Returns an error if the tables identified by the oid's have RLS policies which
 /// affect the current user. Two checks are made:
 ///
-/// 1. Identify which tables, from the provided oid's, have RLS policies that affecct the user or
-///    public.
+/// 1. Identify which tables, from the provided oid's, have RLS SELECT or ALL policies that affect
+///    the user or public.
 /// 2. If there are policies that affect the user, check if the BYPASSRLS attribute is set. If set,
 ///    the role is unaffected by the policies.
 pub async fn validate_no_rls_policies(
@@ -119,13 +121,21 @@ pub async fn validate_no_rls_policies(
     let tables_with_rls_for_user = client
         .query(
             "SELECT
-                    format('%I.%I', pc.relnamespace::regnamespace, pc.relname) AS qualified_name
+                    format('%I.%I', n.nspname, pc.relname) AS qualified_name
                 FROM pg_policy pp
-                JOIN pg_class pc ON pc.oid = polrelid
+                JOIN pg_class pc ON pc.oid = pp.polrelid
+                JOIN pg_namespace n ON n.oid = pc.relnamespace
                 WHERE
-                    polrelid = ANY($1::oid[])
-                    AND
-                    (0 = ANY(polroles) OR CURRENT_USER::regrole::oid = ANY(polroles));",
+                    pp.polrelid = ANY($1::oid[])
+                    AND pp.polcmd IN ('r', '*')
+                    AND (
+                        0 = ANY(pp.polroles)
+                        OR EXISTS (
+                            SELECT 1
+                            FROM unnest(pp.polroles) AS r(role_oid)
+                            WHERE pg_has_role(CURRENT_USER, r.role_oid, 'USAGE')
+                        )
+                    );",
             &[&table_oids],
         )
         .await
@@ -185,6 +195,7 @@ pub async fn drop_replication_slots(
                 }
 
                 let wait_str = if *should_wait { " WAIT" } else { "" };
+                let slot = Ident::new_unchecked(*slot).to_ast_string_simple();
                 replication_client
                     .simple_query(&format!("DROP_REPLICATION_SLOT {slot}{wait_str}"))
                     .await?;

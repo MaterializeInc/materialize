@@ -174,12 +174,13 @@ mod tests {
     use std::collections::BTreeSet;
 
     use mz_adapter_types::connection::ConnectionId;
+    use mz_auth::AuthenticatorKind;
     use mz_cluster_client::ReplicaId;
     use mz_controller_types::ClusterId;
     use mz_ore::metrics::MetricsRegistry;
     use mz_ore::{assert_contains, assert_ok};
+    use mz_repr::CatalogItemId;
     use mz_repr::role_id::RoleId;
-    use mz_repr::{CatalogItemId, Timestamp};
     use mz_sql::catalog::RoleAttributesRaw;
     use mz_sql::session::metadata::SessionMetadata;
     use uuid::Uuid;
@@ -215,7 +216,7 @@ mod tests {
                 .expect("is ok");
             let role = catalog.try_get_role_by_name(role).expect("must exist");
             // Can't use a dummy session because we need a valid role for the validity check.
-            let mut session = Session::<Timestamp>::new(
+            let mut session = Session::new(
                 &mz_build_info::DUMMY_BUILD_INFO,
                 SessionConfig {
                     conn_id,
@@ -223,8 +224,8 @@ mod tests {
                     user,
                     client_ip: None,
                     external_metadata_rx: None,
-                    internal_user_metadata: None,
                     helm_chart_version: None,
+                    authenticator_kind: AuthenticatorKind::None,
                 },
                 metrics.session_metrics(),
             );

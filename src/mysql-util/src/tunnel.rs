@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use mz_ore::future::{InTask, TimeoutError};
 use mz_ore::option::OptionExt;
-use mz_ore::task::{JoinHandleExt, spawn};
+use mz_ore::task::spawn;
 use mz_repr::CatalogItemId;
 use mz_ssh_util::tunnel::{SshTimeoutConfig, SshTunnelConfig};
 use mz_ssh_util::tunnel_manager::{ManagedSshTunnelHandle, SshTunnelManager};
@@ -371,9 +371,7 @@ impl Config {
         opts_builder: OptsBuilder,
     ) -> Result<mysql_async::Conn, MySqlError> {
         let connection_future = if let InTask::Yes = self.in_task {
-            spawn(|| "mysql_connect".to_string(), Conn::new(opts_builder))
-                .abort_on_drop()
-                .wait_and_assert_finished()
+            Box::pin(spawn(|| "mysql_connect".to_string(), Conn::new(opts_builder)).abort_on_drop())
         } else {
             Conn::new(opts_builder)
         };

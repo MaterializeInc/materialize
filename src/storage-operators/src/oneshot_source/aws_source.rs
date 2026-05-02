@@ -13,6 +13,7 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use aws_sdk_s3::error::DisplayErrorContext;
 use derivative::Derivative;
 use futures::StreamExt;
 use futures::stream::{BoxStream, TryStreamExt};
@@ -44,6 +45,7 @@ pub struct AwsS3Source {
     /// S3 client that is lazily initialized.
     #[derivative(Debug = "ignore")]
     client: std::sync::OnceLock<mz_aws_util::s3::Client>,
+    use_checksum: bool,
 }
 
 impl AwsS3Source {
@@ -52,6 +54,7 @@ impl AwsS3Source {
         connection_id: CatalogItemId,
         context: ConnectionContext,
         uri: String,
+        use_checksum: bool,
     ) -> Self {
         let uri = http::Uri::from_str(&uri).expect("validated URI in sequencing");
 
@@ -82,6 +85,7 @@ impl AwsS3Source {
             bucket,
             prefix,
             client: std::sync::OnceLock::new(),
+            use_checksum,
         }
     }
 
@@ -90,7 +94,17 @@ impl AwsS3Source {
             .connection
             .load_sdk_config(&self.context, self.connection_id, InTask::Yes)
             .await?;
-        let s3_client = mz_aws_util::s3::new_client(&sdk_config);
+
+        let mut s3_config_builder = aws_sdk_s3::config::Builder::from(&sdk_config)
+            .force_path_style(sdk_config.endpoint_url().is_some());
+
+        if !self.use_checksum {
+            s3_config_builder = s3_config_builder.response_checksum_validation(
+                aws_smithy_types::checksum_config::ResponseChecksumValidation::WhenRequired,
+            );
+        }
+        let s3_config = s3_config_builder.build();
+        let s3_client = aws_sdk_s3::Client::from_conf(s3_config);
 
         Ok(s3_client)
     }
@@ -154,16 +168,16 @@ impl OneshotSource for AwsS3Source {
         }
 
         let objects = objects_request
+            .into_paginator()
             .send()
+            .try_collect()
             .await
-            .map_err(StorageErrorXKind::generic)
+            .map_err(|err| StorageErrorXKind::generic(DisplayErrorContext(err)))
             .context("list_objects_v2")?;
 
-        // TODO(cf1): Pagination.
-
         let objects: Vec<_> = objects
-            .contents()
             .iter()
+            .flat_map(aws_sdk_s3::operation::list_objects_v2::ListObjectsV2Output::contents)
             .map(|o| {
                 let key = o
                     .key()
@@ -201,7 +215,6 @@ impl OneshotSource for AwsS3Source {
         let initial_response = async move {
             tracing::info!(name = %object.name(), ?range, "fetching object");
 
-            // TODO(cf1): Validate our checksum.
             let client = self.client().await.map_err(StorageErrorXKind::generic)?;
 
             let mut request = client.get_object().bucket(&self.bucket).key(&object.key);
@@ -209,11 +222,10 @@ impl OneshotSource for AwsS3Source {
                 let value = range.into_range_header_value();
                 request = request.range(value);
             }
-
             let object = request
                 .send()
                 .await
-                .map_err(|err| StorageErrorXKind::AwsS3Request(err.to_string()))?;
+                .map_err(|err| StorageErrorXKind::generic(DisplayErrorContext(err)))?;
             // AWS's ByteStream doesn't implement the Stream trait.
             let stream = mz_aws_util::s3::ByteStreamAdapter::new(object.body)
                 .err_into()

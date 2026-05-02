@@ -162,7 +162,7 @@ Explained Query:
   With
     cte l0 =
       Reduce::Accumulable
-        simple_aggrs[0]=(0, 0, count(*))
+        simple_aggrs[0]=(0, count(*))
         key_plan=id
         val_plan
           project=(#0)
@@ -225,6 +225,10 @@ Used Indexes:
   - materialize.public.idx_t1_a_b (*** full scan ***)
 
 Target cluster: quickstart
+
+Notices:
+  - Notice: Comparison with NULL using `=`, `<>`, or `!=` always evaluates to NULL.
+    Hint: Use `IS NULL` or `IS NOT NULL` instead.
 
 EOF
 
@@ -1024,7 +1028,7 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 WHERE v = 'xxx';
 ----
 Explained Query (fast path):
-  Project (#1{a}..=#4{v})
+  Project (#1{a}..=#3{c}, #0{v})
     ReadIndex on=materialize.public.foo idx_foo_v_cast=[lookup value=("xxx")]
 
 Used Indexes:
@@ -1260,17 +1264,17 @@ WHERE (a,b,c) IN ((15, 16, 17), (25, 26, 111), (35, 36, 111));
 Explained Query:
   With
     cte l0 =
-      Reduce aggregates=[sum((((#0{a} * #1{b}) * #2{c}) * #3{d}))] // { arity: 1, types: "(bigint?)", keys: "([])" }
-        Project (#0{a}..=#3{d}) // { arity: 4, types: "(integer, integer, integer, integer?)", keys: "([1], [2])" }
-          ReadIndex on=materialize.public.t4 idx_t4_a_b_c=[lookup values=[(15, 16, 17); (25, 26, 111); (35, 36, 111)]] // { arity: 7, types: "(integer, integer, integer, integer?, integer, integer, integer)", keys: "([1], [2])" }
-  Return // { arity: 1, types: "(bigint?)", keys: "([])" }
-    Union // { arity: 1, types: "(bigint?)", keys: "([])" }
-      Get l0 // { arity: 1, types: "(bigint?)", keys: "([])" }
-      Map (null) // { arity: 1, types: "(bigint?)", keys: "()" }
+      Reduce aggregates=[sum((((#0{a} * #1{b}) * #2{c}) * #3{d}))] // { arity: 1, types: "(r_int64?)", keys: "([])" }
+        Project (#0{a}..=#3{d}) // { arity: 4, types: "(r_int32, r_int32, r_int32, r_int32?)", keys: "([1], [2])" }
+          ReadIndex on=materialize.public.t4 idx_t4_a_b_c=[lookup values=[(15, 16, 17); (25, 26, 111); (35, 36, 111)]] // { arity: 7, types: "(r_int32, r_int32, r_int32, r_int32?, r_int32, r_int32, r_int32)", keys: "([1], [2])" }
+  Return // { arity: 1, types: "(r_int64?)", keys: "([])" }
+    Union // { arity: 1, types: "(r_int64?)", keys: "([])" }
+      Get l0 // { arity: 1, types: "(r_int64?)", keys: "([])" }
+      Map (null) // { arity: 1, types: "(r_int64?)", keys: "()" }
         Union // { arity: 0, types: "()", keys: "()" }
           Negate // { arity: 0, types: "()", keys: "()" }
             Project () // { arity: 0, types: "()", keys: "([])" }
-              Get l0 // { arity: 1, types: "(bigint?)", keys: "([])" }
+              Get l0 // { arity: 1, types: "(r_int64?)", keys: "([])" }
           Constant // { arity: 0, types: "()", keys: "([])" }
             - ()
 

@@ -31,8 +31,7 @@ class Kafka(Scenario):
     def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
         self.init(
             [
-                TdPhase(
-                    """
+                TdPhase("""
                     $ set keyschema={"type": "record", "name": "Key", "fields": [ { "name": "f1", "type": "long" } ] }
                     $ set schema={"type" : "record", "name" : "test", "fields": [ { "name": "f2", "type": "long" } ] }
 
@@ -56,8 +55,7 @@ class Kafka(Scenario):
                     > CREATE MATERIALIZED VIEW kafka_mv AS SELECT * FROM kafka_tbl;
 
                     > CREATE DEFAULT INDEX ON kafka_mv;
-                    """
-                ),
+                    """),
                 LoadPhase(
                     duration=120,
                     actions=[
@@ -87,8 +85,48 @@ class Kafka(Scenario):
                 ),
             ],
             guarantees={
-                "SELECT * FROM kafka_mv (standalone)": {"qps": 15, "p99": 400},
+                # PR#35328 (compute: move MV sink persist I/O off Timely thread) reduced qps / increased p99
+                "SELECT * FROM kafka_mv (standalone)": {"qps": 3, "p99": 2000},
             },
+        )
+
+
+class CreateKafkaSink(Scenario):
+    def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
+        self.init(
+            [
+                TdPhase("""
+                    $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                    ALTER SYSTEM SET max_objects_per_schema = 1000000;
+                    ALTER SYSTEM SET max_sinks = 1000000;
+
+                    > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
+
+                    > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
+                      URL '${testdrive.schema-registry-url}');
+
+                    > CREATE TABLE IF NOT EXISTS t (c INT)
+
+                    > INSERT INTO t VALUES (1)
+                    """),
+                LoadPhase(
+                    duration=300,
+                    actions=[
+                        ClosedLoop(
+                            action=TdAction(
+                                """
+                                $ set-from-sql var=id
+                                SELECT mz_now()::text
+
+                                > CREATE SINK sink${id} FROM t INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-${id}') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE DEBEZIUM
+                                """,
+                                c,
+                            ),
+                            report_regressions=False,  # TODO: Currently not stable enough, add guarantees when we improve
+                        )
+                    ],
+                ),
+            ],
         )
 
 
@@ -96,8 +134,7 @@ class PgReadReplica(Scenario):
     def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
         self.init(
             [
-                TdPhase(
-                    """
+                TdPhase("""
                     > DROP SECRET IF EXISTS pgpass CASCADE
                     > CREATE SECRET pgpass AS 'postgres'
                     > CREATE CONNECTION pg TO POSTGRES (
@@ -124,8 +161,7 @@ class PgReadReplica(Scenario):
                       SELECT COUNT(*) FROM t1;
 
                     > CREATE DEFAULT INDEX ON mv_sum;
-                    """
-                ),
+                    """),
                 LoadPhase(
                     duration=120,
                     actions=[
@@ -159,8 +195,7 @@ class PgReadReplicaRTR(Scenario):
     def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
         self.init(
             [
-                TdPhase(
-                    """
+                TdPhase("""
                     > DROP SECRET IF EXISTS pgpass CASCADE
                     > CREATE SECRET pgpass AS 'postgres'
                     > CREATE CONNECTION pg TO POSTGRES (
@@ -187,8 +222,7 @@ class PgReadReplicaRTR(Scenario):
                       SELECT COUNT(*) FROM t2;
 
                     > CREATE DEFAULT INDEX ON mv_sum;
-                    """
-                ),
+                    """),
                 LoadPhase(
                     duration=120,
                     actions=[
@@ -225,8 +259,7 @@ class MySQLReadReplica(Scenario):
     def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
         self.init(
             [
-                TdPhase(
-                    f"""
+                TdPhase(f"""
                     > DROP SECRET IF EXISTS mysqlpass CASCADE
                     > CREATE SECRET mysqlpass AS '{MySql.DEFAULT_ROOT_PASSWORD}'
                     > CREATE CONNECTION IF NOT EXISTS mysql_conn TO MYSQL (HOST mysql, USER root, PASSWORD SECRET mysqlpass)
@@ -246,8 +279,7 @@ class MySQLReadReplica(Scenario):
                       SELECT COUNT(*) FROM t3;
 
                     > CREATE DEFAULT INDEX ON mv_sum_mysql;
-                    """
-                ),
+                    """),
                 LoadPhase(
                     duration=120,
                     actions=[
@@ -286,16 +318,14 @@ class OpenIndexedSelects(Scenario):
     def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
         self.init(
             [
-                TdPhase(
-                    """
+                TdPhase("""
                     > CREATE TABLE t4 (f1 TEXT, f2 INTEGER);
                     > CREATE DEFAULT INDEX ON t4;
                     > INSERT INTO t4 VALUES ('A', 1);
                     > INSERT INTO t4 VALUES ('B', 2);
                     > INSERT INTO t4 VALUES ('C', 3);
                     > INSERT INTO t4 VALUES ('D', 4);
-                    """
-                ),
+                    """),
                 LoadPhase(
                     duration=120,
                     actions=[
@@ -432,14 +462,12 @@ class StatementLogging(Scenario):
     def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
         self.init(
             [
-                TdPhase(
-                    """
+                TdPhase("""
                     $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
                     ALTER SYSTEM SET statement_logging_max_sample_rate = 1.0;
                     ALTER SYSTEM SET statement_logging_default_sample_rate = 1.0;
                     ALTER SYSTEM SET enable_statement_lifecycle_logging = true;
-                    """
-                ),
+                    """),
                 LoadPhase(
                     duration=120,
                     actions=[
@@ -452,14 +480,12 @@ class StatementLogging(Scenario):
                         ),
                     ],
                 ),
-                TdPhase(
-                    """
+                TdPhase("""
                     $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
                     ALTER SYSTEM SET statement_logging_default_sample_rate = 0;
                     ALTER SYSTEM SET statement_logging_max_sample_rate = 0;
                     ALTER SYSTEM SET enable_statement_lifecycle_logging = false;
-                    """
-                ),
+                    """),
             ],
             conn_pool_size=100,
             guarantees={
@@ -472,11 +498,9 @@ class InsertWhereNotExists(Scenario):
     def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
         self.init(
             [
-                TdPhase(
-                    """
+                TdPhase("""
                     > CREATE TABLE insert_table (a int, b text);
-                    """
-                ),
+                    """),
                 LoadPhase(
                     duration=120,
                     actions=[
@@ -500,11 +524,9 @@ class InsertsSelects(Scenario):
     def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
         self.init(
             [
-                TdPhase(
-                    """
+                TdPhase("""
                     > CREATE TABLE insert_select_table (a int, b text);
-                    """
-                ),
+                    """),
                 LoadPhase(
                     duration=120,
                     actions=[
@@ -547,8 +569,7 @@ class CommandQueryResponsibilitySegregation(Scenario):
     def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
         self.init(
             [
-                TdPhase(
-                    """
+                TdPhase("""
                     > DROP SECRET IF EXISTS pgpass CASCADE
                     > CREATE SECRET pgpass AS 'postgres'
                     > CREATE CONNECTION pg TO POSTGRES (
@@ -574,8 +595,7 @@ class CommandQueryResponsibilitySegregation(Scenario):
                     > CREATE MATERIALIZED VIEW mv_cqrs AS
                       SELECT t1.date, SUM(t1.id) FROM t1 JOIN t1 AS t2 ON true JOIN t1 AS t3 ON true JOIN t1 AS t4 ON true GROUP BY t1.date;
                     > CREATE DEFAULT INDEX ON mv_cqrs;
-                    """
-                ),
+                    """),
                 LoadPhase(
                     duration=120,
                     actions=[
@@ -629,8 +649,7 @@ class OperationalDataStore(Scenario):
     def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
         self.init(
             [
-                TdPhase(
-                    """
+                TdPhase("""
                     > DROP SECRET IF EXISTS pgpass CASCADE
                     > CREATE SECRET pgpass AS 'postgres'
                     > CREATE CONNECTION pg TO POSTGRES (
@@ -659,8 +678,7 @@ class OperationalDataStore(Scenario):
                     > CREATE DEFAULT INDEX ON mv_sum;
 
                     # TODO: Other sources
-                    """
-                ),
+                    """),
                 LoadPhase(
                     duration=120,
                     actions=[
@@ -693,8 +711,7 @@ class OperationalDataMesh(Scenario):
     def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
         self.init(
             [
-                TdPhase(
-                    """
+                TdPhase("""
                     $ set keyschema={"type": "record", "name": "Key", "fields": [ { "name": "f1", "type": "long" } ] }
                     $ set schema={"type" : "record", "name" : "test", "fields": [ { "name": "f2", "type": "long" } ] }
 
@@ -734,8 +751,7 @@ class OperationalDataMesh(Scenario):
                     > CREATE TABLE sink_source_tbl FROM SOURCE sink_source (REFERENCE "sink")
                       FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                       ENVELOPE NONE;
-                    """
-                ),
+                    """),
                 LoadPhase(
                     duration=120,
                     actions=[
@@ -776,8 +792,7 @@ class ReadReplicaBenchmark(Scenario):
     def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
         self.init(
             [
-                TdPhase(
-                    """
+                TdPhase("""
                     $ postgres-execute connection=postgres://postgres:postgres@postgres
                     DROP TABLE IF EXISTS customers CASCADE;
                     DROP TABLE IF EXISTS accounts CASCADE;
@@ -995,8 +1010,7 @@ class ReadReplicaBenchmark(Scenario):
                     > CREATE INDEX ON order_fulfillment_rates (customer_id);
                     > CREATE INDEX ON sector_order_activity (sector);
                     > CREATE INDEX ON sector_performance (sector);
-                    """
-                ),
+                    """),
                 LoadPhase(
                     duration=120,
                     actions=[

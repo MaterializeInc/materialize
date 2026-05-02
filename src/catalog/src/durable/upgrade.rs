@@ -43,8 +43,7 @@
 //! 6. Rebuild Materialize which will error because the hashes stored in
 //!    `src/catalog-protos/protos/hashes.json` have now changed. Update these to match the new
 //!    hashes for objects.proto and `objects_v<CATALOG_VERSION>.proto`.
-//! 7. Add `v<CATALOG_VERSION>` to the call to the `objects!` macro in this file, and to the
-//!    `proto_objects!` macro in the [`mz_catalog_protos`] crate.
+//! 7. Add `v<CATALOG_VERSION>` to the call to the `objects!` macro in this file
 //! 8. Add a new file to `catalog/src/durable/upgrade` which is where we'll put the new migration
 //!    path.
 //! 9. Write upgrade functions using the two versions of the protos we now have, e.g.
@@ -60,9 +59,9 @@
 //!
 //! When in doubt, reach out to the Surfaces team, and we'll be more than happy to help :)
 
+pub mod json_compatible;
 #[cfg(test)]
 mod tests;
-pub mod wire_compatible;
 
 use mz_ore::{soft_assert_eq_or_log, soft_assert_ne_or_log};
 use mz_repr::Diff;
@@ -86,12 +85,17 @@ use crate::durable::{CatalogError, DurableCatalogError};
 #[cfg(test)]
 const ENCODED_TEST_CASES: usize = 100;
 
+/// Generate per-version support code.
+///
+/// Here we have to deal with the fact that the pre-v79 objects had a protobuf-generated format,
+/// which gives them additional levels of indirection that the post-v79 objects don't have and thus
+/// requires slightly different code to be generated.
 macro_rules! objects {
-    ( $( $x:ident ),* ) => {
+    ( [$( $x_old:ident ),*], [$( $x:ident ),*] ) => {
         paste! {
             $(
-                pub(crate) mod [<objects_ $x>] {
-                    pub use mz_catalog_protos::[<objects_ $x>]::*;
+                pub(crate) mod [<objects_ $x_old>] {
+                    pub use mz_catalog_protos::[<objects_ $x_old>]::*;
 
                     use crate::durable::objects::state_update::StateUpdateKindJson;
 
@@ -104,12 +108,32 @@ macro_rules! objects {
                         }
                     }
 
-                    impl TryFrom<StateUpdateKindJson> for StateUpdateKind {
-                        type Error = String;
-
-                        fn try_from(value: StateUpdateKindJson) -> Result<Self, Self::Error> {
+                    impl From<StateUpdateKindJson> for StateUpdateKind {
+                        fn from(value: StateUpdateKindJson) -> Self {
                             let kind: state_update_kind::Kind = value.to_serde();
-                            Ok(StateUpdateKind { kind: Some(kind) })
+                            StateUpdateKind { kind: Some(kind) }
+                        }
+                    }
+                }
+            )*
+
+            $(
+                pub(crate) mod [<objects_ $x>] {
+                    pub use mz_catalog_protos::[<objects_ $x>]::*;
+
+                    use crate::durable::objects::state_update::StateUpdateKindJson;
+
+                    impl From<StateUpdateKind> for StateUpdateKindJson {
+                        fn from(value: StateUpdateKind) -> Self {
+                            // TODO: This requires that the json->proto->json roundtrips
+                            // exactly, see database-issues#7179.
+                            StateUpdateKindJson::from_serde(&value)
+                        }
+                    }
+
+                    impl From<StateUpdateKindJson> for StateUpdateKind {
+                        fn from(value: StateUpdateKindJson) -> Self {
+                            value.to_serde()
                         }
                     }
                 }
@@ -121,6 +145,9 @@ macro_rules! objects {
             #[derive(Debug, Arbitrary)]
             enum AllVersionsStateUpdateKind {
                 $(
+                    [<$x_old:upper>](crate::durable::upgrade::[<objects_ $x_old>]::StateUpdateKind),
+                )*
+                $(
                     [<$x:upper>](crate::durable::upgrade::[<objects_ $x>]::StateUpdateKind),
                 )*
             }
@@ -131,7 +158,10 @@ macro_rules! objects {
                 fn arbitrary_vec(version: &str) -> Result<Vec<Self>, String> {
                     let mut runner = proptest::test_runner::TestRunner::deterministic();
                     std::iter::repeat(())
-                        .filter_map(|_| AllVersionsStateUpdateKind::arbitrary(version, &mut runner).transpose())
+                        .filter_map(|_| {
+                            AllVersionsStateUpdateKind::arbitrary(version, &mut runner)
+                                .transpose()
+                        })
                         .take(ENCODED_TEST_CASES)
                         .collect::<Result<_, _>>()
                 }
@@ -143,22 +173,37 @@ macro_rules! objects {
                 ) -> Result<Option<Self>, String> {
                     match version {
                         $(
-                            concat!("objects_", stringify!($x)) => {
+                            concat!("objects_", stringify!($x_old)) => {
                                 let arbitrary_data =
-                                    crate::durable::upgrade::[<objects_ $x>]::StateUpdateKind::arbitrary()
+                                    crate::durable::upgrade
+                                        ::[<objects_ $x_old>]::StateUpdateKind::arbitrary()
                                         .new_tree(runner)
                                         .expect("unable to create arbitrary data")
                                         .current();
-                                // Skip over generated data where kind is None because they are not interesting or
-                                // possible in production. Unfortunately any of the inner fields can still be None,
-                                // which is also not possible in production.
-                                // TODO(jkosh44) See if there's an arbitrary config that forces Some.
+                                // Skip over generated data where kind is None
+                                // because they are not interesting or possible in
+                                // production. Unfortunately any of the inner fields
+                                // can still be None, which is also not possible in
+                                // production.
+                                // TODO(jkosh44) See if there's an arbitrary config
+                                // that forces Some.
                                 let arbitrary_data = if arbitrary_data.kind.is_some() {
-                                    Some(Self::[<$x:upper>](arbitrary_data))
+                                    Some(Self::[<$x_old:upper>](arbitrary_data))
                                 } else {
                                     None
                                 };
                                 Ok(arbitrary_data)
+                            }
+                        )*
+                        $(
+                            concat!("objects_", stringify!($x)) => {
+                                let arbitrary_data =
+                                    crate::durable::upgrade
+                                        ::[<objects_ $x>]::StateUpdateKind::arbitrary()
+                                        .new_tree(runner)
+                                        .expect("unable to create arbitrary data")
+                                        .current();
+                                Ok(Some(Self::[<$x:upper>](arbitrary_data)))
                             }
                         )*
                         _ => Err(format!("unrecognized version {version} add enum variant")),
@@ -169,7 +214,11 @@ macro_rules! objects {
                 fn try_from_raw(version: &str, raw: StateUpdateKindJson) -> Result<Self, String> {
                     match version {
                         $(
-                            concat!("objects_", stringify!($x)) => Ok(Self::[<$x:upper>](raw.try_into()?)),
+                            concat!("objects_", stringify!($x_old)) => Ok(Self::[<$x_old:upper>](raw.into())),
+                        )*
+                        $(
+                            concat!("objects_", stringify!($x)) => Ok(Self::[<$x:upper>](raw.into())),
+
                         )*
                         _ => Err(format!("unrecognized version {version} add enum variant")),
                     }
@@ -178,6 +227,9 @@ macro_rules! objects {
                 #[cfg(test)]
                 fn raw(self) -> StateUpdateKindJson {
                     match self {
+                        $(
+                            Self::[<$x_old:upper>](kind) => kind.into(),
+                        )*
                         $(
                             Self::[<$x:upper>](kind) => kind.into(),
                         )*
@@ -188,7 +240,7 @@ macro_rules! objects {
     }
 }
 
-objects!(v67, v68, v69, v70, v71, v72, v73, v74, v75, v76, v77, v78);
+objects!([v74, v75, v76, v77, v78], [v79, v80, v81, v82]);
 
 /// The current version of the `Catalog`.
 pub use mz_catalog_protos::CATALOG_VERSION;
@@ -200,17 +252,14 @@ pub use mz_catalog_protos::MIN_CATALOG_VERSION;
 const TOO_OLD_VERSION: u64 = MIN_CATALOG_VERSION - 1;
 const FUTURE_VERSION: u64 = CATALOG_VERSION + 1;
 
-mod v67_to_v68;
-mod v68_to_v69;
-mod v69_to_v70;
-mod v70_to_v71;
-mod v71_to_v72;
-mod v72_to_v73;
-mod v73_to_v74;
 mod v74_to_v75;
 mod v75_to_v76;
 mod v76_to_v77;
 mod v77_to_v78;
+mod v78_to_v79;
+mod v79_to_v80;
+mod v80_to_v81;
+mod v81_to_v82;
 
 /// Describes a single action to take during a migration from `V1` to `V2`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -293,69 +342,6 @@ async fn run_upgrade(
     match version {
         ..=TOO_OLD_VERSION => Err(incompatible),
 
-        67 => {
-            run_versioned_upgrade(
-                unopened_catalog_state,
-                version,
-                commit_ts,
-                v67_to_v68::upgrade,
-            )
-            .await
-        }
-        68 => {
-            run_versioned_upgrade(
-                unopened_catalog_state,
-                version,
-                commit_ts,
-                v68_to_v69::upgrade,
-            )
-            .await
-        }
-        69 => {
-            run_versioned_upgrade(
-                unopened_catalog_state,
-                version,
-                commit_ts,
-                v69_to_v70::upgrade,
-            )
-            .await
-        }
-        70 => {
-            run_versioned_upgrade(
-                unopened_catalog_state,
-                version,
-                commit_ts,
-                v70_to_v71::upgrade,
-            )
-            .await
-        }
-        71 => {
-            run_versioned_upgrade(
-                unopened_catalog_state,
-                version,
-                commit_ts,
-                v71_to_v72::upgrade,
-            )
-            .await
-        }
-        72 => {
-            run_versioned_upgrade(
-                unopened_catalog_state,
-                version,
-                commit_ts,
-                v72_to_v73::upgrade,
-            )
-            .await
-        }
-        73 => {
-            run_versioned_upgrade(
-                unopened_catalog_state,
-                version,
-                commit_ts,
-                v73_to_v74::upgrade,
-            )
-            .await
-        }
         74 => {
             run_versioned_upgrade(
                 unopened_catalog_state,
@@ -389,6 +375,42 @@ async fn run_upgrade(
                 version,
                 commit_ts,
                 v77_to_v78::upgrade,
+            )
+            .await
+        }
+        78 => {
+            run_versioned_upgrade(
+                unopened_catalog_state,
+                version,
+                commit_ts,
+                v78_to_v79::upgrade,
+            )
+            .await
+        }
+        79 => {
+            run_versioned_upgrade(
+                unopened_catalog_state,
+                version,
+                commit_ts,
+                v79_to_v80::upgrade,
+            )
+            .await
+        }
+        80 => {
+            run_versioned_upgrade(
+                unopened_catalog_state,
+                version,
+                commit_ts,
+                v80_to_v81::upgrade,
+            )
+            .await
+        }
+        81 => {
+            run_versioned_upgrade(
+                unopened_catalog_state,
+                version,
+                commit_ts,
+                v81_to_v82::upgrade,
             )
             .await
         }
@@ -457,7 +479,7 @@ async fn run_versioned_upgrade<V1: IntoStateUpdateKindJson, V2: IntoStateUpdateK
             .into_iter()
             .map(|(kind, diff)| StateUpdate { kind, ts, diff });
         commit_ts = commit_ts.step_forward();
-        unopened_catalog_state.apply_updates(updates)?;
+        unopened_catalog_state.apply_updates_and_consolidate(updates)?;
     }
 
     // 5. Consolidate snapshot to remove old versions.

@@ -74,6 +74,54 @@ contains:result exceeds max size of 1.0 MiB
 ! INSERT INTO t2 SELECT * FROM t2;
 contains:result exceeds max size of 1.0 MiB
 
+# Regression test: subscribe should not fail when cumulative bytes across
+# multiple FETCHes exceed max_result_size, as long as each individual batch
+# is within the limit. Previously, stashed_result_size in
+# PartitionedComputeState was never reset when batches were shipped, causing
+# a monotonically growing counter to eventually trip the limit.
+
+$ postgres-connect name=sub url=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
+$ postgres-connect name=writer url=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
+
+> CREATE TABLE t_subscribe_cumulative (a int4, b text);
+
+# Seed ~400KB of data (3000 rows * ~130 bytes each in wire format).
+$ postgres-execute connection=writer
+INSERT INTO t_subscribe_cumulative SELECT generate_series, repeat('a', 100) FROM generate_series(1, 3000);
+
+# Start a subscribe on the separate connection.
+$ postgres-execute connection=sub
+BEGIN;
+DECLARE c CURSOR FOR SUBSCRIBE t_subscribe_cumulative;
+FETCH ALL c WITH (timeout = '5s');
+
+# Second batch, cumulative ~800KB.
+$ postgres-execute connection=writer
+INSERT INTO t_subscribe_cumulative SELECT generate_series + 100000, repeat('a', 100) FROM generate_series(1, 3000);
+
+$ postgres-execute connection=sub
+FETCH ALL c WITH (timeout = '5s');
+
+# Third batch, cumulative ~1.2MB — exceeds max_result_size of 1MB.
+# Before the fix, this FETCH would fail with "total result exceeds max size".
+$ postgres-execute connection=writer
+INSERT INTO t_subscribe_cumulative SELECT generate_series + 200000, repeat('a', 100) FROM generate_series(1, 3000);
+
+$ postgres-execute connection=sub
+FETCH ALL c WITH (timeout = '5s');
+
+# Fourth batch, cumulative ~1.6MB — well past the 1MB limit.
+$ postgres-execute connection=writer
+INSERT INTO t_subscribe_cumulative SELECT generate_series + 300000, repeat('a', 100) FROM generate_series(1, 3000);
+
+$ postgres-execute connection=sub
+FETCH ALL c WITH (timeout = '5s');
+
+$ postgres-execute connection=sub
+ROLLBACK;
+
+> DROP TABLE t_subscribe_cumulative;
+
 $ postgres-execute connection=mz_system
 ALTER SYSTEM RESET max_result_size
 

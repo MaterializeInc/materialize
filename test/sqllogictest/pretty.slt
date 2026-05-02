@@ -52,7 +52,8 @@ CREATE CONNECTION kafka_conn TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCO
 query T multiline
 SELECT pretty_sql(create_sql) FROM mz_connections WHERE name = 'kafka_conn'
 ----
-CREATE CONNECTION materialize.public.kafka_conn TO KAFKA (BROKER = 'localhost:9092', SECURITY PROTOCOL = plaintext);
+CREATE CONNECTION materialize.public.kafka_conn
+TO KAFKA (BROKER = 'localhost:9092', SECURITY PROTOCOL = plaintext);
 EOF
 
 statement ok
@@ -71,6 +72,19 @@ query T multiline
 SELECT replace(pretty_sql(create_sql), on_id, '<on_id>') FROM mz_indexes WHERE name = 't_primary_idx'
 ----
 CREATE INDEX t_primary_idx IN CLUSTER [u1] ON [<on_id> AS materialize.public.t] (i);
+EOF
+
+# Test default index on a table with multiple columns.
+statement ok
+CREATE TABLE t_multi (a INT, b TEXT, c BOOL)
+
+statement ok
+CREATE DEFAULT INDEX ON t_multi
+
+query T multiline
+SELECT replace(pretty_sql(create_sql), on_id, '<on_id>') FROM mz_indexes WHERE name = 't_multi_primary_idx'
+----
+CREATE INDEX t_multi_primary_idx IN CLUSTER [u1] ON [<on_id> AS materialize.public.t_multi] (a, b, c);
 EOF
 
 statement ok
@@ -98,4 +112,34 @@ query T multiline
 SELECT pretty_sql(create_sql) FROM mz_types WHERE name = 'ty'
 ----
 CREATE TYPE materialize.public.ty AS LIST (ELEMENT TYPE = [s6 AS pg_catalog.bool]);
+EOF
+
+# Only some of the following require quotations. This depends on whether `Parser::parse_prefix` checks the next token
+# before treating them as keywords. We took care to make this behavior exactly the same as Postgres.
+query T multiline
+SELECT pretty_sql('SELECT "true", "false", "null", "array", "list", "map", "case", "cast", "coalesce", "greatest", "least", "nullif", "exists", "extract", "not", "row", "trim", "position", "substring", "normalize"
+                   FROM iffy_colnames')
+----
+SELECT
+    "true",
+    "false",
+    "null",
+    "array",
+    list,
+    map,
+    "case",
+    "cast",
+    coalesce,
+    greatest,
+    least,
+    nullif,
+    exists,
+    extract,
+    "not",
+    row,
+    trim,
+    position,
+    substring,
+    normalize
+FROM iffy_colnames;
 EOF

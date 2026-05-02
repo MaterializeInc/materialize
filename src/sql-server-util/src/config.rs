@@ -8,6 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use anyhow::Context;
+use std::net::SocketAddr;
+
 use mz_ore::future::InTask;
 use mz_repr::CatalogItemId;
 use mz_ssh_util::tunnel::{SshTimeoutConfig, SshTunnelConfig};
@@ -48,7 +50,9 @@ impl Config {
         let inner = tiberius::Config::from_ado_string(s).context("tiberius config")?;
         Ok(Config {
             inner,
-            tunnel: TunnelConfig::Direct,
+            tunnel: TunnelConfig::Direct {
+                resolved_addresses: Default::default(),
+            },
             in_task: InTask::No,
         })
     }
@@ -59,8 +63,12 @@ impl Config {
 /// TODO(sql_server2): De-duplicate this with MySQL and Postgres sources.
 #[derive(Debug, Clone)]
 pub enum TunnelConfig {
-    /// No tunnelling.
-    Direct,
+    /// Establish a direct TCP connection to the database host.
+    /// If `resolved_addresses` is non-empty, those addresses are used directly;
+    /// otherwise falls back to DNS lookup of the host.
+    Direct {
+        resolved_addresses: Box<[SocketAddr]>,
+    },
     /// Establish a TCP connection to the database via an SSH tunnel.
     Ssh {
         /// Config for opening the SSH tunnel.
@@ -88,7 +96,17 @@ pub enum TunnelConfig {
 ///
 /// Mirror of [`tiberius::EncryptionLevel`] but we define our own so we can
 /// implement traits like [`Serialize`].
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Arbitrary, Serialize, Deserialize)]
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    Arbitrary,
+    Serialize,
+    Deserialize
+)]
 pub enum EncryptionLevel {
     /// Do not use encryption at all.
     None,
@@ -123,7 +141,17 @@ impl From<EncryptionLevel> for tiberius::EncryptionLevel {
 }
 
 /// Policy that dictates validation of the SQL-SERVER certificate.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Arbitrary, Serialize, Deserialize)]
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    Arbitrary,
+    Serialize,
+    Deserialize
+)]
 pub enum CertificateValidationPolicy {
     /// Don't validate the server's certificate; trust all certificates.
     TrustAll,

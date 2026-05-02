@@ -10,31 +10,28 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.100"
-async-trait = "0.1.89"
-crossbeam-channel = "0.5.15"
-differential-dataflow = "0.18.0"
-futures = "0.3.31"
-lgalloc = "0.6.0"
+anyhow.workspace = true
+async-trait.workspace = true
+differential-dataflow.workspace = true
+futures.workspace = true
+lgalloc.workspace = true
 mz-cluster-client = { path = "../cluster-client" }
 mz-ore = { path = "../ore", features = ["async", "process", "tracing"] }
 mz-service = { path = "../service" }
-rand = "0.8.5"
-regex = "1.12.2"
-timely = "0.25.1"
-tokio = { version = "1.44.1", features = ["fs", "rt", "sync", "net"] }
-tracing = "0.1.37"
-uuid = "1.18.1"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+rand.workspace = true
+regex.workspace = true
+timely.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 mz-ore = { path = "../ore", features = ["turmoil"] }
-tracing-subscriber = "0.3.19"
-turmoil = "0.7.0"
+tracing-subscriber.workspace = true
+turmoil.workspace = true
 
 [package.metadata.cargo-udeps.ignore]
 # only used on linux
-normal = ["inotify", "workspace-hack", "rocksdb"]
 
 [features]
-default = ["workspace-hack"]
+default = []

@@ -28,10 +28,12 @@
 //!    the [`RawOptimizerNotice`] enum and other boilerplate code.
 
 // Modules (one for each notice type).
+mod equals_null;
 mod index_already_exists;
 mod index_key_empty;
 mod index_too_wide_for_literal_constraints;
 
+pub use equals_null::EqualsNull;
 pub use index_already_exists::IndexAlreadyExists;
 pub use index_key_empty::IndexKeyEmpty;
 pub use index_too_wide_for_literal_constraints::IndexTooWideForLiteralConstraints;
@@ -47,7 +49,18 @@ use mz_repr::explain::ExprHumanizer;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Arbitrary)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    Arbitrary
+)]
 /// An long lived in-memory representation of a [`RawOptimizerNotice`] that is
 /// meant to be kept as part of the hydrated catalog state.
 pub struct OptimizerNotice {
@@ -124,7 +137,17 @@ impl OptimizerNotice {
 }
 
 #[derive(
-    EnumKind, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Arbitrary,
+    EnumKind,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 #[enum_kind(ActionKind)]
 /// An action attached to an [`OptimizerNotice`]
@@ -286,7 +309,10 @@ macro_rules! raw_optimizer_notices {
         paste::paste!{
             /// Notices that the optimizer wants to show to users.
             #[derive(EnumKind, Clone, Debug, Eq, PartialEq, Hash)]
-            #[enum_kind(OptimizerNoticeKind, derive(PartialOrd, Ord, Hash, Serialize, Deserialize,Arbitrary))]
+            #[enum_kind(
+                OptimizerNoticeKind,
+                derive(PartialOrd, Ord, Hash, Serialize, Deserialize, Arbitrary)
+            )]
             pub enum RawOptimizerNotice {
                 $(
                     #[doc = concat!("See [`", stringify!($ty), "`].")]
@@ -301,19 +327,34 @@ macro_rules! raw_optimizer_notices {
                     }
                 }
 
-                fn fmt_message(&self, f: &mut Formatter<'_>, humanizer: &dyn ExprHumanizer, redacted: bool) -> fmt::Result {
+                fn fmt_message(
+                    &self,
+                    f: &mut Formatter<'_>,
+                    humanizer: &dyn ExprHumanizer,
+                    redacted: bool,
+                ) -> fmt::Result {
                     match self {
                         $(Self::$ty(notice) => notice.fmt_message(f, humanizer, redacted),)+
                     }
                 }
 
-                fn fmt_hint(&self, f: &mut Formatter<'_>, humanizer: &dyn ExprHumanizer, redacted: bool) -> fmt::Result {
+                fn fmt_hint(
+                    &self,
+                    f: &mut Formatter<'_>,
+                    humanizer: &dyn ExprHumanizer,
+                    redacted: bool,
+                ) -> fmt::Result {
                     match self {
                         $(Self::$ty(notice) => notice.fmt_hint(f, humanizer, redacted),)+
                     }
                 }
 
-                fn fmt_action(&self, f: &mut Formatter<'_>, humanizer: &dyn ExprHumanizer, redacted: bool) -> fmt::Result {
+                fn fmt_action(
+                    &self,
+                    f: &mut Formatter<'_>,
+                    humanizer: &dyn ExprHumanizer,
+                    redacted: bool,
+                ) -> fmt::Result {
                     match self {
                         $(Self::$ty(notice) => notice.fmt_action(f, humanizer, redacted),)+
                     }
@@ -356,6 +397,7 @@ macro_rules! raw_optimizer_notices {
 }
 
 raw_optimizer_notices![
+    EqualsNull => "Comparison with NULL",
     IndexAlreadyExists => "An identical index already exists",
     IndexTooWideForLiteralConstraints => "Index too wide for literal constraints",
     IndexKeyEmpty => "Empty index key",

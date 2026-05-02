@@ -9,6 +9,8 @@
 
 //! Integration tests for pgwire functionality.
 
+#![recursion_limit = "256"]
+
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::Path;
@@ -19,6 +21,7 @@ use fallible_iterator::FallibleIterator;
 use mz_adapter::session::DEFAULT_DATABASE_NAME;
 use mz_environmentd::test_util::{self, PostgresErrorExt};
 use mz_ore::collections::CollectionExt;
+use mz_ore::error::ErrorExt;
 use mz_ore::retry::Retry;
 use mz_ore::{assert_err, assert_ok};
 use mz_pgrepr::{Numeric, Record};
@@ -40,7 +43,8 @@ fn test_bind_params() {
     match client.query("SELECT ROW(1, 2) = $1", &[&"(1,2)"]) {
         Ok(_) => panic!("query with invalid parameters executed successfully"),
         Err(err) => assert!(
-            err.to_string().contains("operator does not exist"),
+            err.to_string_with_causes()
+                .contains("operator does not exist"),
             "unexpected error: {err}"
         ),
     }
@@ -191,6 +195,29 @@ fn test_bind_params() {
             .unwrap();
         let val: i32 = client.query_one("SELECT * FROM t", &[]).unwrap().get(0);
         assert_eq!(val, 42);
+    }
+
+    // Test that `varchar_to_text` is properly handled (whether eliminated or no).
+    {
+        client.batch_execute("CREATE TABLE v (w varchar)").unwrap();
+        client.query("INSERT INTO v VALUES ($1)", &[&"aa"]).unwrap();
+        let stmt = client
+            .prepare("SELECT w, w::text, w::text::varchar FROM v WHERE w = $1")
+            .unwrap();
+        assert_eq!(stmt.columns().len(), 3);
+        assert_eq!(stmt.columns()[0].type_(), &Type::VARCHAR);
+        assert_eq!(stmt.columns()[1].type_(), &Type::TEXT);
+        assert_eq!(stmt.columns()[2].type_(), &Type::VARCHAR);
+        let row = client.query_one(&stmt, &[&"aa"]).unwrap();
+        assert_eq!(row.get::<_, String>(0), "aa");
+        assert_eq!(row.get::<_, String>(1), "aa");
+        assert_eq!(row.get::<_, String>(2), "aa");
+
+        let stmt = client
+            .prepare_typed("SELECT 'aa'::varchar::text = $1", &[Type::TEXT])
+            .unwrap();
+        let val: bool = client.query_one(&stmt, &[&"aa"]).unwrap().get(0);
+        assert_eq!(val, true);
     }
 }
 
@@ -633,7 +660,7 @@ fn pg_test_inner(path: &Path, mz_flags: bool) {
             tokio_postgres::config::Host::Tcp(host) => {
                 format!("{}:{}", host, config.get_ports()[0])
             }
-            _ => panic!("only tcp connections supported"),
+            tokio_postgres::config::Host::Unix(_) => panic!("only tcp connections supported"),
         };
         let user = config.get_user().unwrap();
         let timeout = Duration::from_secs(120);
@@ -675,6 +702,11 @@ fn test_pgtest_copy_from_null() {
 #[mz_ore::test]
 fn test_pgtest_copy_from() {
     pg_test_inner(Path::new("../../test/pgtest/copy-from.pt"), false);
+}
+
+#[mz_ore::test]
+fn test_pgtest_copy_from_range() {
+    pg_test_inner(Path::new("../../test/pgtest/copy-from-range.pt"), false);
 }
 
 #[mz_ore::test]
@@ -739,6 +771,11 @@ fn test_pgtest_vars() {
 
 // Materialize's differences from Postgres' responses.
 #[mz_ore::test]
+fn test_pgtest_mz_affected() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/affected.pt"), true);
+}
+
+#[mz_ore::test]
 fn test_pgtest_mz_copy_from_csv() {
     pg_test_inner(Path::new("../../test/pgtest-mz/copy-from-csv.pt"), true);
 }
@@ -796,4 +833,80 @@ fn test_pgtest_mz_transactions() {
 #[mz_ore::test]
 fn test_pgtest_mz_vars() {
     pg_test_inner(Path::new("../../test/pgtest-mz/vars.pt"), true);
+}
+
+// Guard against .pt files silently losing test coverage when new files are
+// added to test/pgtest/ or test/pgtest-mz/ without a corresponding test wrapper.
+#[mz_ore::test]
+fn test_all_pt_files_have_test_wrappers() {
+    let source = include_str!("pgwire.rs");
+    for (dir, prefix) in [
+        ("../../test/pgtest", "test_pgtest_"),
+        ("../../test/pgtest-mz", "test_pgtest_mz_"),
+    ] {
+        let dir_path = Path::new(dir);
+        for entry in
+            std::fs::read_dir(dir_path).unwrap_or_else(|e| panic!("failed to read {dir}: {e}"))
+        {
+            let entry = entry.unwrap();
+            let file_name = entry.file_name();
+            let name = file_name.to_str().unwrap();
+            if !name.ends_with(".pt") {
+                continue;
+            }
+            let stem = name.trim_end_matches(".pt").replace('-', "_");
+            let expected_fn = format!("fn {prefix}{stem}(");
+            assert!(
+                source.contains(&expected_fn),
+                "no test wrapper found for {dir}/{name} — expected `{expected_fn})`",
+            );
+        }
+    }
+}
+
+// Test that encoding a message with too many columns (> i16::MAX) doesn't
+// corrupt the connection. The codec truncates the buffer when encoding fails,
+// ensuring no partial message is left in the buffer. See
+// https://github.com/MaterializeInc/database-issues/issues/9496
+#[mz_ore::test]
+fn test_many_columns() {
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    let cols = (1..=32769)
+        .map(|i| i.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let query = format!("SELECT {cols}");
+
+    // The query must fail because the server can't encode a RowDescription
+    // with more than i16::MAX columns. When encoding fails, `machine.run()`
+    // returns an error, and the catch-all handler in `protocol.rs` sends a
+    // FATAL ErrorResponse with "fields in row description, which exceeds ..."
+    // before closing the connection.
+    //
+    // However, the client non-deterministically sees either the FATAL
+    // ErrorResponse or just "connection closed". This is because the
+    // rust-postgres client's `poll_block_on` drains connection-level events
+    // before polling the query future: if the ErrorResponse and the TCP
+    // close (FIN) arrive in the same read, `poll_read` processes the
+    // ErrorResponse but then immediately hits EOF and returns
+    // `Err(Error::closed)`, which short-circuits `poll_block_on` before the
+    // query future can read the ErrorResponse from the channel.
+    //
+    // Both outcomes indicate the server handled the overflow gracefully (no
+    // partial/corrupt message in the buffer).
+    match client.simple_query(&query) {
+        Ok(_) => panic!("query with too many columns should have failed"),
+        Err(err) => {
+            let err_str = err.to_string_with_causes();
+            assert!(
+                err_str.contains("fields in row description, which exceeds")
+                    || err_str.contains("connection closed"),
+                "unexpected error: {err}"
+            );
+        }
+    }
 }

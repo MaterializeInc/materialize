@@ -40,8 +40,8 @@ use crate::internal::machine::{Machine, retry_external};
 use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::{GcStepTimings, RetryMetrics};
 use crate::internal::paths::{BlobKey, PartialBlobKey, PartialRollupKey};
-use crate::internal::state::HollowBlobRef;
-use crate::internal::state_versions::{InspectDiff, StateVersionsIter};
+use crate::internal::state::{GC_USE_ACTIVE_GC, HollowBlobRef};
+use crate::internal::state_versions::{InspectDiff, StateVersionsIter, UntypedStateVersionsIter};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct GcReq {
@@ -168,7 +168,6 @@ where
                                 .await
                         })
                         .await
-                        .expect("gc_and_truncate failed")
                 };
                 machine.applier.metrics.gc.finished.inc();
                 machine.applier.shard_metrics.gc_finished.inc();
@@ -260,9 +259,11 @@ where
         if rollups_to_remove_from_state.is_empty() {
             // If there are no rollups to remove from state (either the work has already
             // been done, or the there aren't enough rollups <= seqno_since to have any
-            // to delete), we can safely exit.
+            // to delete), we can safely exit. We still call remove_rollups to clear
+            // active_gc if it was set, so the next GC isn't suppressed.
+            let (_removed, maintenance) = machine.remove_rollups(&[]).await;
             machine.applier.metrics.gc.noop.inc();
-            return (RoutineMaintenance::default(), gc_results);
+            return (maintenance, gc_results);
         }
 
         debug!(
@@ -272,14 +273,65 @@ where
             rollups_to_remove_from_state,
         );
 
-        let mut states = machine
-            .applier
-            .state_versions
-            .fetch_all_live_states(req.shard_id)
-            .await
-            .expect("state is initialized")
+        let mut states = if GC_USE_ACTIVE_GC.get(&machine.applier.cfg) {
+            let diffs = machine
+                .applier
+                .state_versions
+                .fetch_live_diffs_through(&req.shard_id, req.new_seqno_since)
+                .await;
+
+            let initial_seqno = diffs.first().expect("state is initialized").seqno;
+
+            let Some(initial_rollup) = gc_rollups.get(initial_seqno) else {
+                // The latest state is always expected to have a reference to a rollup for the
+                // earliest seqno. If our state doesn't, that could mean:
+                // - Our diffs are too old, and some other process has already truncated past this point.
+                //   (But currently we fetch diffs _after_ checking state, so that shouldn't happen.)
+                // - Our diffs are too new... someone has added a rollup for this seqno _after_ we fetched
+                //   state, then truncated to it.
+                // In either case we're working on outdated data and should stop.
+                debug!(
+                    ?initial_seqno,
+                    ?gc_rollups,
+                    "skipping gc - no rollup at initial seqno. concurrent GC?"
+                );
+                return (RoutineMaintenance::default(), gc_results);
+            };
+
+            let Some(state) = machine
+                .applier
+                .state_versions
+                .fetch_rollup_at_key::<T>(&req.shard_id, initial_rollup)
+                .await
+            else {
+                debug!(
+                    ?initial_seqno,
+                    ?gc_rollups,
+                    "skipping gc - deleted rollup at initial seqno. concurrent GC?"
+                );
+                return (RoutineMaintenance::default(), gc_results);
+            };
+
+            UntypedStateVersionsIter::new(
+                req.shard_id,
+                machine.applier.cfg.clone(),
+                Arc::clone(&machine.applier.metrics),
+                state,
+                diffs,
+            )
             .check_ts_codec()
-            .expect("ts codec has not changed");
+            .expect("ts codec has not changed")
+        } else {
+            machine
+                .applier
+                .state_versions
+                .fetch_all_live_states(req.shard_id)
+                .await
+                .expect("state is initialized")
+                .check_ts_codec()
+                .expect("ts codec has not changed")
+        };
+
         let initial_seqno = states.state().seqno;
         report_step_timing(&machine.applier.metrics.gc.steps.fetch_seconds);
 
@@ -633,6 +685,15 @@ impl GcRollups {
             rollups_lte_seqno_since,
             rollup_seqnos,
         }
+    }
+
+    /// Return the rollup key for the given seqno, if it exists.
+    fn get(&self, seqno: SeqNo) -> Option<&PartialRollupKey> {
+        let index = self
+            .rollups_lte_seqno_since
+            .binary_search_by_key(&seqno, |(k, _)| *k)
+            .ok()?;
+        Some(&self.rollups_lte_seqno_since[index].1)
     }
 
     fn contains_seqno(&self, seqno: &SeqNo) -> bool {

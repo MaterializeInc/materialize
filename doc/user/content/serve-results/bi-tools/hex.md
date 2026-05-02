@@ -39,7 +39,8 @@ This guide walks you through the steps required to use the collaborative data no
 
 ## Configure a custom cluster
 
-{{% alter-cluster/configure-cluster %}}
+{{% include-from-yaml data="examples/alter_cluster"
+name="configure-cluster" %}}
 
 ## Execute and visualize a query
 

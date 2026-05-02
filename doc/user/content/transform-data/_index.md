@@ -7,12 +7,14 @@ menu:
     parent: transform-data
     weight: 5
     identifier: transform-overview
+aliases:
+  - /self-managed/v25.1/transform-data/troubleshooting/
 ---
 
 With Materialize, you can use SQL to transform, deliver, and act on
 fast-changing data.
 
-{{% materialize-postgres-compatibility %}}
+{{% include-from-yaml data="materialize_details" name="postgres-compatibility" %}}
 
 ### SELECT statement
 

@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::VecDeque;
+
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use mz_compute_types::dyncfgs::COMPUTE_FLAT_MAP_FUEL;
 use mz_expr::MfpPlan;
@@ -14,29 +16,24 @@ use mz_expr::{MapFilterProject, MirScalarExpr, TableFunc};
 use mz_repr::{DatumVec, RowArena, SharedRow};
 use mz_repr::{Diff, Row, Timestamp};
 use mz_timely_util::operator::StreamExt;
-use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::InputCapability;
+use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::generic::Session;
 use timely::progress::Antichain;
 
-use crate::render::DataflowError;
 use crate::render::context::{CollectionBundle, Context};
+use crate::render::errors::DataflowErrorSer;
 
-impl<G> Context<G>
-where
-    G: Scope,
-    G::Timestamp: crate::render::RenderTimestamp,
-{
+impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
     /// Applies a `TableFunc` to every row, followed by an `mfp`.
     pub fn render_flat_map(
         &self,
         input_key: Option<Vec<MirScalarExpr>>,
-        input: CollectionBundle<G>,
+        input: CollectionBundle<'scope, T>,
         exprs: Vec<MirScalarExpr>,
         func: TableFunc,
         mfp: MapFilterProject,
-    ) -> CollectionBundle<G> {
+    ) -> CollectionBundle<'scope, T> {
         let until = self.until.clone();
         let mfp_plan = mfp.into_plan().expect("MapFilterProject planning failed");
         let (ok_collection, err_collection) =
@@ -52,6 +49,7 @@ where
 
         let (oks, errs) = stream.unary_fallible(Pipeline, "FlatMapStage", move |_, info| {
             let activator = scope.activator_for(info.address);
+            let mut queue = VecDeque::new();
             Box::new(move |input, ok_output, err_output| {
                 let mut datums = DatumVec::new();
                 let mut datums_mfp = DatumVec::new();
@@ -61,11 +59,15 @@ where
 
                 let mut budget = budget;
 
-                while let Some((cap, data)) = input.next() {
-                    let mut ok_session = ok_output.session_with_builder(&cap);
-                    let mut err_session = err_output.session_with_builder(&cap);
+                input.for_each(|cap, data| {
+                    queue.push_back((cap.retain(0), cap.retain(1), std::mem::take(data)))
+                });
 
-                    'input: for (input_row, time, diff) in data.drain(..) {
+                while let Some((ok_cap, err_cap, data)) = queue.pop_front() {
+                    let mut ok_session = ok_output.session_with_builder(&ok_cap);
+                    let mut err_session = err_output.session_with_builder(&err_cap);
+
+                    'input: for (input_row, time, diff) in data {
                         let temp_storage = RowArena::new();
 
                         // Unpack datums for expression evaluation.
@@ -120,7 +122,7 @@ where
         use differential_dataflow::AsCollection;
         let ok_collection = oks.as_collection();
         let new_err_collection = errs.as_collection();
-        let err_collection = err_collection.concat(&new_err_collection);
+        let err_collection = err_collection.concat(new_err_collection);
         CollectionBundle::from_collections(ok_collection, err_collection)
     }
 }
@@ -141,14 +143,14 @@ fn drain_through_mfp<T>(
         '_,
         T,
         ConsolidatingContainerBuilder<Vec<(Row, T, Diff)>>,
-        InputCapability<T>,
+        Capability<T>,
     >,
     err_output: &mut Session<
         '_,
         '_,
         T,
-        ConsolidatingContainerBuilder<Vec<(DataflowError, T, Diff)>>,
-        InputCapability<T>,
+        ConsolidatingContainerBuilder<Vec<(DataflowErrorSer, T, Diff)>>,
+        Capability<T>,
     >,
     budget: &mut usize,
 ) where

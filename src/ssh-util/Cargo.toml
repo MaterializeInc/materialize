@@ -10,28 +10,24 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = { version = "1.0.100" }
+anyhow.workspace = true
 mz-ore = { path = "../ore", features = ["test"] }
-openssh = { version = "0.11.5", default-features = false, features = ["native-mux"] }
-openssh-mux-client = "0.17.9"
-openssl = { version = "0.10.75", features = ["vendored"] }
-rand = "0.8.5"
-futures = "0.3.31"
-itertools = "0.14.0"
-scopeguard = "1.2.0"
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = { version = "1.0.145" }
-ssh-key = { version = "0.6.7" }
-tempfile = "3.23.0"
-thiserror = { version = "2.0.17" }
-tokio = "1.44.1"
-tokio-stream = "0.1.17"
-tracing = "0.1.37"
-zeroize = { version = "1.8.2", features = ["serde"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+openssh.workspace = true
+openssh-mux-client.workspace = true
+aws-lc-rs.workspace = true
+rand.workspace = true
+futures.workspace = true
+itertools.workspace = true
+scopeguard.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ssh-key.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tracing.workspace = true
+zeroize.workspace = true
 
 [features]
-default = ["workspace-hack"]
+default = []

@@ -13,7 +13,6 @@
 
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::Debug;
 use std::future::Future;
 use std::mem;
 use std::net::IpAddr;
@@ -24,6 +23,7 @@ use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
+use mz_auth::AuthenticatorKind;
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_controller_types::ClusterId;
 use mz_ore::metrics::{MetricsFutureExt, MetricsRegistry};
@@ -31,7 +31,7 @@ use mz_ore::now::{EpochMillis, NowFn};
 use mz_pgwire_common::Format;
 use mz_repr::role_id::RoleId;
 use mz_repr::user::{ExternalUserMetadata, InternalUserMetadata};
-use mz_repr::{CatalogItemId, Datum, Row, RowIterator, SqlScalarType, TimestampManipulation};
+use mz_repr::{CatalogItemId, Datum, Row, RowIterator, SqlScalarType, Timestamp};
 use mz_sql::ast::{AstInfo, Raw, Statement, TransactionAccessMode};
 use mz_sql::plan::{Params, PlanContext, QueryWhen, StatementDesc};
 use mz_sql::session::metadata::SessionMetadata;
@@ -47,7 +47,7 @@ use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_storage_client::client::TableData;
 use mz_storage_types::sources::Timeline;
 use qcell::{QCell, QCellOwner};
-use rand::Rng;
+use timely::progress::Timestamp as _;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::watch;
 use uuid::Uuid;
@@ -57,29 +57,27 @@ use crate::client::RecordFirstRowStream;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::in_memory_oracle::InMemoryTimestampOracle;
 use crate::coord::peek::PeekResponseUnary;
-use crate::coord::statement_logging::PreparedStatementLoggingInfo;
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
 use crate::coord::{Coordinator, ExplainContext};
 use crate::error::AdapterError;
 use crate::metrics::{Metrics, SessionMetrics};
+use crate::statement_logging::PreparedStatementLoggingInfo;
 use crate::{AdapterNotice, ExecuteContext};
+use mz_catalog::durable::Snapshot;
 
 const DUMMY_CONNECTION_ID: ConnectionId = ConnectionId::Static(0);
 
 /// A session holds per-connection state.
 #[derive(Derivative)]
 #[derivative(Debug)]
-pub struct Session<T = mz_repr::Timestamp>
-where
-    T: Debug + Clone + Send + Sync,
-{
+pub struct Session {
     conn_id: ConnectionId,
     /// A globally unique identifier for the session. Not to be confused
     /// with `conn_id`, which may be reused.
     uuid: Uuid,
     prepared_statements: BTreeMap<String, PreparedStatement>,
     portals: BTreeMap<String, Portal>,
-    transaction: TransactionStatus<T>,
+    transaction: TransactionStatus,
     pcx: Option<PlanContext>,
     metrics: SessionMetrics,
     #[derivative(Debug = "ignore")]
@@ -118,7 +116,7 @@ where
     // on. We express this by gating access with this token.
     #[derivative(Debug = "ignore")]
     qcell_owner: QCellOwner,
-    session_oracles: BTreeMap<Timeline, InMemoryTimestampOracle<T, NowFn<T>>>,
+    session_oracles: BTreeMap<Timeline, InMemoryTimestampOracle>,
     /// Incremented when session state that is relevant to prepared statement planning changes.
     /// Currently, only changes to `portals` are tracked. Changes to `prepared_statements` don't
     /// need to be tracked, because prepared statements can't depend on other prepared statements.
@@ -127,11 +125,7 @@ where
     state_revision: u64,
 }
 
-impl<T> SessionMetadata for Session<T>
-where
-    T: Debug + Clone + Send + Sync,
-    T: TimestampManipulation,
-{
+impl SessionMetadata for Session {
     fn conn_id(&self) -> &ConnectionId {
         &self.conn_id
     }
@@ -211,19 +205,19 @@ pub struct SessionConfig {
     /// An optional receiver that the session will periodically check for
     /// updates to a user's external metadata.
     pub external_metadata_rx: Option<watch::Receiver<ExternalUserMetadata>>,
-    /// The metadata of the user associated with the session.
-    pub internal_user_metadata: Option<InternalUserMetadata>,
     /// Helm chart version
     pub helm_chart_version: Option<String>,
+    /// The authenticator that authenticated this user, if any.
+    pub authenticator_kind: AuthenticatorKind,
 }
 
-impl<T: TimestampManipulation> Session<T> {
+impl Session {
     /// Creates a new session for the specified connection ID.
     pub(crate) fn new(
         build_info: &'static BuildInfo,
         config: SessionConfig,
         metrics: SessionMetrics,
-    ) -> Session<T> {
+    ) -> Session {
         assert_ne!(config.conn_id, DUMMY_CONNECTION_ID);
         Self::new_internal(build_info, config, metrics)
     }
@@ -270,6 +264,10 @@ impl<T: TimestampManipulation> Session<T> {
         ))
     }
 
+    pub(crate) fn qcell_ro<'a, T2: 'a>(&'a self, cell: &'a Arc<QCell<T2>>) -> &'a T2 {
+        self.qcell_owner.ro(&*cell)
+    }
+
     pub(crate) fn qcell_rw<'a, T2: 'a>(&'a mut self, cell: &'a Arc<QCell<T2>>) -> &'a mut T2 {
         self.qcell_owner.rw(&*cell)
     }
@@ -284,7 +282,7 @@ impl<T: TimestampManipulation> Session<T> {
     ///
     /// Dummy sessions are intended for use when executing queries on behalf of
     /// the system itself, rather than on behalf of a user.
-    pub fn dummy() -> Session<T> {
+    pub fn dummy() -> Session {
         let registry = MetricsRegistry::new();
         let metrics = Metrics::register_into(&registry);
         let metrics = metrics.session_metrics();
@@ -296,8 +294,8 @@ impl<T: TimestampManipulation> Session<T> {
                 user: SYSTEM_USER.name.clone(),
                 client_ip: None,
                 external_metadata_rx: None,
-                internal_user_metadata: None,
                 helm_chart_version: None,
+                authenticator_kind: AuthenticatorKind::None,
             },
             metrics,
         );
@@ -313,19 +311,20 @@ impl<T: TimestampManipulation> Session<T> {
             user,
             client_ip,
             mut external_metadata_rx,
-            internal_user_metadata,
             helm_chart_version,
+            authenticator_kind,
         }: SessionConfig,
         metrics: SessionMetrics,
-    ) -> Session<T> {
+    ) -> Session {
         let (notices_tx, notices_rx) = mpsc::unbounded_channel();
         let default_cluster = INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER.get(&user);
         let user = User {
             name: user,
-            internal_metadata: internal_user_metadata,
+            internal_metadata: None,
             external_metadata: external_metadata_rx
                 .as_mut()
                 .map(|rx| rx.borrow_and_update().clone()),
+            authenticator_kind: Some(authenticator_kind),
         };
         let mut vars = SessionVars::new_unchecked(build_info, user, helm_chart_version);
         if let Some(default_cluster) = default_cluster {
@@ -346,7 +345,7 @@ impl<T: TimestampManipulation> Session<T> {
             notices_tx,
             notices_rx,
             next_transaction_id: 0,
-            secret_key: rand::thread_rng().r#gen(),
+            secret_key: rand::random(),
             external_metadata_rx,
             qcell_owner: QCellOwner::new(),
             session_oracles: BTreeMap::new(),
@@ -461,7 +460,7 @@ impl<T: TimestampManipulation> Session<T> {
     /// and
     /// > An unnamed portal is destroyed at the end of the transaction
     #[must_use]
-    pub fn clear_transaction(&mut self) -> TransactionStatus<T> {
+    pub fn clear_transaction(&mut self) -> TransactionStatus {
         self.portals.clear();
         self.pcx = None;
         self.state_revision += 1;
@@ -483,12 +482,12 @@ impl<T: TimestampManipulation> Session<T> {
     }
 
     /// Returns the current transaction status.
-    pub fn transaction(&self) -> &TransactionStatus<T> {
+    pub fn transaction(&self) -> &TransactionStatus {
         &self.transaction
     }
 
     /// Returns the current transaction status.
-    pub fn transaction_mut(&mut self) -> &mut TransactionStatus<T> {
+    pub fn transaction_mut(&mut self) -> &mut TransactionStatus {
         &mut self.transaction
     }
 
@@ -500,7 +499,7 @@ impl<T: TimestampManipulation> Session<T> {
     /// Adds operations to the current transaction. An error is produced if
     /// they cannot be merged (i.e., a timestamp-dependent read cannot be
     /// merged to an insert).
-    pub fn add_transaction_ops(&mut self, add_ops: TransactionOps<T>) -> Result<(), AdapterError> {
+    pub fn add_transaction_ops(&mut self, add_ops: TransactionOps) -> Result<(), AdapterError> {
         self.transaction.add_ops(add_ops)
     }
 
@@ -579,7 +578,7 @@ impl<T: TimestampManipulation> Session<T> {
     /// ops to `None`, returning the old read timestamp context if
     /// any existed. Must only be used after verifying that no transaction
     /// anomalies will occur if cleared.
-    pub fn take_transaction_timestamp_context(&mut self) -> Option<TimestampContext<T>> {
+    pub fn take_transaction_timestamp_context(&mut self) -> Option<TimestampContext> {
         if let Some(Transaction { ops, .. }) = self.transaction.inner_mut() {
             if let TransactionOps::Peeks { .. } = ops {
                 let ops = std::mem::take(ops);
@@ -600,7 +599,7 @@ impl<T: TimestampManipulation> Session<T> {
     ///
     /// Returns `None` if there is no active transaction, or if the active
     /// transaction is not a read transaction.
-    pub fn get_transaction_timestamp_determination(&self) -> Option<TimestampDetermination<T>> {
+    pub fn get_transaction_timestamp_determination(&self) -> Option<TimestampDetermination> {
         match self.transaction.inner() {
             Some(Transaction {
                 pcx: _,
@@ -868,6 +867,11 @@ impl<T: TimestampManipulation> Session<T> {
         self.vars.set_external_user_metadata(metadata);
     }
 
+    /// Applies the internal user metadata to the session.
+    pub fn apply_internal_user_metadata(&mut self, metadata: InternalUserMetadata) {
+        self.vars.set_internal_user_metadata(metadata);
+    }
+
     /// Initializes the session's role metadata.
     pub fn initialize_role_metadata(&mut self, role_id: RoleId) {
         self.role_metadata = Some(RoleMetadata::new(role_id));
@@ -875,32 +879,26 @@ impl<T: TimestampManipulation> Session<T> {
 
     /// Ensures that a timestamp oracle exists for `timeline` and returns a mutable reference to
     /// the timestamp oracle.
-    pub fn ensure_timestamp_oracle(
-        &mut self,
-        timeline: Timeline,
-    ) -> &mut InMemoryTimestampOracle<T, NowFn<T>> {
-        self.session_oracles
-            .entry(timeline)
-            .or_insert_with(|| InMemoryTimestampOracle::new(T::minimum(), NowFn::from(T::minimum)))
+    pub fn ensure_timestamp_oracle(&mut self, timeline: Timeline) -> &mut InMemoryTimestampOracle {
+        self.session_oracles.entry(timeline).or_insert_with(|| {
+            InMemoryTimestampOracle::new(Timestamp::minimum(), NowFn::from(Timestamp::minimum))
+        })
     }
 
     /// Ensures that a timestamp oracle exists for reads and writes from/to a local input and
     /// returns a mutable reference to the timestamp oracle.
-    pub fn ensure_local_timestamp_oracle(&mut self) -> &mut InMemoryTimestampOracle<T, NowFn<T>> {
+    pub fn ensure_local_timestamp_oracle(&mut self) -> &mut InMemoryTimestampOracle {
         self.ensure_timestamp_oracle(Timeline::EpochMilliseconds)
     }
 
     /// Returns a reference to the timestamp oracle for `timeline`.
-    pub fn get_timestamp_oracle(
-        &self,
-        timeline: &Timeline,
-    ) -> Option<&InMemoryTimestampOracle<T, NowFn<T>>> {
+    pub fn get_timestamp_oracle(&self, timeline: &Timeline) -> Option<&InMemoryTimestampOracle> {
         self.session_oracles.get(timeline)
     }
 
     /// If the current session is using the Strong Session Serializable isolation level advance the
     /// session local timestamp oracle to `write_ts`.
-    pub fn apply_write(&mut self, timestamp: T) {
+    pub fn apply_write(&mut self, timestamp: Timestamp) {
         if self.vars().transaction_isolation() == &IsolationLevel::StrongSessionSerializable {
             self.ensure_local_timestamp_oracle().apply_write(timestamp);
         }
@@ -1091,7 +1089,7 @@ impl LifecycleTimestamps {
 ///
 /// PostgreSQL's transaction states are in backend/access/transam/xact.c.
 #[derive(Debug)]
-pub enum TransactionStatus<T> {
+pub enum TransactionStatus {
     /// Idle. Matches `TBLOCK_DEFAULT`.
     Default,
     /// Running a single-query transaction. Matches
@@ -1103,19 +1101,19 @@ pub enum TransactionStatus<T> {
     /// when using the extended query protocol. Therefore, we can guarantee that this state will
     /// always be a single-query transaction and never be upgraded into a multi-statement implicit
     /// query.
-    Started(Transaction<T>),
+    Started(Transaction),
     /// Currently in a transaction issued from a `BEGIN`. Matches `TBLOCK_INPROGRESS`.
-    InTransaction(Transaction<T>),
+    InTransaction(Transaction),
     /// Currently in an implicit transaction started from a multi-statement query
     /// with more than 1 statements. Matches `TBLOCK_IMPLICIT_INPROGRESS`.
-    InTransactionImplicit(Transaction<T>),
+    InTransactionImplicit(Transaction),
     /// In a failed transaction. Matches `TBLOCK_ABORT`.
-    Failed(Transaction<T>),
+    Failed(Transaction),
 }
 
-impl<T: TimestampManipulation> TransactionStatus<T> {
+impl TransactionStatus {
     /// Extracts the inner transaction ops and write lock guard if not failed.
-    pub fn into_ops_and_lock_guard(self) -> (Option<TransactionOps<T>>, Option<WriteLocks>) {
+    pub fn into_ops_and_lock_guard(self) -> (Option<TransactionOps>, Option<WriteLocks>) {
         match self {
             TransactionStatus::Default | TransactionStatus::Failed(_) => (None, None),
             TransactionStatus::Started(txn)
@@ -1127,7 +1125,7 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
     }
 
     /// Exposes the inner transaction.
-    pub fn inner(&self) -> Option<&Transaction<T>> {
+    pub fn inner(&self) -> Option<&Transaction> {
         match self {
             TransactionStatus::Default => None,
             TransactionStatus::Started(txn)
@@ -1138,7 +1136,7 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
     }
 
     /// Exposes the inner transaction.
-    pub fn inner_mut(&mut self) -> Option<&mut Transaction<T>> {
+    pub fn inner_mut(&mut self) -> Option<&mut Transaction> {
         match self {
             TransactionStatus::Default => None,
             TransactionStatus::Started(txn)
@@ -1184,7 +1182,7 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
         }
     }
 
-    /// Whether the transaction is in a multi-statement, immediate transaction.
+    /// Whether we are in a multi-statement transaction, AND the query is immediate.
     pub fn in_immediate_multi_stmt_txn(&self, when: &QueryWhen) -> bool {
         self.is_in_multi_statement_transaction() && when == &QueryWhen::Immediately
     }
@@ -1299,7 +1297,7 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
     /// If the operations are compatible but the operation metadata doesn't match. Such as reads at
     /// different timestamps, reads on different timelines, reads on different clusters, etc. It's
     /// up to the caller to make sure these are aligned.
-    pub fn add_ops(&mut self, add_ops: TransactionOps<T>) -> Result<(), AdapterError> {
+    pub fn add_ops(&mut self, add_ops: TransactionOps) -> Result<(), AdapterError> {
         match self {
             TransactionStatus::Started(Transaction { ops, access, .. })
             | TransactionStatus::InTransaction(Transaction { ops, access, .. })
@@ -1393,12 +1391,14 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
                         revision: og_revision,
                         state: og_state,
                         side_effects,
+                        snapshot: og_snapshot,
                     } => match add_ops {
                         TransactionOps::DDL {
                             ops: new_ops,
                             revision: new_revision,
                             side_effects: mut net_new_side_effects,
                             state: new_state,
+                            snapshot: new_snapshot,
                         } => {
                             if *og_revision != new_revision {
                                 return Err(AdapterError::DDLTransactionRace);
@@ -1407,6 +1407,7 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
                             if !new_ops.is_empty() {
                                 *og_ops = new_ops;
                                 *og_state = new_state;
+                                *og_snapshot = new_snapshot;
                             }
                             side_effects.append(&mut net_new_side_effects);
                         }
@@ -1425,7 +1426,7 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
 /// An abstraction allowing us to identify different transactions.
 pub type TransactionId = u64;
 
-impl<T> Default for TransactionStatus<T> {
+impl Default for TransactionStatus {
     fn default() -> Self {
         TransactionStatus::Default
     }
@@ -1433,11 +1434,11 @@ impl<T> Default for TransactionStatus<T> {
 
 /// State data for transactions.
 #[derive(Debug)]
-pub struct Transaction<T> {
+pub struct Transaction {
     /// Plan context.
     pub pcx: PlanContext,
     /// Transaction operations.
-    pub ops: TransactionOps<T>,
+    pub ops: TransactionOps,
     /// Uniquely identifies the transaction on a per connection basis.
     /// Two transactions started from separate connections may share the
     /// same ID.
@@ -1449,7 +1450,7 @@ pub struct Transaction<T> {
     access: Option<TransactionAccessMode>,
 }
 
-impl<T> Transaction<T> {
+impl Transaction {
     /// Tries to grant the write lock to this transaction for the remainder of its lifetime. Errors
     /// if this [`Transaction`] has already been granted write locks.
     fn try_grant_write_locks(&mut self, guards: WriteLocks) -> Result<(), &WriteLocks> {
@@ -1527,9 +1528,9 @@ impl From<TransactionCode> for String {
     }
 }
 
-impl<T> From<&TransactionStatus<T>> for TransactionCode {
+impl From<&TransactionStatus> for TransactionCode {
     /// Convert from the Session's version
-    fn from(status: &TransactionStatus<T>) -> TransactionCode {
+    fn from(status: &TransactionStatus) -> TransactionCode {
         match status {
             TransactionStatus::Default => TransactionCode::Idle,
             TransactionStatus::Started(_) => TransactionCode::InTransaction,
@@ -1547,7 +1548,7 @@ impl<T> From<&TransactionStatus<T>> for TransactionCode {
 /// happen at commit.
 #[derive(Derivative)]
 #[derivative(Debug)]
-pub enum TransactionOps<T> {
+pub enum TransactionOps {
     /// The transaction has been initiated, but no statement has yet been executed
     /// in it.
     None,
@@ -1557,7 +1558,7 @@ pub enum TransactionOps<T> {
     /// perform writes.
     Peeks {
         /// The timestamp and timestamp related metadata for the peek.
-        determination: TimestampDetermination<T>,
+        determination: TimestampDetermination,
         /// The cluster used to execute peeks.
         cluster_id: ClusterId,
         /// Whether this peek needs to be linearized.
@@ -1597,11 +1598,16 @@ pub enum TransactionOps<T> {
         >,
         /// Transient revision of the `Catalog` when this transaction started.
         revision: u64,
+        /// Snapshot of the durable transaction state after the last dry run.
+        /// Used to initialize the next dry run's transaction so it starts
+        /// in sync with the accumulated `state`. `None` for the first
+        /// statement in the transaction (before any dry run).
+        snapshot: Option<Snapshot>,
     },
 }
 
-impl<T> TransactionOps<T> {
-    fn timestamp_determination(self) -> Option<TimestampDetermination<T>> {
+impl TransactionOps {
+    fn timestamp_determination(self) -> Option<TimestampDetermination> {
         match self {
             TransactionOps::Peeks { determination, .. } => Some(determination),
             TransactionOps::None
@@ -1613,7 +1619,7 @@ impl<T> TransactionOps<T> {
     }
 }
 
-impl<T> Default for TransactionOps<T> {
+impl Default for TransactionOps {
     fn default() -> Self {
         Self::None
     }

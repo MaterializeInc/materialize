@@ -1,0 +1,67 @@
+---
+source: src/expr-derive-impl/src/lib.rs
+expression: "#[sqlfunc(sqlname = \"multi_generic\")]\nfn multi_generic<'a, A, B>(a: DatumList<'a, A>, b: DatumList<'a, B>) -> Option<B> {\n    unimplemented!()\n}\n"
+---
+#[derive(
+    proptest_derive::Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    Hash,
+    mz_lowertest::MzReflect,
+)]
+pub struct MultiGeneric;
+impl crate::func::binary::EagerBinaryFunc for MultiGeneric {
+    type Input<'a> = (DatumList<'a, Datum<'a>>, DatumList<'a, Datum<'a>>);
+    type Output<'a> = Option<Datum<'a>>;
+    fn call<'a>(
+        &self,
+        (a, b): Self::Input<'a>,
+        temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
+        multi_generic(a, b)
+    }
+    fn output_sql_type(
+        &self,
+        input_types: &[mz_repr::SqlColumnType],
+    ) -> mz_repr::SqlColumnType {
+        use mz_repr::AsColumnType;
+        let output = {
+            <DatumList<
+                '_,
+                Datum<'_>,
+            > as mz_repr::SqlContainerType>::unwrap_element_type(
+                    &input_types[1].scalar_type,
+                )
+                .clone()
+                .nullable(true)
+        };
+        let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
+            self,
+        );
+        let nullable = output.nullable;
+        let non_nullable_input_is_nullable = false
+            || input_types.get(0usize).map_or(false, |t| t.nullable)
+            || input_types.get(1usize).map_or(false, |t| t.nullable);
+        let inputs_nullable = input_types.iter().any(|it| it.nullable);
+        let is_null = nullable || non_nullable_input_is_nullable
+            || (propagates_nulls && inputs_nullable);
+        output.nullable(is_null)
+    }
+    fn introduces_nulls(&self) -> bool {
+        true
+    }
+}
+impl std::fmt::Display for MultiGeneric {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("multi_generic")
+    }
+}
+fn multi_generic<'a, A, B>(a: DatumList<'a, A>, b: DatumList<'a, B>) -> Option<B> {
+    unimplemented!()
+}

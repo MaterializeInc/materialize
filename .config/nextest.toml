@@ -109,11 +109,6 @@ priority = 60
 filter = "package(mz-repr) and test(row_packing_roundtrips_single_valued)"
 priority = 60
 
-[[profile.default.overrides]]
-filter = "package(mz-ore) and test(smoke_test_metrics_future_ext)"
-threads-required = 8
-priority = 50
-
 [profile.ci]
 junit = { path = "junit_cargo-test.xml" }
 fail-fast = false

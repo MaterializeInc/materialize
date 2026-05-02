@@ -12,7 +12,7 @@
 //! Persistent metadata storage for the coordinator.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 use std::convert;
 use std::sync::Arc;
 
@@ -48,24 +48,24 @@ use mz_controller::clusters::ReplicaLocation;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::OptimizedMirRelationExpr;
 use mz_license_keys::ValidatedLicenseKey;
-use mz_ore::collections::HashSet;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
 use mz_ore::result::ResultExt as _;
-use mz_ore::{soft_assert_eq_or_log, soft_assert_or_log};
+use mz_ore::soft_panic_or_log;
 use mz_persist_client::PersistClient;
 use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::namespaces::MZ_TEMP_SCHEMA;
 use mz_repr::network_policy_id::NetworkPolicyId;
+use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, Diff, GlobalId, RelationVersionSelector, SqlScalarType};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError as SqlCatalogError,
-    CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogItemType,
-    CatalogNetworkPolicy, CatalogRole, CatalogSchema, DefaultPrivilegeAclItem,
-    DefaultPrivilegeObject, EnvironmentId, SessionCatalog, SystemObjectType,
+    CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogNetworkPolicy,
+    CatalogRole, CatalogSchema, DefaultPrivilegeAclItem, DefaultPrivilegeObject, EnvironmentId,
+    SessionCatalog, SystemObjectType,
 };
 use mz_sql::names::{
     CommentObjectId, DatabaseId, FullItemName, FullSchemaName, ItemQualifiers, ObjectId,
@@ -82,10 +82,8 @@ use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::connections::inline::{ConnectionResolver, InlinedConnection};
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
-use smallvec::SmallVec;
 use tokio::sync::MutexGuard;
 use tokio::sync::mpsc::UnboundedSender;
-use tracing::error;
 use uuid::Uuid;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
@@ -93,10 +91,12 @@ pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::open::{InitializeStateResult, OpenCatalogResult};
 pub use crate::catalog::state::CatalogState;
 pub use crate::catalog::transact::{
-    DropObjectInfo, Op, ReplicaCreateDropReason, TransactionResult,
+    DropObjectInfo, InjectedAuditEvent, Op, ReplicaCreateDropReason, TransactionResult,
 };
 use crate::command::CatalogDump;
 use crate::coord::TargetCluster;
+#[cfg(test)]
+use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
 use crate::session::{Portal, PreparedStatement, Session};
 use crate::util::ResultExt;
 use crate::{AdapterError, AdapterNotice, ExecuteResponse};
@@ -136,7 +136,6 @@ mod transact;
 #[derive(Debug)]
 pub struct Catalog {
     state: CatalogState,
-    plans: CatalogPlans,
     expr_cache_handle: Option<ExpressionCacheHandle>,
     storage: Arc<tokio::sync::Mutex<Box<dyn mz_catalog::durable::DurableCatalogState>>>,
     transient_revision: u64,
@@ -148,7 +147,6 @@ impl Clone for Catalog {
     fn clone(&self) -> Self {
         Self {
             state: self.state.clone(),
-            plans: self.plans.clone(),
             expr_cache_handle: self.expr_cache_handle.clone(),
             storage: Arc::clone(&self.storage),
             transient_revision: self.transient_revision,
@@ -156,33 +154,33 @@ impl Clone for Catalog {
     }
 }
 
-#[derive(Default, Debug, Clone)]
-pub struct CatalogPlans {
-    optimized_plan_by_id: BTreeMap<GlobalId, Arc<DataflowDescription<OptimizedMirRelationExpr>>>,
-    physical_plan_by_id: BTreeMap<GlobalId, Arc<DataflowDescription<mz_compute_types::plan::Plan>>>,
-    dataflow_metainfos: BTreeMap<GlobalId, DataflowMetainfo<Arc<OptimizerNotice>>>,
-    notices_by_dep_id: BTreeMap<GlobalId, SmallVec<[Arc<OptimizerNotice>; 4]>>,
-}
-
 impl Catalog {
     /// Set the optimized plan for the item identified by `id`.
+    ///
+    /// # Panics
+    /// If the item is not an `Index`, `MaterializedView`, or
+    /// `ContinualTask`.
     #[mz_ore::instrument(level = "trace")]
     pub fn set_optimized_plan(
         &mut self,
         id: GlobalId,
         plan: DataflowDescription<OptimizedMirRelationExpr>,
     ) {
-        self.plans.optimized_plan_by_id.insert(id, plan.into());
+        self.state.set_optimized_plan(id, plan);
     }
 
     /// Set the physical plan for the item identified by `id`.
+    ///
+    /// # Panics
+    /// If the item is not an `Index`, `MaterializedView`, or
+    /// `ContinualTask`.
     #[mz_ore::instrument(level = "trace")]
     pub fn set_physical_plan(
         &mut self,
         id: GlobalId,
         plan: DataflowDescription<mz_compute_types::plan::Plan>,
     ) {
-        self.plans.physical_plan_by_id.insert(id, plan.into());
+        self.state.set_physical_plan(id, plan);
     }
 
     /// Try to get the optimized plan for the item identified by `id`.
@@ -191,7 +189,8 @@ impl Catalog {
         &self,
         id: &GlobalId,
     ) -> Option<&DataflowDescription<OptimizedMirRelationExpr>> {
-        self.plans.optimized_plan_by_id.get(id).map(AsRef::as_ref)
+        let entry = self.state.try_get_entry_by_global_id(id)?;
+        entry.item().optimized_plan().map(AsRef::as_ref)
     }
 
     /// Try to get the physical plan for the item identified by `id`.
@@ -200,32 +199,22 @@ impl Catalog {
         &self,
         id: &GlobalId,
     ) -> Option<&DataflowDescription<mz_compute_types::plan::Plan>> {
-        self.plans.physical_plan_by_id.get(id).map(AsRef::as_ref)
+        let entry = self.state.try_get_entry_by_global_id(id)?;
+        entry.item().physical_plan().map(AsRef::as_ref)
     }
 
     /// Set the `DataflowMetainfo` for the item identified by `id`.
+    ///
+    /// # Panics
+    /// If the item is not an `Index`, `MaterializedView`, or
+    /// `ContinualTask`.
     #[mz_ore::instrument(level = "trace")]
     pub fn set_dataflow_metainfo(
         &mut self,
         id: GlobalId,
         metainfo: DataflowMetainfo<Arc<OptimizerNotice>>,
     ) {
-        // Add entries to the `notices_by_dep_id` lookup map.
-        for notice in metainfo.optimizer_notices.iter() {
-            for dep_id in notice.dependencies.iter() {
-                let entry = self.plans.notices_by_dep_id.entry(*dep_id).or_default();
-                entry.push(Arc::clone(notice))
-            }
-            if let Some(item_id) = notice.item_id {
-                soft_assert_eq_or_log!(
-                    item_id,
-                    id,
-                    "notice.item_id should match the id for whom we are saving the notice"
-                );
-            }
-        }
-        // Add the dataflow with the scoped entries.
-        self.plans.dataflow_metainfos.insert(id, metainfo);
+        self.state.set_dataflow_metainfo(id, metainfo);
     }
 
     /// Try to get the `DataflowMetainfo` for the item identified by `id`.
@@ -234,179 +223,8 @@ impl Catalog {
         &self,
         id: &GlobalId,
     ) -> Option<&DataflowMetainfo<Arc<OptimizerNotice>>> {
-        self.plans.dataflow_metainfos.get(id)
-    }
-
-    /// Drop all optimized and physical plans and `DataflowMetainfo`s for the
-    /// item identified by `id`.
-    ///
-    /// Ignore requests for non-existing plans or `DataflowMetainfo`s.
-    ///
-    /// Return a set containing all dropped notices. Note that if for some
-    /// reason we end up with two identical notices being dropped by the same
-    /// call, the result will contain only one instance of that notice.
-    #[mz_ore::instrument(level = "trace")]
-    pub fn drop_plans_and_metainfos(
-        &mut self,
-        drop_ids: &BTreeSet<GlobalId>,
-    ) -> BTreeSet<Arc<OptimizerNotice>> {
-        // Collect dropped notices in this set.
-        let mut dropped_notices = BTreeSet::new();
-
-        // Remove plans and metainfo.optimizer_notices entries.
-        for id in drop_ids {
-            self.plans.optimized_plan_by_id.remove(id);
-            self.plans.physical_plan_by_id.remove(id);
-            if let Some(mut metainfo) = self.plans.dataflow_metainfos.remove(id) {
-                soft_assert_or_log!(
-                    metainfo.optimizer_notices.iter().all_unique(),
-                    "should have been pushed there by `push_optimizer_notice_dedup`"
-                );
-                for n in metainfo.optimizer_notices.drain(..) {
-                    // Remove the corresponding notices_by_dep_id entries.
-                    for dep_id in n.dependencies.iter() {
-                        if let Some(notices) = self.plans.notices_by_dep_id.get_mut(dep_id) {
-                            soft_assert_or_log!(
-                                notices.iter().any(|x| &n == x),
-                                "corrupt notices_by_dep_id"
-                            );
-                            notices.retain(|x| &n != x)
-                        }
-                    }
-                    dropped_notices.insert(n);
-                }
-            }
-        }
-
-        // Remove notices_by_dep_id entries.
-        for id in drop_ids {
-            if let Some(mut notices) = self.plans.notices_by_dep_id.remove(id) {
-                for n in notices.drain(..) {
-                    // Remove the corresponding metainfo.optimizer_notices entries.
-                    if let Some(item_id) = n.item_id.as_ref() {
-                        if let Some(metainfo) = self.plans.dataflow_metainfos.get_mut(item_id) {
-                            metainfo.optimizer_notices.iter().for_each(|n2| {
-                                if let Some(item_id_2) = n2.item_id {
-                                    soft_assert_eq_or_log!(item_id_2, *item_id, "a notice's item_id should match the id for whom we have saved the notice");
-                                }
-                            });
-                            metainfo.optimizer_notices.retain(|x| &n != x);
-                        }
-                    }
-                    dropped_notices.insert(n);
-                }
-            }
-        }
-
-        // Collect dependency ids not in drop_ids with at least one dropped
-        // notice.
-        let mut todo_dep_ids = BTreeSet::new();
-        for notice in dropped_notices.iter() {
-            for dep_id in notice.dependencies.iter() {
-                if !drop_ids.contains(dep_id) {
-                    todo_dep_ids.insert(*dep_id);
-                }
-            }
-        }
-        // Remove notices in `dropped_notices` for all `notices_by_dep_id`
-        // entries in `todo_dep_ids`.
-        for id in todo_dep_ids {
-            if let Some(notices) = self.plans.notices_by_dep_id.get_mut(&id) {
-                notices.retain(|n| !dropped_notices.contains(n))
-            }
-        }
-
-        if dropped_notices.iter().any(|n| Arc::strong_count(n) != 1) {
-            use mz_ore::str::{bracketed, separated};
-            let bad_notices = dropped_notices.iter().filter(|n| Arc::strong_count(n) != 1);
-            let bad_notices = bad_notices.map(|n| {
-                // Try to find where the bad reference is.
-                // Maybe in `dataflow_metainfos`?
-                let mut dataflow_metainfo_occurrences = Vec::new();
-                for (id, meta_info) in self.plans.dataflow_metainfos.iter() {
-                    if meta_info.optimizer_notices.contains(n) {
-                        dataflow_metainfo_occurrences.push(id);
-                    }
-                }
-                // Or `notices_by_dep_id`?
-                let mut notices_by_dep_id_occurrences = Vec::new();
-                for (id, notices) in self.plans.notices_by_dep_id.iter() {
-                    if notices.iter().contains(n) {
-                        notices_by_dep_id_occurrences.push(id);
-                    }
-                }
-                format!(
-                    "(id = {}, kind = {:?}, deps = {:?}, strong_count = {}, \
-                    dataflow_metainfo_occurrences = {:?}, notices_by_dep_id_occurrences = {:?})",
-                    n.id,
-                    n.kind,
-                    n.dependencies,
-                    Arc::strong_count(n),
-                    dataflow_metainfo_occurrences,
-                    notices_by_dep_id_occurrences
-                )
-            });
-            let bad_notices = bracketed("{", "}", separated(", ", bad_notices));
-            error!(
-                "all dropped_notices entries should have `Arc::strong_count(_) == 1`; \
-                 bad_notices = {bad_notices}; \
-                 drop_ids = {drop_ids:?}"
-            );
-        }
-
-        dropped_notices
-    }
-
-    /// Return a set of [`GlobalId`]s for items that need to have their cache entries invalidated
-    /// as a result of creating new indexes on the items in `ons`.
-    ///
-    /// When creating and inserting a new index, we need to invalidate some entries that may
-    /// optimize to new expressions. When creating index `i` on object `o`, we need to invalidate
-    /// the following objects:
-    ///
-    ///   - `o`.
-    ///   - All compute objects that depend directly on `o`.
-    ///   - All compute objects that would directly depend on `o`, if all views were inlined.
-    pub(crate) fn invalidate_for_index(
-        &self,
-        ons: impl Iterator<Item = GlobalId>,
-    ) -> BTreeSet<GlobalId> {
-        let mut dependencies = BTreeSet::new();
-        let mut queue = VecDeque::new();
-        let mut seen = HashSet::new();
-        for on in ons {
-            let entry = self.get_entry_by_global_id(&on);
-            dependencies.insert(on);
-            seen.insert(entry.id);
-            let uses = entry.uses();
-            queue.extend(uses.clone());
-        }
-
-        while let Some(cur) = queue.pop_front() {
-            let entry = self.get_entry(&cur);
-            if seen.insert(cur) {
-                let global_ids = entry.global_ids();
-                match entry.item_type() {
-                    CatalogItemType::Table
-                    | CatalogItemType::Source
-                    | CatalogItemType::MaterializedView
-                    | CatalogItemType::Sink
-                    | CatalogItemType::Index
-                    | CatalogItemType::Type
-                    | CatalogItemType::Func
-                    | CatalogItemType::Secret
-                    | CatalogItemType::Connection
-                    | CatalogItemType::ContinualTask => {
-                        dependencies.extend(global_ids);
-                    }
-                    CatalogItemType::View => {
-                        dependencies.extend(global_ids);
-                        queue.extend(entry.uses());
-                    }
-                }
-            }
-        }
-        dependencies
+        let entry = self.state.try_get_entry_by_global_id(id)?;
+        entry.item().dataflow_metainfo()
     }
 }
 
@@ -684,7 +502,6 @@ impl Catalog {
                 unsafe_mode: true,
                 all_features: false,
                 build_info,
-                deploy_generation: 0,
                 environment_id: environment_id.unwrap_or_else(EnvironmentId::for_tests),
                 read_only,
                 now,
@@ -1058,6 +875,16 @@ impl Catalog {
         self.state.get_schema(database_spec, schema_spec, conn_id)
     }
 
+    pub fn try_get_schema(
+        &self,
+        database_spec: &ResolvedDatabaseSpecifier,
+        schema_spec: &SchemaSpecifier,
+        conn_id: &ConnectionId,
+    ) -> Option<&Schema> {
+        self.state
+            .try_get_schema(database_spec, schema_spec, conn_id)
+    }
+
     pub fn get_mz_catalog_schema_id(&self) -> SchemaId {
         self.state.get_mz_catalog_schema_id()
     }
@@ -1117,9 +944,12 @@ impl Catalog {
     }
 
     fn item_exists_in_temp_schemas(&self, conn_id: &ConnectionId, item_name: &str) -> bool {
-        self.state.temporary_schemas[conn_id]
-            .items
-            .contains_key(item_name)
+        // Temporary schemas are created lazily, so it's valid for one to not exist yet.
+        self.state
+            .temporary_schemas
+            .get(conn_id)
+            .map(|schema| schema.items.contains_key(item_name))
+            .unwrap_or(false)
     }
 
     /// Drops schema for connection if it exists. Returns an error if it exists and has items.
@@ -1217,8 +1047,8 @@ impl Catalog {
     }
 
     #[mz_ore::instrument(level = "debug")]
-    pub async fn confirm_leadership(&self) -> Result<(), AdapterError> {
-        Ok(self.storage().await.confirm_leadership().await?)
+    pub async fn advance_upper(&self, new_upper: mz_repr::Timestamp) -> Result<(), AdapterError> {
+        Ok(self.storage().await.advance_upper(new_upper).await?)
     }
 
     /// Return the ids of all log sources the given object depends on.
@@ -1340,9 +1170,12 @@ impl Catalog {
             .filter(|role| role.is_user())
     }
 
-    pub fn user_continual_tasks(&self) -> impl Iterator<Item = &CatalogEntry> {
-        self.entries()
-            .filter(|entry| entry.is_continual_task() && entry.id().is_user())
+    pub fn user_network_policies(&self) -> impl Iterator<Item = &NetworkPolicy> {
+        self.state
+            .network_policies_by_id
+            .iter()
+            .filter(|(id, _)| id.is_user())
+            .map(|(_, policy)| policy)
     }
 
     pub fn system_privileges(&self) -> &PrivilegeMap {
@@ -1478,19 +1311,66 @@ impl Catalog {
             .deserialize_plan_with_enable_for_item_parsing(create_sql, force_if_exists_skip)
     }
 
+    /// Cache global and, optionally, local expressions for the given `GlobalId`.
+    ///
+    /// This takes the required plans and metainfo from the catalog and expects that they were
+    /// previously stored via [`Catalog::set_optimized_plan`], [`Catalog::set_physical_plan`], and
+    /// [`Catalog::set_dataflow_metainfo`].
+    pub(crate) fn cache_expressions(
+        &self,
+        id: GlobalId,
+        local_mir: Option<OptimizedMirRelationExpr>,
+        optimizer_features: OptimizerFeatures,
+    ) {
+        let Some(mut global_mir) = self.try_get_optimized_plan(&id).cloned() else {
+            soft_panic_or_log!("optimized plan missing for ID {id}");
+            return;
+        };
+        let Some(mut physical_plan) = self.try_get_physical_plan(&id).cloned() else {
+            soft_panic_or_log!("physical plan missing for ID {id}");
+            return;
+        };
+        let Some(dataflow_metainfos) = self.try_get_dataflow_metainfo(&id).cloned() else {
+            soft_panic_or_log!("dataflow metainfo missing for ID {id}");
+            return;
+        };
+
+        // Make sure we're not caching the result of timestamp selection, as it will almost
+        // certainly be wrong if we re-install the dataflow at a later time.
+        global_mir.as_of = None;
+        global_mir.until = Default::default();
+        physical_plan.as_of = None;
+        physical_plan.until = Default::default();
+
+        let mut local_exprs = Vec::new();
+        if let Some(local_mir) = local_mir {
+            local_exprs.push((
+                id,
+                LocalExpressions {
+                    local_mir,
+                    optimizer_features: optimizer_features.clone(),
+                },
+            ));
+        }
+        let global_exprs = vec![(
+            id,
+            GlobalExpressions {
+                global_mir,
+                physical_plan,
+                dataflow_metainfos,
+                optimizer_features,
+            },
+        )];
+        let _fut = self.update_expression_cache(local_exprs, global_exprs, Default::default());
+    }
+
     pub(crate) fn update_expression_cache<'a, 'b>(
         &'a self,
         new_local_expressions: Vec<(GlobalId, LocalExpressions)>,
         new_global_expressions: Vec<(GlobalId, GlobalExpressions)>,
+        invalidate_ids: BTreeSet<GlobalId>,
     ) -> BoxFuture<'b, ()> {
         if let Some(expr_cache) = &self.expr_cache_handle {
-            let ons = new_local_expressions
-                .iter()
-                .map(|(id, _)| id)
-                .chain(new_global_expressions.iter().map(|(id, _)| id))
-                .map(|id| self.get_entry_by_global_id(id))
-                .filter_map(|entry| entry.index().map(|index| index.on));
-            let invalidate_ids = self.invalidate_for_index(ons);
             expr_cache
                 .update(
                     new_local_expressions,
@@ -1509,10 +1389,19 @@ impl Catalog {
     #[cfg(test)]
     async fn sync_to_current_updates(
         &mut self,
-    ) -> Result<Vec<BuiltinTableUpdate<&'static BuiltinTable>>, CatalogError> {
+    ) -> Result<
+        (
+            Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
+            Vec<ParsedStateUpdate>,
+        ),
+        CatalogError,
+    > {
         let updates = self.storage().await.sync_to_current_updates().await?;
-        let builtin_table_updates = self.state.apply_updates(updates)?;
-        Ok(builtin_table_updates)
+        let (builtin_table_updates, catalog_updates) = self
+            .state
+            .apply_updates(updates, &mut state::LocalExpressionCache::Closed)
+            .await;
+        Ok((builtin_table_updates, catalog_updates))
     }
 }
 
@@ -1551,7 +1440,6 @@ pub(crate) fn comment_id_to_audit_object_type(id: CommentObjectId) -> ObjectType
         CommentObjectId::Schema(_) => ObjectType::Schema,
         CommentObjectId::Cluster(_) => ObjectType::Cluster,
         CommentObjectId::ClusterReplica(_) => ObjectType::ClusterReplica,
-        CommentObjectId::ContinualTask(_) => ObjectType::ContinualTask,
         CommentObjectId::NetworkPolicy(_) => ObjectType::NetworkPolicy,
     }
 }
@@ -1582,7 +1470,6 @@ pub(crate) fn system_object_type_to_audit_object_type(
             mz_sql::catalog::ObjectType::Database => ObjectType::Database,
             mz_sql::catalog::ObjectType::Schema => ObjectType::Schema,
             mz_sql::catalog::ObjectType::Func => ObjectType::Func,
-            mz_sql::catalog::ObjectType::ContinualTask => ObjectType::ContinualTask,
             mz_sql::catalog::ObjectType::NetworkPolicy => ObjectType::NetworkPolicy,
         },
         SystemObjectType::System => ObjectType::System,
@@ -1652,11 +1539,11 @@ impl ExprHumanizer for ConnCatalog<'_> {
         Some(self.resolve_full_name(entry.name()).into_parts())
     }
 
-    fn humanize_scalar_type(&self, typ: &SqlScalarType, postgres_compat: bool) -> String {
+    fn humanize_sql_scalar_type(&self, typ: &SqlScalarType, postgres_compat: bool) -> String {
         use SqlScalarType::*;
 
         match typ {
-            Array(t) => format!("{}[]", self.humanize_scalar_type(t, postgres_compat)),
+            Array(t) => format!("{}[]", self.humanize_sql_scalar_type(t, postgres_compat)),
             List {
                 custom_id: Some(item_id),
                 ..
@@ -1671,13 +1558,13 @@ impl ExprHumanizer for ConnCatalog<'_> {
             List { element_type, .. } => {
                 format!(
                     "{} list",
-                    self.humanize_scalar_type(element_type, postgres_compat)
+                    self.humanize_sql_scalar_type(element_type, postgres_compat)
                 )
             }
             Map { value_type, .. } => format!(
                 "map[{}=>{}]",
-                self.humanize_scalar_type(&SqlScalarType::String, postgres_compat),
-                self.humanize_scalar_type(value_type, postgres_compat)
+                self.humanize_sql_scalar_type(&SqlScalarType::String, postgres_compat),
+                self.humanize_sql_scalar_type(value_type, postgres_compat)
             ),
             Record {
                 custom_id: Some(item_id),
@@ -1693,7 +1580,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
                     .map(|f| format!(
                         "{}: {}",
                         f.0,
-                        self.humanize_column_type(&f.1, postgres_compat)
+                        self.humanize_sql_column_type(&f.1, postgres_compat)
                     ))
                     .join(",")
             ),
@@ -2192,7 +2079,7 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn system_vars_mut(&mut self) -> &mut SystemVars {
-        &mut self.state.to_mut().system_configuration
+        Arc::make_mut(&mut self.state.to_mut().system_configuration)
     }
 
     fn get_owner_id(&self, id: &ObjectId) -> Option<RoleId> {
@@ -2209,7 +2096,11 @@ impl SessionCatalog for ConnCatalog<'_> {
                 Some(self.get_database(id).privileges())
             }
             SystemObjectId::Object(ObjectId::Schema((database_spec, schema_spec))) => {
-                Some(self.get_schema(database_spec, schema_spec).privileges())
+                // For temporary schemas that haven't been created yet (lazy creation),
+                // we return None - the RBAC check will need to handle this case.
+                self.state
+                    .try_get_schema(database_spec, schema_spec, &self.conn_id)
+                    .map(|schema| schema.privileges())
             }
             SystemObjectId::Object(ObjectId::Item(id)) => Some(self.get_item(id).privileges()),
             SystemObjectId::Object(ObjectId::NetworkPolicy(id)) => {
@@ -2244,7 +2135,22 @@ impl SessionCatalog for ConnCatalog<'_> {
 
     /// Returns a [`PartialItemName`] with the minimum amount of qualifiers to unambiguously resolve
     /// the object.
+    ///
+    /// Warning: This is broken for temporary objects. Don't use this function for serious stuff,
+    /// i.e., don't expect that what you get back is a thing you can resolve. Current usages are
+    /// only for error msgs and other humanizations.
     fn minimal_qualification(&self, qualified_name: &QualifiedItemName) -> PartialItemName {
+        if qualified_name.qualifiers.schema_spec.is_temporary() {
+            // All bets are off. Just give up and return the qualified name as is.
+            // TODO: Figure out what's going on with temporary objects.
+
+            // See e.g. `temporary_objects.slt` fail if you comment this out, which has the repro
+            // from https://github.com/MaterializeInc/database-issues/issues/9973#issuecomment-3646382143
+            // There is also https://github.com/MaterializeInc/database-issues/issues/9974, for
+            // which we don't have a simple repro.
+            return qualified_name.item.clone().into();
+        }
+
         let database_id = match &qualified_name.qualifiers.database_spec {
             ResolvedDatabaseSpecifier::Ambient => None,
             ResolvedDatabaseSpecifier::Id(id)
@@ -2333,31 +2239,31 @@ mod tests {
     use mz_controller_types::{ClusterId, ReplicaId};
     use mz_expr::MirScalarExpr;
     use mz_ore::now::to_datetime;
-    use mz_ore::{assert_err, assert_ok, task};
+    use mz_ore::{assert_err, assert_ok, soft_assert_eq_or_log, task};
     use mz_persist_client::PersistClient;
     use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_UNPINNED_OID, FIRST_USER_OID};
     use mz_repr::namespaces::{INFORMATION_SCHEMA, PG_CATALOG_SCHEMA};
     use mz_repr::role_id::RoleId;
     use mz_repr::{
-        CatalogItemId, Datum, GlobalId, RelationVersionSelector, RowArena, SqlRelationType,
+        CatalogItemId, Datum, GlobalId, RelationVersionSelector, Row, RowArena, SqlRelationType,
         SqlScalarType, Timestamp,
     };
-    use mz_sql::catalog::{BuiltinsConfig, CatalogSchema, CatalogType, SessionCatalog};
+    use mz_sql::catalog::{CatalogSchema, CatalogType, SessionCatalog};
     use mz_sql::func::{Func, FuncImpl, OP_IMPLS, Operation};
     use mz_sql::names::{
         self, DatabaseId, ItemQualifiers, ObjectId, PartialItemName, QualifiedItemName,
         ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier, SystemObjectId,
     };
     use mz_sql::plan::{
-        CoercibleScalarExpr, ExprContext, HirScalarExpr, PlanContext, QueryContext, QueryLifetime,
-        Scope, StatementContext,
+        CoercibleScalarExpr, ExprContext, HirScalarExpr, HirToMirConfig, PlanContext, QueryContext,
+        QueryLifetime, Scope, StatementContext,
     };
     use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
     use mz_sql::session::vars::{SystemVars, VarInput};
 
     use crate::catalog::state::LocalExpressionCache;
     use crate::catalog::{Catalog, Op};
-    use crate::optimize::dataflows::{EvalTime, ExprPrepStyle, prep_scalar_expr};
+    use crate::optimize::dataflows::{EvalTime, ExprPrep, ExprPrepOneShot};
     use crate::session::Session;
 
     /// System sessions have an empty `search_path` so it's necessary to
@@ -2782,18 +2688,15 @@ mod tests {
         Catalog::with_debug(|catalog| async move {
             let conn_catalog = catalog.for_system_session();
 
-            let builtins_cfg = BuiltinsConfig {
-                include_continual_tasks: true,
-            };
-            for builtin in BUILTINS::iter(&builtins_cfg) {
+            for builtin in BUILTINS::iter() {
                 let (schema, name, expected_desc) = match builtin {
                     Builtin::Table(t) => (&t.schema, &t.name, &t.desc),
                     Builtin::View(v) => (&v.schema, &v.name, &v.desc),
+                    Builtin::MaterializedView(mv) => (&mv.schema, &mv.name, &mv.desc),
                     Builtin::Source(s) => (&s.schema, &s.name, &s.desc),
                     Builtin::Log(_)
                     | Builtin::Type(_)
                     | Builtin::Func(_)
-                    | Builtin::ContinualTask(_)
                     | Builtin::Index(_)
                     | Builtin::Connection(_) => continue,
                 };
@@ -2806,8 +2709,7 @@ mod tests {
                     .expect("unable to resolve item")
                     .at_version(RelationVersionSelector::Latest);
 
-                let full_name = conn_catalog.resolve_full_name(item.name());
-                let actual_desc = item.desc(&full_name).expect("invalid item type");
+                let actual_desc = item.relation_desc().expect("invalid item type");
                 for (index, ((actual_name, actual_typ), (expected_name, expected_typ))) in
                     actual_desc.iter().zip_eq(expected_desc.iter()).enumerate()
                 {
@@ -2983,10 +2885,7 @@ mod tests {
                 a == b
             };
 
-            let builtins_cfg = BuiltinsConfig {
-                include_continual_tasks: true,
-            };
-            for builtin in BUILTINS::iter(&builtins_cfg) {
+            for builtin in BUILTINS::iter() {
                 match builtin {
                     Builtin::Type(ty) => {
                         assert!(all_oids.insert(ty.oid), "{} reused oid {}", ty.name, ty.oid);
@@ -3042,7 +2941,7 @@ mod tests {
                         // Ensure the type matches.
                         match &ty.details.typ {
                             CatalogType::Array { element_reference } => {
-                                let elem_ty = BUILTINS::iter(&builtins_cfg)
+                                let elem_ty = BUILTINS::iter()
                                     .filter_map(|builtin| match builtin {
                                         Builtin::Type(ty @ BuiltinType { name, .. })
                                             if element_reference == name =>
@@ -3372,7 +3271,7 @@ mod tests {
 
         let handles = Catalog::with_debug(|catalog| async { inner(catalog) }).await;
         for handle in handles {
-            handle.await.expect("must succeed");
+            handle.await;
         }
     }
 
@@ -3401,11 +3300,11 @@ mod tests {
             allow_windows: false,
         };
         let arena = RowArena::new();
-        let mut session = Session::<Timestamp>::dummy();
+        let mut session = Session::dummy();
         session
             .start_transaction(to_datetime(0), None, None)
             .expect("must succeed");
-        let prep_style = ExprPrepStyle::OneShot {
+        let prep_style = ExprPrepOneShot {
             logical_time: EvalTime::Time(Timestamp::MIN),
             session: &session,
             catalog_state: &catalog.state,
@@ -3415,22 +3314,59 @@ mod tests {
         // otherwise ignoring eval errors. We also do various other checks.
         let res = (op.0)(&ecx, scalars, &imp.params, vec![]);
         if let Ok(hir) = res {
-            if let Ok(mut mir) = hir.lower_uncorrelated() {
+            let uneliminated_result_row = {
+                if let HirScalarExpr::CallUnary { func, .. } = &hir
+                    && func.is_eliminable_cast()
+                {
+                    let mut uneliminated_mir = hir
+                        .clone()
+                        .lower_uncorrelated(HirToMirConfig {
+                            enable_cast_elimination: false,
+                            ..catalog.system_config().into()
+                        })
+                        .expect("lowering eliminable cast should always succeed");
+                    prep_style
+                        .prep_scalar_expr(&mut uneliminated_mir)
+                        .expect("must succeed");
+
+                    // Pack the row, to avoid lifetime issues with the MIR we lowered here
+                    uneliminated_mir
+                        .eval(&[], &arena)
+                        .ok()
+                        .map(|datum| Row::pack([datum]))
+                } else {
+                    None
+                }
+            };
+
+            if let Ok(mut mir) = hir.lower_uncorrelated(catalog.system_config()) {
                 // Populate unmaterialized functions.
-                prep_scalar_expr(&mut mir, prep_style.clone()).expect("must succeed");
+                prep_style.prep_scalar_expr(&mut mir).expect("must succeed");
 
                 if let Ok(eval_result_datum) = mir.eval(&[], &arena) {
                     if let Some(return_styp) = return_styp {
                         let mir_typ = mir.typ(&[]);
                         // MIR type inference should be consistent with the type
                         // we get from the catalog.
-                        assert_eq!(mir_typ.scalar_type, return_styp);
+                        soft_assert_eq_or_log!(
+                            mir_typ.scalar_type,
+                            (&return_styp).into(),
+                            "MIR type did not match the catalog type (cast elimination/repr type error)"
+                        );
                         // The following will check not just that the scalar type
                         // is ok, but also catches if the function returned a null
                         // but the MIR type inference said "non-nullable".
-                        if !eval_result_datum.is_instance_of_sql(&mir_typ) {
+                        if !eval_result_datum.is_instance_of(&mir_typ) {
                             panic!(
                                 "{call_name}: expected return type of {return_styp:?}, got {eval_result_datum}"
+                            );
+                        }
+                        // Check the consistency of `is_eliminable_cast`---we should get the same datum either way.
+                        if let Some(row) = uneliminated_result_row {
+                            let uneliminated_result_datum = row.unpack_first();
+                            assert_eq!(
+                                uneliminated_result_datum, eval_result_datum,
+                                "datums should not change if cast is eliminable"
                             );
                         }
                         // Check the consistency of `introduces_nulls` and
@@ -3455,13 +3391,19 @@ mod tests {
                                         "fn named `{}` called on args `{:?}` (lowered to `{}`) yielded mir_typ.nullable: {}",
                                         name, args, mir, mir_typ.nullable
                                     );
-                                } else {
-                                    assert_eq!(
-                                        mir_typ.nullable, propagates_nulls,
+                                } else if propagates_nulls {
+                                    // propagates_nulls means the optimizer short-circuits
+                                    // all-null inputs, so the output must be nullable.
+                                    assert!(
+                                        mir_typ.nullable,
                                         "fn named `{}` called on args `{:?}` (lowered to `{}`) yielded mir_typ.nullable: {}",
                                         name, args, mir, mir_typ.nullable
                                     );
                                 }
+                                // When propagates_nulls is false, the output may still
+                                // be nullable if a non-nullable parameter received a null
+                                // input (per-position null rejection). The is_instance_of
+                                // check above ensures type consistency.
                             }
                         }
                         // Check that `MirScalarExpr::reduce` yields the same result
@@ -3567,11 +3509,8 @@ mod tests {
                     // TODO(alter_table)
                     .at_version(RelationVersionSelector::Latest);
                 let full_name = conn_catalog.resolve_full_name(item.name());
-                for col_type in item
-                    .desc(&full_name)
-                    .expect("invalid item type")
-                    .iter_types()
-                {
+                let desc = item.relation_desc().expect("invalid item type");
+                for col_type in desc.iter_types() {
                     match &col_type.scalar_type {
                         typ @ SqlScalarType::UInt16
                         | typ @ SqlScalarType::UInt32

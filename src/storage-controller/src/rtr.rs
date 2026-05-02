@@ -14,9 +14,7 @@ use std::collections::BinaryHeap;
 use std::collections::binary_heap::PeekMut;
 
 use differential_dataflow::lattice::Lattice;
-use mz_ore::now::EpochMillis;
 use mz_persist_client::read::{ListenEvent, Subscribe};
-use mz_persist_types::Codec64;
 use mz_repr::{GlobalId, Row};
 use mz_storage_types::StorageDiff;
 use mz_storage_types::configuration::StorageConfiguration;
@@ -25,7 +23,6 @@ use mz_storage_types::sources::{
 };
 use mz_timely_util::antichain::AntichainExt;
 use timely::PartialOrder;
-use timely::order::TotalOrder;
 use timely::progress::Antichain;
 use timely::progress::frontier::MutableAntichain;
 
@@ -44,15 +41,13 @@ use crate::Timestamp;
 ///   generator sources do not yet (or might never) support real-time
 ///   recency. You can avoid this panic by choosing to not call this
 ///   function on load generator sources.
-pub(super) async fn real_time_recency_ts<
-    T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis> + Sync,
->(
+pub(super) async fn real_time_recency_ts(
     connection: GenericSourceConnection,
     id: GlobalId,
     config: StorageConfiguration,
-    as_of: Antichain<T>,
-    remap_subscribe: Subscribe<SourceData, (), T, StorageDiff>,
-) -> Result<T, StorageError<T>> {
+    as_of: Antichain<Timestamp>,
+    remap_subscribe: Subscribe<SourceData, (), Timestamp, StorageDiff>,
+) -> Result<Timestamp, StorageError> {
     match connection {
         GenericSourceConnection::Kafka(kafka) => {
             let external_frontier = kafka
@@ -119,15 +114,12 @@ pub(super) async fn real_time_recency_ts<
     }
 }
 
-async fn decode_remap_data_until_geq_external_frontier<
-    FromTime: SourceTimestamp,
-    T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis> + Sync,
->(
+async fn decode_remap_data_until_geq_external_frontier<FromTime: SourceTimestamp>(
     id: GlobalId,
     external_frontier: timely::progress::Antichain<FromTime>,
-    as_of: Antichain<T>,
-    mut remap_subscribe: Subscribe<SourceData, (), T, StorageDiff>,
-) -> Result<T, StorageError<T>> {
+    as_of: Antichain<Timestamp>,
+    mut remap_subscribe: Subscribe<SourceData, (), Timestamp, StorageDiff>,
+) -> Result<Timestamp, StorageError> {
     tracing::debug!(
         ?id,
         "fetched real time recency frontier: {}",
@@ -137,10 +129,10 @@ async fn decode_remap_data_until_geq_external_frontier<
     let external_frontier = external_frontier.borrow();
     let mut native_upper = MutableAntichain::new();
 
-    let mut remap_frontier = Antichain::from_elem(T::minimum());
+    let mut remap_frontier = Antichain::from_elem(Timestamp::MIN);
     let mut pending_remap = BinaryHeap::new();
 
-    let mut min_ts = T::minimum();
+    let mut min_ts = Timestamp::MIN;
     min_ts.advance_by(as_of.borrow());
     let mut min_ts = Some(min_ts);
 
@@ -152,8 +144,8 @@ async fn decode_remap_data_until_geq_external_frontier<
             match event {
                 ListenEvent::Updates(updates) => {
                     for ((k, v), into_ts, diff) in updates {
-                        let row: Row = k.expect("invalid binding").0.expect("invalid binding");
-                        let _v: () = v.expect("invalid binding");
+                        let row: Row = k.0.expect("invalid binding");
+                        let _v: () = v;
 
                         let from_ts: FromTime = SourceTimestamp::decode_row(&row);
                         pending_remap.push(Reverse((into_ts, from_ts, diff)));
@@ -176,7 +168,7 @@ async fn decode_remap_data_until_geq_external_frontier<
                             break;
                         };
                         if !remap_frontier.less_equal(into_ts) {
-                            into_ts.clone()
+                            *into_ts
                         } else {
                             break;
                         }

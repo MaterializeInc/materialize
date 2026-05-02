@@ -185,6 +185,18 @@ impl PostgresConsensusConfig {
             fn tcp_user_timeout(&self) -> Duration {
                 Duration::ZERO
             }
+
+            fn keepalives_idle(&self) -> Duration {
+                Duration::from_secs(10)
+            }
+
+            fn keepalives_interval(&self) -> Duration {
+                Duration::from_secs(5)
+            }
+
+            fn keepalives_retries(&self) -> u32 {
+                5
+            }
         }
 
         let dyncfg = ConfigSet::default().add(&USE_POSTGRES_TUNED_QUERIES);
@@ -226,7 +238,7 @@ impl PostgresConsensus {
     pub async fn open(config: PostgresConsensusConfig) -> Result<Self, ExternalError> {
         // don't need to unredact here because we just want to pull out the username
         let pg_config: Config = config.url.to_string().parse()?;
-        let role = pg_config.get_user().unwrap();
+        let role = pg_config.get_user().expect("failed to get PostgreSQL user");
         let create_schema = format!(
             "CREATE SCHEMA IF NOT EXISTS consensus AUTHORIZATION {}",
             escape_identifier(role),
@@ -368,16 +380,9 @@ impl Consensus for PostgresConsensus {
     async fn compare_and_set(
         &self,
         key: &str,
-        expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<CaSResult, ExternalError> {
-        if let Some(expected) = expected {
-            if new.seqno <= expected {
-                return Err(Error::from(
-                        format!("new seqno must be strictly greater than expected. Got new: {:?} expected: {:?}",
-                                 new.seqno, expected)).into());
-            }
-        }
+        let expected = new.seqno.previous();
 
         let result = if let Some(expected) = expected {
             /// This query has been written to execute within a single
@@ -481,7 +486,7 @@ impl Consensus for PostgresConsensus {
         Ok(results)
     }
 
-    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<Option<usize>, ExternalError> {
         static CRDB_TRUNCATE_QUERY: &str = "
         DELETE FROM consensus
         WHERE shard = $1 AND sequence_number < $2 AND
@@ -556,7 +561,7 @@ impl Consensus for PostgresConsensus {
             }
         }
 
-        Ok(usize::cast_from(result))
+        Ok(Some(usize::cast_from(result)))
     }
 }
 
@@ -590,12 +595,12 @@ mod tests {
         let consensus = PostgresConsensus::open(config.clone()).await?;
         let key = Uuid::new_v4().to_string();
         let state = VersionedData {
-            seqno: SeqNo(5),
+            seqno: SeqNo(0),
             data: Bytes::from("abc"),
         };
 
         assert_eq!(
-            consensus.compare_and_set(&key, None, state.clone()).await,
+            consensus.compare_and_set(&key, state.clone()).await,
             Ok(CaSResult::Committed),
         );
 

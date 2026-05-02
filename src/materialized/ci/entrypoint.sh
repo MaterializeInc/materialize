@@ -63,12 +63,12 @@ if ! is_truthy "${MZ_NO_BUILTIN_POSTGRES:-0}"; then
   # Should exist already, but /mzdata might be overwritten with a fresh volume
   if [ ! -f $PGDATA/PG_VERSION ]; then
     mkdir -p $PGDATA
-    /usr/lib/postgresql/17/bin/initdb -D $PGDATA -U $PGUSER --auth-local=trust
+    /usr/lib/postgresql/16/bin/initdb -D $PGDATA -U $PGUSER --auth-local=trust
   fi
 
   # Might have been killed hard
   rm -f $PGDATA/postmaster.pid
-  /usr/lib/postgresql/17/bin/postgres -D $PGDATA \
+  /usr/lib/postgresql/16/bin/postgres -D $PGDATA \
       -c listen_addresses='*' \
       -c unix_socket_directories=/var/run/postgresql \
       -c config_file=/etc/postgresql/postgresql.conf > /mzdata/postgres/postgres.log 2>&1 &
@@ -76,7 +76,7 @@ if ! is_truthy "${MZ_NO_BUILTIN_POSTGRES:-0}"; then
 
   trap 'kill -INT $PGPID; wait $PGPID' SIGTERM SIGINT
 
-  until /usr/lib/postgresql/17/bin/pg_isready > /dev/null 2>&1; do
+  until /usr/lib/postgresql/16/bin/pg_isready > /dev/null 2>&1; do
     sleep 0.01
   done
 
@@ -119,6 +119,7 @@ export MZ_TIMESTAMP_ORACLE_URL=${MZ_TIMESTAMP_ORACLE_URL:-postgresql://$PGUSER@%
 export MZ_ORCHESTRATOR=${MZ_ORCHESTRATOR:-process}
 export MZ_ORCHESTRATOR_PROCESS_SECRETS_DIRECTORY=${MZ_ORCHESTRATOR_PROCESS_SECRETS_DIRECTORY:-/mzdata/secrets}
 export MZ_ORCHESTRATOR_PROCESS_SCRATCH_DIRECTORY=${MZ_ORCHESTRATOR_PROCESS_SCRATCH_DIRECTORY:-/scratch}
+export MZ_ORCHESTRATOR_PROCESS_TCP_PROXY_LISTEN_ADDR=${MZ_ORCHESTRATOR_PROCESS_TCP_PROXY_LISTEN_ADDR:-0.0.0.0}
 export MZ_BOOTSTRAP_ROLE=${MZ_BOOTSTRAP_ROLE:-materialize}
 
 # Supported replica sizes.

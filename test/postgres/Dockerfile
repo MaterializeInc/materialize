@@ -9,7 +9,7 @@
 
 MZFROM test-certs as certs
 
-FROM postgres:17.4
+FROM postgres:17.7
 
 ENV POSTGRES_PASSWORD=postgres
 
@@ -18,6 +18,11 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     && rm -rf /var/lib/apt/lists/* \
     && rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/* /var/cache/* /var/log/*
 
+# Bake in certs from test-certs as a build-time default.
 COPY --chown=postgres --from=certs /secrets/* /share/secrets/
 COPY pg_hba.conf /share/conf/pg_hba.conf
 COPY setup-postgres.sh /docker-entrypoint-initdb.d/setup-postgres.sh
+COPY entrypoint-wrapper.sh /usr/local/bin/entrypoint-wrapper.sh
+
+ENTRYPOINT ["entrypoint-wrapper.sh"]
+CMD ["postgres"]

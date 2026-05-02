@@ -720,7 +720,9 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
             "predicates": [
               {
                 "CallVariadic": {
-                  "func": "And",
+                  "func": {
+                    "And": null
+                  },
                   "exprs": [
                     {
                       "Exists": [
@@ -1247,7 +1249,9 @@ WHERE t1.b = t2.b AND t2.b = t3.b
         "predicates": [
           {
             "CallVariadic": {
-              "func": "And",
+              "func": {
+                "And": null
+              },
               "exprs": [
                 {
                   "CallBinary": {

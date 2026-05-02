@@ -14,16 +14,12 @@ from materialize.checks.checks import Check
 
 class WithMutuallyRecursive(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > CREATE MATERIALIZED VIEW wmr1 AS WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 100)
                   foo (a int, b int) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar),
                   bar (a int) as (SELECT a FROM foo)
                   SELECT * FROM bar;
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -51,9 +47,7 @@ class WithMutuallyRecursive(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM wmr1
                 1
                 1
@@ -71,6 +65,4 @@ class WithMutuallyRecursive(Check):
                 > SELECT * FROM wmr3
                 1
                 1
-           """
-            )
-        )
+           """))

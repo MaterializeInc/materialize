@@ -16,8 +16,8 @@ use std::sync::Arc;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
 use mz_expr::{AccessStrategy, Id, MirRelationExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::num::NonNeg;
+use mz_repr::GlobalId;
 use mz_repr::explain::ExprHumanizer;
-use mz_repr::{GlobalId, Timestamp};
 use mz_sql::ast::Statement;
 use mz_sql::names::Aug;
 use mz_sql::optimizer_metrics::OptimizerMetrics;
@@ -49,7 +49,7 @@ pub struct PlanInsightsContext {
     pub finishing: RowSetFinishing,
     pub optimizer_config: OptimizerConfig,
     pub session: SessionMeta,
-    pub timestamp_context: TimestampContext<Timestamp>,
+    pub timestamp_context: TimestampContext,
     pub view_id: GlobalId,
     pub index_id: GlobalId,
     pub enable_re_optimize: bool,
@@ -132,7 +132,7 @@ impl PlanInsights {
             });
         for task in tasks {
             let res = task.await;
-            let Ok(Ok((name, plan))) = res else {
+            let Ok((name, plan)) = res else {
                 continue;
             };
             let (plan, _, _) = plan.unapply();

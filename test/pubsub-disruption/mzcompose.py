@@ -33,8 +33,7 @@ SERVICES = [
     Testdrive(no_reset=True, seed=1, default_timeout="60s"),
 ]
 
-SCHEMA = dedent(
-    """
+SCHEMA = dedent("""
     $ set keyschema={
         "type" : "record",
         "name" : "test",
@@ -50,8 +49,7 @@ SCHEMA = dedent(
             {"name":"f2", "type":"long"}
         ]
       }
-    """
-)
+    """)
 
 
 @dataclass
@@ -88,10 +86,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         toxiproxy_start(c)
 
-        c.testdrive(
-            input=SCHEMA
-            + dedent(
-                """
+        c.testdrive(input=SCHEMA + dedent("""
                 > CREATE TABLE t1 (f1 INTEGER, f2 INTEGER);
                 $ kafka-create-topic topic=pubsub-disruption partitions=4
 
@@ -126,16 +121,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 > UPDATE t1 SET f2 = 2;
                 $ kafka-ingest format=avro key-format=avro topic=pubsub-disruption schema=${schema} key-schema=${keyschema} start-iteration=1 repeat=1000000
                 {"f1": ${kafka-ingest.iteration}} {"f2": 2}
-                """
-            )
-        )
+                """))
 
         disruption.breakage(c)
 
-        c.testdrive(
-            input=SCHEMA
-            + dedent(
-                """
+        c.testdrive(input=SCHEMA + dedent("""
                 $ set-sql-timeout duration=120s
 
                 > UPDATE t1 SET f2 = 3;
@@ -159,16 +149,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                          MIN(f1) AS min1, MIN(f2) AS min2, MAX(f1) AS max1, MAX(f2) AS max2
                   FROM s1_tbl;
 
-                """
-            )
-        )
+                """))
 
         disruption.fixage(c)
 
-        c.testdrive(
-            input=SCHEMA
-            + dedent(
-                """
+        c.testdrive(input=SCHEMA + dedent("""
                 $ set-sql-timeout duration=120s
                 > UPDATE t1 SET f2 = 4;
                 $ kafka-ingest format=avro key-format=avro topic=pubsub-disruption schema=${schema} key-schema=${keyschema} start-iteration=1 repeat=1000000
@@ -185,16 +170,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
                 > SELECT * FROM v4
                 1000000 1000000 1 1 4 1000000 4
-                """
-            )
-        )
+                """))
 
 
 def toxiproxy_start(c: Composition) -> None:
     c.up("toxiproxy")
-    c.testdrive(
-        input=dedent(
-            """
+    c.testdrive(input=dedent("""
                 $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
                 {
                    "name": "pubsub",
@@ -202,6 +183,4 @@ def toxiproxy_start(c: Composition) -> None:
                    "upstream": "materialized:6879",
                    "enabled": true
                 }
-                """
-        )
-    )
+                """))

@@ -16,11 +16,9 @@ use std::fmt::Debug;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::Error;
-use crossbeam_channel::SendError;
 use mz_cluster::client::{ClusterClient, ClusterSpec};
 use mz_cluster_client::client::TimelyConfig;
 use mz_compute_client::protocol::command::ComputeCommand;
@@ -32,11 +30,13 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
 use mz_storage_types::connections::ConnectionContext;
+use mz_timely_util::capture::EventLink;
 use mz_txn_wal::operator::TxnsContext;
-use timely::communication::Allocate;
+use timely::logging::TimelyEvent;
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::SendError;
 use tracing::{info, trace, warn};
 use uuid::Uuid;
 
@@ -56,8 +56,12 @@ pub struct ComputeInstanceContext {
     pub connection_context: ConnectionContext,
 }
 
+/// Type alias for the storage timely log reader.
+pub(crate) type StorageTimelyLogReader =
+    Arc<EventLink<mz_repr::Timestamp, Vec<(Duration, TimelyEvent)>>>;
+
 /// Configures the server with compute-specific metrics.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct Config {
     /// `persist` client cache.
     pub persist_clients: Arc<PersistClientCache>,
@@ -69,6 +73,12 @@ struct Config {
     pub metrics: ComputeMetrics,
     /// Other configuration for compute.
     pub context: ComputeInstanceContext,
+    /// The process-global metrics registry.
+    pub metrics_registry: MetricsRegistry,
+    /// The number of timely workers per process.
+    pub workers_per_process: usize,
+    /// A reader for each storage worker in this process.
+    pub storage_log_readers: Arc<Mutex<Vec<Option<StorageTimelyLogReader>>>>,
 }
 
 /// Initiates a timely dataflow computation, processing compute commands.
@@ -79,13 +89,27 @@ pub async fn serve(
     txns_ctx: TxnsContext,
     tracing_handle: Arc<TracingHandle>,
     context: ComputeInstanceContext,
+    storage_log_readers: Vec<StorageTimelyLogReader>,
 ) -> Result<impl Fn() -> Box<dyn ComputeClient> + use<>, Error> {
+    let workers_per_process = timely_config.workers;
+    // Normalize the log-reader vec to exactly one slot per local worker. Empty
+    // input means logging is disabled; pad with `None` so index-based access is
+    // always in bounds.
+    let storage_log_readers = if storage_log_readers.is_empty() {
+        (0..workers_per_process).map(|_| None).collect()
+    } else {
+        assert_eq!(storage_log_readers.len(), workers_per_process);
+        storage_log_readers.into_iter().map(Some).collect()
+    };
     let config = Config {
         persist_clients,
         txns_ctx,
         tracing_handle,
         metrics: ComputeMetrics::register_with(metrics_registry),
         context,
+        metrics_registry: metrics_registry.clone(),
+        workers_per_process,
+        storage_log_readers: Arc::new(Mutex::new(storage_log_readers)),
     };
     let tokio_executor = tokio::runtime::Handle::current();
 
@@ -161,7 +185,7 @@ impl CommandReceiver {
 /// previous client connections.
 pub(crate) struct ResponseSender {
     /// The channel consuming responses.
-    inner: crossbeam_channel::Sender<(ComputeResponse, Uuid)>,
+    inner: mpsc::UnboundedSender<(ComputeResponse, Uuid)>,
     /// The ID of the Timely worker.
     worker_id: usize,
     /// The nonce identifying the current cluster protocol incarnation.
@@ -169,7 +193,7 @@ pub(crate) struct ResponseSender {
 }
 
 impl ResponseSender {
-    fn new(inner: crossbeam_channel::Sender<(ComputeResponse, Uuid)>, worker_id: usize) -> Self {
+    fn new(inner: mpsc::UnboundedSender<(ComputeResponse, Uuid)>, worker_id: usize) -> Self {
         Self {
             inner,
             worker_id,
@@ -197,9 +221,9 @@ impl ResponseSender {
 ///
 /// Much of this state can be viewed as local variables for the worker thread,
 /// holding state that persists across function calls.
-struct Worker<'w, A: Allocate> {
+struct Worker<'w> {
     /// The underlying Timely worker.
-    timely_worker: &'w mut TimelyWorker<A>,
+    timely_worker: &'w mut TimelyWorker,
     /// The channel over which commands are received.
     command_rx: CommandReceiver,
     /// The channel over which responses are sent.
@@ -215,18 +239,26 @@ struct Worker<'w, A: Allocate> {
     /// A process-global handle to tracing configuration.
     tracing_handle: Arc<TracingHandle>,
     context: ComputeInstanceContext,
+    /// The process-global metrics registry.
+    metrics_registry: MetricsRegistry,
+    /// The number of timely workers per process.
+    workers_per_process: usize,
+    /// Reader for storage timely logging events.
+    storage_log_reader: Option<StorageTimelyLogReader>,
 }
 
 impl ClusterSpec for Config {
     type Command = ComputeCommand;
     type Response = ComputeResponse;
 
-    fn run_worker<A: Allocate + 'static>(
+    const NAME: &str = "compute";
+
+    fn run_worker(
         &self,
-        timely_worker: &mut TimelyWorker<A>,
-        client_rx: crossbeam_channel::Receiver<(
+        timely_worker: &mut TimelyWorker,
+        client_rx: mpsc::UnboundedReceiver<(
             Uuid,
-            crossbeam_channel::Receiver<ComputeCommand>,
+            mpsc::UnboundedReceiver<ComputeCommand>,
             mpsc::UnboundedSender<ComputeResponse>,
         )>,
     ) {
@@ -237,12 +269,17 @@ impl ClusterSpec for Config {
         let worker_id = timely_worker.index();
         let metrics = self.metrics.for_worker(worker_id);
 
+        // Take this worker's storage log reader, indexed by local worker index
+        // so compute worker x matches storage worker x.
+        let local_index = worker_id % self.workers_per_process;
+        let storage_log_reader = self.storage_log_readers.lock().unwrap()[local_index].take();
+
         // Create the command channel that broadcasts commands from worker 0 to other workers. We
         // reuse this channel between client connections, to avoid bugs where different workers end
         // up creating incompatible sides of the channel dataflow after reconnects.
         // See database-issues#8964.
         let (cmd_tx, cmd_rx) = command_channel::render(timely_worker);
-        let (resp_tx, resp_rx) = crossbeam_channel::unbounded();
+        let (resp_tx, resp_rx) = mpsc::unbounded_channel();
 
         spawn_channel_adapter(client_rx, cmd_tx, resp_rx, worker_id);
 
@@ -256,6 +293,9 @@ impl ClusterSpec for Config {
             txns_ctx: self.txns_ctx.clone(),
             compute_state: None,
             tracing_handle: Arc::clone(&self.tracing_handle),
+            metrics_registry: self.metrics_registry.clone(),
+            workers_per_process: self.workers_per_process,
+            storage_log_reader,
         }
         .run()
     }
@@ -305,7 +345,7 @@ fn set_core_affinity(_worker_id: usize) {
     info!("setting core affinity is not supported on macOS");
 }
 
-impl<'w, A: Allocate + 'static> Worker<'w, A> {
+impl<'w> Worker<'w> {
     /// Runs a compute worker.
     pub fn run(&mut self) {
         // The command receiver is initialized without an nonce, so receiving the first command
@@ -384,22 +424,22 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
     }
 
     fn handle_command(&mut self, cmd: ComputeCommand) {
-        match &cmd {
-            ComputeCommand::CreateInstance(_) => {
-                self.compute_state = Some(ComputeState::new(
-                    Arc::clone(&self.persist_clients),
-                    self.txns_ctx.clone(),
-                    self.metrics.clone(),
-                    Arc::clone(&self.tracing_handle),
-                    self.context.clone(),
-                ));
-            }
-            _ => (),
+        if matches!(&cmd, ComputeCommand::CreateInstance(_)) {
+            self.compute_state = Some(ComputeState::new(
+                Arc::clone(&self.persist_clients),
+                self.txns_ctx.clone(),
+                self.metrics.clone(),
+                Arc::clone(&self.tracing_handle),
+                self.context.clone(),
+                self.metrics_registry.clone(),
+                self.workers_per_process,
+                self.storage_log_reader.take(),
+            ));
         }
         self.activate_compute().unwrap().handle_compute_command(cmd);
     }
 
-    fn activate_compute(&mut self) -> Option<ActiveComputeState<'_, A>> {
+    fn activate_compute(&mut self) -> Option<ActiveComputeState<'_>> {
         if let Some(compute_state) = &mut self.compute_state {
             Some(ActiveComputeState {
                 timely_worker: &mut *self.timely_worker,
@@ -728,25 +768,23 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
     }
 }
 
-/// Spawn a thread to bridge between [`ClusterClient`] and [`Worker`] channels.
+/// Spawn a task to bridge between [`ClusterClient`] and [`Worker`] channels.
 ///
 /// The [`Worker`] expects a pair of persistent channels, with punctuation marking reconnects,
 /// while the [`ClusterClient`] provides a new pair of channels on each reconnect.
 fn spawn_channel_adapter(
-    client_rx: crossbeam_channel::Receiver<(
+    mut client_rx: mpsc::UnboundedReceiver<(
         Uuid,
-        crossbeam_channel::Receiver<ComputeCommand>,
+        mpsc::UnboundedReceiver<ComputeCommand>,
         mpsc::UnboundedSender<ComputeResponse>,
     )>,
     command_tx: command_channel::Sender,
-    response_rx: crossbeam_channel::Receiver<(ComputeResponse, Uuid)>,
+    mut response_rx: mpsc::UnboundedReceiver<(ComputeResponse, Uuid)>,
     worker_id: usize,
 ) {
-    thread::Builder::new()
-        // "cca" stands for "compute channel adapter". We need to shorten that because Linux has a
-        // 15-character limit for thread names.
-        .name(format!("cca-{worker_id}"))
-        .spawn(move || {
+    mz_ore::task::spawn(
+        || format!("compute-channel-adapter-{worker_id}"),
+        async move {
             // To make workers aware of the individual client connections, we tag forwarded
             // commands with the client nonce. Additionally, we use the nonce to filter out
             // responses with a different nonce, which are intended for different client
@@ -765,7 +803,7 @@ fn spawn_channel_adapter(
             // know that all stashed responses must be from the past.
             let mut stashed_responses = BTreeMap::<Uuid, Vec<ComputeResponse>>::new();
 
-            while let Ok((nonce, command_rx, response_tx)) = client_rx.recv() {
+            while let Some((nonce, mut command_rx, response_tx)) = client_rx.recv().await {
                 // Send stashed responses for this client.
                 if let Some(resps) = stashed_responses.remove(&nonce) {
                     for resp in resps {
@@ -774,13 +812,13 @@ fn spawn_channel_adapter(
                 }
 
                 // Wait for a new response while forwarding received commands.
-                let serve_rx_channels = || loop {
-                    crossbeam_channel::select! {
-                        recv(command_rx) -> msg => match msg {
-                            Ok(cmd) => command_tx.send((cmd, nonce)),
-                            Err(_) => return Err(()),
+                let mut serve_rx_channels = async || loop {
+                    tokio::select! {
+                        msg = command_rx.recv() => match msg {
+                            Some(cmd) => command_tx.send((cmd, nonce)),
+                            None => return Err(()),
                         },
-                        recv(response_rx) -> msg => {
+                        msg = response_rx.recv() => {
                             return Ok(msg.expect("worker connected"));
                         }
                     }
@@ -788,7 +826,7 @@ fn spawn_channel_adapter(
 
                 // Serve this connection until we see any of the channels disconnect.
                 loop {
-                    let Ok((resp, resp_nonce)) = serve_rx_channels() else {
+                    let Ok((resp, resp_nonce)) = serve_rx_channels().await else {
                         break;
                     };
 
@@ -805,6 +843,6 @@ fn spawn_channel_adapter(
                     }
                 }
             }
-        })
-        .unwrap();
+        },
+    );
 }

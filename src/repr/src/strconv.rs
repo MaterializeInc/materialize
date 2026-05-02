@@ -1929,7 +1929,17 @@ where
 
 /// An error while parsing an input as a type.
 #[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
 )]
 pub struct ParseError {
     pub kind: ParseErrorKind,
@@ -1950,7 +1960,7 @@ pub struct ParseError {
     Serialize,
     Deserialize,
     Hash,
-    MzReflect,
+    MzReflect
 )]
 pub enum ParseErrorKind {
     OutOfRange,
@@ -2071,7 +2081,7 @@ impl RustType<ProtoParseError> for ParseError {
     Serialize,
     Deserialize,
     Hash,
-    MzReflect,
+    MzReflect
 )]
 pub enum ParseHexError {
     InvalidHexDigit(char),

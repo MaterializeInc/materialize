@@ -10,31 +10,35 @@ menu:
 
 ## Syntax
 
-{{< diagram "copy-from.svg" >}}
+{{< tabs >}}
 
-Field | Use
-------|-----
-_table_name_ | Copy values to this table.
-**(**_column_...**)** | Correlate the inserted rows' columns to _table_name_'s columns by ordinal position, i.e. the first column of the row to insert is correlated to the first named column. <br/><br/>Without a column list, all columns must have data provided, and will be referenced using their order in the table. With a partial column list, all unreferenced columns will receive their default value.
-_field_ | The name of the option you want to set.
-_val_ | The value for the option.
+{{< tab "Copy from STDIN" >}}
+{{% include-syntax file="examples/copy_from" example="syntax" %}}
+{{< /tab >}}
 
-### `WITH` options
+{{< tab "Copy from S3 and S3 compatible services" >}}
+{{% include-syntax file="examples/copy_from_s3" example="syntax" %}}
+{{< /tab >}}
 
-The following options are valid within the `WITH` clause.
-
-Name | Value type | Default value | Description
------|-----------------|---------------|------------
-`FORMAT` | `TEXT`, `CSV` | `TEXT` | Sets the input formatting method. For more information see [Text formatting](#text-formatting), [CSV formatting](#csv-formatting).
-`DELIMITER` | Single-quoted one-byte character | Format-dependent | Overrides the format's default column delimiter.
-`NULL` | Single-quoted strings | Format-dependent | Specifies the string that represents a _NULL_ value.
-`QUOTE` | Single-quoted one-byte character | `"` | Specifies the character to signal a quoted string, which may contain the `DELIMITER` value (without beginning new columns). To include the `QUOTE` character itself in column, wrap the column's value in the `QUOTE` character and prefix all instance of the value you want to literally interpret with the `ESCAPE` value. _`FORMAT CSV` only_
-`ESCAPE` | Single-quoted strings | `QUOTE`'s value | Specifies the character to allow instances of the `QUOTE` character to be parsed literally as part of a column's value. _`FORMAT CSV` only_
-`HEADER`  | `boolean`   | `boolean`  | Specifies that the file contains a header line with the names of each column in the file. The first line is ignored on input.  _`FORMAT CSV` only._
-
-Note that `DELIMITER` and `QUOTE` must use distinct values.
+{{< /tabs >}}
 
 ## Details
+
+### S3 Bucket IAM Policies
+
+To use `COPY FROM` with S3, you need to allow the following actions in your IAM policy:
+
+| Action type | Action name                                                                               | Action description                                                |
+| ----------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| Read        | [`s3:GetObject`](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html)      | Grants permission to retrieve an object from a bucket.            |
+| List        | [`s3:ListBucket`](https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html) | Grants permission to list some or all of the objects in a bucket. |
+
+{{< note >}}
+For S3-compatible object storage services (e.g., Google Cloud Storage, Cloudflare R2, MinIO),
+you need to enable equivalent permissions on the service you are using. The specific
+configuration steps will vary by provider, but the access credentials must allow the same
+read and list operations on the target bucket.
+{{< /note >}}
 
 ### Text formatting
 
@@ -57,14 +61,66 @@ except that:
 - Quoted null strings will be parsed as nulls, despite being quoted. In
   PostgreSQL, this data would be escaped.
 
-  To ensure proper null handling, we recommend specifying a unique string for
-  null values, and ensuring it is never quoted.
+    To ensure proper null handling, we recommend specifying a unique string for
+    null values, and ensuring it is never quoted.
 
 - Unterminated quotes are allowed, i.e. they do not generate errors. In
   PostgreSQL, all open unescaped quotation punctuation must have a matching
   piece of unescaped quotation punctuation or it generates an error.
 
-## Example
+### PARQUET formatting
+
+Supported PARQUET compression formats
+
+- snappy
+- gzip
+- brotli
+- zstd
+- lz4
+
+{{< comment >}}
+TODO:
+
+- Text can be imported as text or JSON/JSONB or a map.. do we document casting rules/make a whole section for casting?
+  {{< /comment >}}
+
+| [Arrow type](https://github.com/apache/arrow/blob/main/format/Schema.fbs) | [Parquet primitive type](https://parquet.apache.org/docs/file-format/types/) | [Parquet logical type](https://github.com/apache/parquet-format/blob/master/LogicalTypes.md) | Materialize type                                                                  |
+| ------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `bool`                                                                    | `BOOLEAN`                                                                    |                                                                                              | [`boolean`](/sql/types/boolean/)                                                  |
+| `date32`                                                                  | `INT32`                                                                      | `DATE`                                                                                       | [`date`](/sql/types/date/)                                                        |
+| `decimal128[38, 10 or max-scale]`                                         | `FIXED_LEN_BYTE_ARRAY`                                                       | `DECIMAL`                                                                                    | [`numeric`](/sql/types/numeric/)                                                  |
+| `fixed_size_binary(16)`                                                   | `FIXED_LEN_BYTE_ARRAY`                                                       |                                                                                              | [`bytea`](/sql/types/bytea/)                                                      |
+| `float32`                                                                 | `FLOAT`                                                                      |                                                                                              | [`real`](/sql/types/float/#real-info)                                             |
+| `float64`                                                                 | `DOUBLE`                                                                     |                                                                                              | [`double precision`](/sql/types/float/#double-precision-info)                     |
+| `int16`                                                                   | `INT32`                                                                      | `INT(16, true)`                                                                              | [`smallint`](/sql/types/integer/#smallint-info)                                   |
+| `int32`                                                                   | `INT32`                                                                      |                                                                                              | [`integer`](/sql/types/integer/#integer-info)                                     |
+| `int64`                                                                   | `INT64`                                                                      |                                                                                              | [`bigint`](/sql/types/integer/#bigint-info)                                       |
+| `interval[year-month]`                                                    | `INT32`                                                                      | `INTERVAL(YEAR_MONTH)`                                                                       | [`interval`](/sql/types/interval/)                                                |
+| `interval[day-time]`                                                      | `FIXED_LEN_BYTE_ARRAY(12)`                                                   | `INTERVAL`                                                                                   | [`interval`](/sql/types/interval/)                                                |
+| `large_binary`                                                            | `BYTE_ARRAY`                                                                 |                                                                                              | [`bytea`](/sql/types/bytea/)                                                      |
+| `large_utf8`                                                              | `BYTE_ARRAY`                                                                 |                                                                                              | [`jsonb`](/sql/types/jsonb/)                                                      |
+| `list`                                                                    | Nested                                                                       |                                                                                              | [`list`](/sql/types/list/)                                                        |
+| `map`                                                                     | Nested                                                                       | `MAP`                                                                                        | [`map`](/sql/types/map/)                                                          |
+| `struct`                                                                  | Nested                                                                       |                                                                                              | [Arrays](/sql/types/array/) (`[]`)                                                |
+| `time64[microsecond]`                                                     | `INT64`                                                                      | `TIMESTAMP[isAdjustedToUTC = false, unit = MICROS]`                                          | [`timestamp`](/sql/types/timestamp/#timestamp-info)                               |
+| `time64[microsecond]`                                                     | `INT64`                                                                      | `TIMESTAMP[isAdjustedToUTC = true, unit = MICROS]`                                           | [`timestamp with time zone`](/sql/types/timestamp/#timestamp-with-time-zone-info) |
+| `time64[nanosecond]`                                                      | `INT64`                                                                      | `TIME[isAdjustedToUTC = false, unit = NANOS]`                                                | [`time`](/sql/types/time/)                                                        |
+| `uint16`                                                                  | `INT32`                                                                      | `INT(16, false)`                                                                             | [`uint2`](/sql/types/uint/#uint2-info)                                            |
+| `uint32`                                                                  | `INT32`                                                                      | `INT(32, false)`                                                                             | [`uint4`](/sql/types/uint/#uint4-info)                                            |
+| `uint64`                                                                  | `INT64`                                                                      | `INT(64, false)`                                                                             | [`uint8`](/sql/types/uint/#uint8-info)                                            |
+| `utf8` or `large_utf8`                                                    | `BYTE_ARRAY`                                                                 | `STRING`                                                                                     | [`text`](/sql/types/text/)                                                        |
+
+### Limits
+
+You can copy up to 10 GiB of data at a time. If you need to copy more than that, please [contact support](/support/).
+
+When importing parquet files, entire row groups are held in memory at once, so ensure that your
+Materialize instance has enough available memory to accomodate your parquet files. If you are
+encountering memory issues, and are unable to reduce the sizes of your row groups, please [contact support](/support/).
+
+## Examples
+
+### From STDIN
 
 ```mzsql
 COPY t FROM STDIN WITH (DELIMITER '|');
@@ -78,14 +134,52 @@ COPY t FROM STDIN (FORMAT CSV);
 COPY t FROM STDIN (DELIMITER '|');
 ```
 
+### From AWS S3
+
+#### Using AWS connection
+
+Perform bulk import:
+
+Using `FILES` option:
+
+```mzsql
+COPY INTO csv_table FROM 's3://example_bucket' (FORMAT CSV, AWS CONNECTION = example_aws_conn, FILES = ['example_data.csv']);
+```
+
+Using the full s3 URI:
+
+```mzsql
+COPY INTO csv_table FROM 's3://example_bucket/example_data.csv' (FORMAT CSV, AWS CONNECTION = example_aws_conn);
+```
+
+Using `PATTERN` option:
+
+```mzsql
+COPY INTO parquet_table FROM 's3://example_bucket' (FORMAT PARQUET, AWS CONNECTION = example_aws_conn, PATTERN = '*parquet*');
+```
+
+#### Using S3-compatible object storage
+
+You can use `COPY FROM` with any S3-compatible object storage service, such as
+Google Cloud Storage, Cloudflare R2, or MinIO. First,
+[create an AWS connection for S3-compatible storage](/sql/create-connection/#s3-compatible-object-storage),
+then use it in the `COPY` command. Make sure your credentials have the necessary
+permissions as described in [S3 Bucket IAM Policies](#s3-bucket-iam-policies).
+
+```mzsql
+COPY INTO csv_table FROM 's3://my_bucket/my_data.csv' (FORMAT CSV, AWS CONNECTION = gcs_connection);
+```
+
+#### Using presigned URL
+
+```mzsql
+COPY INTO csv_table FROM '<s3 presigned URL>' (FORMAT CSV);
+```
+
 ## Privileges
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/copy-from.md" >}}
+{{% include-headless "/headless/sql-command-privileges/copy-from" %}}
 
 [pg-copy-from]: https://www.postgresql.org/docs/14/sql-copy.html
-
-## Limits
-
-You can only copy up to 1 GiB of data at a time. If you need this limit increased, please [chat with our team](http://materialize.com/convert-account/).

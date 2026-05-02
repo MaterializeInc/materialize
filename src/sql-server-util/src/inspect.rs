@@ -390,7 +390,7 @@ JOIN cdc.change_tables ch ON t.object_id = ch.source_object_id
 ";
 
 /// Returns the table metadata for the tables that are tracked by the specified `capture_instance`s.
-pub async fn get_tables_for_capture_instance<'a>(
+pub async fn get_tables_for_capture_instance(
     client: &mut Client,
     capture_instances: impl IntoIterator<Item = &str>,
 ) -> Result<Vec<SqlServerTableRaw>, SqlServerError> {
@@ -499,27 +499,25 @@ pub async fn get_constraints_for_tables(
         .map(|idx| format!("@P{}", idx))
         .join(", ");
 
-    // Because we don't have an object idenfifier for the table(s), this query concatenates the
-    // schema and table name to create a single identifier for the query rather than compose a
-    // complex set of OR conditions for each schema + set of tables in the schema.
-    //
-    // This query may perform poorly due to the condition relying on a concatenated value. We may get
-    // better performance by adding a query constraint on the table names, but it isn't clear at
-    // this time if that is needed.
+    // KEY_COLUMN_USAGE (not CONSTRAINT_COLUMN_USAGE) because it exposes
+    // ORDINAL_POSITION, letting us preserve composite-key column order.
     let query = format!(
         "SELECT \
         tc.table_schema, \
         tc.table_name, \
-        ccu.column_name,  \
+        kcu.column_name, \
         tc.constraint_name, \
         tc.constraint_type \
     FROM information_schema.table_constraints tc \
-    JOIN information_schema.constraint_column_usage ccu \
-        ON ccu.constraint_schema = tc.constraint_schema \
-        AND ccu.constraint_name = tc.constraint_name \
+    JOIN information_schema.key_column_usage kcu \
+        ON kcu.constraint_schema = tc.constraint_schema \
+        AND kcu.constraint_name = tc.constraint_name \
+        AND kcu.table_schema = tc.table_schema \
+        AND kcu.table_name = tc.table_name \
     WHERE
         QUOTENAME(tc.table_schema) + '.' + QUOTENAME(tc.table_name) IN ({params})
-        AND tc.constraint_type in ('PRIMARY KEY', 'UNIQUE')"
+        AND tc.constraint_type IN ('PRIMARY KEY', 'UNIQUE')
+    ORDER BY tc.table_schema, tc.table_name, tc.constraint_name, kcu.ordinal_position"
     );
 
     let query_params: Vec<_> = qualified_table_names
@@ -622,7 +620,7 @@ impl DDLEvent {
     ///  2. ALTER TABLE .. DROP COLUMN
     ///
     /// See <https://learn.microsoft.com/en-us/sql/t-sql/statements/alter-table-transact-sql?view=sql-server-ver17>
-    pub fn is_compatible(&self) -> bool {
+    pub fn is_compatible(&self, included_columns: &[Arc<str>]) -> bool {
         // TODO (maz): This is currently a basic check that doesn't take into account type changes.
         // At some point, we will need to move this to SqlServerTableDesc and expand it.
         let mut words = self.ddl_command.split_ascii_whitespace();
@@ -635,9 +633,54 @@ impl DDLEvent {
                 let mut compatible = true;
                 while compatible && let Some(token) = peekable.next() {
                     compatible = match token.to_ascii_lowercase().as_str() {
-                        "alter" | "drop" => peekable
-                            .peek()
-                            .is_some_and(|next_tok| !next_tok.eq_ignore_ascii_case("column")),
+                        "alter" | "drop" => {
+                            let target = peekable.next();
+                            match target {
+                                // Targeting a column
+                                Some(t) if t.eq_ignore_ascii_case("column") => {
+                                    let mut all_excluded = true;
+                                    while let Some(tok) = peekable.next() {
+                                        // The column name(s) can be preceeded by the pair of keywords "IF EXISTS", so we want to skip those.
+                                        match tok.to_ascii_lowercase().as_str() {
+                                            "if" | "exists" | "," | "column" => continue,
+                                            col_str => {
+                                                // If any column is in the included list, then it is not okay to alter/drop it
+                                                // The col_str token may be a comma-separated list of columns as whitespace is not required
+                                                // between column names in SQL Server DDL.
+                                                if !col_str.trim_matches(',').split(',').all(
+                                                    |col_name| {
+                                                        !included_columns.iter().any(|included| {
+                                                            included.eq_ignore_ascii_case(
+                                                                col_name.trim_matches(
+                                                                    ['[', ']', '"'].as_ref(),
+                                                                ),
+                                                            )
+                                                        })
+                                                    },
+                                                ) {
+                                                    all_excluded = false;
+                                                    break;
+                                                }
+                                                // If this is the only/last column, then we can break out of the while loop.
+                                                // Check if this string has no trailing comma, and if not, peek to see if the next token
+                                                // contains a leading comma.
+                                                if !col_str.ends_with(",") {
+                                                    match peekable.peek() {
+                                                        Some(x) if x.starts_with(",") => continue,
+                                                        _ => break,
+                                                    }
+                                                }
+                                            }
+                                        };
+                                    }
+                                    all_excluded
+                                }
+                                // No target token after "alter" or "drop"
+                                None => false,
+                                // Other targets are considered compatible
+                                _ => true,
+                            }
+                        }
                         _ => true,
                     }
                 }
@@ -891,7 +934,7 @@ where
 /// have the necessary permissions to and an error if any table, column,
 /// or capture instance does not have the necessary permissions
 /// for tracking changes.
-pub async fn validate_source_privileges<'a>(
+pub async fn validate_source_privileges(
     client: &mut Client,
     capture_instances: impl IntoIterator<Item = &str>,
 ) -> Result<(), SqlServerError> {
@@ -972,4 +1015,119 @@ pub async fn validate_source_privileges<'a>(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DDLEvent;
+    use std::sync::Arc;
+
+    #[mz_ore::test]
+    fn test_ddl_event_is_compatible() {
+        fn test_case(ddl_command: &str, included_columns: &[Arc<str>], expected: bool) {
+            let ddl_event = DDLEvent {
+                lsn: Default::default(),
+                ddl_command: ddl_command.into(),
+            };
+            let result = ddl_event.is_compatible(included_columns);
+            assert_eq!(
+                result, expected,
+                "DDL command '{}' with included_columns {:?} expected to be {}, got {}",
+                ddl_command, included_columns, expected, result
+            );
+        }
+
+        let included_columns = vec![Arc::from("col3"), Arc::from("col4"), Arc::from("col4")];
+
+        test_case(
+            "ALTER TABLE my_table ALTER COLUMN col1 INT",
+            &included_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col2",
+            &included_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table ALTER COLUMN col3 INT",
+            &included_columns,
+            false,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col4 INT",
+            &included_columns,
+            false,
+        );
+        test_case(
+            "CREATE INDEX idx_my_index ON my_table(col1)",
+            &included_columns,
+            true,
+        );
+        test_case(
+            "DROP INDEX idx_my_index ON my_table",
+            &included_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table ADD COLUMN col5 INT",
+            &included_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col1, col2",
+            &included_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col3, col2",
+            &included_columns,
+            false,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col3, col4",
+            &included_columns,
+            false,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN IF EXISTS col1, col2",
+            &included_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP CONSTRAINT constraint_name",
+            &included_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col1,col3",
+            &included_columns,
+            false,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col1,col2",
+            &included_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col1 ,col2",
+            &included_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col1 , col2",
+            &included_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col1 , col3",
+            &included_columns,
+            false,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col1 , COLUMN col3",
+            &included_columns,
+            false,
+        );
+    }
 }

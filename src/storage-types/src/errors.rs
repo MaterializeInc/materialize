@@ -15,19 +15,31 @@ use bytes::BufMut;
 use mz_expr::EvalError;
 use mz_kafka_util::client::TunnelingClientContext;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::Row;
+use mz_repr::{GlobalId, Row};
 use mz_ssh_util::tunnel::SshTunnelStatus;
 use proptest_derive::Arbitrary;
 use prost::Message;
 use rdkafka::error::KafkaError;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use tracing::warn;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_types.errors.rs"));
 
 /// The underlying data was not decodable in the format we expected: eg.
 /// invalid JSON or Avro data that doesn't match a schema.
-#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash
+)]
 pub struct DecodeError {
     pub kind: DecodeErrorKind,
     pub raw: Vec<u8>,
@@ -86,7 +98,18 @@ impl Display for DecodeError {
     }
 }
 
-#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash
+)]
 pub enum DecodeErrorKind {
     Text(Box<str>),
     Bytes(Box<str>),
@@ -123,7 +146,18 @@ impl Display for DecodeErrorKind {
 }
 
 /// Errors arising during envelope processing.
-#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, Deserialize, Serialize, PartialEq, Hash)]
+#[derive(
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    Deserialize,
+    Serialize,
+    PartialEq,
+    Hash
+)]
 pub enum EnvelopeError {
     /// An error that can be retracted by a future message using upsert logic.
     Upsert(UpsertError),
@@ -169,7 +203,18 @@ impl Display for EnvelopeError {
 
 /// An error from a value in an upsert source. The corresponding key is included, allowing
 /// us to reconstruct their entry in the upsert map upon restart.
-#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash
+)]
 pub struct UpsertValueError {
     /// The underlying error.
     pub inner: DecodeError,
@@ -207,7 +252,17 @@ impl Display for UpsertValueError {
 
 /// A source contained a record with a NULL key, which we don't support.
 #[derive(
-    Arbitrary, Ord, PartialOrd, Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash,
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Copy,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash
 )]
 pub struct UpsertNullKeyError;
 
@@ -235,7 +290,18 @@ impl Display for UpsertNullKeyError {
 }
 
 /// An error that can be retracted by a future message using upsert logic.
-#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash
+)]
 pub enum UpsertError {
     /// Wrapper around a key decoding error.
     /// We use this instead of emitting the underlying `DataflowError::DecodeError` because with only
@@ -295,7 +361,18 @@ impl Display for UpsertError {
 
 /// Source-wide durable errors; for example, a replication log being meaningless or corrupted.
 /// This should _not_ include transient source errors, like connection issues or misconfigurations.
-#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash
+)]
 pub struct SourceError {
     pub error: SourceErrorDetails,
 }
@@ -320,7 +397,18 @@ impl Display for SourceError {
     }
 }
 
-#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash
+)]
 pub enum SourceErrorDetails {
     Initialization(Box<str>),
     Other(Box<str>),
@@ -382,7 +470,18 @@ impl Display for SourceErrorDetails {
 /// All of the variants are boxed to minimize the memory size of `DataflowError`. This type is
 /// likely to appear in `Result<Row, DataflowError>`s on high-throughput code paths, so keeping its
 /// size less than or equal to that of `Row` is important to ensure we are not wasting memory.
-#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, Deserialize, Serialize, PartialEq, Hash)]
+#[derive(
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    Deserialize,
+    Serialize,
+    PartialEq,
+    Hash
+)]
 pub enum DataflowError {
     DecodeError(Box<DecodeError>),
     EvalError(Box<EvalError>),
@@ -394,8 +493,8 @@ impl Error for DataflowError {}
 
 mod boxed_str {
 
-    use differential_dataflow::containers::Region;
-    use differential_dataflow::containers::StableRegion;
+    use columnation::Region;
+    use columnation::StableRegion;
 
     /// Region allocation for `String` data.
     ///
@@ -447,7 +546,7 @@ mod boxed_str {
 mod columnation {
     use std::iter::once;
 
-    use differential_dataflow::containers::{Columnation, Region, StableRegion};
+    use columnation::{Columnation, Region, StableRegion};
     use mz_expr::EvalError;
     use mz_repr::Row;
     use mz_repr::adt::range::InvalidRangeError;
@@ -553,6 +652,7 @@ mod columnation {
                         | e @ EvalError::KeyCannotBeNull
                         | e @ EvalError::UnterminatedLikeEscapeSequence
                         | e @ EvalError::MultipleRowsFromSubquery
+                        | e @ EvalError::NegativeRowsFromSubquery
                         | e @ EvalError::LikePatternTooLong
                         | e @ EvalError::LikeEscapeTooLong
                         | e @ EvalError::MultidimensionalArrayRemovalNotSupported
@@ -736,6 +836,9 @@ mod columnation {
                         EvalError::InvalidPrivileges(x) => {
                             EvalError::InvalidPrivileges(self.string_region.copy(x))
                         }
+                        EvalError::InvalidCatalogJson(x) => {
+                            EvalError::InvalidCatalogJson(self.string_region.copy(x))
+                        }
                         EvalError::LetRecLimitExceeded(x) => {
                             EvalError::LetRecLimitExceeded(self.string_region.copy(x))
                         }
@@ -767,6 +870,9 @@ mod columnation {
                         }
                         EvalError::PrettyError(x) => {
                             EvalError::PrettyError(self.string_region.copy(x))
+                        }
+                        EvalError::RedactError(x) => {
+                            EvalError::RedactError(self.string_region.copy(x))
                         }
                     };
                     let reference = self.eval_error_region.copy_iter(once(err));
@@ -907,13 +1013,13 @@ mod columnation {
 
     #[cfg(test)]
     mod tests {
-        use differential_dataflow::containers::TimelyStack;
+        use mz_timely_util::columnation::ColumnationStack;
         use proptest::prelude::*;
 
         use super::*;
 
-        fn columnation_roundtrip<T: Columnation>(item: &T) -> TimelyStack<T> {
-            let mut container = TimelyStack::with_capacity(1);
+        fn columnation_roundtrip<T: Columnation>(item: &T) -> ColumnationStack<T> {
+            let mut container = ColumnationStack::with_capacity(1);
             container.copy(item);
             container
         }
@@ -1097,6 +1203,11 @@ pub enum CsrConnectError {
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
+
+/// Error returned in response to a reference to an unknown collection.
+#[derive(Error, Debug)]
+#[error("collection does not exist: {0}")]
+pub struct CollectionMissing(pub GlobalId);
 
 #[cfg(test)]
 mod tests {

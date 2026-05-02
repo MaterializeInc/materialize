@@ -24,7 +24,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll, Waker, ready};
 
-use differential_dataflow::containers::{Columnation, TimelyStack};
 use futures_util::Stream;
 use futures_util::task::ArcWake;
 use timely::communication::{Pull, Push};
@@ -35,24 +34,24 @@ use timely::dataflow::channels::pushers::Output;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
 use timely::dataflow::operators::generic::{InputHandleCore, OperatorInfo};
 use timely::dataflow::operators::{Capability, CapabilitySet, InputCapability};
-use timely::dataflow::{Scope, StreamCore};
+use timely::dataflow::{Scope, Stream as TimelyStream, StreamVec};
 use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::{Activator, SyncActivator};
 use timely::{Bincode, Container, ContainerBuilder, PartialOrder};
 
-use crate::containers::stack::AccountedStackBuilder;
+use crate::containers::stack::FueledBuilder;
 
 /// Builds async operators with generic shape.
-pub struct OperatorBuilder<G: Scope> {
-    builder: OperatorBuilderRc<G>,
+pub struct OperatorBuilder<'scope, T: Timestamp> {
+    builder: OperatorBuilderRc<'scope, T>,
     /// The activator for this operator
     activator: Activator,
     /// The waker set up to activate this timely operator when woken
     operator_waker: Arc<TimelyWaker>,
     /// The currently known upper frontier of each of the input handles.
-    input_frontiers: Vec<Antichain<G::Timestamp>>,
+    input_frontiers: Vec<Antichain<T>>,
     /// Input queues for each of the declared inputs of the operator.
-    input_queues: Vec<Box<dyn InputQueue<G::Timestamp>>>,
+    input_queues: Vec<Box<dyn InputQueue<T>>>,
     /// Holds type erased closures that flush an output handle when called. These handles will be
     /// automatically drained when the operator is scheduled after the logic future has been polled
     output_flushes: Vec<Box<dyn FnMut()>>,
@@ -85,11 +84,11 @@ where
     fn accept_input(&mut self) {
         let mut queue = self.queue.borrow_mut();
         let mut new_data = false;
-        while let Some((cap, data)) = self.handle.next() {
+        self.handle.for_each(|cap, data| {
             new_data = true;
             let cap = self.connection.accept(cap);
             queue.push_back(Event::Data(cap, std::mem::take(data)));
-        }
+        });
         if new_data {
             if let Some(waker) = self.waker.take() {
                 waker.wake();
@@ -314,25 +313,29 @@ where
     }
 }
 
-impl<T, D> AsyncOutputHandle<T, AccountedStackBuilder<CapacityContainerBuilder<TimelyStack<D>>>>
+impl<T, D> AsyncOutputHandle<T, FueledBuilder<CapacityContainerBuilder<Vec<D>>>>
 where
-    D: timely::Data + Columnation,
+    D: Clone + 'static,
     T: Timestamp,
 {
     pub const MAX_OUTSTANDING_BYTES: usize = 128 * 1024 * 1024;
 
-    /// Provides one record at the time specified by the capability. This method will automatically
-    /// yield back to timely after [Self::MAX_OUTSTANDING_BYTES] have been produced.
-    pub async fn give_fueled<D2>(&self, cap: &Capability<T>, data: D2)
+    /// Provides one record at the time specified by the capability and
+    /// charges `size_bytes` against the builder's fuel counter. Once at least
+    /// [`Self::MAX_OUTSTANDING_BYTES`] have been emitted since the last yield
+    /// this method yields back to timely and resets the counter.
+    pub async fn give_fueled<D2>(&self, cap: &Capability<T>, data: D2, size_bytes: usize)
     where
-        TimelyStack<D>: PushInto<D2>,
+        FueledBuilder<CapacityContainerBuilder<Vec<D>>>: PushInto<D2>,
     {
         let should_yield = {
             let mut handle = self.inner.borrow_mut();
             handle.give(cap, data);
-            let should_yield = handle.builder.bytes.get() > Self::MAX_OUTSTANDING_BYTES;
+            let bytes = &handle.builder.bytes;
+            bytes.set(bytes.get() + size_bytes);
+            let should_yield = bytes.get() > Self::MAX_OUTSTANDING_BYTES;
             if should_yield {
-                handle.builder.bytes.set(0);
+                bytes.set(0);
             }
             should_yield
         };
@@ -392,7 +395,7 @@ impl<T: Timestamp> InputConnection<T> for ConnectedToOne {
     }
 
     fn accept(&self, input_cap: InputCapability<T>) -> Self::Capability {
-        input_cap.retain_for_output(self.0)
+        input_cap.retain(self.0)
     }
 }
 
@@ -411,8 +414,7 @@ impl<const N: usize, T: Timestamp> InputConnection<T> for ConnectedToMany<N> {
     }
 
     fn accept(&self, input_cap: InputCapability<T>) -> Self::Capability {
-        self.0
-            .map(|output| input_cap.delayed_for_output(input_cap.time(), output))
+        self.0.map(|output| input_cap.retain(output))
     }
 }
 
@@ -430,19 +432,19 @@ impl<T: Timestamp, CB: ContainerBuilder> OutputIndex for AsyncOutputHandle<T, CB
     }
 }
 
-impl<G: Scope> OperatorBuilder<G> {
+impl<'scope, T: Timestamp> OperatorBuilder<'scope, T> {
     /// Allocates a new generic async operator builder from its containing scope.
-    pub fn new(name: String, mut scope: G) -> Self {
-        let builder = OperatorBuilderRc::new(name, scope.clone());
+    pub fn new(name: String, scope: Scope<'scope, T>) -> Self {
+        let builder = OperatorBuilderRc::new(name, scope);
         let info = builder.operator_info();
         let activator = scope.activator_for(Rc::clone(&info.address));
-        let sync_activator = scope.sync_activator_for(info.address.to_vec());
+        let sync_activator = scope.worker().sync_activator_for(info.address.to_vec());
         let operator_waker = TimelyWaker {
             activator: sync_activator,
             active: AtomicBool::new(false),
             task_ready: AtomicBool::new(true),
         };
-        let (shutdown_handle, shutdown_button) = button(&mut scope, info.address);
+        let (shutdown_handle, shutdown_button) = button(scope, info.address);
 
         OperatorBuilder {
             builder,
@@ -459,13 +461,13 @@ impl<G: Scope> OperatorBuilder<G> {
     /// Adds a new input that is connected to the specified output, returning the async input handle to use.
     pub fn new_input_for<D, P>(
         &mut self,
-        stream: &StreamCore<G, D>,
+        stream: TimelyStream<'scope, T, D>,
         pact: P,
         output: &dyn OutputIndex,
-    ) -> AsyncInputHandle<G::Timestamp, D, ConnectedToOne>
+    ) -> AsyncInputHandle<T, D, ConnectedToOne>
     where
-        D: Container + 'static,
-        P: ParallelizationContract<G::Timestamp, D>,
+        D: Container + Clone + 'static,
+        P: ParallelizationContract<T, D>,
     {
         let index = output.index();
         assert!(index < self.builder.shape().outputs());
@@ -475,13 +477,13 @@ impl<G: Scope> OperatorBuilder<G> {
     /// Adds a new input that is connected to the specified outputs, returning the async input handle to use.
     pub fn new_input_for_many<const N: usize, D, P>(
         &mut self,
-        stream: &StreamCore<G, D>,
+        stream: TimelyStream<'scope, T, D>,
         pact: P,
         outputs: [&dyn OutputIndex; N],
-    ) -> AsyncInputHandle<G::Timestamp, D, ConnectedToMany<N>>
+    ) -> AsyncInputHandle<T, D, ConnectedToMany<N>>
     where
-        D: Container + 'static,
-        P: ParallelizationContract<G::Timestamp, D>,
+        D: Container + Clone + 'static,
+        P: ParallelizationContract<T, D>,
     {
         let indices = outputs.map(|output| output.index());
         for index in indices {
@@ -493,12 +495,12 @@ impl<G: Scope> OperatorBuilder<G> {
     /// Adds a new input that is not connected to any output, returning the async input handle to use.
     pub fn new_disconnected_input<D, P>(
         &mut self,
-        stream: &StreamCore<G, D>,
+        stream: TimelyStream<'scope, T, D>,
         pact: P,
-    ) -> AsyncInputHandle<G::Timestamp, D, Disconnected>
+    ) -> AsyncInputHandle<T, D, Disconnected>
     where
-        D: Container + 'static,
-        P: ParallelizationContract<G::Timestamp, D>,
+        D: Container + Clone + 'static,
+        P: ParallelizationContract<T, D>,
     {
         self.new_input_connection(stream, pact, Disconnected)
     }
@@ -506,17 +508,17 @@ impl<G: Scope> OperatorBuilder<G> {
     /// Adds a new input with connection information, returning the async input handle to use.
     pub fn new_input_connection<D, P, C>(
         &mut self,
-        stream: &StreamCore<G, D>,
+        stream: TimelyStream<'scope, T, D>,
         pact: P,
         connection: C,
-    ) -> AsyncInputHandle<G::Timestamp, D, C>
+    ) -> AsyncInputHandle<T, D, C>
     where
-        D: Container + 'static,
-        P: ParallelizationContract<G::Timestamp, D>,
-        C: InputConnection<G::Timestamp> + 'static,
+        D: Container + Clone + 'static,
+        P: ParallelizationContract<T, D>,
+        C: InputConnection<T> + 'static,
     {
         self.input_frontiers
-            .push(Antichain::from_elem(G::Timestamp::minimum()));
+            .push(Antichain::from_elem(T::minimum()));
 
         let outputs = self.builder.shape().outputs();
         let handle = self.builder.new_input_connection(
@@ -546,8 +548,8 @@ impl<G: Scope> OperatorBuilder<G> {
     pub fn new_output<CB: ContainerBuilder>(
         &mut self,
     ) -> (
-        AsyncOutputHandle<G::Timestamp, CB>,
-        StreamCore<G, CB::Container>,
+        AsyncOutputHandle<T, CB>,
+        TimelyStream<'scope, T, CB::Container>,
     ) {
         let index = self.builder.shape().outputs();
 
@@ -568,7 +570,7 @@ impl<G: Scope> OperatorBuilder<G> {
     /// [`Button::press_on_drop`]
     pub fn build<B, L>(self, constructor: B) -> Button
     where
-        B: FnOnce(Vec<Capability<G::Timestamp>>) -> L,
+        B: FnOnce(Vec<Capability<T>>) -> L,
         L: Future + 'static,
     {
         let operator_waker = self.operator_waker;
@@ -683,10 +685,10 @@ impl<G: Scope> OperatorBuilder<G> {
     pub fn build_fallible<E: 'static, F>(
         mut self,
         constructor: F,
-    ) -> (Button, StreamCore<G, Vec<Rc<E>>>)
+    ) -> (Button, StreamVec<'scope, T, Rc<E>>)
     where
         F: for<'a> FnOnce(
-                &'a mut [CapabilitySet<G::Timestamp>],
+                &'a mut [CapabilitySet<T>],
             ) -> Pin<Box<dyn Future<Output = Result<(), E>> + 'a>>
             + 'static,
     {
@@ -721,9 +723,12 @@ impl<G: Scope> OperatorBuilder<G> {
 }
 
 /// Creates a new coordinated button the worker configuration described by `scope`.
-pub fn button<G: Scope>(scope: &mut G, addr: Rc<[usize]>) -> (ButtonHandle, Button) {
-    let index = scope.new_identifier();
-    let (pushers, puller) = scope.allocate(index, addr);
+pub fn button<'scope, T: Timestamp>(
+    scope: Scope<'scope, T>,
+    addr: Rc<[usize]>,
+) -> (ButtonHandle, Button) {
+    let index = scope.worker().new_identifier();
+    let (pushers, puller) = scope.worker().allocate(index, addr);
 
     let local_pressed = Rc::new(Cell::new(false));
 
@@ -800,8 +805,9 @@ mod test {
     use futures_util::StreamExt;
     use timely::WorkerConfig;
     use timely::dataflow::channels::pact::Pipeline;
+    use timely::dataflow::operators::Capture;
     use timely::dataflow::operators::capture::Extract;
-    use timely::dataflow::operators::{Capture, ToStream};
+    use timely::dataflow::operators::vec::ToStream;
 
     use super::*;
 
@@ -812,7 +818,7 @@ mod test {
 
             let mut op = OperatorBuilder::new("async_passthru".to_string(), input.scope());
             let (output, output_stream) = op.new_output::<CapacityContainerBuilder<_>>();
-            let mut input_handle = op.new_input_for(&input, Pipeline, &output);
+            let mut input_handle = op.new_input_for(input, Pipeline, &output);
 
             op.build(move |_capabilities| async move {
                 tokio::task::yield_now().await;
@@ -856,7 +862,7 @@ mod test {
                 });
 
                 let mut consumer = OperatorBuilder::new("consumer".to_string(), scope.clone());
-                let mut input_handle = consumer.new_disconnected_input(&output_stream, Pipeline);
+                let mut input_handle = consumer.new_disconnected_input(output_stream, Pipeline);
                 let consumer_button = consumer.build(move |_| async move {
                     while let Some(event) = input_handle.next().await {
                         if let Event::Progress(frontier) = event {

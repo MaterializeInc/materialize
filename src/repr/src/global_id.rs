@@ -12,7 +12,6 @@ use std::str::FromStr;
 
 use anyhow::{Error, anyhow};
 use columnar::Columnar;
-use columnation::{Columnation, CopyRegion};
 use mz_lowertest::MzReflect;
 use mz_ore::id_gen::AtomicIdGen;
 use proptest_derive::Arbitrary;
@@ -38,7 +37,7 @@ use crate::CatalogItemId;
     Serialize,
     Deserialize,
     MzReflect,
-    Columnar,
+    Columnar
 )]
 pub enum GlobalId {
     /// System namespace.
@@ -117,10 +116,6 @@ impl fmt::Display for GlobalId {
             GlobalId::Explain => write!(f, "Explained Query"),
         }
     }
-}
-
-impl Columnation for GlobalId {
-    type InnerRegion = CopyRegion<GlobalId>;
 }
 
 #[derive(Debug)]

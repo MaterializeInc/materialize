@@ -23,8 +23,8 @@ from materialize import buildkite
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.minio import Minio
-from materialize.mzcompose.services.postgres import CockroachOrPostgresMetadata
 
 
 class Operation(Enum):
@@ -113,7 +113,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 
 def execute_operation(
-    args: tuple[Composition, Workload, Operation, int]
+    args: tuple[Composition, Workload, Operation, int],
 ) -> SuccessfulCommit | None:
     c, workload, operation, id = args
 
@@ -246,7 +246,7 @@ def run_workload(c: Composition, workload: Workload, args: argparse.Namespace) -
         # Confirm that the first Mz has properly given up the ghost
         mz_first_log = c.invoke("logs", "mz_first", capture=True)
         assert (
-            "unable to confirm leadership" in mz_first_log.stdout
+            "unable to advance catalog upper" in mz_first_log.stdout
             or "unexpected fence epoch" in mz_first_log.stdout
             or "fenced by new catalog upper" in mz_first_log.stdout
             or "fenced by envd" in mz_first_log.stdout
@@ -258,14 +258,12 @@ def run_workload(c: Composition, workload: Workload, args: argparse.Namespace) -
             if commit is None:
                 continue
             for target in ["table", "view"]:
-                cursor.execute(
-                    f"""
+                cursor.execute(f"""
                     SELECT id, COUNT(*) AS transaction_size
                     FROM {target}{commit.table_id}
                     WHERE id = {commit.row_id}
                     GROUP BY id
-                    """.encode()
-                )
+                    """.encode())
                 result = cursor.fetchall()
                 assert len(result) == 1
                 assert (

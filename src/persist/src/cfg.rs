@@ -23,6 +23,8 @@ use mz_postgres_client::metrics::PostgresClientMetrics;
 
 use crate::azure::{AzureBlob, AzureBlobConfig};
 use crate::file::{FileBlob, FileBlobConfig};
+#[cfg(feature = "foundationdb")]
+use crate::foundationdb::{FdbConsensus, FdbConsensusConfig};
 use crate::location::{Blob, Consensus, Determinate, ExternalError};
 use crate::mem::{MemBlob, MemBlobConfig, MemConsensus};
 use crate::metrics::S3BlobMetrics;
@@ -31,12 +33,7 @@ use crate::s3::{S3Blob, S3BlobConfig};
 
 /// Adds the full set of all mz_persist `Config`s.
 pub fn all_dyn_configs(configs: ConfigSet) -> ConfigSet {
-    configs
-        .add(&crate::indexed::columnar::arrow::ENABLE_ARROW_LGALLOC_CC_SIZES)
-        .add(&crate::indexed::columnar::arrow::ENABLE_ARROW_LGALLOC_NONCC_SIZES)
-        .add(&crate::s3::ENABLE_S3_LGALLOC_CC_SIZES)
-        .add(&crate::s3::ENABLE_S3_LGALLOC_NONCC_SIZES)
-        .add(&crate::postgres::USE_POSTGRES_TUNED_QUERIES)
+    configs.add(&crate::postgres::USE_POSTGRES_TUNED_QUERIES)
 }
 
 /// Config for an implementation of [Blob].
@@ -90,7 +87,6 @@ impl BlobConfig {
         url: &SensitiveUrl,
         knobs: Box<dyn BlobKnobs>,
         metrics: S3BlobMetrics,
-        cfg: Arc<ConfigSet>,
     ) -> Result<Self, ExternalError> {
         let mut query_params = url.query_pairs().collect::<BTreeMap<_, _>>();
 
@@ -137,7 +133,6 @@ impl BlobConfig {
                     credentials,
                     knobs,
                     metrics,
-                    cfg,
                 )
                 .await?;
 
@@ -183,7 +178,6 @@ impl BlobConfig {
                             metrics,
                             url.clone().into_redacted(),
                             knobs,
-                            cfg,
                         )?))
                     } else {
                         Err(anyhow!("unknown persist blob scheme: {}", url.as_str()))
@@ -222,6 +216,9 @@ impl BlobConfig {
 /// Config for an implementation of [Consensus].
 #[derive(Debug, Clone)]
 pub enum ConsensusConfig {
+    #[cfg(feature = "foundationdb")]
+    /// Config for FoundationDB.
+    FoundationDB(FdbConsensusConfig),
     /// Config for [PostgresConsensus].
     Postgres(PostgresConsensusConfig),
     /// Config for [MemConsensus], only available in testing.
@@ -235,6 +232,10 @@ impl ConsensusConfig {
     /// Opens the associated implementation of [Consensus].
     pub async fn open(self) -> Result<Arc<dyn Consensus>, ExternalError> {
         match self {
+            #[cfg(feature = "foundationdb")]
+            ConsensusConfig::FoundationDB(config) => {
+                Ok(Arc::new(FdbConsensus::open(config).await?))
+            }
             ConsensusConfig::Postgres(config) => {
                 Ok(Arc::new(PostgresConsensus::open(config).await?))
             }
@@ -254,6 +255,10 @@ impl ConsensusConfig {
         dyncfg: Arc<ConfigSet>,
     ) -> Result<Self, ExternalError> {
         let config = match url.scheme() {
+            #[cfg(feature = "foundationdb")]
+            "foundationdb" => Ok(ConsensusConfig::FoundationDB(FdbConsensusConfig::new(
+                url.clone(),
+            )?)),
             "postgres" | "postgresql" => Ok(ConsensusConfig::Postgres(
                 PostgresConsensusConfig::new(url, knobs, metrics, dyncfg)?,
             )),

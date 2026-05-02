@@ -54,9 +54,7 @@ from .deploy.deploy_util import rust_version
 # exercise as much of the glue code as possible.
 #
 # It's tough to track this code with any sort of fine-grained granularity, so we
-# err on the side of including too much rather than too little. (For example,
-# bin/resync-submodules is not presently used by CI, but it's just not worth
-# trying to capture that.)
+# err on the side of including too much rather than too little.
 CI_GLUE_GLOBS = ["bin", "ci", "misc/python/materialize/cli/ci_annotate_errors.py"]
 
 DEFAULT_AGENT = "hetzner-aarch64-4cpu-8gb"
@@ -71,6 +69,39 @@ def steps(pipeline: Any) -> Iterator[dict[str, Any]]:
 
 def get_imported_files(composition: str) -> list[str]:
     return spawn.capture(["bin/ci-python-imports", composition]).splitlines()
+
+
+def post_ci_trigger_status() -> None:
+    """Post a GitHub commit status linking to the CI trigger page for PRs."""
+    if not ui.env_is_truthy("BUILDKITE_PULL_REQUEST"):
+        return
+    pr_number = os.environ["BUILDKITE_PULL_REQUEST"]
+    token = os.getenv("GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN") or os.getenv(
+        "GITHUB_TOKEN"
+    )
+    if not token:
+        return
+    commit = os.getenv("BUILDKITE_COMMIT", "")
+    if not commit:
+        return
+    try:
+        resp = requests.post(
+            f"https://api.github.com/repos/MaterializeInc/materialize/statuses/{commit}",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github.v3+json",
+            },
+            json={
+                "state": "success",
+                "target_url": f"https://ci.dev.materialize.com/trigger/{pr_number}",
+                "description": "Trigger Nightly/Release Qualification/...",
+                "context": "Additional CI runs",
+            },
+        )
+        resp.raise_for_status()
+        print("Posted CI trigger link status to GitHub")
+    except Exception as e:
+        print(f"Failed to post CI trigger link status: {e}")
 
 
 def main() -> int:
@@ -97,6 +128,10 @@ so it is executed.""",
     )
     parser.add_argument("pipeline", type=str)
     args = parser.parse_args()
+
+    if not args.dry_run:
+        ci_trigger_thread = threading.Thread(target=post_ci_trigger_status, daemon=True)
+        ci_trigger_thread.start()
 
     print(f"Pipeline is: {args.pipeline}")
 
@@ -137,8 +172,16 @@ so it is executed.""",
         return (hash(deps), check)
 
     def fetch_hashes() -> None:
-        for arch in [Arch.AARCH64, Arch.X86_64]:
-            hash_check[arch] = get_hashes(arch)
+        # Resolve both architectures in parallel since they are independent
+        # and each involves expensive fingerprinting.
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = {
+                pool.submit(get_hashes, arch): arch
+                for arch in [Arch.AARCH64, Arch.X86_64]
+            }
+            for future in futures:
+                arch = futures[future]
+                hash_check[arch] = future.result()
 
     trim_builds_prep_thread = threading.Thread(target=fetch_hashes)
     trim_builds_prep_thread.start()
@@ -167,6 +210,7 @@ so it is executed.""",
                 args.sanitizer,
                 lto,
             )
+            trim_ci_glue_exempt_steps(pipeline)
         else:
             print("Trimming unchanged steps from pipeline")
             trim_tests_pipeline(
@@ -326,6 +370,8 @@ def increase_agents_timeouts(
                     agent = "hetzner-x86-64-8cpu-16gb"
                 elif agent == "hetzner-x86-64-8cpu-16gb":
                     agent = "hetzner-x86-64-16cpu-32gb"
+                elif agent == "hetzner-x86-64-12cpu-24gb":
+                    agent = "hetzner-x86-64-dedi-16cpu-64gb"
                 elif agent == "hetzner-x86-64-16cpu-32gb":
                     agent = "hetzner-x86-64-dedi-16cpu-64gb"
                 elif agent == "hetzner-x86-64-16cpu-64gb":
@@ -379,6 +425,7 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
         stuck = set(
             {
                 "hetzner-x86-64-16cpu-32gb",
+                "hetzner-x86-64-12cpu-24gb",
                 "hetzner-x86-64-8cpu-16gb",
                 "hetzner-x86-64-4cpu-8gb",
                 "hetzner-x86-64-2cpu-4gb",
@@ -490,8 +537,8 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
                 step["agents"]["queue"] = "linux-aarch64-medium"
 
         elif agent == "hetzner-aarch64-16cpu-32gb":
-            if "hetzner-x86-64-16cpu-32gb" not in stuck:
-                step["agents"]["queue"] = "hetzner-x86-64-16cpu-32gb"
+            if "hetzner-x86-64-12cpu-24gb" not in stuck:
+                step["agents"]["queue"] = "hetzner-x86-64-12cpu-24gb"
                 if step.get("depends_on") == "build-aarch64":
                     step["depends_on"] = "build-x86_64"
             else:
@@ -499,7 +546,11 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
 
         elif agent in ("hetzner-x86-64-4cpu-8gb", "hetzner-x86-64-2cpu-4gb"):
             step["agents"]["queue"] = "linux-x86_64"
-        elif agent in ("hetzner-x86-64-8cpu-16gb", "hetzner-x86-64-16cpu-32gb"):
+        elif agent in (
+            "hetzner-x86-64-8cpu-16gb",
+            "hetzner-x86-64-12cpu-24gb",
+            "hetzner-x86-64-16cpu-32gb",
+        ):
             step["agents"]["queue"] = "linux-x86_64-medium"
         elif agent == "hetzner-x86-64-dedi-2cpu-8gb":
             step["agents"]["queue"] = "linux-x86_64"
@@ -542,7 +593,7 @@ def set_retry_on_agent_lost(pipeline: Any) -> None:
                     "limit": 2,
                 },
                 {
-                    "exit_status": 128,  # Temporary Github connection issue
+                    "exit_status": 128,  # Temporary Github/GHCR/DockerHub connection issue
                     "limit": 2,
                 },
                 {
@@ -718,7 +769,27 @@ def trim_tests_pipeline(
             files = future.result()
             imported_files[path] = files
 
+    # Cache compositions loaded with munge_services=False to extract image
+    # names from their service configs. This avoids expensive fingerprinting
+    # and dependency resolution that munge_services=True triggers.
     compositions: dict[str, Composition] = {}
+
+    def get_composition_image_deps(
+        name: str,
+    ) -> list[mzbuild.ResolvedImage]:
+        """Get the mzbuild image dependencies for a composition without
+        doing expensive fingerprinting/dependency resolution."""
+        if name not in compositions:
+            compositions[name] = Composition(repo, name, munge_services=False)
+        comp = compositions[name]
+        image_deps = []
+        for _svc_name, config in comp.compose.get("services", {}).items():
+            if "mzbuild" in config:
+                try:
+                    image_deps.append(deps[config["mzbuild"]])
+                except KeyError:
+                    pass
+        return image_deps
 
     def to_step(config: dict[str, Any]) -> PipelineStep | None:
         if "wait" in config or "group" in config:
@@ -740,9 +811,7 @@ def trim_tests_pipeline(
                 for plugin_name, plugin_config in plugin.items():
                     if plugin_name == "./ci/plugins/mzcompose":
                         name = plugin_config["composition"]
-                        if name not in compositions:
-                            compositions[name] = Composition(repo, name)
-                        for dep in compositions[name].dependencies:
+                        for dep in get_composition_image_deps(name):
                             step.image_dependencies.add(dep)
                         composition_path = str(repo.compositions[name])
                         step.extra_inputs.add(composition_path)
@@ -1003,6 +1072,15 @@ def have_paths_changed(globs: Iterable[str]) -> bool:
             raise RuntimeError("unreachable")
 
 
+def trim_ci_glue_exempt_steps(pipeline: Any) -> None:
+    for step in steps(pipeline):
+        if not step.get("ci_glue_exempt"):
+            continue
+        inputs = step.get("inputs", [])
+        if inputs and not have_paths_changed(inputs):
+            step["skip"] = "No changes in inputs"
+
+
 def remove_mz_specific_keys(pipeline: Any) -> None:
     """Remove the Materialize-specific keys from the configuration that are only used to inform how to trim the pipeline and for coverage runs."""
     for step in steps(pipeline):
@@ -1012,6 +1090,8 @@ def remove_mz_specific_keys(pipeline: Any) -> None:
             del step["coverage"]
         if "sanitizer" in step:
             del step["sanitizer"]
+        if "ci_glue_exempt" in step:
+            del step["ci_glue_exempt"]
         if (
             "timeout_in_minutes" not in step
             and "prompt" not in step

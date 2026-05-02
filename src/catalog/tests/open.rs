@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+#![recursion_limit = "256"]
+
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::time::Duration;
@@ -281,7 +283,6 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
 
         // Perform writes.
         let mut txn = state.transaction().await.unwrap();
-        let mut ids = Vec::new();
         let mut db_schemas = Vec::new();
         for i in 0..10 {
             let (db_id, db_oid) = txn
@@ -301,7 +302,6 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
                     &HashSet::new(),
                 )
                 .unwrap();
-            ids.push((db_id.clone(), schema_id.clone()));
             db_schemas.push((
                 Database {
                     id: db_id.clone(),
@@ -470,7 +470,7 @@ async fn test_open_read_only(state_builder: TestCatalogStateBuilder) {
 
     let snapshot = read_only_state.snapshot().await.unwrap();
     let role = snapshot.roles.get(&proto::RoleKey {
-        id: Some(role_id.into_proto()),
+        id: role_id.into_proto(),
     });
     assert_eq!(&role.unwrap().name, "joe");
 
@@ -970,7 +970,7 @@ async fn test_concurrent_open(state_builder: TestCatalogStateBuilder) {
         .unwrap()
         .0;
 
-    state_handle.await.unwrap();
+    state_handle.await;
 
     // Open again to ensure that we didn't commit an invalid retraction.
     let _state = state_builder

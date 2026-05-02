@@ -6,6 +6,7 @@ menu:
     parent: "mysql"
     name: "Amazon RDS"
     identifier: "mysql-amazon-rds"
+    weight: 20
 ---
 
 This page shows you how to stream data from [Amazon RDS for MySQL](https://aws.amazon.com/rds/mysql/)
@@ -422,4 +423,4 @@ available (also for PostgreSQL)."
 
 ## Considerations
 
-{{% include-md file="shared-content/mysql-considerations.md" %}}
+{{% include-headless "/headless/mysql-considerations" %}}

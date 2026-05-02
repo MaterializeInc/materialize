@@ -86,7 +86,7 @@ class Workload:
     grammar: str
     reference_implementation: ReferenceImplementation | None
     dataset: Dataset | None = None
-    duration: int = 30 * 60
+    duration: int = 20 * 60
     queries: int = 100000000
     disabled: bool = False
     threads: int = 4

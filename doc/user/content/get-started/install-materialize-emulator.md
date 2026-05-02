@@ -69,7 +69,11 @@ not suitable for full feature set evaluations or production workloads.
 
    Open the Materialize Console in your browser at [http://localhost:6874](http://localhost:6874).
 
-   Alternatively, you can connect to the Materialize Emulator using your
+   To streamline development and troubleshooting, we recommend configuring our
+   [MCP
+   Server](https://materialize.com/docs/integrations/mcp-server/mcp-developer/).
+
+   You can also connect to the Materialize Emulator using your
    preferred SQL client, using the following connection field values:
 
    | Field    | Value         |
@@ -99,9 +103,8 @@ not suitable for full feature set evaluations or production workloads.
   Cloud
   account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation).
   The full experience of Materialize is also available as a self-managed
-  offering. See [Self-managed Materialize].
+  offering. See [Self-managed Materialize](/self-managed-deployments/).
 
-[Self-managed Materialize]: https://materialize.com/docs/self-managed/v25.2/
 
 ### Technical Support
 

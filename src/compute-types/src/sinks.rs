@@ -9,6 +9,7 @@
 
 //! Types for describing dataflow sinks.
 
+use mz_expr::ColumnOrder;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{CatalogItemId, GlobalId, RelationDesc, Timestamp};
 use mz_storage_types::connections::aws::AwsConnection;
@@ -18,7 +19,7 @@ use timely::progress::Antichain;
 
 /// A sink for updates to a relational collection.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct ComputeSinkDesc<S: 'static = (), T = Timestamp> {
+pub struct ComputeSinkDesc<S: 'static = ()> {
     /// TODO(database-issues#7533): Add documentation.
     pub from: GlobalId,
     /// TODO(database-issues#7533): Add documentation.
@@ -28,7 +29,7 @@ pub struct ComputeSinkDesc<S: 'static = (), T = Timestamp> {
     /// TODO(database-issues#7533): Add documentation.
     pub with_snapshot: bool,
     /// TODO(database-issues#7533): Add documentation.
-    pub up_to: Antichain<T>,
+    pub up_to: Antichain<Timestamp>,
     /// TODO(database-issues#7533): Add documentation.
     pub non_null_assertions: Vec<usize>,
     /// TODO(database-issues#7533): Add documentation.
@@ -42,9 +43,6 @@ pub enum ComputeSinkConnection<S: 'static = ()> {
     Subscribe(SubscribeSinkConnection),
     /// TODO(database-issues#7533): Add documentation.
     MaterializedView(MaterializedViewSinkConnection<S>),
-    /// ContinualTask-specific information necessary for rendering a
-    /// ContinualTask sink.
-    ContinualTask(ContinualTaskConnection<S>),
     /// A compute sink to do a oneshot copy to s3.
     CopyToS3Oneshot(CopyToS3OneshotSinkConnection),
 }
@@ -55,7 +53,6 @@ impl<S> ComputeSinkConnection<S> {
         match self {
             ComputeSinkConnection::Subscribe(_) => "subscribe",
             ComputeSinkConnection::MaterializedView(_) => "materialized_view",
-            ComputeSinkConnection::ContinualTask(_) => "continual_task",
             ComputeSinkConnection::CopyToS3Oneshot(_) => "copy_to_s3_oneshot",
         }
     }
@@ -71,8 +68,11 @@ impl<S> ComputeSinkConnection<S> {
 }
 
 /// TODO(database-issues#7533): Add documentation.
-#[derive(Default, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct SubscribeSinkConnection {}
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct SubscribeSinkConnection {
+    /// An ordering for the data in the subscribe.
+    pub output: Vec<ColumnOrder>,
+}
 
 /// Connection attributes required to do a oneshot copy to s3.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -95,18 +95,5 @@ pub struct MaterializedViewSinkConnection<S> {
     /// TODO(database-issues#7533): Add documentation.
     pub value_desc: RelationDesc,
     /// TODO(database-issues#7533): Add documentation.
-    pub storage_metadata: S,
-}
-
-/// ContinualTask-specific information necessary for rendering a ContinualTask
-/// sink. (Shared-sink information is instead stored on ComputeSinkConnection.)
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ContinualTaskConnection<S> {
-    /// The id of the (for now) single input to this CT.
-    //
-    // TODO(ct3): This can be removed once we render the "input" sources without
-    // the hack.
-    pub input_id: GlobalId,
-    /// The necessary storage information for writing to the output collection.
     pub storage_metadata: S,
 }

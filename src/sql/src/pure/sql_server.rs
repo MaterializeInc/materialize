@@ -410,7 +410,7 @@ pub(super) fn generate_source_export_statement_values(
         initial_lsn,
     } = purified_export.details
     else {
-        unreachable!("purified export details must be SQL Server")
+        bail_internal!("purified export details must be SQL Server");
     };
 
     // Filter out columns that the user wanted to exclude.

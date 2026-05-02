@@ -13,4 +13,4 @@ contains:
 - Per-replica introspection metrics (under `{cluster_name}/{replica_name}/*.csv`)
 
 For more information about each relation, view the [system
-catalog](/sql/system-catalog/).
+catalog](/reference/system-catalog/).

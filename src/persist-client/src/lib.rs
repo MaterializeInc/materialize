@@ -27,7 +27,7 @@ use mz_dyncfg::ConfigSet;
 use mz_ore::instrument;
 use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist_types::schema::SchemaId;
-use mz_persist_types::{Codec, Codec64, Opaque};
+use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoType};
 use semver::Version;
 use timely::order::TotalOrder;
@@ -37,7 +37,7 @@ use crate::async_runtime::IsolatedRuntime;
 use crate::batch::{BATCH_DELETE_ENABLED, Batch, BatchBuilder, ProtoBatch};
 use crate::cache::{PersistClientCache, StateCache};
 use crate::cfg::PersistConfig;
-use crate::critical::{CriticalReaderId, SinceHandle};
+use crate::critical::{CriticalReaderId, Opaque, SinceHandle};
 use crate::error::InvalidUsage;
 use crate::fetch::{BatchFetcher, BatchFetcherConfig};
 use crate::internal::compact::{CompactConfig, Compactor};
@@ -364,8 +364,7 @@ impl PersistClient {
             Arc::clone(&self.blob),
             reader_id,
             schemas,
-            reader_state.since,
-            heartbeat_ts,
+            reader_state,
         )
         .await;
 
@@ -455,33 +454,27 @@ impl PersistClient {
     /// return a handle with its `since` frontier set to the initial value of
     /// `Antichain::from_elem(T::minimum())`.
     #[instrument(level = "debug", fields(shard = %shard_id))]
-    pub async fn open_critical_since<K, V, T, D, O>(
+    pub async fn open_critical_since<K, V, T, D>(
         &self,
         shard_id: ShardId,
         reader_id: CriticalReaderId,
+        default_opaque: Opaque,
         diagnostics: Diagnostics,
-    ) -> Result<SinceHandle<K, V, T, D, O>, InvalidUsage<T>>
+    ) -> Result<SinceHandle<K, V, T, D>, InvalidUsage<T>>
     where
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64 + Sync,
         D: Monoid + Codec64 + Send + Sync,
-        O: Opaque + Codec64,
     {
         let machine = self.make_machine(shard_id, diagnostics.clone()).await?;
         let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
 
         let (state, maintenance) = machine
-            .register_critical_reader::<O>(&reader_id, &diagnostics.handle_purpose)
+            .register_critical_reader(&reader_id, default_opaque, &diagnostics.handle_purpose)
             .await;
         maintenance.start_performing(&machine, &gc);
-        let handle = SinceHandle::new(
-            machine,
-            gc,
-            reader_id,
-            state.since,
-            Codec64::decode(state.opaque.0),
-        );
+        let handle = SinceHandle::new(machine, gc, reader_id, state.since, state.opaque);
 
         Ok(handle)
     }
@@ -873,11 +866,11 @@ impl PersistClient {
         // method in StateVersions for fetching the latest version of State of a
         // shard that might or might not exist.
         let versions = state_versions.fetch_all_live_diffs(shard_id).await;
-        if versions.0.is_empty() {
+        if versions.is_empty() {
             return Err(anyhow::anyhow!("{} does not exist", shard_id));
         }
         let state = state_versions
-            .fetch_current_state::<T>(shard_id, versions.0)
+            .fetch_current_state::<T>(shard_id, versions)
             .await;
         let state = state.check_ts_codec(shard_id)?;
         Ok(state)
@@ -920,7 +913,6 @@ impl PersistClient {
 #[cfg(test)]
 mod tests {
     use std::future::Future;
-    use std::mem;
     use std::pin::Pin;
     use std::task::Context;
     use std::time::Duration;
@@ -941,6 +933,7 @@ mod tests {
     use crate::batch::BLOB_TARGET_SIZE;
     use crate::cache::PersistClientCache;
     use crate::cfg::BATCH_BUILDER_MAX_OUTSTANDING_PARTS;
+    use crate::critical::Opaque;
     use crate::error::{CodecConcreteType, CodecMismatch, UpperMismatch};
     use crate::internal::paths::BlobKey;
     use crate::read::ListenEvent;
@@ -970,10 +963,7 @@ mod tests {
             .expect("client construction failed")
     }
 
-    pub fn all_ok<'a, K, V, T, D, I>(
-        iter: I,
-        as_of: T,
-    ) -> Vec<((Result<K, String>, Result<V, String>), T, D)>
+    pub fn all_ok<'a, K, V, T, D, I>(iter: I, as_of: T) -> Vec<((K, V), T, D)>
     where
         K: Ord + Clone + 'a,
         V: Ord + Clone + 'a,
@@ -987,7 +977,7 @@ mod tests {
             .map(|((k, v), t, d)| {
                 let mut t = t.clone();
                 t.advance_by(as_of.borrow());
-                ((Ok(k.clone()), Ok(v.clone())), t, d.clone())
+                ((k.clone(), v.clone()), t, d.clone())
             })
             .collect();
         consolidate_updates(&mut ret);
@@ -999,13 +989,10 @@ mod tests {
         key: &BlobKey,
         metrics: &Metrics,
         read_schemas: &Schemas<K, V>,
-    ) -> (
-        BlobTraceBatchPart<T>,
-        Vec<((Result<K, String>, Result<V, String>), T, D)>,
-    )
+    ) -> (BlobTraceBatchPart<T>, Vec<((K, V), T, D)>)
     where
-        K: Codec,
-        V: Codec,
+        K: Codec + Clone,
+        V: Codec + Clone,
         T: Timestamp + Codec64,
         D: Codec64,
     {
@@ -1016,22 +1003,13 @@ mod tests {
             .expect("missing part");
         let mut part =
             BlobTraceBatchPart::decode(&value, &metrics.columnar).expect("failed to decode part");
-        // Ensure codec data is present even if it was not generated at write time.
-        let _ = part
+        let structured = part
             .updates
-            .get_or_make_codec::<K, V>(&read_schemas.key, &read_schemas.val);
-        let mut updates = Vec::new();
-        // TODO(bkirwi): switch to structured data in tests
-        for ((k, v), t, d) in part.updates.records().expect("codec data").iter() {
-            updates.push((
-                (
-                    K::decode(k, &read_schemas.key),
-                    V::decode(v, &read_schemas.val),
-                ),
-                T::decode(t),
-                D::decode(d),
-            ));
-        }
+            .into_part::<K, V>(&*read_schemas.key, &*read_schemas.val);
+        let updates = structured
+            .decode_iter::<K, V, T, D>(&*read_schemas.key, &*read_schemas.val)
+            .expect("structured data")
+            .collect();
         (part, updates)
     }
 
@@ -1919,7 +1897,7 @@ mod tests {
         }
 
         for handle in handles {
-            let () = handle.await.expect("task failed");
+            let () = handle.await;
         }
 
         let expected = data.records().collect::<Vec<_>>();
@@ -1973,7 +1951,7 @@ mod tests {
         assert_eq!(
             listen_next.await,
             vec![
-                ListenEvent::Updates(vec![((Ok("2".to_owned()), Ok("two".to_owned())), 2, 1)]),
+                ListenEvent::Updates(vec![(("2".to_owned(), "two".to_owned()), 2, 1)]),
                 ListenEvent::Progress(Antichain::from_elem(3)),
             ]
         );
@@ -2022,16 +2000,12 @@ mod tests {
             .expect("client construction failed")
             .expect_open::<(), (), u64, i64>(ShardId::new())
             .await;
-        let mut read_unexpired_state = read
+        let read_unexpired_state = read
             .unexpired_state
             .take()
             .expect("handle should have unexpired state");
         read.expire().await;
-        for read_heartbeat_task in mem::take(&mut read_unexpired_state._heartbeat_tasks) {
-            let () = read_heartbeat_task
-                .await
-                .expect("task should shutdown cleanly");
-        }
+        read_unexpired_state.heartbeat_task.await
     }
 
     /// Verify that shard finalization works with empty shards, shards that have
@@ -2054,8 +2028,13 @@ mod tests {
         let () = read.downgrade_since(&Antichain::new()).await;
         let () = write.advance_upper(&Antichain::new()).await;
 
-        let mut since_handle: SinceHandle<(), (), u64, i64, u64> = persist_client
-            .open_critical_since(shard_id, CRITICAL_SINCE, Diagnostics::for_tests())
+        let mut since_handle: SinceHandle<(), (), u64, i64> = persist_client
+            .open_critical_since(
+                shard_id,
+                CRITICAL_SINCE,
+                Opaque::encode(&0u64),
+                Diagnostics::for_tests(),
+            )
             .await
             .expect("invalid persist usage");
 
@@ -2112,8 +2091,13 @@ mod tests {
         let () = read.downgrade_since(&Antichain::new()).await;
         let () = write.advance_upper(&Antichain::new()).await;
 
-        let mut since_handle: SinceHandle<(), (), u64, i64, u64> = persist_client
-            .open_critical_since(shard_id, CRITICAL_SINCE, Diagnostics::for_tests())
+        let mut since_handle: SinceHandle<(), (), u64, i64> = persist_client
+            .open_critical_since(
+                shard_id,
+                CRITICAL_SINCE,
+                Opaque::encode(&0u64),
+                Diagnostics::for_tests(),
+            )
             .await
             .expect("invalid persist usage");
 

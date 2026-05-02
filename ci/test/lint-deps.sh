@@ -85,6 +85,9 @@ crates=(
     tikv_jemalloc_ctl
     tikv_jemallocator
     tikv_jemalloc_sys
+    # Checks that foundationdb is not included unless explicitly enabled, unless on Linux,
+    # here it's enabled by default.
+    foundationdb
 )
 
 # The crates whose dependency graphs we want to lint.
@@ -99,70 +102,12 @@ for target in "${targets[@]}"; do
         deps > "$resources/$target-default"
         deps --no-default-features > "$resources/$target-no-default-features"
         deps --features jemalloc > "$resources/$target-jemalloc"
+        deps --features foundationdb > "$resources/$target-foundationdb"
     else
         try diff "$resources/$target-default" <(deps)
         try diff "$resources/$target-no-default-features" <(deps --no-default-features)
         try diff "$resources/$target-jemalloc" <(deps --features jemalloc)
-    fi
-done
-
-################################################
-# workspace-hack lints
-################################################
-
-# List of crates to include in the dependency lint, including an explanation why they're listed.
-crates=(
-    # Should not be included in anything that may end up in the cloud repo.
-    # Eventually, we should be able to disable this everywhere with --no-default-features.
-    workspace_hack
-)
-
-# The crates whose dependency graphs we want to lint.
-# This should include any current or potential dependencies
-# used by the cloud repo.
-entrypoints=(
-    mz-alloc
-    mz-aws-secrets-controller
-    mz-aws-util
-    mz-build-info
-    mz-build-tools
-    mz-cloud-provider
-    mz-cloud-resources
-    mz-http-util
-    mz-license-keys
-    mz-lowertest
-    mz-lowertest-derive
-    mz-npm
-    mz-orchestrator
-    mz-orchestrator-kubernetes
-    mz-orchestrator-process
-    mz-orchestrator-tracing
-    mz-orchestratord
-    mz-ore
-    mz-ore-build
-    mz-ore-proc
-    mz-persist-types
-    mz-pgrepr-consts
-    mz-pgtz
-    mz-prof
-    mz-prof-http
-    mz-proto
-    mz-repr
-    mz-secrets
-    mz-segment
-    mz-service
-    mz-sql-lexer
-    mz-sql-parser
-    mz-tls-util
-    mz-tracing
-    mz-walkabout
-)
-
-for target in "${targets[@]}"; do
-    if $rewrite; then
-        deps --no-default-features > "$resources/$target-workspace-hack-no-default-features"
-    else
-        try diff "$resources/$target-workspace-hack-no-default-features" <(deps --no-default-features)
+        try diff "$resources/$target-foundationdb" <(deps --features foundationdb)
     fi
 done
 

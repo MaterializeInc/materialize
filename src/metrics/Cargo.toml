@@ -10,20 +10,16 @@ publish = false
 workspace = true
 
 [dependencies]
-lgalloc = "0.6"
-libc = "0.2.177"
+lgalloc.workspace = true
+libc.workspace = true
 mz-dyncfg = { path = "../dyncfg" }
 mz-ore = { path = "../ore", features = ["metrics"] }
-paste = "1.0"
-prometheus = { version = "0.14.0", default-features = false }
-thiserror = "2.0.17"
-tokio = { version = "1.44.1", features = ["sync", "time"] }
-tokio-util = { version = "0.7.17" }
-tracing = "0.1.37"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+paste.workspace = true
+prometheus.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
 
 [features]
-default = ["workspace-hack"]
+default = []

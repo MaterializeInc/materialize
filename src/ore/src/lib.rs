@@ -50,12 +50,6 @@ pub mod hint;
 pub mod id_gen;
 pub mod iter;
 pub mod lex;
-#[cfg_attr(
-    nightly_doc_features,
-    doc(cfg(all(feature = "bytes", feature = "region")))
-)]
-#[cfg(all(feature = "bytes", feature = "region", feature = "tracing"))]
-pub mod lgbytes;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "metrics")))]
 #[cfg(feature = "metrics")]
 pub mod metrics;
@@ -82,6 +76,7 @@ pub mod result;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "async")))]
 #[cfg(feature = "async")]
 pub mod retry;
+pub mod secure;
 pub mod serde;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "stack")))]
 #[cfg(feature = "stack")]

@@ -106,17 +106,17 @@ use mz_storage_types::sources::MySqlSourceConnection;
 use mz_storage_types::sources::mysql::{GtidPartition, gtid_set_frontier};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
-use mz_timely_util::containers::stack::AccountedStackBuilder;
+use mz_timely_util::containers::stack::FueledBuilder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::core::Map;
 use timely::dataflow::operators::{CapabilitySet, Concat};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Timestamp;
 use tracing::{error, trace};
 
 use crate::metrics::source::mysql::MySqlSnapshotMetrics;
 use crate::source::RawSourceCreationConfig;
-use crate::source::types::{SignaledFuture, SourceMessage, StackedCollection};
+use crate::source::types::{FuelSize, SignaledFuture, SourceMessage, StackedCollection};
 use crate::statistics::SourceStatistics;
 
 use super::schemas::verify_schemas;
@@ -126,26 +126,26 @@ use super::{
 };
 
 /// Renders the snapshot dataflow. See the module documentation for more information.
-pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
-    scope: G,
+pub(crate) fn render<'scope>(
+    scope: Scope<'scope, GtidPartition>,
     config: RawSourceCreationConfig,
     connection: MySqlSourceConnection,
     source_outputs: Vec<SourceOutputInfo>,
     metrics: MySqlSnapshotMetrics,
 ) -> (
-    StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
-    Stream<G, RewindRequest>,
-    Stream<G, ReplicationError>,
+    StackedCollection<'scope, GtidPartition, (usize, Result<SourceMessage, DataflowError>)>,
+    StreamVec<'scope, GtidPartition, RewindRequest>,
+    StreamVec<'scope, GtidPartition, ReplicationError>,
     PressOnDropButton,
 ) {
     let mut builder =
         AsyncOperatorBuilder::new(format!("MySqlSnapshotReader({})", config.id), scope.clone());
 
-    let (raw_handle, raw_data) = builder.new_output::<AccountedStackBuilder<_>>();
-    let (rewinds_handle, rewinds) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (raw_handle, raw_data) = builder.new_output::<FueledBuilder<_>>();
+    let (rewinds_handle, rewinds) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
     // Captures DefiniteErrors that affect the entire source, including all outputs
     let (definite_error_handle, definite_errors) =
-        builder.new_output::<CapacityContainerBuilder<_>>();
+        builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
     // A global view of all outputs that will be snapshot by all workers.
     let mut all_outputs = vec![];
@@ -179,7 +179,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
         }
     }
 
-    let (button, transient_errors): (_, Stream<G, Rc<TransientError>>) =
+    let (button, transient_errors): (_, StreamVec<'scope, GtidPartition, Rc<TransientError>>) =
         builder.build_fallible(move |caps| {
             let busy_signal = Arc::clone(&config.busy_signal);
             Box::pin(SignaledFuture::new(busy_signal, async move {
@@ -367,17 +367,14 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 let mut removed_outputs = BTreeSet::new();
                 for (output, err) in errored_outputs {
                     // Publish the error for this table and stop ingesting it
-                    raw_handle
-                        .give_fueled(
-                            &data_cap_set[0],
-                            (
-                                (output.output_index, Err(err.clone().into())),
-                                GtidPartition::minimum(),
-                                Diff::ONE,
-                            ),
-                        )
-                        .await;
-                    trace!(%id, "timely-{worker_id} stopping snapshot of output {output:?} \
+                    let update = (
+                        (output.output_index, Err(err.clone().into())),
+                        GtidPartition::minimum(),
+                        Diff::ONE,
+                    );
+                    let size = update.fuel_size();
+                    raw_handle.give_fueled(&data_cap_set[0], update, size).await;
+                    tracing::warn!(%id, "timely-{worker_id} stopping snapshot of output {output:?} \
                                 due to schema mismatch");
                     removed_outputs.insert(output.output_index);
                 }
@@ -435,16 +432,13 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                                 }
                                 Err(err) => Err(err)?,
                             };
-                            raw_handle
-                                .give_fueled(
-                                    &data_cap_set[0],
-                                    (
-                                        (output.output_index, event),
-                                        GtidPartition::minimum(),
-                                        Diff::ONE,
-                                    ),
-                                )
-                                .await;
+                            let update = (
+                                (output.output_index, event),
+                                GtidPartition::minimum(),
+                                Diff::ONE,
+                            );
+                            let size = update.fuel_size();
+                            raw_handle.give_fueled(&data_cap_set[0], update, size).await;
                         }
                         // This overcounting maintains existing behavior but will be removed one readers no longer rely on the value.
                         snapshot_staged_total += u64::cast_from(outputs.len());
@@ -492,7 +486,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 
     // TODO: Split row decoding into a separate operator that can be distributed across all workers
 
-    let errors = definite_errors.concat(&transient_errors.map(ReplicationError::from));
+    let errors = definite_errors.concat(transient_errors.map(ReplicationError::from));
 
     (
         raw_data.as_collection(),

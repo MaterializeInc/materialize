@@ -35,7 +35,18 @@ pub struct LoggingConfig {
 }
 
 /// TODO(database-issues#7533): Add documentation.
-#[derive(Hash, Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(
+    Hash,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Debug,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize
+)]
 pub enum LogVariant {
     /// TODO(database-issues#7533): Add documentation.
     Timely(TimelyLog),
@@ -64,7 +75,18 @@ impl From<ComputeLog> for LogVariant {
 }
 
 /// TODO(database-issues#7533): Add documentation.
-#[derive(Hash, Eq, Ord, PartialEq, PartialOrd, Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(
+    Hash,
+    Eq,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Debug,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize
+)]
 pub enum TimelyLog {
     /// TODO(database-issues#7533): Add documentation.
     Operates,
@@ -91,7 +113,18 @@ pub enum TimelyLog {
 }
 
 /// TODO(database-issues#7533): Add documentation.
-#[derive(Hash, Eq, Ord, PartialEq, PartialOrd, Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(
+    Hash,
+    Eq,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Debug,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize
+)]
 pub enum DifferentialLog {
     /// TODO(database-issues#7533): Add documentation.
     ArrangementBatches,
@@ -110,7 +143,18 @@ pub enum DifferentialLog {
 }
 
 /// Variants of compute introspection sources.
-#[derive(Hash, Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(
+    Hash,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Debug,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize
+)]
 pub enum ComputeLog {
     /// Installed dataflow exports.
     DataflowCurrent,
@@ -128,8 +172,6 @@ pub enum ComputeLog {
     ArrangementHeapCapacity,
     /// Arrangement heap allocations.
     ArrangementHeapAllocations,
-    /// A histogram over dataflow shutdown durations.
-    ShutdownDuration,
     /// Counts of errors in exported collections.
     ErrorCount,
     /// Hydration times of exported collections.
@@ -140,6 +182,8 @@ pub enum ComputeLog {
     LirMapping,
     /// Mappings from dataflows to `GlobalId`s.
     DataflowGlobal,
+    /// Prometheus metrics gathered from the metrics registry.
+    PrometheusMetrics,
 }
 
 impl LogVariant {
@@ -300,11 +344,6 @@ impl LogVariant {
                 .with_column("duration_ns", SqlScalarType::UInt64.nullable(false))
                 .finish(),
 
-            LogVariant::Compute(ComputeLog::ShutdownDuration) => RelationDesc::builder()
-                .with_column("worker_id", SqlScalarType::UInt64.nullable(false))
-                .with_column("duration_ns", SqlScalarType::UInt64.nullable(false))
-                .finish(),
-
             LogVariant::Compute(ComputeLog::ErrorCount) => RelationDesc::builder()
                 .with_column("export_id", SqlScalarType::String.nullable(false))
                 .with_column("worker_id", SqlScalarType::UInt64.nullable(false))
@@ -343,7 +382,24 @@ impl LogVariant {
                 .with_column("id", SqlScalarType::UInt64.nullable(false))
                 .with_column("worker_id", SqlScalarType::UInt64.nullable(false))
                 .with_column("global_id", SqlScalarType::String.nullable(false))
-                .with_key(vec![0, 1])
+                .with_key(vec![0, 1, 2])
+                .finish(),
+
+            LogVariant::Compute(ComputeLog::PrometheusMetrics) => RelationDesc::builder()
+                .with_column("process_id", SqlScalarType::UInt64.nullable(false))
+                .with_column("metric_name", SqlScalarType::String.nullable(false))
+                .with_column("metric_type", SqlScalarType::String.nullable(false))
+                .with_column(
+                    "labels",
+                    SqlScalarType::Map {
+                        value_type: Box::new(SqlScalarType::String),
+                        custom_id: None,
+                    }
+                    .nullable(false),
+                )
+                .with_column("value", SqlScalarType::Float64.nullable(false))
+                .with_column("help", SqlScalarType::String.nullable(false))
+                .with_key(vec![0, 1, 3])
                 .finish(),
         }
     }

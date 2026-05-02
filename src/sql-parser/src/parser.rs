@@ -179,6 +179,22 @@ pub fn parse_data_type(sql: &str) -> Result<RawDataType, ParserError> {
     }
 }
 
+/// Parses a SQL item name (e.g. `"db"."schema"."table"` or `my_view`).
+pub fn parse_item_name(sql: &str) -> Result<UnresolvedItemName, ParserError> {
+    let tokens = lexer::lex(sql)?;
+    let mut parser = Parser::new(sql, tokens);
+    let name = parser.parse_item_name()?;
+    if parser.next_token().is_some() {
+        parser_err!(
+            parser,
+            parser.peek_prev_pos(),
+            "extra token after item name"
+        )
+    } else {
+        Ok(name)
+    }
+}
+
 /// Parses a string containing a comma-separated list of identifiers and
 /// returns their underlying string values.
 ///
@@ -418,7 +434,7 @@ impl<'a> Parser<'a> {
                 Token::Keyword(COMMIT) => {
                     Ok(self.parse_commit().map_parser_err(StatementKind::Commit)?)
                 }
-                Token::Keyword(ROLLBACK) => Ok(self
+                Token::Keyword(ROLLBACK) | Token::Keyword(ABORT) => Ok(self
                     .parse_rollback()
                     .map_parser_err(StatementKind::Rollback)?),
                 Token::Keyword(TAIL) => {
@@ -560,52 +576,55 @@ impl<'a> Parser<'a> {
         let tok = self
             .next_token()
             .ok_or_else(|| self.error(self.peek_prev_pos(), "Unexpected EOF".to_string()))?;
-        let expr = match tok {
-            Token::LBracket => {
+        let expr = match (tok, self.peek_token()) {
+            (Token::LBracket, _) => {
                 self.prev_token();
                 let function = self.parse_named_function()?;
                 Ok(Expr::Function(function))
             }
-            Token::Keyword(TRUE) | Token::Keyword(FALSE) | Token::Keyword(NULL) => {
+            (Token::Keyword(TRUE) | Token::Keyword(FALSE) | Token::Keyword(NULL), _) => {
                 self.prev_token();
                 Ok(Expr::Value(self.parse_value()?))
             }
-            Token::Keyword(ARRAY) => self.parse_array(),
-            Token::Keyword(LIST) => self.parse_list(),
-            Token::Keyword(MAP) => self.parse_map(),
-            Token::Keyword(CASE) => self.parse_case_expr(),
-            Token::Keyword(CAST) => self.parse_cast_expr(),
-            Token::Keyword(COALESCE) => {
+            (Token::Keyword(ARRAY), _) => self.parse_array(),
+            (Token::Keyword(LIST), Some(Token::LBracket) | Some(Token::LParen)) => {
+                self.parse_list()
+            }
+            (Token::Keyword(MAP), Some(Token::LBracket) | Some(Token::LParen)) => self.parse_map(),
+            (Token::Keyword(CASE), _) => self.parse_case_expr(),
+            (Token::Keyword(CAST), _) => self.parse_cast_expr(),
+            (Token::Keyword(COALESCE), Some(Token::LParen)) => {
                 self.parse_homogenizing_function(HomogenizingFunction::Coalesce)
             }
-            Token::Keyword(GREATEST) => {
+            (Token::Keyword(GREATEST), Some(Token::LParen)) => {
                 self.parse_homogenizing_function(HomogenizingFunction::Greatest)
             }
-            Token::Keyword(LEAST) => self.parse_homogenizing_function(HomogenizingFunction::Least),
-            Token::Keyword(NULLIF) => self.parse_nullif_expr(),
-            Token::Keyword(EXISTS) => self.parse_exists_expr(),
-            Token::Keyword(EXTRACT) => self.parse_extract_expr(),
-            Token::Keyword(NOT) => Ok(Expr::Not {
+            (Token::Keyword(LEAST), Some(Token::LParen)) => {
+                self.parse_homogenizing_function(HomogenizingFunction::Least)
+            }
+            (Token::Keyword(NULLIF), Some(Token::LParen)) => self.parse_nullif_expr(),
+            (Token::Keyword(EXISTS), Some(Token::LParen)) => self.parse_exists_expr(),
+            (Token::Keyword(EXTRACT), Some(Token::LParen)) => self.parse_extract_expr(),
+            (Token::Keyword(NOT), _) => Ok(Expr::Not {
                 expr: Box::new(self.parse_subexpr(Precedence::PrefixNot)?),
             }),
-            Token::Keyword(ROW) if self.peek_token() == Some(Token::LParen) => {
-                self.parse_row_expr()
-            }
-            Token::Keyword(TRIM) => self.parse_trim_expr(),
-            Token::Keyword(POSITION) if self.peek_token() == Some(Token::LParen) => {
-                self.parse_position_expr()
-            }
-            Token::Keyword(NORMALIZE) => self.parse_normalize_expr(),
-            Token::Keyword(SUBSTRING) => self.parse_substring_expr(),
-            Token::Keyword(kw) if kw.is_reserved() => {
+            (Token::Keyword(ROW), Some(Token::LParen)) => self.parse_row_expr(),
+            (Token::Keyword(TRIM), Some(Token::LParen)) => self.parse_trim_expr(),
+            (Token::Keyword(POSITION), Some(Token::LParen)) => self.parse_position_expr(),
+            (Token::Keyword(NORMALIZE), Some(Token::LParen)) => self.parse_normalize_expr(),
+            (Token::Keyword(SUBSTRING), Some(Token::LParen)) => self.parse_substring_expr(),
+            (Token::Keyword(kw), _) if kw.is_always_reserved() => {
                 return Err(self.error(
                     self.peek_prev_pos(),
                     format!("expected expression, but found reserved keyword: {kw}"),
                 ));
             }
-            Token::Keyword(id) => self.parse_qualified_identifier(id.into()),
-            Token::Ident(id) => self.parse_qualified_identifier(self.new_identifier(id)?),
-            Token::Op(op) if op == "-" => {
+            // (Some of the above keywords are recognized by `is_reserved_in_scalar_expression`,
+            // except the ones where we check for a following opening paren before treating them as
+            // keywords.)
+            (Token::Keyword(id), _) => self.parse_qualified_identifier(id.into()),
+            (Token::Ident(id), _) => self.parse_qualified_identifier(self.new_identifier(id)?),
+            (Token::Op(op), _) if op == "-" => {
                 if let Some(Token::Number(n)) = self.peek_token() {
                     let n = match n.parse::<f64>() {
                         Ok(n) => n,
@@ -627,27 +646,29 @@ impl<'a> Parser<'a> {
                     expr2: None,
                 })
             }
-            Token::Op(op) if op == "+" => Ok(Expr::Op {
+            (Token::Op(op), _) if op == "+" => Ok(Expr::Op {
                 op: Op::bare(op),
                 expr1: Box::new(self.parse_subexpr(Precedence::PrefixPlusMinus)?),
                 expr2: None,
             }),
-            Token::Op(op) if op == "~" => Ok(Expr::Op {
+            (Token::Op(op), _) if op == "~" => Ok(Expr::Op {
                 op: Op::bare(op),
                 expr1: Box::new(self.parse_subexpr(Precedence::Other)?),
                 expr2: None,
             }),
-            Token::Number(_) | Token::String(_) | Token::HexString(_) => {
+            (Token::Number(_) | Token::String(_) | Token::HexString(_), _) => {
                 self.prev_token();
                 Ok(Expr::Value(self.parse_value()?))
             }
-            Token::Parameter(n) => Ok(Expr::Parameter(n)),
-            Token::LParen => {
+            (Token::Parameter(n), _) => Ok(Expr::Parameter(n)),
+            (Token::LParen, _) => {
                 let expr = self.parse_parenthesized_fragment()?.into_expr();
                 self.expect_token(&Token::RParen)?;
                 Ok(expr)
             }
-            unexpected => self.expected(self.peek_prev_pos(), "an expression", Some(unexpected)),
+            (unexpected, _) => {
+                self.expected(self.peek_prev_pos(), "an expression", Some(unexpected))
+            }
         }?;
 
         Ok(expr)
@@ -1874,6 +1895,22 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Optional '=', then comma-separated list in parens/brackets.
+    fn parse_list_value<T, F>(&mut self, f: F) -> Result<Vec<T>, ParserError>
+    where
+        F: FnMut(&mut Self) -> Result<T, ParserError>,
+    {
+        let _ = self.consume_token(&Token::Eq);
+        let delimiter = self.expect_one_of_tokens(&[Token::LParen, Token::LBracket])?;
+        let values = self.parse_comma_separated(f)?;
+        self.expect_token(&match delimiter {
+            Token::LParen => Token::RParen,
+            Token::LBracket => Token::RBracket,
+            _ => unreachable!(),
+        })?;
+        Ok(values)
+    }
+
     /// Parse a comma-separated list of 1+ items accepted by `F`
     fn parse_comma_separated<T, F>(&mut self, mut f: F) -> Result<Vec<T>, ParserError>
     where
@@ -1959,20 +1996,11 @@ impl<'a> Parser<'a> {
                 .map_parser_err(StatementKind::CreateConnection)
         } else if self.peek_keywords(&[MATERIALIZED, VIEW])
             || self.peek_keywords(&[OR, REPLACE, MATERIALIZED, VIEW])
+            || self.peek_keywords(&[REPLACEMENT, MATERIALIZED, VIEW])
+            || self.peek_keywords(&[OR, REPLACE, REPLACEMENT, MATERIALIZED, VIEW])
         {
             self.parse_create_materialized_view()
                 .map_parser_err(StatementKind::CreateMaterializedView)
-        } else if self.peek_keywords(&[CONTINUAL, TASK]) {
-            if self.peek_keywords_lookahead(&[FROM, TRANSFORM]) {
-                self.parse_create_continual_task_from_transform()
-                    .map_parser_err(StatementKind::CreateContinualTask)
-            } else if self.peek_keywords_lookahead(&[FROM, RETAIN]) {
-                self.parse_create_continual_task_from_retain()
-                    .map_parser_err(StatementKind::CreateContinualTask)
-            } else {
-                self.parse_create_continual_task()
-                    .map_parser_err(StatementKind::CreateContinualTask)
-            }
         } else if self.peek_keywords(&[USER]) {
             parser_err!(
                 self,
@@ -2238,11 +2266,36 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
+
+            // Parse KEY REFERENCES if present (only valid if we have a key schema)
+            let key_reference_schemas =
+                if key_schema.is_some() && self.parse_keywords(&[KEY, REFERENCES]) {
+                    self.expect_token(&Token::LParen)?;
+                    let refs = self.parse_comma_separated(|p| p.parse_literal_string())?;
+                    self.expect_token(&Token::RParen)?;
+                    refs
+                } else {
+                    vec![]
+                };
+
             self.expect_keywords(&[VALUE, SCHEMA])?;
             let value_schema = self.parse_literal_string()?;
+
+            // Parse VALUE REFERENCES if present
+            let value_reference_schemas = if self.parse_keywords(&[VALUE, REFERENCES]) {
+                self.expect_token(&Token::LParen)?;
+                let refs = self.parse_comma_separated(|p| p.parse_literal_string())?;
+                self.expect_token(&Token::RParen)?;
+                refs
+            } else {
+                vec![]
+            };
+
             Some(CsrSeedAvro {
                 key_schema,
                 value_schema,
+                key_reference_schemas,
+                value_reference_schemas,
             })
         } else {
             None
@@ -2374,6 +2427,17 @@ impl<'a> Parser<'a> {
             self.expected(self.peek_pos(), "UPSERT, DEBEZIUM", self.peek_token())
         }
     }
+
+    fn parse_iceberg_sink_mode(&mut self) -> Result<IcebergSinkMode, ParserError> {
+        if self.parse_keyword(UPSERT) {
+            Ok(IcebergSinkMode::Upsert)
+        } else if self.parse_keyword(APPEND) {
+            Ok(IcebergSinkMode::Append)
+        } else {
+            self.expected(self.peek_pos(), "UPSERT, APPEND", self.peek_token())
+        }
+    }
+
     /// Parse a `VALIDATE` statement
     fn parse_validate(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(CONNECTION)?;
@@ -2472,6 +2536,14 @@ impl<'a> Parser<'a> {
 
     fn parse_default_aws_privatelink(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
         let _ = self.consume_token(&Token::Eq);
+        Ok(WithOptionValue::ConnectionAwsPrivatelink(
+            self.parse_default_aws_privatelink_()?,
+        ))
+    }
+
+    fn parse_default_aws_privatelink_(
+        &mut self,
+    ) -> Result<ConnectionDefaultAwsPrivatelink<Raw>, ParserError> {
         let connection = self.parse_raw_name()?;
         let port = if self.consume_token(&Token::LParen) {
             self.expect_keyword(PORT)?;
@@ -2484,9 +2556,69 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        Ok(WithOptionValue::ConnectionAwsPrivatelink(
-            ConnectionDefaultAwsPrivatelink { connection, port },
-        ))
+        Ok(ConnectionDefaultAwsPrivatelink { connection, port })
+    }
+
+    /// This is just like 'parse_default_aws_privatelink_' except it supports more PrivateLink options.
+    fn parse_aws_privatelink(&mut self) -> Result<KafkaBrokerAwsPrivatelink<Raw>, ParserError> {
+        let connection = self.parse_raw_name()?;
+        let options = if self.consume_token(&Token::LParen) {
+            let options =
+                self.parse_comma_separated(Parser::parse_kafka_broker_aws_privatelink_option)?;
+            self.expect_token(&Token::RParen)?;
+            options
+        } else {
+            vec![]
+        };
+        Ok(KafkaBrokerAwsPrivatelink {
+            connection,
+            options,
+        })
+    }
+
+    fn parse_connection_rule_pattern(&mut self) -> Result<ConnectionRulePattern, ParserError> {
+        let s = self.parse_literal_string()?;
+        let pos = self.peek_prev_pos();
+        let mut prefix_wildcard = false;
+        let mut suffix_wildcard = false;
+        let mut remainder = &s[..];
+
+        if let Some(stripped) = remainder.strip_prefix('*') {
+            prefix_wildcard = true;
+            remainder = stripped;
+        }
+        if let Some(stripped) = remainder.strip_suffix('*') {
+            suffix_wildcard = true;
+            remainder = stripped;
+        }
+
+        if remainder.contains('*') {
+            return parser_err!(
+                self,
+                pos,
+                "pattern may only contain `*` as a leading and/or trailing wildcard"
+            );
+        }
+
+        Ok(ConnectionRulePattern {
+            prefix_wildcard,
+            literal_match: remainder.to_owned(),
+            suffix_wildcard,
+        })
+    }
+
+    fn parse_kafka_broker_or_matching_rule(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
+        if self.parse_keyword(MATCHING) {
+            let pattern = self.parse_connection_rule_pattern()?;
+            self.expect_keyword(USING)?;
+            self.expect_keywords(&[AWS, PRIVATELINK])?;
+            let tunnel = self.parse_aws_privatelink()?;
+            Ok(WithOptionValue::KafkaMatchingBrokerRule(
+                KafkaMatchingBrokerRule { pattern, tunnel },
+            ))
+        } else {
+            self.parse_kafka_broker()
+        }
     }
 
     fn parse_kafka_broker(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
@@ -2496,20 +2628,7 @@ impl<'a> Parser<'a> {
             match self.expect_one_of_keywords(&[AWS, SSH])? {
                 AWS => {
                     self.expect_keywords(&[PRIVATELINK])?;
-                    let connection = self.parse_raw_name()?;
-                    let options = if self.consume_token(&Token::LParen) {
-                        let options = self.parse_comma_separated(
-                            Parser::parse_kafka_broker_aws_privatelink_option,
-                        )?;
-                        self.expect_token(&Token::RParen)?;
-                        options
-                    } else {
-                        vec![]
-                    };
-                    KafkaBrokerTunnel::AwsPrivatelink(KafkaBrokerAwsPrivatelink {
-                        connection,
-                        options,
-                    })
+                    KafkaBrokerTunnel::AwsPrivatelink(self.parse_aws_privatelink()?)
                 }
                 SSH => {
                     self.expect_keywords(&[TUNNEL])?;
@@ -2788,51 +2907,18 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_connection_option_unified(&mut self) -> Result<ConnectionOption<Raw>, ParserError> {
-        let name = match self.parse_connection_option_name()? {
-            ConnectionOptionName::AwsConnection => {
-                return Ok(ConnectionOption {
-                    name: ConnectionOptionName::AwsConnection,
-                    value: Some(self.parse_object_option_value()?),
-                });
-            }
-            ConnectionOptionName::AwsPrivatelink => {
-                return Ok(ConnectionOption {
-                    name: ConnectionOptionName::AwsPrivatelink,
-                    value: Some(self.parse_default_aws_privatelink()?),
-                });
-            }
-            ConnectionOptionName::Broker => {
-                return Ok(ConnectionOption {
-                    name: ConnectionOptionName::Broker,
-                    value: Some(self.parse_kafka_broker()?),
-                });
-            }
-            ConnectionOptionName::Brokers => {
-                let _ = self.consume_token(&Token::Eq);
-                let delimiter = self.expect_one_of_tokens(&[Token::LParen, Token::LBracket])?;
-                let brokers = self.parse_comma_separated(Parser::parse_kafka_broker)?;
-                self.expect_token(&match delimiter {
-                    Token::LParen => Token::RParen,
-                    Token::LBracket => Token::RBracket,
-                    _ => unreachable!(),
-                })?;
-                return Ok(ConnectionOption {
-                    name: ConnectionOptionName::Brokers,
-                    value: Some(WithOptionValue::Sequence(brokers)),
-                });
-            }
-            ConnectionOptionName::SshTunnel => {
-                return Ok(ConnectionOption {
-                    name: ConnectionOptionName::SshTunnel,
-                    value: Some(self.parse_object_option_value()?),
-                });
-            }
-            name => name,
+        let name = self.parse_connection_option_name()?;
+        let value = match name {
+            ConnectionOptionName::AwsConnection => Some(self.parse_object_option_value()?),
+            ConnectionOptionName::AwsPrivatelink => Some(self.parse_default_aws_privatelink()?),
+            ConnectionOptionName::Broker => Some(self.parse_kafka_broker()?),
+            ConnectionOptionName::Brokers => Some(WithOptionValue::Sequence(
+                self.parse_list_value(Parser::parse_kafka_broker_or_matching_rule)?,
+            )),
+            ConnectionOptionName::SshTunnel => Some(self.parse_object_option_value()?),
+            _ => self.parse_optional_option_value()?,
         };
-        Ok(ConnectionOption {
-            name,
-            value: self.parse_optional_option_value()?,
-        })
+        Ok(ConnectionOption { name, value })
     }
 
     fn parse_create_subsource(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -3243,8 +3329,8 @@ impl<'a> Parser<'a> {
         if_not_exists: bool,
         connection: CreateSinkConnection<Raw>,
     ) -> Result<CreateSinkStatement<Raw>, ParserError> {
-        let envelope = if self.parse_keyword(ENVELOPE) {
-            Some(self.parse_sink_envelope()?)
+        let mode = if self.parse_keyword(MODE) {
+            Some(self.parse_iceberg_sink_mode()?)
         } else {
             None
         };
@@ -3264,7 +3350,8 @@ impl<'a> Parser<'a> {
             from,
             connection,
             format: None,
-            envelope,
+            envelope: None,
+            mode,
             if_not_exists,
             with_options,
         })
@@ -3312,6 +3399,7 @@ impl<'a> Parser<'a> {
             connection,
             format,
             envelope,
+            mode: None,
             if_not_exists,
             with_options,
         })
@@ -3737,7 +3825,7 @@ impl<'a> Parser<'a> {
                 let key_columns = self.parse_parenthesized_column_list(Mandatory)?;
 
                 let not_enforced = if self.peek_keywords(&[NOT, ENFORCED]) {
-                    let _ = self.expect_keywords(&[NOT, ENFORCED])?;
+                    self.expect_keywords(&[NOT, ENFORCED])?;
                     true
                 } else {
                     false
@@ -3855,6 +3943,7 @@ impl<'a> Parser<'a> {
         } else {
             IfExistsBehavior::Error
         };
+        let replacement = self.parse_keyword(REPLACEMENT);
         self.expect_keywords(&[MATERIALIZED, VIEW])?;
         if if_exists == IfExistsBehavior::Error && self.parse_if_not_exists()? {
             if_exists = IfExistsBehavior::Skip;
@@ -3862,7 +3951,26 @@ impl<'a> Parser<'a> {
 
         let name = self.parse_item_name()?;
         let columns = self.parse_parenthesized_column_list(Optional)?;
-        let in_cluster = self.parse_optional_in_cluster()?;
+        let replacement_for = if replacement {
+            self.expect_keyword(FOR)?;
+            Some(self.parse_raw_name()?)
+        } else {
+            None
+        };
+        let (in_cluster, in_cluster_replica) = if self.parse_keywords(&[IN, CLUSTER]) {
+            let cluster = self.parse_raw_ident()?;
+            let replica = if self.parse_keyword(REPLICA) {
+                Some(self.parse_identifier()?)
+            } else {
+                None
+            };
+            (Some(cluster), replica)
+        } else if self.parse_keywords(&[IN, REPLICA]) {
+            let replica = self.parse_identifier()?;
+            (None, Some(replica))
+        } else {
+            (None, None)
+        };
 
         let with_options = if self.parse_keyword(WITH) {
             self.expect_token(&Token::LParen)?;
@@ -3882,219 +3990,12 @@ impl<'a> Parser<'a> {
                 if_exists,
                 name,
                 columns,
+                replacement_for,
                 in_cluster,
+                in_cluster_replica,
                 query,
                 as_of,
                 with_options,
-            },
-        ))
-    }
-
-    fn parse_create_continual_task(&mut self) -> Result<Statement<Raw>, ParserError> {
-        // TODO(ct3): OR REPLACE/IF NOT EXISTS.
-        self.expect_keywords(&[CONTINUAL, TASK])?;
-
-        // TODO(ct3): Multiple outputs.
-        let name = RawItemName::Name(self.parse_item_name()?);
-        let columns = match self.consume_token(&Token::LParen) {
-            true => {
-                let columns = self.parse_comma_separated(|parser| {
-                    Ok(CteMutRecColumnDef {
-                        name: parser.parse_identifier()?,
-                        data_type: parser.parse_data_type()?,
-                    })
-                })?;
-                self.expect_token(&Token::RParen)?;
-                Some(columns)
-            }
-            false => None,
-        };
-        let in_cluster = self.parse_optional_in_cluster()?;
-        let with_options = self.parse_create_continual_task_with_options()?;
-
-        // TODO(ct3): Multiple inputs.
-        self.expect_keywords(&[ON, INPUT])?;
-        let input = self.parse_raw_name()?;
-        // TODO(ct3): Allow renaming the inserts/deletes so that we can use
-        // something as both an "input" and a "reference".
-
-        // Also try to parse WITH options in the old location. We never exposed
-        // this to users, so this can be removed once the CI upgrade tests have
-        // moved past these old versions.
-        let legacy_with_options = self.parse_create_continual_task_with_options()?;
-        let with_options = match (!with_options.is_empty(), !legacy_with_options.is_empty()) {
-            (_, false) => with_options,
-            (false, true) => legacy_with_options,
-            (true, true) => {
-                return parser_err!(
-                    self,
-                    self.peek_prev_pos(),
-                    "CREATE CONTINUAL TASK with options in both new and legacy locations"
-                );
-            }
-        };
-
-        self.expect_keyword(AS)?;
-
-        let mut stmts = Vec::new();
-        let mut expecting_statement_delimiter = false;
-        self.expect_token(&Token::LParen)?;
-        // TODO(ct2): Dedup this with parse_statements?
-        loop {
-            // ignore empty statements (between successive statement delimiters)
-            while self.consume_token(&Token::Semicolon) {
-                expecting_statement_delimiter = false;
-            }
-
-            if self.consume_token(&Token::RParen) {
-                break;
-            } else if expecting_statement_delimiter {
-                self.expected(self.peek_pos(), "end of statement", self.peek_token())?
-            }
-
-            let stmt = self.parse_statement().map_err(|err| err.error)?.ast;
-            match stmt {
-                Statement::Delete(stmt) => stmts.push(ContinualTaskStmt::Delete(stmt)),
-                Statement::Insert(stmt) => stmts.push(ContinualTaskStmt::Insert(stmt)),
-                _ => {
-                    return parser_err!(
-                        self,
-                        self.peek_prev_pos(),
-                        "unsupported query in CREATE CONTINUAL TASK"
-                    );
-                }
-            }
-            expecting_statement_delimiter = true;
-        }
-
-        let as_of = self.parse_optional_internal_as_of()?;
-
-        Ok(Statement::CreateContinualTask(
-            CreateContinualTaskStatement {
-                name,
-                columns,
-                in_cluster,
-                with_options,
-                input,
-                stmts,
-                as_of,
-                sugar: None,
-            },
-        ))
-    }
-
-    fn parse_create_continual_task_from_transform(
-        &mut self,
-    ) -> Result<Statement<Raw>, ParserError> {
-        self.expect_keywords(&[CONTINUAL, TASK])?;
-        let name = RawItemName::Name(self.parse_item_name()?);
-        let in_cluster = self.parse_optional_in_cluster()?;
-        let with_options = self.parse_create_continual_task_with_options()?;
-
-        self.expect_keywords(&[FROM, TRANSFORM])?;
-        let input = self.parse_raw_name()?;
-
-        self.expect_keyword(USING)?;
-        self.expect_token(&Token::LParen)?;
-        let transform = self.parse_query()?;
-        self.expect_token(&Token::RParen)?;
-
-        let as_of = self.parse_optional_internal_as_of()?;
-
-        // `INSERT INTO name SELECT * FROM <transform>`
-        let insert = InsertStatement {
-            table_name: name.clone(),
-            columns: Vec::new(),
-            source: InsertSource::Query(transform.clone()),
-            returning: Vec::new(),
-        };
-
-        // Desugar into a normal CT body.
-        let stmts = vec![ContinualTaskStmt::Insert(insert)];
-
-        Ok(Statement::CreateContinualTask(
-            CreateContinualTaskStatement {
-                name,
-                columns: None,
-                in_cluster,
-                with_options,
-                input,
-                stmts,
-                as_of,
-                sugar: Some(CreateContinualTaskSugar::Transform { transform }),
-            },
-        ))
-    }
-
-    fn parse_create_continual_task_from_retain(&mut self) -> Result<Statement<Raw>, ParserError> {
-        self.expect_keywords(&[CONTINUAL, TASK])?;
-        let name = RawItemName::Name(self.parse_item_name()?);
-        let in_cluster = self.parse_optional_in_cluster()?;
-        let with_options = self.parse_create_continual_task_with_options()?;
-
-        self.expect_keywords(&[FROM, RETAIN])?;
-        let input = self.parse_raw_name()?;
-
-        self.expect_keyword(WHILE)?;
-        self.expect_token(&Token::LParen)?;
-        let retain = self.parse_expr()?;
-        self.expect_token(&Token::RParen)?;
-
-        let as_of = self.parse_optional_internal_as_of()?;
-
-        // `INSERT INTO name SELECT * FROM input WHERE <retain>`
-        let insert = InsertStatement {
-            table_name: name.clone(),
-            columns: Vec::new(),
-            source: InsertSource::Query(Query {
-                ctes: CteBlock::Simple(Vec::new()),
-                body: SetExpr::Select(Box::new(Select {
-                    from: vec![TableWithJoins {
-                        relation: TableFactor::Table {
-                            name: input.clone(),
-                            alias: None,
-                        },
-                        joins: Vec::new(),
-                    }],
-                    selection: Some(retain.clone()),
-                    distinct: None,
-                    projection: vec![SelectItem::Wildcard],
-                    group_by: Vec::new(),
-                    having: None,
-                    qualify: None,
-                    options: Vec::new(),
-                })),
-                order_by: Vec::new(),
-                limit: None,
-                offset: None,
-            }),
-            returning: Vec::new(),
-        };
-
-        // `DELETE FROM name WHERE NOT <retain>`
-        let delete = DeleteStatement {
-            table_name: name.clone(),
-            alias: None,
-            using: Vec::new(),
-            selection: Some(retain.clone().negate()),
-        };
-
-        // Desugar into a normal CT body.
-        let stmts = vec![
-            ContinualTaskStmt::Insert(insert),
-            ContinualTaskStmt::Delete(delete),
-        ];
-
-        Ok(Statement::CreateContinualTask(
-            CreateContinualTaskStatement {
-                name,
-                columns: None,
-                in_cluster,
-                with_options,
-                input,
-                stmts,
-                as_of,
-                sugar: Some(CreateContinualTaskSugar::Retain { retain }),
             },
         ))
     }
@@ -4184,34 +4085,6 @@ impl<'a> Parser<'a> {
             }
             _ => unreachable!(),
         }
-    }
-
-    fn parse_create_continual_task_with_options(
-        &mut self,
-    ) -> Result<Vec<ContinualTaskOption<Raw>>, ParserError> {
-        if self.parse_keyword(WITH) {
-            self.expect_token(&Token::LParen)?;
-            let options = self.parse_comma_separated(Parser::parse_continual_task_option)?;
-            self.expect_token(&Token::RParen)?;
-            Ok(options)
-        } else {
-            Ok(vec![])
-        }
-    }
-
-    fn parse_continual_task_option_name(&mut self) -> Result<ContinualTaskOptionName, ParserError> {
-        let option = self.expect_one_of_keywords(&[SNAPSHOT])?;
-        let name = match option {
-            SNAPSHOT => ContinualTaskOptionName::Snapshot,
-            _ => unreachable!(),
-        };
-        Ok(name)
-    }
-
-    fn parse_continual_task_option(&mut self) -> Result<ContinualTaskOption<Raw>, ParserError> {
-        let name = self.parse_continual_task_option_name()?;
-        let value = self.parse_optional_option_value()?;
-        Ok(ContinualTaskOption { name, value })
     }
 
     fn parse_create_index(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -4574,13 +4447,13 @@ impl<'a> Parser<'a> {
                     UNTIL => {
                         self.expect_keyword(READY)?;
                         let _ = self.consume_token(&Token::Eq);
-                        let _ = self.expect_token(&Token::LParen)?;
+                        self.expect_token(&Token::LParen)?;
                         let opts = Some(WithOptionValue::ClusterAlterStrategy(
                             ClusterAlterOptionValue::UntilReady(self.parse_comma_separated(
                                 Parser::parse_cluster_alter_until_ready_option,
                             )?),
                         ));
-                        let _ = self.expect_token(&Token::RParen)?;
+                        self.expect_token(&Token::RParen)?;
                         opts
                     }
                     _ => unreachable!(),
@@ -4891,8 +4764,7 @@ impl<'a> Parser<'a> {
             | ObjectType::Index
             | ObjectType::Type
             | ObjectType::Secret
-            | ObjectType::Connection
-            | ObjectType::ContinualTask => {
+            | ObjectType::Connection => {
                 let names = self.parse_comma_separated(|parser| {
                     Ok(UnresolvedObjectName::Item(parser.parse_item_name()?))
                 })?;
@@ -5074,6 +4946,13 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_create_table_from_source(&mut self) -> Result<Statement<Raw>, ParserError> {
+        if self.parse_keyword(TEMP) || self.parse_keyword(TEMPORARY) {
+            return parser_err!(
+                self,
+                self.peek_prev_pos(),
+                "temporary tables FROM SOURCE are not supported"
+            );
+        }
         self.expect_keyword(TABLE)?;
         let if_not_exists = self.parse_if_not_exists()?;
         let table_name = self.parse_item_name()?;
@@ -5605,10 +5484,9 @@ impl<'a> Parser<'a> {
             ObjectType::Index => self.parse_alter_index(),
             ObjectType::Secret => self.parse_alter_secret(),
             ObjectType::Connection => self.parse_alter_connection(),
-            ObjectType::View
-            | ObjectType::MaterializedView
-            | ObjectType::Table
-            | ObjectType::ContinualTask => self.parse_alter_views(object_type),
+            ObjectType::View | ObjectType::MaterializedView | ObjectType::Table => {
+                self.parse_alter_views(object_type)
+            }
             ObjectType::Type => {
                 let if_exists = self
                     .parse_if_exists()
@@ -5789,6 +5667,7 @@ impl<'a> Parser<'a> {
 
                 Ok(Statement::AlterObjectSwap(AlterObjectSwapStatement {
                     object_type,
+                    if_exists,
                     name_a: UnresolvedObjectName::Cluster(name),
                     name_b,
                 }))
@@ -6432,10 +6311,26 @@ impl<'a> Parser<'a> {
     ) -> Result<Statement<Raw>, ParserStatementError> {
         let if_exists = self.parse_if_exists().map_no_statement_parser_err()?;
         let name = self.parse_item_name().map_no_statement_parser_err()?;
-        let keywords = if object_type == ObjectType::Table {
-            [SET, RENAME, OWNER, RESET, ADD].as_slice()
-        } else {
-            [SET, RENAME, OWNER, RESET].as_slice()
+        let keywords: &[_] = match object_type {
+            ObjectType::Table => &[SET, RENAME, OWNER, RESET, ADD],
+            ObjectType::MaterializedView => &[SET, RENAME, OWNER, RESET, APPLY],
+            ObjectType::View => &[SET, RENAME, OWNER, RESET],
+            ObjectType::Source
+            | ObjectType::Sink
+            | ObjectType::Index
+            | ObjectType::Type
+            | ObjectType::Role
+            | ObjectType::Cluster
+            | ObjectType::ClusterReplica
+            | ObjectType::Secret
+            | ObjectType::Connection
+            | ObjectType::Database
+            | ObjectType::Schema
+            | ObjectType::Func
+            | ObjectType::Subsource
+            | ObjectType::NetworkPolicy => {
+                unreachable!("parse_alter_views called with unsupported object type: {object_type}")
+            }
         };
 
         let action = self
@@ -6526,6 +6421,28 @@ impl<'a> Parser<'a> {
                     },
                 ))
             }
+            APPLY => {
+                assert_eq!(
+                    object_type,
+                    ObjectType::MaterializedView,
+                    "checked object_type above",
+                );
+
+                self.expect_keyword(REPLACEMENT)
+                    .map_parser_err(StatementKind::AlterMaterializedViewApplyReplacement)?;
+
+                let replacement_name = self
+                    .parse_item_name()
+                    .map_parser_err(StatementKind::AlterMaterializedViewApplyReplacement)?;
+
+                Ok(Statement::AlterMaterializedViewApplyReplacement(
+                    AlterMaterializedViewApplyReplacementStatement {
+                        if_exists,
+                        name,
+                        replacement_name,
+                    },
+                ))
+            }
             _ => unreachable!(),
         }
     }
@@ -6579,6 +6496,7 @@ impl<'a> Parser<'a> {
 
                 Ok(Statement::AlterObjectSwap(AlterObjectSwapStatement {
                     object_type,
+                    if_exists,
                     name_a: name,
                     name_b,
                 }))
@@ -7024,6 +6942,16 @@ impl<'a> Parser<'a> {
                 BOOLEAN => other(ident!("bool")),
                 BYTES => other(ident!("bytea")),
                 JSON => other(ident!("jsonb")),
+
+                // We do not want any reserved keywords to be parsed as data type names,
+                // eg "CASE 'foo' WHEN ... END" should not parse as "CAST 'foo' AS CASE"
+                kw if kw.is_sometimes_reserved() => {
+                    return self.expected(
+                        self.peek_prev_pos(),
+                        "a data type name",
+                        Some(Token::Keyword(kw)),
+                    );
+                }
                 _ => {
                     self.prev_token();
                     RawDataType::Other {
@@ -7239,8 +7167,7 @@ impl<'a> Parser<'a> {
             | ObjectType::Type
             | ObjectType::Secret
             | ObjectType::Connection
-            | ObjectType::Func
-            | ObjectType::ContinualTask => UnresolvedObjectName::Item(self.parse_item_name()?),
+            | ObjectType::Func => UnresolvedObjectName::Item(self.parse_item_name()?),
             ObjectType::Role => UnresolvedObjectName::Role(self.parse_identifier()?),
             ObjectType::Cluster => UnresolvedObjectName::Cluster(self.parse_identifier()?),
             ObjectType::ClusterReplica => {
@@ -7747,7 +7674,7 @@ impl<'a> Parser<'a> {
             // An empty target list is permissible to match PostgreSQL, which
             // permits these for symmetry with zero column tables. We need
             // to sniff out `AS` here specially to support `SELECT AS OF ...`.
-            Some(Token::Keyword(kw)) if kw.is_reserved() || kw == AS => vec![],
+            Some(Token::Keyword(kw)) if kw.is_always_reserved() || kw == AS => vec![],
             Some(Token::Semicolon) | Some(Token::RParen) | None => vec![],
             _ => {
                 let mut projection = vec![];
@@ -8038,10 +7965,6 @@ impl<'a> Parser<'a> {
                 ObjectType::MaterializedView => {
                     let in_cluster = self.parse_optional_in_cluster()?;
                     ShowObjectType::MaterializedView { in_cluster }
-                }
-                ObjectType::ContinualTask => {
-                    let in_cluster = self.parse_optional_in_cluster()?;
-                    ShowObjectType::ContinualTask { in_cluster }
                 }
                 ObjectType::Index => {
                     let on_object = if self.parse_one_of_keywords(&[ON]).is_some() {
@@ -8910,6 +8833,14 @@ impl<'a> Parser<'a> {
                 };
 
                 Explainee::CreateIndex(Box::new(stmt), broken)
+            } else if self.peek_keyword(SUBSCRIBE) {
+                // Parse: `BROKEN? SUBSCRIBE ...`
+                let _ = self.parse_keyword(SUBSCRIBE); // consume SUBSCRIBE token
+                let stmt = match self.parse_subscribe()? {
+                    Statement::Subscribe(stmt) => stmt,
+                    _ => panic!("Unexpected statement type return after parsing"),
+                };
+                Explainee::Subscribe(Box::new(stmt), broken)
             } else {
                 // Parse: `BROKEN? query`
                 let query = self.parse_select_statement()?;
@@ -9499,10 +9430,7 @@ impl<'a> Parser<'a> {
         object_type: ObjectType,
     ) -> Result<ObjectType, ParserError> {
         match object_type {
-            ObjectType::View
-            | ObjectType::MaterializedView
-            | ObjectType::Source
-            | ObjectType::ContinualTask => {
+            ObjectType::View | ObjectType::MaterializedView | ObjectType::Source => {
                 parser_err!(
                     self,
                     self.peek_prev_pos(),
@@ -9553,7 +9481,6 @@ impl<'a> Parser<'a> {
                 DATABASE,
                 SCHEMA,
                 FUNCTION,
-                CONTINUAL,
                 NETWORK,
             ])? {
                 TABLE => ObjectType::Table,
@@ -9582,13 +9509,6 @@ impl<'a> Parser<'a> {
                 DATABASE => ObjectType::Database,
                 SCHEMA => ObjectType::Schema,
                 FUNCTION => ObjectType::Func,
-                CONTINUAL => {
-                    if let Err(e) = self.expect_keyword(TASK) {
-                        self.prev_token();
-                        return Err(e);
-                    }
-                    ObjectType::ContinualTask
-                }
                 NETWORK => {
                     if let Err(e) = self.expect_keyword(POLICY) {
                         self.prev_token();
@@ -9726,7 +9646,6 @@ impl<'a> Parser<'a> {
                 DATABASES,
                 SCHEMAS,
                 SUBSOURCES,
-                CONTINUAL,
                 NETWORK,
             ])? {
                 TABLES => ObjectType::Table,
@@ -9758,14 +9677,6 @@ impl<'a> Parser<'a> {
                 DATABASES => ObjectType::Database,
                 SCHEMAS => ObjectType::Schema,
                 SUBSOURCES => ObjectType::Subsource,
-                CONTINUAL => {
-                    if self.parse_keyword(TASKS) {
-                        ObjectType::ContinualTask
-                    } else {
-                        self.prev_token();
-                        return None;
-                    }
-                }
                 NETWORK => {
                     if self.parse_keyword(POLICIES) {
                         ObjectType::NetworkPolicy
@@ -9955,7 +9866,6 @@ impl<'a> Parser<'a> {
             DATABASE,
             SCHEMA,
             CLUSTER,
-            CONTINUAL,
             NETWORK,
         ])? {
             TABLE => {
@@ -10023,11 +9933,6 @@ impl<'a> Parser<'a> {
             COLUMN => {
                 let name = self.parse_column_name()?;
                 CommentObjectType::Column { name }
-            }
-            CONTINUAL => {
-                self.expect_keyword(TASK)?;
-                let name = self.parse_raw_name()?;
-                CommentObjectType::ContinualTask { name }
             }
             NETWORK => {
                 self.expect_keyword(POLICY)?;

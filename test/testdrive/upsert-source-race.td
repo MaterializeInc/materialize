@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9690 is fixed
+$ skip-if
+SELECT true
+
 # Try to trigger a race by creating source, rendering it, then dropping, in a loop.
 
 $ set-arg-default single-replica-cluster=quickstart

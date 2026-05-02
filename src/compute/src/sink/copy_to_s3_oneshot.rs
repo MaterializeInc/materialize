@@ -20,22 +20,18 @@ use mz_compute_types::dyncfgs::{
 use mz_compute_types::sinks::{ComputeSinkDesc, CopyToS3OneshotSinkConnection};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::consolidate_pact;
 use mz_timely_util::probe::{Handle, ProbeNotify};
-use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::Operator;
 use timely::progress::Antichain;
 
 use crate::render::StartSignal;
+use crate::render::errors::DataflowErrorSer;
 use crate::render::sinks::SinkRender;
 use crate::typedefs::KeyBatcher;
 
-impl<G> SinkRender<G> for CopyToS3OneshotSinkConnection
-where
-    G: Scope<Timestamp = Timestamp>,
-{
+impl<'scope> SinkRender<'scope> for CopyToS3OneshotSinkConnection {
     fn render_sink(
         &self,
         compute_state: &mut crate::compute_state::ComputeState,
@@ -43,9 +39,8 @@ where
         sink_id: GlobalId,
         _as_of: Antichain<Timestamp>,
         _start_signal: StartSignal,
-        sinked_collection: VecCollection<G, Row, Diff>,
-        err_collection: VecCollection<G, DataflowError, Diff>,
-        _ct_times: Option<VecCollection<G, (), Diff>>,
+        sinked_collection: VecCollection<'scope, Timestamp, Row, Diff>,
+        err_collection: VecCollection<'scope, Timestamp, DataflowErrorSer, Diff>,
         output_probe: &Handle<Timestamp>,
     ) -> Option<Rc<dyn Any>> {
         // Set up a callback to communicate the result of the copy-to operation to the controller.
@@ -66,17 +61,17 @@ where
 
         // We exchange the data according to batch, but we don't want to send the batch ID to the
         // sink. The sink can re-compute the batch ID from the data.
-        let input = consolidate_pact::<KeyBatcher<_, _, _>, _, _>(
-            &sinked_collection.map(move |row| (row, ())).inner,
+        let input = consolidate_pact::<KeyBatcher<_, _, _>, _>(
+            sinked_collection.map(move |row| (row, ())).inner,
             Exchange::new(move |((row, ()), _, _): &((Row, _), _, _)| row.hashed() % batch_count),
             "Consolidated COPY TO S3 input",
         )
         .probe_notify_with(vec![output_probe.clone()]);
 
         // We need to consolidate the error collection to ensure we don't act on retracted errors.
-        let error = consolidate_pact::<KeyBatcher<_, _, _>, _, _>(
-            &err_collection.map(move |err| (err, ())).inner,
-            Exchange::new(move |((err, _), _, _): &((DataflowError, _), _, _)| {
+        let error = consolidate_pact::<KeyBatcher<_, _, _>, _>(
+            err_collection.map(move |err| (err, ())).inner,
+            Exchange::new(move |((err, _), _, _): &((DataflowErrorSer, _), _, _)| {
                 err.hashed() % batch_count
             }),
             "Consolidated COPY TO S3 errors",
@@ -115,6 +110,11 @@ where
             s3_multipart_part_size_bytes: COPY_TO_S3_MULTIPART_PART_SIZE_BYTES
                 .get(&compute_state.worker_config),
         };
+
+        // Deserialize DataflowErrorSer back to DataflowError at the boundary
+        // with storage-operators, which expects DataflowError.
+        use timely::dataflow::operators::vec::Map;
+        let error_stream = error_stream.map(|(err, time, diff)| (err.deserialize(), time, diff));
 
         let token = mz_storage_operators::s3_oneshot_sink::copy_to(
             input,

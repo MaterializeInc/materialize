@@ -25,6 +25,7 @@ node_modules
 /test/feature-benchmark/tmp/*.td
 /test/zippy/tmp/*.td
 /test/**/tmp_*.toml
+/test/**/fdb_*.cluster
 junit_*.xml
 parallel-workload-queries.log
 perf.data*
@@ -60,3 +61,9 @@ flake.lock
 /known-docker-images.txt
 /test/sqllogictest/sqlite
 my-local-mz/
+/test/orchestratord/cluster.yaml
+uv.lock
+/test/workload-replay/captured-workloads/
+/misc/kind/cache/
+/plots/
+/test/testdrive/types.parquet*

@@ -12,6 +12,7 @@ use std::fmt;
 use std::sync::LazyLock;
 
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
+use mz_expr_derive::sqlfunc;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
@@ -30,143 +31,149 @@ use mz_repr::{Datum, RowArena, SqlColumnType, SqlScalarType, strconv};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::func::regexp_match_static;
+use crate::func::{binary, regexp_match_static};
 use crate::scalar::func::{
     EagerUnaryFunc, LazyUnaryFunc, array_create_scalar, regexp_split_to_array_re,
 };
 use crate::{EvalError, MirScalarExpr, UnaryFunc, like_pattern};
 
-sqlfunc!(
-    #[sqlname = "text_to_boolean"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastBoolToString)]
-    fn cast_string_to_bool<'a>(a: &'a str) -> Result<bool, EvalError> {
-        strconv::parse_bool(a).err_into()
-    }
-);
+#[sqlfunc(
+    sqlname = "text_to_boolean",
+    preserves_uniqueness = false,
+    inverse = to_unary!(super::CastBoolToString)
+)]
+fn cast_string_to_bool<'a>(a: &'a str) -> Result<bool, EvalError> {
+    strconv::parse_bool(a).err_into()
+}
 
-sqlfunc!(
-    #[sqlname = "text_to_\"char\""]
-    #[preserves_uniqueness = true]
-    #[inverse = to_unary!(super::CastPgLegacyCharToString)]
-    fn cast_string_to_pg_legacy_char<'a>(a: &'a str) -> PgLegacyChar {
-        PgLegacyChar(a.as_bytes().get(0).copied().unwrap_or(0))
-    }
-);
+#[sqlfunc(
+    sqlname = "text_to_\"char\"",
+    preserves_uniqueness = true,
+    inverse = to_unary!(super::CastPgLegacyCharToString)
+)]
+fn cast_string_to_pg_legacy_char<'a>(a: &'a str) -> PgLegacyChar {
+    PgLegacyChar(a.as_bytes().get(0).copied().unwrap_or(0))
+}
 
-sqlfunc!(
-    #[sqlname = "text_to_name"]
-    #[preserves_uniqueness = true]
-    fn cast_string_to_pg_legacy_name<'a>(a: &'a str) -> PgLegacyName<String> {
-        PgLegacyName(strconv::parse_pg_legacy_name(a))
-    }
-);
+#[sqlfunc(sqlname = "text_to_name", preserves_uniqueness = true)]
+fn cast_string_to_pg_legacy_name<'a>(a: &'a str) -> PgLegacyName<String> {
+    PgLegacyName(strconv::parse_pg_legacy_name(a))
+}
 
-sqlfunc!(
-    #[sqlname = "text_to_bytea"]
-    #[preserves_uniqueness = true]
-    #[inverse = to_unary!(super::CastBytesToString)]
-    fn cast_string_to_bytes<'a>(a: &'a str) -> Result<Vec<u8>, EvalError> {
-        strconv::parse_bytes(a).err_into()
-    }
-);
+#[sqlfunc(
+    sqlname = "text_to_bytea",
+    preserves_uniqueness = true,
+    inverse = to_unary!(super::CastBytesToString)
+)]
+fn cast_string_to_bytes<'a>(a: &'a str) -> Result<Vec<u8>, EvalError> {
+    strconv::parse_bytes(a).err_into()
+}
 
-sqlfunc!(
-    #[sqlname = "text_to_smallint"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastInt16ToString)]
-    fn cast_string_to_int16<'a>(a: &'a str) -> Result<i16, EvalError> {
-        strconv::parse_int16(a).err_into()
-    }
-);
+#[sqlfunc(
+    sqlname = "text_to_smallint",
+    preserves_uniqueness = false,
+    inverse = to_unary!(super::CastInt16ToString)
+)]
+fn cast_string_to_int16<'a>(a: &'a str) -> Result<i16, EvalError> {
+    strconv::parse_int16(a).err_into()
+}
 
-sqlfunc!(
-    #[sqlname = "text_to_integer"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastInt32ToString)]
-    fn cast_string_to_int32<'a>(a: &'a str) -> Result<i32, EvalError> {
-        strconv::parse_int32(a).err_into()
-    }
-);
+#[sqlfunc(
+    sqlname = "text_to_integer",
+    preserves_uniqueness = false,
+    inverse = to_unary!(super::CastInt32ToString)
+)]
+fn cast_string_to_int32<'a>(a: &'a str) -> Result<i32, EvalError> {
+    strconv::parse_int32(a).err_into()
+}
 
-sqlfunc!(
-    #[sqlname = "text_to_bigint"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastInt64ToString)]
-    fn cast_string_to_int64<'a>(a: &'a str) -> Result<i64, EvalError> {
-        strconv::parse_int64(a).err_into()
-    }
-);
+#[sqlfunc(
+    sqlname = "text_to_bigint",
+    preserves_uniqueness = false,
+    inverse = to_unary!(super::CastInt64ToString)
+)]
+fn cast_string_to_int64<'a>(a: &'a str) -> Result<i64, EvalError> {
+    strconv::parse_int64(a).err_into()
+}
 
-sqlfunc!(
-    #[sqlname = "text_to_real"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastFloat32ToString)]
-    fn cast_string_to_float32<'a>(a: &'a str) -> Result<f32, EvalError> {
-        strconv::parse_float32(a).err_into()
-    }
-);
+#[sqlfunc(
+    sqlname = "text_to_real",
+    preserves_uniqueness = false,
+    inverse = to_unary!(super::CastFloat32ToString)
+)]
+fn cast_string_to_float32<'a>(a: &'a str) -> Result<f32, EvalError> {
+    strconv::parse_float32(a).err_into()
+}
 
-sqlfunc!(
-    #[sqlname = "text_to_double"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastFloat64ToString)]
-    fn cast_string_to_float64<'a>(a: &'a str) -> Result<f64, EvalError> {
-        strconv::parse_float64(a).err_into()
-    }
-);
+#[sqlfunc(
+    sqlname = "text_to_double",
+    preserves_uniqueness = false,
+    inverse = to_unary!(super::CastFloat64ToString)
+)]
+fn cast_string_to_float64<'a>(a: &'a str) -> Result<f64, EvalError> {
+    strconv::parse_float64(a).err_into()
+}
 
-sqlfunc!(
-    #[sqlname = "text_to_oid"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastOidToString)]
-    fn cast_string_to_oid<'a>(a: &'a str) -> Result<Oid, EvalError> {
-        Ok(Oid(strconv::parse_oid(a)?))
-    }
-);
+#[sqlfunc(
+    sqlname = "text_to_oid",
+    preserves_uniqueness = false,
+    inverse = to_unary!(super::CastOidToString)
+)]
+fn cast_string_to_oid<'a>(a: &'a str) -> Result<Oid, EvalError> {
+    Ok(Oid(strconv::parse_oid(a)?))
+}
 
-sqlfunc!(
-    #[sqlname = "text_to_uint2"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastUint16ToString)]
-    fn cast_string_to_uint16(a: &'a str) -> Result<u16, EvalError> {
-        strconv::parse_uint16(a).err_into()
-    }
-);
+#[sqlfunc(
+    sqlname = "text_to_uint2",
+    preserves_uniqueness = false,
+    inverse = to_unary!(super::CastUint16ToString)
+)]
+fn cast_string_to_uint16(a: &str) -> Result<u16, EvalError> {
+    strconv::parse_uint16(a).err_into()
+}
 
-sqlfunc!(
-    #[sqlname = "text_to_uint4"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastUint32ToString)]
-    fn cast_string_to_uint32(a: &'a str) -> Result<u32, EvalError> {
-        strconv::parse_uint32(a).err_into()
-    }
-);
+#[sqlfunc(
+    sqlname = "text_to_uint4",
+    preserves_uniqueness = false,
+    inverse = to_unary!(super::CastUint32ToString)
+)]
+fn cast_string_to_uint32(a: &str) -> Result<u32, EvalError> {
+    strconv::parse_uint32(a).err_into()
+}
 
-sqlfunc!(
-    #[sqlname = "text_to_uint8"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastUint64ToString)]
-    fn cast_string_to_uint64(a: &'a str) -> Result<u64, EvalError> {
-        strconv::parse_uint64(a).err_into()
-    }
-);
+#[sqlfunc(
+    sqlname = "text_to_uint8",
+    preserves_uniqueness = false,
+    inverse = to_unary!(super::CastUint64ToString)
+)]
+fn cast_string_to_uint64(a: &str) -> Result<u64, EvalError> {
+    strconv::parse_uint64(a).err_into()
+}
 
-sqlfunc!(
-    #[sqlname = "reverse"]
-    fn reverse<'a>(a: &'a str) -> String {
-        a.chars().rev().collect()
-    }
-);
+#[sqlfunc(sqlname = "reverse")]
+fn reverse<'a>(a: &'a str) -> String {
+    a.chars().rev().collect()
+}
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastStringToNumeric(pub Option<NumericMaxScale>);
 
-impl<'a> EagerUnaryFunc<'a> for CastStringToNumeric {
-    type Input = &'a str;
-    type Output = Result<Numeric, EvalError>;
+impl EagerUnaryFunc for CastStringToNumeric {
+    type Input<'a> = &'a str;
+    type Output<'a> = Result<Numeric, EvalError>;
 
-    fn call(&self, a: &'a str) -> Result<Numeric, EvalError> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         let mut d = strconv::parse_numeric(a)?;
         if let Some(scale) = self.0 {
             if numeric::rescale(&mut d.0, scale.into_u8()).is_err() {
@@ -176,7 +183,7 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToNumeric {
         Ok(d.into_inner())
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Numeric { max_scale: self.0 }.nullable(input.nullable)
     }
 
@@ -191,38 +198,49 @@ impl fmt::Display for CastStringToNumeric {
     }
 }
 
-sqlfunc!(
-    #[sqlname = "text_to_date"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastDateToString)]
-    fn cast_string_to_date<'a>(a: &'a str) -> Result<Date, EvalError> {
-        strconv::parse_date(a).err_into()
-    }
-);
+#[sqlfunc(
+    sqlname = "text_to_date",
+    preserves_uniqueness = false,
+    inverse = to_unary!(super::CastDateToString)
+)]
+fn cast_string_to_date<'a>(a: &'a str) -> Result<Date, EvalError> {
+    strconv::parse_date(a).err_into()
+}
 
-sqlfunc!(
-    #[sqlname = "text_to_time"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastTimeToString)]
-    fn cast_string_to_time<'a>(a: &'a str) -> Result<NaiveTime, EvalError> {
-        strconv::parse_time(a).err_into()
-    }
-);
+#[sqlfunc(
+    sqlname = "text_to_time",
+    preserves_uniqueness = false,
+    inverse = to_unary!(super::CastTimeToString)
+)]
+fn cast_string_to_time<'a>(a: &'a str) -> Result<NaiveTime, EvalError> {
+    strconv::parse_time(a).err_into()
+}
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastStringToTimestamp(pub Option<TimestampPrecision>);
 
-impl<'a> EagerUnaryFunc<'a> for CastStringToTimestamp {
-    type Input = &'a str;
-    type Output = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
+impl EagerUnaryFunc for CastStringToTimestamp {
+    type Input<'a> = &'a str;
+    type Output<'a> = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
 
-    fn call(&self, a: &'a str) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         let out = strconv::parse_timestamp(a)?;
         let updated = out.round_to_precision(self.0)?;
         Ok(updated)
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Timestamp { precision: self.0 }.nullable(input.nullable)
     }
 
@@ -237,37 +255,46 @@ impl fmt::Display for CastStringToTimestamp {
     }
 }
 
-sqlfunc!(
-    #[sqlname = "try_parse_monotonic_iso8601_timestamp"]
-    // TODO: Pretty sure this preserves uniqueness, but not 100%.
-    //
-    // Ironically, even though this has "monotonic" in the name, it's not quite
-    // eligible for `#[is_monotone = true]` because any input could also be
-    // mapped to null. So, handle it via SpecialUnary in the interpreter.
-    fn try_parse_monotonic_iso8601_timestamp<'a>(
-        a: &'a str,
-    ) -> Option<CheckedTimestamp<NaiveDateTime>> {
-        let ts = mz_persist_types::timestamp::try_parse_monotonic_iso8601_timestamp(a)?;
-        let ts = CheckedTimestamp::from_timestamplike(ts)
-            .expect("monotonic_iso8601 range is a subset of CheckedTimestamp domain");
-        Some(ts)
-    }
-);
+#[sqlfunc(sqlname = "try_parse_monotonic_iso8601_timestamp")]
+// TODO: Pretty sure this preserves uniqueness, but not 100%.
+//
+// Ironically, even though this has "monotonic" in the name, it's not quite
+// eligible for `#[is_monotone = true]` because any input could also be
+// mapped to null. So, handle it via SpecialUnary in the interpreter.
+fn try_parse_monotonic_iso8601_timestamp<'a>(
+    a: &'a str,
+) -> Option<CheckedTimestamp<NaiveDateTime>> {
+    let ts = mz_persist_types::timestamp::try_parse_monotonic_iso8601_timestamp(a)?;
+    let ts = CheckedTimestamp::from_timestamplike(ts)
+        .expect("monotonic_iso8601 range is a subset of CheckedTimestamp domain");
+    Some(ts)
+}
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastStringToTimestampTz(pub Option<TimestampPrecision>);
 
-impl<'a> EagerUnaryFunc<'a> for CastStringToTimestampTz {
-    type Input = &'a str;
-    type Output = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
+impl EagerUnaryFunc for CastStringToTimestampTz {
+    type Input<'a> = &'a str;
+    type Output<'a> = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
 
-    fn call(&self, a: &'a str) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         let out = strconv::parse_timestamptz(a)?;
         let updated = out.round_to_precision(self.0)?;
         Ok(updated)
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::TimestampTz { precision: self.0 }.nullable(input.nullable)
     }
 
@@ -282,25 +309,36 @@ impl fmt::Display for CastStringToTimestampTz {
     }
 }
 
-sqlfunc!(
-    #[sqlname = "text_to_interval"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastIntervalToString)]
-    fn cast_string_to_interval<'a>(a: &'a str) -> Result<Interval, EvalError> {
-        strconv::parse_interval(a).err_into()
-    }
-);
+#[sqlfunc(
+    sqlname = "text_to_interval",
+    preserves_uniqueness = false,
+    inverse = to_unary!(super::CastIntervalToString)
+)]
+fn cast_string_to_interval<'a>(a: &'a str) -> Result<Interval, EvalError> {
+    strconv::parse_interval(a).err_into()
+}
 
-sqlfunc!(
-    #[sqlname = "text_to_uuid"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastUuidToString)]
-    fn cast_string_to_uuid<'a>(a: &'a str) -> Result<Uuid, EvalError> {
-        strconv::parse_uuid(a).err_into()
-    }
-);
+#[sqlfunc(
+    sqlname = "text_to_uuid",
+    preserves_uniqueness = false,
+    inverse = to_unary!(super::CastUuidToString)
+)]
+fn cast_string_to_uuid<'a>(a: &'a str) -> Result<Uuid, EvalError> {
+    strconv::parse_uuid(a).err_into()
+}
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastStringToArray {
     // Target array's type.
     pub return_ty: SqlScalarType,
@@ -337,7 +375,7 @@ impl LazyUnaryFunc for CastStringToArray {
     }
 
     /// The output SqlColumnType of this function
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         self.return_ty.clone().nullable(input_type.nullable)
     }
 
@@ -365,6 +403,10 @@ impl LazyUnaryFunc for CastStringToArray {
     fn is_monotone(&self) -> bool {
         false
     }
+
+    fn is_eliminable_cast(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for CastStringToArray {
@@ -373,7 +415,18 @@ impl fmt::Display for CastStringToArray {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastStringToList {
     // Target list's type
     pub return_ty: SqlScalarType,
@@ -414,7 +467,7 @@ impl LazyUnaryFunc for CastStringToList {
     }
 
     /// The output SqlColumnType of this function
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         self.return_ty
             .without_modifiers()
             .nullable(input_type.nullable)
@@ -444,6 +497,10 @@ impl LazyUnaryFunc for CastStringToList {
     fn is_monotone(&self) -> bool {
         false
     }
+
+    fn is_eliminable_cast(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for CastStringToList {
@@ -452,7 +509,18 @@ impl fmt::Display for CastStringToList {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastStringToMap {
     // Target map's value type
     pub return_ty: SqlScalarType,
@@ -501,7 +569,7 @@ impl LazyUnaryFunc for CastStringToMap {
     }
 
     /// The output SqlColumnType of this function
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         self.return_ty.clone().nullable(input_type.nullable)
     }
 
@@ -529,6 +597,10 @@ impl LazyUnaryFunc for CastStringToMap {
     fn is_monotone(&self) -> bool {
         false
     }
+
+    fn is_eliminable_cast(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for CastStringToMap {
@@ -537,17 +609,28 @@ impl fmt::Display for CastStringToMap {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastStringToChar {
     pub length: Option<mz_repr::adt::char::CharLength>,
     pub fail_on_len: bool,
 }
 
-impl<'a> EagerUnaryFunc<'a> for CastStringToChar {
-    type Input = &'a str;
-    type Output = Result<Char<String>, EvalError>;
+impl EagerUnaryFunc for CastStringToChar {
+    type Input<'a> = &'a str;
+    type Output<'a> = Result<Char<String>, EvalError>;
 
-    fn call(&self, a: &'a str) -> Result<Char<String>, EvalError> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         let s = format_str_trim(a, self.length, self.fail_on_len).map_err(|_| {
             assert!(self.fail_on_len);
             EvalError::StringValueTooLong {
@@ -559,7 +642,7 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToChar {
         Ok(Char(s))
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Char {
             length: self.length,
         }
@@ -572,6 +655,11 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToChar {
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastCharToString)
+    }
+
+    fn is_eliminable_cast(&self) -> bool {
+        // even when `length` is `None`, we'll trim whitespace at the end
+        false
     }
 }
 
@@ -591,7 +679,18 @@ impl fmt::Display for CastStringToChar {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastStringToRange {
     // Target range's type
     pub return_ty: SqlScalarType,
@@ -630,7 +729,7 @@ impl LazyUnaryFunc for CastStringToRange {
     }
 
     /// The output SqlColumnType of this function
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         self.return_ty
             .without_modifiers()
             .nullable(input_type.nullable)
@@ -660,6 +759,10 @@ impl LazyUnaryFunc for CastStringToRange {
     fn is_monotone(&self) -> bool {
         false
     }
+
+    fn is_eliminable_cast(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for CastStringToRange {
@@ -668,17 +771,28 @@ impl fmt::Display for CastStringToRange {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastStringToVarChar {
     pub length: Option<VarCharMaxLength>,
     pub fail_on_len: bool,
 }
 
-impl<'a> EagerUnaryFunc<'a> for CastStringToVarChar {
-    type Input = &'a str;
-    type Output = Result<VarChar<&'a str>, EvalError>;
+impl EagerUnaryFunc for CastStringToVarChar {
+    type Input<'a> = &'a str;
+    type Output<'a> = Result<VarChar<&'a str>, EvalError>;
 
-    fn call(&self, a: &'a str) -> Result<VarChar<&'a str>, EvalError> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         let s =
             mz_repr::adt::varchar::format_str(a, self.length, self.fail_on_len).map_err(|_| {
                 assert!(self.fail_on_len);
@@ -691,7 +805,7 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToVarChar {
         Ok(VarChar(s))
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::VarChar {
             max_length: self.length,
         }
@@ -708,6 +822,10 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToVarChar {
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastVarCharToString)
+    }
+
+    fn is_eliminable_cast(&self) -> bool {
+        self.length.is_none()
     }
 }
 
@@ -734,7 +852,18 @@ static INT2VECTOR_CAST_EXPR: LazyLock<MirScalarExpr> = LazyLock::new(|| MirScala
     expr: Box::new(MirScalarExpr::column(0)),
 });
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastStringToInt2Vector;
 
 impl LazyUnaryFunc for CastStringToInt2Vector {
@@ -760,7 +889,7 @@ impl LazyUnaryFunc for CastStringToInt2Vector {
     }
 
     /// The output SqlColumnType of this function
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Int2Vector.nullable(input_type.nullable)
     }
 
@@ -786,6 +915,10 @@ impl LazyUnaryFunc for CastStringToInt2Vector {
     fn is_monotone(&self) -> bool {
         false
     }
+
+    fn is_eliminable_cast(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for CastStringToInt2Vector {
@@ -794,140 +927,120 @@ impl fmt::Display for CastStringToInt2Vector {
     }
 }
 
-sqlfunc!(
-    #[sqlname = "text_to_jsonb"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastJsonbToString)]
-    // TODO(jamii): it would be much more efficient to skip the intermediate repr::jsonb::Jsonb.
-    fn cast_string_to_jsonb<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
-        Ok(strconv::parse_jsonb(a)?)
-    }
-);
-
-sqlfunc!(
-    #[sqlname = "btrim"]
-    fn trim_whitespace<'a>(a: &'a str) -> &'a str {
-        a.trim_matches(' ')
-    }
-);
-
-sqlfunc!(
-    #[sqlname = "ltrim"]
-    fn trim_leading_whitespace<'a>(a: &'a str) -> &'a str {
-        a.trim_start_matches(' ')
-    }
-);
-
-sqlfunc!(
-    #[sqlname = "rtrim"]
-    fn trim_trailing_whitespace<'a>(a: &'a str) -> &'a str {
-        a.trim_end_matches(' ')
-    }
-);
-
-sqlfunc!(
-    #[sqlname = "initcap"]
-    fn initcap<'a>(a: &'a str) -> String {
-        let mut out = String::new();
-        let mut capitalize_next = true;
-        for ch in a.chars() {
-            if capitalize_next {
-                out.extend(ch.to_uppercase())
-            } else {
-                out.extend(ch.to_lowercase())
-            };
-            capitalize_next = !ch.is_alphanumeric();
-        }
-        out
-    }
-);
-
-sqlfunc!(
-    #[sqlname = "ascii"]
-    fn ascii<'a>(a: &'a str) -> i32 {
-        a.chars()
-            .next()
-            .and_then(|c| i32::try_from(u32::from(c)).ok())
-            .unwrap_or(0)
-    }
-);
-
-sqlfunc!(
-    #[sqlname = "char_length"]
-    fn char_length<'a>(a: &'a str) -> Result<i32, EvalError> {
-        let length = a.chars().count();
-        i32::try_from(length)
-            .or_else(|_| Err(EvalError::Int32OutOfRange(length.to_string().into())))
-    }
-);
-
-sqlfunc!(
-    #[sqlname = "bit_length"]
-    fn bit_length_string<'a>(a: &'a str) -> Result<i32, EvalError> {
-        let length = a.as_bytes().len() * 8;
-        i32::try_from(length)
-            .or_else(|_| Err(EvalError::Int32OutOfRange(length.to_string().into())))
-    }
-);
-
-sqlfunc!(
-    #[sqlname = "octet_length"]
-    fn byte_length_string<'a>(a: &'a str) -> Result<i32, EvalError> {
-        let length = a.as_bytes().len();
-        i32::try_from(length)
-            .or_else(|_| Err(EvalError::Int32OutOfRange(length.to_string().into())))
-    }
-);
-
-sqlfunc!(
-    fn upper<'a>(a: &'a str) -> String {
-        a.to_uppercase()
-    }
-);
-
-sqlfunc!(
-    fn lower<'a>(a: &'a str) -> String {
-        a.to_lowercase()
-    }
-);
-
-pub fn normalize_with_form<'a>(
-    text: Datum<'a>,
-    form_str: Datum<'a>,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    use unicode_normalization::UnicodeNormalization;
-
-    let text = text.unwrap_str();
-    let form_str = form_str.unwrap_str();
-
-    let normalized = match form_str.to_uppercase().as_str() {
-        "NFC" => text.nfc().collect(),
-        "NFD" => text.nfd().collect(),
-        "NFKC" => text.nfkc().collect(),
-        "NFKD" => text.nfkd().collect(),
-        _ => {
-            return Err(EvalError::InvalidParameterValue(
-                format!("invalid normalization form: {}", form_str).into(),
-            ));
-        }
-    };
-
-    Ok(Datum::String(temp_storage.push_string(normalized)))
+#[sqlfunc(
+    sqlname = "text_to_jsonb",
+    preserves_uniqueness = false,
+    inverse = to_unary!(super::CastJsonbToString)
+)]
+// TODO(jamii): it would be much more efficient to skip the intermediate repr::jsonb::Jsonb.
+fn cast_string_to_jsonb<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
+    Ok(strconv::parse_jsonb(a)?)
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[sqlfunc(sqlname = "btrim")]
+fn trim_whitespace<'a>(a: &'a str) -> &'a str {
+    a.trim_matches(' ')
+}
+
+#[sqlfunc(sqlname = "ltrim")]
+fn trim_leading_whitespace<'a>(a: &'a str) -> &'a str {
+    a.trim_start_matches(' ')
+}
+
+#[sqlfunc(sqlname = "rtrim")]
+fn trim_trailing_whitespace<'a>(a: &'a str) -> &'a str {
+    a.trim_end_matches(' ')
+}
+
+#[sqlfunc(sqlname = "initcap")]
+fn initcap<'a>(a: &'a str) -> String {
+    let mut out = String::new();
+    let mut capitalize_next = true;
+    for ch in a.chars() {
+        if capitalize_next {
+            out.extend(ch.to_uppercase())
+        } else {
+            out.extend(ch.to_lowercase())
+        };
+        capitalize_next = !ch.is_alphanumeric();
+    }
+    out
+}
+
+#[sqlfunc(sqlname = "ascii")]
+fn ascii<'a>(a: &'a str) -> i32 {
+    a.chars()
+        .next()
+        .and_then(|c| i32::try_from(u32::from(c)).ok())
+        .unwrap_or(0)
+}
+
+#[sqlfunc(sqlname = "char_length")]
+fn char_length<'a>(a: &'a str) -> Result<i32, EvalError> {
+    let length = a.chars().count();
+    i32::try_from(length).or_else(|_| Err(EvalError::Int32OutOfRange(length.to_string().into())))
+}
+
+#[sqlfunc(sqlname = "bit_length")]
+fn bit_length_string<'a>(a: &'a str) -> Result<i32, EvalError> {
+    let length = a.as_bytes().len() * 8;
+    i32::try_from(length).or_else(|_| Err(EvalError::Int32OutOfRange(length.to_string().into())))
+}
+
+#[sqlfunc(sqlname = "octet_length")]
+fn byte_length_string<'a>(a: &'a str) -> Result<i32, EvalError> {
+    let length = a.as_bytes().len();
+    i32::try_from(length).or_else(|_| Err(EvalError::Int32OutOfRange(length.to_string().into())))
+}
+
+#[sqlfunc]
+fn upper<'a>(a: &'a str) -> String {
+    a.to_uppercase()
+}
+
+#[sqlfunc]
+fn lower<'a>(a: &'a str) -> String {
+    a.to_lowercase()
+}
+
+#[sqlfunc]
+fn normalize(text: &str, form_str: &str) -> Result<String, EvalError> {
+    use unicode_normalization::UnicodeNormalization;
+
+    match form_str.to_uppercase().as_str() {
+        "NFC" => Ok(text.nfc().collect()),
+        "NFD" => Ok(text.nfd().collect()),
+        "NFKC" => Ok(text.nfkc().collect()),
+        "NFKD" => Ok(text.nfkd().collect()),
+        _ => Err(EvalError::InvalidParameterValue(
+            format!("invalid normalization form: {}", form_str).into(),
+        )),
+    }
+}
+
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct IsLikeMatch(pub like_pattern::Matcher);
 
-impl<'a> EagerUnaryFunc<'a> for IsLikeMatch {
-    type Input = &'a str;
-    type Output = bool;
+impl EagerUnaryFunc for IsLikeMatch {
+    type Input<'a> = &'a str;
+    type Output<'a> = bool;
 
-    fn call(&self, haystack: &'a str) -> bool {
+    fn call<'a>(&self, haystack: Self::Input<'a>) -> Self::Output<'a> {
         self.0.is_match(haystack)
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Bool.nullable(input.nullable)
     }
 }
@@ -943,18 +1056,29 @@ impl fmt::Display for IsLikeMatch {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct IsRegexpMatch(pub Regex);
 
-impl<'a> EagerUnaryFunc<'a> for IsRegexpMatch {
-    type Input = &'a str;
-    type Output = bool;
+impl EagerUnaryFunc for IsRegexpMatch {
+    type Input<'a> = &'a str;
+    type Output<'a> = bool;
 
-    fn call(&self, haystack: &'a str) -> bool {
+    fn call<'a>(&self, haystack: Self::Input<'a>) -> Self::Output<'a> {
         self.0.is_match(haystack)
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Bool.nullable(input.nullable)
     }
 }
@@ -970,7 +1094,18 @@ impl fmt::Display for IsRegexpMatch {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct RegexpMatch(pub Regex);
 
 impl LazyUnaryFunc for RegexpMatch {
@@ -988,7 +1123,7 @@ impl LazyUnaryFunc for RegexpMatch {
     }
 
     /// The output SqlColumnType of this function
-    fn output_type(&self, _input_type: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, _input_type: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(true)
     }
 
@@ -1015,6 +1150,10 @@ impl LazyUnaryFunc for RegexpMatch {
     fn is_monotone(&self) -> bool {
         false
     }
+
+    fn is_eliminable_cast(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for RegexpMatch {
@@ -1028,7 +1167,18 @@ impl fmt::Display for RegexpMatch {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct RegexpSplitToArray(pub Regex);
 
 impl LazyUnaryFunc for RegexpSplitToArray {
@@ -1046,7 +1196,7 @@ impl LazyUnaryFunc for RegexpSplitToArray {
     }
 
     /// The output SqlColumnType of this function
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(input_type.nullable)
     }
 
@@ -1072,6 +1222,10 @@ impl LazyUnaryFunc for RegexpSplitToArray {
     fn is_monotone(&self) -> bool {
         false
     }
+
+    fn is_eliminable_cast(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for RegexpSplitToArray {
@@ -1085,69 +1239,71 @@ impl fmt::Display for RegexpSplitToArray {
     }
 }
 
-sqlfunc!(
-    #[sqlname = "mz_panic"]
-    fn panic<'a>(a: &'a str) -> String {
-        print!("{}", a);
-        panic!("{}", a)
-    }
-);
+#[sqlfunc(sqlname = "mz_panic")]
+fn panic<'a>(a: &'a str) -> String {
+    print!("{}", a);
+    panic!("{}", a)
+}
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
-pub struct QuoteIdent;
+#[sqlfunc(sqlname = "quote_ident", preserves_uniqueness = true)]
+fn quote_ident<'a>(a: &'a str) -> Result<String, EvalError> {
+    let i = mz_sql_parser::ast::Ident::new(a).map_err(|err| EvalError::InvalidIdentifier {
+        ident: a.into(),
+        detail: Some(err.to_string().into()),
+    })?;
+    Ok(i.to_string())
+}
 
-impl LazyUnaryFunc for QuoteIdent {
-    fn eval<'a>(
-        &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let d = a.eval(datums, temp_storage)?;
-        if d.is_null() {
-            return Ok(Datum::Null);
-        }
-        let v = d.unwrap_str();
-        let i = mz_sql_parser::ast::Ident::new(v).map_err(|err| EvalError::InvalidIdentifier {
-            ident: v.into(),
-            detail: Some(err.to_string().into()),
-        })?;
-        let r = temp_storage.push_string(i.to_string());
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct RegexpReplace {
+    pub regex: Regex,
+    pub limit: usize,
+}
 
-        Ok(Datum::String(r))
-    }
+impl binary::EagerBinaryFunc for RegexpReplace {
+    type Input<'a> = (&'a str, &'a str);
+    type Output<'a> = Cow<'a, str>;
 
-    /// The output SqlColumnType of this function
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::String.nullable(input_type.nullable)
-    }
-
-    /// Whether this function will produce NULL on NULL input
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
-
-    /// Whether this function will produce NULL on non-NULL input
-    fn introduces_nulls(&self) -> bool {
-        false
-    }
-
-    /// Whether this function preserves uniqueness
-    fn preserves_uniqueness(&self) -> bool {
-        true
+    fn call<'a>(
+        &self,
+        (source, replacement): Self::Input<'a>,
+        _temp_storage: &'a RowArena,
+    ) -> Self::Output<'a> {
+        // WARNING: This function has potential OOM risk if used with an inflationary
+        // replacement pattern. It is very difficult to calculate the output size ahead
+        // of time because the replacement pattern may depend on capture groups.
+        self.regex.replacen(source, self.limit, replacement)
     }
 
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-
-    fn is_monotone(&self) -> bool {
-        false
+    fn output_sql_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType {
+        use mz_repr::AsColumnType;
+        let output = <Self::Output<'_> as AsColumnType>::as_column_type();
+        let propagates_nulls = binary::EagerBinaryFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        let input_nullable = input_types.iter().any(|t| t.nullable);
+        output.nullable(nullable || (propagates_nulls && input_nullable))
     }
 }
 
-impl fmt::Display for QuoteIdent {
+impl fmt::Display for RegexpReplace {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "quote_ident")
+        write!(
+            f,
+            "regexp_replace[{}, case_insensitive={}, limit={}]",
+            self.regex.pattern().escaped(),
+            self.regex.case_insensitive,
+            self.limit
+        )
     }
 }

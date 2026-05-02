@@ -5,9 +5,10 @@ disable_list: true
 menu:
   main:
     identifier: "commands"
-    parent: "reference"
+    parent: "sql"
     weight: 100
-
+aliases:
+  - /sql/alter-owner/
 ---
 
 ## Create/Alter/Drop Objects
@@ -23,10 +24,9 @@ sources, and tables:
 
 ## RBAC
 
-Commands to manage roles and privileges:
+Commands to manage roles and privileges and owners:
 
 {{< yaml-table data="sql_commands_rbac" noHeader=true >}}
-
 
 ## Query Introspection (`Explain`)
 
@@ -45,3 +45,7 @@ Commands related with session state and configurations:
 ## Validations
 
 {{< yaml-list data="sql_commands_all" label="other" >}}
+
+## Prepared Statements
+
+{{< yaml-list data="sql_commands_all" label="prepared statements" >}}

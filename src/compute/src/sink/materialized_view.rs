@@ -122,6 +122,7 @@ use std::sync::Arc;
 
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::StreamExt;
+use mz_compute_types::dyncfgs::MV_SINK_ADVANCE_PERSIST_FRONTIERS;
 use mz_compute_types::sinks::{ComputeSinkDesc, MaterializedViewSinkConnection};
 use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
@@ -135,7 +136,6 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
 use mz_timely_util::builder_async::PressOnDropButton;
 use mz_timely_util::builder_async::{Event, OperatorBuilder};
@@ -144,22 +144,22 @@ use serde::{Deserialize, Serialize};
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{Broadcast, Capability, CapabilitySet, probe};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::operators::vec::Broadcast;
+use timely::dataflow::operators::{Capability, CapabilitySet, probe};
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
 use tokio::sync::watch;
 use tracing::trace;
 
 use crate::compute_state::ComputeState;
 use crate::render::StartSignal;
+use crate::render::errors::DataflowErrorSer;
 use crate::render::sinks::SinkRender;
-use crate::sink::correction::Correction;
+use crate::sink::correction::{ChannelLogging, Correction, CorrectionLogger};
+use crate::sink::materialized_view_v2;
 use crate::sink::refresh::apply_refresh;
 
-impl<G> SinkRender<G> for MaterializedViewSinkConnection<CollectionMetadata>
-where
-    G: Scope<Timestamp = Timestamp>,
-{
+impl<'scope> SinkRender<'scope> for MaterializedViewSinkConnection<CollectionMetadata> {
     fn render_sink(
         &self,
         compute_state: &mut ComputeState,
@@ -167,9 +167,8 @@ where
         sink_id: GlobalId,
         as_of: Antichain<Timestamp>,
         start_signal: StartSignal,
-        mut ok_collection: VecCollection<G, Row, Diff>,
-        mut err_collection: VecCollection<G, DataflowError, Diff>,
-        _ct_times: Option<VecCollection<G, (), Diff>>,
+        mut ok_collection: VecCollection<'scope, Timestamp, Row, Diff>,
+        mut err_collection: VecCollection<'scope, Timestamp, DataflowErrorSer, Diff>,
         output_probe: &Handle<Timestamp>,
     ) -> Option<Rc<dyn Any>> {
         // Attach probes reporting the compute frontier.
@@ -213,47 +212,58 @@ where
 }
 
 /// Type of the `desired` stream, split into `Ok` and `Err` streams.
-type DesiredStreams<S> =
-    OkErr<Stream<S, (Row, Timestamp, Diff)>, Stream<S, (DataflowError, Timestamp, Diff)>>;
+pub(super) type DesiredStreams<'s> = OkErr<
+    StreamVec<'s, Timestamp, (Row, Timestamp, Diff)>,
+    StreamVec<'s, Timestamp, (DataflowErrorSer, Timestamp, Diff)>,
+>;
 
 /// Type of the `persist` stream, split into `Ok` and `Err` streams.
-type PersistStreams<S> =
-    OkErr<Stream<S, (Row, Timestamp, Diff)>, Stream<S, (DataflowError, Timestamp, Diff)>>;
+pub(super) type PersistStreams<'s> = OkErr<
+    StreamVec<'s, Timestamp, (Row, Timestamp, Diff)>,
+    StreamVec<'s, Timestamp, (DataflowErrorSer, Timestamp, Diff)>,
+>;
 
 /// Type of the `descs` stream.
-type DescsStream<S> = Stream<S, BatchDescription>;
+pub(super) type DescsStream<'s> = StreamVec<'s, Timestamp, BatchDescription>;
 
 /// Type of the `batches` stream.
-type BatchesStream<S> = Stream<S, (BatchDescription, ProtoBatch)>;
+pub(super) type BatchesStream<'s> = StreamVec<'s, Timestamp, (BatchDescription, ProtoBatch)>;
 
 /// Type of the shared sink write frontier.
-type SharedSinkFrontier = Rc<RefCell<Antichain<Timestamp>>>;
+pub(super) type SharedSinkFrontier = Rc<RefCell<Antichain<Timestamp>>>;
 
 /// Renders an MV sink writing the given desired collection into the `target` persist collection.
-pub(super) fn persist_sink<S>(
+pub(super) fn persist_sink<'s>(
     sink_id: GlobalId,
     target: &CollectionMetadata,
-    ok_collection: VecCollection<S, Row, Diff>,
-    err_collection: VecCollection<S, DataflowError, Diff>,
+    ok_collection: VecCollection<'s, Timestamp, Row, Diff>,
+    err_collection: VecCollection<'s, Timestamp, DataflowErrorSer, Diff>,
     as_of: Antichain<Timestamp>,
     compute_state: &mut ComputeState,
     start_signal: StartSignal,
     read_only_rx: watch::Receiver<bool>,
 ) -> Rc<dyn Any>
 where
-    S: Scope<Timestamp = Timestamp>,
 {
-    let mut scope = ok_collection.scope();
+    if mz_compute_types::dyncfgs::ENABLE_SYNC_MV_SINK.get(&compute_state.worker_config) {
+        return materialized_view_v2::persist_sink(
+            sink_id,
+            target,
+            ok_collection,
+            err_collection,
+            as_of,
+            compute_state,
+            start_signal,
+            read_only_rx,
+        );
+    }
+
+    let scope = ok_collection.scope();
     let desired = OkErr::new(ok_collection.inner, err_collection.inner);
 
     // Read back the persist shard.
-    let (persist, persist_token) = persist_source(
-        &mut scope,
-        sink_id,
-        target.clone(),
-        compute_state,
-        start_signal,
-    );
+    let (persist, persist_token) =
+        persist_source(scope, sink_id, target.clone(), compute_state, start_signal);
 
     let persist_api = PersistApi {
         persist_clients: Arc::clone(&compute_state.persist_clients),
@@ -267,20 +277,20 @@ where
         persist_api.clone(),
         as_of.clone(),
         read_only_rx,
-        &desired,
+        desired,
     );
 
     let (batches, write_token) = write::render(
         sink_id,
         persist_api.clone(),
         as_of,
-        &desired,
-        &persist,
-        &descs,
+        desired,
+        persist,
+        descs.clone(),
         Rc::clone(&compute_state.worker_config),
     );
 
-    let append_token = append::render(sink_id, persist_api, &descs, &batches);
+    let append_token = append::render(sink_id, persist_api, descs, batches);
 
     // Report sink frontier updates to the `ComputeState`.
     let collection = compute_state.expect_collection_mut(sink_id);
@@ -291,19 +301,19 @@ where
 
 /// Generic wrapper around ok/err pairs (e.g. streams, frontiers), to simplify code dealing with
 /// such pairs.
-struct OkErr<O, E> {
-    ok: O,
-    err: E,
+pub(super) struct OkErr<O, E> {
+    pub(super) ok: O,
+    pub(super) err: E,
 }
 
 impl<O, E> OkErr<O, E> {
-    fn new(ok: O, err: E) -> Self {
+    pub(super) fn new(ok: O, err: E) -> Self {
         Self { ok, err }
     }
 }
 
 impl OkErr<Antichain<Timestamp>, Antichain<Timestamp>> {
-    fn new_frontiers() -> Self {
+    pub(super) fn new_frontiers() -> Self {
         Self {
             ok: Antichain::from_elem(Timestamp::MIN),
             err: Antichain::from_elem(Timestamp::MIN),
@@ -311,7 +321,7 @@ impl OkErr<Antichain<Timestamp>, Antichain<Timestamp>> {
     }
 
     /// Return the overall frontier, i.e., the minimum of `ok` and `err`.
-    fn frontier(&self) -> &Antichain<Timestamp> {
+    pub(super) fn frontier(&self) -> &Antichain<Timestamp> {
         if PartialOrder::less_equal(&self.ok, &self.err) {
             &self.ok
         } else {
@@ -323,9 +333,13 @@ impl OkErr<Antichain<Timestamp>, Antichain<Timestamp>> {
 /// Advance the given `frontier` to `new`, if the latter one is greater.
 ///
 /// Returns whether `frontier` was advanced.
-fn advance(frontier: &mut Antichain<Timestamp>, new: Antichain<Timestamp>) -> bool {
-    if PartialOrder::less_than(frontier, &new) {
-        *frontier = new;
+pub(super) fn advance(
+    frontier: &mut Antichain<Timestamp>,
+    new: timely::progress::frontier::AntichainRef<'_, Timestamp>,
+) -> bool {
+    if PartialOrder::less_than(&frontier.borrow(), &new) {
+        frontier.clear();
+        frontier.extend(new.iter().cloned());
         true
     } else {
         false
@@ -334,22 +348,22 @@ fn advance(frontier: &mut Antichain<Timestamp>, new: Antichain<Timestamp>) -> bo
 
 /// A persist API specialized to a single collection.
 #[derive(Clone)]
-struct PersistApi {
-    persist_clients: Arc<PersistClientCache>,
-    collection: CollectionMetadata,
-    shard_name: String,
-    purpose: String,
+pub(super) struct PersistApi {
+    pub(super) persist_clients: Arc<PersistClientCache>,
+    pub(super) collection: CollectionMetadata,
+    pub(super) shard_name: String,
+    pub(super) purpose: String,
 }
 
 impl PersistApi {
-    async fn open_client(&self) -> PersistClient {
+    pub(super) async fn open_client(&self) -> PersistClient {
         self.persist_clients
             .open(self.collection.persist_location.clone())
             .await
             .unwrap_or_else(|error| panic!("error opening persist client: {error}"))
     }
 
-    async fn open_writer(&self) -> WriteHandle<SourceData, (), Timestamp, StorageDiff> {
+    pub(super) async fn open_writer(&self) -> WriteHandle<SourceData, (), Timestamp, StorageDiff> {
         self.open_client()
             .await
             .open_writer(
@@ -372,16 +386,13 @@ impl PersistApi {
 }
 
 /// Instantiate a persist source reading back the `target` collection.
-fn persist_source<S>(
-    scope: &mut S,
+pub(super) fn persist_source<'s>(
+    scope: Scope<'s, Timestamp>,
     sink_id: GlobalId,
     target: CollectionMetadata,
     compute_state: &ComputeState,
     start_signal: StartSignal,
-) -> (PersistStreams<S>, Vec<PressOnDropButton>)
-where
-    S: Scope<Timestamp = Timestamp>,
-{
+) -> (PersistStreams<'s>, Vec<PressOnDropButton>) {
     // There is no guarantee that the sink as-of is beyond the persist shard's since. If it isn't,
     // instantiating a `persist_source` with it would panic. So instead we leave it to
     // `persist_source` to select an appropriate as-of. We only care about times beyond the current
@@ -397,21 +408,22 @@ where
     let until = Antichain::new();
     let map_filter_project = None;
 
-    let (ok_stream, err_stream, token) = mz_storage_operators::persist_source::persist_source(
-        scope,
-        sink_id,
-        Arc::clone(&compute_state.persist_clients),
-        &compute_state.txns_ctx,
-        target,
-        None,
-        as_of,
-        SnapshotMode::Include,
-        until,
-        map_filter_project,
-        compute_state.dataflow_max_inflight_bytes(),
-        start_signal,
-        ErrorHandler::Halt("compute persist sink"),
-    );
+    let (ok_stream, err_stream, token) =
+        mz_storage_operators::persist_source::persist_source::<DataflowErrorSer>(
+            scope,
+            sink_id,
+            Arc::clone(&compute_state.persist_clients),
+            &compute_state.txns_ctx,
+            target,
+            None,
+            as_of,
+            SnapshotMode::Include,
+            until,
+            map_filter_project,
+            compute_state.dataflow_max_inflight_bytes(),
+            start_signal.into_send_future(),
+            ErrorHandler::Halt("compute persist sink"),
+        );
 
     let streams = OkErr::new(ok_stream, err_stream);
     (streams, token)
@@ -425,14 +437,18 @@ where
 /// Each batch description also contains the index of its "append worker", i.e. the worker that is
 /// responsible for appending the written batches to the output shard.
 #[derive(Clone, Serialize, Deserialize)]
-struct BatchDescription {
-    lower: Antichain<Timestamp>,
-    upper: Antichain<Timestamp>,
-    append_worker: usize,
+pub(super) struct BatchDescription {
+    pub(super) lower: Antichain<Timestamp>,
+    pub(super) upper: Antichain<Timestamp>,
+    pub(super) append_worker: usize,
 }
 
 impl BatchDescription {
-    fn new(lower: Antichain<Timestamp>, upper: Antichain<Timestamp>, append_worker: usize) -> Self {
+    pub(super) fn new(
+        lower: Antichain<Timestamp>,
+        upper: Antichain<Timestamp>,
+        append_worker: usize,
+    ) -> Self {
         assert!(PartialOrder::less_than(&lower, &upper));
         Self {
             lower,
@@ -455,7 +471,7 @@ impl std::fmt::Debug for BatchDescription {
 }
 
 /// Construct a name for the given sub-operator.
-fn operator_name(sink_id: GlobalId, sub_operator: &str) -> String {
+pub(super) fn operator_name(sink_id: GlobalId, sub_operator: &str) -> String {
     format!("mv_sink({sink_id})::{sub_operator}")
 }
 
@@ -471,21 +487,18 @@ mod mint {
     ///  * `as_of`: The first time for which the sink may produce output.
     ///  * `read_only_tx`: A receiver that reports the sink is in read-only mode.
     ///  * `desired`: The ok/err streams that should be sinked to persist.
-    pub fn render<S>(
+    pub fn render<'s>(
         sink_id: GlobalId,
         persist_api: PersistApi,
         as_of: Antichain<Timestamp>,
         mut read_only_rx: watch::Receiver<bool>,
-        desired: &DesiredStreams<S>,
+        desired: DesiredStreams<'s>,
     ) -> (
-        DesiredStreams<S>,
-        DescsStream<S>,
+        DesiredStreams<'s>,
+        DescsStream<'s>,
         SharedSinkFrontier,
         PressOnDropButton,
-    )
-    where
-        S: Scope<Timestamp = Timestamp>,
-    {
+    ) {
         let scope = desired.ok.scope();
         let worker_id = scope.index();
         let worker_count = scope.peers();
@@ -507,8 +520,8 @@ mod mint {
         let (desc_output, desc_output_stream) = op.new_output::<CapacityContainerBuilder<_>>();
 
         let mut desired_inputs = OkErr {
-            ok: op.new_input_for(&desired.ok, Pipeline, &desired_outputs.ok),
-            err: op.new_input_for(&desired.err, Pipeline, &desired_outputs.err),
+            ok: op.new_input_for(desired.ok, Pipeline, &desired_outputs.ok),
+            err: op.new_input_for(desired.err, Pipeline, &desired_outputs.err),
         };
 
         let button = op.build(move |capabilities| async move {
@@ -552,6 +565,16 @@ mod mint {
             // the `persist` stream, because the latter has two annoying glitches:
             //  (a) It starts at the shard's read frontier, not its write frontier.
             //  (b) It can lag behind if there are spikes in ingested data.
+            //
+            // The decoupling from the `persist` stream is load-bearing: that stream can fall
+            // arbitrarily behind the shard upper during snapshot replay or write spikes. Using it
+            // would delay both (1) the controller-visible sink frontier (`shared_frontier`),
+            // which previously caused a CrossJoin feature-bench regression where the controller
+            // held a finished MV dataflow open waiting for the empty frontier, and (2) the
+            // `state.persist_frontier` that gates batch-description minting, stalling mint until
+            // the read-back stream catches up. The goal isn't tick-granular descriptions per
+            // se — it's avoiding the stream-induced stall. See 5eab5ff896 for the original
+            // regression and rationale.
             let mut persist_frontiers = pin!(async_stream::stream! {
                 let mut writer = persist_api.open_writer().await;
                 let mut frontier = Antichain::from_elem(Timestamp::MIN);
@@ -683,19 +706,19 @@ mod mint {
         }
 
         fn advance_desired_ok_frontier(&mut self, frontier: Antichain<Timestamp>) {
-            if advance(&mut self.desired_frontiers.ok, frontier) {
+            if advance(&mut self.desired_frontiers.ok, frontier.borrow()) {
                 self.trace("advanced `desired` ok frontier");
             }
         }
 
         fn advance_desired_err_frontier(&mut self, frontier: Antichain<Timestamp>) {
-            if advance(&mut self.desired_frontiers.err, frontier) {
+            if advance(&mut self.desired_frontiers.err, frontier.borrow()) {
                 self.trace("advanced `desired` err frontier");
             }
         }
 
         fn advance_persist_frontier(&mut self, frontier: Antichain<Timestamp>) {
-            if advance(&mut self.persist_frontier, frontier) {
+            if advance(&mut self.persist_frontier, frontier.borrow()) {
                 self.trace("advanced `persist` frontier");
             }
         }
@@ -751,23 +774,38 @@ mod write {
     ///  * `desired`: The ok/err streams that should be sinked to persist.
     ///  * `persist`: The ok/err streams read back from the output persist shard.
     ///  * `descs`: The stream of batch descriptions produced by the `mint` operator.
-    pub fn render<S>(
+    pub fn render<'s>(
         sink_id: GlobalId,
         persist_api: PersistApi,
         as_of: Antichain<Timestamp>,
-        desired: &DesiredStreams<S>,
-        persist: &PersistStreams<S>,
-        descs: &Stream<S, BatchDescription>,
+        desired: DesiredStreams<'s>,
+        persist: PersistStreams<'s>,
+        descs: DescsStream<'s>,
         worker_config: Rc<ConfigSet>,
-    ) -> (BatchesStream<S>, PressOnDropButton)
-    where
-        S: Scope<Timestamp = Timestamp>,
-    {
+    ) -> (BatchesStream<'s>, PressOnDropButton) {
         let scope = desired.ok.scope();
         let worker_id = scope.index();
 
         let name = operator_name(sink_id, "write");
-        let mut op = OperatorBuilder::new(name, scope);
+        let mut op = OperatorBuilder::new(name, scope.clone());
+
+        let mut channel_logging = None;
+        let mut correction_logger = None;
+        if let (Some(compute_logger), Some(differential_logger)) = (
+            scope.worker().logger_for("materialize/compute"),
+            scope.worker().logger_for("differential/arrange"),
+        ) {
+            let operator_info = op.operator_info();
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            channel_logging = Some(ChannelLogging::new(tx));
+            correction_logger = Some(CorrectionLogger::new(
+                compute_logger,
+                differential_logger.into(),
+                operator_info.global_id,
+                operator_info.address.to_vec(),
+                rx,
+            ));
+        }
 
         let (batches_output, batches_output_stream) =
             op.new_output::<CapacityContainerBuilder<_>>();
@@ -775,17 +813,17 @@ mod write {
         // It is important that we exchange the `desired` and `persist` data the same way, so
         // updates that cancel each other out end up on the same worker.
         let exchange_ok = |(d, _, _): &(Row, Timestamp, Diff)| d.hashed();
-        let exchange_err = |(d, _, _): &(DataflowError, Timestamp, Diff)| d.hashed();
+        let exchange_err = |(d, _, _): &(DataflowErrorSer, Timestamp, Diff)| d.hashed();
 
         let mut desired_inputs = OkErr::new(
-            op.new_disconnected_input(&desired.ok, Exchange::new(exchange_ok)),
-            op.new_disconnected_input(&desired.err, Exchange::new(exchange_err)),
+            op.new_disconnected_input(desired.ok, Exchange::new(exchange_ok)),
+            op.new_disconnected_input(desired.err, Exchange::new(exchange_err)),
         );
         let mut persist_inputs = OkErr::new(
-            op.new_disconnected_input(&persist.ok, Exchange::new(exchange_ok)),
-            op.new_disconnected_input(&persist.err, Exchange::new(exchange_err)),
+            op.new_disconnected_input(persist.ok, Exchange::new(exchange_ok)),
+            op.new_disconnected_input(persist.err, Exchange::new(exchange_err)),
         );
-        let mut descs_input = op.new_input_for(&descs.broadcast(), Pipeline, &batches_output);
+        let mut descs_input = op.new_input_for(descs.broadcast(), Pipeline, &batches_output);
 
         let button = op.build(move |capabilities| async move {
             // We will use the data capabilities from the `descs` input to produce output, so no
@@ -799,11 +837,18 @@ mod write {
                 worker_id,
                 writer,
                 sink_metrics,
+                channel_logging,
                 as_of,
                 &worker_config,
             );
+            let mut correction_logger = correction_logger;
 
             loop {
+                // Drain correction logging events from the channel.
+                if let Some(logger) = &mut correction_logger {
+                    logger.apply_events();
+                }
+
                 // Read from the inputs, extract `desired` updates as positive contributions to
                 // `correction` and `persist` updates as negative contributions. If either the
                 // `desired` or `persist` frontier advances, or if we receive a new batch description,
@@ -889,7 +934,7 @@ mod write {
         /// Contains `desired - persist`, reflecting the updates we would like to commit to
         /// `persist` in order to "correct" it to track `desired`. This collection is only modified
         /// by updates received from either the `desired` or `persist` inputs.
-        corrections: OkErr<Correction<Row>, Correction<DataflowError>>,
+        corrections: OkErr<Correction<Row>, Correction<DataflowErrorSer>>,
         /// The frontiers of the `desired` inputs.
         desired_frontiers: OkErr<Antichain<Timestamp>, Antichain<Timestamp>>,
         /// The frontiers of the `persist` inputs.
@@ -919,6 +964,7 @@ mod write {
             worker_id: usize,
             persist_writer: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
             metrics: SinkMetrics,
+            logging: Option<ChannelLogging>,
             as_of: Antichain<Timestamp>,
             worker_config: &ConfigSet,
         ) -> Self {
@@ -926,21 +972,40 @@ mod write {
 
             // Force a consolidation of `corrections` after the snapshot updates have been fully
             // processed, to ensure we get rid of those as quickly as possible.
-            let force_consolidation_after = Some(as_of);
+            let force_consolidation_after = Some(as_of.clone());
 
-            Self {
+            let mut state = Self {
                 sink_id,
                 worker_id,
                 persist_writer,
                 corrections: OkErr::new(
-                    Correction::new(metrics.clone(), worker_metrics.clone(), worker_config),
-                    Correction::new(metrics, worker_metrics, worker_config),
+                    Correction::new(
+                        metrics.clone(),
+                        worker_metrics.clone(),
+                        logging.clone(),
+                        worker_config,
+                    ),
+                    Correction::new(metrics, worker_metrics, logging, worker_config),
                 ),
                 desired_frontiers: OkErr::new_frontiers(),
                 persist_frontiers: OkErr::new_frontiers(),
                 batch_description: None,
                 force_consolidation_after,
+            };
+
+            // Immediately advance the persist frontier tracking to the `as_of`.
+            // This is important to ensure the persist sink doesn't get stuck if the output shard's
+            // initial frontier is less than the `as_of`. The `mint` operator first emits a batch
+            // description with `lower = as_of`, and the `write` operator only emits a batch when
+            // its observed persist frontier is >= the batch description's `lower`, which (assuming
+            // no other writers) would be never if we didn't advance the observed persist frontier
+            // to the `as_of`.
+            if MV_SINK_ADVANCE_PERSIST_FRONTIERS.get(worker_config) {
+                state.advance_persist_ok_frontier(as_of.clone());
+                state.advance_persist_err_frontier(as_of);
             }
+
+            state
         }
 
         fn trace<S: AsRef<str>>(&self, message: S) {
@@ -956,28 +1021,28 @@ mod write {
         }
 
         fn advance_desired_ok_frontier(&mut self, frontier: Antichain<Timestamp>) {
-            if advance(&mut self.desired_frontiers.ok, frontier) {
+            if advance(&mut self.desired_frontiers.ok, frontier.borrow()) {
                 self.apply_desired_frontier_advancement();
                 self.trace("advanced `desired` ok frontier");
             }
         }
 
         fn advance_desired_err_frontier(&mut self, frontier: Antichain<Timestamp>) {
-            if advance(&mut self.desired_frontiers.err, frontier) {
+            if advance(&mut self.desired_frontiers.err, frontier.borrow()) {
                 self.apply_desired_frontier_advancement();
                 self.trace("advanced `desired` err frontier");
             }
         }
 
         fn advance_persist_ok_frontier(&mut self, frontier: Antichain<Timestamp>) {
-            if advance(&mut self.persist_frontiers.ok, frontier) {
+            if advance(&mut self.persist_frontiers.ok, frontier.borrow()) {
                 self.apply_persist_frontier_advancement();
                 self.trace("advanced `persist` ok frontier");
             }
         }
 
         fn advance_persist_err_frontier(&mut self, frontier: Antichain<Timestamp>) {
-            if advance(&mut self.persist_frontiers.err, frontier) {
+            if advance(&mut self.persist_frontiers.err, frontier.borrow()) {
                 self.apply_persist_frontier_advancement();
                 self.trace("advanced `persist` err frontier");
             }
@@ -1060,7 +1125,8 @@ mod write {
             let err_updates = self.corrections.err.updates_before(&desc.upper);
 
             let oks = ok_updates.map(|(d, t, r)| ((SourceData(Ok(d)), ()), t, r.into_inner()));
-            let errs = err_updates.map(|(d, t, r)| ((SourceData(Err(d)), ()), t, r.into_inner()));
+            let errs = err_updates
+                .map(|(d, t, r)| ((SourceData(Err(d.deserialize())), ()), t, r.into_inner()));
             let mut updates = oks.chain(errs).peekable();
 
             // Don't write empty batches.
@@ -1094,15 +1160,12 @@ mod append {
     ///  * `persist_api`: An object providing access to the output persist shard.
     ///  * `descs`: The stream of batch descriptions produced by the `mint` operator.
     ///  * `batches`: The stream of written batches produced by the `write` operator.
-    pub fn render<S>(
+    pub fn render<'s>(
         sink_id: GlobalId,
         persist_api: PersistApi,
-        descs: &DescsStream<S>,
-        batches: &BatchesStream<S>,
-    ) -> PressOnDropButton
-    where
-        S: Scope<Timestamp = Timestamp>,
-    {
+        descs: DescsStream<'s>,
+        batches: BatchesStream<'s>,
+    ) -> PressOnDropButton {
         let scope = descs.scope();
         let worker_id = scope.index();
 
@@ -1112,7 +1175,7 @@ mod append {
         // Broadcast batch descriptions to all workers, regardless of whether or not they are
         // responsible for the append, to give them a chance to clean up any outdated state they
         // might still hold.
-        let mut descs_input = op.new_disconnected_input(&descs.broadcast(), Pipeline);
+        let mut descs_input = op.new_disconnected_input(descs.broadcast(), Pipeline);
         let mut batches_input = op.new_disconnected_input(
             batches,
             Exchange::new(move |(desc, _): &(BatchDescription, _)| {
@@ -1206,7 +1269,7 @@ mod append {
         }
 
         fn advance_batches_frontier(&mut self, frontier: Antichain<Timestamp>) {
-            if advance(&mut self.batches_frontier, frontier) {
+            if advance(&mut self.batches_frontier, frontier.borrow()) {
                 self.trace("advanced `batches` frontier");
             }
         }
@@ -1328,6 +1391,10 @@ mod append {
                     Ok(()) => return Ok(upper),
                     Err(mismatch) if PartialOrder::less_than(&mismatch.current, &lower) => {
                         advance_shard_upper(&mut self.persist_writer, lower.clone()).await;
+
+                        // At this point the shard's since and upper are likely the same, a state
+                        // that is likely to hit edge-cases in logic reasoning about frontiers.
+                        fail::fail_point!("mv_advanced_upper");
                     }
                     Err(mismatch) => return Err(mismatch.current),
                 }

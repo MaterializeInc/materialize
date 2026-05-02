@@ -7,44 +7,68 @@ menu:
     parent: 'commands'
 ---
 
-`CREATE MATERIALIZED VIEW` defines a view that maintains [fresh results](/concepts/reaction-time) by persisting them in durable storage and incrementally updating them as new data arrives.
+Use `CREATE MATERIALIZED VIEW` to:
 
-Materialized views are particularly useful when you need **cross-cluster access** to results or want to sink data to external systems like [Kafka](/sql/create-sink). When you create a materialized view, you specify a [cluster](/concepts/clusters/) responsible for maintaining it, but the results can be **queried from any cluster**. This allows you to separate the compute resources used for view maintenance from those used for serving queries.
+- Create a materialized view that maintains [fresh
+  results](/concepts/reaction-time) by persisting them in durable storage and
+  incrementally updating them as new data arrives.
 
-If you do not need durability or cross-cluster sharing, and you are primarily interested in fast query performance within a single cluster, you may prefer to [create a view and index it](/concepts/views/#views). In Materialize, [indexes on views](/concepts/indexes/) also maintain results incrementally, but store them in memory, scoped to the cluster where the index was created. This approach offers lower latency for direct querying within that cluster.
+- Create a replacement for an existing materialized view that can be applied in
+  place with [`ALTER MATERIALIZED VIEW ... APPLY
+  REPLACEMENT`](/sql/alter-materialized-view/).
+
+Materialized views are particularly useful when you need **cross-cluster
+access** to results or want to sink data to external systems like
+[Kafka](/sql/create-sink). When you create a materialized view, a
+[cluster](/concepts/clusters/), responsible for maintaining the view, is
+associated with it, but the results can be **queried from any cluster**. This
+allows you to separate the compute resources used for view maintenance from
+those used for serving queries.
+
+If you do not need durability or cross-cluster sharing, and you are primarily
+interested in fast query performance within a single cluster, you may prefer to
+[create a view and index it](/concepts/views/#views). In Materialize, [indexes
+on views](/concepts/indexes/) also maintain results incrementally, but store
+them in memory, scoped to the cluster where the index was created. This approach
+offers lower latency for direct querying within that cluster.
 
 ## Syntax
 
-{{< diagram "create-materialized-view.svg" >}}
+{{< tabs >}}
+{{< tab "CREATE MATERIALIZED VIEW" >}}
 
-Field | Use
-------|-----
-**OR REPLACE** | If a materialized view exists with the same name, replace it with the view defined in this statement. You cannot replace views that other views or sinks depend on, nor can you replace a non-view object with a view.
-**IF NOT EXISTS** | If specified, _do not_ generate an error if a materialized view of the same name already exists. <br/><br/>If _not_ specified, throw an error if a view of the same name already exists. _(Default)_
-_view&lowbar;name_ | A name for the materialized view.
-**(** _col_ident_... **)** | Rename the `SELECT` statement's columns to the list of identifiers, both of which must be the same length. Note that this is required for statements that return multiple columns with the same identifier.
-_cluster&lowbar;name_ | The cluster to maintain this materialized view. If not specified, defaults to the active cluster.
-_select&lowbar;stmt_ | The [`SELECT` statement](../select) whose results you want to maintain incrementally updated.
+### Create materialized view
 
-#### `with_options`
+{{% include-syntax file="examples/create_materialized_view" example="syntax" %}}
 
-{{< diagram "with-options.svg" >}}
+{{< /tab >}}
 
-| Field                                     | Value               | Description                                                                                                                                                       |
-|-------------------------------------------|---------------------| ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **ASSERT NOT NULL** _col_ident_           | `text`              | The column identifier for which to create a [non-null assertion](#non-null-assertions). To specify multiple columns, use the option multiple times. |
-| **PARTITION BY** _columns_                | `(ident [, ident]*)` | The key by which Materialize should internally partition this durable collection. See the [partitioning guide](/transform-data/patterns/partition-by/) for restrictions on valid values and other details.
-| **RETAIN HISTORY FOR** _retention_period_ | `interval`          | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
-| **REFRESH** _refresh_strategy_             |                     | ***Private preview.** This option has known performance or stability issues and is under active development.* The refresh strategy for the materialized view. See [Refresh strategies](#refresh-strategies) for syntax options. <br>Default: `ON COMMIT`. |
+{{< tab "CREATE REPLACEMENT MATERIALIZED VIEW" >}}
+
+### Create replacement materialized view
+
+{{% include-headless "/headless/replacement-views/public-preview-annotation" %}}
+
+Create a replacement materialized view for an existing materialized view.
+
+{{% include-syntax file="examples/create_materialized_view" example="syntax-replacement" %}}
+
+The created replacement materialized view starts hydrating immediately and can
+later be applied to replace the specified materialized view. For more
+information, see [Creating replacement materialized
+views](#creating-replacement-materialized-views).
+
+{{< /tab >}}
+{{< /tabs >}}
 
 ## Details
 
-### Usage patterns
+### Usage pattern
 
-{{% views-indexes/table-usage-pattern-intro %}}
-{{% views-indexes/table-usage-pattern %}}
+{{% include-from-yaml data="index_view_details" name="table-usage-pattern-intro" %}}
+{{% include-from-yaml data="index_view_details" name="table-usage-pattern" %}}
 
-### Indexes
+### Indexing materialized views
 
 Although you can query a materialized view directly, these queries will be
 issued against Materialize's storage layer. This is expected to be fast, but
@@ -245,8 +269,8 @@ SET (SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '30 minutes'));
 
 To check details about the (non-default) refresh strategies associated with any materialized
 view in the system, you can query
-the [`mz_internal.mz_materialized_view_refresh_strategies`](../system-catalog/mz_internal/#mz_materialized_view_refresh_strategies)
-and [`mz_internal.mz_materialized_view_refreshes`](../system-catalog/mz_internal/#mz_materialized_view_refreshes)
+the [`mz_internal.mz_materialized_view_refresh_strategies`](/reference/system-catalog/mz_internal/#mz_materialized_view_refresh_strategies)
+and [`mz_internal.mz_materialized_view_refreshes`](/reference/system-catalog/mz_internal/#mz_materialized_view_refreshes)
 system catalog tables:
 
 ```mzsql
@@ -263,19 +287,46 @@ JOIN mz_internal.mz_materialized_view_refreshes r ON r.materialized_view_id = rs
 JOIN mz_materialized_views mv ON rs.materialized_view_id = mv.id;
 ```
 
+### Creating replacement materialized views
+
+{{% include-headless "/headless/replacement-views/public-preview-annotation" %}}
+
+{{% include-headless "/headless/replacement-views/associated-commands-blurb/"
+%}}
+
+{{% include-from-yaml data="examples/create_materialized_view"
+name="create-replacement-view-syntax-details" %}}
+
+{{< include-from-yaml data="examples/alter_materialized_view"
+name="prereq-recommendations-short" >}}
+
+The replacement view is dropped when you apply the replacement view. For more
+information on applying the replacement view, including recommendations and
+CPU/memory considerations, see [`ALTER MATERIALIZED VIEW ... APPLY
+REPLACEMENT...`](/sql/alter-materialized-view/#replacing-a-materialized-view)
+
+See also:
+
+- [Replace materialized
+views](/transform-data/updating-materialized-views/replace-materialized-view/)
+guide for a step-by-step tutorial.
+
+#### Query performance of replacement views
+
+{{% include-headless "/headless/replacement-views/querying-replacement-view" %}}
+
+#### Restrictions and limitations
+
+{{% include-headless
+"/headless/replacement-views/replacement-view-target-restrictions" %}}
+
+{{% include-headless "/headless/replacement-views/replacement-view-index-restrictions" %}}
+
 ## Examples
 
 ### Creating a materialized view
 
-```mzsql
-CREATE MATERIALIZED VIEW winning_bids AS
-SELECT auction_id,
-       bid_id,
-       item,
-       amount
-FROM highest_bid_per_auction
-WHERE end_time < mz_now();
-```
+{{% include-example file="examples/create_materialized_view" example="example-create-materialized-view" %}}
 
 ### Using non-null assertions
 
@@ -314,12 +365,30 @@ AS SELECT ... FROM ...;
 things like querying materialized views from different clusters, indexed vs.
 non-indexed, and so on."
 
+### Creating a replacement materialized view
+
+{{% include-headless "/headless/replacement-views/public-preview-annotation" %}}
+
+{{% include-from-yaml file="examples/create_materialized_view"
+name="replacement-view-syntax-details" %}}
+
+{{% include-example file="examples/create_materialized_view"
+example="example-create-replacement-materialized-view" %}}
+
+To replace the existing view with its replacement, see [`ALTER MATERIALIZED
+VIEW`](../alter-materialized-view).
+
+See also:
+
+- [Replace materialized views guide
+](/transform-data/updating-materialized-views/replace-materialized-view/)
+
+
 ## Privileges
 
 The privileges required to execute this statement are:
 
-{{< include-md
-file="shared-content/sql-command-privileges/create-materialized-view.md" >}}
+{{% include-headless "/headless/sql-command-privileges/create-materialized-view" %}}
 
 ## Additional information
 
@@ -328,6 +397,7 @@ file="shared-content/sql-command-privileges/create-materialized-view.md" >}}
 
 ## Related pages
 
+- [`ALTER MATERIALIZED VIEW`](../alter-materialized-view)
 - [`SHOW MATERIALIZED VIEWS`](../show-materialized-views)
 - [`SHOW CREATE MATERIALIZED VIEW`](../show-create-materialized-view)
 - [`DROP MATERIALIZED VIEW`](../drop-materialized-view)

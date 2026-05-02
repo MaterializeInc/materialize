@@ -17,21 +17,18 @@ menu:
 
 {{< tab "Cloud" >}}
 
-{{% include-example file="examples/rbac-cloud/alter_roles" example="alter-role-syntax" %}}
+### Cloud
 
-{{% include-example file="examples/rbac-cloud/alter_roles"
-example="alter-role-options" %}}
+{{% include-syntax file="examples/rbac-cloud/alter_roles" example="alter-role-syntax" %}}
 
 **Note:**
 {{% include-example file="examples/rbac-cloud/alter_roles"
 example="alter-role-details" %}}
 {{< /tab >}}
 {{< tab "Self-Managed" >}}
+### Self-Managed
 
-{{% include-example file="examples/rbac-sm/alter_roles" example="alter-role-syntax" %}}
-
-{{% include-example file="examples/rbac-sm/alter_roles"
-example="alter-role-options" %}}
+{{% include-syntax file="examples/rbac-sm/alter_roles" example="alter-role-syntax" %}}
 
 **Note:**
 {{% include-example file="examples/rbac-sm/alter_roles"
@@ -133,7 +130,7 @@ ALTER ROLE rj PASSWORD 'new_password';
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/alter-role.md" >}}
+{{% include-headless "/headless/sql-command-privileges/alter-role" %}}
 
 ## Related pages
 
@@ -142,6 +139,6 @@ The privileges required to execute this statement are:
 - [`DROP USER`](../drop-user)
 - [`GRANT ROLE`](../grant-role)
 - [`REVOKE ROLE`](../revoke-role)
-- [`ALTER OWNER`](../alter-owner)
+- [`ALTER OWNER`](/sql/#rbac)
 - [`GRANT PRIVILEGE`](../grant-privilege)
 - [`REVOKE PRIVILEGE`](../revoke-privilege)

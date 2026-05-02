@@ -293,10 +293,8 @@ sudo systemctl start confluent-schema-registry
 
     print("Launched instances:")
     print_instances(launched, format="table")  # todo
-    print(
-        f"""Launched cloud bench with ID {bench_id}.
-To wait for results, run: bin/cloudbench check {bench_id}"""
-    )
+    print(f"""Launched cloud bench with ID {bench_id}.
+To wait for results, run: bin/cloudbench check {bench_id}""")
 
 
 if __name__ == "__main__":

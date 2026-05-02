@@ -66,6 +66,7 @@ use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::PERSIST_FAST_PATH_ORDER;
 use mz_catalog::memory::objects::{CatalogCollectionEntry, CatalogEntry, Index};
 use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::dyncfgs::SUBSCRIBE_SNAPSHOT_OPTIMIZATION;
 use mz_compute_types::plan::Plan;
 use mz_controller_types::ClusterId;
 use mz_expr::{EvalError, MirRelationExpr, OptimizedMirRelationExpr, UnmaterializableFunc};
@@ -100,18 +101,8 @@ type LirDataflowDescription = DataflowDescription<Plan>;
 /// Each implementation represents a concrete optimization stage for a fixed
 /// statement type that consumes an input of type `From` and produces output of
 /// type `Self::To`.
-///
-/// The generic lifetime `'ctx` models the lifetime of the optimizer context and
-/// can be passed to the optimizer struct and the `Self::To` types.
-///
-/// The `'s: 'ctx` bound in the `optimize` method call ensures that an optimizer
-/// instance can run an optimization stage that produces a `Self::To` with
-/// `&'ctx` references.
-pub trait Optimize<From>: Send
-where
-    From: Send,
-{
-    type To: Send;
+pub trait Optimize<From> {
+    type To;
 
     /// Execute the optimization stage, transforming the input plan of type
     /// `From` to an output plan of type `To`.
@@ -126,17 +117,6 @@ where
     #[mz_ore::instrument(target = "optimizer", level = "debug", name = "optimize")]
     fn catch_unwind_optimize(&mut self, plan: From) -> Result<Self::To, OptimizerError> {
         mz_transform::catch_unwind_optimize(|| self.optimize(plan))
-    }
-
-    /// Execute the optimization stage and panic if an error occurs.
-    ///
-    /// See [`Optimize::optimize`].
-    #[allow(dead_code)] // This function is never used, but it's useful to keep around.
-    fn must_optimize(&mut self, expr: From) -> Self::To {
-        match self.optimize(expr) {
-            Ok(ok) => ok,
-            Err(err) => panic!("must_optimize call failed: {err}"),
-        }
     }
 }
 
@@ -184,6 +164,8 @@ pub struct OptimizerConfig {
     // If set, allow some additional queries down the Persist fast path when we believe
     // the orderings are compatible.
     persist_fast_path_order: bool,
+    // Enable calculating with_snapshot metadata for subscribes.
+    subscribe_snapshot_optimization: bool,
     /// Optimizer feature flags.
     pub features: OptimizerFeatures,
 }
@@ -203,6 +185,7 @@ impl From<&SystemVars> for OptimizerConfig {
             replan: None,
             no_fast_path: false,
             persist_fast_path_order: PERSIST_FAST_PATH_ORDER.get(vars.dyncfgs()),
+            subscribe_snapshot_optimization: SUBSCRIBE_SNAPSHOT_OPTIMIZATION.get(vars.dyncfgs()),
             features: OptimizerFeatures::from(vars),
         }
     }
@@ -242,6 +225,10 @@ impl From<&OptimizerConfig> for mz_sql::plan::HirToMirConfig {
             enable_new_outer_join_lowering: config.features.enable_new_outer_join_lowering,
             enable_variadic_left_join_lowering: config.features.enable_variadic_left_join_lowering,
             enable_guard_subquery_tablefunc: config.features.enable_guard_subquery_tablefunc,
+            enable_cast_elimination: config.features.enable_cast_elimination,
+            enable_simplify_quantified_comparisons: config
+                .features
+                .enable_simplify_quantified_comparisons,
         }
     }
 }

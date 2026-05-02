@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import datetime
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -58,11 +59,15 @@ def get_all_self_managed_versions() -> list[MzVersion]:
     return sorted([version.version for version in fetch_self_managed_versions()])
 
 
-def get_self_managed_versions() -> list[MzVersion]:
+def get_self_managed_versions(
+    max_version: MzVersion | None = None,
+) -> list[MzVersion]:
     prefixes = set()
     result = set()
     self_managed_versions = fetch_self_managed_versions()
     for version_info in self_managed_versions:
+        if max_version is not None and version_info.version >= max_version:
+            continue
         prefix = (version_info.version.major, version_info.version.minor)
         if (
             not version_info.version.prerelease
@@ -74,18 +79,34 @@ def get_self_managed_versions() -> list[MzVersion]:
     return sorted(result)
 
 
-# Gets the supported self managed versions relative to the current version
-def get_supported_self_managed_versions() -> list[MzVersion]:
-    self_managed_versions = fetch_self_managed_versions()
-    # TODO (multiversion2): Change this to filter on versions between the next and previous unskippable major release
-    # when unskippable versions are implemented.
-    return sorted(
-        {
+# Gets the range of versions we can "upgrade from" to the current version, sorted in ascending order.
+def get_compatible_upgrade_from_versions() -> list[MzVersion]:
+
+    # Determine the current MzVersion from the environment, or from a version constant
+    current_version = MzVersion.parse_cargo()
+
+    published_versions_within_one_major_version = {
+        v
+        for v in get_published_mz_versions_within_one_major_version()
+        if abs(v.major - current_version.major) <= 1 and v <= current_version
+    }
+
+    if current_version.major <= 26:
+        # For versions <= 26, we can only upgrade from 25.2 self-managed versions
+        self_managed_25_2_versions = {
             v.version
-            for v in self_managed_versions
+            for v in fetch_self_managed_versions()
             if v.helm_version.major == 25 and v.helm_version.minor == 2
         }
-    )
+
+        return sorted(
+            self_managed_25_2_versions.union(
+                published_versions_within_one_major_version
+            )
+        )
+    else:
+        # For versions > 26, get all mz versions within 1 major version of current_version
+        return sorted(published_versions_within_one_major_version)
 
 
 BAD_SELF_MANAGED_VERSIONS = {
@@ -176,7 +197,7 @@ class AncestorImageResolutionBase:
     def __init__(self, ancestor_overrides: dict[str, MzVersion]):
         self.ancestor_overrides = ancestor_overrides
 
-    def resolve_image_tag(self) -> tuple[str, str]:
+    def resolve_image_tag(self) -> tuple[str, str] | None:
         raise NotImplementedError
 
     def _get_override_commit_instead_of_version(
@@ -260,7 +281,6 @@ class AncestorImageResolutionBase:
     def _resolve_image_tag_of_merge_base(
         self,
         context_when_image_of_commit_exists: str,
-        context_when_falling_back_to_latest: str,
     ) -> tuple[str, str] | None:
         # If the current PR has a known and accepted regression, don't compare
         # against merge base of it
@@ -277,16 +297,20 @@ class AncestorImageResolutionBase:
             # )
             return None
 
-        if image_of_commit_exists(common_ancestor_commit):
-            return (
-                commit_to_image_tag(common_ancestor_commit),
-                context_when_image_of_commit_exists,
-            )
-        else:
-            return (
-                release_version_to_image_tag(get_latest_published_version()),
-                context_when_falling_back_to_latest,
-            )
+        ancestors = git.get_first_parent_commits(common_ancestor_commit, limit=20)
+        for ancestor in ancestors:
+            if image_of_commit_exists(ancestor):
+                context = (
+                    context_when_image_of_commit_exists
+                    if ancestor == common_ancestor_commit
+                    else f"ancestor of {context_when_image_of_commit_exists} (walked back from {common_ancestor_commit[:12]})"
+                )
+                return (
+                    commit_to_image_tag(ancestor),
+                    context,
+                )
+
+        return None
 
 
 class AncestorImageResolutionLocal(AncestorImageResolutionBase):
@@ -303,7 +327,6 @@ class AncestorImageResolutionLocal(AncestorImageResolutionBase):
         else:
             return self._resolve_image_tag_of_merge_base(
                 "merge base of local non-main branch",
-                "latest release because image of merge base of local non-main branch not available",
             )
 
 
@@ -312,7 +335,6 @@ class AncestorImageResolutionInBuildkite(AncestorImageResolutionBase):
         if buildkite.is_in_pull_request():
             return self._resolve_image_tag_of_merge_base(
                 "merge base of pull request",
-                "latest release because image of merge base of pull request not available",
             )
         elif build_context.is_on_release_version():
             return self._resolve_image_tag_of_previous_release(
@@ -370,6 +392,7 @@ def get_published_minor_mz_versions(
     limit: int | None = None,
     include_filter: Callable[[MzVersion], bool] | None = None,
     exclude_current_minor_version: bool = False,
+    max_version: MzVersion | None = None,
 ) -> list[MzVersion]:
     """
     Get the latest patch version for every minor version.
@@ -390,6 +413,9 @@ def get_published_minor_mz_versions(
     for version in all_versions:
         if include_filter is not None and not include_filter(version):
             # this version shall not be included
+            continue
+
+        if max_version is not None and version >= max_version:
             continue
 
         minor_version = f"{version.major}.{version.minor}"
@@ -415,16 +441,6 @@ def get_published_minor_mz_versions(
     return sorted(minor_versions.values(), reverse=newest_first)
 
 
-def get_minor_mz_versions_listed_in_docs(respect_released_tag: bool) -> list[MzVersion]:
-    """
-    Get the latest patch version for every minor version in ascending order.
-    Use this version if it is important whether a tag was introduced before or after creating this branch.
-
-    See also: #get_published_minor_mz_versions()
-    """
-    return VersionsFromDocs(respect_released_tag).minor_versions()
-
-
 def get_all_mz_versions(
     newest_first: bool = True,
 ) -> list[MzVersion]:
@@ -439,27 +455,33 @@ def get_all_mz_versions(
             version_type=MzVersion, newest_first=newest_first
         )
         if version not in INVALID_VERSIONS
+        # Exclude release candidates
+        and not version.prerelease
     ]
-
-
-def get_all_mz_versions_listed_in_docs(
-    respect_released_tag: bool,
-) -> list[MzVersion]:
-    """
-    Get all mz versions based on docs. Versions known to be invalid are excluded.
-
-    See also: #get_all_mz_versions()
-    """
-    return VersionsFromDocs(respect_released_tag).all_versions()
 
 
 def get_all_published_mz_versions(
     newest_first: bool = True, limit: int | None = None
 ) -> list[MzVersion]:
     """Get all mz versions based on git tags. This method ensures that images of the versions exist."""
-    return limit_to_published_versions(
-        get_all_mz_versions(newest_first=newest_first), limit
-    )
+    all_versions = get_all_mz_versions(newest_first=newest_first)
+    print(f"all_versions: {all_versions}")
+    return limit_to_published_versions(all_versions, limit)
+
+
+def get_published_mz_versions_within_one_major_version(
+    newest_first: bool = True,
+) -> list[MzVersion]:
+    """Get all previous mz versions within one major version of the current version. Ensure that images of the versions exist."""
+    current_version = MzVersion.parse_cargo()
+    all_versions = get_all_mz_versions(newest_first=newest_first)
+    versions_within_one_major_version = {
+        v
+        for v in all_versions
+        if abs(v.major - current_version.major) <= 1 and v <= current_version
+    }
+
+    return limit_to_published_versions(list(versions_within_one_major_version))
 
 
 def limit_to_published_versions(
@@ -560,9 +582,6 @@ def get_commits_of_accepted_regressions_between_versions(
 class VersionsFromDocs:
     """Materialize versions as listed in doc/user/content/releases
 
-    Only versions that declare `versiond: true` in their
-    frontmatter are considered.
-
     >>> len(VersionsFromDocs(respect_released_tag=True).all_versions()) > 0
     True
 
@@ -576,7 +595,13 @@ class VersionsFromDocs:
     MzVersion(major=0, minor=27, patch=0, prerelease=None, build=None)
     """
 
-    def __init__(self, respect_released_tag: bool) -> None:
+    def __init__(
+        self,
+        respect_released_tag: bool,
+        respect_date: bool = False,
+        only_publish_helm_chart: bool = True,
+        skip_rc: bool = False,
+    ) -> None:
         files = Path(MZ_ROOT / "doc" / "user" / "content" / "releases").glob("v*.md")
         self.versions = []
         current_version = MzVersion.parse_cargo()
@@ -585,12 +610,19 @@ class VersionsFromDocs:
             metadata = frontmatter.load(f)
             if respect_released_tag and not metadata.get("released", False):
                 continue
+            if only_publish_helm_chart and not metadata.get("publish_helm_chart", True):
+                continue
+            date: datetime.date = metadata["date"]
+            if respect_date and date > datetime.date.today():
+                continue
 
             current_patch = metadata.get("patch", 0)
             current_rc = metadata.get("rc", 0)
 
             if current_rc > 0:
-                for rc in range(current_rc + 1):
+                if skip_rc:
+                    continue
+                for rc in range(1, current_rc + 1):
                     version = MzVersion.parse_mz(f"{base}.{current_patch}-rc.{rc}")
                     if not respect_released_tag and version >= current_version:
                         continue

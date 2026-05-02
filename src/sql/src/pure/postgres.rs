@@ -11,10 +11,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use mz_expr::MirScalarExpr;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_proto::RustType;
-use mz_repr::{SqlColumnType, SqlRelationType, SqlScalarType};
+use mz_repr::{Datum, ReprColumnType, ReprScalarType, Row, SqlScalarType};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement,
@@ -22,6 +21,7 @@ use mz_sql_parser::ast::{
     WithOptionValue,
 };
 use mz_storage_types::sources::SourceExportStatementDetails;
+use mz_storage_types::sources::casts::{CastFunc, StorageScalarExpr};
 use mz_storage_types::sources::postgres::CastType;
 use prost::Message;
 use tokio_postgres::Client;
@@ -29,11 +29,7 @@ use tokio_postgres::types::Oid;
 
 use crate::names::{Aug, ResolvedItemName};
 use crate::normalize;
-use crate::plan::hir::ColumnRef;
-use crate::plan::typeconv::{CastContext, plan_cast};
-use crate::plan::{
-    ExprContext, HirScalarExpr, PlanError, QueryContext, QueryLifetime, Scope, StatementContext,
-};
+use crate::plan::{PlanError, StatementContext};
 
 use super::error::PgSourcePurificationError;
 use super::references::RetrievedSourceReferences;
@@ -66,7 +62,7 @@ pub(super) fn map_column_refs(
 
     for name in columns {
         let (qual, col) = match name.0.split_last().expect("must have at least one element") {
-            (col, qual) if qual.is_empty() => {
+            (col, []) => {
                 return Err(PlanError::InvalidOptionValue {
                     option_name: option_type.to_ast_string_simple(),
                     err: Box::new(PlanError::UnderqualifiedColumnName(
@@ -234,7 +230,7 @@ pub(super) fn generate_source_export_statement_values(
         exclude_columns,
     } = purified_export.details
     else {
-        unreachable!("purified export details must be postgres")
+        bail_internal!("purified export details must be postgres");
     };
 
     let text_column_set = BTreeSet::from_iter(text_columns.iter().flatten().map(Ident::as_str));
@@ -554,42 +550,13 @@ pub(crate) fn generate_column_casts(
     scx: &StatementContext,
     table: &PostgresTableDesc,
     text_columns: &Vec<Ident>,
-) -> Result<Vec<(CastType, MirScalarExpr)>, PlanError> {
+) -> Result<Vec<(CastType, StorageScalarExpr)>, PlanError> {
     // Generate the cast expressions required to convert the text encoded columns into
-    // the appropriate target types, creating a Vec<MirScalarExpr>
-    // The postgres source reader will then eval each of those on the incoming rows
-    // First, construct an expression context where the expression is evaluated on an
-    // imaginary row which has the same number of columns as the upstream table but all
-    // of the types are text
-    let mut cast_scx = scx.clone();
-    cast_scx.param_types = Default::default();
-    let cast_qcx = QueryContext::root(&cast_scx, QueryLifetime::Source);
-    let mut column_types = vec![];
-    for column in table.columns.iter() {
-        column_types.push(SqlColumnType {
-            nullable: column.nullable,
-            scalar_type: SqlScalarType::String,
-        });
-    }
-
-    let cast_ecx = ExprContext {
-        qcx: &cast_qcx,
-        name: "plan_postgres_source_cast",
-        scope: &Scope::empty(),
-        relation_type: &SqlRelationType {
-            column_types,
-            keys: vec![],
-        },
-        allow_aggregates: false,
-        allow_subqueries: false,
-        allow_parameters: false,
-        allow_windows: false,
-    };
+    // the appropriate target types, creating a Vec<StorageScalarExpr>.
+    // The postgres source reader will then eval each of those on the incoming rows.
 
     let text_columns = BTreeSet::from_iter(text_columns.iter().map(Ident::as_str));
 
-    // Then, for each column we will generate a MirRelationExpr that extracts the nth
-    // column and casts it to the appropriate target type
     let mut table_cast = vec![];
     for (i, column) in table.columns.iter().enumerate() {
         let (cast_type, ty) = if text_columns.contains(column.name.as_str()) {
@@ -609,36 +576,44 @@ pub(crate) fn generate_column_casts(
                 Err(_) => {
                     table_cast.push((
                         CastType::Natural,
-                        HirScalarExpr::call_variadic(
-                            mz_expr::VariadicFunc::ErrorIfNull,
-                            vec![
-                                HirScalarExpr::literal_null(SqlScalarType::String),
-                                HirScalarExpr::literal(
-                                    mz_repr::Datum::from(
-                                        format!("Unsupported type with OID {}", column.type_oid)
-                                            .as_str(),
-                                    ),
-                                    SqlScalarType::String,
-                                ),
-                            ],
-                        )
-                        .lower_uncorrelated()
-                        .expect("no correlation"),
+                        StorageScalarExpr::ErrorIfNull(
+                            Box::new(StorageScalarExpr::Literal(
+                                Row::pack_slice(&[Datum::Null]),
+                                ReprColumnType {
+                                    nullable: true,
+                                    scalar_type: ReprScalarType::String,
+                                },
+                            )),
+                            format!("Unsupported type with OID {}", column.type_oid),
+                        ),
                     ));
                     continue;
                 }
             }
         };
 
-        let data_type = scx.resolve_type(ty)?;
-        let scalar_type = crate::plan::query::scalar_type_from_sql(scx, &data_type)?;
-
-        let col_expr = HirScalarExpr::unnamed_column(ColumnRef {
-            level: 0,
-            column: i,
-        });
-
-        let cast_expr = plan_cast(&cast_ecx, CastContext::Explicit, col_expr, &scalar_type)?;
+        let cast_expr = match pg_type_to_cast_func(scx, &ty) {
+            Ok(None) => {
+                // No cast needed (e.g. Text → String identity).
+                StorageScalarExpr::Column(i)
+            }
+            Ok(Some(cast_func)) => {
+                StorageScalarExpr::CallUnary(cast_func, Box::new(StorageScalarExpr::Column(i)))
+            }
+            Err(PlanError::TableContainsUningestableTypes { type_, .. }) => {
+                // We expect only reg* types and similar to encounter
+                // this. Users can ingest the data as text if they need
+                // to. This is acceptable because we don't expect the
+                // OIDs from an external PG source to be unilaterally
+                // usable in resolving item names in MZ.
+                return Err(PlanError::TableContainsUningestableTypes {
+                    name: table.name.to_string(),
+                    type_,
+                    column: column.name.to_string(),
+                });
+            }
+            Err(e) => return Err(e),
+        };
 
         let cast = if column.nullable {
             cast_expr
@@ -648,44 +623,183 @@ pub(crate) fn generate_column_casts(
             // constraint changes and we want to error subsource if
             // e.g. the constraint is dropped and we don't notice
             // it.
-            HirScalarExpr::call_variadic(mz_expr::VariadicFunc::ErrorIfNull, vec![
-                                cast_expr,
-                                HirScalarExpr::literal(
-                                    mz_repr::Datum::from(
-                                        format!(
-                                            "PG column {}.{}.{} contained NULL data, despite having NOT NULL constraint",
-                                            table.namespace.clone(),
-                                            table.name.clone(),
-                                            column.name.clone())
-                                            .as_str(),
-                                    ),
-                                    SqlScalarType::String,
-                                ),
-                            ],
-                            )
+            let message = format!(
+                "PG column {}.{}.{} contained NULL data, despite having NOT NULL constraint",
+                table.namespace, table.name, column.name
+            );
+            StorageScalarExpr::ErrorIfNull(Box::new(cast_expr), message)
         };
 
-        // We expect only reg* types to encounter this issue. Users
-        // can ingest the data as text if they need to ingest it.
-        // This is acceptable because we don't expect the OIDs from
-        // an external PG source to be unilaterally usable in
-        // resolving item names in MZ.
-        let mir_cast = cast.lower_uncorrelated().map_err(|_e| {
-            tracing::info!(
-                "cannot ingest {:?} data from PG source because cast is correlated",
-                scalar_type
-            );
-
-            PlanError::TableContainsUningestableTypes {
-                name: table.name.to_string(),
-                type_: scx.humanize_scalar_type(&scalar_type, false),
-                column: column.name.to_string(),
-            }
-        })?;
-
-        table_cast.push((cast_type, mir_cast));
+        table_cast.push((cast_type, cast));
     }
     Ok(table_cast)
+}
+
+/// Resolve a PG type to its corresponding `SqlScalarType` via the catalog.
+fn resolve_pg_type_to_scalar_type(
+    scx: &StatementContext,
+    ty: &mz_pgrepr::Type,
+) -> Result<SqlScalarType, PlanError> {
+    let data_type = scx.resolve_type(ty.clone())?;
+    crate::plan::query::scalar_type_from_sql(scx, &data_type)
+}
+
+/// Map a PG type to the corresponding `CastFunc` variant. Returns:
+/// - `Ok(Some(func))` for types that need a cast
+/// - `Ok(None)` for types that need no cast (Text → String identity)
+/// - `Err(PlanError::TableContainsUningestableTypes { .. })` for types
+///   that cannot be ingested. The error uses placeholder strings for
+///   table/column name; callers with context should use
+///   `pg_type_to_cast_func_or_uningestable` instead.
+fn pg_type_to_cast_func(
+    scx: &StatementContext,
+    ty: &mz_pgrepr::Type,
+) -> Result<Option<CastFunc>, PlanError> {
+    use mz_pgrepr::Type;
+
+    let cast_func = match ty {
+        Type::Bool => CastFunc::CastStringToBool,
+        Type::Bytea => CastFunc::CastStringToBytes,
+        Type::Char => CastFunc::CastStringToPgLegacyChar,
+        Type::Date => CastFunc::CastStringToDate,
+        Type::Float4 => CastFunc::CastStringToFloat32,
+        Type::Float8 => CastFunc::CastStringToFloat64,
+        Type::Int2 => CastFunc::CastStringToInt16,
+        Type::Int4 => CastFunc::CastStringToInt32,
+        Type::Int8 => CastFunc::CastStringToInt64,
+        Type::UInt2 => CastFunc::CastStringToUint16,
+        Type::UInt4 => CastFunc::CastStringToUint32,
+        Type::UInt8 => CastFunc::CastStringToUint64,
+        Type::Interval { .. } => CastFunc::CastStringToInterval,
+        Type::Jsonb => CastFunc::CastStringToJsonb,
+        Type::Name => CastFunc::CastStringToPgLegacyName,
+        Type::Numeric { .. } => {
+            // Resolve through the catalog to get the repr NumericMaxScale type.
+            let scalar_type = resolve_pg_type_to_scalar_type(scx, ty)?;
+            match scalar_type {
+                SqlScalarType::Numeric { max_scale } => CastFunc::CastStringToNumeric(max_scale),
+                _ => unreachable!("Numeric must resolve to Numeric"),
+            }
+        }
+        Type::Oid => CastFunc::CastStringToOid,
+        Type::Text => return Ok(None),
+        Type::BpChar { .. } => {
+            // Resolve through the catalog to get the repr CharLength type.
+            let scalar_type = resolve_pg_type_to_scalar_type(scx, ty)?;
+            match scalar_type {
+                SqlScalarType::Char { length } => CastFunc::CastStringToChar {
+                    length,
+                    fail_on_len: true,
+                },
+                _ => unreachable!("BpChar must resolve to Char"),
+            }
+        }
+        Type::VarChar { .. } => {
+            // Resolve through the catalog to get the repr VarCharMaxLength type.
+            let scalar_type = resolve_pg_type_to_scalar_type(scx, ty)?;
+            match scalar_type {
+                SqlScalarType::VarChar { max_length } => CastFunc::CastStringToVarChar {
+                    length: max_length,
+                    fail_on_len: true,
+                },
+                _ => unreachable!("VarChar must resolve to VarChar"),
+            }
+        }
+        Type::Time { .. } => {
+            // Time precision is not yet fully supported; resolve_type strips precision.
+            CastFunc::CastStringToTime
+        }
+        Type::Timestamp { .. } => {
+            // Resolve through the catalog to get the repr TimestampPrecision type.
+            let scalar_type = resolve_pg_type_to_scalar_type(scx, ty)?;
+            match scalar_type {
+                SqlScalarType::Timestamp { precision } => {
+                    CastFunc::CastStringToTimestamp(precision)
+                }
+                _ => unreachable!("Timestamp must resolve to Timestamp"),
+            }
+        }
+        Type::TimestampTz { .. } => {
+            // Resolve through the catalog to get the repr TimestampPrecision type.
+            let scalar_type = resolve_pg_type_to_scalar_type(scx, ty)?;
+            match scalar_type {
+                SqlScalarType::TimestampTz { precision } => {
+                    CastFunc::CastStringToTimestampTz(precision)
+                }
+                _ => unreachable!("TimestampTz must resolve to TimestampTz"),
+            }
+        }
+        Type::Uuid => CastFunc::CastStringToUuid,
+        Type::Int2Vector => CastFunc::CastStringToInt2Vector,
+        Type::MzTimestamp => CastFunc::CastStringToMzTimestamp,
+        // JSON is ingested as JSONB (same as the old plan_cast path).
+        Type::Json => CastFunc::CastStringToJsonb,
+        Type::Array(elem) => {
+            let return_ty = resolve_pg_type_to_scalar_type(scx, ty)?;
+            let elem_cast = build_element_cast_expr(scx, elem)?;
+            CastFunc::CastStringToArray {
+                return_ty,
+                cast_expr: Box::new(elem_cast),
+            }
+        }
+        Type::List(elem) => {
+            let return_ty = resolve_pg_type_to_scalar_type(scx, ty)?;
+            let elem_cast = build_element_cast_expr(scx, elem)?;
+            CastFunc::CastStringToList {
+                return_ty,
+                cast_expr: Box::new(elem_cast),
+            }
+        }
+        Type::Map { value_type } => {
+            let return_ty = resolve_pg_type_to_scalar_type(scx, ty)?;
+            let value_cast = build_element_cast_expr(scx, value_type)?;
+            CastFunc::CastStringToMap {
+                return_ty,
+                cast_expr: Box::new(value_cast),
+            }
+        }
+        Type::Range { element_type } => {
+            let return_ty = resolve_pg_type_to_scalar_type(scx, ty)?;
+            let elem_cast = build_element_cast_expr(scx, element_type)?;
+            CastFunc::CastStringToRange {
+                return_ty,
+                cast_expr: Box::new(elem_cast),
+            }
+        }
+        // reg* types require subquery-based casts that storage cannot
+        // evaluate. Users can ingest them as text via TEXT COLUMNS.
+        Type::RegType | Type::RegClass | Type::RegProc => {
+            return Err(PlanError::TableContainsUningestableTypes {
+                name: String::new(),
+                type_: ty.name().to_string(),
+                column: String::new(),
+            });
+        }
+        other => {
+            return Err(PlanError::TableContainsUningestableTypes {
+                name: String::new(),
+                type_: other.name().to_string(),
+                column: String::new(),
+            });
+        }
+    };
+    Ok(Some(cast_func))
+}
+
+/// Build the element cast expression for container types (Array, List, Map,
+/// Range). The element expression operates on a single-column input row
+/// containing the text-encoded element at column 0.
+fn build_element_cast_expr(
+    scx: &StatementContext,
+    elem_ty: &mz_pgrepr::Type,
+) -> Result<StorageScalarExpr, PlanError> {
+    match pg_type_to_cast_func(scx, elem_ty)? {
+        None => Ok(StorageScalarExpr::Column(0)),
+        Some(cast_func) => Ok(StorageScalarExpr::CallUnary(
+            cast_func,
+            Box::new(StorageScalarExpr::Column(0)),
+        )),
+    }
 }
 
 mod privileges {

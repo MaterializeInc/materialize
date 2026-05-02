@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, LazyLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use derivative::Derivative;
 use futures::future::{BoxFuture, FutureExt};
@@ -445,18 +445,17 @@ impl Coordinator {
             advance_to,
         } = self.get_local_write_ts().await;
 
-        // While we're flipping on the feature flags for txn-wal tables and
-        // the separated Postgres timestamp oracle, we also need to confirm
-        // leadership on writes _after_ getting the timestamp and _before_
-        // writing anything to table shards.
-        //
-        // TODO: Remove this after both (either?) of the above features are on
-        // for good and no possibility of running the old code.
-        let () = self
-            .catalog
-            .confirm_leadership()
+        // Advance the catalog shard's upper to keep it in sync with the oracle
+        // timestamp. This ensures that reads of mz_catalog_raw at the oracle's
+        // read_ts do not block waiting for the catalog shard's upper to advance.
+        let catalog_upper_start = Instant::now();
+        self.catalog
+            .advance_upper(advance_to)
             .await
-            .unwrap_or_terminate("unable to confirm leadership");
+            .unwrap_or_terminate("unable to advance catalog upper");
+        self.metrics
+            .group_commit_catalog_upper_seconds
+            .observe(catalog_upper_start.elapsed().as_secs_f64());
 
         let mut appends: BTreeMap<CatalogItemId, SmallVec<[TableData; 1]>> = BTreeMap::new();
         let mut responses = Vec::with_capacity(validated_writes.len());
@@ -506,9 +505,13 @@ impl Coordinator {
         }
 
         // Add table advancements for all tables.
+        let table_advancement_start = Instant::now();
         for table in self.catalog().entries().filter(|entry| entry.is_table()) {
             appends.entry(table.id()).or_default();
         }
+        self.metrics
+            .group_commit_table_advancement_seconds
+            .observe(table_advancement_start.elapsed().as_secs_f64());
 
         // Consolidate all Rows for a given table. We do not consolidate the
         // staged batches, that's up to whoever staged them.
@@ -916,16 +919,21 @@ pub struct GroupCommitPermit {
     _permit: Option<OwnedSemaphorePermit>,
 }
 
-/// When we start a [`Session`] we need to update some builtin tables, we don't want to wait for
+/// When we start a [`Session`] we need to update some builtin tables, but we don't want to wait for
 /// these writes to complete for two reasons:
 ///
 /// 1. Doing a write can take a relatively long time.
 /// 2. Decoupling the write from the session start allows us to batch multiple writes together, if
 ///    sessions are being created with a high frequency.
 ///
-/// So as an optimization we do not wait for these writes to complete. But if a [`Session`] tries
+/// So, as an optimization we do not wait for these writes to complete. But if a [`Session`] tries
 /// to query any of these builtin objects, we need to block that query on the writes completing to
 /// maintain linearizability.
+///
+/// Warning: this already clears the wait flag (i.e., it calls `clear_builtin_table_updates`).
+///
+/// TODO(peek-seq): After we delete the old peek sequencing, we can remove the first component of
+/// the return tuple.
 pub(crate) fn waiting_on_startup_appends(
     catalog: &Catalog,
     session: &mut Session,
@@ -951,7 +959,6 @@ pub(crate) fn waiting_on_startup_appends(
         | Plan::CreateNetworkPolicy(_)
         | Plan::CreateCluster(_)
         | Plan::CreateClusterReplica(_)
-        | Plan::CreateContinualTask(_)
         | Plan::CreateSource(_)
         | Plan::CreateSources(_)
         | Plan::CreateSecret(_)
@@ -994,6 +1001,7 @@ pub(crate) fn waiting_on_startup_appends(
         | Plan::AlterSetCluster(_)
         | Plan::AlterItemRename(_)
         | Plan::AlterRetainHistory(_)
+        | Plan::AlterSourceTimestampInterval(_)
         | Plan::AlterSchemaRename(_)
         | Plan::AlterSchemaSwap(_)
         | Plan::AlterSecret(_)
@@ -1004,6 +1012,7 @@ pub(crate) fn waiting_on_startup_appends(
         | Plan::AlterRole(_)
         | Plan::AlterOwner(_)
         | Plan::AlterTableAddColumn(_)
+        | Plan::AlterMaterializedViewApplyReplacement(_)
         | Plan::Declare(_)
         | Plan::Fetch(_)
         | Plan::Close(_)

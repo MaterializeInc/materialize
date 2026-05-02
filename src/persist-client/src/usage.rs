@@ -250,10 +250,10 @@ impl StorageUsageClient {
     }
 
     /// Computes [ShardUsageReferenced] for a given set of shards. Suitable for customer billing.
-    pub async fn shards_usage_referenced<I>(&self, shard_ids: I) -> ShardsUsageReferenced
-    where
-        I: IntoIterator<Item = ShardId>,
-    {
+    pub async fn shards_usage_referenced(
+        &self,
+        shard_ids: impl IntoIterator<Item = ShardId>,
+    ) -> ShardsUsageReferenced {
         let semaphore = Arc::new(Semaphore::new(
             USAGE_STATE_FETCH_CONCURRENCY_LIMIT.get(&self.cfg),
         ));

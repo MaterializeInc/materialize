@@ -234,14 +234,14 @@ EXPLAIN WITH (humanized expressions) CREATE MATERIALIZED VIEW mv AS SELECT 665
 ----
 EXPLAIN WITH (HUMANIZED EXPRESSIONS) CREATE MATERIALIZED VIEW mv AS SELECT 665
 =>
-ExplainPlan(ExplainPlanStatement { stage: None, with_options: [ExplainPlanOption { name: HumanizedExpressions, value: None }], format: None, explainee: CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("mv")]), columns: [], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None, with_options: [] }, false) })
+ExplainPlan(ExplainPlanStatement { stage: None, with_options: [ExplainPlanOption { name: HumanizedExpressions, value: None }], format: None, explainee: CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("mv")]), columns: [], replacement_for: None, in_cluster: None, in_cluster_replica: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None, with_options: [] }, false) })
 
 parse-statement
 EXPLAIN BROKEN CREATE MATERIALIZED VIEW mv AS SELECT 665
 ----
 EXPLAIN BROKEN CREATE MATERIALIZED VIEW mv AS SELECT 665
 =>
-ExplainPlan(ExplainPlanStatement { stage: None, with_options: [], format: None, explainee: CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("mv")]), columns: [], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None, with_options: [] }, true) })
+ExplainPlan(ExplainPlanStatement { stage: None, with_options: [], format: None, explainee: CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("mv")]), columns: [], replacement_for: None, in_cluster: None, in_cluster_replica: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None, with_options: [] }, true) })
 
 parse-statement
 EXPLAIN BROKEN CREATE DEFAULT INDEX ON q1
@@ -269,21 +269,21 @@ EXPLAIN VALUE SCHEMA FOR CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOP
 ----
 EXPLAIN VALUE SCHEMA FOR CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 ENVELOPE UPSERT
 =>
-ExplainSinkSchema(ExplainSinkSchemaStatement { schema_for: Value, format: None, statement: CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None, headers: None }, format: Some(Bare(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("conn2")])), options: [] }, key_strategy: None, value_strategy: None, seed: None } }))), envelope: Some(Upsert), with_options: [] } })
+ExplainSinkSchema(ExplainSinkSchemaStatement { schema_for: Value, format: None, statement: CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None, headers: None }, format: Some(Bare(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("conn2")])), options: [] }, key_strategy: None, value_strategy: None, seed: None } }))), envelope: Some(Upsert), mode: None, with_options: [] } })
 
 parse-statement
 EXPLAIN KEY SCHEMA AS JSON FOR CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 ENVELOPE UPSERT
 ----
 EXPLAIN KEY SCHEMA AS JSON FOR CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 ENVELOPE UPSERT
 =>
-ExplainSinkSchema(ExplainSinkSchemaStatement { schema_for: Key, format: Some(Json), statement: CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None, headers: None }, format: Some(Bare(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("conn2")])), options: [] }, key_strategy: None, value_strategy: None, seed: None } }))), envelope: Some(Upsert), with_options: [] } })
+ExplainSinkSchema(ExplainSinkSchemaStatement { schema_for: Key, format: Some(Json), statement: CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None, headers: None }, format: Some(Bare(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("conn2")])), options: [] }, key_strategy: None, value_strategy: None, seed: None } }))), envelope: Some(Upsert), mode: None, with_options: [] } })
 
 parse-statement
 EXPLAIN KEY SCHEMA FOR CREATE SINK FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 ENVELOPE UPSERT
 ----
 EXPLAIN KEY SCHEMA FOR CREATE SINK FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 ENVELOPE UPSERT
 =>
-ExplainSinkSchema(ExplainSinkSchemaStatement { schema_for: Key, format: None, statement: CreateSinkStatement { name: None, in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None, headers: None }, format: Some(Bare(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("conn2")])), options: [] }, key_strategy: None, value_strategy: None, seed: None } }))), envelope: Some(Upsert), with_options: [] } })
+ExplainSinkSchema(ExplainSinkSchemaStatement { schema_for: Key, format: None, statement: CreateSinkStatement { name: None, in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None, headers: None }, format: Some(Bare(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("conn2")])), options: [] }, key_strategy: None, value_strategy: None, seed: None } }))), envelope: Some(Upsert), mode: None, with_options: [] } })
 
 parse-statement
 EXPLAIN SELECT 665 AS OF 3
@@ -318,7 +318,7 @@ EXPLAIN WITH (ARITY, EQUIVALENCES, HUMANIZED EXPRESSIONS) CREATE MATERIALIZED VI
 ----
 EXPLAIN WITH (ARITY, EQUIVALENCES, HUMANIZED EXPRESSIONS) CREATE MATERIALIZED VIEW mv AS SELECT 665
 =>
-ExplainPlan(ExplainPlanStatement { stage: None, with_options: [ExplainPlanOption { name: Arity, value: None }, ExplainPlanOption { name: Equivalences, value: None }, ExplainPlanOption { name: HumanizedExpressions, value: None }], format: None, explainee: CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("mv")]), columns: [], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None, with_options: [] }, false) })
+ExplainPlan(ExplainPlanStatement { stage: None, with_options: [ExplainPlanOption { name: Arity, value: None }, ExplainPlanOption { name: Equivalences, value: None }, ExplainPlanOption { name: HumanizedExpressions, value: None }], format: None, explainee: CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("mv")]), columns: [], replacement_for: None, in_cluster: None, in_cluster_replica: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None, with_options: [] }, false) })
 
 parse-statement
 EXPLAIN ANALYZE MEMORY FOR INDEX i AS SQL
@@ -368,3 +368,96 @@ EXPLAIN ANALYZE HINTS FOR idx_top_buyers
 error: Expected one of INDEX or MATERIALIZED, found identifier "idx_top_buyers"
 EXPLAIN ANALYZE HINTS FOR idx_top_buyers
                           ^
+
+# EXPLAIN SUBSCRIBE tests
+
+parse-statement
+EXPLAIN SUBSCRIBE t
+----
+EXPLAIN SUBSCRIBE t
+=>
+ExplainPlan(ExplainPlanStatement { stage: None, with_options: [], format: None, explainee: Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("t")]))), options: [], as_of: None, up_to: None, output: Diffs }, false) })
+
+parse-statement
+EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE t
+----
+EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE t
+=>
+ExplainPlan(ExplainPlanStatement { stage: Some(GlobalPlan), with_options: [], format: None, explainee: Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("t")]))), options: [], as_of: None, up_to: None, output: Diffs }, false) })
+
+parse-statement
+EXPLAIN PHYSICAL PLAN FOR SUBSCRIBE t
+----
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SUBSCRIBE t
+=>
+ExplainPlan(ExplainPlanStatement { stage: Some(PhysicalPlan), with_options: [], format: Some(VerboseText), explainee: Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("t")]))), options: [], as_of: None, up_to: None, output: Diffs }, false) })
+
+parse-statement
+EXPLAIN OPTIMIZED PLAN AS JSON FOR SUBSCRIBE t
+----
+EXPLAIN OPTIMIZED PLAN AS JSON FOR SUBSCRIBE t
+=>
+ExplainPlan(ExplainPlanStatement { stage: Some(GlobalPlan), with_options: [], format: Some(Json), explainee: Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("t")]))), options: [], as_of: None, up_to: None, output: Diffs }, false) })
+
+parse-statement
+EXPLAIN SUBSCRIBE (SELECT 1)
+----
+EXPLAIN SUBSCRIBE (SELECT 1)
+=>
+ExplainPlan(ExplainPlanStatement { stage: None, with_options: [], format: None, explainee: Subscribe(SubscribeStatement { relation: Query(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }), options: [], as_of: None, up_to: None, output: Diffs }, false) })
+
+parse-statement
+EXPLAIN SUBSCRIBE t AS OF 100
+----
+EXPLAIN SUBSCRIBE t AS OF 100
+=>
+ExplainPlan(ExplainPlanStatement { stage: None, with_options: [], format: None, explainee: Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("t")]))), options: [], as_of: Some(At(Value(Number("100")))), up_to: None, output: Diffs }, false) })
+
+parse-statement
+EXPLAIN SUBSCRIBE t AS OF AT LEAST 100
+----
+EXPLAIN SUBSCRIBE t AS OF AT LEAST 100
+=>
+ExplainPlan(ExplainPlanStatement { stage: None, with_options: [], format: None, explainee: Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("t")]))), options: [], as_of: Some(AtLeast(Value(Number("100")))), up_to: None, output: Diffs }, false) })
+
+parse-statement
+EXPLAIN SUBSCRIBE t UP TO 500
+----
+EXPLAIN SUBSCRIBE t UP TO 500
+=>
+ExplainPlan(ExplainPlanStatement { stage: None, with_options: [], format: None, explainee: Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("t")]))), options: [], as_of: None, up_to: Some(Value(Number("500"))), output: Diffs }, false) })
+
+parse-statement
+EXPLAIN SUBSCRIBE t AS OF 100 UP TO 500
+----
+EXPLAIN SUBSCRIBE t AS OF 100 UP TO 500
+=>
+ExplainPlan(ExplainPlanStatement { stage: None, with_options: [], format: None, explainee: Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("t")]))), options: [], as_of: Some(At(Value(Number("100")))), up_to: Some(Value(Number("500"))), output: Diffs }, false) })
+
+parse-statement
+EXPLAIN SUBSCRIBE t WITH (SNAPSHOT = false)
+----
+EXPLAIN SUBSCRIBE t WITH (SNAPSHOT = false)
+=>
+ExplainPlan(ExplainPlanStatement { stage: None, with_options: [], format: None, explainee: Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("t")]))), options: [SubscribeOption { name: Snapshot, value: Some(Value(Boolean(false))) }], as_of: None, up_to: None, output: Diffs }, false) })
+
+parse-statement
+EXPLAIN SUBSCRIBE t WITH (PROGRESS = true)
+----
+EXPLAIN SUBSCRIBE t WITH (PROGRESS = true)
+=>
+ExplainPlan(ExplainPlanStatement { stage: None, with_options: [], format: None, explainee: Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("t")]))), options: [SubscribeOption { name: Progress, value: Some(Value(Boolean(true))) }], as_of: None, up_to: None, output: Diffs }, false) })
+
+parse-statement
+EXPLAIN BROKEN SUBSCRIBE t
+----
+EXPLAIN BROKEN SUBSCRIBE t
+=>
+ExplainPlan(ExplainPlanStatement { stage: None, with_options: [], format: None, explainee: Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("t")]))), options: [], as_of: None, up_to: None, output: Diffs }, true) })
+
+parse-statement
+EXPLAIN OPTIMIZER TRACE FOR SUBSCRIBE t
+----
+EXPLAIN OPTIMIZER TRACE FOR SUBSCRIBE t
+=>
+ExplainPlan(ExplainPlanStatement { stage: Some(Trace), with_options: [], format: None, explainee: Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("t")]))), options: [], as_of: None, up_to: None, output: Diffs }, false) })

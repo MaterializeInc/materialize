@@ -52,4 +52,4 @@ or reach out in the Materialize [Community Slack](https://materialize.com/s/chat
 
 ## Considerations
 
-{{% include-md file="shared-content/mysql-considerations.md" %}}
+{{% include-headless "/headless/mysql-considerations" %}}

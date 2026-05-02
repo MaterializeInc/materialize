@@ -35,7 +35,8 @@ mod alloc {
     }
 
     thread_local! {
-        static ENABLE_COLUMNAR_LGALLOC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        static ENABLE_COLUMNAR_LGALLOC: std::cell::Cell<bool> =
+            const { std::cell::Cell::new(false) };
     }
 
     /// Returns `true` if columnar allocations should come from lgalloc.

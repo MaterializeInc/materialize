@@ -85,15 +85,13 @@ def workflow_resumption(c: Composition) -> None:
         cursor.execute("SET TRANSACTION_ISOLATION = 'STRICT SERIALIZABLE'")
         cursor.execute("SET REAL_TIME_RECENCY TO TRUE")
         cursor.execute("SET statement_timeout = '600s'")
-        cursor.execute(
-            """
+        cursor.execute("""
             SELECT sum(count)
               FROM (
                   SELECT count(*) FROM input_1_tbl
                   UNION ALL SELECT count(*) FROM input_2_tbl
                   UNION ALL SELECT count(*) FROM t
-              ) AS x;"""
-        )
+              ) AS x;""")
         return cursor
 
     def verify_ok():
@@ -172,36 +170,28 @@ def workflow_multithreaded(c: Composition) -> None:
         repeat = 1
         while running:
             with lock:
-                c.testdrive(
-                    dedent(
-                        f"""
+                c.testdrive(dedent(f"""
                     $ kafka-ingest topic=input_1 format=bytes repeat={repeat}
                     A,B,0
                     $ kafka-ingest topic=input_2 format=bytes repeat={repeat}
                     A,B,0
-                """
-                    )
-                )
+                """))
                 value[0] += repeat * 2
                 expected = value[0]
                 repeat *= 2
                 cursor.execute("BEGIN")
-            cursor.execute(
-                """
+            cursor.execute("""
                 SELECT sum(count)
                   FROM (
                       SELECT count(*) FROM input_1_tbl
                       UNION ALL SELECT count(*) FROM input_2_tbl
                       UNION ALL SELECT count(*) FROM t
-                  ) AS x;"""
-            )
+                  ) AS x;""")
             result = cursor.fetchall()
             assert result[0][0] >= expected, f"Expected {expected}, got {result[0][0]}"
             cursor.execute("COMMIT")
 
-    c.testdrive(
-        dedent(
-            """
+    c.testdrive(dedent("""
         $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
         ALTER SYSTEM SET allow_real_time_recency = true
 
@@ -240,9 +230,7 @@ def workflow_multithreaded(c: Composition) -> None:
               UNION ALL SELECT count(*) FROM input_2_tbl
               UNION ALL SELECT count(*) FROM t
           ) AS x;
-    """
-        )
-    )
+    """))
     threads = [PropagatingThread(target=run, args=(value,)) for i in range(10)]
     for thread in threads:
         thread.start()

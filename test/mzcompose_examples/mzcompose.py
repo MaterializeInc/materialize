@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from materialize.docker import image_registry
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
@@ -19,7 +20,7 @@ from materialize.mzcompose.services.zookeeper import Zookeeper
 versioned_mz = [
     Materialized(
         name=f"materialized_{version}",
-        image=f"materialize/materialized:{version}",
+        image=f"{image_registry()}/materialized:{version}",
     )
     for version in ["v0.7.0", "v0.8.0"]
 ]

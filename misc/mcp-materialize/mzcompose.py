@@ -10,7 +10,11 @@
 
 from dataclasses import dataclass
 
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mcp import Mcp
 
@@ -41,6 +45,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     parser.add_argument("-s", action="store_true", help="don't suppress output")
     args = parser.parse_args()
+
+    c.up(Service("mcp", idle=True))
 
     for test_case in test_cases:
         if args.filter in test_case.name:

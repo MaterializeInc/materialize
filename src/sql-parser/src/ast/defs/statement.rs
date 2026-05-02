@@ -27,13 +27,13 @@ use smallvec::{SmallVec, smallvec};
 
 use crate::ast::display::{self, AstDisplay, AstFormatter, WithOptionName};
 use crate::ast::{
-    AstInfo, ColumnDef, ConnectionOption, ConnectionOptionName, ContinualTaskOption,
-    CreateConnectionOption, CreateConnectionType, CreateSinkConnection, CreateSourceConnection,
-    CreateSourceOption, CreateSourceOptionName, CteMutRecColumnDef, DeferredItemName, Expr, Format,
-    FormatSpecifier, Ident, IntervalValue, KeyConstraint, MaterializedViewOption, Query,
-    SelectItem, SinkEnvelope, SourceEnvelope, SourceIncludeMetadata, SubscribeOutput, TableAlias,
-    TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedItemName,
-    UnresolvedObjectName, UnresolvedSchemaName, Value,
+    AstInfo, ColumnDef, ConnectionOption, ConnectionOptionName, CreateConnectionOption,
+    CreateConnectionType, CreateSinkConnection, CreateSourceConnection, CreateSourceOption,
+    CreateSourceOptionName, DeferredItemName, Expr, Format, FormatSpecifier, IcebergSinkMode,
+    Ident, IntervalValue, KeyConstraint, MaterializedViewOption, Query, SelectItem, SinkEnvelope,
+    SourceEnvelope, SourceIncludeMetadata, SubscribeOutput, TableAlias, TableConstraint,
+    TableWithJoins, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
+    UnresolvedSchemaName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -55,7 +55,6 @@ pub enum Statement<T: AstInfo> {
     CreateSink(CreateSinkStatement<T>),
     CreateView(CreateViewStatement<T>),
     CreateMaterializedView(CreateMaterializedViewStatement<T>),
-    CreateContinualTask(CreateContinualTaskStatement<T>),
     CreateTable(CreateTableStatement<T>),
     CreateTableFromSource(CreateTableFromSourceStatement<T>),
     CreateIndex(CreateIndexStatement<T>),
@@ -82,6 +81,7 @@ pub enum Statement<T: AstInfo> {
     AlterNetworkPolicy(AlterNetworkPolicyStatement<T>),
     AlterRole(AlterRoleStatement<T>),
     AlterTableAddColumn(AlterTableAddColumnStatement<T>),
+    AlterMaterializedViewApplyReplacement(AlterMaterializedViewApplyReplacementStatement),
     Discard(DiscardStatement),
     DropObjects(DropObjectsStatement),
     DropOwned(DropOwnedStatement<T>),
@@ -133,7 +133,6 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateSink(stmt) => f.write_node(stmt),
             Statement::CreateView(stmt) => f.write_node(stmt),
             Statement::CreateMaterializedView(stmt) => f.write_node(stmt),
-            Statement::CreateContinualTask(stmt) => f.write_node(stmt),
             Statement::CreateTable(stmt) => f.write_node(stmt),
             Statement::CreateTableFromSource(stmt) => f.write_node(stmt),
             Statement::CreateIndex(stmt) => f.write_node(stmt),
@@ -160,6 +159,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::AlterConnection(stmt) => f.write_node(stmt),
             Statement::AlterRole(stmt) => f.write_node(stmt),
             Statement::AlterTableAddColumn(stmt) => f.write_node(stmt),
+            Statement::AlterMaterializedViewApplyReplacement(stmt) => f.write_node(stmt),
             Statement::Discard(stmt) => f.write_node(stmt),
             Statement::DropObjects(stmt) => f.write_node(stmt),
             Statement::DropOwned(stmt) => f.write_node(stmt),
@@ -214,7 +214,6 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::CreateSink => "create_sink",
         StatementKind::CreateView => "create_view",
         StatementKind::CreateMaterializedView => "create_materialized_view",
-        StatementKind::CreateContinualTask => "create_continual_task",
         StatementKind::CreateTable => "create_table",
         StatementKind::CreateTableFromSource => "create_table_from_source",
         StatementKind::CreateIndex => "create_index",
@@ -241,6 +240,9 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::AlterOwner => "alter_owner",
         StatementKind::AlterConnection => "alter_connection",
         StatementKind::AlterTableAddColumn => "alter_table",
+        StatementKind::AlterMaterializedViewApplyReplacement => {
+            "alter_materialized_view_apply_replacement"
+        }
         StatementKind::Discard => "discard",
         StatementKind::DropObjects => "drop_objects",
         StatementKind::DropOwned => "drop_owned",
@@ -597,6 +599,68 @@ impl<T: AstInfo> AstDisplay for ConnectionDefaultAwsPrivatelink<T> {
     }
 }
 impl_display_t!(ConnectionDefaultAwsPrivatelink);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+/// A MATCHING rule inside BROKERS (...) that routes brokers matching a pattern
+/// through an AWS PrivateLink tunnel.
+pub struct KafkaMatchingBrokerRule<T: AstInfo> {
+    /// Given a broker's host:port, should we use this route?
+    pub pattern: ConnectionRulePattern,
+    /// Route to the broker through this PrivateLink connection.
+    pub tunnel: KafkaBrokerAwsPrivatelink<T>,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
+)]
+/// Parsed from a string, with optional leading and trailing '*' wildcards.
+pub struct ConnectionRulePattern {
+    /// If true, allow any combination of characters before the literal match.
+    pub prefix_wildcard: bool,
+    /// We expect the broker's host:port to match these characters in their entirety.
+    pub literal_match: String,
+    /// If true, allow any combination of characters after the literal match.
+    pub suffix_wildcard: bool,
+}
+
+impl<T: AstInfo> AstDisplay for KafkaMatchingBrokerRule<T> {
+    fn fmt<W>(&self, f: &mut AstFormatter<W>)
+    where
+        W: fmt::Write,
+    {
+        f.write_str("MATCHING ");
+        f.write_node(&self.pattern);
+        f.write_str(" ");
+        f.write_node(&self.tunnel);
+    }
+}
+impl_display_t!(KafkaMatchingBrokerRule);
+
+impl AstDisplay for ConnectionRulePattern {
+    fn fmt<W>(&self, f: &mut AstFormatter<W>)
+    where
+        W: fmt::Write,
+    {
+        f.write_str("'");
+        if self.prefix_wildcard {
+            f.write_str("*");
+        }
+        f.write_node(&display::escape_single_quote_string(&self.literal_match));
+        if self.suffix_wildcard {
+            f.write_str("*");
+        }
+        f.write_str("'");
+    }
+}
+impl_display!(ConnectionRulePattern);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct KafkaBroker<T: AstInfo> {
@@ -1025,14 +1089,14 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
         if !self.col_names.is_empty() {
             f.write_str(" (");
             f.write_node(&display::comma_separated(&self.col_names));
-            if self.key_constraint.is_some() {
+            if let Some(key_constraint) = &self.key_constraint {
                 f.write_str(", ");
-                f.write_node(self.key_constraint.as_ref().unwrap());
+                f.write_node(key_constraint);
             }
             f.write_str(")");
-        } else if self.key_constraint.is_some() {
+        } else if let Some(key_constraint) = &self.key_constraint {
             f.write_str(" (");
-            f.write_node(self.key_constraint.as_ref().unwrap());
+            f.write_node(key_constraint);
             f.write_str(")")
         }
         if let Some(cluster) = &self.in_cluster {
@@ -1282,6 +1346,7 @@ pub struct CreateSinkStatement<T: AstInfo> {
     pub connection: CreateSinkConnection<T>,
     pub format: Option<FormatSpecifier<T>>,
     pub envelope: Option<SinkEnvelope>,
+    pub mode: Option<IcebergSinkMode>,
     pub with_options: Vec<CreateSinkOption<T>>,
 }
 
@@ -1311,6 +1376,10 @@ impl<T: AstInfo> AstDisplay for CreateSinkStatement<T> {
         if let Some(envelope) = &self.envelope {
             f.write_str(" ENVELOPE ");
             f.write_node(envelope);
+        }
+        if let Some(mode) = &self.mode {
+            f.write_str(" MODE ");
+            f.write_node(mode);
         }
 
         if !self.with_options.is_empty() {
@@ -1382,7 +1451,9 @@ pub struct CreateMaterializedViewStatement<T: AstInfo> {
     pub if_exists: IfExistsBehavior,
     pub name: UnresolvedItemName,
     pub columns: Vec<Ident>,
+    pub replacement_for: Option<T::ItemName>,
     pub in_cluster: Option<T::ClusterName>,
+    pub in_cluster_replica: Option<Ident>,
     pub query: Query<T>,
     pub as_of: Option<u64>,
     pub with_options: Vec<MaterializedViewOption<T>>,
@@ -1393,6 +1464,9 @@ impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {
         f.write_str("CREATE");
         if self.if_exists == IfExistsBehavior::Replace {
             f.write_str(" OR REPLACE");
+        }
+        if self.replacement_for.is_some() {
+            f.write_str(" REPLACEMENT");
         }
 
         f.write_str(" MATERIALIZED VIEW");
@@ -1410,9 +1484,27 @@ impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {
             f.write_str(")");
         }
 
-        if let Some(cluster) = &self.in_cluster {
-            f.write_str(" IN CLUSTER ");
-            f.write_node(cluster);
+        if let Some(target) = &self.replacement_for {
+            f.write_str(" FOR ");
+            f.write_node(target);
+        }
+
+        match (&self.in_cluster, &self.in_cluster_replica) {
+            (Some(cluster), Some(replica)) => {
+                f.write_str(" IN CLUSTER ");
+                f.write_node(cluster);
+                f.write_str(" REPLICA ");
+                f.write_node(replica);
+            }
+            (Some(cluster), None) => {
+                f.write_str(" IN CLUSTER ");
+                f.write_node(cluster);
+            }
+            (None, Some(replica)) => {
+                f.write_str(" IN REPLICA ");
+                f.write_node(replica);
+            }
+            (None, None) => {}
         }
 
         if !self.with_options.is_empty() {
@@ -1431,105 +1523,6 @@ impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {
     }
 }
 impl_display_t!(CreateMaterializedViewStatement);
-
-/// `CREATE CONTINUAL TASK`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CreateContinualTaskStatement<T: AstInfo> {
-    pub name: T::ItemName,
-    pub columns: Option<Vec<CteMutRecColumnDef<T>>>,
-    pub in_cluster: Option<T::ClusterName>,
-    pub as_of: Option<u64>,
-    pub with_options: Vec<ContinualTaskOption<T>>,
-
-    // The thing we get input diffs from
-    pub input: T::ItemName,
-
-    // The txn to execute on each set of diffs
-    pub stmts: Vec<ContinualTaskStmt<T>>,
-
-    pub sugar: Option<CreateContinualTaskSugar<T>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ContinualTaskStmt<T: AstInfo> {
-    Delete(DeleteStatement<T>),
-    Insert(InsertStatement<T>),
-}
-
-impl<T: AstInfo> AstDisplay for ContinualTaskStmt<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        match self {
-            ContinualTaskStmt::Delete(stmt) => f.write_node(stmt),
-            ContinualTaskStmt::Insert(stmt) => f.write_node(stmt),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CreateContinualTaskSugar<T: AstInfo> {
-    Transform { transform: Query<T> },
-    Retain { retain: Expr<T> },
-}
-
-impl<T: AstInfo> AstDisplay for CreateContinualTaskStatement<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("CREATE CONTINUAL TASK ");
-        f.write_node(&self.name);
-        if let Some(columns) = &self.columns {
-            f.write_str(" (");
-            f.write_node(&display::comma_separated(columns));
-            f.write_str(")");
-        }
-
-        if let Some(cluster) = &self.in_cluster {
-            f.write_str(" IN CLUSTER ");
-            f.write_node(cluster);
-        }
-
-        if !self.with_options.is_empty() {
-            f.write_str(" WITH (");
-            f.write_node(&display::comma_separated(&self.with_options));
-            f.write_str(")");
-        }
-
-        match &self.sugar {
-            Some(CreateContinualTaskSugar::Transform { transform }) => {
-                f.write_str(" FROM TRANSFORM ");
-                f.write_node(&self.input);
-                f.write_str(" USING ");
-                f.write_str("(");
-                f.write_node(transform);
-                f.write_str(")");
-            }
-            Some(CreateContinualTaskSugar::Retain { retain }) => {
-                f.write_str(" FROM RETAIN ");
-                f.write_node(&self.input);
-                f.write_str(" WHILE ");
-                f.write_str("(");
-                f.write_node(retain);
-                f.write_str(")");
-            }
-            None => {
-                f.write_str(" ON INPUT ");
-                f.write_node(&self.input);
-                f.write_str(" AS (");
-                for (idx, stmt) in self.stmts.iter().enumerate() {
-                    if idx > 0 {
-                        f.write_str("; ");
-                    }
-                    f.write_node(stmt);
-                }
-                f.write_str(")");
-            }
-        }
-
-        if let Some(time) = &self.as_of {
-            f.write_str(" AS OF ");
-            f.write_str(time);
-        }
-    }
-}
-impl_display_t!(CreateContinualTaskStatement);
 
 /// `ALTER SET CLUSTER`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -2764,6 +2757,7 @@ impl_display_t!(AlterRetainHistoryStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AlterObjectSwapStatement {
     pub object_type: ObjectType,
+    pub if_exists: bool,
     pub name_a: UnresolvedObjectName,
     pub name_b: Ident,
 }
@@ -2774,6 +2768,9 @@ impl AstDisplay for AlterObjectSwapStatement {
 
         f.write_node(&self.object_type);
         f.write_str(" ");
+        if self.if_exists {
+            f.write_str("IF EXISTS ");
+        }
         f.write_node(&self.name_a);
 
         f.write_str(" SWAP WITH ");
@@ -3199,6 +3196,32 @@ impl<T: AstInfo> AstDisplay for AlterTableAddColumnStatement<T> {
 
 impl_display_t!(AlterTableAddColumnStatement);
 
+/// `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterMaterializedViewApplyReplacementStatement {
+    pub if_exists: bool,
+    pub name: UnresolvedItemName,
+    pub replacement_name: UnresolvedItemName,
+}
+
+impl AstDisplay for AlterMaterializedViewApplyReplacementStatement {
+    fn fmt<W>(&self, f: &mut AstFormatter<W>)
+    where
+        W: fmt::Write,
+    {
+        f.write_str("ALTER MATERIALIZED VIEW ");
+        if self.if_exists {
+            f.write_str("IF EXISTS ");
+        }
+        f.write_node(&self.name);
+
+        f.write_str(" APPLY REPLACEMENT ");
+        f.write_node(&self.replacement_name);
+    }
+}
+
+impl_display!(AlterMaterializedViewApplyReplacementStatement);
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DiscardStatement {
     pub target: DiscardTarget,
@@ -3424,9 +3447,6 @@ pub enum ShowObjectType<T: AstInfo> {
     RoleMembership {
         role: Option<T::RoleName>,
     },
-    ContinualTask {
-        in_cluster: Option<T::ClusterName>,
-    },
     NetworkPolicy,
 }
 /// `SHOW <object>S`
@@ -3469,7 +3489,6 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ShowObjectType::Privileges { .. } => "PRIVILEGES",
             ShowObjectType::DefaultPrivileges { .. } => "DEFAULT PRIVILEGES",
             ShowObjectType::RoleMembership { .. } => "ROLE MEMBERSHIP",
-            ShowObjectType::ContinualTask { .. } => "CONTINUAL TASKS",
             ShowObjectType::NetworkPolicy => "NETWORK POLICIES",
         });
 
@@ -3495,8 +3514,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ShowObjectType::MaterializedView { in_cluster }
             | ShowObjectType::Index { in_cluster, .. }
             | ShowObjectType::Sink { in_cluster }
-            | ShowObjectType::Source { in_cluster }
-            | ShowObjectType::ContinualTask { in_cluster } => {
+            | ShowObjectType::Source { in_cluster } => {
                 if let Some(cluster) = in_cluster {
                     f.write_str(" IN CLUSTER ");
                     f.write_node(cluster);
@@ -4223,7 +4241,6 @@ pub enum ObjectType {
     Schema,
     Func,
     Subsource,
-    ContinualTask,
     NetworkPolicy,
 }
 
@@ -4240,8 +4257,7 @@ impl ObjectType {
             | ObjectType::Secret
             | ObjectType::Connection
             | ObjectType::Func
-            | ObjectType::Subsource
-            | ObjectType::ContinualTask => true,
+            | ObjectType::Subsource => true,
             ObjectType::Database
             | ObjectType::Schema
             | ObjectType::Cluster
@@ -4271,7 +4287,6 @@ impl AstDisplay for ObjectType {
             ObjectType::Schema => "SCHEMA",
             ObjectType::Func => "FUNCTION",
             ObjectType::Subsource => "SUBSOURCE",
-            ObjectType::ContinualTask => "CONTINUAL TASK",
             ObjectType::NetworkPolicy => "NETWORK POLICY",
         })
     }
@@ -4333,6 +4348,7 @@ pub enum WithOptionValue<T: AstInfo> {
     ClusterReplicas(Vec<ReplicaDefinition<T>>),
     ConnectionKafkaBroker(KafkaBroker<T>),
     ConnectionAwsPrivatelink(ConnectionDefaultAwsPrivatelink<T>),
+    KafkaMatchingBrokerRule(KafkaMatchingBrokerRule<T>),
     RetainHistoryFor(Value),
     Refresh(RefreshOptionValue<T>),
     ClusterScheduleOptionValue(ClusterScheduleOptionValue),
@@ -4363,6 +4379,7 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
                 | WithOptionValue::UnresolvedItemName(_)
                 | WithOptionValue::Ident(_)
                 | WithOptionValue::ConnectionAwsPrivatelink(_)
+                | WithOptionValue::KafkaMatchingBrokerRule(_)
                 | WithOptionValue::ClusterReplicas(_)
                 | WithOptionValue::ClusterScheduleOptionValue(_)
                 | WithOptionValue::ClusterAlterStrategy(_)
@@ -4413,6 +4430,9 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
             }
             WithOptionValue::ConnectionAwsPrivatelink(aws_privatelink) => {
                 f.write_node(aws_privatelink);
+            }
+            WithOptionValue::KafkaMatchingBrokerRule(rule) => {
+                f.write_node(rule);
             }
             WithOptionValue::ConnectionKafkaBroker(broker) => {
                 f.write_node(broker);
@@ -4479,7 +4499,17 @@ impl<T: AstInfo> AstDisplay for RefreshOptionValue<T> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize, Serialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Deserialize,
+    Serialize
+)]
 pub enum ClusterScheduleOptionValue {
     Manual,
     Refresh {
@@ -4757,6 +4787,7 @@ pub enum Explainee<T: AstInfo> {
     CreateView(Box<CreateViewStatement<T>>, bool),
     CreateMaterializedView(Box<CreateMaterializedViewStatement<T>>, bool),
     CreateIndex(Box<CreateIndexStatement<T>>, bool),
+    Subscribe(Box<SubscribeStatement<T>>, bool),
 }
 
 impl<T: AstInfo> Explainee<T> {
@@ -4771,7 +4802,8 @@ impl<T: AstInfo> Explainee<T> {
             Self::Select(..)
             | Self::CreateView(..)
             | Self::CreateMaterializedView(..)
-            | Self::CreateIndex(..) => None,
+            | Self::CreateIndex(..)
+            | Self::Subscribe(..) => None,
         }
     }
 
@@ -4827,6 +4859,12 @@ impl<T: AstInfo> AstDisplay for Explainee<T> {
                 f.write_node(statement);
             }
             Self::CreateIndex(statement, broken) => {
+                if *broken {
+                    f.write_str("BROKEN ");
+                }
+                f.write_node(statement);
+            }
+            Self::Subscribe(statement, broken) => {
                 if *broken {
                     f.write_str("BROKEN ");
                 }
@@ -5595,7 +5633,6 @@ pub enum CommentObjectType<T: AstInfo> {
     Schema { name: T::SchemaName },
     Cluster { name: T::ClusterName },
     ClusterReplica { name: QualifiedReplica },
-    ContinualTask { name: T::ItemName },
     NetworkPolicy { name: T::NetworkPolicyName },
 }
 
@@ -5666,10 +5703,6 @@ impl<T: AstInfo> AstDisplay for CommentObjectType<T> {
             }
             ClusterReplica { name } => {
                 f.write_str("CLUSTER REPLICA ");
-                f.write_node(name);
-            }
-            ContinualTask { name } => {
-                f.write_str("CONTINUAL TASK ");
                 f.write_node(name);
             }
             NetworkPolicy { name } => {

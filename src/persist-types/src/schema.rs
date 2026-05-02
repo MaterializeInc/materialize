@@ -22,7 +22,18 @@ use serde::{Deserialize, Serialize};
 
 /// An ordered identifier for a pair of key and val schemas registered to a
 /// shard.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
+)]
 #[serde(try_from = "String", into = "String")]
 pub struct SchemaId(pub usize);
 
@@ -321,6 +332,8 @@ fn backward_compatible_typ(old: &DataType, new: &DataType) -> Option<ArrayMigrat
             | LargeListView(_)
             | Union(_, _)
             | Dictionary(_, _)
+            | Decimal32(_, _)
+            | Decimal64(_, _)
             | Decimal128(_, _)
             | Decimal256(_, _)
             | RunEndEncoded(_, _),

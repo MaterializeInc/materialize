@@ -140,12 +140,7 @@ impl Metrics {
             move || start.elapsed().as_secs_f64(),
         );
         let s3_blob = S3BlobMetrics::new(registry);
-        let columnar = ColumnarMetrics::new(
-            registry,
-            &s3_blob.lgbytes,
-            Arc::clone(&cfg.configs),
-            cfg.is_cc_active,
-        );
+        let columnar = ColumnarMetrics::new(registry);
         Metrics {
             blob: vecs.blob_metrics(),
             consensus: vecs.consensus_metrics(),
@@ -421,7 +416,6 @@ impl MetricsVecs {
             )),
             compare_and_downgrade_since: self.cmd_metrics("compare_and_downgrade_since"),
             downgrade_since: self.cmd_metrics("downgrade_since"),
-            heartbeat_reader: self.cmd_metrics("heartbeat_reader"),
             expire_reader: self.cmd_metrics("expire_reader"),
             expire_writer: self.cmd_metrics("expire_writer"),
             merge_res: self.cmd_metrics("merge_res"),
@@ -630,7 +624,6 @@ pub struct CmdsMetrics {
     pub(crate) compare_and_append_noop: IntCounter,
     pub(crate) compare_and_downgrade_since: CmdMetrics,
     pub(crate) downgrade_since: CmdMetrics,
-    pub(crate) heartbeat_reader: CmdMetrics,
     pub(crate) expire_reader: CmdMetrics,
     pub(crate) expire_writer: CmdMetrics,
     pub(crate) merge_res: CmdMetrics,
@@ -2301,12 +2294,10 @@ pub struct LockMetrics {
 
 #[derive(Debug)]
 pub struct WatchMetrics {
-    pub(crate) listen_woken_via_watch: IntCounter,
-    pub(crate) listen_woken_via_sleep: IntCounter,
-    pub(crate) listen_resolved_via_watch: IntCounter,
-    pub(crate) listen_resolved_via_sleep: IntCounter,
-    pub(crate) snapshot_woken_via_watch: IntCounter,
-    pub(crate) snapshot_woken_via_sleep: IntCounter,
+    pub(crate) wait_woken_via_watch: IntCounter,
+    pub(crate) wait_woken_via_sleep: IntCounter,
+    pub(crate) wait_resolved_via_watch: IntCounter,
+    pub(crate) wait_resolved_via_sleep: IntCounter,
     pub(crate) notify_sent: IntCounter,
     pub(crate) notify_noop: IntCounter,
     pub(crate) notify_recv: IntCounter,
@@ -2318,29 +2309,21 @@ pub struct WatchMetrics {
 impl WatchMetrics {
     fn new(registry: &MetricsRegistry) -> Self {
         WatchMetrics {
-            listen_woken_via_watch: registry.register(metric!(
-                name: "mz_persist_listen_woken_via_watch",
-                help: "count of listen next batches wakes via watch notify",
+            wait_woken_via_watch: registry.register(metric!(
+                name: "mz_persist_wait_woken_via_watch",
+                help: "count of wait-for-uppers wakes via watch notify",
             )),
-            listen_woken_via_sleep: registry.register(metric!(
-                name: "mz_persist_listen_woken_via_sleep",
-                help: "count of listen next batches wakes via sleep",
+            wait_woken_via_sleep: registry.register(metric!(
+                name: "mz_persist_wait_woken_via_sleep",
+                help: "count of wait-for-uppers wakes via sleep",
             )),
-            listen_resolved_via_watch: registry.register(metric!(
-                name: "mz_persist_listen_resolved_via_watch",
-                help: "count of listen next batches resolved via watch notify",
+            wait_resolved_via_watch: registry.register(metric!(
+                name: "mz_persist_wait_resolved_via_watch",
+                help: "count of wait-for-uppers resolved via watch notify",
             )),
-            listen_resolved_via_sleep: registry.register(metric!(
-                name: "mz_persist_listen_resolved_via_sleep",
-                help: "count of listen next batches resolved via sleep",
-            )),
-            snapshot_woken_via_watch: registry.register(metric!(
-                name: "mz_persist_snapshot_woken_via_watch",
-                help: "count of snapshot wakes via watch notify",
-            )),
-            snapshot_woken_via_sleep: registry.register(metric!(
-                name: "mz_persist_snapshot_woken_via_sleep",
-                help: "count of snapshot wakes via sleep",
+            wait_resolved_via_sleep: registry.register(metric!(
+                name: "mz_persist_wait_resolved_via_sleep",
+                help: "count of wait-for-uppers resolved via sleep",
             )),
             notify_sent: registry.register(metric!(
                 name: "mz_persist_watch_notify_sent",
@@ -2957,7 +2940,6 @@ impl Consensus for MetricsConsensus {
     async fn compare_and_set(
         &self,
         key: &str,
-        expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<CaSResult, ExternalError> {
         let bytes = new.data.len();
@@ -2965,10 +2947,7 @@ impl Consensus for MetricsConsensus {
             .metrics
             .consensus
             .compare_and_set
-            .run_op(
-                || self.consensus.compare_and_set(key, expected, new),
-                Self::on_err,
-            )
+            .run_op(|| self.consensus.compare_and_set(key, new), Self::on_err)
             .await;
         match res.as_ref() {
             Ok(CaSResult::Committed) => self
@@ -3007,17 +2986,15 @@ impl Consensus for MetricsConsensus {
     }
 
     #[instrument(name = "consensus::truncate", fields(shard=key))]
-    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
-        let deleted = self
-            .metrics
-            .consensus
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<Option<usize>, ExternalError> {
+        let metrics = &self.metrics.consensus;
+        let deleted = metrics
             .truncate
             .run_op(|| self.consensus.truncate(key, seqno), Self::on_err)
             .await?;
-        self.metrics
-            .consensus
-            .truncated_count
-            .inc_by(u64::cast_from(deleted));
+        if let Some(deleted) = deleted {
+            metrics.truncated_count.inc_by(u64::cast_from(deleted));
+        }
         Ok(deleted)
     }
 }

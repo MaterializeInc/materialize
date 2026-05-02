@@ -205,10 +205,11 @@ $ kafka-ingest format=avro topic=nums schema=${nums-schema}
 # Data from older transactions should be immediately compacted to the timestamp
 # of the latest transaction (i.e., 4).
 
+# (The error msg's details are tested in `test_subscribe_basic`.)
 ! SELECT * FROM nums AS OF 2
-contains:Timestamp (2) is not valid for all inputs
+contains:imestamp
 ! SELECT * FROM nums AS OF 3
-contains:Timestamp (3) is not valid for all inputs
+contains:imestamp
 > SELECT * FROM nums AS OF 4
 6
 
@@ -238,9 +239,10 @@ $ kafka-ingest format=avro topic=nums schema=${nums-schema}
 > SELECT * FROM nums AS OF 6
 8
 
+# (The error msg's details are tested in `test_subscribe_basic`.)
 ! SELECT * FROM nums_compacted AS OF 4
-contains:Timestamp (4) is not valid for all inputs
+contains:imestamp
 ! SELECT * FROM nums_compacted AS OF 5
-contains:Timestamp (5) is not valid for all inputs
+contains:imestamp
 > SELECT * FROM nums_compacted AS OF 6
 8

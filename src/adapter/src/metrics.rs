@@ -13,6 +13,7 @@ use mz_ore::stats::{histogram_milliseconds_buckets, histogram_seconds_buckets};
 use mz_sql::ast::{AstInfo, Statement, StatementKind, SubscribeOutput};
 use mz_sql::session::user::User;
 use mz_sql_parser::ast::statement_kind_label_value;
+use prometheus::core::{AtomicU64, GenericCounter};
 use prometheus::{Histogram, HistogramVec, IntCounter, IntCounterVec, IntGaugeVec};
 
 #[derive(Debug, Clone)]
@@ -49,6 +50,10 @@ pub struct Metrics {
     pub pgwire_ensure_transaction_seconds: HistogramVec,
     pub catalog_snapshot_seconds: HistogramVec,
     pub pgwire_recv_scheduling_delay_ms: HistogramVec,
+    pub catalog_transact_seconds: HistogramVec,
+    pub apply_catalog_implications_seconds: Histogram,
+    pub group_commit_catalog_upper_seconds: Histogram,
+    pub group_commit_table_advancement_seconds: Histogram,
 }
 
 impl Metrics {
@@ -82,12 +87,12 @@ impl Metrics {
             determine_timestamp: registry.register(metric!(
                 name: "mz_determine_timestamp",
                 help: "The total number of calls to determine_timestamp.",
-                var_labels:["respond_immediately", "isolation_level", "compute_instance", "determination_method"],
+                var_labels:["respond_immediately", "isolation_level", "compute_instance"],
             )),
             timestamp_difference_for_strict_serializable_ms: registry.register(metric!(
                 name: "mz_timestamp_difference_for_strict_serializable_ms",
                 help: "Difference in timestamp in milliseconds for running in strict serializable vs serializable isolation level.",
-                var_labels:["compute_instance", "determination_method"],
+                var_labels:["compute_instance"],
                 buckets: histogram_milliseconds_buckets(1., 8000.),
             )),
             commands: registry.register(metric!(
@@ -220,6 +225,27 @@ impl Metrics {
                 help: "The time between a pgwire connection's receiver task being woken up by incoming data and getting polled.",
                 var_labels: ["message_type"],
                 buckets: histogram_milliseconds_buckets(0.128, 512000.),
+            )),
+            catalog_transact_seconds: registry.register(metric!(
+                name: "mz_catalog_transact_seconds",
+                help: "The time it takes to run various catalog transact methods.",
+                var_labels: ["method"],
+                buckets: histogram_seconds_buckets(0.001, 32.0),
+            )),
+            apply_catalog_implications_seconds: registry.register(metric!(
+                name: "mz_apply_catalog_implications_seconds",
+                help: "The time it takes to apply catalog implications.",
+                buckets: histogram_seconds_buckets(0.001, 32.0),
+            )),
+            group_commit_catalog_upper_seconds: registry.register(metric!(
+                name: "mz_group_commit_catalog_upper_seconds",
+                help: "The time it takes to advance the catalog shard upper during group commit.",
+                buckets: histogram_seconds_buckets(0.001, 32.0),
+            )),
+            group_commit_table_advancement_seconds: registry.register(metric!(
+                name: "mz_group_commit_table_advancement_seconds",
+                help: "The time it takes to iterate over all catalog entries to find tables during group commit.",
+                buckets: histogram_seconds_buckets(0.001, 32.0),
             ))
         }
     }
@@ -232,15 +258,31 @@ impl Metrics {
         SessionMetrics {
             row_set_finishing_seconds: self.row_set_finishing_seconds(),
             session_startup_table_writes_seconds: self.session_startup_table_writes_seconds.clone(),
+            query_total: self.query_total.clone(),
+            determine_timestamp: self.determine_timestamp.clone(),
+            timestamp_difference_for_strict_serializable_ms: self
+                .timestamp_difference_for_strict_serializable_ms
+                .clone(),
+            optimization_notices: self.optimization_notices.clone(),
+            statement_logging_records: self.statement_logging_records.clone(),
+            statement_logging_unsampled_bytes: self.statement_logging_unsampled_bytes.clone(),
+            statement_logging_actual_bytes: self.statement_logging_actual_bytes.clone(),
         }
     }
 }
 
-/// Metrics associated with a [`crate::session::Session`].
+/// Metrics to be accessed from a [`crate::session::Session`].
 #[derive(Debug, Clone)]
 pub struct SessionMetrics {
     row_set_finishing_seconds: Histogram,
     session_startup_table_writes_seconds: Histogram,
+    query_total: IntCounterVec,
+    determine_timestamp: IntCounterVec,
+    timestamp_difference_for_strict_serializable_ms: HistogramVec,
+    optimization_notices: IntCounterVec,
+    statement_logging_records: IntCounterVec,
+    statement_logging_unsampled_bytes: IntCounter,
+    statement_logging_actual_bytes: IntCounter,
 }
 
 impl SessionMetrics {
@@ -250,6 +292,42 @@ impl SessionMetrics {
 
     pub(crate) fn session_startup_table_writes_seconds(&self) -> &Histogram {
         &self.session_startup_table_writes_seconds
+    }
+
+    pub(crate) fn query_total(&self, label_values: &[&str]) -> GenericCounter<AtomicU64> {
+        self.query_total.with_label_values(label_values)
+    }
+
+    pub(crate) fn determine_timestamp(&self, label_values: &[&str]) -> GenericCounter<AtomicU64> {
+        self.determine_timestamp.with_label_values(label_values)
+    }
+
+    pub(crate) fn timestamp_difference_for_strict_serializable_ms(
+        &self,
+        label_values: &[&str],
+    ) -> Histogram {
+        self.timestamp_difference_for_strict_serializable_ms
+            .with_label_values(label_values)
+    }
+
+    pub(crate) fn optimization_notices(&self, label_values: &[&str]) -> GenericCounter<AtomicU64> {
+        self.optimization_notices.with_label_values(label_values)
+    }
+
+    pub(crate) fn statement_logging_records(
+        &self,
+        label_values: &[&str],
+    ) -> GenericCounter<AtomicU64> {
+        self.statement_logging_records
+            .with_label_values(label_values)
+    }
+
+    pub(crate) fn statement_logging_unsampled_bytes(&self) -> &IntCounter {
+        &self.statement_logging_unsampled_bytes
+    }
+
+    pub(crate) fn statement_logging_actual_bytes(&self) -> &IntCounter {
+        &self.statement_logging_actual_bytes
     }
 }
 

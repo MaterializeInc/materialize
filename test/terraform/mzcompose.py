@@ -362,7 +362,11 @@ class State:
         # self._kubectl_log_all_pods(namespace)
 
     def kubectl_setup(
-        self, tag: str, metadata_backend_url: str, persist_backend_url: str
+        self,
+        tag: str,
+        metadata_backend_url: str,
+        persist_backend_url: str,
+        skip_materialize_cr: bool = False,
     ) -> None:
         self.metadata_backend_url = metadata_backend_url
         self.persist_backend_url = persist_backend_url
@@ -394,60 +398,64 @@ class State:
         else:
             raise ValueError("Never completed")
 
-        spawn.runv(["kubectl", "create", "namespace", "materialize-environment"])
+        # Skip Materialize CR creation if Terraform already created it
+        if skip_materialize_cr:
+            print("--- Skipping Materialize CR creation (Terraform handles it)")
+        else:
+            spawn.runv(["kubectl", "create", "namespace", "materialize-environment"])
 
-        materialize_backend_secret = {
-            "apiVersion": "v1",
-            "kind": "Secret",
-            "metadata": {
-                "name": "materialize-backend",
-                "namespace": "materialize-environment",
-            },
-            "stringData": {
-                "metadata_backend_url": self.metadata_backend_url,
-                "persist_backend_url": self.persist_backend_url,
-                "license_key": os.getenv("MZ_CI_LICENSE_KEY"),
-            },
-        }
-
-        spawn.runv(
-            ["kubectl", "apply", "-f", "-"],
-            cwd=self.path,
-            stdin=yaml.dump(materialize_backend_secret).encode(),
-        )
-
-        self.materialize_environment = {
-            "apiVersion": "materialize.cloud/v1alpha1",
-            "kind": "Materialize",
-            "metadata": {
-                "name": "12345678-1234-1234-1234-123456789012",
-                "namespace": "materialize-environment",
-            },
-            "spec": {
-                "environmentdImageRef": f"materialize/environmentd:{tag}",
-                "environmentdResourceRequirements": {
-                    "limits": {"memory": "4Gi"},
-                    "requests": {"cpu": "2", "memory": "4Gi"},
+            materialize_backend_secret = {
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "metadata": {
+                    "name": "materialize-backend",
+                    "namespace": "materialize-environment",
                 },
-                "balancerdResourceRequirements": {
-                    "limits": {"memory": "256Mi"},
-                    "requests": {"cpu": "100m", "memory": "256Mi"},
+                "stringData": {
+                    "metadata_backend_url": self.metadata_backend_url,
+                    "persist_backend_url": self.persist_backend_url,
+                    "license_key": os.getenv("MZ_CI_LICENSE_KEY"),
                 },
-                "backendSecretName": "materialize-backend",
-            },
-        }
+            }
 
-        # Only supported since self-managed v25.2
-        if not tag.startswith("v") or MzVersion.parse_mz(tag) >= MzVersion.parse_mz(
-            "v0.147.0"
-        ):
-            self.materialize_environment["spec"]["authenticatorKind"] = "None"
+            spawn.runv(
+                ["kubectl", "apply", "-f", "-"],
+                cwd=self.path,
+                stdin=yaml.dump(materialize_backend_secret).encode(),
+            )
 
-        spawn.runv(
-            ["kubectl", "apply", "-f", "-"],
-            cwd=self.path,
-            stdin=yaml.dump(self.materialize_environment).encode(),
-        )
+            self.materialize_environment = {
+                "apiVersion": "materialize.cloud/v1alpha1",
+                "kind": "Materialize",
+                "metadata": {
+                    "name": "12345678-1234-1234-1234-123456789012",
+                    "namespace": "materialize-environment",
+                },
+                "spec": {
+                    "environmentdImageRef": f"materialize/environmentd:{tag}",
+                    "environmentdResourceRequirements": {
+                        "limits": {"memory": "4Gi"},
+                        "requests": {"cpu": "2", "memory": "4Gi"},
+                    },
+                    "balancerdResourceRequirements": {
+                        "limits": {"memory": "256Mi"},
+                        "requests": {"cpu": "100m", "memory": "256Mi"},
+                    },
+                    "backendSecretName": "materialize-backend",
+                },
+            }
+
+            # Only supported since self-managed v25.2
+            if not tag.startswith("v") or MzVersion.parse_mz(tag) >= MzVersion.parse_mz(
+                "v0.147.0"
+            ):
+                self.materialize_environment["spec"]["authenticatorKind"] = "None"
+
+            spawn.runv(
+                ["kubectl", "apply", "-f", "-"],
+                cwd=self.path,
+                stdin=yaml.dump(self.materialize_environment).encode(),
+            )
         for i in range(60):
             try:
                 spawn.runv(
@@ -493,6 +501,7 @@ class State:
                 )
                 if status == "Running":
                     break
+                time.sleep(1)
             except subprocess.CalledProcessError:
                 time.sleep(1)
         else:
@@ -518,6 +527,7 @@ class State:
                 )
                 if status == "Running":
                     break
+                time.sleep(1)
             except subprocess.CalledProcessError:
                 time.sleep(1)
         else:
@@ -553,7 +563,24 @@ class State:
         )
         run_ignore_error(["kubectl", "delete", "namespace", "materialize-environment"])
         run_ignore_error(["kubectl", "delete", "namespace", "materialize"])
-        spawn.runv(["terraform", "destroy", "-auto-approve"], cwd=self.path, env=env)
+
+        # Retry terraform destroy up to 3 times with delays
+        # Security groups may fail to delete if ENIs are still being released
+        for attempt in range(3):
+            try:
+                spawn.runv(
+                    ["terraform", "destroy", "-auto-approve"], cwd=self.path, env=env
+                )
+                break
+            except subprocess.CalledProcessError:
+                if attempt < 2:
+                    print(
+                        f"terraform destroy failed (attempt {attempt + 1}/3), "
+                        "waiting 60s for resources to be released..."
+                    )
+                    time.sleep(60)
+                else:
+                    raise
 
     def test(
         self, c: Composition, tag: str, run_testdrive_files: bool, files: list[str]
@@ -582,44 +609,38 @@ class State:
                 c.up(Service("testdrive", idle=True))
                 c.run_testdrive_files(*TD_CMD, *files)
 
-    def connect(self, c: Composition) -> None:
-        environmentd_name = spawn.capture(
+    def _find_service(self, pattern: str) -> str:
+        """Find a service in materialize-environment namespace by name pattern."""
+        all_svcs = spawn.capture(
             [
                 "kubectl",
                 "get",
-                "pods",
-                "-l",
-                "app=environmentd",
+                "svc",
                 "-n",
                 "materialize-environment",
                 "-o",
                 "jsonpath={.items[*].metadata.name}",
             ],
             cwd=self.path,
-        )
-
-        balancerd_name = spawn.capture(
-            [
-                "kubectl",
-                "get",
-                "pods",
-                "-l",
-                "app=balancerd",
-                "-n",
-                "materialize-environment",
-                "-o",
-                "jsonpath={.items[0].metadata.name}",
-            ],
-            cwd=self.path,
         ).strip()
-        # error: arguments in resource/name form must have a single resource and name
-        print(f"Got balancerd name: {balancerd_name}")
+        for svc in all_svcs.split():
+            if pattern in svc:
+                return svc
+        raise ValueError(f"No service matching '{pattern}' found in namespace")
+
+    def connect(self, c: Composition) -> None:
+        # Find services by name pattern (they're named like mz<id>-environmentd)
+        environmentd_svc = self._find_service("environmentd")
+        print(f"Got environmentd service: {environmentd_svc}")
+
+        balancerd_svc = self._find_service("balancerd")
+        print(f"Got balancerd service: {balancerd_svc}")
 
         self.environmentd_port_forward_process = subprocess.Popen(
             [
                 "kubectl",
                 "port-forward",
-                f"pod/{environmentd_name}",
+                f"svc/{environmentd_svc}",
                 "-n",
                 "materialize-environment",
                 "6877:6877",
@@ -631,7 +652,7 @@ class State:
             [
                 "kubectl",
                 "port-forward",
-                f"pod/{balancerd_name}",
+                f"svc/{balancerd_svc}",
                 "-n",
                 "materialize-environment",
                 "6875:6875",
@@ -652,17 +673,19 @@ class State:
 
         with c.override(testdrive(no_reset=False)):
             c.up(Service("testdrive", idle=True))
-            c.testdrive(
-                dedent(
-                    """
+            c.testdrive(dedent("""
                > SELECT 1
                1
-            """
-                )
-            )
+            """))
 
 
 class AWS(State):
+    base_vars: list[str]
+
+    def __init__(self, path: Path):
+        super().__init__(path)
+        self.base_vars = []
+
     def setup(
         self,
         prefix: str,
@@ -685,15 +708,29 @@ class AWS(State):
             )
             return
 
-        vars = [
+        # Build base vars (without environmentd_version) that stay constant during upgrades
+        self.base_vars = [
             "-var",
             f"operator_version={get_operator_version()}",
         ]
         if orchestratord_override:
-            vars += [
+            self.base_vars += [
                 "-var",
                 f"orchestratord_version={get_tag(orchestratord_tag or tag)}",
             ]
+
+        license_key = os.getenv("MZ_CI_LICENSE_KEY", "")
+        if license_key:
+            self.base_vars += [
+                "-var",
+                f"license_key={license_key}",
+            ]
+
+        # Full vars includes environmentd_version for initial setup
+        vars = self.base_vars + [
+            "-var",
+            f"environmentd_version={tag}",
+        ]
 
         print("--- Setup")
         spawn.runv(
@@ -727,44 +764,37 @@ class AWS(State):
         persist_backend_url = spawn.capture(
             ["terraform", "output", "-raw", "persist_backend_url"], cwd=self.path
         ).strip()
-        self.kubectl_setup(tag, metadata_backend_url, persist_backend_url)
+        # For aws-temporary, Terraform creates the Materialize instance
+        # We will implement this for the other providers as well next
+        self.kubectl_setup(
+            tag, metadata_backend_url, persist_backend_url, skip_materialize_cr=True
+        )
 
     def upgrade(self, tag: str) -> None:
-        print(f"--- Upgrading to {tag}")
-        # Following https://materialize.com/docs/self-managed/v25.1/installation/install-on-aws/upgrade-on-aws/
-        self.materialize_environment = {
-            "apiVersion": "materialize.cloud/v1alpha1",
-            "kind": "Materialize",
-            "metadata": {
-                "name": "12345678-1234-1234-1234-123456789012",
-                "namespace": "materialize-environment",
-            },
-            "spec": {
-                "requestRollout": f"12345678-9012-3456-7890-12345678901{self.version+3}",
-                "environmentdImageRef": f"materialize/environmentd:{tag}",
-                "environmentdResourceRequirements": {
-                    "limits": {"memory": "4Gi"},
-                    "requests": {"cpu": "2", "memory": "4Gi"},
-                },
-                "balancerdResourceRequirements": {
-                    "limits": {"memory": "256Mi"},
-                    "requests": {"cpu": "100m", "memory": "256Mi"},
-                },
-                "backendSecretName": "materialize-backend",
-            },
-        }
-        # Only supported since self-managed v25.2
-        if not tag.startswith("v") or MzVersion.parse_mz(tag) >= MzVersion.parse_mz(
-            "v0.147.0"
-        ):
-            self.materialize_environment["spec"]["authenticatorKind"] = "None"
+        """Upgrade Materialize to a new version using Terraform.
 
+        This matches how customers perform upgrades - by running terraform apply
+        with updated environmentd_version and request_rollout variables.
+        """
+        print(f"--- Upgrading to {tag}")
         self.version += 1
-        spawn.runv(
-            ["kubectl", "apply", "-f", "-"],
-            cwd=self.path,
-            stdin=yaml.dump(self.materialize_environment).encode(),
-        )
+
+        # Generate a new rollout UUID to trigger the upgrade
+        # Format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (last segment must be 12 chars)
+        rollout_uuid = f"12345678-9012-3456-7890-{(self.version + 3):012d}"
+
+        # Use base_vars from setup() + updated environmentd_version and request_rollout
+        vars = self.base_vars + [
+            "-var",
+            f"environmentd_version={tag}",
+            "-var",
+            f"request_rollout={rollout_uuid}",
+        ]
+
+        # Run terraform apply to perform the upgrade
+        spawn.runv(["terraform", "apply", "-auto-approve", *vars], cwd=self.path)
+
+        # Wait for the Materialize CR to be updated
         for i in range(60):
             try:
                 spawn.runv(
@@ -782,6 +812,8 @@ class AWS(State):
                 time.sleep(1)
         else:
             raise ValueError("Never completed")
+
+        # Wait for environmentd pod to be running
         for i in range(240):
             try:
                 spawn.runv(
@@ -834,7 +866,7 @@ class AWS(State):
             raise ValueError("Never completed")
 
         # Wait a bit for the status to stabilize
-        print("--- Waiting and get status:")
+        print("Waiting and get status:")
         time.sleep(120)
         self._kubectl_debug_namespace("materialize-environment")
 
@@ -843,7 +875,7 @@ class AWS(State):
     def _verify_upgrade_completed(self, expected_tag: str) -> None:
         """Verify that the upgrade has completed by checking the Docker image of environmentd pods."""
         print(
-            f"--- Verifying upgrade to {expected_tag} completed by checking Docker images"
+            f"Verifying upgrade to {expected_tag} completed by checking Docker images"
         )
 
         expected_image = f"materialize/environmentd:{expected_tag}"
@@ -870,54 +902,53 @@ class AWS(State):
                     .split()
                 )
 
-                print(f"--- Found environmentd pod images: {pod_images}")
+                print(f"Found environmentd pod images: {pod_images}")
 
                 # Check if all pods are using the expected image
                 if pod_images and all(image == expected_image for image in pod_images):
                     pod_count = len(pod_images)
                     if pod_count == 1:
                         print(
-                            f"--- Upgrade verification successful: Single pod running {expected_image}"
+                            f"Upgrade verification successful: Single pod running {expected_image}"
                         )
                         return
                     else:
                         print(
-                            f"--- Still {pod_count} environmentd pods running, waiting for rollout to complete..."
+                            f"Still {pod_count} environmentd pods running, waiting for rollout to complete..."
                         )
                 else:
                     print(
-                        f"--- Pod images don't match expected {expected_image}, waiting..."
+                        f"Pod images don't match expected {expected_image}, waiting..."
                     )
 
                 time.sleep(5)
             except subprocess.CalledProcessError as e:
-                print(f"--- Failed to get pod images: {e}")
+                print(f"Failed to get pod images: {e}")
                 time.sleep(5)
         else:
-            print("--- WARNING: Upgrade verification timed out after 5 minutes")
+            print("WARNING: Upgrade verification timed out after 5 minutes")
             # Still log the final state for debugging
-            try:
-                pod_images = (
-                    spawn.capture(
-                        [
-                            "kubectl",
-                            "get",
-                            "pods",
-                            "-l",
-                            "app=environmentd",
-                            "-n",
-                            "materialize-environment",
-                            "-o",
-                            "jsonpath={.items[*].spec.containers[0].image}",
-                        ],
-                        cwd=self.path,
-                    )
-                    .strip()
-                    .split()
+            pod_images = (
+                spawn.capture(
+                    [
+                        "kubectl",
+                        "get",
+                        "pods",
+                        "-l",
+                        "app=environmentd",
+                        "-n",
+                        "materialize-environment",
+                        "-o",
+                        "jsonpath={.items[*].spec.containers[0].image}",
+                    ],
+                    cwd=self.path,
                 )
-                print(f"--- Final pod images: {pod_images}, expected: {expected_image}")
-            except:
-                pass
+                .strip()
+                .split()
+            )
+            raise ValueError(
+                f"Final pod images: {pod_images}, expected: {expected_image}"
+            )
 
 
 def workflow_aws_temporary(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -965,16 +996,17 @@ def workflow_aws_upgrade(c: Composition, parser: WorkflowArgumentParser) -> None
     try:
         if args.run_mz_debug:
             mz_debug_build_thread = build_mz_debug_async()
-        aws.setup(
-            "aws-upgrade",
-            args.setup,
-            str(previous_tags[0]),
-            str(tag),
-            orchestratord_override=args.orchestratord_override,
-        )
-        for previous_tag in previous_tags[1:]:
-            aws.upgrade(str(previous_tag))
-        aws.upgrade(tag)
+        if args.setup:
+            aws.setup(
+                "aws-up",
+                args.setup,
+                str(previous_tags[0]),
+                str(tag),
+                orchestratord_override=args.orchestratord_override,
+            )
+            for previous_tag in previous_tags[1:]:
+                aws.upgrade(str(previous_tag))
+            aws.upgrade(tag)
         if args.test:
             print("--- Running tests")
             # Try waiting a bit, otherwise connection error, should be handled better
@@ -1040,15 +1072,11 @@ def workflow_aws_persistent_setup(
         aws.setup(PREFIX_AWS_PERSISTENT, True, tag)
         with c.override(testdrive(no_reset=True)):
             aws.connect(c)
-            c.testdrive(
-                dedent(
-                    """
+            c.testdrive(dedent("""
                > CREATE SOURCE counter FROM LOAD GENERATOR COUNTER
                > CREATE TABLE table (c INT)
                > CREATE MATERIALIZED VIEW mv AS SELECT count(*) FROM table
-            """
-                )
-            )
+            """))
     finally:
         aws.cleanup()
 
@@ -1078,18 +1106,12 @@ def workflow_aws_persistent_test(
 
             count = 1
 
-            c.testdrive(
-                dedent(
-                    """
+            c.testdrive(dedent("""
                > DELETE FROM table
-                """
-                )
-            )
+                """))
 
             while time.time() - start_time < args.runtime:
-                c.testdrive(
-                    dedent(
-                        f"""
+                c.testdrive(dedent(f"""
                    > SELECT 1
                    1
 
@@ -1107,9 +1129,7 @@ def workflow_aws_persistent_test(
 
                    > SELECT * FROM temp
                    {count}
-                """
-                    )
-                )
+                """))
 
                 count += 1
 
@@ -1178,6 +1198,18 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
                 f"orchestratord_version={get_tag(tag)}",
             ]
 
+        license_key = os.getenv("MZ_CI_LICENSE_KEY", "")
+        if license_key:
+            vars += [
+                "-var",
+                f"license_key={license_key}",
+            ]
+
+        vars += [
+            "-var",
+            f"environmentd_version={tag}",
+        ]
+
         if args.setup:
             print("--- Setup")
             spawn.runv(
@@ -1186,8 +1218,12 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
             )
             spawn.runv(["terraform", "init"], cwd=path)
             spawn.runv(["terraform", "validate"], cwd=path)
-            spawn.runv(["terraform", "plan"], cwd=path)
-            spawn.runv(["terraform", "apply", "-auto-approve", *vars], cwd=path)
+            spawn.runv(["terraform", "plan", *vars], cwd=path)
+            try:
+                spawn.runv(["terraform", "apply", "-auto-approve", *vars], cwd=path)
+            except:
+                # Sometimes fails for unknown reason, so just retry
+                spawn.runv(["terraform", "apply", "-auto-approve", *vars], cwd=path)
 
         gke_cluster = json.loads(
             spawn.capture(
@@ -1215,12 +1251,39 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
         )
 
         if args.setup:
-            print("--- Setup")
+            # For gcp-temporary, Terraform creates the Materialize instance
             state.kubectl_setup(
                 tag,
                 connection_strings["metadata_backend_url"],
                 connection_strings["persist_backend_url"],
+                skip_materialize_cr=True,
             )
+            # Wait for environmentd pod to be ready (not just Running)
+            print("--- Waiting for environmentd pod to be ready...")
+            for i in range(60):
+                try:
+                    ready = spawn.capture(
+                        [
+                            "kubectl",
+                            "get",
+                            "pods",
+                            "-l",
+                            "app=environmentd",
+                            "-n",
+                            "materialize-environment",
+                            "-o",
+                            "jsonpath={.items[0].status.conditions[?(@.type=='Ready')].status}",
+                        ],
+                        cwd=path,
+                    ).strip()
+                    if ready == "True":
+                        print("environmentd pod is ready!")
+                        break
+                except subprocess.CalledProcessError:
+                    pass
+                time.sleep(5)
+            else:
+                print("Warning: Timed out waiting for environmentd to be ready")
 
         if args.test:
             state.test(c, tag, args.run_testdrive_files, args.files)
@@ -1244,7 +1307,17 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
     path = MZ_ROOT / "test" / "terraform" / "azure-temporary"
     state = State(path)
 
-    spawn.runv(["bin/ci-builder", "run", "stable", "uv", "venv", str(path / "venv")])
+    spawn.runv(
+        [
+            "bin/ci-builder",
+            "run",
+            "stable",
+            "uv",
+            "venv",
+            "--clear",
+            str(path / "venv"),
+        ],
+    )
     venv_env = os.environ.copy()
     venv_env["PATH"] = f"{path/'venv'/'bin'}:{os.getenv('PATH')}"
     venv_env["VIRTUAL_ENV"] = str(path / "venv")
@@ -1290,14 +1363,27 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
                 f"orchestratord_version={get_tag(tag)}",
             ]
 
+        license_key = os.getenv("MZ_CI_LICENSE_KEY", "")
+        if license_key:
+            vars += [
+                "-var",
+                f"license_key={license_key}",
+            ]
+
+        vars += [
+            "-var",
+            f"environmentd_version={tag}",
+        ]
+
         if args.setup:
+            print("--- Setup")
             spawn.runv(
                 ["helm", "package", "../../../misc/helm-charts/operator/"],
                 cwd=path,
             )
             spawn.runv(["terraform", "init"], cwd=path, env=venv_env)
             spawn.runv(["terraform", "validate"], cwd=path, env=venv_env)
-            spawn.runv(["terraform", "plan"], cwd=path, env=venv_env)
+            spawn.runv(["terraform", "plan", *vars], cwd=path, env=venv_env)
             try:
                 spawn.runv(
                     ["terraform", "apply", "-auto-approve", *vars],
@@ -1349,7 +1435,33 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
                 tag,
                 connection_strings["metadata_backend_url"],
                 connection_strings["persist_backend_url"],
+                skip_materialize_cr=True,
             )
+            print("--- Waiting for environmentd pod to be ready...")
+            for i in range(60):
+                try:
+                    ready = spawn.capture(
+                        [
+                            "kubectl",
+                            "get",
+                            "pods",
+                            "-l",
+                            "app=environmentd",
+                            "-n",
+                            "materialize-environment",
+                            "-o",
+                            "jsonpath={.items[0].status.conditions[?(@.type=='Ready')].status}",
+                        ],
+                        cwd=path,
+                    ).strip()
+                    if ready == "True":
+                        print("environmentd pod is ready!")
+                        break
+                except subprocess.CalledProcessError:
+                    pass
+                time.sleep(5)
+            else:
+                print("Warning: Timed out waiting for environmentd to be ready")
 
         if args.test:
             state.test(c, tag, args.run_testdrive_files, args.files)

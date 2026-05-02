@@ -11,12 +11,7 @@ A secret securely stores sensitive credentials (like passwords and SSL keys) in 
 
 ## Syntax
 
-{{< diagram "create-secret.svg" >}}
-
-Field   | Use
---------|-----
-_name_  | The identifier for the secret.
-_value_ | The value for the secret. The _value_ expression may not reference any relations, and must be implicitly castable to `bytea`.
+{{% include-syntax file="examples/create_secret" example="syntax" %}}
 
 ## Examples
 
@@ -28,7 +23,7 @@ CREATE SECRET kafka_ca_cert AS decode('c2VjcmV0Cg==', 'base64');
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/create-secret.md" >}}
+{{% include-headless "/headless/sql-command-privileges/create-secret" %}}
 
 ## Related pages
 

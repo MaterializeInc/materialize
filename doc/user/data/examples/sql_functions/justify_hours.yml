@@ -1,0 +1,7 @@
+- name: "syntax"
+  code: |
+    justify_hours ( <interval> )
+  syntax_elements:
+    - name: "`<interval>`"
+      description: |
+        An [`interval`](/sql/types/interval/) value to justify. Returns a new interval such that 24-hour time periods are converted to days.

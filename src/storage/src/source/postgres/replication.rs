@@ -81,13 +81,16 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use differential_dataflow::AsCollection;
 use futures::{FutureExt, Stream as AsyncStream, StreamExt, TryStreamExt};
+use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
 use mz_postgres_util::PostgresError;
 use mz_postgres_util::{Client, simple_query_opt};
 use mz_repr::{Datum, DatumVec, Diff, Row};
-use mz_sql_parser::ast::{Ident, display::AstDisplay};
-use mz_storage_types::dyncfgs::{PG_OFFSET_KNOWN_INTERVAL, PG_SCHEMA_VALIDATION_INTERVAL};
+use mz_sql_parser::ast::Ident;
+use mz_sql_parser::ast::display::{AstDisplay, escaped_string_literal};
+use mz_storage_types::dyncfgs::PG_SCHEMA_VALIDATION_INTERVAL;
+use mz_storage_types::dyncfgs::PG_SOURCE_VALIDATE_TIMELINE;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
 use mz_timely_util::builder_async::{
@@ -103,7 +106,7 @@ use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::Concat;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::core::Map;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
 use tokio::sync::{mpsc, watch};
 use tokio_postgres::error::SqlState;
@@ -115,7 +118,13 @@ use crate::source::RawSourceCreationConfig;
 use crate::source::postgres::verify_schema;
 use crate::source::postgres::{DefiniteError, ReplicationError, SourceOutputInfo, TransientError};
 use crate::source::probe;
-use crate::source::types::{Probe, SignaledFuture, SourceMessage, StackedCollection};
+use crate::source::types::{FuelSize, Probe, SignaledFuture, SourceMessage, StackedCollection};
+
+/// A logical replication message from the server.
+type LogicalReplMsg = ReplicationMessage<LogicalReplicationMessage>;
+
+/// A decoded row from a transaction with source information.
+type DecodedRow = (u32, usize, Result<Row, DefiniteError>, Diff);
 
 /// Postgres epoch is 2000-01-01T00:00:00Z
 static PG_EPOCH: LazyLock<SystemTime> =
@@ -133,20 +142,19 @@ pub(crate) struct RewindRequest {
 }
 
 /// Renders the replication dataflow. See the module documentation for more information.
-pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
-    scope: G,
+pub(crate) fn render<'scope>(
+    scope: Scope<'scope, MzOffset>,
     config: RawSourceCreationConfig,
     connection: PostgresSourceConnection,
     table_info: BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>>,
-    rewind_stream: &Stream<G, RewindRequest>,
-    slot_ready_stream: &Stream<G, Infallible>,
+    rewind_stream: StreamVec<'scope, MzOffset, RewindRequest>,
+    slot_ready_stream: StreamVec<'scope, MzOffset, Infallible>,
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
     metrics: PgSourceMetrics,
 ) -> (
-    StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
-    Stream<G, Infallible>,
-    Option<Stream<G, Probe<MzOffset>>>,
-    Stream<G, ReplicationError>,
+    StackedCollection<'scope, MzOffset, (usize, Result<SourceMessage, DataflowError>)>,
+    StreamVec<'scope, MzOffset, Probe<MzOffset>>,
+    StreamVec<'scope, MzOffset, ReplicationError>,
     PressOnDropButton,
 ) {
     let op_name = format!("ReplicationReader({})", config.id);
@@ -154,7 +162,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
     let slot_reader = u64::cast_from(config.responsible_worker("slot"));
     let (data_output, data_stream) = builder.new_output();
-    let (_upper_output, upper_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     let (definite_error_handle, definite_errors) =
         builder.new_output::<CapacityContainerBuilder<_>>();
     let (probe_output, probe_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
@@ -174,12 +181,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
         let busy_signal = Arc::clone(&config.busy_signal);
         Box::pin(SignaledFuture::new(busy_signal, async move {
             let (id, worker_id) = (config.id, config.worker_id);
-            let [
-                data_cap_set,
-                upper_cap_set,
-                definite_error_cap_set,
-                probe_cap,
-            ]: &mut [_; 4] = caps.try_into().unwrap();
+            let [data_cap_set, definite_error_cap_set, probe_cap]: &mut [_; 3] =
+                caps.try_into().unwrap();
 
             if !config.responsible_for("slot") {
                 // Emit 0, to mark this worker as having started up correctly.
@@ -303,7 +306,12 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 std::future::pending::<()>().await;
                 return Ok(());
             };
-            upper_cap_set.downgrade([&resume_lsn]);
+            // If we don't set "offset_committed" now, it'll be stuck at 0 (the default value)
+            // until we finish processing the table snapshot. If the snapshot is large, that could be a long time.
+            // This confuses the ingestion lag calculation in the UI, causing it to yield erroneously high values.
+            for stat in config.statistics.values() {
+                stat.set_offset_committed(resume_lsn.offset);
+            }
             trace!(%id, "timely-{worker_id} replication reader started lsn={resume_lsn}");
 
             // Emitting an initial probe before we start waiting for rewinds ensures that we will
@@ -345,7 +353,10 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                         MzOffset::from(u64::MAX),
                                         Diff::ONE,
                                     );
-                                    data_output.give_fueled(&data_cap_set[0], update).await;
+                                    let size = update.fuel_size();
+                                    data_output
+                                        .give_fueled(&data_cap_set[0], update, size)
+                                        .await;
                                 }
                             }
                             definite_error_handle.give(
@@ -390,7 +401,10 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                 MzOffset::from(u64::MAX),
                                 Diff::ONE,
                             );
-                            data_output.give_fueled(&data_cap_set[0], update).await;
+                            let size = update.fuel_size();
+                            data_output
+                                .give_fueled(&data_cap_set[0], update, size)
+                                .await;
                         }
                     }
 
@@ -421,8 +435,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             // creating excessive progress tracking traffic when there are multiple small
             // transactions ready to go.
             let mut data_upper = resume_lsn;
-            // A stash of reusable vectors to convert from bytes::Bytes based data, which is not
-            // compatible with `columnation`, to Vec<u8> data that is.
             while let Some(event) = stream.as_mut().next().await {
                 use LogicalReplicationMessage::*;
                 use ReplicationMessage::*;
@@ -450,26 +462,24 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                 "new_upper={data_upper} tx_lsn={commit_lsn}",
                             );
                             data_upper = commit_lsn + 1;
-                            // We are about to ingest a transaction which has the possiblity to be
-                            // very big and we certainly don't want to hold the data in memory. For
-                            // this reason we eagerly downgrade the upper capability in order for
-                            // the reclocking machinery to mint a binding that includes
-                            // this transaction and therefore be able to pass the data of the
-                            // transaction through as we stream it.
-                            upper_cap_set.downgrade([&data_upper]);
                             while let Some((oid, output_index, event, diff)) = tx.try_next().await?
                             {
                                 let event = event.map_err(Into::into);
-                                let mut data = (oid, output_index, event);
+                                let data = (oid, output_index, event);
                                 if let Some(req) = rewinds.get(&output_index) {
                                     if commit_lsn <= req.snapshot_lsn {
-                                        let update = (data, MzOffset::from(0), -diff);
-                                        data_output.give_fueled(&data_cap_set[0], &update).await;
-                                        data = update.0;
+                                        let update = (data.clone(), MzOffset::from(0), -diff);
+                                        let size = update.fuel_size();
+                                        data_output
+                                            .give_fueled(&data_cap_set[0], update, size)
+                                            .await;
                                     }
                                 }
                                 let update = (data, commit_lsn, diff);
-                                data_output.give_fueled(&data_cap_set[0], &update).await;
+                                let size = update.fuel_size();
+                                data_output
+                                    .give_fueled(&data_cap_set[0], update, size)
+                                    .await;
                             }
                         }
                         _ => return Err(TransientError::BareTransactionEvent),
@@ -497,7 +507,10 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                                 data_cap_set[0].time().clone(),
                                                 Diff::ONE,
                                             );
-                                            data_output.give_fueled(&data_cap_set[0], update).await;
+                                            let size = update.fuel_size();
+                                            data_output
+                                                .give_fueled(&data_cap_set[0], update, size)
+                                                .await;
                                         }
                                     }
                                     definite_error_handle.give(
@@ -522,7 +535,10 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                         data_cap_set[0].time().clone(),
                                         Diff::ONE,
                                     );
-                                    data_output.give_fueled(&data_cap_set[0], update).await;
+                                    let size = update.fuel_size();
+                                    data_output
+                                        .give_fueled(&data_cap_set[0], update, size)
+                                        .await;
                                 }
                             }
                         }
@@ -541,7 +557,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     if rewinds.is_empty() {
                         data_cap_set.downgrade([&data_upper]);
                     }
-                    upper_cap_set.downgrade([&data_upper]);
                 }
             }
             // We never expect the replication stream to gracefully end
@@ -559,7 +574,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
         .cycle();
     let round_robin = Exchange::new(move |_| next_worker.next().unwrap());
     let replication_updates = data_stream
-        .map::<Vec<_>, _, _>(Clone::clone)
         .unary(round_robin, "PgCastReplicationRows", |_, _| {
             move |input, output| {
                 input.for_each_time(|time, data| {
@@ -588,12 +602,11 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
         })
         .as_collection();
 
-    let errors = definite_errors.concat(&transient_errors.map(ReplicationError::from));
+    let errors = definite_errors.concat(transient_errors.map(ReplicationError::from));
 
     (
         replication_updates,
-        upper_stream,
-        Some(probe_stream),
+        probe_stream,
         errors,
         button.press_on_drop(),
     )
@@ -615,11 +628,7 @@ async fn raw_stream<'a>(
     probe_output: &'a AsyncOutputHandle<MzOffset, CapacityContainerBuilder<Vec<Probe<MzOffset>>>>,
     probe_cap: &'a Capability<MzOffset>,
 ) -> Result<
-    Result<
-        impl AsyncStream<Item = Result<ReplicationMessage<LogicalReplicationMessage>, TransientError>>
-        + 'a,
-        DefiniteError,
-    >,
+    Result<impl AsyncStream<Item = Result<LogicalReplMsg, TransientError>> + 'a, DefiniteError>,
     TransientError,
 > {
     if let Err(err) = ensure_publication_exists(&*metadata_client, publication).await? {
@@ -631,8 +640,12 @@ async fn raw_stream<'a>(
     // Skip the timeline ID check for sources without a known timeline ID
     // (sources created before the timeline ID was added to the source details)
     if let Some(expected_timeline_id) = timeline_id {
-        if let Err(err) =
-            ensure_replication_timeline_id(&replication_client, expected_timeline_id).await?
+        if let Err(err) = ensure_replication_timeline_id(
+            &replication_client,
+            expected_timeline_id,
+            config.config.config_set(),
+        )
+        .await?
         {
             return Ok(Err(err));
         }
@@ -686,10 +699,10 @@ async fn raw_stream<'a>(
     // following the timely upper semantics.
     let lsn = PgLsn::from(resume_lsn.offset);
     let query = format!(
-        r#"START_REPLICATION SLOT "{}" LOGICAL {} ("proto_version" '1', "publication_names" '{}')"#,
+        r#"START_REPLICATION SLOT "{}" LOGICAL {} ("proto_version" '1', "publication_names" {})"#,
         Ident::new_unchecked(slot).to_ast_string_simple(),
         lsn,
-        publication,
+        escaped_string_literal(publication),
     );
     let copy_stream = match replication_client.copy_both_simple(&query).await {
         Ok(copy_stream) => copy_stream,
@@ -719,12 +732,11 @@ async fn raw_stream<'a>(
     );
 
     let (probe_tx, mut probe_rx) = watch::channel(None);
-    let config_set = Arc::clone(config.config.config_set());
+    let timestamp_interval = config.timestamp_interval;
     let now_fn = config.now_fn.clone();
     let max_lsn_task_handle =
         mz_ore::task::spawn(|| format!("pg_current_wal_lsn:{}", config.id), async move {
-            let mut probe_ticker =
-                probe::Ticker::new(|| PG_OFFSET_KNOWN_INTERVAL.get(&config_set), now_fn);
+            let mut probe_ticker = probe::Ticker::new(move || timestamp_interval, now_fn);
 
             while !probe_tx.is_closed() {
                 let probe_ts = probe_ticker.tick().await;
@@ -823,16 +835,13 @@ async fn raw_stream<'a>(
 /// message. The BEGIN message must have already been consumed from the stream before calling this
 /// function.
 fn extract_transaction<'a>(
-    stream: impl AsyncStream<
-        Item = Result<ReplicationMessage<LogicalReplicationMessage>, TransientError>,
-    > + 'a,
+    stream: impl AsyncStream<Item = Result<LogicalReplMsg, TransientError>> + 'a,
     metadata_client: &'a Client,
     commit_lsn: MzOffset,
     table_info: &'a mut BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>>,
     metrics: &'a PgSourceMetrics,
     publication: &'a str,
-) -> impl AsyncStream<Item = Result<(u32, usize, Result<Row, DefiniteError>, Diff), TransientError>> + 'a
-{
+) -> impl AsyncStream<Item = Result<DecodedRow, TransientError>> + 'a {
     use LogicalReplicationMessage::*;
     let mut row = Row::default();
     async_stream::try_stream!({
@@ -1068,15 +1077,23 @@ async fn ensure_publication_exists(
 async fn ensure_replication_timeline_id(
     replication_client: &Client,
     expected_timeline_id: &u64,
+    config_set: &ConfigSet,
 ) -> Result<Result<(), DefiniteError>, TransientError> {
     let timeline_id = mz_postgres_util::get_timeline_id(replication_client).await?;
     if timeline_id == *expected_timeline_id {
         Ok(Ok(()))
     } else {
-        Ok(Err(DefiniteError::InvalidTimelineId {
-            expected: *expected_timeline_id,
-            actual: timeline_id,
-        }))
+        if PG_SOURCE_VALIDATE_TIMELINE.get(config_set) {
+            Ok(Err(DefiniteError::InvalidTimelineId {
+                expected: *expected_timeline_id,
+                actual: timeline_id,
+            }))
+        } else {
+            tracing::warn!(
+                "Timeline ID mismatch ignored: expected={expected_timeline_id} actual={timeline_id}"
+            );
+            Ok(Ok(()))
+        }
     }
 }
 

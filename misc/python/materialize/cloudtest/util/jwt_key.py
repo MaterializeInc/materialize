@@ -30,18 +30,18 @@ def fetch_jwt(
         return res
 
     try:
-        res = retry(fetch, max_tries, [requests.exceptions.HTTPError])
+        res = retry(
+            fetch,
+            max_tries,
+            [requests.exceptions.HTTPError, requests.exceptions.ConnectionError],
+        )
     except requests.exceptions.HTTPError as e:
         res = e.response
-        LOGGER.error(
-            dedent(
-                f"""
+        LOGGER.error(dedent(f"""
                 e: {e}
                 res: {res}
                 res.text: {res.text}
-                """
-            )
-        )
+                """))
         raise
 
     access_token: str = res.json()["accessToken"]

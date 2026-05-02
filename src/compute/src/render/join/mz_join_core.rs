@@ -41,11 +41,10 @@ use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use mz_ore::future::yield_now;
 use mz_repr::Diff;
 use timely::container::{CapacityContainerBuilder, PushInto, SizableContainer};
+use timely::dataflow::Stream;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::OutputBuilderSession;
 use timely::dataflow::operators::{Capability, Operator};
-use timely::dataflow::{Scope, StreamCore};
-use timely::progress::timestamp::Timestamp;
 use timely::{Container, PartialOrder};
 use tracing::trace;
 
@@ -54,29 +53,27 @@ use tracing::trace;
 /// Each matching pair of records `(key, val1)` and `(key, val2)` are subjected to the `result` function,
 /// which produces something implementing `IntoIterator`, where the output collection will have an entry for
 /// every value returned by the iterator.
-pub(super) fn mz_join_core<G, Tr1, Tr2, L, I, YFn, C>(
-    arranged1: &Arranged<G, Tr1>,
-    arranged2: &Arranged<G, Tr2>,
+pub(super) fn mz_join_core<'scope, T, Tr1, Tr2, L, I, YFn, C>(
+    arranged1: Arranged<'scope, Tr1>,
+    arranged2: Arranged<'scope, Tr2>,
     result: L,
     yield_fn: YFn,
-) -> StreamCore<G, C>
+) -> Stream<'scope, T, C>
 where
-    G: Scope,
-    G::Timestamp: Lattice,
-    Tr1: TraceReader<Time = G::Timestamp, Diff = Diff> + Clone + 'static,
-    Tr2: for<'a> TraceReader<Key<'a> = Tr1::Key<'a>, Time = G::Timestamp, Diff = Diff>
-        + Clone
-        + 'static,
+    T: timely::progress::Timestamp + Lattice,
+    Tr1: TraceReader<Time = T, Diff = Diff> + Clone + 'static,
+    Tr2: for<'a> TraceReader<Key<'a> = Tr1::Key<'a>, Time = T, Diff = Diff> + Clone + 'static,
     L: FnMut(Tr1::Key<'_>, Tr1::Val<'_>, Tr2::Val<'_>) -> I + 'static,
     I: IntoIterator<Item: Data> + 'static,
     YFn: Fn(Instant, usize) -> bool + 'static,
-    C: Container + SizableContainer + PushInto<(I::Item, G::Timestamp, Diff)> + Data,
+    C: Container + SizableContainer + PushInto<(I::Item, T, Diff)> + Data,
 {
+    let scope = arranged1.stream.scope();
     let mut trace1 = arranged1.trace.clone();
     let mut trace2 = arranged2.trace.clone();
 
     arranged1.stream.binary_frontier(
-        &arranged2.stream,
+        arranged2.stream,
         Pipeline,
         Pipeline,
         "Join",
@@ -84,7 +81,7 @@ where
             let operator_id = info.global_id;
 
             // Acquire an activator to reschedule the operator when it has unfinished work.
-            let activator = arranged1.stream.scope().activator_for(info.address);
+            let activator = scope.activator_for(info.address);
 
             // Our initial invariants are that for each trace, physical compaction is less or equal the trace's upper bound.
             // These invariants ensure that we can reference observed batch frontiers from `_start_upper` onward, as long as
@@ -97,8 +94,8 @@ where
             // the physical compaction frontier of their corresponding trace.
             // Should we ever *drop* a trace, these are 1. much harder to maintain correctly, but 2. no longer used.
             use timely::progress::frontier::Antichain;
-            let mut acknowledged1 = Antichain::from_elem(<G::Timestamp>::minimum());
-            let mut acknowledged2 = Antichain::from_elem(<G::Timestamp>::minimum());
+            let mut acknowledged1 = Antichain::from_elem(<T>::minimum());
+            let mut acknowledged2 = Antichain::from_elem(<T>::minimum());
 
             // deferred work of batches from each input.
             let result_fn = Rc::new(RefCell::new(result));
@@ -222,7 +219,7 @@ where
                     let trace2 = trace2_option
                         .as_mut()
                         .expect("we only drop a trace in response to the other input emptying");
-                    let capability = capability.retain();
+                    let capability = capability.retain(0);
                     for batch1 in data.drain(..) {
                         // Ignore any pre-loaded data.
                         if PartialOrder::less_equal(&acknowledged1, batch1.lower()) {
@@ -278,7 +275,7 @@ where
                     let trace1 = trace1_option
                         .as_mut()
                         .expect("we only drop a trace in response to the other input emptying");
-                    let capability = capability.retain();
+                    let capability = capability.retain(0);
                     for batch2 in data.drain(..) {
                         // Ignore any pre-loaded data.
                         if PartialOrder::less_equal(&acknowledged2, batch2.lower()) {

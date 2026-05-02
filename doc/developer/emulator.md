@@ -4,7 +4,7 @@ The emulator is a version of materialize used primarily for local testing. User 
 
 ## How to profile the emulator
 
-Run the emulator using the following command to allow for local access to the heap dump endpoints for usage with the [debug tool](https://materialize.com/docs/self-managed/v25.1/integrations/mz-debug/).
+Run the emulator using the following command to allow for local access to the heap dump endpoints for usage with the [debug tool](https://materialize.com/docs/integrations/mz-debug/).
 
 ```bash
   docker run -d \

@@ -12,14 +12,14 @@
 use std::cmp::Ordering;
 use std::fmt;
 
-use openssl::pkey::{PKey, Private};
+use aws_lc_rs::signature::{Ed25519KeyPair, KeyPair};
+use mz_ore::secure::Zeroizing;
 use serde::de::{self, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::ser::{SerializeStruct, Serializer};
 use serde::{Deserialize, Serialize};
 use ssh_key::private::{Ed25519Keypair, Ed25519PrivateKey, KeypairData};
 use ssh_key::public::Ed25519PublicKey;
 use ssh_key::{HashAlg, LineEnding, PrivateKey};
-use zeroize::Zeroizing;
 
 /// A SSH key pair consisting of a public and private key.
 #[derive(Debug, Clone)]
@@ -32,14 +32,23 @@ pub struct SshKeyPair {
 impl SshKeyPair {
     /// Generates a new SSH key pair.
     ///
-    /// Ed25519 keys are generated via OpenSSL, using [`ssh_key`] to convert
+    /// Ed25519 keys are generated via aws-lc-rs, using [`ssh_key`] to convert
     /// them into the OpenSSH format.
     pub fn new() -> Result<SshKeyPair, anyhow::Error> {
-        let openssl_key = PKey::<Private>::generate_ed25519()?;
+        // Generate a random 32-byte Ed25519 seed and wrap in Zeroizing so it
+        // is erased on drop, preventing the intermediate buffer from lingering
+        // in memory.
+        let mut seed = Zeroizing::new([0u8; 32]);
+        aws_lc_rs::rand::fill(&mut *seed)
+            .map_err(|_| anyhow::anyhow!("random generation failed"))?;
+
+        // Derive the public key from the seed using aws-lc-rs.
+        let aws_key = Ed25519KeyPair::from_seed_unchecked(&*seed)
+            .map_err(|_| anyhow::anyhow!("Ed25519 key generation failed"))?;
 
         let key_pair_data = KeypairData::Ed25519(Ed25519Keypair {
-            public: Ed25519PublicKey::try_from(openssl_key.raw_public_key()?.as_slice())?,
-            private: Ed25519PrivateKey::try_from(openssl_key.raw_private_key()?.as_slice())?,
+            public: Ed25519PublicKey::try_from(aws_key.public_key().as_ref())?,
+            private: Ed25519PrivateKey::try_from(seed.as_slice())?,
         });
 
         let key_pair = PrivateKey::new(key_pair_data, "materialize")?;
@@ -250,7 +259,8 @@ impl SshKeyPairSet {
 
 #[cfg(test)]
 mod tests {
-    use openssl::pkey::{PKey, Private};
+    use aws_lc_rs::signature::{Ed25519KeyPair, KeyPair};
+    use mz_ore::secure::Zeroizing;
     use serde::{Deserialize, Serialize};
     use ssh_key::private::{Ed25519Keypair, Ed25519PrivateKey, KeypairData};
     use ssh_key::public::Ed25519PublicKey;
@@ -412,11 +422,15 @@ mod tests {
 
     impl LegacySshKeyPair {
         fn new() -> Result<Self, anyhow::Error> {
-            let openssl_key = PKey::<Private>::generate_ed25519()?;
+            let mut seed = Zeroizing::new([0u8; 32]);
+            aws_lc_rs::rand::fill(&mut *seed)
+                .map_err(|_| anyhow::anyhow!("random generation failed"))?;
+            let aws_key = Ed25519KeyPair::from_seed_unchecked(&*seed)
+                .map_err(|_| anyhow::anyhow!("Ed25519 key generation failed"))?;
 
             let key_pair = KeypairData::Ed25519(Ed25519Keypair {
-                public: Ed25519PublicKey::try_from(openssl_key.raw_public_key()?.as_slice())?,
-                private: Ed25519PrivateKey::try_from(openssl_key.raw_private_key()?.as_slice())?,
+                public: Ed25519PublicKey::try_from(aws_key.public_key().as_ref())?,
+                private: Ed25519PrivateKey::try_from(seed.as_slice())?,
             });
 
             let private_key_wrapper = PrivateKey::new(key_pair, "materialize")?;

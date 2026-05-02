@@ -206,7 +206,7 @@ impl BalancerService {
             cfg.config_sync_file_path.as_deref(),
         ) {
             (Some(key), None) => {
-                mz_dyncfg_launchdarkly::sync_launchdarkly_to_configset(
+                let _ = mz_dyncfg_launchdarkly::sync_launchdarkly_to_configset(
                     configs.clone(),
                     &BUILD_INFO,
                     |builder| {
@@ -257,11 +257,10 @@ impl BalancerService {
                     },
                 )
                 .await
-                .inspect_err(|e| warn!("LaunchDarkly sync error: {e}"))
-                .ok();
+                .inspect_err(|e| warn!("LaunchDarkly sync error: {e}"));
             }
             (None, Some(path)) => {
-                mz_dyncfg_file::sync_file_to_configset(
+                let _ = mz_dyncfg_file::sync_file_to_configset(
                     configs.clone(),
                     path,
                     cfg.config_sync_timeout,
@@ -281,8 +280,7 @@ impl BalancerService {
                 // (unlike the adapter, but it has a durable catalog). The
                 // ConfigSet defaults have been chosen to be good enough if this
                 // is the case.
-                .inspect_err(|e| warn!("File config sync error: {e}"))
-                .ok();
+                .inspect_err(|e| warn!("File config sync error: {e}"));
             }
             (Some(_), Some(_)) => panic!(
                 "must provide either config_sync_file_path or launchdarkly_sdk_key for config syncing",
@@ -670,11 +668,21 @@ impl PgwireBalancer {
             .tenant
             .as_ref()
             .map(|tenant| metrics.tenant_connections(tenant));
-        let Ok(mut mz_stream) =
-            Self::init_stream(conn, resolved.addr, resolved.password, params, internal_tls).await
-        else {
-            return Ok(());
-        };
+        let mut mz_stream =
+            match Self::init_stream(conn, resolved.addr, resolved.password, params, internal_tls)
+                .await
+            {
+                Ok(stream) => stream,
+                Err(e) => {
+                    error!("failed to connect to upstream server: {e}");
+                    return conn
+                        .send(ErrorResponse::fatal(
+                            SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
+                            "upstream server not available",
+                        ))
+                        .await;
+                }
+            };
 
         let mut client_counter = CountingConn::new(conn.inner_mut());
 
@@ -743,6 +751,25 @@ impl PgwireBalancer {
         mz_stream.write_all(&buf).await?;
         let client_stream = conn.inner_mut();
 
+        // This early return is important in self managed with SASL mode.
+        // The below code specifically looks for cleartext password requests, but in SASL mode
+        // the server will send a different message type (SASLInitialResponse) that we should
+        // not try to interpret or respond to.
+        // "Why not? That code looks like it should fall back fine?" You may ask.
+        // The below block unconditionally reads 9 bytes from the server. If we don't have
+        // a password or the message isn't a cleartext password request, we forward those 9 bytes
+        // to the client. Then we return the stream to the caller, who will continue shuffling bytes.
+        // The problem is that with TLS enabled between balancerd <-> client, flushing the first 9 bytes
+        // before copying bidirectionally will have the side effect of splitting the auth handshake into
+        // two SSL records. Pgbouncer misbehaves in this scenario, and fails the connection.
+        // PGbouncer shouldn't do this! It's a common footgun of protocols over TLS.
+        // So common in fact that PGbouncer already hit and fixed this issue on the bouncer <-> client side:
+        // once before: https://github.com/pgbouncer/pgbouncer/pull/1058.
+        // We will work to upstream a fix, but in the meantime, this early return avoids the issue entirely.
+        if password.is_none() {
+            return Ok(mz_stream);
+        }
+
         // Read a single backend message, which may be a password request. Send ours if so.
         // Otherwise start shuffling bytes. message type (len 1, 'R') + message len (len 4, 8_i32) +
         // auth type (len 4, 3_i32).
@@ -810,34 +837,43 @@ impl mz_server_core::Server for PgwireBalancer {
                             mut params,
                         }) => {
                             let mut conn = FramedConn::new(conn);
+                            let rejected =
+                                SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION;
                             let peer_addr = match peer_addr {
                                 Ok(addr) => addr.ip(),
                                 Err(e) => {
                                     error!("Invalid peer_addr {:?}", e);
                                     return Ok(conn
                                         .send(ErrorResponse::fatal(
-                                            SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
+                                            rejected,
                                             "invalid peer address",
                                         ))
                                         .await?);
                                 }
                             };
-                            debug!(%conn_uuid, %peer_addr,  "starting new pgwire connection in balancer");
+                            debug!(
+                                %conn_uuid, %peer_addr,
+                                "starting new pgwire connection in balancer",
+                            );
                             let prev =
                                 params.insert(CONN_UUID_KEY.to_string(), conn_uuid.to_string());
                             if prev.is_some() {
                                 return Ok(conn
                                     .send(ErrorResponse::fatal(
-                                        SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
+                                        rejected,
                                         format!("invalid parameter '{CONN_UUID_KEY}'"),
                                     ))
                                     .await?);
                             }
 
-                            if let Some(_) = params.insert(MZ_FORWARDED_FOR_KEY.to_string(), peer_addr.to_string().clone()) {
+                            let forwarded_for = params.insert(
+                                MZ_FORWARDED_FOR_KEY.to_string(),
+                                peer_addr.to_string().clone(),
+                            );
+                            if let Some(_) = forwarded_for {
                                 return Ok(conn
                                     .send(ErrorResponse::fatal(
-                                        SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
+                                        rejected,
                                         format!("invalid parameter '{MZ_FORWARDED_FOR_KEY}'"),
                                     ))
                                     .await?);
@@ -1177,7 +1213,7 @@ impl mz_server_core::Server for HttpsBalancer {
             let active_guard = inner_metrics.active_connections();
             let result: Result<_, anyhow::Error> = Box::pin(async move {
                 let peer_addr = peer_addr.context("fetching peer addr")?;
-                let (client_stream, servername): (Box<dyn ClientStream>, Option<String>) =
+                let (mut client_stream, servername): (Box<dyn ClientStream>, Option<String>) =
                     match tls_context {
                         Some(tls_context) => {
                             let mut ssl_stream =
@@ -1206,8 +1242,31 @@ impl mz_server_core::Server for HttpsBalancer {
                     .tenant
                     .as_ref()
                     .map(|tenant| inner_metrics.tenant_connections(tenant));
-
-                let mut mz_stream = TcpStream::connect(resolved.addr).await?;
+                let mut mz_stream = match TcpStream::connect(resolved.addr).await {
+                    Ok(stream) => stream,
+                    Err(e) => {
+                        error!("failed to connect to upstream server: {e}");
+                        let body = "upstream server not available";
+                        // We know this is an HTTPs stream (see name
+                        // HttpsBalancer), but we actually don't care what type
+                        // of traffic it is and we only use raw tcp streams.In
+                        // order to respond with HTTP we have to write this as a
+                        // raw http message.
+                        let response = format!(
+                            "HTTP/1.1 502 Bad Gateway\r\n\
+                             Content-Type: text/plain\r\n\
+                             Content-Length: {}\r\n\
+                             Connection: close\r\n\
+                             \r\n\
+                             {}",
+                            body.len(),
+                            body
+                        );
+                        let _ = client_stream.write_all(response.as_bytes()).await;
+                        let _ = client_stream.shutdown().await;
+                        return Ok(());
+                    }
+                };
 
                 if inject_proxy_headers {
                     // Write the tcp proxy header
@@ -1342,7 +1401,7 @@ impl Resolver {
 
                         let auth_response = auth.authenticate(user, &password).await;
                         let auth_session = match auth_response {
-                            Ok(auth_session) => auth_session,
+                            Ok((auth_session, _)) => auth_session,
                             Err(e) => {
                                 warn!("pgwire connection failed authentication: {}", e);
                                 // TODO: fix error codes.

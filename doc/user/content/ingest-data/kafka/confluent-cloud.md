@@ -120,6 +120,6 @@ of the following steps:
     connection to Confluent Cloud Kafka using SASL authentication and credentials
     securely stored as secrets in Materialize's secret management system. For
     input formats, we used `JSON`, but you can also ingest Kafka messages
-    formatted in e.g. [Avro and Protobuf](/sql/create-source/kafka/#supported-formats).
+    formatted in other supported formats; e.g., [Avro and CSV](/sql/create-source/kafka/#syntax).
     You can find more details about the various different supported formats and
     possible configurations in the [reference documentation](/sql/create-source/kafka/).

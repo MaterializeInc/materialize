@@ -58,3 +58,66 @@ query T
 SELECT NULL IS NOT DISTINCT FROM NULL
 ----
 true
+
+# Test that implicit casts work correctly
+query T
+SELECT 1::int4 IS DISTINCT FROM 2::int8
+----
+true
+
+query T
+SELECT 1::int4 IS DISTINCT FROM 1::int8
+----
+false
+
+query T
+SELECT 1::int4 IS NOT DISTINCT FROM 1::int8
+----
+true
+
+query T
+SELECT 1 IS DISTINCT FROM 1.0
+----
+false
+
+query T
+SELECT 1 IS NOT DISTINCT FROM 1.0
+----
+true
+
+# Test that incompatible types produce proper type errors
+statement error invalid input syntax for type integer
+SELECT 1 IS DISTINCT FROM 'hello'
+
+statement error invalid input syntax for type integer
+SELECT 1 IS NOT DISTINCT FROM 'hello'
+
+# Complex join tests with IS DISTINCT FROM / IS NOT DISTINCT FROM
+
+statement ok
+CREATE TABLE database1_t0(c0 INT , c1 VARCHAR , c2 VARCHAR(500), c3 INT );
+
+statement ok
+CREATE TABLE database1_t1(c0 INT , c1 VARCHAR(500) );
+
+statement ok
+CREATE VIEW database1_v0(c0) AS SELECT CAST(database1_t1.c0 AS BOOLEAN) FROM database1_t1 OFFSET 1275367570;
+
+query ITTIIT
+SELECT database1_t0.c0, database1_t0.c1, database1_t0.c2, database1_t0.c3, database1_t1.c0, database1_t1.c1, database1_v0.c0 FROM database1_v0, database1_t0 LEFT  JOIN database1_t1 ON ((database1_t0.c2)<>(database1_t0.c1)) WHERE ((database1_t0.c1)IS NOT DISTINCT FROM('d'));
+----
+
+statement ok
+DROP TABLE database1_t1 CASCADE;
+
+statement ok
+CREATE TABLE database1_t1(c0 INT , c1 BOOLEAN , c2 INT );
+
+statement error operator does not exist: boolean <> double precision
+SELECT * FROM database1_t1 RIGHT  JOIN  (SELECT SQRT(773097233) AS col0 FROM database1_t1) AS sub0  ON ((database1_t1.c1)IS NOT DISTINCT FROM(sub0.col0));
+
+statement ok
+CREATE TABLE t0(c0 INT , c1 BOOLEAN );
+
+statement error operator does not exist: boolean <> double precision
+SELECT t0.c0, t0.c1 FROM t0 INNER  JOIN  (SELECT CBRT(t0.c0) AS col0 FROM t0) AS sub0  ON ((true)IS NOT DISTINCT FROM(sub0.col0)) WHERE t0.c1 ORDER BY (NOT t0.c1) ASC;

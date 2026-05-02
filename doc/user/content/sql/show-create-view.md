@@ -11,7 +11,7 @@ menu:
 ## Syntax
 
 ```sql
-SHOW [REDACTED] CREATE VIEW <view_name>
+SHOW [REDACTED] CREATE VIEW <view_name>;
 ```
 
 {{< yaml-table data="show_create_redacted_option" >}}
@@ -33,8 +33,7 @@ SHOW CREATE VIEW my_view;
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/show-create-view.md"
->}}
+{{% include-headless "/headless/sql-command-privileges/show-create-view" %}}
 
 ## Related pages
 

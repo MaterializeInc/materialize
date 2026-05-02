@@ -314,7 +314,7 @@ impl Value for Duration {
             o => {
                 return Err(VarParseError::InvalidParameterValue {
                     invalid_values: vec![o.to_string()],
-                    reason: "expected us, ms, s, min, h, or d but got {o:?}".to_string(),
+                    reason: format!("expected us, ms, s, min, h, or d but got {o:?}"),
                 });
             }
         };

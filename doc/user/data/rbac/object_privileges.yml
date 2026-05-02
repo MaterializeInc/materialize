@@ -39,6 +39,7 @@ rows:
       - `CREATEROLE`
       - `CREATEDB`
       - `CREATECLUSTER`
+      - `CREATENETWORKPOLICY`
 
   - Object: "`TABLE`"
     Privileges: |

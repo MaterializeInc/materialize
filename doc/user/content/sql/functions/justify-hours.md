@@ -11,7 +11,7 @@ converted to days.
 
 ## Signatures
 
-{{< diagram "func-justify-hours.svg" >}}
+{{% include-syntax file="examples/sql_functions/justify_hours" example="syntax" %}}
 
 Parameter | Type                                                                                                                                                                                            | Description
 ----------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------

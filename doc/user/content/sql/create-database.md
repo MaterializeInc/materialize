@@ -6,35 +6,17 @@ menu:
     parent: 'commands'
 ---
 
-`CREATE DATABASE` creates a new database.
-
-## Conceptual framework
-
-Materialize mimics SQL standard's namespace hierarchy, which is:
-
-- Databases (highest level)
-- Schemas
-- Tables, views, sources
-- Columns (lowest level)
-
-Each layer in the hierarchy can contain elements directly beneath it. In this
-instance, databases can contain schemas.
-
-For more information, see [Namespaces](../namespaces).
+Use `CREATE DATABASE` to create a new database.
 
 ## Syntax
 
-{{< diagram "create-database.svg" >}}
-
-Field | Use
-------|-----
-**IF NOT EXISTS** | If specified, _do not_ generate an error if a database of the same name already exists. <br/><br/>If _not_ specified, throw an error if a database of the same name already exists. _(Default)_
-_database&lowbar;name_ | A name for the database.
+{{% include-syntax file="examples/create_database" example="syntax" %}}
 
 ## Details
 
-For details about databases, see [Namespaces: Database
-details](../namespaces/#database-details).
+Databases can contain schemas. By default, each database has a schema called
+`public`. For more information about databases, see
+[Namespaces](/sql/namespaces).
 
 ## Examples
 
@@ -53,8 +35,7 @@ my_db
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/create-database.md"
->}}
+{{% include-headless "/headless/sql-command-privileges/create-database" %}}
 
 ## Related pages
 

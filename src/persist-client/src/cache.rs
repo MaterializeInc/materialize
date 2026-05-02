@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 
 use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
+use mz_dyncfg::Config;
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task::{AbortOnDropHandle, JoinHandle};
@@ -39,7 +40,7 @@ use crate::internal::cache::BlobMemCache;
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{LockMetrics, Metrics, MetricsBlob, MetricsConsensus, ShardMetrics};
 use crate::internal::state::TypedState;
-use crate::internal::watch::StateWatchNotifier;
+use crate::internal::watch::{AwaitableState, StateWatchNotifier};
 use crate::rpc::{PubSubClientConnection, PubSubSender, ShardSubscriptionToken};
 use crate::schema::SchemaCacheMaps;
 use crate::{Diagnostics, PersistClient, PersistConfig, PersistLocation, ShardId};
@@ -109,6 +110,39 @@ impl PersistClientCache {
             &MetricsRegistry::new(),
             |_, _| PubSubClientConnection::noop(),
         )
+    }
+
+    #[cfg(feature = "turmoil")]
+    /// Create a [PersistClientCache] for use in turmoil tests.
+    ///
+    /// Turmoil wants to run all software under test in a single thread, so we disable the
+    /// (multi-threaded) isolated runtime.
+    pub fn new_for_turmoil() -> Self {
+        use crate::rpc::NoopPubSubSender;
+
+        let cfg = PersistConfig::new_for_tests();
+        let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
+
+        let pubsub_sender: Arc<dyn PubSubSender> = Arc::new(NoopPubSubSender);
+        let _pubsub_receiver_task = mz_ore::task::spawn(|| "noop", async {});
+
+        let state_cache = Arc::new(StateCache::new(
+            &cfg,
+            Arc::clone(&metrics),
+            Arc::clone(&pubsub_sender),
+        ));
+        let isolated_runtime = IsolatedRuntime::new_disabled();
+
+        PersistClientCache {
+            cfg,
+            metrics,
+            blob_by_uri: Mutex::new(BTreeMap::new()),
+            consensus_by_uri: Mutex::new(BTreeMap::new()),
+            isolated_runtime: Arc::new(isolated_runtime),
+            state_cache,
+            pubsub_sender,
+            _pubsub_receiver_task,
+        }
     }
 
     /// Returns the [PersistConfig] being used by this cache.
@@ -209,7 +243,6 @@ impl PersistClientCache {
                     x.key(),
                     Box::new(self.cfg.clone()),
                     self.metrics.s3_blob.clone(),
-                    Arc::clone(&self.cfg.configs),
                 )
                 .await?;
                 let blob = retry_external(&self.metrics.retries.external.blob_open, || {
@@ -571,6 +604,7 @@ pub(crate) struct LockingTypedState<K, V, T, D> {
     cfg: Arc<PersistConfig>,
     metrics: Arc<Metrics>,
     shard_metrics: Arc<ShardMetrics>,
+    update_semaphore: AwaitableState<Option<tokio::time::Instant>>,
     /// A [SchemaCacheMaps<K, V>], but stored as an Any so the `: Codec` bounds
     /// don't propagate to basically every struct in persist.
     schema_cache: Arc<dyn Any + Send + Sync>,
@@ -586,6 +620,7 @@ impl<K, V, T: Debug, D> Debug for LockingTypedState<K, V, T, D> {
             cfg: _cfg,
             metrics: _metrics,
             shard_metrics: _shard_metrics,
+            update_semaphore: _,
             schema_cache: _schema_cache,
             _subscription_token,
         } = self;
@@ -612,6 +647,7 @@ impl<K: Codec, V: Codec, T, D> LockingTypedState<K, V, T, D> {
             state: RwLock::new(initial_state),
             cfg: Arc::clone(&cfg),
             shard_metrics: metrics.shards.shard(&shard_id, &diagnostics.shard_name),
+            update_semaphore: AwaitableState::new(None),
             schema_cache: Arc::new(SchemaCacheMaps::<K, V>::new(&metrics.schema)),
             metrics,
             _subscription_token: subscription_token,
@@ -624,6 +660,14 @@ impl<K: Codec, V: Codec, T, D> LockingTypedState<K, V, T, D> {
             .expect("K and V match")
     }
 }
+
+pub(crate) const STATE_UPDATE_LEASE_TIMEOUT: Config<Duration> = Config::new(
+    "persist_state_update_lease_timeout",
+    Duration::from_secs(1),
+    "The amount of time for a command to wait for a previous command to finish before executing. \
+        (If zero, commands will not wait for others to complete.) Higher values reduce database contention \
+        at the cost of higher worst-case latencies for individual requests.",
+);
 
 impl<K, V, T, D> LockingTypedState<K, V, T, D> {
     pub(crate) fn shard_id(&self) -> &ShardId {
@@ -684,6 +728,74 @@ impl<K, V, T, D> LockingTypedState<K, V, T, D> {
         ret
     }
 
+    /// We want to _mostly_ just attempt a single CaS against the same state at once, since
+    /// only one concurrent CaS can succeed. However, we also want to guard against a
+    /// single hung update blocking all progress globally. We manage this with a shared state,
+    /// tracking whether a request is in flight and when it times out. If the timeout is never hit,
+    /// this behaves like a semaphore with limit 1... but if our requests _are_ timing out, future
+    /// requests will only wait for a bounded time before retrying, and one of those retries will
+    /// be able to claim that lease and make progress.
+    pub(crate) async fn lease_for_update(&self) -> impl Drop {
+        use tokio::time::Instant;
+
+        let timeout = STATE_UPDATE_LEASE_TIMEOUT.get(&self.cfg);
+
+        struct DropLease(Option<(AwaitableState<Option<Instant>>, Instant)>);
+
+        impl Drop for DropLease {
+            fn drop(&mut self) {
+                if let Some((state, time)) = self.0.take() {
+                    // Clear the timeout if it hasn't changed since we set it.
+                    state.maybe_modify(|s| {
+                        if s.is_some_and(|t| t == time) {
+                            *s.get_mut() = None;
+                        }
+                    })
+                }
+            }
+        }
+
+        // Special case: if the timeout is set to zero, go ahead without taking a lease.
+        if timeout.is_zero() {
+            return DropLease(None);
+        }
+
+        let timeout_state = self.update_semaphore.clone();
+        loop {
+            let now = tokio::time::Instant::now();
+            let expires_at = now + timeout;
+            // Claim the lease if there isn't one, or if the current lease has expired.
+            let maybe_leased = timeout_state.maybe_modify(|state| {
+                if let Some(other_expires_at) = **state
+                    && other_expires_at > now
+                {
+                    // Still locked: sleep until the deadline and try again.
+                    Err(other_expires_at)
+                } else {
+                    *state.get_mut() = Some(expires_at);
+                    Ok(())
+                }
+            });
+
+            match maybe_leased {
+                Ok(()) => {
+                    break DropLease(Some((timeout_state, expires_at)));
+                }
+                Err(other_expires_at) => {
+                    // Wait until either the lease has dropped or timed out, whichever is first.
+                    // If there are a lot of clients trying to update the same state, this may
+                    // cause significant lock contention... but the lock is only briefly held,
+                    // and anyways that's still cheaper than contending on the remote database.
+                    let _ = tokio::time::timeout_at(
+                        other_expires_at,
+                        timeout_state.wait_while(|s| s.is_some()),
+                    )
+                    .await;
+                }
+            }
+        }
+    }
+
     pub(crate) fn notifier(&self) -> &StateWatchNotifier {
         &self.notifier
     }
@@ -692,15 +804,17 @@ impl<K, V, T, D> LockingTypedState<K, V, T, D> {
 #[cfg(test)]
 mod tests {
     use std::ops::Deref;
+    use std::pin::pin;
     use std::str::FromStr;
     use std::sync::atomic::{AtomicBool, Ordering};
 
+    use super::*;
+    use crate::rpc::NoopPubSubSender;
     use futures::stream::{FuturesUnordered, StreamExt};
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_ore::task::spawn;
     use mz_ore::{assert_err, assert_none};
-
-    use super::*;
+    use tokio::sync::oneshot;
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
@@ -815,6 +929,7 @@ mod tests {
             )
             .await
         })
+        .into_tokio_handle()
         .await;
         assert_err!(res);
         assert_eq!(states.initialized_count(), 0);
@@ -975,6 +1090,120 @@ mod tests {
 
         for _ in 0..COUNT {
             let _ = futures.next().await.unwrap();
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn update_semaphore() {
+        // Check that the update lease mechanism is not susceptible to futurelock.
+        // If there is an issue, this test will time out.
+        mz_ore::test::init_logging();
+
+        let shard_id = ShardId::new();
+        let persist_config = Arc::new(PersistConfig::new_for_tests());
+        let pubsub = Arc::new(NoopPubSubSender);
+        let state: LockingTypedState<String, (), u64, i64> = LockingTypedState::new(
+            shard_id,
+            TypedState::new(
+                DUMMY_BUILD_INFO.semver_version(),
+                shard_id,
+                "host".into(),
+                0,
+            ),
+            Arc::new(Metrics::new(&*persist_config, &MetricsRegistry::new())),
+            persist_config,
+            pubsub.subscribe(&shard_id),
+            &Diagnostics::for_tests(),
+        );
+
+        // Initialize three futures, all of which will grab a lease and then poll a oneshot,
+        // which allows us to externally trigger which ones will complete.
+        let mk_future = || {
+            let (tx, rx) = oneshot::channel();
+            let future = async {
+                let lease = state.lease_for_update().await;
+                let () = rx.await.unwrap();
+                drop(lease);
+            };
+            (future, tx)
+        };
+
+        let (one, _one_tx) = mk_future();
+        let (two, _two_tx) = mk_future();
+        let (three, three_tx) = mk_future();
+        let mut one = pin!(one);
+        let mut two = pin!(two);
+        let mut three = pin!(three);
+
+        // Poll all the futures, but fall through to the default case, since none are ready.
+        tokio::select! { biased;
+            _ = &mut one => { unreachable!() }
+            _ = &mut two => { unreachable!() }
+            _ = &mut three => { unreachable!() }
+            _ = async {} => {}
+        }
+
+        // Allow the third future to complete.
+        three_tx.send(()).unwrap();
+
+        // Poll all the futures but the second future. This shouldn't hang, since the third future
+        // is now ready to go and the others should eventually time out.
+        tokio::select! { biased;
+            _ = &mut one => { unreachable!() }
+            _ = &mut three => {  }
+        }
+    }
+
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn update_semaphore_stress() {
+        // Check that the update lease mechanism is not susceptible to futurelock.
+        // If there is an issue, this test will time out.
+        mz_ore::test::init_logging();
+
+        const TIMEOUT: Duration = Duration::from_millis(100);
+        const COUNT: u64 = 100;
+
+        let shard_id = ShardId::new();
+        let persist_config = Arc::new(PersistConfig::new_for_tests());
+        persist_config.set_config(&STATE_UPDATE_LEASE_TIMEOUT, TIMEOUT);
+        let pubsub = Arc::new(NoopPubSubSender);
+        let state: LockingTypedState<String, (), u64, i64> = LockingTypedState::new(
+            shard_id,
+            TypedState::new(
+                DUMMY_BUILD_INFO.semver_version(),
+                shard_id,
+                "host".into(),
+                0,
+            ),
+            Arc::new(Metrics::new(&*persist_config, &MetricsRegistry::new())),
+            persist_config,
+            pubsub.subscribe(&shard_id),
+            &Diagnostics::for_tests(),
+        );
+
+        let mut futures = (0..(COUNT * 3))
+            .map(async |i| {
+                state.lease_for_update().await;
+                // Either hang forever, succeed quickly, or succeed after hitting the timeout.
+                match i % 3 {
+                    0 => {
+                        let () = std::future::pending().await;
+                    }
+                    1 => {
+                        tokio::time::sleep(Duration::from_millis(i)).await;
+                    }
+                    _ => {
+                        tokio::time::sleep(Duration::from_millis(i) + TIMEOUT).await;
+                    }
+                }
+            })
+            .collect::<FuturesUnordered<_>>();
+
+        // All the futures that don't themselves hang forever should resolve.
+        for _ in 0..(COUNT * 2) {
+            futures.next().await.unwrap();
         }
     }
 }

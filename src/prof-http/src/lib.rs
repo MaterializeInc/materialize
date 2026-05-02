@@ -60,7 +60,7 @@ pub fn router(build_info: &'static BuildInfo) -> Router {
             routing::post(move |form| handle_post(form, build_info)),
         )
         .route("/heap", routing::get(handle_get_heap))
-        .route("/static/*path", routing::get(handle_static))
+        .route("/static/{*path}", routing::get(handle_static))
 }
 
 #[allow(dead_code)]
@@ -102,7 +102,9 @@ async fn time_prof(
         } else {
             ctl_lock = if let Some(ctl) = jemalloc_pprof::PROF_CTL.as_ref() {
                 let mut borrow = ctl.lock().await;
-                borrow.deactivate().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+                borrow.deactivate().map_err(|e| {
+                    (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+                })?;
                 Some(borrow)
             } else {
                 None

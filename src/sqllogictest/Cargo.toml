@@ -10,17 +10,17 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.100"
-bytes = "1.10.1"
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
-clap = { version = "4.5.23", features = ["derive"] }
-dec = "0.4.8"
-fallible-iterator = "0.2.0"
-futures = "0.3.31"
-itertools = "0.14.0"
-junit-report = "0.8.3"
-maplit = "1.0.2"
-md-5 = "0.10.6"
+anyhow.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+clap.workspace = true
+dec.workspace = true
+fallible-iterator.workspace = true
+futures.workspace = true
+itertools.workspace = true
+junit-report.workspace = true
+maplit.workspace = true
+md-5.workspace = true
 mz-adapter-types = { path = "../adapter-types" }
 mz-authenticator = { path = "../authenticator", default-features = false }
 mz-build-info = { path = "../build-info" }
@@ -43,28 +43,24 @@ mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-storage-types = { path = "../storage-types" }
 mz-tracing = { path = "../tracing" }
-postgres-protocol = { version = "0.6.5" }
-regex = "1.12.2"
-reqwest = { version = "0.11.13", features = ["json"] }
-shell-words = "1.1.0"
-serde_json = "1.0.145"
-tempfile = "3.23.0"
-time = "0.3.17"
-tracing = "0.1.37"
-tokio = "1.44.1"
-tokio-postgres = { version = "0.7.8", features = [
+postgres-protocol.workspace = true
+regex.workspace = true
+reqwest.workspace = true
+shell-words.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+time.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+tokio-postgres = { workspace = true, features = [
     "with-chrono-0_4",
     "with-uuid-1",
     "with-serde_json-1",
 ] }
-tokio-stream = { version = "0.1.17", features = ["net"] }
-tower-http = { version = "0.6.6", features = ["cors"] }
-uuid = "1.18.1"
-walkdir = "2.5.0"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+tokio-stream = { workspace = true, features = ["net"] }
+tower-http.workspace = true
+uuid.workspace = true
+walkdir.workspace = true
 
 [features]
-default = ["workspace-hack"]
+default = []

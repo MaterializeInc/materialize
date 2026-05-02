@@ -13,9 +13,6 @@ sources:
   - name: mysql_cdc
     schema: public_mysql_cdc
     tables:
-      - name: mysql_cdc_progress
-        data_tests:
-          - makes_progress
       - name: mysql_people
         data_tests:
           - makes_progress

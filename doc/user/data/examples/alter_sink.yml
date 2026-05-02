@@ -1,12 +1,51 @@
-- name: "syntax"
+- name: "syntax-set-from"
   code: |
-    ALTER SINK <sink_name> SET FROM <relation_name>;
+    ALTER SINK <name> SET FROM <relation_name>;
+  syntax_elements:
+    - name: |
+        `<name>`
+      description: |
+        The name of the sink you want to change.
+    - name: |
+        `<relation_name>`
+      description: |
+        The name of the relation you want to sink from.
+- name: "syntax-rename"
+  code: |
+    ALTER SINK <name> RENAME TO <new_name>;
+  syntax_elements:
+    - name: "`<name>`"
+      description: |
+        The current name of the sink.
+    - name: "`<new_name>`"
+      description: |
+        The new name of the sink.
+  addenda: |
+    See also [Renaming restrictions](/sql/identifiers/#renaming-restrictions).
+
+- name: "syntax-change-owner"
+  code: |
+    ALTER SINK <name> OWNER TO <new_owner_role>;
+  syntax_elements:
+    - name: "`<name>`"
+      description: |
+        The name of the sink you want to change ownership of.
+    - name: "`<new_owner_role>`"
+      description: |
+        The new owner of the sink.
+  addenda: |
+    To change the owner, you must be a current owner as well as have membership
+    in the `<new_owner_role>`.
 
 - name: "alter-sink-create-original-sink"
   description: |
     That is, assume you have a Kafka sink `avro_sink` created from `matview_old`
     (See [`CREATE SINK`:Kafka/Redpanda](/sql/create-sink/kafka/) for more
     information):
+  test_setup: |
+    > CREATE MATERIALIZED VIEW matview_old AS SELECT DISTINCT ON (key_col) 1 AS key_col;
+    > CREATE CONNECTION kafka_connection TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
+    > CREATE CONNECTION csr_connection TO CONFLUENT SCHEMA REGISTRY (URL '${testdrive.schema-registry-url}');
   code: |
     CREATE SINK avro_sink
       FROM matview_old
@@ -29,6 +68,8 @@
     to make progress. See [Valid schema changes](#valid-schema-changes) for
     details.
     {{< /note >}}
+  test_setup: |
+    > CREATE MATERIALIZED VIEW matview_new AS SELECT DISTINCT ON (key_col) 2 AS key_col;
   code: |
     ALTER SINK avro_sink
       SET FROM matview_new
@@ -47,6 +88,8 @@
 
     For workaround, see [Example: Handle cutover scenarios](#handle-cutover-scenarios)
     {{< /tip >}}
+
+  testable_results: false
 
 - name: "handle-cutover-scenarios-intro"
   description: |
@@ -91,6 +134,7 @@
 - name: "handle-cutover-scenarios-alter-sink-to-transition"
   code: |
     ALTER SINK avro_sink SET FROM transition;
+  testable: false  # TODO: Materialize could not prove that the specified upsert envelope key ("key_col") was a unique key of the underlying relation "materialize.public.transition". There are no known valid unique keys for the underlying relation.
 
 - name: "handle-cutover-scenarios-step-3-intro"
   description: |
@@ -103,7 +147,7 @@
 - name: "handle-cutover-scenarios-step-4-intro"
   description: |
     Wait for the sink's upper frontier
-    ([`mz_frontiers`](/sql/system-catalog/mz_internal/#mz_frontiers)) to advance
+    ([`mz_frontiers`](/reference/system-catalog/mz_internal/#mz_frontiers)) to advance
     beyond the time of the switch update. Once advanced, alter sink to use
     `matview_new`:
 - name: "handle-cutover-scenarios-alter-sink-to-new-mv"

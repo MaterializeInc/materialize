@@ -33,7 +33,7 @@ fn encode_copy_row_binary(
     // 16-bit int of number of tuples.
     let count = i16::try_from(typ.column_types.len()).map_err(|_| {
         io::Error::new(
-            io::ErrorKind::Other,
+            io::ErrorKind::InvalidData,
             "column count does not fit into an i16",
         )
     })?;
@@ -54,7 +54,7 @@ fn encode_copy_row_binary(
                     i32::try_from(buf.len())
                         .map_err(|_| {
                             io::Error::new(
-                                io::ErrorKind::Other,
+                                io::ErrorKind::InvalidData,
                                 "field length does not fit into an i32",
                             )
                         })?
@@ -319,7 +319,7 @@ impl<'a> CopyTextFormatParser<'a> {
                                         match decode_nibble(self.peek()) {
                                             Some(c) => {
                                                 self.consume_n(1);
-                                                value = value << 4 | c;
+                                                value = (value << 4) | c;
                                             }
                                             _ => break,
                                         }
@@ -337,7 +337,7 @@ impl<'a> CopyTextFormatParser<'a> {
                                 match self.peek() {
                                     Some(c @ b'0'..=b'7') => {
                                         self.consume_n(1);
-                                        value = value << 3 | (c - b'0');
+                                        value = (value << 3) | (c - b'0');
                                     }
                                     _ => break,
                                 }
@@ -557,7 +557,13 @@ pub fn decode_copy_format_text(
             let raw_value = parser.consume_raw_value()?;
             if let Some(raw_value) = raw_value {
                 match mz_pgrepr::Value::decode_text(typ, raw_value) {
-                    Ok(value) => row.push(value.into_datum(&buf, typ)),
+                    Ok(value) => {
+                        row.push(
+                            value
+                                .into_datum_decode_error(&buf, typ, "column")
+                                .map_err(|msg| io::Error::new(io::ErrorKind::InvalidData, msg))?,
+                        );
+                    }
                     Err(err) => {
                         let msg = format!("unable to decode column: {}", err);
                         return Err(io::Error::new(io::ErrorKind::InvalidData, msg));

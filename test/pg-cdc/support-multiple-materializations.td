@@ -38,6 +38,8 @@ INSERT INTO t1(f1) VALUES ('true'),('false');
 
 INSERT INTO t2(t1_id, name) VALUES (1, 'example');
 
+ANALYZE;
+
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > BEGIN

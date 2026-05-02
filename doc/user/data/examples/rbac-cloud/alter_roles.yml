@@ -1,3 +1,5 @@
+- test_depends_on: rbac-cloud/create_roles.yml
+
 - name: "alter-role-syntax"
   description: |
     The following syntax is used to alter a role in Materialize Cloud.
@@ -6,10 +8,43 @@
     [[WITH] INHERIT]
     [SET <config> =|TO <value|DEFAULT> ]
     [RESET <config>];
+  syntax_elements:
+    - name: "`INHERIT`"
+      description: |
+        *Optional.* If specified, grants the role the ability to inherit
+        privileges of other roles. *Default.*
+    - name: "`SET <name> TO <value|DEFAULT>`"
+      description: |
+        *Optional.* If specified, sets the configuration parameter for the role
+        to the `<value>` or if the value specified is `DEFAULT`, the system's
+        default (equivalent to `ALTER ROLE ... RESET <name>`).
 
-- name: "alter-role-options"
-  description: |
-    {{< yaml-table data="syntax_options/alter_role_cloud_options" >}}
+        To view the configuration parameter defaults for a role, see
+        [`mz_role_parameters`](/reference/system-catalog/mz_catalog#mz_role_parameters).
+
+        {{< note >}}
+
+        - Altering the configuration parameter for a role only affects **new
+        sessions**.
+        - Role configuration parameters are **not inherited**.
+
+        {{< /note >}}
+
+    - name: "`RESET <name>`"
+      description: |
+        *Optional.* If specified, resets the configuration parameter for the
+        role to the system's default.
+
+        To view the configuration parameter defaults for a role, see
+        [`mz_role_parameters`](/reference/system-catalog/mz_catalog#mz_role_parameters).
+
+        {{< note >}}
+
+        - Altering the configuration parameter for a role only affects **new
+        sessions**.
+        - Role configuration parameters are **not inherited**.
+
+        {{< /note >}}
 
 - name: alter-role-details
   description: |
@@ -44,6 +79,7 @@
       string can specify a different database for the session or the user can
       issue a `SET ...` command to override these values for the current
       session.
+  testable_results: false
 
 - name: "alter-roles-configs-not-inherited"
   description: |
@@ -54,6 +90,8 @@
     the following example updates the `data_reader` role to use
     `serving_cluster` by default.
 
+  test_setup: |
+    > CREATE CLUSTER serving_cluster SIZE 'scale=1,workers=1'
   code: |
     ALTER ROLE data_reader SET CLUSTER = serving_cluster;
   results: |
@@ -68,5 +106,6 @@
     - The default cluster for `sales_report_app` is not affected.
 
     {{< tip >}}
-    {{< include-md file="shared-content/rbac-cloud/alter-role-tip.md" >}}
+    {{% include-headless "/headless/rbac-cloud/alter-role-tip" %}}
     {{</ tip >}}
+  testable_results: false

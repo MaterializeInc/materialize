@@ -10,13 +10,13 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.100"
-async-trait = "0.1.89"
-bytesize = "2.1.0"
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
-derivative = "2.2.0"
-differential-dataflow = "0.18.0"
-futures = "0.3.31"
+anyhow.workspace = true
+async-trait.workspace = true
+bytesize.workspace = true
+chrono.workspace = true
+derivative.workspace = true
+differential-dataflow.workspace = true
+futures.workspace = true
 mz-build-info = { path = "../build-info" }
 mz-cluster-client = { path = "../cluster-client" }
 mz-compute-types = { path = "../compute-types" }
@@ -32,18 +32,14 @@ mz-service = { path = "../service" }
 mz-storage-client = { path = "../storage-client" }
 mz-storage-types = { path = "../storage-types" }
 mz-tracing = { path = "../tracing" }
-prometheus = { version = "0.14.0", default-features = false }
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.145"
-thiserror = "2.0.17"
-timely = "0.25.1"
-tokio = "1.44.1"
-tracing = "0.1.37"
-uuid = { version = "1.18.1", features = ["serde", "v4"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+prometheus.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+timely.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid = { workspace = true, features = ["serde", "v4"] }
 
 [features]
-default = ["workspace-hack"]
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+default = []

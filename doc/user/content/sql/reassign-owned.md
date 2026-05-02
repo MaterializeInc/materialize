@@ -15,12 +15,14 @@ all objects across all databases, including the databases themselves.
 
 ## Syntax
 
-{{< diagram "reassign-owned.svg" >}}
+```mzsql
+REASSIGN OWNED BY <current_owner> [, ...] TO <new_owner>;
+```
 
-Field | Use
-------|-----
-_old_role_ | The role name whose owned objects will be reassigned.
-_new_role_ | The role name of the new owner of all the objects.
+Syntax element | Description
+---------------|------------
+`<current_owner>` | The role whose objects are to be reassigned.
+`<new_owner>` | The role name of the new owner of these objects.
 
 ## Examples
 
@@ -36,10 +38,9 @@ REASSIGN OWNED BY joe, george TO mike;
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/reassign-owned.md"
->}}
+{{% include-headless "/headless/sql-command-privileges/reassign-owned" %}}
 
 ## Related pages
 
-- [`ALTER OWNER`](../alter-owner)
+- [`ALTER OWNER`](/sql/#rbac)
 - [`DROP OWNED`](../drop-owned)

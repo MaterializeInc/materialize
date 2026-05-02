@@ -20,22 +20,37 @@ used:
 
 {{% yaml-table data="self_managed/authentication_setting" %}}
 
-## Configuring password authentication
+{{% include-headless
+"/headless/self-managed-deployments/enabled-auth-setting-warning" %}}
 
-{{< public-preview >}}This feature{{</ public-preview >}}
+### Configuring SASL/SCRAM authentication
 
-Password authentication requires users to log in with a password.
+{{< note>}}
+SASL/SCRAM-SHA-256 authentication requires Materialize `v26.0.0` or later.
+{{< /note >}}
 
-To configure Self-Managed Materialize for password authentication:
+SASL authentication requires users to log in with a password.
 
- Configuration | Description
----------------| ------------
-`spec.authenticatorKind` | Set to `Password` to enable password authentication.
-`external_login_password_mz_system` | To the Kubernetes Secret referenced by `spec.backendSecretName`, add the secret key `external_login_password_mz_system`. This is the password for the `mz_system` user [^1], who is the only user initially available when password authentication is enabled.
+When SASL authentication is enabled:
+- **PostgreSQL connections** (e.g., `psql`, client libraries, [connection
+  poolers](/integrations/connection-pooling/)) use SCRAM-SHA-256 authentication.
+- **HTTP/Web Console connections** use standard password authentication.
 
-For example, if using Kind, in the `sample-materialize.yaml` file:
+This hybrid approach provides maximum security for SQL connections while
+maintaining compatibility with web-based tools.
 
-```hc {hl_lines="14 24"}
+To configure Self-Managed Materialize for SASL/SCRAM authentication, update the
+following fields:
+
+| Resource | Configuration | Description
+|----------|---------------| ------------
+| Materialize CR | `spec.authenticatorKind` | Set to `Sasl` to enable SASL/SCRAM-SHA-256 authentication for PostgreSQL connections.
+| Kubernetes Secret | `external_login_password_mz_system` | Specify the password for the `mz_system` user, who is the only user initially available. Add `external_login_password_mz_system` to the Kubernetes Secret referenced in the Materialize CR's `spec.backendSecretName` field.
+
+The following example Kubernetes manifest includes configuration for
+SASL/SCRAM-SHA-256 authentication:
+
+```hc {hl_lines="15 25"}
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -49,6 +64,7 @@ metadata:
 stringData:
   metadata_backend_url: "..."
   persist_backend_url: "..."
+  license_key: "..."
   external_login_password_mz_system: "enter_mz_system_password"
 ---
 apiVersion: materialize.cloud/v1alpha1
@@ -57,33 +73,98 @@ metadata:
   name: 12345678-1234-1234-1234-123456789012
   namespace: materialize-environment
 spec:
-  environmentdImageRef: materialize/environmentd:v0.147.2
+  environmentdImageRef: materialize/environmentd:v26.12.1
+  backendSecretName: materialize-backend
+  authenticatorKind: Sasl
+```
+
+{{% include-headless
+"/headless/self-managed-deployments/enabled-auth-setting-warning" %}}
+
+### Configuring password authentication
+
+{{< public-preview />}}
+
+Password authentication requires users to log in with a password.
+
+To configure Self-Managed Materialize for password authentication, update the following fields:
+
+| Resource | Configuration | Description
+|----------|---------------| ------------
+| Materialize CR | `spec.authenticatorKind` | Set to `Password` to enable password authentication.
+| Kubernetes Secret | `external_login_password_mz_system` | Specify the password for the `mz_system` user, who is the only user initially available. Add `external_login_password_mz_system` to the Kubernetes Secret referenced in the Materialize CR's `spec.backendSecretName` field.
+
+The following example Kubernetes manifest includes configuration for password
+authentication:
+
+```hc {hl_lines="15 25"}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: materialize-environment
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: materialize-backend
+  namespace: materialize-environment
+stringData:
+  metadata_backend_url: "..."
+  persist_backend_url: "..."
+  license_key: "..."
+  external_login_password_mz_system: "enter_mz_system_password"
+---
+apiVersion: materialize.cloud/v1alpha1
+kind: Materialize
+metadata:
+  name: 12345678-1234-1234-1234-123456789012
+  namespace: materialize-environment
+spec:
+  environmentdImageRef: materialize/environmentd:v26.12.1
   backendSecretName: materialize-backend
   authenticatorKind: Password
 ```
 
-#### Logging in and creating users
+{{% include-headless
+"/headless/self-managed-deployments/enabled-auth-setting-warning" %}}
 
-Initially, only the `mz_system` user [^1] is available. To create additional
-users:
+## Logging in and creating users
 
-1. Login as the `mz_system` user, using the
-`external_login_password_mz_system` password,
-![Image of Materialize Console login screen with mz_system user](/images/mz_system_login.png
-"Materialize Console login screen with mz_system user")
+When authentication is enabled, only the `mz_system` user is initially
+available. To create additional users:
+
+1. Login as the `mz_system` user, using the `external_login_password_mz_system`
+password. ![Image of Materialize Console login screen with mz_system
+user](/images/mz_system_login.png "Materialize Console login screen with
+mz_system user")
 
 1. Use [`CREATE ROLE ... WITH LOGIN PASSWORD ...`](/sql/create-role) to create
-   new users:
+new users:
 
    ```mzsql
    CREATE ROLE <user> WITH LOGIN PASSWORD '<password>';
    ```
 
-[^1]: The `mz_system` user is also used by the Materialize Operator for upgrades
-and maintenance tasks.
+1. Log out as `mz_system` user.
 
-## Enabling RBAC
+   {{< important >}}
 
-{{< include-md file="shared-content/enable-rbac.md" >}}
+   In general, other than the initial login to create new users, avoid using
+   `mz_system` since `mz_system` also used by the Materialize Operator for
+   upgrades and maintenance tasks. {{< /important >}}
 
-See [Access Control](/security/self-managed/access-control/) for details on role based authorization.
+1. Login as one of the created users.
+
+## RBAC
+
+For details on role-based access control (RBAC), including enabling RBAC, see
+[Access Control](/security/self-managed/access-control/).
+
+{{< warning >}}
+If RBAC is not enabled, all users have <red>**superuser**</red> privileges.
+{{< /warning >}}
+
+## See also
+
+- For all Materialize CR settings, see [Materialize CRD Field
+Descriptions](/installation/appendix-materialize-crd-field-descriptions/).

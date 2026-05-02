@@ -15,7 +15,14 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::{Context, anyhow};
-use iceberg::{Catalog, CatalogBuilder};
+use async_trait::async_trait;
+use aws_credential_types::provider::ProvideCredentials;
+use iceberg::Catalog;
+use iceberg::CatalogBuilder;
+use iceberg::io::{
+    AwsCredential, AwsCredentialLoad, CustomAwsCredentialLoader, S3_ACCESS_KEY_ID,
+    S3_DISABLE_EC2_METADATA, S3_REGION, S3_SECRET_ACCESS_KEY,
+};
 use iceberg_catalog_rest::{
     REST_CATALOG_PROP_URI, REST_CATALOG_PROP_WAREHOUSE, RestCatalogBuilder,
 };
@@ -24,21 +31,21 @@ use mz_ccsr::tls::{Certificate, Identity};
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceReader, vpc_endpoint_host};
 use mz_dyncfg::ConfigSet;
 use mz_kafka_util::client::{
-    BrokerAddr, BrokerRewrite, MzClientContext, MzKafkaError, TunnelConfig, TunnelingClientContext,
+    BrokerAddr, BrokerRewrite, HostMappingRules, MzClientContext, MzKafkaError, TunnelConfig,
+    TunnelingClientContext,
 };
 use mz_mysql_util::{MySqlConn, MySqlError};
 use mz_ore::assert_none;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::{InTask, OreFutureExt};
-use mz_ore::netio::DUMMY_DNS_PORT;
 use mz_ore::netio::resolve_address;
 use mz_ore::num::NonNeg;
 use mz_repr::{CatalogItemId, GlobalId};
 use mz_secrets::SecretsReader;
+use mz_sql_parser::ast::ConnectionRulePattern;
 use mz_ssh_util::keys::SshKeyPair;
 use mz_ssh_util::tunnel::SshTunnelConfig;
 use mz_ssh_util::tunnel_manager::{ManagedSshTunnelHandle, SshTunnelManager};
-use mz_tls_util::Pkcs12Archive;
 use mz_tracing::CloneableEnvFilter;
 use rdkafka::ClientContext;
 use rdkafka::config::FromClientConfigAndContext;
@@ -48,13 +55,13 @@ use serde::{Deserialize, Deserializer, Serialize};
 use tokio::net;
 use tokio::runtime::Handle;
 use tokio_postgres::config::SslMode;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 use url::Url;
 
 use crate::AlterCompatible;
 use crate::configuration::StorageConfiguration;
 use crate::connections::aws::{
-    AwsConnection, AwsConnectionReference, AwsConnectionValidationError,
+    AwsAuth, AwsConnection, AwsConnectionReference, AwsConnectionValidationError,
 };
 use crate::connections::string_or_secret::StringOrSecret;
 use crate::controller::AlterError;
@@ -71,6 +78,56 @@ pub mod string_or_secret;
 
 const REST_CATALOG_PROP_SCOPE: &str = "scope";
 const REST_CATALOG_PROP_CREDENTIAL: &str = "credential";
+
+/// A credential loader that wraps an aws-sdk-rust credentials provider for use with
+/// iceberg/OpenDAL. This allows us to provide refreshable credentials from the AWS SDK
+/// credential chain (including the full assume role chain) to OpenDAL's S3 implementation.
+///
+/// We use this instead of OpenDAL's built-in assume role support because Materialize
+/// has a runtime-defined credential chain (ambient → jump role → user role with external ID)
+/// that can't be expressed via OpenDAL's static configuration properties.
+struct AwsSdkCredentialLoader {
+    /// The underlying AWS SDK credentials provider. For assume role auth, this provider
+    /// already handles the full chain: ambient creds -> jump role -> user role.
+    provider: aws_credential_types::provider::SharedCredentialsProvider,
+}
+
+impl AwsSdkCredentialLoader {
+    fn new(provider: aws_credential_types::provider::SharedCredentialsProvider) -> Self {
+        Self { provider }
+    }
+}
+
+#[async_trait]
+impl AwsCredentialLoad for AwsSdkCredentialLoader {
+    async fn load_credential(
+        &self,
+        _client: reqwest::Client,
+    ) -> anyhow::Result<Option<AwsCredential>> {
+        let creds = self
+            .provider
+            .provide_credentials()
+            .await
+            .map_err(|e| {
+                warn!(
+                    error = %e.display_with_causes(),
+                    "failed to load AWS credentials for Iceberg FileIO from SDK provider"
+                );
+                e
+            })
+            .context(
+                "failed to load AWS credentials from SDK provider for Iceberg FileIO \
+                 (credential source may be temporarily unavailable)",
+            )?;
+
+        Ok(Some(AwsCredential {
+            access_key_id: creds.access_key_id().to_string(),
+            secret_access_key: creds.secret_access_key().to_string(),
+            session_token: creds.session_token().map(|s| s.to_string()),
+            expires_in: creds.expiry().map(|t| t.into()),
+        }))
+    }
+}
 
 /// An extension trait for [`SecretsReader`]
 #[async_trait::async_trait]
@@ -493,17 +550,34 @@ impl IcebergCatalogConnection<InlinedConnection> {
         }
     }
 
+    pub fn catalog_type(&self) -> IcebergCatalogType {
+        match self.catalog {
+            IcebergCatalogImpl::S3TablesRest(_) => IcebergCatalogType::S3TablesRest,
+            IcebergCatalogImpl::Rest(_) => IcebergCatalogType::Rest,
+        }
+    }
+
+    pub fn s3tables_catalog(&self) -> Option<&S3TablesRestIcebergCatalog> {
+        match &self.catalog {
+            IcebergCatalogImpl::S3TablesRest(s3tables) => Some(s3tables),
+            IcebergCatalogImpl::Rest(_) => None,
+        }
+    }
+
+    pub fn rest_catalog(&self) -> Option<&RestIcebergCatalog> {
+        match &self.catalog {
+            IcebergCatalogImpl::Rest(rest) => Some(rest),
+            IcebergCatalogImpl::S3TablesRest(_) => None,
+        }
+    }
+
     async fn connect_s3tables(
         &self,
         s3tables: &S3TablesRestIcebergCatalog,
         storage_configuration: &StorageConfiguration,
         in_task: InTask,
     ) -> Result<Arc<dyn Catalog>, anyhow::Error> {
-        let mut props = BTreeMap::from([(
-            REST_CATALOG_PROP_URI.to_string(),
-            self.uri.to_string().clone(),
-        )]);
-
+        let secret_reader = &storage_configuration.connection_context.secrets_reader;
         let aws_ref = &s3tables.aws_connection;
         let aws_config = aws_ref
             .connection
@@ -512,18 +586,77 @@ impl IcebergCatalogConnection<InlinedConnection> {
                 aws_ref.connection_id,
                 in_task,
             )
-            .await?;
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to load AWS SDK config for S3 Tables Iceberg catalog \
+                     (connection id: {}, auth method: {}, catalog uri: {}, warehouse: {})",
+                    aws_ref.connection_id,
+                    aws_ref.connection.auth_method(),
+                    self.uri,
+                    s3tables.warehouse
+                )
+            })?;
 
-        props.insert(
-            REST_CATALOG_PROP_WAREHOUSE.to_string(),
-            s3tables.warehouse.clone(),
-        );
+        let aws_region = aws_ref
+            .connection
+            .region
+            .clone()
+            .unwrap_or_else(|| "us-east-1".to_string());
 
+        let mut props = vec![
+            (S3_REGION.to_string(), aws_region),
+            (S3_DISABLE_EC2_METADATA.to_string(), "true".to_string()),
+            (
+                REST_CATALOG_PROP_WAREHOUSE.to_string(),
+                s3tables.warehouse.clone(),
+            ),
+            (REST_CATALOG_PROP_URI.to_string(), self.uri.to_string()),
+        ];
+
+        let aws_auth = aws_ref.connection.auth.clone();
+
+        if let AwsAuth::Credentials(creds) = &aws_auth {
+            props.push((
+                S3_ACCESS_KEY_ID.to_string(),
+                creds
+                    .access_key_id
+                    .get_string(in_task, secret_reader)
+                    .await?,
+            ));
+            props.push((
+                S3_SECRET_ACCESS_KEY.to_string(),
+                secret_reader.read_string(creds.secret_access_key).await?,
+            ));
+        }
+
+        // Build the catalog with aws_config for REST API signing.
+        // For AssumeRole auth, we also add a FileIO extension so OpenDAL can
+        // use our credential chain for S3 object access.
         let catalog = RestCatalogBuilder::default()
-            .with_aws_client(aws_config)
+            .with_aws_config(aws_config.clone())
             .load("IcebergCatalog", props.into_iter().collect())
             .await
-            .map_err(|e| anyhow!("failed to create Iceberg catalog: {e}"))?;
+            .with_context(|| {
+                format!(
+                    "failed to create S3 Tables Iceberg catalog \
+                     (connection id: {}, catalog uri: {}, warehouse: {})",
+                    aws_ref.connection_id, self.uri, s3tables.warehouse
+                )
+            })?;
+
+        let catalog = if matches!(aws_auth, AwsAuth::AssumeRole(_)) {
+            let credentials_provider = aws_config
+                .credentials_provider()
+                .ok_or_else(|| anyhow!("aws_config missing credentials provider"))?;
+            let file_io_loader = CustomAwsCredentialLoader::new(Arc::new(
+                AwsSdkCredentialLoader::new(credentials_provider),
+            ));
+            catalog.with_file_io_extension(file_io_loader)
+        } else {
+            catalog
+        };
+
         Ok(Arc::new(catalog))
     }
 
@@ -826,15 +959,30 @@ impl KafkaConnection {
                     t.port.unwrap_or(9092)
                 )
             }
+            Tunnel::AwsPrivatelinks(_pl) => {
+                let algo = KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM
+                    .get(storage_configuration.config_set());
+                options.insert("ssl.endpoint.identification.algorithm".into(), algo.into());
+
+                if self.brokers.is_empty() {
+                    return Err(ContextCreationError::Other(anyhow::anyhow!(
+                        "at least one static broker is required when using BROKER or BROKERS"
+                    )));
+                }
+                self.brokers.iter().map(|b| &b.address).join(",")
+            }
             _ => self.brokers.iter().map(|b| &b.address).join(","),
         };
-        options.insert("bootstrap.servers".into(), brokers.into());
+        options.insert("bootstrap.servers".into(), brokers.clone().into());
         let security_protocol = match (self.tls.is_some(), self.sasl.is_some()) {
             (false, false) => "PLAINTEXT",
             (true, false) => "SSL",
             (false, true) => "SASL_PLAINTEXT",
             (true, true) => "SASL_SSL",
         };
+        info!(
+            "kafka: create_with_context bootstrap.servers={brokers}, security_protocol={security_protocol}"
+        );
         options.insert("security.protocol".into(), security_protocol.into());
         if let Some(tls) = &self.tls {
             if let Some(root_cert) = &tls.root_cert {
@@ -936,10 +1084,15 @@ impl KafkaConnection {
                 // By default, don't offer a default override for broker address lookup.
             }
             Tunnel::AwsPrivatelink(pl) => {
-                context.set_default_tunnel(TunnelConfig::StaticHost(vpc_endpoint_host(
-                    pl.connection_id,
-                    None, // Default tunnel does not support availability zones.
-                )));
+                context.set_default_tunnel(TunnelConfig::StaticHost(
+                    // Possible bug: We have been ignoring the configured port.
+                    KafkaConnection::from_default_aws_privatelink(pl).host,
+                ));
+            }
+            Tunnel::AwsPrivatelinks(pl) => {
+                context.set_default_tunnel(TunnelConfig::Rules(
+                    KafkaConnection::from_aws_privatelinks(pl),
+                ));
             }
             Tunnel::Ssh(ssh_tunnel) => {
                 let secret = storage_configuration
@@ -966,7 +1119,19 @@ impl KafkaConnection {
                 }));
             }
         }
+        info!(
+            "kafka: tunnel config set to {}",
+            match &self.default_tunnel {
+                Tunnel::Direct => "Direct".to_string(),
+                Tunnel::AwsPrivatelink(_) => "AwsPrivatelink (static host)".to_string(),
+                Tunnel::AwsPrivatelinks(pl) =>
+                    format!("AwsPrivatelinks ({} rules)", pl.rules.len()),
+                Tunnel::Ssh(_) => "Ssh".to_string(),
+            }
+        );
 
+        // Here, we preemptively rewrite broker addresses.
+        // In concept, this overlaps with 'TunnelingClientContext::resolve_broker_addr'.
         for broker in &self.brokers {
             let mut addr_parts = broker.address.splitn(2, ':');
             let addr = BrokerAddr {
@@ -993,19 +1158,14 @@ impl KafkaConnection {
                     // in the `TunnelingClientContext`.
                 }
                 Tunnel::AwsPrivatelink(aws_privatelink) => {
-                    let host = mz_cloud_resources::vpc_endpoint_host(
-                        aws_privatelink.connection_id,
-                        aws_privatelink.availability_zone.as_deref(),
-                    );
-                    let port = aws_privatelink.port;
                     context.add_broker_rewrite(
                         addr,
-                        BrokerRewrite {
-                            host: host.clone(),
-                            port,
-                        },
+                        KafkaConnection::from_aws_privatelink(aws_privatelink),
                     );
                 }
+                Tunnel::AwsPrivatelinks(_) => unreachable!(
+                    "Individually predefined brokers do not use rule-based PrivateLinks routing."
+                ),
                 Tunnel::Ssh(ssh_tunnel) => {
                     // Ensure any SSH bastion address we connect to is resolved to an external address.
                     let ssh_host_resolved = resolve_address(
@@ -1073,11 +1233,16 @@ impl KafkaConnection {
         // The downside of this approach is it produces a generic error message like
         // "metadata fetch error" with no additional details. The real networking
         // error is buried in the librdkafka logs, which are not visible to users.
+        info!("kafka: starting connection validation via fetch_metadata (timeout={timeout:?})");
         let result = mz_ore::task::spawn_blocking(|| "kafka_get_metadata", {
             let consumer = Arc::clone(&consumer);
             move || consumer.fetch_metadata(None, timeout)
         })
-        .await?;
+        .await;
+        info!(
+            "kafka: connection validation result: {}",
+            if result.is_ok() { "success" } else { "failed" },
+        );
         match result {
             Ok(_) => Ok(()),
             // The error returned by `fetch_metadata` does not provide any details which makes for
@@ -1103,6 +1268,48 @@ impl KafkaConnection {
                     None => Err(err.into()),
                 }
             }
+        }
+    }
+
+    /// The "default" PrivateLink connection is used for bootstrapping Kafka.
+    fn from_default_aws_privatelink(pl: &AwsPrivatelink) -> BrokerRewrite {
+        BrokerRewrite {
+            host: vpc_endpoint_host(
+                pl.connection_id,
+                None, // Default tunnel does not support availability zones.
+            ),
+            port: pl.port,
+        }
+    }
+
+    /// The "not default" PrivateLink connections are used for routing to specific Kafka brokers.
+    fn from_aws_privatelink(pl: &AwsPrivatelink) -> BrokerRewrite {
+        BrokerRewrite {
+            host: vpc_endpoint_host(pl.connection_id, pl.availability_zone.as_deref()),
+            port: pl.port,
+        }
+    }
+
+    fn from_aws_privatelink_rule(
+        AwsPrivatelinkRule { pattern, to }: &AwsPrivatelinkRule,
+    ) -> (mz_kafka_util::client::ConnectionRulePattern, BrokerRewrite) {
+        (
+            mz_kafka_util::client::ConnectionRulePattern {
+                prefix_wildcard: pattern.prefix_wildcard,
+                literal_match: pattern.literal_match.clone(),
+                suffix_wildcard: pattern.suffix_wildcard,
+            },
+            KafkaConnection::from_aws_privatelink(to),
+        )
+    }
+
+    fn from_aws_privatelinks(pl: &AwsPrivatelinks) -> HostMappingRules {
+        HostMappingRules {
+            rules: pl
+                .rules
+                .iter()
+                .map(KafkaConnection::from_aws_privatelink_rule)
+                .collect_vec(),
         }
     }
 }
@@ -1260,7 +1467,7 @@ impl CsrConnection {
                     host,
                     &resolved
                         .iter()
-                        .map(|addr| SocketAddr::new(*addr, DUMMY_DNS_PORT))
+                        .map(|addr| SocketAddr::new(*addr, 0))
                         .collect::<Vec<_>>(),
                 )
             }
@@ -1287,14 +1494,9 @@ impl CsrConnection {
                     // at the DNS level, which means the TCP connection is
                     // correctly routed through the tunnel, but TLS verification
                     // is still performed against the remote hostname.
-                    // Unfortunately the port here is ignored...
-                    .resolve_to_addrs(
-                        host,
-                        &[SocketAddr::new(
-                            ssh_tunnel.local_addr().ip(),
-                            DUMMY_DNS_PORT,
-                        )],
-                    )
+                    // Unfortunately the port here is ignored if the URL also
+                    // specifies a port...
+                    .resolve_to_addrs(host, &[SocketAddr::new(ssh_tunnel.local_addr().ip(), 0)])
                     // ...so we also dynamically rewrite the URL to use the
                     // current port for the SSH tunnel.
                     //
@@ -1322,11 +1524,14 @@ impl CsrConnection {
                     connection.connection_id,
                     connection.availability_zone.as_deref(),
                 );
-                let addrs: Vec<_> = net::lookup_host((privatelink_host, DUMMY_DNS_PORT))
+                let addrs: Vec<_> = net::lookup_host((privatelink_host, 0))
                     .await
                     .context("resolving PrivateLink host")?
                     .collect();
                 client_config = client_config.resolve_to_addrs(host, &addrs)
+            }
+            Tunnel::AwsPrivatelinks(_) => {
+                unreachable!("MATCHING broker rules are only available for Kafka connections.");
             }
         }
 
@@ -1586,6 +1791,9 @@ impl PostgresConnection<InlinedConnection> {
                     connection_id: connection.connection_id,
                 }
             }
+            Tunnel::AwsPrivatelinks(_) => {
+                unreachable!("MATCHING broker rules are only available for Kafka connections.");
+            }
         };
 
         Ok(mz_postgres_util::Config::new(
@@ -1675,7 +1883,7 @@ impl PostgresConnectionValidationError {
                     .into(),
             ),
             Self::ReplicationDisabled => Some("set max_wal_senders to a value > 0".into()),
-            _ => None,
+            Self::InsufficientWalLevel { .. } => None,
         }
     }
 }
@@ -1721,6 +1929,7 @@ pub enum Tunnel<C: ConnectionAccess = InlinedConnection> {
     Ssh(SshTunnel<C>),
     /// Via the specified AWS PrivateLink connection.
     AwsPrivatelink(AwsPrivatelink),
+    AwsPrivatelinks(AwsPrivatelinks),
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<Tunnel, R> for Tunnel<ReferencedConnection> {
@@ -1729,6 +1938,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<Tunnel, R> for Tunnel<Reference
             Tunnel::Direct => Tunnel::Direct,
             Tunnel::Ssh(ssh) => Tunnel::Ssh(ssh.into_inline_connection(r)),
             Tunnel::AwsPrivatelink(awspl) => Tunnel::AwsPrivatelink(awspl),
+            Tunnel::AwsPrivatelinks(x) => Tunnel::AwsPrivatelinks(x),
         }
     }
 }
@@ -1880,8 +2090,8 @@ impl MySqlConnection<InlinedConnection> {
                 .read_string_in_task_if(in_task, identity.key)
                 .await?;
             let cert = identity.cert.get_string(in_task, secrets_reader).await?;
-            let Pkcs12Archive { der, pass } =
-                mz_tls_util::pkcs12der_from_pem(key.as_bytes(), cert.as_bytes())?;
+            let (der, pass) =
+                mz_tls_util::pkcs12der_from_pem(key.as_bytes(), cert.as_bytes())?.into_parts();
 
             // Add client identity to SSLOpts
             ssl_opts = ssl_opts.map(|opts| {
@@ -1936,6 +2146,9 @@ impl MySqlConnection<InlinedConnection> {
                 mz_mysql_util::TunnelConfig::AwsPrivatelink {
                     connection_id: connection.connection_id,
                 }
+            }
+            Tunnel::AwsPrivatelinks(_) => {
+                unreachable!("MATCHING broker rules are only available for Kafka connections.");
             }
         };
 
@@ -2220,10 +2433,20 @@ impl SqlServerConnectionDetails<InlinedConnection> {
 
         // Prevent users from probing our internal network ports by trying to
         // connect to localhost, or another non-external IP.
-        let enfoce_external_addresses = ENFORCE_EXTERNAL_ADDRESSES.get(dyncfg);
+        let enforce_external_addresses = ENFORCE_EXTERNAL_ADDRESSES.get(dyncfg);
 
         let tunnel = match &self.tunnel {
-            Tunnel::Direct => mz_sql_server_util::config::TunnelConfig::Direct,
+            Tunnel::Direct => {
+                let resolved_addresses: Vec<SocketAddr> =
+                    resolve_address(&self.host, enforce_external_addresses)
+                        .await?
+                        .into_iter()
+                        .map(|ip| SocketAddr::new(ip, self.port))
+                        .collect();
+                mz_sql_server_util::config::TunnelConfig::Direct {
+                    resolved_addresses: resolved_addresses.into_boxed_slice(),
+                }
+            }
             Tunnel::Ssh(SshTunnel {
                 connection_id,
                 connection: ssh_connection,
@@ -2235,7 +2458,7 @@ impl SqlServerConnectionDetails<InlinedConnection> {
                 let key_pair = SshKeyPair::from_bytes(&secret).context("ssh key pair")?;
                 // Ensure any SSH-bastion host we connect to is resolved to an
                 // external address.
-                let addresses = resolve_address(&ssh_connection.host, enfoce_external_addresses)
+                let addresses = resolve_address(&ssh_connection.host, enforce_external_addresses)
                     .await
                     .context("ssh tunnel")?;
 
@@ -2262,6 +2485,9 @@ impl SqlServerConnectionDetails<InlinedConnection> {
                     connection_id: private_link_connection.connection_id,
                     port: self.port,
                 }
+            }
+            Tunnel::AwsPrivatelinks(_) => {
+                unreachable!("MATCHING broker rules are only available for Kafka connections.");
             }
         };
 
@@ -2424,6 +2650,22 @@ impl AlterCompatible for AwsPrivatelink {
 
         Ok(())
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct AwsPrivatelinks {
+    /// Route to brokers through PrivateLink connections according to these rules.
+    /// Exact-match rules (no wildcards) are used as bootstrap brokers.
+    /// Wildcard rules are applied dynamically to discovered brokers.
+    pub rules: Vec<AwsPrivatelinkRule>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct AwsPrivatelinkRule {
+    /// Given a broker's host:port, should we use this route?
+    pub pattern: ConnectionRulePattern,
+    /// Route to the broker through this PrivateLink connection.
+    pub to: AwsPrivatelink,
 }
 
 /// Specifies an SSH tunnel connection.

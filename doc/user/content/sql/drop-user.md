@@ -11,18 +11,20 @@ menu:
 
 ## Syntax
 
-{{< diagram "drop-user.svg" >}}
+```mzsql
+DROP USER [IF EXISTS] <role_name>;
+```
 
-Field | Use
-------|-----
-**IF EXISTS** | Do not return an error if the specified role does not exist.
-_role_name_ | The role you want to drop. For available roles, see [`mz_roles`](/sql/system-catalog/mz_catalog#mz_roles).
+Syntax element | Description
+---------------|------------
+**IF EXISTS** | Optional. If specified, do not return an error if the specified role does not exist.
+`<role_name>` | The role you want to drop. For available roles, see [`mz_roles`](/reference/system-catalog/mz_catalog#mz_roles).
 
 ## Privileges
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/drop-user.md" >}}
+{{% include-headless "/headless/sql-command-privileges/drop-user" %}}
 
 ## Related pages
 

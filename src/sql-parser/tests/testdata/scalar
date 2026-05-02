@@ -573,6 +573,16 @@ CASE WHEN bar IS NULL THEN 'null' WHEN bar = 0 THEN '=0' WHEN bar >= 0 THEN '>=0
 ----
 CASE WHEN bar IS NULL THEN 'null' WHEN bar = 0 THEN '=0' WHEN bar >= 0 THEN '>=0' ELSE '<0' END
 
+parse-scalar roundtrip
+CASE 'foo' WHEN 'foo' THEN 'FOO' WHEN 'bar' THEN 'BAR' ELSE 'other' END
+----
+CASE 'foo' WHEN 'foo' THEN 'FOO' WHEN 'bar' THEN 'BAR' ELSE 'other' END
+
+parse-scalar roundtrip
+CASE 67 WHEN 67 THEN 'FOO' WHEN 13 THEN 'BAR' ELSE 'other' END
+----
+CASE 67 WHEN 67 THEN 'FOO' WHEN 13 THEN 'BAR' ELSE 'other' END
+
 parse-scalar
 CASE foo WHEN 1 THEN 'Y' ELSE 'N' END
 ----

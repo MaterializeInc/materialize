@@ -11,8 +11,9 @@ use std::collections::BTreeSet;
 use std::ops::Range;
 
 use itertools::Itertools;
-use mz_repr::SqlRelationType;
+use mz_repr::ReprRelationType;
 
+use crate::scalar::func::variadic::{And, Or};
 use crate::visit::Visit;
 use crate::{MirRelationExpr, MirScalarExpr, VariadicFunc};
 
@@ -47,14 +48,14 @@ impl JoinInputMapper {
     }
 
     /// Creates a new `JoinInputMapper` and calculates the mapping of global context
-    /// columns to local context columns. Using this method saves is more
-    /// efficient if input types have been pre-calculated
-    pub fn new_from_input_types(types: &[SqlRelationType]) -> Self {
-        Self::new_from_input_arities(types.iter().map(|t| t.column_types.len()))
+    /// columns to local context columns. Using this method is more
+    /// efficient if input repr types have been pre-calculated.
+    pub fn new_from_input_types(types: &[ReprRelationType]) -> Self {
+        Self::new_from_input_arities(types.iter().map(|t| t.arity()))
     }
 
     /// Creates a new `JoinInputMapper` and calculates the mapping of global context
-    /// columns to local context columns. Using this method saves is more
+    /// columns to local context columns. Using this method is more
     /// efficient if input arities have been pre-calculated
     pub fn new_from_input_arities<I>(arities: I) -> Self
     where
@@ -264,13 +265,13 @@ impl JoinInputMapper {
     /// # Examples
     ///
     /// ```
-    /// use mz_repr::{Datum, SqlColumnType, SqlRelationType, SqlScalarType};
+    /// use mz_repr::{Datum, ReprColumnType, ReprRelationType, ReprScalarType};
     /// use mz_expr::{JoinInputMapper, MirRelationExpr, MirScalarExpr};
     ///
     /// // A two-column schema common to each of the three inputs
-    /// let schema = SqlRelationType::new(vec![
-    ///   SqlScalarType::Int32.nullable(false),
-    ///   SqlScalarType::Int32.nullable(false),
+    /// let schema = ReprRelationType::new(vec![
+    ///   ReprScalarType::Int32.nullable(false),
+    ///   ReprScalarType::Int32.nullable(false),
     /// ]);
     ///
     /// // the specific data are not important here.
@@ -400,7 +401,7 @@ impl JoinInputMapper {
         } else {
             match expr {
                 MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::Or,
+                    func: VariadicFunc::Or(_),
                     exprs: or_args,
                 } => {
                     // Each OR arg should provide a consequence. If they do, we OR them.
@@ -410,13 +411,10 @@ impl JoinInputMapper {
                             mz_ore::stack::maybe_grow(|| self.consequence_for_input(or_arg, index))
                         })
                         .collect::<Option<Vec<_>>>()?; // return None if any of them are None
-                    Some(MirScalarExpr::CallVariadic {
-                        func: VariadicFunc::Or,
-                        exprs: consequences_per_arg,
-                    })
+                    Some(MirScalarExpr::call_variadic(Or, consequences_per_arg))
                 }
                 MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::And,
+                    func: VariadicFunc::And(_),
                     exprs: and_args,
                 } => {
                     // If any of the AND args provide a consequence, then we take those that do,
@@ -431,10 +429,7 @@ impl JoinInputMapper {
                     if consequences_per_arg.is_empty() {
                         None
                     } else {
-                        Some(MirScalarExpr::CallVariadic {
-                            func: VariadicFunc::And,
-                            exprs: consequences_per_arg,
-                        })
+                        Some(MirScalarExpr::call_variadic(And, consequences_per_arg))
                     }
                 }
                 _ => None,
@@ -445,7 +440,7 @@ impl JoinInputMapper {
 
 #[cfg(test)]
 mod tests {
-    use mz_repr::{Datum, SqlScalarType};
+    use mz_repr::{Datum, ReprScalarType};
 
     use crate::scalar::func;
     use crate::{BinaryFunc, MirScalarExpr, UnaryFunc};
@@ -494,7 +489,7 @@ mod tests {
             expr1: Box::new(MirScalarExpr::column(2)),
             expr2: Box::new(MirScalarExpr::literal(
                 Ok(Datum::Int32(4)),
-                SqlScalarType::Int32,
+                ReprScalarType::Int32,
             )),
         };
         let key22 = MirScalarExpr::column(5);

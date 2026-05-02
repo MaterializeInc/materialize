@@ -32,7 +32,7 @@ prevent operational incidents. For alert rules guidelines, see
 
 ### Monitoring
 
-You can monitor the performance and overall health of your Self-Manaed
+You can monitor the performance and overall health of your Self-Managed
 Materialize.
 
 To help you get started, the following guides are available:

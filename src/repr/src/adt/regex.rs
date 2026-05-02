@@ -21,6 +21,23 @@ use serde::de::Error as DeError;
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
+/// The maximum size of a regex after compilation.
+/// This is the same as the `Regex` crate's default at the time of writing.
+///
+/// Note: This number is mentioned in our user-facing docs at the "String operators" in the function
+/// reference.
+const MAX_REGEX_SIZE_AFTER_COMPILATION: usize = 10 * 1024 * 1024;
+
+/// We also need a separate limit for the size of regexes before compilation. Even though the
+/// `Regex` crate promises that using its `size_limit` option (which we set to the other limit,
+/// `MAX_REGEX_SIZE_AFTER_COMPILATION`) would prevent excessive resource usage, this doesn't seem to
+/// be the case. Since we compile regexes in envd, we need strict limits to prevent envd OOMs.
+/// See <https://github.com/MaterializeInc/database-issues/issues/9907> for an example.
+///
+/// Note: This number is mentioned in our user-facing docs at the "String operators" in the function
+/// reference.
+const MAX_REGEX_SIZE_BEFORE_COMPILATION: usize = 1 * 1024 * 1024;
+
 /// A hashable, comparable, and serializable regular expression type.
 ///
 /// The  [`regex::Regex`] type, the de facto standard regex type in Rust, does
@@ -58,7 +75,7 @@ impl Regex {
     /// A simple constructor for the default setting of `dot_matches_new_line: true`.
     /// See <https://www.postgresql.org/docs/current/functions-matching.html#POSIX-MATCHING-RULES>
     /// "newline-sensitive matching"
-    pub fn new(pattern: &str, case_insensitive: bool) -> Result<Regex, Error> {
+    pub fn new(pattern: &str, case_insensitive: bool) -> Result<Regex, RegexCompilationError> {
         Self::new_dot_matches_new_line(pattern, case_insensitive, true)
     }
 
@@ -67,10 +84,16 @@ impl Regex {
         pattern: &str,
         case_insensitive: bool,
         dot_matches_new_line: bool,
-    ) -> Result<Regex, Error> {
+    ) -> Result<Regex, RegexCompilationError> {
+        if pattern.len() > MAX_REGEX_SIZE_BEFORE_COMPILATION {
+            return Err(RegexCompilationError::PatternTooLarge {
+                pattern_size: pattern.len(),
+            });
+        }
         let mut regex_builder = RegexBuilder::new(pattern);
         regex_builder.case_insensitive(case_insensitive);
         regex_builder.dot_matches_new_line(dot_matches_new_line);
+        regex_builder.size_limit(MAX_REGEX_SIZE_AFTER_COMPILATION);
         Ok(Regex {
             case_insensitive,
             dot_matches_new_line,
@@ -83,6 +106,36 @@ impl Regex {
         // `as_str` returns the raw pattern as provided during construction,
         // and doesn't include any of the flags.
         self.regex.as_str()
+    }
+}
+
+/// Error type for regex compilation failures.
+#[derive(Debug, Clone)]
+pub enum RegexCompilationError {
+    /// Wrapper for regex crate's Error type.
+    RegexError(Error),
+    /// Regex pattern size exceeds MAX_REGEX_SIZE_BEFORE_COMPILATION.
+    PatternTooLarge { pattern_size: usize },
+}
+
+impl fmt::Display for RegexCompilationError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            RegexCompilationError::RegexError(e) => write!(f, "{}", e),
+            RegexCompilationError::PatternTooLarge {
+                pattern_size: patter_size,
+            } => write!(
+                f,
+                "regex pattern too large ({} bytes, max {} bytes)",
+                patter_size, MAX_REGEX_SIZE_BEFORE_COMPILATION
+            ),
+        }
+    }
+}
+
+impl From<Error> for RegexCompilationError {
+    fn from(e: Error) -> Self {
+        RegexCompilationError::RegexError(e)
     }
 }
 

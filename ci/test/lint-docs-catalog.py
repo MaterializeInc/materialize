@@ -23,8 +23,15 @@ class ParserState(Enum):
 
 
 HEADER_SEPARATOR_RE = re.compile(r"\|?(\s*-+\s*)(\|\s*-+\s*){2}\|?")
-TABLE_RE = re.compile(r"(?:\|?[\s`\[\]]*([\w_ ]+)[\s`\[\]]*)")
-RELATION_MARKER_RE = re.compile(r"RELATION_SPEC (\w+)\.(\w+)")
+# Field names are enclosed in backticks
+FIELD_NAME_RE = re.compile(r"`(.*)`")
+# Field types are enclosed in backticks and optionally in square brackets
+FIELD_TYPE_RE = re.compile(r"\[?`(.*)`\]?")
+# Documentation links are not preserved in the SQL comments. We capture the
+# text of [..](..) and [..][..] type links and keep only the link text.
+DOC_LINK_TYPE1_RE = re.compile(r"\[([^\]]+)\]\([^)]+\)")
+DOC_LINK_TYPE2_RE = re.compile(r"\[([^\]]+)\]\[[^]]+\]")
+RELATION_MARKER_RE = re.compile(r"RELATION_SPEC (\w+)\.(\w+)(.*)")
 UNDOCUMENTED_RELATION_MARKER = re.compile(r"RELATION_SPEC_UNDOCUMENTED (\w+)\.(\w+)")
 
 HEADER = """
@@ -41,6 +48,11 @@ HEADER = """
 
 mode cockroach
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET unsafe_enable_unstable_dependencies = true
+----
+COMPLETE 0
+
 statement ok
 CREATE VIEW objects AS
   SELECT
@@ -48,12 +60,13 @@ CREATE VIEW objects AS
     objects.name AS object,
     columns.position,
     columns.name,
-    columns.type
+    columns.type,
+    comments.comment
   FROM
-    mz_catalog.mz_columns AS columns,
-    mz_catalog.mz_objects AS objects,
-    mz_catalog.mz_schemas AS schema
-  WHERE columns.id = objects.id AND objects.schema_id = schema.id
+    mz_catalog.mz_columns AS columns
+    JOIN mz_catalog.mz_objects AS objects ON columns.id = objects.id
+    JOIN mz_catalog.mz_schemas AS schema ON objects.schema_id = schema.id
+    LEFT JOIN mz_internal.mz_comments AS comments ON columns.id = comments.id AND columns.position = comments.object_sub_id
 
 statement ok
 CREATE INDEX objects_idx ON objects(schema, object)
@@ -76,14 +89,22 @@ def main() -> None:
                 objects.append(object_name)
                 schemas.add(f"'{schema}'")
                 continue
-            marker_match = RELATION_MARKER_RE.search(line)
-            if marker_match:
-                schema = marker_match.group(1)
-                object_name = marker_match.group(2)
-                print("query ITT")
-                print(
-                    f"SELECT position, name, type FROM objects WHERE schema = '{schema}' AND object = '{object_name}' ORDER BY position"
-                )
+            match = RELATION_MARKER_RE.search(line)
+            if match:
+                modifiers = match.group(3)
+                include_comments = "NO_COMMENTS" not in modifiers
+                schema = match.group(1)
+                object_name = match.group(2)
+                if include_comments:
+                    print("query TTT")
+                    print(
+                        f"SELECT name, type, comment FROM objects WHERE schema = '{schema}' AND object = '{object_name}' ORDER BY position"
+                    )
+                else:
+                    print("query TT")
+                    print(
+                        f"SELECT name, type FROM objects WHERE schema = '{schema}' AND object = '{object_name}' ORDER BY position"
+                    )
                 print("----")
                 state = ParserState.HEADER
                 objects.append(object_name)
@@ -92,10 +113,17 @@ def main() -> None:
             if HEADER_SEPARATOR_RE.match(line):
                 state = ParserState.FIELDS
         elif state == ParserState.FIELDS:
-            table_match = TABLE_RE.findall(line)
-            if table_match and len(table_match) >= 2:
-                field = table_match[0]
-                type_name = table_match[1]
+            line = line.strip()
+            if line.startswith("|"):
+                line = line[1:]
+            fields = [field.strip() for field in line.split("|")]
+            if len(fields) >= 3:
+                field_match = FIELD_NAME_RE.search(fields[0])
+                type_match = FIELD_TYPE_RE.search(fields[1])
+                if not field_match or not type_match:
+                    raise ValueError(f"unexpected field format: {line}")
+                field = field_match.group(1)
+                type_name = type_match.group(1)
                 # We currently cannot determine the type of lists from the catalog.
                 if type_name == "mz_aclitem array":
                     type_name = "mz_aclitem[]"
@@ -106,7 +134,13 @@ def main() -> None:
                 elif "array" in type_name:
                     type_name = "array"
                 type_name = type_name.replace(" ", "␠")
-                print("  ".join([str(position), field, type_name]))
+                if include_comments:
+                    documentation = DOC_LINK_TYPE1_RE.sub(r"\1", fields[2])
+                    documentation = DOC_LINK_TYPE2_RE.sub(r"\1", documentation)
+                    documentation = documentation.replace(" ", "␠")
+                    print("  ".join([field, type_name, documentation]))
+                else:
+                    print("  ".join([field, type_name]))
                 position += 1
             else:
                 print()

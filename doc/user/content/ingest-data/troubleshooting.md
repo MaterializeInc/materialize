@@ -32,7 +32,7 @@ to https://console.materialize.com/, clicking the **Sources** tab in the
 navigation bar, and clicking the affected source.
 
 Alternatively, you can get this information from the system catalog by querying
-the [`mz_source_statuses`](/sql/system-catalog/mz_internal/#mz_source_statuses)
+the [`mz_source_statuses`](/reference/system-catalog/mz_internal/#mz_source_statuses)
 table:
 
 ```mzsql
@@ -66,7 +66,7 @@ breaks out of the query).
 {{< include-md file="shared-content/snapshotting-cluster-size-postgres.md" >}}
 
 To determine whether your source has completed ingesting the initial snapshot,
-you can query the [`mz_source_statistics`](/sql/system-catalog/mz_internal/#mz_source_statistics)
+you can query the [`mz_source_statistics`](/reference/system-catalog/mz_internal/#mz_source_statistics)
 system catalog table:
 
 ```mzsql
@@ -113,3 +113,5 @@ the cluster for steady-state.
 ## See also
 
 - [Monitoring data ingestion](/ingest-data/monitoring-data-ingestion/)
+- [Postgres troubleshooting guides](/ingest-data/postgres/troubleshooting/)
+- [MySQL troubleshooting guides](/ingest-data/mysql/troubleshooting/)

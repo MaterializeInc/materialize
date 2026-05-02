@@ -406,7 +406,17 @@ impl DateTimeToken {
 
 /// Specifies the ordinal suffix that should be attached to numeric fields.
 #[derive(
-    Debug, Eq, PartialEq, PartialOrd, Ord, Copy, Clone, Hash, Serialize, Deserialize, MzReflect,
+    Debug,
+    Eq,
+    PartialEq,
+    PartialOrd,
+    Ord,
+    Copy,
+    Clone,
+    Hash,
+    Serialize,
+    Deserialize,
+    MzReflect
 )]
 enum OrdinalMode {
     /// No ordinal suffix.
@@ -447,7 +457,17 @@ impl OrdinalMode {
 /// Specifies the capitalization of a word.
 #[allow(clippy::enum_variant_names)] // Having "Caps" in the variant names is clarifying.
 #[derive(
-    Debug, Eq, PartialEq, PartialOrd, Ord, Copy, Clone, Hash, Serialize, Deserialize, MzReflect,
+    Debug,
+    Eq,
+    PartialEq,
+    PartialOrd,
+    Ord,
+    Copy,
+    Clone,
+    Hash,
+    Serialize,
+    Deserialize,
+    MzReflect
 )]
 enum WordCaps {
     /// All of the letters should be capitalized.
@@ -462,7 +482,18 @@ enum WordCaps {
 ///
 /// The variants are largely self-evident, but are described in detail in the
 /// PostgreSQL documentation if necessary.
-#[derive(Debug, Eq, PartialEq, PartialOrd, Ord, Clone, Hash, Serialize, Deserialize, MzReflect)]
+#[derive(
+    Debug,
+    Eq,
+    PartialEq,
+    PartialOrd,
+    Ord,
+    Clone,
+    Hash,
+    Serialize,
+    Deserialize,
+    MzReflect
+)]
 enum DateTimeField {
     Hour12,
     Hour24,
@@ -503,7 +534,18 @@ enum DateTimeField {
 }
 
 /// An element of a date-time format string.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, MzReflect)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    MzReflect
+)]
 enum DateTimeFormatNode {
     /// A field whose value will be computed from the input timestamp.
     Field {
@@ -796,7 +838,18 @@ impl DateTimeFormatNode {
 }
 
 /// A compiled date-time format string.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, MzReflect)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    MzReflect
+)]
 pub struct DateTimeFormat(Vec<DateTimeFormatNode>);
 
 impl DateTimeFormat {

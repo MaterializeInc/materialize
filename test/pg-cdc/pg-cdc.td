@@ -136,6 +136,8 @@ CREATE TABLE conflict_schema.another_enum_table ("колона" another_enum);
 INSERT INTO conflict_schema.another_enum_table VALUES ('var2'), ('var3');
 ALTER TABLE conflict_schema.another_enum_table REPLICA IDENTITY FULL;
 
+ANALYZE;
+
 DROP PUBLICATION IF EXISTS mz_source_narrow;
 
 CREATE PUBLICATION mz_source_narrow FOR TABLE enum_table, public.another_enum_table, pk_table;
@@ -145,6 +147,8 @@ CREATE SCHEMA another_schema;
 CREATE TABLE another_schema.another_table (f1 TEXT);
 ALTER TABLE another_schema.another_table REPLICA IDENTITY FULL;
 INSERT INTO another_schema.another_table VALUES ('123');
+
+ANALYZE;
 
 DROP PUBLICATION IF EXISTS another_publication;
 
@@ -327,21 +331,23 @@ public          nonpk_table
 public          types_table
 public          nulls_table
 public          multipart_pk
-public          "\"space table\""
+public          "space table"
 public          tstzrange_table
-public          "\"таблица\""
+public          таблица
 public          array_types_table
 public          trailing_space_pk
 public          escaped_text_table
 public          trailing_space_nopk
-public          "\"\"\"literal_quotes\"\"\""
+public          "\"literal_quotes\""
 conflict_schema conflict_table
 
-# Ensure all ingestion export subsources have an ID greater than the primary source ID
+# Ensure all ingestion export subsources have an ID greater than the primary source ID.
+# We compare IDs as integers because the string `id` column (e.g. 'u9', 'u10') doesn't
+# sort correctly with lexicographic comparison across different digit counts.
 > SELECT bool_and(primary_source_id < subsource_id)
   FROM
-      (SELECT id AS primary_source_id FROM mz_sources WHERE type = 'postgres')
-          CROSS JOIN (SELECT id AS subsource_id FROM mz_tables WHERE source_id IS NOT NULL);
+      (SELECT substr(id, 2)::integer AS primary_source_id FROM mz_sources WHERE type = 'postgres')
+          CROSS JOIN (SELECT substr(id, 2)::integer AS subsource_id FROM mz_tables WHERE source_id IS NOT NULL);
 true
 
 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mz_source';
@@ -720,8 +726,11 @@ var1
 
 $ set-regex match="DETAILS = '[a-f0-9]+'" replacement=<DETAILS>
 
-> SHOW CREATE TABLE enum_table
+>[version<2600700] SHOW CREATE TABLE enum_table
 materialize.public.enum_table "CREATE TABLE materialize.public.enum_table (a pg_catalog.text) FROM SOURCE materialize.public.enum_source (REFERENCE = postgres.public.enum_table) WITH (TEXT COLUMNS = (a), <DETAILS>);"
+
+>[version>=2600700] SHOW CREATE TABLE enum_table
+materialize.public.enum_table "CREATE TABLE materialize.public.enum_table (a pg_catalog.text)\nFROM SOURCE materialize.public.enum_source (REFERENCE = postgres.public.enum_table)\nWITH (\n    TEXT COLUMNS = (a),\n    <DETAILS>\n);"
 
 # Test that TEXT COLUMN types can change
 $ postgres-execute connection=postgres://postgres:postgres@postgres

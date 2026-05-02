@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::borrow::Cow;
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt::{self, Debug};
 use std::hash::Hash;
@@ -14,6 +16,7 @@ use std::iter;
 use std::ops::Add;
 use std::sync::LazyLock;
 
+use anyhow::bail;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use dec::OrderedDecimal;
 use enum_kinds::EnumKind;
@@ -21,7 +24,7 @@ use itertools::Itertools;
 use mz_lowertest::MzReflect;
 use mz_ore::Overflowing;
 use mz_ore::cast::CastFrom;
-use mz_ore::str::StrExt;
+use mz_ore::str::{StrExt, separated};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use ordered_float::OrderedFloat;
 use proptest::prelude::*;
@@ -70,7 +73,7 @@ use crate::{CatalogItemId, ColumnName, DatumList, DatumMap, Row, RowArena, SqlCo
 /// functions on `repr::row::RowPacker` prefixed with `push_`.
 ///
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd, EnumKind)]
-#[enum_kind(DatumKind)]
+#[enum_kind(DatumKind, derive(Hash))]
 pub enum Datum<'a> {
     /// The `false` boolean value.
     False,
@@ -1015,7 +1018,7 @@ impl<'a> Datum<'a> {
                     _ => false,
                 }
             } else {
-                // sql type checking
+                // general scalar repr type checking
                 match (datum, scalar_type) {
                     (Datum::Dummy, _) => false,
                     (Datum::Null, _) => false,
@@ -1064,7 +1067,7 @@ impl<'a> Datum<'a> {
                         })
                     }
                     (Datum::Array(array), ReprScalarType::Int2Vector) => {
-                        array.dims().len() == 1
+                        array.has_int2vector_dims()
                             && array
                                 .elements
                                 .iter()
@@ -1202,7 +1205,7 @@ impl<'a> Datum<'a> {
                         })
                     }
                     (Datum::Array(array), SqlScalarType::Int2Vector) => {
-                        array.dims().len() == 1
+                        array.has_int2vector_dims()
                             && array
                                 .elements
                                 .iter()
@@ -1415,6 +1418,13 @@ impl<'a> From<&'a [u8]> for Datum<'a> {
     }
 }
 
+impl<'a, const N: usize> From<&'a [u8; N]> for Datum<'a> {
+    #[inline]
+    fn from(b: &'a [u8; N]) -> Datum<'a> {
+        Datum::Bytes(b.as_slice())
+    }
+}
+
 impl<'a> From<Date> for Datum<'a> {
     #[inline]
     fn from(d: Date) -> Datum<'a> {
@@ -1555,12 +1565,12 @@ impl fmt::Display for Datum<'_> {
                     f.write_str("=")?;
                 }
                 f.write_str("{")?;
-                write_delimited(f, ", ", &array.elements, |f, e| write!(f, "{}", e))?;
+                write_delimited(f, ", ", array.elements, |f, e| write!(f, "{}", e))?;
                 f.write_str("}")
             }
             Datum::List(list) => {
                 f.write_str("[")?;
-                write_delimited(f, ", ", list, |f, e| write!(f, "{}", e))?;
+                write_delimited(f, ", ", *list, |f, e| write!(f, "{}", e))?;
                 f.write_str("]")
             }
             Datum::Map(dict) => {
@@ -1589,7 +1599,17 @@ impl fmt::Display for Datum<'_> {
 /// There is an indirect correspondence between `Datum` variants and `SqlScalarType`
 /// variants: every `Datum` variant belongs to one or more `SqlScalarType` variants.
 #[derive(
-    Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd, Hash, EnumKind, MzReflect,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    Ord,
+    PartialOrd,
+    Hash,
+    EnumKind,
+    MzReflect
 )]
 #[enum_kind(SqlScalarBaseType, derive(PartialOrd, Ord, Hash))]
 pub enum SqlScalarType {
@@ -1913,6 +1933,23 @@ impl RustType<ProtoScalarType> for SqlScalarType {
     }
 }
 
+/// Trait for SQL container types whose element/value type can be extracted
+/// from or wrapped into a [`SqlScalarType`].
+///
+/// Implemented by [`DatumList`], [`Array`], [`DatumMap`], and [`Range`].
+/// The `#[sqlfunc]` proc macro emits calls to these associated functions so
+/// that Rust's type system resolves the correct unwrap/wrap behavior at compile
+/// time, instead of relying on string-matching type names in the AST.
+///
+/// The methods are deliberately associated functions (no `&self`) because they
+/// operate on [`SqlScalarType`] metadata, not on container values.
+pub trait SqlContainerType {
+    /// Extract the element type from a container scalar type.
+    fn unwrap_element_type(container: &SqlScalarType) -> &SqlScalarType;
+    /// Construct a container scalar type from an element type.
+    fn wrap_element_type(element: SqlScalarType) -> SqlScalarType;
+}
+
 /// Types that implement this trait can be stored in an SQL column with the specified SqlColumnType
 pub trait AsColumnType {
     /// The SQL column type of this Rust type
@@ -1920,16 +1957,44 @@ pub trait AsColumnType {
 }
 
 /// A bridge between native Rust types and SQL runtime types represented in Datums
-pub trait DatumType<'a, E>: Sized {
+pub trait InputDatumType<'a, E>: Sized {
+    /// Whether this Rust type can represent NULL values
+    fn nullable() -> bool;
+
+    /// Whether ALL components of this input accept NULL values.
+    ///
+    /// For single-element types this equals `nullable()`. For tuples, this is
+    /// the AND of all components' `nullable()` values. Used by `output_type` to
+    /// detect implicit null propagation from non-nullable parameter positions.
+    fn all_nullable() -> bool {
+        Self::nullable()
+    }
+
+    /// Try to convert a Result whose Ok variant is a Datum into this native Rust type (Self). If
+    /// it fails the error variant will contain the original result.
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>>;
+
+    /// Try to convert a number of datums to a Result whose Ok variant is a native Rust type (Self)
+    /// representing a number of datums obtained from the iterator.
+    fn try_from_iter(
+        iter: &mut impl Iterator<Item = Result<Datum<'a>, E>>,
+    ) -> Result<Self, Result<Option<Datum<'a>>, E>> {
+        // TODO: Consider removing default implementation, only relevant for single-element datum
+        //   types.
+        match iter.next() {
+            Some(next) => Self::try_from_result(next).map_err(|e| e.map(Some)),
+            None => Err(Ok(None)),
+        }
+    }
+}
+
+/// A bridge between native Rust types and SQL runtime types represented in Datums
+pub trait OutputDatumType<'a, E>: Sized {
     /// Whether this Rust type can represent NULL values
     fn nullable() -> bool;
 
     /// Whether this Rust type can represent errors
     fn fallible() -> bool;
-
-    /// Try to convert a Result whose Ok variant is a Datum into this native Rust type (Self). If
-    /// it fails the error variant will contain the original result.
-    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>>;
 
     /// Convert this Rust type into a Result containing a Datum, or an error
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E>;
@@ -1940,18 +2005,60 @@ pub trait DatumType<'a, E>: Sized {
 #[derive(Debug)]
 pub struct ArrayRustType<T>(pub Vec<T>);
 
+impl<T> From<Vec<T>> for ArrayRustType<T> {
+    fn from(v: Vec<T>) -> Self {
+        Self(v)
+    }
+}
+
+// We define `AsColumnType` in terms of the owned type of `B`.
+impl<B: ToOwned<Owned: AsColumnType> + ?Sized> AsColumnType for Cow<'_, B> {
+    fn as_column_type() -> SqlColumnType {
+        <B::Owned>::as_column_type()
+    }
+}
+
+impl<'a, E, B: ToOwned + ?Sized> InputDatumType<'a, E> for Cow<'a, B>
+where
+    for<'b> B::Owned: InputDatumType<'b, E>,
+    for<'b> &'b B: InputDatumType<'b, E>,
+{
+    fn nullable() -> bool {
+        B::Owned::nullable()
+    }
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        <&B>::try_from_result(res).map(|b| Cow::Borrowed(b))
+    }
+}
+
+impl<'a, E, B: ToOwned + ?Sized> OutputDatumType<'a, E> for Cow<'a, B>
+where
+    for<'b> B::Owned: OutputDatumType<'b, E>,
+    for<'b> &'b B: OutputDatumType<'b, E>,
+{
+    fn nullable() -> bool {
+        B::Owned::nullable()
+    }
+    fn fallible() -> bool {
+        B::Owned::fallible()
+    }
+    fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        match self {
+            Cow::Owned(b) => b.into_result(temp_storage),
+            Cow::Borrowed(b) => b.into_result(temp_storage),
+        }
+    }
+}
+
 impl<B: AsColumnType> AsColumnType for Option<B> {
     fn as_column_type() -> SqlColumnType {
         B::as_column_type().nullable(true)
     }
 }
 
-impl<'a, E, B: DatumType<'a, E>> DatumType<'a, E> for Option<B> {
+impl<'a, E, B: InputDatumType<'a, E>> InputDatumType<'a, E> for Option<B> {
     fn nullable() -> bool {
         true
-    }
-    fn fallible() -> bool {
-        false
     }
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
@@ -1959,6 +2066,15 @@ impl<'a, E, B: DatumType<'a, E>> DatumType<'a, E> for Option<B> {
             Ok(datum) => B::try_from_result(Ok(datum)).map(Some),
             _ => Err(res),
         }
+    }
+}
+
+impl<'a, E, B: OutputDatumType<'a, E>> OutputDatumType<'a, E> for Option<B> {
+    fn nullable() -> bool {
+        true
+    }
+    fn fallible() -> bool {
+        false
     }
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         match self {
@@ -1974,36 +2090,262 @@ impl<E, B: AsColumnType> AsColumnType for Result<B, E> {
     }
 }
 
-impl<'a, E, B: DatumType<'a, E>> DatumType<'a, E> for Result<B, E> {
+impl<'a, E, B: InputDatumType<'a, E>> InputDatumType<'a, E> for Result<B, E> {
+    fn nullable() -> bool {
+        B::nullable()
+    }
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        B::try_from_result(res).map(Ok)
+    }
+    fn try_from_iter(
+        iter: &mut impl Iterator<Item = Result<Datum<'a>, E>>,
+    ) -> Result<Self, Result<Option<Datum<'a>>, E>> {
+        B::try_from_iter(iter).map(Ok)
+    }
+}
+
+impl<'a, E, B: OutputDatumType<'a, E>> OutputDatumType<'a, E> for Result<B, E> {
     fn nullable() -> bool {
         B::nullable()
     }
     fn fallible() -> bool {
         true
     }
-    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
-        B::try_from_result(res).map(Ok)
-    }
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         self.and_then(|inner| inner.into_result(temp_storage))
     }
 }
 
-/// Macro to derive DatumType for all Datum variants that are simple Copy types
+macro_rules! impl_tuple_input_datum_type {
+    ($($T:ident),+) => {
+        #[allow(non_snake_case)]
+        impl<'a, E, $($T: InputDatumType<'a, E>),+> InputDatumType<'a, E> for ($($T,)+) {
+            fn try_from_result(_res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+                unimplemented!("Not possible")
+            }
+            fn try_from_iter(
+                iter: &mut impl Iterator<Item = Result<Datum<'a>, E>>,
+            ) -> Result<Self, Result<Option<Datum<'a>>, E>> {
+                // Eagerly evaluate all arguments before checking for errors.
+                // Each `$T` repetition expands to a separate variable, so we
+                // first collect all results and then unpack them in priority
+                // order: internal errors, then eval errors, then null
+                // propagation. Doing it in one pass per `$T` would short-
+                // circuit on the first error and skip evaluating later args.
+                $(
+                    let $T = <$T>::try_from_iter(iter);
+                )+
+                // Handle internal errors
+                $(
+                    let $T = match $T {
+                        Err(Ok(None)) => return Err(Ok(None)),
+                        Err(Ok(Some(datum))) if !datum.is_null() => return Err(Ok(Some(datum))),
+                        els => els,
+                    };
+                )+
+                // Handle eval errors
+                $(
+                    let $T = match $T {
+                        Err(Err(err)) => return Err(Err(err)),
+                        els => els,
+                    };
+                )+
+                // Handle null propagation
+                $(
+                    let $T = $T?;
+                )+
+                Ok(($($T,)+))
+            }
+            fn nullable() -> bool {
+                // OR: the tuple "accepts NULL" if any component does.
+                // Used by the default `propagates_nulls` (`!nullable()`): when
+                // every component rejects NULL, the function propagates nulls
+                // for ALL inputs — safe for the optimizer to replace with NULL.
+                $( <$T>::nullable() )||+
+            }
+            fn all_nullable() -> bool {
+                // AND: true only when every component accepts NULL. When false,
+                // at least one parameter position rejects NULL at runtime
+                // (via `try_from_iter`), making the output potentially nullable
+                // even if `propagates_nulls` is false.
+                $( <$T>::nullable() )&&+
+            }
+        }
+    }
+}
+
+impl_tuple_input_datum_type!(T0);
+impl_tuple_input_datum_type!(T0, T1);
+impl_tuple_input_datum_type!(T0, T1, T2);
+impl_tuple_input_datum_type!(T0, T1, T2, T3);
+impl_tuple_input_datum_type!(T0, T1, T2, T3, T4);
+impl_tuple_input_datum_type!(T0, T1, T2, T3, T4, T5);
+
+/// A wrapper type for variadic arguments that consumes the remaining iterator.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Variadic<T>(pub Vec<T>);
+
+impl<T> From<Vec<T>> for Variadic<T> {
+    #[inline(always)]
+    fn from(v: Vec<T>) -> Self {
+        Self(v)
+    }
+}
+
+impl<T> std::ops::Deref for Variadic<T> {
+    type Target = Vec<T>;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T> IntoIterator for Variadic<T> {
+    type Item = T;
+    type IntoIter = std::vec::IntoIter<T>;
+
+    #[inline(always)]
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl<'a, T> IntoIterator for &'a Variadic<T> {
+    type Item = &'a T;
+    type IntoIter = std::slice::Iter<'a, T>;
+
+    #[inline(always)]
+    fn into_iter(self) -> Self::IntoIter {
+        (&self.0).into_iter()
+    }
+}
+
+impl<'a, E, T: InputDatumType<'a, E>> InputDatumType<'a, E> for Variadic<T> {
+    fn nullable() -> bool {
+        T::nullable()
+    }
+    #[inline]
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        Ok(vec![T::try_from_result(res)?].into())
+    }
+    #[inline]
+    fn try_from_iter(
+        iter: &mut impl Iterator<Item = Result<Datum<'a>, E>>,
+    ) -> Result<Self, Result<Option<Datum<'a>>, E>> {
+        let mut res = Vec::with_capacity(iter.size_hint().0);
+        loop {
+            match T::try_from_iter(iter) {
+                Ok(t) => res.push(t),
+                Err(Ok(None)) => break,
+                Err(err) => return Err(err),
+            }
+        }
+        Ok(Self(res))
+    }
+}
+
+/// Wrapper to distinguish "argument may not be present" from `Option<T>` (nullable).
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct OptionalArg<T>(pub Option<T>);
+
+impl<T> std::ops::Deref for OptionalArg<T> {
+    type Target = Option<T>;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T> From<Option<T>> for OptionalArg<T> {
+    #[inline(always)]
+    fn from(opt: Option<T>) -> Self {
+        Self(opt)
+    }
+}
+
+impl<'a, E, T: InputDatumType<'a, E>> InputDatumType<'a, E> for OptionalArg<T> {
+    fn nullable() -> bool {
+        T::nullable()
+    }
+    #[inline]
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        Ok(Some(T::try_from_result(res)?).into())
+    }
+    #[inline]
+    fn try_from_iter(
+        iter: &mut impl Iterator<Item = Result<Datum<'a>, E>>,
+    ) -> Result<Self, Result<Option<Datum<'a>>, E>> {
+        match iter.next() {
+            Some(datum) => {
+                let val = T::try_from_result(datum).map_err(|r| r.map(Some))?;
+                Ok(Some(val).into())
+            }
+            None => Ok(None.into()),
+        }
+    }
+}
+
+/// A wrapper type that excludes `NULL` values, even if `B` allows them.
+///
+/// The wrapper allows for using types that can represent `NULL` values in contexts where
+/// `NULL` values are not allowed, enforcing the non-null constraint at the type level.
+/// For example, functions that propagate `NULL` values can use this type to ensure that
+/// their inputs are non-null, even if the type could represent `NULL` values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ExcludeNull<B>(B);
+
+impl<B: AsColumnType> AsColumnType for ExcludeNull<B> {
+    fn as_column_type() -> SqlColumnType {
+        B::as_column_type().nullable(false)
+    }
+}
+
+impl<'a, E, B: InputDatumType<'a, E>> InputDatumType<'a, E> for ExcludeNull<B> {
+    fn nullable() -> bool {
+        false
+    }
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        match res {
+            Ok(Datum::Null) => Err(Ok(Datum::Null)),
+            _ => B::try_from_result(res).map(ExcludeNull),
+        }
+    }
+}
+
+impl<'a, E, B: OutputDatumType<'a, E>> OutputDatumType<'a, E> for ExcludeNull<B> {
+    fn nullable() -> bool {
+        false
+    }
+    fn fallible() -> bool {
+        B::fallible()
+    }
+    fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        self.0.into_result(temp_storage)
+    }
+}
+
+impl<B> std::ops::Deref for ExcludeNull<B> {
+    type Target = B;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+/// Macro to derive InputDatumType and OutputDatumType for all Datum variants that are simple Copy types
 macro_rules! impl_datum_type_copy {
     ($lt:lifetime, $native:ty, $variant:ident) => {
+        #[allow(unused_lifetimes)]
         impl<$lt> AsColumnType for $native {
             fn as_column_type() -> SqlColumnType {
                 SqlScalarType::$variant.nullable(false)
             }
         }
 
-        impl<$lt, E> DatumType<$lt, E> for $native {
+        impl<$lt, E> InputDatumType<$lt, E> for $native {
             fn nullable() -> bool {
-                false
-            }
-
-            fn fallible() -> bool {
                 false
             }
 
@@ -2012,6 +2354,16 @@ macro_rules! impl_datum_type_copy {
                     Ok(Datum::$variant(f)) => Ok(f.into()),
                     _ => Err(res),
                 }
+            }
+        }
+
+        impl<$lt, E> OutputDatumType<$lt, E> for $native {
+            fn nullable() -> bool {
+                false
+            }
+
+            fn fallible() -> bool {
+                false
             }
 
             fn into_result(self, _temp_storage: &$lt RowArena) -> Result<Datum<$lt>, E> {
@@ -2040,13 +2392,9 @@ impl_datum_type_copy!('a, &'a str, String);
 impl_datum_type_copy!('a, &'a [u8], Bytes);
 impl_datum_type_copy!(crate::Timestamp, MzTimestamp);
 
-impl<'a, E> DatumType<'a, E> for Datum<'a> {
+impl<'a, E> InputDatumType<'a, E> for Datum<'a> {
     fn nullable() -> bool {
         true
-    }
-
-    fn fallible() -> bool {
-        false
     }
 
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
@@ -2055,18 +2403,24 @@ impl<'a, E> DatumType<'a, E> for Datum<'a> {
             _ => Err(res),
         }
     }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for Datum<'a> {
+    fn nullable() -> bool {
+        true
+    }
+
+    fn fallible() -> bool {
+        false
+    }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         Ok(self)
     }
 }
 
-impl<'a, E> DatumType<'a, E> for DatumList<'a> {
+impl<'a, E> InputDatumType<'a, E> for DatumList<'a> {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2076,18 +2430,24 @@ impl<'a, E> DatumType<'a, E> for DatumList<'a> {
             _ => Err(res),
         }
     }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for DatumList<'a> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
+    }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         Ok(Datum::List(self))
     }
 }
 
-impl<'a, E> DatumType<'a, E> for Array<'a> {
+impl<'a, E> InputDatumType<'a, E> for Array<'a> {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2097,18 +2457,64 @@ impl<'a, E> DatumType<'a, E> for Array<'a> {
             _ => Err(res),
         }
     }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for Array<'a> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
+    }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         Ok(Datum::Array(self))
     }
 }
 
-impl<'a, E> DatumType<'a, E> for DatumMap<'a> {
+/// A wrapper around [`Array`] that represents a PostgreSQL `int2vector` value.
+///
+/// This exists to allow distinguishing between `int2vector` and regular array
+/// values in the type system, which enables `#[sqlfunc]` conversions.
+#[derive(Debug)]
+pub struct Int2Vector<'a>(pub Array<'a>);
+
+impl AsColumnType for Int2Vector<'_> {
+    fn as_column_type() -> SqlColumnType {
+        SqlScalarType::Int2Vector.nullable(false)
+    }
+}
+
+impl<'a, E> InputDatumType<'a, E> for Int2Vector<'a> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        match res {
+            Ok(Datum::Array(array)) => Ok(Int2Vector(array)),
+            _ => Err(res),
+        }
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for Int2Vector<'a> {
     fn nullable() -> bool {
         false
     }
 
     fn fallible() -> bool {
+        false
+    }
+
+    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(Datum::Array(self.0))
+    }
+}
+
+impl<'a, E> InputDatumType<'a, E> for DatumMap<'a> {
+    fn nullable() -> bool {
         false
     }
 
@@ -2118,18 +2524,24 @@ impl<'a, E> DatumType<'a, E> for DatumMap<'a> {
             _ => Err(res),
         }
     }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for DatumMap<'a> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
+    }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         Ok(Datum::Map(self))
     }
 }
 
-impl<'a, E> DatumType<'a, E> for Range<DatumNested<'a>> {
+impl<'a, E> InputDatumType<'a, E> for Range<DatumNested<'a>> {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2139,13 +2551,9 @@ impl<'a, E> DatumType<'a, E> for Range<DatumNested<'a>> {
             _ => Err(res),
         }
     }
-
-    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
-        Ok(Datum::Range(self))
-    }
 }
 
-impl<'a, E> DatumType<'a, E> for Range<Datum<'a>> {
+impl<'a, E> OutputDatumType<'a, E> for Range<DatumNested<'a>> {
     fn nullable() -> bool {
         false
     }
@@ -2154,11 +2562,31 @@ impl<'a, E> DatumType<'a, E> for Range<Datum<'a>> {
         false
     }
 
+    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(Datum::Range(self))
+    }
+}
+
+impl<'a, E> InputDatumType<'a, E> for Range<Datum<'a>> {
+    fn nullable() -> bool {
+        false
+    }
+
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
             Ok(r @ Datum::Range(..)) => Ok(r.unwrap_range()),
             _ => Err(res),
         }
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for Range<Datum<'a>> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
     }
 
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
@@ -2174,12 +2602,8 @@ impl AsColumnType for bool {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for bool {
+impl<'a, E> InputDatumType<'a, E> for bool {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2189,6 +2613,16 @@ impl<'a, E> DatumType<'a, E> for bool {
             Ok(Datum::False) => Ok(false),
             _ => Err(res),
         }
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for bool {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
     }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
@@ -2206,12 +2640,8 @@ impl AsColumnType for String {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for String {
+impl<'a, E> InputDatumType<'a, E> for String {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2221,19 +2651,9 @@ impl<'a, E> DatumType<'a, E> for String {
             _ => Err(res),
         }
     }
-
-    fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
-        Ok(Datum::String(temp_storage.push_string(self)))
-    }
 }
 
-impl AsColumnType for ArrayRustType<String> {
-    fn as_column_type() -> SqlColumnType {
-        SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false)
-    }
-}
-
-impl<'a, E> DatumType<'a, E> for ArrayRustType<String> {
+impl<'a, E> OutputDatumType<'a, E> for String {
     fn nullable() -> bool {
         false
     }
@@ -2242,30 +2662,69 @@ impl<'a, E> DatumType<'a, E> for ArrayRustType<String> {
         false
     }
 
+    fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(Datum::String(temp_storage.push_string(self)))
+    }
+}
+
+impl<T: AsColumnType> AsColumnType for ArrayRustType<T> {
+    fn as_column_type() -> SqlColumnType {
+        let inner = T::as_column_type();
+        SqlScalarType::Array(Box::new(inner.scalar_type)).nullable(false)
+    }
+}
+
+impl<'a, T, E> InputDatumType<'a, E> for ArrayRustType<T>
+where
+    T: InputDatumType<'a, E>,
+{
+    fn nullable() -> bool {
+        false
+    }
+
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
-        match res {
-            Ok(Datum::Array(arr)) => Ok(ArrayRustType(
-                arr.elements()
-                    .into_iter()
-                    .map(|d| d.unwrap_str().to_string())
-                    .collect(),
-            )),
-            _ => Err(res),
+        if let Ok(Datum::Array(arr)) = &res {
+            let result = arr
+                .elements()
+                .into_iter()
+                .map(|d| T::try_from_result(Ok(d)))
+                .collect::<Result<_, _>>();
+            if let Ok(elements) = result {
+                return Ok(ArrayRustType(elements));
+            }
         }
+
+        // The `try_from_result` contract requires we return the original `res` on error.
+        Err(res)
+    }
+}
+
+impl<'a, T, E> OutputDatumType<'a, E> for ArrayRustType<T>
+where
+    T: OutputDatumType<'a, E>,
+{
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        T::fallible()
     }
 
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
-        Ok(temp_storage.make_datum(|packer| {
+        let dimensions = ArrayDimension {
+            lower_bound: 1,
+            length: self.0.len(),
+        };
+        let iter = self
+            .0
+            .into_iter()
+            .map(|elem| elem.into_result(temp_storage));
+        temp_storage.try_make_datum(|packer| {
             packer
-                .try_push_array(
-                    &[ArrayDimension {
-                        lower_bound: 1,
-                        length: self.0.len(),
-                    }],
-                    self.0.iter().map(|elem| Datum::String(elem.as_str())),
-                )
-                .expect("self is 1 dimensional, and its length is used for the array length");
-        }))
+                .try_push_array_fallible(&[dimensions], iter)
+                .expect("self is 1 dimensional, and its length is used for the array length")
+        })
     }
 }
 
@@ -2275,12 +2734,8 @@ impl AsColumnType for Vec<u8> {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for Vec<u8> {
+impl<'a, E> InputDatumType<'a, E> for Vec<u8> {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2289,6 +2744,16 @@ impl<'a, E> DatumType<'a, E> for Vec<u8> {
             Ok(Datum::Bytes(b)) => Ok(b.to_owned()),
             _ => Err(res),
         }
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for Vec<u8> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
     }
 
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
@@ -2302,12 +2767,8 @@ impl AsColumnType for Numeric {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for Numeric {
+impl<'a, E> InputDatumType<'a, E> for Numeric {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2317,13 +2778,9 @@ impl<'a, E> DatumType<'a, E> for Numeric {
             _ => Err(res),
         }
     }
-
-    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
-        Ok(Datum::from(self))
-    }
 }
 
-impl<'a, E> DatumType<'a, E> for OrderedDecimal<Numeric> {
+impl<'a, E> OutputDatumType<'a, E> for Numeric {
     fn nullable() -> bool {
         false
     }
@@ -2332,11 +2789,31 @@ impl<'a, E> DatumType<'a, E> for OrderedDecimal<Numeric> {
         false
     }
 
+    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(Datum::from(self))
+    }
+}
+
+impl<'a, E> InputDatumType<'a, E> for OrderedDecimal<Numeric> {
+    fn nullable() -> bool {
+        false
+    }
+
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
             Ok(Datum::Numeric(n)) => Ok(n),
             _ => Err(res),
         }
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for OrderedDecimal<Numeric> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
     }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
@@ -2350,12 +2827,8 @@ impl AsColumnType for PgLegacyChar {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for PgLegacyChar {
+impl<'a, E> InputDatumType<'a, E> for PgLegacyChar {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2364,6 +2837,16 @@ impl<'a, E> DatumType<'a, E> for PgLegacyChar {
             Ok(Datum::UInt8(a)) => Ok(PgLegacyChar(a)),
             _ => Err(res),
         }
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for PgLegacyChar {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
     }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
@@ -2380,12 +2863,8 @@ where
     }
 }
 
-impl<'a, E> DatumType<'a, E> for PgLegacyName<&'a str> {
+impl<'a, E> InputDatumType<'a, E> for PgLegacyName<&'a str> {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2395,13 +2874,9 @@ impl<'a, E> DatumType<'a, E> for PgLegacyName<&'a str> {
             _ => Err(res),
         }
     }
-
-    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
-        Ok(Datum::String(self.0))
-    }
 }
 
-impl<'a, E> DatumType<'a, E> for PgLegacyName<String> {
+impl<'a, E> OutputDatumType<'a, E> for PgLegacyName<&'a str> {
     fn nullable() -> bool {
         false
     }
@@ -2410,11 +2885,31 @@ impl<'a, E> DatumType<'a, E> for PgLegacyName<String> {
         false
     }
 
+    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(Datum::String(self.0))
+    }
+}
+
+impl<'a, E> InputDatumType<'a, E> for PgLegacyName<String> {
+    fn nullable() -> bool {
+        false
+    }
+
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
             Ok(Datum::String(a)) => Ok(PgLegacyName(a.to_owned())),
             _ => Err(res),
         }
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for PgLegacyName<String> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
     }
 
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
@@ -2428,12 +2923,8 @@ impl AsColumnType for Oid {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for Oid {
+impl<'a, E> InputDatumType<'a, E> for Oid {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2442,6 +2933,16 @@ impl<'a, E> DatumType<'a, E> for Oid {
             Ok(Datum::UInt32(a)) => Ok(Oid(a)),
             _ => Err(res),
         }
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for Oid {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
     }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
@@ -2455,12 +2956,8 @@ impl AsColumnType for RegClass {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for RegClass {
+impl<'a, E> InputDatumType<'a, E> for RegClass {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2469,6 +2966,16 @@ impl<'a, E> DatumType<'a, E> for RegClass {
             Ok(Datum::UInt32(a)) => Ok(RegClass(a)),
             _ => Err(res),
         }
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for RegClass {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
     }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
@@ -2482,12 +2989,8 @@ impl AsColumnType for RegProc {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for RegProc {
+impl<'a, E> InputDatumType<'a, E> for RegProc {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2496,6 +2999,16 @@ impl<'a, E> DatumType<'a, E> for RegProc {
             Ok(Datum::UInt32(a)) => Ok(RegProc(a)),
             _ => Err(res),
         }
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for RegProc {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
     }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
@@ -2509,12 +3022,8 @@ impl AsColumnType for RegType {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for RegType {
+impl<'a, E> InputDatumType<'a, E> for RegType {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2523,6 +3032,16 @@ impl<'a, E> DatumType<'a, E> for RegType {
             Ok(Datum::UInt32(a)) => Ok(RegType(a)),
             _ => Err(res),
         }
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for RegType {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
     }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
@@ -2539,12 +3058,8 @@ where
     }
 }
 
-impl<'a, E> DatumType<'a, E> for Char<&'a str> {
+impl<'a, E> InputDatumType<'a, E> for Char<&'a str> {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2554,13 +3069,9 @@ impl<'a, E> DatumType<'a, E> for Char<&'a str> {
             _ => Err(res),
         }
     }
-
-    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
-        Ok(Datum::String(self.0))
-    }
 }
 
-impl<'a, E> DatumType<'a, E> for Char<String> {
+impl<'a, E> OutputDatumType<'a, E> for Char<&'a str> {
     fn nullable() -> bool {
         false
     }
@@ -2569,11 +3080,31 @@ impl<'a, E> DatumType<'a, E> for Char<String> {
         false
     }
 
+    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(Datum::String(self.0))
+    }
+}
+
+impl<'a, E> InputDatumType<'a, E> for Char<String> {
+    fn nullable() -> bool {
+        false
+    }
+
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
             Ok(Datum::String(a)) => Ok(Char(a.to_owned())),
             _ => Err(res),
         }
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for Char<String> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
     }
 
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
@@ -2590,12 +3121,8 @@ where
     }
 }
 
-impl<'a, E> DatumType<'a, E> for VarChar<&'a str> {
+impl<'a, E> InputDatumType<'a, E> for VarChar<&'a str> {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2605,18 +3132,24 @@ impl<'a, E> DatumType<'a, E> for VarChar<&'a str> {
             _ => Err(res),
         }
     }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for VarChar<&'a str> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
+    }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         Ok(Datum::String(self.0))
     }
 }
 
-impl<'a, E> DatumType<'a, E> for VarChar<String> {
+impl<'a, E> InputDatumType<'a, E> for VarChar<String> {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2626,13 +3159,9 @@ impl<'a, E> DatumType<'a, E> for VarChar<String> {
             _ => Err(res),
         }
     }
-
-    fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
-        Ok(Datum::String(temp_storage.push_string(self.0)))
-    }
 }
 
-impl<'a, E> DatumType<'a, E> for Jsonb {
+impl<'a, E> OutputDatumType<'a, E> for VarChar<String> {
     fn nullable() -> bool {
         false
     }
@@ -2641,8 +3170,28 @@ impl<'a, E> DatumType<'a, E> for Jsonb {
         false
     }
 
+    fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(Datum::String(temp_storage.push_string(self.0)))
+    }
+}
+
+impl<'a, E> InputDatumType<'a, E> for Jsonb {
+    fn nullable() -> bool {
+        false
+    }
+
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         Ok(JsonbRef::try_from_result(res)?.to_owned())
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for Jsonb {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
     }
 
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
@@ -2656,12 +3205,8 @@ impl AsColumnType for Jsonb {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for JsonbRef<'a> {
+impl<'a, E> InputDatumType<'a, E> for JsonbRef<'a> {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2678,6 +3223,16 @@ impl<'a, E> DatumType<'a, E> for JsonbRef<'a> {
             ) => Ok(JsonbRef::from_datum(d)),
             _ => Err(res),
         }
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for JsonbRef<'a> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
     }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
@@ -2697,12 +3252,8 @@ impl AsColumnType for MzAclItem {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for MzAclItem {
+impl<'a, E> InputDatumType<'a, E> for MzAclItem {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2711,6 +3262,16 @@ impl<'a, E> DatumType<'a, E> for MzAclItem {
             Ok(Datum::MzAclItem(mz_acl_item)) => Ok(mz_acl_item),
             _ => Err(res),
         }
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for MzAclItem {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
     }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
@@ -2724,12 +3285,8 @@ impl AsColumnType for AclItem {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for AclItem {
+impl<'a, E> InputDatumType<'a, E> for AclItem {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2738,6 +3295,16 @@ impl<'a, E> DatumType<'a, E> for AclItem {
             Ok(Datum::AclItem(acl_item)) => Ok(acl_item),
             _ => Err(res),
         }
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for AclItem {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
     }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
@@ -2751,12 +3318,8 @@ impl AsColumnType for CheckedTimestamp<NaiveDateTime> {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for CheckedTimestamp<NaiveDateTime> {
+impl<'a, E> InputDatumType<'a, E> for CheckedTimestamp<NaiveDateTime> {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2765,6 +3328,16 @@ impl<'a, E> DatumType<'a, E> for CheckedTimestamp<NaiveDateTime> {
             Ok(Datum::Timestamp(a)) => Ok(a),
             _ => Err(res),
         }
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for CheckedTimestamp<NaiveDateTime> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
     }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
@@ -2778,12 +3351,8 @@ impl AsColumnType for CheckedTimestamp<DateTime<Utc>> {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for CheckedTimestamp<DateTime<Utc>> {
+impl<'a, E> InputDatumType<'a, E> for CheckedTimestamp<DateTime<Utc>> {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2792,6 +3361,16 @@ impl<'a, E> DatumType<'a, E> for CheckedTimestamp<DateTime<Utc>> {
             Ok(Datum::TimestampTz(a)) => Ok(a),
             _ => Err(res),
         }
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for CheckedTimestamp<DateTime<Utc>> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
     }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
@@ -2872,7 +3451,7 @@ impl SqlScalarType {
         }
     }
 
-    /// Returns vector of [`SqlScalarType`] elements in a [`SqlScalarType::Record`].
+    /// Returns a vector of [`SqlScalarType`] elements in a [`SqlScalarType::Record`].
     ///
     /// # Panics
     ///
@@ -3213,6 +3792,62 @@ impl SqlScalarType {
                         })
             }
             (s, o) => SqlScalarBaseType::from(s) == SqlScalarBaseType::from(o),
+        }
+    }
+
+    /// Adopts the nullability from another [`SqlScalarType`].
+    /// Traverses deeply into structured types.
+    pub fn backport_nullability(&mut self, backport_typ: &ReprScalarType) {
+        match (self, backport_typ) {
+            (
+                SqlScalarType::List { element_type, .. },
+                ReprScalarType::List {
+                    element_type: backport_element_type,
+                    ..
+                },
+            ) => {
+                element_type.backport_nullability(backport_element_type);
+            }
+            (
+                SqlScalarType::Map { value_type, .. },
+                ReprScalarType::Map {
+                    value_type: backport_value_type,
+                    ..
+                },
+            ) => {
+                value_type.backport_nullability(backport_value_type);
+            }
+            (
+                SqlScalarType::Record { fields, .. },
+                ReprScalarType::Record {
+                    fields: backport_fields,
+                    ..
+                },
+            ) => {
+                assert_eq!(
+                    fields.len(),
+                    backport_fields.len(),
+                    "HIR and MIR types should have the same number of fields"
+                );
+                fields
+                    .iter_mut()
+                    .zip_eq(backport_fields)
+                    .for_each(|(field, backport_field)| {
+                        field.1.backport_nullability(backport_field);
+                    });
+            }
+            (SqlScalarType::Array(a), ReprScalarType::Array(b)) => {
+                a.backport_nullability(b);
+            }
+            (
+                SqlScalarType::Range { element_type },
+                ReprScalarType::Range {
+                    element_type: backport_element_type,
+                },
+            ) => {
+                element_type.backport_nullability(backport_element_type);
+            }
+            _ => (),
         }
     }
 
@@ -4060,9 +4695,10 @@ impl Arbitrary for ReprScalarType {
 /// There is a direct correspondence between `Datum` variants and `ReprScalarType`
 /// variants: every `Datum` variant corresponds to exactly one `ReprScalarType` variant
 /// (with an exception for `Datum::Array`, which could be both an `Int2Vector` and an `Array`).
-#[derive(
-    Clone, Debug, EnumKind, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd, Hash, MzReflect,
-)]
+///
+/// It is important that any new variants for this enum be added to the `Arbitrary` instance
+/// and the `union` method.
+#[derive(Clone, Debug, EnumKind, Serialize, Deserialize, MzReflect)]
 #[enum_kind(ReprScalarBaseType, derive(PartialOrd, Ord, Hash))]
 pub enum ReprScalarType {
     Bool,
@@ -4094,6 +4730,259 @@ pub enum ReprScalarType {
     Range { element_type: Box<ReprScalarType> },
     MzAclItem,
     AclItem,
+}
+
+impl PartialEq for ReprScalarType {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (ReprScalarType::Array(a), ReprScalarType::Array(b)) => a.eq(b),
+            (
+                ReprScalarType::List { element_type: a },
+                ReprScalarType::List { element_type: b },
+            ) => a.eq(b),
+            (ReprScalarType::Record { fields: a }, ReprScalarType::Record { fields: b }) => {
+                a.len() == b.len()
+                    && a.iter()
+                        .zip_eq(b.iter())
+                        .all(|(af, bf)| af.scalar_type.eq(&bf.scalar_type))
+            }
+            (ReprScalarType::Map { value_type: a }, ReprScalarType::Map { value_type: b }) => {
+                a.eq(b)
+            }
+            (
+                ReprScalarType::Range { element_type: a },
+                ReprScalarType::Range { element_type: b },
+            ) => a.eq(b),
+            _ => ReprScalarBaseType::from(self) == ReprScalarBaseType::from(other),
+        }
+    }
+}
+impl Eq for ReprScalarType {}
+
+impl Hash for ReprScalarType {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self {
+            ReprScalarType::Array(a) => a.hash(state),
+            ReprScalarType::List { element_type: a } => a.hash(state),
+            ReprScalarType::Record { fields: a } => {
+                for field in a {
+                    field.scalar_type.hash(state);
+                }
+            }
+            ReprScalarType::Map { value_type: a } => a.hash(state),
+            ReprScalarType::Range { element_type: a } => a.hash(state),
+            _ => ReprScalarBaseType::from(self).hash(state),
+        }
+    }
+}
+
+impl PartialOrd for ReprScalarType {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ReprScalarType {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (ReprScalarType::Array(a), ReprScalarType::Array(b)) => a.cmp(b),
+            (
+                ReprScalarType::List { element_type: a },
+                ReprScalarType::List { element_type: b },
+            ) => a.cmp(b),
+            (ReprScalarType::Record { fields: a }, ReprScalarType::Record { fields: b }) => {
+                let len_ordering = a.len().cmp(&b.len());
+                if len_ordering != Ordering::Equal {
+                    return len_ordering;
+                }
+
+                // NB ignoring nullability
+                for (af, bf) in a.iter().zip_eq(b.iter()) {
+                    let scalar_type_ordering = af.scalar_type.cmp(&bf.scalar_type);
+                    if scalar_type_ordering != Ordering::Equal {
+                        return scalar_type_ordering;
+                    }
+                }
+
+                Ordering::Equal
+            }
+            (ReprScalarType::Map { value_type: a }, ReprScalarType::Map { value_type: b }) => {
+                a.cmp(b)
+            }
+            (
+                ReprScalarType::Range { element_type: a },
+                ReprScalarType::Range { element_type: b },
+            ) => a.cmp(b),
+            _ => ReprScalarBaseType::from(self).cmp(&ReprScalarBaseType::from(other)),
+        }
+    }
+}
+
+impl std::fmt::Display for ReprScalarType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReprScalarType::Bool => write!(f, "r_bool"),
+            ReprScalarType::Int16 => write!(f, "r_int16"),
+            ReprScalarType::Int32 => write!(f, "r_int32"),
+            ReprScalarType::Int64 => write!(f, "r_int64"),
+            ReprScalarType::UInt8 => write!(f, "r_uint8"),
+            ReprScalarType::UInt16 => write!(f, "r_uint16"),
+            ReprScalarType::UInt32 => write!(f, "r_uint32"),
+            ReprScalarType::UInt64 => write!(f, "r_uint64"),
+            ReprScalarType::Float32 => write!(f, "r_float32"),
+            ReprScalarType::Float64 => write!(f, "r_float64"),
+            ReprScalarType::Numeric => write!(f, "r_numeric"),
+            ReprScalarType::Date => write!(f, "r_date"),
+            ReprScalarType::Time => write!(f, "r_time"),
+            ReprScalarType::Timestamp => write!(f, "r_timestamp"),
+            ReprScalarType::TimestampTz => write!(f, "r_timestamptz"),
+            ReprScalarType::MzTimestamp => write!(f, "r_mz_timestamp"),
+            ReprScalarType::Interval => write!(f, "r_interval"),
+            ReprScalarType::Bytes => write!(f, "r_bytes"),
+            ReprScalarType::Jsonb => write!(f, "r_jsonb"),
+            ReprScalarType::String => write!(f, "r_string"),
+            ReprScalarType::Uuid => write!(f, "r_uuid"),
+            ReprScalarType::Array(element_type) => write!(f, "r_array({element_type})"),
+            ReprScalarType::Int2Vector => write!(f, "r_int2vector"),
+            ReprScalarType::List { element_type } => write!(f, "r_list({element_type})"),
+            ReprScalarType::Record { fields } => {
+                let fields = separated(", ", fields.iter());
+                write!(f, "r_record({fields})")
+            }
+            ReprScalarType::Map { value_type } => write!(f, "r_map({value_type})"),
+            ReprScalarType::Range { element_type } => write!(f, "r_range({element_type})"),
+            ReprScalarType::MzAclItem => write!(f, "r_mz_acl_item"),
+            ReprScalarType::AclItem => write!(f, "r_acl_item"),
+        }
+    }
+}
+
+impl ReprScalarType {
+    /// Returns a [`ReprColumnType`] with the given nullability.
+    pub fn nullable(self, nullable: bool) -> ReprColumnType {
+        ReprColumnType {
+            scalar_type: self,
+            nullable,
+        }
+    }
+
+    /// Returns the union of two `ReprScalarType` or an error.
+    ///
+    /// Errors can only occur if the two types are built somewhere using different constructors.
+    /// Note that `ReprScalarType::Record` holds a `ReprColumnType`, and so nullability information
+    /// is unioned.
+    pub fn union(&self, scalar_type: &ReprScalarType) -> Result<Self, anyhow::Error> {
+        match (self, scalar_type) {
+            (ReprScalarType::Bool, ReprScalarType::Bool) => Ok(ReprScalarType::Bool),
+            (ReprScalarType::Int16, ReprScalarType::Int16) => Ok(ReprScalarType::Int16),
+            (ReprScalarType::Int32, ReprScalarType::Int32) => Ok(ReprScalarType::Int32),
+            (ReprScalarType::Int64, ReprScalarType::Int64) => Ok(ReprScalarType::Int64),
+            (ReprScalarType::UInt8, ReprScalarType::UInt8) => Ok(ReprScalarType::UInt8),
+            (ReprScalarType::UInt16, ReprScalarType::UInt16) => Ok(ReprScalarType::UInt16),
+            (ReprScalarType::UInt32, ReprScalarType::UInt32) => Ok(ReprScalarType::UInt32),
+            (ReprScalarType::UInt64, ReprScalarType::UInt64) => Ok(ReprScalarType::UInt64),
+            (ReprScalarType::Float32, ReprScalarType::Float32) => Ok(ReprScalarType::Float32),
+            (ReprScalarType::Float64, ReprScalarType::Float64) => Ok(ReprScalarType::Float64),
+            (ReprScalarType::Numeric, ReprScalarType::Numeric) => Ok(ReprScalarType::Numeric),
+            (ReprScalarType::Date, ReprScalarType::Date) => Ok(ReprScalarType::Date),
+            (ReprScalarType::Time, ReprScalarType::Time) => Ok(ReprScalarType::Time),
+            (ReprScalarType::Timestamp, ReprScalarType::Timestamp) => Ok(ReprScalarType::Timestamp),
+            (ReprScalarType::TimestampTz, ReprScalarType::TimestampTz) => {
+                Ok(ReprScalarType::TimestampTz)
+            }
+            (ReprScalarType::MzTimestamp, ReprScalarType::MzTimestamp) => {
+                Ok(ReprScalarType::MzTimestamp)
+            }
+            (ReprScalarType::AclItem, ReprScalarType::AclItem) => Ok(ReprScalarType::AclItem),
+            (ReprScalarType::MzAclItem, ReprScalarType::MzAclItem) => Ok(ReprScalarType::MzAclItem),
+            (ReprScalarType::Interval, ReprScalarType::Interval) => Ok(ReprScalarType::Interval),
+            (ReprScalarType::Bytes, ReprScalarType::Bytes) => Ok(ReprScalarType::Bytes),
+            (ReprScalarType::Jsonb, ReprScalarType::Jsonb) => Ok(ReprScalarType::Jsonb),
+            (ReprScalarType::String, ReprScalarType::String) => Ok(ReprScalarType::String),
+            (ReprScalarType::Uuid, ReprScalarType::Uuid) => Ok(ReprScalarType::Uuid),
+            (ReprScalarType::Array(element_type), ReprScalarType::Array(other_element_type)) => Ok(
+                ReprScalarType::Array(Box::new(element_type.union(other_element_type)?)),
+            ),
+            (ReprScalarType::Int2Vector, ReprScalarType::Int2Vector) => {
+                Ok(ReprScalarType::Int2Vector)
+            }
+            (
+                ReprScalarType::List { element_type },
+                ReprScalarType::List {
+                    element_type: other_element_type,
+                },
+            ) => Ok(ReprScalarType::List {
+                element_type: Box::new(element_type.union(other_element_type)?),
+            }),
+            (
+                ReprScalarType::Record { fields },
+                ReprScalarType::Record {
+                    fields: other_fields,
+                },
+            ) => {
+                if fields.len() != other_fields.len() {
+                    bail!("Can't union record types: {:?} and {:?}", self, scalar_type);
+                }
+
+                let mut union_fields = Vec::with_capacity(fields.len());
+                for (field, other_field) in fields.iter().zip_eq(other_fields.iter()) {
+                    union_fields.push(field.union(other_field)?);
+                }
+                Ok(ReprScalarType::Record {
+                    fields: union_fields.into_boxed_slice(),
+                })
+            }
+            (
+                ReprScalarType::Map { value_type },
+                ReprScalarType::Map {
+                    value_type: other_value_type,
+                },
+            ) => Ok(ReprScalarType::Map {
+                value_type: Box::new(value_type.union(other_value_type)?),
+            }),
+            (
+                ReprScalarType::Range { element_type },
+                ReprScalarType::Range {
+                    element_type: other_element_type,
+                },
+            ) => Ok(ReprScalarType::Range {
+                element_type: Box::new(element_type.union(other_element_type)?),
+            }),
+            (_, _) => bail!("Can't union scalar types: {:?} and {:?}", self, scalar_type),
+        }
+    }
+
+    /// Returns the [`ReprScalarType`] of elements in a [`ReprScalarType::List`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on anything other than a [`ReprScalarType::List`].
+    pub fn unwrap_list_element_type(&self) -> &ReprScalarType {
+        match self {
+            ReprScalarType::List { element_type, .. } => element_type,
+            _ => panic!(
+                "ReprScalarType::unwrap_list_element_type called on {:?}",
+                self
+            ),
+        }
+    }
+
+    /// Returns a vector of [`ReprScalarType`] elements in a [`ReprScalarType::Record`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on anything other than a [`ReprScalarType::Record`].
+    pub fn unwrap_record_element_type(&self) -> Vec<&ReprScalarType> {
+        match self {
+            ReprScalarType::Record { fields, .. } => {
+                fields.iter().map(|t| &t.scalar_type).collect_vec()
+            }
+            _ => panic!(
+                "SqlScalarType::unwrap_record_element_type called on {:?}",
+                self
+            ),
+        }
+    }
 }
 
 impl From<&SqlScalarType> for ReprScalarType {
@@ -4268,6 +5157,26 @@ impl Datum<'_> {
     pub fn empty_map() -> Datum<'static> {
         EMPTY_MAP_ROW.unpack_first()
     }
+
+    pub fn contains_dummy(&self) -> bool {
+        match self {
+            Datum::Dummy => true,
+            Datum::List(list) => list.iter().any(|d| d.contains_dummy()),
+            Datum::Map(map) => map.iter().any(|(_, d)| d.contains_dummy()),
+            Datum::Array(array) => array.elements().iter().any(|d| d.contains_dummy()),
+            Datum::Range(range) => range.inner.map_or(false, |range| {
+                range
+                    .lower
+                    .bound
+                    .map_or(false, |d| d.datum().contains_dummy())
+                    || range
+                        .upper
+                        .bound
+                        .map_or(false, |d| d.datum().contains_dummy())
+            }),
+            _ => false,
+        }
+    }
 }
 
 /// A mirror type for [`Datum`] that can be proptest-generated.
@@ -4326,9 +5235,8 @@ impl Ord for PropDatum {
 }
 
 /// Generate an arbitrary [`PropDatum`].
-pub fn arb_datum() -> BoxedStrategy<PropDatum> {
-    let leaf = Union::new(vec![
-        Just(PropDatum::Dummy).boxed(),
+pub fn arb_datum(allow_dummy: bool) -> BoxedStrategy<PropDatum> {
+    let mut leaf_options = vec![
         any::<bool>().prop_map(PropDatum::Bool).boxed(),
         any::<i16>().prop_map(PropDatum::Int16).boxed(),
         any::<i32>().prop_map(PropDatum::Int32).boxed(),
@@ -4361,8 +5269,12 @@ pub fn arb_datum() -> BoxedStrategy<PropDatum> {
         arb_range(arb_range_data())
             .prop_map(PropDatum::Range)
             .boxed(),
-        Just(PropDatum::Dummy).boxed(),
-    ]);
+    ];
+
+    if allow_dummy {
+        leaf_options.push(Just(PropDatum::Dummy).boxed());
+    }
+    let leaf = Union::new(leaf_options);
 
     leaf.prop_recursive(3, 8, 16, |inner| {
         Union::new(vec![
@@ -4943,13 +5855,20 @@ mod tests {
     proptest! {
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)]
-        fn sql_repr_types_agree_on_valid_data((src, datum) in any::<SqlColumnType>().prop_flat_map(|src| {
-            let datum = arb_datum_for_column(src.clone());
-            (Just(src), datum) }
-        )) {
+        fn sql_repr_types_agree_on_valid_data(
+            (src, datum) in any::<SqlColumnType>()
+                .prop_flat_map(|src| {
+                    let datum = arb_datum_for_column(src.clone());
+                    (Just(src), datum)
+                }),
+        ) {
             let tgt = ReprColumnType::from(&src);
             let datum = Datum::from(&datum);
-            assert_eq!(datum.is_instance_of_sql(&src), datum.is_instance_of(&tgt), "translated to repr type {tgt:#?}");
+            assert_eq!(
+                datum.is_instance_of_sql(&src),
+                datum.is_instance_of(&tgt),
+                "translated to repr type {tgt:#?}",
+            );
         }
     }
 
@@ -4959,11 +5878,18 @@ mod tests {
         #![proptest_config(ProptestConfig::with_cases(10000))]
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)]
-        fn sql_repr_types_agree_on_random_data(src in any::<SqlColumnType>(), datum in arb_datum()) {
+        fn sql_repr_types_agree_on_random_data(
+            src in any::<SqlColumnType>(),
+            datum in arb_datum(true),
+        ) {
             let tgt = ReprColumnType::from(&src);
             let datum = Datum::from(&datum);
 
-            assert_eq!(datum.is_instance_of_sql(&src), datum.is_instance_of(&tgt), "translated to repr type {tgt:#?}");
+            assert_eq!(
+                datum.is_instance_of_sql(&src),
+                datum.is_instance_of(&tgt),
+                "translated to repr type {tgt:#?}",
+            );
         }
     }
 
@@ -4985,7 +5911,10 @@ mod tests {
         #![proptest_config(ProptestConfig::with_cases(10000))]
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)]
-        fn sql_type_base_eq_implies_repr_type_eq(sql_type1 in any::<SqlScalarType>(), sql_type2 in any::<SqlScalarType>()) {
+        fn sql_type_base_eq_implies_repr_type_eq(
+            sql_type1 in any::<SqlScalarType>(),
+            sql_type2 in any::<SqlScalarType>(),
+        ) {
             let repr_type1 = ReprScalarType::from(&sql_type1);
             let repr_type2 = ReprScalarType::from(&sql_type2);
             if sql_type1.base_eq(&sql_type2) {
@@ -4995,36 +5924,60 @@ mod tests {
     }
 
     proptest! {
+        #![proptest_config(ProptestConfig::with_cases(10000))]
         #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
-        fn array_packing_unpacks_correctly(array in arb_array(arb_datum())) {
+        #[cfg_attr(miri, ignore)]
+        fn repr_type_self_union(repr_type in any::<ReprScalarType>()) {
+            let union = repr_type.union(&repr_type);
+            assert_ok!(
+                union,
+                "every type should self-union \
+                 (update ReprScalarType::union to handle this)",
+            );
+            assert_eq!(
+                union.unwrap(), repr_type,
+                "every type should self-union to itself",
+            );
+        }
+    }
+
+    proptest! {
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault`
+        fn array_packing_unpacks_correctly(array in arb_array(arb_datum(true))) {
             let PropArray(row, elts) = array;
             let datums: Vec<Datum<'_>> = elts.iter().map(|e| e.into()).collect();
-            let unpacked_datums: Vec<Datum<'_>> = row.unpack_first().unwrap_array().elements().iter().collect();
+            let unpacked_datums: Vec<Datum<'_>> = row
+                .unpack_first().unwrap_array().elements().iter().collect();
             assert_eq!(unpacked_datums, datums);
         }
 
         #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
-        fn list_packing_unpacks_correctly(array in arb_list(arb_datum())) {
+        #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault`
+        fn list_packing_unpacks_correctly(array in arb_list(arb_datum(true))) {
             let PropList(row, elts) = array;
             let datums: Vec<Datum<'_>> = elts.iter().map(|e| e.into()).collect();
-            let unpacked_datums: Vec<Datum<'_>> = row.unpack_first().unwrap_list().iter().collect();
+            let unpacked_datums: Vec<Datum<'_>> = row
+                .unpack_first().unwrap_list().iter().collect();
             assert_eq!(unpacked_datums, datums);
         }
 
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // too slow
-        fn dict_packing_unpacks_correctly(array in arb_dict(arb_datum())) {
+        fn dict_packing_unpacks_correctly(array in arb_dict(arb_datum(true))) {
             let PropDict(row, elts) = array;
-            let datums: Vec<(&str, Datum<'_>)> = elts.iter().map(|(k, e)| (k.as_str(), e.into())).collect();
-            let unpacked_datums: Vec<(&str, Datum<'_>)> = row.unpack_first().unwrap_map().iter().collect();
+            let datums: Vec<(&str, Datum<'_>)> = elts.iter()
+                .map(|(k, e)| (k.as_str(), e.into())).collect();
+            let unpacked_datums: Vec<(&str, Datum<'_>)> = row
+                .unpack_first().unwrap_map().iter().collect();
             assert_eq!(unpacked_datums, datums);
         }
 
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // too slow
-        fn row_packing_roundtrips_single_valued(prop_datums in prop::collection::vec(arb_datum(), 1..100)) {
+        fn row_packing_roundtrips_single_valued(
+            prop_datums in prop::collection::vec(arb_datum(true), 1..100),
+        ) {
             let datums: Vec<Datum<'_>> = prop_datums.iter().map(|pd| pd.into()).collect();
             let row = Row::pack(&datums);
             let unpacked = row.unpack();
@@ -5038,7 +5991,10 @@ mod tests {
             let row = row.unpack_first();
             let d = row.unwrap_range();
 
-            let (((prop_lower, prop_lower_inc), (prop_upper, prop_upper_inc)), crate::adt::range::RangeInner {lower, upper}) = match (prop_range, d.inner) {
+            let (
+                ((prop_lower, prop_lower_inc), (prop_upper, prop_upper_inc)),
+                crate::adt::range::RangeInner { lower, upper },
+            ) = match (prop_range, d.inner) {
                 (Some(prop_values), Some(inner_range)) => (prop_values, inner_range),
                 (None, None) => return Ok(()),
                 _ => panic!("inequivalent row packing"),

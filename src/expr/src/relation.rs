@@ -9,6 +9,7 @@
 
 #![warn(missing_docs)]
 
+use std::cell::RefCell;
 use std::cmp::{Ordering, max};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -18,10 +19,10 @@ use std::num::NonZeroU64;
 use std::time::Instant;
 
 use bytesize::ByteSize;
-use differential_dataflow::containers::{Columnation, CopyRegion};
+use columnation::{Columnation, CopyRegion};
 use itertools::Itertools;
 use mz_lowertest::MzReflect;
-use mz_ore::cast::CastFrom;
+use mz_ore::cast::{CastFrom, CastInto};
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdGen;
 use mz_ore::metrics::Histogram;
@@ -35,19 +36,21 @@ use mz_repr::explain::{
     DummyHumanizer, ExplainConfig, ExprHumanizer, IndexUsageType, PlanRenderingContext,
 };
 use mz_repr::{
-    ColumnName, Datum, Diff, GlobalId, IntoRowIterator, Row, RowIterator, SqlColumnType,
-    SqlRelationType, SqlScalarType,
+    ColumnName, Datum, DatumVec, Diff, GlobalId, IntoRowIterator, ReprColumnType, ReprRelationType,
+    ReprScalarType, Row, RowIterator, RowRef, SqlColumnType, SqlRelationType, SqlScalarType,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::Id::Local;
 use crate::explain::{HumanizedExpr, HumanizerMode};
 use crate::relation::func::{AggregateFunc, LagLeadType, TableFunc};
-use crate::row::{RowCollection, SortedRowCollectionIter};
+use crate::row::{RowCollection, RowCollectionIter};
+use crate::scalar::func::variadic::{
+    JsonbBuildArray, JsonbBuildObject, ListCreate, ListIndex, MapBuild, RecordCreate,
+};
 use crate::visit::{Visit, VisitChildren};
 use crate::{
-    EvalError, FilterCharacteristics, Id, LocalId, MirScalarExpr, UnaryFunc, VariadicFunc,
-    func as scalar_func,
+    EvalError, FilterCharacteristics, Id, LocalId, MirScalarExpr, UnaryFunc, func as scalar_func,
 };
 
 pub mod canonicalize;
@@ -105,7 +108,7 @@ pub enum MirRelationExpr {
         /// Rows of the constant collection and their multiplicities.
         rows: Result<Vec<(Row, Diff)>, EvalError>,
         /// Schema of the collection.
-        typ: SqlRelationType,
+        typ: ReprRelationType,
     },
     /// Get an existing dataflow.
     ///
@@ -115,7 +118,7 @@ pub enum MirRelationExpr {
         #[mzreflect(ignore)]
         id: Id,
         /// Schema of the collection.
-        typ: SqlRelationType,
+        typ: ReprRelationType,
         /// If this is a global Get, this will indicate whether we are going to read from Persist or
         /// from an index, or from a different object in `objects_to_build`. If it's an index, then
         /// how downstream dataflow operations will use this index is also recorded. This is filled
@@ -323,6 +326,16 @@ impl Eq for MirRelationExpr {}
 impl MirRelationExpr {
     /// Reports the schema of the relation.
     ///
+    /// This is the SQL-type parallel of [`Self::typ`]; it is merely
+    /// a wrapper around it, returning a [`SqlRelationType`] instead of
+    /// a [`ReprRelationType`].
+    pub fn sql_typ(&self) -> SqlRelationType {
+        let repr_typ = self.typ();
+        SqlRelationType::from_repr(&repr_typ)
+    }
+
+    /// Reports the repr schema of the relation.
+    ///
     /// This method determines the type through recursive traversal of the
     /// relation expression, drawing from the types of base collections.
     /// As such, this is not an especially cheap method, and should be used
@@ -331,22 +344,14 @@ impl MirRelationExpr {
     /// The relation type is computed incrementally with a recursive post-order
     /// traversal, that accumulates the input types for the relations yet to be
     /// visited in `type_stack`.
-    pub fn typ(&self) -> SqlRelationType {
+    pub fn typ(&self) -> ReprRelationType {
         let mut type_stack = Vec::new();
         #[allow(deprecated)]
         self.visit_pre_post_nolimit(
             &mut |e: &MirRelationExpr| -> Option<Vec<&MirRelationExpr>> {
                 match &e {
-                    MirRelationExpr::Let { body, .. } => {
-                        // Do not traverse the value sub-graph, since it's not relevant for
-                        // determining the relation type of Let operators.
-                        Some(vec![&*body])
-                    }
-                    MirRelationExpr::LetRec { body, .. } => {
-                        // Do not traverse the value sub-graph, since it's not relevant for
-                        // determining the relation type of Let operators.
-                        Some(vec![&*body])
-                    }
+                    MirRelationExpr::Let { body, .. } => Some(vec![&*body]),
+                    MirRelationExpr::LetRec { body, .. } => Some(vec![&*body]),
                     _ => None,
                 }
             },
@@ -356,15 +361,16 @@ impl MirRelationExpr {
                         let body_typ = type_stack.pop().unwrap();
                         // Insert a dummy relation type for the value, since `typ_with_input_types`
                         // won't look at it, but expects the relation type of the body to be second.
-                        type_stack.push(SqlRelationType::empty());
+                        type_stack.push(ReprRelationType::empty());
                         type_stack.push(body_typ);
                     }
                     MirRelationExpr::LetRec { values, .. } => {
                         let body_typ = type_stack.pop().unwrap();
+                        type_stack.extend(
+                            std::iter::repeat(ReprRelationType::empty()).take(values.len()),
+                        );
                         // Insert dummy relation types for the values, since `typ_with_input_types`
                         // won't look at them, but expects the relation type of the body to be last.
-                        type_stack
-                            .extend(std::iter::repeat(SqlRelationType::empty()).take(values.len()));
                         type_stack.push(body_typ);
                     }
                     _ => {}
@@ -380,24 +386,14 @@ impl MirRelationExpr {
         type_stack.pop().unwrap()
     }
 
-    /// Reports the schema of the relation given the schema of the input relations.
-    ///
-    /// `input_types` is required to contain the schemas for the input relations of
-    /// the current relation in the same order as they are visited by `try_visit_children`
-    /// method, even though not all may be used for computing the schema of the
-    /// current relation. For example, `Let` expects two input types, one for the
-    /// value relation and one for the body, in that order, but only the one for the
-    /// body is used to determine the type of the `Let` relation.
-    ///
-    /// It is meant to be used during post-order traversals to compute relation
-    /// schemas incrementally.
-    pub fn typ_with_input_types(&self, input_types: &[SqlRelationType]) -> SqlRelationType {
+    /// Reports the repr schema of the relation given the repr schema of the input relations.
+    pub fn typ_with_input_types(&self, input_types: &[ReprRelationType]) -> ReprRelationType {
         let column_types = self.col_with_input_cols(input_types.iter().map(|i| &i.column_types));
         let unique_keys = self.keys_with_input_keys(
             input_types.iter().map(|i| i.arity()),
             input_types.iter().map(|i| &i.keys),
         );
-        SqlRelationType::new(column_types).with_keys(unique_keys)
+        ReprRelationType::new(column_types).with_keys(unique_keys)
     }
 
     /// Reports the column types of the relation given the column types of the
@@ -405,9 +401,9 @@ impl MirRelationExpr {
     ///
     /// This method delegates to `try_col_with_input_cols`, panicking if an `Err`
     /// variant is returned.
-    pub fn col_with_input_cols<'a, I>(&self, input_types: I) -> Vec<SqlColumnType>
+    pub fn col_with_input_cols<'a, I>(&self, input_types: I) -> Vec<ReprColumnType>
     where
-        I: Iterator<Item = &'a Vec<SqlColumnType>>,
+        I: Iterator<Item = &'a Vec<ReprColumnType>>,
     {
         match self.try_col_with_input_cols(input_types) {
             Ok(col_types) => col_types,
@@ -429,9 +425,9 @@ impl MirRelationExpr {
     pub fn try_col_with_input_cols<'a, I>(
         &self,
         mut input_types: I,
-    ) -> Result<Vec<SqlColumnType>, String>
+    ) -> Result<Vec<ReprColumnType>, String>
     where
-        I: Iterator<Item = &'a Vec<SqlColumnType>>,
+        I: Iterator<Item = &'a Vec<ReprColumnType>>,
     {
         use MirRelationExpr::*;
 
@@ -471,7 +467,12 @@ impl MirRelationExpr {
             }
             FlatMap { func, .. } => {
                 let mut result = input_types.next().unwrap().clone();
-                result.extend(func.output_type().column_types);
+                result.extend(
+                    func.output_sql_type()
+                        .column_types
+                        .iter()
+                        .map(ReprColumnType::from),
+                );
                 result
             }
             Filter { predicates, .. } => {
@@ -1066,18 +1067,18 @@ impl MirRelationExpr {
 
     /// Constructs a constant collection from specific rows and schema, where
     /// each row will have a multiplicity of one.
-    pub fn constant(rows: Vec<Vec<Datum>>, typ: SqlRelationType) -> Self {
+    pub fn constant(rows: Vec<Vec<Datum>>, typ: ReprRelationType) -> Self {
         let rows = rows.into_iter().map(|row| (row, Diff::ONE)).collect();
         MirRelationExpr::constant_diff(rows, typ)
     }
 
     /// Constructs a constant collection from specific rows and schema, where
     /// each row can have an arbitrary multiplicity.
-    pub fn constant_diff(rows: Vec<(Vec<Datum>, Diff)>, typ: SqlRelationType) -> Self {
+    pub fn constant_diff(rows: Vec<(Vec<Datum>, Diff)>, typ: ReprRelationType) -> Self {
         for (row, _diff) in &rows {
             for (datum, column_typ) in row.iter().zip_eq(typ.column_types.iter()) {
                 assert!(
-                    datum.is_instance_of_sql(column_typ),
+                    datum.is_instance_of(column_typ),
                     "Expected datum of type {:?}, got value {:?}",
                     column_typ,
                     datum
@@ -1093,7 +1094,7 @@ impl MirRelationExpr {
 
     /// If self is a constant, return the value and the type, otherwise `None`.
     /// Looks behind `ArrangeBy`s.
-    pub fn as_const(&self) -> Option<(&Result<Vec<(Row, Diff)>, EvalError>, &SqlRelationType)> {
+    pub fn as_const(&self) -> Option<(&Result<Vec<(Row, Diff)>, EvalError>, &ReprRelationType)> {
         match self {
             MirRelationExpr::Constant { rows, typ } => Some((rows, typ)),
             MirRelationExpr::ArrangeBy { input, .. } => input.as_const(),
@@ -1107,7 +1108,7 @@ impl MirRelationExpr {
         &mut self,
     ) -> Option<(
         &mut Result<Vec<(Row, Diff)>, EvalError>,
-        &mut SqlRelationType,
+        &mut ReprRelationType,
     )> {
         match self {
             MirRelationExpr::Constant { rows, typ } => Some((rows, typ)),
@@ -1136,7 +1137,7 @@ impl MirRelationExpr {
     }
 
     /// Constructs the expression for getting a local collection.
-    pub fn local_get(id: LocalId, typ: SqlRelationType) -> Self {
+    pub fn local_get(id: LocalId, typ: ReprRelationType) -> Self {
         MirRelationExpr::Get {
             id: Id::Local(id),
             typ,
@@ -1145,7 +1146,7 @@ impl MirRelationExpr {
     }
 
     /// Constructs the expression for getting a global collection
-    pub fn global_get(id: GlobalId, typ: SqlRelationType) -> Self {
+    pub fn global_get(id: GlobalId, typ: ReprRelationType) -> Self {
         MirRelationExpr::Get {
             id: Id::Global(id),
             typ,
@@ -1256,13 +1257,13 @@ impl MirRelationExpr {
     /// # Example
     ///
     /// ```rust
-    /// use mz_repr::{Datum, SqlColumnType, SqlRelationType, SqlScalarType};
+    /// use mz_repr::{Datum, SqlColumnType, ReprRelationType, ReprScalarType};
     /// use mz_expr::MirRelationExpr;
     ///
     /// // A common schema for each input.
-    /// let schema = SqlRelationType::new(vec![
-    ///     SqlScalarType::Int32.nullable(false),
-    ///     SqlScalarType::Int32.nullable(false),
+    /// let schema = ReprRelationType::new(vec![
+    ///     ReprScalarType::Int32.nullable(false),
+    ///     ReprScalarType::Int32.nullable(false),
     /// ]);
     ///
     /// // the specific data are not important here.
@@ -1402,7 +1403,7 @@ impl MirRelationExpr {
     ///
     /// If `inputs` is empty, then an empty relation of type `typ` is
     /// constructed.
-    pub fn union_many(mut inputs: Vec<Self>, typ: SqlRelationType) -> Self {
+    pub fn union_many(mut inputs: Vec<Self>, typ: ReprRelationType) -> Self {
         // Deconstruct `inputs` as `Union`s and reconstitute.
         let mut flat_inputs = Vec::with_capacity(inputs.len());
         for input in inputs {
@@ -1490,17 +1491,23 @@ impl MirRelationExpr {
     /// Pretty-print this [MirRelationExpr] to a string.
     pub fn pretty(&self) -> String {
         let config = ExplainConfig::default();
-        self.explain(&config, None)
+        self.debug_explain(&config, None)
     }
 
     /// Pretty-print this [MirRelationExpr] to a string using a custom
     /// [ExplainConfig] and an optionally provided [ExprHumanizer].
-    pub fn explain(&self, config: &ExplainConfig, humanizer: Option<&dyn ExprHumanizer>) -> String {
+    /// This is intended for debugging and tests, not users.
+    pub fn debug_explain(
+        &self,
+        config: &ExplainConfig,
+        humanizer: Option<&dyn ExprHumanizer>,
+    ) -> String {
         text_string_at(self, || PlanRenderingContext {
             indent: Indent::default(),
             humanizer: humanizer.unwrap_or(&DummyHumanizer),
             annotations: BTreeMap::default(),
             config,
+            ambiguous_ids: BTreeSet::default(),
         })
     }
 
@@ -1511,14 +1518,15 @@ impl MirRelationExpr {
     ///
     /// If `typ` is not given, then this calls `.typ()` (which is possibly expensive) to determine
     /// the correct type.
-    pub fn take_safely(&mut self, typ: Option<SqlRelationType>) -> MirRelationExpr {
+    pub fn take_safely(&mut self, typ: Option<ReprRelationType>) -> MirRelationExpr {
         if let Some(typ) = &typ {
+            let self_typ = self.typ();
             soft_assert_no_log!(
-                self.typ()
+                self_typ
                     .column_types
                     .iter()
                     .zip_eq(typ.column_types.iter())
-                    .all(|(t1, t2)| t1.scalar_type.base_eq(&t2.scalar_type))
+                    .all(|(t1, t2)| t1.scalar_type == t2.scalar_type)
             );
         }
         let mut typ = typ.unwrap_or_else(|| self.typ());
@@ -1538,8 +1546,17 @@ impl MirRelationExpr {
     /// Take ownership of `self`, leaving an empty `MirRelationExpr::Constant` with the given scalar
     /// types. Nullability is ignored in the given `SqlColumnType`s, and instead we set the best
     /// possible nullability, since we are making an empty collection.
-    pub fn take_safely_with_col_types(&mut self, typ: Vec<SqlColumnType>) -> MirRelationExpr {
-        self.take_safely(Some(SqlRelationType::new(typ)))
+    pub fn take_safely_with_sql_col_types(&mut self, typ: Vec<SqlColumnType>) -> MirRelationExpr {
+        self.take_safely(Some(ReprRelationType::from(&SqlRelationType::new(typ))))
+    }
+
+    /// Like [`Self::take_safely_with_col_types`], but accepts `Vec<ReprColumnType>`.
+    ///
+    /// This is the preferred entry point for optimizer transforms, where repr
+    /// types are the native currency. Internally converts to [`SqlColumnType`]
+    /// and delegates to [`Self::take_safely_with_col_types`].
+    pub fn take_safely_with_col_types(&mut self, typ: Vec<ReprColumnType>) -> MirRelationExpr {
+        self.take_safely(Some(ReprRelationType::new(typ)))
     }
 
     /// Take ownership of `self`, leaving an empty `MirRelationExpr::Constant` with an **incorrect** type.
@@ -1548,7 +1565,7 @@ impl MirRelationExpr {
     pub fn take_dangerous(&mut self) -> MirRelationExpr {
         let empty = MirRelationExpr::Constant {
             rows: Ok(vec![]),
-            typ: SqlRelationType::new(Vec::new()),
+            typ: ReprRelationType::new(Vec::new()),
         };
         std::mem::replace(self, empty)
     }
@@ -1560,7 +1577,7 @@ impl MirRelationExpr {
     {
         let empty = MirRelationExpr::Constant {
             rows: Ok(vec![]),
-            typ: SqlRelationType::new(Vec::new()),
+            typ: ReprRelationType::new(Vec::new()),
         };
         let expr = std::mem::replace(self, empty);
         *self = logic(expr);
@@ -1596,11 +1613,19 @@ impl MirRelationExpr {
         self,
         id_gen: &mut IdGen,
         keys_and_values: MirRelationExpr,
-        default: Vec<(Datum, SqlScalarType)>,
+        default: Vec<(Datum, ReprScalarType)>,
     ) -> Result<MirRelationExpr, E> {
         let (data, column_types): (Vec<_>, Vec<_>) = default
             .into_iter()
-            .map(|(datum, scalar_type)| (datum, scalar_type.nullable(datum.is_null())))
+            .map(|(datum, scalar_type)| {
+                (
+                    datum,
+                    ReprColumnType {
+                        scalar_type,
+                        nullable: datum.is_null(),
+                    },
+                )
+            })
             .unzip();
         assert_eq!(keys_and_values.arity() - self.arity(), data.len());
         self.let_in(id_gen, |_id_gen, get_keys| {
@@ -1625,7 +1650,7 @@ impl MirRelationExpr {
             // optimizer.
             .product(MirRelationExpr::constant(
                 vec![data],
-                SqlRelationType::new(column_types),
+                ReprRelationType::new(column_types),
             )))
         })
     }
@@ -1641,7 +1666,7 @@ impl MirRelationExpr {
         self,
         id_gen: &mut IdGen,
         keys_and_values: MirRelationExpr,
-        default: Vec<(Datum<'static>, SqlScalarType)>,
+        default: Vec<(Datum<'static>, ReprScalarType)>,
     ) -> Result<MirRelationExpr, E> {
         keys_and_values.let_in(id_gen, |id_gen, get_keys_and_values| {
             Ok(get_keys_and_values.clone().union(self.anti_lookup(
@@ -1948,27 +1973,28 @@ impl MirRelationExpr {
     /// The MirRelationExpr is considered potentially expensive if and only if
     /// at least one of the following conditions is true:
     ///
-    ///  - It contains at least one FlatMap or a Reduce operator.
     ///  - It contains at least one MirScalarExpr with a function call.
+    ///  - It contains at least one FlatMap or a Reduce operator.
+    ///  - We run into a RecursionLimitError while analyzing the expression.
     ///
     /// !!!WARNING!!!: this method has an HirRelationExpr counterpart. The two
     /// should be kept in sync w.r.t. HIR ⇒ MIR lowering!
     pub fn could_run_expensive_function(&self) -> bool {
         let mut result = false;
+        use MirRelationExpr::*;
+        use MirScalarExpr::*;
+        if let Err(_) = self.try_visit_scalars::<_, RecursionLimitError>(&mut |scalar| {
+            result |= match scalar {
+                Column(_, _) | Literal(_, _) | CallUnmaterializable(_) | If { .. } => false,
+                // Function calls are considered expensive
+                CallUnary { .. } | CallBinary { .. } | CallVariadic { .. } => true,
+            };
+            Ok(())
+        }) {
+            // Conservatively set `true` if on RecursionLimitError.
+            result = true;
+        }
         self.visit_pre(|e: &MirRelationExpr| {
-            use MirRelationExpr::*;
-            use MirScalarExpr::*;
-            if let Err(_) = self.try_visit_scalars::<_, RecursionLimitError>(&mut |scalar| {
-                result |= match scalar {
-                    Column(_, _) | Literal(_, _) | CallUnmaterializable(_) | If { .. } => false,
-                    // Function calls are considered expensive
-                    CallUnary { .. } | CallBinary { .. } | CallVariadic { .. } => true,
-                };
-                Ok(())
-            }) {
-                // Conservatively set `true` if on RecursionLimitError.
-                result = true;
-            }
             // FlatMap has a table function; Reduce has an aggregate function.
             // Other constructs use MirScalarExpr to run a function
             result |= matches!(e, FlatMap { .. } | Reduce { .. });
@@ -2198,8 +2224,11 @@ pub fn non_nullable_columns(predicates: &[MirScalarExpr]) -> BTreeSet<usize> {
 }
 
 impl CollectionPlan for MirRelationExpr {
-    // !!!WARNING!!!: this method has an HirRelationExpr counterpart. The two
-    // should be kept in sync w.r.t. HIR ⇒ MIR lowering!
+    /// Collects the global collections that this MIR expression directly depends on, i.e., that it
+    /// has a `Get` for. (It does _not_ traverse view definitions transitively.)
+    ///
+    /// !!!WARNING!!!: this method has an HirRelationExpr counterpart. The two
+    /// should be kept in sync w.r.t. HIR ⇒ MIR lowering!
     fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>) {
         if let MirRelationExpr::Get {
             id: Id::Global(id), ..
@@ -2378,7 +2407,17 @@ impl VisitChildren<Self> for MirRelationExpr {
 
 /// Specification for an ordering by a column.
 #[derive(
-    Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
+    Debug,
+    Clone,
+    Copy,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
 )]
 pub struct ColumnOrder {
     /// The column index.
@@ -2416,7 +2455,18 @@ where
 }
 
 /// Describes an aggregation expression.
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct AggregateExpr {
     /// Names the aggregation function.
     pub func: AggregateFunc,
@@ -2429,14 +2479,20 @@ pub struct AggregateExpr {
 
 impl AggregateExpr {
     /// Computes the type of this `AggregateExpr`.
-    pub fn typ(&self, column_types: &[SqlColumnType]) -> SqlColumnType {
+    pub fn sql_typ(&self, column_types: &[SqlColumnType]) -> SqlColumnType {
+        self.func.output_sql_type(self.expr.sql_typ(column_types))
+    }
+
+    /// Computes the type of this `AggregateExpr`.
+    pub fn typ(&self, column_types: &[ReprColumnType]) -> ReprColumnType {
         self.func.output_type(self.expr.typ(column_types))
     }
 
     /// Returns whether the expression has a constant result.
     pub fn is_constant(&self) -> bool {
         match self.func {
-            AggregateFunc::MaxInt16
+            AggregateFunc::MaxNumeric
+            | AggregateFunc::MaxInt16
             | AggregateFunc::MaxInt32
             | AggregateFunc::MaxInt64
             | AggregateFunc::MaxUInt16
@@ -2450,6 +2506,9 @@ impl AggregateExpr {
             | AggregateFunc::MaxDate
             | AggregateFunc::MaxTimestamp
             | AggregateFunc::MaxTimestampTz
+            | AggregateFunc::MaxInterval
+            | AggregateFunc::MaxTime
+            | AggregateFunc::MinNumeric
             | AggregateFunc::MinInt16
             | AggregateFunc::MinInt32
             | AggregateFunc::MinInt64
@@ -2464,18 +2523,43 @@ impl AggregateExpr {
             | AggregateFunc::MinDate
             | AggregateFunc::MinTimestamp
             | AggregateFunc::MinTimestampTz
+            | AggregateFunc::MinInterval
+            | AggregateFunc::MinTime
             | AggregateFunc::Any
             | AggregateFunc::All
             | AggregateFunc::Dummy => self.expr.is_literal(),
             AggregateFunc::Count => self.expr.is_literal_null(),
-            _ => self.expr.is_literal_err(),
+            AggregateFunc::SumInt16
+            | AggregateFunc::SumInt32
+            | AggregateFunc::SumInt64
+            | AggregateFunc::SumUInt16
+            | AggregateFunc::SumUInt32
+            | AggregateFunc::SumUInt64
+            | AggregateFunc::SumFloat32
+            | AggregateFunc::SumFloat64
+            | AggregateFunc::SumNumeric
+            | AggregateFunc::JsonbAgg { .. }
+            | AggregateFunc::JsonbObjectAgg { .. }
+            | AggregateFunc::MapAgg { .. }
+            | AggregateFunc::ArrayConcat { .. }
+            | AggregateFunc::ListConcat { .. }
+            | AggregateFunc::StringAgg { .. }
+            | AggregateFunc::RowNumber { .. }
+            | AggregateFunc::Rank { .. }
+            | AggregateFunc::DenseRank { .. }
+            | AggregateFunc::LagLead { .. }
+            | AggregateFunc::FirstValue { .. }
+            | AggregateFunc::LastValue { .. }
+            | AggregateFunc::FusedValueWindowFunc { .. }
+            | AggregateFunc::WindowAggregate { .. }
+            | AggregateFunc::FusedWindowAggregate { .. } => self.expr.is_literal_err(),
         }
     }
 
     /// Returns an expression that computes `self` on a group that has exactly one row.
     /// Instead of performing a `Reduce` with `self`, one can perform a `Map` with the expression
     /// returned by `on_unique`, which is cheaper. (See `ReduceElision`.)
-    pub fn on_unique(&self, input_type: &[SqlColumnType]) -> MirScalarExpr {
+    pub fn on_unique(&self, input_type: &[ReprColumnType]) -> MirScalarExpr {
         match &self.func {
             // Count is one if non-null, and zero if null.
             AggregateFunc::Count => self
@@ -2483,8 +2567,8 @@ impl AggregateExpr {
                 .clone()
                 .call_unary(UnaryFunc::IsNull(crate::func::IsNull))
                 .if_then_else(
-                    MirScalarExpr::literal_ok(Datum::Int64(0), SqlScalarType::Int64),
-                    MirScalarExpr::literal_ok(Datum::Int64(1), SqlScalarType::Int64),
+                    MirScalarExpr::literal_ok(Datum::Int64(0), ReprScalarType::Int64),
+                    MirScalarExpr::literal_ok(Datum::Int64(1), ReprScalarType::Int64),
                 ),
 
             // SumInt16 takes Int16s as input, but outputs Int64s.
@@ -2522,14 +2606,14 @@ impl AggregateExpr {
             }
 
             // JsonbAgg takes _anything_ as input, but must output a Jsonb array.
-            AggregateFunc::JsonbAgg { .. } => MirScalarExpr::CallVariadic {
-                func: VariadicFunc::JsonbBuildArray,
-                exprs: vec![
+            AggregateFunc::JsonbAgg { .. } => MirScalarExpr::call_variadic(
+                JsonbBuildArray,
+                vec![
                     self.expr
                         .clone()
                         .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0))),
                 ],
-            },
+            ),
 
             // JsonbAgg takes _anything_ as input, but must output a Jsonb object.
             AggregateFunc::JsonbObjectAgg { .. } => {
@@ -2537,16 +2621,16 @@ impl AggregateExpr {
                     .expr
                     .clone()
                     .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
-                MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::JsonbBuildObject,
-                    exprs: (0..2)
+                MirScalarExpr::call_variadic(
+                    JsonbBuildObject,
+                    (0..2)
                         .map(|i| {
                             record
                                 .clone()
                                 .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(i)))
                         })
                         .collect(),
-                }
+                )
             }
 
             AggregateFunc::MapAgg { value_type, .. } => {
@@ -2554,18 +2638,18 @@ impl AggregateExpr {
                     .expr
                     .clone()
                     .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
-                MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::MapBuild {
+                MirScalarExpr::call_variadic(
+                    MapBuild {
                         value_type: value_type.clone(),
                     },
-                    exprs: (0..2)
+                    (0..2)
                         .map(|i| {
                             record
                                 .clone()
                                 .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(i)))
                         })
                         .collect(),
-                }
+                )
             }
 
             // StringAgg takes nested records of strings and outputs a string
@@ -2618,17 +2702,17 @@ impl AggregateExpr {
                 let (result_expr, column_name) =
                     Self::on_unique_lag_lead(lag_lead, encoded_args, lag_lead_return_type.clone());
 
-                MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::ListCreate {
-                        elem_type: return_type_with_orig_row,
+                MirScalarExpr::call_variadic(
+                    ListCreate {
+                        elem_type: SqlScalarType::from_repr(&return_type_with_orig_row),
                     },
-                    exprs: vec![MirScalarExpr::CallVariadic {
-                        func: VariadicFunc::RecordCreate {
+                    vec![MirScalarExpr::call_variadic(
+                        RecordCreate {
                             field_names: vec![column_name, ColumnName::from("?record?")],
                         },
-                        exprs: vec![result_expr, original_row],
-                    }],
-                }
+                        vec![result_expr, original_row],
+                    )],
+                )
             }
 
             // The input type for FirstValue is ((OriginalRow, InputValue), OrderByExprs...)
@@ -2661,17 +2745,17 @@ impl AggregateExpr {
                     first_value_return_type,
                 );
 
-                MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::ListCreate {
-                        elem_type: return_type_with_orig_row,
+                MirScalarExpr::call_variadic(
+                    ListCreate {
+                        elem_type: SqlScalarType::from_repr(&return_type_with_orig_row),
                     },
-                    exprs: vec![MirScalarExpr::CallVariadic {
-                        func: VariadicFunc::RecordCreate {
+                    vec![MirScalarExpr::call_variadic(
+                        RecordCreate {
                             field_names: vec![column_name, ColumnName::from("?record?")],
                         },
-                        exprs: vec![result_expr, original_row],
-                    }],
-                }
+                        vec![result_expr, original_row],
+                    )],
+                )
             }
 
             // The input type for LastValue is ((OriginalRow, InputValue), OrderByExprs...)
@@ -2704,17 +2788,17 @@ impl AggregateExpr {
                     last_value_return_type,
                 );
 
-                MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::ListCreate {
-                        elem_type: return_type_with_orig_row,
+                MirScalarExpr::call_variadic(
+                    ListCreate {
+                        elem_type: SqlScalarType::from_repr(&return_type_with_orig_row),
                     },
-                    exprs: vec![MirScalarExpr::CallVariadic {
-                        func: VariadicFunc::RecordCreate {
+                    vec![MirScalarExpr::call_variadic(
+                        RecordCreate {
                             field_names: vec![column_name, ColumnName::from("?record?")],
                         },
-                        exprs: vec![result_expr, original_row],
-                    }],
-                }
+                        vec![result_expr, original_row],
+                    )],
+                )
             }
 
             // The input type for window aggs is ((OriginalRow, InputValue), OrderByExprs...)
@@ -2755,17 +2839,17 @@ impl AggregateExpr {
                     wrapped_aggregate,
                 );
 
-                MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::ListCreate {
-                        elem_type: return_type,
+                MirScalarExpr::call_variadic(
+                    ListCreate {
+                        elem_type: SqlScalarType::from_repr(&return_type),
                     },
-                    exprs: vec![MirScalarExpr::CallVariadic {
-                        func: VariadicFunc::RecordCreate {
+                    vec![MirScalarExpr::call_variadic(
+                        RecordCreate {
                             field_names: vec![column_name, ColumnName::from("?record?")],
                         },
-                        exprs: vec![result, original_row],
-                    }],
-                }
+                        vec![result, original_row],
+                    )],
+                )
             }
 
             // The input type is ((OriginalRow, (Arg1, Arg2, ...)), OrderByExprs...)
@@ -2815,28 +2899,28 @@ impl AggregateExpr {
                     col_names.push(column_name);
                 }
 
-                MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::ListCreate {
-                        elem_type: return_type_with_orig_row,
+                MirScalarExpr::call_variadic(
+                    ListCreate {
+                        elem_type: SqlScalarType::from_repr(&return_type_with_orig_row),
                     },
-                    exprs: vec![MirScalarExpr::CallVariadic {
-                        func: VariadicFunc::RecordCreate {
+                    vec![MirScalarExpr::call_variadic(
+                        RecordCreate {
                             field_names: vec![
                                 ColumnName::from("?fused_window_aggr?"),
                                 ColumnName::from("?record?"),
                             ],
                         },
-                        exprs: vec![
-                            MirScalarExpr::CallVariadic {
-                                func: VariadicFunc::RecordCreate {
+                        vec![
+                            MirScalarExpr::call_variadic(
+                                RecordCreate {
                                     field_names: col_names,
                                 },
-                                exprs: func_result_exprs,
-                            },
+                                func_result_exprs,
+                            ),
                             original_row,
                         ],
-                    }],
-                }
+                    )],
+                )
             }
 
             // The input type is ((OriginalRow, (Args1, Args2, ...)), OrderByExprs...)
@@ -2912,28 +2996,28 @@ impl AggregateExpr {
                     col_names.push(column_name);
                 }
 
-                MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::ListCreate {
-                        elem_type: return_type_with_orig_row,
+                MirScalarExpr::call_variadic(
+                    ListCreate {
+                        elem_type: SqlScalarType::from_repr(&return_type_with_orig_row),
                     },
-                    exprs: vec![MirScalarExpr::CallVariadic {
-                        func: VariadicFunc::RecordCreate {
+                    vec![MirScalarExpr::call_variadic(
+                        RecordCreate {
                             field_names: vec![
                                 ColumnName::from("?fused_value_window_func?"),
                                 ColumnName::from("?record?"),
                             ],
                         },
-                        exprs: vec![
-                            MirScalarExpr::CallVariadic {
-                                func: VariadicFunc::RecordCreate {
+                        vec![
+                            MirScalarExpr::call_variadic(
+                                RecordCreate {
                                     field_names: col_names,
                                 },
-                                exprs: func_result_exprs,
-                            },
+                                func_result_exprs,
+                            ),
                             original_row,
                         ],
-                    }],
-                }
+                    )],
+                )
             }
 
             // All other variants should return the argument to the aggregation.
@@ -2983,9 +3067,11 @@ impl AggregateExpr {
     /// `on_unique` for ROW_NUMBER, RANK, DENSE_RANK
     fn on_unique_ranking_window_funcs(
         &self,
-        input_type: &[SqlColumnType],
+        input_type: &[ReprColumnType],
         col_name: &str,
     ) -> MirScalarExpr {
+        let sql_input_type: Vec<SqlColumnType> =
+            input_type.iter().map(SqlColumnType::from_repr).collect();
         let list = self
             .expr
             .clone()
@@ -2993,39 +3079,39 @@ impl AggregateExpr {
             .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
 
         // extract the expression within the list
-        let record = MirScalarExpr::CallVariadic {
-            func: VariadicFunc::ListIndex,
-            exprs: vec![
+        let record = MirScalarExpr::call_variadic(
+            ListIndex,
+            vec![
                 list,
-                MirScalarExpr::literal_ok(Datum::Int64(1), SqlScalarType::Int64),
+                MirScalarExpr::literal_ok(Datum::Int64(1), ReprScalarType::Int64),
             ],
-        };
+        );
 
-        MirScalarExpr::CallVariadic {
-            func: VariadicFunc::ListCreate {
+        MirScalarExpr::call_variadic(
+            ListCreate {
                 elem_type: self
-                    .typ(input_type)
+                    .sql_typ(&sql_input_type)
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone(),
             },
-            exprs: vec![MirScalarExpr::CallVariadic {
-                func: VariadicFunc::RecordCreate {
+            vec![MirScalarExpr::call_variadic(
+                RecordCreate {
                     field_names: vec![ColumnName::from(col_name), ColumnName::from("?record?")],
                 },
-                exprs: vec![
-                    MirScalarExpr::literal_ok(Datum::Int64(1), SqlScalarType::Int64),
+                vec![
+                    MirScalarExpr::literal_ok(Datum::Int64(1), ReprScalarType::Int64),
                     record,
                 ],
-            }],
-        }
+            )],
+        )
     }
 
     /// `on_unique` for `lag` and `lead`
     fn on_unique_lag_lead(
         lag_lead: &LagLeadType,
         encoded_args: MirScalarExpr,
-        return_type: SqlScalarType,
+        return_type: ReprScalarType,
     ) -> (MirScalarExpr, ColumnName) {
         let expr = encoded_args
             .clone()
@@ -3041,7 +3127,7 @@ impl AggregateExpr {
         let value = offset
             .clone()
             .call_binary(
-                MirScalarExpr::literal_ok(Datum::Int32(0), SqlScalarType::Int32),
+                MirScalarExpr::literal_ok(Datum::Int32(0), ReprScalarType::Int32),
                 crate::func::Eq,
             )
             .if_then_else(expr, default_value);
@@ -3061,7 +3147,7 @@ impl AggregateExpr {
     fn on_unique_first_value_last_value(
         window_frame: &WindowFrame,
         arg: MirScalarExpr,
-        return_type: SqlScalarType,
+        return_type: ReprScalarType,
     ) -> (MirScalarExpr, ColumnName) {
         // If the window frame includes the current (single) row, return its value, null otherwise
         let result_expr = if window_frame.includes_current_row() {
@@ -3076,8 +3162,8 @@ impl AggregateExpr {
     fn on_unique_window_agg(
         window_frame: &WindowFrame,
         arg_expr: MirScalarExpr,
-        input_type: &[SqlColumnType],
-        return_type: SqlScalarType,
+        input_type: &[ReprColumnType],
+        return_type: ReprScalarType,
         wrapped_aggr: &AggregateFunc,
     ) -> (MirScalarExpr, ColumnName) {
         // If the window frame includes the current (single) row, evaluate the wrapped aggregate on
@@ -3108,7 +3194,18 @@ impl AggregateExpr {
 }
 
 /// Describe a join implementation in dataflow.
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub enum JoinImplementation {
     /// Perform a sequence of binary differential dataflow joins.
     ///
@@ -3192,7 +3289,18 @@ impl JoinImplementation {
 ///
 /// This has more than one version. `new` instantiates the appropriate version based on a
 /// feature flag.
-#[derive(Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub enum JoinInputCharacteristics {
     /// Old version, with `enable_join_prioritize_arranged` turned off.
     V1(JoinInputCharacteristicsV1),
@@ -3258,7 +3366,18 @@ impl JoinInputCharacteristics {
 }
 
 /// Newer version of `JoinInputCharacteristics`, with `enable_join_prioritize_arranged` turned on.
-#[derive(Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct JoinInputCharacteristicsV2 {
     /// An excellent indication that record count will not increase.
     pub unique_key: bool,
@@ -3325,7 +3444,18 @@ impl JoinInputCharacteristicsV2 {
 }
 
 /// Old version of `JoinInputCharacteristics`, with `enable_join_prioritize_arranged` turned off.
-#[derive(Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct JoinInputCharacteristicsV1 {
     /// An excellent indication that record count will not increase.
     pub unique_key: bool,
@@ -3448,7 +3578,7 @@ impl RowSetFinishing {
     /// Applies finishing actions to a [`RowCollection`], and reports the total
     /// time it took to run.
     ///
-    /// Returns a [`SortedRowCollectionIter`] that contains all of the response data, as
+    /// Returns a [`RowCollectionIter`] that contains all of the response data, as
     /// well as the size of the response in bytes.
     pub fn finish(
         &self,
@@ -3456,7 +3586,7 @@ impl RowSetFinishing {
         max_result_size: u64,
         max_returned_query_size: Option<u64>,
         duration_histogram: &Histogram,
-    ) -> Result<(SortedRowCollectionIter, usize), String> {
+    ) -> Result<(RowCollectionIter, usize), String> {
         let now = Instant::now();
         let result = self.finish_inner(rows, max_result_size, max_returned_query_size);
         let duration = now.elapsed();
@@ -3471,7 +3601,7 @@ impl RowSetFinishing {
         rows: RowCollection,
         max_result_size: u64,
         max_returned_query_size: Option<u64>,
-    ) -> Result<(SortedRowCollectionIter, usize), String> {
+    ) -> Result<(RowCollectionIter, usize), String> {
         // How much additional memory is required to make a sorted view.
         let sorted_view_mem = rows.entries().saturating_mul(std::mem::size_of::<usize>());
         let required_memory = rows.byte_len().saturating_add(sorted_view_mem);
@@ -3482,7 +3612,7 @@ impl RowSetFinishing {
             return Err(format!("result exceeds max size of {max_bytes}",));
         }
 
-        let sorted_view = rows.sorted_view(&self.order_by);
+        let sorted_view = rows;
         let mut iter = sorted_view
             .into_row_iter()
             .apply_offset(self.offset)
@@ -3564,14 +3694,14 @@ impl RowSetFinishingIncremental {
     /// Applies finishing actions to the given [`RowCollection`], and reports
     /// the total time it took to run.
     ///
-    /// Returns a [`SortedRowCollectionIter`] that contains all of the response
+    /// Returns a [`RowCollectionIter`] that contains all of the response
     /// data.
     pub fn finish_incremental(
         &mut self,
         rows: RowCollection,
         max_result_size: u64,
         duration_histogram: &Histogram,
-    ) -> Result<SortedRowCollectionIter, String> {
+    ) -> Result<RowCollectionIter, String> {
         let now = Instant::now();
         let result = self.finish_incremental_inner(rows, max_result_size);
         let duration = now.elapsed();
@@ -3584,7 +3714,7 @@ impl RowSetFinishingIncremental {
         &mut self,
         rows: RowCollection,
         max_result_size: u64,
-    ) -> Result<SortedRowCollectionIter, String> {
+    ) -> Result<RowCollectionIter, String> {
         // How much additional memory is required to make a sorted view.
         let sorted_view_mem = rows.entries().saturating_mul(std::mem::size_of::<usize>());
         let required_memory = rows.byte_len().saturating_add(sorted_view_mem);
@@ -3595,9 +3725,9 @@ impl RowSetFinishingIncremental {
             return Err(format!("total result exceeds max size of {max_bytes}",));
         }
 
-        let batch_num_rows = rows.count(0, None);
+        let batch_num_rows = rows.count();
 
-        let sorted_view = rows.sorted_view(&[]);
+        let sorted_view = rows;
         let mut iter = sorted_view
             .into_row_iter()
             .apply_offset(self.remaining_offset)
@@ -3622,14 +3752,72 @@ impl RowSetFinishingIncremental {
         let response_size: usize = iter.clone().map(|row| row.data().len()).sum();
 
         // Bail if we would end up returning more data to the client than they can support.
-        if let Some(max) = self.remaining_max_returned_query_size {
-            if response_size > usize::cast_from(max) {
+        if let Some(max) = &mut self.remaining_max_returned_query_size {
+            if let Some(remaining) = max.checked_sub(response_size.cast_into()) {
+                *max = remaining;
+            } else {
                 let max_bytes = ByteSize::b(self.max_returned_query_size.expect("known to exist"));
                 return Err(format!("total result exceeds max size of {max_bytes}"));
             }
         }
 
         Ok(iter)
+    }
+}
+
+/// Compares two rows columnwise, using [compare_columns].
+///
+/// Compared to the naive implementation, this allows sharing some memory and implements some
+/// optimizations that avoid unnecessary row unpacking.
+#[derive(Debug, Clone)]
+pub struct RowComparator<O: AsRef<[ColumnOrder]> = Vec<ColumnOrder>> {
+    order: O,
+    /// Invariant: all column references in the order are less than this limit.
+    /// This allows for partial unpacking of rows.
+    limit: usize,
+    left_vec: RefCell<DatumVec>,
+    right_vec: RefCell<DatumVec>,
+}
+
+impl<O: AsRef<[ColumnOrder]>> RowComparator<O> {
+    /// Create a new row comparator from the given column ordering.
+    pub fn new(order: O) -> Self {
+        let limit = order
+            .as_ref()
+            .iter()
+            .map(|o| o.column + 1)
+            .max()
+            .unwrap_or(0);
+        Self {
+            order,
+            limit,
+            left_vec: Default::default(),
+            right_vec: Default::default(),
+        }
+    }
+
+    /// Compare two (references to) rows.
+    pub fn compare_rows(
+        &self,
+        left_row: &RowRef,
+        right_row: &RowRef,
+        tiebreaker: impl Fn() -> Ordering,
+    ) -> Ordering {
+        let order = if self.limit == 0 {
+            Ordering::Equal
+        } else {
+            // These borrows should never fail, since this struct is non-sync and this function
+            // is non-recursive.
+            let mut left_ref = self.left_vec.borrow_mut();
+            let mut right_ref = self.right_vec.borrow_mut();
+            let left_cols = left_ref.borrow_with_limit(left_row, self.limit);
+            let right_cols = right_ref.borrow_with_limit(right_row, self.limit);
+            compare_columns(self.order.as_ref(), &left_cols, &right_cols, || {
+                Ordering::Equal
+            })
+        };
+        // Tiebreak without the vecs borrowed, in case that recursively invokes this function.
+        order.then_with(tiebreaker)
     }
 }
 
@@ -3681,7 +3869,18 @@ where
 ///
 /// Window frames define a subset of the partition , and only a subset of
 /// window functions make use of the window frame.
-#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Debug,
+    Clone,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct WindowFrame {
     /// ROWS, RANGE or GROUPS
     pub units: WindowFrameUnits,
@@ -3761,7 +3960,18 @@ impl WindowFrame {
 }
 
 /// Describe how frame bounds are interpreted
-#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Debug,
+    Clone,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub enum WindowFrameUnits {
     /// Each row is treated as the unit of work for bounds
     Rows,
@@ -3787,7 +3997,18 @@ impl Display for WindowFrameUnits {
 ///
 /// The order between frame bounds is significant, as Postgres enforces
 /// some restrictions there.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, MzReflect, PartialOrd, Ord)]
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    Hash,
+    MzReflect,
+    PartialOrd,
+    Ord
+)]
 pub enum WindowFrameBound {
     /// `UNBOUNDED PRECEDING`
     UnboundedPreceding,
@@ -3814,7 +4035,18 @@ impl Display for WindowFrameBound {
 }
 
 /// Maximum iterations for a LetRec.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 pub struct LetRecLimit {
     /// Maximum number of iterations to evaluate.
     pub max_iters: NonZeroU64,
@@ -3849,7 +4081,17 @@ impl Display for LetRecLimit {
 
 /// For a global Get, this indicates whether we are going to read from Persist or from an index.
 /// (See comment in MirRelationExpr::Get.)
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash)]
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash
+)]
 pub enum AccessStrategy {
     /// It's either a local Get (a CTE), or unknown at the time.
     /// `prune_and_annotate_dataflow_index_imports` decides it for global Gets, and thus switches to
@@ -3866,6 +4108,8 @@ pub enum AccessStrategy {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroUsize;
+
     use mz_repr::explain::text::text_string_at;
 
     use crate::explain::HumanizedExplain;
@@ -3902,6 +4146,30 @@ mod tests {
         };
 
         assert_eq!(act, exp);
+    }
+
+    #[mz_ore::test]
+    fn test_row_set_finishing_incremental_max_returned_query_size() {
+        let row = Row::pack_slice(&[Datum::String("hello")]);
+        let row_size = u64::cast_from(row.data().len());
+        let diff = NonZeroUsize::new(1).unwrap();
+        let batch = RowCollection::new(vec![(row, diff)], &[]);
+
+        // Set max_returned_query_size to hold exactly 2 batches worth of rows.
+        let mut finishing = RowSetFinishingIncremental::new(0, None, vec![0], Some(row_size * 2));
+
+        let max_result_size = u64::MAX;
+
+        let r = finishing.finish_incremental_inner(batch.clone(), max_result_size);
+        assert!(r.is_ok());
+        assert_eq!(finishing.remaining_max_returned_query_size, Some(row_size));
+
+        let r = finishing.finish_incremental_inner(batch.clone(), max_result_size);
+        assert!(r.is_ok());
+        assert_eq!(finishing.remaining_max_returned_query_size, Some(0));
+
+        let r = finishing.finish_incremental_inner(batch, max_result_size);
+        assert!(r.unwrap_err().contains("total result exceeds max size"));
     }
 }
 

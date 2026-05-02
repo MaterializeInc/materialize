@@ -25,48 +25,30 @@ class SubscribeParallel(Scenario):
     def benchmark(self) -> MeasurementSource:
         return Td(
             self.create_subscribe_source()
-            + "\n".join(
-                [
-                    dedent(
-                        f"""
+            + "\n".join([dedent(f"""
                         $ postgres-connect name=conn{i} url=postgres://materialize:materialize@${{testdrive.materialize-sql-addr}}
                         $ postgres-execute connection=conn{i}
                         # STRICT SERIALIZABLE is affected by database-issues#5407
                         START TRANSACTION ISOLATION LEVEL SERIALIZABLE;
                         DECLARE c{i} CURSOR FOR SUBSCRIBE s1
-                        """
-                    )
-                    for i in range(0, self.n())
-                ]
-            )
+                        """) for i in range(0, self.n())])
             + self.insert()
             # We measure from here ...
-            + dedent(
-                """
+            + dedent("""
                 > SELECT COUNT(*) FROM s1;
                   /* A */
                 1
-                """
-            )
-            + "\n".join(
-                [
-                    dedent(
-                        f"""
+                """)
+            + "\n".join([dedent(f"""
                         $ postgres-execute connection=conn{i}
                         FETCH ALL FROM c{i};
-                        """
-                    )
-                    for i in range(0, self.n())
-                ]
-            )
+                        """) for i in range(0, self.n())])
             # ... to here
-            + dedent(
-                """
+            + dedent("""
                 > SELECT 1
                   /* B */
                 1
-                """
-            )
+                """)
         )
 
     def create_subscribe_source(self) -> str:
@@ -78,12 +60,10 @@ class SubscribeParallel(Scenario):
 
 class SubscribeParallelTable(SubscribeParallel):
     def create_subscribe_source(self) -> str:
-        return dedent(
-            """
+        return dedent("""
              > DROP TABLE IF EXISTS s1;
              > CREATE TABLE s1 (f1 TEXT);
-             """
-        )
+             """)
 
     def insert(self) -> str:
         return "> INSERT INTO s1 VALUES (REPEAT('x', 1024))\n"
@@ -91,13 +71,11 @@ class SubscribeParallelTable(SubscribeParallel):
 
 class SubscribeParallelTableWithIndex(SubscribeParallel):
     def create_subscribe_source(self) -> str:
-        return dedent(
-            """
+        return dedent("""
              > DROP TABLE IF EXISTS s1;
              > CREATE TABLE s1 (f1 INTEGER);
              > CREATE DEFAULT INDEX ON s1;
-             """
-        )
+             """)
 
     def insert(self) -> str:
         return "> INSERT INTO s1 VALUES (123)\n"
@@ -109,8 +87,7 @@ class SubscribeParallelKafka(SubscribeParallel):
         # we must always use a unique topic to ensure isolation between the individal
         # measurements
         self._unique_topic_id = getrandbits(64)
-        return dedent(
-            f"""
+        return dedent(f"""
              # Separate topic for each Mz instance
              $ kafka-create-topic topic=subscribe-kafka-{self._unique_topic_id}
 
@@ -129,13 +106,132 @@ class SubscribeParallelKafka(SubscribeParallel):
                FORMAT BYTES ENVELOPE NONE;
 
              > CREATE DEFAULT INDEX ON s1;
-             """
-        )
+             """)
 
     def insert(self) -> str:
-        return dedent(
-            f"""
+        return dedent(f"""
             $ kafka-ingest format=bytes topic=subscribe-kafka-{self._unique_topic_id}
             123
-            """
+            """)
+
+
+class SubscribeParallelLarge(Scenario):
+    """Feature benchmarks related to SUBSCRIBE with a large initial dataset."""
+
+    SCALE = 6
+
+    def benchmark(self) -> MeasurementSource:
+        total_size = self.n()
+        step = min(100_000, total_size)
+        return Td(
+            dedent(
+                dedent("""
+                    > DROP TABLE IF EXISTS s1;
+                    > CREATE TABLE s1 (f2 INTEGER);
+                    """)
+                + "\n".join(
+                    f"> INSERT INTO s1 SELECT generate_series FROM generate_series({n+1}, {n+step});"
+                    for n in range(0, total_size, step)
+                )
+                # Note that we use a separate connection for the subscribe, largely so we ignore the (large) result
+                # set instead of matching against it in testdrive code; we're interested in performance and not validating
+                # the actual contents.
+                + dedent(f"""
+                    > SELECT COUNT(*) FROM s1;
+                      /* A */
+                    {total_size}
+
+                    $ postgres-execute connection=postgres://materialize@${{testdrive.materialize-sql-addr}}
+                    START TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+                    DECLARE c1 CURSOR FOR SUBSCRIBE (SELECT * FROM s1);
+                    """)
+                + "\n".join(
+                    f"FETCH {step} c1 WITH (TIMEOUT = '60s');"
+                    for n in range(0, total_size, step)
+                )
+                + dedent("""
+                    COMMIT;
+
+                    > SELECT 1;
+                      /* B */
+                    1
+                    """)
+            )
         )
+
+
+class SubscribeNoSnapshotTable(Scenario):
+    """Feature benchmarks related to SUBSCRIBE without a snapshot"""
+
+    SCALE = 6  # Controls the size of the snapshot we skip over.
+
+    def benchmark(self) -> MeasurementSource:
+        subscribes = "\n".join(["""
+             > START TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+             > DECLARE c1 CURSOR FOR SUBSCRIBE s1 WITH (SNAPSHOT false) AS OF ${mz_now};
+             > FETCH 1 c1 WITH (TIMEOUT = '10s');
+             <TIMESTAMP> 1 wow!
+             > COMMIT;""" for _ in range(30)])
+
+        return Td(f"""
+             $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+             ALTER SYSTEM SET max_result_size = '100GB';
+
+             $ set-regex match=\\d{{13}} replacement=<TIMESTAMP>
+
+             > DROP TABLE IF EXISTS s1;
+             > CREATE TABLE s1 (f1 TEXT) WITH (RETAIN HISTORY FOR '1hr');
+             > INSERT INTO s1 SELECT generate_series::text from generate_series(1, {self.n()});
+             > SELECT COUNT(*) FROM s1;
+             {self.n()}
+
+             $ set-from-sql var=mz_now
+             SELECT mz_now()::text;
+
+             > INSERT INTO s1 VALUES ('wow!');
+               /* A */
+
+             {subscribes}
+
+             > SELECT 1
+               /* B */
+             1
+            """)
+
+
+class SubscribeNoSnapshotIndex(Scenario):
+    """Feature benchmarks related to SUBSCRIBE without a snapshot"""
+
+    SCALE = 6  # Controls the size of the snapshot we skip over.
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(f"""
+             $ set-regex match=\\d{{13}} replacement=<TIMESTAMP>
+
+             $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+             ALTER SYSTEM SET enable_index_options = true;
+             ALTER SYSTEM SET max_result_size = '100GB';
+
+             > DROP TABLE IF EXISTS s1;
+             > CREATE TABLE s1 (f1 TEXT);
+             > CREATE DEFAULT INDEX ON s1 WITH (RETAIN HISTORY FOR '1hr');
+             > INSERT INTO s1 SELECT generate_series::text from generate_series(1, {self.n()});
+             > SELECT COUNT(*) FROM s1;
+             {self.n()}
+
+             $ set-from-sql var=mz_now
+             SELECT mz_now()::text;
+
+             > INSERT INTO s1 VALUES ('wow!');
+               /* A */
+
+             > START TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+             > DECLARE c1 CURSOR FOR SUBSCRIBE s1 WITH (SNAPSHOT false) AS OF ${{mz_now}};
+             > FETCH 1 c1 WITH (TIMEOUT = '10s');
+             <TIMESTAMP> 1 wow!
+             > COMMIT;
+
+             > SELECT 1
+               /* B */
+             1
+            """)

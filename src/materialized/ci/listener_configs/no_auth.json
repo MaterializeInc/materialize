@@ -24,7 +24,10 @@
         "webhook": true,
         "internal": false,
         "metrics": false,
-        "profiling": false
+        "profiling": false,
+        "mcp_agent": true,
+        "mcp_developer": true,
+        "console_config": true
       }
     },
     "internal": {
@@ -37,7 +40,10 @@
         "webhook": true,
         "internal": true,
         "metrics": true,
-        "profiling": true
+        "profiling": true,
+        "mcp_agent": true,
+        "mcp_developer": true,
+        "console_config": false
       }
     }
   }

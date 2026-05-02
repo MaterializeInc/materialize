@@ -12,6 +12,7 @@
 use askama::Template;
 use axum::Json;
 use axum::http::HeaderValue;
+use axum::http::Uri;
 use axum::http::status::StatusCode;
 use axum::response::{Html, IntoResponse};
 use axum_extra::TypedHeader;
@@ -155,6 +156,37 @@ pub async fn handle_tracing() -> impl IntoResponse {
     )
 }
 
+/// Returns true if `origin` matches any entry in `allowed`. Supports bare `*`
+/// (any origin), exact match, and wildcard subdomains (`*.example.com`).
+pub fn origin_is_allowed(origin: &HeaderValue, allowed: &[HeaderValue]) -> bool {
+    fn wildcard_origin_match(origin: &HeaderValue, wildcard: &[u8]) -> bool {
+        let Some(origin) = origin.to_str().ok() else {
+            return false;
+        };
+        let Ok(origin) = origin.parse::<Uri>() else {
+            return false;
+        };
+        let Some(host) = origin.host() else {
+            return false;
+        };
+
+        host.as_bytes().ends_with(wildcard)
+    }
+
+    if allowed.iter().any(|o| o.as_bytes() == b"*") {
+        return true;
+    }
+    for val in allowed {
+        if (val.as_bytes().starts_with(b"*.")
+            && wildcard_origin_match(origin, &val.as_bytes()[1..]))
+            || origin == val
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// Construct a CORS policy to allow origins to query us via HTTP. If any bare
 /// '*' is passed, this allows any origin; otherwise, allows a list of origins,
 /// which can include wildcard subdomains. If the allowed origin starts with a
@@ -163,6 +195,20 @@ pub fn build_cors_allowed_origin<'a, I>(allowed: I) -> AllowOrigin
 where
     I: IntoIterator<Item = &'a HeaderValue>,
 {
+    fn wildcard_origin_match(origin: &HeaderValue, wildcard: &[u8]) -> bool {
+        let Some(origin) = origin.to_str().ok() else {
+            return false;
+        };
+        let Ok(origin) = origin.parse::<Uri>() else {
+            return false;
+        };
+        let Some(host) = origin.host() else {
+            return false;
+        };
+
+        host.as_bytes().ends_with(wildcard)
+    }
+
     let allowed = allowed.into_iter().cloned().collect::<Vec<HeaderValue>>();
     if allowed.iter().any(|o| o.as_bytes() == b"*") {
         AllowOrigin::any()
@@ -170,7 +216,7 @@ where
         AllowOrigin::predicate(move |origin: &HeaderValue, _request_parts: _| {
             for val in &allowed {
                 if (val.as_bytes().starts_with(b"*.")
-                    && origin.as_bytes().ends_with(&val.as_bytes()[1..]))
+                    && wildcard_origin_match(origin, &val.as_bytes()[1..]))
                     || origin == val
                 {
                     return true;
@@ -224,6 +270,7 @@ mod tests {
                 allowed_origins: vec![HeaderValue::from_static("*.example.org")],
                 mirrored_origins: vec![
                     HeaderValue::from_static("https://foo.example.org"),
+                    HeaderValue::from_static("https://foo.example.org:8443"),
                     HeaderValue::from_static("https://bar.example.org"),
                     HeaderValue::from_static("https://baz.bar.foo.example.org"),
                 ],
@@ -231,6 +278,7 @@ mod tests {
                 invalid_origins: vec![
                     HeaderValue::from_static("https://example.org"),
                     HeaderValue::from_static("https://wrong.com"),
+                    HeaderValue::from_static("https://wrong.com:8443"),
                 ],
             },
             TestCase {
@@ -240,6 +288,7 @@ mod tests {
                 ],
                 mirrored_origins: vec![
                     HeaderValue::from_static("https://foo.example.org"),
+                    HeaderValue::from_static("https://foo.example.org:8443"),
                     HeaderValue::from_static("https://bar.example.org"),
                     HeaderValue::from_static("https://baz.bar.foo.example.org"),
                     HeaderValue::from_static("https://other.com"),

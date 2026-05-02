@@ -36,6 +36,7 @@ SUBSCRIBE [TO] <object_name | (SELECT ...)>
 [WITH (<option_name> [= <option_value>], ...)]
 [AS OF [AT LEAST] <timestamp_expression>]
 [UP TO <timestamp_expression>]
+;
 
 ```
 
@@ -49,7 +50,7 @@ where:
 The generated schemas have a Debezium-style diff envelope to capture changes in
 the input view or source.
 
-| Option                            | Description                                                                                                                                      |
+| Syntax element                  | Description                                                                                                                                      |
 | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | **ENVELOPE UPSERT (KEY (**\<key1\>, ...**))**                | If specified, use the upsert envelope, which takes a list of `KEY` columns. The upsert envelope supports inserts, updates and deletes in the subscription output. For more information, see [Modifying the output format](#modifying-the-output-format). |
 | **ENVELOPE DEBEZIUM (KEY (**\<key1\>, ...**))**           | If specified, use a [Debezium-style diff envelope](/sql/create-sink/kafka/#debezium-envelope), which takes a list of `KEY` columns. The Debezium envelope supports inserts, updates and deletes in the subscription output along with the previous state of the key. For more information, see [Modifying the output format](#modifying-the-output-format). |
@@ -198,6 +199,29 @@ For updates in the snapshot, the `mz_timestamp` field will be fast-forwarded to 
 For example, an insert that occurred before the `SUBSCRIBE` began would appear in the snapshot.
 
 To see only updates after the initial timestamp, specify `WITH (SNAPSHOT = false)`.
+
+{{< note >}}
+While `WITH (SNAPSHOT = false)` guarantees that the snapshot will not be sent to
+the client, Materialize may still need to fetch and process the snapshot data to
+compute the correct result.
+
+For example, consider:
+
+```mzsql
+SUBSCRIBE TO SELECT SUM(column) FROM table WITH (SNAPSHOT = false)
+```
+
+The latest update for the query depends on _all_ rows in `table`, not just the
+rows that have changed recently.
+
+However, when subscribing directly to a collection; e.g.,
+
+```mzsql
+SUBSCRIBE TO <object> WITH (SNAPSHOT = false)
+```
+
+where `<object>` is a materialized view, table, source, or index, Materialize can generally skip fetching or processing the snapshot data from that collection entirely.
+{{< /note >}}
 
 ### `PROGRESS`
 
@@ -568,4 +592,4 @@ subscriptions](/transform-data/patterns/durable-subscriptions/).
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/subscribe.md" >}}
+{{% include-headless "/headless/sql-command-privileges/subscribe" %}}

@@ -114,7 +114,8 @@ where
                     // Emit an event at the same level as the span. For the same reason as noted in the comment
                     // above we can't use `tracing::event!(dynamic_level, ...)` since the level argument
                     // needs to be static
-                    if span.metadata().and_then(|m| Some(m.level())).unwrap_or(&Level::DEBUG) == &Level::DEBUG {
+                    let level = span.metadata().map(|m| m.level()).unwrap_or(&Level::DEBUG);
+                    if level == &Level::DEBUG {
                         tracing::debug!(msg = "HTTP response generated", response = ?response, status_code = response.status().as_u16());
                     } else {
                         tracing::info!(msg = "HTTP response generated", response = ?response, status_code = response.status().as_u16());

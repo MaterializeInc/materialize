@@ -113,8 +113,8 @@ use std::task::Poll;
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::operators::iterate::SemigroupVariable;
-use differential_dataflow::trace::TraceReader;
+use differential_dataflow::operators::iterate::Variable;
+use differential_dataflow::trace::{BatchReader, TraceReader};
 use differential_dataflow::{AsCollection, Data, VecCollection};
 use futures::FutureExt;
 use futures::channel::oneshot;
@@ -122,34 +122,33 @@ use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
 use mz_compute_types::dyncfgs::{
     COMPUTE_APPLY_COLUMN_DEMANDS, COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK,
     COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES, ENABLE_COMPUTE_LOGICAL_BACKPRESSURE,
-    ENABLE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY,
+    ENABLE_TEMPORAL_BUCKETING, SUBSCRIBE_SNAPSHOT_OPTIMIZATION, TEMPORAL_BUCKETING_SUMMARY,
 };
 use mz_compute_types::plan::LirId;
 use mz_compute_types::plan::render_plan::{
     self, BindStage, LetBind, LetFreePlan, RecBind, RenderPlan,
 };
-use mz_expr::{EvalError, Id, LocalId};
+use mz_expr::{EvalError, Id, LocalId, permutation_for_arrangement};
 use mz_persist_client::operators::shard_source::{ErrorHandler, SnapshotMode};
 use mz_repr::explain::DummyHumanizer;
-use mz_repr::{Datum, Diff, GlobalId, Row, SharedRow};
+use mz_repr::{Datum, DatumVec, Diff, GlobalId, ReprRelationType, Row, SharedRow};
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 use mz_timely_util::probe::{Handle as MzProbeHandle, ProbeNotify};
+use mz_timely_util::scope_label::ScopeExt;
 use timely::PartialOrder;
-use timely::communication::Allocate;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::to_stream::ToStream;
-use timely::dataflow::operators::{BranchWhen, Capability, Operator, Probe, probe};
-use timely::dataflow::scopes::Child;
-use timely::dataflow::{Scope, Stream, StreamCore};
-use timely::order::Product;
+use timely::dataflow::operators::vec::ToStream;
+use timely::dataflow::operators::vec::{BranchWhen, Filter};
+use timely::dataflow::operators::{Capability, Operator, Probe, probe};
+use timely::dataflow::{Scope, Stream, StreamVec};
+use timely::order::{Product, TotalOrder};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::ActivateOnDrop;
-use timely::worker::{AsWorker, Worker as TimelyWorker};
+use timely::worker::Worker as TimelyWorker;
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
@@ -160,13 +159,12 @@ use crate::logging::compute::{
     ComputeEvent, DataflowGlobal, LirMapping, LirMetadata, LogDataflowErrors, OperatorHydration,
 };
 use crate::render::context::{ArrangementFlavor, Context};
-use crate::render::continual_task::ContinualTaskCtx;
-use crate::row_spine::{RowRowBatcher, RowRowBuilder};
+use crate::render::errors::DataflowErrorSer;
+use crate::row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp};
 
 pub mod context;
-pub(crate) mod continual_task;
-mod errors;
+pub(crate) mod errors;
 mod flat_map;
 mod join;
 mod reduce;
@@ -182,8 +180,8 @@ pub use join::LinearJoinSpec;
 /// This method imports sources from provided assets, and then builds the remaining
 /// dataflow using "compute-local" assets like shared arrangements, and producing
 /// both arrangements and sinks.
-pub fn build_compute_dataflow<A: Allocate>(
-    timely_worker: &mut TimelyWorker<A>,
+pub fn build_compute_dataflow(
+    timely_worker: &mut TimelyWorker,
     compute_state: &mut ComputeState,
     dataflow: DataflowDescription<RenderPlan, CollectionMetadata>,
     start_signal: StartSignal,
@@ -212,15 +210,15 @@ pub fn build_compute_dataflow<A: Allocate>(
 
     let worker_logging = timely_worker.logger_for("timely").map(Into::into);
     let apply_demands = COMPUTE_APPLY_COLUMN_DEMANDS.get(&compute_state.worker_config);
+    let subscribe_snapshot_optimization =
+        SUBSCRIBE_SNAPSHOT_OPTIMIZATION.get(&compute_state.worker_config);
 
     let name = format!("Dataflow: {}", &dataflow.debug_name);
     let input_name = format!("InputRegion: {}", &dataflow.debug_name);
     let build_name = format!("BuildRegion: {}", &dataflow.debug_name);
 
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
-        // TODO(ct3): This should be a config of the source instead, but at least try
-        // to contain the hacks.
-        let mut ct_ctx = ContinualTaskCtx::new(&dataflow);
+        let scope = scope.with_label();
 
         // The scope.clone() occurs to allow import in the region.
         // We build a region here to establish a pattern of a scope inside the dataflow,
@@ -232,16 +230,19 @@ pub fn build_compute_dataflow<A: Allocate>(
 
         scope.clone().region_named(&input_name, |region| {
             // Import declared sources into the rendering context.
-            for (source_id, (source, _monotonic, upper)) in dataflow.source_imports.iter() {
+            for (source_id, import) in dataflow.source_imports.iter() {
                 region.region_named(&format!("Source({:?})", source_id), |inner| {
                     let mut read_schema = None;
-                    let mut mfp = source.arguments.operators.clone().map(|mut ops| {
+                    let mut mfp = import.desc.arguments.operators.clone().map(|mut ops| {
                         // If enabled, we read from Persist with a `RelationDesc` that
                         // omits uneeded columns.
                         if apply_demands {
                             let demands = ops.demand();
-                            let new_desc =
-                                source.storage_metadata.relation_desc.apply_demand(&demands);
+                            let new_desc = import
+                                .desc
+                                .storage_metadata
+                                .relation_desc
+                                .apply_demand(&demands);
                             let new_arity = demands.len();
                             let remap: BTreeMap<_, _> = demands
                                 .into_iter()
@@ -256,32 +257,33 @@ pub fn build_compute_dataflow<A: Allocate>(
                             .expect("Linear operators should always be valid")
                     });
 
-                    let mut snapshot_mode = SnapshotMode::Include;
-                    let mut suppress_early_progress_as_of = dataflow.as_of.clone();
-                    let ct_source_transformer = ct_ctx.get_ct_source_transformer(*source_id);
-                    if let Some(x) = ct_source_transformer.as_ref() {
-                        snapshot_mode = x.snapshot_mode();
-                        suppress_early_progress_as_of = suppress_early_progress_as_of
-                            .map(|as_of| x.suppress_early_progress_as_of(as_of));
-                    }
+                    let snapshot_mode = if import.with_snapshot || !subscribe_snapshot_optimization
+                    {
+                        SnapshotMode::Include
+                    } else {
+                        compute_state.metrics.inc_subscribe_snapshot_optimization();
+                        SnapshotMode::Exclude
+                    };
+                    let suppress_early_progress_as_of = dataflow.as_of.clone();
 
                     // Note: For correctness, we require that sources only emit times advanced by
                     // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
-                    let (mut ok_stream, err_stream, token) = persist_source::persist_source(
-                        inner,
-                        *source_id,
-                        Arc::clone(&compute_state.persist_clients),
-                        &compute_state.txns_ctx,
-                        source.storage_metadata.clone(),
-                        read_schema,
-                        dataflow.as_of.clone(),
-                        snapshot_mode,
-                        until.clone(),
-                        mfp.as_mut(),
-                        compute_state.dataflow_max_inflight_bytes(),
-                        start_signal.clone(),
-                        ErrorHandler::Halt("compute_import"),
-                    );
+                    let (mut ok_stream, err_stream, token) =
+                        persist_source::persist_source::<DataflowErrorSer>(
+                            inner,
+                            *source_id,
+                            Arc::clone(&compute_state.persist_clients),
+                            &compute_state.txns_ctx,
+                            import.desc.storage_metadata.clone(),
+                            read_schema,
+                            dataflow.as_of.clone(),
+                            snapshot_mode,
+                            until.clone(),
+                            mfp.as_mut(),
+                            compute_state.dataflow_max_inflight_bytes(),
+                            start_signal.clone().into_send_future(),
+                            ErrorHandler::Halt("compute_import"),
+                        );
 
                     // If `mfp` is non-identity, we need to apply what remains.
                     // For the moment, assert that it is either trivial or `None`.
@@ -308,7 +310,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                             output_probe.clone(),
                             slack,
                             limit,
-                            upper.clone(),
+                            import.upper.clone(),
                             name.clone(),
                         );
                         ok_stream = stream;
@@ -319,24 +321,15 @@ pub fn build_compute_dataflow<A: Allocate>(
                         compute_state.input_probe_for(*source_id, dataflow.export_ids());
                     ok_stream = ok_stream.probe_with(&input_probe);
 
-                    // The `suppress_early_progress` operator and the input
-                    // probe both want to work on the untransformed ct input,
-                    // make sure this stays after them.
-                    let (ok_stream, err_stream) = match ct_source_transformer {
-                        None => (ok_stream, err_stream),
-                        Some(ct_source_transformer) => {
-                            let (oks, errs, ct_times) = ct_source_transformer
-                                .transform(ok_stream.as_collection(), err_stream.as_collection());
-                            // TODO(ct3): Ideally this would be encapsulated by
-                            // ContinualTaskCtx, but the types are tricky.
-                            ct_ctx.ct_times.push(ct_times.leave_region().leave_region());
-                            (oks.inner, errs.inner)
-                        }
-                    };
-
                     let (oks, errs) = (
-                        ok_stream.as_collection().leave_region().leave_region(),
-                        err_stream.as_collection().leave_region().leave_region(),
+                        ok_stream
+                            .as_collection()
+                            .leave_region(region)
+                            .leave_region(scope),
+                        err_stream
+                            .as_collection()
+                            .leave_region(region)
+                            .leave_region(scope),
                     );
 
                     imported_sources.push((mz_expr::Id::Global(*source_id), (oks, errs)));
@@ -371,12 +364,21 @@ pub fn build_compute_dataflow<A: Allocate>(
                 // Import declared indexes into the rendering context.
                 for (idx_id, idx) in &dataflow.index_imports {
                     let input_probe = compute_state.input_probe_for(*idx_id, dataflow.export_ids());
+                    let snapshot_mode = if idx.with_snapshot || !subscribe_snapshot_optimization {
+                        SnapshotMode::Include
+                    } else {
+                        compute_state.metrics.inc_subscribe_snapshot_optimization();
+                        SnapshotMode::Exclude
+                    };
                     context.import_index(
+                        scope,
                         compute_state,
                         &mut tokens,
                         input_probe,
                         *idx_id,
                         &idx.desc,
+                        &idx.typ,
+                        snapshot_mode,
                         start_signal.clone(),
                     );
                 }
@@ -397,7 +399,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                                     // recursive plans _must_ have bodies in a let
                                     BindingInfo::Body { in_let },
                                 )
-                                .leave_region()
+                                .leave_region(context.scope)
                         },
                     );
                     let global_id = object.id;
@@ -416,6 +418,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                 // Export declared indexes.
                 for (idx_id, dependencies, idx) in indexes {
                     context.export_index_iterative(
+                        scope,
                         compute_state,
                         &tokens,
                         dependencies,
@@ -434,8 +437,8 @@ pub fn build_compute_dataflow<A: Allocate>(
                         sink_id,
                         &sink,
                         start_signal.clone(),
-                        ct_ctx.input_times(&context.scope.parent),
                         &output_probe,
+                        scope,
                     );
                 }
             });
@@ -473,12 +476,21 @@ pub fn build_compute_dataflow<A: Allocate>(
                 // Import declared indexes into the rendering context.
                 for (idx_id, idx) in &dataflow.index_imports {
                     let input_probe = compute_state.input_probe_for(*idx_id, dataflow.export_ids());
+                    let snapshot_mode = if idx.with_snapshot || !subscribe_snapshot_optimization {
+                        SnapshotMode::Include
+                    } else {
+                        compute_state.metrics.inc_subscribe_snapshot_optimization();
+                        SnapshotMode::Exclude
+                    };
                     context.import_index(
+                        scope,
                         compute_state,
                         &mut tokens,
                         input_probe,
                         *idx_id,
                         &idx.desc,
+                        &idx.typ,
+                        snapshot_mode,
                         start_signal.clone(),
                     );
                 }
@@ -492,7 +504,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                             context
                                 .enter_region(region, Some(&depends))
                                 .render_plan(object.id, object.plan)
-                                .leave_region()
+                                .leave_region(context.scope)
                         },
                     );
                     let global_id = object.id;
@@ -528,29 +540,56 @@ pub fn build_compute_dataflow<A: Allocate>(
                         sink_id,
                         &sink,
                         start_signal.clone(),
-                        ct_ctx.input_times(&context.scope.parent),
                         &output_probe,
+                        scope,
                     );
                 }
             });
         }
-    })
+    });
 }
 
 // This implementation block allows child timestamps to vary from parent timestamps,
 // but requires the parent timestamp to be `repr::Timestamp`.
-impl<'g, G, T> Context<Child<'g, G, T>>
+impl<'g, T> Context<'g, T>
 where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
-    T: Refines<G::Timestamp> + RenderTimestamp,
+    T: Refines<mz_repr::Timestamp> + RenderTimestamp,
 {
-    pub(crate) fn import_index(
+    /// Import the collection from the arrangement, discarding batches from the snapshot.
+    /// (This does not guarantee that no records from the snapshot are included; the assumption is
+    /// that we'll filter those out later if necessary.)
+    fn import_filtered_index_collection<
+        'outer,
+        Tr: TraceReader<Time = mz_repr::Timestamp> + Clone,
+        V: Data,
+    >(
+        &self,
+        arranged: Arranged<'outer, Tr>,
+        start_signal: StartSignal,
+        mut logic: impl FnMut(Tr::Key<'_>, Tr::Val<'_>) -> V + 'static,
+    ) -> VecCollection<'g, T, V, Tr::Diff>
+    where
+        // This is implied by the fact that the outer timestamp = mz_repr::Timestamp, but it's essential
+        // for our batch-level filtering to be safe, so we document it here regardless.
+        mz_repr::Timestamp: TotalOrder,
+    {
+        let oks = arranged.stream.with_start_signal(start_signal).filter({
+            let as_of = self.as_of_frontier.clone();
+            move |b| !<Antichain<mz_repr::Timestamp> as PartialOrder>::less_equal(b.upper(), &as_of)
+        });
+        Arranged::<'outer, Tr>::flat_map_batches(oks, move |a, b| [logic(a, b)]).enter(self.scope)
+    }
+
+    pub(crate) fn import_index<'outer>(
         &mut self,
+        outer: Scope<'outer, mz_repr::Timestamp>,
         compute_state: &mut ComputeState,
         tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
         input_probe: probe::Handle<mz_repr::Timestamp>,
         idx_id: GlobalId,
         idx: &IndexDesc,
+        typ: &ReprRelationType,
+        snapshot_mode: SnapshotMode,
         start_signal: StartSignal,
     ) {
         if let Some(traces) = compute_state.traces.get_mut(&idx_id) {
@@ -562,7 +601,7 @@ where
             let token = traces.to_drop().clone();
 
             let (mut oks, ok_button) = traces.oks_mut().import_frontier_core(
-                &self.scope.parent,
+                outer,
                 &format!("Index({}, {:?})", idx.on_id, idx.key),
                 self.as_of_frontier.clone(),
                 self.until.clone(),
@@ -571,26 +610,56 @@ where
             oks.stream = oks.stream.probe_with(&input_probe);
 
             let (err_arranged, err_button) = traces.errs_mut().import_frontier_core(
-                &self.scope.parent,
+                outer,
                 &format!("ErrIndex({}, {:?})", idx.on_id, idx.key),
                 self.as_of_frontier.clone(),
                 self.until.clone(),
             );
 
-            let ok_arranged = oks
-                .enter(&self.scope)
-                .with_start_signal(start_signal.clone());
-            let err_arranged = err_arranged
-                .enter(&self.scope)
-                .with_start_signal(start_signal);
-
-            self.update_id(
-                Id::Global(idx.on_id),
-                CollectionBundle::from_expressions(
-                    idx.key.clone(),
-                    ArrangementFlavor::Trace(idx_id, ok_arranged, err_arranged),
-                ),
-            );
+            let bundle = match snapshot_mode {
+                SnapshotMode::Include => {
+                    let ok_arranged = oks
+                        .enter(self.scope)
+                        .with_start_signal(start_signal.clone());
+                    let err_arranged = err_arranged
+                        .enter(self.scope)
+                        .with_start_signal(start_signal);
+                    CollectionBundle::from_expressions(
+                        idx.key.clone(),
+                        ArrangementFlavor::Trace(idx_id, ok_arranged, err_arranged),
+                    )
+                }
+                SnapshotMode::Exclude => {
+                    // When we import an index without a snapshot, we have two balancing considerations:
+                    // - It's easy to filter out irrelevant batches from the stream, but hard to filter them out from an arrangement.
+                    //   (The `TraceFrontier` wrapper allows us to set an "until" frontier, but not a lower.)
+                    // - We do not actually need to reference the arrangement in this dataflow, since all operators that use the arrangement
+                    //   (joins, reduces, etc.) also require the snapshot data.
+                    // So: when the snapshot is excluded, we import only the (filtered) collection itself and ignore the arrangement.
+                    let oks = {
+                        let mut datums = DatumVec::new();
+                        let (permutation, _thinning) =
+                            permutation_for_arrangement(&idx.key, typ.arity());
+                        self.import_filtered_index_collection(
+                            oks,
+                            start_signal.clone(),
+                            move |k: DatumSeq, v: DatumSeq| {
+                                let mut datums_borrow = datums.borrow();
+                                datums_borrow.extend(k);
+                                datums_borrow.extend(v);
+                                SharedRow::pack(permutation.iter().map(|i| datums_borrow[*i]))
+                            },
+                        )
+                    };
+                    let errs = self.import_filtered_index_collection(
+                        err_arranged,
+                        start_signal,
+                        |e, _| e.clone(),
+                    );
+                    CollectionBundle::from_collections(oks, errs)
+                }
+            };
+            self.update_id(Id::Global(idx.on_id), bundle);
             tokens.insert(
                 idx_id,
                 Rc::new((ok_button.press_on_drop(), err_button.press_on_drop(), token)),
@@ -606,10 +675,7 @@ where
 
 // This implementation block requires the scopes have the same timestamp as the trace manager.
 // That makes some sense, because we are hoping to deposit an arrangement in the trace manager.
-impl<'g, G> Context<Child<'g, G, G::Timestamp>, G::Timestamp>
-where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
-{
+impl<'g> Context<'g, mz_repr::Timestamp> {
     pub(crate) fn export_index(
         &self,
         compute_state: &mut ComputeState,
@@ -617,7 +683,7 @@ where
         dependency_ids: BTreeSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
-        output_probe: &MzProbeHandle<G::Timestamp>,
+        output_probe: &MzProbeHandle<mz_repr::Timestamp>,
     ) {
         // put together tokens that belong to the export
         let mut needed_tokens = Vec::new();
@@ -652,7 +718,7 @@ where
 
                 // Attach logging of dataflow errors.
                 if let Some(logger) = compute_state.compute_logger.clone() {
-                    errs.stream.log_dataflow_errors(logger, idx_id);
+                    errs.stream = errs.stream.log_dataflow_errors(logger, idx_id);
                 }
 
                 compute_state.traces.set(
@@ -684,19 +750,19 @@ where
 
 // This implementation block requires the scopes have the same timestamp as the trace manager.
 // That makes some sense, because we are hoping to deposit an arrangement in the trace manager.
-impl<'g, G, T> Context<Child<'g, G, T>>
+impl<'g, T> Context<'g, T>
 where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
     T: RenderTimestamp,
 {
-    pub(crate) fn export_index_iterative(
+    pub(crate) fn export_index_iterative<'outer>(
         &self,
+        outer: Scope<'outer, mz_repr::Timestamp>,
         compute_state: &mut ComputeState,
         tokens: &BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
         dependency_ids: BTreeSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
-        output_probe: &MzProbeHandle<G::Timestamp>,
+        output_probe: &MzProbeHandle<mz_repr::Timestamp>,
     ) {
         // put together tokens that belong to the export
         let mut needed_tokens = Vec::new();
@@ -719,14 +785,14 @@ where
                 //   * Use columnar to extract columns from the batches to implement leave.
                 let mut oks = oks
                     .as_collection(|k, v| (k.to_row(), v.to_row()))
-                    .leave()
+                    .leave(outer)
                     .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, _>(
-                    "Arrange export iterative",
-                );
+                        "Arrange export iterative",
+                    );
 
                 let mut errs = errs
                     .as_collection(|k, v| (k.clone(), v.clone()))
-                    .leave()
+                    .leave(outer)
                     .mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, _>(
                         "Arrange export iterative err",
                     );
@@ -748,7 +814,7 @@ where
 
                 // Attach logging of dataflow errors.
                 if let Some(logger) = compute_state.compute_logger.clone() {
-                    errs.stream.log_dataflow_errors(logger, idx_id);
+                    errs.stream = errs.stream.log_dataflow_errors(logger, idx_id);
                 }
 
                 compute_state.traces.set(
@@ -789,10 +855,7 @@ enum BindingInfo {
     LetRec { id: LocalId, last: bool },
 }
 
-impl<G> Context<G>
-where
-    G: Scope<Timestamp = Product<mz_repr::Timestamp, PointStamp<u64>>>,
-{
+impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
     /// Renders a plan to a differential dataflow, producing the collection of results.
     ///
     /// This method allows for `plan` to contain [`RecBind`]s, and is planned
@@ -811,7 +874,7 @@ where
         level: usize,
         plan: RenderPlan,
         binding: BindingInfo,
-    ) -> CollectionBundle<G> {
+    ) -> CollectionBundle<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
         for BindStage { lets, recs } in plan.binds {
             // Render the let bindings in order.
             let mut let_iter = lets.into_iter().peekable();
@@ -825,7 +888,7 @@ where
                             let binding = BindingInfo::Let { id, last };
                             self.enter_region(region, Some(&depends))
                                 .render_letfree_plan(object_id, value, binding)
-                                .leave_region()
+                                .leave_region(self.scope)
                         });
                 self.insert_id(Id::Local(id), bundle);
             }
@@ -833,24 +896,20 @@ where
             let rec_ids: Vec<_> = recs.iter().map(|r| r.id).collect();
 
             // Define variables for rec bindings.
-            // It is important that we only use the `SemigroupVariable` until the object is bound.
+            // It is important that we only use the `Variable` until the object is bound.
             // At that point, all subsequent uses should have access to the object itself.
             let mut variables = BTreeMap::new();
             for id in rec_ids.iter() {
                 use differential_dataflow::dynamic::feedback_summary;
                 let inner = feedback_summary::<u64>(level + 1, 1);
-                let oks_v = SemigroupVariable::new(
-                    &mut self.scope,
-                    Product::new(Default::default(), inner.clone()),
-                );
-                let err_v = SemigroupVariable::new(
-                    &mut self.scope,
-                    Product::new(Default::default(), inner),
-                );
+                let (oks_v, oks_collection) =
+                    Variable::new(self.scope, Product::new(Default::default(), inner.clone()));
+                let (err_v, err_collection) =
+                    Variable::new(self.scope, Product::new(Default::default(), inner));
 
                 self.insert_id(
                     Id::Local(*id),
-                    CollectionBundle::from_collections(oks_v.clone(), err_v.clone()),
+                    CollectionBundle::from_collections(oks_collection, err_collection),
                 );
                 variables.insert(Id::Local(*id), (oks_v, err_v));
             }
@@ -867,7 +926,10 @@ where
                 let (oks_v, err_v) = variables.remove(&Id::Local(id)).unwrap();
 
                 // Set oks variable to `oks` but consolidated to ensure iteration ceases at fixed point.
-                let mut oks = oks.consolidate_named::<KeyBatcher<_, _, _>>("LetRecConsolidation");
+                let mut oks = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
+                    oks,
+                    "LetRecConsolidation",
+                );
 
                 if let Some(limit) = limit {
                     // We swallow the results of the `max_iter`th iteration, because
@@ -881,10 +943,10 @@ where
                         });
                     oks = VecCollection::new(in_limit);
                     if !limit.return_at_limit {
-                        err = err.concat(&VecCollection::new(over_limit).map(move |_data| {
-                            DataflowError::EvalError(Box::new(EvalError::LetRecLimitExceeded(
+                        err = err.concat(VecCollection::new(over_limit).map(move |_data| {
+                            DataflowErrorSer::from(EvalError::LetRecLimitExceeded(
                                 format!("{}", limit.max_iters.get()).into(),
-                            )))
+                            ))
                         }));
                     }
                 }
@@ -905,8 +967,8 @@ where
                     )
                     .as_collection(|k, _| k.clone());
 
-                oks_v.set(&oks);
-                err_v.set(&errs);
+                oks_v.set(oks);
+                err_v.set(errs);
             }
             // Now extract each of the rec bindings into the outer scope.
             for id in rec_ids.into_iter() {
@@ -926,11 +988,7 @@ where
     }
 }
 
-impl<G> Context<G>
-where
-    G: Scope,
-    G::Timestamp: RenderTimestamp,
-{
+impl<'scope, T: RenderTimestamp> Context<'scope, T> {
     /// Renders a non-recursive plan to a differential dataflow, producing the collection of
     /// results.
     ///
@@ -941,7 +999,11 @@ where
     ///
     /// Panics if the given plan contains any [`RecBind`]s. Recursive plans must be rendered using
     /// `render_recursive_plan` instead.
-    fn render_plan(&mut self, object_id: GlobalId, plan: RenderPlan) -> CollectionBundle<G> {
+    fn render_plan(
+        &mut self,
+        object_id: GlobalId,
+        plan: RenderPlan,
+    ) -> CollectionBundle<'scope, T> {
         let mut in_let = false;
         for BindStage { lets, recs } in plan.binds {
             assert!(recs.is_empty());
@@ -959,7 +1021,7 @@ where
                             let binding = BindingInfo::Let { id, last };
                             self.enter_region(region, Some(&depends))
                                 .render_letfree_plan(object_id, value, binding)
-                                .leave_region()
+                                .leave_region(self.scope)
                         });
                 self.insert_id(Id::Local(id), bundle);
             }
@@ -969,17 +1031,17 @@ where
             let depends = plan.body.depends();
             self.enter_region(region, Some(&depends))
                 .render_letfree_plan(object_id, plan.body, BindingInfo::Body { in_let })
-                .leave_region()
+                .leave_region(self.scope)
         })
     }
 
     /// Renders a let-free plan to a differential dataflow, producing the collection of results.
     fn render_letfree_plan(
-        &mut self,
+        &self,
         object_id: GlobalId,
         plan: LetFreePlan,
         binding: BindingInfo,
-    ) -> CollectionBundle<G> {
+    ) -> CollectionBundle<'scope, T> {
         let (mut nodes, root_id, topological_order) = plan.destruct();
 
         // Rendered collections by their `LirId`.
@@ -1029,7 +1091,7 @@ where
                     operator
                 };
 
-                let operator_id_start = self.scope.peek_identifier();
+                let operator_id_start = self.scope.worker().peek_identifier();
                 Some((operator, operator_id_start))
             } else {
                 None
@@ -1038,7 +1100,7 @@ where
             let mut bundle = self.render_plan_expr(node.expr, &collections);
 
             if let Some((operator, operator_id_start)) = metadata {
-                let operator_id_end = self.scope.peek_identifier();
+                let operator_id_end = self.scope.worker().peek_identifier();
                 let operator_span = (operator_id_start, operator_id_end);
 
                 if let Some(lir_mapping_metadata) = &mut lir_mapping_metadata {
@@ -1070,10 +1132,10 @@ where
     /// Panics if any of the expr's inputs is not found in `collections`.
     /// Callers must ensure that input nodes have been rendered previously.
     fn render_plan_expr(
-        &mut self,
+        &self,
         expr: render_plan::Expr,
-        collections: &BTreeMap<LirId, CollectionBundle<G>>,
-    ) -> CollectionBundle<G> {
+        collections: &BTreeMap<LirId, CollectionBundle<'scope, T>>,
+    ) -> CollectionBundle<'scope, T> {
         use render_plan::Expr::*;
 
         let expect_input = |id| {
@@ -1101,14 +1163,14 @@ where
                         if !until.less_equal(&time) {
                             Some((
                                 row,
-                                <G::Timestamp as Refines<mz_repr::Timestamp>>::to_inner(time),
+                                <T as Refines<mz_repr::Timestamp>>::to_inner(time),
                                 diff,
                             ))
                         } else {
                             None
                         }
                     })
-                    .to_stream(&mut self.scope)
+                    .to_stream(self.scope)
                     .as_collection();
 
                 let mut error_time: mz_repr::Timestamp = Timestamp::minimum();
@@ -1117,12 +1179,12 @@ where
                     .into_iter()
                     .map(move |e| {
                         (
-                            DataflowError::from(e),
-                            <G::Timestamp as Refines<mz_repr::Timestamp>>::to_inner(error_time),
+                            DataflowErrorSer::from(e),
+                            <T as Refines<mz_repr::Timestamp>>::to_inner(error_time),
                             Diff::ONE,
                         )
                     })
-                    .to_stream(&mut self.scope)
+                    .to_stream(self.scope)
                     .as_collection();
 
                 CollectionBundle::from_collections(ok_collection, err_collection)
@@ -1247,11 +1309,14 @@ where
                     oks.push(os);
                     errs.push(es);
                 }
-                let mut oks = differential_dataflow::collection::concatenate(&mut self.scope, oks);
+                let mut oks = differential_dataflow::collection::concatenate(self.scope, oks);
                 if consolidate_output {
-                    oks = oks.consolidate_named::<KeyBatcher<_, _, _>>("UnionConsolidation")
+                    oks = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
+                        oks,
+                        "UnionConsolidation",
+                    )
                 }
-                let errs = differential_dataflow::collection::concatenate(&mut self.scope, errs);
+                let errs = differential_dataflow::collection::concatenate(self.scope, errs);
                 CollectionBundle::from_collections(oks, errs)
             }
             ArrangeBy {
@@ -1287,7 +1352,7 @@ where
         }
     }
 
-    fn log_operator_hydration(&self, bundle: &mut CollectionBundle<G>, lir_id: LirId) {
+    fn log_operator_hydration(&self, bundle: &mut CollectionBundle<'scope, T>, lir_id: LirId) {
         // A `CollectionBundle` can contain more than one collection, which makes it not obvious to
         // which we should attach the logging operator.
         //
@@ -1313,10 +1378,10 @@ where
 
                 match arrangement {
                     Local(a, _) => {
-                        a.stream = self.log_operator_hydration_inner(&a.stream, lir_id);
+                        a.stream = self.log_operator_hydration_inner(a.stream.clone(), lir_id);
                     }
                     Trace(_, a, _) => {
-                        a.stream = self.log_operator_hydration_inner(&a.stream, lir_id);
+                        a.stream = self.log_operator_hydration_inner(a.stream.clone(), lir_id);
                     }
                 }
             }
@@ -1325,15 +1390,19 @@ where
                     .collection
                     .as_mut()
                     .expect("CollectionBundle invariant");
-                let stream = self.log_operator_hydration_inner(&oks.inner, lir_id);
+                let stream = self.log_operator_hydration_inner(oks.inner.clone(), lir_id);
                 *oks = stream.as_collection();
             }
         }
     }
 
-    fn log_operator_hydration_inner<D>(&self, stream: &Stream<G, D>, lir_id: LirId) -> Stream<G, D>
+    fn log_operator_hydration_inner<D>(
+        &self,
+        stream: Stream<'scope, T, D>,
+        lir_id: LirId,
+    ) -> Stream<'scope, T, D>
     where
-        D: Clone + 'static,
+        D: timely::Container + Clone + 'static,
     {
         let Some(logger) = self.compute_logger.clone() else {
             return stream.clone(); // hydration logging disabled
@@ -1456,7 +1525,7 @@ impl RenderTimestamp for Product<mz_repr::Timestamp, PointStamp<u64>> {
         // and when one is a `PointStamp` that also means all coordinates
         // of the pointstamp.
         let inner = self.inner.clone();
-        let mut vec = inner.into_vec();
+        let mut vec = inner.into_inner();
         for item in vec.iter_mut() {
             *item = item.saturating_sub(1);
         }
@@ -1501,6 +1570,15 @@ impl StartSignal {
         self.token_ref.strong_count() == 0
     }
 
+    /// Returns a Send-safe future that completes when the signal fires.
+    ///
+    /// Unlike `StartSignal` itself, the returned future does not retain a reference to the token,
+    /// so it cannot be used for `drop_on_fire` or `has_fired` checks.
+    pub fn into_send_future(self) -> impl Future<Output = ()> + Send {
+        use futures::FutureExt;
+        self.fut.map(|_| ())
+    }
+
     pub fn drop_on_fire(&self, to_drop: Box<dyn Any>) {
         if let Some(token) = self.token_ref.upgrade() {
             let mut token = token.borrow_mut();
@@ -1527,11 +1605,9 @@ pub(crate) trait WithStartSignal {
     fn with_start_signal(self, signal: StartSignal) -> Self;
 }
 
-impl<S, Tr> WithStartSignal for Arranged<S, Tr>
+impl<'scope, Tr> WithStartSignal for Arranged<'scope, Tr>
 where
-    S: Scope,
-    S::Timestamp: RenderTimestamp,
-    Tr: TraceReader + Clone,
+    Tr: TraceReader<Time: RenderTimestamp> + Clone,
 {
     fn with_start_signal(self, signal: StartSignal) -> Self {
         Arranged {
@@ -1541,18 +1617,14 @@ where
     }
 }
 
-impl<S, D> WithStartSignal for Stream<S, D>
+impl<'scope, T: Timestamp, D> WithStartSignal for Stream<'scope, T, D>
 where
-    S: Scope,
-    D: timely::Data,
+    D: timely::Container + Clone + 'static,
 {
     fn with_start_signal(self, signal: StartSignal) -> Self {
+        let activations = self.scope().activations();
         self.unary(Pipeline, "StartSignal", |_cap, info| {
-            let token = Box::new(ActivateOnDrop::new(
-                (),
-                info.address,
-                self.scope().activations(),
-            ));
+            let token = Box::new(ActivateOnDrop::new((), info.address, activations));
             signal.drop_on_fire(token);
 
             let mut stash = Vec::new();
@@ -1599,13 +1671,12 @@ where
 /// still be upstream of `arrange_core` operators when those get to know about us dropping the
 /// minimum capability. The in-flight snapshot updates would hold back the input frontiers of
 /// `arrange_core` operators to the `as_of`, which would cause them to insert empty batches.
-fn suppress_early_progress<G, D>(
-    stream: Stream<G, D>,
-    as_of: Antichain<G::Timestamp>,
-) -> Stream<G, D>
+fn suppress_early_progress<'scope, T: Timestamp, D>(
+    stream: Stream<'scope, T, D>,
+    as_of: Antichain<T>,
+) -> Stream<'scope, T, D>
 where
-    G: Scope,
-    D: Data,
+    D: Data + timely::Container,
 {
     stream.unary_frontier(Pipeline, "SuppressEarlyProgress", |default_cap, _info| {
         let mut early_cap = Some(default_cap);
@@ -1633,7 +1704,7 @@ where
     })
 }
 
-/// Extension trait for [`StreamCore`] to selectively limit progress.
+/// Extension trait for [`Stream`] to selectively limit progress.
 trait LimitProgress<T: Timestamp> {
     /// Limit the progress of the stream until its frontier reaches the given `upper` bound. Expects
     /// the implementation to observe times in data, and release capabilities based on the probe's
@@ -1663,7 +1734,7 @@ trait LimitProgress<T: Timestamp> {
     /// * `upper` is the upper bound of the stream's frontier until which the implementation can
     ///   retain a capability.
     fn limit_progress(
-        &self,
+        self,
         handle: MzProbeHandle<T>,
         slack_ms: u64,
         limit: Option<usize>,
@@ -1674,28 +1745,29 @@ trait LimitProgress<T: Timestamp> {
 
 // TODO: We could make this generic over a `T` that can be converted to and from a u64 millisecond
 // number.
-impl<G, D, R> LimitProgress<mz_repr::Timestamp> for StreamCore<G, Vec<(D, mz_repr::Timestamp, R)>>
+impl<'scope, D, R> LimitProgress<mz_repr::Timestamp>
+    for StreamVec<'scope, mz_repr::Timestamp, (D, mz_repr::Timestamp, R)>
 where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
-    D: timely::Data,
-    R: timely::Data,
+    D: Clone + 'static,
+    R: Clone + 'static,
 {
     fn limit_progress(
-        &self,
+        self,
         handle: MzProbeHandle<mz_repr::Timestamp>,
         slack_ms: u64,
         limit: Option<usize>,
         upper: Antichain<mz_repr::Timestamp>,
         name: String,
     ) -> Self {
+        let scope = self.scope();
         let stream =
             self.unary_frontier(Pipeline, &format!("LimitProgress({name})"), |_cap, info| {
                 // Times that we've observed on our input.
-                let mut pending_times: BTreeSet<G::Timestamp> = BTreeSet::new();
+                let mut pending_times: BTreeSet<mz_repr::Timestamp> = BTreeSet::new();
                 // Capability for the lower bound of `pending_times`, if any.
-                let mut retained_cap: Option<Capability<G::Timestamp>> = None;
+                let mut retained_cap: Option<Capability<mz_repr::Timestamp>> = None;
 
-                let activator = self.scope().activator_for(info.address);
+                let activator = scope.activator_for(info.address);
                 handle.activate(activator.clone());
 
                 move |(input, frontier), output| {
@@ -1714,7 +1786,7 @@ where
                         if retained_cap.as_ref().is_none_or(|c| {
                             !c.time().less_than(cap.time()) && !upper.less_than(cap.time())
                         }) {
-                            retained_cap = Some(cap.retain());
+                            retained_cap = Some(cap.retain(0));
                         }
                     });
 

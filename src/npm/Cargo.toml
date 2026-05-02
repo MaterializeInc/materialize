@@ -10,18 +10,14 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.100"
-flate2 = "1.1.5"
-hex = "0.4.3"
-hex-literal = "1.0.0"
-reqwest = { version = "0.11.13", features = ["blocking", "native-tls-vendored"] }
-sha2 = "0.10.9"
-tar = "0.4.44"
-walkdir = "2.5.0"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional=true }
+anyhow.workspace = true
+flate2.workspace = true
+hex.workspace = true
+hex-literal.workspace = true
+reqwest.workspace = true
+sha2.workspace = true
+tar.workspace = true
+walkdir.workspace = true
 
 [features]
-default = ["workspace-hack"]
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+default = []

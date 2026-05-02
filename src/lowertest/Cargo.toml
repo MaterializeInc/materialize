@@ -12,18 +12,14 @@ workspace = true
 [dependencies]
 mz-lowertest-derive = { path = "../lowertest-derive", default-features = false }
 mz-ore = { path = "../ore", features = ["test"], default-features = false }
-proc-macro2 = "1.0.103"
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.145"
-itertools = "0.14.0"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+proc-macro2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+itertools.workspace = true
 
 [dev-dependencies]
-anyhow = "1.0.100"
-datadriven = "0.8.0"
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+anyhow.workspace = true
+datadriven.workspace = true
 
 [features]
-default = ["workspace-hack"]
+default = []

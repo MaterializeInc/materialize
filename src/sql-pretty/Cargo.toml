@@ -10,19 +10,15 @@ publish = false
 workspace = true
 
 [dependencies]
-itertools = "0.14.0"
+itertools.workspace = true
 mz-sql-parser = { path = "../sql-parser", default-features = false }
-pretty = "0.12.5"
-thiserror = "2.0.17"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+pretty.workspace = true
+thiserror.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-datadriven = "0.8.0"
+datadriven.workspace = true
 mz-sql-parser = { path = "../sql-parser", features = ["test"] }
 mz-ore = { path = "../ore", default-features = false, features = ["test"] }
 
 [features]
-default = ["workspace-hack", "mz-sql-parser/workspace-hack"]
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+default = []

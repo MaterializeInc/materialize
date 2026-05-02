@@ -99,9 +99,7 @@ def workflow_create(c: Composition, parser: WorkflowArgumentParser) -> None:
             no_consistency_checks=True,  # No access to HTTP for coordinator check
         )
     ):
-        c.testdrive(
-            input=dedent(
-                f"""
+        c.testdrive(input=dedent(f"""
             > SET DATABASE=qa_canary_environment
             > CREATE SECRET IF NOT EXISTS kafka_username AS '{CONFLUENT_CLOUD_QA_CANARY_KAFKA_USERNAME}'
             > CREATE SECRET IF NOT EXISTS kafka_password AS '{CONFLUENT_CLOUD_QA_CANARY_KAFKA_PASSWORD}'
@@ -121,13 +119,21 @@ def workflow_create(c: Composition, parser: WorkflowArgumentParser) -> None:
               USERNAME = SECRET csr_username,
               PASSWORD = SECRET csr_password
               )
-        """
-            )
-        )
 
-        c.testdrive(
-            input=dedent(
-                f"""
+            > CREATE CONNECTION IF NOT EXISTS qa_canary_aws_connection TO AWS (
+              ASSUME ROLE ARN = 'arn:aws:iam::400121260767:role/qa-canary-environment-iceberg-role',
+              REGION = 'us-east-1'
+              )
+
+            > CREATE CONNECTION IF NOT EXISTS qa_canary_iceberg_catalog TO ICEBERG CATALOG (
+              CATALOG TYPE = 's3tablesrest',
+              URL = 'https://s3tables.us-east-1.amazonaws.com/iceberg',
+              WAREHOUSE = 'arn:aws:s3tables:us-east-1:400121260767:bucket/qa-canary-environment',
+              AWS CONNECTION = qa_canary_aws_connection
+              )
+        """))
+
+        c.testdrive(input=dedent(f"""
             > SET DATABASE=qa_canary_environment
             $ mysql-connect name=mysql url=mysql://admin@{MATERIALIZE_PROD_SANDBOX_RDS_MYSQL_HOSTNAME} password={MATERIALIZE_PROD_SANDBOX_RDS_MYSQL_PASSWORD}
             $ mysql-execute name=mysql
@@ -195,13 +201,9 @@ def workflow_create(c: Composition, parser: WorkflowArgumentParser) -> None:
               PASSWORD SECRET pg_password,
               SSL MODE 'require'
               )
-            """
-            )
-        )
+            """))
 
-        c.testdrive(
-            input=dedent(
-                """
+        c.testdrive(input=dedent("""
             > SET DATABASE=qa_canary_environment
 
             > CREATE SCHEMA IF NOT EXISTS public_table;
@@ -209,6 +211,15 @@ def workflow_create(c: Composition, parser: WorkflowArgumentParser) -> None:
             # create the tables here because dbt creates it as materialized view, which will not allow inserts
             > CREATE TABLE IF NOT EXISTS public_table.table (c INT);
             > GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public_table.table TO "infra+qacanaryload@materialize.io"
+
+            > CREATE SCHEMA IF NOT EXISTS public_webhook;
+
+            > CREATE SOURCE IF NOT EXISTS public_webhook.webhook_source
+              IN CLUSTER qa_canary_environment_storage
+              FROM WEBHOOK
+              BODY FORMAT JSON
+
+            > GRANT SELECT ON public_webhook.webhook_source TO "infra+qacanaryload@materialize.io"
 
             > CREATE SCHEMA IF NOT EXISTS public_loadgen;
             > CREATE TABLE IF NOT EXISTS public_loadgen.product_category (
@@ -342,11 +353,16 @@ def workflow_create(c: Composition, parser: WorkflowArgumentParser) -> None:
               (98, 10, 'Field Divider', 'Divider for splitting a soccer field into sections', 39.99),
               (99, 10, 'Bench Canopy', 'Canopy for providing shade to the bench area', 99.99),
               (100, 10, 'Team Shelter', 'Shelter for the team during games', 199.99);
-            """
-            )
-        )
+            """))
 
-    c.exec("dbt", "dbt", "run", "--threads", "8", workdir="/workdir")
+    c.exec(
+        "dbt",
+        "dbt",
+        "run",
+        "--threads",
+        "8",
+        workdir="/workdir",
+    )
 
 
 def workflow_test(c: Composition, parser: WorkflowArgumentParser) -> None:

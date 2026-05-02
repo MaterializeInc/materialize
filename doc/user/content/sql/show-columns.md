@@ -16,9 +16,10 @@ subsource, materialized view, view, or table.
 ```sql
 SHOW COLUMNS FROM <object_name>
 [LIKE <pattern> | WHERE <condition(s)>]
+;
 ```
 
-Option                        | Description
+Syntax element                | Description
 ------------------------------|------------
 **LIKE** \<pattern\>          | If specified, only show columns that match the pattern.
 **WHERE** <condition(s)>      | If specified, only show columns that match the condition(s).
@@ -70,7 +71,7 @@ SHOW COLUMNS FROM my_source;
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/show-columns.md" >}}
+{{% include-headless "/headless/sql-command-privileges/show-columns" %}}
 
 ## Related pages
 

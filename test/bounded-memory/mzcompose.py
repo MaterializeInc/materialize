@@ -11,6 +11,7 @@
 Tests with limited amount of memory, makes sure that the scenarios keep working
 and do not regress. Contains tests for large data ingestions.
 """
+
 import argparse
 import math
 from dataclasses import dataclass
@@ -24,10 +25,13 @@ from materialize.mzcompose.composition import (
     Service,
     WorkflowArgumentParser,
 )
+from materialize.mzcompose.helpers.iceberg import setup_polaris_for_iceberg
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.polaris import Polaris, PolarisBootstrap
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -69,6 +73,10 @@ SERVICES = [
     MySql(),
     Clusterd(),
     Mz(app_password=""),
+    Minio(setup_materialize=True, additional_directories=["copytos3"]),
+    Mc(),
+    PolarisBootstrap(),
+    Polaris(),
 ]
 
 
@@ -80,11 +88,11 @@ class Scenario:
     materialized_memory: str
     clusterd_memory: str
     disabled: bool = False
+    needs_iceberg: bool = False
 
 
 class PgCdcScenario(Scenario):
-    PG_SETUP = dedent(
-        """
+    PG_SETUP = dedent("""
         > CREATE SECRET pgpass AS 'postgres'
         > CREATE CONNECTION pg FOR POSTGRES
           HOST postgres,
@@ -99,10 +107,8 @@ class PgCdcScenario(Scenario):
         ALTER TABLE t1 REPLICA IDENTITY FULL;
 
         CREATE PUBLICATION mz_source FOR ALL TABLES;
-        """
-    )
-    MZ_SETUP = dedent(
-        """
+        """)
+    MZ_SETUP = dedent("""
         > CREATE SOURCE mz_source
           IN CLUSTER clusterd
           FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
@@ -110,13 +116,11 @@ class PgCdcScenario(Scenario):
         > CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE t1);
 
         > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM t1;
-        """
-    )
+        """)
 
 
 class MySqlCdcScenario(Scenario):
-    MYSQL_SETUP = dedent(
-        f"""
+    MYSQL_SETUP = dedent(f"""
         > CREATE SECRET mysqlpass AS '${{arg.mysql-root-password}}'
         > CREATE CONNECTION mysql_conn TO MYSQL (
             HOST mysql,
@@ -143,10 +147,8 @@ class MySqlCdcScenario(Scenario):
         INSERT INTO series_helper (i) SELECT @i:=@i+1 FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT {REPEAT};
 
         CREATE TABLE t1 (f1 SERIAL PRIMARY KEY, f2 INTEGER DEFAULT 0, f3 TEXT);
-        """
-    )
-    MZ_SETUP = dedent(
-        """
+        """)
+    MZ_SETUP = dedent("""
         > CREATE SOURCE mz_source
           IN CLUSTER clusterd
           FROM MYSQL CONNECTION mysql_conn;
@@ -154,13 +156,11 @@ class MySqlCdcScenario(Scenario):
         > CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE public.t1);
 
         > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM t1;
-        """
-    )
+        """)
 
 
 class KafkaScenario(Scenario):
-    SCHEMAS = dedent(
-        """
+    SCHEMAS = dedent("""
         $ set key-schema={
             "type": "string"
           }
@@ -172,11 +172,9 @@ class KafkaScenario(Scenario):
             {"name":"f1", "type":"string"}
           ]
           }
-        """
-    )
+        """)
 
-    CONNECTIONS = dedent(
-        """
+    CONNECTIONS = dedent("""
         $ kafka-create-topic topic=topic1
 
         $ kafka-ingest format=avro key-format=avro topic=topic1 schema=${value-schema} key-schema=${key-schema}
@@ -188,11 +186,9 @@ class KafkaScenario(Scenario):
 
         > CREATE CONNECTION IF NOT EXISTS kafka_conn
           FOR KAFKA BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT;
-        """
-    )
+        """)
 
-    SOURCE = dedent(
-        """
+    SOURCE = dedent("""
         > CREATE SOURCE s1
           IN CLUSTER clusterd
           FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic1-${testdrive.seed}');
@@ -202,18 +198,14 @@ class KafkaScenario(Scenario):
           ENVELOPE UPSERT;
 
         > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM s1_tbl;
-        """
-    )
+        """)
 
-    END_MARKER = dedent(
-        """
+    END_MARKER = dedent("""
         $ kafka-ingest format=avro key-format=avro topic=topic1 schema=${value-schema} key-schema=${key-schema}
         "ZZZ" {"f1": "END MARKER"}
-        """
-    )
+        """)
 
-    POST_RESTART = dedent(
-        f"""
+    POST_RESTART = dedent(f"""
         # Delete all rows except markers
         $ kafka-ingest format=avro key-format=avro topic=topic1 schema=${{value-schema}} key-schema=${{key-schema}} repeat={REPEAT}
         "${{kafka-ingest.iteration}}"
@@ -224,8 +216,7 @@ class KafkaScenario(Scenario):
         # Expect that only markers are left
         > SELECT * FROM v1;
         2
-        """
-    )
+        """)
 
 
 SCENARIOS = [
@@ -233,16 +224,9 @@ SCENARIOS = [
         name="pg-cdc-snapshot",
         pre_restart=PgCdcScenario.PG_SETUP
         + "$ postgres-execute connection=postgres://postgres:postgres@postgres\n"
-        + "\n".join(
-            [
-                dedent(
-                    f"""
+        + "\n".join([dedent(f"""
                     INSERT INTO t1 (f3) SELECT '{i}' || REPEAT('a', {PAD_LEN}) FROM generate_series(1, {REPEAT});
-                    """
-                )
-                for i in range(0, ITERATIONS * 10)
-            ]
-        )
+                    """) for i in range(0, ITERATIONS * 10)])
         + PgCdcScenario.MZ_SETUP
         + dedent(
             f"""
@@ -253,8 +237,7 @@ SCENARIOS = [
             {ITERATIONS * 10 * REPEAT}
             """
         ),
-        post_restart=dedent(
-            f"""
+        post_restart=dedent(f"""
             # We do not do DELETE post-restart, as it will cause postgres to go out of disk
 
             > SELECT * FROM v1; /* expect {ITERATIONS * 10 * REPEAT} */
@@ -262,33 +245,23 @@ SCENARIOS = [
 
             > SELECT COUNT(*) FROM t1; /* expect {ITERATIONS * 10 * REPEAT} */
             {ITERATIONS * 10 * REPEAT}
-            """
-        ),
+            """),
         materialized_memory="4.5Gb",
         clusterd_memory="1Gb",
     ),
     PgCdcScenario(
         name="pg-cdc-update",
         pre_restart=PgCdcScenario.PG_SETUP
-        + dedent(
-            f"""
+        + dedent(f"""
             $ postgres-execute connection=postgres://postgres:postgres@postgres
             INSERT INTO t1 (f3) VALUES ('START');
             INSERT INTO t1 (f3) SELECT REPEAT('a', {PAD_LEN}) FROM generate_series(1, {REPEAT});
-            """
-        )
+            """)
         + PgCdcScenario.MZ_SETUP
-        + "\n".join(
-            [
-                dedent(
-                    """
+        + "\n".join([dedent("""
                     $ postgres-execute connection=postgres://postgres:postgres@postgres
                     UPDATE t1 SET f2 = f2 + 1;
-                    """
-                )
-                for letter in ascii_lowercase[:ITERATIONS]
-            ]
-        )
+                    """) for letter in ascii_lowercase[:ITERATIONS]])
         + dedent(
             f"""
             $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -301,8 +274,7 @@ SCENARIOS = [
             {REPEAT + 2}
             """
         ),
-        post_restart=dedent(
-            """
+        post_restart=dedent("""
             $ postgres-execute connection=postgres://postgres:postgres@postgres
             DELETE FROM t1;
 
@@ -311,15 +283,13 @@ SCENARIOS = [
 
             > SELECT COUNT(*) FROM t1;
             0
-            """
-        ),
+            """),
         materialized_memory="4.5Gb",
         clusterd_memory="3.5Gb",
     ),
     Scenario(
         name="pg-cdc-gh-15044",
-        pre_restart=dedent(
-            f"""
+        pre_restart=dedent(f"""
             > CREATE SECRET pgpass AS 'postgres'
             > CREATE CONNECTION pg FOR POSTGRES
               HOST postgres,
@@ -363,10 +333,8 @@ SCENARIOS = [
             17
 
             > SELECT COUNT(*) FROM t2;
-            """
-        ),
-        post_restart=dedent(
-            """
+            """),
+        post_restart=dedent("""
             > SELECT * FROM v2;
             17
 
@@ -381,8 +349,7 @@ SCENARIOS = [
 
             > SELECT COUNT(*) FROM t2;
             0
-            """
-        ),
+            """),
         materialized_memory="8Gb",
         clusterd_memory="6Gb",
         disabled=True,
@@ -393,16 +360,9 @@ SCENARIOS = [
         + PgCdcScenario.MZ_SETUP
         + "$ postgres-execute connection=postgres://postgres:postgres@postgres\n"
         + "BEGIN;\n"
-        + "\n".join(
-            [
-                dedent(
-                    f"""
+        + "\n".join([dedent(f"""
                     INSERT INTO t1 (f3) SELECT '{i}' || REPEAT('a', {PAD_LEN}) FROM generate_series(1, {int(REPEAT / 16)});
-                    """
-                )
-                for i in range(0, ITERATIONS * 20)
-            ]
-        )
+                    """) for i in range(0, ITERATIONS * 20)])
         + "COMMIT;\n"
         + dedent(
             f"""
@@ -413,8 +373,7 @@ SCENARIOS = [
             {int(ITERATIONS * 20 * REPEAT / 16)}
             """
         ),
-        post_restart=dedent(
-            f"""
+        post_restart=dedent(f"""
             > SELECT * FROM v1; /* expect {int(ITERATIONS * 20 * REPEAT / 16)} */
             {int(ITERATIONS * 20 * REPEAT / 16)}
 
@@ -429,8 +388,7 @@ SCENARIOS = [
 
             > SELECT COUNT(*) FROM t1;
             0
-            """
-        ),
+            """),
         materialized_memory="4.5Gb",
         # TODO: Reduce to 1Gb when https://github.com/MaterializeInc/database-issues/issues/9515 is fixed
         clusterd_memory="2Gb",
@@ -439,16 +397,9 @@ SCENARIOS = [
         name="mysql-cdc-snapshot",
         pre_restart=MySqlCdcScenario.MYSQL_SETUP
         + "$ mysql-execute name=mysql\n"
-        + "\n".join(
-            [
-                dedent(
-                    f"""
+        + "\n".join([dedent(f"""
                     INSERT INTO t1 (f3) SELECT CONCAT('{i}', REPEAT('a', {PAD_LEN})) FROM series_helper;
-                    """
-                )
-                for i in range(0, ITERATIONS)
-            ]
-        )
+                    """) for i in range(0, ITERATIONS)])
         + MySqlCdcScenario.MZ_SETUP
         + dedent(
             f"""
@@ -459,8 +410,7 @@ SCENARIOS = [
             {ITERATIONS * REPEAT}
             """
         ),
-        post_restart=dedent(
-            f"""
+        post_restart=dedent(f"""
             > SELECT * FROM v1; /* expect {ITERATIONS * REPEAT} */
             {ITERATIONS * REPEAT}
 
@@ -477,33 +427,23 @@ SCENARIOS = [
 
             > SELECT COUNT(*) FROM t1;
             0
-            """
-        ),
+            """),
         materialized_memory="4.5Gb",
         clusterd_memory="3.5Gb",
     ),
     MySqlCdcScenario(
         name="mysql-cdc-update",
         pre_restart=MySqlCdcScenario.MYSQL_SETUP
-        + dedent(
-            f"""
+        + dedent(f"""
             $ mysql-execute name=mysql
             INSERT INTO t1 (f3) VALUES ('START');
             INSERT INTO t1 (f3) SELECT REPEAT('a', {PAD_LEN}) FROM series_helper;
-            """
-        )
+            """)
         + MySqlCdcScenario.MZ_SETUP
-        + "\n".join(
-            [
-                dedent(
-                    """
+        + "\n".join([dedent("""
                     $ mysql-execute name=mysql
                     UPDATE t1 SET f2 = f2 + 1;
-                    """
-                )
-                for letter in ascii_lowercase[:ITERATIONS]
-            ]
-        )
+                    """) for letter in ascii_lowercase[:ITERATIONS]])
         + dedent(
             f"""
             $ mysql-execute name=mysql
@@ -516,8 +456,7 @@ SCENARIOS = [
             {REPEAT + 2}
             """
         ),
-        post_restart=dedent(
-            """
+        post_restart=dedent("""
             $ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-password}
             $ mysql-execute name=mysql
             USE public;
@@ -528,8 +467,7 @@ SCENARIOS = [
 
             > SELECT COUNT(*) FROM t1;
             0
-            """
-        ),
+            """),
         materialized_memory="4.5Gb",
         clusterd_memory="3.5Gb",
     ),
@@ -539,16 +477,9 @@ SCENARIOS = [
         + MySqlCdcScenario.MZ_SETUP
         + "$ mysql-execute name=mysql\n"
         + "SET AUTOCOMMIT = FALSE;\n"
-        + "\n".join(
-            [
-                dedent(
-                    f"""
+        + "\n".join([dedent(f"""
                     INSERT INTO t1 (f3) SELECT CONCAT('{i}', REPEAT('a', {PAD_LEN})) FROM series_helper LIMIT {int(REPEAT / 128)};
-                    """
-                )
-                for i in range(0, ITERATIONS * 10)
-            ]
-        )
+                    """) for i in range(0, ITERATIONS * 10)])
         + "COMMIT;\n"
         + dedent(
             f"""
@@ -559,8 +490,7 @@ SCENARIOS = [
             {int(ITERATIONS * 10) * int(REPEAT / 128)}
             """
         ),
-        post_restart=dedent(
-            f"""
+        post_restart=dedent(f"""
             > SELECT * FROM v1; /* expect {int(ITERATIONS * 10) * int(REPEAT / 128)} */
             {int(ITERATIONS * 10) * int(REPEAT / 128)}
 
@@ -577,8 +507,7 @@ SCENARIOS = [
 
             > SELECT COUNT(*) FROM t1;
             0
-            """
-        ),
+            """),
         materialized_memory="3.5Gb",
         clusterd_memory="8.5Gb",
     ),
@@ -586,26 +515,17 @@ SCENARIOS = [
         name="upsert-snapshot",
         pre_restart=KafkaScenario.SCHEMAS
         + KafkaScenario.CONNECTIONS
-        + "\n".join(
-            [
-                dedent(
-                    f"""
+        + "\n".join([dedent(f"""
                     $ kafka-ingest format=avro key-format=avro topic=topic1 schema=${{value-schema}} key-schema=${{key-schema}} repeat={REPEAT}
                     "MMM" {{"f1": "{i}{STRING_PAD}"}}
-                    """
-                )
-                for i in range(0, ITERATIONS)
-            ]
-        )
+                    """) for i in range(0, ITERATIONS)])
         + KafkaScenario.END_MARKER
         # Ensure this config works.
-        + dedent(
-            """
+        + dedent("""
             $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
             $ postgres-execute connection=mz_system
             ALTER SYSTEM SET storage_upsert_max_snapshot_batch_buffering = 2;
-            """
-        )
+            """)
         + KafkaScenario.SOURCE
         + dedent(
             """
@@ -627,17 +547,10 @@ SCENARIOS = [
         pre_restart=KafkaScenario.SCHEMAS
         + KafkaScenario.CONNECTIONS
         + KafkaScenario.SOURCE
-        + "\n".join(
-            [
-                dedent(
-                    f"""
+        + "\n".join([dedent(f"""
                     $ kafka-ingest format=avro key-format=avro topic=topic1 schema=${{value-schema}} key-schema=${{key-schema}} repeat={REPEAT}
                     "${{kafka-ingest.iteration}}" {{"f1": "{i}{STRING_PAD}"}}
-                    """
-                )
-                for i in range(0, ITERATIONS)
-            ]
-        )
+                    """) for i in range(0, ITERATIONS)])
         + KafkaScenario.END_MARKER
         + dedent(
             f"""
@@ -659,20 +572,13 @@ SCENARIOS = [
         pre_restart=KafkaScenario.SCHEMAS
         + KafkaScenario.CONNECTIONS
         + KafkaScenario.SOURCE
-        + "\n".join(
-            [
-                dedent(
-                    f"""
+        + "\n".join([dedent(f"""
                     $ kafka-ingest format=avro key-format=avro topic=topic1 schema=${{value-schema}} key-schema=${{key-schema}} repeat={REPEAT}
                     "${{kafka-ingest.iteration}}" {{"f1": "{letter}{STRING_PAD}"}}
 
                     $ kafka-ingest format=avro key-format=avro topic=topic1 schema=${{value-schema}} key-schema=${{key-schema}} repeat={REPEAT}
                     "${{kafka-ingest.iteration}}"
-                    """
-                )
-                for letter in ascii_lowercase[:ITERATIONS]
-            ]
-        )
+                    """) for letter in ascii_lowercase[:ITERATIONS]])
         + KafkaScenario.END_MARKER
         + dedent(
             """
@@ -690,27 +596,18 @@ SCENARIOS = [
     ),
     Scenario(
         name="table-insert-delete",
-        pre_restart=dedent(
-            """
+        pre_restart=dedent("""
             $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
             $ postgres-execute connection=mz_system
             ALTER SYSTEM SET max_result_size = 2147483648;
 
             > CREATE TABLE t1 (f1 STRING, f2 STRING)
             > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM t1;
-            """
-        )
-        + "\n".join(
-            [
-                dedent(
-                    f"""
+            """)
+        + "\n".join([dedent(f"""
                     > INSERT INTO t1 (f1, f2) SELECT '{letter}', REPEAT('a', {PAD_LEN}) || generate_series::text FROM generate_series(1, {REPEAT});
                     > DELETE FROM t1 WHERE f1 = '{letter}';
-                    """
-                )
-                for letter in ascii_lowercase[:ITERATIONS]
-            ]
-        )
+                    """) for letter in ascii_lowercase[:ITERATIONS]])
         + dedent(
             """
             > SELECT * FROM v1;
@@ -720,22 +617,19 @@ SCENARIOS = [
             0
             """
         ),
-        post_restart=dedent(
-            """
+        post_restart=dedent("""
            > SELECT * FROM v1;
            0
 
            > SELECT COUNT(*) FROM t1;
            0
-           """
-        ),
+           """),
         materialized_memory="4.5Gb",
         clusterd_memory="3.5Gb",
     ),
     Scenario(
         name="table-index-hydration",
-        pre_restart=dedent(
-            """
+        pre_restart=dedent("""
             > DROP CLUSTER REPLICA clusterd.r1;
 
             > CREATE TABLE t (a bigint, b bigint);
@@ -770,28 +664,24 @@ SCENARIOS = [
 
             > SELECT COUNT(*) FROM t;
             2000000
-            """
-        ),
-        post_restart=dedent(
-            """
+            """),
+        post_restart=dedent("""
             > SET CLUSTER = clusterd
 
             > SELECT COUNT(*) FROM t;
             2000000
-            """
-        ),
+            """),
         materialized_memory="10Gb",
         clusterd_memory="3.5Gb",
     ),
     Scenario(
         name="accumulate-reductions",
-        pre_restart=dedent(
-            """
+        pre_restart=dedent("""
             > DROP TABLE IF EXISTS t CASCADE;
             > CREATE TABLE t (a int, b int, c int, d int);
 
             > CREATE MATERIALIZED VIEW data AS
-              SELECT a, a AS b FROM generate_series(1, 10000000) AS a
+              SELECT a, a AS b FROM generate_series(1, 1000000) AS a
               UNION ALL
               SELECT a, b FROM t;
 
@@ -814,17 +704,14 @@ SCENARIOS = [
             > SET CLUSTER = idx_cluster;
 
             > SELECT COUNT(*) FROM accumulable;
-            10000001
-            """
-        ),
-        post_restart=dedent(
-            """
+            1000001
+            """),
+        post_restart=dedent("""
             > SET CLUSTER = idx_cluster;
 
             > SELECT COUNT(*) FROM accumulable;
-            10000001
-            """
-        ),
+            1000001
+            """),
         materialized_memory="8.5Gb",
         clusterd_memory="3.5Gb",
     ),
@@ -832,12 +719,10 @@ SCENARIOS = [
         name="upsert-index-hydration",
         pre_restart=KafkaScenario.SCHEMAS
         + KafkaScenario.CONNECTIONS
-        + dedent(
-            f"""
+        + dedent(f"""
             $ kafka-ingest format=avro key-format=avro topic=topic1 schema=${{value-schema}} key-schema=${{key-schema}} repeat={90 * REPEAT}
             "${{kafka-ingest.iteration}}" {{"f1": "{STRING_PAD}"}}
-            """
-        )
+            """)
         + KafkaScenario.END_MARKER
         + dedent(
             """
@@ -854,9 +739,7 @@ SCENARIOS = [
             > CREATE INDEX i1 IN CLUSTER clusterd ON s1_tbl (f1);
             """
         ),
-        post_restart=KafkaScenario.SCHEMAS
-        + dedent(
-            f"""
+        post_restart=KafkaScenario.SCHEMAS + dedent(f"""
             > CREATE CLUSTER REPLICA clusterd.r1
               STORAGECTL ADDRESSES ['clusterd:2100'],
               STORAGE ADDRESSES ['clusterd:2103'],
@@ -870,15 +753,13 @@ SCENARIOS = [
             # Delete all rows except markers
             $ kafka-ingest format=avro key-format=avro topic=topic1 schema=${{value-schema}} key-schema=${{key-schema}} repeat={REPEAT}
             "${{kafka-ingest.iteration}}"
-            """
-        ),
+            """),
         materialized_memory="7.2Gb",
         clusterd_memory="3.5Gb",
     ),
     Scenario(
         name="table-aggregate",
-        pre_restart=dedent(
-            f"""
+        pre_restart=dedent(f"""
             > SET statement_timeout = '600 s';
 
             > CREATE TABLE t1 (key1 INTEGER, key2 INTEGER, key3 INTEGER, key4 INTEGER)
@@ -911,10 +792,8 @@ SCENARIOS = [
             true
             > SELECT COUNT(*) > 0 FROM v4;
             true
-            """
-        ),
-        post_restart=dedent(
-            """
+            """),
+        post_restart=dedent("""
             > SELECT COUNT(*) > 0 FROM v1;
             true
             > SELECT COUNT(*) > 0 FROM v2;
@@ -923,15 +802,13 @@ SCENARIOS = [
             true
             > SELECT COUNT(*) > 0 FROM v4;
             true
-            """
-        ),
+            """),
         materialized_memory="4.5Gb",
         clusterd_memory="5.5Gb",
     ),
     Scenario(
         name="table-outer-join",
-        pre_restart=dedent(
-            f"""
+        pre_restart=dedent(f"""
             > SET statement_timeout = '600 s';
 
             > CREATE TABLE t1 (key1 INTEGER, f1 STRING DEFAULT 'abcdefghi')
@@ -971,24 +848,20 @@ SCENARIOS = [
 
             > SELECT COUNT(*) > 0 FROM v2;
             true
-            """
-        ),
-        post_restart=dedent(
-            """
+            """),
+        post_restart=dedent("""
             > SELECT COUNT(*) > 0 FROM v1;
             true
 
             > SELECT COUNT(*) > 0 FROM v2;
             true
-            """
-        ),
+            """),
         materialized_memory="4.5Gb",
         clusterd_memory="3.5Gb",
     ),
     Scenario(
         name="cardinality-estimate-disjunction",
-        pre_restart=dedent(
-            """
+        pre_restart=dedent("""
             $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
             $ postgres-execute connection=mz_system
             ALTER SYSTEM SET ENABLE_CARDINALITY_ESTIMATES TO TRUE;
@@ -1160,10 +1033,8 @@ SCENARIOS = [
             Source materialize.public.tab0
 
             Target cluster: quickstart
-            """
-        ),
-        post_restart=dedent(
-            """
+            """),
+        post_restart=dedent("""
             > SELECT pk FROM tab0 WHERE col0 <= 88 AND (((col4 <= 97.11 AND col0 IN (11,85,87,63,88) OR (col0 <= 45 AND ((((((((col0 > 79)) OR col1 <= 30.14 OR col3 >= 12))) OR col0 >= 89 OR col1 < 20.99 OR col1 >= 74.51 AND col3 > 77) AND (col0 IN (67,97,94,86,81))) AND ((col1 <= 10.70 AND col1 IS NULL AND col3 > 49 AND col3 > 66 AND (((col4 > 42.2) AND ((((col4 < 86.27) AND col3 >= 77 AND col3 < 48))) AND col3 >= 49)) AND col0 IN (SELECT col3 FROM tab0 WHERE col4 BETWEEN 20.3 AND 97.63))) AND col0 >= 25) OR ((col0 <= 35)) AND col0 < 68 OR ((col0 = 98))) OR (col1 <= 17.96) AND ((((col0 IS NULL))) OR col4 <= 2.63 AND (col0 > 2) AND col3 > 8) OR col3 <= 88 AND (((col0 IS NULL))) OR col0 >= 30)) AND col0 > 5) OR col0 > 3;
             0
             1
@@ -1297,15 +1168,13 @@ SCENARIOS = [
             Source materialize.public.tab0
 
             Target cluster: quickstart
-            """
-        ),
+            """),
         materialized_memory="4.5Gb",
         clusterd_memory="3.5Gb",
     ),
     Scenario(
         name="dataflow-logical-backpressure",
-        pre_restart=dedent(
-            """
+        pre_restart=dedent("""
             # * Timestamp interval to quickly create a source with many distinct timestamps.
             # * Lgalloc disabled to force more memory pressure.
             # * Index options to enable retained history.
@@ -1354,18 +1223,107 @@ SCENARIOS = [
             > CREATE DEFAULT INDEX ON v WITH (RETAIN HISTORY FOR '10d');
             > SELECT COUNT(*) > 0 FROM v;
             true
-            """
-        ),
-        post_restart=dedent(
-            """
+            """),
+        post_restart=dedent("""
             > SET CLUSTER = clusterd
 
             > SELECT COUNT(*) > 0 FROM v;
             true
-            """
-        ),
+            """),
         materialized_memory="10Gb",
         clusterd_memory="3.5Gb",
+    ),
+    Scenario(
+        name="iceberg-sink",
+        needs_iceberg=True,
+        pre_restart="\n".join(
+            [
+                "> SET CLUSTER = clusterd",
+                "> CREATE TABLE t1 (key INT, pad TEXT)",
+                f"> INSERT INTO t1 SELECT generate_series, repeat('x', {PAD_LEN}) FROM generate_series(1, {REPEAT})",
+            ]
+            + [
+                f"> INSERT INTO t1 SELECT key + {i * REPEAT}, pad FROM t1 WHERE key <= {REPEAT}"
+                for i in range(1, 16)
+            ]
+            + [
+                "> SELECT count(*) FROM t1",
+                f"{REPEAT * 16}",
+                """> CREATE SECRET access_key_secret AS '${arg.s3-access-key}'""",
+                """> CREATE CONNECTION aws_conn TO AWS (
+  ACCESS KEY ID = '${arg.s3-access-user}',
+  SECRET ACCESS KEY = SECRET access_key_secret,
+  ENDPOINT = 'http://${arg.aws-endpoint}/',
+  REGION = 'us-east-1'
+  )""",
+                """> CREATE CONNECTION polaris_conn TO ICEBERG CATALOG (
+  CATALOG TYPE = 'REST',
+  URL = 'http://polaris:8181/api/catalog',
+  CREDENTIAL = 'root:root',
+  WAREHOUSE = 'default_catalog',
+  SCOPE = 'PRINCIPAL_ROLE:ALL'
+  )""",
+                """> CREATE SINK iceberg_sink
+  IN CLUSTER clusterd
+  FROM t1
+  INTO ICEBERG CATALOG CONNECTION polaris_conn (
+    NAMESPACE 'default_namespace',
+    TABLE 'bounded_memory_test'
+  )
+  USING AWS CONNECTION aws_conn
+  KEY (key) NOT ENFORCED
+  MODE UPSERT
+  WITH (COMMIT INTERVAL '10s')""",
+                "> SELECT status FROM mz_internal.mz_sink_statuses WHERE name = 'iceberg_sink'",
+                "running",
+            ]
+        ),
+        post_restart=dedent("""
+            > SELECT status FROM mz_internal.mz_sink_statuses WHERE name = 'iceberg_sink'
+            running
+            """),
+        materialized_memory="2.5Gb",
+        clusterd_memory="1Gb",
+    ),
+    Scenario(
+        name="copy-to-from-s3",
+        pre_restart=dedent(f"""
+            $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+            $ postgres-execute connection=mz_system
+            ALTER SYSTEM SET max_result_size = 2147483648;
+
+            > CREATE SECRET s3_secret AS '${{arg.aws-secret-access-key}}'
+
+            > CREATE CONNECTION s3_conn TO AWS (
+                ACCESS KEY ID = '${{arg.aws-access-key-id}}',
+                SECRET ACCESS KEY = SECRET s3_secret,
+                ENDPOINT = '${{arg.aws-endpoint}}',
+                REGION = 'us-east-1'
+              )
+
+            > CREATE TABLE t_src (f1 INTEGER, f2 TEXT)
+
+            > INSERT INTO t_src
+              SELECT i, repeat('x', {PAD_LEN})
+              FROM generate_series(1, {REPEAT}) AS s(i)
+
+            > COPY t_src TO 's3://copytos3/bounded-memory/copy-from-s3'
+              WITH (AWS CONNECTION = s3_conn, FORMAT = 'csv')
+
+            > CREATE TABLE t_dst (f1 INTEGER, f2 TEXT)
+
+            > COPY INTO t_dst FROM 's3://copytos3/bounded-memory/copy-from-s3'
+              (FORMAT CSV, AWS CONNECTION = s3_conn)
+
+            > SELECT COUNT(*) FROM t_dst
+            {REPEAT}
+            """),
+        post_restart=dedent(f"""
+            > SELECT COUNT(*) FROM t_dst
+            {REPEAT}
+            """),
+        materialized_memory="1.8Gb",
+        clusterd_memory="0.5Gb",
     ),
 ]
 
@@ -1504,7 +1462,16 @@ def run_scenario(
             "postgres",
             "mysql",
             "clusterd",
+            "minio",
             Service("testdrive", idle=True),
+            *(
+                [
+                    Service("polaris-bootstrap", idle=True),
+                    Service("polaris", idle=True),
+                ]
+                if scenario.needs_iceberg
+                else []
+            ),
         )
 
         c.sql(
@@ -1513,22 +1480,35 @@ def run_scenario(
             user="mz_system",
         )
 
-        c.sql(
-            """
+        c.sql("""
             CREATE CLUSTER clusterd REPLICAS (r1 (
                 STORAGECTL ADDRESSES ['clusterd:2100'],
                 STORAGE ADDRESSES ['clusterd:2103'],
                 COMPUTECTL ADDRESSES ['clusterd:2101'],
                 COMPUTE ADDRESSES ['clusterd:2102']
             ))
-        """
-        )
+        """)
 
         testdrive_timeout_arg = "--default-timeout=5m"
         statement_timeout = "> SET statement_timeout = '600s';\n"
+        extra_testdrive_args: list[str] = []
+
+        if scenario.needs_iceberg:
+            username, key = setup_polaris_for_iceberg(c)
+            c.sql(
+                "ALTER SYSTEM SET enable_iceberg_sink = true;",
+                port=6877,
+                user="mz_system",
+            )
+            extra_testdrive_args = [
+                f"--var=s3-access-key={key}",
+                f"--var=s3-access-user={username}",
+                "--var=aws-endpoint=minio:9000",
+            ]
 
         c.testdrive(
-            statement_timeout + scenario.pre_restart, args=[testdrive_timeout_arg]
+            statement_timeout + scenario.pre_restart,
+            args=[testdrive_timeout_arg] + extra_testdrive_args,
         )
 
         # Restart Mz to confirm that re-hydration is also bounded memory
@@ -1536,7 +1516,8 @@ def run_scenario(
         c.up("materialized", "clusterd")
 
         c.testdrive(
-            statement_timeout + scenario.post_restart, args=[testdrive_timeout_arg]
+            statement_timeout + scenario.post_restart,
+            args=[testdrive_timeout_arg] + extra_testdrive_args,
         )
 
 

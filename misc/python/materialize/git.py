@@ -29,6 +29,24 @@ MATERIALIZE_REMOTE_URL = "https://github.com/MaterializeInc/materialize"
 fetched_tags_in_remotes: set[str | None] = set()
 
 
+def get_config(key: str) -> str | None:
+    """Read a git config value, returning None if unset."""
+    try:
+        return spawn.capture(["git", "config", key]).strip()
+    except subprocess.CalledProcessError:
+        return None
+
+
+def get_user_name() -> str | None:
+    """Get the configured git user.name."""
+    return get_config("user.name")
+
+
+def get_user_email() -> str | None:
+    """Get the configured git user.email."""
+    return get_config("user.email")
+
+
 def rev_count(rev: str) -> int:
     """Count the commits up to a revision.
 
@@ -40,6 +58,19 @@ def rev_count(rev: str) -> int:
             initial commit and ending with the specified commit, inclusive.
     """
     return int(spawn.capture(["git", "rev-list", "--count", rev, "--"]).strip())
+
+
+def get_first_parent_commits(rev: str, limit: int) -> list[str]:
+    """Get commit hashes along the first-parent chain starting from rev.
+
+    Returns up to `limit` commit hashes (including rev itself), following
+    only first parents (i.e., staying on the main branch).
+    """
+    return (
+        spawn.capture(["git", "rev-list", "--first-parent", f"-{limit}", rev])
+        .strip()
+        .splitlines()
+    )
 
 
 def rev_parse(rev: str, *, abbrev: bool = False) -> str:
@@ -197,16 +228,6 @@ def is_dirty() -> bool:
     return proc.returncode != 0 or idx.returncode != 0
 
 
-def first_remote_matching(pattern: str) -> str | None:
-    """Get the name of the remote that matches the pattern"""
-    remotes = spawn.capture(["git", "remote", "-v"])
-    for remote in remotes.splitlines():
-        if pattern in remote:
-            return remote.split()[0]
-
-    return None
-
-
 def describe() -> str:
     """Describe the relationship between the current commit and the most recent tag"""
     return spawn.capture(["git", "describe"]).strip()
@@ -219,7 +240,6 @@ def fetch(
     force: bool = False,
     branch: str | None = None,
     only_tags: bool = False,
-    include_submodules: bool = False,
 ) -> str:
     """Fetch from remotes"""
 
@@ -244,12 +264,6 @@ def fetch(
 
     if all_remotes:
         command.append("--all")
-
-    # explicitly specify both cases to be independent of the git config
-    if include_submodules:
-        command.append("--recurse-submodules")
-    else:
-        command.append("--no-recurse-submodules")
 
     fetch_tags = (
         include_tags == YesNoOnce.YES

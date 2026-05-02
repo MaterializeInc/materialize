@@ -12,7 +12,6 @@ use std::time::{Duration, Instant};
 
 use itertools::Itertools;
 use maplit::btreeset;
-use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::builtin::BUILTINS;
 use mz_catalog::memory::objects::{
     ClusterConfig, ClusterReplica, ClusterVariant, ClusterVariantManaged,
@@ -22,12 +21,12 @@ use mz_controller::clusters::{
     ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaConfig, ReplicaLocation,
     ReplicaLogging,
 };
-use mz_controller_types::{ClusterId, DEFAULT_REPLICA_LOGGING_INTERVAL, ReplicaId};
+use mz_controller_types::{ClusterId, DEFAULT_REPLICA_LOGGING_INTERVAL};
 use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
 use mz_repr::role_id::RoleId;
 use mz_sql::ast::{Ident, QualifiedReplica};
-use mz_sql::catalog::{CatalogCluster, CatalogClusterReplica, ObjectType};
+use mz_sql::catalog::{CatalogCluster, ObjectType};
 use mz_sql::plan::{
     self, AlterClusterPlanStrategy, AlterClusterRenamePlan, AlterClusterReplicaRenamePlan,
     AlterClusterSwapPlan, AlterOptionParameter, AlterSetClusterPlan,
@@ -129,7 +128,7 @@ impl Coordinator {
 
     #[instrument]
     async fn alter_cluster_validate(
-        &mut self,
+        &self,
         session: &Session,
         plan: plan::AlterClusterPlan,
     ) -> Result<ClusterStage, AdapterError> {
@@ -267,7 +266,6 @@ impl Coordinator {
             )));
         }
 
-        let new_workload_class = new_config.workload_class.clone();
         match (&config.variant, &new_config.variant) {
             (Managed(_), Managed(new_config_managed)) => {
                 let alter_followup = self
@@ -350,9 +348,6 @@ impl Coordinator {
             }
         }
 
-        self.controller
-            .update_cluster_workload_class(cluster_id, new_workload_class)?;
-
         Ok(StageResult::Response(ExecuteResponse::AlteredObject(
             ObjectType::Cluster,
         )))
@@ -433,7 +428,7 @@ impl Coordinator {
                     }) => {
                         *pending = false;
                     }
-                    _ => {}
+                    mz_controller::clusters::ReplicaLocation::Unmanaged(_) => {}
                 }
 
                 let mut replica_ops = vec![];
@@ -478,9 +473,6 @@ impl Coordinator {
             .expect("There must be an active connection")
             .pending_cluster_alters
             .remove(&cluster_id);
-
-        self.controller
-            .update_cluster_workload_class(cluster_id, workload_class)?;
 
         Ok(StageResult::Response(ExecuteResponse::AlteredObject(
             ObjectType::Cluster,
@@ -714,8 +706,6 @@ impl Coordinator {
 
         self.catalog_transact(Some(session), ops).await?;
 
-        self.create_cluster(cluster_id).await;
-
         Ok(ExecuteResponse::CreatedCluster)
     }
 
@@ -895,49 +885,7 @@ impl Coordinator {
 
         self.catalog_transact(Some(session), ops).await?;
 
-        self.create_cluster(id).await;
-
         Ok(ExecuteResponse::CreatedCluster)
-    }
-
-    async fn create_cluster(&mut self, cluster_id: ClusterId) {
-        let Coordinator {
-            catalog,
-            controller,
-            ..
-        } = self;
-        let cluster = catalog.get_cluster(cluster_id);
-        let cluster_id = cluster.id;
-        let introspection_source_ids: Vec<_> =
-            cluster.log_indexes.iter().map(|(_, id)| *id).collect();
-
-        controller
-            .create_cluster(
-                cluster_id,
-                mz_controller::clusters::ClusterConfig {
-                    arranged_logs: cluster.log_indexes.clone(),
-                    workload_class: cluster.config.workload_class.clone(),
-                },
-            )
-            .expect("creating cluster must not fail");
-
-        let replica_ids: Vec<_> = cluster
-            .replicas()
-            .map(|r| (r.replica_id, format!("{}.{}", cluster.name(), &r.name)))
-            .collect();
-        for (replica_id, replica_name) in replica_ids {
-            self.create_cluster_replica(cluster_id, replica_id, replica_name)
-                .await;
-        }
-
-        if !introspection_source_ids.is_empty() {
-            self.initialize_compute_read_policies(
-                introspection_source_ids,
-                cluster_id,
-                CompactionWindow::Default,
-            )
-            .await;
-        }
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -1045,48 +993,7 @@ impl Coordinator {
 
         self.catalog_transact(Some(session), vec![op]).await?;
 
-        let id = self
-            .catalog()
-            .resolve_replica_in_cluster(&cluster_id, &name)
-            .expect("just created")
-            .replica_id();
-
-        self.create_cluster_replica(cluster_id, id, name).await;
-
         Ok(ExecuteResponse::CreatedClusterReplica)
-    }
-
-    async fn create_cluster_replica(
-        &mut self,
-        cluster_id: ClusterId,
-        replica_id: ReplicaId,
-        replica_name: String,
-    ) {
-        let cluster = self.catalog().get_cluster(cluster_id);
-        let role = cluster.role();
-        let replica_config = cluster
-            .replica(replica_id)
-            .expect("known to exist")
-            .config
-            .clone();
-
-        let enable_worker_core_affinity =
-            self.catalog().system_config().enable_worker_core_affinity();
-
-        self.controller
-            .create_replica(
-                cluster_id,
-                replica_id,
-                cluster.name.to_owned(),
-                replica_name,
-                role,
-                replica_config,
-                enable_worker_core_affinity,
-            )
-            .expect("creating replicas must not fail");
-
-        self.install_introspection_subscribes(cluster_id, replica_id)
-            .await;
     }
 
     /// When this is called by the automated cluster scheduling, `scheduling_decision_reason` should
@@ -1110,7 +1017,6 @@ impl Coordinator {
         let owner_id = cluster.owner_id();
 
         let mut ops = vec![];
-        let mut create_cluster_replicas = vec![];
         let mut finalization_needed = NeedsFinalization::No;
 
         let ClusterVariant::Managed(ClusterVariantManaged {
@@ -1206,7 +1112,6 @@ impl Coordinator {
                             owner_id,
                             reason.clone(),
                         )?;
-                        create_cluster_replicas.push((cluster_id, name));
                     }
                 }
                 AlterClusterPlanStrategy::For(_) | AlterClusterPlanStrategy::UntilReady { .. } => {
@@ -1223,7 +1128,6 @@ impl Coordinator {
                             owner_id,
                             reason.clone(),
                         )?;
-                        create_cluster_replicas.push((cluster_id, name));
                     }
                     finalization_needed = NeedsFinalization::Yes;
                 }
@@ -1260,7 +1164,6 @@ impl Coordinator {
                     owner_id,
                     reason.clone(),
                 )?;
-                create_cluster_replicas.push((cluster_id, name))
             }
         }
 
@@ -1274,18 +1177,9 @@ impl Coordinator {
                     config: new_config,
                 });
             }
-            _ => {}
+            NeedsFinalization::Yes => {}
         }
         self.catalog_transact(session, ops).await?;
-        for (cluster_id, replica_name) in create_cluster_replicas {
-            let replica_id = self
-                .catalog()
-                .resolve_replica_in_cluster(&cluster_id, &replica_name)
-                .expect("just created")
-                .replica_id();
-            self.create_cluster_replica(cluster_id, replica_id, replica_name)
-                .await;
-        }
         Ok(finalization_needed)
     }
 
@@ -1373,7 +1267,7 @@ impl Coordinator {
                 AlterOptionParameter::Reset | AlterOptionParameter::Unchanged => {
                     coord_bail!("Missing SIZE for empty cluster")
                 }
-                _ => {} // Was set within the calling function.
+                AlterOptionParameter::Set(_) => {} // Was set within the calling function.
             }
         } else if sizes.len() == 1 {
             let size = sizes.into_iter().next().expect("must exist");

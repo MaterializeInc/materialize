@@ -14,16 +14,12 @@ from materialize.checks.checks import Check
 
 class NullValue(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > CREATE TABLE null_value_table (f1 INTEGER, f2 INTEGER DEFAULT NULL);
             > INSERT INTO null_value_table DEFAULT VALUES;
             > INSERT INTO null_value_table VALUES (NULL, NULL);
             > INSERT INTO null_value_table VALUES (NULL, NULL);
-        """
-            )
-        )
+        """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -49,9 +45,7 @@ class NullValue(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM null_value_view1;
                 <null> <null> <null>
                 <null> <null> <null>
@@ -79,6 +73,4 @@ class NullValue(Check):
                 <null> <null> <null>
                 <null> <null> <null>
                 <null> <null> <null>
-            """
-            )
-        )
+            """))

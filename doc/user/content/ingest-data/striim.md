@@ -12,14 +12,9 @@ Capture (CDC) into Materialize using the [Kafka source](/sql/create-source/kafka
 
 ## Before you begin
 
-{{< note >}}
-We are in touch with the Striim team to build a direct CDC connector
-to Materialize. If you're interested in this integration, please [contact our team](/support/)!
-{{</ note >}}
-
-As is, integrating Striim Cloud with Materialize requires using a message broker
-(like Apache Kafka) as an intermediary, as well as a schema registry
-(like Confluent Schema Registry) configured for Avro schema management.
+Integrating Striim Cloud with Materialize requires using a message broker (like
+Apache Kafka) and a schema registry (like Confluent Schema Registry) configured
+for Avro schema management.
 
 Ensure that you have:
 

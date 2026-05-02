@@ -62,7 +62,8 @@ mod test {
                 output_type = i16,
                 is_infix_op = true,
                 sqlname = "+",
-                propagates_nulls = true
+                propagates_nulls = true,
+                test = true,
         };
         let item = quote! {
             fn add_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
@@ -79,7 +80,7 @@ mod test {
     #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
     #[mz_ore::test]
     fn insta_test_unary() {
-        let attr = quote! {};
+        let attr = quote! {test = true};
         let item = quote! {
             fn unary_fn<'a>(a: Datum<'a>) -> bool {
                 unimplemented!()
@@ -92,7 +93,7 @@ mod test {
     #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
     #[mz_ore::test]
     fn insta_test_unary_arena() {
-        let attr = quote! {};
+        let attr = quote! {test = true};
         let item = quote! {
             fn unary_fn<'a>(a: Datum<'a>, temp_storage: &RowArena) -> bool {
                 unimplemented!()
@@ -105,7 +106,7 @@ mod test {
     #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
     #[mz_ore::test]
     fn insta_test_unary_ref() {
-        let attr = quote! {};
+        let attr = quote! {test = true};
         let item = quote! {
             fn unary_fn<'a>(a: &i16) -> bool {
                 unimplemented!()
@@ -123,10 +124,14 @@ mod test {
                 output_type = "Option<bool>",
                 is_infix_op = true,
                 sqlname = "test",
-                propagates_nulls = true
+                propagates_nulls = true,
+                test = true,
         };
         let item = quote! {
-            fn complex_output_type_fn<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+            fn complex_output_type_fn<'a>(
+                a: Datum<'a>,
+                b: Datum<'a>,
+            ) -> Result<Datum<'a>, EvalError> {
                 unimplemented!()
             }
         };
@@ -137,7 +142,7 @@ mod test {
     #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
     #[mz_ore::test]
     fn insta_test_binary_arena() {
-        let attr = quote! {};
+        let attr = quote! {test = true};
         let item = quote! {
             fn unary_fn<'a>(a: Datum<'a>, b: u16, temp_storage: &RowArena) -> bool {
                 unimplemented!()
@@ -145,5 +150,135 @@ mod test {
         };
         let (output, input) = super::test_sqlfunc(attr, item);
         insta::assert_snapshot!("binary_arena_fn", output, &input);
+    }
+
+    #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
+    #[mz_ore::test]
+    fn insta_test_variadic_tuple() {
+        let attr = quote! {
+            Replace,
+            sqlname = "replace",
+        };
+        let item = quote! {
+            fn replace(text: &str, from: &str, to: &str) -> Result<String, EvalError> {
+                Ok(text.replace(from, to))
+            }
+        };
+        let (output, input) = super::test_sqlfunc(attr, item);
+        insta::assert_snapshot!("variadic_tuple", output, &input);
+    }
+
+    #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
+    #[mz_ore::test]
+    fn insta_test_variadic_variadic_type() {
+        let attr = quote! {
+            Concat,
+            sqlname = "concat",
+            is_associative = true,
+        };
+        let item = quote! {
+            fn concat(strs: Variadic<Option<&str>>) -> Result<String, EvalError> {
+                Ok(strs.into_iter().flatten().collect())
+            }
+        };
+        let (output, input) = super::test_sqlfunc(attr, item);
+        insta::assert_snapshot!("variadic_variadic_type", output, &input);
+    }
+
+    #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
+    #[mz_ore::test]
+    fn insta_test_variadic_arena() {
+        let attr = quote! {
+            ArrayFill,
+            sqlname = "array_fill",
+            introduces_nulls = false,
+        };
+        let item = quote! {
+            fn array_fill<'a>(
+                &self,
+                fill: Datum<'a>,
+                dims: Datum<'a>,
+                lb: OptionalArg<Datum<'a>>,
+                temp_storage: &RowArena,
+            ) -> Result<Datum<'a>, EvalError> {
+                unimplemented!()
+            }
+        };
+        let (output, input) = super::test_sqlfunc(attr, item);
+        insta::assert_snapshot!("variadic_arena", output, &input);
+    }
+
+    #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
+    #[mz_ore::test]
+    fn insta_test_variadic_modifiers() {
+        let attr = quote! {
+            Greatest,
+            sqlname = "greatest",
+            could_error = false,
+            is_monotone = true,
+        };
+        let item = quote! {
+            fn greatest<'a>(datums: Variadic<Datum<'a>>) -> Datum<'a> {
+                datums.into_iter().max().unwrap_or(Datum::Null)
+            }
+        };
+        let (output, input) = super::test_sqlfunc(attr, item);
+        insta::assert_snapshot!("variadic_modifiers", output, &input);
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[mz_ore::test]
+    fn insta_test_unary_generic_range() {
+        let attr = quote! {
+            sqlname = "rangelower",
+            is_monotone = true,
+        };
+        let item = quote! {
+            fn range_lower<'a, T>(a: Range<T>) -> Option<T> {
+                a.inner.map(|inner| inner.lower.bound).flatten()
+            }
+        };
+        let (output, input) = super::test_sqlfunc(attr, item);
+        insta::assert_snapshot!("unary_generic_range", output, &input);
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[mz_ore::test]
+    fn insta_test_binary_generic_list() {
+        let attr = quote! {
+            is_infix_op = true,
+            sqlname = "||",
+            propagates_nulls = false,
+            introduces_nulls = false,
+        };
+        let item = quote! {
+            fn list_list_concat<'a, T>(
+                a: Option<DatumList<'a, T>>,
+                b: Option<DatumList<'a, T>>,
+                temp_storage: &'a RowArena,
+            ) -> Option<DatumList<'a, T>> {
+                unimplemented!()
+            }
+        };
+        let (output, input) = super::test_sqlfunc(attr, item);
+        insta::assert_snapshot!("binary_generic_list", output, &input);
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[mz_ore::test]
+    fn insta_test_binary_multi_generic() {
+        let attr = quote! {
+            sqlname = "multi_generic",
+        };
+        let item = quote! {
+            fn multi_generic<'a, A, B>(
+                a: DatumList<'a, A>,
+                b: DatumList<'a, B>,
+            ) -> Option<B> {
+                unimplemented!()
+            }
+        };
+        let (output, input) = super::test_sqlfunc(attr, item);
+        insta::assert_snapshot!("binary_multi_generic", output, &input);
     }
 }

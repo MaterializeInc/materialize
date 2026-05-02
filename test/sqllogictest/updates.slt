@@ -132,7 +132,7 @@ SELECT * FROM t1
 ----
 6
 
-statement error db error: ERROR: column "t1\.x" does not exist
+statement error column "t1\.x" does not exist
 UPDATE t1 AS m SET x = 5 WHERE t1.x < 10
 
 # Regression for database-issues#7334
@@ -188,7 +188,7 @@ COMPLETE 0
 statement ok
 SET max_query_result_size = '8B';
 
-query error db error: ERROR: result exceeds max size of 8 B
+query error result exceeds max size of 8 B
 SELECT generate_series(1, 1000000)
 
 statement ok
@@ -210,7 +210,7 @@ ALTER SYSTEM SET max_result_size = '1MB'
 ----
 COMPLETE 0
 
-statement error db error: ERROR: result exceeds max size of 1\.0 MiB
+statement error result exceeds max size of 1\.0 MiB
 INSERT INTO t SELECT * FROM t_big
 
 simple conn=mz_system,user=mz_system
@@ -229,5 +229,5 @@ INSERT INTO dt VALUES (now())
 statement count 1
 UPDATE dt SET t = now()
 
-statement error db error: ERROR: calls to mz_now in write statements are not supported
+statement error calls to mz_now in write statements are not supported
 UPDATE dt SET t = mz_now()

@@ -38,8 +38,7 @@ use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Enter, Feedback, Leave};
-use timely::dataflow::scopes::Child;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, StreamVec};
 use timely::order::TotalOrder;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp, timestamp::Refines};
@@ -139,40 +138,40 @@ impl ErrorHandler {
 /// usages for details.
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
-pub fn shard_source<'g, K, V, T, D, DT, G, C>(
-    scope: &mut Child<'g, G, T>,
+pub fn shard_source<'inner, 'outer, K, V, T, D, DT, TOuter, C>(
+    outer: Scope<'outer, TOuter>,
+    scope: Scope<'inner, T>,
     name: &str,
     client: impl Fn() -> C,
     shard_id: ShardId,
-    as_of: Option<Antichain<G::Timestamp>>,
+    as_of: Option<Antichain<TOuter>>,
     snapshot_mode: SnapshotMode,
-    until: Antichain<G::Timestamp>,
+    until: Antichain<TOuter>,
     desc_transformer: Option<DT>,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
-    filter_fn: impl FnMut(&PartStats, AntichainRef<G::Timestamp>) -> FilterResult + 'static,
+    filter_fn: impl FnMut(&PartStats, AntichainRef<TOuter>) -> FilterResult + 'static,
     // If Some, an override for the default listen sleep retry parameters.
     listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
     start_signal: impl Future<Output = ()> + 'static,
     error_handler: ErrorHandler,
 ) -> (
-    Stream<Child<'g, G, T>, FetchedBlob<K, V, G::Timestamp, D>>,
+    StreamVec<'inner, T, FetchedBlob<K, V, TOuter, D>>,
     Vec<PressOnDropButton>,
 )
 where
     K: Debug + Codec,
     V: Debug + Codec,
     D: Monoid + Codec64 + Send + Sync,
-    G: Scope,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
-    G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder + Sync,
-    T: Refines<G::Timestamp>,
+    TOuter: Timestamp + Lattice + Codec64 + TotalOrder + Sync,
+    T: Refines<TOuter>,
     DT: FnOnce(
-        Child<'g, G, T>,
-        &Stream<Child<'g, G, T>, (usize, ExchangeableBatchPart<G::Timestamp>)>,
+        Scope<'inner, T>,
+        StreamVec<'inner, T, (usize, ExchangeableBatchPart<TOuter>)>,
         usize,
     ) -> (
-        Stream<Child<'g, G, T>, (usize, ExchangeableBatchPart<G::Timestamp>)>,
+        StreamVec<'inner, T, (usize, ExchangeableBatchPart<TOuter>)>,
         Vec<PressOnDropButton>,
     ),
     C: Future<Output = PersistClient> + Send + 'static,
@@ -206,15 +205,15 @@ where
     // metrics.
     let is_transient = !until.is_empty();
 
-    let (descs, descs_token) = shard_source_descs::<K, V, D, G>(
-        &scope.parent,
+    let (descs, descs_token) = shard_source_descs::<K, V, D, TOuter>(
+        outer,
         name,
         client(),
         shard_id.clone(),
         as_of,
         snapshot_mode,
         until,
-        completed_fetches_feedback_stream.leave(),
+        completed_fetches_feedback_stream.leave(outer),
         chosen_worker,
         Arc::clone(&key_schema),
         Arc::clone(&val_schema),
@@ -228,15 +227,15 @@ where
     let descs = descs.enter(scope);
     let descs = match desc_transformer {
         Some(desc_transformer) => {
-            let (descs, extra_tokens) = desc_transformer(scope.clone(), &descs, chosen_worker);
+            let (descs, extra_tokens) = desc_transformer(scope, descs, chosen_worker);
             tokens.extend(extra_tokens);
             descs
         }
         None => descs,
     };
 
-    let (parts, completed_fetches_stream, fetch_token) = shard_source_fetch(
-        &descs,
+    let (parts, completed_fetches_stream, fetch_token) = shard_source_fetch::<K, V, TOuter, D, T>(
+        descs,
         name,
         client(),
         shard_id,
@@ -292,34 +291,33 @@ impl<T: Timestamp + Codec64> LeaseManager<T> {
     }
 }
 
-pub(crate) fn shard_source_descs<K, V, D, G>(
-    scope: &G,
+pub(crate) fn shard_source_descs<'outer, K, V, D, TOuter>(
+    scope: Scope<'outer, TOuter>,
     name: &str,
     client: impl Future<Output = PersistClient> + Send + 'static,
     shard_id: ShardId,
-    as_of: Option<Antichain<G::Timestamp>>,
+    as_of: Option<Antichain<TOuter>>,
     snapshot_mode: SnapshotMode,
-    until: Antichain<G::Timestamp>,
-    completed_fetches_stream: Stream<G, Infallible>,
+    until: Antichain<TOuter>,
+    completed_fetches_stream: StreamVec<'outer, TOuter, Infallible>,
     chosen_worker: usize,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
-    mut filter_fn: impl FnMut(&PartStats, AntichainRef<G::Timestamp>) -> FilterResult + 'static,
+    mut filter_fn: impl FnMut(&PartStats, AntichainRef<TOuter>) -> FilterResult + 'static,
     // If Some, an override for the default listen sleep retry parameters.
     listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
     start_signal: impl Future<Output = ()> + 'static,
     error_handler: ErrorHandler,
 ) -> (
-    Stream<G, (usize, ExchangeableBatchPart<G::Timestamp>)>,
+    StreamVec<'outer, TOuter, (usize, ExchangeableBatchPart<TOuter>)>,
     PressOnDropButton,
 )
 where
     K: Debug + Codec,
     V: Debug + Codec,
     D: Monoid + Codec64 + Send + Sync,
-    G: Scope,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
-    G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder + Sync,
+    TOuter: Timestamp + Lattice + Codec64 + TotalOrder + Sync,
 {
     let worker_index = scope.index();
     let num_workers = scope.peers();
@@ -333,12 +331,12 @@ where
     let return_listen_handle = Rc::clone(&listen_handle);
 
     // Create a oneshot channel to give the part returner a SubscriptionLeaseReturner
-    let (tx, rx) = tokio::sync::oneshot::channel::<Rc<RefCell<LeaseManager<G::Timestamp>>>>();
+    let (tx, rx) = tokio::sync::oneshot::channel::<Rc<RefCell<LeaseManager<TOuter>>>>();
     let mut builder = AsyncOperatorBuilder::new(
         format!("shard_source_descs_return({})", name),
         scope.clone(),
     );
-    let mut completed_fetches = builder.new_disconnected_input(&completed_fetches_stream, Pipeline);
+    let mut completed_fetches = builder.new_disconnected_input(completed_fetches_stream, Pipeline);
     // This operator doesn't need to use a token because it naturally exits when its input
     // frontier reaches the empty antichain.
     builder.build(move |_caps| async move {
@@ -391,7 +389,7 @@ where
             async move {
                 let client = client.await;
                 client
-                    .open_leased_reader::<K, V, G::Timestamp, D>(
+                    .open_leased_reader::<K, V, TOuter, D>(
                         shard_id,
                         key_schema,
                         val_schema,
@@ -402,7 +400,6 @@ where
             }
         })
         .await
-        .expect("reader creation shouldn't panic")
         .expect("could not open persist shard");
 
         // Wait for the start signal only after we have obtained a read handle. This makes "cannot
@@ -584,8 +581,8 @@ where
     (descs_stream, shutdown_button.press_on_drop())
 }
 
-pub(crate) fn shard_source_fetch<K, V, T, D, G>(
-    descs: &Stream<G, (usize, ExchangeableBatchPart<T>)>,
+pub(crate) fn shard_source_fetch<'inner, K, V, T, D, TInner>(
+    descs: StreamVec<'inner, TInner, (usize, ExchangeableBatchPart<T>)>,
     name: &str,
     client: impl Future<Output = PersistClient> + Send + 'static,
     shard_id: ShardId,
@@ -594,8 +591,8 @@ pub(crate) fn shard_source_fetch<K, V, T, D, G>(
     is_transient: bool,
     error_handler: ErrorHandler,
 ) -> (
-    Stream<G, FetchedBlob<K, V, T, D>>,
-    Stream<G, Infallible>,
+    StreamVec<'inner, TInner, FetchedBlob<K, V, T, D>>,
+    StreamVec<'inner, TInner, Infallible>,
     PressOnDropButton,
 )
 where
@@ -603,8 +600,7 @@ where
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64 + Sync,
     D: Monoid + Codec64 + Send + Sync,
-    G: Scope,
-    G::Timestamp: Refines<T>,
+    TInner: Timestamp + Refines<T>,
 {
     let mut builder =
         AsyncOperatorBuilder::new(format!("shard_source_fetch({})", name), descs.scope());
@@ -638,7 +634,6 @@ where
             }
         })
         .await
-        .expect("fetcher creation shouldn't panic")
         .expect("shard codecs should not change");
 
         while let Some(event) = descs_input.next().await {
@@ -695,9 +690,9 @@ mod tests {
     use std::sync::Arc;
 
     use mz_persist::location::SeqNo;
-    use timely::dataflow::Scope;
     use timely::dataflow::operators::Leave;
     use timely::dataflow::operators::Probe;
+    use timely::dataflow::operators::probe::Handle as ProbeHandle;
     use timely::progress::Antichain;
 
     use crate::operators::shard_source::shard_source;
@@ -746,10 +741,11 @@ mod tests {
         let res = timely::execute::execute_directly(move |worker| {
             let until = Antichain::new();
 
-            let (probe, _token) = worker.dataflow::<u64, _, _>(|scope| {
-                let (stream, token) = scope.scoped::<u64, _, _>("hybrid", |scope| {
-                    let transformer = move |_, descs: &Stream<_, _>, _| (descs.clone(), vec![]);
+            let (probe, _token) = worker.dataflow::<u64, _, _>(|outer| {
+                let (stream, token) = outer.scoped::<u64, _, _>("hybrid", |scope| {
+                    let transformer = move |_, descs, _| (descs, vec![]);
                     let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _>(
+                        outer,
                         scope,
                         "test_source",
                         move || std::future::ready(persist_client.clone()),
@@ -769,10 +765,11 @@ mod tests {
                         async {},
                         ErrorHandler::Halt("test"),
                     );
-                    (stream.leave(), tokens)
+                    (stream.leave(outer), tokens)
                 });
 
-                let probe = stream.probe();
+                let probe = ProbeHandle::new();
+                let _stream = stream.probe_with(&probe);
 
                 (probe, token)
             });
@@ -815,10 +812,11 @@ mod tests {
             let as_of = Antichain::from_elem(expected_frontier);
             let until = Antichain::new();
 
-            let (probe, _token) = worker.dataflow::<u64, _, _>(|scope| {
-                let (stream, token) = scope.scoped::<u64, _, _>("hybrid", |scope| {
-                    let transformer = move |_, descs: &Stream<_, _>, _| (descs.clone(), vec![]);
+            let (probe, _token) = worker.dataflow::<u64, _, _>(|outer| {
+                let (stream, token) = outer.scoped::<u64, _, _>("hybrid", |scope| {
+                    let transformer = move |_, descs, _| (descs, vec![]);
                     let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _>(
+                        outer,
                         scope,
                         "test_source",
                         move || std::future::ready(persist_client.clone()),
@@ -838,10 +836,11 @@ mod tests {
                         async {},
                         ErrorHandler::Halt("test"),
                     );
-                    (stream.leave(), tokens)
+                    (stream.leave(outer), tokens)
                 });
 
-                let probe = stream.probe();
+                let probe = ProbeHandle::new();
+                let _stream = stream.probe_with(&probe);
 
                 (probe, token)
             });

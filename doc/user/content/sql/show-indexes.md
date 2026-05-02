@@ -14,9 +14,10 @@ menu:
 SHOW INDEXES [ FROM <schema_name> | ON <object_name> ]
 [ IN CLUSTER <cluster_name> ]
 [ LIKE <pattern> | WHERE <condition(s)> ]
+;
 ```
 
-Option                        | Description
+Syntax element                | Description
 ------------------------------|------------
 **FROM** <schema_name>        | If specified, only show indexes from the specified schema. Defaults to first resolvable schema in the search path if neither `ON <object_name>` nor `IN CLUSTER <cluster_name>` are specified. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
 **ON** <object_name>          | If specified, only show indexes for the specified object.

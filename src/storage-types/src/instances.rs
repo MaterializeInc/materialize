@@ -17,7 +17,18 @@ use serde::{Deserialize, Serialize};
 use tracing::error;
 
 /// Identifier of a storage instance.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 pub enum StorageInstanceId {
     /// A system storage instance.
     System(u64),

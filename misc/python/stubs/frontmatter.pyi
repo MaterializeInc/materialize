@@ -7,7 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from io import BufferedWriter
 from pathlib import Path
 from typing import Any
 
 def load(path: Path) -> dict[Any, Any]: ...
+def dump(obj: dict[Any, Any], file: BufferedWriter, sort_keys: bool = True) -> None: ...

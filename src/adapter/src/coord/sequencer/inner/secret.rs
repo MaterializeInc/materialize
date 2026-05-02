@@ -10,6 +10,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{CatalogItem, Secret};
 use mz_expr::MirScalarExpr;
 use mz_ore::collections::CollectionExt;
@@ -28,7 +29,7 @@ use crate::coord::{
     AlterSecret, Coordinator, CreateSecretEnsure, CreateSecretFinish, Message, PlanValidity,
     RotateKeysSecretEnsure, RotateKeysSecretFinish, SecretStage, StageResult, Staged,
 };
-use crate::optimize::dataflows::{EvalTime, ExprPrepStyle, prep_scalar_expr};
+use crate::optimize::dataflows::{EvalTime, ExprPrep, ExprPrepOneShot};
 use crate::session::Session;
 use crate::{AdapterError, AdapterNotice, ExecuteContext, ExecuteResponse, catalog};
 
@@ -93,7 +94,7 @@ impl Coordinator {
 
     #[instrument]
     async fn create_secret_validate(
-        &mut self,
+        &self,
         session: &Session,
         plan: plan::CreateSecretPlan,
     ) -> Result<SecretStage, AdapterError> {
@@ -117,8 +118,7 @@ impl Coordinator {
         session: &Session,
         CreateSecretEnsure { validity, mut plan }: CreateSecretEnsure,
     ) -> Result<StageResult<Box<SecretStage>>, AdapterError> {
-        let id_ts = self.get_catalog_write_ts().await;
-        let (item_id, global_id) = self.catalog().allocate_user_id(id_ts).await?;
+        let (item_id, global_id) = self.allocate_user_id().await?;
 
         let secrets_controller = Arc::clone(&self.secrets_controller);
         let payload = self.extract_secret(session, &mut plan.secret.secret_as)?;
@@ -145,14 +145,12 @@ impl Coordinator {
         secret_as: &mut MirScalarExpr,
     ) -> Result<Vec<u8>, AdapterError> {
         let temp_storage = RowArena::new();
-        prep_scalar_expr(
-            secret_as,
-            ExprPrepStyle::OneShot {
-                logical_time: EvalTime::NotAvailable,
-                session,
-                catalog_state: self.catalog().state(),
-            },
-        )?;
+        let style = ExprPrepOneShot {
+            logical_time: EvalTime::NotAvailable,
+            session,
+            catalog_state: self.catalog().state(),
+        };
+        style.prep_scalar_expr(secret_as)?;
         let evaled = secret_as.eval(&[], &temp_storage)?;
 
         if evaled == Datum::Null {
@@ -220,9 +218,18 @@ impl Coordinator {
         let res = match self.catalog_transact(Some(session), ops).await {
             Ok(()) => Ok(ExecuteResponse::CreatedSecret),
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
-                kind:
-                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+                kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
+                // Clean up the secret we already persisted, since the catalog
+                // item was not created.
+                if let Err(e) = self.secrets_controller.delete(item_id).await {
+                    warn!(
+                        "Dropping newly created secrets has encountered an error: {}",
+                        e
+                    );
+                } else {
+                    self.caching_secrets_reader.invalidate(item_id);
+                }
                 session.add_notice(AdapterNotice::ObjectAlreadyExists {
                     name: name.item,
                     ty: "secret",
@@ -235,6 +242,8 @@ impl Coordinator {
                         "Dropping newly created secrets has encountered an error: {}",
                         e
                     );
+                } else {
+                    self.caching_secrets_reader.invalidate(item_id);
                 }
                 Err(err)
             }
@@ -265,11 +274,12 @@ impl Coordinator {
 
     #[instrument]
     fn alter_secret(
-        &mut self,
+        &self,
         session: &Session,
         plan: plan::AlterSecretPlan,
     ) -> Result<StageResult<Box<SecretStage>>, AdapterError> {
         let plan::AlterSecretPlan { id, mut secret_as } = plan;
+        let caching_secrets_reader = self.caching_secrets_reader.clone();
         let secrets_controller = Arc::clone(&self.secrets_controller);
         let payload = self.extract_secret(session, &mut secret_as)?;
         let span = Span::current();
@@ -277,6 +287,7 @@ impl Coordinator {
             || "alter secret ensure",
             async move {
                 secrets_controller.ensure(id, &payload).await?;
+                caching_secrets_reader.invalidate(id);
                 Ok(ExecuteResponse::AlteredObject(ObjectType::Secret))
             }
             .instrument(span),
@@ -304,9 +315,10 @@ impl Coordinator {
 
     #[instrument]
     fn rotate_keys_ensure(
-        &mut self,
+        &self,
         RotateKeysSecretEnsure { validity, id }: RotateKeysSecretEnsure,
     ) -> Result<StageResult<Box<SecretStage>>, AdapterError> {
+        let caching_secrets_reader = self.caching_secrets_reader.clone();
         let secrets_controller = Arc::clone(&self.secrets_controller);
         let entry = self.catalog().get_entry(&id).clone();
         let span = Span::current();
@@ -319,6 +331,7 @@ impl Coordinator {
                 secrets_controller
                     .ensure(id, &new_key_set.to_bytes())
                     .await?;
+                caching_secrets_reader.invalidate(id);
 
                 let mut to_item = entry.item;
                 match &mut to_item {

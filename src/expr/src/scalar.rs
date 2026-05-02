@@ -17,6 +17,7 @@ use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::iter::IteratorExt;
+use mz_ore::soft_assert_or_log;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
 use mz_ore::treat_as_equal::TreatAsEqual;
@@ -28,15 +29,20 @@ use mz_repr::adt::array::InvalidArrayError;
 use mz_repr::adt::date::DateError;
 use mz_repr::adt::datetime::DateTimeUnits;
 use mz_repr::adt::range::InvalidRangeError;
-use mz_repr::adt::regex::Regex;
+use mz_repr::adt::regex::{Regex, RegexCompilationError};
 use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::strconv::{ParseError, ParseHexError};
-use mz_repr::{Datum, Row, RowArena, SqlColumnType, SqlScalarType};
+use mz_repr::{Datum, ReprColumnType, ReprScalarType, Row, RowArena, SqlColumnType, SqlScalarType};
+
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
+use crate::explain::{HumanizedExplain, HumanizerMode};
 use crate::scalar::func::format::DateTimeFormat;
+use crate::scalar::func::variadic::{
+    And, Coalesce, ListCreate, ListIndex, Or, RegexpMatch, RegexpReplace, RegexpSplitToArray,
+};
 use crate::scalar::func::{
     BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc, parse_timezone,
     regexp_replace_parse_flags,
@@ -49,13 +55,23 @@ pub mod like_pattern;
 
 include!(concat!(env!("OUT_DIR"), "/mz_expr.scalar.rs"));
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, MzReflect)]
+#[derive(
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    MzReflect
+)]
 pub enum MirScalarExpr {
     /// A column of the input row
     Column(usize, TreatAsEqual<Option<Arc<str>>>),
     /// A literal value.
     /// (Stored as a row, because we can't own a Datum)
-    Literal(Result<Row, EvalError>, SqlColumnType),
+    Literal(Result<Row, EvalError>, ReprColumnType),
     /// A call to an unmaterializable function.
     ///
     /// These functions cannot be evaluated by `MirScalarExpr::eval`. They must
@@ -132,26 +148,46 @@ impl MirScalarExpr {
         MirScalarExpr::Column(column, TreatAsEqual(Some(name)))
     }
 
-    pub fn literal(res: Result<Datum, EvalError>, typ: SqlScalarType) -> Self {
-        let typ = typ.nullable(matches!(res, Ok(Datum::Null)));
+    pub fn literal(res: Result<Datum, EvalError>, typ: ReprScalarType) -> Self {
+        let typ = ReprColumnType {
+            scalar_type: typ,
+            nullable: matches!(res, Ok(Datum::Null)),
+        };
         let row = res.map(|datum| Row::pack_slice(&[datum]));
         MirScalarExpr::Literal(row, typ)
     }
 
-    pub fn literal_ok(datum: Datum, typ: SqlScalarType) -> Self {
+    pub fn literal_ok(datum: Datum, typ: ReprScalarType) -> Self {
         MirScalarExpr::literal(Ok(datum), typ)
     }
 
-    pub fn literal_null(typ: SqlScalarType) -> Self {
+    /// Constructs a `MirScalarExpr::Literal` from a pre-packed `Row`
+    /// containing a single datum and a `ReprScalarType`. Nullability is
+    /// derived by inspecting the first datum in the row.
+    pub fn literal_from_single_element_row(row: Row, typ: ReprScalarType) -> Self {
+        soft_assert_or_log!(
+            row.iter().count() == 1,
+            "literal_from_row called with a Row containing {} datums",
+            row.iter().count()
+        );
+        let nullable = row.unpack_first() == Datum::Null;
+        let typ = ReprColumnType {
+            scalar_type: typ,
+            nullable,
+        };
+        MirScalarExpr::Literal(Ok(row), typ)
+    }
+
+    pub fn literal_null(typ: ReprScalarType) -> Self {
         MirScalarExpr::literal_ok(Datum::Null, typ)
     }
 
     pub fn literal_false() -> Self {
-        MirScalarExpr::literal_ok(Datum::False, SqlScalarType::Bool)
+        MirScalarExpr::literal_ok(Datum::False, ReprScalarType::Bool)
     }
 
     pub fn literal_true() -> Self {
-        MirScalarExpr::literal_ok(Datum::True, SqlScalarType::Bool)
+        MirScalarExpr::literal_ok(Datum::True, ReprScalarType::Bool)
     }
 
     pub fn call_unary<U: Into<UnaryFunc>>(self, func: U) -> Self {
@@ -169,6 +205,14 @@ impl MirScalarExpr {
         }
     }
 
+    /// Call function `func` on `exprs`.
+    pub fn call_variadic<V: Into<VariadicFunc>>(func: V, exprs: Vec<Self>) -> Self {
+        MirScalarExpr::CallVariadic {
+            func: func.into(),
+            exprs,
+        }
+    }
+
     pub fn if_then_else(self, t: Self, f: Self) -> Self {
         MirScalarExpr::If {
             cond: Box::new(self),
@@ -178,17 +222,11 @@ impl MirScalarExpr {
     }
 
     pub fn or(self, other: Self) -> Self {
-        MirScalarExpr::CallVariadic {
-            func: VariadicFunc::Or,
-            exprs: vec![self, other],
-        }
+        MirScalarExpr::call_variadic(Or, vec![self, other])
     }
 
     pub fn and(self, other: Self) -> Self {
-        MirScalarExpr::CallVariadic {
-            func: VariadicFunc::And,
-            exprs: vec![self, other],
-        }
+        MirScalarExpr::call_variadic(And, vec![self, other])
     }
 
     pub fn not(self) -> Self {
@@ -202,7 +240,7 @@ impl MirScalarExpr {
     /// Match AND or OR on self and get the args. If no match, then interpret self as if it were
     /// wrapped in a 1-arg AND/OR.
     pub fn and_or_args(&self, func_to_match: VariadicFunc) -> Vec<MirScalarExpr> {
-        assert!(func_to_match == VariadicFunc::Or || func_to_match == VariadicFunc::And);
+        assert!(func_to_match == Or.into() || func_to_match == And.into());
         match self {
             MirScalarExpr::CallVariadic { func, exprs } if *func == func_to_match => exprs.clone(),
             _ => vec![self.clone()],
@@ -475,7 +513,7 @@ impl MirScalarExpr {
     }
 
     pub fn take(&mut self) -> Self {
-        mem::replace(self, MirScalarExpr::literal_null(SqlScalarType::String))
+        mem::replace(self, MirScalarExpr::literal_null(ReprScalarType::String))
     }
 
     /// If the expression is a literal, this returns the literal's Datum or the literal's EvalError.
@@ -500,6 +538,16 @@ impl MirScalarExpr {
         } else {
             None
         }
+    }
+
+    /// Returns a reference to the `Row` if the expression is a non-NULL `Ok` literal.
+    pub fn as_literal_non_null_row(&self) -> Option<&Row> {
+        if let MirScalarExpr::Literal(Ok(row), _) = self {
+            if !row.unpack_first().is_null() {
+                return Some(row);
+            }
+        }
+        None
     }
 
     pub fn as_literal_str(&self) -> Option<&str> {
@@ -552,7 +600,7 @@ impl MirScalarExpr {
         matches!(
             self,
             Self::CallVariadic {
-                func: VariadicFunc::ErrorIfNull,
+                func: VariadicFunc::ErrorIfNull(_),
                 ..
             }
         )
@@ -594,21 +642,24 @@ impl MirScalarExpr {
             if expr2.contains_temporal()
                 || **expr1 != MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow)
             {
+                let mode = HumanizedExplain::new(false); // no redaction
+                let bad_expr = MirScalarExpr::CallBinary {
+                    func: func.clone(),
+                    expr1: expr1.clone(),
+                    expr2: expr2.clone(),
+                };
                 return Err(format!(
                     "Unsupported temporal predicate. Note: `mz_now()` must be directly compared to a mz_timestamp-castable expression. Expression found: {}",
-                    MirScalarExpr::CallBinary {
-                        func: func.clone(),
-                        expr1: expr1.clone(),
-                        expr2: expr2.clone()
-                    },
+                    mode.expr(&bad_expr, None),
                 ));
             }
 
             Ok((&*func, expr2))
         } else {
+            let mode = HumanizedExplain::new(false); // no redaction
             Err(format!(
                 "Unsupported temporal predicate. Note: `mz_now()` must be directly compared to a non-temporal expression of mz_timestamp-castable type. Expression found: {}",
-                self,
+                mode.expr(self, None),
             ))
         }
     }
@@ -676,7 +727,7 @@ impl MirScalarExpr {
     ///
     /// ```rust
     /// use mz_expr::MirScalarExpr;
-    /// use mz_repr::{SqlColumnType, Datum, SqlScalarType};
+    /// use mz_repr::{ReprColumnType, Datum, SqlScalarType};
     ///
     /// let expr_0 = MirScalarExpr::column(0);
     /// let expr_t = MirScalarExpr::literal_true();
@@ -688,11 +739,12 @@ impl MirScalarExpr {
     ///     .and(expr_f.clone())
     ///     .if_then_else(expr_0, expr_t.clone());
     ///
-    /// let input_type = vec![SqlScalarType::Int32.nullable(false)];
+    /// let input_type = vec![ReprColumnType::from(&SqlScalarType::Int32.nullable(false))];
     /// test.reduce(&input_type);
     /// assert_eq!(test, expr_t);
     /// ```
-    pub fn reduce(&mut self, column_types: &[SqlColumnType]) {
+    /// Reduce the expression to a simpler form.
+    pub fn reduce(&mut self, column_types: &[ReprColumnType]) {
         let temp_storage = &RowArena::new();
         let eval = |e: &MirScalarExpr| {
             MirScalarExpr::literal(e.eval(&[], temp_storage), e.typ(column_types).scalar_type)
@@ -757,7 +809,7 @@ impl MirScalarExpr {
                             *e = eval(e);
                         } else if let UnaryFunc::RecordGet(func::RecordGet(i)) = *func {
                             if let MirScalarExpr::CallVariadic {
-                                func: VariadicFunc::RecordCreate { .. },
+                                func: VariadicFunc::RecordCreate(..),
                                 exprs,
                             } = &mut **expr
                             {
@@ -782,11 +834,11 @@ impl MirScalarExpr {
                                 Err(err.clone()),
                                 e.typ(column_types).scalar_type,
                             );
-                        } else if let BinaryFunc::IsLikeMatch { case_insensitive } = func {
+                        } else if let BinaryFunc::IsLikeMatchCaseInsensitive(_) = func {
                             if expr2.is_literal() {
                                 // We can at least precompile the regex.
                                 let pattern = expr2.as_literal_str().unwrap();
-                                *e = match like_pattern::compile(pattern, *case_insensitive) {
+                                *e = match like_pattern::compile(pattern, true) {
                                     Ok(matcher) => expr1.take().call_unary(UnaryFunc::IsLikeMatch(
                                         func::IsLikeMatch(matcher),
                                     )),
@@ -796,11 +848,31 @@ impl MirScalarExpr {
                                     ),
                                 };
                             }
-                        } else if let BinaryFunc::IsRegexpMatch { case_insensitive } = func {
+                        } else if let BinaryFunc::IsLikeMatchCaseSensitive(_) = func {
+                            if expr2.is_literal() {
+                                // We can at least precompile the regex.
+                                let pattern = expr2.as_literal_str().unwrap();
+                                *e = match like_pattern::compile(pattern, false) {
+                                    Ok(matcher) => expr1.take().call_unary(UnaryFunc::IsLikeMatch(
+                                        func::IsLikeMatch(matcher),
+                                    )),
+                                    Err(err) => MirScalarExpr::literal(
+                                        Err(err),
+                                        e.typ(column_types).scalar_type,
+                                    ),
+                                };
+                            }
+                        } else if matches!(
+                            func,
+                            BinaryFunc::IsRegexpMatchCaseSensitive(_)
+                                | BinaryFunc::IsRegexpMatchCaseInsensitive(_)
+                        ) {
+                            let case_insensitive =
+                                matches!(func, BinaryFunc::IsRegexpMatchCaseInsensitive(_));
                             if let MirScalarExpr::Literal(Ok(row), _) = &**expr2 {
                                 *e = match Regex::new(
                                     row.unpack_first().unwrap_str(),
-                                    *case_insensitive,
+                                    case_insensitive,
                                 ) {
                                     Ok(regex) => expr1.take().call_unary(UnaryFunc::IsRegexpMatch(
                                         func::IsRegexpMatch(regex),
@@ -979,7 +1051,9 @@ impl MirScalarExpr {
                                     e.typ(column_types).scalar_type,
                                 ),
                             }
-                        } else if *func == BinaryFunc::TimezoneTimestamp && expr1.is_literal() {
+                        } else if matches!(func, BinaryFunc::TimezoneTimestampBinary(_))
+                            && expr1.is_literal()
+                        {
                             // If the timezone argument is a literal, and we're applying the function on many rows at the same
                             // time we really don't want to parse it again and again, so we parse it once and embed it into the
                             // UnaryFunc enum. The memory footprint of Timezone is small (8 bytes).
@@ -994,7 +1068,9 @@ impl MirScalarExpr {
                                     e.typ(column_types).scalar_type,
                                 ),
                             }
-                        } else if *func == BinaryFunc::TimezoneTimestampTz && expr1.is_literal() {
+                        } else if matches!(func, BinaryFunc::TimezoneTimestampTzBinary(_))
+                            && expr1.is_literal()
+                        {
                             let tz = expr1.as_literal_str().unwrap();
                             *e = match parse_timezone(tz, TimezoneSpec::Posix) {
                                 Ok(tz) => MirScalarExpr::CallUnary {
@@ -1041,9 +1117,9 @@ impl MirScalarExpr {
                             BinaryFunc::Eq(_),
                             MirScalarExpr::Literal(
                                 Ok(lit_row),
-                                SqlColumnType {
+                                ReprColumnType {
                                     scalar_type:
-                                        SqlScalarType::Record {
+                                        ReprScalarType::Record {
                                             fields: field_types,
                                             ..
                                         },
@@ -1051,7 +1127,7 @@ impl MirScalarExpr {
                                 },
                             ),
                             MirScalarExpr::CallVariadic {
-                                func: VariadicFunc::RecordCreate { .. },
+                                func: VariadicFunc::RecordCreate(..),
                                 exprs: rec_create_args,
                             },
                         ) = (&*func, &**expr1, &**expr2)
@@ -1066,13 +1142,13 @@ impl MirScalarExpr {
                             // because `(e1,e2) IN ((1,2))` is desugared using `record_create`.
                             match lit_row.unpack_first() {
                                 Datum::List(datum_list) => {
-                                    *e = MirScalarExpr::CallVariadic {
-                                        func: VariadicFunc::And,
-                                        exprs: datum_list
+                                    *e = MirScalarExpr::call_variadic(
+                                        And,
+                                        datum_list
                                             .iter()
                                             .zip_eq(field_types)
                                             .zip_eq(rec_create_args)
-                                            .map(|((d, (_, typ)), a)| {
+                                            .map(|((d, typ), a)| {
                                                 MirScalarExpr::literal_ok(
                                                     d,
                                                     typ.scalar_type.clone(),
@@ -1080,18 +1156,18 @@ impl MirScalarExpr {
                                                 .call_binary(a.clone(), func::Eq)
                                             })
                                             .collect(),
-                                    };
+                                    );
                                 }
                                 _ => {}
                             }
                         } else if let (
                             BinaryFunc::Eq(_),
                             MirScalarExpr::CallVariadic {
-                                func: VariadicFunc::RecordCreate { .. },
+                                func: VariadicFunc::RecordCreate(..),
                                 exprs: rec_create_args1,
                             },
                             MirScalarExpr::CallVariadic {
-                                func: VariadicFunc::RecordCreate { .. },
+                                func: VariadicFunc::RecordCreate(..),
                                 exprs: rec_create_args2,
                             },
                         ) = (&*func, &**expr1, &**expr2)
@@ -1107,14 +1183,14 @@ impl MirScalarExpr {
                             // Note that there is a similar decomposition in
                             // `mz_sql::plan::transform_ast::Desugarer`, but that is earlier in the
                             // pipeline than the compilation of IN lists to `record_create`.
-                            *e = MirScalarExpr::CallVariadic {
-                                func: VariadicFunc::And,
-                                exprs: rec_create_args1
+                            *e = MirScalarExpr::call_variadic(
+                                And,
+                                rec_create_args1
                                     .into_iter()
                                     .zip_eq(rec_create_args2)
                                     .map(|(a, b)| a.clone().call_binary(b.clone(), func::Eq))
                                     .collect(),
-                            }
+                            )
                         }
                     }
                     MirScalarExpr::CallVariadic { .. } => {
@@ -1123,7 +1199,7 @@ impl MirScalarExpr {
                             MirScalarExpr::CallVariadic { func, exprs } => (func, exprs),
                             _ => unreachable!("`flatten_associative` shouldn't change node type"),
                         };
-                        if *func == VariadicFunc::Coalesce {
+                        if *func == Coalesce.into() {
                             // If all inputs are null, output is null. This check must
                             // be done before `exprs.retain...` because `e.typ` requires
                             // > 0 `exprs` remain.
@@ -1165,7 +1241,7 @@ impl MirScalarExpr {
                                 Err(err.clone()),
                                 e.typ(column_types).scalar_type,
                             );
-                        } else if *func == VariadicFunc::RegexpMatch
+                        } else if *func == RegexpMatch.into()
                             && exprs[1].is_literal()
                             && exprs.get(2).map_or(true, |e| e.is_literal())
                         {
@@ -1183,7 +1259,7 @@ impl MirScalarExpr {
                                     e.typ(column_types).scalar_type,
                                 ),
                             };
-                        } else if *func == VariadicFunc::RegexpReplace
+                        } else if *func == RegexpReplace.into()
                             && exprs[1].is_literal()
                             && exprs.get(3).map_or(true, |e| e.is_literal())
                         {
@@ -1196,8 +1272,8 @@ impl MirScalarExpr {
                             // The behavior of `regexp_replace` is that if the data is `NULL`, the
                             // function returns `NULL`, independently of whether the pattern or
                             // flags are correct. We need to check for this case and introduce an
-                            // if-then-else on the error path to only surface the error if the first
-                            // input is non-NULL.
+                            // if-then-else on the error path to only surface the error if both
+                            // the source and replacement inputs are non-NULL.
                             *e = match func::build_regex(pattern, &flags) {
                                 Ok(regex) => {
                                     let mut exprs = mem::take(exprs);
@@ -1205,21 +1281,25 @@ impl MirScalarExpr {
                                     let source = exprs.swap_remove(0);
                                     source.call_binary(
                                         replacement,
-                                        BinaryFunc::RegexpReplace { regex, limit },
+                                        BinaryFunc::from(func::RegexpReplace { regex, limit }),
                                     )
                                 }
                                 Err(err) => {
                                     let mut exprs = mem::take(exprs);
+                                    let replacement = exprs.swap_remove(2);
                                     let source = exprs.swap_remove(0);
                                     let scalar_type = e.typ(column_types).scalar_type;
                                     // We need to return `NULL` on `NULL` input, and error otherwise.
-                                    source.call_is_null().if_then_else(
-                                        MirScalarExpr::literal_null(scalar_type.clone()),
-                                        MirScalarExpr::literal(Err(err), scalar_type),
-                                    )
+                                    source
+                                        .call_is_null()
+                                        .or(replacement.call_is_null())
+                                        .if_then_else(
+                                            MirScalarExpr::literal_null(scalar_type.clone()),
+                                            MirScalarExpr::literal(Err(err), scalar_type),
+                                        )
                                 }
                             };
-                        } else if *func == VariadicFunc::RegexpSplitToArray
+                        } else if *func == RegexpSplitToArray.into()
                             && exprs[1].is_literal()
                             && exprs.get(2).map_or(true, |e| e.is_literal())
                         {
@@ -1237,18 +1317,17 @@ impl MirScalarExpr {
                                     e.typ(column_types).scalar_type,
                                 ),
                             };
-                        } else if *func == VariadicFunc::ListIndex && is_list_create_call(&exprs[0])
-                        {
+                        } else if *func == ListIndex.into() && is_list_create_call(&exprs[0]) {
                             // We are looking for ListIndex(ListCreate, literal), and eliminate
                             // both the ListIndex and the ListCreate. E.g.: `LIST[f1,f2][2]` --> `f2`
                             let ind_exprs = exprs.split_off(1);
                             let top_list_create = exprs.swap_remove(0);
                             *e = reduce_list_create_list_index_literal(top_list_create, ind_exprs);
-                        } else if *func == VariadicFunc::Or || *func == VariadicFunc::And {
+                        } else if *func == Or.into() || *func == And.into() {
                             // Note: It's important that we have called `flatten_associative` above.
                             e.undistribute_and_or();
                             e.reduce_and_canonicalize_and_or();
-                        } else if let VariadicFunc::TimezoneTime = func {
+                        } else if let VariadicFunc::TimezoneTimeVariadic(_) = func {
                             if exprs[0].is_literal() && exprs[2].is_literal_ok() {
                                 let tz = exprs[0].as_literal_str().unwrap();
                                 *e = match parse_timezone(tz, TimezoneSpec::Posix) {
@@ -1291,8 +1370,8 @@ impl MirScalarExpr {
                             *e = then.take();
                         } else if then.is_literal_ok()
                             && els.is_literal_ok()
-                            && then.typ(column_types).scalar_type == SqlScalarType::Bool
-                            && els.typ(column_types).scalar_type == SqlScalarType::Bool
+                            && then.typ(column_types).scalar_type == ReprScalarType::Bool
+                            && els.typ(column_types).scalar_type == ReprScalarType::Bool
                         {
                             match (then.as_literal(), els.as_literal()) {
                                 // Note: NULLs from the condition should not be propagated to the result
@@ -1353,12 +1432,7 @@ impl MirScalarExpr {
                                 (
                                     MirScalarExpr::CallUnary { func: f1, expr: e1 },
                                     MirScalarExpr::CallUnary { func: f2, expr: e2 },
-                                ) if f1 == f2
-                                    && e1
-                                        .typ(column_types)
-                                        .union(&e2.typ(column_types))
-                                        .is_ok() =>
-                                {
+                                ) if f1 == f2 && e1.typ(column_types) == e2.typ(column_types) => {
                                     *e = cond
                                         .take()
                                         .if_then_else(e1.take(), e2.take())
@@ -1377,10 +1451,7 @@ impl MirScalarExpr {
                                     },
                                 ) if f1 == f2
                                     && e1a == e1b
-                                    && e2a
-                                        .typ(column_types)
-                                        .union(&e2b.typ(column_types))
-                                        .is_ok() =>
+                                    && e2a.typ(column_types) == e2b.typ(column_types) =>
                                 {
                                     *e = e1a.take().call_binary(
                                         cond.take().if_then_else(e2a.take(), e2b.take()),
@@ -1400,10 +1471,7 @@ impl MirScalarExpr {
                                     },
                                 ) if f1 == f2
                                     && e2a == e2b
-                                    && e1a
-                                        .typ(column_types)
-                                        .union(&e1b.typ(column_types))
-                                        .is_ok() =>
+                                    && e1a.typ(column_types) == e1b.typ(column_types) =>
                                 {
                                     *e = cond
                                         .take()
@@ -1420,13 +1488,13 @@ impl MirScalarExpr {
 
         /* #region `reduce_list_create_list_index_literal` and helper functions */
 
-        fn list_create_type(list_create: &MirScalarExpr) -> SqlScalarType {
+        fn list_create_type(list_create: &MirScalarExpr) -> ReprScalarType {
             if let MirScalarExpr::CallVariadic {
-                func: VariadicFunc::ListCreate { elem_type: typ },
+                func: VariadicFunc::ListCreate(ListCreate { elem_type: typ }),
                 ..
             } = list_create
             {
-                (*typ).clone()
+                ReprScalarType::from(typ)
             } else {
                 unreachable!()
             }
@@ -1436,7 +1504,7 @@ impl MirScalarExpr {
             matches!(
                 expr,
                 MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::ListCreate { .. },
+                    func: VariadicFunc::ListCreate(..),
                     ..
                 }
             )
@@ -1491,7 +1559,7 @@ impl MirScalarExpr {
                     for list_create in &mut list_create_mut_refs {
                         let list_create_args = match list_create {
                             MirScalarExpr::CallVariadic {
-                                func: VariadicFunc::ListCreate { elem_type: _ },
+                                func: VariadicFunc::ListCreate(ListCreate { elem_type: _ }),
                                 exprs,
                             } => exprs,
                             _ => unreachable!(), // func cannot be anything else than a ListCreate
@@ -1537,7 +1605,7 @@ impl MirScalarExpr {
                         .into_iter()
                         .flat_map(|list_create| match list_create {
                             MirScalarExpr::CallVariadic {
-                                func: VariadicFunc::ListCreate { elem_type },
+                                func: VariadicFunc::ListCreate(ListCreate { elem_type }),
                                 exprs: list_create_args,
                             } => {
                                 earlier_list_create_types.push(elem_type);
@@ -1556,12 +1624,12 @@ impl MirScalarExpr {
                 assert_eq!(list_create_mut_refs.len(), 1);
                 list_create_to_reduce
             } else {
-                let mut exprs: Vec<MirScalarExpr> = vec![list_create_to_reduce];
-                exprs.append(&mut index_exprs);
-                MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::ListIndex,
-                    exprs,
-                }
+                MirScalarExpr::call_variadic(
+                    ListIndex,
+                    std::iter::once(list_create_to_reduce)
+                        .chain(index_exprs)
+                        .collect(),
+                )
             }
         }
 
@@ -1588,8 +1656,24 @@ impl MirScalarExpr {
                         *self = inner_expr.take();
                         return self.decompose_is_null();
                     } else {
-                        // Different from CallBinary and CallVariadic, because of determinism. See
-                        // https://materializeinc.slack.com/archives/C01BE3RN82F/p1657644478517709
+                        // We can simplify to `false`, because the function simply can't produce
+                        // nulls at all. This is because
+                        // - !propagates_nulls means that the input type of the Rust function is not
+                        //   nullable, so the automatic null propagation won't kick in;
+                        // - !introduces_nulls means that the output type of the Rust function is
+                        //   not nullable, so the Rust function can't produce a null manually either.
+                        //
+                        // Note that we can't do this same optimization for binary and variadic
+                        // functions. This is because for binary and variadic functions the value of
+                        // propagates_nulls and introduces_nulls is not derived solely from the
+                        // input/output type nullabilities, but instead depends on what the Rust
+                        // function does. For example, list concatenation neither introduces nor
+                        // propagates nulls, but it can produce a null:
+                        // - It does not introduce nulls, because if both input lists are not null,
+                        //   then it will produce a list.
+                        // - It does not propagate nulls, because giving a null as just one of the
+                        //   arguments returns the other argument instead of null.
+                        // - It does produce a null if both arguments are null.
                         return Some(MirScalarExpr::literal_false());
                     }
                 }
@@ -1606,10 +1690,7 @@ impl MirScalarExpr {
             MirScalarExpr::CallVariadic { func, exprs } => {
                 if func.propagates_nulls() && !func.introduces_nulls() {
                     let exprs = exprs.into_iter().map(|e| e.take().call_is_null()).collect();
-                    return Some(MirScalarExpr::CallVariadic {
-                        func: VariadicFunc::Or,
-                        exprs,
-                    });
+                    return Some(MirScalarExpr::call_variadic(Or, exprs));
                 }
             }
             _ => {}
@@ -1661,7 +1742,7 @@ impl MirScalarExpr {
             old_self = self.clone();
             match self {
                 MirScalarExpr::CallVariadic {
-                    func: func @ (VariadicFunc::And | VariadicFunc::Or),
+                    func: func @ (VariadicFunc::And(_) | VariadicFunc::Or(_)),
                     exprs,
                 } => {
                     // Canonically order elements so that various deduplications work better,
@@ -1702,7 +1783,7 @@ impl MirScalarExpr {
             inner.flatten_associative();
             match &mut **inner {
                 MirScalarExpr::CallVariadic {
-                    func: inner_func @ (VariadicFunc::And | VariadicFunc::Or),
+                    func: inner_func @ (VariadicFunc::And(_) | VariadicFunc::Or(_)),
                     exprs,
                 } => {
                     *inner_func = inner_func.switch_and_or();
@@ -1789,7 +1870,7 @@ impl MirScalarExpr {
             self.reduce_and_canonicalize_and_or(); // We don't want to deal with 1-arg AND/OR at the top
             if let MirScalarExpr::CallVariadic {
                 exprs: outer_operands,
-                func: outer_func @ (VariadicFunc::Or | VariadicFunc::And),
+                func: outer_func @ (VariadicFunc::Or(_) | VariadicFunc::And(_)),
             } = self
             {
                 let inner_func = outer_func.switch_and_or();
@@ -1940,14 +2021,19 @@ impl MirScalarExpr {
         }
     }
 
-    pub fn typ(&self, column_types: &[SqlColumnType]) -> SqlColumnType {
+    pub fn sql_typ(&self, column_types: &[SqlColumnType]) -> SqlColumnType {
+        let repr_column_types = column_types.iter().map(ReprColumnType::from).collect_vec();
+        SqlColumnType::from_repr(&self.typ(&repr_column_types))
+    }
+
+    pub fn typ(&self, column_types: &[ReprColumnType]) -> ReprColumnType {
         match self {
             MirScalarExpr::Column(i, _name) => column_types[*i].clone(),
             MirScalarExpr::Literal(_, typ) => typ.clone(),
             MirScalarExpr::CallUnmaterializable(func) => func.output_type(),
             MirScalarExpr::CallUnary { expr, func } => func.output_type(expr.typ(column_types)),
             MirScalarExpr::CallBinary { expr1, expr2, func } => {
-                func.output_type(expr1.typ(column_types), expr2.typ(column_types))
+                func.output_type(&[expr1.typ(column_types), expr2.typ(column_types)])
             }
             MirScalarExpr::CallVariadic { exprs, func } => {
                 func.output_type(exprs.iter().map(|e| e.typ(column_types)).collect())
@@ -1966,7 +2052,7 @@ impl MirScalarExpr {
         temp_storage: &'a RowArena,
     ) -> Result<Datum<'a>, EvalError> {
         match self {
-            MirScalarExpr::Column(index, _name) => Ok(datums[*index].clone()),
+            MirScalarExpr::Column(index, _name) => Ok(datums[*index]),
             MirScalarExpr::Literal(res, _column_type) => match res {
                 Ok(row) => Ok(row.unpack_first()),
                 Err(e) => Err(e.clone()),
@@ -1979,7 +2065,7 @@ impl MirScalarExpr {
             )),
             MirScalarExpr::CallUnary { func, expr } => func.eval(datums, temp_storage, expr),
             MirScalarExpr::CallBinary { func, expr1, expr2 } => {
-                func.eval(datums, temp_storage, expr1, expr2)
+                func.eval(datums, temp_storage, &[expr1, expr2])
             }
             MirScalarExpr::CallVariadic { func, exprs } => func.eval(datums, temp_storage, exprs),
             MirScalarExpr::If { cond, then, els } => match cond.eval(datums, temp_storage)? {
@@ -2043,7 +2129,7 @@ impl MirScalarExpr {
         self.visit_pre(|e| {
             if let MirScalarExpr::Literal(row, _) = e {
                 if let Ok(row) = row {
-                    contains |= row.iter().any(|d| d == Datum::Dummy);
+                    contains |= row.iter().any(|d| d.contains_dummy());
                 }
             }
         });
@@ -2292,7 +2378,18 @@ impl MirScalarExpr {
 /// The fields are ordered based on heuristic assumptions about their typical selectivity, so that
 /// Ord gives the right ordering for join inputs. Bigger is better, i.e., will tend to come earlier
 /// than other inputs.
-#[derive(Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct FilterCharacteristics {
     // `<expr> = <literal>` appears in the filter.
     // Excludes cases where NOT appears anywhere above the literal equality.
@@ -2473,7 +2570,7 @@ impl FilterCharacteristics {
     Serialize,
     Deserialize,
     Hash,
-    MzReflect,
+    MzReflect
 )]
 pub enum DomainLimit {
     None,
@@ -2507,7 +2604,17 @@ impl RustType<ProtoDomainLimit> for DomainLimit {
 }
 
 #[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
 )]
 pub enum EvalError {
     CharacterNotValidForEncoding(i32),
@@ -2584,6 +2691,7 @@ pub enum EvalError {
     OutOfDomain(DomainLimit, DomainLimit, Box<str>),
     ComplexOutOfRange(Box<str>),
     MultipleRowsFromSubquery,
+    NegativeRowsFromSubquery,
     Undefined(Box<str>),
     LikePatternTooLong,
     LikeEscapeTooLong,
@@ -2599,6 +2707,7 @@ pub enum EvalError {
     InvalidRange(InvalidRangeError),
     InvalidRoleId(Box<str>),
     InvalidPrivileges(Box<str>),
+    InvalidCatalogJson(Box<str>),
     LetRecLimitExceeded(Box<str>),
     MultiDimensionalArraySearch,
     MustNotBeNull(Box<str>),
@@ -2621,6 +2730,7 @@ pub enum EvalError {
     AclArrayNullElement,
     MzAclArrayNullElement,
     PrettyError(Box<str>),
+    RedactError(Box<str>),
 }
 
 impl fmt::Display for EvalError {
@@ -2730,6 +2840,7 @@ impl fmt::Display for EvalError {
             }
             EvalError::Parse(e) => e.fmt(f),
             EvalError::PrettyError(e) => e.fmt(f),
+            EvalError::RedactError(e) => e.fmt(f),
             EvalError::ParseHex(e) => e.fmt(f),
             EvalError::Internal(s) => write!(f, "internal error: {}", s),
             EvalError::InfinityOutOfDomain(s) => {
@@ -2766,6 +2877,9 @@ impl fmt::Display for EvalError {
             EvalError::MultipleRowsFromSubquery => {
                 write!(f, "more than one record produced in subquery")
             }
+            EvalError::NegativeRowsFromSubquery => {
+                write!(f, "negative number of rows produced in subquery")
+            }
             EvalError::Undefined(s) => {
                 write!(f, "{} is undefined", s)
             }
@@ -2795,6 +2909,9 @@ impl fmt::Display for EvalError {
             EvalError::InvalidRoleId(msg) => write!(f, "{msg}"),
             EvalError::InvalidPrivileges(privilege) => {
                 write!(f, "unrecognized privilege type: {privilege}")
+            }
+            EvalError::InvalidCatalogJson(msg) => {
+                write!(f, "invalid catalog JSON: {msg}")
             }
             EvalError::LetRecLimitExceeded(max_iters) => {
                 write!(
@@ -2892,8 +3009,8 @@ impl From<InvalidArrayError> for EvalError {
     }
 }
 
-impl From<regex::Error> for EvalError {
-    fn from(e: regex::Error) -> EvalError {
+impl From<RegexCompilationError> for EvalError {
+    fn from(e: RegexCompilationError) -> EvalError {
         EvalError::InvalidRegex(e.to_string().into())
     }
 }
@@ -3030,6 +3147,7 @@ impl RustType<ProtoEvalError> for EvalError {
             EvalError::UnterminatedLikeEscapeSequence => UnterminatedLikeEscapeSequence(()),
             EvalError::Parse(error) => Parse(error.into_proto()),
             EvalError::PrettyError(error) => PrettyError(error.into_proto()),
+            EvalError::RedactError(error) => RedactError(error.into_proto()),
             EvalError::ParseHex(error) => ParseHex(error.into_proto()),
             EvalError::Internal(v) => Internal(v.into_proto()),
             EvalError::InfinityOutOfDomain(v) => InfinityOutOfDomain(v.into_proto()),
@@ -3042,6 +3160,7 @@ impl RustType<ProtoEvalError> for EvalError {
             }),
             EvalError::ComplexOutOfRange(v) => ComplexOutOfRange(v.into_proto()),
             EvalError::MultipleRowsFromSubquery => MultipleRowsFromSubquery(()),
+            EvalError::NegativeRowsFromSubquery => NegativeRowsFromSubquery(()),
             EvalError::Undefined(v) => Undefined(v.into_proto()),
             EvalError::LikePatternTooLong => LikePatternTooLong(()),
             EvalError::LikeEscapeTooLong => LikeEscapeTooLong(()),
@@ -3064,6 +3183,7 @@ impl RustType<ProtoEvalError> for EvalError {
             EvalError::InvalidRange(error) => InvalidRange(error.into_proto()),
             EvalError::InvalidRoleId(v) => InvalidRoleId(v.into_proto()),
             EvalError::InvalidPrivileges(v) => InvalidPrivileges(v.into_proto()),
+            EvalError::InvalidCatalogJson(v) => InvalidCatalogJson(v.into_proto()),
             EvalError::LetRecLimitExceeded(v) => WmrRecursionLimitExceeded(v.into_proto()),
             EvalError::MultiDimensionalArraySearch => MultiDimensionalArraySearch(()),
             EvalError::MustNotBeNull(v) => MustNotBeNull(v.into_proto()),
@@ -3175,6 +3295,7 @@ impl RustType<ProtoEvalError> for EvalError {
                 )),
                 ComplexOutOfRange(v) => Ok(EvalError::ComplexOutOfRange(v.into())),
                 MultipleRowsFromSubquery(()) => Ok(EvalError::MultipleRowsFromSubquery),
+                NegativeRowsFromSubquery(()) => Ok(EvalError::NegativeRowsFromSubquery),
                 Undefined(v) => Ok(EvalError::Undefined(v.into())),
                 LikePatternTooLong(()) => Ok(EvalError::LikePatternTooLong),
                 LikeEscapeTooLong(()) => Ok(EvalError::LikeEscapeTooLong),
@@ -3192,6 +3313,7 @@ impl RustType<ProtoEvalError> for EvalError {
                 InvalidRange(e) => Ok(EvalError::InvalidRange(e.into_rust()?)),
                 InvalidRoleId(v) => Ok(EvalError::InvalidRoleId(v.into())),
                 InvalidPrivileges(v) => Ok(EvalError::InvalidPrivileges(v.into())),
+                InvalidCatalogJson(v) => Ok(EvalError::InvalidCatalogJson(v.into())),
                 WmrRecursionLimitExceeded(v) => Ok(EvalError::LetRecLimitExceeded(v.into())),
                 MultiDimensionalArraySearch(()) => Ok(EvalError::MultiDimensionalArraySearch),
                 MustNotBeNull(v) => Ok(EvalError::MustNotBeNull(v.into())),
@@ -3214,6 +3336,7 @@ impl RustType<ProtoEvalError> for EvalError {
                 MzAclArrayNullElement(()) => Ok(EvalError::MzAclArrayNullElement),
                 InvalidIanaTimezoneId(s) => Ok(EvalError::InvalidIanaTimezoneId(s.into())),
                 PrettyError(s) => Ok(EvalError::PrettyError(s.into())),
+                RedactError(s) => Ok(EvalError::RedactError(s.into())),
             },
             None => Err(TryFromProtoError::missing_field("ProtoEvalError::kind")),
         }
@@ -3240,15 +3363,18 @@ mod tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn test_reduce() {
-        let relation_type = vec![
-            SqlScalarType::Int64.nullable(true),
-            SqlScalarType::Int64.nullable(true),
-            SqlScalarType::Int64.nullable(false),
-        ];
+        let relation_type: Vec<ReprColumnType> = vec![
+            ReprScalarType::Int64.nullable(true),
+            ReprScalarType::Int64.nullable(true),
+            ReprScalarType::Int64.nullable(false),
+        ]
+        .into_iter()
+        .collect();
         let col = MirScalarExpr::column;
-        let err = |e| MirScalarExpr::literal(Err(e), SqlScalarType::Int64);
-        let lit = |i| MirScalarExpr::literal_ok(Datum::Int64(i), SqlScalarType::Int64);
-        let null = || MirScalarExpr::literal_null(SqlScalarType::Int64);
+        let int64_typ = ReprScalarType::Int64;
+        let err = |e| MirScalarExpr::literal(Err(e), int64_typ.clone());
+        let lit = |i| MirScalarExpr::literal_ok(Datum::Int64(i), int64_typ.clone());
+        let null = || MirScalarExpr::literal_null(int64_typ.clone());
 
         struct TestCase {
             input: MirScalarExpr,
@@ -3257,62 +3383,44 @@ mod tests {
 
         let test_cases = vec![
             TestCase {
-                input: MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
-                    exprs: vec![lit(1)],
-                },
+                input: MirScalarExpr::call_variadic(Coalesce, vec![lit(1)]),
                 output: lit(1),
             },
             TestCase {
-                input: MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
-                    exprs: vec![lit(1), lit(2)],
-                },
+                input: MirScalarExpr::call_variadic(Coalesce, vec![lit(1), lit(2)]),
                 output: lit(1),
             },
             TestCase {
-                input: MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
-                    exprs: vec![null(), lit(2), null()],
-                },
+                input: MirScalarExpr::call_variadic(Coalesce, vec![null(), lit(2), null()]),
                 output: lit(2),
             },
             TestCase {
-                input: MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
-                    exprs: vec![null(), col(0), null(), col(1), lit(2), lit(3)],
-                },
-                output: MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
-                    exprs: vec![col(0), col(1), lit(2)],
-                },
+                input: MirScalarExpr::call_variadic(
+                    Coalesce,
+                    vec![null(), col(0), null(), col(1), lit(2), lit(3)],
+                ),
+                output: MirScalarExpr::call_variadic(Coalesce, vec![col(0), col(1), lit(2)]),
             },
             TestCase {
-                input: MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
-                    exprs: vec![col(0), col(2), col(1)],
-                },
-                output: MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
-                    exprs: vec![col(0), col(2)],
-                },
+                input: MirScalarExpr::call_variadic(Coalesce, vec![col(0), col(2), col(1)]),
+                output: MirScalarExpr::call_variadic(Coalesce, vec![col(0), col(2)]),
             },
             TestCase {
-                input: MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
-                    exprs: vec![lit(1), err(EvalError::DivisionByZero)],
-                },
+                input: MirScalarExpr::call_variadic(
+                    Coalesce,
+                    vec![lit(1), err(EvalError::DivisionByZero)],
+                ),
                 output: lit(1),
             },
             TestCase {
-                input: MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
-                    exprs: vec![
+                input: MirScalarExpr::call_variadic(
+                    Coalesce,
+                    vec![
                         null(),
                         err(EvalError::DivisionByZero),
                         err(EvalError::NumericFieldOverflow),
                     ],
-                },
+                ),
                 output: err(EvalError::DivisionByZero),
             },
         ];

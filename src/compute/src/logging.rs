@@ -12,6 +12,7 @@
 pub mod compute;
 mod differential;
 pub(super) mod initialize;
+mod prometheus;
 mod reachability;
 mod timely;
 
@@ -22,7 +23,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use ::timely::container::CapacityContainerBuilder;
-use ::timely::dataflow::StreamCore;
+use ::timely::dataflow::Stream;
 use ::timely::dataflow::channels::pact::Pipeline;
 use ::timely::dataflow::operators::capture::{Event, EventLink, EventPusher};
 use ::timely::dataflow::operators::generic::Session;
@@ -224,14 +225,13 @@ struct LogCollection {
 /// the updates into `(Row, Row)` pairs using the provided logic function. It is crucial that the
 /// data is not exchanged between workers, as the consolidation would not function as desired
 /// otherwise.
-pub(super) fn consolidate_and_pack<G, B, CB, L, F>(
-    input: &StreamCore<G, B::Input>,
+pub(super) fn consolidate_and_pack<'scope, B, CB, L, F>(
+    input: Stream<'scope, Timestamp, B::Input>,
     log: L,
     mut logic: F,
-) -> StreamCore<G, CB::Container>
+) -> Stream<'scope, Timestamp, CB::Container>
 where
-    G: ::timely::dataflow::Scope<Timestamp = Timestamp>,
-    B: Batcher<Time = G::Timestamp> + 'static,
+    B: Batcher<Time = Timestamp> + 'static,
     B::Input: Container + Clone + 'static,
     B::Output: Clone,
     CB: ContainerBuilder,
@@ -243,7 +243,7 @@ where
     let c_name = &format!("Consolidate {log:?}");
     let u_name = &format!("ToRow {log:?}");
     let mut packer = PermutedRowPacker::new(log);
-    let consolidated = consolidate_pact::<B, _, _>(input, Pipeline, c_name);
+    let consolidated = consolidate_pact::<B, _>(input, Pipeline, c_name);
     consolidated.unary::<CB, _, _, _>(Pipeline, u_name, |_, _| {
         move |input, output| {
             input.for_each_time(|time, data| {

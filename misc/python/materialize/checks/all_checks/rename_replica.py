@@ -43,9 +43,7 @@ class RenameReplica(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SET cluster=rename_replica
 
                 > SELECT * FROM rename_replica_table;
@@ -58,6 +56,4 @@ class RenameReplica(Check):
 
                 > SELECT * FROM rename_replica_view;
                 6
-           """
-            )
-        )
+           """))

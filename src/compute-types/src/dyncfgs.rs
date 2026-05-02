@@ -13,6 +13,16 @@ use std::time::Duration;
 
 use mz_dyncfg::{Config, ConfigSet};
 
+/// Whether rendering should use `half_join2` rather than DD's `half_join` for delta joins.
+///
+/// `half_join2` avoids quadratic behavior in certain join patterns. This flag exists as an escape
+/// hatch to revert to the old implementation if issues arise.
+pub const ENABLE_HALF_JOIN2: Config<bool> = Config::new(
+    "enable_compute_half_join2",
+    true,
+    "Whether compute should use `half_join2` rather than DD's `half_join` to render delta joins.",
+);
+
 /// Whether rendering should use `mz_join_core` rather than DD's `JoinCore::join_core`.
 pub const ENABLE_MZ_JOIN_CORE: Config<bool> = Config::new(
     "enable_mz_join_core",
@@ -21,11 +31,32 @@ pub const ENABLE_MZ_JOIN_CORE: Config<bool> = Config::new(
      linear joins.",
 );
 
+/// Use sync Timely operators with Tokio tasks for the MV sink.
+pub const ENABLE_SYNC_MV_SINK: Config<bool> = Config::new(
+    "enable_compute_sync_mv_sink",
+    true,
+    "Use sync Timely operators with Tokio tasks for the MV sink.",
+);
+
 /// Whether rendering should use the new MV sink correction buffer implementation.
 pub const ENABLE_CORRECTION_V2: Config<bool> = Config::new(
     "enable_compute_correction_v2",
-    false,
+    true,
     "Whether compute should use the new MV sink correction buffer implementation.",
+);
+
+/// The size factor of subsequent chains in the correction V2 buffer.
+pub const CORRECTION_V2_CHAIN_PROPORTIONALITY: Config<f64> = Config::new(
+    "compute_correction_v2_chain_proportionality",
+    3.0,
+    "The size factor of subsequent chains in the correction V2 buffer.",
+);
+
+/// The byte size of chunks in the correction V2 buffer.
+pub const CORRECTION_V2_CHUNK_SIZE: Config<usize> = Config::new(
+    "compute_correction_v2_chunk_size",
+    8 * 1024,
+    "The byte size of chunks in the correction V2 buffer.",
 );
 
 /// Whether to enable temporal bucketing in compute.
@@ -270,7 +301,7 @@ pub const COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK: Config<Duration> = Config
 /// `compute_peek_response_stash_threshold_bytes`.
 pub const ENABLE_PEEK_RESPONSE_STASH: Config<bool> = Config::new(
     "enable_compute_peek_response_stash",
-    false,
+    true,
     "Whether to enable the peek response stash, for sending back large peek responses. Will only be used for results that exceed compute_peek_response_stash_threshold_bytes.",
 );
 
@@ -279,7 +310,7 @@ pub const ENABLE_PEEK_RESPONSE_STASH: Config<bool> = Config::new(
 /// query is "streamable" (roughly: doesn't have an ORDER BY).
 pub const PEEK_RESPONSE_STASH_THRESHOLD_BYTES: Config<usize> = Config::new(
     "compute_peek_response_stash_threshold_bytes",
-    1024 * 1024 * 300, /* 300mb */
+    1024 * 10, /* 10KB */
     "The threshold above which to use the peek response stash, for sending back large peek responses.",
 );
 
@@ -327,11 +358,40 @@ pub const PEEK_STASH_BATCH_SIZE: Config<usize> = Config::new(
     "The size, as number of rows, of each batch pumped from the peek result iterator (in one iteration through the worker loop) when stashing peek responses.",
 );
 
+/// The collection interval for the Prometheus metrics introspection source.
+///
+/// Set to zero to disable scraping and retract any existing data.
+pub const COMPUTE_PROMETHEUS_INTROSPECTION_SCRAPE_INTERVAL: Config<Duration> = Config::new(
+    "compute_prometheus_introspection_scrape_interval",
+    Duration::from_secs(1),
+    "The collection interval for the Prometheus metrics introspection source. Set to zero to disable.",
+);
+
+/// If set, skip fetching or processing the snapshot data for subscribes when possible.
+pub const SUBSCRIBE_SNAPSHOT_OPTIMIZATION: Config<bool> = Config::new(
+    "compute_subscribe_snapshot_optimization",
+    true,
+    "If set, skip fetching or processing the snapshot data for subscribes when possible.",
+);
+
+/// Temporary flag to de-risk the rollout of a release-blocker fix.
+///
+/// TODO: Remove after one, or a couple, releases.
+pub const MV_SINK_ADVANCE_PERSIST_FRONTIERS: Config<bool> = Config::new(
+    "compute_mv_sink_advance_persist_frontiers",
+    true,
+    "Whether the MV sink's write operator advances its internal persist frontiers to the as_of.",
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
+        .add(&ENABLE_HALF_JOIN2)
         .add(&ENABLE_MZ_JOIN_CORE)
+        .add(&ENABLE_SYNC_MV_SINK)
         .add(&ENABLE_CORRECTION_V2)
+        .add(&CORRECTION_V2_CHAIN_PROPORTIONALITY)
+        .add(&CORRECTION_V2_CHUNK_SIZE)
         .add(&ENABLE_TEMPORAL_BUCKETING)
         .add(&TEMPORAL_BUCKETING_SUMMARY)
         .add(&LINEAR_JOIN_YIELDING)
@@ -369,4 +429,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES)
         .add(&PEEK_STASH_NUM_BATCHES)
         .add(&PEEK_STASH_BATCH_SIZE)
+        .add(&COMPUTE_PROMETHEUS_INTROSPECTION_SCRAPE_INTERVAL)
+        .add(&SUBSCRIBE_SNAPSHOT_OPTIMIZATION)
+        .add(&MV_SINK_ADVANCE_PERSIST_FRONTIERS)
 }

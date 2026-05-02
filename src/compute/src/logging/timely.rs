@@ -15,7 +15,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use columnar::{Columnar, Index};
-use differential_dataflow::containers::{Columnation, CopyRegion};
+use columnation::{Columnation, CopyRegion};
 use mz_compute_client::logging::LoggingConfig;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Timestamp};
@@ -56,11 +56,12 @@ pub(super) struct Return {
 /// * `scope`: The Timely scope hosting the log analysis dataflow.
 /// * `config`: Logging configuration
 /// * `event_queue`: The source to read log events from.
-pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
-    mut scope: G,
+pub(super) fn construct(
+    scope: Scope<'_, Timestamp>,
     config: &LoggingConfig,
     event_queue: EventQueue<Vec<(Duration, TimelyEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
+    storage_log_reader: Option<crate::server::StorageTimelyLogReader>,
 ) -> Return {
     scope.scoped("timely logging", move |scope| {
         let enable_logging = config.enable_logging;
@@ -76,10 +77,29 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             (empty(scope), token)
         };
 
+        // If we have a storage log reader, replay it and concatenate with compute logs.
+        let (logs, storage_token) = if let Some(reader) = storage_log_reader {
+            use mz_timely_util::activator::RcActivator;
+            use timely::dataflow::operators::Concatenate;
+
+            let activator = RcActivator::new("storage_timely_activator".to_string(), 128);
+            let (storage_logs, s_token) =
+                [reader].mz_replay(scope, "storage timely logs", config.interval, activator);
+            let merged = scope.concatenate([logs, storage_logs]);
+            (merged, Some(s_token))
+        } else {
+            (logs, None)
+        };
+        // Convert storage token to Rc<dyn Any> so we can stash it alongside the compute token.
+        let storage_token: Rc<dyn std::any::Any> = match storage_token {
+            Some(t) => t,
+            None => Rc::new(()),
+        };
+
         // Build a demux operator that splits the replayed event stream up into the separate
         // logging streams.
         let mut demux = OperatorBuilder::new("Timely Logging Demux".to_string(), scope.clone());
-        let mut input = demux.new_input(&logs, Pipeline);
+        let mut input = demux.new_input(logs, Pipeline);
         let (operates_out, operates) = demux.new_output();
         let mut operates_out = OutputBuilder::from(operates_out);
         let (channels_out, channels) = demux.new_output();
@@ -158,8 +178,8 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         // We pre-arrange the logging streams to force a consolidation and reduce the amount of
         // updates that reach `Row` encoding.
 
-        let operates = consolidate_and_pack::<_, KeyValBatcher<_, _, _, _>, ColumnBuilder<_>, _, _>(
-            &operates,
+        let operates = consolidate_and_pack::<KeyValBatcher<_, _, _, _>, ColumnBuilder<_>, _, _>(
+            operates,
             TimelyLog::Operates,
             move |data, packer, session| {
                 for ((id, name), time, diff) in data.iter() {
@@ -194,7 +214,9 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
                                 Datum::UInt64(u64::cast_from(source_port)),
                                 Datum::UInt64(u64::cast_from(target_node)),
                                 Datum::UInt64(u64::cast_from(target_port)),
-                                Datum::String(datum.typ),
+                                Datum::String(
+                                    std::str::from_utf8(datum.typ).expect("valid string"),
+                                ),
                             ]);
                             session.give((data, time, diff));
                         }
@@ -207,8 +229,8 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         type KVB<K, V, T, D> = KeyValBatcher<K, V, T, D>;
         type KB<K, T, D> = KeyBatcher<K, T, D>;
 
-        let addresses = consolidate_and_pack::<_, KVB<_, _, _, _>, ColumnBuilder<_>, _, _>(
-            &addresses,
+        let addresses = consolidate_and_pack::<KVB<_, _, _, _>, ColumnBuilder<_>, _, _>(
+            addresses,
             TimelyLog::Addresses,
             move |data, packer, session| {
                 for ((id, address), time, diff) in data.iter() {
@@ -226,8 +248,8 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             },
         );
 
-        let parks = consolidate_and_pack::<_, KB<_, _, _>, ColumnBuilder<_>, _, _>(
-            &parks,
+        let parks = consolidate_and_pack::<KB<_, _, _>, ColumnBuilder<_>, _, _>(
+            parks,
             TimelyLog::Parks,
             move |data, packer, session| {
                 for ((datum, ()), time, diff) in data.iter() {
@@ -244,8 +266,8 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             },
         );
 
-        let batches_sent = consolidate_and_pack::<_, KB<_, _, _>, ColumnBuilder<_>, _, _>(
-            &batches_sent,
+        let batches_sent = consolidate_and_pack::<KB<_, _, _>, ColumnBuilder<_>, _, _>(
+            batches_sent,
             TimelyLog::BatchesSent,
             move |data, packer, session| {
                 for ((datum, ()), time, diff) in data.iter() {
@@ -259,8 +281,8 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             },
         );
 
-        let batches_received = consolidate_and_pack::<_, KB<_, _, _>, ColumnBuilder<_>, _, _>(
-            &batches_received,
+        let batches_received = consolidate_and_pack::<KB<_, _, _>, ColumnBuilder<_>, _, _>(
+            batches_received,
             TimelyLog::BatchesReceived,
             move |data, packer, session| {
                 for ((datum, ()), time, diff) in data.iter() {
@@ -274,8 +296,8 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             },
         );
 
-        let messages_sent = consolidate_and_pack::<_, KB<_, _, _>, ColumnBuilder<_>, _, _>(
-            &messages_sent,
+        let messages_sent = consolidate_and_pack::<KB<_, _, _>, ColumnBuilder<_>, _, _>(
+            messages_sent,
             TimelyLog::MessagesSent,
             move |data, packer, session| {
                 for ((datum, ()), time, diff) in data.iter() {
@@ -289,8 +311,8 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             },
         );
 
-        let messages_received = consolidate_and_pack::<_, KB<_, _, _>, ColumnBuilder<_>, _, _>(
-            &messages_received,
+        let messages_received = consolidate_and_pack::<KB<_, _, _>, ColumnBuilder<_>, _, _>(
+            messages_received,
             TimelyLog::MessagesReceived,
             move |data, packer, session| {
                 for ((datum, ()), time, diff) in data.iter() {
@@ -304,8 +326,8 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             },
         );
 
-        let elapsed = consolidate_and_pack::<_, KB<_, _, _>, ColumnBuilder<_>, _, _>(
-            &schedules_duration,
+        let elapsed = consolidate_and_pack::<KB<_, _, _>, ColumnBuilder<_>, _, _>(
+            schedules_duration,
             TimelyLog::Elapsed,
             move |data, packer, session| {
                 for ((operator, ()), time, diff) in data.iter() {
@@ -318,8 +340,8 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             },
         );
 
-        let histogram = consolidate_and_pack::<_, KB<_, _, _>, ColumnBuilder<_>, _, _>(
-            &schedules_histogram,
+        let histogram = consolidate_and_pack::<KB<_, _, _>, ColumnBuilder<_>, _, _>(
+            schedules_histogram,
             TimelyLog::Histogram,
             move |data, packer, session| {
                 for ((datum, ()), time, diff) in data.iter() {
@@ -365,9 +387,11 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
                         &format!("Arrange {variant:?}"),
                     )
                     .trace;
+                let combined_token: Rc<dyn std::any::Any> =
+                    Rc::new((Rc::clone(&token), Rc::clone(&storage_token)));
                 let collection = LogCollection {
                     trace,
-                    token: Rc::clone(&token),
+                    token: combined_token,
                 };
                 collections.insert(variant, collection);
             }
@@ -391,7 +415,7 @@ struct DemuxState {
     /// Maps channel IDs to boxed slices counting the messages received from each source worker.
     messages_received: BTreeMap<usize, Box<[MessageCount]>>,
     /// Stores for scheduled operators the time when they were scheduled.
-    schedule_starts: BTreeMap<usize, Duration>,
+    schedule_starts: Vec<(usize, Duration)>,
     /// Maps operator IDs to a vector recording the (count, elapsed_ns) values in each histogram
     /// bucket.
     schedules_data: BTreeMap<usize, Vec<(isize, Diff)>>,
@@ -728,16 +752,18 @@ impl DemuxHandler<'_, '_, '_> {
     fn handle_schedule(&mut self, event: ScheduleEvent) {
         match event.start_stop {
             timely::logging::StartStop::Start => {
-                let existing = self.state.schedule_starts.insert(event.id, self.time);
-                if existing.is_some() {
-                    error!(operator_id = ?event.id, "schedule start without succeeding stop");
-                }
+                self.state.schedule_starts.push((event.id, self.time));
             }
             timely::logging::StartStop::Stop => {
-                let Some(start_time) = self.state.schedule_starts.remove(&event.id) else {
-                    error!(operator_id = ?event.id, "schedule stop without preceeding start");
+                let Some((old_id, start_time)) = self.state.schedule_starts.pop() else {
+                    error!(operator_id = ?event.id, "schedule stop without preceding start");
                     return;
                 };
+
+                if old_id != event.id {
+                    error!(start_id = ?old_id, stop_id = ?event.id, "schedule stop without preceding start");
+                    return;
+                }
 
                 let elapsed_ns = self.time.saturating_sub(start_time).as_nanos();
                 let elapsed_i64 = i64::try_from(elapsed_ns).expect("must fit");

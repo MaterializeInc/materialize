@@ -166,7 +166,7 @@ impl StashingPeek {
 
         let mut num_rows: u64 = 0;
 
-        loop {
+        'outer: loop {
             let row = rows_rx.recv().await;
             match row {
                 Some(Ok(rows)) => {
@@ -180,10 +180,12 @@ impl StashingPeek {
                             .await
                             .expect("invalid usage");
 
-                        // Stop if we have enough rows to satisfy the RowSetFinishing's offset + limit.
                         if let Some(max_rows) = max_rows {
                             if num_rows >= u64::cast_from(max_rows) {
-                                break;
+                                // Drop the receiver so the producer's next
+                                // try_reserve() fails, stopping row production.
+                                drop(rows_rx);
+                                break 'outer;
                             }
                         }
                     }
@@ -203,7 +205,7 @@ impl StashingPeek {
             relation_desc,
             shard_id,
             batches: vec![batch.into_transmittable_batch()],
-            inline_rows: RowCollection::new(vec![], &[]),
+            inline_rows: vec![RowCollection::new(vec![], &[])],
         };
         let result = PeekResponse::Stashed(Box::new(stashed_response));
         Ok(result)
@@ -213,7 +215,9 @@ impl StashingPeek {
     /// `rows_tx`. Will pump at most `batch_size` rows in one batch, and at most
     /// the given `num_batches` batches.
     pub fn pump_rows(&mut self, mut num_batches: usize, batch_size: usize) {
-        while let Some(row_iter) = self.peek_iterator.as_mut() {
+        while num_batches > 0
+            && let Some(row_iter) = self.peek_iterator.as_mut()
+        {
             // Try to reserve space in the channel before pulling rows from the
             // iterator.
             let permit = match self
@@ -247,9 +251,6 @@ impl StashingPeek {
             }
 
             num_batches -= 1;
-            if num_batches == 0 {
-                break;
-            }
         }
     }
 }

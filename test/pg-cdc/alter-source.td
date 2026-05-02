@@ -9,6 +9,10 @@
 
 $ set-sql-timeout duration=60s
 
+# TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9571 is fixed
+$ skip-if
+SELECT true
+
 # IMPORTANT: The Postgres server has a custom pg_hba.conf that only
 # accepts connections from specific users. You will have to update
 # pg_hba.conf if you modify the existing user names or add new ones.
@@ -38,6 +42,8 @@ INSERT INTO table_a VALUES (1, 'one');
 ALTER TABLE table_a REPLICA IDENTITY FULL;
 INSERT INTO table_a VALUES (2, 'two');
 
+ANALYZE;
+
 # Check empty publication on ALTER
 
 > CREATE SOURCE "mz_source"
@@ -65,14 +71,8 @@ CREATE TABLE table_a (pk INTEGER PRIMARY KEY, f2 TEXT);
 ALTER TABLE table_a REPLICA IDENTITY FULL;
 INSERT INTO table_a VALUES (9, 'nine');
 
-# TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9571 is fixed
-$ skip-if
-SELECT true
-
 ! SELECT * FROM table_a;
 regex:(table was dropped|incompatible schema change)
-
-$ skip-end
 
 # We are not aware that the new table_a is different
 ! CREATE TABLE table_a FROM SOURCE mz_source (REFERENCE table_a);
@@ -119,6 +119,8 @@ INSERT INTO table_g VALUES (1, 'one');
 ALTER TABLE table_g REPLICA IDENTITY FULL;
 INSERT INTO table_g VALUES (2, 'two');
 
+ANALYZE;
+
 > CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pg (
     PUBLICATION 'mz_source'
@@ -148,8 +150,11 @@ $ set-regex match="DETAILS = '[a-f0-9]+'" replacement=<DETAILS>
 > SHOW CREATE SOURCE mz_source;
 materialize.public.mz_source "CREATE SOURCE materialize.public.mz_source\nIN CLUSTER quickstart\nFROM POSTGRES CONNECTION materialize.public.pg (PUBLICATION = 'mz_source');"
 
-> SHOW CREATE TABLE table_a;
+>[version<2600700] SHOW CREATE TABLE table_a;
 materialize.public.table_a "CREATE TABLE materialize.public.table_a (pk pg_catalog.int4 NOT NULL, f2 pg_catalog.text, CONSTRAINT table_a_pkey PRIMARY KEY (pk)) FROM SOURCE materialize.public.mz_source (REFERENCE = postgres.public.table_a) WITH (<DETAILS>);"
+
+>[version>=2600700] SHOW CREATE TABLE table_a;
+materialize.public.table_a "CREATE TABLE\n    materialize.public.table_a\n        (pk pg_catalog.int4 NOT NULL, f2 pg_catalog.text, CONSTRAINT table_a_pkey PRIMARY KEY (pk))\nFROM SOURCE materialize.public.mz_source (REFERENCE = postgres.public.table_a)\nWITH (\n    <DETAILS>\n);"
 
 #
 # State checking
@@ -203,9 +208,9 @@ INSERT INTO table_e VALUES (3, 'three');
 3
 4
 
-> SHOW MATERIALIZED VIEWS
-mv_e quickstart ""
-mv_f quickstart ""
+> SELECT name FROM mz_materialized_views WHERE id LIKE 'u%'
+mv_e
+mv_f
 
 # RESTRICT works
 ! DROP TABLE table_e RESTRICT;
@@ -226,7 +231,7 @@ contains:cannot drop table "table_e": still depended upon by materialized view "
 > SHOW TABLES
 table_g               ""
 
-> SHOW MATERIALIZED VIEWS
+> SELECT name FROM mz_materialized_views WHERE id LIKE 'u%'
 
 > DROP TABLE table_g;
 

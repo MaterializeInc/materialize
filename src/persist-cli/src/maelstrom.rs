@@ -71,5 +71,4 @@ pub async fn run<S: Service + 'static>(args: Args) -> Result<(), anyhow::Error> 
             },
         )
         .await
-        .expect("task failed")
 }

@@ -9,6 +9,7 @@
 
 //! Integration test driver for Materialize.
 
+#![recursion_limit = "256"]
 #![warn(missing_docs)]
 
 use std::fs::File;
@@ -158,14 +159,16 @@ pub(crate) async fn run_line_reader(
             }
         }
     }
+    let mut consistency_checks_succeeded = true;
     if config.consistency_checks == action::consistency::Level::File {
         if let Err(e) = action::consistency::run_consistency_checks(&state).await {
+            consistency_checks_succeeded = false;
             errors.push(e.into());
         }
     }
     state.clear_skip_consistency_checks();
 
-    if config.rewrite_results {
+    if config.rewrite_results && consistency_checks_succeeded {
         let mut f = NamedTempFile::new_in(filename.unwrap().parent().unwrap()).unwrap();
         let mut pos = 0;
         for rewrite in &state.rewrites {

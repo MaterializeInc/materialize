@@ -25,6 +25,7 @@ const PUBLIC_KEYS: &[&str] = &[include_str!("license_keys/production.pub")];
 const REVOKED_KEYS: &[&str] = &["eddaf004-dc1e-48cf-9cc1-41d1543d940a"];
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub enum ExpirationBehavior {
     Warn,
     DisableClusterCreation,

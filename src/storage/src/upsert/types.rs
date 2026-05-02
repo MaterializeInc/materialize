@@ -285,7 +285,7 @@ impl<T, O> StateValue<T, O> {
     pub fn is_tombstone(&self) -> bool {
         match self {
             Self::Value(value) => value.finalized.is_none(),
-            _ => false,
+            Self::Consolidating(_) => false,
         }
     }
 
@@ -293,7 +293,9 @@ impl<T, O> StateValue<T, O> {
     pub fn into_decoded(self) -> Value<T, O> {
         match self {
             Self::Value(value) => value,
-            _ => panic!("called `into_decoded without calling `ensure_decoded`"),
+            Self::Consolidating(_) => {
+                panic!("called `into_decoded without calling `ensure_decoded`")
+            }
         }
     }
 
@@ -434,7 +436,9 @@ impl<T: Eq, O> StateValue<T, O> {
     pub fn into_finalized_value(self) -> Option<UpsertValue> {
         match self {
             Self::Value(v) => v.finalized,
-            _ => panic!("called `into_finalized_value` without calling `ensure_decoded`"),
+            Self::Consolidating(_) => {
+                panic!("called `into_finalized_value` without calling `ensure_decoded`")
+            }
         }
     }
 }
@@ -582,7 +586,12 @@ impl<T: Eq, O> StateValue<T, O> {
     /// Afterwards, if we need to retract one of these values, we need to assert that its in this correct state,
     /// then mutate it to its `Value` state, so the `upsert` operator can use it.
     #[allow(clippy::as_conversions)]
-    pub fn ensure_decoded(&mut self, bincode_opts: BincodeOpts, source_id: GlobalId) {
+    pub fn ensure_decoded(
+        &mut self,
+        bincode_opts: BincodeOpts,
+        source_id: GlobalId,
+        key: Option<&UpsertKey>,
+    ) {
         match self {
             StateValue::Consolidating(consolidating) => {
                 match consolidating.diff_sum.0 {
@@ -644,13 +653,31 @@ impl<T: Eq, O> StateValue<T, O> {
                         );
                         *self = Self::tombstone();
                     }
-                    other => panic!(
-                        "invalid upsert state: non 0/1 diff_sum: {}, state: {}, {}",
-                        other, consolidating, source_id
-                    ),
+                    other => {
+                        // If diff_sum is odd, value_xor holds the bincode of a
+                        // single value (even XORs cancel out). Try to decode it
+                        // so we can log the shape (not contents) for debugging.
+                        let value_byte_len = usize::try_from(consolidating.len_sum.0 / other).ok();
+                        let decode_ok = value_byte_len
+                            .and_then(|l| consolidating.value_xor.get(..l))
+                            .and_then(|bytes| bincode_opts.deserialize::<UpsertValue>(bytes).ok())
+                            .map(|v| match v {
+                                Ok(row) => format!(
+                                    "Ok(Row(byte_len={}, col_count={}))",
+                                    row.byte_len(),
+                                    row.iter().count(),
+                                ),
+                                Err(_) => "Err(UpsertValueError)".to_string(),
+                            });
+                        panic!(
+                            "invalid upsert state: non 0/1 diff_sum: {}, state: {}, {}, \
+                            key: {:?}, value_byte_len: {:?}, decodable: {:?}",
+                            other, consolidating, source_id, key, value_byte_len, decode_ok,
+                        )
+                    }
                 }
             }
-            _ => {}
+            StateValue::Value(_) => {}
         }
     }
 }
@@ -1035,8 +1062,21 @@ where
             panic!("attempted completion of already completed upsert snapshot")
         }
 
+        let phase = if !self.snapshot_completed {
+            "rehydration"
+        } else {
+            "steady-state"
+        };
+
         let now = Instant::now();
         let batch_size = updates.len();
+
+        tracing::trace!(
+            %phase,
+            batch_size,
+            completed,
+            "consolidate_chunk: processing batch"
+        );
 
         self.consolidate_scratch.clear();
         self.consolidate_upsert_scratch.clear();
@@ -1362,7 +1402,7 @@ mod tests {
         s.merge_update(longer_row, Diff::ONE, opts, &mut buf);
 
         // Assert that the `Consolidating` value is fully merged.
-        s.ensure_decoded(opts, GlobalId::User(1));
+        s.ensure_decoded(opts, GlobalId::User(1), None);
     }
 
     // We guard some of our assumptions. Increasing in-memory size of StateValue
@@ -1421,7 +1461,7 @@ mod tests {
         s.merge_update(longer_row.clone(), Diff::ONE, opts, &mut buf);
         s.merge_update(small_row.clone(), Diff::MINUS_ONE, opts, &mut buf);
 
-        s.ensure_decoded(opts, GlobalId::User(1));
+        s.ensure_decoded(opts, GlobalId::User(1), None);
     }
 
     #[mz_ore::test]
@@ -1440,7 +1480,7 @@ mod tests {
         s.merge_update(small_row.clone(), Diff::MINUS_ONE, opts, &mut buf);
         s.merge_update(longer_row.clone(), Diff::ONE, opts, &mut buf);
 
-        s.ensure_decoded(opts, GlobalId::User(1));
+        s.ensure_decoded(opts, GlobalId::User(1), None);
     }
 
     #[mz_ore::test]
@@ -1457,6 +1497,6 @@ mod tests {
         s.merge_update(small_row.clone(), Diff::MINUS_ONE, opts, &mut buf);
         s.merge_update(longer_row.clone(), Diff::ONE, opts, &mut buf);
 
-        s.ensure_decoded(opts, GlobalId::User(1));
+        s.ensure_decoded(opts, GlobalId::User(1), None);
     }
 }

@@ -26,3 +26,12 @@ pub const DEFAULT_PG_TIMESTAMP_ORACLE_CONNECT_TIMEOUT: Duration = Duration::from
 
 /// Default value for `DynamicConfig::pg_connection_pool_tcp_user_timeout`.
 pub const DEFAULT_PG_TIMESTAMP_ORACLE_TCP_USER_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Default value for `DynamicConfig::pg_connection_pool_keepalives_idle`.
+pub const DEFAULT_PG_TIMESTAMP_ORACLE_KEEPALIVES_IDLE: Duration = Duration::from_secs(10);
+
+/// Default value for `DynamicConfig::pg_connection_pool_keepalives_interval`.
+pub const DEFAULT_PG_TIMESTAMP_ORACLE_KEEPALIVES_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Default value for `DynamicConfig::pg_connection_pool_keepalives_retries`.
+pub const DEFAULT_PG_TIMESTAMP_ORACLE_KEEPALIVES_RETRIES: u32 = 5;

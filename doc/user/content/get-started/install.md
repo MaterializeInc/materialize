@@ -7,7 +7,19 @@ menu:
     parent: get-started
     identifier: "install"
     weight: 20
-
+aliases:
+  - /get-started/key-concepts/#indexes
+  - /self-managed/v25.1/get-started/install/
 ---
 
-{{< include-md file="shared-content/self-managed/install-landing-page.md" >}}
+{{% include-from-yaml data="self_managed/installation"
+name="installation-landing-intro" %}}
+
+{{% include-from-yaml data="self_managed/installation"
+name="installation-landing-guides-helm" %}}
+
+{{% include-from-yaml data="self_managed/installation"
+name="installation-landing-guides-unified" %}}
+
+{{% include-from-yaml data="self_managed/installation"
+name="installation-landing-guides-legacy" %}}

@@ -18,7 +18,7 @@ class PolarisBootstrap(Service):
         self,
         name: str = "polaris-bootstrap",
         image: str = "apache/polaris-admin-tool",
-        tag: str = "1.0.1-incubating",
+        tag: str = "1.2.0-incubating",
         environment: list[str] = [
             "POLARIS_BOOTSTRAP_CREDENTIALS=POLARIS,root,root",
             "POLARIS_PERSISTENCE_TYPE=relational-jdbc",
@@ -40,7 +40,7 @@ class PolarisBootstrap(Service):
                 "--credential",
                 "POLARIS,root,root",
             ],
-            "depends_on": {"postgres": {"condition": "service_healthy"}},
+            "depends_on": {"postgres": {"condition": "service_started"}},
         }
         super().__init__(name, config)
 
@@ -51,7 +51,7 @@ class Polaris(Service):
         name: str = "polaris",
         image: str = "apache/polaris",
         # Fails with 1.1.0-incubating
-        tag: str = "1.0.1-incubating",
+        tag: str = "1.2.0-incubating",
         # 8181: api port, 8182: management port
         ports: list[str | int] = [8181, 8182],
         environment: list[str] = [
@@ -68,23 +68,27 @@ class Polaris(Service):
             "polaris.readiness.ignore-severe-issues=true",
             "AWS_REGION=minio",
         ],
-        depends_on_extra: list[str] = [],
+        extra_environment: list[str] = [],
     ) -> None:
         config: ServiceConfig = {
             "image": f"{image}:{tag}",
             "ports": ports,
-            "environment": environment,
+            "environment": environment + extra_environment,
             "depends_on": {
-                "postgres": {"condition": "service_healthy"},
                 "polaris-bootstrap": {"condition": "service_completed_successfully"},
-                **{s: {"condition": "service_started"} for s in depends_on_extra},
+                "postgres": {"condition": "service_started"},
             },
             "healthcheck": {
-                "test": ["CMD", "curl", "http://localhost:8182/q/health"],
-                "interval": "2s",
-                "timeout": "10s",
+                "test": [
+                    "CMD",
+                    "curl",
+                    "--fail",
+                    "http://localhost:8182/q/health/live",
+                ],
+                "interval": "1s",
+                "timeout": "5s",
                 "retries": 10,
-                "start_period": "10s",
+                "start_period": "2s",
             },
         }
         super().__init__(name, config)

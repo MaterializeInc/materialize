@@ -13,6 +13,8 @@
 //! scripts. The tests here are simply too complicated to be easily expressed
 //! in testdrive, e.g., because they depend on the current time.
 
+#![recursion_limit = "256"]
+
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::net::{Ipv4Addr, SocketAddr};
@@ -31,14 +33,14 @@ use mz_environmentd::test_util::{
     get_explain_timestamp_determination, try_get_explain_timestamp,
 };
 use mz_ore::collections::CollectionExt;
+use mz_ore::error::ErrorExt;
 use mz_ore::now::{EpochMillis, NOW_ZERO, NowFn};
 use mz_ore::result::ResultExt;
 use mz_ore::retry::Retry;
-use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
+use mz_ore::task::{self, AbortOnDropHandle};
 use mz_ore::{assert_contains, assert_err, assert_ok};
 use mz_pgrepr::UInt4;
 use mz_repr::Timestamp;
-use mz_sql::catalog::BuiltinsConfig;
 use mz_sql::session::user::{INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER, SUPPORT_USER, SYSTEM_USER};
 use mz_storage_types::sources::Timeline;
 use postgres::Row;
@@ -65,7 +67,7 @@ impl MockHttpServer {
     async fn new() -> MockHttpServer {
         let (conn_tx, conn_rx) = mpsc::unbounded_channel();
         let router = Router::new().route(
-            "/*path",
+            "/{*path}",
             routing::get(|| async move {
                 let (response_tx, response_rx) = oneshot::channel();
                 conn_tx
@@ -134,7 +136,7 @@ async fn test_no_block() {
                 ))
                 .await;
             println!("test_no_block: in thread; create CSR conn done");
-            let _ = result.unwrap();
+            result.unwrap();
 
             let admin: AdminClient<_> = ClientConfig::new()
                 .set("bootstrap.servers", &*KAFKA_ADDRS)
@@ -158,7 +160,7 @@ async fn test_no_block() {
                     ))
                     .await;
             println!("test_no_block: in thread; create Kafka conn done");
-            let _ = result.unwrap();
+            result.unwrap();
 
             let result = client
                 .batch_execute(
@@ -170,7 +172,10 @@ async fn test_no_block() {
             println!("test_no_block: in thread; create source done");
             // Verify that the schema registry error was returned to the client, for
             // good measure.
-            assert_contains!(result.unwrap_err().to_string(), "server error 503");
+            assert_contains!(
+                result.unwrap_err().to_string_with_causes(),
+                "server error 503"
+            );
         });
 
         // Wait for Materialize to contact the schema registry, which
@@ -194,7 +199,7 @@ async fn test_no_block() {
             .expect("server unexpectedly closed channel");
 
         println!("test_no_block: joining task");
-        slow_task.await.unwrap();
+        slow_task.await;
     };
 
     tokio::time::timeout(Duration::from_secs(120), test_case)
@@ -297,9 +302,9 @@ async fn test_drop_connection_race() {
         .expect("server unexpectedly closed channel");
 
     info!("test_drop_connection_race: asserting response");
-    let source_res = source_task.await.unwrap();
+    let source_res = source_task.into_tokio_handle().await.unwrap();
     assert_contains!(
-        source_res.unwrap_err().to_string(),
+        source_res.unwrap_err().to_string_with_causes(),
         "unknown catalog item 'conn'"
     );
 }
@@ -460,8 +465,12 @@ async fn test_empty_subscribe_notice() {
     Retry::default()
         .max_duration(Duration::from_secs(10))
         .retry(|_| {
-            let Some(e) = rx.try_next().unwrap() else {
-                return Err("No notice received".to_string());
+            let e = match rx.try_recv() {
+                Ok(e) => e,
+                Err(futures::channel::mpsc::TryRecvError::Closed) => {
+                    panic!("unexpected channel close")
+                }
+                Err(_) => return Err("No notice received".to_string()),
             };
             if e.message().contains("guaranteed to be empty") {
                 Ok(())
@@ -502,15 +511,6 @@ fn test_subscribe_basic() {
     let mut client_reads = server.connect(postgres::NoTls).unwrap();
 
     server.enable_feature_flags(&["enable_index_options", "enable_logical_compaction_window"]);
-
-    let mut sys_client = server.connect_internal(postgres::NoTls).unwrap();
-
-    sys_client
-        .execute(
-            "ALTER SYSTEM SET constraint_based_timestamp_selection = 'verify'",
-            &[],
-        )
-        .unwrap();
 
     // Create a table with disabled compaction.
     client_writes
@@ -645,10 +645,26 @@ fn test_subscribe_basic() {
         }
     };
 
-    assert!(
-        err.unwrap_db_error()
-            .message()
-            .starts_with("Timestamp (1) is not valid for all inputs")
+    let err = err.unwrap_db_error();
+    assert_eq!(
+        err.message(),
+        "could not find a valid timestamp for the query"
+    );
+    let detail = err.detail().expect("error should have detail");
+    // Replace timestamps and GlobalIds with placeholders for comparison
+    let detail = Regex::new(r"\s*\d+ \([^)]+\)")
+        .unwrap()
+        .replace_all(detail, "<TIMESTAMP>");
+    let detail = Regex::new(r"u\d+").unwrap().replace_all(&detail, "<ID>");
+    let expected_detail = "Constraints:
+lower:
+  (Storage inputs: [<ID>]): [<TIMESTAMP>]
+upper:
+  (Query's AS OF): [<TIMESTAMP>]
+";
+    assert_eq!(
+        detail, expected_detail,
+        "detail mismatch:\ngot:\n{detail}\nexpected:\n{expected_detail}"
     );
 }
 
@@ -1250,8 +1266,8 @@ source materialize.public.t1 (u1, storage):
 
 binding constraints:
 lower:
-  (StorageInput([User(1)])): [<TIMESTAMP>]
-  (IsolationLevel(StrictSerializable)): [<TIMESTAMP>]\n";
+  (Storage inputs: [u1]): [<TIMESTAMP>]
+  (Isolation level: StrictSerializable): [<TIMESTAMP>]\n";
 
     let row = client
         .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM t1;", &[])
@@ -1273,7 +1289,7 @@ fn test_explain_timestamp_json() {
         .unwrap();
     let explain: String = row.get(0);
     // Just check that we can round-trip to the original type
-    let _explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
+    let _explain: TimestampExplanation = serde_json::from_str(&explain).unwrap();
 }
 
 // Verify that `EXPLAIN TIMESTAMP ...` within acts like a peek within a transaction.
@@ -1311,7 +1327,11 @@ fn test_transactional_explain_timestamps() {
         .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM t1;", &[])
         .unwrap_err();
 
-    assert!(format!("{}", error).contains("transaction in write-only mode"));
+    assert!(
+        error
+            .to_string_with_causes()
+            .contains("transaction in write-only mode")
+    );
 
     client_writes.batch_execute("ROLLBACK").unwrap();
 
@@ -1326,7 +1346,7 @@ fn test_transactional_explain_timestamps() {
             .unwrap();
 
         let explain: String = row.get(0);
-        let explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
+        let explain: TimestampExplanation = serde_json::from_str(&explain).unwrap();
         let explain_timestamp = explain.determination.timestamp_context.timestamp().unwrap();
 
         if let Some(timestamp) = query_timestamp {
@@ -1360,7 +1380,8 @@ fn test_transactional_explain_timestamps() {
         .unwrap_err();
 
     assert!(
-        format!("{}", error)
+        error
+            .to_string_with_causes()
             .contains("Transactions can only reference objects in the same timedomain")
     );
 
@@ -1389,7 +1410,7 @@ fn test_transactional_explain_timestamps() {
         .unwrap();
 
     let explain: String = row.get(0);
-    let explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
+    let explain: TimestampExplanation = serde_json::from_str(&explain).unwrap();
     let explain_timestamp = explain.determination.timestamp_context.timestamp().unwrap();
 
     assert_eq!(*explain_timestamp, mz_now_timestamp);
@@ -1443,7 +1464,7 @@ async fn test_utilization_hold() {
 
             let row = client.query_one(explain_q, &[]).await.unwrap();
             let explain: String = row.get(0);
-            let explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
+            let explain: TimestampExplanation = serde_json::from_str(&explain).unwrap();
 
             // Assert that we actually used the indexes/tables, as required
             for s in &explain.sources {
@@ -1508,8 +1529,7 @@ async fn test_utilization_hold() {
                     .unwrap();
                 let row = client.query_one(explain_q, &[]).await.unwrap();
                 let explain: String = row.get(0);
-                let explain: TimestampExplanation<Timestamp> =
-                    serde_json::from_str(&explain).unwrap();
+                let explain: TimestampExplanation = serde_json::from_str(&explain).unwrap();
                 let since = explain
                     .determination
                     .since
@@ -1589,15 +1609,15 @@ async fn test_github_12546() {
     );
 }
 
+/// Regression test for database-issues#3721.
 #[mz_ore::test]
-fn test_github_12951() {
+fn test_github_3721() {
     let server = test_util::TestHarness::default().start_blocking();
 
     // Verify sinks (SUBSCRIBE) are correctly handled for a dropped cluster.
     {
         let mut client1 = server.connect(postgres::NoTls).unwrap();
         let mut client2 = server.connect(postgres::NoTls).unwrap();
-        let client2_cancel = client2.cancel_token();
 
         client1
             .batch_execute("CREATE CLUSTER foo REPLICAS (r1 (size 'scale=1,workers=1'))")
@@ -1610,7 +1630,6 @@ fn test_github_12951() {
             )
             .unwrap();
         client1.batch_execute("DROP CLUSTER foo CASCADE").unwrap();
-        client2_cancel.cancel_query(postgres::NoTls).unwrap();
         client2
             .batch_execute("ROLLBACK; SET CLUSTER = default")
             .unwrap();
@@ -2014,14 +2033,14 @@ fn test_alter_system_invalid_param() {
         .batch_execute("ALTER SYSTEM SET invalid_param TO 42")
         .unwrap_err();
     assert!(
-        res.to_string()
+        res.to_string_with_causes()
             .contains("unrecognized configuration parameter \"invalid_param\"")
     );
     let res = mz_client
         .batch_execute("ALTER SYSTEM RESET invalid_param")
         .unwrap_err();
     assert!(
-        res.to_string()
+        res.to_string_with_causes()
             .contains("unrecognized configuration parameter \"invalid_param\"")
     );
 }
@@ -2174,6 +2193,14 @@ fn test_support_user_permissions() {
 
 #[mz_ore::test]
 fn test_idle_in_transaction_session_timeout() {
+    #[track_caller]
+    fn assert_db_error(error: tokio_postgres::Error, message: &str) {
+        match error.as_db_error() {
+            Some(e) => assert_eq!(e.message(), message),
+            None => panic!("unexpected error: {error:?}"),
+        }
+    }
+
     let server = test_util::TestHarness::default()
         .unsafe_mode()
         .start_blocking();
@@ -2181,28 +2208,14 @@ fn test_idle_in_transaction_session_timeout() {
 
     let mut client = server.connect(postgres::NoTls).unwrap();
     client
-        .batch_execute("SET idle_in_transaction_session_timeout TO '4ms'")
+        .batch_execute("SET idle_in_transaction_session_timeout TO '50ms'")
         .unwrap();
     client.batch_execute("BEGIN").unwrap();
-    std::thread::sleep(Duration::from_millis(5));
-    // Retry because sleep might be woken up early.
-    Retry::default()
-        .max_duration(Duration::from_secs(1))
-        .retry(|_| {
-            let res = client.query("SELECT 1", &[]);
-            if let Err(error) = res {
-                if error.is_closed() {
-                    Ok(())
-                } else {
-                    Err(format!(
-                        "error should indicates that the connection is closed: {error:?}"
-                    ))
-                }
-            } else {
-                Err(format!("query should return error: {res:?}"))
-            }
-        })
-        .unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+    assert_db_error(
+        client.query("SELECT 1", &[]).unwrap_err(),
+        "terminating connection due to idle-in-transaction timeout",
+    );
 
     // session should be timed out even if transaction has failed.
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -2210,30 +2223,15 @@ fn test_idle_in_transaction_session_timeout() {
         .batch_execute("SET idle_in_transaction_session_timeout TO '50ms'")
         .unwrap();
     client.batch_execute("BEGIN").unwrap();
-    let error = client.batch_execute("SELECT 1/0").unwrap_err();
-    assert!(
-        !error.is_closed(),
-        "failing a transaction should not close the connection: {error:?}"
+    assert_db_error(
+        client.batch_execute("SELECT 1/0").unwrap_err(),
+        "division by zero",
     );
-    std::thread::sleep(Duration::from_millis(51));
-    // Retry because sleep might be woken up early.
-    Retry::default()
-        .max_duration(Duration::from_secs(1))
-        .retry(|_| {
-            let res = client.query("SELECT 1", &[]);
-            if let Err(error) = res {
-                if error.is_closed() {
-                    Ok(())
-                } else {
-                    Err(format!(
-                        "error should indicates that the connection is closed: {error:?}"
-                    ))
-                }
-            } else {
-                Err(format!("query should return error: {res:?}"))
-            }
-        })
-        .unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+    assert_db_error(
+        client.query("SELECT 1", &[]).unwrap_err(),
+        "terminating connection due to idle-in-transaction timeout",
+    );
 
     // session should not be timed out if it's not idle.
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -2245,7 +2243,7 @@ fn test_idle_in_transaction_session_timeout() {
     client.query("SELECT 1", &[]).unwrap();
     client.batch_execute("COMMIT").unwrap();
 
-    // 0 timeout indicated no timeout.
+    // 0 timeout indicates no timeout.
     let mut client = server.connect(postgres::NoTls).unwrap();
     client
         .batch_execute("SET idle_in_transaction_session_timeout TO 0")
@@ -2339,15 +2337,17 @@ fn test_emit_timestamp_notice() {
     let first_timestamp = Retry::default()
         .retry(|_| {
             loop {
-                match rx.try_next() {
-                    Ok(Some(msg)) => {
+                match rx.try_recv() {
+                    Ok(msg) => {
                         if let Some(caps) = timestamp_re.captures(msg.detail().unwrap_or_default())
                         {
                             let ts: u64 = caps.get(1).unwrap().as_str().parse().unwrap();
                             return Ok(mz_repr::Timestamp::from(ts));
                         }
                     }
-                    Ok(None) => panic!("unexpected channel close"),
+                    Err(futures::channel::mpsc::TryRecvError::Closed) => {
+                        panic!("unexpected channel close")
+                    }
                     Err(e) => return Err(e),
                 }
             }
@@ -2359,8 +2359,8 @@ fn test_emit_timestamp_notice() {
         .retry(|_| {
             client.batch_execute("SELECT * FROM t").unwrap();
             loop {
-                match rx.try_next() {
-                    Ok(Some(msg)) => {
+                match rx.try_recv() {
+                    Ok(msg) => {
                         if let Some(caps) = timestamp_re.captures(msg.detail().unwrap_or_default())
                         {
                             let ts: u64 = caps.get(1).unwrap().as_str().parse().unwrap();
@@ -2371,7 +2371,9 @@ fn test_emit_timestamp_notice() {
                             return Err("not yet advanced");
                         }
                     }
-                    Ok(None) => panic!("unexpected channel close"),
+                    Err(futures::channel::mpsc::TryRecvError::Closed) => {
+                        panic!("unexpected channel close")
+                    }
                     Err(_) => return Err("no messages available"),
                 }
             }
@@ -2403,12 +2405,12 @@ fn test_isolation_level_notice() {
 
     Retry::default()
         .max_duration(Duration::from_secs(10))
-        .retry(|_| match rx.try_next() {
-            Ok(Some(msg)) => notice_re
+        .retry(|_| match rx.try_recv() {
+            Ok(msg) => notice_re
                 .captures(msg.message())
                 .ok_or("wrong message")
                 .map(|_| ()),
-            Ok(None) => panic!("unexpected channel close"),
+            Err(futures::channel::mpsc::TryRecvError::Closed) => panic!("unexpected channel close"),
             Err(_) => Err("no messages available"),
         })
         .unwrap();
@@ -2440,8 +2442,8 @@ fn test_emit_tracing_notice() {
     let _row = client.query_one("SELECT 1;", &[]).unwrap();
 
     let tracing_re = Regex::new("trace id: (.*)").unwrap();
-    match rx.try_next() {
-        Ok(Some(msg)) => {
+    match rx.try_recv() {
+        Ok(msg) => {
             // assert the NOTICE we recieved contained a trace_id
             let captures = tracing_re.captures(msg.message()).expect("no matches?");
             let trace_id = captures.get(1).expect("trace_id not captured?").as_str();
@@ -2580,7 +2582,10 @@ fn test_dont_drop_sinks_twice() {
         .cancel_query(postgres::NoTls)
         .expect("failed to cancel subscribe");
     let err = out.read_to_end(&mut vec![]).unwrap_err();
-    assert!(err.to_string().contains("subscribe has been terminated"));
+    assert!(
+        err.to_string_with_causes()
+            .contains("subscribe has been terminated")
+    );
 
     drop(out);
     client_a.close().expect("failed to drop client");
@@ -2739,8 +2744,8 @@ fn test_auto_run_on_introspection_feature_enabled() {
         .unwrap();
 
     let mut assert_catalog_server_notice = |expected| {
-        match (rx.try_next(), expected) {
-            (Ok(Some(notice)), true) => {
+        match (rx.try_recv(), expected) {
+            (Ok(notice), true) => {
                 let msg = notice.message();
                 let expected = "query was automatically run on the \"mz_catalog_server\" cluster";
                 assert_eq!(msg, expected);
@@ -2750,7 +2755,7 @@ fn test_auto_run_on_introspection_feature_enabled() {
             (res, false) => panic!("Got a notice, but it wasn't expected! {:?}", res),
         }
         // Drain the channel of any other notices
-        while let Ok(Some(_)) = rx.try_next() {}
+        while let Ok(_) = rx.try_recv() {}
     };
 
     // The notice we assert on only gets emitted at the DEBUG level
@@ -2833,8 +2838,8 @@ fn test_auto_run_on_introspection_feature_disabled() {
         .unwrap();
 
     let mut assert_notice = |expected: Option<&str>| {
-        match (rx.try_next(), expected) {
-            (Ok(Some(notice)), Some(expected)) => {
+        match (rx.try_recv(), expected) {
+            (Ok(notice), Some(expected)) => {
                 let msg = notice.message();
                 assert!(msg.contains(expected));
             }
@@ -2843,7 +2848,7 @@ fn test_auto_run_on_introspection_feature_disabled() {
             (res, None) => panic!("Got a notice, but it wasn't expected! {:?}", res),
         }
         // Drain the channel of any other notices
-        while let Ok(Some(_)) = rx.try_next() {}
+        while let Ok(_) = rx.try_recv() {}
     };
 
     // The notice we assert on only gets emitted at the DEBUG level
@@ -2909,8 +2914,8 @@ fn test_auto_run_on_introspection_per_replica_relations() {
         .unwrap();
 
     let mut assert_notice = |expected: Option<&str>| {
-        match (rx.try_next(), expected) {
-            (Ok(Some(notice)), Some(expected)) => {
+        match (rx.try_recv(), expected) {
+            (Ok(notice), Some(expected)) => {
                 let msg = notice.message();
                 assert!(msg.contains(expected));
             }
@@ -2919,7 +2924,7 @@ fn test_auto_run_on_introspection_per_replica_relations() {
             (res, None) => panic!("Got a notice, but it wasn't expected! {:?}", res),
         }
         // Drain the channel of any other notices
-        while let Ok(Some(_)) = rx.try_next() {}
+        while let Ok(_) = rx.try_recv() {}
     };
 
     // The notice we assert on only gets emitted at the DEBUG level
@@ -2995,7 +3000,7 @@ fn test_pg_cancel_backend() {
         .connect(postgres::NoTls)
         .unwrap();
 
-    let _ = client1.batch_execute("CREATE TABLE t (i INT)").unwrap();
+    client1.batch_execute("CREATE TABLE t (i INT)").unwrap();
 
     // Start a thread to perform the cancel while the SUBSCRIBE is running in this thread.
     let handle = thread::spawn(move || {
@@ -3017,7 +3022,7 @@ fn test_pg_cancel_backend() {
             client_user
                 .query_one(&format!("SELECT pg_cancel_backend({conn_id})"), &[])
                 .unwrap_err()
-                .to_string(),
+                .to_string_with_causes(),
             r#"must be a member of "materialize""#
         );
 
@@ -3029,7 +3034,10 @@ fn test_pg_cancel_backend() {
     });
 
     let err = client1.query("SUBSCRIBE t", &[]).unwrap_err();
-    assert_contains!(err.to_string(), "canceling statement due to user request");
+    assert_contains!(
+        err.to_string_with_causes(),
+        "canceling statement due to user request"
+    );
 
     handle.join().unwrap();
 
@@ -3037,7 +3045,7 @@ fn test_pg_cancel_backend() {
         client1
             .query_one("SELECT * FROM (SELECT pg_cancel_backend(1))", &[])
             .unwrap_err()
-            .to_string(),
+            .to_string_with_causes(),
         "pg_cancel_backend in this position",
     );
 
@@ -3050,7 +3058,7 @@ fn test_pg_cancel_backend() {
         client1
             .query_one(&format!("SELECT pg_cancel_backend({conn_id})"), &[])
             .unwrap_err()
-            .to_string(),
+            .to_string_with_causes(),
         "canceling statement due to user request",
     );
 
@@ -3078,11 +3086,14 @@ fn test_pg_cancel_backend() {
         client1
             .query_one(&format!("SELECT pg_cancel_backend({conn_id})"), &[])
             .unwrap_err()
-            .to_string(),
+            .to_string_with_causes(),
         "canceling statement due to user request",
     );
     assert_contains!(
-        client1.batch_execute("SELECT 1").unwrap_err().to_string(),
+        client1
+            .batch_execute("SELECT 1")
+            .unwrap_err()
+            .to_string_with_causes(),
         "current transaction is aborted"
     );
 }
@@ -3244,7 +3255,7 @@ fn test_peek_on_dropped_indexed_view() {
 
     // Check that the peek is cancelled an all resources are cleaned up.
     let select_res = handle.join().unwrap();
-    let select_err = select_res.unwrap_err().to_string();
+    let select_err = select_res.unwrap_err().to_string_with_causes();
     assert!(
         select_err.contains(
             "query could not complete because relation \"materialize.public.v\" was dropped"
@@ -3746,7 +3757,7 @@ async fn test_cancel_linearize_read_then_writes() {
         )
         .await;
     res.unwrap();
-    handle.await.unwrap();
+    handle.await;
 }
 
 // Test that builtin objects are created in the schemas they advertise in builtin.rs.
@@ -3756,11 +3767,8 @@ async fn test_builtin_schemas() {
     let server = test_util::TestHarness::default().start().await;
     let client = server.connect().await.unwrap();
 
-    let builtins_cfg = BuiltinsConfig {
-        include_continual_tasks: true,
-    };
     let mut builtins = BTreeMap::new();
-    for builtin in BUILTINS::iter(&builtins_cfg) {
+    for builtin in BUILTINS::iter() {
         builtins.insert(builtin.name(), builtin.schema());
     }
 
@@ -3817,7 +3825,7 @@ async fn test_serialized_ddl_serial() {
     let mut successes = 0;
     let mut errors = 0;
     for handle in handles {
-        let result = handle.await.unwrap();
+        let result = handle.await;
         match result {
             Ok(_) => {
                 successes += 1;
@@ -3869,12 +3877,18 @@ async fn test_serialized_ddl_cancel() {
     // Cancel the pending statement (this uses different cancellation logic and is the actual thing
     // we are trying to test here).
     cancel2.cancel_query(tokio_postgres::NoTls).await.unwrap();
-    let err = handle2.await.unwrap();
-    assert_contains!(err.to_string(), "canceling statement due to user request");
+    let err = handle2.await;
+    assert_contains!(
+        err.to_string_with_causes(),
+        "canceling statement due to user request"
+    );
     // Cancel the in-progress statement.
     cancel1.cancel_query(tokio_postgres::NoTls).await.unwrap();
-    let err = handle1.await.unwrap();
-    assert_contains!(err.to_string(), "canceling statement due to user request");
+    let err = handle1.await;
+    assert_contains!(
+        err.to_string_with_causes(),
+        "canceling statement due to user request"
+    );
 
     // The mz_sleep calls above cause this test to not exit until the optimization tasks have fully
     // run, because spawn_blocking (used by optimization) are waited upon during Drop. Thus, don't

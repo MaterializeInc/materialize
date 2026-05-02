@@ -24,22 +24,20 @@ use mz_compute_types::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan}
 use mz_dyncfg::ConfigSet;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
-use mz_storage_types::errors::DataflowError;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
+use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::OkErr;
-use timely::dataflow::scopes::Child;
-use timely::dataflow::{Scope, ScopeParent};
-use timely::progress::timestamp::Refines;
 
 use crate::extensions::arrange::MzArrangeCore;
 use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
+use crate::render::errors::DataflowErrorSer;
 use crate::render::join::mz_join_core::mz_join_core;
 use crate::row_spine::{RowRowBuilder, RowRowSpine};
-use crate::typedefs::{MzTimestamp, RowRowAgent, RowRowEnter};
+use crate::typedefs::{RowRowAgent, RowRowEnter};
 
 /// Available linear join implementations.
 ///
@@ -93,19 +91,16 @@ impl LinearJoinSpec {
     }
 
     /// Render a join operator according to this specification.
-    fn render<G, Tr1, Tr2, L, I>(
+    fn render<'s, T, Tr1, Tr2, L, I>(
         &self,
-        arranged1: &Arranged<G, Tr1>,
-        arranged2: &Arranged<G, Tr2>,
+        arranged1: Arranged<'s, Tr1>,
+        arranged2: Arranged<'s, Tr2>,
         result: L,
-    ) -> VecCollection<G, I::Item, Diff>
+    ) -> VecCollection<'s, T, I::Item, Diff>
     where
-        G: Scope,
-        G::Timestamp: Lattice,
-        Tr1: TraceReader<Time = G::Timestamp, Diff = Diff> + Clone + 'static,
-        Tr2: for<'a> TraceReader<Key<'a> = Tr1::Key<'a>, Time = G::Timestamp, Diff = Diff>
-            + Clone
-            + 'static,
+        T: Lattice + timely::progress::Timestamp,
+        Tr1: TraceReader<Time = T, Diff = Diff> + Clone + 'static,
+        Tr2: for<'a> TraceReader<Key<'a> = Tr1::Key<'a>, Time = T, Diff = Diff> + Clone + 'static,
         L: FnMut(Tr1::Key<'_>, Tr1::Val<'_>, Tr2::Val<'_>) -> I + 'static,
         I: IntoIterator<Item: Data> + 'static,
     {
@@ -186,31 +181,24 @@ impl YieldSpec {
 }
 
 /// Different forms the streamed data might take.
-enum JoinedFlavor<G, T>
-where
-    G: Scope,
-    G::Timestamp: Refines<T> + MzTimestamp,
-    T: MzTimestamp,
-{
+enum JoinedFlavor<'scope, T: RenderTimestamp> {
     /// Streamed data as a collection.
-    Collection(VecCollection<G, Row, Diff>),
+    Collection(VecCollection<'scope, T, Row, Diff>),
     /// A dataflow-local arrangement.
-    Local(Arranged<G, RowRowAgent<G::Timestamp, Diff>>),
+    Local(Arranged<'scope, RowRowAgent<T, Diff>>),
     /// An imported arrangement.
-    Trace(Arranged<G, RowRowEnter<T, Diff, G::Timestamp>>),
+    Trace(Arranged<'scope, RowRowEnter<mz_repr::Timestamp, Diff, T>>),
 }
 
-impl<G, T> Context<G, T>
+impl<'scope, T> Context<'scope, T>
 where
-    G: Scope,
-    G::Timestamp: Lattice + Refines<T> + RenderTimestamp,
-    T: MzTimestamp,
+    T: Lattice + RenderTimestamp,
 {
     pub(crate) fn render_join(
         &self,
-        inputs: Vec<CollectionBundle<G, T>>,
+        inputs: Vec<CollectionBundle<'scope, T>>,
         linear_plan: LinearJoinPlan,
-    ) -> CollectionBundle<G, T> {
+    ) -> CollectionBundle<'scope, T> {
         self.scope.clone().region_named("Join(Linear)", |inner| {
             self.render_join_inner(inputs, linear_plan, inner)
         })
@@ -218,10 +206,10 @@ where
 
     fn render_join_inner(
         &self,
-        inputs: Vec<CollectionBundle<G, T>>,
+        inputs: Vec<CollectionBundle<'scope, T>>,
         linear_plan: LinearJoinPlan,
-        inner: &mut Child<G, <G as ScopeParent>::Timestamp>,
-    ) -> CollectionBundle<G, T> {
+        inner: Scope<'_, T>,
+    ) -> CollectionBundle<'scope, T> {
         // Collect all error streams, and concatenate them at the end.
         let mut errors = Vec::new();
 
@@ -270,7 +258,7 @@ where
                             closure
                                 .apply(&mut datums_local, &temp_storage, &mut row_builder)
                                 .map(|row| row.cloned())
-                                .map_err(DataflowError::from)
+                                .map_err(DataflowErrorSer::from)
                                 .transpose()
                         }
                     });
@@ -314,7 +302,7 @@ where
                         closure
                             .apply(&mut datums_local, &temp_storage, &mut row_builder)
                             .map(|row| row.cloned())
-                            .map_err(DataflowError::from)
+                            .map_err(DataflowErrorSer::from)
                             .transpose()
                     }
                 });
@@ -331,15 +319,15 @@ where
         } else {
             panic!("Unexpectedly arranged join output");
         };
-        bundle.leave_region()
+        bundle.leave_region(self.scope)
     }
 
     /// Looks up the arrangement for the next input and joins it to the arranged
     /// version of the join of previous inputs.
-    fn differential_join<S>(
+    fn differential_join<'s>(
         &self,
-        mut joined: JoinedFlavor<S, T>,
-        lookup_relation: CollectionBundle<S, T>,
+        mut joined: JoinedFlavor<'s, T>,
+        lookup_relation: CollectionBundle<'s, T>,
         LinearStagePlan {
             stream_key,
             stream_thinning,
@@ -347,17 +335,14 @@ where
             closure,
             lookup_relation: _,
         }: LinearStagePlan,
-        errors: &mut Vec<VecCollection<S, DataflowError, Diff>>,
-    ) -> VecCollection<S, Row, Diff>
-    where
-        S: Scope<Timestamp = G::Timestamp>,
-    {
+        errors: &mut Vec<VecCollection<'s, T, DataflowErrorSer, Diff>>,
+    ) -> VecCollection<'s, T, Row, Diff> {
         // If we have only a streamed collection, we must first form an arrangement.
         if let JoinedFlavor::Collection(stream) = joined {
             let name = "LinearJoinKeyPreparation";
             let (keyed, errs) = stream
                 .inner
-                .unary_fallible::<ColumnBuilder<((Row, Row), S::Timestamp, Diff)>, _, _, _>(
+                .unary_fallible::<ColumnBuilder<((Row, Row), T, Diff)>, _, _, _>(
                     Pipeline,
                     name,
                     |_, _| {
@@ -366,7 +351,7 @@ where
                             let mut key_buf = Row::default();
                             let mut val_buf = Row::default();
                             let mut datums = DatumVec::new();
-                            while let Some((time, data)) = input.next() {
+                            input.for_each(|time, data| {
                                 let mut ok_session = ok.session_with_builder(&time);
                                 let mut err_session = errs.session(&time);
                                 for (row, time, diff) in data.iter() {
@@ -388,7 +373,7 @@ where
                                         }
                                     }
                                 }
-                            }
+                            });
                         })
                     },
                 );
@@ -396,8 +381,16 @@ where
             errors.push(errs.as_collection());
 
             let arranged = keyed
-                .mz_arrange_core::<_, Col2ValBatcher<_, _,_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
-                    ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, S::Timestamp, Diff>),"JoinStage"
+                .mz_arrange_core::<
+                    _,
+                    Col2ValBatcher<_, _, _, _>,
+                    RowRowBuilder<_, _>,
+                    RowRowSpine<_, _>,
+                >(
+                    ExchangeCore::<ColumnBuilder<_>, _>::new_core(
+                        columnar_exchange::<Row, Row, T, Diff>,
+                    ),
+                    "JoinStage"
                 );
             joined = JoinedFlavor::Local(arranged);
         }
@@ -414,7 +407,7 @@ where
             JoinedFlavor::Local(local) => match arrangement {
                 ArrangementFlavor::Local(oks, errs1) => {
                     let (oks, errs2) = self
-                        .differential_join_inner::<_, RowRowAgent<_, _>, RowRowAgent<_, _>>(
+                        .differential_join_inner::<RowRowAgent<_, _>, RowRowAgent<_, _>>(
                             local, oks, closure,
                         );
 
@@ -424,7 +417,7 @@ where
                 }
                 ArrangementFlavor::Trace(_gid, oks, errs1) => {
                     let (oks, errs2) = self
-                        .differential_join_inner::<_, RowRowAgent<_, _>, RowRowEnter<_, _, _>>(
+                        .differential_join_inner::<RowRowAgent<_, _>, RowRowEnter<_, _, _>>(
                             local, oks, closure,
                         );
 
@@ -436,7 +429,7 @@ where
             JoinedFlavor::Trace(trace) => match arrangement {
                 ArrangementFlavor::Local(oks, errs1) => {
                     let (oks, errs2) = self
-                        .differential_join_inner::<_, RowRowEnter<_, _, _>, RowRowAgent<_, _>>(
+                        .differential_join_inner::<RowRowEnter<_, _, _>, RowRowAgent<_, _>>(
                             trace, oks, closure,
                         );
 
@@ -446,7 +439,7 @@ where
                 }
                 ArrangementFlavor::Trace(_gid, oks, errs1) => {
                     let (oks, errs2) = self
-                        .differential_join_inner::<_, RowRowEnter<_, _, _>, RowRowEnter<_, _, _>>(
+                        .differential_join_inner::<RowRowEnter<_, _, _>, RowRowEnter<_, _, _>>(
                             trace, oks, closure,
                         );
 
@@ -464,21 +457,18 @@ where
     ///
     /// The return type includes an optional error collection, which may be
     /// `None` if we can determine that `closure` cannot error.
-    fn differential_join_inner<S, Tr1, Tr2>(
+    fn differential_join_inner<'s, Tr1, Tr2>(
         &self,
-        prev_keyed: Arranged<S, Tr1>,
-        next_input: Arranged<S, Tr2>,
+        prev_keyed: Arranged<'s, Tr1>,
+        next_input: Arranged<'s, Tr2>,
         closure: JoinClosure,
     ) -> (
-        VecCollection<S, Row, Diff>,
-        Option<VecCollection<S, DataflowError, Diff>>,
+        VecCollection<'s, T, Row, Diff>,
+        Option<VecCollection<'s, T, DataflowErrorSer, Diff>>,
     )
     where
-        S: Scope<Timestamp = G::Timestamp>,
-        Tr1: TraceReader<Time = G::Timestamp, Diff = Diff> + Clone + 'static,
-        Tr2: for<'a> TraceReader<Key<'a> = Tr1::Key<'a>, Time = G::Timestamp, Diff = Diff>
-            + Clone
-            + 'static,
+        Tr1: TraceReader<Time = T, Diff = Diff> + Clone + 'static,
+        Tr2: for<'a> TraceReader<Key<'a> = Tr1::Key<'a>, Time = T, Diff = Diff> + Clone + 'static,
         for<'a> Tr1::Key<'a>: ToDatumIter,
         for<'a> Tr1::Val<'a>: ToDatumIter,
         for<'a> Tr2::Val<'a>: ToDatumIter,
@@ -489,7 +479,7 @@ where
         if closure.could_error() {
             let (oks, err) = self
                 .linear_join_spec
-                .render(&prev_keyed, &next_input, move |key, old, new| {
+                .render(prev_keyed, next_input, move |key, old, new| {
                     let mut row_builder = SharedRow::get();
                     let temp_storage = RowArena::new();
 
@@ -501,7 +491,7 @@ where
                     closure
                         .apply(&mut datums_local, &temp_storage, &mut row_builder)
                         .map(|row| row.cloned())
-                        .map_err(DataflowError::from)
+                        .map_err(DataflowErrorSer::from)
                         .transpose()
                 })
                 .inner
@@ -515,22 +505,22 @@ where
 
             (oks.as_collection(), Some(err.as_collection()))
         } else {
-            let oks =
-                self.linear_join_spec
-                    .render(&prev_keyed, &next_input, move |key, old, new| {
-                        let mut row_builder = SharedRow::get();
-                        let temp_storage = RowArena::new();
+            let oks = self
+                .linear_join_spec
+                .render(prev_keyed, next_input, move |key, old, new| {
+                    let mut row_builder = SharedRow::get();
+                    let temp_storage = RowArena::new();
 
-                        let mut datums_local = datums.borrow();
-                        datums_local.extend(key.to_datum_iter());
-                        datums_local.extend(old.to_datum_iter());
-                        datums_local.extend(new.to_datum_iter());
+                    let mut datums_local = datums.borrow();
+                    datums_local.extend(key.to_datum_iter());
+                    datums_local.extend(old.to_datum_iter());
+                    datums_local.extend(new.to_datum_iter());
 
-                        closure
-                            .apply(&mut datums_local, &temp_storage, &mut row_builder)
-                            .expect("Closure claimed to never error")
-                            .cloned()
-                    });
+                    closure
+                        .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                        .expect("Closure claimed to never error")
+                        .cloned()
+                });
 
             (oks, None)
         }

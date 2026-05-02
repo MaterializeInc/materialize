@@ -145,6 +145,15 @@ where
         self.inner.get_mut().codec_mut().encode_state = encode_state;
     }
 
+    /// Enables or disables copy mode on the codec.
+    ///
+    /// When copy mode is enabled, the aggregate buffer size check in the
+    /// decoder is skipped. This is needed during COPY FROM STDIN because
+    /// many small CopyData frames can accumulate in the TCP read buffer.
+    pub fn set_copy_mode(&mut self, enabled: bool) {
+        self.inner.get_mut().codec_mut().in_copy_mode = enabled;
+    }
+
     /// Waits for the connection to be closed.
     ///
     /// Returns a "connection closed" error when the connection is closed. If
@@ -208,6 +217,12 @@ where
 struct Codec {
     decode_state: DecodeState,
     encode_state: Vec<(mz_pgrepr::Type, mz_pgwire_common::Format)>,
+    /// When true, skip the aggregate buffer size check in `decode()`.
+    /// During COPY FROM STDIN, many small CopyData frames accumulate in the
+    /// TCP read buffer and can exceed MAX_REQUEST_SIZE even though individual
+    /// frames are small. Individual frame lengths are still validated by
+    /// `parse_frame_len()`.
+    in_copy_mode: bool,
 }
 
 impl Codec {
@@ -216,6 +231,7 @@ impl Codec {
         Codec {
             decode_state: DecodeState::Head,
             encode_state: vec![],
+            in_copy_mode: false,
         }
     }
 }
@@ -229,7 +245,27 @@ impl Default for Codec {
 impl Encoder<BackendMessage> for Codec {
     type Error = io::Error;
 
+    /// Encode a backend message into `dst`.
+    /// If this function returns an error result, `dst` is left unmodified.
     fn encode(&mut self, msg: BackendMessage, dst: &mut BytesMut) -> Result<(), io::Error> {
+        // Record the starting position so we can truncate on error.
+        // This prevents partial messages from being left in the buffer,
+        // which could be sent to the client and cause "lost synchronization" errors.
+        let start = dst.len();
+        match self.encode_inner(msg, dst) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                dst.truncate(start);
+                Err(e)
+            }
+        }
+    }
+}
+
+impl Codec {
+    /// This is the meat of the encoding logic. It's a separate function so that errors returned by
+    /// `?` can be handled in the outer `encode` function.
+    fn encode_inner(&self, msg: BackendMessage, dst: &mut BytesMut) -> Result<(), io::Error> {
         // Write type byte.
         let byte = match &msg {
             BackendMessage::AuthenticationOk => b'R',
@@ -279,6 +315,16 @@ impl Encoder<BackendMessage> for Codec {
                 column_formats,
             } => {
                 dst.put_format_i8(overall_format);
+                if column_formats.len() > usize::try_from(i16::MAX).expect("i16::MAX is positive") {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "{} columns in COPY response, which exceeds {}",
+                            column_formats.len(),
+                            i16::MAX
+                        ),
+                    ));
+                }
                 dst.put_length_i16(column_formats.len())?;
                 for format in column_formats {
                     dst.put_format_i16(format);
@@ -321,6 +367,16 @@ impl Encoder<BackendMessage> for Codec {
                 }
             }
             BackendMessage::RowDescription(fields) => {
+                if fields.len() > usize::try_from(i16::MAX).expect("i16::MAX is positive") {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "{} fields in row description, which exceeds {}",
+                            fields.len(),
+                            i16::MAX
+                        ),
+                    ));
+                }
                 dst.put_length_i16(fields.len())?;
                 for f in &fields {
                     dst.put_string(&f.name.to_string());
@@ -334,6 +390,16 @@ impl Encoder<BackendMessage> for Codec {
                 }
             }
             BackendMessage::DataRow(fields) => {
+                if fields.len() > usize::try_from(i16::MAX).expect("i16::MAX is positive") {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "{} fields in data row, which exceeds {}",
+                            fields.len(),
+                            i16::MAX
+                        ),
+                    ));
+                }
                 dst.put_length_i16(fields.len())?;
                 for (f, (ty, format)) in fields.iter().zip_eq(&self.encode_state) {
                     if let Some(f) = f {
@@ -343,7 +409,7 @@ impl Encoder<BackendMessage> for Codec {
                         let len = dst.len() - base - 4;
                         let len = i32::try_from(len).map_err(|_| {
                             io::Error::new(
-                                io::ErrorKind::Other,
+                                io::ErrorKind::InvalidData,
                                 "length of encoded data row field does not fit into an i32",
                             )
                         })?;
@@ -377,6 +443,16 @@ impl Encoder<BackendMessage> for Codec {
                 dst.put_u32(secret_key);
             }
             BackendMessage::ParameterDescription(params) => {
+                if params.len() > usize::try_from(i16::MAX).expect("i16::MAX is positive") {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "{} params in parameter description, which exceeds {}",
+                            params.len(),
+                            i16::MAX
+                        ),
+                    ));
+                }
                 dst.put_length_i16(params.len())?;
                 for param in params {
                     dst.put_u32(param.oid());
@@ -417,7 +493,7 @@ impl Encoder<BackendMessage> for Codec {
         // Overwrite length placeholder with true length.
         let len = i32::try_from(len).map_err(|_| {
             io::Error::new(
-                io::ErrorKind::Other,
+                io::ErrorKind::InvalidData,
                 "length of encoded message does not fit into an i32",
             )
         })?;
@@ -432,7 +508,7 @@ impl Decoder for Codec {
     type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<FrontendMessage>, io::Error> {
-        if src.len() > MAX_REQUEST_SIZE {
+        if !self.in_copy_mode && src.len() > MAX_REQUEST_SIZE {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(

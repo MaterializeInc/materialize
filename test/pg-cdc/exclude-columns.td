@@ -34,6 +34,8 @@ CREATE TABLE enum_table (a an_enum, b int);
 INSERT INTO enum_table VALUES ('var1', 1), ('var0', 0);
 ALTER TABLE enum_table REPLICA IDENTITY FULL;
 
+ANALYZE;
+
 > CREATE SOURCE mz_source
   IN CLUSTER storage
   FROM POSTGRES CONNECTION pg (PUBLICATION mz_source);

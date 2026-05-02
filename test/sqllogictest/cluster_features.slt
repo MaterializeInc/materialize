@@ -17,7 +17,7 @@ mode cockroach
 # -----------------------------------------------------------
 
 # Regular users cannot create clusters with FEATURES yet.
-statement error db error: ERROR: FEATURES not supported for non\-system users
+statement error FEATURES not supported for non\-system users
 CREATE CLUSTER FOO SIZE = 'scale=1,workers=1' FEATURES (ENABLE EAGER DELTA JOINS = TRUE);
 
 # Cluster and system config for the test DDL statements below

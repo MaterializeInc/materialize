@@ -68,7 +68,7 @@ When provisioning replicas,
 
 ## Cluster sizing
 
-When creating a cluster, you must choose its [size](/sql/create-cluster/#size)
+When creating a cluster, you must choose its [size](/sql/create-cluster/#available-sizes)
 (e.g., `25cc`, `50cc`, `100cc`), which determines its resource allocation
 (CPU, memory, and scratch disk space) and [cost](/administration/billing/#compute).
 The appropriate size for a cluster depends on the resource requirements of your
@@ -92,7 +92,7 @@ The following provides some general guidelines for clusters. See also
 
 ### Three-tier architecture in production
 
-{{% best-practices/architecture/three-tier %}}
+{{% include-from-yaml data="best_practices_details" name="architecture-three-tier" %}}
 
 See also [Operational guidelines](/manage/operational-guidelines/).
 

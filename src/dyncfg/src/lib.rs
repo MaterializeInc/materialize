@@ -327,6 +327,8 @@ pub enum ConfigVal {
     F64(f64),
     /// A `String` value.
     String(String),
+    /// An `Option<String>` value
+    OptString(Option<String>),
     /// A `Duration` value.
     Duration(Duration),
     /// A JSON value.
@@ -372,6 +374,7 @@ enum ConfigValAtomic {
     // Shared via to_bits/from_bits so we can use the atomic instead of Mutex.
     F64(Arc<AtomicU64>),
     String(Arc<RwLock<String>>),
+    OptString(Arc<RwLock<Option<String>>>),
     Duration(Arc<RwLock<Duration>>),
     Json(Arc<RwLock<serde_json::Value>>),
 }
@@ -385,6 +388,7 @@ impl From<ConfigVal> for ConfigValAtomic {
             ConfigVal::OptUsize(x) => ConfigValAtomic::OptUsize(Arc::new(RwLock::new(x))),
             ConfigVal::F64(x) => ConfigValAtomic::F64(Arc::new(AtomicU64::new(x.to_bits()))),
             ConfigVal::String(x) => ConfigValAtomic::String(Arc::new(RwLock::new(x))),
+            ConfigVal::OptString(x) => ConfigValAtomic::OptString(Arc::new(RwLock::new(x))),
             ConfigVal::Duration(x) => ConfigValAtomic::Duration(Arc::new(RwLock::new(x))),
             ConfigVal::Json(x) => ConfigValAtomic::Json(Arc::new(RwLock::new(x))),
         }
@@ -401,6 +405,9 @@ impl ConfigValAtomic {
             ConfigValAtomic::F64(x) => ConfigVal::F64(f64::from_bits(x.load(SeqCst))),
             ConfigValAtomic::String(x) => {
                 ConfigVal::String(x.read().expect("lock poisoned").clone())
+            }
+            ConfigValAtomic::OptString(x) => {
+                ConfigVal::OptString(x.read().expect("lock poisoned").clone())
             }
             ConfigValAtomic::Duration(x) => ConfigVal::Duration(*x.read().expect("lock poisoned")),
             ConfigValAtomic::Json(x) => ConfigVal::Json(x.read().expect("lock poisoned").clone()),
@@ -419,6 +426,9 @@ impl ConfigValAtomic {
             (ConfigValAtomic::String(x), ConfigVal::String(val)) => {
                 *x.write().expect("lock poisoned") = val
             }
+            (ConfigValAtomic::OptString(x), ConfigVal::OptString(val)) => {
+                *x.write().expect("lock poisoned") = val
+            }
             (ConfigValAtomic::Duration(x), ConfigVal::Duration(val)) => {
                 *x.write().expect("lock poisoned") = val
             }
@@ -431,6 +441,7 @@ impl ConfigValAtomic {
             | (ConfigValAtomic::OptUsize(_), val)
             | (ConfigValAtomic::F64(_), val)
             | (ConfigValAtomic::String(_), val)
+            | (ConfigValAtomic::OptString(_), val)
             | (ConfigValAtomic::Duration(_), val)
             | (ConfigValAtomic::Json(_), val) => {
                 panic!("attempted to store {val:?} value in {self:?} parameter")
@@ -636,6 +647,33 @@ mod impls {
         }
     }
 
+    impl ConfigType for Option<String> {
+        fn from_val(val: ConfigVal) -> Self {
+            match val {
+                ConfigVal::OptString(x) => x,
+                x => panic!("expected String value got {:?}", x),
+            }
+        }
+
+        fn parse(s: &str) -> Result<Self, String> {
+            Ok(Some(s.to_string()))
+        }
+    }
+
+    impl From<Option<String>> for ConfigVal {
+        fn from(val: Option<String>) -> ConfigVal {
+            ConfigVal::OptString(val)
+        }
+    }
+
+    impl ConfigDefault for Option<&str> {
+        type ConfigType = Option<String>;
+
+        fn into_config_type(self) -> Option<String> {
+            self.map(|s| s.to_string())
+        }
+    }
+
     impl ConfigType for Duration {
         fn from_val(val: ConfigVal) -> Self {
             match val {
@@ -696,6 +734,7 @@ mod tests {
     const OPT_USIZE: Config<Option<usize>> = Config::new("opt_usize", Some(2), "");
     const F64: Config<f64> = Config::new("f64", 5.0, "");
     const STRING: Config<&str> = Config::new("string", "a", "");
+    const OPT_STRING: Config<Option<&str>> = Config::new("opt_string", Some("a"), "");
     const DURATION: Config<Duration> = Config::new("duration", Duration::from_nanos(3), "");
     const JSON: Config<fn() -> serde_json::Value> =
         Config::new("json", || serde_json::json!({}), "");
@@ -709,6 +748,7 @@ mod tests {
             .add(&OPT_USIZE)
             .add(&F64)
             .add(&STRING)
+            .add(&OPT_STRING)
             .add(&DURATION)
             .add(&JSON);
         assert_eq!(BOOL.get(&configs), true);
@@ -717,6 +757,7 @@ mod tests {
         assert_eq!(OPT_USIZE.get(&configs), Some(2));
         assert_eq!(F64.get(&configs), 5.0);
         assert_eq!(STRING.get(&configs), "a");
+        assert_eq!(OPT_STRING.get(&configs), Some("a".to_string()));
         assert_eq!(DURATION.get(&configs), Duration::from_nanos(3));
         assert_eq!(JSON.get(&configs), serde_json::json!({}));
 
@@ -724,9 +765,10 @@ mod tests {
         updates.add(&BOOL, false);
         updates.add(&U32, 7);
         updates.add(&USIZE, 2);
-        updates.add(&OPT_USIZE, None);
+        updates.add(&OPT_USIZE, None::<usize>);
         updates.add(&F64, 8.0);
         updates.add(&STRING, "b");
+        updates.add(&OPT_STRING, None::<String>);
         updates.add(&DURATION, Duration::from_nanos(4));
         updates.add(&JSON, serde_json::json!({"a": 1}));
         updates.apply(&configs);
@@ -737,6 +779,7 @@ mod tests {
         assert_eq!(OPT_USIZE.get(&configs), None);
         assert_eq!(F64.get(&configs), 8.0);
         assert_eq!(STRING.get(&configs), "b");
+        assert_eq!(OPT_STRING.get(&configs), None);
         assert_eq!(DURATION.get(&configs), Duration::from_nanos(4));
         assert_eq!(JSON.get(&configs), serde_json::json!({"a": 1}));
     }
@@ -747,11 +790,16 @@ mod tests {
         const STRING_FN_DEFAULT: Config<fn() -> String> =
             Config::new("string", || "x".repeat(3), "");
 
+        const OPT_STRING_FN_DEFAULT: Config<fn() -> Option<String>> =
+            Config::new("opt_string", || Some("x".repeat(3)), "");
+
         let configs = ConfigSet::default()
             .add(&BOOL_FN_DEFAULT)
-            .add(&STRING_FN_DEFAULT);
+            .add(&STRING_FN_DEFAULT)
+            .add(&OPT_STRING_FN_DEFAULT);
         assert_eq!(BOOL_FN_DEFAULT.get(&configs), false);
         assert_eq!(STRING_FN_DEFAULT.get(&configs), "xxx");
+        assert_eq!(OPT_STRING_FN_DEFAULT.get(&configs), Some("xxx".to_string()));
     }
 
     #[mz_ore::test]
@@ -889,6 +937,35 @@ mod tests {
         assert_eq!(
             STRING.parse_val("5 s"),
             Ok(ConfigVal::String("5 s".to_string()))
+        );
+
+        assert_eq!(
+            OPT_STRING.parse_val("true"),
+            Ok(ConfigVal::OptString(Some("true".to_string())))
+        );
+        assert_eq!(
+            OPT_STRING.parse_val("false"),
+            Ok(ConfigVal::OptString(Some("false".to_string())))
+        );
+        assert_eq!(
+            OPT_STRING.parse_val("66.6"),
+            Ok(ConfigVal::OptString(Some("66.6".to_string())))
+        );
+        assert_eq!(
+            OPT_STRING.parse_val("42"),
+            Ok(ConfigVal::OptString(Some("42".to_string())))
+        );
+        assert_eq!(
+            OPT_STRING.parse_val("farragut"),
+            Ok(ConfigVal::OptString(Some("farragut".to_string())))
+        );
+        assert_eq!(
+            OPT_STRING.parse_val(""),
+            Ok(ConfigVal::OptString(Some("".to_string())))
+        );
+        assert_eq!(
+            OPT_STRING.parse_val("5 s"),
+            Ok(ConfigVal::OptString(Some("5 s".to_string())))
         );
 
         assert_err!(DURATION.parse_val("true"));

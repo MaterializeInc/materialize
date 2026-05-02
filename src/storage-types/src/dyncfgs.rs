@@ -105,13 +105,6 @@ pub const KAFKA_POLL_MAX_WAIT: Config<Duration> = Config::new(
     available.",
 );
 
-/// Interval to fetch topic partition metadata.
-pub static KAFKA_METADATA_FETCH_INTERVAL: Config<Duration> = Config::new(
-    "kafka_default_metadata_fetch_interval",
-    Duration::from_secs(1),
-    "Interval to fetch topic partition metadata.",
-);
-
 pub const KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM: Config<&'static str> =
     Config::new(
         "kafka_default_aws_privatelink_endpoint_identification_algorithm",
@@ -172,13 +165,6 @@ pub const MYSQL_REPLICATION_HEARTBEAT_INTERVAL: Config<Duration> = Config::new(
     "Replication heartbeat interval requested from the MySQL server.",
 );
 
-/// Interval to fetch `offset_known`, from `@gtid_executed`
-pub const MYSQL_OFFSET_KNOWN_INTERVAL: Config<Duration> = Config::new(
-    "mysql_offset_known_interval",
-    Duration::from_secs(1),
-    "Interval to fetch `offset_known`, from `@gtid_executed`",
-);
-
 // Postgres
 
 /// Interval to poll `confirmed_flush_lsn` to get a resumption lsn.
@@ -188,18 +174,33 @@ pub const PG_FETCH_SLOT_RESUME_LSN_INTERVAL: Config<Duration> = Config::new(
     "Interval to poll `confirmed_flush_lsn` to get a resumption lsn.",
 );
 
-/// Interval to fetch `offset_known`, from `pg_current_wal_lsn`
-pub const PG_OFFSET_KNOWN_INTERVAL: Config<Duration> = Config::new(
-    "pg_offset_known_interval",
-    Duration::from_secs(1),
-    "Interval to fetch `offset_known`, from `pg_current_wal_lsn`",
-);
-
 /// Interval to re-validate the schemas of ingested tables.
 pub const PG_SCHEMA_VALIDATION_INTERVAL: Config<Duration> = Config::new(
     "pg_schema_validation_interval",
     Duration::from_secs(15),
     "Interval to re-validate the schemas of ingested tables.",
+);
+
+/// Controls behavior of PG Source when the upstream DB timeline changes. The default behavior
+/// is to emit a definite error forcing source recreation. In cases of HA, the upstream DB may
+/// provide guarantees of failover without loss of data (e.g. CloudSQL maintenance). Changing this
+/// flag puts the onus on the customer to recreate the source if the upstream DB changes timeline
+/// in a way that introduces data loss (e.g. manual failover, restore, etc.).
+pub static PG_SOURCE_VALIDATE_TIMELINE: Config<bool> = Config::new(
+    "pg_source_validate_timeline",
+    true,
+    "Whether to treat a timeline switch as a definite error",
+);
+
+/// Controls behavior of the SQL Server source when the upstream DB restore history changes. The
+/// default behavior is to emit a definite error, forcing source recreation.  In cases of Always
+/// On Availability Group (AOAG), the upstream DB may guarantee continuity without loss of data.
+/// Changing this flag puts the onus on the customer to recreate the source if the upstream DB
+/// changes in a way that introduces data loss.
+pub static SQL_SERVER_SOURCE_VALIDATE_RESTORE_HISTORY: Config<bool> = Config::new(
+    "sql_server_source_validate_restore_history",
+    true,
+    "Whether to treat a restore history change as a definite error",
 );
 
 // Networking
@@ -268,19 +269,18 @@ pub const STORAGE_SUSPEND_AND_RESTART_DELAY: Config<Duration> = Config::new(
     "Delay interval when reconnecting to a source / sink after halt.",
 );
 
-/// Whether to mint reclock bindings based on the latest probed frontier or the currently ingested
-/// frontier.
-pub const STORAGE_RECLOCK_TO_LATEST: Config<bool> = Config::new(
-    "storage_reclock_to_latest",
-    true,
-    "Whether to mint reclock bindings based on the latest probed offset or the latest ingested offset.",
-);
-
 /// Whether to use the new continual feedback upsert operator.
 pub const STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT: Config<bool> = Config::new(
     "storage_use_continual_feedback_upsert",
     true,
     "Whether to use the new continual feedback upsert operator.",
+);
+
+/// Whether to use the v2 upsert operator.
+pub const ENABLE_UPSERT_V2: Config<bool> = Config::new(
+    "enable_upsert_v2",
+    false,
+    "Whether to use the v2 upsert operator.",
 );
 
 /// The interval at which the storage server performs maintenance tasks.
@@ -309,7 +309,7 @@ pub const SINK_ENSURE_TOPIC_CONFIG: Config<&'static str> = Config::new(
 /// Configure mz-ore overflowing type behavior.
 pub const ORE_OVERFLOWING_BEHAVIOR: Config<&'static str> = Config::new(
     "ore_overflowing_behavior",
-    "ignore",
+    "soft_panic",
     "Overflow behavior for Overflowing types. One of 'ignore', 'panic', 'soft_panic'.",
 );
 
@@ -333,23 +333,21 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS)
         .add(&KAFKA_CLIENT_ID_ENRICHMENT_RULES)
         .add(&KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM)
-        .add(&KAFKA_METADATA_FETCH_INTERVAL)
         .add(&KAFKA_POLL_MAX_WAIT)
         .add(&KAFKA_RETRY_BACKOFF)
         .add(&KAFKA_RETRY_BACKOFF_MAX)
         .add(&KAFKA_RECONNECT_BACKOFF)
         .add(&KAFKA_RECONNECT_BACKOFF_MAX)
-        .add(&MYSQL_OFFSET_KNOWN_INTERVAL)
         .add(&MYSQL_REPLICATION_HEARTBEAT_INTERVAL)
         .add(&ORE_OVERFLOWING_BEHAVIOR)
         .add(&PG_FETCH_SLOT_RESUME_LSN_INTERVAL)
-        .add(&PG_OFFSET_KNOWN_INTERVAL)
         .add(&PG_SCHEMA_VALIDATION_INTERVAL)
+        .add(&PG_SOURCE_VALIDATE_TIMELINE)
         .add(&REPLICA_METRICS_HISTORY_RETENTION_INTERVAL)
         .add(&SINK_ENSURE_TOPIC_CONFIG)
         .add(&SINK_PROGRESS_SEARCH)
+        .add(&SQL_SERVER_SOURCE_VALIDATE_RESTORE_HISTORY)
         .add(&STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION)
-        .add(&STORAGE_RECLOCK_TO_LATEST)
         .add(&STORAGE_ROCKSDB_CLEANUP_TRIES)
         .add(&STORAGE_ROCKSDB_USE_MERGE_OPERATOR)
         .add(&STORAGE_SERVER_MAINTENANCE_INTERVAL)
@@ -357,14 +355,13 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING)
         .add(&STORAGE_UPSERT_PREVENT_SNAPSHOT_BUFFERING)
         .add(&STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT)
+        .add(&ENABLE_UPSERT_V2)
         .add(&SUSPENDABLE_SOURCES)
         .add(&WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RETENTION_INTERVAL)
         .add(&WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL)
-        .add(&crate::sources::sql_server::CDC_POLL_INTERVAL)
         .add(&crate::sources::sql_server::CDC_CLEANUP_CHANGE_TABLE)
         .add(&crate::sources::sql_server::CDC_CLEANUP_CHANGE_TABLE_MAX_DELETES)
         .add(&crate::sources::sql_server::MAX_LSN_WAIT)
         .add(&crate::sources::sql_server::SNAPSHOT_PROGRESS_REPORT_INTERVAL)
-        .add(&crate::sources::sql_server::OFFSET_KNOWN_INTERVAL)
         .add(&STATISTICS_RETENTION_DURATION)
 }

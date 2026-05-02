@@ -1,0 +1,46 @@
+- name: "syntax"
+  code: |
+    CREATE [TEMP|TEMPORARY] VIEW [IF NOT EXISTS] <view_name>[(<col_ident>, ...)] AS
+    <select_stmt>;
+  syntax_elements:
+    - name: "`TEMP` / `TEMPORARY`"
+      description: |
+        Optional. Mark the view as [temporary](/sql/create-view/#temporary-views).
+        Temporary views are:
+        - Created in the `mz_temp` schema.
+        - Not visible to other connections.
+        - Automatically dropped at the end of the SQL session
+    - name: "`IF NOT EXISTS`"
+      description: |
+        Optional. If specified, do not generate an error if a view with the same
+        name already exists. If not specified, an error is generated if a view
+        with the same name already exists.
+    - name: "`<view_name>`"
+      description: |
+        A name for the view.
+    - name: "`(<col_ident>, ...)`"
+      description: |
+        Optional if the `SELECT` statement return columns with unique names;
+        else, is required if the `SELECT` statement returns multiple columns
+        with the same identifier. If specified, renames the `SELECT` statement's columns to the list of identifiers.
+        Both must be the same length.
+    - name: "`<select_stmt>`"
+      description: |
+        The [`SELECT` statement](/sql/select) that defines the view.
+
+- name: "syntax-replace"
+  code: |
+    CREATE OR REPLACE VIEW <view_name> [(<col_ident>, ...)] AS <select_stmt>;
+  syntax_elements:
+    - name: "`<view_name>`"
+      description: |
+        A name for the view.
+    - name: "`(<col_ident>, ...)`"
+      description: |
+        Optional if the `SELECT` statement return columns with unique names;
+        else, is required if the `SELECT` statement returns multiple columns
+        with the same identifier. If specified, renames the `SELECT` statement's columns to the list of identifiers.
+        Both must be the same length.
+    - name: "`<select_stmt>`"
+      description: |
+        The [`SELECT` statement](/sql/select) that defines the view.

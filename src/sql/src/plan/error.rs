@@ -70,6 +70,10 @@ pub enum PlanError {
         table: Option<PartialItemName>,
         column: ColumnName,
     },
+    ItemWithoutColumns {
+        name: String,
+        item_type: CatalogItemType,
+    },
     WrongJoinTypeForLateralColumn {
         table: Option<PartialItemName>,
         column: ColumnName,
@@ -111,6 +115,10 @@ pub enum PlanError {
         desired_key: Vec<String>,
         valid_keys: Vec<Vec<String>>,
     },
+    IcebergSinkUnsupportedKeyType {
+        column: String,
+        column_type: String,
+    },
     InvalidWmrRecursionLimit(String),
     InvalidNumericMaxScale(InvalidNumericMaxScaleError),
     InvalidCharLength(InvalidCharLengthError),
@@ -136,12 +144,24 @@ pub enum PlanError {
         from: String,
         to: String,
     },
+    /// Range type with an element type that is not supported (e.g. float, uint).
+    UnsupportedRangeElementType {
+        element_type_name: String,
+    },
     InvalidTable {
         name: String,
     },
     InvalidVersion {
         name: String,
         version: String,
+    },
+    InvalidSinkFrom {
+        name: String,
+        item_type: String,
+    },
+    InvalidDependency {
+        name: String,
+        item_type: String,
     },
     MangedReplicaName(String),
     ParserStatement(ParserStatementError),
@@ -286,6 +306,7 @@ pub enum PlanError {
     UntilReadyTimeoutRequired,
     SubsourceResolutionError(ExternalReferenceResolutionError),
     Replan(String),
+    Internal(String),
     NetworkPolicyLockoutError,
     NetworkPolicyInUse,
     /// Expected a constant expression that evaluates without an error to a non-null value.
@@ -298,6 +319,12 @@ pub enum PlanError {
     },
     /// AS OF or UP TO should be an expression that is castable and simplifiable to a non-null mz_timestamp value.
     InvalidAsOfUpTo,
+    InvalidReplacement {
+        item_type: CatalogItemType,
+        item_name: PartialItemName,
+        replacement_type: CatalogItemType,
+        replacement_name: PartialItemName,
+    },
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -352,7 +379,11 @@ impl PlanError {
             Self::CsrPurification(e) => e.detail(),
             Self::KafkaSinkPurification(e) => e.detail(),
             Self::IcebergSinkPurification(e) => e.detail(),
-            Self::CreateReplicaFailStorageObjects { current_replica_count: current, internal_replica_count: internal, hypothetical_replica_count: target } => {
+            Self::CreateReplicaFailStorageObjects {
+                current_replica_count: current,
+                internal_replica_count: internal,
+                hypothetical_replica_count: target,
+            } => {
                 Some(format!(
                     "Currently have {} replica{}{}; command would result in {}",
                     current,
@@ -453,6 +484,9 @@ impl PlanError {
             Self::UpsertSinkWithInvalidKey { .. } | Self::UpsertSinkWithoutKey => {
                 Some("See: https://materialize.com/s/sink-key-selection".into())
             }
+            Self::IcebergSinkUnsupportedKeyType { .. } => {
+                Some("Iceberg equality delete keys must be primitive, non-floating-point columns.".into())
+            }
             Self::Catalog(e) => e.hint(),
             Self::VarError(e) => e.hint(),
             Self::PgSourcePurification(e) => e.hint(),
@@ -527,6 +561,10 @@ impl fmt::Display for PlanError {
                 "column {} must appear in the GROUP BY clause or be used in an aggregate function",
                 ColumnDisplay { table, column },
             ),
+            Self::ItemWithoutColumns { name, item_type } => {
+                let name = name.quoted();
+                write!(f, "{item_type} {name} does not have columns")
+            }
             Self::WrongJoinTypeForLateralColumn { table, column } => write!(
                 f,
                 "column {} cannot be referenced from this part of the query: \
@@ -601,6 +639,9 @@ impl fmt::Display for PlanError {
             Self::UpsertSinkWithInvalidKey { .. } => {
                 write!(f, "upsert key could not be validated as unique")
             }
+            Self::IcebergSinkUnsupportedKeyType { column, column_type } => {
+                write!(f, "column {column} has type {column_type} which cannot be used as an Iceberg equality delete key")
+            }
             Self::InvalidWmrRecursionLimit(msg) => write!(f, "Invalid WITH MUTUALLY RECURSIVE recursion limit. {}", msg),
             Self::InvalidNumericMaxScale(e) => e.fmt(f),
             Self::InvalidCharLength(e) => e.fmt(f),
@@ -631,11 +672,20 @@ impl fmt::Display for PlanError {
                     },
                 )
             }
+            Self::UnsupportedRangeElementType { element_type_name } => {
+                write!(f, "range type over {} is not supported", element_type_name)
+            }
             Self::InvalidTable { name } => {
                 write!(f, "invalid table definition for {}", name.quoted())
             },
             Self::InvalidVersion { name, version } => {
                 write!(f, "invalid version {} for {}", version.quoted(), name.quoted())
+            },
+            Self::InvalidSinkFrom { name, item_type } => {
+                write!(f, "{item_type} {name} cannot be exported as a sink")
+            },
+            Self::InvalidDependency { name, item_type } => {
+                write!(f, "{item_type} {name} cannot be depended upon")
             },
             Self::DropViewOnMaterializedView(name)
             | Self::AlterViewOnMaterializedView(name)
@@ -819,6 +869,7 @@ impl fmt::Display for PlanError {
             },
             Self::SubsourceResolutionError(e) => write!(f, "{}", e),
             Self::Replan(msg) => write!(f, "internal error while replanning, please contact support: {msg}"),
+            Self::Internal(msg) => write!(f, "internal error: {msg}"),
             Self::NetworkPolicyLockoutError => write!(f, "policy would block current session IP"),
             Self::NetworkPolicyInUse => write!(f, "network policy is currently in use"),
             Self::UntilReadyTimeoutRequired => {
@@ -829,8 +880,22 @@ impl fmt::Display for PlanError {
             Self::UnknownCursor(name) => {
                 write!(f, "cursor {} does not exist", name.quoted())
             }
-            Self::CopyFromTargetTableDropped { target_name: name } => write!(f, "COPY FROM's target table {} was dropped", name.quoted()),
-            Self::InvalidAsOfUpTo => write!(f, "AS OF or UP TO should be castable to a (non-null) mz_timestamp value")
+            Self::CopyFromTargetTableDropped { target_name: name } => {
+                write!(f, "COPY FROM's target table {} was dropped", name.quoted())
+            }
+            Self::InvalidAsOfUpTo => write!(
+                f,
+                "AS OF or UP TO should be castable to a (non-null) mz_timestamp value",
+            ),
+            Self::InvalidReplacement {
+                item_type, item_name, replacement_type, replacement_name,
+            } => {
+                write!(
+                    f,
+                    "cannot replace {item_type} {item_name} \
+                     with {replacement_type} {replacement_name}",
+                )
+            }
         }
     }
 }

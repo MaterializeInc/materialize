@@ -23,12 +23,12 @@ from psycopg.errors import (
     OperationalError,
 )
 
-from materialize import buildkite
+from materialize import MZ_ROOT, buildkite
 from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.mz import Mz
-from materialize.mzcompose.services.postgres import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
@@ -119,8 +119,7 @@ def workflow_github_5108(c: Composition) -> None:
 
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             > CREATE SOURCE with_subsources FROM LOAD GENERATOR AUCTION;
             > CREATE TABLE accounts FROM SOURCE with_subsources (REFERENCE accounts);
             > CREATE TABLE auctions FROM SOURCE with_subsources (REFERENCE auctions);
@@ -152,8 +151,7 @@ def workflow_github_5108(c: Composition) -> None:
             with_subsources   accounts
             with_subsources   auctions
             with_subsources   organizations
-            """
-        ),
+            """),
     )
 
     # Restart mz
@@ -162,8 +160,7 @@ def workflow_github_5108(c: Composition) -> None:
 
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             > SELECT
               top_level_s.name as source,
               s.name AS subsource
@@ -189,8 +186,7 @@ def workflow_github_5108(c: Composition) -> None:
             with_subsources   auctions
             with_subsources   organizations
 
-            """
-        ),
+            """),
     )
 
     c.kill("materialized")
@@ -282,8 +278,7 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
 
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 
             # We can create a cluster with sizes 'scale=1,workers=1' and 'scale=1,workers=2'
@@ -299,8 +294,7 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
 
             ! CREATE CLUSTER REPLICA test.r3 SIZE 'scale=1,workers=2'
             contains:unknown cluster replica size scale=1,workers=2
-            """
-        ),
+            """),
     )
 
     # Assert that mz restarts successfully even in the presence of replica sizes that are not allowed
@@ -309,8 +303,7 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
 
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 
             # Cluster replica of disallowed sizes still exist
@@ -332,8 +325,7 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
             test r1 scale=1,workers=1 true ""
             test r2 scale=1,workers=2 true ""
             test r3 scale=1,workers=2 true ""
-            """
-        ),
+            """),
     )
 
     # Assert that the persisted allowed_cluster_replica_sizes (a setting that
@@ -343,8 +335,7 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
 
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             > SHOW allowed_cluster_replica_sizes
             "\\"scale=1,workers=1\\", \\"scale=1,workers=2\\""
 
@@ -353,8 +344,7 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
             # Reset for following tests
             $ postgres-execute connection=mz_system
             ALTER SYSTEM RESET allowed_cluster_replica_sizes
-            """
-        ),
+            """),
     )
 
 
@@ -426,6 +416,79 @@ def workflow_allow_user_sessions(c: Composition) -> None:
     # The cursor from the beginning of the test should still work.
     cursor.execute("SELECT 1")
     assert cursor.fetchall() == [(1,)]
+
+
+def workflow_mcp_feature_flags(c: Composition) -> None:
+    """Test that enable_mcp_agent and enable_mcp_developer dyncfg flags
+    can disable MCP endpoints without a restart."""
+
+    mcp_request = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "test", "version": "0.1.0"},
+        },
+    }
+
+    with c.override(
+        Materialized(
+            listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth.json",
+        )
+    ):
+        c.up("materialized")
+        http_port = c.port("materialized", 6876)
+
+        agent_url = f"http://localhost:{http_port}/api/mcp/agent"
+        developer_url = f"http://localhost:{http_port}/api/mcp/developer"
+
+        # Both endpoints should be enabled by default.
+        assert requests.post(agent_url, json=mcp_request).status_code == 200
+        assert requests.post(developer_url, json=mcp_request).status_code == 200
+
+        # Disable the agent endpoint individually.
+        c.sql(
+            "ALTER SYSTEM SET enable_mcp_agent = false",
+            port=6877,
+            user="mz_system",
+        )
+
+        assert requests.post(agent_url, json=mcp_request).status_code == 503
+        # Developer should still be enabled.
+        assert requests.post(developer_url, json=mcp_request).status_code == 200
+
+        # Disable developer too.
+        c.sql(
+            "ALTER SYSTEM SET enable_mcp_developer = false",
+            port=6877,
+            user="mz_system",
+        )
+
+        assert requests.post(developer_url, json=mcp_request).status_code == 503
+
+        # Re-enable agent — developer should remain disabled.
+        c.sql(
+            "ALTER SYSTEM SET enable_mcp_agent = true",
+            port=6877,
+            user="mz_system",
+        )
+
+        assert requests.post(agent_url, json=mcp_request).status_code == 200
+        assert requests.post(developer_url, json=mcp_request).status_code == 503
+
+        # Re-enable developer.
+        c.sql(
+            "ALTER SYSTEM SET enable_mcp_developer = true",
+            port=6877,
+            user="mz_system",
+        )
+
+        assert requests.post(agent_url, json=mcp_request).status_code == 200
+        assert requests.post(developer_url, json=mcp_request).status_code == 200
+
+        c.kill("materialized")
 
 
 def workflow_network_policies(c: Composition) -> None:
@@ -585,8 +648,7 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
 
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             $ kafka-create-topic topic=status-history
 
             > CREATE CONNECTION kafka_conn
@@ -609,34 +671,29 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
               ENVELOPE DEBEZIUM
 
             $ kafka-verify-topic sink=materialize.public.kafka_sink
-            """
-        ),
+            """),
     )
 
     # Fill mz_source_status_history and mz_sink_status_history up with enough events
     for i in range(5):
         c.testdrive(
             service="testdrive_no_reset",
-            input=dedent(
-                """
+            input=dedent("""
                 > ALTER CONNECTION kafka_conn SET (BROKER 'dne') WITH (VALIDATE = false);
                 > ALTER CONNECTION kafka_conn SET (BROKER '${testdrive.kafka-addr}') WITH (VALIDATE = true);
-                """
-            ),
+                """),
         )
 
     # Verify that we have enough events so that they can be truncated
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             > SELECT COUNT(*) > 7 FROM mz_internal.mz_source_status_history
             true
 
             > SELECT COUNT(*) > 7 FROM mz_internal.mz_sink_status_history
             true
-            """
-        ),
+            """),
     )
 
     # Restart mz.
@@ -648,15 +705,13 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
     # objects produce a new starting and running event.
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             > SELECT COUNT(*) FROM mz_internal.mz_source_status_history
             14
 
             > SELECT COUNT(*) FROM mz_internal.mz_sink_status_history
             7
-            """
-        ),
+            """),
     )
 
 
@@ -675,8 +730,7 @@ def workflow_bound_size_mz_cluster_replica_metrics_history(c: Composition) -> No
     # Create a replica and wait for metrics data to arrive.
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             > CREATE CLUSTER test SIZE 'scale=1,workers=1'
 
             > SELECT count(*) >= 1
@@ -685,8 +739,7 @@ def workflow_bound_size_mz_cluster_replica_metrics_history(c: Composition) -> No
               JOIN mz_clusters c ON c.id = r.cluster_id
               WHERE c.name = 'test'
             true
-            """
-        ),
+            """),
     )
 
     # The default retention interval is 30 days, so we don't expect truncation
@@ -696,16 +749,14 @@ def workflow_bound_size_mz_cluster_replica_metrics_history(c: Composition) -> No
 
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             > SELECT count(*) >= 2
               FROM mz_internal.mz_cluster_replica_metrics_history m
               JOIN mz_cluster_replicas r ON r.id = m.replica_id
               JOIN mz_clusters c ON c.id = r.cluster_id
               WHERE c.name = 'test'
             true
-            """
-        ),
+            """),
     )
 
     # Reduce the retention interval to force a truncation.
@@ -720,16 +771,14 @@ def workflow_bound_size_mz_cluster_replica_metrics_history(c: Composition) -> No
 
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             > SELECT count(*) < 2
               FROM mz_internal.mz_cluster_replica_metrics_history m
               JOIN mz_cluster_replicas r ON r.id = m.replica_id
               JOIN mz_clusters c ON c.id = r.cluster_id
               WHERE c.name = 'test'
             true
-            """
-        ),
+            """),
     )
 
     # Verify that this also works a second time.
@@ -738,16 +787,14 @@ def workflow_bound_size_mz_cluster_replica_metrics_history(c: Composition) -> No
 
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             > SELECT count(*) < 2
               FROM mz_internal.mz_cluster_replica_metrics_history m
               JOIN mz_cluster_replicas r ON r.id = m.replica_id
               JOIN mz_clusters c ON c.id = r.cluster_id
               WHERE c.name = 'test'
             true
-            """
-        ),
+            """),
     )
 
 
@@ -774,8 +821,7 @@ def workflow_index_compute_dependencies(c: Composition) -> None:
         """Check whether `(obj_name, dep_name)` is a compute dependency or not."""
         c.testdrive(
             service="testdrive_no_reset",
-            input=dedent(
-                f"""
+            input=dedent(f"""
                 > (
                     SELECT
                       true
@@ -810,14 +856,12 @@ def workflow_index_compute_dependencies(c: Composition) -> None:
                       )
                   );
                 {str(expected).lower()}
-                """
-            ),
+                """),
         )
 
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             > DROP TABLE IF EXISTS t1 CASCADE;
             > DROP TABLE IF EXISTS t2 CASCADE;
 
@@ -835,8 +879,7 @@ def workflow_index_compute_dependencies(c: Composition) -> None:
             > CREATE VIEW v2 AS SELECT * FROM t2 JOIN t1 USING (y);
             > CREATE MATERIALIZED VIEW mv2 AS SELECT * FROM v2;
             > CREATE INDEX ix2 ON v2(x);
-            """
-        ),
+            """),
     )
 
     # Verify that mv1 and ix1 depend on t1_y_idx but not on t2_y_idx.
@@ -865,6 +908,72 @@ def workflow_index_compute_dependencies(c: Composition) -> None:
     depends_on(c, "mv2", "t2_y_idx", True)
     depends_on(c, "ix2", "t1_y_idx", True)
     depends_on(c, "ix2", "t2_y_idx", True)
+
+
+def workflow_user_id_no_reuse_after_restart(c: Composition) -> None:
+    """Verify that batch-allocated user IDs are never reused across restarts.
+
+    Uses a small batch size so unused IDs in the pool are discarded on
+    shutdown. After restart a fresh batch is allocated, so all new IDs
+    must be strictly greater than every pre-restart ID.
+    """
+
+    def user_id_nums(c: Composition, name_prefix: str) -> list[int]:
+        """Return the numeric part of user IDs for objects matching the prefix."""
+        rows = c.sql_query(
+            f"SELECT id FROM mz_objects WHERE name LIKE '{name_prefix}%'"
+        )
+        # IDs look like 'u123'; extract the numeric suffix.
+        return sorted(int(row[0].lstrip("u")) for row in rows)
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    # Set a small batch size so most of the pool is unused at restart.
+    c.sql(
+        "ALTER SYSTEM SET user_id_pool_batch_size = 5",
+        port=6877,
+        user="mz_system",
+    )
+
+    # --- Phase 1: create objects before restart ---
+    c.sql("CREATE TABLE idreuse_t1 (a INT)")
+    c.sql("CREATE TABLE idreuse_t2 (b INT)")
+    c.sql("CREATE VIEW idreuse_v1 AS SELECT * FROM idreuse_t1")
+
+    ids_before = user_id_nums(c, "idreuse_")
+    assert len(ids_before) == 3, f"expected 3 objects, got {ids_before}"
+    max_id_before = max(ids_before)
+
+    # --- Restart ---
+    c.kill("materialized")
+    c.up("materialized")
+
+    # --- Phase 2: create objects after restart ---
+    c.sql("CREATE TABLE idreuse_t3 (c INT)")
+    c.sql("CREATE VIEW idreuse_v2 AS SELECT * FROM idreuse_t1")
+    c.sql("CREATE MATERIALIZED VIEW idreuse_mv1 AS SELECT count(*) FROM idreuse_t1")
+
+    ids_after = user_id_nums(c, "idreuse_")
+    # The 3 pre-restart objects should still exist, plus 3 new ones.
+    assert len(ids_after) == 6, f"expected 6 objects, got {ids_after}"
+
+    new_ids = [i for i in ids_after if i not in ids_before]
+    assert len(new_ids) == 3, f"expected 3 new IDs, got {new_ids}"
+
+    min_new_id = min(new_ids)
+    assert min_new_id > max_id_before, (
+        f"ID reuse detected! max pre-restart ID = {max_id_before}, "
+        f"but post-restart IDs include {min_new_id}"
+    )
+
+    # --- Cleanup ---
+    c.sql("DROP MATERIALIZED VIEW idreuse_mv1")
+    c.sql("DROP VIEW idreuse_v2")
+    c.sql("DROP VIEW idreuse_v1")
+    c.sql("DROP TABLE idreuse_t3")
+    c.sql("DROP TABLE idreuse_t2")
+    c.sql("DROP TABLE idreuse_t1")
 
 
 def workflow_default(c: Composition) -> None:

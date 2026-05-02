@@ -874,7 +874,7 @@ Explained Query:
             Get l0 // { arity: 3 }
     Return // { arity: 5 }
       Map (((bigint_to_numeric((1 * #3{count})) + (2 * #1{sum})) + (10 * #2{sum}))) // { arity: 5 }
-        Reduce group_by=[#0{creatorpersonid}] aggregates=[sum(coalesce(case when (#2) IS NULL then null else #1{count} end, 0)), sum(coalesce(case when (#4) IS NULL then null else #3{count} end, 0)), count(*)] // { arity: 4 }
+        Reduce group_by=[#0{creatorpersonid}] aggregates=[sum(case when (#2) IS NULL then 0 else coalesce(#1{count}, 0) end), sum(case when (#4) IS NULL then 0 else coalesce(#3{count}, 0) end), count(*)] // { arity: 4 }
           Project (#1{creatorpersonid}, #3{count}, #4, #6{count}, #7) // { arity: 5 }
             Join on=(#0{messageid} = #2{parentmessageid} = #5{messageid}) type=delta // { arity: 8 }
               implementation
@@ -2018,7 +2018,7 @@ Explained Query:
             ArrangeBy keys=[[#0{rootpostlanguage}]] // { arity: 1 }
               Distinct project=[#0{rootpostlanguage}] // { arity: 1 }
                 Project (#0{rootpostlanguage}) // { arity: 1 }
-                  Filter (#0{rootpostlanguage} = varchar_to_text(#1{right_col0_0})) // { arity: 2 }
+                  Filter (#0{rootpostlanguage} = #1{right_col0_0}) // { arity: 2 }
                     FlatMap unnest_array({"es", "ta", "pt"}) // { arity: 2 }
                       Distinct project=[#0{rootpostlanguage}] // { arity: 1 }
                         Project (#13{rootpostlanguage}) // { arity: 1 }

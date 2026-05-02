@@ -7,7 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from __future__ import annotations
+
 import os
+from typing import TYPE_CHECKING
 
 from materialize import MZ_ROOT
 from materialize.mzcompose import loader
@@ -15,7 +18,10 @@ from materialize.mzcompose.service import (
     Service,
     ServiceConfig,
 )
-from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.minio import minio_blob_uri
+
+if TYPE_CHECKING:
+    from materialize.mzcompose.composition import Composition
 
 
 class Postgres(Service):
@@ -69,7 +75,7 @@ class Postgres(Service):
                 "ports": ports,
                 "environment": environment,
                 "healthcheck": {
-                    "test": ["CMD", "pg_isready"],
+                    "test": ["CMD", "pg_isready", "-U", "postgres"],
                     "interval": "1s",
                     "start_period": "30s",
                 },
@@ -89,11 +95,48 @@ class PostgresMetadata(Postgres):
             restart=restart,
         )
 
+    @staticmethod
+    def backup(c: Composition) -> None:
+        backup = c.exec(
+            "postgres-metadata",
+            "pg_dumpall",
+            "--user",
+            "postgres",
+            capture=True,
+        ).stdout
+        with open("backup.sql", "w") as f:
+            f.write(backup)
 
-CockroachOrPostgresMetadata = (
-    Cockroach if os.getenv("BUILDKITE_TAG", "") != "" else PostgresMetadata
-)
+    @staticmethod
+    def restore(
+        c: Composition, mz_service: str = "materialized", restart_mz: bool = True
+    ) -> None:
+        c.kill(mz_service)
+        c.kill("postgres-metadata")
+        c.rm("postgres-metadata")
+        c.up("postgres-metadata")
+        with open("backup.sql") as f:
+            backup = f.read()
+        c.exec(
+            "postgres-metadata",
+            "psql",
+            "--user",
+            "postgres",
+            "--file",
+            "-",
+            stdin=backup,
+        )
+        from materialize.mzcompose.composition import Service as ServiceName
 
-METADATA_STORE: str = (
-    "cockroach" if CockroachOrPostgresMetadata == Cockroach else "postgres-metadata"
-)
+        c.up(ServiceName("persistcli", idle=True))
+        c.exec(
+            "persistcli",
+            "persistcli",
+            "admin",
+            "--commit",
+            "restore-blob",
+            f"--blob-uri={minio_blob_uri()}",
+            "--consensus-uri=postgres://root@postgres-metadata:26257?options=--search_path=consensus",
+        )
+        if restart_mz:
+            c.up(mz_service)

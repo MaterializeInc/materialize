@@ -11,6 +11,7 @@
 
 use mz_ore::metrics::MetricsRegistry;
 
+pub mod iceberg;
 pub mod kafka;
 
 /// A set of base metrics that hang off a central metrics registry, labeled by the sink they
@@ -18,12 +19,14 @@ pub mod kafka;
 #[derive(Debug, Clone)]
 pub(crate) struct SinkMetricDefs {
     pub(crate) kafka_defs: kafka::KafkaSinkMetricDefs,
+    pub(crate) iceberg_defs: iceberg::IcebergSinkMetricDefs,
 }
 
 impl SinkMetricDefs {
     pub(crate) fn register_with(registry: &MetricsRegistry) -> Self {
         Self {
             kafka_defs: kafka::KafkaSinkMetricDefs::register_with(registry),
+            iceberg_defs: iceberg::IcebergSinkMetricDefs::register_with(registry),
         }
     }
 }

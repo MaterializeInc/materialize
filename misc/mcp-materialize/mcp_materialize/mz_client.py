@@ -94,8 +94,8 @@ class MzClient:
         if self._bg_task:
             self._bg_task.cancel()
             try:
-                await self._bg_task
-            except asyncio.CancelledError:
+                await asyncio.wait_for(self._bg_task, timeout=5.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
                 pass
 
     async def _subscribe(self) -> None:
@@ -111,9 +111,7 @@ class MzClient:
                 async with conn.cursor(row_factory=dict_row) as cur:
                     logger.info("Starting background tool subscription")
                     await cur.execute("BEGIN")
-                    await cur.execute(
-                        dedent(
-                            """
+                    await cur.execute(dedent("""
                         DECLARE c CURSOR FOR
                         SUBSCRIBE (
                             SELECT count(*) AS eligible_tools
@@ -121,11 +119,9 @@ class MzClient:
                             JOIN mz_indexes i ON o.id = i.on_id
                             JOIN mz_internal.mz_comments cts ON cts.id = o.id
                         ) WITH (PROGRESS)
-                    """
-                        )
-                    )
+                    """))
                     while True:
-                        await cur.execute("FETCH ALL c")
+                        await cur.execute("FETCH ALL c WITH (timeout = '5s')")
                         reload = False
                         async for row in cur:
                             if not row["mz_progressed"]:

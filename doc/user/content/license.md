@@ -20,13 +20,14 @@ Use of the Materialize Self-Managed Community edition is subject to the
 License](https://github.com/MaterializeInc/materialize/blob/main/LICENSE)
 agreement.
 
-To purchase a Materialize Self-Managed Enterprise License, contact us
-[here](https://materialize.com/self-managed).
+A license key is required to use Self-Managed Materialize.
+
+{{< yaml-table data="self_managed/license_key" >}}
 
 ### Self-Managed Community Edition Privacy Policy
 
 By downloading  Materialize Self-Managed Community Edition, you are agreeing to
-Materialize' [privacy policy](https://materialize.com/privacy-policy/).
+Materialize's [privacy policy](https://materialize.com/privacy-policy/).
 
 ### Materialize Self-Managed Community Edition and Emulator Privacy FAQ
 

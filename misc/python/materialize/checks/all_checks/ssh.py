@@ -9,7 +9,7 @@
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check, externally_idempotent
+from materialize.checks.checks import Check, disabled, externally_idempotent
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
 
 
@@ -18,16 +18,14 @@ def schemas() -> str:
 
 
 @externally_idempotent(False)
+@disabled("database-issues#10047")
 class SshPg(Check):
     """
     Testing Postgres CDC source with SSH tunnel
     """
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            schemas()
-            + dedent(
-                """
+        return Testdrive(schemas() + dedent("""
                 > CREATE SECRET pgpass AS 'postgres'
 
                 > CREATE CONNECTION pg_ssh1 TO POSTGRES (
@@ -53,9 +51,7 @@ class SshPg(Check):
                   FROM POSTGRES CONNECTION pg_ssh1
                   (PUBLICATION 'mz_source_ssh')
                 > CREATE TABLE t_ssh1 FROM SOURCE mz_source_ssh1 (REFERENCE t_ssh1);
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -108,9 +104,7 @@ class SshPg(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT COUNT(*) FROM t_ssh1;
                 15
 
@@ -119,22 +113,18 @@ class SshPg(Check):
 
                 > SELECT COUNT(*) FROM t_ssh3;
                 5
-           """
-            )
-        )
+           """))
 
 
 @externally_idempotent(False)
+@disabled("database-issues#10047")
 class SshKafka(Check):
     """
     Testing Kafka source with SSH tunnel
     """
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            schemas()
-            + dedent(
-                """
+        return Testdrive(schemas() + dedent("""
                 $ kafka-create-topic topic=ssh1
 
                 $ kafka-create-topic topic=ssh2
@@ -152,9 +142,7 @@ class SshKafka(Check):
                 > CREATE TABLE ssh1 FROM SOURCE ssh1_src (REFERENCE "testdrive-ssh1-${testdrive.seed}")
                   FORMAT TEXT
                   ENVELOPE NONE;
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -199,9 +187,7 @@ class SshKafka(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM ssh1;
                 one
                 two
@@ -213,6 +199,4 @@ class SshKafka(Check):
 
                 > SELECT * FROM ssh3;
                 three
-           """
-            )
-        )
+           """))

@@ -34,8 +34,8 @@ from materialize.mzcompose.composition import (
     WorkflowArgumentParser,
 )
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.mz import Mz
-from materialize.mzcompose.services.postgres import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.redpanda_cloud import RedpandaCloud
 from materialize.ui import UIError
@@ -145,19 +145,15 @@ class Redpanda:
         )
         cloud_conn.autocommit = True
         cloud_cursor = cloud_conn.cursor()
-        cloud_cursor.execute(
-            f"""CREATE CONNECTION privatelink_conn
+        cloud_cursor.execute(f"""CREATE CONNECTION privatelink_conn
             TO AWS PRIVATELINK (
                 SERVICE NAME '{self.aws_private_link}',
                 AVAILABILITY ZONES ('use1-az2')
-            );""".encode()
-        )
-        cloud_cursor.execute(
-            """SELECT principal
+            );""".encode())
+        cloud_cursor.execute("""SELECT principal
             FROM mz_aws_privatelink_connections plc
             JOIN mz_connections c on plc.id = c.id
-            WHERE c.name = 'privatelink_conn';"""
-        )
+            WHERE c.name = 'privatelink_conn';""")
         results = cloud_cursor.fetchone()
         assert results
         privatelink_principal = results[0]
@@ -280,13 +276,15 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         if args.version_check:
             version_check(c)
 
+        # TODO(def-): Reenable when Redpanda fixes "Internal server error"
+        redpanda = None
         # Takes about 40 min to spin up
-        print("--- Spinnung up Redpanda Cloud (takes ~40 min)")
-        redpanda = (
-            Redpanda(c, cleanup=args.cleanup)
-            if any(["redpanda" in filename for filename in files])
-            else None
-        )
+        # print("--- Spinnung up Redpanda Cloud (takes ~40 min)")
+        # redpanda = (
+        #     Redpanda(c, cleanup=args.cleanup)
+        #     if any(["redpanda" in filename for filename in files])
+        #     else None
+        # )
 
         try:
             print("--- Running .td files ...")

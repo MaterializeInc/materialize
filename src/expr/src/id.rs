@@ -16,7 +16,17 @@ use serde::{Deserialize, Serialize};
 /// An opaque identifier for a dataflow component. In other words, identifies
 /// the target of a [`MirRelationExpr::Get`](crate::MirRelationExpr::Get).
 #[derive(
-    Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, MzReflect,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize,
+    MzReflect
 )]
 pub enum Id {
     /// An identifier that refers to a local component of a dataflow.
@@ -36,7 +46,17 @@ impl fmt::Display for Id {
 
 /// The identifier for a local component of a dataflow.
 #[derive(
-    Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, MzReflect,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize,
+    MzReflect
 )]
 pub struct LocalId(pub(crate) u64);
 
@@ -61,7 +81,18 @@ impl fmt::Display for LocalId {
 }
 
 /// Unique identifier for an instantiation of a source.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 pub struct SourceInstanceId {
     /// The ID of the source, shared across all instances.
     pub source_id: GlobalId,

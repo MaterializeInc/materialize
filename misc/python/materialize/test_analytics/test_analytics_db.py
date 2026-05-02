@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 """Test analytics database."""
+
 from materialize import buildkite
 from materialize.test_analytics.config.mz_db_config import MzDbConfig
 from materialize.test_analytics.connector.test_analytics_connector import (
@@ -26,6 +27,7 @@ from materialize.test_analytics.data.build_annotation.build_annotation_storage i
     BuildAnnotationStorage,
 )
 from materialize.test_analytics.data.cluster_spec_sheet.cluster_spec_sheet_result_storage import (
+    ClusterSpecSheetEnvironmentdResultStorage,
     ClusterSpecSheetResultStorage,
 )
 from materialize.test_analytics.data.feature_benchmark.feature_benchmark_result_storage import (
@@ -45,6 +47,9 @@ from materialize.test_analytics.data.product_limits.product_limits_result_storag
 )
 from materialize.test_analytics.data.scalability_framework.scalability_framework_result_storage import (
     ScalabilityFrameworkResultStorage,
+)
+from materialize.test_analytics.data.upgrade_downtime.upgrade_downtime_result_storage import (
+    UpgradeDowntimeResultStorage,
 )
 
 TEST_ANALYTICS_DATA_VERSION: int = 21
@@ -77,6 +82,12 @@ class TestAnalyticsDb:
             self.database_connector
         )
         self.cluster_spec_sheet_results = ClusterSpecSheetResultStorage(
+            self.database_connector
+        )
+        self.cluster_spec_sheet_environmentd_results = (
+            ClusterSpecSheetEnvironmentdResultStorage(self.database_connector)
+        )
+        self.upgrade_downtime_results = UpgradeDowntimeResultStorage(
             self.database_connector
         )
 

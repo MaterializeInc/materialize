@@ -64,9 +64,9 @@ class RegressionAssessment:
             self._mark_all_targets_with_regressions_as_unjustified()
             return
 
-        baseline_version = get_mz_version_from_image_tag(
-            self.baseline_endpoint.resolved_target()
-        )
+        baseline_target = self.baseline_endpoint.resolved_target()
+        assert baseline_target is not None
+        baseline_version = get_mz_version_from_image_tag(baseline_target)
 
         for endpoint in self.comparison_outcome.endpoints_with_regressions:
             commits_with_accepted_regressions = (
@@ -93,7 +93,9 @@ class RegressionAssessment:
             # no explicit version referenced: not supported
             return []
 
-        endpoint_version = get_mz_version_from_image_tag(endpoint.resolved_target())
+        endpoint_target = endpoint.resolved_target()
+        assert endpoint_target is not None
+        endpoint_version = get_mz_version_from_image_tag(endpoint_target)
 
         if baseline_version >= endpoint_version:
             # baseline more recent than endpoint: not supported, should not be relevant
@@ -111,6 +113,8 @@ class RegressionAssessment:
 
     def _endpoint_references_release_version(self, endpoint: Endpoint) -> bool:
         target = endpoint.resolved_target()
+        if target is None:
+            return False
         return is_image_tag_of_release_version(
             target
         ) and MzVersion.is_valid_version_string(target)

@@ -1,0 +1,10 @@
+- name: "syntax"
+  code: |
+    '<map_string>'::MAP[TEXT => <value_type>]
+  syntax_elements:
+    - name: "`'<map_string>'`"
+      description: |
+        A well-formed map object string.
+    - name: "`::MAP[TEXT => <value_type>]`"
+      description: |
+        The type annotation specifying that this is a map with [`text`](/sql/types/text/) keys and values of `<value_type>`.

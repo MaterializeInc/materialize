@@ -7,16 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use mz_expr_derive::sqlfunc;
 use mz_repr::strconv;
 use uuid::Uuid;
 
-sqlfunc!(
-    #[sqlname = "uuid_to_text"]
-    #[preserves_uniqueness = true]
-    #[inverse = to_unary!(super::CastStringToUuid)]
-    fn cast_uuid_to_string(u: Uuid) -> String {
-        let mut buf = String::with_capacity(36);
-        strconv::format_uuid(&mut buf, u);
-        buf
-    }
-);
+#[sqlfunc(
+    sqlname = "uuid_to_text",
+    preserves_uniqueness = true,
+    inverse = to_unary!(super::CastStringToUuid)
+)]
+fn cast_uuid_to_string(u: Uuid) -> String {
+    let mut buf = String::with_capacity(36);
+    strconv::format_uuid(&mut buf, u);
+    buf
+}

@@ -12,14 +12,16 @@ option.
 
 ## Syntax
 
-{{< diagram "drop-source.svg" >}}
+```mzsql
+DROP SOURCE [IF EXISTS] <source_name> [RESTRICT|CASCADE];
+```
 
-Field | Use
-------|-----
-**IF EXISTS** | Do not return an error if the named source does not exist.
-_source&lowbar;name_ | The name of the source you want to remove.
-**CASCADE** | Remove the source and its dependent views.
-**RESTRICT** | Do not remove this source if any views depend on it. _(Default.)_
+Syntax element | Description
+---------------|------------
+**IF EXISTS** | Optional. If specified, do not return an error if the named source does not exist.
+`<source_name>` | The name of the source you want to remove.
+**CASCADE** | Optional. If specified, remove the source and its dependent objects.
+**RESTRICT** | Optional. Do not remove this source if it has dependent objects. _(Default.)_
 
 ## Examples
 
@@ -70,7 +72,7 @@ DROP SOURCE IF EXISTS my_source;
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/drop-source.md" >}}
+{{% include-headless "/headless/sql-command-privileges/drop-source" %}}
 
 ## Related pages
 

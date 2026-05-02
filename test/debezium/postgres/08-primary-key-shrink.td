@@ -20,6 +20,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE alter_shrink_primary_key (f1 INTEGER DEFAULT 1, f2 INTEGER DEFAULT 2, PRIMARY KEY (f1, f2));
 ALTER TABLE alter_shrink_primary_key REPLICA IDENTITY FULL;
 INSERT INTO alter_shrink_primary_key VALUES (123,234),(345,456);
+ANALYZE;
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'

@@ -41,6 +41,9 @@ where
             self.context.humanizer,
             self.plan.annotations.clone(),
             self.context.config,
+            self.context
+                .used_indexes
+                .ambiguous_ids(self.context.humanizer),
         );
 
         let mode = HumanizedExplain::new(self.context.config.redacted);
@@ -103,6 +106,9 @@ where
                 ctx.humanizer,
                 plan.annotations.clone(),
                 self.context.config,
+                self.context
+                    .used_indexes
+                    .ambiguous_ids(self.context.humanizer),
             );
 
             if no > 0 {
@@ -135,8 +141,11 @@ where
         }
 
         if self.sources.iter().any(|src| !src.is_identity()) {
-            // Render one blank line between the plans and sources.
-            writeln!(f)?;
+            // Render one blank line between the plans and sources, but only if
+            // there were plans rendered above.
+            if !self.plans.is_empty() {
+                writeln!(f)?;
+            }
             for src in self.sources.iter().filter(|src| !src.is_identity()) {
                 if self.context.config.humanized_exprs {
                     let mut cols = ctx.humanizer.column_names_for_id(src.id);
@@ -461,13 +470,11 @@ impl MirRelationExpr {
                                 .unwrap_or_else(|| id.to_string())
                         };
                         let humanize_unqualified = |id: &GlobalId| {
-                            ctx.humanizer
-                                .humanize_id_unqualified(*id)
+                            ctx.humanize_id_maybe_unqualified(*id)
                                 .unwrap_or_else(|| id.to_string())
                         };
                         let humanize_unqualified_maybe_deleted = |id: &GlobalId| {
-                            ctx.humanizer
-                                .humanize_id_unqualified(*id)
+                            ctx.humanize_id_maybe_unqualified(*id)
                                 .unwrap_or_else(|| "[DELETED INDEX]".to_owned())
                         };
                         match persist_or_index {
@@ -944,8 +951,7 @@ impl MirRelationExpr {
             .humanize_id(*coll_id)
             .unwrap_or_else(|| coll_id.to_string());
         let humanized_index = ctx
-            .humanizer
-            .humanize_id_unqualified(*idx_id)
+            .humanize_id_maybe_unqualified(*idx_id)
             .unwrap_or_else(|| "[DELETED INDEX]".to_owned());
         if let Some(constants) = constants {
             write!(
@@ -1309,26 +1315,42 @@ where
             }
             CallVariadic { func, exprs } => {
                 use crate::VariadicFunc::*;
-                let exprs = exprs.iter().map(|expr| self.child(expr));
                 match func {
-                    ArrayCreate { .. } => {
+                    CaseLiteral(cl) => {
+                        let input = self.child::<MirScalarExpr>(&exprs[0]);
+                        write!(f, "case_lookup {}", input)?;
+                        for entry in &cl.lookup {
+                            let result = self.child::<MirScalarExpr>(&exprs[entry.expr_index]);
+                            write!(f, " when ")?;
+                            self.mode.humanize_datum(entry.literal.unpack_first(), f)?;
+                            write!(f, " then {}", result)?;
+                        }
+                        let els = self.child::<MirScalarExpr>(exprs.last().unwrap());
+                        write!(f, " else {} end", els)
+                    }
+                    ArrayCreate(..) => {
+                        let exprs = exprs.iter().map(|expr| self.child(expr));
                         let exprs = separated(", ", exprs);
                         write!(f, "array[{}]", exprs)
                     }
-                    ListCreate { .. } => {
+                    ListCreate(..) => {
+                        let exprs = exprs.iter().map(|expr| self.child(expr));
                         let exprs = separated(", ", exprs);
                         write!(f, "list[{}]", exprs)
                     }
-                    RecordCreate { .. } => {
+                    RecordCreate(..) => {
+                        let exprs = exprs.iter().map(|expr| self.child(expr));
                         let exprs = separated(", ", exprs);
                         write!(f, "row({})", exprs)
                     }
                     func if func.is_infix_op() && exprs.len() > 1 => {
+                        let exprs = exprs.iter().map(|expr| self.child(expr));
                         let func = format!(" {} ", func);
                         let exprs = separated(&func, exprs);
                         write!(f, "({})", exprs)
                     }
                     func => {
+                        let exprs = exprs.iter().map(|expr| self.child(expr));
                         let exprs = separated(", ", exprs);
                         write!(f, "{}({})", func, exprs)
                     }

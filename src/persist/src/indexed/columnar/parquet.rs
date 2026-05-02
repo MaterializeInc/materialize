@@ -20,7 +20,7 @@ use mz_persist_types::parquet::EncodingConfig;
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ParquetRecordBatchReaderBuilder};
 use parquet::basic::Encoding;
-use parquet::file::metadata::KeyValue;
+use parquet::file::metadata::{KeyValue, ParquetMetaData};
 use parquet::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
 use timely::progress::{Antichain, Timestamp};
 use tracing::warn;
@@ -201,7 +201,7 @@ pub fn decode_parquet_file_kvtd(
 /// from the [`ArrowWriter`].
 fn report_parquet_metrics(
     metrics: &ColumnarMetrics,
-    metadata: &parquet::format::FileMetaData,
+    metadata: &ParquetMetaData,
     bytes_written: usize,
     format: &'static str,
 ) {
@@ -209,7 +209,7 @@ fn report_parquet_metrics(
         .parquet()
         .num_row_groups
         .with_label_values(&[format])
-        .inc_by(u64::cast_from(metadata.row_groups.len()));
+        .inc_by(u64::cast_from(metadata.row_groups().len()));
     metrics
         .parquet()
         .encoded_size
@@ -218,13 +218,12 @@ fn report_parquet_metrics(
 
     let report_column_size = |col_name: &str, metrics: &ParquetColumnMetrics| {
         let (uncomp, comp) = metadata
-            .row_groups
+            .row_groups()
             .iter()
-            .map(|row_group| row_group.columns.iter())
+            .map(|row_group| row_group.columns().iter())
             .flatten()
-            .filter_map(|col_chunk| col_chunk.meta_data.as_ref())
-            .filter(|m| m.path_in_schema.first().map(|s| s.as_str()) == Some(col_name))
-            .map(|m| (m.total_uncompressed_size, m.total_compressed_size))
+            .filter(|m| m.column_path().parts().first().map(|s| s.as_str()) == Some(col_name))
+            .map(|m| (m.uncompressed_size(), m.compressed_size()))
             .fold((0, 0), |(tot_u, tot_c), (u, c)| (tot_u + u, tot_c + c));
 
         let uncomp = uncomp.try_into().unwrap_or(0u64);

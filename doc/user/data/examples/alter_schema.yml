@@ -1,0 +1,37 @@
+- name: "syntax-swap-with"
+  code: |
+    ALTER SCHEMA <schema1> SWAP WITH <schema2>;
+  syntax_elements:
+    - name: "`<schema1>`"
+      description: |
+        The name of the schema you want to swap.
+    - name: "`<schema2>`"
+      description: |
+        The name of the other schema you want to swap with.
+
+- name: "syntax-rename"
+  code: |
+    ALTER SCHEMA <name> RENAME TO <new_name>;
+  syntax_elements:
+    - name: "`<name>`"
+      description: |
+        The current name of the schema.
+    - name: "`<new_name>`"
+      description: |
+        The new name of the schema.
+  addenda: |
+    See also [Renaming restrictions](/sql/identifiers/#renaming-restrictions).
+
+- name: "syntax-change-owner"
+  code: |
+    ALTER SCHEMA <name> OWNER TO <new_owner_role>;
+  syntax_elements:
+    - name: "`<name>`"
+      description: |
+        The name of the schema you want to change ownership of.
+    - name: "`<new_owner_role>`"
+      description: |
+        The new owner of the schema.
+  addenda: |
+    To change the owner of a schema, you must be the owner of the schema and have
+    membership in the `<new_owner_role>`. See also [Privileges](#privileges).

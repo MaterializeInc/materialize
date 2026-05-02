@@ -45,6 +45,12 @@ pub struct StorageSinkDesc<S, T = mz_repr::Timestamp> {
     pub as_of: Antichain<T>,
     pub from_storage_metadata: S,
     pub to_storage_metadata: S,
+    /// The interval at which to commit data to the sink.
+    /// This isn't universally supported by all sinks
+    /// yet, so it is optional. Even for sinks that might
+    /// support it in the future (ahem, kafka) users might
+    /// not want to set it.
+    pub commit_interval: Option<Duration>,
 }
 
 impl<S: Debug + PartialEq, T: Debug + PartialEq + PartialOrder> AlterCompatible
@@ -76,6 +82,7 @@ impl<S: Debug + PartialEq, T: Debug + PartialEq + PartialOrder> AlterCompatible
             from_storage_metadata,
             with_snapshot,
             to_storage_metadata,
+            commit_interval: _,
         } = self;
 
         let compatibility_checks = [
@@ -117,8 +124,11 @@ impl<S: Debug + PartialEq, T: Debug + PartialEq + PartialOrder> AlterCompatible
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum SinkEnvelope {
+    /// Only used for Kafka.
     Debezium,
     Upsert,
+    /// Only used for Iceberg.
+    Append,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -628,6 +638,50 @@ pub struct S3UploadInfo {
 
 pub const MIN_S3_SINK_FILE_SIZE: ByteSize = ByteSize::mb(16);
 pub const MAX_S3_SINK_FILE_SIZE: ByteSize = ByteSize::gb(4);
+
+/// Column name appended by MODE APPEND Iceberg sinks to record the diff (+1/−1).
+pub const ICEBERG_APPEND_DIFF_COLUMN: &str = "_mz_diff";
+/// Column name appended by MODE APPEND Iceberg sinks to record the logical timestamp.
+pub const ICEBERG_APPEND_TIMESTAMP_COLUMN: &str = "_mz_timestamp";
+
+/// The precision needed to store all UInt64 values in a Decimal128.
+/// UInt64 max value is 18,446,744,073,709,551,615 which has 20 digits.
+pub const ICEBERG_UINT64_DECIMAL_PRECISION: u8 = 20;
+
+/// Type overrides for Iceberg-compatible Arrow schemas.
+///
+/// Iceberg doesn't support unsigned integer types or interval natively, so we
+/// map them to compatible types:
+/// - `UInt8`, `UInt16` -> `Int32`
+/// - `UInt32` -> `Int64`
+/// - `UInt64` -> `Decimal128(20, 0)`
+/// - `MzTimestamp` (which uses UInt64) -> `Decimal128(20, 0)`
+/// - `Interval` -> string (`LargeUtf8`)
+///
+/// Pass this to `mz_arrow_util::builder::desc_to_schema_with_overrides`
+/// when producing the Arrow schema for an iceberg sink, and to
+/// `mz_arrow_util::builder::ArrowBuilder::validate_desc_for_parquet` to
+/// validate the desc before sink creation.
+pub fn iceberg_type_overrides(
+    scalar_type: &mz_repr::SqlScalarType,
+) -> Option<(arrow::datatypes::DataType, String)> {
+    use arrow::datatypes::DataType;
+    use mz_repr::SqlScalarType;
+    match scalar_type {
+        SqlScalarType::UInt16 => Some((DataType::Int32, "uint2".to_string())),
+        SqlScalarType::UInt32 => Some((DataType::Int64, "uint4".to_string())),
+        SqlScalarType::UInt64 => Some((
+            DataType::Decimal128(ICEBERG_UINT64_DECIMAL_PRECISION, 0),
+            "uint8".to_string(),
+        )),
+        SqlScalarType::MzTimestamp => Some((
+            DataType::Decimal128(ICEBERG_UINT64_DECIMAL_PRECISION, 0),
+            "mz_timestamp".to_string(),
+        )),
+        SqlScalarType::Interval => Some((DataType::LargeUtf8, "interval".to_string())),
+        _ => None,
+    }
+}
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct IcebergSinkConnection<C: ConnectionAccess = InlinedConnection> {

@@ -14,8 +14,7 @@ from materialize.cloudtest.app.materialize_application import MaterializeApplica
 
 def test_replica_metrics(mz: MaterializeApplication) -> None:
     mz.testdrive.run(
-        input=dedent(
-            """
+        input=dedent("""
             > CREATE CLUSTER my_cluster REPLICAS (my_replica (SIZE 'scale=4,workers=4'))
 
             > SELECT process_id
@@ -43,19 +42,16 @@ def test_replica_metrics(mz: MaterializeApplication) -> None:
             3
 
             > DROP CLUSTER my_cluster
-            """
-        ),
+            """),
     )
 
 
 def test_prometheus_sql_metrics(mz: MaterializeApplication) -> None:
     # We need a source to have any metrics under `metrics/mz_storage
     mz.testdrive.run(
-        input=dedent(
-            """
+        input=dedent("""
             > CREATE SOURCE counter FROM LOAD GENERATOR COUNTER
-            """
-        ),
+            """),
     )
 
     def check_metrics(metric_group_name: str, metric_name: str):

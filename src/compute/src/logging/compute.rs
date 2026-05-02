@@ -25,14 +25,13 @@ use mz_repr::{Datum, Diff, GlobalId, Row, RowRef, Timestamp};
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, Column, columnar_exchange};
 use mz_timely_util::replay::MzReplay;
-use timely::Data;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::operator::empty;
-use timely::dataflow::{Scope, Stream};
-use timely::scheduling::Scheduler;
+use timely::dataflow::{Scope, StreamVec};
+use timely::scheduling::activate::{Activations, Activator};
 use tracing::error;
 use uuid::Uuid;
 
@@ -301,9 +300,9 @@ pub(super) struct Return {
 /// * `event_queue`: The source to read compute log events from.
 /// * `compute_event_streams`: Additional compute event streams to absorb.
 /// * `shared_state`: Shared state between logging dataflow fragments.
-pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>(
-    mut scope: G,
-    scheduler: S,
+pub(super) fn construct<'scope>(
+    scope: Scope<'scope, Timestamp>,
+    activations: Rc<RefCell<Activations>>,
     config: &mz_compute_client::logging::LoggingConfig,
     event_queue: EventQueue<Column<(Duration, ComputeEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
@@ -327,7 +326,7 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
         // Build a demux operator that splits the replayed event stream up into the separate
         // logging streams.
         let mut demux = OperatorBuilder::new("Compute Logging Demux".to_string(), scope.clone());
-        let mut input = demux.new_input(&logs, Pipeline);
+        let mut input = demux.new_input(logs, Pipeline);
         let (export_out, export) = demux.new_output();
         let mut export_out = OutputBuilder::from(export_out);
         let (frontier_out, frontier) = demux.new_output();
@@ -338,15 +337,13 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
         let mut peek_out = OutputBuilder::from(peek_out);
         let (peek_duration_out, peek_duration) = demux.new_output();
         let mut peek_duration_out = OutputBuilder::from(peek_duration_out);
-        let (shutdown_duration_out, shutdown_duration) = demux.new_output();
-        let mut shutdown_duration_out = OutputBuilder::from(shutdown_duration_out);
         let (arrangement_heap_size_out, arrangement_heap_size) = demux.new_output();
         let mut arrangement_heap_size_out = OutputBuilder::from(arrangement_heap_size_out);
         let (arrangement_heap_capacity_out, arrangement_heap_capacity) = demux.new_output();
         let mut arrangement_heap_capacity_out = OutputBuilder::from(arrangement_heap_capacity_out);
-        let (arrangement_heap_allocations_out, arrangement_heap_allocations) =
-            demux.new_output();
-        let mut arrangement_heap_allocations_out = OutputBuilder::from(arrangement_heap_allocations_out);
+        let (arrangement_heap_allocations_out, arrangement_heap_allocations) = demux.new_output();
+        let mut arrangement_heap_allocations_out =
+            OutputBuilder::from(arrangement_heap_allocations_out);
         let (error_count_out, error_count) = demux.new_output();
         let mut error_count_out = OutputBuilder::from(error_count_out);
         let (hydration_time_out, hydration_time) = demux.new_output();
@@ -358,7 +355,7 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
         let (dataflow_global_ids_out, dataflow_global_ids) = demux.new_output();
         let mut dataflow_global_ids_out = OutputBuilder::from(dataflow_global_ids_out);
 
-        let mut demux_state = DemuxState::new(scheduler, scope.index());
+        let mut demux_state = DemuxState::new(activations, scope.index());
         demux.build(move |_capability| {
             move |_frontiers| {
                 let mut export = export_out.activate();
@@ -366,7 +363,6 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
                 let mut import_frontier = import_frontier_out.activate();
                 let mut peek = peek_out.activate();
                 let mut peek_duration = peek_duration_out.activate();
-                let mut shutdown_duration = shutdown_duration_out.activate();
                 let mut arrangement_heap_size = arrangement_heap_size_out.activate();
                 let mut arrangement_heap_capacity = arrangement_heap_capacity_out.activate();
                 let mut arrangement_heap_allocations = arrangement_heap_allocations_out.activate();
@@ -383,13 +379,15 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
                         import_frontier: import_frontier.session_with_builder(&cap),
                         peek: peek.session_with_builder(&cap),
                         peek_duration: peek_duration.session_with_builder(&cap),
-                        shutdown_duration: shutdown_duration.session_with_builder(&cap),
-                        arrangement_heap_allocations: arrangement_heap_allocations.session_with_builder(&cap),
-                        arrangement_heap_capacity: arrangement_heap_capacity.session_with_builder(&cap),
+                        arrangement_heap_allocations: arrangement_heap_allocations
+                            .session_with_builder(&cap),
+                        arrangement_heap_capacity: arrangement_heap_capacity
+                            .session_with_builder(&cap),
                         arrangement_heap_size: arrangement_heap_size.session_with_builder(&cap),
                         error_count: error_count.session_with_builder(&cap),
                         hydration_time: hydration_time.session_with_builder(&cap),
-                        operator_hydration_status: operator_hydration_status.session_with_builder(&cap),
+                        operator_hydration_status: operator_hydration_status
+                            .session_with_builder(&cap),
                         lir_mapping: lir_mapping.session_with_builder(&cap),
                         dataflow_global_ids: dataflow_global_ids.session_with_builder(&cap),
                     };
@@ -424,7 +422,6 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
             (OperatorHydrationStatus, operator_hydration_status),
             (PeekCurrent, peek),
             (PeekDuration, peek_duration),
-            (ShutdownDuration, shutdown_duration),
         ];
 
         // Build the output arrangements.
@@ -432,11 +429,16 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
         for (variant, stream) in logs {
             let variant = LogVariant::Compute(variant);
             if config.index_logs.contains_key(&variant) {
+                let exchange = ExchangeCore::<ColumnBuilder<_>, _>::new_core(
+                    columnar_exchange::<Row, Row, Timestamp, Diff>,
+                );
                 let trace = stream
-                    .mz_arrange_core::<_, Col2ValBatcher<_, _, _, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
-                        ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, Timestamp, Diff>),
-                        &format!("Arrange {variant:?}"),
-                    )
+                    .mz_arrange_core::<
+                        _,
+                        Col2ValBatcher<_, _, _, _>,
+                        RowRowBuilder<_, _>,
+                        RowRowSpine<_, _>,
+                    >(exchange, &format!("Arrange {variant:?}"))
                     .trace;
                 let collection = LogCollection {
                     trace,
@@ -465,9 +467,9 @@ where
 }
 
 /// State maintained by the demux operator.
-struct DemuxState<A> {
-    /// The timely scheduler.
-    scheduler: A,
+struct DemuxState {
+    /// The timely activations handle.
+    activations: Rc<RefCell<Activations>>,
     /// The index of this worker.
     worker_id: usize,
     /// A reusable scratch string for formatting IDs.
@@ -476,12 +478,6 @@ struct DemuxState<A> {
     scratch_string_b: String,
     /// State tracked per dataflow export.
     exports: BTreeMap<GlobalId, ExportState>,
-    /// Maps live dataflows to counts of their exports.
-    dataflow_export_counts: BTreeMap<usize, u32>,
-    /// Maps dropped dataflows to their drop time.
-    dataflow_drop_times: BTreeMap<usize, Duration>,
-    /// Contains dataflows that have shut down but not yet been dropped.
-    shutdown_dataflows: BTreeSet<usize>,
     /// Maps pending peeks to their installation time.
     peek_stash: BTreeMap<Uuid, Duration>,
     /// Arrangement size stash.
@@ -514,23 +510,18 @@ struct DemuxState<A> {
     peek_duration_packer: PermutedRowPacker,
     /// A row packer for the peek output.
     peek_packer: PermutedRowPacker,
-    /// A row packer for the shutdown duration output.
-    shutdown_duration_packer: PermutedRowPacker,
     /// A row packer for the hydration time output.
     hydration_time_packer: PermutedRowPacker,
 }
 
-impl<A: Scheduler> DemuxState<A> {
-    fn new(scheduler: A, worker_id: usize) -> Self {
+impl DemuxState {
+    fn new(activations: Rc<RefCell<Activations>>, worker_id: usize) -> Self {
         Self {
-            scheduler,
+            activations,
             worker_id,
             scratch_string_a: String::new(),
             scratch_string_b: String::new(),
             exports: Default::default(),
-            dataflow_export_counts: Default::default(),
-            dataflow_drop_times: Default::default(),
-            shutdown_dataflows: Default::default(),
             peek_stash: Default::default(),
             arrangement_size: Default::default(),
             lir_mapping: Default::default(),
@@ -554,7 +545,6 @@ impl<A: Scheduler> DemuxState<A> {
             ),
             peek_duration_packer: PermutedRowPacker::new(ComputeLog::PeekDuration),
             peek_packer: PermutedRowPacker::new(ComputeLog::PeekCurrent),
-            shutdown_duration_packer: PermutedRowPacker::new(ComputeLog::ShutdownDuration),
         }
     }
 
@@ -727,14 +717,6 @@ impl<A: Scheduler> DemuxState<A> {
             Datum::MzTimestamp(time),
         ])
     }
-
-    /// Pack a shutdown duration update key-value for the given time bucket.
-    fn pack_shutdown_duration_update(&mut self, bucket: u128) -> (&RowRef, &RowRef) {
-        self.shutdown_duration_packer.pack_slice(&[
-            Datum::UInt64(u64::cast_from(self.worker_id)),
-            Datum::UInt64(bucket.try_into().expect("bucket too big")),
-        ])
-    }
 }
 
 /// State tracked for each dataflow export.
@@ -781,7 +763,6 @@ struct DemuxOutput<'a, 'b> {
     import_frontier: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     peek: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     peek_duration: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
-    shutdown_duration: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     arrangement_heap_allocations: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     arrangement_heap_capacity: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     arrangement_heap_size: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
@@ -793,9 +774,9 @@ struct DemuxOutput<'a, 'b> {
 }
 
 /// Event handler of the demux operator.
-struct DemuxHandler<'a, 'b, 'c, A: Scheduler> {
+struct DemuxHandler<'a, 'b, 'c> {
     /// State kept by the demux operator.
-    state: &'a mut DemuxState<A>,
+    state: &'a mut DemuxState,
     /// State shared across log receivers.
     shared_state: &'a mut SharedLoggingState,
     /// Demux output sessions.
@@ -806,7 +787,7 @@ struct DemuxHandler<'a, 'b, 'c, A: Scheduler> {
     time: Duration,
 }
 
-impl<A: Scheduler> DemuxHandler<'_, '_, '_, A> {
+impl DemuxHandler<'_, '_, '_> {
     /// Return the timestamp associated with the current event, based on the event time and the
     /// logging interval.
     fn ts(&self) -> Timestamp {
@@ -862,12 +843,6 @@ impl<A: Scheduler> DemuxHandler<'_, '_, '_, A> {
             error!(%export_id, "export already registered");
         }
 
-        *self
-            .state
-            .dataflow_export_counts
-            .entry(dataflow_index)
-            .or_default() += 1;
-
         // Insert hydration time logging for this export.
         let datum = self.state.pack_hydration_time_update(export_id, None);
         self.output.hydration_time.give((datum, ts, Diff::ONE));
@@ -888,18 +863,6 @@ impl<A: Scheduler> DemuxHandler<'_, '_, '_, A> {
 
         let datum = self.state.pack_export_update(export_id, dataflow_index);
         self.output.export.give((datum, ts, Diff::MINUS_ONE));
-
-        match self.state.dataflow_export_counts.get_mut(&dataflow_index) {
-            entry @ Some(0) | entry @ None => {
-                error!(
-                    %export_id,
-                    %dataflow_index,
-                    "invalid dataflow_export_counts entry at time of export drop: {entry:?}",
-                );
-            }
-            Some(1) => self.handle_dataflow_dropped(dataflow_index),
-            Some(count) => *count -= 1,
-        }
 
         // Remove error count logging for this export.
         if export.error_count != Diff::ZERO {
@@ -928,45 +891,11 @@ impl<A: Scheduler> DemuxHandler<'_, '_, '_, A> {
         }
     }
 
-    fn handle_dataflow_dropped(&mut self, dataflow_index: usize) {
-        let ts = self.ts();
-        self.state.dataflow_export_counts.remove(&dataflow_index);
-
-        if self.state.shutdown_dataflows.remove(&dataflow_index) {
-            // Dataflow has already shut down before it was dropped.
-            let datum = self.state.pack_shutdown_duration_update(0);
-            self.output.shutdown_duration.give((datum, ts, Diff::ONE));
-        } else {
-            // Dataflow has not yet shut down.
-            let existing = self
-                .state
-                .dataflow_drop_times
-                .insert(dataflow_index, self.time);
-            if existing.is_some() {
-                error!(%dataflow_index, "dataflow already dropped");
-            }
-        }
-    }
-
     fn handle_dataflow_shutdown(
         &mut self,
         DataflowShutdownReference { dataflow_index }: Ref<'_, DataflowShutdown>,
     ) {
         let ts = self.ts();
-
-        if let Some(start) = self.state.dataflow_drop_times.remove(&dataflow_index) {
-            // Dataflow has already been dropped.
-            let elapsed_ns = self.time.saturating_sub(start).as_nanos();
-            let elapsed_pow = elapsed_ns.next_power_of_two();
-            let datum = self.state.pack_shutdown_duration_update(elapsed_pow);
-            self.output.shutdown_duration.give((datum, ts, Diff::ONE));
-        } else {
-            // Dataflow has not yet been dropped.
-            let was_new = self.state.shutdown_dataflows.insert(dataflow_index);
-            if !was_new {
-                error!(%dataflow_index, "dataflow already shutdown");
-            }
-        }
 
         // We deal with any `GlobalId` based mappings in this event.
         if let Some(global_ids) = self.state.dataflow_global_ids.remove(&dataflow_index) {
@@ -1257,10 +1186,10 @@ impl<A: Scheduler> DemuxHandler<'_, '_, '_, A> {
             address,
         }: Ref<'_, ArrangementHeapSizeOperator>,
     ) {
-        let activator = self
-            .state
-            .scheduler
-            .activator_for(address.into_iter().collect());
+        let activator = Activator::new(
+            address.into_iter().collect(),
+            Rc::clone(&self.state.activations),
+        );
         let existing = self
             .state
             .arrangement_size
@@ -1498,10 +1427,10 @@ pub(crate) trait LogDataflowErrors {
     fn log_dataflow_errors(self, logger: Logger, export_id: GlobalId) -> Self;
 }
 
-impl<G, D> LogDataflowErrors for VecCollection<G, D, Diff>
+impl<'scope, T, D> LogDataflowErrors for VecCollection<'scope, T, D, Diff>
 where
-    G: Scope,
-    D: Data,
+    T: timely::progress::Timestamp,
+    D: Clone + 'static,
 {
     fn log_dataflow_errors(self, logger: Logger, export_id: GlobalId) -> Self {
         self.inner
@@ -1519,9 +1448,9 @@ where
     }
 }
 
-impl<G, B> LogDataflowErrors for Stream<G, B>
+impl<'scope, T, B> LogDataflowErrors for StreamVec<'scope, T, B>
 where
-    G: Scope,
+    T: timely::progress::Timestamp,
     for<'a> B: BatchReader<DiffGat<'a> = &'a Diff> + Clone + 'static,
 {
     fn log_dataflow_errors(self, logger: Logger, export_id: GlobalId) -> Self {

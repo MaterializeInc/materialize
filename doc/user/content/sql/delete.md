@@ -10,21 +10,27 @@ menu:
 
 ## Syntax
 
-{{< diagram "delete-stmt.svg" >}}
+```mzsql
+DELETE FROM <table_name> [AS <alias>]
+[USING <from_item> [, ...]]
+[WHERE <condition>]
+;
+```
 
-Field | Use
-------|-----
-**DELETE FROM** _table_name_ | The table whose values you want to remove.
-_alias_ | Only permit references to _table_name_ as _alias_.
-**USING** _from_item_ | Table expressions whose columns you want to reference in the `WHERE` clause. This supports the same syntax as the **FROM** clause in [`SELECT`](../select) statements, e.g. supporting aliases.
-**WHERE** _condition_ | Only remove rows which evaluate to `true` for _condition_.
+Syntax element | Description
+---------------|------------
+`<table_name>` | The table whose values you want to remove.
+**AS** `<alias>` | Optional. The alias for the table. If specified, only permit references to `<table_name>` as `<alias>`.
+**USING** _from_item_ | Optional. Table expressions whose columns you want to reference in the `WHERE` clause. This supports the same syntax as the **FROM** clause in [`SELECT`](../select) statements, e.g. supporting aliases.
+**WHERE** `<condition>` | Optional. Only remove rows which evaluate to `true` for _condition_.
 
 ## Details
 
 ### Known limitations
 
 * `DELETE` cannot be used inside [transactions](../begin).
-* `DELETE` can reference [user-created tables](../create-table) but not [sources](../create-source).
+* `DELETE` can reference [read-write tables](../create-table) but not
+  [sources](../create-source) or read-only tables.
 * **Low performance.** While processing a `DELETE` statement, Materialize cannot
   process other `INSERT`, `UPDATE`, or `DELETE` statements.
 
@@ -72,7 +78,7 @@ SELECT * FROM delete_me;
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/delete.md" >}}
+{{% include-headless "/headless/sql-command-privileges/delete" %}}
 
 ## Related pages
 

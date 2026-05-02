@@ -22,8 +22,7 @@ CLUSTER_SIZE = 8
 
 def populate(mz: MaterializeApplication, seed: int) -> None:
     mz.testdrive.run(
-        input=dedent(
-            f"""
+        input=dedent(f"""
             > CREATE CLUSTER shared_fate REPLICAS (shared_fate_replica (SIZE 'scale={CLUSTER_SIZE},workers=1'));
             > SET cluster = shared_fate;
 
@@ -58,16 +57,14 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
 
             > SELECT COUNT(*) > 0 FROM s1_tbl;
             true
-            """
-        ),
+            """),
         seed=seed,
     )
 
 
 def validate(mz: MaterializeApplication, seed: int) -> None:
     mz.testdrive.run(
-        input=dedent(
-            """
+        input=dedent("""
             > SET cluster = shared_fate;
 
             > INSERT INTO t1 SELECT 345000 + generate_series FROM generate_series(1, 1000);
@@ -86,8 +83,7 @@ def validate(mz: MaterializeApplication, seed: int) -> None:
             3000
 
             > DROP CLUSTER shared_fate CASCADE;
-            """
-        ),
+            """),
         no_reset=True,
         seed=seed,
     )

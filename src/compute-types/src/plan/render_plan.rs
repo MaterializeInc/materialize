@@ -19,7 +19,7 @@ use mz_expr::{
 };
 use mz_ore::soft_assert_or_log;
 use mz_repr::explain::{CompactScalars, ExprHumanizer};
-use mz_repr::{Diff, GlobalId, Row};
+use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use serde::{Deserialize, Serialize};
 
 use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
@@ -38,11 +38,11 @@ use crate::plan::{AvailableCollections, GetPlan, LirId, Plan, PlanNode};
 ///
 /// A [`RenderPlan`] can be constructed from a [`Plan`] using the corresponding [`TryFrom`] impl.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct RenderPlan<T = mz_repr::Timestamp> {
+pub struct RenderPlan {
     /// Stages of bindings to render in order.
-    pub binds: Vec<BindStage<T>>,
+    pub binds: Vec<BindStage>,
     /// The binding-free body.
-    pub body: LetFreePlan<T>,
+    pub body: LetFreePlan,
 }
 
 /// A set of bindings to render in order.
@@ -55,29 +55,29 @@ pub struct RenderPlan<T = mz_repr::Timestamp> {
 /// Rec bindings in `recs` are rendered second. Each one has access to _all_ Let and Rec bindings
 /// in the same stage, including itself, as well as any bindings from previous stages.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct BindStage<T = mz_repr::Timestamp> {
+pub struct BindStage {
     /// Non-recursive bindings.
-    pub lets: Vec<LetBind<T>>,
+    pub lets: Vec<LetBind>,
     /// Potentially recursive bindings.
-    pub recs: Vec<RecBind<T>>,
+    pub recs: Vec<RecBind>,
 }
 
 /// Binds a collection to a [`LocalId`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct LetBind<T = mz_repr::Timestamp> {
+pub struct LetBind {
     /// The identifier through which the collection can be referenced.
     pub id: LocalId,
     /// The collection that is bound to `id`.
-    pub value: LetFreePlan<T>,
+    pub value: LetFreePlan,
 }
 
 /// Binds a potentially recursively defined collection to a [`LocalId`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct RecBind<T = mz_repr::Timestamp> {
+pub struct RecBind {
     /// The identifier through which the collection can be referenced.
     pub id: LocalId,
     /// The collection that is bound to `id`.
-    pub value: RenderPlan<T>,
+    pub value: RenderPlan,
     /// Limits imposed on recursive iteration.
     pub limit: Option<LetRecLimit>,
 }
@@ -97,9 +97,9 @@ pub struct RecBind<T = mz_repr::Timestamp> {
 /// The implementation of [`LetFreePlan`] must ensure that all its methods uphold these invariants
 /// and that users are not able to break them.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct LetFreePlan<T = mz_repr::Timestamp> {
+pub struct LetFreePlan {
     /// The nodes in the plan.
-    nodes: BTreeMap<LirId, Node<T>>,
+    nodes: BTreeMap<LirId, Node>,
     /// The ID of the root node.
     root: LirId,
     /// The topological order of nodes (dependencies before dependants).
@@ -108,9 +108,9 @@ pub struct LetFreePlan<T = mz_repr::Timestamp> {
 
 /// A node of a [`RenderPlan`], comprising an [`Expr`] and some metadata.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Node<T = mz_repr::Timestamp> {
+pub struct Node {
     /// The relation expression for this node.
-    pub expr: Expr<T>,
+    pub expr: Expr,
     /// The [`LirId`] of the parent of this node (for tree reconstruction).
     pub parent: Option<LirId>,
     /// The nesting level of this node (for pretty printing).
@@ -124,11 +124,11 @@ pub struct Node<T = mz_repr::Timestamp> {
 ///  * The `Let` and `LetRec` variants are removed.
 ///  * The `lir_id` fields are removed.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum Expr<T = mz_repr::Timestamp> {
+pub enum Expr {
     /// A collection containing a pre-determined collection.
     Constant {
         /// Explicit update triples for the collection.
-        rows: Result<Vec<(Row, T, Diff)>, EvalError>,
+        rows: Result<Vec<(Row, Timestamp, Diff)>, EvalError>,
     },
     /// A reference to a bound collection.
     ///
@@ -276,7 +276,7 @@ pub enum Expr<T = mz_repr::Timestamp> {
     },
 }
 
-impl<T> TryFrom<Plan<T>> for RenderPlan<T> {
+impl TryFrom<Plan> for RenderPlan {
     /// The only error is "invalid input plan".
     type Error = ();
 
@@ -299,7 +299,7 @@ impl<T> TryFrom<Plan<T>> for RenderPlan<T> {
     /// ```
     ///
     /// Input [`Plan`]s that do not satisfy this requirement will result in errors.
-    fn try_from(mut plan: Plan<T>) -> Result<Self, Self::Error> {
+    fn try_from(mut plan: Plan) -> Result<Self, Self::Error> {
         use PlanNode::{Let, LetRec};
 
         // Peel off stages of bindings. Each stage is constructed of an arbitrary amount of leading
@@ -338,14 +338,14 @@ impl<T> TryFrom<Plan<T>> for RenderPlan<T> {
     }
 }
 
-impl<T> TryFrom<Plan<T>> for LetFreePlan<T> {
+impl TryFrom<Plan> for LetFreePlan {
     /// The only error is "invalid input plan".
     type Error = ();
 
     /// Convert the given [`Plan`] into a [`LetFreePlan`].
     ///
     /// Returns an error if the given [`Plan`] contains `Let` or `LetRec` nodes.
-    fn try_from(plan: Plan<T>) -> Result<Self, Self::Error> {
+    fn try_from(plan: Plan) -> Result<Self, Self::Error> {
         use Expr::*;
 
         // The strategy is to walk walk through the `Plan` in right-to-left pre-order and for each
@@ -355,9 +355,9 @@ impl<T> TryFrom<Plan<T>> for LetFreePlan<T> {
         let root = plan.lir_id;
 
         // Stack of nodes to flatten, with their parent id and nesting.
-        let mut todo: Vec<(Plan<T>, Option<LirId>, u8)> = vec![(plan, None, 0)];
+        let mut todo: Vec<(Plan, Option<LirId>, u8)> = vec![(plan, None, 0)];
         // `RenderPlan` nodes produced so far.
-        let mut nodes: BTreeMap<LirId, Node<T>> = Default::default();
+        let mut nodes: BTreeMap<LirId, Node> = Default::default();
         // A list remembering the order in which nodes were flattened.
         // Because nodes are flatten in right-to-left pre-order, reversing this list at the end
         // yields a valid topological order.
@@ -524,7 +524,7 @@ impl<T> TryFrom<Plan<T>> for LetFreePlan<T> {
     }
 }
 
-impl<T> CollectionPlan for RenderPlan<T> {
+impl CollectionPlan for RenderPlan {
     fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>) {
         for stage in &self.binds {
             for LetBind { value, .. } in &stage.lets {
@@ -539,7 +539,7 @@ impl<T> CollectionPlan for RenderPlan<T> {
     }
 }
 
-impl<T> CollectionPlan for LetFreePlan<T> {
+impl CollectionPlan for LetFreePlan {
     fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>) {
         for Node { expr, .. } in self.nodes.values() {
             if let Expr::Get { id, .. } = expr {
@@ -551,7 +551,7 @@ impl<T> CollectionPlan for LetFreePlan<T> {
     }
 }
 
-impl<T> RenderPlan<T> {
+impl RenderPlan {
     /// Return whether the plan contains recursion.
     pub fn is_recursive(&self) -> bool {
         self.binds.iter().any(|b| !b.recs.is_empty())
@@ -589,7 +589,7 @@ impl<T> RenderPlan<T> {
     }
 }
 
-impl<T> LetFreePlan<T> {
+impl LetFreePlan {
     /// Return the ID of the root node.
     pub fn root_id(&self) -> LirId {
         self.root
@@ -600,7 +600,7 @@ impl<T> LetFreePlan<T> {
     ///
     /// This allows consuming the plan without being required to uphold the [`LetFreePlan`]
     /// invariants.
-    pub fn destruct(self) -> (BTreeMap<LirId, Node<T>>, LirId, Vec<LirId>) {
+    pub fn destruct(self) -> (BTreeMap<LirId, Node>, LirId, Vec<LirId>) {
         (self.nodes, self.root, self.topological_order)
     }
 
@@ -634,7 +634,7 @@ impl<T> LetFreePlan<T> {
     }
 }
 
-impl<T: Clone> RenderPlan<T> {
+impl RenderPlan {
     /// Partitions the plan into `parts` many disjoint pieces.
     ///
     /// This is used to partition `PlanNode::Constant` stages so that the work
@@ -668,7 +668,7 @@ impl<T: Clone> RenderPlan<T> {
     }
 }
 
-impl<T: Clone> BindStage<T> {
+impl BindStage {
     /// Partitions the stage into `parts` many disjoint pieces.
     ///
     /// This is used to partition `PlanNode::Constant` stages so that the work
@@ -699,7 +699,7 @@ impl<T: Clone> BindStage<T> {
     }
 }
 
-impl<T: Clone> LetFreePlan<T> {
+impl LetFreePlan {
     /// Partitions the plan into `parts` many disjoint pieces.
     ///
     /// This is used to partition `PlanNode::Constant` stages so that the work
@@ -732,7 +732,7 @@ impl<T: Clone> LetFreePlan<T> {
     }
 }
 
-impl<T: Clone> Expr<T> {
+impl Expr {
     /// Partitions the expr into `parts` many disjoint pieces.
     ///
     /// This is used to partition `PlanNode::Constant` stages so that the work
@@ -771,7 +771,7 @@ impl<T: Clone> Expr<T> {
     }
 }
 
-impl<T> Expr<T> {
+impl Expr {
     /// Renders a single [`Expr`] as a string.
     ///
     /// Typically of the format "{ExprName}::{Detail} {input LirID} ({options})"
@@ -787,23 +787,23 @@ impl<T> Expr<T> {
 ///
 /// Invariant: the [`std::fmt::Display`] instance should produce a single line for a given expr.
 #[derive(Debug)]
-pub struct RenderPlanExprHumanizer<'a, T> {
+pub struct RenderPlanExprHumanizer<'a> {
     /// The [`Expr`] to be rendered.
-    expr: &'a Expr<T>,
+    expr: &'a Expr,
     /// Humanization information.
     humanizer: &'a dyn ExprHumanizer,
 }
 
-impl<'a, T> RenderPlanExprHumanizer<'a, T> {
+impl<'a> RenderPlanExprHumanizer<'a> {
     /// Creates a [`RenderPlanExprHumanizer`] (which simply holds the references).
     ///
     /// Use the [`std::fmt::Display`] instance.
-    pub fn new(expr: &'a Expr<T>, humanizer: &'a dyn ExprHumanizer) -> Self {
+    pub fn new(expr: &'a Expr, humanizer: &'a dyn ExprHumanizer) -> Self {
         Self { expr, humanizer }
     }
 }
 
-impl<'a, T> std::fmt::Display for RenderPlanExprHumanizer<'a, T> {
+impl<'a> std::fmt::Display for RenderPlanExprHumanizer<'a> {
     // NOTE: This code needs to be kept in sync with `Plan::fmt_default_text`.
     //
     // This code determines what you see in `mz_lir_mapping`; that other code
@@ -888,8 +888,8 @@ impl<'a, T> std::fmt::Display for RenderPlanExprHumanizer<'a, T> {
                     for dpp in path_plans {
                         if !first {
                             write!(f, " ")?;
-                            first = false;
                         }
+                        first = false;
                         write!(f, "[%{}", dpp.source_relation)?;
 
                         for dsp in &dpp.stage_plans {
@@ -930,8 +930,7 @@ impl<'a, T> std::fmt::Display for RenderPlanExprHumanizer<'a, T> {
                     }
                     write!(f, ")")
                 }
-                ReducePlan::Basic(..) => write!(f, "Non-incremental GroupAggregate`"),
-                ReducePlan::Collation(..) => write!(f, "Collated Multi-GroupAggregate"),
+                ReducePlan::Basic(..) => write!(f, "Non-incremental GroupAggregate"),
             },
             TopK {
                 input: _,

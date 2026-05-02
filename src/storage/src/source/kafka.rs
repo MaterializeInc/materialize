@@ -9,7 +9,6 @@
 
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
-use std::convert::Infallible;
 use std::str::{self};
 use std::sync::Arc;
 use std::thread;
@@ -32,7 +31,6 @@ use mz_ore::iter::IteratorExt;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Diff, GlobalId, Row, adt::jsonb::Jsonb};
 use mz_ssh_util::tunnel::SshTunnelStatus;
-use mz_storage_types::dyncfgs::KAFKA_METADATA_FETCH_INTERVAL;
 use mz_storage_types::errors::{
     ContextCreationError, DataflowError, SourceError, SourceErrorDetails,
 };
@@ -44,7 +42,7 @@ use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
-use mz_timely_util::containers::stack::AccountedStackBuilder;
+use mz_timely_util::containers::stack::FueledBuilder;
 use mz_timely_util::order::Partitioned;
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
@@ -57,9 +55,10 @@ use serde::{Deserialize, Serialize};
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::core::Partition;
-use timely::dataflow::operators::{Broadcast, Capability};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::operators::vec::Broadcast;
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
 use timely::progress::Timestamp;
 use tokio::sync::{Notify, mpsc};
@@ -67,11 +66,21 @@ use tracing::{error, info, trace};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::metrics::source::kafka::KafkaSourceMetrics;
-use crate::source::types::{Probe, SignaledFuture, SourceRender, StackedCollection};
+use crate::source::types::{FuelSize, Probe, SignaledFuture, SourceRender, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage, probe};
 use crate::statistics::SourceStatistics;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
+)]
 struct HealthStatus {
     kafka: Option<HealthStatusUpdate>,
     ssh: Option<HealthStatusUpdate>,
@@ -126,8 +135,6 @@ pub struct KafkaSourceReader {
 struct PartitionCapability {
     /// The capability of the data produced
     data: Capability<KafkaTimestamp>,
-    /// The capability of the progress stream
-    progress: Capability<KafkaTimestamp>,
 }
 
 /// The high watermark offsets of a Kafka partition.
@@ -168,22 +175,24 @@ impl SourceRender for KafkaSourceConnection {
 
     const STATUS_NAMESPACE: StatusNamespace = StatusNamespace::Kafka;
 
-    fn render<G: Scope<Timestamp = KafkaTimestamp>>(
+    fn render<'scope>(
         self,
-        scope: &mut G,
+        scope: Scope<'scope, KafkaTimestamp>,
         config: &RawSourceCreationConfig,
         resume_uppers: impl futures::Stream<Item = Antichain<KafkaTimestamp>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        Stream<G, Infallible>,
-        Stream<G, HealthStatusMessage>,
-        Option<Stream<G, Probe<KafkaTimestamp>>>,
+        BTreeMap<
+            GlobalId,
+            StackedCollection<'scope, KafkaTimestamp, Result<SourceMessage, DataflowError>>,
+        >,
+        StreamVec<'scope, KafkaTimestamp, HealthStatusMessage>,
+        StreamVec<'scope, KafkaTimestamp, Probe<KafkaTimestamp>>,
         Vec<PressOnDropButton>,
     ) {
         let (metadata, probes, metadata_token) =
             render_metadata_fetcher(scope, self.clone(), config.clone());
-        let (data, progress, health, reader_token) = render_reader(
+        let (data, health, reader_token) = render_reader(
             scope,
             self,
             config.clone(),
@@ -195,13 +204,9 @@ impl SourceRender for KafkaSourceConnection {
         let partition_count = u64::cast_from(config.source_exports.len());
         let data_streams: Vec<_> = data.inner.partition::<CapacityContainerBuilder<_>, _, _>(
             partition_count,
-            |((output, data), time, diff): &(
-                (usize, Result<SourceMessage, DataflowError>),
-                _,
-                Diff,
-            )| {
-                let output = u64::cast_from(*output);
-                (output, (data.clone(), time.clone(), diff.clone()))
+            |((output, data), time, diff)| {
+                let output = u64::cast_from(output);
+                (output, (data, time, diff))
             },
         );
         let mut data_collections = BTreeMap::new();
@@ -211,9 +216,8 @@ impl SourceRender for KafkaSourceConnection {
 
         (
             data_collections,
-            progress,
             health,
-            Some(probes),
+            probes,
             vec![metadata_token, reader_token],
         )
     }
@@ -223,27 +227,25 @@ impl SourceRender for KafkaSourceConnection {
 ///
 /// The reader is responsible for polling the Kafka topic partitions for new messages, and
 /// transforming them into a `SourceMessage` collection.
-fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
-    scope: &G,
+fn render_reader<'scope>(
+    scope: Scope<'scope, KafkaTimestamp>,
     connection: KafkaSourceConnection,
     config: RawSourceCreationConfig,
     resume_uppers: impl futures::Stream<Item = Antichain<KafkaTimestamp>> + 'static,
-    metadata_stream: Stream<G, (mz_repr::Timestamp, MetadataUpdate)>,
+    metadata_stream: StreamVec<'scope, KafkaTimestamp, (mz_repr::Timestamp, MetadataUpdate)>,
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
-    StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
-    Stream<G, Infallible>,
-    Stream<G, HealthStatusMessage>,
+    StackedCollection<'scope, KafkaTimestamp, (usize, Result<SourceMessage, DataflowError>)>,
+    StreamVec<'scope, KafkaTimestamp, HealthStatusMessage>,
     PressOnDropButton,
 ) {
     let name = format!("KafkaReader({})", config.id);
     let mut builder = AsyncOperatorBuilder::new(name, scope.clone());
 
-    let (data_output, stream) = builder.new_output::<AccountedStackBuilder<_>>();
-    let (_progress_output, progress_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
-    let (health_output, health_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (data_output, stream) = builder.new_output::<FueledBuilder<_>>();
+    let (health_output, health_stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
-    let mut metadata_input = builder.new_disconnected_input(&metadata_stream.broadcast(), Pipeline);
+    let mut metadata_input = builder.new_disconnected_input(metadata_stream.broadcast(), Pipeline);
 
     let mut outputs = vec![];
 
@@ -297,7 +299,7 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
     let busy_signal = Arc::clone(&config.busy_signal);
     let button = builder.build(move |caps| {
         SignaledFuture::new(busy_signal, async move {
-            let [mut data_cap, mut progress_cap, health_cap] = caps.try_into().unwrap();
+            let [mut data_cap, health_cap] = caps.try_into().unwrap();
 
             let client_id = connection.client_id(
                 config.config.config_set(),
@@ -353,7 +355,6 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                         );
                         let part_cap = PartitionCapability {
                             data: data_cap.delayed(&part_ts),
-                            progress: progress_cap.delayed(&part_ts),
                         };
                         partition_capabilities.insert(*pid, part_cap);
                     }
@@ -365,7 +366,6 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
             let future_ts =
                 Partitioned::new_range(lower, RangeBound::PosInfinity, MzOffset::from(0));
             data_cap.downgrade(&future_ts);
-            progress_cap.downgrade(&future_ts);
 
             info!(
                 source_id = config.id.to_string(),
@@ -610,23 +610,9 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                                         RangeBound::exact(pid),
                                         MzOffset::from(start_offset),
                                     );
-                                    let part_upper_ts = Partitioned::new_singleton(
-                                        RangeBound::exact(pid),
-                                        MzOffset::from(high_watermark),
-                                    );
 
-                                    // This is the moment at which we have discovered a new partition
-                                    // and we need to make sure we produce its initial snapshot at a,
-                                    // single timestamp so that the source transitions from no data
-                                    // from this partition to all the data of this partition. We do
-                                    // this by initializing the data capability to the starting offset
-                                    // and, importantly, the progress capability directly to the high
-                                    // watermark. This jump of the progress capability ensures that
-                                    // everything until the high watermark will be reclocked to a
-                                    // single point.
                                     entry.insert(PartitionCapability {
                                         data: data_cap.delayed(&part_since_ts),
-                                        progress: progress_cap.delayed(&part_upper_ts),
                                     });
                                 }
                             }
@@ -672,7 +658,6 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                         }
 
                         data_cap.downgrade(&future_ts);
-                        progress_cap.downgrade(&future_ts);
                     }
                     Some(MetadataUpdate::TransientError(status)) => {
                         if let Some(update) = status.kafka {
@@ -733,8 +718,10 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                         for (output, error) in
                             outputs.iter().map(|o| o.output_index).repeat_clone(error)
                         {
+                            let update = ((output, error), time, Diff::ONE);
+                            let size = update.fuel_size();
                             data_output
-                                .give_fueled(&data_cap, ((output, error), time, Diff::ONE))
+                                .give_fueled(&data_cap, update, size)
                                 .await;
                         }
 
@@ -802,8 +789,10 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                                             error: SourceErrorDetails::Other(e.to_string().into()),
                                         }))
                                     });
+                                    let update = ((output_index, msg), time, diff);
+                                    let size = update.fuel_size();
                                     data_output
-                                        .give_fueled(part_cap, ((output_index, msg), time, diff))
+                                        .give_fueled(part_cap, update, size)
                                         .await;
                                 }
                             }
@@ -848,11 +837,11 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                                             error: SourceErrorDetails::Other(e.to_string().into()),
                                         }))
                                     });
+                                    let update =
+                                        ((output.output_index, msg), time, diff);
+                                    let size = update.fuel_size();
                                     data_output
-                                        .give_fueled(
-                                            part_cap,
-                                            ((output.output_index, msg), time, diff),
-                                        )
+                                        .give_fueled(part_cap, update, size)
                                         .await;
                                 }
                                 // The message was from an offset we've already seen.
@@ -945,11 +934,6 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                             }
                         };
 
-                        // We use try_downgrade here because during the initial snapshot phase the
-                        // data capability is not beyond the progress capability and therefore a
-                        // normal downgrade would panic. Once it catches up though the data
-                        // capbility is what's pushing the progress capability forward.
-                        let _ = part_cap.progress.try_downgrade(&upper);
                     }
                 }
 
@@ -970,7 +954,6 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
 
     (
         stream.as_collection(),
-        progress_stream,
         health_stream,
         button.press_on_drop(),
     )
@@ -1018,7 +1001,7 @@ impl KafkaResumeUpperProcessor {
                 || format!("source({}) kafka offset commit", self.config.id),
                 move || consumer.commit(&tpl, CommitMode::Sync),
             )
-            .await??;
+            .await?;
         }
         Ok(())
     }
@@ -1571,13 +1554,13 @@ pub enum KafkaHeaderParseError {
 /// The metadata fetcher is a single-worker operator that is responsible for periodically fetching
 /// the Kafka topic metadata (partition IDs and high watermarks) and making it available as a
 /// Timely stream.
-fn render_metadata_fetcher<G: Scope<Timestamp = KafkaTimestamp>>(
-    scope: &G,
+fn render_metadata_fetcher<'scope>(
+    scope: Scope<'scope, KafkaTimestamp>,
     connection: KafkaSourceConnection,
     config: RawSourceCreationConfig,
 ) -> (
-    Stream<G, (mz_repr::Timestamp, MetadataUpdate)>,
-    Stream<G, Probe<KafkaTimestamp>>,
+    StreamVec<'scope, KafkaTimestamp, (mz_repr::Timestamp, MetadataUpdate)>,
+    StreamVec<'scope, KafkaTimestamp, Probe<KafkaTimestamp>>,
     PressOnDropButton,
 ) {
     let active_worker_id = usize::cast_from(config.id.hashed());
@@ -1594,8 +1577,9 @@ fn render_metadata_fetcher<G: Scope<Timestamp = KafkaTimestamp>>(
     let name = format!("KafkaMetadataFetcher({})", config.id);
     let mut builder = AsyncOperatorBuilder::new(name, scope.clone());
 
-    let (metadata_output, metadata_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
-    let (probe_output, probe_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (metadata_output, metadata_stream) =
+        builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+    let (probe_output, probe_stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
     let button = builder.build(move |caps| async move {
         if !is_active_worker {
@@ -1721,10 +1705,8 @@ fn spawn_metadata_thread<C: ConsumerContext>(
                 "kafka metadata thread: starting..."
             );
 
-            let mut ticker = probe::Ticker::new(
-                || KAFKA_METADATA_FETCH_INTERVAL.get(config.config.config_set()),
-                config.now_fn,
-            );
+            let timestamp_interval = config.timestamp_interval;
+            let mut ticker = probe::Ticker::new(move || timestamp_interval, config.now_fn);
 
             loop {
                 let probe_ts = ticker.tick_blocking();

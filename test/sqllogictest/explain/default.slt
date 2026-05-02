@@ -381,7 +381,6 @@ Explained Query:
     cte l0 =
       Reduce::Hierarchical
         aggr_funcs=[min, max]
-        skips=[0, 0]
         monotonic
         must_consolidate
         key_plan
@@ -518,7 +517,7 @@ Explained Query:
       →Arranged l1
     cte l3 =
       →Consolidating Monotonic Top1
-        Group By#0
+        Group By #0
         →Differential Join %0 » %1
           Join stage 0 in %1 with lookup key #1{b}
             filter=((#0{b}) IS NOT NULL)
@@ -526,7 +525,7 @@ Explained Query:
           →Arranged materialize.public.iv
     cte l4 =
       →Consolidating Monotonic Top1
-        Group By#0
+        Group By #0
         →Differential Join %0 » %1
           Join stage 0 in %1 with lookup key #1{b}
           →Arranged l2
@@ -1312,6 +1311,18 @@ Explained Query:
           Project: ()
         →Stream materialize.public.t1
 
+Source materialize.public.t1
+
+Target cluster: quickstart
+
+EOF
+
+## Test default EXPLAIN for SUBSCRIBE
+
+query T multiline
+EXPLAIN WITH(humanized expressions)
+SUBSCRIBE t1
+----
 Source materialize.public.t1
 
 Target cluster: quickstart
@@ -2113,6 +2124,79 @@ Explained Query:
         →Fused with Child Map/Filter/Project
           Project: #1
             →Read materialize.public.t
+
+Target cluster: no_replicas
+
+EOF
+
+# fast path operator names
+statement ok
+CREATE TABLE fp_t_raw(x int, y text);
+
+statement ok
+CREATE MATERIALIZED VIEW fp_mv_filtered AS SELECT * FROM fp_t_raw WHERE x IS NOT NULL;
+
+query T multiline
+EXPLAIN
+SELECT * FROM fp_mv_filtered LIMIT 5
+----
+Explained Query (fast path):
+  Finish limit=5 output=[#0, #1]
+    →Map/Filter/Project
+      →ReadStorage materialize.public.fp_mv_filtered
+
+Target cluster: no_replicas
+
+EOF
+
+# this does not seem to be successfully hitting the `ReadStorage`/`Lookup` path, so we don't have 100% coverage :(
+query T multiline
+EXPLAIN
+SELECT * FROM fp_mv_filtered WHERE x=15 AND y='hello' LIMIT 5
+----
+Explained Query:
+  Finish limit=5 output=[#0, #1]
+    →Read materialize.public.fp_mv_filtered
+
+Source materialize.public.fp_mv_filtered
+  filter=((#0{x} = 15) AND (#1{y} = "hello"))
+
+Target cluster: no_replicas
+
+EOF
+
+statement ok
+CREATE INDEX fp_idx ON fp_mv_filtered(x, y);
+
+query T multiline
+EXPLAIN
+SELECT * FROM fp_mv_filtered LIMIT 5
+----
+Explained Query (fast path):
+  Finish limit=5 output=[#0, #1]
+    →Map/Filter/Project
+      →Indexed materialize.public.fp_mv_filtered (using materialize.public.fp_idx)
+
+Used Indexes:
+  - materialize.public.fp_idx (fast path limit)
+
+Target cluster: no_replicas
+
+EOF
+
+query T multiline
+EXPLAIN
+SELECT * FROM fp_mv_filtered WHERE x=15 AND y='hello' LIMIT 5
+----
+Explained Query (fast path):
+  Finish limit=5 output=[#0, #1]
+    →Map/Filter/Project
+      Project: #0, #1
+      →Index Lookup on materialize.public.fp_mv_filtered (using materialize.public.fp_idx)
+        Lookup values: (15, "hello")
+
+Used Indexes:
+  - materialize.public.fp_idx (lookup)
 
 Target cluster: no_replicas
 

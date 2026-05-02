@@ -28,12 +28,10 @@ from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.mysql import MySql
-from materialize.mzcompose.services.postgres import (
-    CockroachOrPostgresMetadata,
-    Postgres,
-)
+from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.sql_server import (
     SqlServer,
@@ -74,7 +72,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument(
-        "--runtime", default=600, type=int, help="Runtime in seconds per workload"
+        "--runtime", default=400, type=int, help="Runtime in seconds per workload"
     )
     parser.add_argument(
         "--workload",
@@ -178,15 +176,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         conn = c.sql_connection()
         conn.autocommit = True
         with conn.cursor() as cur:
-            cur.execute(
-                """CREATE CONNECTION IF NOT EXISTS kafka_conn
-                   FOR KAFKA BROKER 'kafka:9092', SECURITY PROTOCOL PLAINTEXT"""
-            )
-            cur.execute(
-                """CREATE CONNECTION IF NOT EXISTS csr_conn
+            cur.execute("""CREATE CONNECTION IF NOT EXISTS kafka_conn
+                   FOR KAFKA BROKER 'kafka:9092', SECURITY PROTOCOL PLAINTEXT""")
+            cur.execute("""CREATE CONNECTION IF NOT EXISTS csr_conn
                    FOR CONFLUENT SCHEMA REGISTRY
-                   URL 'http://schema-registry:8081'"""
-            )
+                   URL 'http://schema-registry:8081'""")
         conn.autocommit = False
         conn.close()
 

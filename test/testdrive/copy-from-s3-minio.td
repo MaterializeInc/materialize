@@ -15,19 +15,84 @@ $ set-max-tries max-tries=1
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_copy_from_remote = true;
 
+
 # Prepare the table we want to COPY INTO.
 > CREATE TABLE t1 (a text, b text);
+> CREATE TABLE t1_num (a text, b numeric);
+> CREATE TABLE t1_bad_cast (a jsonb, b int);
+> CREATE TABLE t1_single_col (a text);
+> CREATE TABLE t1_not_null (a text, b int, c float NOT NULL);
+> CREATE TABLE t1_not_nullable (a text NOT NULL, b int NOT NULL);
+> CREATE TABLE t1_fun_house (y int, z text, c float NOT NULL DEFAULT 1.11, d bigint);
 
 $ s3-file-upload bucket=copytos3 key=csv/1.csv repeat=2
 none,100
 
 $ s3-set-presigned-url bucket=copytos3 key=csv/1.csv var-name=1_csv_url
 
+# everything imports as text
 > COPY INTO t1 FROM '${1_csv_url}' (FORMAT CSV);
-
 > SELECT * FROM t1;
 none 100
 none 100
+
+# columns can be cast to types
+> COPY INTO t1_num FROM '${1_csv_url}' (FORMAT CSV);
+> SELECT *, pg_typeof(b) FROM t1_num;
+none 100 numeric
+none 100 numeric
+
+# FYI: casting a number to json/jsonb, e.g. '1'::jsonb, is valid, casting alphabetic string is not
+! COPY INTO t1_bad_cast FROM '${1_csv_url}' (FORMAT CSV);
+contains:failed to decode Row
+
+! COPY INTO t1_single_col FROM '${1_csv_url}' (FORMAT CSV);
+contains:wrong number of columns
+
+# Cannot perform this COPY because column c is NOT NULL, has no default value, and is not being copied into.
+! COPY INTO t1_not_null (a, b) FROM '${1_csv_url}' (FORMAT CSV);
+contains:did not match desc
+
+> COPY INTO t1_not_nullable FROM '${1_csv_url}' (FORMAT CSV);
+> SELECT * FROM t1_not_nullable;
+none 100
+none 100
+
+# The last row of this csv contains a NULL value in the third column
+$ s3-file-upload bucket=copytos3 key=csv2/nulls.csv repeat=1
+foo,100,1.0
+foo,100,1.0
+foo,100,1.0
+foo,100,1.0
+foo,100,1.0
+foo,100,1.0
+foo,100,1.0
+foo,100,1.0
+foo,100,1.0
+foo,100,1.0
+foo,100,1.0
+foo,100,1.0
+foo,100,1.0
+foo,100,1.0
+foo,100,1.0
+foo,100,1.0
+foo,100,1.0
+foo,100,
+
+$ s3-set-presigned-url bucket=copytos3 key=csv2/nulls.csv var-name=nulls_csv_url
+
+# The final row with the null value in "column c" should cause an error as c is NOT NULL
+! COPY INTO t1_not_null (a, b, c) FROM '${nulls_csv_url}' (FORMAT CSV);
+contains:did not match desc
+
+# Make sure that the entire transaction is rejected
+> SELECT COUNT(*) FROM t1_not_null;
+0
+
+> COPY INTO t1_fun_house (z, y) FROM '${1_csv_url}' (FORMAT CSV);
+> SELECT * from t1_fun_house;
+100 none 1.11 <null>
+100 none 1.11 <null>
 
 # gzip Compression.
 
@@ -158,3 +223,15 @@ zstd 500
 > SELECT * FROM t4;
 none 100
 none 100
+
+# Test pagination: upload >1000 objects to force multiple ListObjectsV2 pages.
+
+$ s3-file-upload bucket=copytos3 key-prefix=pagination/ key-suffix=.csv count=1001
+data,value
+
+> CREATE TABLE t_pagination (a text, b text);
+
+> COPY INTO t_pagination FROM 's3://copytos3/pagination' (FORMAT CSV, AWS CONNECTION = aws_conn);
+
+> SELECT COUNT(*) FROM t_pagination;
+1001

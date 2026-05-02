@@ -17,9 +17,13 @@ from materialize.mzcompose.service import (
     Service,
     ServiceConfig,
 )
+from materialize.mzcompose.services import foundationdb
 from materialize.mzcompose.services.azurite import azure_blob_uri
+from materialize.mzcompose.services.metadata_store import (
+    EXTERNAL_METADATA_STORE_ADDRESS,
+    METADATA_STORE,
+)
 from materialize.mzcompose.services.minio import minio_blob_uri
-from materialize.mzcompose.services.postgres import METADATA_STORE
 
 
 class Testdrive(Service):
@@ -52,7 +56,8 @@ class Testdrive(Service):
         aws_access_key_id: str | None = "minioadmin",
         aws_secret_access_key: str | None = "minioadmin",
         no_consistency_checks: bool = False,
-        external_metadata_store: bool = False,
+        check_statement_logging: bool = False,
+        external_metadata_store: str | bool = EXTERNAL_METADATA_STORE_ADDRESS,
         external_blob_store: bool = False,
         blob_store_is_azure: bool = False,
         fivetran_destination: bool = False,
@@ -165,6 +170,9 @@ class Testdrive(Service):
         if no_consistency_checks:
             entrypoint.append("--consistency-checks=disable")
 
+        if check_statement_logging:
+            entrypoint.append("--check-statement-logging")
+
         if fivetran_destination:
             entrypoint.append(f"--fivetran-destination-url={fivetran_destination_url}")
             entrypoint.append(
@@ -187,9 +195,20 @@ class Testdrive(Service):
                 entrypoint.append("--persist-blob-url=file:///mzdata/persist/blob")
 
             if external_metadata_store:
-                entrypoint.append(
-                    "--persist-consensus-url=postgres://root@cockroach:26257?options=--search_path=consensus"
-                )
+                if metadata_store == "foundationdb":
+                    entrypoint.append(
+                        "--persist-consensus-url=foundationdb:?prefix=consensus"
+                    )
+                    volumes += foundationdb.fdb_cluster_file(external_metadata_store)
+                else:
+                    address = (
+                        metadata_store
+                        if external_metadata_store == True
+                        else external_metadata_store
+                    )
+                    entrypoint.append(
+                        f"--persist-consensus-url=postgres://root@{address}:26257?options=--search_path=consensus"
+                    )
             else:
                 entrypoint.append(
                     f"--persist-consensus-url=postgres://root@{mz_service}:26257?options=--search_path=consensus"

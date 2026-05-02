@@ -196,7 +196,8 @@ impl<F: Fn(&ConfigUpdates, &ConfigSet) + Send> SyncedConfigSet<F> {
                 | (ConfigVal::Duration(_), _)
                 | (ConfigVal::Json(_), _)
                 | (ConfigVal::OptUsize(_), _)
-                | (ConfigVal::String(_), _) => anyhow::bail!(
+                | (ConfigVal::String(_), _)
+                | (ConfigVal::OptString(_), _) => anyhow::bail!(
                     "LD flag cannot be cast to the ConfigVal for {}",
                     entry.name()
                 ),
@@ -228,6 +229,9 @@ fn dyn_into_flag(val: ConfigVal) -> Result<ld::FlagValue, anyhow::Error> {
         ConfigVal::OptUsize(_) => anyhow::bail!("OptUsize None cannot be converted to a FlagValue"),
         ConfigVal::F64(v) => ld::FlagValue::Number(v),
         ConfigVal::String(v) => ld::FlagValue::Str(v),
+        ConfigVal::OptString(_) => {
+            anyhow::bail!("OptString None cannot be converted to a FlagValue")
+        }
         ConfigVal::Duration(v) => ld::FlagValue::Str(humantime::format_duration(v).to_string()),
         ConfigVal::Json(v) => ld::FlagValue::Json(v),
     })

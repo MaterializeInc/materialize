@@ -12,7 +12,7 @@
 use std::fmt::Debug;
 use std::num::NonZeroI64;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use itertools::Itertools;
@@ -21,7 +21,8 @@ use mz_controller_types::ClusterId;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist_client::PersistClient;
-use mz_repr::{CatalogItemId, Diff, GlobalId};
+use mz_persist_types::ShardId;
+use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, SqlScalarType};
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use uuid::Uuid;
 
@@ -29,9 +30,10 @@ use crate::config::ClusterReplicaSizeMap;
 use crate::durable::debug::{DebugCatalogState, Trace};
 pub use crate::durable::error::{CatalogError, DurableCatalogError, FenceError};
 pub use crate::durable::metrics::Metrics;
+use crate::durable::objects::AuditLog;
+pub use crate::durable::objects::Snapshot;
 pub use crate::durable::objects::state_update::StateUpdate;
 use crate::durable::objects::state_update::{StateUpdateKindJson, TryIntoStateUpdateKind};
-use crate::durable::objects::{AuditLog, Snapshot};
 pub use crate::durable::objects::{
     Cluster, ClusterConfig, ClusterReplica, ClusterVariant, ClusterVariantManaged, Comment,
     Database, DefaultPrivilege, IntrospectionSourceIndex, Item, NetworkPolicy, ReplicaConfig,
@@ -211,6 +213,9 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send + Sync {
     /// NB: We may remove this in later iterations of Pv2.
     fn epoch(&self) -> Epoch;
 
+    /// Returns the metrics for this catalog state.
+    fn metrics(&self) -> &Metrics;
+
     /// Politely releases all external resources that can only be released in an async context.
     async fn expire(self: Box<Self>);
 
@@ -295,6 +300,16 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     /// Creates a new durable catalog state transaction.
     async fn transaction(&mut self) -> Result<Transaction, CatalogError>;
 
+    /// Creates a new transaction initialized from the given [`Snapshot`]
+    /// instead of reading from durable storage. Used for incremental DDL
+    /// dry runs where the transaction state from a previous dry run has been
+    /// saved and needs to be restored so it stays in sync with the accumulated
+    /// `CatalogState`.
+    fn transaction_from_snapshot(
+        &mut self,
+        snapshot: Snapshot,
+    ) -> Result<Transaction, CatalogError>;
+
     /// Commits a durable catalog state transaction. The transaction will be committed at
     /// `commit_ts`.
     ///
@@ -308,10 +323,11 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         commit_ts: Timestamp,
     ) -> Result<Timestamp, CatalogError>;
 
-    /// Confirms that this catalog is connected as the current leader.
+    /// Advances the upper of the catalog shard to `new_upper`.
     ///
-    /// NB: We may remove this in later iterations of Pv2.
-    async fn confirm_leadership(&mut self) -> Result<(), CatalogError>;
+    /// This implicitly confirms leadership, as attempting to advance the catalog frontier will
+    /// fail if the writer has been fenced out.
+    async fn advance_upper(&mut self, new_upper: Timestamp) -> Result<(), CatalogError>;
 
     /// Allocates and returns `amount` IDs of `id_type`.
     ///
@@ -323,12 +339,16 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         amount: u64,
         commit_ts: Timestamp,
     ) -> Result<Vec<u64>, CatalogError> {
+        let start = Instant::now();
         if amount == 0 {
             return Ok(Vec::new());
         }
         let mut txn = self.transaction().await?;
         let ids = txn.get_and_increment_id_by(id_type.to_string(), amount)?;
         txn.commit_internal(commit_ts).await?;
+        self.metrics()
+            .allocate_id_seconds
+            .observe(start.elapsed().as_secs_f64());
         Ok(ids)
     }
 
@@ -375,6 +395,8 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
             .into_element();
         Ok(ClusterId::user(id).ok_or(SqlCatalogError::IdExhaustion)?)
     }
+
+    fn shard_id(&self) -> ShardId;
 }
 
 trait AuditLogIteratorTrait: Iterator<Item = (AuditLog, Timestamp)> + Send + Sync + Debug {}
@@ -433,6 +455,14 @@ impl Iterator for AuditLogIterator {
     fn next(&mut self) -> Option<Self::Item> {
         self.audit_logs.next()
     }
+}
+
+/// Returns the schema of the `Row`s/`SourceData`s stored in the persist
+/// shard backing the catalog.
+pub fn persist_desc() -> RelationDesc {
+    RelationDesc::builder()
+        .with_column("data", SqlScalarType::Jsonb.nullable(false))
+        .finish()
 }
 
 /// A builder to help create an [`OpenableDurableCatalogState`] for tests.

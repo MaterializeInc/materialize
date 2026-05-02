@@ -15,20 +15,23 @@ use anyhow::Context;
 use arrow::array::{
     Array, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
     Decimal256Array, FixedSizeBinaryArray, Float16Array, Float32Array, Float64Array, Int8Array,
-    Int16Array, Int32Array, Int64Array, LargeBinaryArray, LargeListArray, LargeStringArray,
-    ListArray, StringArray, StringViewArray, StructArray, Time32MillisecondArray,
-    Time32SecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array,
-    UInt64Array,
+    Int16Array, Int32Array, Int64Array, IntervalDayTimeArray, IntervalMonthDayNanoArray,
+    IntervalYearMonthArray, LargeBinaryArray, LargeListArray, LargeStringArray, ListArray,
+    MapArray, StringArray, StringViewArray, StructArray, Time32MillisecondArray, Time32SecondArray,
+    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer};
-use arrow::datatypes::{DataType, TimeUnit};
+use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use chrono::{DateTime, NaiveTime};
 use dec::OrderedDecimal;
+use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_repr::adt::date::Date;
+use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::JsonbPacker;
 use mz_repr::adt::numeric::Numeric;
+use mz_repr::adt::range::{Range, RangeLowerBound, RangeUpperBound};
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, RelationDesc, Row, RowPacker, SharedRow, SqlScalarType};
 use ordered_float::OrderedFloat;
@@ -366,6 +369,88 @@ fn scalar_type_and_array_to_reader(
                 nulls: null_mask.cloned(),
             })
         }
+        (
+            SqlScalarType::Map {
+                value_type,
+                custom_id: _,
+            },
+            DataType::Map(_, _),
+        ) => {
+            let map_array = downcast_array::<MapArray>(array);
+            let keys = map_array
+                .keys()
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("map keys should be Utf8 strings")
+                .clone();
+            let values_reader =
+                scalar_type_and_array_to_reader(value_type, Arc::clone(map_array.values()))
+                    .context("map values")?;
+            Ok(ColReader::Map {
+                offsets: map_array.offsets().clone(),
+                keys,
+                values: Box::new(values_reader),
+                nulls: map_array.nulls().cloned(),
+            })
+        }
+        (SqlScalarType::Range { element_type }, DataType::Struct(_)) => {
+            let struct_array = downcast_array::<StructArray>(array);
+            let lower_array = struct_array
+                .column_by_name("lower")
+                .ok_or_else(|| anyhow::anyhow!("range struct missing 'lower' field"))?;
+            let upper_array = struct_array
+                .column_by_name("upper")
+                .ok_or_else(|| anyhow::anyhow!("range struct missing 'upper' field"))?;
+            let empty_array = struct_array
+                .column_by_name("empty")
+                .ok_or_else(|| anyhow::anyhow!("range struct missing 'empty' field"))?;
+            let lower_inclusive_array = struct_array
+                .column_by_name("lower_inclusive")
+                .ok_or_else(|| anyhow::anyhow!("range struct missing 'lower_inclusive' field"))?;
+            let upper_inclusive_array = struct_array
+                .column_by_name("upper_inclusive")
+                .ok_or_else(|| anyhow::anyhow!("range struct missing 'upper_inclusive' field"))?;
+
+            let lower_reader =
+                scalar_type_and_array_to_reader(element_type, Arc::clone(lower_array))
+                    .context("range lower")?;
+            let upper_reader =
+                scalar_type_and_array_to_reader(element_type, Arc::clone(upper_array))
+                    .context("range upper")?;
+
+            let empty = downcast_array::<BooleanArray>(Arc::clone(empty_array));
+            let lower_inclusive = downcast_array::<BooleanArray>(Arc::clone(lower_inclusive_array));
+            let upper_inclusive = downcast_array::<BooleanArray>(Arc::clone(upper_inclusive_array));
+
+            let lower_nulls = lower_array.nulls().cloned();
+            let upper_nulls = upper_array.nulls().cloned();
+
+            Ok(ColReader::Range {
+                lower: Box::new(lower_reader),
+                lower_nulls,
+                upper: Box::new(upper_reader),
+                upper_nulls,
+                lower_inclusive,
+                upper_inclusive,
+                empty,
+                nulls: struct_array.nulls().cloned(),
+            })
+        }
+        (SqlScalarType::Interval, DataType::Interval(IntervalUnit::YearMonth)) => {
+            Ok(ColReader::IntervalYearMonth(downcast_array::<
+                IntervalYearMonthArray,
+            >(array)))
+        }
+        (SqlScalarType::Interval, DataType::Interval(IntervalUnit::DayTime)) => {
+            Ok(ColReader::IntervalDayTime(downcast_array::<
+                IntervalDayTimeArray,
+            >(array)))
+        }
+        (SqlScalarType::Interval, DataType::Interval(IntervalUnit::MonthDayNano)) => {
+            Ok(ColReader::IntervalMonthDayNano(downcast_array::<
+                IntervalMonthDayNanoArray,
+            >(array)))
+        }
         other => anyhow::bail!("unsupported: {other:?}"),
     }
 }
@@ -448,6 +533,28 @@ enum ColReader {
         fields: Vec<Box<ColReader>>,
         nulls: Option<NullBuffer>,
     },
+
+    Map {
+        offsets: OffsetBuffer<i32>,
+        keys: StringArray,
+        values: Box<ColReader>,
+        nulls: Option<NullBuffer>,
+    },
+
+    Range {
+        lower: Box<ColReader>,
+        lower_nulls: Option<NullBuffer>,
+        upper: Box<ColReader>,
+        upper_nulls: Option<NullBuffer>,
+        lower_inclusive: BooleanArray,
+        upper_inclusive: BooleanArray,
+        empty: BooleanArray,
+        nulls: Option<NullBuffer>,
+    },
+
+    IntervalYearMonth(IntervalYearMonthArray),
+    IntervalDayTime(IntervalDayTimeArray),
+    IntervalMonthDayNano(IntervalMonthDayNanoArray),
 }
 
 impl ColReader {
@@ -764,6 +871,139 @@ impl ColReader {
 
                 // Return early because we've already packed the necessasry Datums.
                 return Ok(());
+            }
+            ColReader::Map {
+                offsets,
+                keys,
+                values,
+                nulls,
+            } => {
+                let is_non_null = nulls.as_ref().map(|n| n.is_valid(idx)).unwrap_or(true);
+                if !is_non_null {
+                    packer.push(Datum::Null);
+                    return Ok(());
+                }
+
+                let start: usize = offsets[idx].try_into().context("map start offset")?;
+                let end: usize = offsets[idx + 1].try_into().context("map end offset")?;
+
+                // Arrow's MapArray doesn't guarantee that keys are in sorted order, but Materialize's
+                // Datum::Map does, so we need to sort the keys here before packing them, or else
+                // many assumptions will break.
+                let mut kv_sorted = (start..end)
+                    .map(|i| (keys.value(i), i))
+                    .sorted_by_key(|(k, _)| *k)
+                    .peekable();
+
+                packer
+                    .push_dict_with(|packer| {
+                        while let Some((key, i)) = kv_sorted.next() {
+                            // Parquet docs state that if there are duplicate keys, the last value
+                            // should be used, so skip duplicates here.
+                            //
+                            // sorted_by_key is a stable sort, so entries with duplicate keys will
+                            // maintain their original order, and we can pick the last one here.
+                            if let Some((next_key, _)) = kv_sorted.peek() {
+                                if key == *next_key {
+                                    continue;
+                                }
+                            }
+                            packer.push(Datum::String(key));
+                            values.read(i, packer)?;
+                        }
+                        Ok::<_, anyhow::Error>(())
+                    })
+                    .context("pack map")?;
+
+                // Return early because we've already packed the necessary Datums.
+                return Ok(());
+            }
+            ColReader::Range {
+                lower,
+                lower_nulls,
+                upper,
+                upper_nulls,
+                lower_inclusive,
+                upper_inclusive,
+                empty,
+                nulls,
+            } => {
+                let is_valid = nulls.as_ref().map(|n| n.is_valid(idx)).unwrap_or(true);
+                if !is_valid {
+                    packer.push(Datum::Null);
+                    return Ok(());
+                }
+
+                if empty.value(idx) {
+                    packer.push(Datum::Range(Range { inner: None }));
+                    return Ok(());
+                }
+
+                let lower_is_infinite = lower_nulls
+                    .as_ref()
+                    .map(|n| !n.is_valid(idx))
+                    .unwrap_or(false);
+                let upper_is_infinite = upper_nulls
+                    .as_ref()
+                    .map(|n| !n.is_valid(idx))
+                    .unwrap_or(false);
+
+                // Read finite bounds into owned Rows so the packing closures
+                // handed to `push_range_with` can capture them by move.
+                let lower_bound = if lower_is_infinite {
+                    None
+                } else {
+                    let mut temp = SharedRow::get();
+                    lower.read(idx, &mut temp.packer())?;
+                    let row = temp.clone();
+                    Some(move |packer: &mut RowPacker| -> Result<(), anyhow::Error> {
+                        packer.push(row.unpack_first());
+                        Ok(())
+                    })
+                };
+
+                let upper_bound = if upper_is_infinite {
+                    None
+                } else {
+                    let mut temp = SharedRow::get();
+                    upper.read(idx, &mut temp.packer())?;
+                    let row = temp.clone();
+                    Some(move |packer: &mut RowPacker| -> Result<(), anyhow::Error> {
+                        packer.push(row.unpack_first());
+                        Ok(())
+                    })
+                };
+
+                packer
+                    .push_range_with(
+                        RangeLowerBound {
+                            inclusive: lower_inclusive.value(idx),
+                            bound: lower_bound,
+                        },
+                        RangeUpperBound {
+                            inclusive: upper_inclusive.value(idx),
+                            bound: upper_bound,
+                        },
+                    )
+                    .context("pack range")?;
+
+                return Ok(());
+            }
+            ColReader::IntervalYearMonth(array) => array
+                .is_valid(idx)
+                .then(|| array.value(idx))
+                .map(|months| Datum::Interval(Interval::new(months, 0, 0))),
+            ColReader::IntervalDayTime(array) => {
+                array.is_valid(idx).then(|| array.value(idx)).map(|v| {
+                    let micros = i64::from(v.milliseconds) * 1_000;
+                    Datum::Interval(Interval::new(0, v.days, micros))
+                })
+            }
+            ColReader::IntervalMonthDayNano(array) => {
+                array.is_valid(idx).then(|| array.value(idx)).map(|v| {
+                    let micros = v.nanoseconds / 1_000;
+                    Datum::Interval(Interval::new(v.months, v.days, micros))
+                })
             }
         };
 

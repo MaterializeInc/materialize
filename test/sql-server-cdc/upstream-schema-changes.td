@@ -51,8 +51,13 @@ $ sql-server-execute name=sql-server
 ALTER TABLE foo ALTER COLUMN meta_col VARCHAR(64);
 INSERT INTO foo VALUES ('d', 'date', 'ajwa');
 
-! SELECT * FROM foo1;
-contains:Incompatible schema change
+# Altering the newly added `meta_col` column does not brick `foo1` subsource because `foo1` is
+# not following/replicating `meta_col`, so schema updates involving it are inconsequential.
+> SELECT * FROM foo1;
+1 a apple
+2 b banana
+3 c cherry
+4 d date
 
 > DROP TABLE foo1;
 
@@ -72,6 +77,26 @@ contains:missing columns
 2 b banana
 3 c cherry
 4 d date
+
+# To support the new column without downtime, we can create a new CDC capture instance for the table
+# in the upstream SQL server db that will contain the new column.
+
+$ sql-server-execute name=sql-server
+USE test;
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'foo', @role_name = 'SA', @capture_instance = 'dbo_foo2', @supports_net_changes = 0;
+
+> CREATE SOURCE sql_server_src2
+  FROM SQL SERVER CONNECTION sql_server_conn;
+
+> CREATE SCHEMA v2;
+
+> CREATE TABLE v2.foo2 FROM SOURCE sql_server_src2 (REFERENCE dbo.foo);
+
+> SELECT * FROM v2.foo2;
+1 a apple <null>
+2 b banana <null>
+3 c cherry wild
+4 d date ajwa
 
 $ sql-server-execute name=sql-server
 ALTER TABLE foo DROP COLUMN id;
@@ -115,5 +140,27 @@ b banana <null>
 c cherry wild
 d date ajwa
 e elderberry montypython
+
+$ sql-server-execute name=sql-server
+CREATE TABLE bar (id BIGINT IDENTITY(1,1), name VARCHAR(16), value VARCHAR(32), age BIGINT, location VARCHAR(32), meta_col VARCHAR(32));
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'bar', @role_name = 'SA', @supports_net_changes = 0;
+INSERT INTO bar VALUES ('a', 'apple', 5, 'orchard', 'blah'), ('b', 'banana', 7, 'tree', 'blahblah');
+
+> CREATE TABLE bar1 FROM SOURCE sql_server_src (REFERENCE dbo.bar) WITH (EXCLUDE COLUMNS = (meta_col, name));
+
+$ sql-server-execute name=sql-server
+ALTER TABLE bar DROP COLUMN meta_col;
+
+# Dropping an excluded column is okay
+> SELECT * FROM bar1;
+1 apple 5 orchard
+2 banana 7 tree
+
+$ sql-server-execute name=sql-server
+ALTER TABLE bar DROP COLUMN name, location;
+
+# Dropping a non-excluded column stalls the source
+! SELECT * FROM bar1;
+contains:Incompatible schema change
 
 > DROP SOURCE sql_server_src CASCADE;

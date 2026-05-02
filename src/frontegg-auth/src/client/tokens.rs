@@ -77,7 +77,15 @@ impl Client {
     }
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    Hash,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize
+)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiTokenArgs {
     pub client_id: Uuid,
@@ -117,7 +125,7 @@ mod tests {
 
         // Fake server that returns the provided status code a few times before returning success.
         let app = Router::new().route(
-            "/:status_code",
+            "/{:status_code}",
             post(
                 |axum::extract::Path(code): axum::extract::Path<u16>| async move {
                     let cnt = count_.fetch_add(1, Ordering::Relaxed);

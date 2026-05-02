@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+#![recursion_limit = "256"]
+
 use std::fmt::{Debug, Formatter};
 use std::time::Duration;
 
@@ -589,7 +591,7 @@ async fn test_concurrent_debugs(state_builder: TestCatalogStateBuilder) {
         .await
         .unwrap();
 
-    state_handle.await.unwrap();
+    state_handle.await;
 
     let mut state = state_builder
         .clone()
@@ -625,7 +627,7 @@ async fn test_concurrent_debugs(state_builder: TestCatalogStateBuilder) {
         .await
         .unwrap();
 
-    state_handle.await.unwrap();
+    state_handle.await;
 
     let configs = state_builder
         .clone()

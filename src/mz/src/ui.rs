@@ -76,7 +76,7 @@ impl OutputFormatter {
         if self.no_color {
             eprintln!("\n* Warning * {}", msg);
         } else {
-            let _ = self.print_with_color("\n* Warning *", Color::Yellow, true)?;
+            self.print_with_color("\n* Warning *", Color::Yellow, true)?;
             eprintln!(" {}", msg);
         }
 

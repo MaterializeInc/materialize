@@ -9,6 +9,7 @@
 
 //! A tiny utility library for making TLS connectors.
 
+use mz_ore::secure::{Zeroize, Zeroizing};
 use openssl::pkcs12::Pkcs12;
 use openssl::pkey::PKey;
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
@@ -18,9 +19,6 @@ use postgres_openssl::MakeTlsConnector;
 use tokio_postgres::config::SslMode;
 
 macro_rules! bail_generic {
-    ($fmt:expr, $($arg:tt)*) => {
-        return Err(TlsError::Generic(anyhow::anyhow!($fmt, $($arg)*)))
-    };
     ($err:expr $(,)?) => {
         return Err(TlsError::Generic(anyhow::anyhow!($err)))
     };
@@ -79,9 +77,9 @@ pub fn make_tls(config: &tokio_postgres::Config) -> Result<MakeTlsConnector, Tls
         _ => {}
     }
     if let Some(ssl_root_cert) = config.get_ssl_root_cert() {
-        builder
-            .cert_store_mut()
-            .add_cert(X509::from_pem(ssl_root_cert)?)?;
+        for cert in X509::stack_from_pem(ssl_root_cert)? {
+            builder.cert_store_mut().add_cert(cert)?;
+        }
     }
 
     let mut tls_connector = MakeTlsConnector::new(builder.build());
@@ -103,12 +101,34 @@ pub struct Pkcs12Archive {
     pub pass: String,
 }
 
+impl Zeroize for Pkcs12Archive {
+    fn zeroize(&mut self) {
+        self.der.zeroize();
+        self.pass.zeroize();
+    }
+}
+
+impl Drop for Pkcs12Archive {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+impl Pkcs12Archive {
+    pub fn into_parts(self) -> (Vec<u8>, String) {
+        let mut md = std::mem::ManuallyDrop::new(self);
+        let der = std::mem::take(&mut md.der);
+        let pass = std::mem::take(&mut md.pass);
+        (der, pass)
+    }
+}
+
 /// Constructs an identity from a PEM-formatted key and certificate using OpenSSL.
 pub fn pkcs12der_from_pem(
     key: &[u8],
     cert: &[u8],
 ) -> Result<Pkcs12Archive, openssl::error::ErrorStack> {
-    let mut buf = Vec::new();
+    let mut buf = Zeroizing::new(Vec::new());
     buf.extend(key);
     buf.push(b'\n');
     buf.extend(cert);
@@ -146,4 +166,33 @@ pub fn pkcs12der_from_pem(
         .build2(&pass)?
         .to_der()?;
     Ok(Pkcs12Archive { der, pass })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn pkcs12_archive_needs_drop() {
+        assert!(std::mem::needs_drop::<Pkcs12Archive>());
+    }
+
+    #[mz_ore::test]
+    fn pkcs12_archive_zeroize_clears_fields() {
+        let mut archive = Pkcs12Archive {
+            der: vec![0xDE, 0xAD, 0xBE, 0xEF],
+            pass: String::from("hunter2"),
+        };
+
+        archive.zeroize();
+
+        assert!(archive.der.is_empty(), "der was not zeroed");
+        assert!(archive.pass.is_empty(), "pass was not zeroed");
+    }
+
+    #[mz_ore::test]
+    fn pkcs12_archive_implements_zeroize() {
+        fn assert_zeroize<T: mz_ore::secure::Zeroize>() {}
+        assert_zeroize::<Pkcs12Archive>();
+    }
 }

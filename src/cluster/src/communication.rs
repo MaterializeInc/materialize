@@ -84,24 +84,25 @@ use mz_ore::cast::CastFrom;
 use mz_ore::netio::{Listener, Stream};
 use mz_ore::retry::Retry;
 use regex::Regex;
-use timely::communication::allocator::zero_copy::allocator::TcpBuilder;
+use timely::communication::allocator::ProcessBuilder;
+use timely::communication::allocator::generic::AllocatorBuilder;
 use timely::communication::allocator::zero_copy::bytes_slab::BytesRefill;
 use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
-use timely::communication::allocator::{GenericBuilder, PeerBuilder};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{info, warn};
 
-/// Creates communication mesh from cluster config
-pub async fn initialize_networking<P>(
+/// Creates communication mesh from cluster config.
+///
+/// `enable_zero_copy_binary` selects between the zero-copy serialized
+/// (`ProcessBuilder::new_bytes_vector`) and regular mpsc-based
+/// (`ProcessBuilder::new_typed_vector`) intra-process allocator flavors.
+pub async fn initialize_networking(
     workers: usize,
     process: usize,
     addresses: Vec<String>,
     refill: BytesRefill,
-    builder_fn: impl Fn(TcpBuilder<P::Peer>) -> GenericBuilder,
-) -> Result<(Vec<GenericBuilder>, Box<dyn Any + Send>), anyhow::Error>
-where
-    P: PeerBuilder,
-{
+    enable_zero_copy_binary: bool,
+) -> Result<(Vec<AllocatorBuilder>, Box<dyn Any + Send>), anyhow::Error> {
     info!(
         process,
         ?addresses,
@@ -126,7 +127,7 @@ where
             .collect::<Result<Vec<_>, _>>()
             .map_err(anyhow::Error::from)
             .context("failed to get standard sockets from tokio sockets")?;
-        initialize_networking_inner::<_, P, _>(sockets, process, workers, refill, builder_fn)
+        initialize_networking_inner(sockets, process, workers, refill, enable_zero_copy_binary)
     } else if sockets
         .iter()
         .filter_map(|s| s.as_ref())
@@ -138,23 +139,21 @@ where
             .collect::<Result<Vec<_>, _>>()
             .map_err(anyhow::Error::from)
             .context("failed to get standard sockets from tokio sockets")?;
-        initialize_networking_inner::<_, P, _>(sockets, process, workers, refill, builder_fn)
+        initialize_networking_inner(sockets, process, workers, refill, enable_zero_copy_binary)
     } else {
         anyhow::bail!("cannot mix TCP and Unix streams");
     }
 }
 
-fn initialize_networking_inner<S, P, PF>(
+fn initialize_networking_inner<S>(
     sockets: Vec<Option<S>>,
     process: usize,
     workers: usize,
     refill: BytesRefill,
-    builder_fn: PF,
-) -> Result<(Vec<GenericBuilder>, Box<dyn Any + Send>), anyhow::Error>
+    enable_zero_copy_binary: bool,
+) -> Result<(Vec<AllocatorBuilder>, Box<dyn Any + Send>), anyhow::Error>
 where
     S: timely::communication::allocator::zero_copy::stream::Stream + 'static,
-    P: PeerBuilder,
-    PF: Fn(TcpBuilder<P::Peer>) -> GenericBuilder,
 {
     for s in &sockets {
         if let Some(s) = s {
@@ -163,16 +162,28 @@ where
         }
     }
 
-    match initialize_networking_from_sockets::<_, P>(
+    // Choose the intra-process allocator flavor up front.
+    let process_allocators = if enable_zero_copy_binary {
+        ProcessBuilder::new_bytes_vector(workers, refill.clone())
+    } else {
+        ProcessBuilder::new_typed_vector(workers, refill.clone())
+    };
+
+    match initialize_networking_from_sockets(
+        process_allocators,
         sockets,
         process,
         workers,
         refill,
         Arc::new(|_| None),
     ) {
-        Ok((stuff, guard)) => {
+        Ok((tcp_builders, guard)) => {
             info!(process = process, "successfully initialized network");
-            Ok((stuff.into_iter().map(builder_fn).collect(), Box::new(guard)))
+            let builders = tcp_builders
+                .into_iter()
+                .map(AllocatorBuilder::Tcp)
+                .collect();
+            Ok((builders, Box::new(guard)))
         }
         Err(err) => {
             warn!(process, "failed to initialize network: {err}");
@@ -537,7 +548,7 @@ mod turmoil_tests {
 
         let mut sim = turmoil::Builder::new()
             .enable_random_order()
-            .rng_seed(rng.r#gen())
+            .rng_seed(rng.random())
             .build();
 
         let processes: Vec<_> = (0..NUM_PROCESSES).map(|i| format!("process-{i}")).collect();
@@ -618,12 +629,12 @@ mod turmoil_tests {
 
         // Let random processes crash at random times.
         for _ in 0..NUM_CRASHES {
-            let steps = rng.gen_range(1..100);
+            let steps = rng.random_range(1..100);
             for _ in 0..steps {
                 sim.step().unwrap();
             }
 
-            let i = rng.gen_range(0..NUM_PROCESSES);
+            let i = rng.random_range(0..NUM_PROCESSES);
             info!("bouncing process {i}");
             sim.bounce(format!("process-{i}"));
         }

@@ -75,18 +75,20 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
-use im::OrdMap;
+use imbl::OrdMap;
 use mz_build_info::BuildInfo;
 use mz_dyncfg::{ConfigSet, ConfigType, ConfigUpdates, ConfigVal};
-use mz_persist_client::cfg::{CRDB_CONNECT_TIMEOUT, CRDB_TCP_USER_TIMEOUT};
+use mz_persist_client::cfg::{
+    CRDB_CONNECT_TIMEOUT, CRDB_KEEPALIVES_IDLE, CRDB_KEEPALIVES_INTERVAL, CRDB_KEEPALIVES_RETRIES,
+    CRDB_TCP_USER_TIMEOUT,
+};
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::bytes::ByteSize;
-use mz_repr::user::ExternalUserMetadata;
+use mz_repr::user::{ExternalUserMetadata, InternalUserMetadata};
 use mz_tracing::{CloneableEnvFilter, SerializableDirective};
 use serde::Serialize;
 use thiserror::Error;
-use tracing::error;
 use uncased::UncasedStr;
 
 use crate::ast::Ident;
@@ -843,6 +845,11 @@ impl SessionVars {
             .as_bytes()
     }
 
+    /// Sets the internal metadata associated with the user.
+    pub fn set_internal_user_metadata(&mut self, metadata: InternalUserMetadata) {
+        self.user.internal_metadata = Some(metadata);
+    }
+
     /// Sets the external metadata associated with the user.
     pub fn set_external_user_metadata(&mut self, metadata: ExternalUserMetadata) {
         self.user.external_metadata = Some(metadata);
@@ -1091,11 +1098,10 @@ impl SystemVars {
             &MAX_OBJECTS_PER_SCHEMA,
             &MAX_SECRETS,
             &MAX_ROLES,
-            &MAX_CONTINUAL_TASKS,
             &MAX_NETWORK_POLICIES,
             &MAX_RULES_PER_NETWORK_POLICY,
             &MAX_RESULT_SIZE,
-            &MAX_COPY_FROM_SIZE,
+            &MAX_COPY_FROM_ROW_SIZE,
             &ALLOWED_CLUSTER_REPLICA_SIZES,
             &upsert_rocksdb::UPSERT_ROCKSDB_COMPACTION_STYLE,
             &upsert_rocksdb::UPSERT_ROCKSDB_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET,
@@ -1157,7 +1163,7 @@ impl SystemVars {
             &ENABLE_STORAGE_SHARD_FINALIZATION,
             &ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE,
             &ENABLE_DEFAULT_CONNECTION_VALIDATION,
-            &ENABLE_REDUCE_REDUCTION,
+            &DEFAULT_TIMESTAMP_INTERVAL,
             &MIN_TIMESTAMP_INTERVAL,
             &MAX_TIMESTAMP_INTERVAL,
             &LOGGING_FILTER,
@@ -1224,6 +1230,9 @@ impl SystemVars {
                     VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), false)
                 }
                 ConfigVal::String(default) => {
+                    VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), false)
+                }
+                ConfigVal::OptString(default) => {
                     VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), false)
                 }
                 ConfigVal::Duration(default) => {
@@ -1447,13 +1456,12 @@ impl SystemVars {
     /// be visible because of other settings or users. Before or after accessing
     /// this method, you should call `Var::visible`.
     pub fn set_default(&mut self, name: &str, input: VarInput) -> Result<(), VarError> {
-        let result = self
-            .vars
+        self.vars
             .get_mut(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
             .and_then(|v| v.set_default(input))?;
         self.notify_callbacks(name);
-        Ok(result)
+        Ok(())
     }
 
     /// Sets the configuration parameter named `name` to its default value.
@@ -1614,11 +1622,6 @@ impl SystemVars {
         *self.expect_value(&MAX_ROLES)
     }
 
-    /// Returns the value of the `max_continual_tasks` configuration parameter.
-    pub fn max_continual_tasks(&self) -> u32 {
-        *self.expect_value(&MAX_CONTINUAL_TASKS)
-    }
-
     /// Returns the value of the `max_network_policies` configuration parameter.
     pub fn max_network_policies(&self) -> u32 {
         *self.expect_value(&MAX_NETWORK_POLICIES)
@@ -1634,9 +1637,10 @@ impl SystemVars {
         self.expect_value::<ByteSize>(&MAX_RESULT_SIZE).as_bytes()
     }
 
-    /// Returns the value of the `max_copy_from_size` configuration parameter.
-    pub fn max_copy_from_size(&self) -> u32 {
-        *self.expect_value(&MAX_COPY_FROM_SIZE)
+    /// Returns the value of the `max_copy_from_row_size` configuration parameter.
+    pub fn max_copy_from_row_size(&self) -> u64 {
+        self.expect_value::<ByteSize>(&MAX_COPY_FROM_ROW_SIZE)
+            .as_bytes()
     }
 
     /// Returns the value of the `allowed_cluster_replica_sizes` configuration parameter.
@@ -1848,6 +1852,27 @@ impl SystemVars {
         ))
     }
 
+    /// Returns the `crdb_keepalives_idle` configuration parameter.
+    pub fn crdb_keepalives_idle(&self) -> Duration {
+        *self.expect_config_value(UncasedStr::new(
+            mz_persist_client::cfg::CRDB_KEEPALIVES_IDLE.name(),
+        ))
+    }
+
+    /// Returns the `crdb_keepalives_interval` configuration parameter.
+    pub fn crdb_keepalives_interval(&self) -> Duration {
+        *self.expect_config_value(UncasedStr::new(
+            mz_persist_client::cfg::CRDB_KEEPALIVES_INTERVAL.name(),
+        ))
+    }
+
+    /// Returns the `crdb_keepalives_retries` configuration parameter.
+    pub fn crdb_keepalives_retries(&self) -> u32 {
+        *self.expect_config_value(UncasedStr::new(
+            mz_persist_client::cfg::CRDB_KEEPALIVES_RETRIES.name(),
+        ))
+    }
+
     /// Returns the `storage_dataflow_max_inflight_bytes` configuration parameter.
     pub fn storage_dataflow_max_inflight_bytes(&self) -> Option<usize> {
         *self.expect_value(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES)
@@ -1908,6 +1933,9 @@ impl SystemVars {
                 ConfigVal::F64(_) => ConfigVal::from(*self.expect_config_value::<f64>(name)),
                 ConfigVal::String(_) => {
                     ConfigVal::from(self.expect_config_value::<String>(name).clone())
+                }
+                ConfigVal::OptString(_) => {
+                    ConfigVal::from(self.expect_config_value::<Option<String>>(name).clone())
                 }
                 ConfigVal::Duration(_) => {
                     ConfigVal::from(*self.expect_config_value::<Duration>(name))
@@ -1976,13 +2004,14 @@ impl SystemVars {
         *self.expect_value(&ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE)
     }
 
-    pub fn enable_reduce_reduction(&self) -> bool {
-        *self.expect_value(&ENABLE_REDUCE_REDUCTION)
-    }
-
     /// Returns the `enable_default_connection_validation` configuration parameter.
     pub fn enable_default_connection_validation(&self) -> bool {
         *self.expect_value(&ENABLE_DEFAULT_CONNECTION_VALIDATION)
+    }
+
+    /// Returns the `default_timestamp_interval` configuration parameter.
+    pub fn default_timestamp_interval(&self) -> Duration {
+        *self.expect_value(&DEFAULT_TIMESTAMP_INTERVAL)
     }
 
     /// Returns the `min_timestamp_interval` configuration parameter.
@@ -2260,15 +2289,18 @@ fn is_upsert_rocksdb_config_var(name: &str) -> bool {
         || name == upsert_rocksdb::UPSERT_ROCKSDB_SHRINK_ALLOCATED_BUFFERS_BY_RATIO.name()
 }
 
-/// Returns whether the named variable is a Postgres/CRDB timestamp oracle
+/// Returns whether the named variable is a (Postgres/CRDB) timestamp oracle
 /// configuration parameter.
-pub fn is_pg_timestamp_oracle_config_var(name: &str) -> bool {
+pub fn is_timestamp_oracle_config_var(name: &str) -> bool {
     name == PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_SIZE.name()
         || name == PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_WAIT.name()
         || name == PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL.name()
         || name == PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL_STAGGER.name()
         || name == CRDB_CONNECT_TIMEOUT.name()
         || name == CRDB_TCP_USER_TIMEOUT.name()
+        || name == CRDB_KEEPALIVES_IDLE.name()
+        || name == CRDB_KEEPALIVES_INTERVAL.name()
+        || name == CRDB_KEEPALIVES_RETRIES.name()
 }
 
 /// Returns whether the named variable is a cluster scheduling config

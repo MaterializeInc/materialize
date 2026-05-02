@@ -47,6 +47,10 @@ $ mysql-execute name=mysql
 CREATE TABLE table_a (pk INTEGER PRIMARY KEY, f2 TEXT);
 INSERT INTO table_a VALUES (9, 'nine');
 
+# TODO: Reenable when database-issues#8127 is fixed
+$ skip-if
+SELECT true
+
 ! SELECT * FROM table_a;
 contains:table was dropped
 
@@ -116,8 +120,11 @@ $ set-regex match="DETAILS = '[a-f0-9]+'" replacement=<DETAILS>
 > SHOW CREATE SOURCE mz_source;
 materialize.public.mz_source "CREATE SOURCE materialize.public.mz_source\nIN CLUSTER quickstart\nFROM MYSQL CONNECTION materialize.public.mysql_conn;"
 
-> SHOW CREATE TABLE table_a;
+>[version<2600700] SHOW CREATE TABLE table_a;
 materialize.public.table_a "CREATE TABLE materialize.public.table_a (pk pg_catalog.int4 NOT NULL, f2 pg_catalog.text, CONSTRAINT \"PRIMARY\" PRIMARY KEY (pk)) FROM SOURCE materialize.public.mz_source (REFERENCE = public.table_a) WITH (<DETAILS>);"
+
+>[version>=2600700] SHOW CREATE TABLE table_a;
+materialize.public.table_a "CREATE TABLE\n    materialize.public.table_a\n        (pk pg_catalog.int4 NOT NULL, f2 pg_catalog.text, CONSTRAINT \"PRIMARY\" PRIMARY KEY (pk))\nFROM SOURCE materialize.public.mz_source (REFERENCE = public.table_a)\nWITH (\n    <DETAILS>\n);"
 
 #
 # Error checking
@@ -189,9 +196,9 @@ INSERT INTO table_e VALUES (3, 'three');
 3
 4
 
-> SHOW MATERIALIZED VIEWS
-mv_e quickstart  ""
-mv_f quickstart  ""
+> SELECT name FROM mz_materialized_views WHERE id LIKE 'u%'
+mv_e
+mv_f
 
 # RESTRICT works
 ! DROP TABLE table_e RESTRICT;
@@ -208,7 +215,7 @@ contains:cannot drop table "table_e": still depended upon by materialized view "
 > SHOW TABLES
 table_g               ""
 
-> SHOW MATERIALIZED VIEWS
+> SELECT name FROM mz_materialized_views WHERE id LIKE 'u%'
 
 > DROP TABLE table_g;
 

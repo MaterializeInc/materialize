@@ -10,22 +10,18 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.100"
-aws-config = { version = "1.2.0", default-features = false }
-aws-sdk-s3 = { version = "1.48.0", default-features = false, features = ["rt-tokio"] }
-bytefmt = "0.1.7"
-clap = { version = "4.5.23", features = ["derive"] }
-futures = "0.3.31"
-indicatif = "0.17.2"
+anyhow.workspace = true
+aws-config.workspace = true
+aws-sdk-s3.workspace = true
+bytefmt.workspace = true
+clap.workspace = true
+futures.workspace = true
+indicatif.workspace = true
 mz-aws-util = { path = "../aws-util", features = ["s3"] }
 mz-ore = { path = "../ore", features = ["cli"] }
-tokio = { version = "1.44.1", features = ["macros", "net", "rt", "rt-multi-thread", "time"] }
-tracing = "0.1.37"
-tracing-subscriber = { version = "0.3.19", default-features = false, features = ["env-filter", "fmt"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 [features]
-default = ["workspace-hack"]
+default = []

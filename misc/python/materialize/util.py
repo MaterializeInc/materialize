@@ -11,12 +11,12 @@
 
 from __future__ import annotations
 
-import filecmp
 import hashlib
 import json
 import os
 import pathlib
 import random
+import re
 import subprocess
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -111,14 +111,6 @@ def ensure_dir_exists(path_to_dir: str) -> None:
     )
 
 
-def sha256_of_file(path: str | Path) -> str:
-    sha256 = hashlib.sha256()
-    with open(path, "rb") as f:
-        for block in iter(lambda: f.read(filecmp.BUFSIZE), b""):
-            sha256.update(block)
-    return sha256.hexdigest()
-
-
 def sha256_of_utf8_string(value: str) -> str:
     return hashlib.sha256(bytes(value, encoding="utf-8")).hexdigest()
 
@@ -169,12 +161,32 @@ class PgConnInfo:
             dbname=self.database,
             sslmode="require" if self.ssl else None,
         )
+        # Set SO_LINGER(1, 0) so close() sends RST instead of FIN, bypassing
+        # TIME_WAIT. Prevents exhausting the ~28k ephemeral port range under
+        # high connection churn (e.g. benchmarks doing rapid connect/disconnect).
+        self._set_linger(conn)
         if self.autocommit:
             conn.autocommit = True
         if self.cluster:
             with conn.cursor() as cur:
                 cur.execute(f"SET cluster = {self.cluster}".encode())
         return conn
+
+    @staticmethod
+    def _set_linger(conn: psycopg.Connection) -> None:
+        import socket
+        import struct
+
+        fd = conn.pgconn.socket
+        if fd < 0:
+            return
+        sock = socket.socket(fileno=fd)
+        try:
+            sock.setsockopt(
+                socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
+            )
+        finally:
+            sock.detach()
 
     def to_conn_string(self) -> str:
         return (
@@ -226,3 +238,16 @@ def filter_cmd(args: list[str]) -> list[str]:
         )
         for arg in args
     ]
+
+
+def redact_secrets(text: str) -> str:
+    text = re.sub(
+        r"-----BEGIN [A-Z ]+-----.*?-----END [A-Z ]+-----",
+        "[REDACTED]",
+        text,
+        flags=re.DOTALL,
+    )
+    for secret in FILTERED_ARGS:
+        if secret in text:
+            text = re.sub(re.escape(secret) + r"\S*", "[REDACTED]", text)
+    return text

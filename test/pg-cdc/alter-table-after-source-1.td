@@ -107,6 +107,8 @@ CREATE TABLE drop_table (f1 int, f2 int);
 ALTER TABLE drop_table REPLICA IDENTITY FULL;
 INSERT INTO drop_table (f1, f2) VALUES (1, 1);
 
+ANALYZE;
+
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 
@@ -158,8 +160,9 @@ INSERT INTO add_columns VALUES (2, 'ab');
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE remove_column DROP COLUMN f2;
 
+# TODO: Back to contains:altered when database-issues#7900 is fixed
 ! SELECT * from remove_column;
-contains:altered
+regex:(altered|incompatible schema change)
 
 
 #

@@ -54,10 +54,9 @@ pub enum DurableCatalogError {
         min_catalog_version: u64,
         catalog_version: u64,
     },
-    /// The applier version in persist is too old for the current catalog. Reading from persist
-    /// would cause other readers to be fenced out.
     #[error(
-        "incompatible persist version {found_version}, current: {catalog_version}, make sure to upgrade the catalog one version forward at a time"
+        "incompatible persist version {found_version}, current: {catalog_version}, \
+         make sure to upgrade the catalog one major version forward at a time"
     )]
     IncompatiblePersistVersion {
         found_version: semver::Version,
@@ -80,7 +79,7 @@ pub enum DurableCatalogError {
     UniquenessViolation,
     /// A programming error occurred during a [`mz_storage_client::controller::StorageTxn`].
     #[error(transparent)]
-    Storage(StorageError<Timestamp>),
+    Storage(StorageError),
     /// An internal programming error.
     #[error("Internal catalog error: {0}")]
     Internal(String),
@@ -96,8 +95,8 @@ impl DurableCatalogError {
     }
 }
 
-impl From<StorageError<Timestamp>> for DurableCatalogError {
-    fn from(e: StorageError<Timestamp>) -> Self {
+impl From<StorageError> for DurableCatalogError {
+    fn from(e: StorageError) -> Self {
         DurableCatalogError::Storage(e)
     }
 }

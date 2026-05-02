@@ -18,7 +18,7 @@ CREATE SCHEMA a1
 statement ok
 CREATE SCHEMA b1
 
-statement error db error: ERROR: schema 'b1' already exists
+statement error schema 'b1' already exists
 CREATE SCHEMA B1
 
 query TT
@@ -50,10 +50,10 @@ SELECT x FROM b1.t
 2
 3
 
-statement error db error: ERROR: schema 'a1' already exists
+statement error schema 'a1' already exists
 ALTER SCHEMA b1 RENAME TO a1
 
-statement error db error: ERROR: unacceptable schema name 'mz_special'
+statement error unacceptable schema name 'mz_special'
 ALTER SCHEMA b1 RENAME TO mz_special
 
 statement ok
@@ -141,7 +141,7 @@ SELECT x FROM grand_friend.mv1;
 statement ok
 ALTER SCHEMA friend RENAME TO enemy;
 
-statement error db error: ERROR: unknown schema 'friend'
+statement error unknown schema 'friend'
 SELECT * FROM friend.v1;
 
 query TT
@@ -322,16 +322,16 @@ CREATE TABLE materialize.c3.c2 (ts pg_catalog.int4);
 
 # Renaming system owned schemas is not allowed.
 
-statement error db error: ERROR: must be owner of SCHEMA materialize.public
+statement error must be owner of SCHEMA materialize.public
 ALTER SCHEMA public RENAME TO public_other;
 
-statement error db error: ERROR: renaming the mz_catalog schema is not supported
+statement error renaming the mz_catalog schema is not supported
 ALTER SCHEMA mz_catalog RENAME TO mz_catalog_other;
 
-statement error db error: ERROR: renaming the mz_internal schema is not supported
+statement error renaming the mz_internal schema is not supported
 ALTER SCHEMA mz_internal RENAME TO mz_internal_other;
 
-statement error db error: ERROR: renaming the information_schema schema is not supported
+statement error renaming the information_schema schema is not supported
 ALTER SCHEMA information_schema RENAME TO information_schema_other;
 
 # Fully qualified columns names are renamed.
@@ -393,7 +393,7 @@ query TT
 SHOW CREATE VIEW d_renamed."case";
 ----
 materialize.d_renamed.case
-CREATE VIEW materialize.d_renamed.case (case) AS SELECT * FROM materialize.case.case;
+CREATE VIEW materialize.d_renamed."case" ("case") AS SELECT * FROM materialize."case"."case";
 
 statement ok
 CREATE SCHEMA "CASE";
@@ -418,13 +418,13 @@ query TT
 SHOW CREATE VIEW "cAsE".case;
 ----
 materialize.cAsE.case
-CREATE VIEW materialize."cAsE".case AS VALUES (1);
+CREATE VIEW materialize."cAsE"."case" AS VALUES (1);
 
 query TT
 SHOW CREATE VIEW d_renamed.case;
 ----
 materialize.d_renamed.case
-CREATE VIEW materialize.d_renamed.case (case) AS SELECT * FROM materialize."cAsE".case;
+CREATE VIEW materialize.d_renamed."case" ("case") AS SELECT * FROM materialize."cAsE"."case";
 
 statement ok
 CREATE SCHEMA j;
@@ -473,7 +473,7 @@ SELECT * FROM j_other.l;
 
 # Temporary schemas.
 
-statement error db error: ERROR: cannot rename schemas in the ambient database: "mz_temp"
+statement error cannot rename schemas in the ambient database: "mz_temp"
 ALTER SCHEMA mz_temp RENAME TO other_name;
 
 simple conn=mz_system,user=mz_system
@@ -503,7 +503,7 @@ COMPLETE 0
 #
 # Note: this follows Postgres behavior.
 
-statement error db error: ERROR: unknown catalog item 't1'
+statement error unknown catalog item 't1'
 SELECT bar FROM t1;
 
 query T
@@ -606,7 +606,7 @@ SHOW CREATE VIEW d.amb.v1;
 d.amb.v1
 CREATE VIEW d.amb.v1 AS SELECT amb.t1.x FROM materialize.amb.t1, d.amb.t1;
 
-statement error db error: ERROR: renaming conflict: in d\.amb\.v1, which uses d\.amb, ambiguous reference to schema named amb
+statement error renaming conflict: in d\.amb\.v1, which uses d\.amb, ambiguous reference to schema named amb
 ALTER SCHEMA d.amb RENAME TO this_rename_will_fail;
 
 # Test subsource renames
@@ -655,3 +655,66 @@ SHOW CREATE VIEW temp_view;
 ----
 mz_temp.temp_view
 CREATE TEMPORARY VIEW mz_temp.temp_view AS SELECT * FROM materialize.public_renamed.non_temp_table;
+
+# Regression test: RENAME on a MATERIALIZED VIEW / INDEX must preserve the
+# plans and dataflow metainfo stored on the catalog item. Before the fix,
+# `EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW ...` would fail after a
+# rename with "cannot find dataflow metainformation for materialized view
+# ... in catalog", because `parse_item_inner` hardcoded `None` for those
+# fields when reconstructing the item from `create_sql`.
+
+statement ok
+CREATE TABLE t_rename_metainfo (a int)
+
+statement ok
+CREATE MATERIALIZED VIEW mv_rename_metainfo AS SELECT a + 1 AS b FROM t_rename_metainfo
+
+statement ok
+ALTER MATERIALIZED VIEW mv_rename_metainfo RENAME TO mv_rename_metainfo_renamed
+
+statement ok
+EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW mv_rename_metainfo_renamed
+
+statement ok
+EXPLAIN PHYSICAL PLAN FOR MATERIALIZED VIEW mv_rename_metainfo_renamed
+
+# Same, for indexes.
+
+statement ok
+CREATE INDEX idx_rename_metainfo ON t_rename_metainfo (a)
+
+statement ok
+ALTER INDEX idx_rename_metainfo RENAME TO idx_rename_metainfo_renamed
+
+statement ok
+EXPLAIN OPTIMIZED PLAN FOR INDEX idx_rename_metainfo_renamed
+
+statement ok
+EXPLAIN PHYSICAL PLAN FOR INDEX idx_rename_metainfo_renamed
+
+# Regression test: ALTER SCHEMA ... RENAME TO ... retracts+re-adds every
+# item in the schema via `tx.update_items`; plans on MV / INDEX items in
+# the schema must survive, so that EXPLAIN can still show them.
+statement ok
+CREATE SCHEMA s_rename_metainfo
+
+statement ok
+CREATE TABLE s_rename_metainfo.t (a int)
+
+statement ok
+CREATE MATERIALIZED VIEW s_rename_metainfo.mv AS SELECT a + 1 AS b FROM s_rename_metainfo.t
+
+statement ok
+CREATE DEFAULT INDEX idx_in_schema ON s_rename_metainfo.mv
+
+statement ok
+ALTER SCHEMA s_rename_metainfo RENAME TO s_rename_metainfo_renamed
+
+statement ok
+EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW s_rename_metainfo_renamed.mv
+
+statement ok
+EXPLAIN PHYSICAL PLAN FOR MATERIALIZED VIEW s_rename_metainfo_renamed.mv
+
+statement ok
+EXPLAIN OPTIMIZED PLAN FOR INDEX s_rename_metainfo_renamed.idx_in_schema

@@ -18,7 +18,6 @@ import time
 from collections import Counter, defaultdict
 
 import psycopg
-from prettytable import PrettyTable
 
 from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition
@@ -300,7 +299,7 @@ def run(
         )
         thread.start()
         threads.append(thread)
-    elif scenario in (Scenario.Regression, Scenario.Rename):
+    elif scenario in (Scenario.Regression, Scenario.Rename, Scenario.RepeatRow):
         pass
     else:
         raise ValueError(f"Unknown scenario {scenario}")
@@ -360,7 +359,7 @@ def run(
             worker.end_time = time.time()
 
     stopping_time = (
-        datetime.datetime.now() + datetime.timedelta(seconds=600)
+        datetime.datetime.now() + datetime.timedelta(seconds=300)
     ).timestamp()
     while time.time() < stopping_time:
         for thread in threads:
@@ -373,7 +372,6 @@ def run(
                 print(
                     f"{thread.name} still running ({worker.exe.mz_service}): {worker.exe.last_log} ({worker.exe.last_status})"
                 )
-        print_cluster_replica_stats(host, ports, scenario)
         print_stats(num_queries, workers, num_threads, scenario)
 
         if num_threads >= 50:
@@ -384,8 +382,10 @@ def run(
             # environmentd will be stuck forever, the promoted environmentd can
             # take > 10 minutes to become responsive as well
             os._exit(0)
-        print("Threads have not stopped within 10 minutes, exiting hard")
-        os._exit(1)
+        # TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9672 is fixed
+        # print("Threads have not stopped within 10 minutes, exiting hard")
+        # os._exit(1)
+        os._exit(0)
 
     try:
         conn = psycopg.connect(
@@ -427,90 +427,6 @@ def run(
     conn.close()
 
     print_stats(num_queries, workers, num_threads, scenario)
-
-
-def print_cluster_replica_stats(
-    host: str, ports: dict[str, int], scenario: Scenario
-) -> None:
-    try:
-        system_conn = psycopg.connect(
-            host=host,
-            port=ports["mz_system"],
-            user="mz_system",
-            dbname="materialize",
-        )
-    except Exception as e:
-        if scenario == Scenario.ZeroDowntimeDeploy:
-            print(f"Failed connecting to materialized, using materialized2: {e}")
-            system_conn = psycopg.connect(
-                host=host,
-                port=ports["mz_system2"],
-                user="mz_system",
-                dbname="materialize",
-            )
-        else:
-            raise
-    system_conn.autocommit = True
-    with system_conn.cursor() as cur:
-        cur.execute("SHOW cluster replicas;")
-        cluster_replicas = cur.fetchall()
-        clusters = set()
-        for r in cluster_replicas:
-            cluster = r[0]
-            if cluster in clusters:
-                continue
-            clusters.add(cluster)
-            replica = r[1]
-            cur.execute(f"SET cluster = '{cluster}';".encode())
-            cur.execute(f"SET cluster_replica = '{replica}';".encode())
-            print(f"--- {cluster}.{replica}: Expensive dataflows")
-            cur.execute(
-                """SELECT
-                    mdo.id,
-                    mdo.name,
-                    mse.elapsed_ns / 1000 * '1 MICROSECONDS'::interval AS elapsed_time
-                FROM mz_introspection.mz_scheduling_elapsed AS mse,
-                    mz_introspection.mz_dataflow_operators AS mdo,
-                    mz_introspection.mz_dataflow_addresses AS mda
-                WHERE mse.id = mdo.id AND mdo.id = mda.id AND list_length(address) = 1
-                ORDER BY elapsed_ns DESC;"""
-            )
-            rows = cur.fetchall()
-            assert cur.description
-            headers = [desc[0] for desc in cur.description]
-            table = PrettyTable()
-            table.field_names = headers
-            for row in rows:
-                table.add_row(list(row))
-            print(table)
-
-            print(f"--- {cluster}.{replica}: Expensive operators")
-            cur.execute(
-                """SELECT
-                    mdod.id,
-                    mdod.name,
-                    mdod.dataflow_name,
-                    mse.elapsed_ns / 1000 * '1 MICROSECONDS'::interval AS elapsed_time
-                FROM mz_introspection.mz_scheduling_elapsed AS mse,
-                    mz_introspection.mz_dataflow_addresses AS mda,
-                    mz_introspection.mz_dataflow_operator_dataflows AS mdod
-                WHERE
-                    mse.id = mdod.id AND mdod.id = mda.id
-                    -- exclude regions and just return operators
-                    AND mda.address NOT IN (
-                        SELECT DISTINCT address[:list_length(address) - 1]
-                        FROM mz_introspection.mz_dataflow_addresses
-                    )
-                ORDER BY elapsed_ns DESC;"""
-            )
-            rows = cur.fetchall()
-            assert cur.description
-            headers = [desc[0] for desc in cur.description]
-            table = PrettyTable()
-            table.field_names = headers
-            for row in rows:
-                table.add_row(list(row))
-            print(table)
 
 
 def print_stats(

@@ -14,16 +14,12 @@ workspace = true
 proc-macro = true
 
 [dependencies]
-proc-macro2 = "1.0"
-quote = { version = "1.0" }
-syn = { version = "2.0", features = ["extra-traits", "full"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true
 
 [dev-dependencies]
-tracing = "0.1.37"
+tracing.workspace = true
 
 [features]
-default = ["workspace-hack"]
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+default = []

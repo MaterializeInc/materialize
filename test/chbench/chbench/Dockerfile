@@ -28,12 +28,12 @@ COPY mysql.asc .
 
 RUN gpg --import mysql.asc \
     && echo "trusted-key B7B3B788A8D3785C" >> ~/.gnupg/gpg.conf \
-    && curl -fsSL https://dev.mysql.com/get/Downloads/Connector-ODBC/9.3/mysql-connector-odbc-9.3.0-src.tar.gz > mysql-odbc.tar.gz \
-    && curl -fsSL "https://dev.mysql.com/downloads/gpg/?file=mysql-connector-odbc-9.3.0-src.tar.gz&p=10" > mysql-odbc.asc \
+    && curl -fsSL https://dev.mysql.com/get/Downloads/Connector-ODBC/9.6/mysql-connector-odbc-9.6.0-src.tar.gz > mysql-odbc.tar.gz \
+    && curl -fsSL "https://dev.mysql.com/downloads/gpg/?file=mysql-connector-odbc-9.6.0-src.tar.gz&p=10" > mysql-odbc.asc \
     && gpg --verify mysql-odbc.asc mysql-odbc.tar.gz \
     && tar -xzf mysql-odbc.tar.gz
 
-RUN cd mysql-connector-odbc-9.3.0-src \
+RUN cd mysql-connector-odbc-9.6.0-src \
     && cmake -DWITH_UNIXODBC=1 -DDISABLE_GUI=1 . \
     && make -j8 \
     && make install
@@ -52,7 +52,7 @@ RUN ls build
 
 MZFROM ubuntu-base
 
-RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y libconfig++11 libmysqlclient24 libpqxx-7.10 unixodbc && apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y libconfig++9v5 libmysqlclient21 libpqxx-7.8t64 unixodbc && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 COPY odbc.ini /etc/odbc.ini
 COPY mz-default-postgres.cfg /etc/chbenchmark/mz-default-postgres.cfg

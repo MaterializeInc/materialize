@@ -181,7 +181,6 @@ use differential_dataflow::{AsCollection, ExchangeData, VecCollection, consolida
 use mz_ore::Overflowing;
 use mz_ore::collections::CollectionExt;
 use timely::communication::{Pull, Push};
-use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::operators::capture::Event;
@@ -198,32 +197,32 @@ use timely::progress::{Antichain, Timestamp};
 /// In order for the operator to read the `source` collection a `Pusher` is returned which can be
 /// used with timely's capture facilities to connect a collection from a foreign scope to this
 /// operator.
-pub fn reclock<G, D, FromTime, IntoTime, R>(
-    remap_collection: &VecCollection<G, FromTime, Overflowing<i64>>,
-    as_of: Antichain<G::Timestamp>,
+pub fn reclock<'scope, D, FromTime, IntoTime, R>(
+    remap_collection: VecCollection<'scope, IntoTime, FromTime, Overflowing<i64>>,
+    as_of: Antichain<IntoTime>,
 ) -> (
     Box<dyn Push<Event<FromTime, Vec<(D, FromTime, R)>>>>,
-    VecCollection<G, D, R>,
+    VecCollection<'scope, IntoTime, D, R>,
 )
 where
-    G: Scope<Timestamp = IntoTime>,
     D: ExchangeData,
     FromTime: Timestamp,
     IntoTime: Timestamp + Lattice + TotalOrder,
     R: Semigroup + 'static,
 {
-    let mut scope = remap_collection.scope();
+    let scope = remap_collection.scope();
     let mut builder = OperatorBuilder::new("Reclock".into(), scope.clone());
     // Here we create a channel that can be used to send data from a foreign scope into this
     // operator. The channel is associated with this operator's address so that it is activated
     // every time events are available for consumption. This mechanism is similar to Timely's input
     // handles where data can be introduced into a timely scope from an exogenous source.
     let info = builder.operator_info();
-    let channel_id = scope.new_identifier();
-    let (pusher, mut events) =
-        scope.pipeline::<Event<FromTime, Vec<(D, FromTime, R)>>>(channel_id, info.address);
+    let channel_id = scope.worker().new_identifier();
+    let (pusher, mut events) = scope
+        .worker()
+        .pipeline::<Event<FromTime, Vec<(D, FromTime, R)>>>(channel_id, info.address);
 
-    let mut remap_input = builder.new_input(&remap_collection.inner, Pipeline);
+    let mut remap_input = builder.new_input(remap_collection.inner, Pipeline);
     let (output, reclocked) = builder.new_output();
     let mut output = OutputBuilder::from(output);
 
@@ -247,7 +246,7 @@ where
         // A stash of source updates for which we don't know the corresponding binding yet.
         let mut deferred_source_updates: Vec<ChainBatch<_, _, _>> = Vec::new();
         // The frontier of the `events` input
-        let mut source_frontier = MutableAntichain::new_bottom(FromTime::minimum());
+        let mut source_frontier = MutableAntichain::from_elem(FromTime::minimum());
 
         let mut binding_buffer = Vec::new();
 
@@ -275,12 +274,12 @@ where
 
             // STEP 1. Accept new bindings into `pending_remap`.
             // Advance all `into` times by `as_of`, and consolidate all updates at that frontier.
-            while let Some((_, data)) = remap_input.next() {
+            remap_input.for_each(|_, data| {
                 for (from, mut into, diff) in data.drain(..) {
                     into.advance_by(as_of.borrow());
                     remap_accum_buffer.update((into, from), diff.into_inner());
                 }
-            }
+            });
             // Drain consolidated bindings into the `pending_remap` heap.
             // Only do this once any of the `remap_input` frontier has passed `as_of`.
             // For as long as the input frontier is less-equal `as_of`, we have no finalized times.
@@ -586,10 +585,10 @@ mod test {
     use differential_dataflow::consolidation;
     use differential_dataflow::input::{Input, InputSession};
     use serde::{Deserialize, Serialize};
-    use timely::communication::allocator::Thread;
     use timely::dataflow::operators::capture::{Event, Extract};
-    use timely::dataflow::operators::unordered_input::UnorderedHandle;
-    use timely::dataflow::operators::{ActivateCapability, Capture, UnorderedInput};
+    use timely::dataflow::operators::vec::UnorderedInput;
+    use timely::dataflow::operators::vec::unordered_input::UnorderedHandle;
+    use timely::dataflow::operators::{ActivateCapability, Capture};
     use timely::progress::PathSummary;
     use timely::progress::timestamp::Refines;
     use timely::worker::Worker;
@@ -624,7 +623,7 @@ mod test {
         FromTime: Timestamp + Refines<()>,
         D: ExchangeData,
         F: FnOnce(
-                &mut Worker<Thread>,
+                &mut Worker,
                 BindingHandle<FromTime>,
                 DataHandle<D, FromTime>,
                 ReclockedStream<D>,
@@ -640,13 +639,13 @@ mod test {
                     scope.scoped::<IntoTime, _, _>("IntoScope", move |scope| {
                         let (binding_handle, binding_collection) = scope.new_collection();
                         let (data_pusher, reclocked_collection) =
-                            reclock(&binding_collection, as_of);
+                            reclock(binding_collection, as_of);
                         let reclocked_capture = reclocked_collection.inner.capture();
                         (binding_handle, data_pusher, reclocked_capture)
                     });
 
                 let (data, data_cap) = scope.scoped::<FromTime, _, _>("FromScope", move |scope| {
-                    let ((handle, cap), data) = scope.new_unordered_input();
+                    let ((handle, cap), data) = scope.new_unordered_input::<(D, FromTime, Diff)>();
                     data.capture_into(PusherCapture(data_pusher));
                     (handle, cap)
                 });
@@ -660,7 +659,7 @@ mod test {
 
     /// Steps the worker four times which is the required number of times for both data and
     /// frontier updates to propagate across the two scopes and into the probing channels.
-    fn step(worker: &mut Worker<Thread>) {
+    fn step(worker: &mut Worker) {
         for _ in 0..4 {
             worker.step();
         }

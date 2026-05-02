@@ -33,6 +33,7 @@ pub use interpret::{ColumnSpec, ColumnSpecs, Interpreter, ResultSpec, Trace, Tra
 pub use linear::plan::{MfpPlan, SafeMfpPlan};
 pub use linear::util::{join_permutations, permutation_for_arrangement};
 pub use linear::{MapFilterProject, memoize_expr};
+pub use relation::func::REPEAT_ROW_NAME;
 pub use relation::func::order_aggregate_datums as order_aggregate_datums_exported_for_benchmarking;
 pub use relation::func::{
     AggregateFunc, AnalyzedRegex, AnalyzedRegexOpts, CaptureGroupDesc, LagLeadType,
@@ -41,9 +42,9 @@ pub use relation::func::{
 pub use relation::join_input_mapper::JoinInputMapper;
 pub use relation::{
     AccessStrategy, AggregateExpr, CollectionPlan, ColumnOrder, JoinImplementation,
-    JoinInputCharacteristics, LetRecLimit, MirRelationExpr, RECURSION_LIMIT, RowSetFinishing,
-    RowSetFinishingIncremental, WindowFrame, WindowFrameBound, WindowFrameUnits, canonicalize,
-    compare_columns, non_nullable_columns,
+    JoinInputCharacteristics, LetRecLimit, MirRelationExpr, RECURSION_LIMIT, RowComparator,
+    RowSetFinishing, RowSetFinishingIncremental, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    canonicalize, compare_columns, non_nullable_columns,
 };
 pub use scalar::func::{self, BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc};
 pub use scalar::{

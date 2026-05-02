@@ -597,9 +597,7 @@ where
 
                     let wrong_sort = data.run_meta.order != Some(RunOrder::Structured);
                     let fetch_result: anyhow::Result<FetchResult<T>> = match task.take() {
-                        Some(handle) => handle
-                            .await
-                            .unwrap_or_else(|join_err| Err(anyhow!(join_err))),
+                        Some(handle) => handle.await,
                         None => {
                             data.clone()
                                 .fetch(

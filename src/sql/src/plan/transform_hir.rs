@@ -15,6 +15,7 @@ use std::{iter, mem};
 
 use itertools::Itertools;
 use mz_expr::WindowFrame;
+use mz_expr::func::variadic::RecordCreate;
 use mz_expr::visit::Visit;
 use mz_expr::{ColumnOrder, UnaryFunc, VariadicFunc};
 use mz_ore::stack::RecursionLimitError;
@@ -135,7 +136,7 @@ pub fn split_subquery_predicates(expr: &mut HirRelationExpr) -> Result<(), Recur
     ) -> Result<(), RecursionLimitError> {
         match expr {
             HirScalarExpr::CallVariadic {
-                func: VariadicFunc::And,
+                func: VariadicFunc::And(_),
                 exprs,
                 name: _,
             } => {
@@ -176,18 +177,20 @@ pub fn split_subquery_predicates(expr: &mut HirRelationExpr) -> Result<(), Recur
 /// M. Elhemali, et al.
 pub fn try_simplify_quantified_comparisons(
     expr: &mut HirRelationExpr,
+    simplify_join_on: bool,
 ) -> Result<(), RecursionLimitError> {
     fn walk_relation(
         expr: &mut HirRelationExpr,
         outers: &[SqlRelationType],
+        simplify_join_on: bool,
     ) -> Result<(), RecursionLimitError> {
         match expr {
             HirRelationExpr::Map { scalars, input } => {
-                walk_relation(input, outers)?;
+                walk_relation(input, outers, simplify_join_on)?;
                 let mut outers = outers.to_vec();
                 outers.insert(0, input.typ(&outers, &NO_PARAMS));
                 for scalar in scalars {
-                    walk_scalar(scalar, &outers, false)?;
+                    walk_scalar(scalar, &outers, false, simplify_join_on)?;
                     let (inner, outers) = outers
                         .split_first_mut()
                         .expect("outers known to have at least one element");
@@ -196,30 +199,42 @@ pub fn try_simplify_quantified_comparisons(
                 }
             }
             HirRelationExpr::Filter { predicates, input } => {
-                walk_relation(input, outers)?;
+                walk_relation(input, outers, simplify_join_on)?;
                 let mut outers = outers.to_vec();
                 outers.insert(0, input.typ(&outers, &NO_PARAMS));
                 for pred in predicates {
-                    walk_scalar(pred, &outers, true)?;
+                    walk_scalar(pred, &outers, true, simplify_join_on)?;
                 }
             }
             HirRelationExpr::CallTable { exprs, .. } => {
                 let mut outers = outers.to_vec();
                 outers.insert(0, SqlRelationType::empty());
                 for scalar in exprs {
-                    walk_scalar(scalar, &outers, false)?;
+                    walk_scalar(scalar, &outers, false, simplify_join_on)?;
                 }
             }
-            HirRelationExpr::Join { left, right, .. } => {
-                walk_relation(left, outers)?;
+            HirRelationExpr::Join {
+                left, right, on, ..
+            } => {
+                walk_relation(left, outers, simplify_join_on)?;
+                let left_type = left.typ(outers, &NO_PARAMS);
                 let mut outers = outers.to_vec();
-                outers.insert(0, left.typ(&outers, &NO_PARAMS));
-                walk_relation(right, &outers)?;
+                outers.insert(0, left_type);
+                walk_relation(right, &outers, simplify_join_on)?;
+                if simplify_join_on {
+                    // Build outers with the full join output type, since the
+                    // ON clause can reference columns from both sides.
+                    let right_type = right.typ(&outers, &NO_PARAMS);
+                    let mut join_columns = outers[0].column_types.clone();
+                    join_columns.extend(right_type.column_types);
+                    outers[0] = SqlRelationType::new(join_columns);
+                    walk_scalar(on, &outers, true, simplify_join_on)?;
+                }
             }
             expr => {
                 #[allow(deprecated)]
                 let _ = expr.visit1_mut(0, &mut |expr, _| -> Result<(), RecursionLimitError> {
-                    walk_relation(expr, outers)
+                    walk_relation(expr, outers, simplify_join_on)
                 });
             }
         }
@@ -230,12 +245,15 @@ pub fn try_simplify_quantified_comparisons(
         expr: &mut HirScalarExpr,
         outers: &[SqlRelationType],
         mut in_filter: bool,
+        simplify_join_on: bool,
     ) -> Result<(), RecursionLimitError> {
         expr.try_visit_mut_pre(&mut |e| {
             match e {
-                HirScalarExpr::Exists(input, _name) => walk_relation(input, outers)?,
+                HirScalarExpr::Exists(input, _name) => {
+                    walk_relation(input, outers, simplify_join_on)?
+                }
                 HirScalarExpr::Select(input, _name) => {
-                    walk_relation(input, outers)?;
+                    walk_relation(input, outers, simplify_join_on)?;
 
                     // We're inside a `(SELECT ...)` subquery. Now let's see if
                     // it has the form `(SELECT <any|all>(...) FROM <input>)`.
@@ -294,7 +312,7 @@ pub fn try_simplify_quantified_comparisons(
         })
     }
 
-    walk_relation(expr, &[])
+    walk_relation(expr, &[], simplify_join_on)
 }
 
 /// An empty parameter type map.
@@ -519,7 +537,7 @@ pub fn fuse_window_functions(
                         })
                         .unzip();
                     let fused_args = HirScalarExpr::call_variadic(
-                        VariadicFunc::RecordCreate {
+                        RecordCreate {
                             // These field names are not important, because this record will only be an
                             // intermediate expression, which we'll manipulate further before it ends up
                             // anywhere where a column name would be visible.
@@ -572,7 +590,7 @@ pub fn fuse_window_functions(
                         })
                         .unzip();
                     let fused_args = HirScalarExpr::call_variadic(
-                        VariadicFunc::RecordCreate {
+                        RecordCreate {
                             field_names: iter::repeat(ColumnName::from(""))
                                 .take(fused_args.len())
                                 .collect(),

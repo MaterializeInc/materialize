@@ -19,8 +19,9 @@ use differential_dataflow::AsCollection;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
-use differential_dataflow::operators::iterate::SemigroupVariable;
-use differential_dataflow::trace::implementations::merge_batcher::container::MergerChunk;
+use differential_dataflow::operators::iterate::Variable as SemigroupVariable;
+use differential_dataflow::trace::implementations::BatchContainer;
+use differential_dataflow::trace::implementations::merge_batcher::container::InternalMerge;
 use differential_dataflow::trace::{Builder, Trace};
 use differential_dataflow::{Data, VecCollection};
 use mz_compute_types::plan::top_k::{
@@ -30,19 +31,18 @@ use mz_expr::func::CastUint64ToInt64;
 use mz_expr::{BinaryFunc, EvalError, MirScalarExpr, UnaryFunc, func};
 use mz_ore::cast::CastFrom;
 use mz_ore::soft_assert_or_log;
-use mz_repr::{Datum, DatumVec, Diff, Row, SharedRow, SqlScalarType};
-use mz_storage_types::errors::DataflowError;
+use mz_repr::{Datum, DatumVec, Diff, ReprScalarType, Row, SharedRow};
 use mz_timely_util::operator::CollectionExt;
 use timely::Container;
 use timely::container::{CapacityContainerBuilder, PushInto};
-use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
-use crate::extensions::reduce::MzReduce;
+use crate::extensions::reduce::{ClearContainer, MzReduce};
 use crate::render::Pairer;
 use crate::render::context::{CollectionBundle, Context};
+use crate::render::errors::DataflowErrorSer;
 use crate::render::errors::MaybeValidatingRow;
 use crate::row_spine::{
     DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBuilder, RowValSpine,
@@ -50,20 +50,17 @@ use crate::row_spine::{
 use crate::typedefs::{KeyBatcher, MzTimestamp, RowRowSpine, RowSpine};
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
-impl<G> Context<G>
-where
-    G: Scope,
-    G::Timestamp: crate::render::RenderTimestamp,
-{
+impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
     pub(crate) fn render_topk(
         &self,
-        input: CollectionBundle<G>,
+        input: CollectionBundle<'scope, T>,
         top_k_plan: TopKPlan,
-    ) -> CollectionBundle<G> {
+    ) -> CollectionBundle<'scope, T> {
         let (ok_input, err_input) = input.as_specific_collection(None, &self.config_set);
 
         // We create a new region to compartmentalize the topk logic.
-        let (ok_result, err_collection) = ok_input.scope().region_named("TopK", |inner| {
+        let outer_scope = ok_input.scope();
+        let (ok_result, err_collection) = outer_scope.clone().region_named("TopK", |inner| {
             let ok_input = ok_input.enter_region(inner);
             let mut err_collection = err_input.enter_region(inner);
 
@@ -86,7 +83,7 @@ where
                     // thus needs to be checked.
                     let expr = expr.clone();
                     let mut datum_vec = mz_repr::DatumVec::new();
-                    let errors = ok_input.flat_map(move |row| {
+                    let errors = ok_input.clone().flat_map(move |row| {
                         let temp_storage = mz_repr::RowArena::new();
                         let datums = datum_vec.borrow_with(&row);
                         match expr.eval(&datums[..], &temp_storage) {
@@ -97,7 +94,7 @@ where
                             Err(e) => Some(e.into()),
                         }
                     });
-                    err_collection = err_collection.concat(&errors);
+                    err_collection = err_collection.concat(errors);
                 }
             }
 
@@ -113,7 +110,7 @@ where
                         order_key,
                         must_consolidate,
                     );
-                    err_collection = err_collection.concat(&errs);
+                    err_collection = err_collection.concat(errs);
                     oks
                 }
                 TopKPlan::MonotonicTopK(MonotonicTopKPlan {
@@ -134,6 +131,7 @@ where
 
                     // Map the group key along with the row and consolidate if required to do so.
                     let mut datum_vec = mz_repr::DatumVec::new();
+                    let ok_scope = ok_input.scope();
                     let collection = ok_input
                         .map(move |row| {
                             let group_row = {
@@ -155,9 +153,9 @@ where
                             &format!("data={data:?}, diff={diff}"),
                         );
                         let m = "tried to build monotonic top-k on non-monotonic input".into();
-                        (DataflowError::from(EvalError::Internal(m)), Diff::ONE)
+                        (DataflowErrorSer::from(EvalError::Internal(m)), Diff::ONE)
                     });
-                    err_collection = err_collection.concat(&errs);
+                    err_collection = err_collection.concat(errs);
 
                     // For monotonic inputs, we are able to thin the input relation in two stages:
                     // 1. First, we can do an intra-timestamp thinning which has the advantage of
@@ -186,13 +184,13 @@ where
                     // of `offset` and `limit`, discarding only the records not produced in the intermediate
                     // stage.
                     let delay = std::time::Duration::from_secs(10);
-                    let retractions = SemigroupVariable::new(
-                        &mut ok_input.scope(),
-                        <G::Timestamp as crate::render::RenderTimestamp>::system_delay(
+                    let (retractions_var, retractions) = SemigroupVariable::new(
+                        ok_scope,
+                        <T as crate::render::RenderTimestamp>::system_delay(
                             delay.try_into().expect("must fit"),
                         ),
                     );
-                    let thinned = collection.concat(&retractions.negate());
+                    let thinned = collection.clone().concat(retractions.negate());
 
                     // As an additional optimization, we can skip creating the full topk hierachy
                     // here since we now have an upper bound on the number records due to the
@@ -202,10 +200,11 @@ where
                     let (result, errs) =
                         self.build_topk_stage(thinned, order_key, 1u64, 0, limit, arity, false);
                     // Consolidate the output of `build_topk_stage` because it's not guaranteed to be.
-                    let result = result.consolidate_named::<KeyBatcher<_, _, _>>(
+                    let result = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
+                        result,
                         "Monotonic TopK final consolidate",
                     );
-                    retractions.set(&collection.concat(&result.negate()));
+                    retractions_var.set(collection.concat(result.clone().negate()));
                     soft_assert_or_log!(
                         errs.is_none(),
                         "requested no validation, but received error collection"
@@ -233,22 +232,25 @@ where
                     let (oks, errs) = self.build_topk(
                         ok_input, group_key, order_key, offset, limit, arity, buckets,
                     );
-                    err_collection = err_collection.concat(&errs);
+                    err_collection = err_collection.concat(errs);
                     oks
                 }
             };
 
             // Extract the results from the region.
-            (ok_result.leave_region(), err_collection.leave_region())
+            (
+                ok_result.leave_region(outer_scope),
+                err_collection.leave_region(outer_scope),
+            )
         });
 
         CollectionBundle::from_collections(ok_result, err_collection)
     }
 
     /// Constructs a TopK dataflow subgraph.
-    fn build_topk<S>(
+    fn build_topk<'s>(
         &self,
-        collection: VecCollection<S, Row, Diff>,
+        collection: VecCollection<'s, T, Row, Diff>,
         group_key: Vec<usize>,
         order_key: Vec<mz_expr::ColumnOrder>,
         offset: usize,
@@ -256,12 +258,9 @@ where
         arity: usize,
         buckets: Vec<u64>,
     ) -> (
-        VecCollection<S, Row, Diff>,
-        VecCollection<S, DataflowError, Diff>,
-    )
-    where
-        S: Scope<Timestamp = G::Timestamp>,
-    {
+        VecCollection<'s, T, Row, Diff>,
+        VecCollection<'s, T, DataflowErrorSer, Diff>,
+    ) {
         let pairer = Pairer::new(1);
         let mut datum_vec = mz_repr::DatumVec::new();
         let mut collection = collection.map({
@@ -277,7 +276,7 @@ where
         });
 
         let mut validating = true;
-        let mut err_collection: Option<VecCollection<S, _, _>> = None;
+        let mut err_collection: Option<VecCollection<'s, T, _, _>> = None;
 
         if let Some(mut limit) = limit.clone() {
             // We may need a new `limit` that reflects the addition of `offset`.
@@ -291,12 +290,12 @@ where
 
                 if let Some(new_limit) = new_limit {
                     limit =
-                        MirScalarExpr::literal_ok(Datum::Int64(new_limit), SqlScalarType::Int64);
+                        MirScalarExpr::literal_ok(Datum::Int64(new_limit), ReprScalarType::Int64);
                 } else {
                     limit = limit.call_binary(
                         MirScalarExpr::literal_ok(
                             Datum::UInt64(u64::cast_from(offset)),
-                            SqlScalarType::UInt64,
+                            ReprScalarType::UInt64,
                         )
                         .call_unary(UnaryFunc::CastUint64ToInt64(CastUint64ToInt64)),
                         BinaryFunc::AddInt64(func::AddInt64),
@@ -335,7 +334,8 @@ where
             collection, order_key, 1u64, offset, limit, arity, validating,
         );
         // Consolidate the output of `build_topk_stage` because it's not guaranteed to be.
-        let oks = oks.consolidate_named::<KeyBatcher<_, _, _>>("TopK final consolidate");
+        let oks =
+            CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(oks, "TopK final consolidate");
         collection = oks;
         if validating {
             err_collection = errs;
@@ -378,9 +378,9 @@ where
     /// ```
     /// There are additional map/flat_map operators as well as error demuxing operators, but we're
     /// omitting them here for the sake of simplicity.
-    fn build_topk_stage<S>(
+    fn build_topk_stage<'s>(
         &self,
-        collection: VecCollection<S, (Row, Row), Diff>,
+        collection: VecCollection<'s, T, (Row, Row), Diff>,
         order_key: Vec<mz_expr::ColumnOrder>,
         modulus: u64,
         offset: usize,
@@ -388,12 +388,9 @@ where
         arity: usize,
         validating: bool,
     ) -> (
-        VecCollection<S, (Row, Row), Diff>,
-        Option<VecCollection<S, DataflowError, Diff>>,
-    )
-    where
-        S: Scope<Timestamp = G::Timestamp>,
-    {
+        VecCollection<'s, T, (Row, Row), Diff>,
+        Option<VecCollection<'s, T, DataflowErrorSer, Diff>>,
+    ) {
         // Form appropriate input by updating the `hash` column (first datum in `hash_key`) by
         // applying `modulus`.
         let input = collection.map(move |(hash_key, row)| {
@@ -407,7 +404,7 @@ where
         let (input, oks, errs) = if validating {
             // Build topk stage, produce errors for invalid multiplicities.
             let (input, stage) = build_topk_negated_stage::<
-                S,
+                T,
                 RowValBuilder<_, _, _>,
                 RowValSpine<Result<Row, Row>, _, _>,
             >(&input, order_key, offset, limit, arity);
@@ -434,7 +431,7 @@ where
         } else {
             // Build non-validating topk stage.
             let (input, stage) =
-                build_topk_negated_stage::<S, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+                build_topk_negated_stage::<T, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
                     &input, order_key, offset, limit, arity,
                 );
             // Turn arrangement into collection.
@@ -443,22 +440,19 @@ where
             (input, stage, None)
         };
         let input = input.as_collection(|k, v| (k.to_row(), v.to_row()));
-        (oks.concat(&input), errs)
+        (oks.concat(input), errs)
     }
 
-    fn render_top1_monotonic<S>(
+    fn render_top1_monotonic<'s>(
         &self,
-        collection: VecCollection<S, Row, Diff>,
+        collection: VecCollection<'s, T, Row, Diff>,
         group_key: Vec<usize>,
         order_key: Vec<mz_expr::ColumnOrder>,
         must_consolidate: bool,
     ) -> (
-        VecCollection<S, Row, Diff>,
-        VecCollection<S, DataflowError, Diff>,
-    )
-    where
-        S: Scope<Timestamp = G::Timestamp>,
-    {
+        VecCollection<'s, T, Row, Diff>,
+        VecCollection<'s, T, DataflowErrorSer, Diff>,
+    ) {
         // We can place our rows directly into the diff field, and only keep the relevant one
         // corresponding to evaluating our aggregate, instead of having to do a hierarchical
         // reduction. We start by mapping the group key along with the row and consolidating
@@ -524,32 +518,34 @@ where
 /// Returns two arrangements:
 /// * The arranged input data without modifications, and
 /// * the maintained negated output data.
-fn build_topk_negated_stage<G, Bu, Tr>(
-    input: &VecCollection<G, (Row, Row), Diff>,
+fn build_topk_negated_stage<'s, T, Bu, Tr>(
+    input: &VecCollection<'s, T, (Row, Row), Diff>,
     order_key: Vec<mz_expr::ColumnOrder>,
     offset: usize,
     limit: Option<mz_expr::MirScalarExpr>,
     arity: usize,
 ) -> (
-    Arranged<G, TraceAgent<RowRowSpine<G::Timestamp, Diff>>>,
-    Arranged<G, TraceAgent<Tr>>,
+    Arranged<'s, TraceAgent<RowRowSpine<T, Diff>>>,
+    Arranged<'s, TraceAgent<Tr>>,
 )
 where
-    G: Scope,
-    G::Timestamp: MzTimestamp,
+    T: MzTimestamp,
     Bu: Builder<
-            Time = G::Timestamp,
-            Input: Container + MergerChunk + PushInto<((Row, Tr::ValOwn), G::Timestamp, Diff)>,
+            Time = T,
+            Input: Container
+                       + InternalMerge
+                       + ClearContainer
+                       + PushInto<((Row, Tr::ValOwn), T, Diff)>,
             Output = Tr::Batch,
         >,
     Tr: for<'a> Trace<
             Key<'a> = DatumSeq<'a>,
-            KeyOwn = Row,
+            KeyContainer: BatchContainer<Owned = Row>,
             ValOwn: Data + MaybeValidatingRow<Row, Row>,
-            Time = G::Timestamp,
+            Time = T,
             Diff = Diff,
         > + 'static,
-    Arranged<G, TraceAgent<Tr>>: ArrangementSize,
+    Arranged<'s, TraceAgent<Tr>>: ArrangementSize,
 {
     let mut datum_vec = mz_repr::DatumVec::new();
 
@@ -557,9 +553,11 @@ where
     // such that `input.concat(&negated_output)` yields the correct TopK
     // NOTE(vmarcos): The arranged input operator name below is used in the tuning advice
     // built-in view mz_introspection.mz_expected_group_size_advice.
-    let arranged = input.mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
-        "Arranged TopK input",
-    );
+    let arranged = input
+        .clone()
+        .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+            "Arranged TopK input",
+        );
 
     // Eagerly evaluate literal limits.
     let limit = limit.map(|l| match l.as_literal() {
@@ -568,118 +566,119 @@ where
         _ => Err(l),
     });
 
-    let reduced = arranged.mz_reduce_abelian::<_, Bu, Tr>("Reduced TopK input", {
-        move |mut hash_key, source, target: &mut Vec<(Tr::ValOwn, Diff)>| {
-            // Unpack the limit, either into an integer literal or an expression to evaluate.
-            let limit = match &limit {
-                Some(Ok(lit)) => Some(*lit),
-                Some(Err(expr)) => {
-                    // Unpack `key` after skipping the hash and determine the limit.
-                    // If the limit errors, use a zero limit; errors are surfaced elsewhere.
-                    let temp_storage = mz_repr::RowArena::new();
-                    let _hash = hash_key.next();
-                    let mut key_datums = datum_vec.borrow();
-                    key_datums.extend(hash_key);
-                    let datum_limit = expr
-                        .eval(&key_datums, &temp_storage)
-                        .unwrap_or(Datum::Int64(0));
-                    Some(match datum_limit {
-                        Datum::Null => Diff::MAX,
-                        d => Diff::from(d.unwrap_int64()),
-                    })
-                }
-                None => None,
-            };
-
-            if let Some(err) = Tr::ValOwn::into_error() {
-                for (datums, diff) in source.iter() {
-                    if diff.is_positive() {
-                        continue;
+    let reduced = arranged
+        .clone()
+        .mz_reduce_abelian::<_, Bu, Tr>("Reduced TopK input", {
+            move |mut hash_key, source, target: &mut Vec<(Tr::ValOwn, Diff)>| {
+                // Unpack the limit, either into an integer literal or an expression to evaluate.
+                let limit = match &limit {
+                    Some(Ok(lit)) => Some(*lit),
+                    Some(Err(expr)) => {
+                        // Unpack `key` after skipping the hash and determine the limit.
+                        // If the limit errors, use a zero limit; errors are surfaced elsewhere.
+                        let temp_storage = mz_repr::RowArena::new();
+                        let _hash = hash_key.next();
+                        let mut key_datums = datum_vec.borrow();
+                        key_datums.extend(hash_key);
+                        let datum_limit = expr
+                            .eval(&key_datums, &temp_storage)
+                            .unwrap_or(Datum::Int64(0));
+                        Some(match datum_limit {
+                            Datum::Null => Diff::MAX,
+                            d => Diff::from(d.unwrap_int64()),
+                        })
                     }
-                    target.push((err((*datums).to_row()), Diff::ONE));
+                    None => None,
+                };
+
+                if let Some(err) = Tr::ValOwn::into_error() {
+                    for (datums, diff) in source.iter() {
+                        if diff.is_positive() {
+                            continue;
+                        }
+                        target.push((err((*datums).to_row()), Diff::ONE));
+                        return;
+                    }
+                }
+
+                // Determine if we must actually shrink the result set.
+                let must_shrink = offset > 0
+                    || limit
+                        .map(|l| source.iter().map(|(_, d)| *d).sum::<Diff>() > l)
+                        .unwrap_or(false);
+                if !must_shrink {
                     return;
                 }
-            }
 
-            // Determine if we must actually shrink the result set.
-            let must_shrink = offset > 0
-                || limit
-                    .map(|l| source.iter().map(|(_, d)| *d).sum::<Diff>() > l)
-                    .unwrap_or(false);
-            if !must_shrink {
-                return;
-            }
-
-            // First go ahead and emit all records. Note that we ensure target
-            // has the capacity to hold at least these records, and avoid any
-            // dependencies on the user-provided (potentially unbounded) limit.
-            target.reserve(source.len());
-            for (datums, diff) in source.iter() {
-                target.push((Tr::ValOwn::ok((*datums).to_row()), -diff));
-            }
-            // local copies that may count down to zero.
-            let mut offset = offset;
-            let mut limit = limit;
-
-            // The order in which we should produce rows.
-            let mut indexes = (0..source.len()).collect::<Vec<_>>();
-            // We decode the datums once, into a common buffer for efficiency.
-            // Each row should contain `arity` columns; we should check that.
-            let mut buffer = datum_vec.borrow();
-            for (index, (datums, _)) in source.iter().enumerate() {
-                buffer.extend(*datums);
-                assert_eq!(buffer.len(), arity * (index + 1));
-            }
-            let width = buffer.len() / source.len();
-
-            //todo: use arrangements or otherwise make the sort more performant?
-            indexes.sort_by(|left, right| {
-                let left = &buffer[left * width..][..width];
-                let right = &buffer[right * width..][..width];
-                // Note: source was originally ordered by the u8 array representation
-                // of rows, but left.cmp(right) uses Datum::cmp.
-                mz_expr::compare_columns(&order_key, left, right, || left.cmp(right))
-            });
-
-            // We now need to lay out the data in order of `buffer`, but respecting
-            // the `offset` and `limit` constraints.
-            for index in indexes.into_iter() {
-                let (datums, mut diff) = source[index];
-                if !diff.is_positive() {
-                    continue;
+                // First go ahead and emit all records. Note that we ensure target
+                // has the capacity to hold at least these records, and avoid any
+                // dependencies on the user-provided (potentially unbounded) limit.
+                target.reserve(source.len());
+                for (datums, diff) in source.iter() {
+                    target.push((Tr::ValOwn::ok((*datums).to_row()), -diff));
                 }
-                // If we are still skipping early records ...
-                if offset > 0 {
-                    let to_skip =
-                        std::cmp::min(offset, usize::try_from(diff.into_inner()).unwrap());
-                    offset -= to_skip;
-                    diff -= Diff::try_from(to_skip).unwrap();
+                // local copies that may count down to zero.
+                let mut offset = offset;
+                let mut limit = limit;
+
+                // The order in which we should produce rows.
+                let mut indexes = (0..source.len()).collect::<Vec<_>>();
+                // We decode the datums once, into a common buffer for efficiency.
+                // Each row should contain `arity` columns; we should check that.
+                let mut buffer = datum_vec.borrow();
+                for (index, (datums, _)) in source.iter().enumerate() {
+                    buffer.extend(*datums);
+                    assert_eq!(buffer.len(), arity * (index + 1));
                 }
-                // We should produce at most `limit` records.
-                if let Some(limit) = &mut limit {
-                    diff = std::cmp::min(diff, Diff::from(*limit));
-                    *limit -= diff;
-                }
-                // Output the indicated number of rows.
-                if diff.is_positive() {
-                    // Emit retractions for the elements actually part of
-                    // the set of TopK elements.
-                    target.push((Tr::ValOwn::ok(datums.to_row()), diff));
+                let width = buffer.len() / source.len();
+
+                //todo: use arrangements or otherwise make the sort more performant?
+                indexes.sort_by(|left, right| {
+                    let left = &buffer[left * width..][..width];
+                    let right = &buffer[right * width..][..width];
+                    // Note: source was originally ordered by the u8 array representation
+                    // of rows, but left.cmp(right) uses Datum::cmp.
+                    mz_expr::compare_columns(&order_key, left, right, || left.cmp(right))
+                });
+
+                // We now need to lay out the data in order of `buffer`, but respecting
+                // the `offset` and `limit` constraints.
+                for index in indexes.into_iter() {
+                    let (datums, mut diff) = source[index];
+                    if !diff.is_positive() {
+                        continue;
+                    }
+                    // If we are still skipping early records ...
+                    if offset > 0 {
+                        let to_skip =
+                            std::cmp::min(offset, usize::try_from(diff.into_inner()).unwrap());
+                        offset -= to_skip;
+                        diff -= Diff::try_from(to_skip).unwrap();
+                    }
+                    // We should produce at most `limit` records.
+                    if let Some(limit) = &mut limit {
+                        diff = std::cmp::min(diff, Diff::from(*limit));
+                        *limit -= diff;
+                    }
+                    // Output the indicated number of rows.
+                    if diff.is_positive() {
+                        // Emit retractions for the elements actually part of
+                        // the set of TopK elements.
+                        target.push((Tr::ValOwn::ok(datums.to_row()), diff));
+                    }
                 }
             }
-        }
-    });
+        });
     (arranged, reduced)
 }
 
-fn render_intra_ts_thinning<S>(
-    collection: VecCollection<S, (Row, Row), Diff>,
+fn render_intra_ts_thinning<'s, T>(
+    collection: VecCollection<'s, T, (Row, Row), Diff>,
     order_key: Vec<mz_expr::ColumnOrder>,
     limit: mz_expr::MirScalarExpr,
-) -> VecCollection<S, (Row, Row), Diff>
+) -> VecCollection<'s, T, (Row, Row), Diff>
 where
-    S: Scope,
-    S::Timestamp: Lattice,
+    T: timely::progress::Timestamp + Lattice,
 {
     let mut datum_vec = mz_repr::DatumVec::new();
 
@@ -730,7 +729,7 @@ where
                             .or_insert_with(move || topk_agg::TopKBatch::new(limit));
                         topk.update(monoid, diff.into_inner());
                     }
-                    notificator.notify_at(time.retain());
+                    notificator.notify_at(time.retain(0));
                 });
 
                 notificator.for_each(|time, _, _| {
@@ -857,7 +856,7 @@ pub mod monoids {
     use std::hash::{Hash, Hasher};
     use std::rc::Rc;
 
-    use differential_dataflow::containers::{Columnation, Region};
+    use columnation::{Columnation, Region};
     use differential_dataflow::difference::{IsZero, Multiply, Semigroup};
     use mz_expr::ColumnOrder;
     use mz_repr::{DatumVec, Diff, Row};

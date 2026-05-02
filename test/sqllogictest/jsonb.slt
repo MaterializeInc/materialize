@@ -659,6 +659,63 @@ SELECT '{"a":1}'::JSONB ? 'a','{"a":1}'::JSONB ? 'b'
 ----
 true false
 
+# PostgreSQL: any jsonb operation on NULL returns NULL.
+query B
+SELECT NULL::jsonb ? 'key'
+----
+NULL
+
+query B
+SELECT NOT (NULL::jsonb ? 'key');
+----
+NULL
+
+# Operators that propagate nulls return NULL.
+query B
+SELECT NULL::jsonb @> '{"a":1}'
+----
+NULL
+
+query B
+SELECT NULL::jsonb <@ '{}'
+----
+NULL
+
+query T
+SELECT NULL::jsonb || '{}'::jsonb
+----
+NULL
+
+query T
+SELECT NULL::jsonb -> 'key'
+----
+NULL
+
+query T
+SELECT NULL::jsonb ->> 'key'
+----
+NULL
+
+query T
+SELECT NULL::jsonb #> '{a}'
+----
+NULL
+
+query T
+SELECT NULL::jsonb #>> '{a}'
+----
+NULL
+
+query T
+SELECT NULL::jsonb - 1
+----
+NULL
+
+query T
+SELECT NULL::jsonb - 'key'
+----
+NULL
+
 query BB
 SELECT '{"a":1,"b":1}'::JSONB ? 'a','{"a":1,"b":1}'::JSONB ? 'b'
 ----
@@ -2043,7 +2100,7 @@ SELECT jsonb_agg(a) FILTER (WHERE a IS NOT NULL) FROM t1
 ----
 [1,2,3]
 
-query error db error: ERROR: function jsonb_agg\(integer, integer\) does not exist
+query error function jsonb_agg\(integer, integer\) does not exist
 SELECT jsonb_agg(1, 2)
 
 statement ok
@@ -2052,15 +2109,17 @@ CREATE TABLE t2 (a int, b date)
 statement ok
 INSERT INTO t2 VALUES (1, date '2020-01-01'), (NULL, date '2020-01-02')
 
+# With no ORDER BY, jsonb_agg sorts by payload (the JSONB object) for deterministic output.
+# DatumMap/Datum compare by datum (Datum::Null is last in enum order = PostgreSQL nulls last).
 query T
 SELECT jsonb_agg((a, b)) FROM t2
 ----
-[{"f1":null,"f2":"2020-01-02"},{"f1":1,"f2":"2020-01-01"}]
+[{"f1":1,"f2":"2020-01-01"},{"f1":null,"f2":"2020-01-02"}]
 
 query TTT
 SELECT jsonb_agg((a, b)), jsonb_agg(a), jsonb_agg(b) FROM t2
 ----
-[{"f1":null,"f2":"2020-01-02"},{"f1":1,"f2":"2020-01-01"}]  [1,null]  ["2020-01-01","2020-01-02"]
+[{"f1":1,"f2":"2020-01-01"},{"f1":null,"f2":"2020-01-02"}]  [1,null]  ["2020-01-01","2020-01-02"]
 
 # jsonb_object_agg
 

@@ -427,8 +427,8 @@ GROUP BY a
 ----
 Explained Query:
   Reduce::Accumulable
-    simple_aggrs[0]=(0, 0, sum(#1{b}))
-    distinct_aggrs[0]=(1, 1, count(distinct #1{b}))
+    simple_aggrs[0]=(0, sum(#1{b}))
+    distinct_aggrs[0]=(1, count(distinct #1{b}))
     input_key=#0{a}
     key_plan
       project=(#0)
@@ -457,8 +457,8 @@ Explained Query:
   With
     cte l0 =
       Reduce::Accumulable
-        simple_aggrs[0]=(0, 0, sum(#0{b}))
-        distinct_aggrs[0]=(1, 1, count(distinct #0{b}))
+        simple_aggrs[0]=(0, sum(#0{b}))
+        distinct_aggrs[0]=(1, count(distinct #0{b}))
         key_plan
           project=()
         val_plan
@@ -504,7 +504,6 @@ MATERIALIZED VIEW hierarchical_group_by_mv
 materialize.public.hierarchical_group_by_mv:
   Reduce::Hierarchical
     aggr_funcs=[min, max]
-    skips=[0, 0]
     buckets=[268435456, 16777216, 1048576, 65536, 4096, 256, 16]
     input_key=#0{a}
     key_plan
@@ -530,7 +529,6 @@ SELECT * FROM hierarchical_group_by
 Explained Query:
   Reduce::Hierarchical
     aggr_funcs=[min, max]
-    skips=[0, 0]
     monotonic
     must_consolidate
     input_key=#0{a}
@@ -559,7 +557,6 @@ materialize.public.hierarchical_global_mv:
     cte l0 =
       Reduce::Hierarchical
         aggr_funcs=[min, max]
-        skips=[0, 0]
         buckets=[268435456, 16777216, 1048576, 65536, 4096, 256, 16]
         key_plan
           project=()
@@ -608,7 +605,6 @@ Explained Query:
     cte l0 =
       Reduce::Hierarchical
         aggr_funcs=[min, max]
-        skips=[0, 0]
         monotonic
         must_consolidate
         key_plan
@@ -665,7 +661,7 @@ Explained Query:
       stream={ key=[#0], thinning=(#1) }
     source={ relation=0, key=[#0] }
     Reduce::Basic
-      aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#1{b}) || █), █))))
+      aggr=(string_agg[order_by=[]](row(row((integer_to_text(#1{b}) || █), █))))
       input_key=#0{a}
       key_plan
         project=(#0)
@@ -676,7 +672,7 @@ Explained Query:
         raw=false
         arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
     Reduce::Basic
-      aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#1{b}) || █), █))))
+      aggr=(string_agg[order_by=[]](row(row((integer_to_text(#1{b}) || █), █))))
       input_key=#0{a}
       key_plan
         project=(#0)
@@ -717,7 +713,7 @@ Explained Query:
           stream={ key=[], thinning=(#0) }
         source={ relation=0, key=[] }
         Reduce::Basic
-          aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#0{b}) || █), █))))
+          aggr=(string_agg[order_by=[]](row(row((integer_to_text(#0{b}) || █), █))))
           key_plan
             project=()
           val_plan
@@ -726,7 +722,7 @@ Explained Query:
           Get::PassArrangements l0
             raw=true
         Reduce::Basic
-          aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#0{b}) || █), █))))
+          aggr=(string_agg[order_by=[]](row(row((integer_to_text(#0{b}) || █), █))))
           key_plan
             project=()
           val_plan
@@ -829,7 +825,6 @@ materialize.public.collated_group_by_mv:
       source={ relation=3, key=[#0] }
     Reduce::Hierarchical
       aggr_funcs=[min, max]
-      skips=[0, 0]
       buckets=[268435456, 16777216, 1048576, 65536, 4096, 256, 16]
       input_key=#0{a}
       key_plan
@@ -840,8 +835,8 @@ materialize.public.collated_group_by_mv:
         raw=false
         arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
     Reduce::Accumulable
-      simple_aggrs[0]=(1, 1, sum(#1{b}))
-      distinct_aggrs[0]=(0, 0, count(distinct #1{b}))
+      simple_aggrs[0]=(1, sum(#1{b}))
+      distinct_aggrs[0]=(0, count(distinct #1{b}))
       input_key=#0{a}
       key_plan
         project=(#0)
@@ -851,7 +846,7 @@ materialize.public.collated_group_by_mv:
         raw=false
         arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
     Reduce::Basic
-      aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#1{b}) || █), █))))
+      aggr=(string_agg[order_by=[]](row(row((integer_to_text(#1{b}) || █), █))))
       input_key=#0{a}
       key_plan
         project=(#0)
@@ -862,7 +857,7 @@ materialize.public.collated_group_by_mv:
         raw=false
         arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
     Reduce::Basic
-      aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#1{b}) || █), █))))
+      aggr=(string_agg[order_by=[]](row(row((integer_to_text(#1{b}) || █), █))))
       input_key=#0{a}
       key_plan
         project=(#0)
@@ -953,7 +948,6 @@ Explained Query:
       source={ relation=3, key=[#0] }
     Reduce::Hierarchical
       aggr_funcs=[min, max]
-      skips=[0, 0]
       monotonic
       must_consolidate
       input_key=#0{a}
@@ -965,8 +959,8 @@ Explained Query:
         raw=false
         arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
     Reduce::Accumulable
-      simple_aggrs[0]=(1, 1, sum(#1{b}))
-      distinct_aggrs[0]=(0, 0, count(distinct #1{b}))
+      simple_aggrs[0]=(1, sum(#1{b}))
+      distinct_aggrs[0]=(0, count(distinct #1{b}))
       input_key=#0{a}
       key_plan
         project=(#0)
@@ -976,7 +970,7 @@ Explained Query:
         raw=false
         arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
     Reduce::Basic
-      aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#1{b}) || █), █))))
+      aggr=(string_agg[order_by=[]](row(row((integer_to_text(#1{b}) || █), █))))
       input_key=#0{a}
       key_plan
         project=(#0)
@@ -987,7 +981,7 @@ Explained Query:
         raw=false
         arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
     Reduce::Basic
-      aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#1{b}) || █), █))))
+      aggr=(string_agg[order_by=[]](row(row((integer_to_text(#1{b}) || █), █))))
       input_key=#0{a}
       key_plan
         project=(#0)
@@ -1078,7 +1072,6 @@ materialize.public.collated_global_mv:
           source={ relation=3, key=[] }
         Reduce::Hierarchical
           aggr_funcs=[min, max]
-          skips=[0, 0]
           buckets=[268435456, 16777216, 1048576, 65536, 4096, 256, 16]
           key_plan
             project=()
@@ -1087,8 +1080,8 @@ materialize.public.collated_global_mv:
           Get::PassArrangements l0
             raw=true
         Reduce::Accumulable
-          simple_aggrs[0]=(1, 1, sum(#0{b}))
-          distinct_aggrs[0]=(0, 0, count(distinct #0{b}))
+          simple_aggrs[0]=(1, sum(#0{b}))
+          distinct_aggrs[0]=(0, count(distinct #0{b}))
           key_plan
             project=()
           val_plan
@@ -1096,7 +1089,7 @@ materialize.public.collated_global_mv:
           Get::PassArrangements l0
             raw=true
         Reduce::Basic
-          aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#0{b}) || █), █))))
+          aggr=(string_agg[order_by=[]](row(row((integer_to_text(#0{b}) || █), █))))
           key_plan
             project=()
           val_plan
@@ -1105,7 +1098,7 @@ materialize.public.collated_global_mv:
           Get::PassArrangements l0
             raw=true
         Reduce::Basic
-          aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#0{b}) || █), █))))
+          aggr=(string_agg[order_by=[]](row(row((integer_to_text(#0{b}) || █), █))))
           key_plan
             project=()
           val_plan
@@ -1209,7 +1202,6 @@ Explained Query:
           source={ relation=3, key=[] }
         Reduce::Hierarchical
           aggr_funcs=[min, max]
-          skips=[0, 0]
           monotonic
           must_consolidate
           key_plan
@@ -1219,8 +1211,8 @@ Explained Query:
           Get::PassArrangements l0
             raw=true
         Reduce::Accumulable
-          simple_aggrs[0]=(1, 1, sum(#0{b}))
-          distinct_aggrs[0]=(0, 0, count(distinct #0{b}))
+          simple_aggrs[0]=(1, sum(#0{b}))
+          distinct_aggrs[0]=(0, count(distinct #0{b}))
           key_plan
             project=()
           val_plan
@@ -1228,7 +1220,7 @@ Explained Query:
           Get::PassArrangements l0
             raw=true
         Reduce::Basic
-          aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#0{b}) || █), █))))
+          aggr=(string_agg[order_by=[]](row(row((integer_to_text(#0{b}) || █), █))))
           key_plan
             project=()
           val_plan
@@ -1237,7 +1229,7 @@ Explained Query:
           Get::PassArrangements l0
             raw=true
         Reduce::Basic
-          aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#0{b}) || █), █))))
+          aggr=(string_agg[order_by=[]](row(row((integer_to_text(#0{b}) || █), █))))
           key_plan
             project=()
           val_plan
@@ -1643,7 +1635,7 @@ SELECT * FROM (
 Explained Query (fast path):
   Constant <empty>
 
-Target cluster: mz_catalog_server
+Target cluster: quickstart
 
 EOF
 
@@ -1658,7 +1650,7 @@ Explained Query:
     map=(record_get[0](#0))
     input_key=
     Reduce::Basic
-      aggr=(0, lead[ignore_nulls=true, order_by=[]](row(row(row(#0, #1), row(#1{b}, █, █)))), fused_unnest_list=true)
+      aggr=(lead[ignore_nulls=true, order_by=[]](row(row(row(#0, #1), row(#1{b}, █, █)))), fused_unnest_list=true)
       input_key=#0{a}
       key_plan
         project=()
@@ -1687,7 +1679,7 @@ Explained Query:
     map=(record_get[0](#2))
     input_key=#0, #1
     Reduce::Basic
-      aggr=(0, lag[ignore_nulls=true, order_by=[#0 asc nulls_last, #1 asc nulls_last]](row(row(row(#0, #1), row(#1{b}, █, █)), (#1{b} + █), (#0{a} - █))), fused_unnest_list=true)
+      aggr=(lag[ignore_nulls=true, order_by=[#0 asc nulls_last, #1 asc nulls_last]](row(row(row(#0, #1), row(#1{b}, █, █)), (#1{b} + █), (#0{a} - █))), fused_unnest_list=true)
       input_key=#0{a}
       key_plan
         project=(#1, #0)

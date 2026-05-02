@@ -10,6 +10,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 
+use mz_auth::AuthenticatorKind;
 use mz_repr::role_id::RoleId;
 use mz_repr::user::{ExternalUserMetadata, InternalUserMetadata};
 use serde::Serialize;
@@ -19,6 +20,7 @@ pub static SYSTEM_USER: LazyLock<User> = LazyLock::new(|| User {
     name: SYSTEM_USER_NAME.into(),
     external_metadata: None,
     internal_metadata: None,
+    authenticator_kind: None,
 });
 
 pub const SUPPORT_USER_NAME: &str = "mz_support";
@@ -26,6 +28,7 @@ pub static SUPPORT_USER: LazyLock<User> = LazyLock::new(|| User {
     name: SUPPORT_USER_NAME.into(),
     external_metadata: None,
     internal_metadata: None,
+    authenticator_kind: None,
 });
 
 pub const ANALYTICS_USER_NAME: &str = "mz_analytics";
@@ -33,6 +36,7 @@ pub static ANALYTICS_USER: LazyLock<User> = LazyLock::new(|| User {
     name: ANALYTICS_USER_NAME.into(),
     external_metadata: None,
     internal_metadata: None,
+    authenticator_kind: None,
 });
 
 pub static INTERNAL_USER_NAMES: LazyLock<BTreeSet<String>> = LazyLock::new(|| {
@@ -58,6 +62,7 @@ pub static HTTP_DEFAULT_USER: LazyLock<User> = LazyLock::new(|| User {
     name: "anonymous_http_user".into(),
     external_metadata: None,
     internal_metadata: None,
+    authenticator_kind: None,
 });
 
 /// Identifies a user.
@@ -67,7 +72,12 @@ pub struct User {
     pub name: String,
     /// Metadata about this user in an external system.
     pub external_metadata: Option<ExternalUserMetadata>,
+    /// Metadata about this user stored in the catalog,
+    /// such as its role's `SUPERUSER` attribute.
     pub internal_metadata: Option<InternalUserMetadata>,
+    /// The authenticator that authenticated this user.
+    /// If `None`, the user hasn't been authenticated.
+    pub authenticator_kind: Option<AuthenticatorKind>,
 }
 
 impl From<&User> for mz_pgwire_common::UserMetadata {
@@ -142,6 +152,10 @@ pub enum UserKind {
 pub const MZ_SYSTEM_ROLE_ID: RoleId = RoleId::System(1);
 pub const MZ_SUPPORT_ROLE_ID: RoleId = RoleId::System(2);
 pub const MZ_ANALYTICS_ROLE_ID: RoleId = RoleId::System(3);
+/// Sentinel role ID for JWT group-sync-managed role memberships.
+/// Not a login role — exists only to distinguish sync grants from manual grants.
+pub const MZ_JWT_SYNC_ROLE_ID: RoleId = RoleId::System(4);
+pub const JWT_SYNC_ROLE_NAME: &str = "mz_jwt_sync";
 pub const MZ_MONITOR_ROLE_ID: RoleId = RoleId::Predefined(1);
 pub const MZ_MONITOR_REDACTED_ROLE_ID: RoleId = RoleId::Predefined(2);
 

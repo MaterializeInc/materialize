@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+#![recursion_limit = "256"]
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::error::Error;
@@ -27,9 +29,9 @@ use mz_ore::cli::{self, CliConfig};
 use mz_ore::path::PathExt;
 use mz_ore::url::SensitiveUrl;
 use mz_testdrive::{CatalogConfig, Config, ConsistencyCheckLevel};
+use rand::SeedableRng;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
-use rand::{Rng, SeedableRng};
 #[allow(deprecated)] // fails with libraries still using old time lib
 use time::Instant;
 use tracing::info;
@@ -112,6 +114,10 @@ struct Args {
     /// Whether we skip coordinator and catalog consistency checks.
     #[clap(long, default_value_t = ConsistencyCheckLevel::default(), value_enum)]
     consistency_checks: ConsistencyCheckLevel,
+    /// Whether to run statement logging consistency checks (adds a few seconds at the end of every
+    /// test file).
+    #[clap(long, action = ArgAction::SetTrue)]
+    check_statement_logging: bool,
     /// Which log messages to emit.
     ///
     /// See environmentd's `--startup-log-filter` option for details.
@@ -381,7 +387,12 @@ async fn main() {
         mz_license_keys::validate(license_key_text.trim())
             .unwrap_or_else(|e| die!("testdrive: failed to validate license key: {}", e))
     } else {
-        ValidatedLicenseKey::default()
+        // Use `disabled()` to match environmentd's behavior when no license
+        // key is provided. `disabled()` sets
+        // `allow_credit_consumption_override: true`, which skips memory-based
+        // credit recalculation. Using `default()` here would cause a mismatch
+        // with environmentd's catalog state in the consistency check.
+        ValidatedLicenseKey::disabled()
     };
 
     let cluster_replica_sizes = ClusterReplicaSizeMap::parse_from_str(
@@ -407,7 +418,7 @@ async fn main() {
     let config = Config {
         // === Testdrive options. ===
         arg_vars,
-        seed: args.seed,
+        seed: args.seed.map(|s| s.to_string()),
         reset: !args.no_reset,
         temp_dir: args.temp_dir,
         source: args.source,
@@ -416,6 +427,7 @@ async fn main() {
         initial_backoff: args.initial_backoff,
         backoff_factor: args.backoff_factor,
         consistency_checks: args.consistency_checks,
+        check_statement_logging: args.check_statement_logging,
         rewrite_results: args.rewrite_results,
 
         // === Materialize options. ===
@@ -508,7 +520,7 @@ async fn main() {
     }
 
     if args.shuffle_tests {
-        let seed = args.seed.unwrap_or_else(|| rand::thread_rng().r#gen());
+        let seed = args.seed.unwrap_or_else(rand::random);
         let mut rng = StdRng::seed_from_u64(seed.into());
         files.shuffle(&mut rng);
     }
@@ -576,8 +588,8 @@ async fn main() {
         eprint!("+++ ");
         eprintln!("!!! Error Report");
         eprintln!("{} errors were encountered during execution", error_count);
-        if config.source.is_some() {
-            eprintln!("source: {}", config.source.unwrap());
+        if let Some(source) = &config.source {
+            eprintln!("source: {source}");
         } else if !error_files.is_empty() {
             eprintln!(
                 "files involved: {}",

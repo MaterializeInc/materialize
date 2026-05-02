@@ -343,15 +343,15 @@ impl fmt::Display for HirScalarExpr {
             CallVariadic { func, exprs, .. } => {
                 use mz_expr::VariadicFunc::*;
                 match func {
-                    ArrayCreate { .. } => {
+                    ArrayCreate(..) => {
                         let exprs = separated(", ", exprs);
                         write!(f, "array[{}]", exprs)
                     }
-                    ListCreate { .. } => {
+                    ListCreate(..) => {
                         let exprs = separated(", ", exprs);
                         write!(f, "list[{}]", exprs)
                     }
-                    RecordCreate { .. } => {
+                    RecordCreate(..) => {
                         let exprs = separated(", ", exprs);
                         write!(f, "row({})", exprs)
                     }

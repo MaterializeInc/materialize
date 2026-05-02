@@ -11,39 +11,72 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use enum_kinds::EnumKind;
 use futures::Stream;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_auth::password::Password;
+use mz_cluster_client::ReplicaId;
 use mz_compute_types::ComputeInstanceId;
+use mz_compute_types::dataflows::DataflowDescription;
+use mz_controller_types::ClusterId;
+use mz_expr::RowSetFinishing;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_no_log;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_persist_client::PersistClient;
 use mz_pgcopy::CopyFormatParams;
+use mz_repr::global_id::TransientIdGen;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, ColumnIndex, RowIterator};
+use mz_repr::{CatalogItemId, ColumnIndex, GlobalId, RowIterator, SqlRelationType};
 use mz_sql::ast::{FetchDirection, Raw, Statement};
 use mz_sql::catalog::ObjectType;
-use mz_sql::plan::{ExecuteTimeout, Plan, PlanKind};
+use mz_sql::optimizer_metrics::OptimizerMetrics;
+use mz_sql::plan;
+use mz_sql::plan::{ExecuteTimeout, Plan, PlanKind, SideEffectingFunc};
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{OwnedVarInput, SystemVars};
 use mz_sql_parser::ast::{AlterObjectRenameStatement, AlterOwnerStatement, DropObjectsStatement};
+use mz_storage_types::sources::Timeline;
+use mz_timestamp_oracle::TimestampOracle;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
-use crate::coord::ExecuteContextExtra;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::consistency::CoordinatorInconsistencies;
-use crate::coord::peek::PeekResponseUnary;
+use crate::coord::peek::{PeekDataflowPlan, PeekResponseUnary};
+use crate::coord::timestamp_selection::TimestampDetermination;
+use crate::coord::{ExecuteContextExtra, ExecuteContextGuard};
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
-use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
+use crate::statement_logging::{
+    FrontendStatementLoggingEvent, StatementEndedExecutionReason, StatementExecutionStrategy,
+    StatementLoggingFrontend,
+};
+use crate::statement_logging::{StatementLoggingId, WatchSetCreation};
 use crate::util::Transmittable;
 use crate::webhook::AppendWebhookResponse;
-use crate::{AdapterNotice, AppendWebhookError};
+use crate::{
+    AdapterNotice, AppendWebhookError, CollectionIdBundle, ReadHolds, TimestampExplanation,
+};
+
+/// A handle for pgwire to stream raw byte chunks to the coordinator's
+/// parallel background batch builder tasks during COPY FROM STDIN.
+#[derive(Debug)]
+pub struct CopyFromStdinWriter {
+    /// Channels for distributing raw byte chunks (split at row boundaries)
+    /// across parallel worker tasks. pgwire round-robins chunks across these.
+    pub batch_txs: Vec<mpsc::Sender<Vec<u8>>>,
+    /// Receives the final result (`Vec<ProtoBatch>` + total row count, or error)
+    /// from the collector task. pgwire uses this to commit the batches.
+    pub completion_rx: oneshot::Receiver<
+        Result<(Vec<mz_persist_client::batch::ProtoBatch>, u64), crate::AdapterError>,
+    >,
+}
 
 #[derive(Debug)]
 pub struct CatalogSnapshot {
@@ -68,7 +101,7 @@ pub enum Command {
     },
 
     AuthenticatePassword {
-        tx: oneshot::Sender<Result<AuthResponse, AdapterError>>,
+        tx: oneshot::Sender<Result<(), AdapterError>>,
         role_name: String,
         password: Option<Password>,
     },
@@ -87,11 +120,16 @@ pub enum Command {
         mock_hash: String,
     },
 
+    CheckRoleCanLogin {
+        tx: oneshot::Sender<Result<(), AdapterError>>,
+        role_name: String,
+    },
+
     Execute {
         portal_name: String,
         session: Session,
         tx: oneshot::Sender<Response<ExecuteResponse>>,
-        outer_ctx_extra: Option<ExecuteContextExtra>,
+        outer_ctx_extra: Option<ExecuteContextGuard>,
     },
 
     /// Attempts to commit or abort the session's transaction. Guarantees that the Coordinator's
@@ -130,9 +168,30 @@ pub enum Command {
         tx: oneshot::Sender<Result<(), AdapterError>>,
     },
 
+    InjectAuditEvents {
+        events: Vec<crate::catalog::InjectedAuditEvent>,
+        conn_id: ConnectionId,
+        tx: oneshot::Sender<Result<(), AdapterError>>,
+    },
+
     Terminate {
         conn_id: ConnectionId,
         tx: Option<oneshot::Sender<Result<(), AdapterError>>>,
+    },
+
+    /// Sets up a streaming COPY FROM STDIN operation. The coordinator
+    /// creates parallel background batch builder tasks and returns a
+    /// [`CopyFromStdinWriter`] that pgwire uses to stream raw byte chunks.
+    StartCopyFromStdin {
+        target_id: CatalogItemId,
+        target_name: String,
+        columns: Vec<ColumnIndex>,
+        /// The row description for the target table (used for constraint checks).
+        row_desc: mz_repr::RelationDesc,
+        /// Copy format parameters (text/csv/binary) for decoding raw bytes.
+        params: mz_pgcopy::CopyFormatParams<'static>,
+        session: Session,
+        tx: oneshot::Sender<Response<CopyFromStdinWriter>>,
     },
 
     /// Performs any cleanup and logging actions necessary for
@@ -153,17 +212,157 @@ pub enum Command {
     Dump {
         tx: oneshot::Sender<Result<serde_json::Value, anyhow::Error>>,
     },
+
+    GetComputeInstanceClient {
+        instance_id: ComputeInstanceId,
+        tx: oneshot::Sender<
+            Result<
+                mz_compute_client::controller::instance_client::InstanceClient,
+                mz_compute_client::controller::error::InstanceMissing,
+            >,
+        >,
+    },
+
+    GetOracle {
+        timeline: Timeline,
+        tx: oneshot::Sender<
+            Result<Arc<dyn TimestampOracle<mz_repr::Timestamp> + Send + Sync>, AdapterError>,
+        >,
+    },
+
+    DetermineRealTimeRecentTimestamp {
+        source_ids: BTreeSet<GlobalId>,
+        real_time_recency_timeout: Duration,
+        tx: oneshot::Sender<Result<Option<mz_repr::Timestamp>, AdapterError>>,
+    },
+
+    GetTransactionReadHoldsBundle {
+        conn_id: ConnectionId,
+        tx: oneshot::Sender<Option<ReadHolds>>,
+    },
+
+    /// _Merges_ the given read holds into the given connection's stored transaction read holds.
+    StoreTransactionReadHolds {
+        conn_id: ConnectionId,
+        read_holds: ReadHolds,
+        tx: oneshot::Sender<()>,
+    },
+
+    ExecuteSlowPathPeek {
+        dataflow_plan: Box<PeekDataflowPlan>,
+        determination: TimestampDetermination,
+        finishing: RowSetFinishing,
+        compute_instance: ComputeInstanceId,
+        target_replica: Option<ReplicaId>,
+        intermediate_result_type: SqlRelationType,
+        source_ids: BTreeSet<GlobalId>,
+        conn_id: ConnectionId,
+        max_result_size: u64,
+        max_query_result_size: Option<u64>,
+        /// If statement logging is enabled, contains all info needed for installing watch sets
+        /// and logging the statement execution.
+        watch_set: Option<WatchSetCreation>,
+        tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
+    },
+
+    ExecuteSubscribe {
+        df_desc: DataflowDescription<mz_compute_types::plan::Plan>,
+        dependency_ids: BTreeSet<GlobalId>,
+        cluster_id: ComputeInstanceId,
+        replica_id: Option<ReplicaId>,
+        conn_id: ConnectionId,
+        session_uuid: Uuid,
+        read_holds: ReadHolds,
+        plan: plan::SubscribePlan,
+        statement_logging_id: Option<StatementLoggingId>,
+        tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
+    },
+
+    /// Preflight check for COPY TO S3 operation. This runs the slow S3 operations
+    /// (loading SDK config, checking bucket path, verifying permissions, uploading sentinel)
+    /// in a background task to avoid blocking the coordinator.
+    CopyToPreflight {
+        /// The S3 connection info needed for preflight checks.
+        s3_sink_connection: mz_compute_types::sinks::CopyToS3OneshotSinkConnection,
+        /// The sink ID for logging and S3 key management.
+        sink_id: GlobalId,
+        /// Response channel for the preflight result.
+        tx: oneshot::Sender<Result<(), AdapterError>>,
+    },
+
+    ExecuteCopyTo {
+        df_desc: Box<DataflowDescription<mz_compute_types::plan::Plan>>,
+        compute_instance: ComputeInstanceId,
+        target_replica: Option<ReplicaId>,
+        source_ids: BTreeSet<GlobalId>,
+        conn_id: ConnectionId,
+        /// If statement logging is enabled, contains all info needed for installing watch sets
+        /// and logging the statement execution.
+        watch_set: Option<WatchSetCreation>,
+        tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
+    },
+
+    /// Execute a side-effecting function from the frontend peek path.
+    ExecuteSideEffectingFunc {
+        plan: SideEffectingFunc,
+        conn_id: ConnectionId,
+        /// The current role of the session, used for RBAC checks.
+        current_role: RoleId,
+        tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
+    },
+
+    /// Register a pending peek initiated by frontend sequencing. This is needed for:
+    /// - statement logging
+    /// - query cancellation
+    RegisterFrontendPeek {
+        uuid: Uuid,
+        conn_id: ConnectionId,
+        cluster_id: mz_controller_types::ClusterId,
+        depends_on: BTreeSet<GlobalId>,
+        is_fast_path: bool,
+        /// If statement logging is enabled, contains all info needed for installing watch sets
+        /// and logging the statement execution.
+        watch_set: Option<WatchSetCreation>,
+        tx: oneshot::Sender<Result<(), AdapterError>>,
+    },
+
+    /// Unregister a pending peek that was registered but failed to issue.
+    /// This is used for cleanup when `client.peek()` fails after `RegisterFrontendPeek` succeeds.
+    /// The `ExecuteContextExtra` is dropped without logging the statement retirement, because the
+    /// frontend will log the error.
+    UnregisterFrontendPeek {
+        uuid: Uuid,
+        tx: oneshot::Sender<()>,
+    },
+
+    /// Generate a timestamp explanation.
+    /// This is used when `emit_timestamp_notice` is enabled.
+    ExplainTimestamp {
+        conn_id: ConnectionId,
+        session_wall_time: DateTime<Utc>,
+        cluster_id: ClusterId,
+        id_bundle: CollectionIdBundle,
+        determination: TimestampDetermination,
+        tx: oneshot::Sender<TimestampExplanation>,
+    },
+
+    /// Statement logging event from frontend peek sequencing.
+    /// No response channel needed - this is fire-and-forget.
+    FrontendStatementLogging(FrontendStatementLoggingEvent),
 }
 
 impl Command {
     pub fn session(&self) -> Option<&Session> {
         match self {
-            Command::Execute { session, .. } | Command::Commit { session, .. } => Some(session),
+            Command::Execute { session, .. }
+            | Command::Commit { session, .. }
+            | Command::StartCopyFromStdin { session, .. } => Some(session),
             Command::CancelRequest { .. }
             | Command::Startup { .. }
             | Command::AuthenticatePassword { .. }
             | Command::AuthenticateGetSASLChallenge { .. }
             | Command::AuthenticateVerifySASLProof { .. }
+            | Command::CheckRoleCanLogin { .. }
             | Command::CatalogSnapshot { .. }
             | Command::PrivilegedCancelRequest { .. }
             | Command::GetWebhook { .. }
@@ -172,18 +371,36 @@ impl Command {
             | Command::SetSystemVars { .. }
             | Command::RetireExecute { .. }
             | Command::CheckConsistency { .. }
-            | Command::Dump { .. } => None,
+            | Command::Dump { .. }
+            | Command::GetComputeInstanceClient { .. }
+            | Command::GetOracle { .. }
+            | Command::DetermineRealTimeRecentTimestamp { .. }
+            | Command::GetTransactionReadHoldsBundle { .. }
+            | Command::StoreTransactionReadHolds { .. }
+            | Command::ExecuteSlowPathPeek { .. }
+            | Command::ExecuteSubscribe { .. }
+            | Command::CopyToPreflight { .. }
+            | Command::ExecuteCopyTo { .. }
+            | Command::ExecuteSideEffectingFunc { .. }
+            | Command::RegisterFrontendPeek { .. }
+            | Command::UnregisterFrontendPeek { .. }
+            | Command::ExplainTimestamp { .. }
+            | Command::FrontendStatementLogging(..)
+            | Command::InjectAuditEvents { .. } => None,
         }
     }
 
     pub fn session_mut(&mut self) -> Option<&mut Session> {
         match self {
-            Command::Execute { session, .. } | Command::Commit { session, .. } => Some(session),
+            Command::Execute { session, .. }
+            | Command::Commit { session, .. }
+            | Command::StartCopyFromStdin { session, .. } => Some(session),
             Command::CancelRequest { .. }
             | Command::Startup { .. }
             | Command::AuthenticatePassword { .. }
             | Command::AuthenticateGetSASLChallenge { .. }
             | Command::AuthenticateVerifySASLProof { .. }
+            | Command::CheckRoleCanLogin { .. }
             | Command::CatalogSnapshot { .. }
             | Command::PrivilegedCancelRequest { .. }
             | Command::GetWebhook { .. }
@@ -192,7 +409,22 @@ impl Command {
             | Command::SetSystemVars { .. }
             | Command::RetireExecute { .. }
             | Command::CheckConsistency { .. }
-            | Command::Dump { .. } => None,
+            | Command::Dump { .. }
+            | Command::GetComputeInstanceClient { .. }
+            | Command::GetOracle { .. }
+            | Command::DetermineRealTimeRecentTimestamp { .. }
+            | Command::GetTransactionReadHoldsBundle { .. }
+            | Command::StoreTransactionReadHolds { .. }
+            | Command::ExecuteSlowPathPeek { .. }
+            | Command::ExecuteSubscribe { .. }
+            | Command::CopyToPreflight { .. }
+            | Command::ExecuteCopyTo { .. }
+            | Command::ExecuteSideEffectingFunc { .. }
+            | Command::RegisterFrontendPeek { .. }
+            | Command::UnregisterFrontendPeek { .. }
+            | Command::ExplainTimestamp { .. }
+            | Command::FrontendStatementLogging(..)
+            | Command::InjectAuditEvents { .. } => None,
         }
     }
 }
@@ -204,28 +436,32 @@ pub struct Response<T> {
     pub otel_ctx: OpenTelemetryContext,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct SuperuserAttribute(pub Option<bool>);
+
 /// The response to [`Client::startup`](crate::Client::startup).
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct StartupResponse {
     /// RoleId for the user.
     pub role_id: RoleId,
+    /// The role's superuser attribute in the Catalog.
+    /// This attribute is None for Cloud. Cloud is able
+    /// to derive the role's superuser status from
+    /// external_metadata_rx.
+    pub superuser_attribute: SuperuserAttribute,
     /// A future that completes when all necessary Builtin Table writes have completed.
     #[derivative(Debug = "ignore")]
     pub write_notify: BuiltinTableAppendNotify,
     /// Map of (name, VarInput::Flat) tuples of session default variables that should be set.
     pub session_defaults: BTreeMap<String, OwnedVarInput>,
     pub catalog: Arc<Catalog>,
-}
-
-/// The response to [`Client::authenticate`](crate::Client::authenticate).
-#[derive(Derivative)]
-#[derivative(Debug)]
-pub struct AuthResponse {
-    /// RoleId for the user.
-    pub role_id: RoleId,
-    /// If the user is a superuser.
-    pub superuser: bool,
+    pub storage_collections:
+        Arc<dyn mz_storage_client::storage_collections::StorageCollections + Send + Sync>,
+    pub transient_id_gen: Arc<TransientIdGen>,
+    pub optimizer_metrics: OptimizerMetrics,
+    pub persist_client: PersistClient,
+    pub statement_logging_frontend: StatementLoggingFrontend,
 }
 
 #[derive(Derivative)]
@@ -241,7 +477,6 @@ pub struct SASLChallengeResponse {
 #[derivative(Debug)]
 pub struct SASLVerifyProofResponse {
     pub verifier: String,
-    pub auth_resp: AuthResponse,
 }
 
 // Facile implementation for `StartupResponse`, which does not use the `allowed`
@@ -312,7 +547,7 @@ pub enum ExecuteResponse {
         target_name: String,
         columns: Vec<ColumnIndex>,
         params: CopyFormatParams<'static>,
-        ctx_extra: ExecuteContextExtra,
+        ctx_extra: ExecuteContextGuard,
     },
     /// The requested connection was created.
     CreatedConnection,
@@ -344,8 +579,6 @@ pub enum ExecuteResponse {
     CreatedViews,
     /// The requested materialized view was created.
     CreatedMaterializedView,
-    /// The requested continual task was created.
-    CreatedContinualTask,
     /// The requested type was created.
     CreatedType,
     /// The requested network policy was created.
@@ -374,7 +607,7 @@ pub enum ExecuteResponse {
         count: Option<FetchDirection>,
         /// How long to wait for results to arrive.
         timeout: ExecuteTimeout,
-        ctx_extra: ExecuteContextExtra,
+        ctx_extra: ExecuteContextGuard,
     },
     /// The requested privilege was granted.
     GrantedPrivilege,
@@ -417,7 +650,7 @@ pub enum ExecuteResponse {
     /// contained receiver.
     Subscribing {
         rx: RowBatchStream,
-        ctx_extra: ExecuteContextExtra,
+        ctx_extra: ExecuteContextGuard,
         instance_id: ComputeInstanceId,
     },
     /// The active transaction committed.
@@ -516,7 +749,6 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
                 Ok(ExecuteResponse::CreatedMaterializedView)
             }
             ExecuteResponseKind::CreatedNetworkPolicy => Ok(ExecuteResponse::CreatedNetworkPolicy),
-            ExecuteResponseKind::CreatedContinualTask => Ok(ExecuteResponse::CreatedContinualTask),
             ExecuteResponseKind::CreatedType => Ok(ExecuteResponse::CreatedType),
             ExecuteResponseKind::Deallocate => Err(()),
             ExecuteResponseKind::DeclaredCursor => Ok(ExecuteResponse::DeclaredCursor),
@@ -578,7 +810,6 @@ impl ExecuteResponse {
             CreatedView { .. } => Some("CREATE VIEW".into()),
             CreatedViews { .. } => Some("CREATE VIEWS".into()),
             CreatedMaterializedView { .. } => Some("CREATE MATERIALIZED VIEW".into()),
-            CreatedContinualTask { .. } => Some("CREATE CONTINUAL TASK".into()),
             CreatedType => Some("CREATE TYPE".into()),
             CreatedNetworkPolicy => Some("CREATE NETWORKPOLICY".into()),
             Deallocate { all } => Some(format!("DEALLOCATE{}", if *all { " ALL" } else { "" })),
@@ -636,6 +867,7 @@ impl ExecuteResponse {
             | AlterOwner
             | AlterItemRename
             | AlterRetainHistory
+            | AlterSourceTimestampInterval
             | AlterNoop
             | AlterSchemaRename
             | AlterSchemaSwap
@@ -644,6 +876,7 @@ impl ExecuteResponse {
             | AlterSource
             | AlterSink
             | AlterTableAddColumn
+            | AlterMaterializedViewApplyReplacement
             | AlterNetworkPolicy => &[AlteredObject],
             AlterDefaultPrivileges => &[AlteredDefaultPrivileges],
             AlterSetCluster => &[AlteredObject],
@@ -668,7 +901,6 @@ impl ExecuteResponse {
             CreateTable => &[CreatedTable],
             CreateView => &[CreatedView],
             CreateMaterializedView => &[CreatedMaterializedView],
-            CreateContinualTask => &[CreatedContinualTask],
             CreateIndex => &[CreatedIndex],
             CreateType => &[CreatedType],
             PlanKind::Deallocate => &[ExecuteResponseKind::Deallocate],

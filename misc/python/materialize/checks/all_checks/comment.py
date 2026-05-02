@@ -16,9 +16,7 @@ class Comment(Check):
     """Test comments on types and tables, as well as the comment export as avro sink schema docs"""
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > CREATE TYPE comment_type AS (x text, y int, z int)
             > CREATE TYPE comment_int4_list AS LIST (ELEMENT TYPE = int4)
             > CREATE TABLE comment_table (f1 comment_type, f2 comment_int4_list, f3 int)
@@ -27,9 +25,7 @@ class Comment(Check):
               INTO KAFKA CONNECTION kafka_conn (TOPIC 'comment-sink1')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE DEBEZIUM
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -60,9 +56,7 @@ class Comment(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > COMMENT ON COLUMN comment_type.z IS 'comment on comment_type.z';
                 > COMMENT ON COLUMN comment_table.f3 IS 'comment on comment_table.f3';
 
@@ -85,6 +79,4 @@ class Comment(Check):
 
                 $ schema-registry-verify schema-type=avro subject=comment-sink3-value
                 {"type":"record","name":"envelope","fields":[{"name":"before","type":["null",{"type":"record","name":"row","doc":"comment on comment_table","fields":[{"name":"f1","type":["null",{"type":"record","name":"record0","namespace":"com.materialize.sink","doc":"comment on comment_type","fields":[{"name":"x","type":["null","string"],"doc":"comment on comment_type.x"},{"name":"y","type":["null","int"],"doc":"comment on comment_type.y"},{"name":"z","type":["null","int"]}]}],"doc":"comment on comment_table.f1"},{"name":"f2","type":["null",{"type":"array","items":["null","int"]}],"doc":"comment on comment_table.f2"},{"name":"f3","type":["null","int"]}]}]},{"name":"after","type":["null","row"]}]}
-            """
-            )
-        )
+            """))

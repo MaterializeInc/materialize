@@ -10,6 +10,7 @@
 use std::fmt;
 
 use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, Utc};
+use mz_expr_derive::sqlfunc;
 use mz_lowertest::MzReflect;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::datetime::DateTimeUnits;
@@ -22,32 +23,43 @@ use crate::EvalError;
 use crate::func::most_significant_unit;
 use crate::scalar::func::EagerUnaryFunc;
 
-sqlfunc!(
-    #[sqlname = "date_to_text"]
-    #[preserves_uniqueness = true]
-    #[inverse = to_unary!(super::CastStringToDate)]
-    fn cast_date_to_string(a: Date) -> String {
-        let mut buf = String::new();
-        strconv::format_date(&mut buf, a);
-        buf
-    }
-);
+#[sqlfunc(
+    sqlname = "date_to_text",
+    preserves_uniqueness = true,
+    inverse = to_unary!(super::CastStringToDate)
+)]
+fn cast_date_to_string(a: Date) -> String {
+    let mut buf = String::new();
+    strconv::format_date(&mut buf, a);
+    buf
+}
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastDateToTimestamp(pub Option<TimestampPrecision>);
 
-impl<'a> EagerUnaryFunc<'a> for CastDateToTimestamp {
-    type Input = Date;
-    type Output = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
+impl EagerUnaryFunc for CastDateToTimestamp {
+    type Input<'a> = Date;
+    type Output<'a> = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
 
-    fn call(&self, a: Date) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         let out =
             CheckedTimestamp::from_timestamplike(NaiveDate::from(a).and_hms_opt(0, 0, 0).unwrap())?;
         let updated = out.round_to_precision(self.0)?;
         Ok(updated)
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Timestamp { precision: self.0 }.nullable(input.nullable)
     }
 
@@ -70,14 +82,25 @@ impl fmt::Display for CastDateToTimestamp {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastDateToTimestampTz(pub Option<TimestampPrecision>);
 
-impl<'a> EagerUnaryFunc<'a> for CastDateToTimestampTz {
-    type Input = Date;
-    type Output = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
+impl EagerUnaryFunc for CastDateToTimestampTz {
+    type Input<'a> = Date;
+    type Output<'a> = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
 
-    fn call(&self, a: Date) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         let out =
             CheckedTimestamp::from_timestamplike(DateTime::<Utc>::from_naive_utc_and_offset(
                 NaiveDate::from(a).and_hms_opt(0, 0, 0).unwrap(),
@@ -87,7 +110,7 @@ impl<'a> EagerUnaryFunc<'a> for CastDateToTimestampTz {
         Ok(updated)
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::TimestampTz { precision: self.0 }.nullable(input.nullable)
     }
 
@@ -142,18 +165,29 @@ pub fn extract_date_inner(units: DateTimeUnits, date: NaiveDate) -> Result<Numer
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct ExtractDate(pub DateTimeUnits);
 
-impl<'a> EagerUnaryFunc<'a> for ExtractDate {
-    type Input = Date;
-    type Output = Result<Numeric, EvalError>;
+impl EagerUnaryFunc for ExtractDate {
+    type Input<'a> = Date;
+    type Output<'a> = Result<Numeric, EvalError>;
 
-    fn call(&self, a: Date) -> Result<Numeric, EvalError> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         extract_date_inner(self.0, a.into())
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Numeric { max_scale: None }.nullable(input.nullable)
     }
 

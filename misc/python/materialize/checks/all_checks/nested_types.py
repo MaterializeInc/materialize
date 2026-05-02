@@ -14,9 +14,7 @@ from materialize.checks.checks import Check
 
 class NestedTypes(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > CREATE TYPE record_type AS (f1 INT, f2 STRING);
             > CREATE TYPE map_type AS MAP (KEY TYPE = text, VALUE TYPE = integer);
 
@@ -26,9 +24,7 @@ class NestedTypes(Check):
             > CREATE TABLE nested_types_table(map_col map_type, list_col int4_list_list, record_col record_type, array_col STRING);
 
             > INSERT INTO nested_types_table VALUES ('{a => 1, b => 2}'::map_type, '{{1,2},{3,4}}'::int4_list_list, ROW(1, 'abc'), ARRAY[ARRAY['a', 'b'], ARRAY['c', 'd']]);
-        """
-            )
-        )
+        """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -58,9 +54,7 @@ class NestedTypes(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT map_col::text, map_type::text, list_col::text, int4_list_list::text, record_col::text, "row"::text, array_col::text, "array"::text FROM nested_types_view1;
                 {a=>1,b=>2} {a=>1,b=>2} {{1,2},{3,4}} {{1,2},{3,4}} (1,abc) (1,abc) {{a,b},{c,d}} {{a,b},{c,d}}
                 {a=>1,b=>2} {a=>1,b=>2} {{1,2},{3,4}} {{1,2},{3,4}} (1,abc) (1,abc) {{a,b},{c,d}} {{a,b},{c,d}}
@@ -71,6 +65,4 @@ class NestedTypes(Check):
                 {a=>1,b=>2} {a=>1,b=>2} {{1,2},{3,4}} {{1,2},{3,4}} (1,abc) (1,abc) {{a,b},{c,d}} {{a,b},{c,d}}
                 {a=>1,b=>2} {a=>1,b=>2} {{1,2},{3,4}} {{1,2},{3,4}} (1,abc) (1,abc) {{a,b},{c,d}} {{a,b},{c,d}}
 
-            """
-            )
-        )
+            """))

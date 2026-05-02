@@ -13,15 +13,11 @@ workspace = true
 mz-expr = { path = "../expr" }
 mz-ore = { path = "../ore" }
 mz-repr = { path = "../repr" }
-proc-macro2 = { version = "1.0.103", features = ["span-locations"] }
-syn = { version = "2.0.106", features = ["full"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+proc-macro2.workspace = true
+syn.workspace = true
 
 [dev-dependencies]
-datadriven = "0.8.0"
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+datadriven.workspace = true
 
 [features]
-default = ["workspace-hack"]
+default = []

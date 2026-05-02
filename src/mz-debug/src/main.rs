@@ -70,9 +70,6 @@ pub struct SelfManagedDebugModeArgs {
     /// The kubernetes context to use.
     #[clap(long, env = "KUBERNETES_CONTEXT")]
     k8s_context: Option<String>,
-    /// If true, the tool will dump the values of secrets in the Kubernetes cluster.
-    #[clap(long, default_value = "false", action = clap::ArgAction::Set)]
-    k8s_dump_secret_values: bool,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -160,7 +157,6 @@ struct SelfManagedContext {
     k8s_namespace: String,
     mz_instance_name: String,
     k8s_additional_namespaces: Option<Vec<String>>,
-    k8s_dump_secret_values: bool,
     mz_connection_info: SelfManagedMzConnectionInfo,
     http_connection_auth_mode: AuthMode,
 }
@@ -256,15 +252,18 @@ fn create_mz_connection_url(
     local_port: i32,
     credentials: Option<PasswordAuthCredentials>,
 ) -> String {
-    let password_auth_segment = if let Some(credentials) = credentials {
-        format!("{}:{}@", credentials.username, credentials.password)
-    } else {
-        "".to_string()
-    };
-    format!(
-        "postgres://{}{}:{}?sslmode=prefer",
-        password_auth_segment, local_address, local_port
-    )
+    let mut url = url::Url::parse(&format!(
+        "postgres://{}:{}?sslmode=prefer",
+        local_address, local_port
+    ))
+    .expect("static prefix is a valid URL");
+    if let Some(creds) = credentials {
+        url.set_username(&creds.username)
+            .expect("postgres scheme allows userinfo");
+        url.set_password(Some(&creds.password))
+            .expect("postgres scheme allows userinfo");
+    }
+    url.into()
 }
 
 async fn initialize_context(
@@ -337,7 +336,6 @@ async fn initialize_context(
                 k8s_namespace: args.k8s_namespace.clone(),
                 mz_instance_name: args.mz_instance_name.clone(),
                 k8s_additional_namespaces: args.additional_k8s_namespaces.clone(),
-                k8s_dump_secret_values: args.k8s_dump_secret_values,
                 mz_connection_info,
                 http_connection_auth_mode: auth_mode,
             })
@@ -406,7 +404,6 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
             k8s_context,
             k8s_namespace,
             k8s_additional_namespaces,
-            k8s_dump_secret_values,
             ..
         }) => {
             if *dump_k8s {
@@ -416,7 +413,6 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
                     k8s_namespace.clone(),
                     k8s_additional_namespaces.clone(),
                     k8s_context.clone(),
-                    *k8s_dump_secret_values,
                 );
                 dumper.dump_container_resources().await;
             }

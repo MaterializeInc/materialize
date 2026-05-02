@@ -40,7 +40,7 @@ use mz_aws_secrets_controller::AwsSecretsController;
 use mz_build_info::BuildInfo;
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
-use mz_controller::ControllerConfig;
+use mz_controller::{ControllerConfig, ReplicaHttpLocator};
 use mz_frontegg_auth::{Authenticator as FronteggAuthenticator, FronteggCliArgs};
 use mz_license_keys::{ExpirationBehavior, ValidatedLicenseKey};
 use mz_orchestrator::Orchestrator;
@@ -238,6 +238,9 @@ pub struct Args {
     #[clap(long, env = "ORCHESTRATOR_KUBERNETES_NAME_PREFIX")]
     orchestrator_kubernetes_name_prefix: Option<String>,
     /// Whether to enable pod metrics collection.
+    ///
+    /// Required for resource usage graphs in the console.
+    /// Requires metrics-server to be installed.
     #[clap(long, env = "ORCHESTRATOR_KUBERNETES_DISABLE_POD_METRICS_COLLECTION")]
     orchestrator_kubernetes_disable_pod_metrics_collection: bool,
     /// Whether to annotate pods for prometheus service discovery.
@@ -350,10 +353,10 @@ pub struct Args {
     )]
     metadata_backend_url: Option<SensitiveUrl>,
 
-    /// Helm chart version for self-hosted Materialize. This version does not correspond to the
-    /// Materialize (core) version (v0.125.0), but is time-based for our twice-a-year helm chart
-    /// releases: v25.1.Z, v25.2.Z in 2025, then v26.1.Z, v26.2.Z in 2026, and so on. This version
-    /// is displayed in addition in `SELECT mz_version()` if set.
+    /// Helm chart version for self-hosted Materialize. This version is supposed to correspond to
+    /// the Materialize (core) version. This version is displayed in addition in `SELECT
+    /// mz_version()` if set and if it differs from the Materialize (core) version (which it should
+    /// not!).
     #[clap(long, env = "HELM_CHART_VERSION")]
     helm_chart_version: Option<String>,
 
@@ -779,6 +782,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         allowed_origins
     };
     let cors_allowed_origin = mz_http_util::build_cors_allowed_origin(&allowed_origins);
+    let cors_allowed_origin_list = allowed_origins.clone();
 
     // Configure controller.
     let entered = info_span!("environmentd::configure_controller").entered();
@@ -1023,6 +1027,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         cloud_resource_reader,
     );
     let orchestrator = Arc::new(TracingOrchestrator::new(orchestrator, args.tracing.clone()));
+    let replica_http_locator = Arc::new(ReplicaHttpLocator::default());
     let controller = ControllerConfig {
         build_info: &BUILD_INFO,
         orchestrator,
@@ -1047,6 +1052,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             secrets_reader_aws_prefix: Some(aws_secrets_controller_prefix(&args.environment_id)),
             secrets_reader_name_prefix: args.orchestrator_kubernetes_name_prefix.clone(),
         },
+        replica_http_locator: Arc::clone(&replica_http_locator),
     };
 
     let cluster_replica_sizes = ClusterReplicaSizeMap::parse_from_str(
@@ -1082,6 +1088,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 external_login_password_mz_system: args.external_login_password_mz_system,
                 frontegg,
                 cors_allowed_origin,
+                cors_allowed_origin_list,
                 egress_addresses: args.announce_egress_address,
                 http_host_name: args.http_host_name,
                 internal_console_redirect_url: args.internal_console_redirect_url,

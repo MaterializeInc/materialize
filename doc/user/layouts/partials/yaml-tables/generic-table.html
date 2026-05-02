@@ -3,7 +3,7 @@
 <thead>
 <tr>
 {{ range .columns }}
-<th>{{ .column }}</th>
+<th>{{ .header | default .column }}</th>
 {{ $fields = $fields | append (dict "field" .column) }}
 {{ end }}
 </tr>

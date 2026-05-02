@@ -61,14 +61,33 @@ impl Keyword {
     ///
     /// The only exception to the rule is when the keyword follows `AS` in a
     /// column or table alias.
-    pub fn is_reserved(self) -> bool {
+    pub fn is_always_reserved(self) -> bool {
         matches!(
             self,
-            // Keywords that can appear at the top-level of a SELECT statement.
-            WITH | SELECT | FROM | WHERE | GROUP | HAVING | QUALIFY | WINDOW | ORDER | LIMIT | OFFSET | FETCH | OPTIONS | RETURNING |
+            // Keywords that can appear at the top-level of a SELECT
+            // statement.
+            WITH | SELECT | FROM | WHERE | GROUP | HAVING |
+            QUALIFY | WINDOW | ORDER | LIMIT | OFFSET | FETCH |
+            OPTIONS | RETURNING |
             // Set operations.
             UNION | EXCEPT | INTERSECT
         )
+    }
+
+    /// Reports whether this keyword requires quoting when used in scalar expressions.
+    ///
+    /// These are the keywords `Parser::parse_prefix` won't parse as an identifier.
+    /// (Note that for some keywords `parse_prefix` checks whether they are followed by an opening
+    /// parenthesis before treating them as keywords. These keywords do not need to be marked as
+    /// reserved here.)
+    ///
+    /// This refers to the PostgreSQL notion of "reserved" keywords,
+    /// which generally refers to built in tables, functions, and
+    /// constructs that cannot be used as identifiers without quoting.
+    /// See <https://www.postgresql.org/docs/current/sql-keywords-appendix.html>
+    /// for more details.
+    pub fn is_reserved_in_scalar_expression(self) -> bool {
+        matches!(self, TRUE | FALSE | NULL | ARRAY | CASE | CAST | NOT) || self.is_always_reserved()
     }
 
     /// Reports whether this keyword requires quoting when used as a table
@@ -91,12 +110,11 @@ impl Keyword {
             // b` from parsing as `a AS outer JOIN b`, instead producing a nice
             // syntax error.
             OUTER
-        ) || self.is_reserved()
+        ) || self.is_always_reserved()
     }
 
     /// Reports whether this keyword requires quoting when used as a column
     /// alias.
-    ///
     ///
     /// Note that this rule is only applies when the column alias is "bare";
     /// i.e., when the column alias is not preceded by `AS`.
@@ -111,15 +129,16 @@ impl Keyword {
             // reserved prevents e.g. `SELECT pg_catalog.interval '1' year` from
             // parsing as `SELECT pg_catalog.interval '1' AS YEAR`.
             YEAR | MONTH | DAY | HOUR | MINUTE | SECOND
-        ) || self.is_reserved()
+        ) || self.is_always_reserved()
     }
 
     /// Reports whether a keyword is considered reserved in any context:
     /// either in table aliases, column aliases, or in all contexts.
     pub fn is_sometimes_reserved(self) -> bool {
-        self.is_reserved()
+        self.is_always_reserved()
             || self.is_reserved_in_table_alias()
             || self.is_reserved_in_column_alias()
+            || self.is_reserved_in_scalar_expression()
     }
 }
 

@@ -6,6 +6,7 @@ menu:
     parent: "mysql"
     name: "Self-hosted"
     identifier: "mysql-self-hosted"
+    weight: 50
 ---
 
 This page shows you how to stream data from a self-hosted MySQL database to
@@ -209,4 +210,4 @@ your networking configuration.
 
 ## Considerations
 
-{{% include-md file="shared-content/mysql-considerations.md" %}}
+{{% include-headless "/headless/mysql-considerations" %}}

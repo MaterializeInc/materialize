@@ -14,7 +14,6 @@ retried until it produces the desired result.
 """
 
 import glob
-import os
 
 from materialize import MZ_ROOT, buildkite, ci_util
 from materialize.mzcompose.composition import (
@@ -26,6 +25,7 @@ from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.fivetran_destination import FivetranDestination
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.metadata_store import metadata_store_services
 from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.mz import Mz
@@ -44,10 +44,14 @@ SERVICES = [
     MySql(),
     Azurite(),
     Mz(app_password=""),
-    Minio(setup_materialize=True, additional_directories=["copytos3"]),
-    Materialized(external_blob_store=True, sanity_restart=False),
+    Minio(setup_materialize=True, additional_directories=["copytos3", "copyfroms3"]),
+    Materialized(
+        external_blob_store=True,
+        sanity_restart=False,
+    ),
     FivetranDestination(volumes_extra=["tmp:/share/tmp"]),
     Testdrive(external_blob_store=True),
+    *metadata_store_services(),
 ]
 
 
@@ -106,12 +110,18 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     parser.add_argument(
+        "--check-statement-logging",
+        action="store_true",
+        help="Run statement logging consistency checks (adds a few seconds at the end of every test file)",
+    )
+
+    parser.add_argument(
         "files",
         nargs="*",
         default=["*.td"],
         help="run against the specified files",
     )
-    (args, passthrough_args) = parser.parse_known_args()
+    args, passthrough_args = parser.parse_known_args()
 
     dependencies = [
         "fivetran-destination",
@@ -150,6 +160,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         blob_store_is_azure=args.azurite,
         fivetran_destination=True,
         fivetran_destination_files_path="/share/tmp",
+        check_statement_logging=args.check_statement_logging,
         entrypoint_extra=[
             f"--var=uses-redpanda={args.redpanda}",
         ],
@@ -236,7 +247,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 file,
             )
             # Uploading successful junit files wastes time and contains no useful information
-            os.remove(f"test/testdrive/{junit_report}")
+            if not args.rewrite_results:
+                (MZ_ROOT / "test" / "testdrive" / junit_report).unlink(missing_ok=True)
 
         files = buildkite.shard_list(
             sorted(

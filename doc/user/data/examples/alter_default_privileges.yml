@@ -1,0 +1,63 @@
+- name: "syntax-grant"
+  code: |
+    ALTER DEFAULT PRIVILEGES
+      FOR ROLE <object_creator> [, ...] | ALL ROLES
+      [IN SCHEMA <schema_name> [, ...] | IN DATABASE <database_name> [, ...]]
+      GRANT [<privilege> [, ...] | ALL [PRIVILEGES]]
+      ON TABLES | TYPES | SECRETS | CONNECTIONS | DATABASES | SCHEMAS | CLUSTERS
+      TO <target_role> [, ...]
+    ;
+  syntax_elements:
+    - name: "`<object_creator>`"
+      description: |
+        The default privilege will apply to objects created by this role. Use the `PUBLIC` pseudo-role to target objects created by all roles.
+    - name: "**ALL ROLES**"
+      description: |
+        The default privilege will apply to objects created by all roles. This is shorthand for specifying `PUBLIC` as the target role.
+    - name: "**IN SCHEMA** `<schema_name>`"
+      description: |
+        Optional. The default privilege will apply only to objects created in this schema.
+    - name: "**IN DATABASE** `<database_name>`"
+      description: |
+        Optional. The default privilege will apply only to objects created in this database.
+    - name: "`<privilege>`"
+      description: |
+        A specific privilege (e.g., `SELECT`, `USAGE`, `CREATE`). See [Available privileges](#available-privileges).
+    - name: "**ALL [PRIVILEGES]**"
+      description: |
+        All applicable privileges for the provided object type.
+    - name: "**TO** `<target_role>`"
+      description: |
+        The role who will be granted the default privilege. Use the `PUBLIC` pseudo-role to grant privileges to all roles.
+
+- name: "syntax-revoke"
+  code: |
+    ALTER DEFAULT PRIVILEGES
+      FOR ROLE <creator_role> [, ...] | ALL ROLES
+      [IN SCHEMA <schema_name> [, ...] | IN DATABASE <database_name> [, ...]]
+      REVOKE [<privilege> [, ...] | ALL [PRIVILEGES]]
+      ON TABLES | TYPES | SECRETS | CONNECTIONS | DATABASES | SCHEMAS | CLUSTERS
+      FROM <target_role> [, ...]
+    ;
+  syntax_elements:
+    - name: "`<creator_role>`"
+      description: |
+        The default privileges for objects created by this role. Use the `PUBLIC` pseudo-role to specify objects created by all roles.
+    - name: "**ALL ROLES**"
+      description: |
+        The default privilege for objects created by all roles. This is shorthand for specifying `PUBLIC` as the target role.
+    - name: "**IN SCHEMA** `<schema_name>`"
+      description: |
+        Optional. The default privileges for objects created in this schema.
+    - name: "**IN DATABASE** `<database_name>`"
+      description: |
+        Optional. The default privilege for objects created in this database.
+    - name: "`<privilege>`"
+      description: |
+        A specific privilege (e.g., `SELECT`, `USAGE`, `CREATE`). See [Available privileges](#available-privileges).
+    - name: "**ALL [PRIVILEGES]**"
+      description: |
+        All applicable privileges for the provided object type.
+    - name: "**FROM** `<target_role>`"
+      description: |
+        The role from whom to remove the default privilege. Use the `PUBLIC` pseudo-role to remove default privileges previously granted to `PUBLIC`.

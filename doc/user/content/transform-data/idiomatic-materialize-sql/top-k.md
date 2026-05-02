@@ -10,7 +10,7 @@ aliases:
   - /sql/patterns/patterns/top-k/
   - /transform-data/patterns/top-k/
   - /guides/top-k/
-  - /docs/sql/patterns/top-k/
+  - /sql/patterns/top-k/
 ---
 
 ## Overview

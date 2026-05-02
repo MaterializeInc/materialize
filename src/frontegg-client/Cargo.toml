@@ -10,20 +10,16 @@ publish = false
 workspace = true
 
 [dependencies]
-jsonwebtoken = "9.3.1"
+jsonwebtoken.workspace = true
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-ore = { path = "../ore", features = ["network"] }
-reqwest = { version = "0.11.13", features = ["json"] }
-serde = { version = "1.0.219", features = ["derive"] }
-thiserror = "2.0.17"
-tokio = { version = "1.44.1", features = ["macros"] }
-serde_json = "1.0.145"
-uuid = { version = "1.18.1", features = ["serde"] }
-url = "2.3.1"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+reqwest.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+serde_json.workspace = true
+uuid = { workspace = true, features = ["serde"] }
+url.workspace = true
 
 [features]
-default = ["workspace-hack"]
+default = []

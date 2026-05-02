@@ -45,7 +45,9 @@ use crate::fetch::{
 };
 use crate::internal::compact::{CompactConfig, Compactor};
 use crate::internal::encoding::{Schemas, assert_code_can_read_data};
-use crate::internal::machine::{CompareAndAppendRes, ExpireFn, Machine};
+use crate::internal::machine::{
+    CompareAndAppendRes, ExpireFn, Machine, next_listen_batch_retry_params,
+};
 use crate::internal::metrics::{BatchWriteMetrics, Metrics, ShardMetrics};
 use crate::internal::state::{BatchPart, HandleDebugState, HollowBatch, RunOrder, RunPart};
 use crate::read::ReadHandle;
@@ -60,13 +62,23 @@ pub(crate) const COMBINE_INLINE_WRITES: Config<bool> = Config::new(
 
 pub(crate) const VALIDATE_PART_BOUNDS_ON_WRITE: Config<bool> = Config::new(
     "persist_validate_part_bounds_on_write",
-    true,
+    false,
     "Validate the part lower <= the batch lower and the part upper <= batch upper,\
     for the batch being appended.",
 );
 
 /// An opaque identifier for a writer of a persist durable TVC (aka shard).
-#[derive(Arbitrary, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Arbitrary,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 #[serde(try_from = "String", into = "String")]
 pub struct WriterId(pub(crate) [u8; 16]);
 
@@ -200,10 +212,12 @@ where
         )
     }
 
-    /// Whether or not this WriteHandle supports writing without enforcing batch
+    /// True iff this WriteHandle supports writing without enforcing batch
     /// bounds checks.
     pub fn validate_part_bounds_on_write(&self) -> bool {
-        VALIDATE_PART_BOUNDS_ON_WRITE.get(&self.cfg) && VALIDATE_PART_BOUNDS_ON_READ.get(&self.cfg)
+        // Note that we require validation when the read checks are enabled, even if the write-time
+        // checks would otherwise be disabled, to avoid batches that would fail at read time.
+        VALIDATE_PART_BOUNDS_ON_WRITE.get(&self.cfg) || VALIDATE_PART_BOUNDS_ON_READ.get(&self.cfg)
     }
 
     /// This handle's shard id.
@@ -662,12 +676,7 @@ where
                                 fetched_part.next_with_storage(&mut key_storage, &mut val_storage)
                             {
                                 builder
-                                    .add(
-                                        &k.expect("decoded just-encoded key data"),
-                                        &v.expect("decoded just-encoded val data"),
-                                        &t,
-                                        &d,
-                                    )
+                                    .add(&k, &v, &t, &d)
                                     .await
                                     .expect("re-encoding just-decoded data");
                             }
@@ -972,12 +981,18 @@ where
     /// Blocks until the given `frontier` is less than the upper of the shard.
     pub async fn wait_for_upper_past(&mut self, frontier: &Antichain<T>) {
         let mut watch = self.machine.applier.watch();
-        let batch = self
-            .machine
-            .next_listen_batch(frontier, &mut watch, None, None)
+        self.machine
+            .wait_for_upper_past(
+                frontier,
+                &mut watch,
+                None,
+                &self.metrics.retries.next_listen_batch, // TODO: new retry metrics for these?
+                next_listen_batch_retry_params(&self.cfg),
+            )
             .await;
-        if PartialOrder::less_than(&self.upper, batch.desc.upper()) {
-            self.upper.clone_from(batch.desc.upper());
+        let upper = self.machine.applier.clone_upper();
+        if PartialOrder::less_than(&self.upper, &upper) {
+            self.upper.clone_from(&upper);
         }
         assert!(PartialOrder::less_than(frontier, &self.upper));
     }
@@ -1231,7 +1246,7 @@ mod tests {
 
         let batch = write
             .machine
-            .snapshot(&Antichain::from_elem(3))
+            .unleased_snapshot(&Antichain::from_elem(3))
             .await
             .expect("just wrote this")
             .into_element();
@@ -1400,6 +1415,6 @@ mod tests {
             tx.send(next_upper).expect("send failed");
         }
 
-        task.await.expect("await failed");
+        task.await;
     }
 }

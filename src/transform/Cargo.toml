@@ -10,34 +10,30 @@ publish = false
 workspace = true
 
 [dependencies]
-differential-dataflow = "0.18.0"
-enum-kinds = "0.5.1"
-itertools = "0.14.0"
+differential-dataflow.workspace = true
+enum-kinds.workspace = true
+itertools.workspace = true
 mz-compute-types = { path = "../compute-types" }
 mz-expr = { path = "../expr" }
 mz-ore = { path = "../ore", features = ["differential-dataflow"] }
 mz-repr = { path = "../repr", features = ["tracing"] }
 mz-sql = { path = "../sql" }
-ordered-float = { version = "5.0.0", features = ["serde"] }
-paste = "1.0.11"
-proptest = { version = "1.7.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.5.1" }
-serde = "1.0.219"
-tracing = "0.1.37"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+ordered-float.workspace = true
+paste.workspace = true
+proptest.workspace = true
+proptest-derive.workspace = true
+serde.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
-anyhow = "1.0.100"
-datadriven = "0.8.0"
+anyhow.workspace = true
+datadriven.workspace = true
 mz-expr-parser = { path = "../expr-parser" }
 mz-expr-test-util = { path = "../expr-test-util" }
 mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore", features = ["test"] }
-proc-macro2 = "1.0.103"
-serde_json = "1.0.145"
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+proc-macro2.workspace = true
+serde_json.workspace = true
 
 [features]
-default = ["workspace-hack"]
+default = []

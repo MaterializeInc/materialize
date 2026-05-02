@@ -1,0 +1,230 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Test EXPLAIN for SUBSCRIBE statements
+
+mode cockroach
+
+statement ok
+CREATE VIEW intervals (a, b) AS VALUES (1, 10), (1, 2), (2, 13), (3, 1), (-3, 10), (5, 18446744073709551616)
+
+statement ok
+CREATE MATERIALIZED VIEW valid AS
+SELECT *
+FROM intervals
+WHERE mz_now() BETWEEN a AND b;
+
+statement ok
+CREATE TABLE t (a int, b text)
+
+statement ok
+CREATE VIEW v AS SELECT a, b FROM t WHERE a > 0
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT a, b FROM t WHERE a > 0
+
+# Test basic EXPLAIN OPTIMIZED PLAN for SUBSCRIBE on a table
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE t
+----
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# Test EXPLAIN OPTIMIZED PLAN for SUBSCRIBE on a view
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE v
+----
+Explained Query:
+  Filter (#0{a} > 0)
+    ReadStorage materialize.public.t
+
+Source materialize.public.t
+  filter=((#0{a} > 0))
+
+Target cluster: quickstart
+
+EOF
+
+# Test EXPLAIN OPTIMIZED PLAN for SUBSCRIBE on a materialized view
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE mv
+----
+Source materialize.public.mv
+
+Target cluster: quickstart
+
+EOF
+
+# Test EXPLAIN OPTIMIZED PLAN for SUBSCRIBE with a query
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE (SELECT a FROM t WHERE a > 5)
+----
+Explained Query:
+  Project (#0)
+    Filter (#0{a} > 5)
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+  filter=((#0{a} > 5))
+
+Target cluster: quickstart
+
+EOF
+
+# Test EXPLAIN OPTIMIZED PLAN for SUBSCRIBE with a query
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR SELECT a FROM t WHERE a > 5
+----
+Explained Query:
+  Project (#0)
+    Filter (#0{a} > 5)
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+  filter=((#0{a} > 5))
+
+Target cluster: quickstart
+
+EOF
+
+# Test EXPLAIN PHYSICAL PLAN for SUBSCRIBE on a table
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR SUBSCRIBE t
+----
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# Test EXPLAIN PHYSICAL PLAN for SUBSCRIBE with a query
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR SUBSCRIBE (SELECT a, b FROM t WHERE a > 5)
+----
+Explained Query:
+  Get::Collection materialize.public.t
+    raw=true
+
+Source materialize.public.t
+  filter=((#0{a} > 5))
+
+Target cluster: quickstart
+
+EOF
+
+# Test EXPLAIN with AS JSON format
+statement ok
+EXPLAIN OPTIMIZED PLAN AS JSON FOR SUBSCRIBE t
+
+# Test EXPLAIN with AS OF timestamp
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE valid AS OF 1000
+----
+Source materialize.public.valid
+
+Target cluster: quickstart
+
+EOF
+
+# Test EXPLAIN with AS OF AT LEAST timestamp
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE valid AS OF AT LEAST 500
+----
+Source materialize.public.valid
+
+Target cluster: quickstart
+
+EOF
+
+# Test EXPLAIN with UP TO
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE valid UP TO 18446744073709551615
+----
+Source materialize.public.valid
+
+Target cluster: quickstart
+
+EOF
+
+# Test EXPLAIN with AS OF and UP TO combined
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE valid AS OF 100 UP TO 500
+----
+Source materialize.public.valid
+
+Target cluster: quickstart
+
+EOF
+
+
+
+# Test EXPLAIN with SUBSCRIBE options (SNAPSHOT = false)
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE t WITH (SNAPSHOT = false)
+----
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# Test EXPLAIN with PROGRESS option
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE t WITH (PROGRESS = true)
+----
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# Test EXPLAIN with multiple options (both SNAPSHOT and PROGRESS)
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE t WITH (SNAPSHOT = false, PROGRESS = true)
+----
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# Test EXPLAIN OPTIMIZER TRACE for SUBSCRIBE
+statement ok
+EXPLAIN OPTIMIZER TRACE FOR SUBSCRIBE t
+
+# Test unsupported stages - SUBSCRIBE doesn't support RAW, DECORRELATED, or LOCAL
+# because it takes MIR directly rather than going through HIR lowering.
+
+statement error cannot EXPLAIN RAW PLAN FOR SUBSCRIBE
+EXPLAIN RAW PLAN FOR SUBSCRIBE t
+
+statement error cannot EXPLAIN DECORRELATED PLAN FOR SUBSCRIBE
+EXPLAIN DECORRELATED PLAN FOR SUBSCRIBE t
+
+statement error cannot EXPLAIN LOCALLY OPTIMIZED PLAN FOR SUBSCRIBE
+EXPLAIN LOCALLY OPTIMIZED PLAN FOR SUBSCRIBE t
+
+# Test error case: SUBSCRIBE on non-existent table
+statement error unknown catalog item 'nonexistent'
+EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE nonexistent
+
+statement ok
+BEGIN
+
+statement ok
+EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE t
+
+statement ok
+EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE t
+
+statement ok
+COMMIT

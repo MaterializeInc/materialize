@@ -11,7 +11,11 @@ menu:
     weight: 5
 ---
 
-{{< include-md file="shared-content/materialize-intro.md" >}}
+{{% include-headless "/headless/materialize-intro/intro" %}}
+
+## Materialize offerings
+
+{{% include-headless "/headless/materialize-intro/offerings" %}}
 
 ## Key features
 
@@ -50,7 +54,7 @@ SQL patterns enabled by streaming like [**Change Data Capture
 filters**](/sql/patterns/temporal-filters/), and
 [**subscriptions**](/sql/subscribe/).
 
-{{% materialize-postgres-compatibility %}}
+{{% include-from-yaml data="materialize_details" name="postgres-compatibility" %}}
 
 ### Real-time data ingestion
 

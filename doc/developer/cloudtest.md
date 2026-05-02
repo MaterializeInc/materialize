@@ -29,7 +29,7 @@ official [`kubernetes`] Python library to control the Kubernetes cluster.
     On Linux, use:
 
     ```
-    curl -fL https://dl.k8s.io/release/v1.26.6/bin/linux/amd64/kubectl > kubectl
+    curl -fL https://dl.k8s.io/release/v1.34.5/bin/linux/amd64/kubectl > kubectl
     chmod +x kubectl
     sudo mv kubectl /usr/local/bin
     ```
@@ -80,8 +80,8 @@ To run a single test:
 ./pytest -k test_name_goes_here
 ```
 
-⚠️ By default, cloudtest builds Materialize in release mode. You can instead
-build in debug mode by passing the `--dev` flag:
+By default, cloudtest builds Materialize in optimized mode, which is what you
+should use. You can instead build in debug mode by passing the `--dev` flag:
 
 ```
 ./pytest --dev [-k TEST]
@@ -129,7 +129,7 @@ Use the `test_wait` workflow, which does nothing but wait for the default
 cluster to become ready:
 
 ```
-./pytest --dev -k test_wait
+./pytest -k test_wait
 ```
 
 # Writing tests

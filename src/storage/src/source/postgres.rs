@@ -13,8 +13,9 @@
 //! # Snapshot
 //!
 //! One part of the dataflow deals with snapshotting the tables involved in the ingestion. Each
-//! table that needs a snapshot is assigned to a specific worker which performs a `COPY` query
-//! and distributes the raw COPY bytes to all workers to decode the text encoded rows.
+//! table is partitioned across all workers using PostgreSQL's `ctid` column to identify row
+//! ranges. Each worker fetches its assigned range using a `COPY` query with ctid filtering,
+//! enabling parallel snapshotting of large tables.
 //!
 //! For all tables that ended up being snapshotted the snapshot reader also emits a rewind request
 //! to the replication reader which will ensure that the requested portion of the replication
@@ -80,13 +81,12 @@
 //! ```
 
 use std::collections::BTreeMap;
-use std::convert::Infallible;
 use std::rc::Rc;
 use std::time::Duration;
 
 use differential_dataflow::AsCollection;
 use itertools::Itertools as _;
-use mz_expr::{EvalError, MirScalarExpr};
+use mz_expr::EvalError;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_postgres_util::desc::PostgresTableDesc;
@@ -95,6 +95,7 @@ use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_sql_parser::ast::Ident;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_types::errors::{DataflowError, SourceError, SourceErrorDetails};
+use mz_storage_types::sources::casts::StorageScalarExpr;
 use mz_storage_types::sources::postgres::CastType;
 use mz_storage_types::sources::{
     MzOffset, PostgresSourceConnection, SourceExport, SourceExportDetails, SourceTimestamp,
@@ -102,9 +103,10 @@ use mz_storage_types::sources::{
 use mz_timely_util::builder_async::PressOnDropButton;
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
+use timely::dataflow::operators::Concat;
 use timely::dataflow::operators::core::Partition;
-use timely::dataflow::operators::{Concat, Map, ToStream};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::operators::vec::{Map, ToStream};
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::PgLsn;
@@ -123,17 +125,19 @@ impl SourceRender for PostgresSourceConnection {
 
     /// Render the ingestion dataflow. This function only connects things together and contains no
     /// actual processing logic.
-    fn render<G: Scope<Timestamp = MzOffset>>(
+    fn render<'scope>(
         self,
-        scope: &mut G,
+        scope: Scope<'scope, MzOffset>,
         config: &RawSourceCreationConfig,
         resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        Stream<G, Infallible>,
-        Stream<G, HealthStatusMessage>,
-        Option<Stream<G, Probe<MzOffset>>>,
+        BTreeMap<
+            GlobalId,
+            StackedCollection<'scope, MzOffset, Result<SourceMessage, DataflowError>>,
+        >,
+        StreamVec<'scope, MzOffset, HealthStatusMessage>,
+        StreamVec<'scope, MzOffset, Probe<MzOffset>>,
         Vec<PressOnDropButton>,
     ) {
         // Collect the source outputs that we will be exporting into a per-table map.
@@ -184,30 +188,30 @@ impl SourceRender for PostgresSourceConnection {
                 metrics.snapshot_metrics.clone(),
             );
 
-        let (repl_updates, uppers, probe_stream, repl_err, repl_token) = replication::render(
+        let (repl_updates, probe_stream, repl_err, repl_token) = replication::render(
             scope.clone(),
             config.clone(),
             self,
             table_info,
-            &rewinds,
-            &slot_ready,
+            rewinds,
+            slot_ready,
             resume_uppers,
             metrics,
         );
 
-        let updates = snapshot_updates.concat(&repl_updates);
+        let updates = snapshot_updates.concat(repl_updates);
         let partition_count = u64::cast_from(config.source_exports.len());
         let data_streams: Vec<_> = updates
             .inner
             .partition::<CapacityContainerBuilder<_>, _, _>(
                 partition_count,
-                |((output, data), time, diff): &(
+                |((output, data), time, diff): (
                     (usize, Result<SourceMessage, DataflowError>),
                     MzOffset,
                     Diff,
                 )| {
-                    let output = u64::cast_from(*output);
-                    (output, (data.clone(), time.clone(), diff.clone()))
+                    let output = u64::cast_from(output);
+                    (output, (data, time, diff))
                 },
             );
         let mut data_collections = BTreeMap::new();
@@ -230,7 +234,7 @@ impl SourceRender for PostgresSourceConnection {
         // N.B. Note that we don't check ssh tunnel statuses here. We could, but immediately on
         // restart we are going to set the status to an ssh error correctly, so we don't do this
         // extra work.
-        let errs = snapshot_err.concat(&repl_err).map(move |err| {
+        let errs = snapshot_err.concat(repl_err).map(move |err| {
             // This update will cause the dataflow to restart
             let err_string = err.display_with_causes().to_string();
             let update = HealthStatusUpdate::halting(err_string.clone(), None);
@@ -255,11 +259,10 @@ impl SourceRender for PostgresSourceConnection {
             }
         });
 
-        let health = health_init.concat(&errs);
+        let health = health_init.concat(errs);
 
         (
             data_collections,
-            uppers,
             health,
             probe_stream,
             vec![snapshot_token, repl_token],
@@ -275,7 +278,7 @@ struct SourceOutputInfo {
     /// is recalculated every time we observe an upstream schema change. On dataflow initialization
     /// this field is None since we haven't yet observed any schemas.
     projection: Option<Vec<usize>>,
-    casts: Vec<(CastType, MirScalarExpr)>,
+    casts: Vec<(CastType, StorageScalarExpr)>,
     resume_upper: Antichain<MzOffset>,
     export_id: GlobalId,
 }
@@ -495,7 +498,7 @@ fn verify_schema(
 
 /// Casts a text row into the target types
 fn cast_row(
-    casts: &[(CastType, MirScalarExpr)],
+    casts: &[(CastType, StorageScalarExpr)],
     datums: &[Datum<'_>],
     row: &mut Row,
 ) -> Result<(), DefiniteError> {

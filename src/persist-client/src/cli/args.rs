@@ -149,13 +149,8 @@ pub(super) async fn make_blob(
     commit: bool,
     metrics: Arc<Metrics>,
 ) -> anyhow::Result<Arc<dyn Blob>> {
-    let blob = BlobConfig::try_from(
-        blob_uri,
-        Box::new(cfg.clone()),
-        metrics.s3_blob.clone(),
-        Arc::clone(&cfg.configs),
-    )
-    .await?;
+    let blob =
+        BlobConfig::try_from(blob_uri, Box::new(cfg.clone()), metrics.s3_blob.clone()).await?;
     let blob = blob.clone().open().await?;
     let blob = if commit {
         blob
@@ -252,12 +247,12 @@ impl Consensus for ReadOnly<Arc<dyn Consensus>> {
     async fn compare_and_set(
         &self,
         key: &str,
-        expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<CaSResult, ExternalError> {
         warn!(
-            "ignoring cas({key}) in read-only mode ({} bytes at seqno {expected:?})",
+            "ignoring cas({key}) in read-only mode ({} bytes at seqno {:?})",
             new.data.len(),
+            new.seqno,
         );
         self.ignoring_write();
         Ok(CaSResult::Committed)
@@ -275,9 +270,9 @@ impl Consensus for ReadOnly<Arc<dyn Consensus>> {
         self.store.scan(key, from, limit).await
     }
 
-    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<Option<usize>, ExternalError> {
         warn!("ignoring truncate({key}) in read-only mode (to seqno {seqno})");
         self.ignoring_write();
-        Ok(0)
+        Ok(None)
     }
 }

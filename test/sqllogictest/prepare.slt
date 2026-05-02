@@ -41,7 +41,7 @@ SELECT * FROM t;
 5
 6
 
-query error db error: ERROR: operator is not unique: unknown \+ unknown
+query error operator is not unique: unknown \+ unknown
 PREPARE i3 AS
 INSERT INTO t(a) VALUES(4) RETURNING $1 + $1;
 
@@ -92,7 +92,7 @@ statement ok
 PREPARE p4 AS
 SELECT $1::text || $1::bigint::text;
 
-query error db error: ERROR: invalid input syntax for type bigint: invalid digit found in string: "abc"
+query error invalid input syntax for type bigint: invalid digit found in string: "abc"
 EXECUTE p4('abc');
 
 query T
@@ -110,13 +110,13 @@ EXECUTE p5(7);
 0
 7
 
-query error db error: ERROR: operator does not exist: bigint \|\| bigint
+query error operator does not exist: bigint \|\| bigint
 PREPARE p6 AS
 SELECT $1 + $1::bigint, $1 || $1;
 
-query error db error: ERROR: operator does not exist: text \+ bigint
+query error operator does not exist: text \+ bigint
 PREPARE p7 AS
 SELECT $1 || $1, $1 + $1::bigint;
 
-query error db error: ERROR: there are contradicting constraints for the type of parameter \$1: should be both text and integer
+query error there are contradicting constraints for the type of parameter \$1: should be both text and integer
 PREPARE p AS SELECT repeat($1, $1);

@@ -10,21 +10,17 @@ publish = false
 workspace = true
 
 [dependencies]
-async-trait = "0.1.89"
-byteorder = "1.4.3"
-bytes = "1.10.1"
-bytesize = "2.1.0"
-derivative = "2.2.0"
+async-trait.workspace = true
+byteorder.workspace = true
+bytes.workspace = true
+bytesize.workspace = true
+derivative.workspace = true
 mz-ore = { path = "../ore", features = ["network"], default-features = false }
 mz-server-core = { path = "../server-core", default-features = false }
-tokio = "1.44.1"
-tokio-openssl = "0.6.5"
-tokio-postgres = { version = "0.7.8" }
-tracing = "0.1.37"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+tokio.workspace = true
+tokio-openssl.workspace = true
+tokio-postgres.workspace = true
+tracing.workspace = true
 
 [features]
-default = ["workspace-hack"]
+default = []

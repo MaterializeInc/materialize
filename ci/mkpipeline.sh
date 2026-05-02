@@ -20,11 +20,14 @@
 set -euo pipefail
 
 pipeline=${1:-test}
+if [ "$#" -gt 0 ]; then
+  shift
+fi
 bootstrap_steps=
 tmpfile=$(mktemp)
 
 for arch in x86_64 aarch64; do
-  for flavor in stable nightly min; do
+  for flavor in stable nightly min console; do
     (
       if ! MZ_DEV_CI_BUILDER_ARCH=$arch bin/ci-builder exists $flavor; then
         echo "$arch:$flavor" >> "$tmpfile"

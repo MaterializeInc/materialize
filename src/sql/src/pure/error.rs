@@ -9,7 +9,6 @@
 
 use std::sync::Arc;
 
-use aws_sdk_sts::operation::get_caller_identity::GetCallerIdentityError;
 use mz_ccsr::ListError;
 use mz_repr::adt::system::Oid;
 use mz_sql_parser::ast::display::AstDisplay;
@@ -219,8 +218,11 @@ pub enum IcebergSinkPurificationError {
     CatalogError(Arc<anyhow::Error>),
     #[error("error loading aws sdk context")]
     AwsSdkContextError(Arc<anyhow::Error>),
-    #[error("error listing sts identity")]
-    StsIdentityError(Arc<GetCallerIdentityError>),
+    #[error("S3 Tables connection region mismatch")]
+    S3TablesRegionMismatch {
+        s3_tables_region: String,
+        environment_region: String,
+    },
 }
 
 impl IcebergSinkPurificationError {
@@ -228,12 +230,26 @@ impl IcebergSinkPurificationError {
         match self {
             Self::CatalogError(e) => Some(e.to_string_with_causes()),
             Self::AwsSdkContextError(e) => Some(e.to_string_with_causes()),
-            Self::StsIdentityError(e) => Some(e.to_string_with_causes()),
+            Self::S3TablesRegionMismatch {
+                s3_tables_region,
+                environment_region,
+            } => Some(format!(
+                "S3 Tables connection is configured for region '{}' but this Materialize environment is running in region '{}'",
+                s3_tables_region, environment_region
+            )),
         }
     }
 
     pub fn hint(&self) -> Option<String> {
-        None
+        match self {
+            Self::S3TablesRegionMismatch {
+                environment_region, ..
+            } => Some(format!(
+                "Create a new AWS connection with REGION = '{}' to use with S3 Tables in this environment.",
+                environment_region
+            )),
+            _ => None,
+        }
     }
 }
 
@@ -255,7 +271,7 @@ impl CsrPurificationError {
         match self {
             Self::ClientError(e) => Some(e.to_string_with_causes()),
             Self::ListSubjectsError(e) => Some(e.to_string_with_causes()),
-            _ => None,
+            Self::NotCsrConnection(_) => None,
         }
     }
 

@@ -8,32 +8,17 @@ menu:
 
 `INSERT` writes values to [user-defined tables](../create-table).
 
-## Conceptual framework
-
-You might want to `INSERT` data into tables when:
-
-- Manually inserting rows into Materialize from a non-streaming data source.
-- Testing Materialize's features without setting up a data stream.
-
 ## Syntax
 
-{{< diagram "insert.svg" >}}
-
-Field | Use
-------|-----
-**INSERT INTO** _table_name_ | The table to write values to.
-_alias_ | Only permit references to _table_name_ as _alias_.
-_column_name_... | Correlates the inserted rows' columns to _table_name_'s columns by ordinal position, i.e. the first column of the row to insert is correlated to the first named column. <br/><br/>If some but not all of _table_name_'s columns are provided, the unprovided columns receive their type's default value, or `NULL` if no default value was specified.
-_expr_... | The expression or value to be inserted into the column. If a given column is nullable, a `NULL` value may be provided.
-_query_ | A [`SELECT`](../select) statements whose returned rows you want to write to the table.
+{{% include-syntax file="examples/insert" example="syntax" %}}
 
 ## Details
 
-The optional `RETURNING` clause causes `INSERT` to return values based on each inserted row.
-
 ### Known limitations
 
-* `INSERT ... SELECT` can reference [user-created tables](../create-table) but not [sources](../create-source) _(or views, materialized views, and indexes that depend on sources)_.
+* `INSERT ... SELECT` can reference [read-write tables](../create-table) but not
+  [sources](../create-source) or read-only tables _(or views, materialized views, and indexes that
+  depend on sources)_.
 * **Low performance.** While processing an `INSERT ... SELECT` statement,
   Materialize cannot process other `INSERT`, `UPDATE`, or `DELETE` statements.
 
@@ -97,7 +82,7 @@ SELECT * FROM t;
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/insert.md" >}}
+{{% include-headless "/headless/sql-command-privileges/insert" %}}
 
 ## Related pages
 

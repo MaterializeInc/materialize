@@ -1,0 +1,10 @@
+- name: "syntax"
+  code: |
+    date_part ( '<time_period>', <val> )
+  syntax_elements:
+    - name: "`'<time_period>'`"
+      description: |
+        The time period to extract. Valid values: `epoch`, `millennium`, `century`, `decade`, `year`, `quarter`, `month`, `week`, `day`, `hour`, `minute`, `second`, `microsecond`, `millisecond`, `dow`, `isodow`, `doy`. See the [Arguments](#arguments) section for synonyms.
+    - name: "`<val>`"
+      description: |
+        A [`time`](/sql/types/time/), [`timestamp`](/sql/types/timestamp/), [`timestamp with time zone`](/sql/types/timestamp/), [`interval`](/sql/types/interval/), or [`date`](/sql/types/date/) value. Values of type [`date`](/sql/types/date/) are first cast to type [`timestamp`](/sql/types/timestamp/).

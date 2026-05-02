@@ -61,8 +61,11 @@ INSERT INTO t1 SELECT * FROM t1;
 "test"
 "test"
 
->[version>=14000] SHOW CREATE SOURCE t1;
+>[14000<=version<2600700] SHOW CREATE SOURCE t1;
 materialize.public.t1 "CREATE SUBSOURCE materialize.public.t1 (f1 pg_catalog.int4, f4 pg_catalog.varchar(64)) OF SOURCE materialize.public.da WITH (EXTERNAL REFERENCE = public.t1, EXCLUDE COLUMNS = (f2, f3));"
+
+>[version>=2600700] SHOW CREATE SOURCE t1;
+materialize.public.t1 "CREATE SUBSOURCE materialize.public.t1 (f1 pg_catalog.int4, f4 pg_catalog.varchar(64))\nOF SOURCE materialize.public.da\nWITH (EXTERNAL REFERENCE = public.t1, EXCLUDE COLUMNS = (f2, f3));"
 
 >[version<14000] SHOW CREATE SOURCE t1;
 materialize.public.t1 "CREATE SUBSOURCE \"materialize\".\"public\".\"t1\" (\"f1\" \"pg_catalog\".\"int4\", \"f4\" \"pg_catalog\".\"varchar\"(64)) OF SOURCE \"materialize\".\"public\".\"da\" WITH (EXTERNAL REFERENCE = \"public\".\"t1\", EXCLUDE COLUMNS = (\"f2\", \"f3\"))"

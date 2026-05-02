@@ -13,6 +13,7 @@
 //! [differential dataflow]: ../differential_dataflow/index.html
 //! [timely dataflow]: ../timely/index.html
 
+use ::http::HeaderValue;
 use std::collections::BTreeMap;
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
@@ -36,7 +37,7 @@ use mz_adapter_types::dyncfgs::{
     WITH_0DT_DEPLOYMENT_MAX_WAIT,
 };
 use mz_auth::password::Password;
-use mz_authenticator::Authenticator;
+use mz_authenticator::GenericOidcAuthenticator;
 use mz_build_info::{BuildInfo, build_info};
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_catalog::durable::BootstrapArgs;
@@ -57,7 +58,7 @@ use mz_pgwire_common::ConnectionCounter;
 use mz_repr::strconv;
 use mz_secrets::SecretsController;
 use mz_server_core::listeners::{
-    AuthenticatorKind, HttpListenerConfig, ListenerConfig, ListenersConfig, SqlListenerConfig,
+    HttpListenerConfig, ListenerConfig, ListenersConfig, SqlListenerConfig,
 };
 use mz_server_core::{
     ConnectionStream, ListenerHandle, ReloadTrigger, ReloadingSslContext, ServeConfig,
@@ -104,11 +105,16 @@ pub struct Config {
     pub tls_reload_certs: ReloadTrigger,
     /// Password of the mz_system user.
     pub external_login_password_mz_system: Option<Password>,
-    /// Frontegg JWT authentication configuration.
+    /// Frontegg JWT authenticator.
     pub frontegg: Option<FronteggAuthenticator>,
     /// Origins for which cross-origin resource sharing (CORS) for HTTP requests
     /// is permitted.
     pub cors_allowed_origin: AllowOrigin,
+    /// Raw list of allowed CORS origins. Retained alongside `cors_allowed_origin`
+    /// (which is the computed predicate) so that endpoints like MCP can perform
+    /// server-side Origin validation to defend against DNS rebinding attacks
+    /// (where same-origin requests bypass CORS enforcement).
+    pub cors_allowed_origin_list: Vec<HeaderValue>,
     /// Public IP addresses which the cloud environment has configured for
     /// egress.
     pub egress_addresses: Vec<IpNet>,
@@ -262,6 +268,7 @@ impl Listener<SqlListenerConfig> {
         tls_reloading_context: Option<ReloadingSslContext>,
         frontegg: Option<FronteggAuthenticator>,
         adapter_client: AdapterClient,
+        oidc: GenericOidcAuthenticator,
         metrics: MetricsConfig,
         helm_chart_version: Option<String>,
     ) -> ListenerHandle {
@@ -274,21 +281,15 @@ impl Listener<SqlListenerConfig> {
                 TlsMode::Allow
             },
         });
-        let authenticator = match self.config.authenticator_kind {
-            AuthenticatorKind::Frontegg => Authenticator::Frontegg(
-                frontegg.expect("Frontegg args are required with AuthenticatorKind::Frontegg"),
-            ),
-            AuthenticatorKind::Password => Authenticator::Password(adapter_client.clone()),
-            AuthenticatorKind::Sasl => Authenticator::Sasl(adapter_client.clone()),
-            AuthenticatorKind::None => Authenticator::None,
-        };
 
         task::spawn(|| format!("{}_sql_server", label), {
             let sql_server = mz_pgwire::Server::new(mz_pgwire::Config {
                 label,
                 tls,
                 adapter_client,
-                authenticator,
+                authenticator_kind: self.config.authenticator_kind,
+                frontegg,
+                oidc,
                 metrics,
                 active_connection_counter,
                 helm_chart_version,
@@ -376,24 +377,8 @@ impl Listeners {
             internal_console_redirect_url: config.internal_console_redirect_url,
         });
 
-        let (authenticator_frontegg_tx, authenticator_frontegg_rx) = oneshot::channel();
-        let authenticator_frontegg_rx = authenticator_frontegg_rx.shared();
-        let (authenticator_password_tx, authenticator_password_rx) = oneshot::channel();
-        let authenticator_password_rx = authenticator_password_rx.shared();
-        let (authenticator_none_tx, authenticator_none_rx) = oneshot::channel();
-        let authenticator_none_rx = authenticator_none_rx.shared();
-
-        // We can only send the Frontegg and None variants immediately.
-        // The Password variant requires an adapter client.
-        if let Some(frontegg) = &config.frontegg {
-            authenticator_frontegg_tx
-                .send(Arc::new(Authenticator::Frontegg(frontegg.clone())))
-                .expect("rx known to be live");
-        }
-        authenticator_none_tx
-            .send(Arc::new(Authenticator::None))
-            .expect("rx known to be live");
-
+        let (authenticator_oidc_tx, authenticator_oidc_rx) = oneshot::channel();
+        let authenticator_oidc_rx = authenticator_oidc_rx.shared();
         let (adapter_client_tx, adapter_client_rx) = oneshot::channel();
         let adapter_client_rx = adapter_client_rx.shared();
 
@@ -402,12 +387,6 @@ impl Listeners {
         let mut http_listener_handles = BTreeMap::new();
         for (name, listener) in self.http {
             let authenticator_kind = listener.config.authenticator_kind();
-            let authenticator_rx = match authenticator_kind {
-                AuthenticatorKind::Frontegg => authenticator_frontegg_rx.clone(),
-                AuthenticatorKind::Password => authenticator_password_rx.clone(),
-                AuthenticatorKind::Sasl => authenticator_password_rx.clone(),
-                AuthenticatorKind::None => authenticator_none_rx.clone(),
-            };
             let source: &'static str = Box::leak(name.clone().into_boxed_str());
             let tls = if listener.config.enable_tls() {
                 tls_reloading_context.clone()
@@ -421,14 +400,17 @@ impl Listeners {
                 source,
                 tls,
                 authenticator_kind,
-                authenticator_rx,
+                frontegg: config.frontegg.clone(),
+                oidc_rx: authenticator_oidc_rx.clone(),
                 allowed_origin: config.cors_allowed_origin.clone(),
+                allowed_origin_list: config.cors_allowed_origin_list.clone(),
                 concurrent_webhook_req: webhook_concurrency_limit.semaphore(),
                 metrics: metrics.clone(),
                 metrics_registry: metrics_registry.clone(),
                 allowed_roles: listener.config.allowed_roles(),
                 internal_route_config: Arc::clone(&internal_route_config),
                 routes_enabled: listener.config.routes.clone(),
+                replica_http_locator: Arc::clone(&config.controller.replica_http_locator),
             };
             http_listener_handles.insert(name.clone(), listener.serve_http(http_config).await);
         }
@@ -470,13 +452,16 @@ impl Listeners {
         let system_parameter_sync_config =
             match (config.launchdarkly_sdk_key, config.config_sync_file_path) {
                 (None, None) => None,
-                (None, Some(f)) => Some(SystemParameterSyncConfig::new(
-                    config.environment_id.clone(),
-                    &BUILD_INFO,
-                    &config.metrics_registry,
-                    config.launchdarkly_key_map,
-                    SystemParameterSyncClientConfig::File { path: f },
-                )),
+                (None, Some(f)) => {
+                    info!("Using config file path {:?}", f);
+                    Some(SystemParameterSyncConfig::new(
+                        config.environment_id.clone(),
+                        &BUILD_INFO,
+                        &config.metrics_registry,
+                        config.launchdarkly_key_map,
+                        SystemParameterSyncClientConfig::File { path: f },
+                    ))
+                }
                 (Some(key), None) => Some(SystemParameterSyncConfig::new(
                     config.environment_id.clone(),
                     &BUILD_INFO,
@@ -794,6 +779,9 @@ impl Listeners {
         .instrument(info_span!("adapter::serve"))
         .await?;
 
+        // Initialize the OIDC authenticator, shared between the HTTP and SQL servers.
+        let oidc = GenericOidcAuthenticator::new(adapter_client.clone());
+
         info!(
             "startup: envd serve: coordinator init complete in {:?}",
             coord_init_start.elapsed()
@@ -802,9 +790,9 @@ impl Listeners {
         let serve_postamble_start = Instant::now();
         info!("startup: envd serve: postamble beginning");
 
-        // Send adapter client to the HTTP servers.
-        authenticator_password_tx
-            .send(Arc::new(Authenticator::Password(adapter_client.clone())))
+        // Send adapter client and OIDC authenticator to the HTTP servers.
+        authenticator_oidc_tx
+            .send(oidc.clone())
             .expect("rx known to be live");
         adapter_client_tx
             .send(adapter_client.clone())
@@ -824,6 +812,7 @@ impl Listeners {
                         tls_reloading_context.clone(),
                         config.frontegg.clone(),
                         adapter_client.clone(),
+                        oidc.clone(),
                         metrics.clone(),
                         config.helm_chart_version.clone(),
                     )

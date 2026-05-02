@@ -123,7 +123,7 @@ views](/sql/create-materialized-view/), you can either:
 
 To see what history retention period has been configured for an object, look up
 the object in the
-[`mz_internal.mz_history_retention_strategies`](/sql/system-catalog/mz_internal/#mz_history_retention_strategies)
+[`mz_internal.mz_history_retention_strategies`](/reference/system-catalog/mz_internal/#mz_history_retention_strategies)
 catalog table. For example:
 
 ```mzsql
@@ -228,8 +228,25 @@ data up until the progress message is complete, so you can:
 continuous query against Materialize in your application code:
 
    ```mzsql
-   SUBSCRIBE (<your query>) WITH (PROGRESS, SNAPSHOT false) AS OF <last_progress_mz_timestamp>;
+   SUBSCRIBE (<your query>) WITH (PROGRESS, SNAPSHOT false) AS OF <last_progress_mz_timestamp - 1>;
    ```
+
+   Note the subtraction of `1` from the last received progress timestamp. By
+   default (i.e., `SNAPSHOT true`), `SUBSCRIBE` begins by emitting a snapshot at
+   the `AS OF` timestamp (if specified) and then emits subsequent updates as
+   they occur. However, when `SNAPSHOT false` is set, the snapshot is not
+   emitted, and `SUBSCRIBE` emits only updates subsequent to the snapshot; i.e.,
+   updates with timestamp greater than the `AS OF` timestamp. To include updates
+   that occurred at the last progress timestamp, subtract `1` from the last
+   progress timestamp.
+
+   If you're subscribing _directly_ to a collection, as in `SUBSCRIBE TO <your
+   collection> WITH (PROGRESS, SNAPSHOT false) AS OF <time>`, Materialize will
+   only fetch the recent data for that query from storage, which can make this
+   resumption fairly quick. However, subscribing to a query (`SUBSCRIBE TO
+   SELECT... WITH (PROGRESS, SNAPSHOT false) AS OF <time>` will build a new
+   dataflow that needs to rehydrate, which can be slower. For details, see
+   [`SUBSCRIBE`](/sql/subscribe/#snapshot).
 
    In a similar way, as results come in continuously, buffer the latest results
    in memory until you receive a [progress](/sql/subscribe#progress) message. At that point,

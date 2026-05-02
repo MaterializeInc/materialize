@@ -113,7 +113,7 @@ impl TimestampProvider for Frontiers {
             .collect()
     }
 
-    fn acquire_read_holds(&self, id_bundle: &CollectionIdBundle) -> ReadHolds<Timestamp> {
+    fn acquire_read_holds(&self, id_bundle: &CollectionIdBundle) -> ReadHolds {
         let mut read_holds = ReadHolds::new();
 
         let mock_read_hold = |id, frontier| {
@@ -149,7 +149,6 @@ impl TimestampProvider for Frontiers {
 struct Determine {
     id_bundle: IdBundle,
     when: String,
-    instance: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
@@ -284,13 +283,10 @@ fn test_timestamp_selection() {
                             &session,
                             &det.id_bundle.into(),
                             &parse_query_when(&det.when),
-                            det.instance.parse().unwrap(),
                             &TimelineContext::TimestampDependent,
                             oracle_read_ts,
                             None, /* real_time_recency_ts */
                             &IsolationLevel::from(isolation),
-                            //TODO: remove this eventually
-                            &mz_adapter_types::timestamp_selection::ConstraintBasedTimestampSelection::Verify
                         )
                         .unwrap();
 

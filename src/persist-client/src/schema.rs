@@ -679,9 +679,9 @@ mod tests {
         assert_eq!(write1.write_schemas.id.unwrap(), SchemaId(1));
     }
 
-    fn strings(xs: &[((Result<Strings, String>, Result<(), String>), u64, i64)]) -> Vec<Vec<&str>> {
+    fn strings(xs: &[((Strings, ()), u64, i64)]) -> Vec<Vec<&str>> {
         xs.iter()
-            .map(|((k, _), _, _)| k.as_ref().unwrap().0.iter().map(|x| x.as_str()).collect())
+            .map(|((k, _), _, _)| k.0.iter().map(|x| x.as_str()).collect())
             .collect()
     }
 
@@ -691,7 +691,7 @@ mod tests {
         async fn snap_streaming(
             as_of: u64,
             read: &mut ReadHandle<Strings, (), u64, i64>,
-        ) -> Vec<((Result<Strings, String>, Result<(), String>), u64, i64)> {
+        ) -> Vec<((Strings, ()), u64, i64)> {
             // NB: We test with both snapshot_and_fetch and snapshot_and_stream
             // because one uses the consolidating iter and one doesn't.
             let mut ret = read

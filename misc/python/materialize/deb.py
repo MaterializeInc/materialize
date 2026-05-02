@@ -8,13 +8,3 @@
 # by the Apache License, Version 2.0.
 
 """Debian packaging utilities."""
-
-from materialize import cargo, git
-
-
-def unstable_version(workspace: cargo.Workspace) -> str:
-    """Computes the version to use for the materialized-unstable package."""
-    mz_version_string = workspace.crates["materialized"].version_string
-    commit_count = git.rev_count("HEAD")
-    commit_hash = git.rev_parse("HEAD")
-    return f"{mz_version_string}-{commit_count}-{commit_hash}"

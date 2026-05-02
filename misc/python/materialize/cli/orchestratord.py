@@ -24,19 +24,11 @@ from uuid import uuid4
 import yaml
 
 from materialize import MZ_ROOT, ui
-from materialize.docker import MZ_GHCR_DEFAULT
+from materialize.docker import image_registry
 
 DEV_IMAGE_TAG = "local-dev"
-DEFAULT_POSTGRES = (
-    "postgres://root@postgres.materialize.svc.cluster.local:5432/materialize"
-)
-DEFAULT_MINIO = "s3://minio:minio123@persist/persist?endpoint=http%3A%2F%2Fminio.materialize.svc.cluster.local%3A9000&region=minio"
-
-IMAGE_REGISTRY = (
-    "ghcr.io/materializeinc/materialize"
-    if ui.env_is_truthy("MZ_GHCR", MZ_GHCR_DEFAULT)
-    else "materialize"
-)
+DEFAULT_POSTGRES = "postgres://materialize_user:materialize_pass@postgres.materialize.svc.cluster.local:5432/materialize_db?sslmode=disable"
+DEFAULT_MINIO = "s3://minio:minio123@bucket/12345678-1234-1234-1234-123456789012?endpoint=http%3A%2F%2Fminio.materialize.svc.cluster.local%3A9000&region=minio"
 
 
 def main():
@@ -44,7 +36,16 @@ def main():
 
     parser = argparse.ArgumentParser(
         prog="orchestratord",
-        description="""Runs orchestratord within a local kind cluster""",
+        description="Runs orchestratord within a local kind cluster",
+        usage="""
+For a new setup you can run:
+  kind delete cluster
+  kind create cluster --config misc/kind/cluster.yaml
+  kubectl create namespace materialize
+  kubectl apply -f misc/helm-charts/testing/postgres.yaml
+  kubectl apply -f misc/helm-charts/testing/minio.yaml
+  bin/orchestratord run
+  bin/orchestratord environment --license-key-file ~/license-key""",
     )
     parser.add_argument(
         "--kind-cluster-name",
@@ -78,11 +79,11 @@ def main():
     parser_environment.add_argument(
         "--external-login-password-mz-system", required=False
     )
+    parser_environment.add_argument("--authenticator-kind", required=False)
     parser_environment.add_argument(
         "--enable-rbac",
-        type=bool,
+        action=argparse.BooleanOptionalAction,
         default=False,
-        required=False,
     )
     parser_environment.set_defaults(func=environment)
 
@@ -120,7 +121,7 @@ def run(args: argparse.Namespace):
         "misc/helm-charts/operator",
         "--atomic",
         f"--set=operator.image.tag={DEV_IMAGE_TAG}",
-        f"--set=operator.image.repository={IMAGE_REGISTRY}/orchestratord",
+        f"--set=operator.image.repository={image_registry()}/orchestratord",
         "--create-namespace",
         f"--namespace={args.namespace}",
     ]
@@ -144,7 +145,7 @@ def reset(args: argparse.Namespace):
         .splitlines()
     )
     for environment in environments:
-        (namespace, environment_name) = environment.split("/", 1)
+        namespace, environment_name = environment.split("/", 1)
         env_kubectl = make_env_kubectl(args, namespace)
 
         mz = json.loads(
@@ -191,14 +192,14 @@ def environment(args: argparse.Namespace):
     if args.environmentd_version:
         image_tag = args.environmentd_version
     else:
-        for image in ["environmentd", "clusterd", "balancerd"]:
+        for image in ["environmentd", "clusterd", "balancerd", "console"]:
             acquire(
                 image,
                 dev=args.dev,
                 cluster=args.kind_cluster_name,
             )
         image_tag = DEV_IMAGE_TAG
-    environmentd_image_ref = f"{IMAGE_REGISTRY}/environmentd:{image_tag}"
+    environmentd_image_ref = f"{image_registry()}/environmentd:{image_tag}"
 
     try:
         kubectl(
@@ -305,11 +306,13 @@ def environment(args: argparse.Namespace):
         },
     ]
 
+    if args.authenticator_kind is not None:
+        resources[-1]["spec"]["authenticatorKind"] = args.authenticator_kind
+
     if args.external_login_password_mz_system is not None:
         resources[0]["stringData"][
             "external_login_password_mz_system"
         ] = args.external_login_password_mz_system
-        resources[-1]["spec"]["authenticatorKind"] = "Password"
 
     env_kubectl("apply", "-f", "-", input=yaml.safe_dump_all(resources).encode())
 
@@ -445,14 +448,14 @@ def acquire(image: str, dev: bool, cluster: str):
         [
             "docker",
             "tag",
-            f"{IMAGE_REGISTRY}/{image}:mzbuild-{fingerprint}",
-            f"{IMAGE_REGISTRY}/{image}:{DEV_IMAGE_TAG}",
+            f"{image_registry()}/{image}:mzbuild-{fingerprint}",
+            f"{image_registry()}/{image}:{DEV_IMAGE_TAG}",
         ]
     )
     kind(
         "load",
         "docker-image",
-        f"{IMAGE_REGISTRY}/{image}:{DEV_IMAGE_TAG}",
+        f"{image_registry()}/{image}:{DEV_IMAGE_TAG}",
         cluster=cluster,
     )
 

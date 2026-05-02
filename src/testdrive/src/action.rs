@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 use std::future::Future;
-use std::net::ToSocketAddrs;
+
 use std::path::PathBuf;
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -26,6 +26,7 @@ use mz_adapter::session::Session;
 use mz_build_info::BuildInfo;
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_catalog::durable::BootstrapArgs;
+use mz_ccsr::SubjectVersion;
 use mz_kafka_util::client::{MzClientContext, create_new_client_config_simple};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
@@ -39,7 +40,6 @@ use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::{PersistClient, PersistLocation};
 use mz_sql::catalog::EnvironmentId;
 use mz_tls_util::make_tls;
-use rand::Rng;
 use rdkafka::ClientConfig;
 use rdkafka::producer::Producer;
 use regex::{Captures, Regex};
@@ -57,6 +57,7 @@ use crate::util::postgres::postgres_client;
 
 pub mod consistency;
 
+mod duckdb;
 mod file;
 mod fivetran;
 mod http;
@@ -79,7 +80,7 @@ mod version_check;
 mod webhook;
 
 /// User-settable configuration parameters.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Config {
     // === Testdrive options. ===
     /// Variables to make available to the testdrive script.
@@ -88,7 +89,7 @@ pub struct Config {
     /// variable named `arg.KEY`.
     pub arg_vars: BTreeMap<String, String>,
     /// A random number to distinguish each run of a testdrive script.
-    pub seed: Option<u32>,
+    pub seed: Option<String>,
     /// Whether to reset Materialize state before executing each script and
     /// to clean up AWS state after each script.
     pub reset: bool,
@@ -113,6 +114,9 @@ pub struct Config {
     pub backoff_factor: f64,
     /// Should we skip coordinator and catalog consistency checks.
     pub consistency_checks: consistency::Level,
+    /// Whether to run statement logging consistency checks (adds a few seconds at the end of every
+    /// test file).
+    pub check_statement_logging: bool,
     /// Whether to automatically rewrite wrong results instead of failing.
     pub rewrite_results: bool,
 
@@ -206,10 +210,13 @@ pub struct MaterializeState {
 }
 
 pub struct State {
+    // The Config that this `State` was originally created from.
+    pub config: Config,
+
     // === Testdrive state. ===
     arg_vars: BTreeMap<String, String>,
     cmd_vars: BTreeMap<String, String>,
-    seed: u32,
+    seed: String,
     temp_path: PathBuf,
     _tempfile: Option<tempfile::TempDir>,
     default_timeout: Duration,
@@ -218,6 +225,7 @@ pub struct State {
     initial_backoff: Duration,
     backoff_factor: f64,
     consistency_checks: consistency::Level,
+    check_statement_logging: bool,
     consistency_checks_adhoc_skip: bool,
     regex: Option<Regex>,
     regex_replacement: String,
@@ -249,6 +257,7 @@ pub struct State {
     aws_config: SdkConfig,
 
     // === Database driver state. ===
+    pub duckdb_clients: BTreeMap<String, std::sync::Arc<std::sync::Mutex<::duckdb::Connection>>>,
     mysql_clients: BTreeMap<String, mysql_async::Conn>,
     postgres_clients: BTreeMap<String, tokio_postgres::Client>,
     sql_server_clients: BTreeMap<String, mz_sql_server_util::Client>,
@@ -278,20 +287,11 @@ impl State {
         self.cmd_vars
             .insert("testdrive.kafka-addr".into(), self.kafka_addr.clone());
         self.cmd_vars.insert(
-            "testdrive.kafka-addr-resolved".into(),
-            self.kafka_addr
-                .to_socket_addrs()
-                .ok()
-                .and_then(|mut addrs| addrs.next())
-                .map(|addr| addr.to_string())
-                .unwrap_or_else(|| "#RESOLUTION-FAILURE#".into()),
-        );
-        self.cmd_vars.insert(
             "testdrive.schema-registry-url".into(),
             self.schema_registry_url.to_string(),
         );
         self.cmd_vars
-            .insert("testdrive.seed".into(), self.seed.to_string());
+            .insert("testdrive.seed".into(), self.seed.clone());
         self.cmd_vars.insert(
             "testdrive.temp-dir".into(),
             self.temp_path.display().to_string(),
@@ -637,6 +637,7 @@ impl State {
 
     /// Delete Kafka topics + CCSR subjects that were created in this run
     pub async fn reset_kafka(&self) -> Result<(), anyhow::Error> {
+        use rdkafka::types::RDKafkaErrorCode;
         let mut errors: Vec<anyhow::Error> = Vec::new();
 
         let metadata = self.kafka_producer.client().fetch_metadata(
@@ -672,10 +673,7 @@ impl State {
                     }
                     for (res, topic) in res.iter().zip_eq(testdrive_topics.iter()) {
                         match res {
-                            Ok(_)
-                            | Err((_, rdkafka::types::RDKafkaErrorCode::UnknownTopicOrPartition)) => {
-                                ()
-                            }
+                            Ok(_) | Err((_, RDKafkaErrorCode::UnknownTopicOrPartition)) => (),
                             Err((_, err)) => {
                                 errors.push(anyhow!("unable to delete {}: {}", topic, err));
                             }
@@ -688,30 +686,9 @@ impl State {
             };
         }
 
-        match self
-            .ccsr_client
-            .list_subjects()
-            .await
-            .context("listing schema registry subjects")
-        {
-            Ok(subjects) => {
-                let testdrive_subjects: Vec<_> = subjects
-                    .iter()
-                    .filter(|s| s.starts_with("testdrive-"))
-                    .collect();
+        let schema_registry_errors = self.reset_schema_registry().await;
 
-                for subject in testdrive_subjects {
-                    match self.ccsr_client.delete_subject(subject).await {
-                        Ok(()) | Err(mz_ccsr::DeleteError::SubjectNotFound) => (),
-                        Err(e) => errors.push(e.into()),
-                    }
-                }
-            }
-            Err(e) => {
-                errors.push(e);
-            }
-        }
-
+        errors.extend(schema_registry_errors);
         if errors.is_empty() {
             Ok(())
         } else {
@@ -724,6 +701,84 @@ impl State {
                     .join("\n")
             );
         }
+    }
+
+    #[allow(clippy::disallowed_types)]
+    async fn reset_schema_registry(&self) -> Vec<anyhow::Error> {
+        use std::collections::HashMap;
+
+        let mut errors = Vec::new();
+        match self
+            .ccsr_client
+            .list_subjects()
+            .await
+            .context("listing schema registry subjects")
+        {
+            Ok(subjects) => {
+                let testdrive_subjects: Vec<_> = subjects
+                    .into_iter()
+                    .filter(|s| s.starts_with("testdrive-"))
+                    .collect();
+
+                // Build the dependency graphs: subject -> list of subjects it references
+                let mut graphs: HashMap<SubjectVersion, Vec<SubjectVersion>> = HashMap::new();
+
+                for subject in &testdrive_subjects {
+                    match self.ccsr_client.get_subject_with_references(subject).await {
+                        Ok((subj, refs)) => {
+                            // Filter to only testdrive subjects
+                            let refs: Vec<_> = refs
+                                .into_iter()
+                                .filter(|r| r.subject.starts_with("testdrive-"))
+                                .collect();
+                            graphs.insert(
+                                SubjectVersion {
+                                    subject: subj.name,
+                                    version: subj.version,
+                                },
+                                refs,
+                            );
+                        }
+                        Err(mz_ccsr::GetBySubjectError::SubjectNotFound) => {
+                            // Subject was already deleted, skip it
+                        }
+                        Err(e) => {
+                            errors.push(anyhow::anyhow!(
+                                "failed to get references for subject {}: {}",
+                                subject,
+                                e
+                            ));
+                        }
+                    }
+                }
+
+                // Get topological ordering (0 = root/no dependencies, higher = more dependents)
+                // We need to delete in reverse order (highest first = subjects that depend on others)
+                let subjects_to_delete: Vec<_> = match mz_ccsr::topological_sort(&graphs) {
+                    Ok(ordered) => {
+                        let mut subjects: Vec<_> = ordered.into_iter().collect();
+                        subjects.sort_by(|a, b| a.1.cmp(&b.1));
+                        subjects.into_iter().map(|(s, _)| s.clone()).collect()
+                    }
+                    Err(_) => {
+                        tracing::info!("Cycle detected, attempting to delete anyway");
+                        // Cycle detected or other error - fall back to deleting in any order
+                        graphs.into_keys().collect()
+                    }
+                };
+
+                for subject in subjects_to_delete {
+                    match self.ccsr_client.delete_subject(&subject.subject).await {
+                        Ok(()) | Err(mz_ccsr::DeleteError::SubjectNotFound) => (),
+                        Err(e) => errors.push(e.into()),
+                    }
+                }
+            }
+            Err(e) => {
+                errors.push(e);
+            }
+        }
+        errors
     }
 }
 
@@ -796,6 +851,8 @@ impl Run for PosCommand {
                     "check-shard-tombstone" => {
                         consistency::run_check_shard_tombstone(builtin, state).await
                     }
+                    "duckdb-execute" => duckdb::run_execute(builtin, state).await,
+                    "duckdb-query" => duckdb::run_query(builtin, state).await,
                     "fivetran-destination" => {
                         fivetran::run_destination_command(builtin, state).await
                     }
@@ -825,6 +882,10 @@ impl Run for PosCommand {
                     "s3-verify-keys" => s3::run_verify_keys(builtin, state).await,
                     "s3-file-upload" => s3::run_upload(builtin, state).await,
                     "s3-set-presigned-url" => s3::run_set_presigned_url(builtin, state).await,
+                    "s3-upload-parquet-types" => s3::run_upload_parquet_types(builtin, state).await,
+                    "s3-upload-parquet-unsorted-map" => {
+                        s3::run_upload_parquet_unsorted_map(builtin, state).await
+                    }
                     "schema-registry-publish" => schema_registry::run_publish(builtin, state).await,
                     "schema-registry-verify" => schema_registry::run_verify(builtin, state).await,
                     "schema-registry-wait" => schema_registry::run_wait(builtin, state).await,
@@ -937,7 +998,10 @@ fn substitute_vars(
 pub async fn create_state(
     config: &Config,
 ) -> Result<(State, impl Future<Output = Result<(), anyhow::Error>>), anyhow::Error> {
-    let seed = config.seed.unwrap_or_else(|| rand::thread_rng().r#gen());
+    let seed = config
+        .seed
+        .clone()
+        .unwrap_or_else(|| format!("{:010}", rand::random::<u32>()));
 
     let (_tempfile, temp_path) = match &config.temp_dir {
         Some(temp_dir) => {
@@ -967,10 +1031,8 @@ pub async fn create_state(
         })
         .await?;
 
-    let pgconn_task = task::spawn(|| "pgconn_task", pgconn).map(|join| {
-        join.expect("pgconn_task unexpectedly canceled")
-            .context("running SQL connection")
-    });
+    let pgconn_task =
+        task::spawn(|| "pgconn_task", pgconn).map(|join| join.context("running SQL connection"));
 
     let materialize_state =
         create_materialize_state(&config, materialize_catalog_config, pgclient).await?;
@@ -1040,6 +1102,8 @@ pub async fn create_state(
     };
 
     let mut state = State {
+        config: config.clone(),
+
         // === Testdrive state. ===
         arg_vars: config.arg_vars.clone(),
         cmd_vars: BTreeMap::new(),
@@ -1052,6 +1116,7 @@ pub async fn create_state(
         initial_backoff: config.initial_backoff,
         backoff_factor: config.backoff_factor,
         consistency_checks: config.consistency_checks,
+        check_statement_logging: config.check_statement_logging,
         consistency_checks_adhoc_skip: false,
         regex: None,
         regex_replacement: set::DEFAULT_REGEX_REPLACEMENT.into(),
@@ -1088,6 +1153,7 @@ pub async fn create_state(
         aws_config: config.aws_config.clone(),
 
         // === Database driver state. ===
+        duckdb_clients: BTreeMap::new(),
         mysql_clients: BTreeMap::new(),
         postgres_clients: BTreeMap::new(),
         sql_server_clients: BTreeMap::new(),

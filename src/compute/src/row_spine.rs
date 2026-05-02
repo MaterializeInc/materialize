@@ -20,7 +20,7 @@ use differential_dataflow::trace::implementations::OffsetList;
 mod spines {
     use std::rc::Rc;
 
-    use differential_dataflow::containers::{Columnation, TimelyStack};
+    use columnation::Columnation;
     use differential_dataflow::trace::implementations::Layout;
     use differential_dataflow::trace::implementations::Update;
     use differential_dataflow::trace::implementations::ord_neu::{OrdKeyBatch, OrdKeyBuilder};
@@ -28,24 +28,27 @@ mod spines {
     use differential_dataflow::trace::implementations::spine_fueled::Spine;
     use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
     use mz_repr::Row;
+    use mz_timely_util::columnation::ColumnationStack;
 
     use crate::row_spine::{DatumContainer, OffsetOptimized};
     use crate::typedefs::{KeyBatcher, KeyValBatcher};
 
     pub type RowRowSpine<T, R> = Spine<Rc<OrdValBatch<RowRowLayout<((Row, Row), T, R)>>>>;
     pub type RowRowBatcher<T, R> = KeyValBatcher<Row, Row, T, R>;
-    pub type RowRowBuilder<T, R> =
-        RcBuilder<OrdValBuilder<RowRowLayout<((Row, Row), T, R)>, TimelyStack<((Row, Row), T, R)>>>;
+    pub type RowRowBuilder<T, R> = RcBuilder<
+        OrdValBuilder<RowRowLayout<((Row, Row), T, R)>, ColumnationStack<((Row, Row), T, R)>>,
+    >;
 
     pub type RowValSpine<V, T, R> = Spine<Rc<OrdValBatch<RowValLayout<((Row, V), T, R)>>>>;
     pub type RowValBatcher<V, T, R> = KeyValBatcher<Row, V, T, R>;
-    pub type RowValBuilder<V, T, R> =
-        RcBuilder<OrdValBuilder<RowValLayout<((Row, V), T, R)>, TimelyStack<((Row, V), T, R)>>>;
+    pub type RowValBuilder<V, T, R> = RcBuilder<
+        OrdValBuilder<RowValLayout<((Row, V), T, R)>, ColumnationStack<((Row, V), T, R)>>,
+    >;
 
     pub type RowSpine<T, R> = Spine<Rc<OrdKeyBatch<RowLayout<((Row, ()), T, R)>>>>;
     pub type RowBatcher<T, R> = KeyBatcher<Row, T, R>;
     pub type RowBuilder<T, R> =
-        RcBuilder<OrdKeyBuilder<RowLayout<((Row, ()), T, R)>, TimelyStack<((Row, ()), T, R)>>>;
+        RcBuilder<OrdKeyBuilder<RowLayout<((Row, ()), T, R)>, ColumnationStack<((Row, ()), T, R)>>>;
 
     /// A layout based on timely stacks
     pub struct RowRowLayout<U: Update<Key = Row, Val = Row>> {
@@ -65,8 +68,8 @@ mod spines {
     {
         type KeyContainer = DatumContainer;
         type ValContainer = DatumContainer;
-        type TimeContainer = TimelyStack<U::Time>;
-        type DiffContainer = TimelyStack<U::Diff>;
+        type TimeContainer = ColumnationStack<U::Time>;
+        type DiffContainer = ColumnationStack<U::Diff>;
         type OffsetContainer = OffsetOptimized;
     }
     impl<U: Update<Key = Row>> Layout for RowValLayout<U>
@@ -76,9 +79,9 @@ mod spines {
         U::Diff: Columnation,
     {
         type KeyContainer = DatumContainer;
-        type ValContainer = TimelyStack<U::Val>;
-        type TimeContainer = TimelyStack<U::Time>;
-        type DiffContainer = TimelyStack<U::Diff>;
+        type ValContainer = ColumnationStack<U::Val>;
+        type TimeContainer = ColumnationStack<U::Time>;
+        type DiffContainer = ColumnationStack<U::Diff>;
         type OffsetContainer = OffsetOptimized;
     }
     impl<U: Update<Key = Row, Val = ()>> Layout for RowLayout<U>
@@ -87,9 +90,9 @@ mod spines {
         U::Diff: Columnation,
     {
         type KeyContainer = DatumContainer;
-        type ValContainer = TimelyStack<()>;
-        type TimeContainer = TimelyStack<U::Time>;
-        type DiffContainer = TimelyStack<U::Diff>;
+        type ValContainer = ColumnationStack<()>;
+        type TimeContainer = ColumnationStack<U::Time>;
+        type DiffContainer = ColumnationStack<U::Diff>;
         type OffsetContainer = OffsetOptimized;
     }
 }

@@ -1,7 +1,7 @@
 [package]
 name = "mz-balancerd"
 description = "Balancer service."
-version = "26.1.0-dev.0"
+version = "26.24.0-dev.0"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
@@ -10,21 +10,21 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.100"
-async-trait = "0.1.89"
-axum = "0.7.5"
-bytes = "1.10.1"
-bytesize = "2.1.0"
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
-clap = { version = "4.5.23", features = ["derive", "env"] }
-domain = { version = "0.11.1", default-features = false, features = ["resolv"] }
-futures = "0.3.31"
-humantime = "2.2.0"
-hyper = { version = "1.4.1", features = ["http1", "server"] }
-hyper-openssl = "0.10.2"
-hyper-util = "0.1.18"
-jsonwebtoken = "9.3.1"
-launchdarkly-server-sdk = { version = "2.5.1", default-features = false }
+anyhow.workspace = true
+async-trait.workspace = true
+axum.workspace = true
+bytes.workspace = true
+bytesize.workspace = true
+chrono.workspace = true
+clap = { workspace = true, features = ["env"] }
+domain.workspace = true
+futures.workspace = true
+humantime.workspace = true
+hyper.workspace = true
+hyper-openssl.workspace = true
+hyper-util.workspace = true
+jsonwebtoken.workspace = true
+launchdarkly-server-sdk.workspace = true
 mz-alloc = { path = "../alloc" }
 mz-alloc-default = { path = "../alloc-default", optional = true }
 mz-build-info = { path = "../build-info" }
@@ -38,32 +38,31 @@ mz-ore = { path = "../ore", default-features = false, features = ["id_gen"]}
 mz-server-core = { path = "../server-core" }
 mz-tracing = { path = "../tracing" }
 mz-pgwire-common = { path = "../pgwire-common" }
-num_cpus = "1.17.0"
-openssl = { version = "0.10.75", features = ["vendored"] }
-prometheus = { version = "0.14.0", default-features = false }
-proxy-header = "0.1.2"
-semver = "1.0.27"
-tokio = { version = "1.44.1", default-features = false }
-tokio-openssl = "0.6.5"
-tokio-postgres = { version = "0.7.8" }
-tokio-util = { version = "0.7.17", features = ["codec"] }
-tokio-metrics = "0.4.5"
-tower = "0.5.2"
-tracing = "0.1.37"
-tracing-subscriber = "0.3.19"
-uuid = "1.18.1"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+num_cpus.workspace = true
+openssl.workspace = true
+prometheus.workspace = true
+proxy-header.workspace = true
+semver.workspace = true
+tokio.workspace = true
+tokio-openssl.workspace = true
+tokio-postgres.workspace = true
+tokio-util = { workspace = true, features = ["codec"] }
+tokio-metrics.workspace = true
+tower.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 mz-environmentd = { path = "../environmentd", default-features = false, features = ["test"] }
 mz-frontegg-mock = { path = "../frontegg-mock" }
-postgres = "0.19.5"
-reqwest = "0.11.24"
-tempfile = "3.23.0"
+postgres.workspace = true
+reqwest.workspace = true
+tempfile.workspace = true
 
 [features]
-default = ["mz-alloc-default", "workspace-hack"]
+default = ["mz-alloc-default"]
 jemalloc = ["mz-alloc/jemalloc"]
 
 [package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack", "mz-alloc-default"]
+normal = ["mz-alloc-default"]

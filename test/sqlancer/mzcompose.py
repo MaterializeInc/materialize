@@ -13,60 +13,18 @@ database systems: https://github.com/sqlancer/sqlancer
 """
 
 import argparse
-import random
-from threading import Thread
 
-from materialize import spawn
 from materialize.mzcompose.composition import (
     Composition,
     WorkflowArgumentParser,
 )
-from materialize.mzcompose.service import Service
-from materialize.mzcompose.services.materialized import Materialized
+from materialize.sqlancer import create_services, run_sqlancer
 
-SERVICES = [
-    # Auto-restart so we can keep testing even after we ran into a panic
-    Materialized(restart="on-failure", default_replication_factor=2),
-    Service(
-        "sqlancer",
-        {
-            "mzbuild": "sqlancer",
-        },
-    ),
-]
+SERVICES = create_services("sqlancer")
 
 
-def print_logs(container_id: str) -> None:
-    spawn.runv(["docker", "logs", "-f", container_id])
-
-
-def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    parser.add_argument("--runtime", default=600, type=int)
-    parser.add_argument("--num-tries", default=100000, type=int)
-    parser.add_argument("--num-threads", default=4, type=int)
-    parser.add_argument("--seed", default=None, type=int)
-    parser.add_argument("--qpg", default=True, action=argparse.BooleanOptionalAction)
-    parser.add_argument("--oracle", default="NOREC", type=str)
-    args = parser.parse_args()
-
-    c.up("materialized")
-
-    c.sql(
-        "ALTER SYSTEM SET max_tables TO 1000",
-        user="mz_system",
-        port=6877,
-    )
-    c.sql(
-        "ALTER SYSTEM SET max_materialized_views TO 1000",
-        user="mz_system",
-        port=6877,
-    )
-
-    seed = args.seed or random.randint(0, 2**31)
-
-    print("--- Run in progress")
-    result = c.run(
-        "sqlancer",
+def _build_run_args(args: argparse.Namespace, seed: int) -> list[str]:
+    return [
         "--random-seed",
         f"{seed}",
         "--host",
@@ -84,30 +42,20 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--qpg-enable",
         f"{args.qpg}",
         "--random-string-generation",
-        "ALPHANUMERIC_SPECIALCHAR",
+        "ALPHANUMERIC",
         "materialize",
         "--oracle",
         args.oracle,
-        check=False,
-        detach=True,
-        capture=True,
+    ]
+
+
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    run_sqlancer(
+        c,
+        parser,
+        service_name="sqlancer",
+        default_oracle="NOREC",
+        build_run_args=_build_run_args,
+        docker_logs_path="/workdir/sqlancer/logs/materialize",
+        log_prefix="SQLancer",
     )
-    container_id = result.stdout.strip()
-
-    # Print logs in a background thread so that we get immediate output in CI,
-    # and also when running SQLancer locally
-    thread = Thread(target=print_logs, args=(container_id,))
-    thread.start()
-    # At the same time capture the logs to analyze for finding new issues
-    stdout = spawn.capture(["docker", "logs", "-f", container_id])
-
-    in_assertion = False
-    for line in stdout.splitlines():
-        if line.startswith("--java.lang.AssertionError: "):
-            in_assertion = True
-            print(f"--- [SQLancer] {line.removeprefix('--java.lang.AssertionError: ')}")
-        elif line == "":
-            in_assertion = False
-        elif in_assertion:
-            print(line)
-    print(f"--- {result.stdout.splitlines()[-1]}")

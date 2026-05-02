@@ -161,6 +161,9 @@ CREATE INDEX b_idx ON b (ts);
 statement ok
 COMMENT ON INDEX b_idx IS 'speed_up';
 
+statement error index "materialize.public.b_idx" does not have columns
+COMMENT ON COLUMN b_idx.foo IS 'no columns'
+
 query TT
 SELECT name, comment FROM (SHOW INDEXES);
 ----
@@ -378,7 +381,7 @@ CREATE TYPE custom_map_type AS MAP (KEY TYPE = text, VALUE TYPE = custom_type)
 statement ok
 COMMENT ON TYPE custom_map_type IS 'custom_map_type_comment';
 
-statement error cannot be depended upon
+statement error type "materialize.public.custom_map_type" does not have columns
 COMMENT ON COLUMN custom_map_type.key IS 'comment_on_key';
 
 query TT rowsort
@@ -394,11 +397,8 @@ CREATE TYPE custom_list_type AS LIST (ELEMENT TYPE = custom_type)
 statement ok
 COMMENT ON TYPE custom_list_type IS 'custom_list_type_comment';
 
-statement error cannot be depended upon
+statement error type "materialize.public.custom_list_type" does not have columns
 COMMENT ON COLUMN custom_list_type.element IS 'comment_on_element';
-
-statement error cannot be depended upon
-COMMENT ON COLUMN custom_map_type.key IS 'comment_on_key';
 
 statement ok
 COMMENT ON TYPE custom_type IS 'custom_type_comment';
@@ -552,6 +552,17 @@ DROP DATABASE comment_on_db;
 
 statement ok
 DROP SCHEMA comment_on_schema;
+
+# Temporary schema comment should fail with correct error message.
+# With lazy temporary schema creation, the temp schema may not exist yet,
+# but we still need to return the correct error (not "unknown schema").
+statement error cannot comment on schema mz_temp because it is a temporary schema
+COMMENT ON SCHEMA mz_temp IS 'temp_schema_comment';
+
+simple conn=mz_system,user=mz_system
+COMMENT ON SCHEMA mz_temp IS 'temp_schema_comment';
+----
+db error: ERROR: cannot comment on schema mz_temp because it is a temporary schema
 
 # Test RBAC.
 

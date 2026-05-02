@@ -30,8 +30,7 @@ SHOW CREATE CLUSTER c;
 
 ## Privileges
 
-{{< include-md
-file="shared-content/sql-command-privileges/show-create-cluster.md" >}}
+{{% include-headless "/headless/sql-command-privileges/show-create-cluster" %}}
 
 ## Related pages
 

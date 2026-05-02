@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 use std::num::TryFromIntError;
@@ -16,6 +16,9 @@ use dec::TryFromDecimalError;
 use itertools::Itertools;
 use mz_catalog::builtin::MZ_CATALOG_SERVER_CLUSTER;
 use mz_compute_client::controller::error as compute_error;
+use mz_compute_client::controller::error::InstanceMissing;
+
+use mz_compute_types::ComputeInstanceId;
 use mz_expr::EvalError;
 use mz_ore::error::ErrorExt;
 use mz_ore::stack::RecursionLimitError;
@@ -23,12 +26,13 @@ use mz_ore::str::StrExt;
 use mz_pgwire_common::{ErrorResponse, Severity};
 use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::explain::ExplainError;
-use mz_repr::{NotNullViolation, Timestamp};
+use mz_repr::{ColumnDiff, ColumnName, KeyDiff, NotNullViolation, RelationDescDiff, Timestamp};
 use mz_sql::plan::PlanError;
 use mz_sql::rbac;
 use mz_sql::session::vars::VarError;
 use mz_storage_types::connections::ConnectionValidationError;
 use mz_storage_types::controller::StorageError;
+use mz_storage_types::errors::CollectionMissing;
 use smallvec::SmallVec;
 use timely::progress::Antichain;
 use tokio::sync::oneshot;
@@ -36,6 +40,7 @@ use tokio_postgres::error::SqlState;
 
 use crate::coord::NetworkPolicyError;
 use crate::optimize::OptimizerError;
+use crate::peek_client::CollectionLookupError;
 
 /// Errors that can occur in the coordinator.
 #[derive(Debug)]
@@ -51,7 +56,10 @@ pub enum AdapterError {
     AmbiguousSystemColumnReference,
     /// An error occurred in a catalog operation.
     Catalog(mz_catalog::memory::error::Error),
-    /// The cached plan or descriptor changed.
+    /// 1. The cached plan or descriptor changed,
+    /// 2. or some dependency of a statement disappeared during sequencing.
+    /// TODO(ggevay): we should refactor 2. usages to use `ConcurrentDependencyDrop` instead
+    /// (e.g., in MV sequencing)
     ChangedPlan(String),
     /// The cursor already exists.
     DuplicateCursor(String),
@@ -92,11 +100,26 @@ pub enum AdapterError {
         expected: Vec<String>,
     },
     /// The selection value for a table mutation operation refers to an invalid object.
-    InvalidTableMutationSelection,
+    InvalidTableMutationSelection {
+        /// The full name of the problematic object (e.g. a source or source-export table).
+        object_name: String,
+        /// Human-readable type of the object (e.g. "source", "source-export table").
+        object_type: String,
+    },
     /// Expression violated a column's constraint
     ConstraintViolation(NotNullViolation),
+    /// An error occurred while decoding COPY data.
+    CopyFormatError(String),
     /// Transaction cluster was dropped in the middle of a transaction.
     ConcurrentClusterDrop,
+    /// A dependency was dropped while sequencing a statement.
+    ConcurrentDependencyDrop {
+        dependency_kind: &'static str,
+        dependency_id: String,
+    },
+    CollectionUnreadable {
+        id: String,
+    },
     /// Target cluster has no replicas to service query.
     NoClusterReplicasAvailable {
         name: String,
@@ -194,16 +217,8 @@ pub enum AdapterError {
     DDLOnlyTransaction,
     /// Another session modified the Catalog while this transaction was open.
     DDLTransactionRace,
-    /// Used to prevent us from durably committing state while a DDL transaction is open, should
-    /// never be returned to the user.
-    TransactionDryRun {
-        /// New operations that were run in the transaction.
-        new_ops: Vec<crate::catalog::Op>,
-        /// New resulting `CatalogState`.
-        new_state: crate::catalog::CatalogState,
-    },
     /// An error occurred in the storage layer
-    Storage(mz_storage_types::controller::StorageError<mz_repr::Timestamp>),
+    Storage(mz_storage_types::controller::StorageError),
     /// An error occurred in the compute layer
     Compute(anyhow::Error),
     /// An error in the orchestrator layer
@@ -232,7 +247,7 @@ pub enum AdapterError {
     UnreadableSinkCollection,
     /// User sessions have been blocked.
     UserSessionsDisallowed,
-    /// This use session has been deneid by a NetworkPolicy.
+    /// This use session has been denied by a NetworkPolicy.
     NetworkPolicyDenied(NetworkPolicyError),
     /// Something attempted a write (to catalog, storage, tables, etc.) while in
     /// read-only mode.
@@ -240,6 +255,16 @@ pub enum AdapterError {
     AlterClusterTimeout,
     AlterClusterWhilePendingReplicas,
     AuthenticationError(AuthenticationError),
+    /// Schema of a replacement is incompatible with the target.
+    ReplacementSchemaMismatch(RelationDescDiff),
+    /// Attempt to apply a replacement to a sealed materialized view.
+    ReplaceMaterializedViewSealed {
+        name: String,
+    },
+    /// Could not find a valid timestamp satisfying all constraints.
+    ImpossibleTimestampConstraints {
+        constraints: String,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -278,7 +303,7 @@ impl AdapterError {
         match self {
             AdapterError::AmbiguousSystemColumnReference => {
                 Some("This is a current limitation in Materialize".into())
-            },
+            }
             AdapterError::Catalog(c) => c.detail(),
             AdapterError::Eval(e) => e.detail(),
             AdapterError::RelationOutsideTimeDomain { relations, names } => Some(format!(
@@ -305,6 +330,15 @@ impl AdapterError {
                 specify size via SIZE option."
                     .into(),
             ),
+            AdapterError::InvalidTableMutationSelection {
+                object_name,
+                object_type,
+            } => Some(format!(
+                "{object_type} '{}' may not be used in this operation; \
+                     the selection may refer to views and materialized views, but transitive \
+                     dependencies must not include sources or source-export tables",
+                object_name.quoted()
+            )),
             AdapterError::SafeModeViolation(_) => Some(
                 "The Materialize server you are connected to is running in \
                  safe mode, which limits the features that are available."
@@ -321,19 +355,24 @@ impl AdapterError {
             )),
             AdapterError::PlanError(e) => e.detail(),
             AdapterError::Unauthorized(unauthorized) => unauthorized.detail(),
-            AdapterError::DependentObject(dependent_objects) => {
-                Some(dependent_objects
+            AdapterError::DependentObject(dependent_objects) => Some(
+                dependent_objects
                     .iter()
-                    .map(|(role_name, err_msgs)| err_msgs
-                        .iter()
-                        .map(|err_msg| format!("{role_name}: {err_msg}"))
-                        .join("\n"))
-                    .join("\n"))
-            },
-            AdapterError::Storage(storage_error) => {
-                storage_error.source().map(|source_error| source_error.to_string_with_causes())
-            }
-            AdapterError::ReadOnlyTransaction => Some("SELECT queries cannot be combined with other query types, including SUBSCRIBE.".into()),
+                    .map(|(role_name, err_msgs)| {
+                        err_msgs
+                            .iter()
+                            .map(|err_msg| format!("{role_name}: {err_msg}"))
+                            .join("\n")
+                    })
+                    .join("\n"),
+            ),
+            AdapterError::Storage(storage_error) => storage_error
+                .source()
+                .map(|source_error| source_error.to_string_with_causes()),
+            AdapterError::ReadOnlyTransaction => Some(
+                "SELECT queries cannot be combined with other query types, including SUBSCRIBE."
+                    .into(),
+            ),
             AdapterError::InvalidAlter(_, e) => e.detail(),
             AdapterError::Optimizer(e) => e.detail(),
             AdapterError::ConnectionValidation(e) => e.detail(),
@@ -341,30 +380,105 @@ impl AdapterError {
                 Some(format!(
                     "The specified last refresh is at {}, while the earliest possible time to compute the materialized \
                     view is {}.",
-                    last_refresh,
-                    earliest_possible,
+                    last_refresh, earliest_possible,
                 ))
             }
-            AdapterError::UnallowedOnCluster { cluster, .. } => (cluster == MZ_CATALOG_SERVER_CLUSTER.name).then(||
-                format!("The transaction is executing on the {cluster} cluster, maybe having been routed there by the first statement in the transaction.")
-            ),
+            AdapterError::UnallowedOnCluster { cluster, .. } => {
+                (cluster == MZ_CATALOG_SERVER_CLUSTER.name).then(|| {
+                    format!(
+                        "The transaction is executing on the \
+                        {cluster} cluster, maybe having been routed \
+                        there by the first statement in the transaction."
+                    )
+                })
+            }
             AdapterError::InputNotReadableAtRefreshAtTime(oracle_read_ts, least_valid_read) => {
                 Some(format!(
                     "The requested REFRESH AT time is {}, \
                     but not all input collections are readable earlier than [{}].",
                     oracle_read_ts,
                     if least_valid_read.len() == 1 {
-                        format!("{}", least_valid_read.as_option().expect("antichain contains exactly 1 timestamp"))
+                        format!(
+                            "{}",
+                            least_valid_read
+                                .as_option()
+                                .expect("antichain contains exactly 1 timestamp")
+                        )
                     } else {
                         // This can't occur currently
                         format!("{:?}", least_valid_read)
                     }
                 ))
             }
-            AdapterError::RtrTimeout(name) => Some(format!("{name} failed to ingest data up to the real-time recency point")),
-            AdapterError::RtrDropFailure(name) => Some(format!("{name} dropped before ingesting data to the real-time recency point")),
-            AdapterError::UserSessionsDisallowed => Some("Your organization has been blocked. Please contact support.".to_string()),
-            AdapterError::NetworkPolicyDenied(reason)=> Some(format!("{reason}.")),
+            AdapterError::RtrTimeout(name) => Some(format!(
+                "{name} failed to ingest data up to the real-time recency point"
+            )),
+            AdapterError::RtrDropFailure(name) => Some(format!(
+                "{name} dropped before ingesting data to the real-time recency point"
+            )),
+            AdapterError::UserSessionsDisallowed => {
+                Some("Your organization has been blocked. Please contact support.".to_string())
+            }
+            AdapterError::NetworkPolicyDenied(reason) => Some(format!("{reason}.")),
+            AdapterError::ReplacementSchemaMismatch(diff) => {
+                let mut lines: Vec<_> = diff.column_diffs.iter().map(|(idx, diff)| {
+                    let pos = idx + 1;
+                    match diff {
+                        ColumnDiff::Missing { name } => {
+                            let name = name.as_str().quoted();
+                            format!("missing column {name} at position {pos}")
+                        }
+                        ColumnDiff::Extra { name } => {
+                            let name = name.as_str().quoted();
+                            format!("extra column {name} at position {pos}")
+                        }
+                        ColumnDiff::TypeMismatch { name, left, right } => {
+                            let name = name.as_str().quoted();
+                            format!("column {name} at position {pos}: type mismatch (target: {left:?}, replacement: {right:?})")
+                        }
+                        ColumnDiff::NullabilityMismatch { name, left, right } => {
+                            let name = name.as_str().quoted();
+                            let left = if *left { "NULL" } else { "NOT NULL" };
+                            let right = if *right { "NULL" } else { "NOT NULL" };
+                            format!("column {name} at position {pos}: nullability mismatch (target: {left}, replacement: {right})")
+                        }
+                        ColumnDiff::NameMismatch { left, right } => {
+                            let left = left.as_str().quoted();
+                            let right = right.as_str().quoted();
+                            format!("column at position {pos}: name mismatch (target: {left}, replacement: {right})")
+                        }
+                    }
+                }).collect();
+
+                if let Some(KeyDiff { left, right }) = &diff.key_diff {
+                    let format_keys = |keys: &BTreeSet<Vec<ColumnName>>| {
+                        if keys.is_empty() {
+                            "(none)".to_string()
+                        } else {
+                            keys.iter()
+                                .map(|key| {
+                                    let cols = key.iter().map(|c| c.as_str()).join(", ");
+                                    format!("{{{cols}}}")
+                                })
+                                .join(", ")
+                        }
+                    };
+                    lines.push(format!(
+                        "keys differ (target: {}, replacement: {})",
+                        format_keys(left),
+                        format_keys(right)
+                    ));
+                }
+                Some(lines.join("\n"))
+            }
+            AdapterError::ReplaceMaterializedViewSealed { .. } => Some(
+                "The materialized view has already computed its output until the end of time, \
+                 so replacing its definition would have no effect."
+                    .into(),
+            ),
+            AdapterError::ImpossibleTimestampConstraints { constraints } => {
+                Some(format!("Constraints:\n{}", constraints))
+            }
             _ => None,
         }
     }
@@ -439,6 +553,9 @@ impl AdapterError {
                 "Currently, DDL transactions fail when any other DDL happens concurrently, \
                  even on unrelated schemas/clusters.".into()
             ),
+            AdapterError::CollectionUnreadable { .. } => Some(
+                "This could be because the collection has recently been dropped.".into()
+            ),
             _ => None,
         }
     }
@@ -489,9 +606,14 @@ impl AdapterError {
             AdapterError::InvalidSetCluster => SqlState::ACTIVE_SQL_TRANSACTION,
             AdapterError::InvalidStorageClusterSize { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::SourceOrSinkSizeRequired { .. } => SqlState::FEATURE_NOT_SUPPORTED,
-            AdapterError::InvalidTableMutationSelection => SqlState::INVALID_TRANSACTION_STATE,
+            AdapterError::InvalidTableMutationSelection { .. } => {
+                SqlState::INVALID_TRANSACTION_STATE
+            }
             AdapterError::ConstraintViolation(NotNullViolation(_)) => SqlState::NOT_NULL_VIOLATION,
+            AdapterError::CopyFormatError(_) => SqlState::BAD_COPY_FILE_FORMAT,
             AdapterError::ConcurrentClusterDrop => SqlState::INVALID_TRANSACTION_STATE,
+            AdapterError::ConcurrentDependencyDrop { .. } => SqlState::UNDEFINED_OBJECT,
+            AdapterError::CollectionUnreadable { .. } => SqlState::NO_DATA_FOUND,
             AdapterError::NoClusterReplicasAvailable { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::OperationProhibitsTransaction(_) => SqlState::ACTIVE_SQL_TRANSACTION,
             AdapterError::OperationRequiresTransaction(_) => SqlState::NO_ACTIVE_SQL_TRANSACTION,
@@ -568,7 +690,6 @@ impl AdapterError {
             AdapterError::Unstructured(_) => SqlState::INTERNAL_ERROR,
             AdapterError::UntargetedLogRead { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::DDLTransactionRace => SqlState::T_R_SERIALIZATION_FAILURE,
-            AdapterError::TransactionDryRun { .. } => SqlState::T_R_SERIALIZATION_FAILURE,
             // It's not immediately clear which error code to use here because a
             // "write-only transaction", "single table write transaction", or "ddl only
             // transaction" are not things in Postgres. This error code is the generic "bad txn
@@ -594,15 +715,145 @@ impl AdapterError {
             AdapterError::ReadOnly => SqlState::READ_ONLY_SQL_TRANSACTION,
             AdapterError::AlterClusterTimeout => SqlState::QUERY_CANCELED,
             AdapterError::AlterClusterWhilePendingReplicas => SqlState::OBJECT_IN_USE,
+            AdapterError::ReplacementSchemaMismatch(_) => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::AuthenticationError(AuthenticationError::InvalidCredentials) => {
                 SqlState::INVALID_PASSWORD
             }
             AdapterError::AuthenticationError(_) => SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
+            AdapterError::ReplaceMaterializedViewSealed { .. } => {
+                SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE
+            }
+            // similar to AbsurdSubscribeBounds
+            AdapterError::ImpossibleTimestampConstraints { .. } => SqlState::DATA_EXCEPTION,
         }
     }
 
     pub fn internal<E: std::fmt::Display>(context: &str, e: E) -> AdapterError {
         AdapterError::Internal(format!("{context}: {e}"))
+    }
+
+    // We don't want the following error conversions to `ConcurrentDependencyDrop` to happen
+    // automatically, because it might depend on the context whether `ConcurrentDependencyDrop`
+    // is appropriate, so we want to make the conversion target explicit at the call site.
+    // For example, maybe we get an `InstanceMissing` if the user specifies a non-existing cluster,
+    // in which case `ConcurrentDependencyDrop` would not be appropriate.
+
+    pub fn concurrent_dependency_drop_from_instance_missing(e: InstanceMissing) -> Self {
+        AdapterError::ConcurrentDependencyDrop {
+            dependency_kind: "cluster",
+            dependency_id: e.0.to_string(),
+        }
+    }
+
+    pub fn concurrent_dependency_drop_from_collection_missing(e: CollectionMissing) -> Self {
+        AdapterError::ConcurrentDependencyDrop {
+            dependency_kind: "collection",
+            dependency_id: e.0.to_string(),
+        }
+    }
+
+    pub fn concurrent_dependency_drop_from_collection_lookup_error(
+        e: CollectionLookupError,
+        compute_instance: ComputeInstanceId,
+    ) -> Self {
+        match e {
+            CollectionLookupError::InstanceMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "cluster",
+                dependency_id: id.to_string(),
+            },
+            CollectionLookupError::CollectionMissing(id) => {
+                AdapterError::ConcurrentDependencyDrop {
+                    dependency_kind: "collection",
+                    dependency_id: id.to_string(),
+                }
+            }
+            CollectionLookupError::InstanceShutDown => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "cluster",
+                dependency_id: compute_instance.to_string(),
+            },
+        }
+    }
+
+    pub fn concurrent_dependency_drop_from_watch_set_install_error(
+        e: compute_error::CollectionLookupError,
+    ) -> Self {
+        match e {
+            compute_error::CollectionLookupError::InstanceMissing(id) => {
+                AdapterError::ConcurrentDependencyDrop {
+                    dependency_kind: "cluster",
+                    dependency_id: id.to_string(),
+                }
+            }
+            compute_error::CollectionLookupError::CollectionMissing(id) => {
+                AdapterError::ConcurrentDependencyDrop {
+                    dependency_kind: "collection",
+                    dependency_id: id.to_string(),
+                }
+            }
+        }
+    }
+
+    pub fn concurrent_dependency_drop_from_instance_peek_error(
+        e: mz_compute_client::controller::instance_client::PeekError,
+        compute_instance: ComputeInstanceId,
+    ) -> AdapterError {
+        use mz_compute_client::controller::instance_client::PeekError::*;
+        match e {
+            ReplicaMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "replica",
+                dependency_id: id.to_string(),
+            },
+            InstanceShutDown => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "cluster",
+                dependency_id: compute_instance.to_string(),
+            },
+            e @ ReadHoldIdMismatch(_) => AdapterError::internal("instance peek error", e),
+            e @ ReadHoldInsufficient(_) => AdapterError::internal("instance peek error", e),
+        }
+    }
+
+    pub fn concurrent_dependency_drop_from_peek_error(
+        e: mz_compute_client::controller::error::PeekError,
+    ) -> AdapterError {
+        use mz_compute_client::controller::error::PeekError::*;
+        match e {
+            InstanceMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "cluster",
+                dependency_id: id.to_string(),
+            },
+            CollectionMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "collection",
+                dependency_id: id.to_string(),
+            },
+            ReplicaMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "replica",
+                dependency_id: id.to_string(),
+            },
+            e @ SinceViolation(_) => AdapterError::internal("peek error", e),
+        }
+    }
+
+    pub fn concurrent_dependency_drop_from_dataflow_creation_error(
+        e: compute_error::DataflowCreationError,
+    ) -> Self {
+        use compute_error::DataflowCreationError::*;
+        match e {
+            InstanceMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "cluster",
+                dependency_id: id.to_string(),
+            },
+            CollectionMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "collection",
+                dependency_id: id.to_string(),
+            },
+            ReplicaMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "replica",
+                dependency_id: id.to_string(),
+            },
+            MissingAsOf | SinceViolation(..) | EmptyAsOfForSubscribe | EmptyAsOfForCopyTo => {
+                AdapterError::internal("dataflow creation error", e)
+            }
+        }
     }
 }
 
@@ -610,11 +861,10 @@ impl fmt::Display for AdapterError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             AdapterError::AbsurdSubscribeBounds { as_of, up_to } => {
-                assert!(up_to < as_of);
                 write!(
                     f,
-                    r#"subscription lower ("as of") bound is beyond its upper ("up to") bound: {} < {}"#,
-                    up_to, as_of
+                    "subscription lower bound (`AS OF`) is greater than its upper bound (`UP TO`): \
+                     {as_of} > {up_to}",
                 )
             }
             AdapterError::AmbiguousSystemColumnReference => {
@@ -656,14 +906,33 @@ impl fmt::Display for AdapterError {
             AdapterError::SourceOrSinkSizeRequired { .. } => {
                 write!(f, "must specify either cluster or size option")
             }
-            AdapterError::InvalidTableMutationSelection => {
-                f.write_str("invalid selection: operation may only refer to user-defined tables")
+            AdapterError::InvalidTableMutationSelection { .. } => {
+                write!(
+                    f,
+                    "invalid selection: operation may only (transitively) refer to non-source, non-system tables"
+                )
+            }
+            AdapterError::ReplaceMaterializedViewSealed { name } => {
+                write!(
+                    f,
+                    "materialized view {name} is sealed and thus cannot be replaced"
+                )
             }
             AdapterError::ConstraintViolation(not_null_violation) => {
                 write!(f, "{}", not_null_violation)
             }
+            AdapterError::CopyFormatError(e) => write!(f, "{e}"),
             AdapterError::ConcurrentClusterDrop => {
                 write!(f, "the transaction's active cluster has been dropped")
+            }
+            AdapterError::ConcurrentDependencyDrop {
+                dependency_kind,
+                dependency_id,
+            } => {
+                write!(f, "{dependency_kind} '{dependency_id}' was dropped")
+            }
+            AdapterError::CollectionUnreadable { id } => {
+                write!(f, "collection '{id}' is not readable at any timestamp")
             }
             AdapterError::NoClusterReplicasAvailable { name, .. } => {
                 write!(
@@ -780,7 +1049,6 @@ impl fmt::Display for AdapterError {
             AdapterError::DDLTransactionRace => f.write_str(
                 "another session modified the catalog while this DDL transaction was open",
             ),
-            AdapterError::TransactionDryRun { .. } => f.write_str("transaction dry run"),
             AdapterError::Storage(e) => e.fmt(f),
             AdapterError::Compute(e) => e.fmt(f),
             AdapterError::Orchestrator(e) => e.fmt(f),
@@ -847,6 +1115,12 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::AlterClusterWhilePendingReplicas => {
                 write!(f, "cannot alter clusters with pending updates")
+            }
+            AdapterError::ReplacementSchemaMismatch(_) => {
+                write!(f, "replacement schema differs from target schema")
+            }
+            AdapterError::ImpossibleTimestampConstraints { .. } => {
+                write!(f, "could not find a valid timestamp for the query")
             }
         }
     }
@@ -953,8 +1227,8 @@ impl From<oneshot::error::RecvError> for AdapterError {
     }
 }
 
-impl From<StorageError<mz_repr::Timestamp>> for AdapterError {
-    fn from(e: StorageError<mz_repr::Timestamp>) -> Self {
+impl From<StorageError> for AdapterError {
+    fn from(e: StorageError) -> Self {
         AdapterError::Storage(e)
     }
 }

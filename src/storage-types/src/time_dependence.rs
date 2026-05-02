@@ -23,7 +23,17 @@ use crate::instances::StorageInstanceId;
 /// Note: This is different from `Timeline` or `TimelineContext`, which describe in what timeline
 /// an object exists. `TimeDependence` explains how an object in an epoch-based timeline
 /// relates to wall-clock time.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    Serialize,
+    Deserialize,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd
+)]
 pub struct TimeDependence {
     /// Optional refresh schedule. None indicates no rounding.
     pub schedule: Option<RefreshSchedule>,

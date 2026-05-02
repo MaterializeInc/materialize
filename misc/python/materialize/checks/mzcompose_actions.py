@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 from materialize import MZ_ROOT
 from materialize.checks.actions import Action
 from materialize.checks.executors import Executor
+from materialize.docker import image_registry
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.materialized import DeploymentStatus, Materialized
@@ -67,7 +68,11 @@ class StartMz(MzcomposeAction):
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
-        image = f"materialize/materialized:{self.tag}" if self.tag is not None else None
+        image = (
+            f"{image_registry()}/materialized:{self.tag}"
+            if self.tag is not None
+            else None
+        )
         print(f"Starting Mz using image {image}, mz_service {self.mz_service}")
 
         listeners_config_path = (
@@ -82,6 +87,9 @@ class StartMz(MzcomposeAction):
         mz = Materialized(
             name=self.mz_service,
             image=image,
+            # TODO: Switch to default (CockroachOrPostgresMetadata) when
+            # https://github.com/MaterializeInc/database-issues/issues/10047 is solved
+            metadata_store="postgres-metadata",
             external_metadata_store=True,
             external_blob_store=True,
             blob_store_is_azure=self.scenario.features.azurite_enabled(),
@@ -141,14 +149,12 @@ class ConfigureMz(MzcomposeAction):
         self.scenario = scenario
 
     def execute(self, e: Executor) -> None:
-        input = dedent(
-            """
+        input = dedent("""
             # Run any query to have the materialize user implicitly created if
             # it didn't exist yet. Required for the GRANT later.
             > SELECT 1;
             1
-            """
-        )
+            """)
 
         system_settings = {
             "ALTER SYSTEM SET max_tables = 1000;",
@@ -182,13 +188,11 @@ class ConfigureMz(MzcomposeAction):
             )
 
         kafka_broker = "BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT"
-        input += dedent(
-            f"""
+        input += dedent(f"""
             > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA {kafka_broker}
 
             > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
-            """
-        )
+            """)
 
         self.handle = e.testdrive(input=input, mz_service=self.mz_service)
         e.system_settings.update(system_settings)
@@ -361,12 +365,15 @@ class DropCreateDefaultReplica(MzcomposeAction):
 class WaitReadyMz(MzcomposeAction):
     """Wait until environmentd is ready, see https://github.com/MaterializeInc/cloud/blob/main/doc/design/20230418_upgrade_orchestration.md#get-apileaderstatus"""
 
-    def __init__(self, mz_service: str = "materialized") -> None:
+    def __init__(
+        self, mz_service: str = "materialized", timeout: int | None = None
+    ) -> None:
         self.mz_service = mz_service
+        self.timeout = timeout
 
     def execute(self, e: Executor) -> None:
         e.mzcompose_composition().await_mz_deployment_status(
-            DeploymentStatus.READY_TO_PROMOTE, self.mz_service
+            DeploymentStatus.READY_TO_PROMOTE, self.mz_service, timeout=self.timeout
         )
 
 

@@ -17,7 +17,6 @@ use anyhow::Context;
 use derivative::Derivative;
 use futures::future::BoxFuture;
 use futures::{FutureExt, Stream, StreamExt, TryStreamExt};
-use mz_ore::netio::DUMMY_DNS_PORT;
 use mz_ore::result::ResultExt;
 use mz_repr::SqlScalarType;
 use smallvec::{SmallVec, smallvec};
@@ -64,10 +63,13 @@ impl Client {
         // Setup our tunnelling and return any resources that need to be kept
         // alive for the duration of the connection.
         let (tcp, resources): (_, Option<Box<dyn Any + Send + Sync>>) = match &config.tunnel {
-            TunnelConfig::Direct => {
-                let tcp = TcpStream::connect(config.inner.get_addr())
-                    .await
-                    .context("direct")?;
+            TunnelConfig::Direct { resolved_addresses } => {
+                let tcp = if resolved_addresses.is_empty() {
+                    TcpStream::connect(config.inner.get_addr()).await
+                } else {
+                    TcpStream::connect(resolved_addresses.as_ref()).await
+                }
+                .context("direct")?;
                 (tcp, None)
             }
             TunnelConfig::Ssh {
@@ -93,21 +95,9 @@ impl Client {
                 port,
             } => {
                 let privatelink_host = mz_cloud_resources::vpc_endpoint_name(*connection_id);
-                let mut privatelink_addrs =
-                    tokio::net::lookup_host((privatelink_host.clone(), DUMMY_DNS_PORT)).await?;
-
-                let Some(mut addr) = privatelink_addrs.next() else {
-                    return Err(SqlServerError::InvariantViolated(format!(
-                        "aws privatelink: no addresses found for host {:?}",
-                        privatelink_host
-                    )));
-                };
-
-                addr.set_port(port.clone());
-
-                let tcp = TcpStream::connect(addr)
+                let tcp = TcpStream::connect((privatelink_host.as_str(), *port))
                     .await
-                    .context(format!("aws privatelink {:?}", addr))?;
+                    .context(format!("aws privatelink {:?}", privatelink_host))?;
 
                 (tcp, None)
             }
@@ -341,16 +331,17 @@ impl Client {
     /// `capture_instances`.
     ///
     /// [`CdcStream`]: crate::cdc::CdcStream
-    pub fn cdc<I>(&mut self, capture_instances: I) -> crate::cdc::CdcStream<'_>
+    pub fn cdc<I, M>(&mut self, capture_instances: I, metrics: M) -> crate::cdc::CdcStream<'_, M>
     where
         I: IntoIterator,
         I::Item: Into<Arc<str>>,
+        M: SqlServerCdcMetrics,
     {
         let instances = capture_instances
             .into_iter()
             .map(|i| (i.into(), None))
             .collect();
-        crate::cdc::CdcStream::new(self, instances)
+        crate::cdc::CdcStream::new(self, instances, metrics)
     }
 }
 
@@ -366,7 +357,14 @@ pub struct Transaction<'a> {
 
 impl<'a> Transaction<'a> {
     async fn new(client: &'a mut Client) -> Result<Self, SqlServerError> {
-        let results = client
+        // Construct the guard *before* awaiting BEGIN to avoid a potential race where
+        // transaction is started on remote, but the transaction is cancelled before returning.
+        let tx = Transaction {
+            client,
+            closed: false,
+        };
+        let results = tx
+            .client
             .simple_query("BEGIN TRANSACTION")
             .await
             .context("begin")?;
@@ -375,10 +373,7 @@ impl<'a> Transaction<'a> {
                 "expected empty result from BEGIN TRANSACTION. Got: {results:?}"
             )))
         } else {
-            Ok(Transaction {
-                client,
-                closed: false,
-            })
+            Ok(tx)
         }
     }
 
@@ -404,7 +399,7 @@ impl<'a> Transaction<'a> {
             )))?;
         }
 
-        let stmt = format!("SAVE TRANSACTION [{savepoint_name}]");
+        let stmt = format!("SAVE TRANSACTION {}", quote_identifier(savepoint_name));
         let _result = self.client.simple_query(stmt).await?;
         Ok(())
     }
@@ -439,7 +434,9 @@ impl<'a> Transaction<'a> {
         // in SELECT using the WITH keyword.  This query does not need to return any rows to lock the table,
         // hence the 1=0, which is something short that always evaluates to false in this universe.
         let query = format!(
-            "{SET_READ_COMMITTED}\nSELECT * FROM [{schema}].[{table}] WITH (TABLOCK, HOLDLOCK) WHERE 1=0;"
+            "{SET_READ_COMMITTED}\nSELECT * FROM {schema}.{table} WITH (TABLOCK, HOLDLOCK) WHERE 1=0;",
+            schema = quote_identifier(schema),
+            table = quote_identifier(table)
         );
         let _result = self.client.simple_query(query).await?;
         Ok(())
@@ -506,10 +503,20 @@ impl<'a> Transaction<'a> {
 
 impl Drop for Transaction<'_> {
     fn drop(&mut self) {
-        // Internally the query is synchronously sent down a channel, and the response is what
-        // we await. In other words, we don't need to `.await` here for the query to be run.
         if !self.closed {
-            let _fut = self.client.simple_query("ROLLBACK TRANSACTION");
+            // Send the ROLLBACK request directly through the channel, bypassing
+            // the async `simple_query` method. We cannot `.await` in `Drop`, and
+            // merely calling an async fn without awaiting it does nothing (the
+            // future is never polled so the channel send inside never executes).
+            //
+            // We intentionally drop the response receiver since we cannot await
+            // it in a synchronous context. The Connection task will execute the
+            // ROLLBACK and discard the response when the receiver is gone.
+            let (tx, _rx) = oneshot::channel();
+            let kind = RequestKind::SimpleQuery {
+                query: "ROLLBACK TRANSACTION".to_string(),
+            };
+            let _ = self.client.tx.send(Request { tx, kind });
         }
     }
 }
@@ -943,6 +950,27 @@ pub fn quote_identifier(ident: &str) -> String {
     quoted.insert(0, '[');
     quoted.push(']');
     quoted
+}
+
+pub trait SqlServerCdcMetrics {
+    /// Called before the table lock is aquired
+    fn snapshot_table_lock_start(&self, table_name: &str);
+    /// Called after the table lock is released
+    fn snapshot_table_lock_end(&self, table_name: &str);
+}
+
+/// A simple implementation of [`SqlServerCdcMetrics`] that uses the tracing framework to log
+/// the start and end conditions.
+pub struct LoggingSqlServerCdcMetrics;
+
+impl SqlServerCdcMetrics for LoggingSqlServerCdcMetrics {
+    fn snapshot_table_lock_start(&self, table_name: &str) {
+        tracing::info!("snapshot_table_lock_start: {table_name}");
+    }
+
+    fn snapshot_table_lock_end(&self, table_name: &str) {
+        tracing::info!("snapshot_table_lock_end: {table_name}");
+    }
 }
 
 #[cfg(test)]

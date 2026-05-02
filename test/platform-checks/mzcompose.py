@@ -40,10 +40,7 @@ from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.persistcli import Persistcli
-from materialize.mzcompose.services.postgres import (
-    CockroachOrPostgresMetadata,
-    Postgres,
-)
+from materialize.mzcompose.services.postgres import Postgres, PostgresMetadata
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
@@ -65,6 +62,9 @@ def create_mzs(
     return [
         Materialized(
             name=mz_name,
+            # TODO: Switch to default (CockroachOrPostgresMetadata) when
+            # https://github.com/MaterializeInc/database-issues/issues/10047 is solved
+            metadata_store="postgres-metadata",
             external_metadata_store=external_metadata_store,
             external_blob_store=external_blob_store,
             blob_store_is_azure=azurite,
@@ -95,14 +95,14 @@ def create_mzs(
 
 SERVICES = [
     TestCerts(),
-    CockroachOrPostgresMetadata(
+    PostgresMetadata(
         # Workaround for database-issues#5899
         restart="on-failure:5",
     ),
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
     Azurite(),
     Mc(),
-    Postgres(),
+    Postgres(volumes=["secrets:/certs:ro"]),
     MySql(),
     SqlServer(),
     Zookeeper(),
@@ -198,11 +198,6 @@ def setup(c: Composition, external_blob_store: bool) -> None:
         "--entity-type=users",
         "--entity-name=materialize",
     )
-
-
-def teardown(c: Composition) -> None:
-    c.rm(*[s.name for s in SERVICES], stop=True, destroy_volumes=True)
-    c.rm_volumes("mzdata", "tmp", force=True)
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:

@@ -24,13 +24,14 @@ from materialize.checks.mzcompose_actions import (
     WaitReadyMz,
 )
 from materialize.checks.scenarios import Scenario
+from materialize.mz_0dt_upgrader import generate_random_upgrade_path
 from materialize.mz_version import MzVersion
 from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.services.materialized import LEADER_STATUS_HEALTHCHECK
 from materialize.version_list import (
+    get_compatible_upgrade_from_versions,
     get_published_minor_mz_versions,
     get_self_managed_versions,
-    get_supported_self_managed_versions,
 )
 
 # late initialization
@@ -43,11 +44,11 @@ def get_minor_versions() -> list[MzVersion]:
     global _minor_versions
     if _minor_versions is None:
         current_version = MzVersion.parse_cargo()
-        _minor_versions = [
-            v
-            for v in get_published_minor_mz_versions(exclude_current_minor_version=True)
-            if v < current_version
-        ]
+        _minor_versions = get_published_minor_mz_versions(
+            exclude_current_minor_version=True,
+            limit=4,
+            max_version=current_version,
+        )
     return _minor_versions
 
 
@@ -92,8 +93,20 @@ def start_mz_read_only(
 class UpgradeEntireMzFromLatestSelfManaged(Scenario):
     """Upgrade the entire Mz instance from the last Self-Managed version without any intermediate steps. This makes sure our Self-Managed releases for self-managed Materialize stay upgradable."""
 
+    def __init__(
+        self,
+        checks: list[type[Check]],
+        executor: Executor,
+        features: Features,
+        seed: str | None = None,
+    ):
+        self._self_managed_versions = get_self_managed_versions(
+            max_version=MzVersion.parse_cargo()
+        )
+        super().__init__(checks, executor, features, seed)
+
     def base_version(self) -> MzVersion:
-        return get_self_managed_versions()[-1]
+        return self._self_managed_versions[-1]
 
     def actions(self) -> list[Action]:
         print(f"Upgrading from tag {self.base_version()}")
@@ -126,12 +139,24 @@ class UpgradeEntireMzFromLatestSelfManaged(Scenario):
 class UpgradeEntireMzFromPreviousSelfManaged(Scenario):
     """Upgrade the entire Mz instance through the last two Self-Managed versions. This makes sure our Self-Managed releases for self-managed Materialize stay upgradable."""
 
+    def __init__(
+        self,
+        checks: list[type[Check]],
+        executor: Executor,
+        features: Features,
+        seed: str | None = None,
+    ):
+        self._self_managed_versions = get_self_managed_versions(
+            max_version=MzVersion.parse_cargo()
+        )
+        super().__init__(checks, executor, features, seed)
+
     def base_version(self) -> MzVersion:
-        return get_self_managed_versions()[-2]
+        return self._self_managed_versions[-2]
 
     def actions(self) -> list[Action]:
         print(
-            f"Upgrading from tag {self.base_version()} through {get_self_managed_versions()[-1]}"
+            f"Upgrading from tag {self.base_version()} through {self._self_managed_versions[-1]}"
         )
         return [
             StartMz(
@@ -143,7 +168,7 @@ class UpgradeEntireMzFromPreviousSelfManaged(Scenario):
             KillMz(
                 capture_logs=True
             ),  #  We always use True here otherwise docker-compose will lose the pre-upgrade logs
-            StartMz(self, tag=get_self_managed_versions()[-1]),
+            StartMz(self, tag=self._self_managed_versions[-1]),
             Manipulate(self, phase=2),
             KillMz(
                 capture_logs=True
@@ -587,7 +612,7 @@ class SelfManagedLinearUpgradePathManipulateBeforeUpgrade(Scenario):
         features: Features,
         seed: str | None = None,
     ):
-        self.self_managed_versions = get_supported_self_managed_versions()
+        self.self_managed_versions = get_compatible_upgrade_from_versions()
         super().__init__(checks, executor, features, seed)
 
     def base_version(self) -> MzVersion:
@@ -643,7 +668,7 @@ class SelfManagedLinearUpgradePathManipulateDuringUpgrade(Scenario):
         features: Features,
         seed: str | None = None,
     ):
-        self.self_managed_versions = get_supported_self_managed_versions()
+        self.self_managed_versions = get_compatible_upgrade_from_versions()
         super().__init__(checks, executor, features, seed)
 
     def base_version(self) -> MzVersion:
@@ -709,7 +734,7 @@ class SelfManagedRandomUpgradePath(Scenario):
         features: Features,
         seed: str | None = None,
     ):
-        self.self_managed_versions = get_supported_self_managed_versions()
+        self.self_managed_versions = get_compatible_upgrade_from_versions()
         super().__init__(checks, executor, features, seed)
 
     def _generate_random_upgrade_path(
@@ -721,17 +746,7 @@ class SelfManagedRandomUpgradePath(Scenario):
         if self.rng is None or len(versions) == 0:
             return versions
 
-        selected_versions = []
-        # For each version in the input list, randomly select it with a 50% chance.
-        for v in versions:
-            if self.rng.random() < 0.5:
-                selected_versions.append(v)
-
-        # Always include at least one version to avoid empty paths.
-        if len(selected_versions) == 0:
-            selected_versions.append(self.rng.choice(versions))
-
-        return selected_versions
+        return generate_random_upgrade_path(versions, self.rng)
 
     def base_version(self) -> MzVersion:
         return self.self_managed_versions[0]
@@ -838,7 +853,7 @@ class SelfManagedEarliestToLatestDirectUpgrade(Scenario):
         features: Features,
         seed: str | None = None,
     ):
-        self.self_managed_versions = get_supported_self_managed_versions()
+        self.self_managed_versions = get_compatible_upgrade_from_versions()
         super().__init__(checks, executor, features, seed)
 
     def base_version(self) -> MzVersion:

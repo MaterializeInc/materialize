@@ -15,6 +15,7 @@ use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use itertools::Itertools;
 use mz_ore::cast::ReinterpretCast;
+use mz_pgrepr_consts::oid::TYPE_INT2_OID;
 use mz_pgwire_common::Format;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::char;
@@ -30,8 +31,10 @@ use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
 use uuid::Uuid;
 
 use crate::types::{UINT2, UINT4, UINT8};
+use crate::value::error::IntoDatumError;
 use crate::{Interval, Jsonb, Numeric, Type, UInt2, UInt4, UInt8};
 
+pub mod error;
 pub mod interval;
 pub mod jsonb;
 pub mod numeric;
@@ -174,8 +177,10 @@ impl Value {
                 Some(Value::Array { dims, elements })
             }
             (Datum::Array(array), SqlScalarType::Int2Vector) => {
-                let dims = array.dims().into_iter();
-                assert!(dims.count() == 1, "int2vector must be 1 dimensional");
+                assert!(
+                    array.has_int2vector_dims(),
+                    "int2vector must be 1 dimensional, or empty"
+                );
                 let elements = array
                     .elements()
                     .iter()
@@ -219,24 +224,30 @@ impl Value {
     }
 
     /// Converts a Materialize datum from this value.
-    pub fn into_datum<'a>(self, buf: &'a RowArena, typ: &Type) -> Datum<'a> {
-        match self {
+    pub fn into_datum<'a>(
+        self,
+        buf: &'a RowArena,
+        typ: &Type,
+    ) -> Result<Datum<'a>, IntoDatumError> {
+        Ok(match self {
             Value::Array { dims, elements } => {
                 let element_pg_type = match typ {
                     Type::Array(t) => &*t,
                     _ => panic!("Value::Array should have type Type::Array. Found {:?}", typ),
                 };
-                buf.make_datum(|packer| {
+                let elements: Result<Vec<_>, _> = elements
+                    .into_iter()
+                    .map(|element| match element {
+                        Some(element) => element.into_datum(buf, element_pg_type),
+                        None => Ok(Datum::Null),
+                    })
+                    .collect();
+                let elements = elements?;
+                buf.try_make_datum(|packer| {
                     packer
-                        .try_push_array(
-                            &dims,
-                            elements.into_iter().map(|element| match element {
-                                Some(element) => element.into_datum(buf, element_pg_type),
-                                None => Datum::Null,
-                            }),
-                        )
-                        .unwrap();
-                })
+                        .try_push_array(&dims, elements.into_iter())
+                        .map_err(IntoDatumError::from)
+                })?
             }
             Value::Int2Vector { .. } => {
                 // This situation is handled gracefully by Value::decode; if we
@@ -262,29 +273,34 @@ impl Value {
                     Type::List(t) => &*t,
                     _ => panic!("Value::List should have type Type::List. Found {:?}", typ),
                 };
-                buf.make_datum(|packer| {
-                    packer.push_list(elems.into_iter().map(|elem| match elem {
+                let elems: Result<Vec<_>, _> = elems
+                    .into_iter()
+                    .map(|elem| match elem {
                         Some(elem) => elem.into_datum(buf, elem_pg_type),
-                        None => Datum::Null,
-                    }));
-                })
+                        None => Ok(Datum::Null),
+                    })
+                    .collect();
+                let elems = elems?;
+                buf.make_datum(|packer| packer.push_list(elems))
             }
             Value::Map(map) => {
                 let elem_pg_type = match typ {
                     Type::Map { value_type } => &*value_type,
                     _ => panic!("Value::Map should have type Type::Map. Found {:?}", typ),
                 };
-                buf.make_datum(|packer| {
-                    packer.push_dict_with(|row| {
+                buf.try_make_datum(|packer| {
+                    packer.try_push_dict_with(|row| {
                         for (k, v) in map {
-                            row.push(Datum::String(&k));
-                            row.push(match v {
-                                Some(elem) => elem.into_datum(buf, elem_pg_type),
+                            row.push(Datum::String(buf.push_string(k)));
+                            let datum = match v {
+                                Some(elem) => elem.into_datum(buf, elem_pg_type)?,
                                 None => Datum::Null,
-                            });
+                            };
+                            row.push(datum);
                         }
-                    });
-                })
+                        Ok::<_, IntoDatumError>(())
+                    })
+                })?
             }
             Value::Oid(oid) => Datum::UInt32(oid),
             Value::Record(_) => {
@@ -308,13 +324,26 @@ impl Value {
                     Type::Range { element_type } => &*element_type,
                     _ => panic!("Value::Range should have type Type::Range. Found {:?}", typ),
                 };
-                let range = range.into_bounds(|elem| elem.into_datum(buf, elem_pg_type));
-
-                buf.make_datum(|packer| packer.push_range(range).unwrap())
+                let range = range.try_into_bounds(|elem| elem.into_datum(buf, elem_pg_type))?;
+                buf.try_make_datum(|packer| packer.push_range(range).map_err(IntoDatumError::from))?
             }
             Value::MzAclItem(mz_acl_item) => Datum::MzAclItem(mz_acl_item),
             Value::AclItem(acl_item) => Datum::AclItem(acl_item),
-        }
+        })
+    }
+
+    /// Like [`Self::into_datum`] but maps the error to a formatted string for decode/parameter contexts.
+    ///
+    /// Callers can then convert the `String` to their preferred error type (e.g. `io::Error`,
+    /// protocol error). The message is `"unable to decode {context}: {error}"`.
+    pub fn into_datum_decode_error<'a>(
+        self,
+        buf: &'a RowArena,
+        typ: &Type,
+        context: &str,
+    ) -> Result<Datum<'a>, String> {
+        self.into_datum(buf, typ)
+            .map_err(|e| format!("unable to decode {}: {}", context, e))
     }
 
     /// Serializes this value to `buf` in the specified `format`.
@@ -421,7 +450,7 @@ impl Value {
                     buf.put_i32(pg_len("array dimension length", dim.length)?);
                     buf.put_i32(dim.lower_bound.try_into().map_err(|_| {
                         io::Error::new(
-                            io::ErrorKind::Other,
+                            io::ErrorKind::InvalidData,
                             "array dimension lower bound does not fit into an i32",
                         )
                     })?);
@@ -431,9 +460,19 @@ impl Value {
                 }
                 Ok(postgres_types::IsNull::No)
             }
-            // TODO: what is the binary format of vector types?
-            Value::Int2Vector { .. } => {
-                Err("binary encoding of int2vector is not implemented".into())
+            Value::Int2Vector { elements } => {
+                // this should always be `false`, but there are exceptions in postgres
+                // feels better to compute this than to assert otherwise
+                let has_null = elements.iter().any(|e| e.is_none());
+                buf.put_i32(1);
+                buf.put_i32(has_null.into());
+                buf.put_u32(TYPE_INT2_OID);
+                buf.put_i32(pg_len("int2vector dimension length", elements.len())?);
+                buf.put_i32(0);
+                for elem in elements {
+                    encode_element(buf, elem.as_ref(), &Type::Int2)?;
+                }
+                Ok(postgres_types::IsNull::No)
             }
             Value::Bool(b) => b.to_sql(&PgType::BOOL, buf),
             Value::Bytea(b) => b.to_sql(&PgType::BYTEA, buf),
@@ -582,7 +621,7 @@ impl Value {
             SqlScalarType::Jsonb => true,
             SqlScalarType::Uuid => true,
             SqlScalarType::Array(elem_type) => Self::can_encode_binary(elem_type),
-            SqlScalarType::Int2Vector => false, // "binary encoding of int2vector is not implemented"
+            SqlScalarType::Int2Vector => true,
             SqlScalarType::List { .. } => false, // "binary encoding of list types is not implemented"
             SqlScalarType::Map { .. } => false, // "binary encoding of map types is not implemented"
             SqlScalarType::Record { fields, .. } => fields
@@ -784,9 +823,12 @@ impl Value {
                 // TODO: We should be able to push ranges without scratch space, but that requires
                 // a different `push_range` API.
                 let buf = RowArena::new();
-                let range = range.into_bounds(|elem| elem.into_datum(&buf, element_type));
-
-                packer.push_range(range).unwrap()
+                let range = range
+                    .try_into_bounds(|elem| elem.into_datum(&buf, element_type))
+                    .map_err(Box::<dyn Error + Sync + Send>::from)?;
+                packer
+                    .push_range(range)
+                    .map_err(Box::<dyn Error + Sync + Send>::from)?;
             }
             Type::MzAclItem => packer.push(Datum::MzAclItem(strconv::parse_mz_acl_item(s)?)),
             Type::AclItem => packer.push(Datum::AclItem(strconv::parse_acl_item(s)?)),
@@ -881,7 +923,7 @@ fn encode_element(buf: &mut BytesMut, elem: Option<&Value>, ty: &Type) -> Result
 fn pg_len(what: &str, len: usize) -> Result<i32, io::Error> {
     len.try_into().map_err(|_| {
         io::Error::new(
-            io::ErrorKind::Other,
+            io::ErrorKind::InvalidData,
             format!("{} does not fit into an i32", what),
         )
     })

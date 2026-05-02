@@ -6,6 +6,7 @@ menu:
     parent: "mysql"
     name: "Azure DB"
     indentifier: "mysql-azure-db"
+    weight: 30
 ---
 
 This page shows you how to stream data from [Azure DB for MySQL](https://azure.microsoft.com/en-us/products/MySQL)
@@ -217,4 +218,4 @@ your networking configuration.
 
 ## Considerations
 
-{{% include-md file="shared-content/mysql-considerations.md" %}}
+{{% include-headless "/headless/mysql-considerations" %}}

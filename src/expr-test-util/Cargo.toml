@@ -10,22 +10,18 @@ publish = false
 workspace = true
 
 [dependencies]
-itertools = "0.14.0"
+itertools.workspace = true
 mz-expr = { path = "../expr" }
 mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore" }
 mz-repr = { path = "../repr" }
 mz-repr-test-util = { path = "../repr-test-util" }
-proc-macro2 = "1.0.103"
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.145"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+proc-macro2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
-datadriven = "0.8.0"
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+datadriven.workspace = true
 
 [features]
-default = ["workspace-hack"]
+default = []

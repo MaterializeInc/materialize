@@ -9,13 +9,14 @@
 
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::num::NonZero;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{env, fmt};
 
 use anyhow::{Context, anyhow, bail};
 use async_trait::async_trait;
-use chrono::Utc;
+use chrono::DateTime;
 use clap::ValueEnum;
 use cloud_resource_controller::KubernetesResourceReader;
 use futures::TryFutureExt;
@@ -29,13 +30,14 @@ use k8s_openapi::api::core::v1::{
     PersistentVolumeClaimTemplate, Pod, PodAffinity, PodAffinityTerm, PodAntiAffinity,
     PodSecurityContext, PodSpec, PodTemplateSpec, PreferredSchedulingTerm, ResourceRequirements,
     SeccompProfile, Secret, SecurityContext, Service as K8sService, ServicePort, ServiceSpec,
-    Toleration, TopologySpreadConstraint, Volume, VolumeMount, VolumeResourceRequirements,
+    Sysctl, Toleration, TopologySpreadConstraint, Volume, VolumeMount, VolumeResourceRequirements,
     WeightedPodAffinityTerm,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{
     LabelSelector, LabelSelectorRequirement, OwnerReference,
 };
+use k8s_openapi::jiff::Timestamp;
 use kube::ResourceExt;
 use kube::api::{Api, DeleteParams, ObjectMeta, PartialObjectMetaExt, Patch, PatchParams};
 use kube::client::Client;
@@ -49,6 +51,7 @@ use mz_orchestrator::{
     OfflineReason, Orchestrator, Service, ServiceAssignments, ServiceConfig, ServiceEvent,
     ServiceProcessMetrics, ServiceStatus, scheduling_config::*,
 };
+use mz_ore::cast::CastInto;
 use mz_ore::retry::Retry;
 use mz_ore::task::AbortOnDropHandle;
 use serde::Deserialize;
@@ -216,7 +219,7 @@ impl Orchestrator for KubernetesOrchestrator {
 
 #[derive(Clone, Copy)]
 struct ServiceInfo {
-    scale: u16,
+    scale: NonZero<u16>,
 }
 
 struct NamespacedKubernetesOrchestrator {
@@ -267,7 +270,7 @@ enum WorkerCommand {
 #[derive(Debug, Clone)]
 struct ServiceDescription {
     name: String,
-    scale: u16,
+    scale: NonZero<u16>,
     service: K8sService,
     stateful_set: StatefulSet,
     pod_template_hash: String,
@@ -560,6 +563,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             memory_limit,
             memory_request,
             cpu_limit,
+            cpu_request,
             scale,
             labels: labels_in,
             annotations: annotations_in,
@@ -632,6 +636,12 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 Quantity(format!("{}m", cpu_limit.as_millicpus())),
             );
         }
+        if let Some(cpu_request) = cpu_request {
+            requests.insert(
+                "cpu".into(),
+                Quantity(format!("{}m", cpu_request.as_millicpus())),
+            );
+        }
         let service = K8sService {
             metadata: ObjectMeta {
                 name: Some(name.clone()),
@@ -655,7 +665,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             status: None,
         };
 
-        let hosts = (0..scale)
+        let hosts = (0..scale.get())
             .map(|i| {
                 format!(
                     "{name}-{i}.{name}.{}.svc.cluster.local",
@@ -751,7 +761,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         let topology_spread = if scheduling_config.topology_spread.enabled {
             let config = &scheduling_config.topology_spread;
 
-            if !config.ignore_non_singular_scale || scale <= 1 {
+            if !config.ignore_non_singular_scale || scale.get() == 1 {
                 let label_selector_requirements = (if config.ignore_non_singular_scale {
                     let mut replicas_selector_ignoring_scale = replicas_selector.clone();
 
@@ -774,9 +784,21 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                     ..Default::default()
                 };
 
+                if config.soft && config.min_domains.is_some() {
+                    warn!(
+                        "topology spread is soft but min_domains is set; \
+                         Kubernetes rejects minDomains with ScheduleAnyway, \
+                         so min_domains will be ignored"
+                    );
+                }
+
                 let constraint = TopologySpreadConstraint {
                     label_selector: Some(ls),
-                    min_domains: config.min_domains,
+                    min_domains: if config.soft {
+                        None
+                    } else {
+                        config.min_domains
+                    },
                     max_skew: config.max_skew,
                     topology_key: "topology.kubernetes.io/zone".to_string(),
                     when_unsatisfiable: if config.soft {
@@ -1067,15 +1089,34 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             None
         };
 
+        let tcp_keepalive_sysctls = vec![
+            Sysctl {
+                name: "net.ipv4.tcp_keepalive_time".to_string(),
+                value: "300".to_string(),
+            },
+            Sysctl {
+                name: "net.ipv4.tcp_keepalive_intvl".to_string(),
+                value: "30".to_string(),
+            },
+            Sysctl {
+                name: "net.ipv4.tcp_keepalive_probes".to_string(),
+                value: "3".to_string(),
+            },
+        ];
+
         let security_context = if let Some(fs_group) = self.config.service_fs_group {
             Some(PodSecurityContext {
                 fs_group: Some(fs_group),
                 run_as_user: Some(fs_group),
                 run_as_group: Some(fs_group),
+                sysctls: Some(tcp_keepalive_sysctls),
                 ..Default::default()
             })
         } else {
-            None
+            Some(PodSecurityContext {
+                sysctls: Some(tcp_keepalive_sysctls),
+                ..Default::default()
+            })
         };
 
         let mut tolerations = vec![
@@ -1196,7 +1237,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                     ..Default::default()
                 },
                 service_name: Some(name.clone()),
-                replicas: Some(scale.into()),
+                replicas: Some(scale.cast_into()),
                 template: pod_template_spec,
                 update_strategy: Some(StatefulSetUpdateStrategy {
                     type_: Some("OnDelete".to_owned()),
@@ -1301,14 +1342,16 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             let time = if let Some(time) = last_probe_time {
                 time.0
             } else {
-                Utc::now()
+                Timestamp::now()
             };
 
             Ok(ServiceEvent {
                 service_id,
                 process_id,
                 status,
-                time,
+                time: DateTime::from_timestamp_nanos(
+                    time.as_nanosecond().try_into().expect("must fit"),
+                ),
             })
         }
 
@@ -1354,6 +1397,12 @@ impl OrchestratorWorker {
                 .expect("always retries on error");
             self.owner_references
                 .extend(orchestrator_pod.owner_references().into_iter().cloned());
+
+            if !self.collect_pod_metrics {
+                info!(
+                    "pod metrics collection is disabled; resource usage graphs in the console will not be available"
+                );
+            }
 
             info!(
                 "Kubernetes orchestrator worker initialized in {:?}",
@@ -1418,7 +1467,7 @@ impl OrchestratorWorker {
         info: &ServiceInfo,
     ) -> Vec<ServiceProcessMetrics> {
         if !self.collect_pod_metrics {
-            return (0..info.scale)
+            return (0..info.scale.get())
                 .map(|_| ServiceProcessMetrics::default())
                 .collect();
         }
@@ -1559,8 +1608,9 @@ impl OrchestratorWorker {
             Ok(usage)
         }
 
-        let ret =
-            futures::future::join_all((0..info.scale).map(|i| get_metrics(self, name, i.into())));
+        let ret = futures::future::join_all(
+            (0..info.scale.cast_into()).map(|i| get_metrics(self, name, i)),
+        );
 
         ret.await
     }
@@ -1611,7 +1661,7 @@ impl OrchestratorWorker {
         // Our pod recreation policy is simple: If a pod's template hash changed, delete it, and
         // let the StatefulSet controller recreate it. Otherwise, patch the existing pod's
         // annotations to line up with the ones in the spec.
-        for pod_id in 0..desc.scale {
+        for pod_id in 0..desc.scale.get() {
             let pod_name = format!("{}-{pod_id}", desc.name);
             let pod = match self.pod_api.get(&pod_name).await {
                 Ok(pod) => pod,

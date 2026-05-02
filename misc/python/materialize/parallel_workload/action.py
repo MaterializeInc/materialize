@@ -24,7 +24,7 @@ from pg8000.native import identifier
 from psycopg import Connection
 from psycopg.errors import OperationalError
 
-import materialize.parallel_workload.database
+import materialize.parallel_workload.column
 from materialize.data_ingest.data_type import (
     NUMBER_TYPES,
     Boolean,
@@ -47,6 +47,7 @@ from materialize.parallel_workload.database import (
     MAX_CLUSTERS,
     MAX_COLUMNS,
     MAX_DBS,
+    MAX_ICEBERG_SINKS,
     MAX_INDEXES,
     MAX_KAFKA_SINKS,
     MAX_KAFKA_SOURCES,
@@ -64,12 +65,15 @@ from materialize.parallel_workload.database import (
     Column,
     Database,
     DBObject,
+    IcebergSink,
     Index,
     KafkaSink,
     KafkaSource,
     MySqlSource,
+    MzTempSchema,
     PostgresSource,
     Role,
+    S3Object,
     Schema,
     SqlServerSource,
     Table,
@@ -78,6 +82,9 @@ from materialize.parallel_workload.database import (
 )
 from materialize.parallel_workload.executor import Executor, Http
 from materialize.parallel_workload.expression import ExprKind, expression
+from materialize.parallel_workload.negative_accumulation_errors import (
+    NEGATIVE_ACCUMULATION_ERRORS,
+)
 from materialize.parallel_workload.settings import (
     ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS,
     Complexity,
@@ -172,6 +179,10 @@ class Action:
                     "real-time source dropped before ingesting the upstream system's visible frontier",  # Expected, see https://buildkite.com/materialize/nightly/builds/9399#0191be17-1f4c-4321-9b51-edc4b08b71c5
                     "object state changed while transaction was in progress",  # Old error msg, can remove this ignore later
                     "another session modified the catalog while this DDL transaction was open",
+                    "was dropped while executing a statement",
+                    "' was dropped",  # ConcurrentDependencyDrop (collection, schema, etc.)
+                    "non-temporary items cannot depend on temporary item",  # TODO(def-): Fix?
+                    "is not readable at any timestamp",  # Expected, due to object drops
                 ]
             )
         if exe.db.scenario == Scenario.Cancel:
@@ -219,7 +230,14 @@ class Action:
             )
         if exe.db.scenario == Scenario.Rename:
             result.extend(["unknown schema", "ambiguous reference to schema name"])
-        if materialize.parallel_workload.database.NAUGHTY_IDENTIFIERS:
+        if exe.db.scenario == Scenario.RepeatRow:
+            # Views that use `repeat_row` with a negative count can surface
+            # negative-accumulation errors both at DDL time (constant folding)
+            # and at read time (various operators checking multiplicities).
+            # The central list lives in `negative_accumulation_errors.py` so
+            # we can update it in one place when the error messages change.
+            result.extend(NEGATIVE_ACCUMULATION_ERRORS)
+        if materialize.parallel_workload.column.NAUGHTY_IDENTIFIERS:
             result.extend(["identifier length exceeds 255 bytes"])
         return result
 
@@ -337,7 +355,6 @@ class FetchAction(Action):
         result = super().errors_to_ignore(exe)
         result.extend(
             [
-                "is not of expected type",  # TODO(def-) Remove when database-issues#7857 is fixed
                 "cached plan must not change result type",  # Expected, see database-issues#9666
             ]
         )
@@ -370,6 +387,9 @@ class FetchAction(Action):
                 columns = self.rng.sample(obj.columns, len(obj.columns))
                 key = ", ".join(column.name(True) for column in columns)
                 query += f" ENVELOPE {envelope} (KEY ({key}))"
+
+            if self.rng.choice([True, False]):
+                query += " WITH (SNAPSHOT = false)"
         else:
             query += f"({self.generate_select_query(exe, ExprKind.MATERIALIZABLE)})"
 
@@ -521,6 +541,8 @@ class CopyToS3Action(Action):
                 "timeout: error trying to connect",
                 "cannot represent decimal value",  # parquet limitation
                 "Cannot represent special numeric value",  # parquet limitation
+                "Arrow interval type MonthDayNano to parquet that is not yet implemented",  # arrow-rs limitation
+                "overflow i64 nanoseconds",  # arrow IntervalMonthDayNano limitation
             ]
         )
         if exe.db.complexity == Complexity.DDL:
@@ -532,24 +554,56 @@ class CopyToS3Action(Action):
         return result
 
     def run(self, exe: Executor) -> bool:
-        obj = self.rng.choice(exe.db.db_objects())
+        db_objs = exe.db.db_objects()
+        if not db_objs:
+            return False
+        obj = self.rng.choice(db_objs)
         obj_name = str(obj)
         with exe.db.lock:
             location = exe.db.s3_path
             exe.db.s3_path += 1
         format = "csv" if self.rng.choice([True, False]) else "parquet"
+        s3_obj = S3Object(str(location), "copytos3", format)
         if self.rng.random() < 0.9:
+            dts = [
+                self.rng.choice(list(DATA_TYPES))
+                for _ in range(self.rng.randint(1, 10))
+            ]
             expressions = ", ".join(
-                [
-                    expression(self.rng.choice(list(DATA_TYPES)), obj.columns, self.rng)
-                    for i in range(self.rng.randint(1, 10))
-                ]
+                [expression(dt, obj.columns, self.rng) for dt in dts]
             )
+            cols = [Column(self.rng, i, dt, s3_obj) for i, dt in enumerate(dts)]
         else:
             expressions = "*"
-        query = f"COPY (SELECT {expressions} FROM {obj_name} WHERE {expression(Boolean, obj.columns, self.rng)} LIMIT {self.rng.randint(0, 100)}) TO 's3://copytos3/{location}' WITH (AWS CONNECTION = aws_conn, FORMAT = '{format}')"
+            cols = [
+                Column(self.rng, i, column.data_type, s3_obj)
+                for i, column in enumerate(obj.columns)
+            ]
+        s3_obj.columns = cols
+        to_query = f"COPY (SELECT {expressions} FROM {obj_name} WHERE {expression(Boolean, obj.columns, self.rng)} LIMIT {self.rng.randint(0, 100)}) TO 's3://copytos3/{location}' WITH (AWS CONNECTION = aws_conn, FORMAT = '{format}')"
 
-        exe.execute(query, explainable=False, http=Http.NO, fetch=False)
+        exe.execute(to_query, explainable=False, http=Http.NO, fetch=False)
+        return True
+
+
+class CopyFromS3Action(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        result = super().errors_to_ignore(exe)
+        if exe.db.complexity == Complexity.DDL:
+            result.extend(
+                [
+                    "COPY FROM's target table",
+                ]
+            )
+        return result
+
+    def run(self, exe: Executor) -> bool:
+        if not exe.db.s3_objects:
+            return False
+        s3_obj = self.rng.choice(exe.db.s3_objects)
+        from_query = f"COPY INTO t1 FROM 's3://{s3_obj.bucket}/{s3_obj.key}' (FORMAT {format.upper()}, AWS CONNECTION = aws_conn)"
+        s3_obj.create(exe)
+        exe.execute(from_query, explainable=False, http=Http.NO, fetch=False)
         return True
 
 
@@ -751,7 +805,7 @@ class UpdateAction(Action):
             ]
         )
 
-        if exe.db.complexity == Complexity.DDL:
+        if exe.db.complexity == Complexity.DDL or exe.db.scenario == Scenario.Rename:
             result.extend(
                 [
                     "does not exist",
@@ -783,9 +837,12 @@ class UpdateAction(Action):
 
 class DeleteAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
-        return [
+        errors = [
             "canceling statement due to statement timeout",
         ] + super().errors_to_ignore(exe)
+        if exe.db.scenario == Scenario.Rename:
+            errors += ["does not exist"]
+        return errors
 
     def run(self, exe: Executor) -> bool:
         table = self.rng.choice(exe.db.tables)
@@ -862,16 +919,33 @@ class DropIndexAction(Action):
 
 class CreateTableAction(Action):
     def run(self, exe: Executor) -> bool:
-        if len(exe.db.tables) >= MAX_TABLES:
+        # TODO: Also in rename when database-issues#9975 and database-issues#9976 are fixed
+        temp = exe.db.scenario != Scenario.Rename and self.rng.choice([True, False])
+        if (
+            not temp
+            and len([table for table in exe.db.tables if not table.temp]) >= MAX_TABLES
+        ):
             return False
         table_id = exe.db.table_id
         exe.db.table_id += 1
-        schema = self.rng.choice(exe.db.schemas)
-        with schema.lock:
-            if schema not in exe.db.schemas:
-                return False
-            table = Table(self.rng, table_id, schema)
+        if temp:
+            schema = MzTempSchema(self.rng.choice(exe.db.dbs))
+            table = Table(self.rng, table_id, schema, temp=True)
             table.create(exe)
+        else:
+            try:
+                schema = self.rng.choice(exe.db.schemas)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
+            with schema.lock:
+                if schema not in exe.db.schemas:
+                    return False
+                table = Table(self.rng, table_id, schema)
+                table.create(exe)
         exe.db.tables.append(table)
         return True
 
@@ -884,14 +958,20 @@ class DropTableAction(Action):
 
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
-            if len(exe.db.tables) <= 2:
+            tables = [table for table in exe.db.tables if not table.temp]
+            if not tables:
                 return False
-            table = self.rng.choice(exe.db.tables)
+            table = self.rng.choice(tables)
+            if (
+                not table.temp
+                and len([table for table in exe.db.tables if not table.temp]) <= 2
+            ):
+                return False
         with table.lock:
             # Was dropped while we were acquiring lock
             if table not in exe.db.tables:
                 return False
-            if len(exe.db.tables) <= 2:
+            if len([table for table in exe.db.tables if not table.temp]) <= 2:
                 return False
 
             query = f"DROP TABLE {table}"
@@ -978,14 +1058,53 @@ class RenameViewAction(Action):
         return True
 
 
-class RenameSinkAction(Action):
+class RenameIcebergSinkAction(Action):
+    def run(self, exe: Executor) -> bool:
+        if exe.db.scenario != Scenario.Rename:
+            return False
+        with exe.db.lock:
+            if not exe.db.iceberg_sinks:
+                return False
+            try:
+                sink = self.rng.choice(exe.db.iceberg_sinks)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
+        with sink.lock:
+            if sink not in exe.db.iceberg_sinks:
+                return False
+
+            old_name = str(sink)
+            sink.rename += 1
+            try:
+                exe.execute(
+                    f"ALTER SINK {old_name} RENAME TO {identifier(sink.name())}",
+                    # http=Http.RANDOM,  # Fails
+                )
+            except:
+                sink.rename -= 1
+                raise
+        return True
+
+
+class RenameKafkaSinkAction(Action):
     def run(self, exe: Executor) -> bool:
         if exe.db.scenario != Scenario.Rename:
             return False
         with exe.db.lock:
             if not exe.db.kafka_sinks:
                 return False
-            sink = self.rng.choice(exe.db.kafka_sinks)
+            try:
+                sink = self.rng.choice(exe.db.kafka_sinks)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         with sink.lock:
             if sink not in exe.db.kafka_sinks:
                 return False
@@ -1003,6 +1122,81 @@ class RenameSinkAction(Action):
         return True
 
 
+class ReplaceMaterializedViewAction(Action):
+    def run(self, exe: Executor) -> bool:
+        with exe.db.lock:
+            mvs = [v for v in exe.db.views if v.materialized]
+            if not mvs:
+                return False
+            view = self.rng.choice(mvs)
+
+        tmp_mv = identifier(view.name() + "_" + threading.current_thread().getName())
+        exe.execute(
+            f"CREATE REPLACEMENT MATERIALIZED VIEW {tmp_mv} FOR {identifier(view.name())} AS {view.get_select()}",
+        )
+        time.sleep(self.rng.random())
+        if self.rng.choice([True, False]):
+            exe.execute(
+                f"ALTER MATERIALIZED VIEW {identifier(view.name())} APPLY REPLACEMENT {tmp_mv}",
+            )
+        else:
+            exe.execute(f"DROP MATERIALIZED VIEW {tmp_mv}")
+        return True
+
+
+class AlterIcebergSinkFromAction(Action):
+    def run(self, exe: Executor) -> bool:
+        if exe.db.scenario in (Scenario.Kill, Scenario.ZeroDowntimeDeploy):
+            # Does not work reliably with kills, see database-issues#8421
+            return False
+        with exe.db.lock:
+            if not exe.db.iceberg_sinks:
+                return False
+            try:
+                sink = self.rng.choice(exe.db.iceberg_sinks)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
+        with sink.lock, sink.base_object.lock:
+            if sink not in exe.db.iceberg_sinks:
+                return False
+
+            old_object = sink.base_object
+            if sink.key != "":
+                # key requires same column names, low chance of even having that
+                return False
+            else:
+                # Avro schema migration checking can be quite strict, and we need to be not only
+                # compatible with the latest object's schema but all previous schemas.
+                # Only allow a conservative case for now: where all types and names match.
+                objs = []
+                old_cols = {c.name(True): c.data_type for c in old_object.columns}
+                for o in exe.db.db_objects_without_views():
+                    if isinstance(old_object, WebhookSource):
+                        continue
+                    if isinstance(o, WebhookSource):
+                        continue
+                    new_cols = {c.name(True): c.data_type for c in o.columns}
+                    if old_cols == new_cols:
+                        objs.append(o)
+            if not objs:
+                return False
+            sink.base_object = self.rng.choice(objs)
+
+            try:
+                exe.execute(
+                    f"ALTER SINK {sink} SET FROM {sink.base_object}",
+                    # http=Http.RANDOM,  # Fails
+                )
+            except:
+                sink.base_object = old_object
+                raise
+        return True
+
+
 class AlterKafkaSinkFromAction(Action):
     def run(self, exe: Executor) -> bool:
         if exe.db.scenario in (Scenario.Kill, Scenario.ZeroDowntimeDeploy):
@@ -1011,7 +1205,14 @@ class AlterKafkaSinkFromAction(Action):
         with exe.db.lock:
             if not exe.db.kafka_sinks:
                 return False
-            sink = self.rng.choice(exe.db.kafka_sinks)
+            try:
+                sink = self.rng.choice(exe.db.kafka_sinks)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         with sink.lock, sink.base_object.lock:
             if sink not in exe.db.kafka_sinks:
                 return False
@@ -1084,7 +1285,14 @@ class DropDatabaseAction(Action):
         with exe.db.lock:
             if len(exe.db.dbs) <= 1:
                 return False
-            db = self.rng.choice(exe.db.dbs)
+            try:
+                db = self.rng.choice(exe.db.dbs)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         with db.lock:
             # Was dropped while we were acquiring lock
             if db not in exe.db.dbs:
@@ -1105,7 +1313,14 @@ class CreateSchemaAction(Action):
                 return False
             schema_id = exe.db.schema_id
             exe.db.schema_id += 1
-        schema = Schema(self.rng.choice(exe.db.dbs), schema_id)
+        try:
+            schema = Schema(self.rng.choice(exe.db.dbs), schema_id)
+        except IndexError:
+            # We mostly prevent index errors, but we don't want to lock too
+            # much since that would reduce our chance of finding race
+            # conditions in production code, so ignore the rare case where
+            # we accidentally removed all objects.
+            return False
         schema.create(exe)
         exe.db.schemas.append(schema)
         return True
@@ -1121,7 +1336,14 @@ class DropSchemaAction(Action):
         with exe.db.lock:
             if len(exe.db.schemas) <= 1:
                 return False
-            schema = self.rng.choice(exe.db.schemas)
+            try:
+                schema = self.rng.choice(exe.db.schemas)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         with schema.lock:
             # Was dropped while we were acquiring lock
             if schema not in exe.db.schemas:
@@ -1145,7 +1367,14 @@ class RenameSchemaAction(Action):
         if exe.db.scenario != Scenario.Rename:
             return False
         with exe.db.lock:
-            schema = self.rng.choice(exe.db.schemas)
+            try:
+                schema = self.rng.choice(exe.db.schemas)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         with schema.lock:
             if schema not in exe.db.schemas:
                 return False
@@ -1172,7 +1401,14 @@ class SwapSchemaAction(Action):
         if exe.db.scenario != Scenario.Rename:
             return False
         with exe.db.lock:
-            db = self.rng.choice(exe.db.dbs)
+            try:
+                db = self.rng.choice(exe.db.dbs)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
             schemas = [
                 schema for schema in exe.db.schemas if schema.db.db_id == db.db_id
             ]
@@ -1299,13 +1535,38 @@ class FlipFlagsAction(Action):
             "100",
         ]
         self.flags_with_values["persist_stats_audit_panic"] = BOOLEAN_FLAG_VALUES
-        self.flags_with_values["persist_validate_part_bounds_on_read"] = (
-            BOOLEAN_FLAG_VALUES
-        )
+        self.flags_with_values["persist_state_update_lease_timeout"] = [
+            "'0s'",
+            "'1s'",
+            "'10s'",
+        ]
+        self.flags_with_values["compute_prometheus_introspection_scrape_interval"] = [
+            "'0s'",
+            "'1s'",
+            "'10s'",
+        ]
+        # Note: it's not safe to re-enable this flag after writing with `persist_validate_part_bounds_on_write`,
+        # since those new-style parts may fail our old-style validation.
+        self.flags_with_values["persist_validate_part_bounds_on_read"] = ["FALSE"]
         self.flags_with_values["persist_validate_part_bounds_on_write"] = (
             BOOLEAN_FLAG_VALUES
         )
+        self.flags_with_values["user_id_pool_batch_size"] = [
+            "1",
+            "5",
+            "512",
+            "1024",
+        ]
         self.flags_with_values["compute_apply_column_demands"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["compute_correction_v2_chain_proportionality"] = [
+            "2",
+            "3",
+        ]
+        self.flags_with_values["compute_correction_v2_chunk_size"] = [
+            "8192",
+            "65536",
+            "1048576",
+        ]
         self.flags_with_values["enable_compute_temporal_bucketing"] = (
             BOOLEAN_FLAG_VALUES
         )
@@ -1318,7 +1579,23 @@ class FlipFlagsAction(Action):
             "1048576",  # 1 MiB, an in-between value
             "314572800",  # 300 MiB, the production value
         ]
+        self.flags_with_values["compute_subscribe_snapshot_optimization"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         self.flags_with_values["cluster"] = ["quickstart", "dont_exist"]
+        self.flags_with_values["enable_frontend_peek_sequencing"] = [
+            "true",
+            "false",
+        ]
+        self.flags_with_values["enable_frontend_subscribes"] = [
+            "true",
+            "false",
+        ]
+        self.flags_with_values["enable_case_literal_transform"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_cast_elimination"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_upsert_v2"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_coalesce_case_transform"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_compute_sync_mv_sink"] = BOOLEAN_FLAG_VALUES
 
         # If you are adding a new config flag in Materialize, consider using it
         # here instead of just marking it as uninteresting to silence the
@@ -1327,11 +1604,13 @@ class FlipFlagsAction(Action):
         # behavior, you should add it. Feature flags which turn on/off
         # externally visible features should not be flipped.
         self.uninteresting_flags: list[str] = [
+            "enable_compute_half_join2",
             "enable_mz_join_core",
             "enable_compute_correction_v2",
             "linear_join_yielding",
             "enable_lgalloc",
             "enable_lgalloc_eager_reclamation",
+            "enable_s3_tables_region_check",
             "lgalloc_background_interval",
             "lgalloc_file_growth_dampener",
             "lgalloc_local_buffer_bytes",
@@ -1350,11 +1629,14 @@ class FlipFlagsAction(Action):
             "copy_to_s3_parquet_row_group_file_ratio",
             "copy_to_s3_arrow_builder_buffer_ratio",
             "copy_to_s3_multipart_part_size_bytes",
+            "enable_compute_prometheus_metrics",
             "enable_compute_replica_expiration",
+            "compute_mv_sink_advance_persist_frontiers",
             "compute_replica_expiration_offset",
             "enable_compute_render_fueled_as_specific_collection",
             "compute_temporal_bucketing_summary",
             "enable_compute_logical_backpressure",
+            "enable_replica_targeted_materialized_views",
             "compute_logical_backpressure_max_retained_capabilities",
             "compute_logical_backpressure_inflight_slack",
             "persist_fetch_semaphore_cost_adjustment",
@@ -1384,6 +1666,9 @@ class FlipFlagsAction(Action):
             "persist_consensus_connection_pool_ttl_stagger",
             "crdb_connect_timeout",
             "crdb_tcp_user_timeout",
+            "crdb_keepalives_idle",
+            "crdb_keepalives_interval",
+            "crdb_keepalives_retries",
             "use_global_txn_cache_source",
             "persist_batch_builder_max_outstanding_parts",
             "persist_compaction_heuristic_min_inputs",
@@ -1458,13 +1743,10 @@ class FlipFlagsAction(Action):
             "wallclock_global_lag_histogram_retention_interval",
             "kafka_client_id_enrichment_rules",
             "kafka_poll_max_wait",
-            "kafka_default_metadata_fetch_interval",
             "kafka_default_aws_privatelink_endpoint_identification_algorithm",
             "kafka_buffered_event_resize_threshold_elements",
             "mysql_replication_heartbeat_interval",
-            "mysql_offset_known_interval",
             "postgres_fetch_slot_resume_lsn_interval",
-            "pg_offset_known_interval",
             "pg_schema_validation_interval",
             "storage_enforce_external_addresses",
             "storage_upsert_prevent_snapshot_buffering",
@@ -1480,10 +1762,9 @@ class FlipFlagsAction(Action):
             "ore_overflowing_behavior",
             "sql_server_max_lsn_wait",
             "sql_server_snapshot_progress_report_interval",
-            "sql_server_cdc_poll_interval",
             "sql_server_cdc_cleanup_change_table",
             "sql_server_cdc_cleanup_change_table_max_deletes",
-            "sql_server_offset_known_interval",
+            "default_timestamp_interval",
             "allow_user_sessions",
             "enable_0dt_deployment",
             "with_0dt_deployment_max_wait",
@@ -1495,12 +1776,14 @@ class FlipFlagsAction(Action):
             "enable_statement_lifecycle_logging",
             "enable_introspection_subscribes",
             "plan_insights_notice_fast_path_clusters_optimize_duration",
-            "enable_continual_task_builtins",
             "enable_expression_cache",
             "enable_multi_replica_sources",
             "enable_password_auth",
-            "constraint_based_timestamp_selection",
             "persist_fast_path_order",
+            "enable_mcp_agent",
+            "enable_mcp_agent_query_tool",
+            "enable_mcp_developer",
+            "mcp_max_response_size",
             "mz_metrics_lgalloc_map_refresh_interval",
             "mz_metrics_lgalloc_refresh_interval",
             "mz_metrics_rusage_refresh_interval",
@@ -1516,6 +1799,16 @@ class FlipFlagsAction(Action):
             "kafka_retry_backoff_max",
             "kafka_reconnect_backoff",
             "kafka_reconnect_backoff_max",
+            "pg_source_validate_timeline",
+            "sql_server_source_validate_restore_history",
+            "oidc_issuer",
+            "oidc_audience",
+            "oidc_authentication_claim",
+            "oidc_group_role_sync_enabled",
+            "oidc_group_claim",
+            "oidc_group_role_sync_strict",
+            "console_oidc_client_id",
+            "console_oidc_scopes",
         ]
 
     def run(self, exe: Executor) -> bool:
@@ -1580,9 +1873,15 @@ class CreateViewAction(Action):
             # Columns could have been renamed, we don't lock the base objects
             # to get more interesting race conditions
             errors += ["does not exist"]
+        errors += [
+            "replica-targeted materialized views is not supported",
+            "unknown cluster replica",
+        ]
         return errors
 
     def run(self, exe: Executor) -> bool:
+        # TODO: Also in rename when database-issues#9975 and database-issues#9976 are fixed
+        temp = exe.db.scenario != Scenario.Rename and self.rng.choice([True, False])
         with exe.db.lock:
             if len(exe.db.views) >= MAX_VIEWS:
                 return False
@@ -1596,18 +1895,52 @@ class CreateViewAction(Action):
         )
         if self.rng.choice([True, False]) or base_object2 == base_object:
             base_object2 = None
-        schema = self.rng.choice(exe.db.schemas)
-        with schema.lock:
-            if schema not in exe.db.schemas:
-                return False
+        if temp:
+            schema = MzTempSchema(self.rng.choice(exe.db.dbs))
             view = View(
                 self.rng,
                 view_id,
                 base_object,
                 base_object2,
                 schema,
+                scenario=exe.db.scenario,
+                temp=True,
             )
             view.create(exe)
+        else:
+            try:
+                schema = self.rng.choice(exe.db.schemas)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
+            with schema.lock:
+                if schema not in exe.db.schemas:
+                    return False
+                view = View(
+                    self.rng,
+                    view_id,
+                    base_object,
+                    base_object2,
+                    schema,
+                    scenario=exe.db.scenario,
+                )
+                # Randomly make materialized views replica-targeted
+                if (
+                    view.materialized
+                    and exe.db.flags.get(
+                        "enable_replica_targeted_materialized_views", "FALSE"
+                    )
+                    == "TRUE"
+                    and self.rng.choice([True, False])
+                ):
+                    clusters_with_replicas = [c for c in exe.db.clusters if c.replicas]
+                    if clusters_with_replicas:
+                        cluster = self.rng.choice(clusters_with_replicas)
+                        view.target_replica = self.rng.choice(cluster.replicas)
+                view.create(exe)
         exe.db.views.append(view)
         return True
 
@@ -1620,9 +1953,10 @@ class DropViewAction(Action):
 
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
-            if not exe.db.views:
+            views = [view for view in exe.db.views if not view.temp]
+            if not views:
                 return False
-            view = self.rng.choice(exe.db.views)
+            view = self.rng.choice(views)
         with view.lock:
             # Was dropped while we were acquiring lock
             if view not in exe.db.views:
@@ -1713,7 +2047,14 @@ class DropClusterAction(Action):
                 return False
             # Keep cluster 0 with 1 replica for sources/sinks
             self.rng.randrange(1, len(exe.db.clusters))
-            cluster = self.rng.choice(exe.db.clusters)
+            try:
+                cluster = self.rng.choice(exe.db.clusters)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         with cluster.lock:
             # Was dropped while we were acquiring lock
             if cluster not in exe.db.clusters:
@@ -1797,7 +2138,14 @@ class SetClusterAction(Action):
         with exe.db.lock:
             if not exe.db.clusters:
                 return False
-            cluster = self.rng.choice(exe.db.clusters)
+            try:
+                cluster = self.rng.choice(exe.db.clusters)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         http = self.rng.choice([Http.NO, Http.YES])
         if self.rng.choice([True, False]):
             exe.commit(http=http)
@@ -1968,7 +2316,6 @@ class ReconnectAction(Action):
 
         NUM_ATTEMPTS = 20
         if exe.ws:
-            threading.current_thread().getName()
             for i in range(
                 NUM_ATTEMPTS
                 if exe.db.scenario != Scenario.ZeroDowntimeDeploy
@@ -2235,8 +2582,15 @@ class CreateWebhookSourceAction(Action):
                 return False
             webhook_source_id = exe.db.webhook_source_id
             exe.db.webhook_source_id += 1
-            cluster = self.rng.choice(exe.db.clusters)
-            schema = self.rng.choice(exe.db.schemas)
+            try:
+                cluster = self.rng.choice(exe.db.clusters)
+                schema = self.rng.choice(exe.db.schemas)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         with schema.lock, cluster.lock:
             if schema not in exe.db.schemas:
                 return False
@@ -2259,7 +2613,14 @@ class DropWebhookSourceAction(Action):
         with exe.db.lock:
             if not exe.db.webhook_sources:
                 return False
-            source = self.rng.choice(exe.db.webhook_sources)
+            try:
+                source = self.rng.choice(exe.db.webhook_sources)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         with source.lock:
             # Was dropped while we were acquiring lock
             if source not in exe.db.webhook_sources:
@@ -2278,8 +2639,15 @@ class CreateKafkaSourceAction(Action):
                 return False
             source_id = exe.db.kafka_source_id
             exe.db.kafka_source_id += 1
-            cluster = self.rng.choice(exe.db.clusters)
-            schema = self.rng.choice(exe.db.schemas)
+            try:
+                cluster = self.rng.choice(exe.db.clusters)
+                schema = self.rng.choice(exe.db.schemas)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         with schema.lock, cluster.lock:
             if schema not in exe.db.schemas:
                 return False
@@ -2315,7 +2683,14 @@ class DropKafkaSourceAction(Action):
         with exe.db.lock:
             if not exe.db.kafka_sources:
                 return False
-            source = self.rng.choice(exe.db.kafka_sources)
+            try:
+                source = self.rng.choice(exe.db.kafka_sources)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         with source.lock:
             # Was dropped while we were acquiring lock
             if source not in exe.db.kafka_sources:
@@ -2339,8 +2714,15 @@ class CreateMySqlSourceAction(Action):
                 return False
             source_id = exe.db.mysql_source_id
             exe.db.mysql_source_id += 1
-            schema = self.rng.choice(exe.db.schemas)
-            cluster = self.rng.choice(exe.db.clusters)
+            try:
+                schema = self.rng.choice(exe.db.schemas)
+                cluster = self.rng.choice(exe.db.clusters)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         with schema.lock, cluster.lock:
             if schema not in exe.db.schemas:
                 return False
@@ -2376,7 +2758,14 @@ class DropMySqlSourceAction(Action):
         with exe.db.lock:
             if not exe.db.mysql_sources:
                 return False
-            source = self.rng.choice(exe.db.mysql_sources)
+            try:
+                source = self.rng.choice(exe.db.mysql_sources)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         with source.lock:
             # Was dropped while we were acquiring lock
             if source not in exe.db.mysql_sources:
@@ -2400,8 +2789,15 @@ class CreatePostgresSourceAction(Action):
                 return False
             source_id = exe.db.postgres_source_id
             exe.db.postgres_source_id += 1
-            schema = self.rng.choice(exe.db.schemas)
-            cluster = self.rng.choice(exe.db.clusters)
+            try:
+                schema = self.rng.choice(exe.db.schemas)
+                cluster = self.rng.choice(exe.db.clusters)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         with schema.lock, cluster.lock:
             if schema not in exe.db.schemas:
                 return False
@@ -2437,7 +2833,14 @@ class DropPostgresSourceAction(Action):
         with exe.db.lock:
             if not exe.db.postgres_sources:
                 return False
-            source = self.rng.choice(exe.db.postgres_sources)
+            try:
+                source = self.rng.choice(exe.db.postgres_sources)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         with source.lock:
             # Was dropped while we were acquiring lock
             if source not in exe.db.postgres_sources:
@@ -2461,8 +2864,15 @@ class CreateSqlServerSourceAction(Action):
                 return False
             source_id = exe.db.sql_server_source_id
             exe.db.sql_server_source_id += 1
-            schema = self.rng.choice(exe.db.schemas)
-            cluster = self.rng.choice(exe.db.clusters)
+            try:
+                schema = self.rng.choice(exe.db.schemas)
+                cluster = self.rng.choice(exe.db.clusters)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         with schema.lock, cluster.lock:
             if schema not in exe.db.schemas:
                 return False
@@ -2500,7 +2910,14 @@ class DropSqlServerSourceAction(Action):
         with exe.db.lock:
             if not exe.db.sql_server_sources:
                 return False
-            source = self.rng.choice(exe.db.sql_server_sources)
+            try:
+                source = self.rng.choice(exe.db.sql_server_sources)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         with source.lock:
             # Was dropped while we were acquiring lock
             if source not in exe.db.sql_server_sources:
@@ -2510,6 +2927,75 @@ class DropSqlServerSourceAction(Action):
             exe.execute(query, http=Http.RANDOM)
             exe.db.sql_server_sources.remove(source)
             source.executor.mz_conn.close()
+        return True
+
+
+class CreateIcebergSinkAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            "BYTES format with non-encodable type",
+            "cannot be used as an Iceberg equality delete key",
+        ] + super().errors_to_ignore(exe)
+
+    def run(self, exe: Executor) -> bool:
+        with exe.db.lock:
+            if len(exe.db.iceberg_sinks) >= MAX_ICEBERG_SINKS:
+                return False
+            sink_id = exe.db.iceberg_sink_id
+            exe.db.iceberg_sink_id += 1
+            try:
+                cluster = self.rng.choice(exe.db.clusters)
+                schema = self.rng.choice(exe.db.schemas)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
+        with schema.lock, cluster.lock:
+            if schema not in exe.db.schemas:
+                return False
+            if cluster not in exe.db.clusters:
+                return False
+
+            sink = IcebergSink(
+                sink_id,
+                cluster,
+                schema,
+                self.rng.choice(exe.db.db_objects_without_views()),
+                self.rng,
+            )
+            sink.create(exe)
+            exe.db.iceberg_sinks.append(sink)
+        return True
+
+
+class DropIcebergSinkAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            "still depended upon by",
+        ] + super().errors_to_ignore(exe)
+
+    def run(self, exe: Executor) -> bool:
+        with exe.db.lock:
+            if not exe.db.iceberg_sinks:
+                return False
+            try:
+                sink = self.rng.choice(exe.db.iceberg_sinks)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
+        with sink.lock:
+            # Was dropped while we were acquiring lock
+            if sink not in exe.db.iceberg_sinks:
+                return False
+
+            query = f"DROP SINK {sink}"
+            exe.execute(query, http=Http.RANDOM)
+            exe.db.iceberg_sinks.remove(sink)
         return True
 
 
@@ -2525,8 +3011,15 @@ class CreateKafkaSinkAction(Action):
                 return False
             sink_id = exe.db.kafka_sink_id
             exe.db.kafka_sink_id += 1
-            cluster = self.rng.choice(exe.db.clusters)
-            schema = self.rng.choice(exe.db.schemas)
+            try:
+                cluster = self.rng.choice(exe.db.clusters)
+                schema = self.rng.choice(exe.db.schemas)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         with schema.lock, cluster.lock:
             if schema not in exe.db.schemas:
                 return False
@@ -2555,7 +3048,14 @@ class DropKafkaSinkAction(Action):
         with exe.db.lock:
             if not exe.db.kafka_sinks:
                 return False
-            sink = self.rng.choice(exe.db.kafka_sinks)
+            try:
+                sink = self.rng.choice(exe.db.kafka_sinks)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         with sink.lock:
             # Was dropped while we were acquiring lock
             if sink not in exe.db.kafka_sinks:
@@ -2676,7 +3176,8 @@ read_action_list = ActionList(
         (
             CopyToS3Action,
             100,
-        ),  # TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9661 is fixed
+        ),
+        (CopyFromS3Action, 100),
         (SetClusterAction, 1),
         (CommitRollbackAction, 30),
         (ReconnectAction, 1),
@@ -2744,6 +3245,8 @@ ddl_action_list = ActionList(
         (DropWebhookSourceAction, 2),
         (CreateKafkaSinkAction, 4),
         (DropKafkaSinkAction, 4),
+        (CreateIcebergSinkAction, 4),
+        (DropIcebergSinkAction, 4),
         (CreateKafkaSourceAction, 4),
         (DropKafkaSourceAction, 4),
         # TODO: Reenable when database-issues#8237 is fixed
@@ -2764,11 +3267,14 @@ ddl_action_list = ActionList(
         (RenameSchemaAction, 10),
         (RenameTableAction, 10),
         (RenameViewAction, 10),
-        (RenameSinkAction, 10),
+        (RenameKafkaSinkAction, 10),
+        (RenameIcebergSinkAction, 10),
         (SwapSchemaAction, 10),
+        (ReplaceMaterializedViewAction, 20),
         (FlipFlagsAction, 2),
         # TODO: Reenable when database-issues#8813 is fixed.
         # (AlterTableAddColumnAction, 10),
+        (AlterIcebergSinkFromAction, 8),
         (AlterKafkaSinkFromAction, 8),
         # (TransactionIsolationAction, 1),
     ],

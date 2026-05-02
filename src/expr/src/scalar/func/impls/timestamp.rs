@@ -12,9 +12,10 @@ use std::fmt;
 use chrono::{
     DateTime, Duration, FixedOffset, NaiveDateTime, NaiveTime, Offset, TimeZone, Timelike, Utc,
 };
+use mz_expr_derive::sqlfunc;
 use mz_lowertest::MzReflect;
 use mz_ore::result::ResultExt;
-use mz_pgtz::timezone::Timezone;
+use mz_pgtz::timezone::{Timezone, TimezoneSpec};
 use mz_repr::adt::date::Date;
 use mz_repr::adt::datetime::DateTimeUnits;
 use mz_repr::adt::interval::Interval;
@@ -24,72 +25,81 @@ use mz_repr::{SqlColumnType, SqlScalarType, strconv};
 use serde::{Deserialize, Serialize};
 
 use crate::EvalError;
+use crate::func::parse_timezone;
 use crate::scalar::func::format::DateTimeFormat;
 use crate::scalar::func::{EagerUnaryFunc, TimestampLike};
 
-sqlfunc!(
-    #[sqlname = "timestamp_to_text"]
-    #[preserves_uniqueness = true]
-    #[inverse = to_unary!(super::CastStringToTimestamp(None))]
-    fn cast_timestamp_to_string(a: CheckedTimestamp<NaiveDateTime>) -> String {
-        let mut buf = String::new();
-        strconv::format_timestamp(&mut buf, &a);
-        buf
-    }
-);
+#[sqlfunc(
+    sqlname = "timestamp_to_text",
+    preserves_uniqueness = true,
+    inverse = to_unary!(super::CastStringToTimestamp(None))
+)]
+fn cast_timestamp_to_string(a: CheckedTimestamp<NaiveDateTime>) -> String {
+    let mut buf = String::new();
+    strconv::format_timestamp(&mut buf, &a);
+    buf
+}
 
-sqlfunc!(
-    #[sqlname = "timestamp_with_time_zone_to_text"]
-    #[preserves_uniqueness = true]
-    #[inverse = to_unary!(super::CastStringToTimestampTz(None))]
-    fn cast_timestamp_tz_to_string(a: CheckedTimestamp<DateTime<Utc>>) -> String {
-        let mut buf = String::new();
-        strconv::format_timestamptz(&mut buf, &a);
-        buf
-    }
-);
+#[sqlfunc(
+    sqlname = "timestamp_with_time_zone_to_text",
+    preserves_uniqueness = true,
+    inverse = to_unary!(super::CastStringToTimestampTz(None))
+)]
+fn cast_timestamp_tz_to_string(a: CheckedTimestamp<DateTime<Utc>>) -> String {
+    let mut buf = String::new();
+    strconv::format_timestamptz(&mut buf, &a);
+    buf
+}
 
-sqlfunc!(
-    #[sqlname = "timestamp_to_date"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastDateToTimestamp(None))]
-    #[is_monotone = true]
-    fn cast_timestamp_to_date(a: CheckedTimestamp<NaiveDateTime>) -> Result<Date, EvalError> {
-        Ok(a.date().try_into()?)
-    }
-);
+#[sqlfunc(
+    sqlname = "timestamp_to_date",
+    preserves_uniqueness = false,
+    inverse = to_unary!(super::CastDateToTimestamp(None)),
+    is_monotone = true
+)]
+fn cast_timestamp_to_date(a: CheckedTimestamp<NaiveDateTime>) -> Result<Date, EvalError> {
+    Ok(a.date().try_into()?)
+}
 
-sqlfunc!(
-    #[sqlname = "timestamp_with_time_zone_to_date"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastDateToTimestampTz(None))]
-    #[is_monotone = true]
-    fn cast_timestamp_tz_to_date(a: CheckedTimestamp<DateTime<Utc>>) -> Result<Date, EvalError> {
-        Ok(a.naive_utc().date().try_into()?)
-    }
-);
+#[sqlfunc(
+    sqlname = "timestamp_with_time_zone_to_date",
+    preserves_uniqueness = false,
+    inverse = to_unary!(super::CastDateToTimestampTz(None)),
+    is_monotone = true
+)]
+fn cast_timestamp_tz_to_date(a: CheckedTimestamp<DateTime<Utc>>) -> Result<Date, EvalError> {
+    Ok(a.naive_utc().date().try_into()?)
+}
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastTimestampToTimestampTz {
     pub from: Option<TimestampPrecision>,
     pub to: Option<TimestampPrecision>,
 }
 
-impl<'a> EagerUnaryFunc<'a> for CastTimestampToTimestampTz {
-    type Input = CheckedTimestamp<NaiveDateTime>;
-    type Output = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
+impl EagerUnaryFunc for CastTimestampToTimestampTz {
+    type Input<'a> = CheckedTimestamp<NaiveDateTime>;
+    type Output<'a> = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
 
-    fn call(
-        &self,
-        a: CheckedTimestamp<NaiveDateTime>,
-    ) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         let out =
             CheckedTimestamp::try_from(DateTime::<Utc>::from_naive_utc_and_offset(a.into(), Utc))?;
         let updated = out.round_to_precision(self.to)?;
         Ok(updated)
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::TimestampTz { precision: self.to }.nullable(input.nullable)
     }
 
@@ -118,20 +128,28 @@ impl fmt::Display for CastTimestampToTimestampTz {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct AdjustTimestampPrecision {
     pub from: Option<TimestampPrecision>,
     pub to: Option<TimestampPrecision>,
 }
 
-impl<'a> EagerUnaryFunc<'a> for AdjustTimestampPrecision {
-    type Input = CheckedTimestamp<NaiveDateTime>;
-    type Output = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
+impl EagerUnaryFunc for AdjustTimestampPrecision {
+    type Input<'a> = CheckedTimestamp<NaiveDateTime>;
+    type Output<'a> = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
 
-    fn call(
-        &self,
-        a: CheckedTimestamp<NaiveDateTime>,
-    ) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         // This should never have been called if precisions are same.
         // Adding a soft-assert to flag if there are such instances.
         mz_ore::soft_assert_no_log!(self.to != self.from);
@@ -140,7 +158,7 @@ impl<'a> EagerUnaryFunc<'a> for AdjustTimestampPrecision {
         Ok(updated)
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Timestamp { precision: self.to }.nullable(input.nullable)
     }
 
@@ -166,26 +184,34 @@ impl fmt::Display for AdjustTimestampPrecision {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastTimestampTzToTimestamp {
     pub from: Option<TimestampPrecision>,
     pub to: Option<TimestampPrecision>,
 }
 
-impl<'a> EagerUnaryFunc<'a> for CastTimestampTzToTimestamp {
-    type Input = CheckedTimestamp<DateTime<Utc>>;
-    type Output = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
+impl EagerUnaryFunc for CastTimestampTzToTimestamp {
+    type Input<'a> = CheckedTimestamp<DateTime<Utc>>;
+    type Output<'a> = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
 
-    fn call(
-        &self,
-        a: CheckedTimestamp<DateTime<Utc>>,
-    ) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         let out = CheckedTimestamp::try_from(a.naive_utc())?;
         let updated = out.round_to_precision(self.to)?;
         Ok(updated)
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Timestamp { precision: self.to }.nullable(input.nullable)
     }
 
@@ -214,20 +240,28 @@ impl fmt::Display for CastTimestampTzToTimestamp {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct AdjustTimestampTzPrecision {
     pub from: Option<TimestampPrecision>,
     pub to: Option<TimestampPrecision>,
 }
 
-impl<'a> EagerUnaryFunc<'a> for AdjustTimestampTzPrecision {
-    type Input = CheckedTimestamp<DateTime<Utc>>;
-    type Output = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
+impl EagerUnaryFunc for AdjustTimestampTzPrecision {
+    type Input<'a> = CheckedTimestamp<DateTime<Utc>>;
+    type Output<'a> = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
 
-    fn call(
-        &self,
-        a: CheckedTimestamp<DateTime<Utc>>,
-    ) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         // This should never have been called if precisions are same.
         // Adding a soft-assert to flag if there are such instances.
         mz_ore::soft_assert_no_log!(self.to != self.from);
@@ -236,7 +270,7 @@ impl<'a> EagerUnaryFunc<'a> for AdjustTimestampTzPrecision {
         Ok(updated)
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::TimestampTz { precision: self.to }.nullable(input.nullable)
     }
 
@@ -262,21 +296,18 @@ impl fmt::Display for AdjustTimestampTzPrecision {
     }
 }
 
-sqlfunc!(
-    #[sqlname = "timestamp_to_time"]
-    #[preserves_uniqueness = false]
-    fn cast_timestamp_to_time(a: CheckedTimestamp<NaiveDateTime>) -> NaiveTime {
-        a.time()
-    }
-);
+#[sqlfunc(sqlname = "timestamp_to_time", preserves_uniqueness = false)]
+fn cast_timestamp_to_time(a: CheckedTimestamp<NaiveDateTime>) -> NaiveTime {
+    a.time()
+}
 
-sqlfunc!(
-    #[sqlname = "timestamp_with_time_zone_to_time"]
-    #[preserves_uniqueness = false]
-    fn cast_timestamp_tz_to_time(a: CheckedTimestamp<DateTime<Utc>>) -> NaiveTime {
-        a.naive_utc().time()
-    }
-);
+#[sqlfunc(
+    sqlname = "timestamp_with_time_zone_to_time",
+    preserves_uniqueness = false
+)]
+fn cast_timestamp_tz_to_time(a: CheckedTimestamp<DateTime<Utc>>) -> NaiveTime {
+    a.naive_utc().time()
+}
 
 pub fn date_part_interval_inner<D>(units: DateTimeUnits, interval: Interval) -> Result<D, EvalError>
 where
@@ -310,18 +341,29 @@ where
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct ExtractInterval(pub DateTimeUnits);
 
-impl<'a> EagerUnaryFunc<'a> for ExtractInterval {
-    type Input = Interval;
-    type Output = Result<Numeric, EvalError>;
+impl EagerUnaryFunc for ExtractInterval {
+    type Input<'a> = Interval;
+    type Output<'a> = Result<Numeric, EvalError>;
 
-    fn call(&self, a: Interval) -> Result<Numeric, EvalError> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         date_part_interval_inner(self.0, a)
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Numeric { max_scale: None }.nullable(input.nullable)
     }
 }
@@ -332,18 +374,29 @@ impl fmt::Display for ExtractInterval {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct DatePartInterval(pub DateTimeUnits);
 
-impl<'a> EagerUnaryFunc<'a> for DatePartInterval {
-    type Input = Interval;
-    type Output = Result<f64, EvalError>;
+impl EagerUnaryFunc for DatePartInterval {
+    type Input<'a> = Interval;
+    type Output<'a> = Result<f64, EvalError>;
 
-    fn call(&self, a: Interval) -> Result<f64, EvalError> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         date_part_interval_inner(self.0, a)
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Float64.nullable(input.nullable)
     }
 }
@@ -400,18 +453,29 @@ pub(crate) fn most_significant_unit(unit: DateTimeUnits) -> bool {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct ExtractTimestamp(pub DateTimeUnits);
 
-impl<'a> EagerUnaryFunc<'a> for ExtractTimestamp {
-    type Input = CheckedTimestamp<NaiveDateTime>;
-    type Output = Result<Numeric, EvalError>;
+impl EagerUnaryFunc for ExtractTimestamp {
+    type Input<'a> = CheckedTimestamp<NaiveDateTime>;
+    type Output<'a> = Result<Numeric, EvalError>;
 
-    fn call(&self, a: CheckedTimestamp<NaiveDateTime>) -> Result<Numeric, EvalError> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         date_part_timestamp_inner(self.0, &*a)
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Numeric { max_scale: None }.nullable(input.nullable)
     }
 
@@ -426,18 +490,29 @@ impl fmt::Display for ExtractTimestamp {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct ExtractTimestampTz(pub DateTimeUnits);
 
-impl<'a> EagerUnaryFunc<'a> for ExtractTimestampTz {
-    type Input = CheckedTimestamp<DateTime<Utc>>;
-    type Output = Result<Numeric, EvalError>;
+impl EagerUnaryFunc for ExtractTimestampTz {
+    type Input<'a> = CheckedTimestamp<DateTime<Utc>>;
+    type Output<'a> = Result<Numeric, EvalError>;
 
-    fn call(&self, a: CheckedTimestamp<DateTime<Utc>>) -> Result<Numeric, EvalError> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         date_part_timestamp_inner(self.0, &*a)
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Numeric { max_scale: None }.nullable(input.nullable)
     }
 
@@ -455,18 +530,29 @@ impl fmt::Display for ExtractTimestampTz {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct DatePartTimestamp(pub DateTimeUnits);
 
-impl<'a> EagerUnaryFunc<'a> for DatePartTimestamp {
-    type Input = CheckedTimestamp<NaiveDateTime>;
-    type Output = Result<f64, EvalError>;
+impl EagerUnaryFunc for DatePartTimestamp {
+    type Input<'a> = CheckedTimestamp<NaiveDateTime>;
+    type Output<'a> = Result<f64, EvalError>;
 
-    fn call(&self, a: CheckedTimestamp<NaiveDateTime>) -> Result<f64, EvalError> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         date_part_timestamp_inner(self.0, &*a)
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Float64.nullable(input.nullable)
     }
 }
@@ -477,18 +563,29 @@ impl fmt::Display for DatePartTimestamp {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct DatePartTimestampTz(pub DateTimeUnits);
 
-impl<'a> EagerUnaryFunc<'a> for DatePartTimestampTz {
-    type Input = CheckedTimestamp<DateTime<Utc>>;
-    type Output = Result<f64, EvalError>;
+impl EagerUnaryFunc for DatePartTimestampTz {
+    type Input<'a> = CheckedTimestamp<DateTime<Utc>>;
+    type Output<'a> = Result<f64, EvalError>;
 
-    fn call(&self, a: CheckedTimestamp<DateTime<Utc>>) -> Result<f64, EvalError> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         date_part_timestamp_inner(self.0, &*a)
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Float64.nullable(input.nullable)
     }
 }
@@ -528,21 +625,29 @@ pub fn date_trunc_inner<T: TimestampLike>(units: DateTimeUnits, ts: &T) -> Resul
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct DateTruncTimestamp(pub DateTimeUnits);
 
-impl<'a> EagerUnaryFunc<'a> for DateTruncTimestamp {
-    type Input = CheckedTimestamp<NaiveDateTime>;
-    type Output = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
+impl EagerUnaryFunc for DateTruncTimestamp {
+    type Input<'a> = CheckedTimestamp<NaiveDateTime>;
+    type Output<'a> = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
 
-    fn call(
-        &self,
-        a: CheckedTimestamp<NaiveDateTime>,
-    ) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         date_trunc_inner(self.0, &*a)?.try_into().err_into()
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Timestamp { precision: None }.nullable(input.nullable)
     }
 
@@ -557,21 +662,29 @@ impl fmt::Display for DateTruncTimestamp {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct DateTruncTimestampTz(pub DateTimeUnits);
 
-impl<'a> EagerUnaryFunc<'a> for DateTruncTimestampTz {
-    type Input = CheckedTimestamp<DateTime<Utc>>;
-    type Output = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
+impl EagerUnaryFunc for DateTruncTimestampTz {
+    type Input<'a> = CheckedTimestamp<DateTime<Utc>>;
+    type Output<'a> = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
 
-    fn call(
-        &self,
-        a: CheckedTimestamp<DateTime<Utc>>,
-    ) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         date_trunc_inner(self.0, &*a)?.try_into().err_into()
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::TimestampTz { precision: None }.nullable(input.nullable)
     }
 
@@ -642,21 +755,29 @@ fn checked_add_with_leapsecond(lhs: &NaiveDateTime, rhs: &FixedOffset) -> Option
     .map(|dt| dt.with_nanosecond(nanos).unwrap())
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct TimezoneTimestamp(pub Timezone);
 
-impl<'a> EagerUnaryFunc<'a> for TimezoneTimestamp {
-    type Input = CheckedTimestamp<NaiveDateTime>;
-    type Output = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
+impl EagerUnaryFunc for TimezoneTimestamp {
+    type Input<'a> = CheckedTimestamp<NaiveDateTime>;
+    type Output<'a> = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
 
-    fn call(
-        &self,
-        a: CheckedTimestamp<NaiveDateTime>,
-    ) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         timezone_timestamp(self.0, a.to_naive())
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::TimestampTz { precision: None }.nullable(input.nullable)
     }
 }
@@ -667,23 +788,31 @@ impl fmt::Display for TimezoneTimestamp {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct TimezoneTimestampTz(pub Timezone);
 
-impl<'a> EagerUnaryFunc<'a> for TimezoneTimestampTz {
-    type Input = CheckedTimestamp<DateTime<Utc>>;
-    type Output = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
+impl EagerUnaryFunc for TimezoneTimestampTz {
+    type Input<'a> = CheckedTimestamp<DateTime<Utc>>;
+    type Output<'a> = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
 
-    fn call(
-        &self,
-        a: CheckedTimestamp<DateTime<Utc>>,
-    ) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         timezone_timestamptz(self.0, a.into())?
             .try_into()
             .err_into()
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Timestamp { precision: None }.nullable(input.nullable)
     }
 }
@@ -694,21 +823,32 @@ impl fmt::Display for TimezoneTimestampTz {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, MzReflect)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    MzReflect
+)]
 pub struct ToCharTimestamp {
     pub format_string: String,
     pub format: DateTimeFormat,
 }
 
-impl<'a> EagerUnaryFunc<'a> for ToCharTimestamp {
-    type Input = CheckedTimestamp<NaiveDateTime>;
-    type Output = String;
+impl EagerUnaryFunc for ToCharTimestamp {
+    type Input<'a> = CheckedTimestamp<NaiveDateTime>;
+    type Output<'a> = String;
 
-    fn call(&self, input: CheckedTimestamp<NaiveDateTime>) -> String {
+    fn call<'a>(&self, input: Self::Input<'a>) -> Self::Output<'a> {
         self.format.render(&*input)
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::String.nullable(input.nullable)
     }
 }
@@ -719,21 +859,32 @@ impl fmt::Display for ToCharTimestamp {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, MzReflect)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    MzReflect
+)]
 pub struct ToCharTimestampTz {
     pub format_string: String,
     pub format: DateTimeFormat,
 }
 
-impl<'a> EagerUnaryFunc<'a> for ToCharTimestampTz {
-    type Input = CheckedTimestamp<DateTime<Utc>>;
-    type Output = String;
+impl EagerUnaryFunc for ToCharTimestampTz {
+    type Input<'a> = CheckedTimestamp<DateTime<Utc>>;
+    type Output<'a> = String;
 
-    fn call(&self, input: CheckedTimestamp<DateTime<Utc>>) -> String {
+    fn call<'a>(&self, input: Self::Input<'a>) -> Self::Output<'a> {
         self.format.render(&*input)
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
         SqlScalarType::String.nullable(input.nullable)
     }
 }
@@ -742,4 +893,22 @@ impl fmt::Display for ToCharTimestampTz {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "tochartstz[{}]", self.format_string)
     }
+}
+
+#[sqlfunc(sqlname = "timezonets")]
+fn timezone_timestamp_binary(
+    tz: &str,
+    ts: CheckedTimestamp<NaiveDateTime>,
+) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
+    let tz = parse_timezone(tz, TimezoneSpec::Posix)?;
+    timezone_timestamp(tz, ts.into())
+}
+
+#[sqlfunc(sqlname = "timezonetstz")]
+fn timezone_timestamp_tz_binary(
+    tz: &str,
+    tstz: CheckedTimestamp<DateTime<Utc>>,
+) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
+    let tz = parse_timezone(tz, TimezoneSpec::Posix)?;
+    Ok(timezone_timestamptz(tz, tstz.into())?.try_into()?)
 }

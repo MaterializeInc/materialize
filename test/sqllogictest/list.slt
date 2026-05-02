@@ -219,6 +219,12 @@ SELECT (LIST [[1, 2, 3], [4, 5]][100][1])::text
 ----
 NULL
 
+# indexing through a NULL element
+query T
+SELECT LIST[[[1,2],[3,4]],NULL::int list list][2][1][1]
+----
+NULL
+
 # exceeds maximum layer
 query error cannot index into
 SELECT LIST [[1, 2, 3], [4, 5]][1][1][1]
@@ -679,10 +685,10 @@ SELECT list_append(NULL, NULL)::text
 query error invalid input syntax for type integer
 SELECT list_append(LIST[1], 'a')::text
 
-query error db error: ERROR: function list_append\(integer list, integer list\) does not exist
+query error function list_append\(integer list, integer list\) does not exist
 SELECT list_append(LIST[1], LIST[2])
 
-query error db error: ERROR: function list_append\(integer, integer list\) does not exist
+query error function list_append\(integer, integer list\) does not exist
 SELECT list_append(1, LIST[1])
 
 # 🔬🔬 list_cat
@@ -1152,7 +1158,7 @@ query T
 SELECT unnest::text FROM unnest(NULL::int list)
 ----
 
-query error db error: ERROR: function unnest\(unknown\) is not unique
+query error function unnest\(unknown\) is not unique
 SELECT * FROM unnest(NULL)
 
 # 🔬 List casts
@@ -1276,7 +1282,7 @@ SELECT length(LIST['1','2']::text)
 ----
 5
 
-query error db error: ERROR: function length\(text list\) does not exist
+query error function length\(text list\) does not exist
 SELECT length(LIST['1','2'])
 
 # 🔬🔬 text to list
@@ -1961,24 +1967,24 @@ false
 
 # 🔬🔬🔬 errors
 
-query error db error: ERROR: operator does not exist: integer list = text list
+query error operator does not exist: integer list = text list
 SELECT LIST[1] = LIST['a']
 
-query error db error: ERROR: operator does not exist: text list = integer list
+query error operator does not exist: text list = integer list
 SELECT LIST[NULL] = LIST[1]
 
-query error db error: ERROR: operator does not exist: text list list = integer list
+query error operator does not exist: text list list = integer list
 SELECT LIST[[NULL]] = LIST[1]
 
-query error db error: ERROR: operator does not exist: integer list list list = integer list
+query error operator does not exist: integer list list list = integer list
 SELECT LIST[[[1]]] = LIST[2]
 
 # Literal text cannot be implicitly cast to list
-query error db error: ERROR: operator does not exist: integer list = text
+query error operator does not exist: integer list = text
 SELECT LIST[1] = '{2}'::text
 
 # Two lists containing implicitly castable element types are not implicitly castable to one another
-query error db error: ERROR: operator does not exist: real list = double precision list
+query error operator does not exist: real list = double precision list
 SELECT '{1}'::float4 list = '{2}'::float8 list
 
 # 🔬 CREATE TYPE .. AS LIST
@@ -2023,7 +2029,7 @@ SELECT '{{1,2}}'::int4_list_list_c::text;
 query error type "bool list" does not exist
 CREATE TYPE nested_list AS LIST (ELEMENT TYPE = "bool list")
 
-query error db error: ERROR: cannot reference pseudo type mz_catalog\.list
+query error cannot reference pseudo type mz_catalog\.list
 CREATE TYPE nested_list AS LIST (ELEMENT TYPE = list)
 
 # 🔬🔬 Check each valid non-array element type
@@ -2353,7 +2359,7 @@ SELECT (list_agg(a) FILTER (WHERE a IS NULL))::text FROM t1
 ----
 {NULL,NULL}
 
-query error db error: ERROR: function list_agg\(integer, integer\) does not exist
+query error function list_agg\(integer, integer\) does not exist
 SELECT list_agg(1, 2)
 
 statement ok
@@ -2677,9 +2683,9 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations, types, no fast path) AS VERBOSE TEXT FOR SELECT LIST[[[f1, f2], [f7, f8, f3, f4]], [[f5, f6], [f7, f8]]] [n][m][n] from m3
 ----
 Explained Query:
-  Project (#12) // { arity: 1, types: "(integer?)" }
-    Map (integer_to_bigint(#8{n}), list_index(list[list[list[#0{f1}, #1{f2}], list[#6{f7}, #7{f8}, #2{f3}, #3{f4}]], list[list[#4{f5}, #5{f6}], list[#6{f7}, #7{f8}]]], #11, integer_to_bigint(#9{m}), #11)) // { arity: 13, types: "(integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer list?, bigint?, integer?)" }
-      ReadIndex on=m3 m3_primary_idx=[*** full scan ***] // { arity: 11, types: "(integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer list?)" }
+  Project (#12) // { arity: 1, types: "(r_int32?)" }
+    Map (integer_to_bigint(#8{n}), list_index(list[list[list[#0{f1}, #1{f2}], list[#6{f7}, #7{f8}, #2{f3}, #3{f4}]], list[list[#4{f5}, #5{f6}], list[#6{f7}, #7{f8}]]], #11, integer_to_bigint(#9{m}), #11)) // { arity: 13, types: "(r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_list(r_int32)?, r_int64?, r_int32?)" }
+      ReadIndex on=m3 m3_primary_idx=[*** full scan ***] // { arity: 11, types: "(r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_list(r_int32)?)" }
 
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
@@ -2698,9 +2704,9 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations, types, no fast path) AS VERBOSE TEXT FOR SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [n][m][1] from m3
 ----
 Explained Query:
-  Project (#11) // { arity: 1, types: "(integer?)" }
-    Map (list_index(list[list[#0{f1}, #2{f3}], list[#4{f5}, #6{f7}]], integer_to_bigint(#8{n}), integer_to_bigint(#9{m}))) // { arity: 12, types: "(integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer list?, integer?)" }
-      ReadIndex on=m3 m3_primary_idx=[*** full scan ***] // { arity: 11, types: "(integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer list?)" }
+  Project (#11) // { arity: 1, types: "(r_int32?)" }
+    Map (list_index(list[list[#0{f1}, #2{f3}], list[#4{f5}, #6{f7}]], integer_to_bigint(#8{n}), integer_to_bigint(#9{m}))) // { arity: 12, types: "(r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_list(r_int32)?, r_int32?)" }
+      ReadIndex on=m3 m3_primary_idx=[*** full scan ***] // { arity: 11, types: "(r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_list(r_int32)?)" }
 
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
@@ -2719,9 +2725,9 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations, types, no fast path) AS VERBOSE TEXT FOR SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [n][2][m] from m3
 ----
 Explained Query:
-  Project (#11) // { arity: 1, types: "(integer?)" }
-    Map (list_index(list[list[#2{f3}, #3{f4}], list[#6{f7}, #7{f8}]], integer_to_bigint(#8{n}), integer_to_bigint(#9{m}))) // { arity: 12, types: "(integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer list?, integer?)" }
-      ReadIndex on=m3 m3_primary_idx=[*** full scan ***] // { arity: 11, types: "(integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer list?)" }
+  Project (#11) // { arity: 1, types: "(r_int32?)" }
+    Map (list_index(list[list[#2{f3}, #3{f4}], list[#6{f7}, #7{f8}]], integer_to_bigint(#8{n}), integer_to_bigint(#9{m}))) // { arity: 12, types: "(r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_list(r_int32)?, r_int32?)" }
+      ReadIndex on=m3 m3_primary_idx=[*** full scan ***] // { arity: 11, types: "(r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_list(r_int32)?)" }
 
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
@@ -2740,9 +2746,9 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations, types, no fast path) AS VERBOSE TEXT FOR SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [1][n][m] from m3
 ----
 Explained Query:
-  Project (#11) // { arity: 1, types: "(integer?)" }
-    Map (list_index(list[list[#0{f1}, #1{f2}], list[#2{f3}, #3{f4}]], integer_to_bigint(#8{n}), integer_to_bigint(#9{m}))) // { arity: 12, types: "(integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer list?, integer?)" }
-      ReadIndex on=m3 m3_primary_idx=[*** full scan ***] // { arity: 11, types: "(integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer list?)" }
+  Project (#11) // { arity: 1, types: "(r_int32?)" }
+    Map (list_index(list[list[#0{f1}, #1{f2}], list[#2{f3}, #3{f4}]], integer_to_bigint(#8{n}), integer_to_bigint(#9{m}))) // { arity: 12, types: "(r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_list(r_int32)?, r_int32?)" }
+      ReadIndex on=m3 m3_primary_idx=[*** full scan ***] // { arity: 11, types: "(r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_list(r_int32)?)" }
 
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
@@ -2761,9 +2767,9 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations, types, no fast path) AS VERBOSE TEXT FOR SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][1][n] from m3
 ----
 Explained Query:
-  Project (#11) // { arity: 1, types: "(integer?)" }
-    Map (list_index(list[#4{f5}, #5{f6}], integer_to_bigint(#8{n}))) // { arity: 12, types: "(integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer list?, integer?)" }
-      ReadIndex on=m3 m3_primary_idx=[*** full scan ***] // { arity: 11, types: "(integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer list?)" }
+  Project (#11) // { arity: 1, types: "(r_int32?)" }
+    Map (list_index(list[#4{f5}, #5{f6}], integer_to_bigint(#8{n}))) // { arity: 12, types: "(r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_list(r_int32)?, r_int32?)" }
+      ReadIndex on=m3 m3_primary_idx=[*** full scan ***] // { arity: 11, types: "(r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_list(r_int32)?)" }
 
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
@@ -2782,9 +2788,9 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations, types, no fast path) AS VERBOSE TEXT FOR SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][n][2] from m3
 ----
 Explained Query:
-  Project (#11) // { arity: 1, types: "(integer?)" }
-    Map (list_index(list[#5{f6}, #7{f8}], integer_to_bigint(#8{n}))) // { arity: 12, types: "(integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer list?, integer?)" }
-      ReadIndex on=m3 m3_primary_idx=[*** full scan ***] // { arity: 11, types: "(integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer list?)" }
+  Project (#11) // { arity: 1, types: "(r_int32?)" }
+    Map (list_index(list[#5{f6}, #7{f8}], integer_to_bigint(#8{n}))) // { arity: 12, types: "(r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_list(r_int32)?, r_int32?)" }
+      ReadIndex on=m3 m3_primary_idx=[*** full scan ***] // { arity: 11, types: "(r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_list(r_int32)?)" }
 
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)
@@ -2803,9 +2809,9 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations, types, no fast path) AS VERBOSE TEXT FOR SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [n][2][2] from m3
 ----
 Explained Query:
-  Project (#11) // { arity: 1, types: "(integer?)" }
-    Map (list_index(list[#3{f4}, #7{f8}], integer_to_bigint(#8{n}))) // { arity: 12, types: "(integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer list?, integer?)" }
-      ReadIndex on=m3 m3_primary_idx=[*** full scan ***] // { arity: 11, types: "(integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer?, integer list?)" }
+  Project (#11) // { arity: 1, types: "(r_int32?)" }
+    Map (list_index(list[#3{f4}, #7{f8}], integer_to_bigint(#8{n}))) // { arity: 12, types: "(r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_list(r_int32)?, r_int32?)" }
+      ReadIndex on=m3 m3_primary_idx=[*** full scan ***] // { arity: 11, types: "(r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_int32?, r_list(r_int32)?)" }
 
 Used Indexes:
   - materialize.public.m3_primary_idx (*** full scan ***)

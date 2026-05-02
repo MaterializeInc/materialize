@@ -19,10 +19,7 @@ def schema() -> str:
 
 class Range(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            schema()
-            + dedent(
-                """
+        return Testdrive(schema() + dedent("""
             > CREATE TABLE range_table (
                 index INT,
                 i4_range INT4RANGE,
@@ -51,9 +48,7 @@ class Range(Check):
                 NULL,
                 NULL
               );
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         manipulation = """
@@ -110,9 +105,7 @@ class Range(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > SELECT * FROM range_table ORDER BY index ASC;
             1 [2,9) [2,101) [400,600] "[2023-01-01 00:00:00,2023-03-01 00:00:00)" "[2023-01-01 00:00:00 UTC,2023-03-01 00:00:00 UTC)" [2023-01-01,2023-03-01)
             1 [2,9) [2,101) [400,600] "[2023-01-01 00:00:00,2023-03-01 00:00:00)" "[2023-01-01 00:00:00 UTC,2023-03-01 00:00:00 UTC)" [2023-01-01,2023-03-01)
@@ -133,6 +126,4 @@ class Range(Check):
             1 [2,9) [2,101) [400,600] "[2023-01-01 00:00:00,2023-03-01 00:00:00)" "[2023-01-01 00:00:00 UTC,2023-03-01 00:00:00 UTC)" [2023-01-01,2023-03-01) [2,6) [2,4) [2,101) [2,6) [2,101) 2 101 false true false false false false false false true true true true false true true true true false true false [2,101) [8,21) [2,8)
             1 [2,9) [2,101) [400,600] "[2023-01-01 00:00:00,2023-03-01 00:00:00)" "[2023-01-01 00:00:00 UTC,2023-03-01 00:00:00 UTC)" [2023-01-01,2023-03-01) [2,6) [2,4) [2,101) [2,6) [2,101) 2 101 false true false false false false false false true true true true false true true true true false true false [2,101) [8,21) [2,8)
             2 <null> <null> <null> <null> <null> <null> [2,6) [2,4) [2,6) [2,6) <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null>
-            """
-            )
-        )
+            """))

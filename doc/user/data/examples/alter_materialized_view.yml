@@ -1,0 +1,134 @@
+- name: "syntax-rename"
+  code: |
+    ALTER MATERIALIZED VIEW <name> RENAME TO <new_name>;
+  syntax_elements:
+    - name: "`<name>`"
+      description: |
+        The current name of the materialized view you want to alter.
+    - name: "`<new_name>`"
+      description: |
+        The new name of the materialized view.
+  addenda: |
+    See also [Renaming restrictions](/sql/identifiers/#renaming-restrictions).
+
+- name: "syntax-change-owner"
+  code: |
+    ALTER MATERIALIZED VIEW <name> OWNER TO <new_owner_role>;
+  syntax_elements:
+    - name: "`<name>`"
+      description: |
+        The name of the materialized view you want to change ownership of.
+    - name: "`<new_owner_role>`"
+      description: |
+        The new owner of the materialized view.
+  addenda: |
+    To change the owner of a materialized view, you must be the owner of the materialized view and have
+    membership in the `<new_owner_role>`. See also [Privileges](#privileges).
+
+- name: "syntax-set-retain-history"
+  code: |
+    ALTER MATERIALIZED VIEW <name> SET (RETAIN HISTORY [=] FOR <retention_period>);
+  syntax_elements:
+    - name: "`<name>`"
+      description: |
+        The name of the materialized view you want to alter.
+    - name: "`<retention_period>`"
+      description: |
+        ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
+
+- name: "syntax-reset-retain-history"
+  code: |
+    ALTER MATERIALIZED VIEW <name> RESET (RETAIN HISTORY);
+  syntax_elements:
+    - name: "`<name>`"
+      description: |
+        The name of the materialized view you want to alter.
+
+- name: "syntax-apply-replacement"
+  code: |
+    ALTER MATERIALIZED VIEW <name> APPLY REPLACEMENT <replacement_materialized_view>;
+  syntax_elements:
+    - name: "`<name>`"
+      description: |
+        The name of the materialized view to replace.
+    - name: "`<replacement_materialized_view>`"
+      description: |
+        The name of a replacement materialized view specifically created for
+        the target materialized view. See [`CREATE REPLACEMENT MATERIALIZED VIEW
+        <replacement_view>...FOR <name>...`](/sql/create-materialized-view).
+
+- name: "example-apply-replacement"
+  description: |
+    Assume that `winning_bids_replacement` is hydrated to avoid downtime (see
+    [Recommended checks before replacing a
+    view](/sql/alter-materialized-view/#recommended-checks-before-replacing-a-view)
+    for details).
+
+    The following example replaces the `winning_bids` materialized view
+    with `winning_bids_replacement`:
+  code: |
+    ALTER MATERIALIZED VIEW winning_bids
+    APPLY REPLACEMENT winning_bids_replacement;
+  testable: false  # TODO: Need to add test_setup for the example.
+
+- name: "apply-replacement-command-details"
+  content: |
+    When replacing a materialized view, the operation:
+
+    - Replaces the materialized view's definition with that of the replacement
+      view and drops the replacement view at the same time.
+
+    - Emits a diff representing the changes between the old and new output.
+
+- name: "prereq-recommendations-short"
+  content: |
+    Before applying the replacement view, verify that the replacement view is
+    hydrated to avoid downtime:
+
+- name: "prereq-recommendations"
+  content: |
+
+   Before applying, verify that the replacement materialized view is hydrated
+   to avoid downtime:
+
+     ```mzsql
+     SELECT
+        mv.name,
+        h.hydrated
+     FROM mz_catalog.mz_materialized_views AS mv
+     JOIN mz_internal.mz_hydration_statuses AS h ON (mv.id = h.object_id)
+     WHERE mv.name = '<replacement_view>';
+     ```
+
+- name: "cpu-memory-considerations"
+  content: |
+    When applying the replacement, dependent objects must process the diff
+    emitted by the operation. Depending on the size of the changes, this may
+    cause temporary CPU and memory spikes.
+
+- name: "troubleshooting-lagging-original-view"
+  content: |
+    **Issue:** Command does not return.
+
+    **Common cause:** The original materialized view is lagging behind the replacement. If
+    the original is lagging behind the replacement, the command waits for the
+    original view to catch up.
+
+    **Action:** Cancel the command and check whether the original materialized view is
+    lagging behind the replacement.
+
+    To check whether the original materialized view is lagging behind the replacement, run
+    the following query to check their write frontiers, substituting the names
+    of your original and replacement materialized views.
+
+    ```mzsql
+    SELECT o.name, f.write_frontier
+    FROM mz_objects o, mz_cluster_replica_frontiers f
+    WHERE o.name in ('<view>', '<view_replacement>')
+    AND f.object_id = o.id;
+    ```
+
+    If the original materialized view is behind, rerun the query to check the progress of the
+    original materialized view. If the rate of advancement suggests that catch
+    up will take an extended period of time, it is recommended to drop the
+    replacement view.

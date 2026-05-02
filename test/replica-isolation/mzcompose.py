@@ -12,7 +12,6 @@ Test replica isolation by introducing faults of various kinds in replica1 and
 then making sure that the cluster continues to operate properly
 """
 
-
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -80,7 +79,7 @@ class AllowCompactionCheck:
 
     def replica_id(self, c: Composition) -> str:
         cursor = c.sql_cursor()
-        (cluster, replica) = self.replica.split(".")
+        cluster, replica = self.replica.split(".")
         cursor.execute(
             f"""
                 SELECT mz_cluster_replicas.id FROM mz_clusters, mz_cluster_replicas
@@ -136,12 +135,10 @@ class MaterializedView(AllowCompactionCheck):
 
     def find_ids(self, c: Composition) -> None:
         cursor = c.sql_cursor()
-        cursor.execute(
-            """
+        cursor.execute("""
                 SELECT id,shard_id from mz_internal.mz_storage_shards, mz_catalog.mz_materialized_views
                 WHERE object_id = id AND name = 'v3';
-            """
-        )
+            """)
         self.ids = [self._format_id(get_single_value_from_cursor(cursor))]
 
     def print_error(self) -> None:
@@ -184,12 +181,10 @@ class ArrangedIndex(AllowCompactionCheck):
 
     def find_ids(self, c: Composition) -> None:
         cursor = c.sql_cursor()
-        cursor.execute(
-            """
+        cursor.execute("""
                 SELECT idx.id FROM mz_catalog.mz_views AS views, mz_catalog.mz_indexes AS idx
                 WHERE views.name = 'ct1' AND views.id = idx.on_id
-            """
-        )
+            """)
         self.ids = [self._format_id(x[0]) for x in cursor.fetchall()]
 
     def print_error(self) -> None:
@@ -201,8 +196,7 @@ class ArrangedIndex(AllowCompactionCheck):
 def populate(c: Composition) -> None:
     # Create some database objects
     c.testdrive(
-        dedent(
-            """
+        dedent("""
             > CREATE TABLE t1 (f1 INTEGER);
             > INSERT INTO t1 SELECT * FROM generate_series(1, 10);
             > CREATE VIEW ct1 AS SELECT COUNT(*) AS c1 FROM t1;
@@ -229,8 +223,7 @@ def populate(c: Composition) -> None:
               FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-source1-${testdrive.seed}')
               FORMAT BYTES
             > CREATE MATERIALIZED VIEW v2 AS SELECT COUNT(*) FROM source1
-            """
-        ),
+            """),
     )
 
 
@@ -252,18 +245,14 @@ def drop_create_replica(c: Composition) -> None:
         user="mz_system",
     )
 
-    c.testdrive(
-        dedent(
-            """
+    c.testdrive(dedent("""
             > DROP CLUSTER REPLICA cluster1.replica1
             > CREATE CLUSTER REPLICA cluster1.replica3
               STORAGECTL ADDRESSES ['clusterd_1_1:2100', 'clusterd_1_2:2100'],
               STORAGE ADDRESSES ['clusterd_1_1:2103', 'clusterd_1_2:2103'],
               COMPUTECTL ADDRESSES ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
               COMPUTE ADDRESSES ['clusterd_1_1:2102', 'clusterd_1_2:2102']
-            """
-        )
-    )
+            """))
 
 
 def create_invalid_replica(c: Composition) -> None:
@@ -272,24 +261,19 @@ def create_invalid_replica(c: Composition) -> None:
         port=6877,
         user="mz_system",
     )
-    c.testdrive(
-        dedent(
-            """
+    c.testdrive(dedent("""
             > CREATE CLUSTER REPLICA cluster1.replica3
               STORAGECTL ADDRESSES ['no_such_host:2100'],
               STORAGE ADDRESSES ['no_such_host:2103'],
               COMPUTECTL ADDRESSES ['no_such_host:2101'],
               COMPUTE ADDRESSES ['no_such_host:2102']
-            """
-        )
-    )
+            """))
 
 
 def validate(c: Composition) -> None:
     # Validate that the cluster continues to operate
     c.testdrive(
-        dedent(
-            """
+        dedent("""
             # Dataflows
             > SELECT * FROM ct1;
             10
@@ -330,8 +314,7 @@ def validate(c: Composition) -> None:
               FORMAT BYTES
             > SELECT COUNT(*) FROM source2
             2000000
-"""
-        ),
+"""),
     )
 
 
@@ -445,9 +428,18 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
         "clusterd_2_1",
         "clusterd_2_2",
     ]
-    c.kill(*cleanup_list)
-    c.rm(*cleanup_list, destroy_volumes=True)
-    c.rm_volumes("mzdata")
+    try:
+        c.kill(*cleanup_list)
+    except:
+        pass
+    try:
+        c.rm(*cleanup_list, destroy_volumes=True)
+    except:
+        pass
+    try:
+        c.rm_volumes("mzdata")
+    except:
+        pass
     print(f"+++ Running disruption scenario {disruption.name}")
 
     with c.override(
@@ -508,8 +500,7 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
                 user="mz_system",
             )
 
-        c.sql(
-            """
+        c.sql("""
             CREATE CLUSTER cluster1 REPLICAS (
                 replica1 (
                     STORAGECTL ADDRESSES ['clusterd_1_1:2100', 'clusterd_1_2:2100'],
@@ -524,8 +515,7 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
                     COMPUTE ADDRESSES ['clusterd_2_1:2102', 'clusterd_2_2:2102']
                 )
             )
-            """
-        )
+            """)
 
         populate(c)
 

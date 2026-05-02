@@ -22,7 +22,6 @@ use differential_dataflow::lattice::Lattice;
 use futures::StreamExt;
 use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::cast::CastFrom;
-use mz_ore::task::JoinHandleExt;
 use mz_persist_client::cfg::RetryParameters;
 use mz_persist_client::operators::shard_source::{
     ErrorHandler, FilterResult, SnapshotMode, shard_source,
@@ -38,12 +37,13 @@ use mz_timely_util::builder_async::{
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::capture::Event;
-use timely::dataflow::operators::{Broadcast, Capture, Leave, Map, Probe};
-use timely::dataflow::{ProbeHandle, Scope, Stream};
+use timely::dataflow::operators::vec::{Broadcast, Map};
+use timely::dataflow::operators::{Capture, Leave, Probe};
+use timely::dataflow::{ProbeHandle, Scope, StreamVec};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use timely::worker::Worker;
-use timely::{Data, PartialOrder, WorkerConfig};
+use timely::{PartialOrder, WorkerConfig};
 use tracing::debug;
 
 use crate::TxnsCodecDefault;
@@ -92,8 +92,8 @@ use crate::txn_read::{DataRemapEntry, TxnsRead};
 ///   10). It knows that the data shard _WAS_ involved in this, so it forwards
 ///   on data from its input until the input has progressed to 10, at which
 ///   point it can itself downgrade to 10.
-pub fn txns_progress<K, V, T, D, P, C, F, G>(
-    passthrough: Stream<G, P>,
+pub fn txns_progress<'scope, K, V, T, D, P, C, F>(
+    passthrough: StreamVec<'scope, T, P>,
     name: &str,
     ctx: &TxnsContext,
     client_fn: impl Fn() -> F,
@@ -103,19 +103,18 @@ pub fn txns_progress<K, V, T, D, P, C, F, G>(
     until: Antichain<T>,
     data_key_schema: Arc<K::Schema>,
     data_val_schema: Arc<V::Schema>,
-) -> (Stream<G, P>, Vec<PressOnDropButton>)
+) -> (StreamVec<'scope, T, P>, Vec<PressOnDropButton>)
 where
     K: Debug + Codec + Send + Sync,
     V: Debug + Codec + Send + Sync,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
-    D: Debug + Data + Monoid + Ord + Codec64 + Send + Sync,
-    P: Debug + Data,
+    D: Debug + Clone + 'static + Monoid + Ord + Codec64 + Send + Sync,
+    P: Debug + Clone + 'static,
     C: TxnsCodec + 'static,
     F: Future<Output = PersistClient> + Send + 'static,
-    G: Scope<Timestamp = T>,
 {
     let unique_id = (name, passthrough.scope().addr()).hashed();
-    let (remap, source_button) = txns_progress_source_global::<K, V, T, D, P, C, G>(
+    let (remap, source_button) = txns_progress_source_global::<K, V, T, D, P, C>(
         passthrough.scope(),
         name,
         ctx.clone(),
@@ -130,7 +129,7 @@ where
     // Each of the `txns_frontiers` workers wants the full copy of the remap
     // information.
     let remap = remap.broadcast();
-    let (passthrough, frontiers_button) = txns_progress_frontiers::<K, V, T, D, P, C, G>(
+    let (passthrough, frontiers_button) = txns_progress_frontiers::<K, V, T, D, P, C>(
         remap,
         passthrough,
         name,
@@ -154,8 +153,8 @@ where
 ///
 /// [reclocking design doc]:
 ///     https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20210714_reclocking.md
-fn txns_progress_source_global<K, V, T, D, P, C, G>(
-    scope: G,
+fn txns_progress_source_global<'scope, K, V, T, D, P, C>(
+    scope: Scope<'scope, T>,
     name: &str,
     ctx: TxnsContext,
     client: impl Future<Output = PersistClient> + 'static,
@@ -165,22 +164,21 @@ fn txns_progress_source_global<K, V, T, D, P, C, G>(
     data_key_schema: Arc<K::Schema>,
     data_val_schema: Arc<V::Schema>,
     unique_id: u64,
-) -> (Stream<G, DataRemapEntry<T>>, PressOnDropButton)
+) -> (StreamVec<'scope, T, DataRemapEntry<T>>, PressOnDropButton)
 where
     K: Debug + Codec + Send + Sync,
     V: Debug + Codec + Send + Sync,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
-    D: Debug + Data + Monoid + Ord + Codec64 + Send + Sync,
-    P: Debug + Data,
+    D: Debug + Clone + 'static + Monoid + Ord + Codec64 + Send + Sync,
+    P: Debug + Clone + 'static,
     C: TxnsCodec + 'static,
-    G: Scope<Timestamp = T>,
 {
     let worker_idx = scope.index();
     let chosen_worker = usize::cast_from(name.hashed()) % scope.peers();
     let name = format!("txns_progress_source({})", name);
     let mut builder = AsyncOperatorBuilder::new(name.clone(), scope);
     let name = format!("{} [{}] {:.9}", name, unique_id, data_id.to_string());
-    let (remap_output, remap_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (remap_output, remap_stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
     let shutdown_button = builder.build(move |capabilities| async move {
         if worker_idx != chosen_worker {
@@ -230,22 +228,21 @@ where
     (remap_stream, shutdown_button.press_on_drop())
 }
 
-fn txns_progress_frontiers<K, V, T, D, P, C, G>(
-    remap: Stream<G, DataRemapEntry<T>>,
-    passthrough: Stream<G, P>,
+fn txns_progress_frontiers<'scope, K, V, T, D, P, C>(
+    remap: StreamVec<'scope, T, DataRemapEntry<T>>,
+    passthrough: StreamVec<'scope, T, P>,
     name: &str,
     data_id: ShardId,
     until: Antichain<T>,
     unique_id: u64,
-) -> (Stream<G, P>, PressOnDropButton)
+) -> (StreamVec<'scope, T, P>, PressOnDropButton)
 where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
-    D: Data + Monoid + Codec64 + Send + Sync,
-    P: Debug + Data,
+    D: Clone + 'static + Monoid + Codec64 + Send + Sync,
+    P: Debug + Clone + 'static,
     C: TxnsCodec,
-    G: Scope<Timestamp = T>,
 {
     let name = format!("txns_progress_frontiers({})", name);
     let mut builder = AsyncOperatorBuilder::new(name.clone(), passthrough.scope());
@@ -258,9 +255,9 @@ where
         data_id.to_string(),
     );
     let (passthrough_output, passthrough_stream) =
-        builder.new_output::<CapacityContainerBuilder<_>>();
-    let mut remap_input = builder.new_disconnected_input(&remap, Pipeline);
-    let mut passthrough_input = builder.new_disconnected_input(&passthrough, Pipeline);
+        builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+    let mut remap_input = builder.new_disconnected_input(remap, Pipeline);
+    let mut passthrough_input = builder.new_disconnected_input(passthrough, Pipeline);
 
     let shutdown_button = builder.build(move |capabilities| async move {
         let [mut cap]: [_; 1] = capabilities.try_into().expect("one capability per output");
@@ -481,7 +478,7 @@ pub fn txns_data_shard_retry_params(cfg: &ConfigSet) -> RetryParameters {
 /// [Subscribe]: mz_persist_client::read::Subscribe
 pub struct DataSubscribe {
     pub(crate) as_of: u64,
-    pub(crate) worker: Worker<timely::communication::allocator::Thread>,
+    pub(crate) worker: Worker,
     data: ProbeHandle<u64>,
     txns: ProbeHandle<u64>,
     capture: mpsc::Receiver<Event<u64, Vec<(String, u64, i64)>>>,
@@ -522,13 +519,16 @@ impl DataSubscribe {
     ) -> Self {
         let mut worker = Worker::new(
             WorkerConfig::default(),
-            timely::communication::allocator::Thread::default(),
+            timely::communication::Allocator::Thread(
+                timely::communication::allocator::Thread::default(),
+            ),
             Some(std::time::Instant::now()),
         );
-        let (data, txns, capture, tokens) = worker.dataflow::<u64, _, _>(|scope| {
-            let (data_stream, shard_source_token) = scope.scoped::<u64, _, _>("hybrid", |scope| {
+        let (data, txns, capture, tokens) = worker.dataflow::<u64, _, _>(|outer| {
+            let (data_stream, shard_source_token) = outer.scoped::<u64, _, _>("hybrid", |scope| {
                 let client = client.clone();
                 let (data_stream, token) = shard_source::<String, (), u64, i64, _, _, _>(
+                    outer,
                     scope,
                     name,
                     move || std::future::ready(client.clone()),
@@ -536,7 +536,7 @@ impl DataSubscribe {
                     Some(Antichain::from_elem(as_of)),
                     SnapshotMode::Include,
                     until.clone(),
-                    false.then_some(|_, _: &_, _| unreachable!()),
+                    false.then_some(|_, _, _| unreachable!()),
                     Arc::new(StringSchema),
                     Arc::new(UnitSchema),
                     FilterResult::keep_all,
@@ -544,19 +544,16 @@ impl DataSubscribe {
                     async {},
                     ErrorHandler::Halt("data_subscribe"),
                 );
-                (data_stream.leave(), token)
+                (data_stream.leave(outer), token)
             });
             let (data, txns) = (ProbeHandle::new(), ProbeHandle::new());
             let data_stream = data_stream.flat_map(|part| {
                 let part = part.parse();
-                part.part.map(|((k, v), t, d)| {
-                    let (k, ()) = (k.unwrap(), v.unwrap());
-                    (k, t, d)
-                })
+                part.part.map(|((k, ()), t, d)| (k, t, d))
             });
             let data_stream = data_stream.probe_with(&data);
             let (data_stream, mut txns_progress_token) =
-                txns_progress::<String, (), u64, i64, _, TxnsCodecDefault, _, _>(
+                txns_progress::<String, (), u64, i64, _, TxnsCodecDefault, _>(
                     data_stream,
                     name,
                     &TxnsContext::default(),
@@ -696,7 +693,7 @@ impl DataSubscribeTask {
     pub async fn finish(self) -> Vec<(String, u64, i64)> {
         // Closing the channel signals the task to exit.
         drop(self.tx);
-        self.task.wait_and_assert_finished().await
+        self.task.await
     }
 
     fn task(
@@ -749,20 +746,18 @@ impl DataSubscribeTask {
 #[cfg(test)]
 mod tests {
     use itertools::{Either, Itertools};
-    use mz_persist_types::Opaque;
 
     use crate::tests::writer;
     use crate::txns::TxnsHandle;
 
     use super::*;
 
-    impl<K, V, T, D, O, C> TxnsHandle<K, V, T, D, O, C>
+    impl<K, V, T, D, C> TxnsHandle<K, V, T, D, C>
     where
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
         D: Debug + Monoid + Ord + Codec64 + Send + Sync,
-        O: Opaque + Debug + Codec64,
         C: TxnsCodec,
     {
         async fn subscribe_task(

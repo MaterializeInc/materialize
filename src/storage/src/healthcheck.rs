@@ -28,8 +28,9 @@ use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::Map;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::operators::vec::Map;
+use timely::dataflow::{Scope, StreamVec};
+use timely::progress::Timestamp;
 use tracing::{error, info};
 
 use crate::internal_control::{InternalCommandSender, InternalStorageCommand};
@@ -41,7 +42,17 @@ use crate::internal_control::{InternalCommandSender, InternalStorageCommand};
 /// and `Running` statuses from them do not mark the entire object as running.
 ///
 /// Ensure you update `is_sidechannel` when adding variants.
-#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord
+)]
 pub enum StatusNamespace {
     /// A normal status namespaces. Any `Running` status from any worker will mark the object
     /// `Running`.
@@ -53,6 +64,7 @@ pub enum StatusNamespace {
     Ssh,
     Upsert,
     Decode,
+    Iceberg,
     Internal,
 }
 
@@ -75,6 +87,7 @@ impl fmt::Display for StatusNamespace {
             Upsert => write!(f, "upsert"),
             Decode => write!(f, "decode"),
             Internal => write!(f, "internal"),
+            Iceberg => write!(f, "iceberg"),
         }
     }
 }
@@ -323,8 +336,8 @@ pub struct HealthStatusMessage {
 ///
 /// The `OutputIndex` values that come across `health_stream` must be a strict subset of those in
 /// `configs`'s keys.
-pub(crate) fn health_operator<G, P>(
-    scope: &G,
+pub(crate) fn health_operator<'scope, T: Timestamp, P>(
+    scope: Scope<'scope, T>,
     now: NowFn,
     // A set of id's that should be marked as `HealthStatusUpdate::starting()` during startup.
     mark_starting: BTreeSet<GlobalId>,
@@ -334,7 +347,7 @@ pub(crate) fn health_operator<G, P>(
     // A description of the object type we are writing status updates about. Used in log lines.
     object_type: &'static str,
     // An indexed stream of health updates. Indexes are configured in `configs`.
-    health_stream: &Stream<G, HealthStatusMessage>,
+    health_stream: StreamVec<'scope, T, HealthStatusMessage>,
     // An impl of `HealthOperator` that configures the output behavior of this operator.
     health_operator_impl: P,
     // Whether or not we should actually write namespaced errors in the `details` column.
@@ -344,7 +357,6 @@ pub(crate) fn health_operator<G, P>(
     suspend_and_restart_delay: Duration,
 ) -> PressOnDropButton
 where
-    G: Scope,
     P: HealthOperator + 'static,
 {
     // Derived config options
@@ -368,7 +380,7 @@ where
     let mut health_op = AsyncOperatorBuilder::new(operator_name, scope.clone());
 
     let mut input = health_op.new_disconnected_input(
-        &health_stream,
+        health_stream,
         Exchange::new(move |_| u64::cast_from(chosen_worker_id)),
     );
 
@@ -1089,7 +1101,7 @@ mod tests {
                                 inputs.keys().copied().collect(),
                                 *inputs.first_key_value().unwrap().0,
                                 "source_test",
-                                &input,
+                                input,
                                 TestWriter {
                                     sender: out_tx,
                                     input_mapping: inputs,
@@ -1150,10 +1162,10 @@ mod tests {
     /// After the channel is empty on the first worker, then the frontier will go to [].
     /// Also ensures that updates are routed to the correct worker based on the `TestUpdate`
     /// using an exchange.
-    fn producer<G: Scope<Timestamp = ()>>(
-        scope: G,
+    fn producer<'scope>(
+        scope: Scope<'scope, ()>,
         mut input: UnboundedReceiver<TestUpdate>,
-    ) -> Stream<G, HealthStatusMessage> {
+    ) -> StreamVec<'scope, (), HealthStatusMessage> {
         let mut iterator = AsyncOperatorBuilder::new("iterator".to_string(), scope.clone());
         let (output_handle, output) = iterator.new_output::<CapacityContainerBuilder<Vec<_>>>();
 

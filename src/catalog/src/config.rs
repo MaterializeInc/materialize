@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::num::NonZero;
 
 use anyhow::bail;
 use bytesize::ByteSize;
@@ -50,8 +51,6 @@ pub struct StateConfig {
     pub all_features: bool,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
-    /// The deploy generation with which the process was started.
-    pub deploy_generation: u64,
     /// A persistent ID associated with the environment.
     pub environment_id: EnvironmentId,
     /// Whether to start Materialize in read-only mode.
@@ -121,9 +120,8 @@ impl ClusterReplicaSizeMap {
                 let Some(memory_limit) = replica.memory_limit else {
                     bail!("No memory limit found in cluster definition for {name}");
                 };
-                replica.credits_per_hour = Numeric::from(
-                    (memory_limit.0 * replica.scale * u64::try_from(replica.workers)?).0,
-                ) / Numeric::from(1 * GIB);
+                let total_memory = memory_limit.0 * replica.scale.get();
+                replica.credits_per_hour = Numeric::from(total_memory.0) / Numeric::from(GIB);
             }
         }
         Ok(Self(cluster_replica_sizes))
@@ -170,7 +168,7 @@ impl ClusterReplicaSizeMap {
         // }
         let mut inner = (0..=5)
             .flat_map(|i| {
-                let workers: u8 = 1 << i;
+                let workers = 1 << i;
                 [
                     (format!("scale=1,workers={workers}"), None),
                     (format!("scale=1,workers={workers},mem=4GiB"), Some(4)),
@@ -184,9 +182,10 @@ impl ClusterReplicaSizeMap {
                         ReplicaAllocation {
                             memory_limit: memory_limit.map(|gib| MemoryLimit(ByteSize::gib(gib))),
                             cpu_limit: None,
+                            cpu_request: None,
                             disk_limit: None,
-                            scale: 1,
-                            workers: workers.into(),
+                            scale: NonZero::new(1).expect("not zero"),
+                            workers: NonZero::new(workers).expect("not zero"),
                             credits_per_hour: 1.into(),
                             cpu_exclusive: false,
                             is_cc: false,
@@ -206,9 +205,10 @@ impl ClusterReplicaSizeMap {
                 ReplicaAllocation {
                     memory_limit: None,
                     cpu_limit: None,
+                    cpu_request: None,
                     disk_limit: None,
-                    scale,
-                    workers: 1,
+                    scale: NonZero::new(scale).expect("not zero"),
+                    workers: NonZero::new(1).expect("not zero"),
                     credits_per_hour: scale.into(),
                     cpu_exclusive: false,
                     is_cc: false,
@@ -223,9 +223,10 @@ impl ClusterReplicaSizeMap {
                 ReplicaAllocation {
                     memory_limit: None,
                     cpu_limit: None,
+                    cpu_request: None,
                     disk_limit: None,
-                    scale,
-                    workers: scale.into(),
+                    scale: NonZero::new(scale).expect("not zero"),
+                    workers: NonZero::new(scale.into()).expect("not zero"),
                     credits_per_hour: scale.into(),
                     cpu_exclusive: false,
                     is_cc: false,
@@ -240,9 +241,10 @@ impl ClusterReplicaSizeMap {
                 ReplicaAllocation {
                     memory_limit: Some(MemoryLimit(ByteSize(u64::cast_from(scale) * (1 << 30)))),
                     cpu_limit: None,
+                    cpu_request: None,
                     disk_limit: None,
-                    scale: 1,
-                    workers: 8,
+                    scale: NonZero::new(1).expect("not zero"),
+                    workers: NonZero::new(8).expect("not zero"),
                     credits_per_hour: 1.into(),
                     cpu_exclusive: false,
                     is_cc: false,
@@ -258,9 +260,10 @@ impl ClusterReplicaSizeMap {
             ReplicaAllocation {
                 memory_limit: None,
                 cpu_limit: None,
+                cpu_request: None,
                 disk_limit: None,
-                scale: 2,
-                workers: 4,
+                scale: NonZero::new(2).expect("not zero"),
+                workers: NonZero::new(4).expect("not zero"),
                 credits_per_hour: 2.into(),
                 cpu_exclusive: false,
                 is_cc: false,
@@ -275,9 +278,10 @@ impl ClusterReplicaSizeMap {
             ReplicaAllocation {
                 memory_limit: None,
                 cpu_limit: None,
+                cpu_request: None,
                 disk_limit: None,
-                scale: 0,
-                workers: 0,
+                scale: NonZero::new(1).expect("not zero"),
+                workers: NonZero::new(1).expect("not zero"),
                 credits_per_hour: 0.into(),
                 cpu_exclusive: false,
                 is_cc: true,
@@ -307,5 +311,29 @@ impl AwsPrincipalContext {
             "arn:aws:iam::{}:role/mz_{}_{}",
             self.aws_account_id, self.aws_external_id_prefix, aws_external_id_suffix
         )
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault`
+    fn cluster_replica_size_credits_from_memory() {
+        let s = r#"{
+            "test": {
+                "memory_limit": "1000MiB",
+                "scale": 2,
+                "workers": 10,
+                "credits_per_hour": "0"
+            }
+        }"#;
+        let map = ClusterReplicaSizeMap::parse_from_str(s, true).unwrap();
+
+        let alloc = map.get_allocation_by_name("test").unwrap();
+        let expected = Numeric::from(2000) / Numeric::from(1024);
+        assert_eq!(alloc.credits_per_hour, expected);
     }
 }

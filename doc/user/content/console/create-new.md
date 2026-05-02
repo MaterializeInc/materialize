@@ -29,7 +29,7 @@ From the Materialize Console:
       | Field | Description |
       | ----- | ----------- |
       | **Name** | A name for the cluster. | `
-      | **Size** | The [size](/sql/create-cluster/#size) of the cluster. |
+      | **Size** | The [size](/sql/create-cluster/#available-sizes) of the cluster. |
       | **Replica** | The [replication factor](/sql/create-cluster/#replication-factor) of the cluster. Default: `1` <br>Clusters that contain sources or sinks cannot have a replication factor greater than 1.|
 
    1. Click **Create cluster** to create the cluster.
@@ -135,8 +135,8 @@ application password")
 1. **For a new service account only**.
 
    For a new service account, after creating the new app password, you must
-   connect with the service account to complete the account creation. {{<
-   include-md file="shared-content/rbac-cloud/service-account-creation.md" >}}
+   connect with the service account to complete the account creation. {{%
+   include-headless "headless/rbac-cloud/service-account-creation.md" %}}
 
    To connect:
 

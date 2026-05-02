@@ -10,19 +10,15 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.100"
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
-reqwest = { version = "0.11.4", features = ["json"] }
-serde = { version = "1.0.219", features = ["derive"] }
-url = "2.2.2"
-thiserror = "2.0.17"
-tokio = "1.44.1"
+anyhow.workspace = true
+chrono.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+url.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
 mz-frontegg-client = { path = "../frontegg-client" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
 
 [features]
-default = ["workspace-hack"]
+default = []

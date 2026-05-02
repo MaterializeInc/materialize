@@ -14,13 +14,14 @@ use std::str::FromStr;
 
 use anyhow::Context;
 use async_trait::async_trait;
-use mz_authenticator::Authenticator;
+use mz_authenticator::GenericOidcAuthenticator;
+use mz_frontegg_auth::Authenticator as FronteggAuthenticator;
 use mz_ore::now::{SYSTEM_TIME, epoch_to_uuid_v7};
 use mz_pgwire_common::{
     ACCEPT_SSL_ENCRYPTION, CONN_UUID_KEY, Conn, ConnectionCounter, FrontendStartupMessage,
     MZ_FORWARDED_FOR_KEY, REJECT_ENCRYPTION, decode_startup,
 };
-use mz_server_core::listeners::AllowedRoles;
+use mz_server_core::listeners::{AllowedRoles, AuthenticatorKind};
 use mz_server_core::{Connection, ConnectionHandler, ReloadingTlsConfig};
 use openssl::ssl::Ssl;
 use tokio::io::AsyncWriteExt;
@@ -44,8 +45,13 @@ pub struct Config {
     /// If not present, then TLS is not enabled, and clients requests to
     /// negotiate TLS will be rejected.
     pub tls: Option<ReloadingTlsConfig>,
-    /// Authentication method to use. Frontegg, Password, or None.
-    pub authenticator: Authenticator,
+    /// Frontegg JWT authenticator.
+    pub frontegg: Option<FronteggAuthenticator>,
+    /// OIDC authenticator.
+    pub oidc: GenericOidcAuthenticator,
+    /// The authentication method defined by the server's listener
+    /// configuration.
+    pub authenticator_kind: AuthenticatorKind,
     /// The registry entries that the pgwire server uses to report metrics.
     pub metrics: MetricsConfig,
     /// Global connection limit and count
@@ -60,7 +66,9 @@ pub struct Config {
 pub struct Server {
     tls: Option<ReloadingTlsConfig>,
     adapter_client: mz_adapter::Client,
-    authenticator: Authenticator,
+    authenticator_kind: AuthenticatorKind,
+    frontegg: Option<FronteggAuthenticator>,
+    oidc: GenericOidcAuthenticator,
     metrics: Metrics,
     active_connection_counter: ConnectionCounter,
     helm_chart_version: Option<String>,
@@ -93,7 +101,9 @@ impl Server {
         Server {
             tls: config.tls,
             adapter_client: config.adapter_client,
-            authenticator: config.authenticator,
+            authenticator_kind: config.authenticator_kind,
+            frontegg: config.frontegg,
+            oidc: config.oidc,
             metrics: Metrics::new(config.metrics, config.label),
             active_connection_counter: config.active_connection_counter,
             helm_chart_version: config.helm_chart_version,
@@ -108,7 +118,9 @@ impl Server {
         tokio_metrics_intervals: impl Iterator<Item = TaskMetrics> + Send + 'static,
     ) -> impl Future<Output = Result<(), anyhow::Error>> + Send + 'static {
         let adapter_client = self.adapter_client.clone();
-        let authenticator = self.authenticator.clone();
+        let authenticator_kind = self.authenticator_kind;
+        let frontegg = self.frontegg.clone();
+        let oidc = self.oidc.clone();
         let tls = self.tls.clone();
         let metrics = self.metrics.clone();
         let active_connection_counter = self.active_connection_counter.clone();
@@ -145,14 +157,30 @@ impl Server {
                                 let conn_uuid_handle = conn.inner_mut().uuid_handle();
                                 let conn_uuid = params
                                     .remove(CONN_UUID_KEY)
-                                    .and_then(|uuid| uuid.parse().inspect_err(|e| error!("pgwire connection with invalid conn UUID: {e}")).ok());
+                                    .and_then(|uuid| {
+                                        uuid.parse()
+                                            .inspect_err(|e| {
+                                                error!(
+                                                    "pgwire connection with invalid conn UUID: {e}",
+                                                )
+                                            })
+                                            .ok()
+                                    });
                                 let conn_uuid_forwarded = conn_uuid.is_some();
-                                // FIXME(ptravers): we should be able to inject the clock when instantiating the `Server`
-                                // but as of writing there's no great way, I can see, to harmonize the lifetimes of the return type
-                                // and &self which must house `NowFn`.
-                                let conn_uuid = conn_uuid.unwrap_or_else(|| epoch_to_uuid_v7(&(SYSTEM_TIME.clone())()));
+                                // FIXME(ptravers): we should be able to inject
+                                // the clock when instantiating the `Server`
+                                // but as of writing there's no great way, I can
+                                // see, to harmonize the lifetimes of the return
+                                // type and &self which must house `NowFn`.
+                                let conn_uuid = conn_uuid.unwrap_or_else(
+                                    || epoch_to_uuid_v7(&(SYSTEM_TIME.clone())()),
+                                );
                                 conn_uuid_handle.set(conn_uuid);
-                                debug!(conn_uuid = %conn_uuid_handle.display(), conn_uuid_forwarded, "starting new pgwire connection in adapter");
+                                debug!(
+                                    conn_uuid = %conn_uuid_handle.display(),
+                                    conn_uuid_forwarded,
+                                    "starting new pgwire connection in adapter",
+                                );
 
                                 let direct_peer_addr = conn
                                     .inner_mut()
@@ -184,7 +212,9 @@ impl Server {
                                     conn_uuid,
                                     version,
                                     params,
-                                    authenticator,
+                                    frontegg,
+                                    oidc,
+                                    authenticator_kind,
                                     active_connection_counter,
                                     helm_chart_version,
                                     allowed_roles,

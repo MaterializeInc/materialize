@@ -11,6 +11,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::num::NonZero;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -21,7 +22,6 @@ use bytesize::ByteSize;
 use chrono::{DateTime, Utc};
 use futures::stream::{BoxStream, StreamExt};
 use mz_cluster_client::client::{ClusterReplicaLocation, TimelyConfig};
-use mz_compute_client::controller::ComputeControllerTimestamp;
 use mz_compute_client::logging::LogVariant;
 use mz_compute_types::config::{ComputeReplicaConfig, ComputeReplicaLogging};
 use mz_controller_types::dyncfgs::{
@@ -34,9 +34,9 @@ use mz_orchestrator::{
     CpuLimit, DiskLimit, LabelSelectionLogic, LabelSelector, MemoryLimit, Service, ServiceConfig,
     ServiceEvent, ServicePort,
 };
-use mz_ore::halt;
-use mz_ore::instrument;
+use mz_ore::cast::CastInto;
 use mz_ore::task::{self, AbortOnDropHandle};
+use mz_ore::{halt, instrument};
 use mz_repr::GlobalId;
 use mz_repr::adt::numeric::Numeric;
 use regex::Regex;
@@ -77,12 +77,14 @@ pub struct ReplicaAllocation {
     pub memory_limit: Option<MemoryLimit>,
     /// The CPU limit for each process in the replica.
     pub cpu_limit: Option<CpuLimit>,
+    /// The CPU limit for each process in the replica.
+    pub cpu_request: Option<CpuLimit>,
     /// The disk limit for each process in the replica.
     pub disk_limit: Option<DiskLimit>,
     /// The number of processes in the replica.
-    pub scale: u16,
+    pub scale: NonZero<u16>,
     /// The number of worker threads in the replica.
-    pub workers: usize,
+    pub workers: NonZero<usize>,
     /// The number of credits per hour that the replica consumes.
     #[serde(deserialize_with = "mz_repr::adt::numeric::str_serde::deserialize")]
     pub credits_per_hour: Numeric,
@@ -113,6 +115,7 @@ fn default_true() -> bool {
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
 fn test_replica_allocation_deserialization() {
     use bytesize::ByteSize;
+    use mz_ore::{assert_err, assert_ok};
 
     let data = r#"
         {
@@ -140,11 +143,12 @@ fn test_replica_allocation_deserialization() {
             disabled: false,
             memory_limit: Some(MemoryLimit(ByteSize::gib(10))),
             cpu_limit: Some(CpuLimit::from_millicpus(1000)),
+            cpu_request: None,
             cpu_exclusive: false,
             is_cc: true,
             swap_enabled: true,
-            scale: 16,
-            workers: 1,
+            scale: NonZero::new(16).unwrap(),
+            workers: NonZero::new(1).unwrap(),
             selectors: BTreeMap::from([
                 ("key1".to_string(), "value1".to_string()),
                 ("key2".to_string(), "value2".to_string())
@@ -157,8 +161,8 @@ fn test_replica_allocation_deserialization() {
             "cpu_limit": 0,
             "memory_limit": "0GiB",
             "disk_limit": "0MiB",
-            "scale": 0,
-            "workers": 0,
+            "scale": 1,
+            "workers": 1,
             "credits_per_hour": "0",
             "cpu_exclusive": true,
             "disabled": true
@@ -175,14 +179,23 @@ fn test_replica_allocation_deserialization() {
             disabled: true,
             memory_limit: Some(MemoryLimit(ByteSize::gib(0))),
             cpu_limit: Some(CpuLimit::from_millicpus(0)),
+            cpu_request: None,
             cpu_exclusive: true,
             is_cc: true,
             swap_enabled: false,
-            scale: 0,
-            workers: 0,
+            scale: NonZero::new(1).unwrap(),
+            workers: NonZero::new(1).unwrap(),
             selectors: Default::default(),
         }
     );
+
+    // `scale` and `workers` must be non-zero.
+    let data = r#"{"scale": 0, "workers": 1, "credits_per_hour": "0"}"#;
+    assert_err!(serde_json::from_str::<ReplicaAllocation>(data));
+    let data = r#"{"scale": 1, "workers": 0, "credits_per_hour": "0"}"#;
+    assert_err!(serde_json::from_str::<ReplicaAllocation>(data));
+    let data = r#"{"scale": 1, "workers": 1, "credits_per_hour": "0"}"#;
+    assert_ok!(serde_json::from_str::<ReplicaAllocation>(data));
 }
 
 /// Configures the location of a cluster replica.
@@ -202,7 +215,7 @@ impl ReplicaLocation {
                 computectl_addrs, ..
             }) => computectl_addrs.len(),
             ReplicaLocation::Managed(ManagedReplicaLocation { allocation, .. }) => {
-                allocation.scale.into()
+                allocation.scale.cast_into()
             }
         }
     }
@@ -212,7 +225,7 @@ impl ReplicaLocation {
             ReplicaLocation::Managed(ManagedReplicaLocation { billed_as, .. }) => {
                 billed_as.as_deref()
             }
-            _ => None,
+            ReplicaLocation::Unmanaged(_) => None,
         }
     }
 
@@ -229,7 +242,7 @@ impl ReplicaLocation {
     pub fn workers(&self) -> Option<usize> {
         match self {
             ReplicaLocation::Managed(ManagedReplicaLocation { allocation, .. }) => {
-                Some(allocation.workers * self.num_processes())
+                Some(allocation.workers.get() * self.num_processes())
             }
             ReplicaLocation::Unmanaged(_) => None,
         }
@@ -242,13 +255,14 @@ impl ReplicaLocation {
     pub fn pending(&self) -> bool {
         match self {
             ReplicaLocation::Managed(ManagedReplicaLocation { pending, .. }) => *pending,
-            _ => false,
+            ReplicaLocation::Unmanaged(_) => false,
         }
     }
 }
 
 /// The "role" of a cluster, which is currently used to determine the
 /// severity of alerts for problems with its replicas.
+#[derive(Debug, Clone)]
 pub enum ClusterRole {
     /// The existence and proper functioning of the cluster's replicas is
     /// business-critical for Materialize.
@@ -338,10 +352,7 @@ pub struct ClusterEvent {
     pub time: DateTime<Utc>,
 }
 
-impl<T> Controller<T>
-where
-    T: ComputeControllerTimestamp,
-{
+impl Controller {
     /// Creates a cluster with the specified identifier and configuration.
     ///
     /// A cluster is a combination of a storage instance and a compute instance.
@@ -360,16 +371,16 @@ where
     }
 
     /// Updates the workload class for a cluster.
-    pub fn update_cluster_workload_class(
-        &mut self,
-        id: ClusterId,
-        workload_class: Option<String>,
-    ) -> Result<(), anyhow::Error> {
+    ///
+    /// # Panics
+    ///
+    /// Panics if the instance does not exist in the StorageController or the ComputeController.
+    pub fn update_cluster_workload_class(&mut self, id: ClusterId, workload_class: Option<String>) {
         self.storage
             .update_instance_workload_class(id, workload_class.clone());
         self.compute
-            .update_instance_workload_class(id, workload_class)?;
-        Ok(())
+            .update_instance_workload_class(id, workload_class)
+            .expect("instance exists");
     }
 
     /// Drops the specified cluster.
@@ -393,6 +404,7 @@ where
         role: ClusterRole,
         config: ReplicaConfig,
         enable_worker_core_affinity: bool,
+        enable_storage_introspection_logs: bool,
     ) -> Result<(), anyhow::Error> {
         let storage_location: ClusterReplicaLocation;
         let compute_location: ClusterReplicaLocation;
@@ -420,6 +432,7 @@ where
                     role,
                     m,
                     enable_worker_core_affinity,
+                    enable_storage_introspection_logs,
                 )?;
                 storage_location = ClusterReplicaLocation {
                     ctl_addrs: service.addresses("storagectl"),
@@ -428,6 +441,11 @@ where
                     ctl_addrs: service.addresses("computectl"),
                 };
                 metrics_task = Some(metrics_task_join_handle);
+
+                // Register the replica for HTTP proxying.
+                let http_addresses = service.addresses("internal-http");
+                self.replica_http_locator
+                    .register_replica(cluster_id, replica_id, http_addresses);
             }
         }
 
@@ -459,6 +477,10 @@ where
         // provisioned.
         self.deprovision_replica(cluster_id, replica_id, self.deploy_generation)?;
         self.metrics_tasks.remove(&replica_id);
+
+        // Remove HTTP addresses from the locator.
+        self.replica_http_locator
+            .remove_replica(cluster_id, replica_id);
 
         self.compute.drop_replica(cluster_id, replica_id)?;
         self.storage.drop_replica(cluster_id, replica_id);
@@ -604,6 +626,7 @@ where
         role: ClusterRole,
         location: ManagedReplicaLocation,
         enable_worker_core_affinity: bool,
+        enable_storage_introspection_logs: bool,
     ) -> Result<(Box<dyn Service>, AbortOnDropHandle<()>), anyhow::Error> {
         let service_name = ReplicaServiceName {
             cluster_id,
@@ -661,12 +684,12 @@ where
                 init_container_image: self.init_container_image.clone(),
                 args: Box::new(move |assigned| {
                     let storage_timely_config = TimelyConfig {
-                        workers: location.allocation.workers,
+                        workers: location.allocation.workers.get(),
                         addresses: assigned.peer_addresses("storage"),
                         ..storage_proto_timely_config
                     };
                     let compute_timely_config = TimelyConfig {
-                        workers: location.allocation.workers,
+                        workers: location.allocation.workers.get(),
                         addresses: assigned.peer_addresses("compute"),
                         ..compute_proto_timely_config
                     };
@@ -718,6 +741,9 @@ where
                     if location.allocation.cpu_exclusive && enable_worker_core_affinity {
                         args.push("--worker-core-affinity".into());
                     }
+                    if enable_storage_introspection_logs {
+                        args.push("--enable-storage-introspection-logs".into());
+                    }
                     if location.allocation.is_cc {
                         args.push("--is-cc".into());
                     }
@@ -765,6 +791,7 @@ where
                     },
                 ],
                 cpu_limit: location.allocation.cpu_limit,
+                cpu_request: location.allocation.cpu_request,
                 memory_limit,
                 memory_request,
                 scale: location.allocation.scale,
@@ -784,7 +811,10 @@ where
                     ),
                 ]),
                 annotations: BTreeMap::from([
-                    ("replica-name".into(), replica_name),
+                    (
+                        "replica-name".into(),
+                        format!("{cluster_name}.{replica_name}"),
+                    ),
                     ("cluster-name".into(), cluster_name),
                 ]),
                 availability_zones: match location.availability_zones {

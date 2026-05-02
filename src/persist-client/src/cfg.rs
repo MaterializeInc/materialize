@@ -305,6 +305,9 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL)
         .add(&crate::cfg::CRDB_CONNECT_TIMEOUT)
         .add(&crate::cfg::CRDB_TCP_USER_TIMEOUT)
+        .add(&crate::cfg::CRDB_KEEPALIVES_IDLE)
+        .add(&crate::cfg::CRDB_KEEPALIVES_INTERVAL)
+        .add(&crate::cfg::CRDB_KEEPALIVES_RETRIES)
         .add(&crate::cfg::USE_CRITICAL_SINCE_TXN)
         .add(&crate::cfg::USE_CRITICAL_SINCE_CATALOG)
         .add(&crate::cfg::USE_CRITICAL_SINCE_SOURCE)
@@ -317,6 +320,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&GC_BLOB_DELETE_CONCURRENCY_LIMIT)
         .add(&STATE_VERSIONS_RECENT_LIVE_DIFFS_LIMIT)
         .add(&USAGE_STATE_FETCH_CONCURRENCY_LIMIT)
+        .add(&crate::cache::STATE_UPDATE_LEASE_TIMEOUT)
         .add(&crate::cli::admin::CATALOG_FORCE_COMPACTION_FUEL)
         .add(&crate::cli::admin::CATALOG_FORCE_COMPACTION_WAIT)
         .add(&crate::cli::admin::EXPRESSION_CACHE_FORCE_COMPACTION_FUEL)
@@ -440,6 +444,28 @@ pub const CRDB_TCP_USER_TIMEOUT: Config<Duration> = Config::new(
     The TCP timeout for connections to CockroachDB. Specifies the amount of \
     time that transmitted data may remain unacknowledged before the TCP \
     connection is forcibly closed.",
+);
+
+pub const CRDB_KEEPALIVES_IDLE: Config<Duration> = Config::new(
+    "crdb_keepalives_idle",
+    Duration::from_secs(10),
+    "\
+    The amount of idle time before a TCP keepalive packet is sent on CRDB \
+    connections.",
+);
+
+pub const CRDB_KEEPALIVES_INTERVAL: Config<Duration> = Config::new(
+    "crdb_keepalives_interval",
+    Duration::from_secs(5),
+    "The time interval between TCP keepalive probes on CRDB connections.",
+);
+
+pub const CRDB_KEEPALIVES_RETRIES: Config<u32> = Config::new(
+    "crdb_keepalives_retries",
+    5,
+    "\
+    The maximum number of TCP keepalive probes that will be sent before \
+    dropping a CRDB connection.",
 );
 
 /// Migrate the txns code to use the critical since when opening a new read handle.
@@ -569,6 +595,18 @@ impl PostgresClientKnobs for PersistConfig {
     fn tcp_user_timeout(&self) -> Duration {
         CRDB_TCP_USER_TIMEOUT.get(self)
     }
+
+    fn keepalives_idle(&self) -> Duration {
+        CRDB_KEEPALIVES_IDLE.get(self)
+    }
+
+    fn keepalives_interval(&self) -> Duration {
+        CRDB_KEEPALIVES_INTERVAL.get(self)
+    }
+
+    fn keepalives_retries(&self) -> u32 {
+        CRDB_KEEPALIVES_RETRIES.get(self)
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Arbitrary, Serialize, Deserialize)]
@@ -580,6 +618,19 @@ pub struct RetryParameters {
 }
 
 impl RetryParameters {
+    pub fn persist_defaults() -> Self {
+        Self {
+            fixed_sleep: Duration::ZERO,
+            // Chosen to meet the following arbitrary criteria: a power of two
+            // that's close to the AWS Aurora latency of 6ms.
+            initial_backoff: Duration::from_millis(4),
+            multiplier: 2,
+            // Chosen to meet the following arbitrary criteria: between 10s and
+            // 60s.
+            clamp: Duration::from_secs(16),
+        }
+    }
+
     pub(crate) fn into_retry(self, now: SystemTime) -> Retry {
         let seed = now
             .duration_since(UNIX_EPOCH)

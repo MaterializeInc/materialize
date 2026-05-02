@@ -9,4 +9,4 @@ menu:
     weight: 126
 ---
 
-{{< include-md file="shared-content/namespaces-content.md" >}}
+{{% include-headless "/headless/namespaces-content" %}}

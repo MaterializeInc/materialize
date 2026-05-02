@@ -14,25 +14,8 @@ Materialize's framework for [access control](/security/cloud/).
 
 ## Syntax
 
-{{< diagram "create-network-policy.svg" >}}
+{{% include-syntax file="examples/create_network_policy" example="syntax" %}}
 
-### `network_policy_rule`
-
-{{< diagram "network-policy-rule.svg" >}}
-
-| <div style="min-width:240px">Field</div>  | Value            | Description
-|-------------------------------------------|------------------|------------------------------------------------
-| _name_                                    | `text`           | A name for the network policy.
-| `RULES`                                   | `text[]`         | A comma-separated list of network policy rules.
-
-#### Network policy rule options
-
-| <div style="min-width:240px">Field</div>  | Value            | Description
-|-------------------------------------------|------------------|------------------------------------------------
-| _name_                                    | `text`           | A name for the network policy rule.
-| `ACTION`                                  | `text`           | The action to take for this rule. `ALLOW` is the only valid option.
-| `DIRECTION`                               | `text`           | The direction of traffic the rule applies to. `INGRESS` is the only valid option.
-| `ADDRESS`                                 | `text`           | The Classless Inter-Domain Routing (CIDR) block the rule will be applied to.
 
 ## Details
 
@@ -53,8 +36,7 @@ change the default value.
 
 The privileges required to execute this statement are:
 
-{{< include-md
-file="shared-content/sql-command-privileges/create-network-policy.md" >}}
+{{% include-headless "/headless/sql-command-privileges/create-network-policy" %}}
 
 ## Examples
 

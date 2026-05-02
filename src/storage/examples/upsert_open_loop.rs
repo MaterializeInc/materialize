@@ -121,7 +121,7 @@ use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Operator;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -445,17 +445,19 @@ async fn run_benchmark(
                             let batch = mz_ore::task::spawn_blocking(
                                 || "data_generator-batch",
                                 move || {
-                                    batch_span
-                                        .in_scope(|| data_generator_cloned.gen_batch(usize::cast_from(batch_idx)))
+                                    batch_span.in_scope(|| {
+                                        data_generator_cloned
+                                            .gen_batch(usize::cast_from(batch_idx))
+                                    })
                                 },
                             )
-                            .await
-                            .expect("task failed");
+                            .await;
                             trace!("data generator {} made a batch", source_id);
                             let batch = match batch {
                                 Some(x) => x,
                                 None => {
-                                    let records_sent = usize::cast_from(batch_idx) * args.batch_size;
+                                    let records_sent =
+                                        usize::cast_from(batch_idx) * args.batch_size;
                                     let finished = format!(
                                         "Data generator {} finished after {} ms and sent {} records",
                                         source_id,
@@ -468,7 +470,9 @@ async fn run_benchmark(
                             batch_idx += 1;
 
                             // send will only error if the matching receiver has been dropped.
-                            if let Err(SendError(_)) = generator_tx.send(GeneratorEvent::Data(batch)) {
+                            if let Err(SendError(_)) =
+                                generator_tx.send(GeneratorEvent::Data(batch))
+                            {
                                 bail!("receiver unexpectedly dropped");
                             }
                             debug!("data generator {} wrote a batch", source_id);
@@ -571,7 +575,7 @@ async fn run_benchmark(
 
                 let upsert_stream = upsert(
                     scope,
-                    &source_stream,
+                    source_stream,
                     source_id,
                     &dir_path,
                     args.clone(),
@@ -592,8 +596,8 @@ async fn run_benchmark(
 
                 let mut frontier = Antichain::from_elem(0);
                 let mut max_lag = 0;
-                upsert_stream.sink(
-                    Exchange::new(move |_| u64::cast_from(chosen_worker)),
+                upsert_stream.clone().sink(
+                    Exchange::new(move |_: &(Vec<u8>, Vec<u8>, i32)| u64::cast_from(chosen_worker)),
                     &format!("source-{source_id}-counter"),
                     move |(input, input_frontier)| {
                         if !active_worker {
@@ -752,7 +756,7 @@ async fn run_benchmark(
     }
 
     for handle in generator_handles {
-        match handle.await? {
+        match handle.await {
             Ok(finished) => info!("{}", finished),
             Err(e) => error!("error: {:?}", e),
         }
@@ -774,14 +778,11 @@ enum GeneratorEvent {
 ///
 /// Only one worker is expected to read from the channel that the associated generator is writing
 /// to.
-fn generator_source<G>(
-    scope: &G,
+fn generator_source<'scope>(
+    scope: Scope<'scope, u64>,
     source_id: usize,
     generator_rxs: Arc<Mutex<BTreeMap<usize, UnboundedReceiver<GeneratorEvent>>>>,
-) -> Stream<G, (Vec<u8>, Vec<u8>)>
-where
-    G: Scope<Timestamp = u64>,
-{
+) -> StreamVec<'scope, u64, (Vec<u8>, Vec<u8>)> {
     let generator_rxs = Arc::clone(&generator_rxs);
 
     let scope = scope.clone();
@@ -793,7 +794,7 @@ where
 
     let mut source_op = AsyncOperatorBuilder::new(format!("source-{source_id}"), scope);
 
-    let (output, output_stream) = source_op.new_output::<CapacityContainerBuilder<_>>();
+    let (output, output_stream) = source_op.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
     let _shutdown_button = source_op.build(move |mut capabilities| async move {
         if !active_worker {
@@ -831,17 +832,14 @@ where
 }
 
 /// A representative upsert operator.
-fn upsert<G>(
-    scope: &G,
-    source_stream: &Stream<G, (Vec<u8>, Vec<u8>)>,
+fn upsert<'scope>(
+    scope: Scope<'scope, u64>,
+    source_stream: StreamVec<'scope, u64, (Vec<u8>, Vec<u8>)>,
     source_id: usize,
     instance_dir: &PathBuf,
     args: Args,
     rocksdb_options: &rocksdb::Options,
-) -> Stream<G, (Vec<u8>, Vec<u8>, i32)>
-where
-    G: Scope<Timestamp = u64>,
-{
+) -> StreamVec<'scope, u64, (Vec<u8>, Vec<u8>, i32)> {
     // TODO(aljoscha): Not liking this duplications...!
     if args.upsert_pre_reduce {
         match args.key_value_store {
@@ -904,20 +902,17 @@ where
     }
 }
 
-fn upsert_core_pre_reduce<G, M: Map + 'static>(
-    scope: &G,
-    source_stream: &Stream<G, (Vec<u8>, Vec<u8>)>,
+fn upsert_core_pre_reduce<'scope, M: Map + 'static>(
+    scope: Scope<'scope, u64>,
+    source_stream: StreamVec<'scope, u64, (Vec<u8>, Vec<u8>)>,
     source_id: usize,
     mut current_values: M,
-) -> Stream<G, (Vec<u8>, Vec<u8>, i32)>
-where
-    G: Scope<Timestamp = u64>,
-{
+) -> StreamVec<'scope, u64, (Vec<u8>, Vec<u8>, i32)> {
     let mut upsert_op =
         AsyncOperatorBuilder::new(format!("source-{source_id}-upsert"), scope.clone());
 
-    let (output, output_stream): (_, Stream<_, (Vec<u8>, Vec<u8>, i32)>) =
-        upsert_op.new_output::<CapacityContainerBuilder<_>>();
+    let (output, output_stream): (_, StreamVec<_, (Vec<u8>, Vec<u8>, i32)>) =
+        upsert_op.new_output::<CapacityContainerBuilder<Vec<_>>>();
     let mut input = upsert_op.new_input_for(
         source_stream,
         Exchange::new(|d: &(Vec<u8>, Vec<u8>)| d.0.hashed()),
@@ -1003,20 +998,17 @@ where
     output_stream
 }
 
-fn upsert_core<G, M: Map + 'static>(
-    scope: &G,
-    source_stream: &Stream<G, (Vec<u8>, Vec<u8>)>,
+fn upsert_core<'scope, M: Map + 'static>(
+    scope: Scope<'scope, u64>,
+    source_stream: StreamVec<'scope, u64, (Vec<u8>, Vec<u8>)>,
     source_id: usize,
     mut current_values: M,
-) -> Stream<G, (Vec<u8>, Vec<u8>, i32)>
-where
-    G: Scope<Timestamp = u64>,
-{
+) -> StreamVec<'scope, u64, (Vec<u8>, Vec<u8>, i32)> {
     let mut upsert_op =
         AsyncOperatorBuilder::new(format!("source-{source_id}-upsert"), scope.clone());
 
-    let (output, output_stream): (_, Stream<_, (Vec<u8>, Vec<u8>, i32)>) =
-        upsert_op.new_output::<CapacityContainerBuilder<_>>();
+    let (output, output_stream): (_, StreamVec<_, (Vec<u8>, Vec<u8>, i32)>) =
+        upsert_op.new_output::<CapacityContainerBuilder<Vec<_>>>();
     let mut input = upsert_op.new_input_for(
         source_stream,
         Exchange::new(|d: &(Vec<u8>, Vec<u8>)| d.0.hashed()),

@@ -264,10 +264,10 @@ SELECT mz_internal.mz_normalize_object_name('"SchemaX"."TableY"')::text;
 ----
 {NULL,SchemaX,TableY}
 
-query error db error: ERROR: improper relation name \(too many dotted names\): Dbz\.Schemax\.Tabley\.Cola
+query error improper relation name \(too many dotted names\): Dbz\.Schemax\.Tabley\.Cola
 SELECT mz_internal.mz_normalize_object_name('Dbz.Schemax.Tabley.Cola')::text;
 
-query error db error: ERROR: improper relation name \(too many dotted names\): "Dbz"\."SchemaX"\."TableY"\.Cola
+query error improper relation name \(too many dotted names\): "Dbz"\."SchemaX"\."TableY"\.Cola
 SELECT mz_internal.mz_normalize_object_name('"Dbz"."SchemaX"."TableY".Cola')::text;
 
 query error string is not a valid identifier: ""
@@ -309,7 +309,7 @@ SELECT mz_internal.mz_normalize_object_name('🌍.🌍.🌍');
 ----
 {🌍,🌍,🌍}
 
-query error db error: ERROR: improper relation name \(too many dotted names\): 🌍\.🌍\.🌍\.🌍
+query error improper relation name \(too many dotted names\): 🌍\.🌍\.🌍\.🌍
 SELECT mz_internal.mz_normalize_object_name('🌍.🌍.🌍.🌍');
 
 # normalizing schema names; this is largely built on top of parse_ident
@@ -334,10 +334,10 @@ SELECT mz_internal.mz_normalize_schema_name('"SchemaX"')::text;
 ----
 {NULL,SchemaX}
 
-query error db error: ERROR: improper schema name \(too many dotted names\): Dbz\.Schemax\.Tabley
+query error improper schema name \(too many dotted names\): Dbz\.Schemax\.Tabley
 SELECT mz_internal.mz_normalize_schema_name('Dbz.Schemax.Tabley')::text;
 
-query error db error: ERROR: improper schema name \(too many dotted names\): "Dbz"\."SchemaX"\."TableY"
+query error improper schema name \(too many dotted names\): "Dbz"\."SchemaX"\."TableY"
 SELECT mz_internal.mz_normalize_schema_name('"Dbz"."SchemaX"."TableY"')::text;
 
 query error string is not a valid identifier: ""
@@ -374,7 +374,7 @@ SELECT mz_internal.mz_normalize_schema_name('🌍.🌍');
 ----
 {🌍,🌍}
 
-query error db error: ERROR: improper schema name \(too many dotted names\): 🌍\.🌍\.🌍
+query error improper schema name \(too many dotted names\): 🌍\.🌍\.🌍
 SELECT mz_internal.mz_normalize_schema_name('🌍.🌍.🌍');
 
 statement ok
@@ -388,7 +388,7 @@ EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT m
 ----
 Explained Query:
   Project (#1)
-    Map (arraytostr(case when (#0{c}) IS NULL then null else case when ((parse_ident(#0{c}, true) array_length 1) > 3) then error_if_null(null, ("improper relation name (too many dotted names): " || #0{c})) else (array_fill(null, array[(3 - (parse_ident(#0{c}, true) array_length 1))]) || parse_ident(#0{c}, true)) end end))
+    Map (arraytostr(case when (#0{c}) IS NULL then null else case when (array_length(parse_ident(#0{c}, true), 1) > 3) then error_if_null(null, ("improper relation name (too many dotted names): " || #0{c})) else (array_fill(null, array[(3 - array_length(parse_ident(#0{c}, true), 1))]) || parse_ident(#0{c}, true)) end end))
       ReadStorage materialize.public.t
 
 Source materialize.public.t

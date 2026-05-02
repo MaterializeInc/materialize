@@ -1,0 +1,38 @@
+- name: "syntax"
+  code: |
+    INTERVAL '<time_expr>' [<head_time_unit> TO <tail_time_unit>]
+  syntax_elements:
+    - name: "`'<time_expr>'`"
+      description: |
+        A time expression string. Can be in SQL Standard format (`'Y-M D H:M:S.NS'`) or PostgreSQL format (repeated `int.frac time_unit`, e.g., `'1 year 2 months 3.4 days'`).
+    - name: "`<head_time_unit>`"
+      description: |
+        Optional. Return an interval without `time_unit`s larger than `<head_time_unit>`. Note that this differs from PostgreSQL's implementation, which ignores this clause.
+    - name: "**TO** `<tail_time_unit>`"
+      description: |
+        Optional. If specified: (1) Return an interval without `time_unit` smaller than `<tail_time_unit>`. (2) If the final `time_expr` is only a number, treat the `time_expr` as belonging to `<tail_time_unit>`. This is the case of the most common `interval` format like `INTERVAL '1' MINUTE`.
+
+- name: "syntax-time-expr"
+  code: |
+    [+ | -] (<ym_str> | <time_str> | <int> [.<frac>] [<time_unit>])
+  syntax_elements:
+    - name: "**+** | **-**"
+      description: |
+        Optional. Sign prefix for the time expression.
+    - name: "`<ym_str>`"
+      description: |
+        A string representing years and months in `Y-M D` format.
+    - name: "`<time_str>`"
+      description: |
+        A string representing hours, minutes, seconds, and nanoseconds in `H:M:S.NS` format.
+    - name: "`<int>` [`.<frac>`] [`<time_unit>`]"
+      description: |
+        An integer or decimal number, optionally followed by a time unit.
+
+- name: "syntax-time-unit"
+  code: |
+    MILLENNIUM | CENTURY | DECADE | YEAR | MONTH | DAY | HOUR | MINUTE | SECOND | MILLISECONDS | MICROSECONDS
+  syntax_elements:
+    - name: "`<time_unit>`"
+      description: |
+        A time unit keyword. Valid values: `MILLENNIUM`, `CENTURY`, `DECADE`, `YEAR`, `MONTH`, `DAY`, `HOUR`, `MINUTE`, `SECOND`, `MILLISECONDS`, `MICROSECONDS`.

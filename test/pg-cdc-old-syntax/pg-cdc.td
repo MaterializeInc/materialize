@@ -336,7 +336,7 @@ types_table           subsource  cdc_cluster  ""
 utf8_table            subsource  cdc_cluster  ""
 таблица               subsource  cdc_cluster  ""
 
-> SELECT schema_name, table_name FROM mz_internal.mz_postgres_source_tables
+>[version<2601900] SELECT schema_name, table_name FROM mz_internal.mz_postgres_source_tables
 public          create
 public          pk_table
 public          large_text
@@ -355,19 +355,40 @@ public          trailing_space_nopk
 public          "\"\"\"literal_quotes\"\"\""
 conflict_schema conflict_table
 
-# Ensure all ingestion export subsources have an ID greater than the primary source ID
+>[version>=2601900] SELECT schema_name, table_name FROM mz_internal.mz_postgres_source_tables
+public          create
+public          pk_table
+public          large_text
+public          utf8_table
+public          nonpk_table
+public          types_table
+public          nulls_table
+public          multipart_pk
+public          "space table"
+public          tstzrange_table
+public          таблица
+public          array_types_table
+public          trailing_space_pk
+public          escaped_text_table
+public          trailing_space_nopk
+public          "\"literal_quotes\""
+conflict_schema conflict_table
+
+# Ensure all ingestion export subsources have an ID greater than the primary source ID.
+# We compare IDs as integers because the string `id` column (e.g. 'u9', 'u10') doesn't
+# sort correctly with lexicographic comparison across different digit counts.
 > SELECT bool_and(primary_source_id < subsource_id)
   FROM
-      (SELECT id AS primary_source_id FROM mz_sources WHERE type = 'postgres')
-          CROSS JOIN (SELECT id AS subsource_id FROM mz_sources WHERE type = 'subsource');
+      (SELECT substr(id, 2)::integer AS primary_source_id FROM mz_sources WHERE type = 'postgres')
+          CROSS JOIN (SELECT substr(id, 2)::integer AS subsource_id FROM mz_sources WHERE type = 'subsource');
 true
 
-# Ensure progress subsources have an ID less than the primary source ID
+# Ensure progress subsources have an ID less than the primary source ID.
 > SELECT progress_source_id < primary_source_id
     FROM (
         SELECT
-            (SELECT id FROM mz_sources WHERE type = 'postgres') AS primary_source_id,
-            (SELECT id FROM mz_sources WHERE type = 'progress') AS progress_source_id
+            (SELECT substr(id, 2)::integer FROM mz_sources WHERE type = 'postgres') AS primary_source_id,
+            (SELECT substr(id, 2)::integer FROM mz_sources WHERE type = 'progress') AS progress_source_id
     );
 true
 
@@ -382,8 +403,10 @@ true
 
 # Ensure we report the write frontier of the progress subsource
 $ set-regex match=(\s{12}0|\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d\.\d\d\d\)|true|false) replacement=<>
-> EXPLAIN TIMESTAMP FOR SELECT * FROM mz_source_progress
+>[version<2601600] EXPLAIN TIMESTAMP FOR SELECT * FROM mz_source_progress
 "                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.public.mz_source_progress (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n\nbinding constraints:\nlower:\n  (IsolationLevel(StrictSerializable)): [<> <>]\n"
+>[version>=2601600] EXPLAIN TIMESTAMP FOR SELECT * FROM mz_source_progress
+"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.public.mz_source_progress (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n\nbinding constraints:\nlower:\n  (Isolation level: StrictSerializable): [<> <>]\n"
 
 $ set-regex match=[0-9]+|_[a-f0-9]+ replacement=<SUPPRESSED>
 
@@ -800,8 +823,11 @@ enum_table              subsource cdc_cluster  ""
 var0
 var1
 
->[version>=14000] SHOW CREATE SOURCE enum_table
+>[14000<=version<2600700] SHOW CREATE SOURCE enum_table
 materialize.public.enum_table "CREATE SUBSOURCE materialize.public.enum_table (a pg_catalog.text) OF SOURCE materialize.public.enum_source WITH (EXTERNAL REFERENCE = postgres.public.enum_table, TEXT COLUMNS = (a));"
+
+>[version>=2600700] SHOW CREATE SOURCE enum_table
+materialize.public.enum_table "CREATE SUBSOURCE materialize.public.enum_table (a pg_catalog.text)\nOF SOURCE materialize.public.enum_source\nWITH (EXTERNAL REFERENCE = postgres.public.enum_table, TEXT COLUMNS = (a));"
 
 >[version<14000] SHOW CREATE SOURCE enum_table
 materialize.public.enum_table "CREATE SUBSOURCE \"materialize\".\"public\".\"enum_table\" (\"a\" \"pg_catalog\".\"text\") OF SOURCE \"materialize\".\"public\".\"enum_source\" WITH (EXTERNAL REFERENCE = \"postgres\".\"public\".\"enum_table\", TEXT COLUMNS = (\"a\"))"

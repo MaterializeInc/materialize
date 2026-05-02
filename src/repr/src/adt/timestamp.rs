@@ -76,7 +76,7 @@ pub const MAX_PRECISION: u8 = 6;
     Hash,
     Serialize,
     Deserialize,
-    MzReflect,
+    MzReflect
 )]
 pub struct TimestampPrecision(pub(crate) u8);
 

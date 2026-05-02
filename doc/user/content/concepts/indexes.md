@@ -8,6 +8,7 @@ menu:
     identifier: 'concepts-indexes'
 aliases:
   - /get-started/key-concepts/#indexes
+  - /self-managed/v25.1/concepts/indexes/
 ---
 
 ## Overview
@@ -196,7 +197,7 @@ CREATE INDEX idx_orders_view_qty on orders_view (quantity);
 The following table shows various queries and whether Materialize performs a
 point lookup or an index scan.
 
-{{< index_usage/index-usage-table data="index_usage_key_quantity" >}}
+{{< yaml-table data="examples/index_usage/index_usage_key_quantity" >}}
 
 Consider that the view has an index on the `quantity` and `price` fields
 instead of an index on the `quantity` field:
@@ -206,16 +207,16 @@ DROP INDEX idx_orders_view_qty;
 CREATE INDEX idx_orders_view_qty_price on orders_view (quantity, price);
 ```
 
-{{< index_usage/index-usage-table data="index_usage_key_quantity_price" >}}
+{{< yaml-table data="examples/index_usage/index_usage_key_quantity_price" >}}
 
 #### Limitations
 
-{{% index_usage/index-ordering %}}
+{{% include-headless "/headless/index-ordering" %}}
 
 ### Indexes on views vs. materialized views
 
-{{% views-indexes/table-usage-pattern-intro %}}
-{{% views-indexes/table-usage-pattern %}}
+{{% include-from-yaml data="index_view_details" name="table-usage-pattern-intro" %}}
+{{% include-from-yaml data="index_view_details" name="table-usage-pattern" %}}
 {{% include-md file="shared-content/mat-view-use-cases.md" %}}
 
 ### Indexes and query optimizations
@@ -228,11 +229,11 @@ query performance](/transform-data/optimization/), such as:
 - Provide fast random access for lookup queries (i.e., selecting individual
   keys).
 
-{{% views-indexes/index-query-optimization-specific-instances %}}
+{{% include-from-yaml data="index_view_details" name="index-query-optimization-specific-instances" %}}
 
 ### Best practices
 
-{{% views-indexes/index-best-practices %}}
+{{% include-from-yaml data="index_view_details" name="index-best-practices" %}}
 
 ## Related pages
 

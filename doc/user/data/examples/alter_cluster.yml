@@ -1,0 +1,150 @@
+- name: "syntax-set-configuration"
+  code: |
+    ALTER CLUSTER <cluster_name>
+    SET (
+        SIZE = <text>
+        [, REPLICATION FACTOR = <int>]
+        [, MANAGED = <bool>]
+        [, SCHEDULE = MANUAL|ON REFRESH(...)]
+    )
+    [WITH ( <with_option>[,...])]
+    ;
+  syntax_elements:
+    - name: "`<cluster_name>`"
+      description: |
+        The name of the cluster you want to alter.
+    - name: "`SIZE`"
+      description:
+        <a name="alter-cluster-size"></a>
+        The size of the resource allocations for the cluster.
+
+        For valid size values, see [Available sizes](#available-sizes).
+
+        {{< warning >}}
+        Changing the size of a cluster may incur downtime. For more information,
+        see [Resizing considerations](#resizing).
+        {{< /warning >}}
+
+        Not available for `ALTER CLUSTER ... RESET` since there is no default
+        `SIZE` value.
+    - name: "`REPLICATION FACTOR`"
+      description: |
+        Optional.The number of replicas to provision for the cluster. Each
+        replica of the cluster provisions a new pool of compute resources to
+        perform exactly the same computations on exactly the same data. For more
+        information, see [Replication factor
+        considerations](#replication-factor).
+
+        Default: `1`
+    - name: "`MANAGED`"
+      description: |
+        Optional. Whether to automatically manage the cluster's replicas based on the configured size and replication factor.
+
+        If `FALSE`, enables the use of the <em>deprecated</em> [`CREATE CLUSTER
+        REPLICA`](/sql/create-cluster-replica) command.
+
+        Default: `TRUE`
+    - name: "`SCHEDULE`"
+      description: |
+        Optional. The [scheduling type](/sql/create-cluster/#scheduling) for the
+        cluster. Valid values are `MANUAL` and `ON REFRESH`.
+
+        Default: `MANUAL`
+
+    - name: "`WITH (<with_option>[,...])`"
+      description: |
+
+        The following `<with_option>`s are supported:
+        | Option  | Description |
+        |--------|-------------|
+        | `WAIT UNTIL READY(...)`    | ***Private preview.** This option has known performance or stability issues and is under activedevelopment.* {{< include-from-yaml data="examples/alter_cluster" name="wait-until-ready-cmd-option" >}} |
+        | `WAIT FOR` |  ***Private preview.** This option has known performance or stability issues and is under active development.* A fixed duration to wait for the new replicas to be ready. This option can lead to downtime. As such, we recommend using the `WAIT UNTIL READY` option instead.|
+
+- name: "syntax-reset-to-default"
+  code: |
+    ALTER CLUSTER <cluster_name>
+    RESET (
+        REPLICATION FACTOR | MANAGED | SCHEDULE,
+        ...
+    )
+    ;
+  syntax_elements:
+    - name: "`<cluster_name>`"
+      description: |
+        The name of the cluster you want to alter.
+
+    - name: "`REPLICATION FACTOR`"
+      description: |
+        Optional. The number of replicas to provision for the cluster.
+
+        Default: `1`
+    - name: "`MANAGED`"
+      description: |
+        Optional. Whether to automatically manage the cluster's replicas based
+        on the configured size and replication factor.
+
+        Default: `TRUE`
+    - name: "`SCHEDULE`"
+      description: |
+        Optional. The [scheduling type](/sql/create-cluster/#scheduling) for the
+        cluster.
+
+        Default: `MANUAL`
+
+- name: "syntax-rename"
+  code: |
+    ALTER CLUSTER <cluster_name> RENAME TO <new_cluster_name>;
+  syntax_elements:
+    - name: "`<cluster_name>`"
+      description: |
+        The current name of the cluster.
+    - name: "`<new_cluster_name>`"
+      description: |
+        The new name of the cluster.
+
+- name: "syntax-change-owner"
+  code: |
+    ALTER CLUSTER <cluster_name> OWNER TO <new_owner_role>;
+  syntax_elements:
+    - name: "`<cluster_name>`"
+      description: |
+        The name of the cluster you want to change ownership of.
+    - name: "`<new_owner_role>`"
+      description: |
+        The new owner of the cluster.
+  addenda: |
+    To change the owner, you must have ownership of the cluster and membership in
+    the `<new_owner_role>`. See also [Required privileges](#required-privileges).
+
+- name: "syntax-swap-with"
+  code: |
+    ALTER CLUSTER <cluster1> SWAP WITH <cluster2>;
+  syntax_elements:
+    - name: "`<cluster1>`"
+      description: |
+        The name of the first cluster.
+    - name: "`<cluster2>`"
+      description: |
+        The name of the second cluster.
+
+- name: "configure-cluster"
+  content: |
+    To direct queries to a specific cluster, [set the cluster at the role
+    level](/sql/alter-role) using the following SQL statement:
+
+    ```sql
+    ALTER ROLE <your_user> SET CLUSTER = <custom_cluster>;
+    ```
+
+    Replace `<your_user>` with the name of your Materialize role and `<custom_cluster>` with the name of the cluster you want to use.
+
+    Once set, all new sessions for that user will automatically run in the specified
+    cluster, eliminating the need to manually specify it in each query or
+    connection.
+
+- name: wait-until-ready-cmd-option
+  content: |
+    | Option | Description |
+    |--------|-------------|
+    | `TIMEOUT` | The maximum duration to wait for the new replicas to be ready. |
+    | `ON TIMEOUT` | The action to take on timeout. <br><ul><li><code>COMMIT</code> cuts over to the new replica regardless of its hydration status, which may lead to downtime.</li><li><code>ROLLBACK</code> removes the pending replica and returns a timeout error.</li></ul>Default: <code>COMMIT</code>. |

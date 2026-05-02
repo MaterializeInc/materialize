@@ -11,30 +11,28 @@ license = "Apache-2.0"
 workspace = true
 
 [dependencies]
-anyhow = "1.0.100"
-backtrace = "0.3.76"
-flate2 = "1.1.5"
-itertools = "0.14.0"
-jemalloc_pprof = { version = "0.8.1", optional = true }
-pprof_util = "0.8"
+anyhow.workspace = true
+backtrace.workspace = true
+flate2.workspace = true
+itertools.workspace = true
+jemalloc_pprof = { workspace = true, optional = true }
+pprof_util.workspace = true
 mz-ore = { path = "../ore", default-features = false, features = ["async"] }
-pprof = "0.15.0"
-prost = { version = "0.13.5", features = ["no-recursion-limit"] }
-tikv-jemalloc-ctl = { version = "0.6", features = ["use_std", "stats"], optional = true }
-tracing = "0.1.37"
-tokio = { version = "1.44.1", features = ["time"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+pprof.workspace = true
+prost.workspace = true
+tikv-jemalloc-ctl = { workspace = true, optional = true }
+tracing.workspace = true
+tokio.workspace = true
 
 [build-dependencies]
-anyhow = "1.0.100"
+anyhow.workspace = true
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
-prost-build = "0.13.5"
+prost-build.workspace = true
 
 [features]
-default = ["workspace-hack"]
+default = []
 # Whether to enable profiling features that depend on jemalloc.
 jemalloc = ["tikv-jemalloc-ctl", "jemalloc_pprof"]
 
 [package.metadata.cargo-udeps.ignore]
 # "bytesize" not used on linux
-normal = ["bytesize", "workspace-hack"]

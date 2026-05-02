@@ -10,6 +10,7 @@
 use std::collections::BTreeMap;
 
 use maplit::btreemap;
+use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{CatalogItem, Index};
 use mz_ore::instrument;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
@@ -188,7 +189,7 @@ impl Coordinator {
 
     #[instrument]
     pub(crate) fn explain_index(
-        &mut self,
+        &self,
         ctx: &ExecuteContext,
         plan::ExplainPlanPlan {
             stage,
@@ -277,7 +278,7 @@ impl Coordinator {
     // sequencing an EXPLAIN for this statement.
     #[instrument]
     fn create_index_validate(
-        &mut self,
+        &self,
         plan: plan::CreateIndexPlan,
         resolved_ids: ResolvedIds,
         explain_ctx: ExplainContext,
@@ -312,8 +313,7 @@ impl Coordinator {
             .instance_snapshot(*cluster_id)
             .expect("compute instance does not exist");
         let (item_id, global_id) = if let ExplainContext::None = explain_ctx {
-            let id_ts = self.get_catalog_write_ts().await;
-            self.catalog().allocate_user_id(id_ts).await?
+            self.allocate_user_id().await?
         } else {
             self.allocate_transient_id()
         };
@@ -321,6 +321,7 @@ impl Coordinator {
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
             .override_from(&self.catalog.get_cluster(*cluster_id).config.features())
             .override_from(&explain_ctx);
+        let optimizer_features = optimizer_config.features.clone();
 
         // Build an optimizer for this INDEX.
         let mut optimizer = optimize::index::Optimizer::new(
@@ -341,8 +342,11 @@ impl Coordinator {
                 ), AdapterError> {
                     let _dispatch_guard = explain_ctx.dispatch_guard();
 
-                    let index_plan =
-                        optimize::index::Index::new(plan.name.clone(), plan.index.on, plan.index.keys.clone());
+                    let index_plan = optimize::index::Index::new(
+                        plan.name.clone(),
+                        plan.index.on,
+                        plan.index.keys.clone(),
+                    );
 
                     // MIR ⇒ MIR optimization (global)
                     let global_mir_plan = optimizer.catch_unwind_optimize(index_plan)?;
@@ -372,6 +376,7 @@ impl Coordinator {
                                     resolved_ids,
                                     global_mir_plan,
                                     global_lir_plan,
+                                    optimizer_features,
                                 })
                             }
                         }
@@ -432,6 +437,7 @@ impl Coordinator {
             resolved_ids,
             global_mir_plan,
             global_lir_plan,
+            optimizer_features,
             ..
         } = stage;
         let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
@@ -449,6 +455,9 @@ impl Coordinator {
                 cluster_id,
                 is_retained_metrics_object: false,
                 custom_logical_compaction_window: compaction_window,
+                optimized_plan: None,
+                physical_plan: None,
+                dataflow_metainfo: None,
             }),
             owner_id: *self.catalog().get_entry_by_global_id(&on).owner_id(),
         }];
@@ -476,6 +485,10 @@ impl Coordinator {
                         .process_dataflow_metainfo(df_meta, global_id, ctx, notice_ids)
                         .await;
 
+                    coord
+                        .catalog()
+                        .cache_expressions(global_id, None, optimizer_features);
+
                     // We're putting in place read holds, such that ship_dataflow,
                     // below, which calls update_read_capabilities, can successfully
                     // do so. Otherwise, the since of dependencies might move along
@@ -492,6 +505,7 @@ impl Coordinator {
                             df_desc,
                             cluster_id,
                             notice_builtin_updates_fut,
+                            None,
                         )
                         .await;
                     // No `allow_writes` here because indexes do not modify external state.
@@ -512,8 +526,7 @@ impl Coordinator {
         match transact_result {
             Ok(_) => Ok(StageResult::Response(ExecuteResponse::CreatedIndex)),
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
-                kind:
-                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+                kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
                 ctx.session()
                     .add_notice(AdapterNotice::ObjectAlreadyExists {
@@ -528,7 +541,7 @@ impl Coordinator {
 
     #[instrument]
     async fn create_index_explain(
-        &mut self,
+        &self,
         session: &Session,
         CreateIndexExplain {
             exported_index_id,
@@ -550,7 +563,7 @@ impl Coordinator {
             let on_entry = self.catalog.get_entry_by_global_id(&index.on);
             let full_name = self.catalog.resolve_full_name(&name, on_entry.conn_id());
             let on_desc = on_entry
-                .desc(&full_name)
+                .relation_desc()
                 .expect("can only create indexes on items with a valid description");
 
             let transient_items = btreemap! {

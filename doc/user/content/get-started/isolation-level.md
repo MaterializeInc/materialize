@@ -23,7 +23,10 @@ Isolation level is a configuration parameter that can be set by the user on a se
 
 ## Syntax
 
-{{< diagram "set-transaction-isolation.svg" >}}
+```mzsql
+SET TRANSACTION_ISOLATION TO|= <isolation_level>
+```
+
 
 | Valid Isolation Levels                      |
 | ------------------------------------------- |

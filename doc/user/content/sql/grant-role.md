@@ -11,12 +11,7 @@ other roles, as well as inherit all the privileges of those roles.
 
 ## Syntax
 
-{{< diagram "grant-role.svg" >}}
-
-Field         | Use
---------------|--------------------------------------------------
-_role_name_   | The role name to add _member_name_ as a member.
-_member_name_ | The role name to add to _role_name_ as a member.
+{{% include-syntax file="examples/grant_role" example="syntax" %}}
 
 ## Examples
 
@@ -32,12 +27,12 @@ GRANT data_scientist TO joe, mike;
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/grant-role.md" >}}
+{{% include-headless "/headless/sql-command-privileges/grant-role" %}}
 
 ## Useful views
 
-- [`mz_internal.mz_show_role_members`](/sql/system-catalog/mz_internal/#mz_show_role_members)
-- [`mz_internal.mz_show_my_role_members`](/sql/system-catalog/mz_internal/#mz_show_my_role_members)
+- [`mz_internal.mz_show_role_members`](/reference/system-catalog/mz_internal/#mz_show_role_members)
+- [`mz_internal.mz_show_my_role_members`](/reference/system-catalog/mz_internal/#mz_show_my_role_members)
 
 ## Related pages
 
@@ -47,6 +42,6 @@ The privileges required to execute this statement are:
 - [`DROP ROLE`](../drop-role)
 - [`DROP USER`](../drop-user)
 - [`REVOKE ROLE`](../revoke-role)
-- [`ALTER OWNER`](../alter-owner)
+- [`ALTER OWNER`](/sql/#rbac)
 - [`GRANT PRIVILEGE`](../grant-privilege)
 - [`REVOKE PRIVILEGE`](../revoke-privilege)

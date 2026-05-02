@@ -1,0 +1,70 @@
+- name: "syntax-set-drop-reset"
+  code: |
+    ALTER CONNECTION [IF EXISTS] <name>
+      SET (<option> = <value>) | DROP (<option>) | RESET (<option>)
+      [, ...]
+      [WITH (VALIDATE [true|false])]
+    ;
+  syntax_elements:
+    - name: "**IF EXISTS**"
+      description: |
+        Optional. If specified, do not return an error if the specified connection does not exist.
+    - name: "`<name>`"
+      description: |
+        The identifier of the connection you want to alter.
+    - name: "**SET**"
+      description: |
+        Sets the option to the specified value.
+    - name: "**DROP**"
+      description: |
+        Resets the specified option to its default value. Synonym for **RESET**.
+    - name: "**RESET**"
+      description: |
+        Resets the specified option to its default value. Synonym for **DROP**.
+    - name: "`<option>`"
+      description: |
+        The connection option to modify. See [`CREATE CONNECTION`](/sql/create-connection) for available options.
+    - name: "`<value>`"
+      description: |
+        The value to assign to the option.
+    - name: "**WITH (VALIDATE `<bool>`)**"
+      description: |
+        Optional. Whether [connection validation](/sql/create-connection#connection-validation) should be performed. Defaults to `true`.
+
+- name: "syntax-rotate-keys"
+  code: |
+    ALTER CONNECTION [IF EXISTS] <name> ROTATE KEYS;
+  syntax_elements:
+    - name: "**IF EXISTS**"
+      description: |
+        Optional. If specified, do not return an error if the specified connection does not exist.
+    - name: "`<name>`"
+      description: |
+        The identifier of the SSH tunnel connection.
+
+- name: "syntax-rename"
+  code: |
+    ALTER CONNECTION <name> RENAME TO <new_name>;
+  syntax_elements:
+    - name: "`<name>`"
+      description: |
+        The current name of the connection.
+    - name: "`<new_name>`"
+      description: |
+        The new name of the connection.
+  addenda: |
+    See also [Renaming restrictions](/sql/identifiers/#renaming-restrictions).
+
+- name: "syntax-change-owner"
+  code: |
+    ALTER CONNECTION <name> OWNER TO <new_owner_role>;
+  syntax_elements:
+    - name: "`<name>`"
+      description: |
+        The name of the connection you want to change ownership of.
+    - name: "`<new_owner_role>`"
+      description: |
+        The new owner of the connection.
+  addenda: |
+    To change the owner of a connection, you must be the owner of the connection and
+    have membership in the `<new_owner_role>`. See also [Privileges](#privileges).

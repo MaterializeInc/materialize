@@ -26,9 +26,7 @@ Materialize region using IP-based rules.
 
 {{< note >}}
 Network policies are applied **globally** (i.e., at the region level) and rules
-can only be configured for **ingress traffic**. In the future, we plan to
-support role- and object-level network policies, as well as egress network
-policies.
+can only be configured for **ingress traffic**.
 {{< /note >}}
 
 To create a new network policy, use the [`CREATE NETWORK POLICY`](/sql/create-network-policy)

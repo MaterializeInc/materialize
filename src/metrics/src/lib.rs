@@ -146,7 +146,9 @@ impl Metrics {
         mz_ore::task::spawn(|| format!("mz_metrics_update({})", T::NAME), async move {
             loop {
                 tokio::select! {
-                    _ = async { interval.as_mut().unwrap().tick().await }, if interval.is_some() => {
+                    _ = async {
+                        interval.as_mut().unwrap().tick().await
+                    }, if interval.is_some() => {
                         update_metrics()
                     }
                     new_interval = rx.recv() => match new_interval {

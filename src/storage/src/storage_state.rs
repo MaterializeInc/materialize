@@ -81,7 +81,6 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use crossbeam_channel::{RecvError, TryRecvError};
 use fail::fail_point;
 use mz_ore::now::NowFn;
 use mz_ore::soft_assert_or_log;
@@ -104,14 +103,14 @@ use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::IngestionDescription;
 use mz_timely_util::builder_async::PressOnDropButton;
 use mz_txn_wal::operator::TxnsContext;
-use timely::communication::Allocate;
 use timely::order::PartialOrder;
 use timely::progress::Timestamp as _;
 use timely::progress::frontier::Antichain;
 use timely::worker::Worker as TimelyWorker;
+use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::internal_control::{
@@ -124,30 +123,30 @@ use crate::storage_state::async_storage_worker::{AsyncStorageWorker, AsyncStorag
 
 pub mod async_storage_worker;
 
-type CommandReceiver = crossbeam_channel::Receiver<StorageCommand>;
+type CommandReceiver = mpsc::UnboundedReceiver<StorageCommand>;
 type ResponseSender = mpsc::UnboundedSender<StorageResponse>;
 
 /// State maintained for each worker thread.
 ///
 /// Much of this state can be viewed as local variables for the worker thread,
 /// holding state that persists across function calls.
-pub struct Worker<'w, A: Allocate> {
+pub struct Worker<'w> {
     /// The underlying Timely worker.
     ///
     /// NOTE: This is `pub` for testing.
-    pub timely_worker: &'w mut TimelyWorker<A>,
+    pub timely_worker: &'w mut TimelyWorker,
     /// The channel over which communication handles for newly connected clients
     /// are delivered.
-    pub client_rx: crossbeam_channel::Receiver<(Uuid, CommandReceiver, ResponseSender)>,
+    pub client_rx: mpsc::UnboundedReceiver<(Uuid, CommandReceiver, ResponseSender)>,
     /// The state associated with collection ingress and egress.
     pub storage_state: StorageState,
 }
 
-impl<'w, A: Allocate> Worker<'w, A> {
+impl<'w> Worker<'w> {
     /// Creates new `Worker` state from the given components.
     pub fn new(
-        timely_worker: &'w mut TimelyWorker<A>,
-        client_rx: crossbeam_channel::Receiver<(Uuid, CommandReceiver, ResponseSender)>,
+        timely_worker: &'w mut TimelyWorker,
+        client_rx: mpsc::UnboundedReceiver<(Uuid, CommandReceiver, ResponseSender)>,
         metrics: StorageMetrics,
         now: NowFn,
         connection_context: ConnectionContext,
@@ -413,10 +412,10 @@ impl StorageInstanceContext {
     }
 }
 
-impl<'w, A: Allocate> Worker<'w, A> {
+impl<'w> Worker<'w> {
     /// Waits for client connections and runs them to completion.
     pub fn run(&mut self) {
-        while let Ok((_nonce, rx, tx)) = self.client_rx.recv() {
+        while let Some((_nonce, rx, tx)) = self.client_rx.blocking_recv() {
             self.run_client(rx, tx);
         }
     }
@@ -427,9 +426,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// See the [module documentation](crate::storage_state) for this
     /// workers responsibilities, how it communicates with the other workers and
     /// how commands flow from the controller and through the workers.
-    fn run_client(&mut self, command_rx: CommandReceiver, response_tx: ResponseSender) {
+    fn run_client(&mut self, mut command_rx: CommandReceiver, response_tx: ResponseSender) {
         // At this point, all workers are still reading from the command flow.
-        if self.reconcile(&command_rx).is_err() {
+        if self.reconcile(&mut command_rx).is_err() {
             return;
         }
 
@@ -737,7 +736,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 // management being a bit of a mess. we should clean this up and remove weird if
                 // statements like this.
                 if resume_uppers.values().all(|frontier| frontier.is_empty()) || as_of.is_empty() {
-                    tracing::info!(
+                    info!(
                         ?resume_uppers,
                         ?as_of,
                         "worker {}/{} skipping building ingestion dataflow \
@@ -818,6 +817,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     self.storage_state.source_tokens.remove(id);
 
                     self.storage_state.sink_tokens.remove(id);
+                    self.storage_state.sink_write_frontiers.remove(id);
 
                     self.storage_state.aggregated_statistics.deinitialize(*id);
                 }
@@ -958,10 +958,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
     }
 
     fn process_oneshot_ingestions(&mut self, response_tx: &ResponseSender) {
-        use tokio::sync::mpsc::error::TryRecvError;
-
-        let mut to_remove = vec![];
-
         for (ingestion_id, ingestion_state) in &mut self.storage_state.oneshot_ingestions {
             loop {
                 match ingestion_state.results.try_recv() {
@@ -977,23 +973,17 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         break;
                     }
                     Err(TryRecvError::Disconnected) => {
-                        to_remove.push(*ingestion_id);
                         break;
                     }
                 }
             }
-        }
-
-        for ingestion_id in to_remove {
-            tracing::info!(?ingestion_id, "removing oneshot ingestion");
-            self.storage_state.oneshot_ingestions.remove(&ingestion_id);
         }
     }
 
     /// Extract commands until `InitializationComplete`, and make the worker
     /// reflect those commands. If the worker can not be made to reflect the
     /// commands, return an error.
-    fn reconcile(&mut self, command_rx: &CommandReceiver) -> Result<(), RecvError> {
+    fn reconcile(&mut self, command_rx: &mut CommandReceiver) -> Result<(), ()> {
         let worker_id = self.timely_worker.index();
 
         // To initialize the connection, we want to drain all commands until we
@@ -1001,7 +991,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
         // target command state.
         let mut commands = vec![];
         loop {
-            match command_rx.recv()? {
+            match command_rx.blocking_recv().ok_or(())? {
                 StorageCommand::InitializationComplete => break,
                 command => commands.push(command),
             }
@@ -1230,13 +1220,13 @@ impl<'w, A: Allocate> Worker<'w, A> {
             .oneshot_ingestions
             .keys()
             .filter(|ingestion_id| {
-                let created = create_oneshot_ingestions.contains(ingestion_id);
-                let dropped = cancel_oneshot_ingestions.contains(ingestion_id);
+                let to_create = create_oneshot_ingestions.contains(ingestion_id);
+                let to_drop = cancel_oneshot_ingestions.contains(ingestion_id);
                 mz_ore::soft_assert_or_log!(
-                    !created && dropped,
-                    "dropped non-existent oneshot source"
+                    !(!to_create && to_drop),
+                    "attempting to drop oneshot source {ingestion_id} that is not expected to be created during reconciliation"
                 );
-                !created && !dropped
+                !to_create && !to_drop
             })
             .copied()
             .collect::<Vec<_>>();
@@ -1302,7 +1292,7 @@ impl StorageState {
             }
             StorageCommand::UpdateConfiguration(params) => {
                 // These can be done from all workers safely.
-                tracing::info!("Applying configuration update: {params:?}");
+                debug!("Applying configuration update: {params:?}");
 
                 // We serialize the dyncfg updates in StorageParameters, but configure
                 // persist separately.
@@ -1452,6 +1442,6 @@ impl StorageState {
     /// Drop the identified oneshot ingestion from the storage state.
     fn drop_oneshot_ingestion(&mut self, ingestion_id: uuid::Uuid) {
         let prev = self.oneshot_ingestions.remove(&ingestion_id);
-        tracing::info!(%ingestion_id, existed = %prev.is_some(), "dropping oneshot ingestion");
+        info!(%ingestion_id, existed = %prev.is_some(), "dropping oneshot ingestion");
     }
 }

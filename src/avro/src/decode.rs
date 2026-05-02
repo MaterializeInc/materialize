@@ -610,18 +610,34 @@ macro_rules! define_unexpected {
         }
     };
     (array) => {
-        fn array<A: $crate::AvroArrayAccess>(self, _a: &mut A) -> Result<Self::Out, $crate::error::Error> {
-            Err($crate::error::Error::Decode($crate::error::DecodeError::UnexpectedArray))
+        fn array<A: $crate::AvroArrayAccess>(
+            self,
+            _a: &mut A,
+        ) -> Result<Self::Out, $crate::error::Error> {
+            Err($crate::error::Error::Decode(
+                $crate::error::DecodeError::UnexpectedArray,
+            ))
         }
     };
     (map) => {
-        fn map<M: $crate::AvroMapAccess>(self, _m: &mut M) -> Result<Self::Out, $crate::error::Error> {
-            Err($crate::error::Error::Decode($crate::error::DecodeError::UnexpectedMap))
+        fn map<M: $crate::AvroMapAccess>(
+            self,
+            _m: &mut M,
+        ) -> Result<Self::Out, $crate::error::Error> {
+            Err($crate::error::Error::Decode(
+                $crate::error::DecodeError::UnexpectedMap,
+            ))
         }
     };
     (enum_variant) => {
-        fn enum_variant(self, _symbol: &str, _idx: usize) -> Result<Self::Out, $crate::error::Error> {
-            Err($crate::error::Error::Decode($crate::error::DecodeError::UnexpectedEnum))
+        fn enum_variant(
+            self,
+            _symbol: &str,
+            _idx: usize,
+        ) -> Result<Self::Out, $crate::error::Error> {
+            Err($crate::error::Error::Decode(
+                $crate::error::DecodeError::UnexpectedEnum,
+            ))
         }
     };
     (scalar) => {
@@ -658,7 +674,11 @@ macro_rules! define_unexpected {
     (json) => {
         fn json<'avro_macro_lifetime, R: AvroRead>(
             self,
-            _r: $crate::ValueOrReader<'avro_macro_lifetime, &'avro_macro_lifetime serde_json::Value, R>,
+            _r: $crate::ValueOrReader<
+                'avro_macro_lifetime,
+                &'avro_macro_lifetime serde_json::Value,
+                R,
+            >,
         ) -> Result<Self::Out, $crate::error::Error> {
             Err($crate::error::Error::Decode($crate::error::DecodeError::UnexpectedJson))
         }
@@ -765,12 +785,16 @@ pub mod public_decoders {
                         $(
                             Scalar::$scalar_branch(inner) => {inner.try_into()?}
                         ),*
-                            other => return Err(AvroError::Decode(DecodeError::UnexpectedScalarKind(other.into())))
+                            other => return Err(AvroError::Decode(
+                                DecodeError::UnexpectedScalarKind(other.into()),
+                            ))
                     };
                     Ok(out)
                 }
                 define_unexpected! {
-                    array, record, union_branch, map, enum_variant, decimal, bytes, string, json, uuid, fixed
+                    array, record, union_branch, map,
+                    enum_variant, decimal, bytes, string,
+                    json, uuid, fixed
                 }
             }
 
@@ -932,7 +956,9 @@ pub mod public_decoders {
             Ok(self.buf)
         }
         define_unexpected! {
-            record, union_branch, map, enum_variant, scalar, decimal, bytes, string, json, uuid, fixed
+            record, union_branch, map, enum_variant,
+            scalar, decimal, bytes, string, json, uuid,
+            fixed
         }
     }
 
@@ -956,7 +982,9 @@ pub mod public_decoders {
             Ok(self.buf)
         }
         define_unexpected! {
-            record, union_branch, map, enum_variant, scalar, decimal, bytes, string, json, uuid, fixed
+            record, union_branch, map, enum_variant,
+            scalar, decimal, bytes, string, json, uuid,
+            fixed
         }
     }
     impl<T: AvroDecodable> StatefulAvroDecodable for Vec<T> {

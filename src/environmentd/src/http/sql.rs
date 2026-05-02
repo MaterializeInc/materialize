@@ -7,17 +7,16 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 use std::pin::pin;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
 use axum::extract::connect_info::ConnectInfo;
-use axum::extract::ws::{CloseFrame, Message, WebSocket};
+use axum::extract::ws::{CloseFrame, Message, Utf8Bytes, WebSocket};
 use axum::extract::{State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use axum::{Extension, Json};
@@ -30,7 +29,7 @@ use mz_adapter::client::RecordFirstRowStream;
 use mz_adapter::session::{EndTransactionAction, TransactionStatus};
 use mz_adapter::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use mz_adapter::{
-    AdapterError, AdapterNotice, ExecuteContextExtra, ExecuteResponse, ExecuteResponseKind,
+    AdapterError, AdapterNotice, ExecuteContextGuard, ExecuteResponse, ExecuteResponseKind,
     PeekResponseUnary, SessionClient, verify_datum_desc,
 };
 use mz_auth::password::Password;
@@ -53,13 +52,13 @@ use tokio::{select, time};
 use tokio_postgres::error::SqlState;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tower_sessions::Session as TowerSession;
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 use tungstenite::protocol::frame::coding::CloseCode;
 
 use crate::http::prometheus::PrometheusSqlQuery;
 use crate::http::{
-    AuthError, AuthedClient, AuthedUser, MAX_REQUEST_SIZE, SESSION_DURATION, TowerSessionData,
-    WsState, init_ws,
+    AuthError, AuthedClient, AuthedUser, MAX_REQUEST_SIZE, WsState, ensure_session_unexpired,
+    init_ws, maybe_get_authenticated_session,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -278,51 +277,42 @@ pub async fn handle_sql(
     }
 }
 
-pub async fn handle_sql_ws(
+#[derive(Debug)]
+pub enum ExistingUser {
+    /// An AuthedUser provided by the
+    /// `x_materialize_user_header_auth` middleware
+    XMaterializeUserHeader(AuthedUser),
+    /// An AuthedUser provided by an authenticated session
+    /// established via [`crate::http::handle_login`].
+    Session(AuthedUser),
+}
+
+pub(crate) async fn handle_sql_ws(
     State(state): State<WsState>,
     existing_user: Option<Extension<AuthedUser>>,
     ws: WebSocketUpgrade,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     tower_session: Option<Extension<TowerSession>>,
-) -> impl IntoResponse {
-    // An upstream middleware may have already provided the user for us
-    let user = match (existing_user, tower_session) {
-        (Some(Extension(user)), _) => Some(user),
-        (None, Some(session)) => {
-            if let Ok(Some(session_data)) = session.get::<TowerSessionData>("data").await {
-                // Check session expiration
-                if session_data
-                    .last_activity
-                    .elapsed()
-                    .unwrap_or(Duration::MAX)
-                    > SESSION_DURATION
-                {
-                    let _ = session.delete().await;
-                    return Err(AuthError::SessionExpired);
-                }
-                // Update last activity
-                let mut updated_data = session_data.clone();
-                updated_data.last_activity = SystemTime::now();
-                session
-                    .insert("data", &updated_data)
-                    .await
-                    .map_err(|_| AuthError::FailedToUpdateSession)?;
-                // User is authenticated via session
-                Some(AuthedUser {
-                    name: session_data.username,
-                    external_metadata_rx: None,
-                })
+) -> Result<impl IntoResponse, AuthError> {
+    let session = tower_session.map(|Extension(session)| session);
+    // The `x_materialize_user_header_auth` middleware may have already provided the user for us
+    let user = match existing_user {
+        Some(Extension(user)) => Some(ExistingUser::XMaterializeUserHeader(user)),
+        None => {
+            let session = maybe_get_authenticated_session(session.as_ref()).await;
+            if let Some((session, session_data)) = session {
+                let user = ensure_session_unexpired(session, session_data).await?;
+                Some(ExistingUser::Session(user))
             } else {
                 None
             }
         }
-        _ => None,
     };
 
     let addr = Box::new(addr.ip());
     Ok(ws
         .max_message_size(MAX_REQUEST_SIZE)
-        .on_upgrade(|ws| async move { run_ws(&state, user, *addr, ws).await }))
+        .on_upgrade(|ws| async move { run_ws(state, user, *addr, ws).await }))
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
@@ -345,7 +335,7 @@ pub enum WebSocketAuth {
     },
 }
 
-async fn run_ws(state: &WsState, user: Option<AuthedUser>, peer_addr: IpAddr, mut ws: WebSocket) {
+async fn run_ws(state: WsState, user: Option<ExistingUser>, peer_addr: IpAddr, mut ws: WebSocket) {
     let mut client = match init_ws(state, user, peer_addr, &mut ws).await {
         Ok(client) => client,
         Err(e) => {
@@ -353,9 +343,9 @@ async fn run_ws(state: &WsState, user: Option<AuthedUser>, peer_addr: IpAddr, mu
             // avoid giving attackers unnecessary information during auth. AdapterErrors
             // are safe to return because they're generated after authentication.
             debug!("WS request failed init: {}", e);
-            let reason = match e.downcast_ref::<AdapterError>() {
-                Some(error) => Cow::Owned(error.to_string()),
-                None => "unauthorized".into(),
+            let reason: Utf8Bytes = match e.downcast_ref::<AdapterError>() {
+                Some(error) => error.to_string().into(),
+                None => "unauthorized".to_string().into(),
             };
             let _ = ws
                 .send(Message::Close(Some(CloseFrame {
@@ -386,7 +376,7 @@ async fn run_ws(state: &WsState, user: Option<AuthedUser>, peer_addr: IpAddr, mu
     for msg in msgs {
         let _ = ws
             .send(Message::Text(
-                serde_json::to_string(&msg).expect("must serialize"),
+                serde_json::to_string(&msg).expect("must serialize").into(),
             ))
             .await;
     }
@@ -491,7 +481,7 @@ async fn run_ws_request(
 /// Sends a single [`WebSocketResponse`] over the provided [`WebSocket`].
 async fn send_ws_response(ws: &mut WebSocket, resp: WebSocketResponse) -> Result<(), Error> {
     let msg = serde_json::to_string(&resp).unwrap();
-    let msg = Message::Text(msg);
+    let msg = Message::Text(msg.into());
     ws.send(msg).await?;
 
     Ok(())
@@ -550,16 +540,25 @@ pub struct ExtendedRequest {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SqlResponse {
     /// The results for each query in the request.
-    results: Vec<SqlResult>,
+    pub(in crate::http) results: Vec<SqlResult>,
 }
 
-enum StatementResult {
+impl SqlResponse {
+    /// Creates a new empty SqlResponse for collecting results.
+    pub(in crate::http) fn new() -> Self {
+        Self {
+            results: Vec::new(),
+        }
+    }
+}
+
+pub(in crate::http) enum StatementResult {
     SqlResult(SqlResult),
     Subscribe {
         desc: RelationDesc,
         tag: String,
         rx: RecordFirstRowStream,
-        ctx_extra: ExecuteContextExtra,
+        ctx_extra: ExecuteContextGuard,
     },
 }
 
@@ -822,7 +821,7 @@ pub struct CommandStarting {
 /// accumulate into a Vec and send all at once. WebSocket clients send each
 /// message as they occur.
 #[async_trait]
-trait ResultSender: Send {
+pub(in crate::http) trait ResultSender: Send {
     const SUPPORTS_STREAMING_NOTICES: bool = false;
 
     /// Adds a result to the client. The first component of the return value is
@@ -838,7 +837,7 @@ trait ResultSender: Send {
         res: StatementResult,
     ) -> (
         Result<Result<(), ()>, Error>,
-        Option<(StatementEndedExecutionReason, ExecuteContextExtra)>,
+        Option<(StatementEndedExecutionReason, ExecuteContextGuard)>,
     );
 
     /// Returns a future that resolves only when the client connection has gone away.
@@ -869,7 +868,7 @@ impl ResultSender for SqlResponse {
         res: StatementResult,
     ) -> (
         Result<Result<(), ()>, Error>,
-        Option<(StatementEndedExecutionReason, ExecuteContextExtra)>,
+        Option<(StatementEndedExecutionReason, ExecuteContextGuard)>,
     ) {
         let (res, stmt_logging) = match res {
             StatementResult::SqlResult(res) => {
@@ -922,7 +921,7 @@ impl ResultSender for WebSocket {
         res: StatementResult,
     ) -> (
         Result<Result<(), ()>, Error>,
-        Option<(StatementEndedExecutionReason, ExecuteContextExtra)>,
+        Option<(StatementEndedExecutionReason, ExecuteContextGuard)>,
     ) {
         let (has_rows, is_streaming) = match res {
             StatementResult::SqlResult(SqlResult::Err { .. }) => (false, false),
@@ -949,9 +948,17 @@ impl ResultSender for WebSocket {
                 desc,
                 notices,
             }) => {
-                let mut msgs = vec![WebSocketResponse::Rows(desc)];
-                msgs.extend(rows.into_iter().map(WebSocketResponse::Row));
-                msgs.push(WebSocketResponse::CommandComplete(tag));
+                // Stream rows directly to avoid buffering all rows as
+                // WebSocketResponse, which inflates memory due to enum sizing.
+                if let Err(e) = send_ws_response(self, WebSocketResponse::Rows(desc)).await {
+                    return (Err(e), None);
+                }
+                for row in rows {
+                    if let Err(e) = send_ws_response(self, WebSocketResponse::Row(row)).await {
+                        return (Err(e), None);
+                    }
+                }
+                let mut msgs = vec![WebSocketResponse::CommandComplete(tag)];
                 msgs.extend(notices.into_iter().map(WebSocketResponse::Notice));
                 (false, msgs, None)
             }
@@ -1104,7 +1111,7 @@ impl ResultSender for WebSocket {
             tick.tick().await;
             loop {
                 tick.tick().await;
-                if let Err(err) = self.send(Message::Ping(Vec::new())).await {
+                if let Err(err) = self.send(Message::Ping(Vec::new().into())).await {
                     return err.into();
                 }
             }
@@ -1209,7 +1216,11 @@ async fn execute_stmt_group<S: ResultSender>(
 ///
 /// See the user-facing documentation about the HTTP API for a description of
 /// the semantics of this function.
-async fn execute_request<S: ResultSender>(
+/// Executes a SQL request and sends results to the provided sender.
+///
+/// Made visible to http submodules (like mcp) via `pub(in crate::http)` to allow
+/// reuse of SQL execution logic.
+pub(in crate::http) async fn execute_request<S: ResultSender>(
     client: &mut AuthedClient,
     request: SqlRequest,
     sender: &mut S,
@@ -1394,7 +1405,14 @@ async fn execute_stmt<S: ResultSender>(
                     &pg_typ,
                     raw_param.as_bytes(),
                 ) {
-                    Ok(param) => param.into_datum(&buf, &pg_typ),
+                    Ok(param) => match param.into_datum_decode_error(&buf, &pg_typ, "parameter") {
+                        Ok(datum) => datum,
+                        Err(msg) => {
+                            return Ok(
+                                SqlResult::err(client, Error::Unstructured(anyhow!(msg))).into()
+                            );
+                        }
+                    },
                     Err(err) => {
                         let msg = anyhow!("unable to decode parameter: {}", err);
                         return Ok(SqlResult::err(client, Error::Unstructured(msg)).into());
@@ -1472,7 +1490,6 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::CreatedView { .. }
         | ExecuteResponse::CreatedViews { .. }
         | ExecuteResponse::CreatedMaterializedView { .. }
-        | ExecuteResponse::CreatedContinualTask { .. }
         | ExecuteResponse::CreatedType
         | ExecuteResponse::CreatedNetworkPolicy
         | ExecuteResponse::Comment

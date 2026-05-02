@@ -27,7 +27,7 @@ use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::txn::{TxnsCodec, TxnsEntry};
-use mz_persist_types::{Codec, Codec64, Opaque, StepForward};
+use mz_persist_types::{Codec, Codec64, StepForward};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::{mpsc, oneshot};
@@ -141,7 +141,7 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64 + Sync> DataSnapshot<T> {
     pub async fn snapshot_and_fetch<K, V, D>(
         &self,
         data_read: &mut ReadHandle<K, V, T, D>,
-    ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, Since<T>>
+    ) -> Result<Vec<((K, V), T, D)>, Since<T>>
     where
         K: Debug + Codec + Ord,
         V: Debug + Codec + Ord,
@@ -176,10 +176,7 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64 + Sync> DataSnapshot<T> {
     pub async fn snapshot_and_stream<K, V, D>(
         &self,
         data_read: &mut ReadHandle<K, V, T, D>,
-    ) -> Result<
-        impl Stream<Item = ((Result<K, String>, Result<V, String>), T, D)> + use<K, V, T, D>,
-        Since<T>,
-    >
+    ) -> Result<impl Stream<Item = ((K, V), T, D)> + use<K, V, T, D>, Since<T>>
     where
         K: Debug + Codec + Ord,
         V: Debug + Codec + Ord,
@@ -193,15 +190,14 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64 + Sync> DataSnapshot<T> {
     }
 
     /// See [SinceHandle::snapshot_stats].
-    pub fn snapshot_stats_from_critical<K, V, D, O>(
+    pub fn snapshot_stats_from_critical<K, V, D>(
         &self,
-        data_since: &SinceHandle<K, V, T, D, O>,
+        data_since: &SinceHandle<K, V, T, D>,
     ) -> impl Future<Output = Result<SnapshotStats, Since<T>>> + Send + 'static
     where
         K: Debug + Codec + Ord,
         V: Debug + Codec + Ord,
         D: Monoid + Codec64 + Send + Sync,
-        O: Opaque + Codec64,
     {
         // This is used by the optimizer in planning to get cost statistics, so
         // it can't use `unblock_read`. Instead use the "translated as_of"

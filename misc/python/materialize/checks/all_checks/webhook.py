@@ -9,7 +9,7 @@
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check, disabled
+from materialize.checks.checks import Check
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
 from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
@@ -21,10 +21,7 @@ def schemas() -> str:
 
 class Webhook(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            schemas()
-            + dedent(
-                """
+        return Testdrive(schemas() + dedent("""
                 >[version>=14700] CREATE CLUSTER webhook_cluster REPLICATION FACTOR 2, SIZE 'scale=1,workers=1'
                 >[version<14700] CREATE CLUSTER webhook_cluster REPLICATION FACTOR 1, SIZE 'scale=1,workers=1'
 
@@ -44,9 +41,7 @@ class Webhook(Check):
 
                 $ webhook-append database=materialize schema=public name=webhook_bytes
                 \u0001
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -79,9 +74,7 @@ class Webhook(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SHOW COLUMNS FROM webhook_text
                 body false text ""
 
@@ -111,14 +104,23 @@ class Webhook(Check):
                 \\\\x01
                 \\\\x01\\x02\\x03\\x04
 
-                >[version>=14000] SHOW CREATE SOURCE webhook_text
+                >[14000<=version<2600700] SHOW CREATE SOURCE webhook_text
                 materialize.public.webhook_text "CREATE SOURCE materialize.public.webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT TEXT;"
 
-                >[version>=14000] SHOW CREATE SOURCE webhook_json
+                >[version>=2600700] SHOW CREATE SOURCE webhook_text
+                materialize.public.webhook_text "CREATE SOURCE materialize.public.webhook_text\\nIN CLUSTER webhook_cluster\\nFROM WEBHOOK\\nBODY FORMAT TEXT;"
+
+                >[14000<=version<2600700] SHOW CREATE SOURCE webhook_json
                 materialize.public.webhook_json "CREATE SOURCE materialize.public.webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON INCLUDE HEADERS;"
 
-                >[version>=14000] SHOW CREATE SOURCE webhook_bytes
+                >[version>=2600700] SHOW CREATE SOURCE webhook_json
+                materialize.public.webhook_json "CREATE SOURCE materialize.public.webhook_json\\nIN CLUSTER webhook_cluster\\nFROM WEBHOOK\\nBODY FORMAT JSON\\nINCLUDE HEADERS;"
+
+                >[14000<=version<2600700] SHOW CREATE SOURCE webhook_bytes
                 materialize.public.webhook_bytes "CREATE SOURCE materialize.public.webhook_bytes IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT BYTES;"
+
+                >[version>=2600700] SHOW CREATE SOURCE webhook_bytes
+                materialize.public.webhook_bytes "CREATE SOURCE materialize.public.webhook_bytes\\nIN CLUSTER webhook_cluster\\nFROM WEBHOOK\\nBODY FORMAT BYTES;"
 
                 >[version<14000] SHOW CREATE SOURCE webhook_text
                 materialize.public.webhook_text "CREATE SOURCE \\"materialize\\".\\"public\\".\\"webhook_text\\" IN CLUSTER \\"webhook_cluster\\" FROM WEBHOOK BODY FORMAT TEXT"
@@ -128,23 +130,15 @@ class Webhook(Check):
 
                 >[version<14000] SHOW CREATE SOURCE webhook_bytes
                 materialize.public.webhook_bytes "CREATE SOURCE \\"materialize\\".\\"public\\".\\"webhook_bytes\\" IN CLUSTER \\"webhook_cluster\\" FROM WEBHOOK BODY FORMAT BYTES"
-           """
-            )
-        )
+           """))
 
 
-@disabled(
-    "Reenable when database-issues#9184 is fixed and there is a way to set the cluster"
-)
 class WebhookTable(Check):
     def _can_run(self, e: Executor) -> bool:
         return self.base_version >= MzVersion.parse_mz("v0.130.0-dev")
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            schemas()
-            + dedent(
-                """
+        return Testdrive(schemas() + dedent("""
                 > CREATE CLUSTER webhook_table_cluster REPLICATION FACTOR 2, SIZE 'scale=1,workers=1'
                 > SET cluster = webhook_table_cluster
                 > CREATE TABLE webhook_table_text FROM WEBHOOK BODY FORMAT TEXT;
@@ -152,9 +146,7 @@ class WebhookTable(Check):
 
                 $ webhook-append database=materialize schema=public name=webhook_table_text
                 hello_world
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -172,9 +164,7 @@ class WebhookTable(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                r"""
+        return Testdrive(dedent(r"""
                 > SELECT * FROM webhook_table_text
                 hello_world
                 anotha_one!
@@ -185,6 +175,4 @@ class WebhookTable(Check):
 
                 >[version<14000] SHOW CREATE TABLE webhook_table_text
                 materialize.public.webhook_table_text "CREATE TABLE \"materialize\".\"public\".\"webhook_table_text\" FROM WEBHOOK BODY FORMAT TEXT"
-           """
-            )
-        )
+           """))

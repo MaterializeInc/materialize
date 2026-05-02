@@ -8,11 +8,11 @@
 // by the Apache License, Version 2.0.
 
 use rand::Rng;
-use rand::distributions::Alphanumeric;
+use rand::distr::Alphanumeric;
 
 /// Generates and returns bytes of length `len`.
 pub fn generate_bytes(len: usize) -> Vec<u8> {
-    rand::thread_rng()
+    rand::rng()
         .sample_iter(&Alphanumeric)
         .take(len)
         .collect::<Vec<u8>>()

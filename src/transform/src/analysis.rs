@@ -20,8 +20,8 @@ pub use column_names::{ColumnName, ColumnNames};
 pub use common::{Derived, DerivedBuilder, DerivedView};
 pub use explain::annotate_plan;
 pub use non_negative::NonNegative;
+pub use repr_types::ReprRelationType;
 pub use subtree::SubtreeSize;
-pub use types::SqlRelationType;
 pub use unique_keys::UniqueKeys;
 
 /// An analysis that can be applied bottom-up to a `MirRelationExpr`.
@@ -549,12 +549,12 @@ mod arity {
 }
 
 /// Expression types
-mod types {
+mod repr_types {
 
     use super::{Analysis, Derived, Lattice};
     use itertools::Itertools;
     use mz_expr::MirRelationExpr;
-    use mz_repr::SqlColumnType;
+    use mz_repr::ReprColumnType;
 
     /// Analysis that determines the type of relation expressions.
     ///
@@ -567,10 +567,10 @@ mod types {
     /// The analysis will panic if an expression is not well typed (i.e. if `try_col_with_input_cols`
     /// returns an error).
     #[derive(Debug)]
-    pub struct SqlRelationType;
+    pub struct ReprRelationType;
 
-    impl Analysis for SqlRelationType {
-        type Value = Option<Vec<SqlColumnType>>;
+    impl Analysis for ReprRelationType {
+        type Value = Option<Vec<ReprColumnType>>;
 
         fn derive(
             &self,
@@ -592,7 +592,7 @@ mod types {
                     typ,
                     ..
                 } => {
-                    let mut result = typ.column_types.clone();
+                    let mut result = typ.column_types.iter().cloned().collect_vec();
                     if let Some(o) = depends.bindings().get(i) {
                         if let Some(t) = results.get(*o) {
                             if let Some(rec_typ) = t {
@@ -623,9 +623,11 @@ mod types {
                     // Every expression with inputs should have non-`None` inputs at this point.
                     let input_cols = offsets.into_iter().rev().map(|o| {
                         o.as_ref()
-                            .expect("SqlRelationType analysis discovered type-less expression")
+                            .expect("ReprRelationType analysis discovered type-less expression")
                     });
-                    Some(expr.try_col_with_input_cols(input_cols).unwrap())
+
+                    let repr_typ = expr.try_col_with_input_cols(input_cols).unwrap();
+                    Some(repr_typ)
                 }
             }
         }
@@ -637,14 +639,14 @@ mod types {
 
     struct RTLattice;
 
-    impl Lattice<Option<Vec<SqlColumnType>>> for RTLattice {
-        fn top(&self) -> Option<Vec<SqlColumnType>> {
+    impl Lattice<Option<Vec<ReprColumnType>>> for RTLattice {
+        fn top(&self) -> Option<Vec<ReprColumnType>> {
             None
         }
         fn meet_assign(
             &self,
-            a: &mut Option<Vec<SqlColumnType>>,
-            b: Option<Vec<SqlColumnType>>,
+            a: &mut Option<Vec<ReprColumnType>>,
+            b: Option<Vec<ReprColumnType>>,
         ) -> bool {
             match (a, b) {
                 (_, None) => false,
@@ -856,7 +858,8 @@ mod non_negative {
                             let mut children = depends.children_of_rev(index, 2);
                             let _negate = children.next().unwrap();
                             let base_id = children.next().unwrap();
-                            debug_assert_eq!(children.next(), None);
+                            let extra = children.next();
+                            debug_assert_eq!(extra, None);
                             if results[base_id] && is_superset_of(&*base, &*input) {
                                 return true;
                             }
@@ -1259,7 +1262,7 @@ mod explain {
                 builder.require(super::NonNegative);
             }
             if context.config.types {
-                builder.require(super::SqlRelationType);
+                builder.require(super::ReprRelationType);
             }
             if context.config.arity {
                 builder.require(super::Arity);
@@ -1334,7 +1337,7 @@ mod explain {
             if config.types {
                 for (expr, types) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<super::SqlRelationType>().into_iter(),
+                    derived.results::<super::ReprRelationType>().into_iter(),
                 ) {
                     let analyses = annotations.entry(expr).or_default();
                     analyses.types = Some(types.clone());
@@ -1663,11 +1666,11 @@ mod cardinality {
                     }
                 }
                 MirScalarExpr::CallVariadic { func, exprs } => match func {
-                    VariadicFunc::And => exprs
+                    VariadicFunc::And(_) => exprs
                         .iter()
                         .map(|expr| self.predicate(expr, unique_columns))
                         .product(),
-                    VariadicFunc::Or => {
+                    VariadicFunc::Or(_) => {
                         // TODO(mgree): BETWEEN will get compiled down to an AND of appropriate bounds---we could try to detect it and be clever
 
                         // F(expr1 OR expr2) = F(expr1) + F(expr2) - F(expr1) * F(expr2), but generalized

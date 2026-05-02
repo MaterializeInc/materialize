@@ -16,13 +16,15 @@ all objects across all databases, including the database itself.
 
 ## Syntax
 
-{{< diagram "drop-owned.svg" >}}
+```mzsql
+DROP OWNED BY <role_name> [, ...] [RESTRICT|CASCADE];
+```
 
-Field | Use
-------|-----
-_role_name_   | The role name whose owned objects will be dropped.
-**CASCADE** | Remove all dependent objects.
-**RESTRICT**  | Don't remove anything if any non-index objects depencies exist. _(Default.)_
+Syntax element | Description
+---------------|------------
+`<role_name>`   | The role name whose owned objects will be dropped.
+**CASCADE** | Optional. If specified, remove all dependent objects.
+**RESTRICT**  | Optional. Do not drop anything if any non-index objects depencies exist. _(Default.)_
 
 ## Examples
 
@@ -38,7 +40,7 @@ DROP OWNED BY joe, george CASCADE;
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/drop-owned.md" >}}
+{{% include-headless "/headless/sql-command-privileges/drop-owned" %}}
 
 ## Related pages
 

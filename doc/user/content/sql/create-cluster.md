@@ -9,25 +9,9 @@ menu:
 
 `CREATE CLUSTER` creates a new [cluster](/concepts/clusters/).
 
-## Conceptual framework
-
-A cluster is a pool of compute resources (CPU, memory, and scratch disk space)
-for running your workloads.
-
-The following operations require compute resources in Materialize, and so need
-to be associated with a cluster:
-
-- Executing [`SELECT`] and [`SUBSCRIBE`] statements.
-- Maintaining [indexes](/concepts/indexes/) and [materialized views](/concepts/views/#materialized-views).
-- Maintaining [sources](/concepts/sources/) and [sinks](/concepts/sinks/).
-
 ## Syntax
 
-{{< diagram "create-managed-cluster.svg" >}}
-
-### Options
-
-{{< yaml-table data="syntax_options/create_cluster_options" >}}
+{{% include-syntax file="examples/create_cluster" example="syntax" %}}
 
 ## Details
 
@@ -71,32 +55,15 @@ example, you could place your development workloads in a cluster named
 
 <a name="legacy-sizes"></a>
 
-### Size
+### Available sizes
 
 The `SIZE` option determines the amount of compute resources available to the
 cluster.
 
 {{< tabs >}}
-{{< tab "M.1 Clusters" >}}
+{{< tab "cc Clusters" >}}
 
-{{< include-md file="shared-content/cluster-size-disclaimer.md" >}}
-
-{{< yaml-table data="m1_cluster_sizing" >}}
-
-{{< /tab >}}
-{{< tab "Legacy cc Clusters" >}}
-
-Materialize offers the following legacy cc cluster sizes:
-
-{{< tip >}}
-In most cases, you **should not** use legacy sizes. [M.1 sizes](#size)
-offer better performance per credit for nearly all workloads. We recommend using
-M.1 sizes for all new clusters, and recommend migrating existing
-legacy-sized clusters to M.1 sizes. Materialize is committed to supporting
-customers during the transition period as we move to deprecate legacy sizes.
-
-The legacy size information is provided for completeness.
-{{< /tip >}}
+Materialize offers the following cc cluster sizes:
 
 * `25cc`
 * `50cc`
@@ -118,7 +85,7 @@ The resource allocations are proportional to the number in the size name. For
 example, a cluster of size `600cc` has 2x as much CPU, memory, and disk as a
 cluster of size `300cc`, and 1.5x as much CPU, memory, and disk as a cluster of
 size `400cc`. To determine the specific resource allocations for a size,
-query the [`mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes) table.
+query the [`mz_cluster_replica_sizes`](/reference/system-catalog/mz_catalog/#mz_cluster_replica_sizes) table.
 
 {{< warning >}}
 The values in the `mz_cluster_replica_sizes` table may change at any
@@ -127,16 +94,29 @@ time. You should not rely on them for any kind of capacity planning.
 
 Clusters of larger sizes can process data faster and handle larger data volumes.
 {{< /tab >}}
+{{< tab "M.1 Clusters" >}}
+
+{{< note >}}
+M.1 sizes provide access to additional disk capacity compared to
+equivalently-priced cc sizes, which can be beneficial for disk-intensive
+workloads. However, cc sizes offer better compute performance per credit for
+most workloads. We recommend using cc sizes unless your workload specifically
+requires the additional disk capacity that M.1 sizes provide.
+{{< /note >}}
+
+{{< include-md file="shared-content/cluster-size-disclaimer.md" >}}
+
+{{< yaml-table data="m1_cluster_sizing" >}}
+
+{{< /tab >}}
 {{< tab "Legacy t-shirt Clusters" >}}
 
 Materialize also offers some legacy t-shirt cluster sizes for upsert sources.
 
 {{< tip >}}
-In most cases, you **should not** use legacy t-shirt sizes. [M.1 sizes](#size)
-offer better performance per credit for nearly all workloads. We recommend using
-M.1 sizes for all new clusters, and recommend migrating existing
-legacy-sized clusters to M.1 sizes. Materialize is committed to supporting
-customers during the transition period as we move to deprecate legacy sizes.
+In most cases, you **should not** use legacy t-shirt sizes. We recommend using
+cc sizes for all new clusters, and recommend migrating existing legacy-sized
+clusters to cc sizes.
 
 The legacy size information is provided for completeness.
 
@@ -168,6 +148,8 @@ When legacy sizes are enabled for a region, the following sizes are available:
 {{< /tabs >}}
 
 See also:
+
+- [cc to M.1 size mapping](/sql/m1-cc-mapping/).
 
 - [Materialize service consumption
   table](https://materialize.com/pdfs/pricing.pdf).
@@ -224,7 +206,7 @@ do exactly the same work (i.e., maintain the same dataflows and process the same
 queries) as all the other replicas of the cluster.
 
 To increase a cluster's capacity, you should instead increase the cluster's
-[size](#size).
+[size](#available-sizes).
 {{< /note >}}
 
 ### Credit usage
@@ -232,23 +214,23 @@ To increase a cluster's capacity, you should instead increase the cluster's
 Each [replica](#replication-factor) of the cluster consumes credits at a rate
 determined by the cluster's size:
 
-Size      | Legacy size  | Credits per replica per hour
-----------|--------------|-----------------------------
-`25cc`    | `3xsmall`    | 0.25
-`50cc`    | `2xsmall`    | 0.5
-`100cc`   | `xsmall`     | 1
-`200cc`   | `small`      | 2
-`300cc`   | &nbsp;       | 3
-`400cc`   | `medium`     | 4
-`600cc`   | &nbsp;       | 6
-`800cc`   | `large`      | 8
-`1200cc`  | &nbsp;       | 12
-`1600cc`  | `xlarge`     | 16
-`3200cc`  | `2xlarge`    | 32
-`6400cc`  | `3xlarge`    | 64
-`128C`    | `4xlarge`    | 128
-`256C`    | `5xlarge`    | 256
-`512C`    | `6xlarge`    | 512
+Size      | Legacy t-shirt size | Credits per replica per hour
+----------|---------------------|-----------------------------
+`25cc`    | `3xsmall`           | 0.25
+`50cc`    | `2xsmall`           | 0.5
+`100cc`   | `xsmall`            | 1
+`200cc`   | `small`             | 2
+`300cc`   | &nbsp;              | 3
+`400cc`   | `medium`            | 4
+`600cc`   | &nbsp;              | 6
+`800cc`   | `large`             | 8
+`1200cc`  | &nbsp;              | 12
+`1600cc`  | `xlarge`            | 16
+`3200cc`  | `2xlarge`           | 32
+`6400cc`  | `3xlarge`           | 64
+`128C`    | `4xlarge`           | 128
+`256C`    | `5xlarge`           | 256
+`512C`    | `6xlarge`           | 512
 
 Credit usage is measured at a one second granularity. For a given replica,
 credit usage begins when a `CREATE CLUSTER` or [`ALTER CLUSTER`] statement
@@ -283,7 +265,7 @@ you can configure a cluster to automatically turn on and off using the
 
 ```mzsql
 CREATE CLUSTER my_scheduled_cluster (
-  SIZE = 'M.1-large',
+  SIZE = '800cc',
   SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour')
 );
 ```
@@ -323,7 +305,7 @@ TIME ESTIMATE` clause.
 #### Scheduling strategy
 
 To check the scheduling strategy associated with a cluster, you can query the
-[`mz_internal.mz_cluster_schedules`](/sql/system-catalog/mz_internal/#mz_cluster_schedules)
+[`mz_internal.mz_cluster_schedules`](/reference/system-catalog/mz_internal/#mz_cluster_schedules)
 system catalog table:
 
 ```mzsql
@@ -337,7 +319,7 @@ WHERE c.name = 'my_refresh_cluster';
 ```
 
 To check if a scheduled cluster is turned on, you can query the
-[`mz_catalog.mz_cluster_replicas`](/sql/system-catalog/mz_catalog/#mz_cluster_replicas)
+[`mz_catalog.mz_cluster_replicas`](/reference/system-catalog/mz_catalog/#mz_cluster_replicas)
 system catalog table:
 
 ```mzsql
@@ -351,7 +333,7 @@ JOIN mz_clusters c ON cs.cluster_id = c.id AND cs.type = 'on-refresh'
 LEFT JOIN mz_cluster_replicas cr ON c.id = cr.cluster_id;
 ```
 
-You can also use the [audit log](../system-catalog/mz_catalog/#mz_audit_events)
+You can also use the [audit log](/reference/system-catalog/mz_catalog/#mz_audit_events)
 to observe the commands that are automatically run when a scheduled cluster is
 turned on and off for materialized view refreshes:
 
@@ -377,10 +359,10 @@ Clusters have several known limitations:
 
 ### Basic
 
-Create a cluster with two `M.1-large` replicas:
+Create a cluster with two `200cc` replicas:
 
 ```mzsql
-CREATE CLUSTER c1 (SIZE = 'M.1-large', REPLICATION FACTOR = 2);
+CREATE CLUSTER c1 (SIZE = '200cc', REPLICATION FACTOR = 2);
 ```
 
 ### Empty
@@ -388,7 +370,7 @@ CREATE CLUSTER c1 (SIZE = 'M.1-large', REPLICATION FACTOR = 2);
 Create a cluster with no replicas:
 
 ```mzsql
-CREATE CLUSTER c1 (SIZE 'M.1-xsmall', REPLICATION FACTOR = 0);
+CREATE CLUSTER c1 (SIZE '100cc', REPLICATION FACTOR = 0);
 ```
 
 You can later add replicas to this cluster with [`ALTER CLUSTER`].
@@ -397,8 +379,7 @@ You can later add replicas to this cluster with [`ALTER CLUSTER`].
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/create-cluster.md"
->}}
+{{% include-headless "/headless/sql-command-privileges/create-cluster" %}}
 
 ## See also
 
@@ -410,4 +391,4 @@ The privileges required to execute this statement are:
 [`DROP CLUSTER`]: /sql/drop-cluster/
 [`SELECT`]: /sql/select
 [`SUBSCRIBE`]: /sql/subscribe
-[`mz_cluster_replica_sizes`]: /sql/system-catalog/mz_catalog#mz_cluster_replica_sizes
+[`mz_cluster_replica_sizes`]: /reference/system-catalog/mz_catalog#mz_cluster_replica_sizes

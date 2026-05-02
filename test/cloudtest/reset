@@ -18,3 +18,5 @@ cd "$(dirname "$0")/../.."
 
 run kubectl --context="$K8S_CONTEXT" delete all --all
 run kubectl --context="$K8S_CONTEXT" delete pvc --all
+run kubectl --context="$K8S_CONTEXT" delete configmap --all
+run kubectl --context="$K8S_CONTEXT" delete vpcendpoint --all 2>/dev/null || true

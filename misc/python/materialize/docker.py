@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 """Docker utilities."""
+
 import re
 import subprocess
 import time
@@ -32,28 +33,103 @@ MZ_GHCR_DEFAULT = "1" if ui.env_is_truthy("CI") else "0"
 VERSION_IN_IMAGE_TAG_PATTERN = re.compile(r"^(v\d+\.\d+\.\d+(-dev)?)")
 
 
-def image_of_release_version_exists(version: MzVersion) -> bool:
+def image_of_release_version_exists(version: MzVersion, quiet: bool = False) -> bool:
     if version.is_dev_version():
         raise ValueError(f"Version {version} is a dev version, not a release version")
 
-    return mz_image_tag_exists(release_version_to_image_tag(version))
+    return mz_image_tag_exists(release_version_to_image_tag(version), quiet=quiet)
 
 
 def image_of_commit_exists(commit_hash: str) -> bool:
-    return mz_image_tag_exists(commit_to_image_tag(commit_hash))
+    try:
+        return mz_image_tag_exists(commit_to_image_tag(commit_hash))
+    except (RuntimeError, requests.exceptions.RequestException) as e:
+        print(f"Failed to check if image of commit {commit_hash} exists: {e}")
+        return False
 
 
-def mz_image_tag_exists(image_tag: str) -> bool:
-    image_name = f"materialize/materialized:{image_tag}"
+def mz_image_tag_exists_cmdline(image_name: str) -> bool:
+    command = [
+        "docker",
+        "manifest",
+        "inspect",
+        image_name,
+    ]
+    try:
+        subprocess.check_output(command, stderr=subprocess.STDOUT, text=True)
+        EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name] = True
+        return True
+    except subprocess.CalledProcessError as e:
+        if "no such manifest:" in e.output:
+            print(f"Failed to fetch image manifest '{image_name}' (does not exist)")
+            EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name] = False
+        else:
+            print(f"Failed to fetch image manifest '{image_name}' ({e.output})")
+            # do not cache the result of unknown error messages
+        return False
+
+
+# Cache for the GHCR anonymous token to avoid re-fetching it for every image check.
+_ghcr_token: str | None = None
+
+
+def _get_ghcr_token() -> str:
+    """Get an anonymous token for pulling from GHCR."""
+    global _ghcr_token
+    if _ghcr_token is None:
+        response = requests.get(
+            "https://ghcr.io/token?scope=repository:materializeinc/materialize/materialized:pull"
+        )
+        response.raise_for_status()
+        _ghcr_token = response.json()["token"]
+    assert _ghcr_token is not None
+    return _ghcr_token
+
+
+def mz_image_tag_exists_ghcr(image_name: str, image_tag: str) -> bool:
+    """Check if an image tag exists on GHCR using the OCI distribution API."""
+    try:
+        token = _get_ghcr_token()
+        response = requests.head(
+            f"https://ghcr.io/v2/materializeinc/materialize/materialized/manifests/{image_tag}",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json",
+            },
+        )
+        if response.status_code == 200:
+            EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name] = True
+            return True
+        elif response.status_code == 404:
+            EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name] = False
+            return False
+        elif response.status_code == 401:
+            # Token may have expired, clear it and fall back to cmdline
+            global _ghcr_token
+            _ghcr_token = None
+            return mz_image_tag_exists_cmdline(image_name)
+        else:
+            print(
+                f"GHCR API returned unexpected status {response.status_code} for {image_name}"
+            )
+            return mz_image_tag_exists_cmdline(image_name)
+    except requests.exceptions.RequestException:
+        return mz_image_tag_exists_cmdline(image_name)
+
+
+def mz_image_tag_exists(image_tag: str, quiet: bool = False) -> bool:
+    image_name = f"{image_registry()}/materialized:{image_tag}"
 
     if image_name in EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK:
         image_exists = EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name]
-        print(
-            f"Status of image {image_name} known from earlier check: {'exists' if image_exists else 'does not exist'}"
-        )
+        if not quiet:
+            print(
+                f"Status of image {image_name} known from earlier check: {'exists' if image_exists else 'does not exist'}"
+            )
         return image_exists
 
-    print(f"Checking existence of image manifest: {image_name}")
+    if not quiet:
+        print(f"Checking existence of image manifest: {image_name}")
 
     command_local = ["docker", "images", "--quiet", image_name]
 
@@ -63,34 +139,27 @@ def mz_image_tag_exists(image_tag: str) -> bool:
         EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name] = True
         return True
 
+    registry = image_registry()
+
+    # Use registry-specific APIs to avoid slow `docker manifest inspect` calls
+    # and Docker Hub rate limits.
+
+    if registry.startswith("ghcr.io/"):
+        return mz_image_tag_exists_ghcr(image_name, image_tag)
+
+    if registry != "materialize":
+        return mz_image_tag_exists_cmdline(image_name)
+
     # docker manifest inspect counts against the Docker Hub rate limits, even
     # when the image doesn't exist, see https://www.docker.com/increase-rate-limits/,
     # so use the API instead.
-
     try:
         response = requests.get(
             f"https://hub.docker.com/v2/repositories/materialize/materialized/tags/{image_tag}"
         )
         result = response.json()
     except (requests.exceptions.ConnectionError, requests.exceptions.JSONDecodeError):
-        command = [
-            "docker",
-            "manifest",
-            "inspect",
-            image_name,
-        ]
-        try:
-            subprocess.check_output(command, stderr=subprocess.STDOUT, text=True)
-            EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name] = True
-            return True
-        except subprocess.CalledProcessError as e:
-            if "no such manifest:" in e.output:
-                print(f"Failed to fetch image manifest '{image_name}' (does not exist)")
-                EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name] = False
-            else:
-                print(f"Failed to fetch image manifest '{image_name}' ({e.output})")
-                # do not cache the result of unknown error messages
-            return False
+        return mz_image_tag_exists_cmdline(image_name)
 
     if result.get("images"):
         EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name] = True
@@ -98,7 +167,8 @@ def mz_image_tag_exists(image_tag: str) -> bool:
     if "not found" in result.get("message", ""):
         EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name] = False
         return False
-    print(f"Failed to fetch image info from API: {result}")
+    if not quiet:
+        print(f"Failed to fetch image info from API: {result}")
     # do not cache the result of unknown error messages
     return False
 
@@ -119,13 +189,6 @@ def is_image_tag_of_release_version(image_tag: str) -> bool:
     )
 
 
-def is_image_tag_of_commit(image_tag: str) -> bool:
-    return (
-        IMAGE_TAG_OF_DEV_VERSION_METADATA_SEPARATOR in image_tag
-        or image_tag.startswith(LEGACY_IMAGE_TAG_COMMIT_PREFIX)
-    )
-
-
 def get_version_from_image_tag(image_tag: str) -> str:
     match = VERSION_IN_IMAGE_TAG_PATTERN.match(image_tag)
     assert match is not None, f"Invalid image tag: {image_tag}"
@@ -137,12 +200,50 @@ def get_mz_version_from_image_tag(image_tag: str) -> MzVersion:
     return MzVersion.parse_mz(get_version_from_image_tag(image_tag))
 
 
+def _try_construct_image_tag(commit_hash: str) -> str | None:
+    """Construct the expected image tag from git info, avoiding Docker Hub search."""
+    try:
+        cargo_toml = subprocess.check_output(
+            ["git", "show", f"{commit_hash}:src/environmentd/Cargo.toml"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        version = None
+        for line in cargo_toml.splitlines():
+            if line.startswith("version"):
+                match = re.search(r'"([^"]+)"', line)
+                if match:
+                    version = match.group(1)
+                break
+
+        if version is None:
+            return None
+
+        tag = f"v{version}--main.g{commit_hash}"
+        if mz_image_tag_exists(tag, quiet=True):
+            return tag
+
+        return None
+    except Exception:
+        return None
+
+
 def _resolve_image_name_by_commit_hash(commit_hash: str) -> str:
-    if commit_hash in CACHED_IMAGE_NAME_BY_COMMIT_HASH.keys():
+    if commit_hash in CACHED_IMAGE_NAME_BY_COMMIT_HASH:
         return CACHED_IMAGE_NAME_BY_COMMIT_HASH[commit_hash]
 
-    image_name_candidates = _search_docker_hub_for_image_name(search_value=commit_hash)
-    image_name = _select_image_name_from_candidates(image_name_candidates, commit_hash)
+    # Try constructing the tag directly from git info (avoids Docker Hub search)
+    constructed_tag = _try_construct_image_tag(commit_hash)
+    if constructed_tag is not None:
+        image_name = constructed_tag
+    else:
+        # Fall back to Docker Hub search
+        image_name_candidates = _search_docker_hub_for_image_name(
+            search_value=commit_hash
+        )
+        image_name = _select_image_name_from_candidates(
+            image_name_candidates, commit_hash
+        )
 
     CACHED_IMAGE_NAME_BY_COMMIT_HASH[commit_hash] = image_name
     EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name] = True
@@ -151,7 +252,7 @@ def _resolve_image_name_by_commit_hash(commit_hash: str) -> str:
 
 
 def _search_docker_hub_for_image_name(
-    search_value: str, remaining_retries: int = 10
+    search_value: str, remaining_retries: int = 3
 ) -> list[str]:
     try:
         json_response = requests.get(
@@ -160,9 +261,11 @@ def _search_docker_hub_for_image_name(
     except (
         requests.exceptions.ConnectionError,
         requests.exceptions.JSONDecodeError,
-    ) as _:
+    ) as e:
         if remaining_retries > 0:
-            print("Searching Docker Hub for image name failed, retrying in 5 seconds")
+            print(
+                f"Searching Docker Hub for image name failed ({e}), retrying in 5 seconds"
+            )
             time.sleep(5)
             return _search_docker_hub_for_image_name(
                 search_value, remaining_retries - 1
@@ -198,3 +301,11 @@ def _select_image_name_from_candidates(
         )
 
     return image_name_candidates[0]
+
+
+def image_registry() -> str:
+    return (
+        "ghcr.io/materializeinc/materialize"
+        if ui.env_is_truthy("MZ_GHCR", "1")
+        else "materialize"
+    )

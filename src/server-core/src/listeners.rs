@@ -13,14 +13,26 @@ use std::net::SocketAddr;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Default, Clone, Copy, Deserialize, Serialize, PartialEq, JsonSchema)]
+#[derive(
+    Debug,
+    Default,
+    Clone,
+    Copy,
+    Deserialize,
+    Serialize,
+    PartialEq,
+    JsonSchema
+)]
 pub enum AuthenticatorKind {
     /// Authenticate users using Frontegg.
     Frontegg,
     /// Authenticate users using internally stored password hashes.
+    /// The backend secret must contain external_login_password_mz_system.
     Password,
     /// Authenticate users using SASL.
     Sasl,
+    /// Authenticate users using OIDC (JWT tokens).
+    Oidc,
     /// Do not authenticate users. Trust they are who they say they are without verification.
     #[default]
     None,
@@ -37,7 +49,7 @@ pub enum AllowedRoles {
     NormalAndInternal,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
 pub struct HttpRoutesEnabled {
     /// Include the primary customer-facing endpoints, including the SQL APIs and static files.
     pub base: bool,
@@ -50,6 +62,15 @@ pub struct HttpRoutesEnabled {
     pub metrics: bool,
     /// Include /prof/ endpoint, and enable profiling in the / endpoint (included in base).
     pub profiling: bool,
+    /// Include /api/mcp/agent endpoint for Model Context Protocol (AI agents).
+    #[serde(default)]
+    pub mcp_agent: bool,
+    /// Include /api/mcp/developer endpoint for system catalog queries via MCP.
+    #[serde(default)]
+    pub mcp_developer: bool,
+    /// Include /api/console/config endpoint for unauthenticated console configuration.
+    #[serde(default)]
+    pub console_config: bool,
 }
 
 /// Configuration for network listeners.

@@ -338,7 +338,7 @@ async fn shared_write_buffer_manager() -> Result<(), anyhow::Error> {
     )?;
 
     // this is a no-op, but it won't return until instance1 has started
-    let _ = instance1.manual_compaction().await?;
+    instance1.manual_compaction().await?;
 
     {
         // Arc will be dropped by the end of this scope
@@ -365,7 +365,7 @@ async fn shared_write_buffer_manager() -> Result<(), anyhow::Error> {
     )?;
 
     // this is a no-op, but it won't return until instance2 has started
-    let _ = instance2.manual_compaction().await?;
+    instance2.manual_compaction().await?;
 
     instance1.close().await?;
     // The shared write buffer manager should still have a reference
@@ -396,7 +396,7 @@ async fn shared_write_buffer_manager() -> Result<(), anyhow::Error> {
     )?;
 
     // this is a no-op, but it won't return until instance3 has started
-    let _ = instance3.manual_compaction().await?;
+    instance3.manual_compaction().await?;
 
     {
         let buf = shared_write_buffer_manager.get().unwrap();

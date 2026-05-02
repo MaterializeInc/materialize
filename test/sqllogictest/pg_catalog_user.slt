@@ -19,15 +19,16 @@ ALTER SYSTEM SET enable_password_auth TO false;
 COMPLETE 0
 
 statement ok
-CREATE ROLE nonlogin_because_not_formatted_like_an_email
+CREATE ROLE nonlogin_role
 
 statement ok
-CREATE ROLE "materialize@foocorp.io"
+CREATE ROLE "materialize@foocorp.io" WITH LOGIN
 
 query TIBBBBTTT rowsort
 SELECT usename, usesysid, usecreatedb, usesuper, userepl, usebypassrls, passwd, valuntil, useconfig FROM pg_user;
 ----
 materialize@foocorp.io  20196  false  NULL  false  false  NULL  NULL  NULL
+mz_support  16662  false  true  false  false  NULL  NULL  NULL
 mz_system  16661  true  true  false  false  NULL  NULL  NULL
 
 statement ok
@@ -40,4 +41,5 @@ query TT rowsort
 SELECT usename, useconfig::text FROM pg_user;
 ----
 materialize@foocorp.io  {cluster=cluster=cluster=cluster=,"search_path=abc,␠def"}
+mz_support  NULL
 mz_system  NULL

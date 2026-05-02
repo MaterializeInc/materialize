@@ -167,6 +167,9 @@ impl Default for TestHarness {
                             internal: false,
                             metrics: false,
                             profiling: false,
+                            mcp_agent: false,
+                            mcp_developer: false,
+                            console_config: true,
                         },
                     },
                     "internal".to_owned() => HttpListenerConfig {
@@ -182,6 +185,9 @@ impl Default for TestHarness {
                             internal: true,
                             metrics: true,
                             profiling: true,
+                            mcp_agent: false,
+                            mcp_developer: false,
+                            console_config: true,
                         },
                     },
                 ],
@@ -269,12 +275,14 @@ impl TestHarness {
 
     /// Starts a runtime and returns a [`TestServerWithRuntime`].
     pub fn start_blocking(self) -> TestServerWithRuntime {
-        stacker::grow(mz_ore::stack::STACK_SIZE, || {
-            let runtime = Runtime::new().expect("failed to spawn runtime for test");
-            let runtime = Arc::new(runtime);
-            let server = runtime.block_on(self.start());
-            TestServerWithRuntime { runtime, server }
-        })
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .thread_stack_size(mz_ore::stack::STACK_SIZE)
+            .build()
+            .expect("failed to spawn runtime for test");
+        let runtime = Arc::new(runtime);
+        let server = runtime.block_on(self.start());
+        TestServerWithRuntime { runtime, server }
     }
 
     pub fn data_directory(mut self, data_directory: impl Into<PathBuf>) -> Self {
@@ -338,6 +346,9 @@ impl TestHarness {
                         internal: false,
                         metrics: false,
                         profiling: false,
+                        mcp_agent: false,
+                        mcp_developer: false,
+                        console_config: true,
                     },
                 },
                 "internal".to_owned() => HttpListenerConfig {
@@ -353,10 +364,97 @@ impl TestHarness {
                         internal: true,
                         metrics: true,
                         profiling: true,
+                        mcp_agent: false,
+                        mcp_developer: false,
+                        console_config: true,
                     },
                 },
             },
         };
+        self
+    }
+
+    pub fn with_oidc_auth(
+        mut self,
+        issuer: Option<String>,
+        authentication_claim: Option<String>,
+        expected_audiences: Option<Vec<String>>,
+    ) -> Self {
+        let enable_tls = self.tls.is_some();
+        self.listeners_config = ListenersConfig {
+            sql: btreemap! {
+                "external".to_owned() => SqlListenerConfig {
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::Oidc,
+                    allowed_roles: AllowedRoles::Normal,
+                    enable_tls,
+                },
+                "internal".to_owned() => SqlListenerConfig {
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::None,
+                    allowed_roles: AllowedRoles::NormalAndInternal,
+                    enable_tls: false,
+                },
+            },
+            http: btreemap! {
+                "external".to_owned() => HttpListenerConfig {
+                    base: BaseListenerConfig {
+                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                        authenticator_kind: AuthenticatorKind::Oidc,
+                        allowed_roles: AllowedRoles::Normal,
+                        enable_tls,
+                    },
+                    routes: HttpRoutesEnabled{
+                        base: true,
+                        webhook: true,
+                        internal: false,
+                        metrics: false,
+                        profiling: false,
+                        mcp_agent: false,
+                        mcp_developer: false,
+                        console_config: true,
+                    },
+                },
+                "internal".to_owned() => HttpListenerConfig {
+                    base: BaseListenerConfig {
+                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                        authenticator_kind: AuthenticatorKind::None,
+                        allowed_roles: AllowedRoles::NormalAndInternal,
+                        enable_tls: false,
+                    },
+                    routes: HttpRoutesEnabled{
+                        base: true,
+                        webhook: true,
+                        internal: true,
+                        metrics: true,
+                        profiling: true,
+                        mcp_agent: false,
+                        mcp_developer: false,
+                        console_config: true,
+                    },
+                },
+            },
+        };
+
+        if let Some(issuer) = issuer {
+            self.system_parameter_defaults
+                .insert("oidc_issuer".to_string(), issuer);
+        }
+
+        if let Some(authentication_claim) = authentication_claim {
+            self.system_parameter_defaults.insert(
+                "oidc_authentication_claim".to_string(),
+                authentication_claim,
+            );
+        }
+
+        if let Some(expected_audiences) = expected_audiences {
+            self.system_parameter_defaults.insert(
+                "oidc_audience".to_string(),
+                serde_json::to_string(&expected_audiences).unwrap(),
+            );
+        }
+
         self
     }
 
@@ -386,6 +484,9 @@ impl TestHarness {
                         internal: true,
                         metrics: false,
                         profiling: true,
+                        mcp_agent: false,
+                        mcp_developer: false,
+                        console_config: true,
                     },
                 },
                 "metrics".to_owned() => HttpListenerConfig {
@@ -401,6 +502,9 @@ impl TestHarness {
                         internal: false,
                         metrics: true,
                         profiling: false,
+                        mcp_agent: false,
+                        mcp_developer: false,
+                        console_config: true,
                     },
                 },
             },
@@ -434,6 +538,9 @@ impl TestHarness {
                         internal: true,
                         metrics: false,
                         profiling: true,
+                        mcp_agent: false,
+                        mcp_developer: false,
+                        console_config: true,
                     },
                 },
                 "metrics".to_owned() => HttpListenerConfig {
@@ -449,6 +556,9 @@ impl TestHarness {
                         internal: false,
                         metrics: true,
                         profiling: false,
+                        mcp_agent: false,
+                        mcp_developer: false,
+                        console_config: true,
                     },
                 },
             },
@@ -533,6 +643,14 @@ impl TestHarness {
 
     pub fn with_system_parameter_default(mut self, param: String, value: String) -> Self {
         self.system_parameter_defaults.insert(param, value);
+        self
+    }
+
+    pub fn with_mcp_routes(mut self, agent: bool, developer: bool) -> Self {
+        for config in self.listeners_config.http.values_mut() {
+            config.routes.mcp_agent = agent;
+            config.routes.mcp_developer = developer;
+        }
         self
     }
 
@@ -690,7 +808,7 @@ impl Listeners {
                     endpoint: "http://fake_address_for_testing:8080".to_string(),
                     headers: http::HeaderMap::new(),
                     filter: EnvFilter::default().add_directive(Level::DEBUG.into()),
-                    resource: opentelemetry_sdk::resource::Resource::default(),
+                    resource: opentelemetry_sdk::resource::Resource::builder().build(),
                     max_batch_queue_size: 2048,
                     max_export_batch_size: 512,
                     max_concurrent_exports: 1,
@@ -746,6 +864,7 @@ impl Listeners {
                         secrets_reader_name_prefix: None,
                     },
                     connection_context,
+                    replica_http_locator: Default::default(),
                 },
                 secrets_controller,
                 cloud_resource_controller: None,
@@ -757,6 +876,7 @@ impl Listeners {
                 now: config.now,
                 environment_id: config.environment_id,
                 cors_allowed_origin: AllowOrigin::list([]),
+                cors_allowed_origin_list: Vec::new(),
                 cluster_replica_sizes: ClusterReplicaSizeMap::for_tests(),
                 bootstrap_default_cluster_replica_size: config.default_cluster_replica_size,
                 bootstrap_default_cluster_replication_factor: config
@@ -823,6 +943,17 @@ impl TestServer {
         for flag in flags {
             internal_client
                 .batch_execute(&format!("ALTER SYSTEM SET {} = true;", flag))
+                .await
+                .unwrap();
+        }
+    }
+
+    pub async fn disable_feature_flags(&self, flags: &[&'static str]) {
+        let internal_client = self.connect().internal().await.unwrap();
+
+        for flag in flags {
+            internal_client
+                .batch_execute(&format!("ALTER SYSTEM SET {} = false;", flag))
                 .await
                 .unwrap();
         }
@@ -1159,6 +1290,17 @@ impl TestServerWithRuntime {
         }
     }
 
+    /// Disable LaunchDarkly feature flags.
+    pub fn disable_feature_flags(&self, flags: &[&'static str]) {
+        let mut internal_client = self.connect_internal(postgres::NoTls).unwrap();
+
+        for flag in flags {
+            internal_client
+                .batch_execute(&format!("ALTER SYSTEM SET {} = false;", flag))
+                .unwrap();
+        }
+    }
+
     /// Return a [`postgres::Config`] for connecting to the __public__ SQL port of the running
     /// `environmentd` server.
     pub fn pg_config(&self) -> postgres::Config {
@@ -1207,6 +1349,11 @@ impl TestServerWithRuntime {
 
     pub fn internal_sql_local_addr(&self) -> SocketAddr {
         self.server.internal_sql_local_addr()
+    }
+
+    /// Returns the metrics registry for the test server.
+    pub fn metrics_registry(&self) -> &MetricsRegistry {
+        &self.server.metrics_registry
     }
 }
 
@@ -1302,7 +1449,7 @@ pub async fn try_get_explain_timestamp(
 pub async fn get_explain_timestamp_determination(
     from_suffix: &str,
     client: &Client,
-) -> Result<TimestampExplanation<mz_repr::Timestamp>, anyhow::Error> {
+) -> Result<TimestampExplanation, anyhow::Error> {
     let row = client
         .query_one(
             &format!("EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM {from_suffix}"),
@@ -1506,7 +1653,8 @@ pub fn auth_with_ws(
                 password: "".into(),
                 options,
             })
-            .unwrap(),
+            .unwrap()
+            .into(),
         ),
     )
 }

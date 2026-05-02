@@ -178,7 +178,7 @@
 //!
 //! However, regardless of whether the output is the main source or a subsource it is treated
 //! identically by the pipeline. Each output is demultiplexed into its own timely stream using
-//! [`timely::dataflow::operators::partition::Partition`] and the rest of the ingestion pipeline is
+//! [`timely::dataflow::operators::core::partition::Partition`] and the rest of the ingestion pipeline is
 //! rendered independently.
 //!
 //! #### Resumption frontier
@@ -209,12 +209,11 @@ use mz_storage_types::oneshot_sources::{OneshotIngestionDescription, OneshotInge
 use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::{GenericSourceConnection, IngestionDescription, SourceConnection};
 use mz_timely_util::antichain::AntichainExt;
-use timely::communication::Allocate;
-use timely::dataflow::Scope;
-use timely::dataflow::operators::{Concatenate, ConnectLoop, Feedback, Leave, Map};
-use timely::dataflow::scopes::Child;
+use mz_timely_util::scope_label::ScopeExt;
+use timely::dataflow::operators::vec::Map;
+use timely::dataflow::operators::{Concatenate, ConnectLoop, Feedback, Leave};
 use timely::progress::Antichain;
-use timely::worker::{AsWorker, Worker as TimelyWorker};
+use timely::worker::Worker as TimelyWorker;
 use tokio::sync::Semaphore;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
@@ -229,8 +228,8 @@ pub mod sources;
 ///
 /// This method creates a new dataflow to host the implementations of sources for the `dataflow`
 /// argument, and returns assets for each source that can import the results into a new dataflow.
-pub fn build_ingestion_dataflow<A: Allocate>(
-    timely_worker: &mut TimelyWorker<A>,
+pub fn build_ingestion_dataflow(
+    timely_worker: &mut TimelyWorker,
     storage_state: &mut StorageState,
     primary_source_id: GlobalId,
     description: IngestionDescription<CollectionMetadata>,
@@ -243,7 +242,8 @@ pub fn build_ingestion_dataflow<A: Allocate>(
     let debug_name = primary_source_id.to_string();
     let name = format!("Source dataflow: {debug_name}");
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, root_scope| {
-        let root_scope: &mut Child<_, ()> = root_scope;
+        let root_scope = root_scope.with_label();
+
         // Here we need to create two scopes. One timestamped with `()`, which is the root scope,
         // and one timestamped with `mz_repr::Timestamp` which is the final scope of the dataflow.
         // Refer to the module documentation for an explanation of this structure.
@@ -301,46 +301,51 @@ pub fn build_ingestion_dataflow<A: Allocate>(
             let (outputs, source_health, source_tokens) = match connection {
                 GenericSourceConnection::Kafka(c) => crate::render::sources::render_source(
                     mz_scope,
+                    root_scope,
                     &debug_name,
                     c,
                     description.clone(),
-                    &feedback,
+                    feedback,
                     storage_state,
                     base_source_config,
                 ),
                 GenericSourceConnection::Postgres(c) => crate::render::sources::render_source(
                     mz_scope,
+                    root_scope,
                     &debug_name,
                     c,
                     description.clone(),
-                    &feedback,
+                    feedback,
                     storage_state,
                     base_source_config,
                 ),
                 GenericSourceConnection::MySql(c) => crate::render::sources::render_source(
                     mz_scope,
+                    root_scope,
                     &debug_name,
                     c,
                     description.clone(),
-                    &feedback,
+                    feedback,
                     storage_state,
                     base_source_config,
                 ),
                 GenericSourceConnection::SqlServer(c) => crate::render::sources::render_source(
                     mz_scope,
+                    root_scope,
                     &debug_name,
                     c,
                     description.clone(),
-                    &feedback,
+                    feedback,
                     storage_state,
                     base_source_config,
                 ),
                 GenericSourceConnection::LoadGenerator(c) => crate::render::sources::render_source(
                     mz_scope,
+                    root_scope,
                     &debug_name,
                     c,
                     description.clone(),
-                    &feedback,
+                    feedback,
                     storage_state,
                     base_source_config,
                 ),
@@ -352,7 +357,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
             health_streams.extend(source_health);
             for (export_id, (ok, err)) in outputs {
                 let export = &description.source_exports[&export_id];
-                let source_data = ok.map(Ok).concat(&err.map(Err));
+                let source_data = ok.map(Ok).concat(err.map(Err));
 
                 let metrics = storage_state.metrics.get_source_persist_sink_metrics(
                     export_id,
@@ -388,7 +393,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                         update: halt_status,
                     }
                 });
-                health_streams.push(sink_health.leave());
+                health_streams.push(sink_health.leave(root_scope));
             }
 
             mz_scope
@@ -409,7 +414,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     .collect(),
                 primary_source_id,
                 "source",
-                &health_stream,
+                health_stream,
                 crate::healthcheck::DefaultWriter {
                     command_tx: storage_state.internal_cmd_tx.clone(),
                     updates: Rc::clone(&storage_state.shared_status_updates),
@@ -431,8 +436,8 @@ pub fn build_ingestion_dataflow<A: Allocate>(
 }
 
 /// do the export dataflow thing
-pub fn build_export_dataflow<A: Allocate>(
-    timely_worker: &mut TimelyWorker<A>,
+pub fn build_export_dataflow(
+    timely_worker: &mut TimelyWorker,
     storage_state: &mut StorageState,
     id: GlobalId,
     description: StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp>,
@@ -440,46 +445,42 @@ pub fn build_export_dataflow<A: Allocate>(
     let worker_logging = timely_worker.logger_for("timely").map(Into::into);
     let debug_name = id.to_string();
     let name = format!("Source dataflow: {debug_name}");
-    timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, root_scope| {
-        // The scope.clone() occurs to allow import in the region.
-        // We build a region here to establish a pattern of a scope inside the dataflow
-        // so that other similar uses (e.g. with iterative scopes) do not require weird
-        // alternate type signatures.
-        root_scope.region_named(&name, |scope| {
-            let mut tokens = vec![];
-            let (health_stream, sink_tokens) =
-                crate::render::sinks::render_sink(scope, storage_state, id, &description);
-            tokens.extend(sink_tokens);
+    timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
+        let scope = scope.with_label();
 
-            // Note that sinks also have only 1 active worker, which simplifies the work that
-            // `health_operator` has to do internally.
-            let health_token = crate::healthcheck::health_operator(
-                scope,
-                storage_state.now.clone(),
-                [id].into_iter().collect(),
-                id,
-                "sink",
-                &health_stream,
-                crate::healthcheck::DefaultWriter {
-                    command_tx: storage_state.internal_cmd_tx.clone(),
-                    updates: Rc::clone(&storage_state.shared_status_updates),
-                },
-                storage_state
-                    .storage_configuration
-                    .parameters
-                    .record_namespaced_errors,
-                dyncfgs::STORAGE_SUSPEND_AND_RESTART_DELAY
-                    .get(storage_state.storage_configuration.config_set()),
-            );
-            tokens.push(health_token);
+        let mut tokens = vec![];
+        let (health_stream, sink_tokens) =
+            crate::render::sinks::render_sink(scope, storage_state, id, &description);
+        tokens.extend(sink_tokens);
 
-            storage_state.sink_tokens.insert(id, tokens);
-        })
+        // Note that sinks also have only 1 active worker, which simplifies the work that
+        // `health_operator` has to do internally.
+        let health_token = crate::healthcheck::health_operator(
+            scope,
+            storage_state.now.clone(),
+            [id].into_iter().collect(),
+            id,
+            "sink",
+            health_stream,
+            crate::healthcheck::DefaultWriter {
+                command_tx: storage_state.internal_cmd_tx.clone(),
+                updates: Rc::clone(&storage_state.shared_status_updates),
+            },
+            storage_state
+                .storage_configuration
+                .parameters
+                .record_namespaced_errors,
+            dyncfgs::STORAGE_SUSPEND_AND_RESTART_DELAY
+                .get(storage_state.storage_configuration.config_set()),
+        );
+        tokens.push(health_token);
+
+        storage_state.sink_tokens.insert(id, tokens);
     });
 }
 
-pub(crate) fn build_oneshot_ingestion_dataflow<A: Allocate>(
-    timely_worker: &mut TimelyWorker<A>,
+pub(crate) fn build_oneshot_ingestion_dataflow(
+    timely_worker: &mut TimelyWorker,
     storage_state: &mut StorageState,
     ingestion_id: uuid::Uuid,
     collection_id: GlobalId,
@@ -499,9 +500,11 @@ pub(crate) fn build_oneshot_ingestion_dataflow<A: Allocate>(
         .connection_context
         .clone();
 
-    let tokens = timely_worker.dataflow(|scope| {
+    let name = format!("Oneshot ingestion: {ingestion_id}");
+    let tokens = timely_worker.dataflow_named(&name, |scope| {
+        let scope = scope.with_label();
         mz_storage_operators::oneshot_source::render(
-            scope.clone(),
+            scope,
             Arc::clone(&storage_state.persist_clients),
             connection_context,
             collection_id,

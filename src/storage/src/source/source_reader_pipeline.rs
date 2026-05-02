@@ -25,7 +25,6 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
-use std::convert::Infallible;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -41,13 +40,10 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::dyncfgs;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::{SourceConnection, SourceExport, SourceTimestamp};
 use mz_timely_util::antichain::AntichainExt;
-use mz_timely_util::builder_async::{
-    Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
-};
+use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 use mz_timely_util::capture::PusherCapture;
 use mz_timely_util::operator::ConcatenateFlatten;
 use mz_timely_util::reclock::reclock;
@@ -55,13 +51,12 @@ use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::capture::capture::Capture;
-use timely::dataflow::operators::capture::{Event, EventPusher};
 use timely::dataflow::operators::core::Map as _;
 use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
-use timely::dataflow::operators::{Broadcast, CapabilitySet, Inspect, Leave};
-use timely::dataflow::scopes::Child;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::operators::vec::Broadcast;
+use timely::dataflow::operators::{CapabilitySet, Inspect, Leave};
+use timely::dataflow::{Scope, StreamVec};
 use timely::order::TotalOrder;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp};
@@ -72,7 +67,6 @@ use tracing::trace;
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate};
 use crate::metrics::StorageMetrics;
 use crate::metrics::source::SourceMetrics;
-use crate::source::probe;
 use crate::source::reclock::ReclockOperator;
 use crate::source::types::{Probe, SourceMessage, SourceOutput, SourceRender, StackedCollection};
 use crate::statistics::SourceStatistics;
@@ -168,10 +162,11 @@ impl RawSourceCreationConfig {
 ///
 /// The `resume_stream` parameter will contain frontier updates whenever times are durably
 /// recorded which allows the ingestion to release upstream resources.
-pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C>(
-    scope: &mut Child<'g, G, mz_repr::Timestamp>,
+pub fn create_raw_source<'scope, 'root, C>(
+    scope: Scope<'scope, mz_repr::Timestamp>,
+    root_scope: Scope<'root, ()>,
     storage_state: &crate::storage_state::StorageState,
-    committed_upper: &Stream<Child<'g, G, mz_repr::Timestamp>, ()>,
+    committed_upper: StreamVec<'scope, mz_repr::Timestamp, ()>,
     config: &RawSourceCreationConfig,
     source_connection: C,
     start_signal: impl std::future::Future<Output = ()> + 'static,
@@ -179,12 +174,13 @@ pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C>(
     BTreeMap<
         GlobalId,
         VecCollection<
-            Child<'g, G, mz_repr::Timestamp>,
+            'scope,
+            mz_repr::Timestamp,
             Result<SourceOutput<C::Time>, DataflowError>,
             Diff,
         >,
     >,
-    Stream<G, HealthStatusMessage>,
+    StreamVec<'root, (), HealthStatusMessage>,
     Vec<PressOnDropButton>,
 )
 where
@@ -195,8 +191,6 @@ where
 
     let mut tokens = vec![];
 
-    let (ingested_upper_tx, ingested_upper_rx) =
-        watch::channel(MutableAntichain::new_bottom(C::Time::minimum()));
     let (probed_upper_tx, probed_upper_rx) = watch::channel(None);
 
     let source_metrics = Arc::new(config.metrics.get_source_metrics(id, worker_id));
@@ -208,7 +202,6 @@ where
         storage_state,
         config.clone(),
         probed_upper_rx,
-        ingested_upper_rx,
         timestamp_desc,
     );
     // Need to broadcast the remap changes to all workers.
@@ -216,7 +209,7 @@ where
     tokens.push(remap_token);
 
     let committed_upper = reclock_committed_upper(
-        &remap_collection,
+        remap_collection.clone(),
         config.as_of.clone(),
         committed_upper,
         id,
@@ -226,8 +219,8 @@ where
     let mut reclocked_exports = BTreeMap::new();
 
     let reclocked_exports2 = &mut reclocked_exports;
-    let (health, source_tokens) = scope.parent.scoped("SourceTimeDomain", move |scope| {
-        let (exports, source_upper, health_stream, source_tokens) = source_render_operator(
+    let (health, source_tokens) = root_scope.scoped("SourceTimeDomain", move |scope| {
+        let (exports, health_stream, source_tokens) = source_render_operator(
             scope,
             config,
             source_connection,
@@ -237,28 +230,27 @@ where
         );
 
         for (id, export) in exports {
-            let (reclock_pusher, reclocked) = reclock(&remap_collection, config.as_of.clone());
+            let (reclock_pusher, reclocked) =
+                reclock(remap_collection.clone(), config.as_of.clone());
             export
                 .inner
                 .map(move |(result, from_time, diff)| {
                     let result = match result {
                         Ok(msg) => Ok(SourceOutput {
-                            key: msg.key.clone(),
-                            value: msg.value.clone(),
-                            metadata: msg.metadata.clone(),
+                            key: msg.key,
+                            value: msg.value,
+                            metadata: msg.metadata,
                             from_time: from_time.clone(),
                         }),
-                        Err(err) => Err(err.clone()),
+                        Err(err) => Err(err),
                     };
-                    (result, from_time.clone(), *diff)
+                    (result, from_time, diff)
                 })
                 .capture_into(PusherCapture(reclock_pusher));
             reclocked_exports2.insert(id, reclocked);
         }
 
-        source_upper.capture_into(FrontierCapture(ingested_upper_tx));
-
-        (health_stream.leave(), source_tokens)
+        (health_stream.leave(root_scope), source_tokens)
     });
 
     tokens.extend(source_tokens);
@@ -266,52 +258,32 @@ where
     (reclocked_exports, health, tokens)
 }
 
-pub struct FrontierCapture<T>(watch::Sender<MutableAntichain<T>>);
-
-impl<T: Timestamp> EventPusher<T, Vec<Infallible>> for FrontierCapture<T> {
-    fn push(&mut self, event: Event<T, Vec<Infallible>>) {
-        match event {
-            Event::Progress(changes) => self.0.send_modify(|frontier| {
-                frontier.update_iter(changes);
-            }),
-            Event::Messages(_, _) => unreachable!(),
-        }
-    }
-}
-
 /// Renders the source dataflow fragment from the given [SourceConnection]. This returns a
-/// collection timestamped with the source specific timestamp type. Also returns a second stream
-/// that can be used to learn about the `source_upper` that all the source reader instances know
-/// about. This second stream will be used by the `remap_operator` to mint new timestamp bindings
-/// into the remap shard.
-fn source_render_operator<G, C>(
-    scope: &mut G,
+/// collection timestamped with the source specific timestamp type.
+fn source_render_operator<'scope, C>(
+    scope: Scope<'scope, C::Time>,
     config: &RawSourceCreationConfig,
     source_connection: C,
     probed_upper_tx: watch::Sender<Option<Probe<C::Time>>>,
     resume_uppers: impl futures::Stream<Item = Antichain<C::Time>> + 'static,
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
-    BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-    Stream<G, Infallible>,
-    Stream<G, HealthStatusMessage>,
+    BTreeMap<GlobalId, StackedCollection<'scope, C::Time, Result<SourceMessage, DataflowError>>>,
+    StreamVec<'scope, C::Time, HealthStatusMessage>,
     Vec<PressOnDropButton>,
 )
 where
-    G: Scope<Timestamp = C::Time>,
     C: SourceRender + 'static,
 {
     let source_id = config.id;
     let worker_id = config.worker_id;
-    let now_fn = config.now_fn.clone();
-    let timestamp_interval = config.timestamp_interval;
 
     let resume_uppers = resume_uppers.inspect(move |upper| {
         let upper = upper.pretty();
         trace!(%upper, "timely-{worker_id} source({source_id}) received resume upper");
     });
 
-    let (exports, progress, health, probes, tokens) =
+    let (exports, health, probe_stream, tokens) =
         source_connection.render(scope, config, resume_uppers, start_signal);
 
     let mut export_collections = BTreeMap::new();
@@ -343,7 +315,7 @@ where
         let (output, new_export) = builder.new_output();
         let mut output = OutputBuilder::<_, CapacityContainerBuilder<_>>::from(output);
 
-        let mut input = builder.new_input(&export.inner, Pipeline);
+        let mut input = builder.new_input(export.inner, Pipeline);
         export_collections.insert(id, new_export.as_collection());
 
         let bytes_read_counter = config.metrics.source_defs.bytes_read.clone();
@@ -366,7 +338,7 @@ where
                 }
                 let health_cap = health_cap.as_mut().unwrap();
 
-                while let Some((cap, data)) = input.next() {
+                input.for_each(|cap, data| {
                     for (message, _, _) in data.iter() {
                         match message {
                             Ok(message) => {
@@ -401,15 +373,10 @@ where
                     }
                     let mut output = output.activate();
                     output.session(&cap).give_container(data);
-                }
+                });
             }
         });
     }
-
-    let probe_stream = match probes {
-        Some(stream) => stream,
-        None => synthesize_probes(source_id, &progress, timestamp_interval, now_fn),
-    };
 
     // Broadcasting does more work than necessary, which would be to exchange the probes to the
     // worker that will be the one minting the bindings but we'd have to thread this information
@@ -421,7 +388,6 @@ where
 
     (
         export_collections,
-        progress,
         health.concatenate_flatten::<_, CapacityContainerBuilder<_>>(health_streams),
         tokens,
     )
@@ -432,16 +398,17 @@ where
 ///
 /// Only one worker will be active and write to the remap shard. All source
 /// upper summaries will be exchanged to it.
-fn remap_operator<G, FromTime>(
-    scope: &G,
+fn remap_operator<'scope, FromTime>(
+    scope: Scope<'scope, mz_repr::Timestamp>,
     storage_state: &crate::storage_state::StorageState,
     config: RawSourceCreationConfig,
     mut probed_upper: watch::Receiver<Option<Probe<FromTime>>>,
-    mut ingested_upper: watch::Receiver<MutableAntichain<FromTime>>,
     remap_relation_desc: RelationDesc,
-) -> (VecCollection<G, FromTime, Diff>, PressOnDropButton)
+) -> (
+    VecCollection<'scope, mz_repr::Timestamp, FromTime, Diff>,
+    PressOnDropButton,
+)
 where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
     FromTime: SourceTimestamp,
 {
     let RawSourceCreationConfig {
@@ -450,7 +417,7 @@ where
         source_exports: _,
         worker_id,
         worker_count,
-        timestamp_interval,
+        timestamp_interval: _,
         remap_metadata,
         as_of,
         resume_uppers: _,
@@ -525,65 +492,24 @@ where
         drop(cap);
         cap_set.downgrade(initial_batch.upper);
 
-        let mut ticker = tokio::time::interval(timestamp_interval);
-        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
         let mut prev_probe_ts: Option<mz_repr::Timestamp> = None;
-        let timestamp_interval_ms: u64 = timestamp_interval
-            .as_millis()
-            .try_into()
-            .expect("huge duration");
 
         while !cap_set.is_empty() {
-            // Check the reclocking strategy in every iteration, to make it possible to change it
-            // without restarting the source pipeline.
-            let reclock_to_latest =
-                dyncfgs::STORAGE_RECLOCK_TO_LATEST.get(&config.config.config_set());
-
-            // If we are reclocking to the latest offset then we only mint bindings after a
-            // successful probe. Otherwise we fall back to the earlier behavior where we just
-            // record the ingested frontier.
-            let mut new_probe = None;
-            if reclock_to_latest {
-                new_probe = probed_upper
-                    .wait_for(|new_probe| match (prev_probe_ts, new_probe) {
-                        (None, Some(_)) => true,
-                        (Some(prev_ts), Some(new)) => prev_ts < new.probe_ts,
-                        _ => false,
+            // We only mint bindings after a successful probe.
+            let new_probe = probed_upper
+                .wait_for(|new_probe| match (prev_probe_ts, new_probe) {
+                    (None, Some(_)) => true,
+                    (Some(prev_ts), Some(new)) => prev_ts < new.probe_ts,
+                    _ => false,
+                })
+                .await
+                .map(|probe| (*probe).clone())
+                .unwrap_or_else(|_| {
+                    Some(Probe {
+                        probe_ts: now_fn().into(),
+                        upstream_frontier: Antichain::new(),
                     })
-                    .await
-                    .map(|probe| (*probe).clone())
-                    .unwrap_or_else(|_| {
-                        Some(Probe {
-                            probe_ts: now_fn().into(),
-                            upstream_frontier: Antichain::new(),
-                        })
-                    });
-            } else {
-                while prev_probe_ts >= new_probe.as_ref().map(|p| p.probe_ts) {
-                    ticker.tick().await;
-                    // We only proceed if the source upper frontier is not the minimum frontier. This
-                    // makes it so the first binding corresponds to the snapshot of the source, and
-                    // because the first binding always maps to the minimum *target* frontier we
-                    // guarantee that the source will never appear empty.
-                    let upstream_frontier = ingested_upper
-                        .wait_for(|f| *f.frontier() != [FromTime::minimum()])
-                        .await
-                        .unwrap()
-                        .frontier()
-                        .to_owned();
-
-                    let now = (now_fn)();
-                    let mut probe_ts = now - now % timestamp_interval_ms;
-                    if (now % timestamp_interval_ms) != 0 {
-                        probe_ts += timestamp_interval_ms;
-                    }
-                    new_probe = Some(Probe {
-                        probe_ts: probe_ts.into(),
-                        upstream_frontier,
-                    });
-                }
-            };
+                });
 
             let probe = new_probe.expect("known to be Some");
             prev_probe_ts = Some(probe.probe_ts);
@@ -619,16 +545,15 @@ where
 /// Reclocks an `IntoTime` frontier stream into a `FromTime` frontier stream. This is used for the
 /// virtual (through persist) feedback edge so that we convert the `IntoTime` resumption frontier
 /// into the `FromTime` frontier that is used with the source's `OffsetCommiter`.
-fn reclock_committed_upper<G, FromTime>(
-    bindings: &VecCollection<G, FromTime, Diff>,
-    as_of: Antichain<G::Timestamp>,
-    committed_upper: &Stream<G, ()>,
+fn reclock_committed_upper<'scope, T, FromTime>(
+    bindings: VecCollection<'scope, T, FromTime, Diff>,
+    as_of: Antichain<T>,
+    committed_upper: StreamVec<'scope, T, ()>,
     id: GlobalId,
     metrics: Arc<SourceMetrics>,
 ) -> impl futures::stream::Stream<Item = Antichain<FromTime>> + 'static
 where
-    G: Scope,
-    G::Timestamp: Lattice + TotalOrder,
+    T: Timestamp + Lattice + TotalOrder,
     FromTime: SourceTimestamp,
 {
     let (tx, rx) = watch::channel(Antichain::from_elem(FromTime::minimum()));
@@ -637,13 +562,13 @@ where
     let name = format!("ReclockCommitUpper({id})");
     let mut builder = OperatorBuilderRc::new(name, scope);
 
-    let mut bindings = builder.new_input(&bindings.inner, Pipeline);
-    let _ = builder.new_input(committed_upper, Pipeline);
+    let mut bindings = builder.new_input(bindings.inner.clone(), Pipeline);
+    let _ = builder.new_input(committed_upper.clone(), Pipeline);
 
     builder.build(move |_| {
         // Remap bindings beyond the upper
         use timely::progress::ChangeBatch;
-        let mut accepted_times: ChangeBatch<(G::Timestamp, FromTime)> = ChangeBatch::new();
+        let mut accepted_times: ChangeBatch<(T, FromTime)> = ChangeBatch::new();
         // The upper frontier of the bindings
         let mut upper = Antichain::from_elem(Timestamp::minimum());
         // Remap bindings not beyond upper
@@ -652,12 +577,12 @@ where
 
         move |frontiers| {
             // Accept new bindings
-            while let Some((_, data)) = bindings.next() {
+            bindings.for_each(|_, data| {
                 accepted_times.extend(data.drain(..).map(|(from, mut into, diff)| {
                     into.advance_by(as_of.borrow());
                     ((into, from), diff.into_inner())
                 }));
-            }
+            });
             // Extract ready bindings
             let new_upper = frontiers[0].frontier();
             if PartialOrder::less_than(&upper.borrow(), &new_upper) {
@@ -747,69 +672,4 @@ where
     });
 
     WatchStream::from_changes(rx)
-}
-
-/// Synthesizes a probe stream that produces the frontier of the given progress stream at the given
-/// interval.
-///
-/// This is used as a fallback for sources that don't support probing the frontier of the upstream
-/// system.
-fn synthesize_probes<G>(
-    source_id: GlobalId,
-    progress: &Stream<G, Infallible>,
-    interval: Duration,
-    now_fn: NowFn,
-) -> Stream<G, Probe<G::Timestamp>>
-where
-    G: Scope,
-{
-    let scope = progress.scope();
-
-    let active_worker = usize::cast_from(source_id.hashed()) % scope.peers();
-    let is_active_worker = active_worker == scope.index();
-
-    let mut op = AsyncOperatorBuilder::new("synthesize_probes".into(), scope);
-    let (output, output_stream) = op.new_output::<CapacityContainerBuilder<_>>();
-    let mut input = op.new_input_for(progress, Pipeline, &output);
-
-    op.build(|caps| async move {
-        if !is_active_worker {
-            return;
-        }
-
-        let [cap] = caps.try_into().expect("one capability per output");
-
-        let mut ticker = probe::Ticker::new(move || interval, now_fn.clone());
-
-        let minimum_frontier = Antichain::from_elem(Timestamp::minimum());
-        let mut frontier = minimum_frontier.clone();
-        loop {
-            tokio::select! {
-                event = input.next() => match event {
-                    Some(AsyncEvent::Progress(progress)) => frontier = progress,
-                    Some(AsyncEvent::Data(..)) => unreachable!(),
-                    None => break,
-                },
-                // We only report a probe if the source upper frontier is not the minimum frontier.
-                // This makes it so the first remap binding corresponds to the snapshot of the
-                // source, and because the first binding always maps to the minimum *target*
-                // frontier we guarantee that the source will never appear empty.
-                probe_ts = ticker.tick(), if frontier != minimum_frontier => {
-                    let probe = Probe {
-                        probe_ts,
-                        upstream_frontier: frontier.clone(),
-                    };
-                    output.give(&cap, probe);
-                }
-            }
-        }
-
-        let probe = Probe {
-            probe_ts: now_fn().into(),
-            upstream_frontier: Antichain::new(),
-        };
-        output.give(&cap, probe);
-    });
-
-    output_stream
 }

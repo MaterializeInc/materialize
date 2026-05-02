@@ -86,7 +86,7 @@ async fn bench_s3(args: &S3FetchArgs) -> Result<(), anyhow::Error> {
         for part in &batch_parts {
             let key = match &**part {
                 BatchPart::Hollow(x) => x.key.complete(&shard_id),
-                _ => continue,
+                BatchPart::Inline { .. } => continue,
             };
             let blob = Arc::clone(&state_versions.blob);
             let metrics = Arc::clone(&state_versions.metrics);
@@ -104,8 +104,7 @@ async fn bench_s3(args: &S3FetchArgs) -> Result<(), anyhow::Error> {
                         start.elapsed()
                     },
                 )
-                .await
-                .unwrap();
+                .await;
                 (
                     key,
                     buf_len,
@@ -116,7 +115,7 @@ async fn bench_s3(args: &S3FetchArgs) -> Result<(), anyhow::Error> {
             fetches.push(fetch);
         }
         for fetch in fetches {
-            let (key, size_bytes, fetch_secs, parse_secs) = fetch.await.unwrap();
+            let (key, size_bytes, fetch_secs, parse_secs) = fetch.await;
             println!(
                 "{},{},{},{},{}",
                 iter, key, size_bytes, fetch_secs, parse_secs

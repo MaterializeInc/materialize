@@ -1,6 +1,12 @@
 ---
 title: "Dataflow troubleshooting"
 description: "How to troubleshoot common dataflow-level scenarios where Materialize is not working as expected."
+menu:
+  main:
+    name: "Dataflow troubleshooting"
+    identifier: dataflow-troubleshooting
+    parent: transform-data
+    weight: 88
 ---
 
 If you're unable to troubleshoot your issue using the [`Ingest data`](/ingest-data/troubleshooting/)
@@ -105,7 +111,7 @@ just important to know than that they define a hierarchy on the operators.
 ## The system catalog and introspection relations
 
 Materialize collects a lot of useful information about the dataflows and
-operators in the system catalog in [introspection relations](/sql/system-catalog/mz_introspection).
+operators in the system catalog in [introspection relations](/reference/system-catalog/mz_introspection).
 The introspection relations are useful to troubleshoot and understand what is
 happening under the hood when Materialize is not behaving as expected. However,
 it is important to understand that most of the statistics we need for

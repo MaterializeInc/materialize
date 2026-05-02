@@ -10,6 +10,7 @@
 """
 Postgres source tests with interruptions, test that Materialize can recover.
 """
+
 import re
 import time
 

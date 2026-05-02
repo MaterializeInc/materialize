@@ -1,0 +1,34 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "jsx": "react",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "noFallthroughCasesInSwitch": true,
+    "resolveJsonModule": true,
+    "strict": true,
+    "sourceMap": true,
+    "skipLibCheck": true,
+    "target": "ES2022",
+    "baseUrl": "./",
+    "paths": {
+      "~/*": ["./src/*"],
+      "~/img/*": ["./img/*"],
+      "~/icon/*": ["./icon/*"],
+      "~/font/*": ["./font/*"],
+      "~/types/*": ["./types/*"]
+    },
+    "noEmit": true,
+    "noErrorTruncation": true,
+    "outDir": "./dist",
+    "plugins": [
+      {
+        "name": "typescript-eslint-language-service"
+      }
+    ],
+    "types": ["vite/client", "vitest/globals"]
+  }
+}

@@ -1,0 +1,24 @@
+- name: "syntax-value"
+  code: |
+    <int> [.<frac>] [E<exp>]
+  syntax_elements:
+    - name: "`<int>`"
+      description: |
+        An integer value.
+    - name: "`.<frac>`"
+      description: |
+        Optional. Fractional decimal digits.
+    - name: "**E**`<exp>`"
+      description: |
+        Optional. Multiply the number preceding **E** by 10<sup>exp</sup>.
+
+- name: "syntax-definition"
+  code: |
+    numeric [(<precision>, <scale>)]
+  syntax_elements:
+    - name: "`<precision>`"
+      description: |
+        **Ignored**: All `numeric` values in Materialize have a precision of 39.
+    - name: "`<scale>`"
+      description: |
+        The total number of fractional decimal digits to track, e.g. `.321` has a scale of 3. `<scale>` cannot exceed the maximum precision (39).

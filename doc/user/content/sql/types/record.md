@@ -17,7 +17,7 @@ Detail | Info
 
 ## Syntax
 
-{{< diagram "type-record.svg" >}}
+{{% include-syntax file="examples/sql_types/record" example="syntax" %}}
 
 ## Details
 

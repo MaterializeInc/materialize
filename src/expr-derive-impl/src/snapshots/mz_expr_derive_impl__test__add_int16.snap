@@ -1,6 +1,6 @@
 ---
 source: src/expr-derive-impl/src/lib.rs
-expression: "#[sqlfunc(\n    is_monotone = (true, true),\n    output_type = i16,\n    is_infix_op = true,\n    sqlname = \"+\",\n    propagates_nulls = true\n)]\nfn add_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    a.unwrap_int16()\n        .checked_add(b.unwrap_int16())\n        .ok_or(EvalError::NumericFieldOverflow)\n        .map(Datum::from)\n}\n"
+expression: "#[sqlfunc(\n    is_monotone = (true, true),\n    output_type = i16,\n    is_infix_op = true,\n    sqlname = \"+\",\n    propagates_nulls = true,\n    test = true,\n)]\nfn add_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    a.unwrap_int16()\n        .checked_add(b.unwrap_int16())\n        .ok_or(EvalError::NumericFieldOverflow)\n        .map(Datum::from)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -13,25 +13,22 @@ expression: "#[sqlfunc(\n    is_monotone = (true, true),\n    output_type = i16,
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct AddInt16;
-impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AddInt16 {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
-    type Output = Result<Datum<'a>, EvalError>;
-    fn call(
+impl crate::func::binary::EagerBinaryFunc for AddInt16 {
+    type Input<'a> = (Datum<'a>, Datum<'a>);
+    type Output<'a> = Result<Datum<'a>, EvalError>;
+    fn call<'a>(
         &self,
-        a: Self::Input1,
-        b: Self::Input2,
+        (a, b): Self::Input<'a>,
         temp_storage: &'a mz_repr::RowArena,
-    ) -> Self::Output {
+    ) -> Self::Output<'a> {
         add_int16(a, b)
     }
-    fn output_type(
+    fn output_sql_type(
         &self,
-        input_type_a: mz_repr::SqlColumnType,
-        input_type_b: mz_repr::SqlColumnType,
+        input_types: &[mz_repr::SqlColumnType],
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
         let output = <i16>::as_column_type();
@@ -39,15 +36,14 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AddInt16 {
             self,
         );
         let nullable = output.nullable;
-        output
-            .nullable(
-                nullable
-                    || (propagates_nulls
-                        && (input_type_a.nullable || input_type_b.nullable)),
-            )
+        let non_nullable_input_is_nullable = false;
+        let inputs_nullable = input_types.iter().any(|it| it.nullable);
+        let is_null = nullable || non_nullable_input_is_nullable
+            || (propagates_nulls && inputs_nullable);
+        output.nullable(is_null)
     }
     fn introduces_nulls(&self) -> bool {
-        <i16 as ::mz_repr::DatumType<'_, ()>>::nullable()
+        <i16 as ::mz_repr::OutputDatumType<'_, ()>>::nullable()
     }
     fn is_infix_op(&self) -> bool {
         true

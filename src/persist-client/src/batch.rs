@@ -274,7 +274,7 @@ where
                     )
                     .instrument(write_span),
                 );
-                let part = handle.await.expect("part write task failed");
+                let part = handle.await;
                 parts.push(RunPart::Single(part));
             }
         }
@@ -472,7 +472,15 @@ impl BatchBuilderConfig {
 
 /// A list of (lowercase) column names that persist will always retain
 /// stats for, even if it means going over the stats budget.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Arbitrary)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    Arbitrary
+)]
 pub(crate) struct UntrimmableColumns {
     /// Always retain columns whose lowercased names exactly equal any of these strings.
     pub equals: Vec<Cow<'static, str>>,
@@ -1254,8 +1262,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 )
             })
             .instrument(debug_span!("batch::encode_part"))
-            .await
-            .expect("part encode task failed");
+            .await;
         // Can't use the `CodecMetrics::encode` helper because of async.
         metrics.codecs.batch.encode_count.inc();
         metrics
@@ -1739,7 +1746,7 @@ mod tests {
             .await;
 
         let (actual, _) = read.expect_listen(0).await.read_until(&3).await;
-        let expected = vec![(((Ok("foo".to_owned())), Ok(())), 2, 1)];
+        let expected = vec![((("foo".to_owned()), ()), 2, 1)];
         assert_eq!(actual, expected);
     }
 

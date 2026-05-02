@@ -15,10 +15,10 @@ secrets and connections.
 ## Syntax
 
 ```mzsql
-SHOW OBJECTS [ FROM <schema_name> ]
+SHOW OBJECTS [ FROM <schema_name> ];
 ```
 
-Option                       | Description
+Syntax element               | Description
 -----------------------------|------------
 **FROM** <schema_name>       | If specified, only show objects from the specified schema. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
 

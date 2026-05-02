@@ -18,7 +18,7 @@ Run the `dbt-materialize` test suite via [mzcompose](../../doc/developer/mzbuild
 to bring up all the dependencies and match how it is run in CI:
 
 ```shell
-./mzcompose --dev run default
+bin/mzcompose --find dbt-materialize run default
 ```
 
 ### Useful links

@@ -1,0 +1,107 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Test for database-issues#7291: Index names in EXPLAIN should be qualified
+# with schema/database when multiple indexes with the same name exist in
+# different schemas.
+
+mode cockroach
+
+# Create multiple schemas, two with identically named indexes, one with a different index name.
+statement ok
+CREATE SCHEMA schema_a
+
+statement ok
+CREATE SCHEMA schema_b
+
+statement ok
+CREATE SCHEMA schema_c
+
+statement ok
+CREATE TABLE schema_a.my_table (id INT, value TEXT)
+
+statement ok
+CREATE TABLE schema_b.my_table (id INT, value TEXT)
+
+statement ok
+CREATE TABLE schema_c.my_table (id INT, value TEXT)
+
+statement ok
+CREATE INDEX my_idx ON schema_a.my_table(id)
+
+statement ok
+CREATE INDEX my_idx ON schema_b.my_table(id)
+
+statement ok
+CREATE INDEX my_idx_foo ON schema_c.my_table(id)
+
+# Test EXPLAIN with UNION ALL that reads from two schemas with the same index names and one with a different index name.
+# The first two index names should be qualified to disambiguate them. The third should not be qualified.
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+SELECT *, 'a' AS origin FROM schema_a.my_table
+UNION ALL
+SELECT *, 'b' AS origin FROM schema_b.my_table
+UNION ALL
+SELECT *, 'c' AS origin FROM schema_c.my_table
+----
+Explained Query:
+  Union
+    Map ("a")
+      ReadIndex on=my_table materialize.schema_a.my_idx=[*** full scan ***]
+    Map ("b")
+      ReadIndex on=my_table materialize.schema_b.my_idx=[*** full scan ***]
+    Map ("c")
+      ReadIndex on=my_table my_idx_foo=[*** full scan ***]
+
+Used Indexes:
+  - materialize.schema_a.my_idx (*** full scan ***)
+  - materialize.schema_b.my_idx (*** full scan ***)
+  - materialize.schema_c.my_idx_foo (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# Test with VERBOSE to ensure qualification is shown there too
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT *, 'a' AS origin FROM schema_a.my_table
+UNION ALL
+SELECT *, 'b' AS origin FROM schema_b.my_table
+UNION ALL
+SELECT *, 'c' AS origin FROM schema_c.my_table
+----
+Explained Query:
+  Union
+    Map ("a")
+      ReadIndex on=my_table materialize.schema_a.my_idx=[*** full scan ***]
+    Map ("b")
+      ReadIndex on=my_table materialize.schema_b.my_idx=[*** full scan ***]
+    Map ("c")
+      ReadIndex on=my_table my_idx_foo=[*** full scan ***]
+
+Used Indexes:
+  - materialize.schema_a.my_idx (*** full scan ***)
+  - materialize.schema_b.my_idx (*** full scan ***)
+  - materialize.schema_c.my_idx_foo (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# Cleanup
+statement ok
+DROP SCHEMA schema_a CASCADE
+
+statement ok
+DROP SCHEMA schema_b CASCADE
+
+statement ok
+DROP SCHEMA schema_c CASCADE

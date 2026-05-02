@@ -88,8 +88,8 @@ select coalesce(a, a/b + 1, a/b + 2) from test;
 1
 
 # The following two results are probably wrong (but depends on what error semantics we agree on later).
-query error db error: ERROR: Evaluation error: division by zero
+query error Evaluation error: division by zero
 select coalesce(a, (select a/b from test)) from test;
 
-query error db error: ERROR: Evaluation error: division by zero
+query error Evaluation error: division by zero
 select *, case when a = 5 then (select a/b from test) else 7 end from test;

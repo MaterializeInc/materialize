@@ -18,7 +18,6 @@ use std::str::FromStr;
 use crate::adt::system::Oid;
 use anyhow::{Error, anyhow};
 use bitflags::bitflags;
-use columnation::{Columnation, CopyRegion};
 use mz_ore::soft_assert_no_log;
 use mz_ore::str::StrExt;
 use mz_persist_types::columnar::FixedSizeCodec;
@@ -246,10 +245,6 @@ impl RustType<ProtoAclMode> for AclMode {
     }
 }
 
-impl Columnation for AclMode {
-    type InnerRegion = CopyRegion<AclMode>;
-}
-
 impl Arbitrary for AclMode {
     type Parameters = ();
     type Strategy = BoxedStrategy<AclMode>;
@@ -268,7 +263,17 @@ impl Arbitrary for AclMode {
 ///
 /// See: <https://github.com/postgres/postgres/blob/7f5b19817eaf38e70ad1153db4e644ee9456853e/src/include/utils/acl.h#L48-L59>
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize, Arbitrary,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Hash,
+    Deserialize,
+    Arbitrary
 )]
 pub struct MzAclItem {
     /// Role that this item grants privileges to.
@@ -385,10 +390,6 @@ impl RustType<ProtoMzAclItem> for MzAclItem {
             (_, _, None) => Err(TryFromProtoError::missing_field("ProtoMzAclItem::acl_mode")),
         }
     }
-}
-
-impl Columnation for MzAclItem {
-    type InnerRegion = CopyRegion<MzAclItem>;
 }
 
 /// An encoded packed variant of [`MzAclItem`].
@@ -516,7 +517,17 @@ impl FixedSizeCodec<MzAclItem> for PackedMzAclItem {
 ///
 /// See: <https://github.com/postgres/postgres/blob/7f5b19817eaf38e70ad1153db4e644ee9456853e/src/include/utils/acl.h#L48-L59>
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize, Arbitrary,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Hash,
+    Deserialize,
+    Arbitrary
 )]
 pub struct AclItem {
     /// Role that this item grants privileges to.
@@ -646,10 +657,6 @@ impl RustType<ProtoAclItem> for AclItem {
     }
 }
 
-impl Columnation for AclItem {
-    type InnerRegion = CopyRegion<AclItem>;
-}
-
 /// An encoded packed variant of [`AclItem`].
 ///
 /// We uphold the variant that [`PackedAclItem`] sorts the same as [`AclItem`].
@@ -707,7 +714,17 @@ impl FixedSizeCodec<AclItem> for PackedAclItem {
 }
 
 /// A container of [`MzAclItem`]s that is optimized to look up an [`MzAclItem`] by the grantee.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Deserialize,
+    Serialize
+)]
 pub struct PrivilegeMap(
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")] BTreeMap<RoleId, Vec<MzAclItem>>,
 );

@@ -20,6 +20,7 @@ use futures::FutureExt;
 use futures::future::Shared;
 use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use lru::LruCache;
+use mz_auth::Authenticated;
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
@@ -96,6 +97,9 @@ impl Authenticator {
         //
         // See this conversation [0] from the Materialize–Frontegg shared Slack
         // channel on 1 January 2024.
+        //
+        // NOTE we do validate that the tenantId claim matches the expected tenant_id
+        // in order to ensure that the JWT was created for the specific environment.
         //
         // [0]: https://materializeinc.slack.com/archives/C02940WNMRQ/p1704131331041669
         validation.validate_aud = false;
@@ -174,12 +178,12 @@ impl Authenticator {
         &self,
         expected_user: &str,
         password: &str,
-    ) -> Result<AuthSessionHandle, Error> {
+    ) -> Result<(AuthSessionHandle, Authenticated), Error> {
         let password: AppPassword = password.parse()?;
         match self.authenticate_inner(expected_user, password).await {
             Ok(handle) => {
                 tracing::debug!("authentication successful");
-                Ok(handle)
+                Ok((handle, Authenticated))
             }
             Err(e) => {
                 tracing::debug!(error = ?e, "authentication failed");
@@ -313,8 +317,9 @@ impl Authenticator {
         &self,
         token: &str,
         expected_user: Option<&str>,
-    ) -> Result<ValidatedClaims, Error> {
-        self.inner.validate_access_token(token, expected_user)
+    ) -> Result<(ValidatedClaims, Authenticated), Error> {
+        let claims = self.inner.validate_access_token(token, expected_user)?;
+        Ok((claims, Authenticated))
     }
 }
 

@@ -1,0 +1,2509 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+//! Iceberg sink implementation.
+//!
+//! This code renders a [`IcebergSinkConnection`] into a dataflow that writes
+//! data to an Iceberg table. `SinkRender::render_sink` hands the sink a stream
+//! of arrangement batches keyed on the sink key (the upstream arrangement's
+//! trace reader is already dropped, so the spine is free to compact as
+//! batches flow). A small `walk_sink_arrangement` operator consumes that
+//! stream and emits one `DiffPair` per `(key, timestamp)` update into the
+//! pipeline below.
+//!
+//! ```text
+//!        ┏━━━━━━━━━━━━━━┓
+//!        ┃   persist    ┃
+//!        ┃    source    ┃
+//!        ┗━━━━━━┯━━━━━━━┛
+//!               │ stream of arrangement batches (trace reader dropped)
+//!               │
+//!        ┏━━━━━━v━━━━━━━┓
+//!        ┃    walk      ┃
+//!        ┃ arrangement  ┃ yields individual DiffPairs per (key, timestamp)
+//!        ┗━━━━━━┯━━━━━━━┛
+//!               │ (Option<Row>, DiffPair<Row>) rows
+//!               │
+//!        ┏━━━━━━v━━━━━━━┓
+//!        ┃     mint     ┃ (single worker)
+//!        ┃    batch     ┃ loads/creates the Iceberg table,
+//!        ┃ descriptions ┃ determines resume upper
+//!        ┗━━━┯━━━━━┯━━━━┛
+//!            │     │ batch descriptions (broadcast)
+//!       rows │     ├─────────────────────────┐
+//!            │     │                         │
+//!        ┏━━━v━━━━━v━━━━┓    ╭─────────────╮ │
+//!        ┃    write     ┃───>│ S3 / object │ │
+//!        ┃  data files  ┃    │   storage   │ │
+//!        ┗━━━━━━┯━━━━━━━┛    ╰─────────────╯ │
+//!               │ file metadata              │
+//!               │                            │
+//!        ┏━━━━━━v━━━━━━━━━━━━━━━━━━━━━━━━━━━━v┓
+//!        ┃           commit to                ┃ (single worker)
+//!        ┃             iceberg                ┃
+//!        ┗━━━━━━━━━━━━━┯━━━━━━━━━━━━━━━━━━━━━━┛
+//!                      │
+//!              ╭───────v───────╮
+//!              │ Iceberg table │
+//!              │  (snapshots)  │
+//!              ╰───────────────╯
+//! ```
+//! # Minting batch descriptions
+//! The "mint batch descriptions" operator is responsible for generating
+//! time-based batch boundaries that group writes into Iceberg snapshots.
+//! It maintains a sliding window of future batch descriptions so that
+//! writers can start processing data even while earlier batches are still being written.
+//! Knowing the batch boundaries ahead of time is important because we need to
+//! be able to make the claim that all data files written for a given batch
+//! include all data up to the upper `t` but not beyond it.
+//! This could be trivially achieved by waiting for all data to arrive up to a certain
+//! frontier, but that would prevent us from streaming writes out to object storage
+//! until the entire batch is complete, which would increase latency and reduce throughput.
+//!
+//! # Writing data files
+//! The "write data files" operator receives rows along with batch descriptions.
+//! It matches rows to batches by timestamp; if a batch description hasn't arrived yet,
+//! rows are stashed until it does. This allows batches to be minted ahead of data arrival.
+//! The operator uses an Iceberg `DeltaWriter` to write Parquet data files
+//! (and position delete files if necessary) to object storage.
+//! It outputs metadata about the written files along with their batch descriptions
+//! for the commit operator to consume.
+//!
+//! # Committing to Iceberg
+//! The "commit to iceberg" operator receives metadata about written data files
+//! along with their batch descriptions. It groups files by batch and creates
+//! Iceberg snapshots that include all files for each batch. It updates the Iceberg
+//! table's metadata to reflect the new snapshots, including updating the
+//! `mz-frontier` property to track progress.
+
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, VecDeque};
+use std::convert::Infallible;
+use std::future::Future;
+use std::time::Instant;
+use std::{cell::RefCell, rc::Rc, sync::Arc};
+
+use anyhow::{Context, anyhow};
+use arrow::array::{ArrayRef, Int32Array, Int64Array, RecordBatch};
+use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
+use differential_dataflow::lattice::Lattice;
+use differential_dataflow::{AsCollection, Hashable, VecCollection};
+use futures::StreamExt;
+use iceberg::ErrorKind;
+use iceberg::arrow::{arrow_schema_to_schema, schema_to_arrow_schema};
+use iceberg::spec::{
+    DataFile, FormatVersion, Snapshot, StructType, read_data_files_from_avro,
+    write_data_files_to_avro,
+};
+use iceberg::spec::{Schema, SchemaRef};
+use iceberg::table::Table;
+use iceberg::transaction::{ApplyTransactionAction, Transaction};
+use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
+use iceberg::writer::base_writer::equality_delete_writer::{
+    EqualityDeleteFileWriterBuilder, EqualityDeleteWriterConfig,
+};
+use iceberg::writer::base_writer::position_delete_writer::{
+    PositionDeleteFileWriterBuilder, PositionDeleteWriterConfig,
+};
+use iceberg::writer::combined_writer::delta_writer::DeltaWriterBuilder;
+use iceberg::writer::file_writer::ParquetWriterBuilder;
+use iceberg::writer::file_writer::location_generator::{
+    DefaultFileNameGenerator, DefaultLocationGenerator,
+};
+use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
+use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
+use iceberg::{Catalog, NamespaceIdent, TableCreation, TableIdent};
+use itertools::Itertools;
+use mz_arrow_util::builder::{ARROW_EXTENSION_NAME_KEY, ArrowBuilder};
+use mz_interchange::avro::DiffPair;
+use mz_interchange::envelopes::for_each_diff_pair;
+use mz_ore::cast::CastFrom;
+use mz_ore::error::ErrorExt;
+use mz_ore::future::InTask;
+use mz_ore::result::ResultExt;
+use mz_ore::retry::{Retry, RetryResult};
+use mz_persist_client::Diagnostics;
+use mz_persist_client::write::WriteHandle;
+use mz_persist_types::codec_impls::UnitSchema;
+use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_storage_types::StorageDiff;
+use mz_storage_types::configuration::StorageConfiguration;
+use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::errors::DataflowError;
+use mz_storage_types::sinks::{
+    IcebergSinkConnection, SinkEnvelope, StorageSinkDesc, iceberg_type_overrides,
+};
+use mz_storage_types::sources::SourceData;
+use mz_timely_util::antichain::AntichainExt;
+use mz_timely_util::builder_async::{Event, OperatorBuilder, PressOnDropButton};
+use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+use parquet::file::properties::WriterProperties;
+use serde::{Deserialize, Serialize};
+use timely::PartialOrder;
+use timely::container::CapacityContainerBuilder;
+use timely::dataflow::StreamVec;
+use timely::dataflow::channels::pact::{Exchange, Pipeline};
+use timely::dataflow::operators::vec::{Broadcast, Map, ToStream};
+use timely::dataflow::operators::{CapabilitySet, Concatenate};
+use timely::progress::{Antichain, Timestamp as _};
+use tracing::debug;
+
+use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
+use crate::metrics::sink::iceberg::IcebergSinkMetrics;
+use crate::render::sinks::{PkViolationWarner, SinkBatchStream, SinkRender};
+use crate::statistics::SinkStatistics;
+use crate::storage_state::StorageState;
+
+/// Set the default capacity for the array builders inside the ArrowBuilder. This is the
+/// number of items each builder can hold before it needs to allocate more memory.
+const DEFAULT_ARRAY_BUILDER_ITEM_CAPACITY: usize = 1024;
+/// Set the default buffer capacity for the string and binary array builders inside the
+/// ArrowBuilder. This is the number of bytes each builder can hold before it needs to allocate
+/// more memory.
+const DEFAULT_ARRAY_BUILDER_DATA_CAPACITY: usize = 1024;
+
+/// The prefix for Parquet files written by this sink.
+const PARQUET_FILE_PREFIX: &str = "mz_data";
+/// The number of batch descriptions to mint ahead of the observed frontier. This determines how
+/// many batches we have in-flight at any given time.
+const INITIAL_DESCRIPTIONS_TO_MINT: u64 = 3;
+
+/// Shared state produced by the async setup in [`write_data_files`] that both
+/// envelope handlers need to construct Parquet writers.
+struct WriterContext {
+    /// Arrow schema for data columns, with Materialize extension metadata merged in.
+    arrow_schema: Arc<ArrowSchema>,
+    /// Iceberg table schema, used to configure Parquet writers.
+    current_schema: Arc<Schema>,
+    /// File I/O for writing Parquet files to object storage.
+    file_io: iceberg::io::FileIO,
+    /// Generates file paths under the table's data directory.
+    location_generator: DefaultLocationGenerator,
+    /// Generates unique file names with a per-worker UUID suffix.
+    file_name_generator: DefaultFileNameGenerator,
+    writer_properties: WriterProperties,
+}
+
+/// Envelope-specific logic for writing Iceberg data files.
+trait EnvelopeHandler: Send {
+    /// Construct from the shared writer context after async setup completes.
+    fn new(
+        ctx: WriterContext,
+        connection: &IcebergSinkConnection,
+        materialize_arrow_schema: &Arc<ArrowSchema>,
+    ) -> anyhow::Result<Self>
+    where
+        Self: Sized;
+
+    /// Create an [`IcebergWriter`] for a new batch.
+    ///
+    /// `is_snapshot` is true for the initial "snapshot" batch (lower == as_of), which
+    /// contains all pre-existing data and can be very large. Implementations may use
+    /// this to disable memory-intensive optimisations like seen-rows deduplication.
+    async fn create_writer(&self, is_snapshot: bool) -> anyhow::Result<Box<dyn IcebergWriter>>;
+
+    fn row_to_batch(&self, diff_pair: DiffPair<Row>, ts: Timestamp) -> anyhow::Result<RecordBatch>;
+}
+
+struct UpsertEnvelopeHandler {
+    ctx: WriterContext,
+    /// Iceberg field IDs of the key columns, used for equality delete files.
+    equality_ids: Vec<i32>,
+    /// Iceberg schema for position delete files.
+    pos_schema: Arc<Schema>,
+    /// Iceberg schema for equality delete files (projected to key columns only).
+    eq_schema: Arc<Schema>,
+    /// Configuration for the equality delete writer (projected schema + column IDs).
+    eq_config: EqualityDeleteWriterConfig,
+    /// Arrow schema with an appended `__op` column that the
+    /// [`DeltaWriter`](iceberg::writer::combined_writer::delta_writer::DeltaWriter)
+    /// uses to distinguish inserts (+1) from deletes (-1).
+    schema_with_op: Arc<ArrowSchema>,
+}
+
+impl EnvelopeHandler for UpsertEnvelopeHandler {
+    fn new(
+        ctx: WriterContext,
+        connection: &IcebergSinkConnection,
+        materialize_arrow_schema: &Arc<ArrowSchema>,
+    ) -> anyhow::Result<Self> {
+        let Some((_, equality_indices)) = &connection.key_desc_and_indices else {
+            return Err(anyhow::anyhow!(
+                "Iceberg sink requires key columns for equality deletes"
+            ));
+        };
+
+        let equality_ids = equality_ids_for_indices(
+            ctx.current_schema.as_ref(),
+            materialize_arrow_schema.as_ref(),
+            equality_indices,
+        )?;
+
+        let pos_arrow_schema = PositionDeleteWriterConfig::arrow_schema();
+        let pos_schema = Arc::new(
+            arrow_schema_to_schema(&pos_arrow_schema)
+                .context("Failed to convert position delete Arrow schema to Iceberg schema")?,
+        );
+
+        let eq_config =
+            EqualityDeleteWriterConfig::new(equality_ids.clone(), Arc::clone(&ctx.current_schema))
+                .context("Failed to create EqualityDeleteWriterConfig")?;
+        let eq_schema = Arc::new(
+            arrow_schema_to_schema(eq_config.projected_arrow_schema_ref())
+                .context("Failed to convert equality delete Arrow schema to Iceberg schema")?,
+        );
+
+        let schema_with_op = Arc::new(build_schema_with_op_column(&ctx.arrow_schema));
+
+        Ok(Self {
+            ctx,
+            equality_ids,
+            pos_schema,
+            eq_schema,
+            eq_config,
+            schema_with_op,
+        })
+    }
+
+    async fn create_writer(&self, is_snapshot: bool) -> anyhow::Result<Box<dyn IcebergWriter>> {
+        let data_parquet_writer = ParquetWriterBuilder::new(
+            self.ctx.writer_properties.clone(),
+            Arc::clone(&self.ctx.current_schema),
+        )
+        .with_arrow_schema(Arc::clone(&self.ctx.arrow_schema))
+        .context("Arrow schema validation failed")?;
+        let data_rolling_writer = RollingFileWriterBuilder::new_with_default_file_size(
+            data_parquet_writer,
+            Arc::clone(&self.ctx.current_schema),
+            self.ctx.file_io.clone(),
+            self.ctx.location_generator.clone(),
+            self.ctx.file_name_generator.clone(),
+        );
+        let data_writer_builder = DataFileWriterBuilder::new(data_rolling_writer);
+
+        let pos_config = PositionDeleteWriterConfig::new(None, 0, None);
+        let pos_parquet_writer = ParquetWriterBuilder::new(
+            self.ctx.writer_properties.clone(),
+            Arc::clone(&self.pos_schema),
+        );
+        let pos_rolling_writer = RollingFileWriterBuilder::new_with_default_file_size(
+            pos_parquet_writer,
+            Arc::clone(&self.ctx.current_schema),
+            self.ctx.file_io.clone(),
+            self.ctx.location_generator.clone(),
+            self.ctx.file_name_generator.clone(),
+        );
+        let pos_delete_writer_builder =
+            PositionDeleteFileWriterBuilder::new(pos_rolling_writer, pos_config);
+
+        let eq_parquet_writer = ParquetWriterBuilder::new(
+            self.ctx.writer_properties.clone(),
+            Arc::clone(&self.eq_schema),
+        );
+        let eq_rolling_writer = RollingFileWriterBuilder::new_with_default_file_size(
+            eq_parquet_writer,
+            Arc::clone(&self.ctx.current_schema),
+            self.ctx.file_io.clone(),
+            self.ctx.location_generator.clone(),
+            self.ctx.file_name_generator.clone(),
+        );
+        let eq_delete_writer_builder =
+            EqualityDeleteFileWriterBuilder::new(eq_rolling_writer, self.eq_config.clone());
+
+        let mut builder = DeltaWriterBuilder::new(
+            data_writer_builder,
+            pos_delete_writer_builder,
+            eq_delete_writer_builder,
+            self.equality_ids.clone(),
+        );
+
+        builder = if is_snapshot {
+            // Snapshot batches only produce inserts, so disable seen_rows tracking to save memory.
+            builder.with_max_seen_rows(0)
+        } else {
+            // For incremental batches, keep all "seen" rows. Do not evict any rows.
+            // The DeltaWriter issues an equality delete if we update (or delete) a row outside the "seen" cache.
+            // But equality deletes only apply to prior snapshots (lower sequence number).
+            //
+            // i.e. The DeltaWriter assumes that rows outside the "seen" cache come from prior snapshots.
+            //
+            // If we insert a row a=foo during this snapshot and then evict it from the "seen" cache,
+            // a subsequent update a=bar (also during this snapshot) will lead to:
+            //   1. Equality delete for a=foo (does nothing because a=foo is from this snapshot, not a prior snapshot)
+            //   2. Insert a=bar
+            // Because the deletion does nothing, we have a=foo and a=bar in the same snapshot.
+            builder.with_max_seen_rows(usize::MAX)
+        };
+
+        Ok(Box::new(
+            builder
+                .build(None)
+                .await
+                .context("Failed to create DeltaWriter")?,
+        ))
+    }
+
+    /// The `__op` column indicates whether each row is an insert (+1) or delete (-1),
+    /// which the DeltaWriter uses to generate the appropriate Iceberg data/delete files.
+    fn row_to_batch(
+        &self,
+        diff_pair: DiffPair<Row>,
+        _ts: Timestamp,
+    ) -> anyhow::Result<RecordBatch> {
+        let mut builder = ArrowBuilder::new_with_schema(
+            Arc::clone(&self.ctx.arrow_schema),
+            DEFAULT_ARRAY_BUILDER_ITEM_CAPACITY,
+            DEFAULT_ARRAY_BUILDER_DATA_CAPACITY,
+        )
+        .context("Failed to create builder")?;
+
+        let mut op_values = Vec::new();
+
+        if let Some(before) = diff_pair.before {
+            builder
+                .add_row(&before)
+                .context("Failed to add delete row to builder")?;
+            op_values.push(-1i32);
+        }
+        if let Some(after) = diff_pair.after {
+            builder
+                .add_row(&after)
+                .context("Failed to add insert row to builder")?;
+            op_values.push(1i32);
+        }
+
+        let batch = builder
+            .to_record_batch()
+            .context("Failed to create record batch")?;
+
+        let mut columns: Vec<ArrayRef> = batch.columns().to_vec();
+        columns.push(Arc::new(Int32Array::from(op_values)));
+
+        RecordBatch::try_new(Arc::clone(&self.schema_with_op), columns)
+            .context("Failed to create batch with op column")
+    }
+}
+
+struct AppendEnvelopeHandler {
+    ctx: WriterContext,
+    /// Arrow schema with only user columns (no `_mz_diff`/`_mz_timestamp`), used by
+    /// [`ArrowBuilder`] to serialize row data before the extra columns are appended.
+    user_schema_for_append: Arc<ArrowSchema>,
+}
+
+impl EnvelopeHandler for AppendEnvelopeHandler {
+    fn new(
+        ctx: WriterContext,
+        _connection: &IcebergSinkConnection,
+        _materialize_arrow_schema: &Arc<ArrowSchema>,
+    ) -> anyhow::Result<Self> {
+        // arrow_schema already includes _mz_diff + _mz_timestamp (added in render_sink); strip
+        // the last two fields so ArrowBuilder only processes the user columns.
+        let n = ctx.arrow_schema.fields().len().saturating_sub(2);
+        let user_schema_for_append =
+            Arc::new(ArrowSchema::new(ctx.arrow_schema.fields()[..n].to_vec()));
+
+        Ok(Self {
+            ctx,
+            user_schema_for_append,
+        })
+    }
+
+    async fn create_writer(&self, _is_snapshot: bool) -> anyhow::Result<Box<dyn IcebergWriter>> {
+        let data_parquet_writer = ParquetWriterBuilder::new(
+            self.ctx.writer_properties.clone(),
+            Arc::clone(&self.ctx.current_schema),
+        )
+        .with_arrow_schema(Arc::clone(&self.ctx.arrow_schema))
+        .context("Arrow schema validation failed")?;
+        let data_rolling_writer = RollingFileWriterBuilder::new_with_default_file_size(
+            data_parquet_writer,
+            Arc::clone(&self.ctx.current_schema),
+            self.ctx.file_io.clone(),
+            self.ctx.location_generator.clone(),
+            self.ctx.file_name_generator.clone(),
+        );
+        Ok(Box::new(
+            DataFileWriterBuilder::new(data_rolling_writer)
+                .build(None)
+                .await
+                .context("Failed to create DataFileWriter")?,
+        ))
+    }
+
+    /// Every change is written as a plain data row: the `before` half (if present) gets
+    /// `_mz_diff = -1` and the `after` half gets `_mz_diff = +1`. Both carry the same `_mz_timestamp`.
+    fn row_to_batch(&self, diff_pair: DiffPair<Row>, ts: Timestamp) -> anyhow::Result<RecordBatch> {
+        let mut builder = ArrowBuilder::new_with_schema(
+            Arc::clone(&self.user_schema_for_append),
+            DEFAULT_ARRAY_BUILDER_ITEM_CAPACITY,
+            DEFAULT_ARRAY_BUILDER_DATA_CAPACITY,
+        )
+        .context("Failed to create builder")?;
+
+        let mut diff_values: Vec<i32> = Vec::new();
+        let ts_i64 = i64::try_from(u64::from(ts)).unwrap_or(i64::MAX);
+
+        if let Some(before) = diff_pair.before {
+            builder
+                .add_row(&before)
+                .context("Failed to add before row to builder")?;
+            diff_values.push(-1i32);
+        }
+        if let Some(after) = diff_pair.after {
+            builder
+                .add_row(&after)
+                .context("Failed to add after row to builder")?;
+            diff_values.push(1i32);
+        }
+
+        let n = diff_values.len();
+        let batch = builder
+            .to_record_batch()
+            .context("Failed to create record batch")?;
+
+        let mut columns: Vec<ArrayRef> = batch.columns().to_vec();
+        columns.push(Arc::new(Int32Array::from(diff_values)));
+        columns.push(Arc::new(Int64Array::from(vec![ts_i64; n])));
+
+        RecordBatch::try_new(Arc::clone(&self.ctx.arrow_schema), columns)
+            .context("Failed to create append record batch")
+    }
+}
+
+/// Add Parquet field IDs to an Arrow schema. Iceberg requires field IDs in the
+/// Parquet metadata for schema evolution tracking. Field IDs are assigned
+/// recursively to all nested fields (structs, lists, maps) using a depth-first,
+/// pre-order traversal.
+fn add_field_ids_to_arrow_schema(schema: ArrowSchema) -> ArrowSchema {
+    let mut next_field_id = 1i32;
+    let fields: Vec<Field> = schema
+        .fields()
+        .iter()
+        .map(|field| add_field_ids_recursive(field, &mut next_field_id))
+        .collect();
+    ArrowSchema::new(fields).with_metadata(schema.metadata().clone())
+}
+
+/// Recursively add field IDs to a field and all its nested children.
+fn add_field_ids_recursive(field: &Field, next_id: &mut i32) -> Field {
+    let current_id = *next_id;
+    *next_id += 1;
+
+    let mut metadata = field.metadata().clone();
+    metadata.insert(
+        PARQUET_FIELD_ID_META_KEY.to_string(),
+        current_id.to_string(),
+    );
+
+    let new_data_type = add_field_ids_to_datatype(field.data_type(), next_id);
+
+    Field::new(field.name(), new_data_type, field.is_nullable()).with_metadata(metadata)
+}
+
+/// Add field IDs to nested fields within a DataType.
+fn add_field_ids_to_datatype(data_type: &DataType, next_id: &mut i32) -> DataType {
+    match data_type {
+        DataType::Struct(fields) => {
+            let new_fields: Vec<Field> = fields
+                .iter()
+                .map(|f| add_field_ids_recursive(f, next_id))
+                .collect();
+            DataType::Struct(new_fields.into())
+        }
+        DataType::List(element_field) => {
+            let new_element = add_field_ids_recursive(element_field, next_id);
+            DataType::List(Arc::new(new_element))
+        }
+        DataType::LargeList(element_field) => {
+            let new_element = add_field_ids_recursive(element_field, next_id);
+            DataType::LargeList(Arc::new(new_element))
+        }
+        DataType::Map(entries_field, sorted) => {
+            let new_entries = add_field_ids_recursive(entries_field, next_id);
+            DataType::Map(Arc::new(new_entries), *sorted)
+        }
+        _ => data_type.clone(),
+    }
+}
+
+/// Merge Materialize extension metadata into Iceberg's Arrow schema.
+/// This uses Iceberg's data types (e.g. Utf8) and field IDs while preserving
+/// Materialize's extension names for ArrowBuilder compatibility.
+/// Handles nested types (structs, lists, maps) recursively.
+fn merge_materialize_metadata_into_iceberg_schema(
+    materialize_arrow_schema: &ArrowSchema,
+    iceberg_schema: &Schema,
+) -> anyhow::Result<ArrowSchema> {
+    // First, convert Iceberg schema to Arrow (this gives us the correct data types)
+    let iceberg_arrow_schema = schema_to_arrow_schema(iceberg_schema)
+        .context("Failed to convert Iceberg schema to Arrow schema")?;
+
+    // Now merge in the Materialize extension metadata
+    let fields: Vec<Field> = iceberg_arrow_schema
+        .fields()
+        .iter()
+        .map(|iceberg_field| {
+            // Find the corresponding Materialize field by name to get extension metadata
+            let mz_field = materialize_arrow_schema
+                .field_with_name(iceberg_field.name())
+                .with_context(|| {
+                    format!(
+                        "Field '{}' not found in Materialize schema",
+                        iceberg_field.name()
+                    )
+                })?;
+
+            merge_field_metadata_recursive(iceberg_field, Some(mz_field))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+
+    Ok(ArrowSchema::new(fields).with_metadata(iceberg_arrow_schema.metadata().clone()))
+}
+
+/// Recursively merge Materialize extension metadata into an Iceberg field.
+fn merge_field_metadata_recursive(
+    iceberg_field: &Field,
+    mz_field: Option<&Field>,
+) -> anyhow::Result<Field> {
+    // Start with Iceberg field's metadata (which includes field IDs)
+    let mut metadata = iceberg_field.metadata().clone();
+
+    // Add Materialize extension name if available
+    if let Some(mz_f) = mz_field {
+        if let Some(extension_name) = mz_f.metadata().get(ARROW_EXTENSION_NAME_KEY) {
+            metadata.insert(ARROW_EXTENSION_NAME_KEY.to_string(), extension_name.clone());
+        }
+    }
+
+    // Recursively process nested types
+    let new_data_type = match iceberg_field.data_type() {
+        DataType::Struct(iceberg_fields) => {
+            let mz_struct_fields = match mz_field {
+                Some(f) => match f.data_type() {
+                    DataType::Struct(fields) => Some(fields),
+                    other => anyhow::bail!(
+                        "Type mismatch for field '{}': Iceberg schema has Struct, but Materialize schema has {:?}",
+                        iceberg_field.name(),
+                        other
+                    ),
+                },
+                None => None,
+            };
+
+            let new_fields: Vec<Field> = iceberg_fields
+                .iter()
+                .map(|iceberg_inner| {
+                    let mz_inner = mz_struct_fields.and_then(|fields| {
+                        fields.iter().find(|f| f.name() == iceberg_inner.name())
+                    });
+                    merge_field_metadata_recursive(iceberg_inner, mz_inner.map(|f| f.as_ref()))
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?;
+
+            DataType::Struct(new_fields.into())
+        }
+        DataType::List(iceberg_element) => {
+            let mz_element = match mz_field {
+                Some(f) => match f.data_type() {
+                    DataType::List(element) => Some(element.as_ref()),
+                    other => anyhow::bail!(
+                        "Type mismatch for field '{}': Iceberg schema has List, but Materialize schema has {:?}",
+                        iceberg_field.name(),
+                        other
+                    ),
+                },
+                None => None,
+            };
+            let new_element = merge_field_metadata_recursive(iceberg_element, mz_element)?;
+            DataType::List(Arc::new(new_element))
+        }
+        DataType::LargeList(iceberg_element) => {
+            let mz_element = match mz_field {
+                Some(f) => match f.data_type() {
+                    DataType::LargeList(element) => Some(element.as_ref()),
+                    other => anyhow::bail!(
+                        "Type mismatch for field '{}': Iceberg schema has LargeList, but Materialize schema has {:?}",
+                        iceberg_field.name(),
+                        other
+                    ),
+                },
+                None => None,
+            };
+            let new_element = merge_field_metadata_recursive(iceberg_element, mz_element)?;
+            DataType::LargeList(Arc::new(new_element))
+        }
+        DataType::Map(iceberg_entries, sorted) => {
+            let mz_entries = match mz_field {
+                Some(f) => match f.data_type() {
+                    DataType::Map(entries, _) => Some(entries.as_ref()),
+                    other => anyhow::bail!(
+                        "Type mismatch for field '{}': Iceberg schema has Map, but Materialize schema has {:?}",
+                        iceberg_field.name(),
+                        other
+                    ),
+                },
+                None => None,
+            };
+            let new_entries = merge_field_metadata_recursive(iceberg_entries, mz_entries)?;
+            DataType::Map(Arc::new(new_entries), *sorted)
+        }
+        other => other.clone(),
+    };
+
+    Ok(Field::new(
+        iceberg_field.name(),
+        new_data_type,
+        iceberg_field.is_nullable(),
+    )
+    .with_metadata(metadata))
+}
+
+async fn reload_table(
+    catalog: &dyn Catalog,
+    namespace: String,
+    table_name: String,
+    current_table: Table,
+) -> anyhow::Result<Table> {
+    let namespace_ident = NamespaceIdent::new(namespace.clone());
+    let table_ident = TableIdent::new(namespace_ident, table_name.clone());
+    let current_schema = current_table.metadata().current_schema_id();
+    let current_partition_spec = current_table.metadata().default_partition_spec_id();
+
+    match catalog.load_table(&table_ident).await {
+        Ok(table) => {
+            let reloaded_schema = table.metadata().current_schema_id();
+            let reloaded_partition_spec = table.metadata().default_partition_spec_id();
+            if reloaded_schema != current_schema {
+                return Err(anyhow::anyhow!(
+                    "Iceberg table '{}' schema changed during operation but schema evolution isn't supported, expected schema ID {}, got {}",
+                    table_name,
+                    current_schema,
+                    reloaded_schema
+                ));
+            }
+
+            if reloaded_partition_spec != current_partition_spec {
+                return Err(anyhow::anyhow!(
+                    "Iceberg table '{}' partition spec changed during operation but partition spec evolution isn't supported, expected partition spec ID {}, got {}",
+                    table_name,
+                    current_partition_spec,
+                    reloaded_partition_spec
+                ));
+            }
+
+            Ok(table)
+        }
+        Err(err) => Err(err).context("Failed to reload Iceberg table"),
+    }
+}
+
+/// Attempt a single commit of a batch of data files to an Iceberg table.
+/// On conflict or failure, reloads the table and returns a retryable error.
+/// On success, returns the updated table state.
+async fn try_commit_batch(
+    mut table: Table,
+    snapshot_properties: Vec<(String, String)>,
+    data_files: Vec<DataFile>,
+    delete_files: Vec<DataFile>,
+    catalog: &dyn Catalog,
+    conn_namespace: &str,
+    conn_table: &str,
+    sink_version: u64,
+    frontier: &Antichain<Timestamp>,
+    batch_lower: &Antichain<Timestamp>,
+    batch_upper: &Antichain<Timestamp>,
+    metrics: &IcebergSinkMetrics,
+) -> (Table, RetryResult<(), anyhow::Error>) {
+    let tx = Transaction::new(&table);
+    let mut action = tx
+        .row_delta()
+        .set_snapshot_properties(snapshot_properties.into_iter().collect())
+        .with_check_duplicate(false);
+
+    if !data_files.is_empty() || !delete_files.is_empty() {
+        action = action
+            .add_data_files(data_files)
+            .add_delete_files(delete_files);
+    }
+
+    let tx = match action
+        .apply(tx)
+        .context("Failed to apply data file addition to iceberg table transaction")
+    {
+        Ok(tx) => tx,
+        Err(e) => {
+            match reload_table(
+                catalog,
+                conn_namespace.to_string(),
+                conn_table.to_string(),
+                table.clone(),
+            )
+            .await
+            {
+                Ok(reloaded) => table = reloaded,
+                Err(reload_err) => {
+                    return (table, RetryResult::RetryableErr(anyhow!(reload_err)));
+                }
+            }
+            return (
+                table,
+                RetryResult::RetryableErr(anyhow!(
+                    "Failed to apply data file addition to iceberg table transaction: {}",
+                    e
+                )),
+            );
+        }
+    };
+
+    let new_table = tx.commit(catalog).await;
+    match new_table {
+        Err(e) if matches!(e.kind(), ErrorKind::CatalogCommitConflicts) => {
+            metrics.commit_conflicts.inc();
+            match reload_table(
+                catalog,
+                conn_namespace.to_string(),
+                conn_table.to_string(),
+                table.clone(),
+            )
+            .await
+            {
+                Ok(reloaded) => table = reloaded,
+                Err(e) => {
+                    return (table, RetryResult::RetryableErr(anyhow!(e)));
+                }
+            };
+
+            let mut snapshots: Vec<_> = table.metadata().snapshots().cloned().collect();
+            let last = retrieve_upper_from_snapshots(&mut snapshots);
+            let last = match last {
+                Ok(val) => val,
+                Err(e) => {
+                    return (table, RetryResult::RetryableErr(anyhow!(e)));
+                }
+            };
+
+            // Check if another writer has advanced the frontier beyond ours (fencing check)
+            if let Some((last_frontier, last_version)) = last {
+                if last_version > sink_version {
+                    return (
+                        table,
+                        RetryResult::FatalErr(anyhow!(
+                            "Iceberg table '{}' has been modified by another writer \
+                             with version {}. Current sink version: {}. \
+                             Frontiers may be out of sync, aborting to avoid data loss.",
+                            conn_table,
+                            last_version,
+                            sink_version,
+                        )),
+                    );
+                }
+                if PartialOrder::less_equal(frontier, &last_frontier) {
+                    return (
+                        table,
+                        RetryResult::FatalErr(anyhow!(
+                            "Iceberg table '{}' has been modified by another writer. \
+                             Current frontier: {:?}, last frontier: {:?}.",
+                            conn_table,
+                            frontier,
+                            last_frontier,
+                        )),
+                    );
+                }
+            }
+
+            (
+                table,
+                RetryResult::RetryableErr(anyhow!(
+                    "Commit conflict detected when committing batch [{}, {}) \
+                     to Iceberg table '{}.{}'. Retrying...",
+                    batch_lower.pretty(),
+                    batch_upper.pretty(),
+                    conn_namespace,
+                    conn_table
+                )),
+            )
+        }
+        Err(e) => {
+            metrics.commit_failures.inc();
+            (table, RetryResult::RetryableErr(anyhow!(e)))
+        }
+        Ok(new_table) => (new_table, RetryResult::Ok(())),
+    }
+}
+
+/// Load an existing Iceberg table or create it if it doesn't exist.
+async fn load_or_create_table(
+    catalog: &dyn Catalog,
+    namespace: String,
+    table_name: String,
+    schema: &Schema,
+) -> anyhow::Result<iceberg::table::Table> {
+    let namespace_ident = NamespaceIdent::new(namespace.clone());
+    let table_ident = TableIdent::new(namespace_ident.clone(), table_name.clone());
+
+    // Try to load the table first
+    match catalog.load_table(&table_ident).await {
+        Ok(table) => {
+            // Table exists, return it
+            // TODO: Add proper schema evolution/validation to ensure compatibility
+            Ok(table)
+        }
+        Err(err) => {
+            if matches!(err.kind(), ErrorKind::TableNotFound { .. })
+                || err
+                    .message()
+                    .contains("Tried to load a table that does not exist")
+            {
+                // Table doesn't exist, create it
+                // Note: location is not specified, letting the catalog determine the default location
+                // based on its warehouse configuration
+                let table_creation = TableCreation::builder()
+                    .name(table_name.clone())
+                    .schema(schema.clone())
+                    // Use unpartitioned spec by default
+                    // TODO: Consider making partition spec configurable
+                    // .partition_spec(UnboundPartitionSpec::builder().build())
+                    .build();
+
+                catalog
+                    .create_table(&namespace_ident, table_creation)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "Failed to create Iceberg table '{}' in namespace '{}'",
+                            table_name, namespace
+                        )
+                    })
+            } else {
+                // Some other error occurred
+                Err(err).context("Failed to load Iceberg table")
+            }
+        }
+    }
+}
+
+/// Find the most recent Materialize frontier from Iceberg snapshots.
+/// We store the frontier in snapshot metadata to track where we left off after restarts.
+/// Snapshots with operation="replace" (compactions) don't have our metadata and are skipped.
+/// The input slice will be sorted by sequence number in descending order.
+fn retrieve_upper_from_snapshots(
+    snapshots: &mut [Arc<Snapshot>],
+) -> anyhow::Result<Option<(Antichain<Timestamp>, u64)>> {
+    snapshots.sort_by(|a, b| Ord::cmp(&b.sequence_number(), &a.sequence_number()));
+
+    for snapshot in snapshots {
+        let props = &snapshot.summary().additional_properties;
+        if let (Some(frontier_json), Some(sink_version_str)) =
+            (props.get("mz-frontier"), props.get("mz-sink-version"))
+        {
+            let frontier: Vec<Timestamp> = serde_json::from_str(frontier_json)
+                .context("Failed to deserialize frontier from snapshot properties")?;
+            let frontier = Antichain::from_iter(frontier);
+
+            let sink_version = sink_version_str
+                .parse::<u64>()
+                .context("Failed to parse mz-sink-version from snapshot properties")?;
+
+            return Ok(Some((frontier, sink_version)));
+        }
+        if snapshot.summary().operation.as_str() != "replace" {
+            // This is a bad heuristic, but we have no real other way to identify compactions
+            // right now other than assume they will be the only operation writing "replace" operations.
+            // That means if we find a snapshot with some other operation, but no mz-frontier, we are in an
+            // inconsistent state and have to error out.
+            anyhow::bail!(
+                "Iceberg table is in an inconsistent state: snapshot {} has operation '{}' but is missing 'mz-frontier' property. Schema or partition spec evolution is not supported.",
+                snapshot.snapshot_id(),
+                snapshot.summary().operation.as_str(),
+            );
+        }
+    }
+
+    Ok(None)
+}
+
+/// Convert a Materialize RelationDesc into Arrow and Iceberg schemas.
+///
+/// Returns a tuple of:
+/// - The Arrow schema (with field IDs and Iceberg-compatible types) for writing Parquet files
+/// - The Iceberg schema for table creation/validation
+///
+/// Iceberg doesn't support unsigned integer types, so we use `iceberg_type_overrides`
+/// to map them to compatible types (e.g., UInt64 -> Decimal128(20,0)). The ArrowBuilder
+/// handles the cross-type conversion (Datum::UInt64 -> Decimal128Builder) automatically.
+fn relation_desc_to_iceberg_schema(
+    desc: &mz_repr::RelationDesc,
+) -> anyhow::Result<(ArrowSchema, SchemaRef)> {
+    let arrow_schema =
+        mz_arrow_util::builder::desc_to_schema_with_overrides(desc, iceberg_type_overrides)
+            .context("Failed to convert RelationDesc to Iceberg-compatible Arrow schema")?;
+
+    let arrow_schema_with_ids = add_field_ids_to_arrow_schema(arrow_schema);
+
+    let iceberg_schema = arrow_schema_to_schema(&arrow_schema_with_ids)
+        .context("Failed to convert Arrow schema to Iceberg schema")?;
+
+    Ok((arrow_schema_with_ids, Arc::new(iceberg_schema)))
+}
+
+/// Resolve Materialize key column indexes to Iceberg top-level field IDs.
+///
+/// Iceberg field IDs are assigned recursively, so a top-level column's field ID
+/// is not necessarily `column_index + 1` once nested fields are present.
+fn equality_ids_for_indices(
+    current_schema: &Schema,
+    materialize_arrow_schema: &ArrowSchema,
+    equality_indices: &[usize],
+) -> anyhow::Result<Vec<i32>> {
+    let top_level_fields = current_schema.as_struct();
+
+    equality_indices
+        .iter()
+        .map(|index| {
+            let mz_field = materialize_arrow_schema
+                .fields()
+                .get(*index)
+                .with_context(|| format!("Equality delete key index {index} is out of bounds"))?;
+            let field_name = mz_field.name();
+            let iceberg_field = top_level_fields
+                .field_by_name(field_name)
+                .with_context(|| {
+                    format!(
+                        "Equality delete key column '{}' not found in Iceberg table schema",
+                        field_name
+                    )
+                })?;
+            Ok(iceberg_field.id)
+        })
+        .collect()
+}
+
+/// Build a new Arrow schema by adding an __op column to the existing schema.
+fn build_schema_with_op_column(schema: &ArrowSchema) -> ArrowSchema {
+    let mut fields: Vec<Arc<Field>> = schema.fields().iter().cloned().collect();
+    fields.push(Arc::new(Field::new("__op", DataType::Int32, false)));
+    ArrowSchema::new(fields)
+}
+
+/// Build a new Arrow schema by appending `_mz_diff` (Int32) and `_mz_timestamp` (Int64) columns.
+/// These are user-visible Iceberg columns written in append mode. Parquet field IDs are
+/// assigned sequentially after the existing maximum field ID so the extended schema can
+/// be converted to a valid Iceberg schema via `arrow_schema_to_schema`.
+#[allow(clippy::disallowed_types)]
+fn build_schema_with_append_columns(schema: &ArrowSchema) -> ArrowSchema {
+    use mz_storage_types::sinks::{ICEBERG_APPEND_DIFF_COLUMN, ICEBERG_APPEND_TIMESTAMP_COLUMN};
+    let mut fields: Vec<Arc<Field>> = schema.fields().iter().cloned().collect();
+    fields.push(Arc::new(Field::new(
+        ICEBERG_APPEND_DIFF_COLUMN,
+        DataType::Int32,
+        false,
+    )));
+    fields.push(Arc::new(Field::new(
+        ICEBERG_APPEND_TIMESTAMP_COLUMN,
+        DataType::Int64,
+        false,
+    )));
+
+    add_field_ids_to_arrow_schema(ArrowSchema::new(fields).with_metadata(schema.metadata().clone()))
+}
+
+/// Generate time-based batch boundaries for grouping writes into Iceberg snapshots.
+/// Batches are minted with configurable windows to balance write efficiency with latency.
+/// We maintain a sliding window of future batch descriptions so writers can start
+/// processing data even while earlier batches are still being written.
+fn mint_batch_descriptions<'scope, D>(
+    name: String,
+    sink_id: GlobalId,
+    input: VecCollection<'scope, Timestamp, D, Diff>,
+    sink: &StorageSinkDesc<CollectionMetadata, Timestamp>,
+    connection: IcebergSinkConnection,
+    storage_configuration: StorageConfiguration,
+    initial_schema: SchemaRef,
+) -> (
+    VecCollection<'scope, Timestamp, D, Diff>,
+    StreamVec<'scope, Timestamp, (Antichain<Timestamp>, Antichain<Timestamp>)>,
+    StreamVec<'scope, Timestamp, Infallible>,
+    StreamVec<'scope, Timestamp, HealthStatusMessage>,
+    PressOnDropButton,
+)
+where
+    D: Clone + 'static,
+{
+    let scope = input.scope();
+    let name_for_error = name.clone();
+    let name_for_logging = name.clone();
+    let mut builder = OperatorBuilder::new(name, scope.clone());
+    let sink_version = sink.version;
+
+    let hashed_id = sink_id.hashed();
+    let is_active_worker = usize::cast_from(hashed_id) % scope.peers() == scope.index();
+    let (_, table_ready_stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+    let (output, output_stream) = builder.new_output();
+    let (batch_desc_output, batch_desc_stream) =
+        builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+    let mut input =
+        builder.new_input_for_many(input.inner, Pipeline, [&output, &batch_desc_output]);
+
+    let as_of = sink.as_of.clone();
+    let commit_interval = sink
+        .commit_interval
+        .expect("the planner should have enforced this")
+        .clone();
+
+    let (button, errors): (_, StreamVec<'scope, Timestamp, Rc<anyhow::Error>>) =
+        builder.build_fallible(move |caps| {
+        Box::pin(async move {
+            let [table_ready_capset, data_capset, capset]: &mut [_; 3] = caps.try_into().unwrap();
+            *data_capset = CapabilitySet::new();
+
+            if !is_active_worker {
+                *capset = CapabilitySet::new();
+                *data_capset = CapabilitySet::new();
+                *table_ready_capset = CapabilitySet::new();
+                while let Some(event) = input.next().await {
+                    match event {
+                        Event::Data([output_cap, _], mut data) => {
+                            output.give_container(&output_cap, &mut data);
+                        }
+                        Event::Progress(_) => {}
+                    }
+                }
+                return Ok(());
+            }
+
+            let catalog = connection
+                .catalog_connection
+                .connect(&storage_configuration, InTask::Yes)
+                .await
+                .with_context(|| {
+                    format!(
+                        "Failed to connect to Iceberg catalog '{}' for table '{}.{}'",
+                        connection.catalog_connection.uri, connection.namespace, connection.table
+                    )
+                })?;
+
+            let table = load_or_create_table(
+                catalog.as_ref(),
+                connection.namespace.clone(),
+                connection.table.clone(),
+                initial_schema.as_ref(),
+            )
+            .await?;
+            debug!(
+                ?sink_id,
+                %name_for_logging,
+                namespace = %connection.namespace,
+                table = %connection.table,
+                "iceberg mint loaded/created table"
+            );
+
+            *table_ready_capset = CapabilitySet::new();
+
+            let mut snapshots: Vec<_> = table.metadata().snapshots().cloned().collect();
+            let resume = retrieve_upper_from_snapshots(&mut snapshots)?;
+            let (resume_upper, resume_version) = match resume {
+                Some((f, v)) => (f, v),
+                None => (Antichain::from_elem(Timestamp::minimum()), 0),
+            };
+            debug!(
+                ?sink_id,
+                %name_for_logging,
+                resume_upper = %resume_upper.pretty(),
+                resume_version,
+                as_of = %as_of.pretty(),
+                "iceberg mint resume position loaded"
+            );
+
+            // The input has overcompacted if
+            let overcompacted =
+                // ..we have made some progress in the past
+                *resume_upper != [Timestamp::minimum()] &&
+                // ..but the since frontier is now beyond that
+                PartialOrder::less_than(&resume_upper, &as_of);
+
+            if overcompacted {
+                let err = format!(
+                    "{name_for_error}: input compacted past resume upper: as_of {}, resume_upper: {}",
+                    as_of.pretty(),
+                    resume_upper.pretty()
+                );
+                // This would normally be an assertion but because it can happen after a
+                // Materialize backup/restore we log an error so that it appears on Sentry but
+                // leaves the rest of the objects in the cluster unaffected.
+                return Err(anyhow::anyhow!("{err}"));
+            };
+
+            if resume_version > sink_version {
+                anyhow::bail!("Fenced off by newer sink version: resume_version {}, sink_version {}", resume_version, sink_version);
+            }
+
+            let mut initialized = false;
+            let mut observed_frontier;
+            let mut max_seen_ts: Option<Timestamp> = None;
+            // Track minted batches to maintain a sliding window of open batch descriptions.
+            // This is needed to know when to retire old batches and mint new ones.
+            // It's "sortedness" is derived from the monotonicity of batch descriptions,
+            // and the fact that we only ever push new descriptions to the back and pop from the front.
+            let mut minted_batches = VecDeque::new();
+            loop {
+                if let Some(event) = input.next().await {
+                    match event {
+                        Event::Data([output_cap, _], mut data) => {
+                            if !initialized {
+                                for (_, ts, _) in data.iter() {
+                                    match max_seen_ts.as_mut() {
+                                        Some(max) => {
+                                            if max.less_than(ts) {
+                                                *max = ts.clone();
+                                            }
+                                        }
+                                        None => {
+                                            max_seen_ts = Some(ts.clone());
+                                        }
+                                    }
+                                }
+                            }
+                            output.give_container(&output_cap, &mut data);
+                            continue;
+                        }
+                        Event::Progress(frontier) => {
+                            observed_frontier = frontier;
+                        }
+                    }
+                } else {
+                    return Ok(());
+                }
+
+                if !initialized {
+                    if observed_frontier.is_empty() {
+                        // Bounded inputs can close (frontier becomes empty) before we finish
+                        // initialization. For example, a loadgen source configured for a finite
+                        // dataset may emit all rows at time t and then immediately close. If we
+                        // saw any data, synthesize an upper one tick past the maximum timestamp
+                        // so we can mint a snapshot batch and commit it.
+                        if let Some(max_ts) = max_seen_ts.as_ref() {
+                            let synthesized_upper =
+                                Antichain::from_elem(max_ts.step_forward());
+                            debug!(
+                                ?sink_id,
+                                %name_for_logging,
+                                max_seen_ts = %max_ts,
+                                synthesized_upper = %synthesized_upper.pretty(),
+                                "iceberg mint input closed before initialization; using max seen ts"
+                            );
+                            observed_frontier = synthesized_upper;
+                        } else {
+                            debug!(
+                                ?sink_id,
+                                %name_for_logging,
+                                "iceberg mint input closed before initialization with no data"
+                            );
+                            // Input stream closed before initialization completed and no data arrived.
+                            return Ok(());
+                        }
+                    }
+
+                    // We only start minting after we've reached as_of and resume_upper to avoid
+                    // minting batches that would be immediately skipped.
+                    if PartialOrder::less_than(&observed_frontier, &resume_upper)
+                        || PartialOrder::less_than(&observed_frontier, &as_of)
+                    {
+                        continue;
+                    }
+
+                    let mut batch_descriptions = vec![];
+                    let mut current_upper = observed_frontier.clone();
+                    let current_upper_ts = current_upper.as_option().expect("frontier not empty").clone();
+
+                    // Create a catch-up batch from the later of resume_upper or as_of to current frontier.
+                    // We use the later of the two because:
+                    // - For fresh sinks: resume_upper = minimum, as_of = actual timestamp, data starts at as_of
+                    // - For resuming: as_of <= resume_upper (enforced by overcompaction check), data starts at resume_upper
+                    let batch_lower = if PartialOrder::less_than(&resume_upper, &as_of) {
+                        as_of.clone()
+                    } else {
+                        resume_upper.clone()
+                    };
+
+                    if batch_lower == current_upper {
+                        // Snapshot! as_of is exactly at the frontier. We still need to mint
+                        // a batch to create the snapshot, so we step the upper forward by one.
+                        current_upper = Antichain::from_elem(current_upper_ts.step_forward());
+                    }
+
+                    let batch_description = (batch_lower.clone(), current_upper.clone());
+                    debug!(
+                        ?sink_id,
+                        %name_for_logging,
+                        batch_lower = %batch_lower.pretty(),
+                        current_upper = %current_upper.pretty(),
+                        "iceberg mint initializing (catch-up batch)"
+                    );
+                    debug!(
+                        "{}: creating catch-up batch [{}, {})",
+                        name_for_logging,
+                        batch_lower.pretty(),
+                        current_upper.pretty()
+                    );
+                    batch_descriptions.push(batch_description);
+                    // Mint initial future batch descriptions at configurable intervals
+                    for i in 1..INITIAL_DESCRIPTIONS_TO_MINT {
+                        let duration_millis = commit_interval.as_millis()
+                            .checked_mul(u128::from(i))
+                            .expect("commit interval multiplication overflow");
+                        let duration_ts = Timestamp::new(
+                            u64::try_from(duration_millis)
+                                .expect("commit interval too large for u64"),
+                        );
+                        let desired_batch_upper = Antichain::from_elem(
+                            current_upper_ts.step_forward_by(&duration_ts),
+                        );
+
+                        let batch_description =
+                            (current_upper.clone(), desired_batch_upper.clone());
+                        debug!(
+                            "{}: minting future batch {}/{} [{}, {})",
+                            name_for_logging,
+                            i,
+                            INITIAL_DESCRIPTIONS_TO_MINT,
+                            current_upper.pretty(),
+                            desired_batch_upper.pretty()
+                        );
+                        current_upper = batch_description.1.clone();
+                        batch_descriptions.push(batch_description);
+                    }
+
+                    minted_batches.extend(batch_descriptions.clone());
+
+                    for desc in batch_descriptions {
+                        batch_desc_output.give(&capset[0], desc);
+                    }
+
+                    capset.downgrade(current_upper);
+
+                    initialized = true;
+                } else {
+                    if observed_frontier.is_empty() {
+                        // We're done!
+                        return Ok(());
+                    }
+                    // Maintain a sliding window: when the oldest batch becomes ready, retire it
+                    // and mint a new future batch to keep the pipeline full
+                    while let Some(oldest_desc) = minted_batches.front() {
+                        let oldest_upper = &oldest_desc.1;
+                        if !PartialOrder::less_equal(oldest_upper, &observed_frontier) {
+                            break;
+                        }
+
+                        let newest_upper = minted_batches.back().unwrap().1.clone();
+                        let new_lower = newest_upper.clone();
+                        let duration_ts = Timestamp::new(commit_interval.as_millis()
+                            .try_into()
+                            .expect("commit interval too large for u64"));
+                        let new_upper = Antichain::from_elem(newest_upper
+                            .as_option()
+                            .unwrap()
+                            .step_forward_by(&duration_ts));
+
+                        let new_batch_description = (new_lower.clone(), new_upper.clone());
+                        minted_batches.pop_front();
+                        minted_batches.push_back(new_batch_description.clone());
+
+                        batch_desc_output.give(&capset[0], new_batch_description);
+
+                        capset.downgrade(new_upper);
+                    }
+                }
+            }
+        })
+    });
+
+    let statuses = errors.map(|error| HealthStatusMessage {
+        id: None,
+        update: HealthStatusUpdate::halting(format!("{}", error.display_with_causes()), None),
+        namespace: StatusNamespace::Iceberg,
+    });
+    (
+        output_stream.as_collection(),
+        batch_desc_stream,
+        table_ready_stream,
+        statuses,
+        button.press_on_drop(),
+    )
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(try_from = "AvroDataFile", into = "AvroDataFile")]
+struct SerializableDataFile {
+    pub data_file: DataFile,
+    pub schema: Schema,
+}
+
+/// A wrapper around Iceberg's DataFile that implements Serialize and Deserialize.
+/// This is slightly complicated by the fact that Iceberg's DataFile doesn't implement
+/// these traits directly, so we serialize to/from Avro bytes (which Iceberg supports natively).
+/// The avro ser(de) also requires the Iceberg schema to be provided, so we include that as well.
+/// It is distinctly possible that this is overkill, but it avoids re-implementing
+/// Iceberg's serialization logic here.
+/// If at some point this becomes a serious overhead, we can revisit this decision.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct AvroDataFile {
+    pub data_file: Vec<u8>,
+    /// Schema serialized as JSON bytes to avoid bincode issues with HashMap
+    pub schema: Vec<u8>,
+}
+
+impl From<SerializableDataFile> for AvroDataFile {
+    fn from(value: SerializableDataFile) -> Self {
+        let mut data_file = Vec::new();
+        write_data_files_to_avro(
+            &mut data_file,
+            [value.data_file],
+            &StructType::new(vec![]),
+            FormatVersion::V2,
+        )
+        .expect("serialization into buffer");
+        let schema = serde_json::to_vec(&value.schema).expect("schema serialization");
+        AvroDataFile { data_file, schema }
+    }
+}
+
+impl TryFrom<AvroDataFile> for SerializableDataFile {
+    type Error = String;
+
+    fn try_from(value: AvroDataFile) -> Result<Self, Self::Error> {
+        let schema: Schema = serde_json::from_slice(&value.schema)
+            .map_err(|e| format!("Failed to deserialize schema: {}", e))?;
+        let data_files = read_data_files_from_avro(
+            &mut &*value.data_file,
+            &schema,
+            0,
+            &StructType::new(vec![]),
+            FormatVersion::V2,
+        )
+        .map_err_to_string_with_causes()?;
+        let Some(data_file) = data_files.into_iter().next() else {
+            return Err("No DataFile found in Avro data".into());
+        };
+        Ok(SerializableDataFile { data_file, schema })
+    }
+}
+
+/// A DataFile along with its associated batch description (lower and upper bounds).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct BoundedDataFile {
+    pub data_file: SerializableDataFile,
+    pub batch_desc: (Antichain<Timestamp>, Antichain<Timestamp>),
+}
+
+impl BoundedDataFile {
+    pub fn new(
+        file: DataFile,
+        schema: Schema,
+        batch_desc: (Antichain<Timestamp>, Antichain<Timestamp>),
+    ) -> Self {
+        Self {
+            data_file: SerializableDataFile {
+                data_file: file,
+                schema,
+            },
+            batch_desc,
+        }
+    }
+
+    pub fn batch_desc(&self) -> &(Antichain<Timestamp>, Antichain<Timestamp>) {
+        &self.batch_desc
+    }
+
+    pub fn data_file(&self) -> &DataFile {
+        &self.data_file.data_file
+    }
+
+    pub fn into_data_file(self) -> DataFile {
+        self.data_file.data_file
+    }
+}
+
+/// A set of DataFiles along with their associated batch descriptions.
+#[derive(Clone, Debug, Default)]
+struct BoundedDataFileSet {
+    pub data_files: Vec<BoundedDataFile>,
+}
+
+/// Construct the envelope-specific closures that [`write_data_files`] needs.
+///
+/// Write rows into Parquet data files bounded by batch descriptions.
+/// Rows are matched to batches by timestamp; if a batch description hasn't arrived yet,
+/// rows are stashed until it does. This allows batches to be minted ahead of data arrival.
+fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
+    name: String,
+    input: VecCollection<'scope, Timestamp, (Option<Row>, DiffPair<Row>), Diff>,
+    batch_desc_input: StreamVec<'scope, Timestamp, (Antichain<Timestamp>, Antichain<Timestamp>)>,
+    table_ready_stream: StreamVec<'scope, Timestamp, Infallible>,
+    as_of: Antichain<Timestamp>,
+    connection: IcebergSinkConnection,
+    storage_configuration: StorageConfiguration,
+    materialize_arrow_schema: Arc<ArrowSchema>,
+    metrics: Arc<IcebergSinkMetrics>,
+    statistics: SinkStatistics,
+) -> (
+    StreamVec<'scope, Timestamp, BoundedDataFile>,
+    StreamVec<'scope, Timestamp, HealthStatusMessage>,
+    PressOnDropButton,
+) {
+    let scope = input.scope();
+    let name_for_logging = name.clone();
+    let mut builder = OperatorBuilder::new(name, scope.clone());
+
+    let (output, output_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+
+    let mut table_ready_input = builder.new_disconnected_input(table_ready_stream, Pipeline);
+    let mut batch_desc_input =
+        builder.new_input_for(batch_desc_input.broadcast(), Pipeline, &output);
+    let mut input = builder.new_disconnected_input(input.inner, Pipeline);
+
+    let (button, errors) = builder.build_fallible(move |caps| {
+        Box::pin(async move {
+            let [capset]: &mut [_; 1] = caps.try_into().unwrap();
+            let catalog = connection
+                .catalog_connection
+                .connect(&storage_configuration, InTask::Yes)
+                .await
+                .with_context(|| {
+                    format!(
+                        "Failed to connect to Iceberg catalog '{}' for table '{}.{}'",
+                        connection.catalog_connection.uri, connection.namespace, connection.table
+                    )
+                })?;
+
+            let namespace_ident = NamespaceIdent::new(connection.namespace.clone());
+            let table_ident = TableIdent::new(namespace_ident, connection.table.clone());
+            while let Some(_) = table_ready_input.next().await {
+                // Wait for table to be ready
+            }
+            let table = catalog
+                .load_table(&table_ident)
+                .await
+                .with_context(|| {
+                    format!(
+                        "Failed to load Iceberg table '{}.{}' in write_data_files operator",
+                        connection.namespace, connection.table
+                    )
+                })?;
+
+            let table_metadata = table.metadata().clone();
+            let current_schema = Arc::clone(table_metadata.current_schema());
+
+            // Merge Materialize extension metadata into the Iceberg schema.
+            // We need extension metadata for ArrowBuilder to work correctly (it uses
+            // extension names to know how to handle different types like records vs arrays).
+            let arrow_schema = Arc::new(
+                merge_materialize_metadata_into_iceberg_schema(
+                    materialize_arrow_schema.as_ref(),
+                    current_schema.as_ref(),
+                )
+                .context("Failed to merge Materialize metadata into Iceberg schema")?,
+            );
+
+            // WORKAROUND: S3 Tables catalog incorrectly sets location to the metadata file path
+            // instead of the warehouse root. Strip off the /metadata/*.metadata.json suffix.
+            // No clear way to detect this properly right now, so we use heuristics.
+            let location = table_metadata.location();
+            let corrected_location = match location.rsplit_once("/metadata/") {
+                Some((a, b)) if b.ends_with(".metadata.json") => a,
+                _ => location,
+            };
+
+            let data_location = format!("{}/data", corrected_location);
+            let location_generator = DefaultLocationGenerator::with_data_location(data_location);
+
+            // Add a unique suffix to avoid filename collisions across restarts and workers
+            let unique_suffix = format!("-{}", uuid::Uuid::new_v4());
+            let file_name_generator = DefaultFileNameGenerator::new(
+                PARQUET_FILE_PREFIX.to_string(),
+                Some(unique_suffix),
+                iceberg::spec::DataFileFormat::Parquet,
+            );
+
+            let file_io = table.file_io().clone();
+
+            let writer_properties = WriterProperties::new();
+
+            let ctx = WriterContext {
+                arrow_schema,
+                current_schema: Arc::clone(&current_schema),
+                file_io,
+                location_generator,
+                file_name_generator,
+                writer_properties,
+            };
+            let handler = H::new(ctx, &connection, &materialize_arrow_schema)?;
+
+            // Rows can arrive before their batch description due to dataflow parallelism.
+            // Stash them until we know which batch they belong to.
+            let mut stashed_rows: BTreeMap<Timestamp, Vec<(Option<Row>, DiffPair<Row>)>> =
+                BTreeMap::new();
+
+            // Track batches currently being written. When a row arrives, we check if it belongs
+            // to an in-flight batch. When frontiers advance to a batch's upper, we close the
+            // writer and emit its data files downstream.
+            // Antichains don't implement Ord, so we use a HashMap with tuple keys instead.
+            #[allow(clippy::disallowed_types)]
+            let mut in_flight_batches: std::collections::HashMap<
+                (Antichain<Timestamp>, Antichain<Timestamp>),
+                Box<dyn IcebergWriter>,
+            > = std::collections::HashMap::new();
+
+            let mut batch_description_frontier = Antichain::from_elem(Timestamp::minimum());
+            let mut processed_batch_description_frontier =
+                Antichain::from_elem(Timestamp::minimum());
+            let mut input_frontier = Antichain::from_elem(Timestamp::minimum());
+            let mut processed_input_frontier = Antichain::from_elem(Timestamp::minimum());
+
+            // Track the minimum batch lower bound to prune data that's already committed
+            let mut min_batch_lower: Option<Antichain<Timestamp>> = None;
+
+            while !(batch_description_frontier.is_empty() && input_frontier.is_empty()) {
+                let mut staged_messages_since_flush: u64 = 0;
+                tokio::select! {
+                    _ = batch_desc_input.ready() => {},
+                    _ = input.ready() => {}
+                }
+
+                while let Some(event) = batch_desc_input.next_sync() {
+                    match event {
+                        Event::Data(_cap, data) => {
+                            for batch_desc in data {
+                                let (lower, upper) = &batch_desc;
+
+                                // Track the minimum batch lower bound (first batch received)
+                                if min_batch_lower.is_none() {
+                                    min_batch_lower = Some(lower.clone());
+                                    debug!(
+                                        "{}: set min_batch_lower to {}",
+                                        name_for_logging,
+                                        lower.pretty()
+                                    );
+
+                                    // Prune any stashed rows that arrived before min_batch_lower (already committed)
+                                    let to_remove: Vec<_> = stashed_rows
+                                        .keys()
+                                        .filter(|ts| {
+                                            let ts_antichain = Antichain::from_elem((*ts).clone());
+                                            PartialOrder::less_than(&ts_antichain, lower)
+                                        })
+                                        .cloned()
+                                        .collect();
+
+                                    if !to_remove.is_empty() {
+                                        let mut removed_count = 0;
+                                        for ts in to_remove {
+                                            if let Some(rows) = stashed_rows.remove(&ts) {
+                                                removed_count += rows.len();
+                                                for _ in &rows {
+                                                    metrics.stashed_rows.dec();
+                                                }
+                                            }
+                                        }
+                                        debug!(
+                                            "{}: pruned {} already-committed rows (< min_batch_lower)",
+                                            name_for_logging,
+                                            removed_count
+                                        );
+                                    }
+                                }
+
+                                // Disable seen_rows tracking for snapshot batch to save memory
+                                let is_snapshot = lower == &as_of;
+                                debug!(
+                                    "{}: received batch description [{}, {}), snapshot={}",
+                                    name_for_logging,
+                                    lower.pretty(),
+                                    upper.pretty(),
+                                    is_snapshot
+                                );
+                                let mut batch_writer =
+                                    handler.create_writer(is_snapshot).await?;
+                                // Drain any stashed rows that belong to this batch
+                                let row_ts_keys: Vec<_> = stashed_rows.keys().cloned().collect();
+                                let mut drained_count = 0;
+                                for row_ts in row_ts_keys {
+                                    let ts = Antichain::from_elem(row_ts.clone());
+                                    if PartialOrder::less_equal(lower, &ts)
+                                        && PartialOrder::less_than(&ts, upper)
+                                    {
+                                        if let Some(rows) = stashed_rows.remove(&row_ts) {
+                                            drained_count += rows.len();
+                                            for (_row, diff_pair) in rows {
+                                                metrics.stashed_rows.dec();
+                                                let record_batch = handler.row_to_batch(
+                                                    diff_pair.clone(),
+                                                    row_ts.clone(),
+                                                )
+                                                .context("failed to convert row to recordbatch")?;
+                                                batch_writer.write(record_batch).await?;
+                                                staged_messages_since_flush += 1;
+                                                if staged_messages_since_flush >= 10_000 {
+                                                    statistics.inc_messages_staged_by(
+                                                        staged_messages_since_flush,
+                                                    );
+                                                    staged_messages_since_flush = 0;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                if drained_count > 0 {
+                                    debug!(
+                                        "{}: drained {} stashed rows into batch [{}, {})",
+                                        name_for_logging,
+                                        drained_count,
+                                        lower.pretty(),
+                                        upper.pretty()
+                                    );
+                                }
+                                let prev =
+                                    in_flight_batches.insert(batch_desc.clone(), batch_writer);
+                                if prev.is_some() {
+                                    anyhow::bail!(
+                                        "Duplicate batch description received for description {:?}",
+                                        batch_desc
+                                    );
+                                }
+                            }
+                        }
+                        Event::Progress(frontier) => {
+                            batch_description_frontier = frontier;
+                        }
+                    }
+                }
+
+                let ready_events = std::iter::from_fn(|| input.next_sync()).collect_vec();
+                for event in ready_events {
+                    match event {
+                        Event::Data(_cap, data) => {
+                            let mut dropped_per_time = BTreeMap::new();
+                            let mut stashed_per_time = BTreeMap::new();
+                            for ((row, diff_pair), ts, _diff) in data {
+                                let row_ts = ts.clone();
+                                let ts_antichain = Antichain::from_elem(row_ts.clone());
+                                let mut written = false;
+                                // Try writing the row to any in-flight batch it belongs to...
+                                for (batch_desc, batch_writer) in in_flight_batches.iter_mut() {
+                                    let (lower, upper) = batch_desc;
+                                    if PartialOrder::less_equal(lower, &ts_antichain)
+                                        && PartialOrder::less_than(&ts_antichain, upper)
+                                    {
+                                        let record_batch = handler.row_to_batch(
+                                            diff_pair.clone(),
+                                            row_ts.clone(),
+                                        )
+                                        .context("failed to convert row to recordbatch")?;
+                                        batch_writer.write(record_batch).await?;
+                                        staged_messages_since_flush += 1;
+                                        if staged_messages_since_flush >= 10_000 {
+                                            statistics.inc_messages_staged_by(
+                                                staged_messages_since_flush,
+                                            );
+                                            staged_messages_since_flush = 0;
+                                        }
+                                        written = true;
+                                        break;
+                                    }
+                                }
+                                if !written {
+                                    // Drop data that's before the first batch we received (already committed)
+                                    if let Some(ref min_lower) = min_batch_lower {
+                                        if PartialOrder::less_than(&ts_antichain, min_lower) {
+                                            dropped_per_time
+                                                .entry(ts_antichain.into_option().unwrap())
+                                                .and_modify(|c| *c += 1)
+                                                .or_insert(1);
+                                            continue;
+                                        }
+                                    }
+
+                                    stashed_per_time.entry(ts).and_modify(|c| *c += 1).or_insert(1);
+                                    let entry = stashed_rows.entry(row_ts).or_default();
+                                    metrics.stashed_rows.inc();
+                                    entry.push((row, diff_pair));
+                                }
+                            }
+
+                            for (ts, count) in dropped_per_time {
+                                debug!(
+                                    "{}: dropped {} rows at timestamp {} (< min_batch_lower, already committed)",
+                                    name_for_logging, count, ts
+                                );
+                            }
+
+                            for (ts, count) in stashed_per_time {
+                                debug!(
+                                    "{}: stashed {} rows at timestamp {} (waiting for batch description)",
+                                    name_for_logging, count, ts
+                                );
+                            }
+                        }
+                        Event::Progress(frontier) => {
+                            input_frontier = frontier;
+                        }
+                    }
+                }
+                if staged_messages_since_flush > 0 {
+                    statistics.inc_messages_staged_by(staged_messages_since_flush);
+                }
+
+                // Check if frontiers have advanced, which may unlock batches ready to close
+                if PartialOrder::less_than(
+                    &processed_batch_description_frontier,
+                    &batch_description_frontier,
+                ) || PartialOrder::less_than(&processed_input_frontier, &input_frontier)
+                {
+                    // Close batches whose upper is now in the past
+                    // Upper bounds are exclusive, so we check if upper is less_equal to the frontier.
+                    // Remember: a frontier at x means all timestamps less than x have been observed.
+                    // Or, in other words we still might yet see timestamps at [x, infinity). X itself will
+                    // be covered by the _next_ batches lower inclusive bound, so we can safely close the batch if its upper is <= x.
+                    let ready_batches: Vec<_> = in_flight_batches
+                        .extract_if(|(lower, upper), _| {
+                            PartialOrder::less_than(lower, &batch_description_frontier)
+                                && PartialOrder::less_equal(upper, &input_frontier)
+                        })
+                        .collect();
+
+                    if !ready_batches.is_empty() {
+                        debug!(
+                            "{}: closing {} batches (batch_frontier: {}, input_frontier: {})",
+                            name_for_logging,
+                            ready_batches.len(),
+                            batch_description_frontier.pretty(),
+                            input_frontier.pretty()
+                        );
+                        let mut max_upper = Antichain::from_elem(Timestamp::minimum());
+                        for (desc, mut batch_writer) in ready_batches {
+                            let close_started_at = Instant::now();
+                            let data_files = batch_writer.close().await;
+                            metrics
+                                .writer_close_duration_seconds
+                                .observe(close_started_at.elapsed().as_secs_f64());
+                            let data_files = data_files.context("Failed to close batch writer")?;
+                            debug!(
+                                "{}: closed batch [{}, {}), wrote {} files",
+                                name_for_logging,
+                                desc.0.pretty(),
+                                desc.1.pretty(),
+                                data_files.len()
+                            );
+                            for data_file in data_files {
+                                match data_file.content_type() {
+                                    iceberg::spec::DataContentType::Data => {
+                                        metrics.data_files_written.inc();
+                                    }
+                                    iceberg::spec::DataContentType::PositionDeletes
+                                    | iceberg::spec::DataContentType::EqualityDeletes => {
+                                        metrics.delete_files_written.inc();
+                                    }
+                                }
+                                statistics.inc_messages_staged_by(data_file.record_count());
+                                statistics.inc_bytes_staged_by(data_file.file_size_in_bytes());
+                                let file = BoundedDataFile::new(
+                                    data_file,
+                                    current_schema.as_ref().clone(),
+                                    desc.clone(),
+                                );
+                                output.give(&capset[0], file);
+                            }
+
+                            max_upper = max_upper.join(&desc.1);
+                        }
+
+                        capset.downgrade(max_upper);
+                    }
+                    processed_batch_description_frontier.clone_from(&batch_description_frontier);
+                    processed_input_frontier.clone_from(&input_frontier);
+                }
+            }
+            Ok(())
+        })
+    });
+
+    let statuses = errors.map(|error| HealthStatusMessage {
+        id: None,
+        update: HealthStatusUpdate::halting(format!("{}", error.display_with_causes()), None),
+        namespace: StatusNamespace::Iceberg,
+    });
+    (output_stream, statuses, button.press_on_drop())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iceberg::spec::{PrimitiveType, Type};
+    use mz_repr::SqlScalarType;
+    use mz_storage_types::sinks::ICEBERG_UINT64_DECIMAL_PRECISION;
+
+    #[mz_ore::test]
+    fn test_iceberg_type_overrides() {
+        // UInt16 should override to Int32
+        let result = iceberg_type_overrides(&SqlScalarType::UInt16);
+        assert_eq!(result.unwrap().0, DataType::Int32);
+
+        // UInt32 should override to Int64
+        let result = iceberg_type_overrides(&SqlScalarType::UInt32);
+        assert_eq!(result.unwrap().0, DataType::Int64);
+
+        // UInt64 should override to Decimal128(20, 0)
+        let result = iceberg_type_overrides(&SqlScalarType::UInt64);
+        assert_eq!(
+            result.unwrap().0,
+            DataType::Decimal128(ICEBERG_UINT64_DECIMAL_PRECISION, 0)
+        );
+
+        // MzTimestamp should override to Decimal128(20, 0)
+        let result = iceberg_type_overrides(&SqlScalarType::MzTimestamp);
+        assert_eq!(
+            result.unwrap().0,
+            DataType::Decimal128(ICEBERG_UINT64_DECIMAL_PRECISION, 0)
+        );
+
+        // Other types should return None (use default)
+        assert!(iceberg_type_overrides(&SqlScalarType::Int32).is_none());
+        assert!(iceberg_type_overrides(&SqlScalarType::String).is_none());
+        assert!(iceberg_type_overrides(&SqlScalarType::Bool).is_none());
+    }
+
+    #[mz_ore::test]
+    fn test_iceberg_schema_with_nested_uint64() {
+        // Test that desc_to_schema_with_overrides handles nested UInt64
+        // by using iceberg_type_overrides which applies recursively
+        let desc = mz_repr::RelationDesc::builder()
+            .with_column(
+                "items",
+                SqlScalarType::List {
+                    element_type: Box::new(SqlScalarType::UInt64),
+                    custom_id: None,
+                }
+                .nullable(true),
+            )
+            .finish();
+
+        let schema =
+            mz_arrow_util::builder::desc_to_schema_with_overrides(&desc, iceberg_type_overrides)
+                .expect("schema conversion should succeed");
+
+        // The inner element should be Decimal128, not UInt64
+        if let DataType::List(field) = schema.field(0).data_type() {
+            assert_eq!(
+                field.data_type(),
+                &DataType::Decimal128(ICEBERG_UINT64_DECIMAL_PRECISION, 0)
+            );
+        } else {
+            panic!("Expected List type");
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_iceberg_interval_override() {
+        // Interval should override to LargeUtf8 (string) for Iceberg
+        let result = iceberg_type_overrides(&SqlScalarType::Interval);
+        assert_eq!(result.unwrap().0, DataType::LargeUtf8);
+
+        // Test full schema conversion with interval column
+        let desc = mz_repr::RelationDesc::builder()
+            .with_column("id", SqlScalarType::Int32.nullable(false))
+            .with_column("dur", SqlScalarType::Interval.nullable(true))
+            .finish();
+
+        let (arrow_schema, iceberg_schema) =
+            relation_desc_to_iceberg_schema(&desc).expect("schema conversion should succeed");
+
+        // Arrow schema should have LargeUtf8 for interval
+        assert_eq!(arrow_schema.field(1).data_type(), &DataType::LargeUtf8);
+
+        // Iceberg schema should have String type
+        let field = iceberg_schema
+            .as_struct()
+            .field_by_name("dur")
+            .expect("field should exist");
+        assert_eq!(*field.field_type, Type::Primitive(PrimitiveType::String));
+    }
+
+    #[mz_ore::test]
+    fn test_iceberg_range_schema() {
+        // Test full schema conversion with range column
+        let desc = mz_repr::RelationDesc::builder()
+            .with_column("id", SqlScalarType::Int32.nullable(false))
+            .with_column(
+                "r",
+                SqlScalarType::Range {
+                    element_type: Box::new(SqlScalarType::Int32),
+                }
+                .nullable(true),
+            )
+            .finish();
+
+        let (_arrow_schema, iceberg_schema) =
+            relation_desc_to_iceberg_schema(&desc).expect("schema conversion should succeed");
+
+        // Iceberg schema should have a struct type for the range
+        let field = iceberg_schema
+            .as_struct()
+            .field_by_name("r")
+            .expect("field should exist");
+        assert!(
+            matches!(&*field.field_type, Type::Struct(_)),
+            "range should be struct, got: {:?}",
+            field.field_type
+        );
+    }
+
+    #[mz_ore::test]
+    fn equality_ids_follow_iceberg_field_ids() {
+        let map_entries = Field::new(
+            "entries",
+            DataType::Struct(
+                vec![
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("value", DataType::Utf8, true),
+                ]
+                .into(),
+            ),
+            false,
+        );
+        let materialize_arrow_schema = ArrowSchema::new(vec![
+            Field::new("attrs", DataType::Map(Arc::new(map_entries), false), true),
+            Field::new("key_col", DataType::Int32, false),
+        ]);
+        let materialize_arrow_schema = add_field_ids_to_arrow_schema(materialize_arrow_schema);
+        let iceberg_schema = arrow_schema_to_schema(&materialize_arrow_schema)
+            .expect("schema conversion should succeed");
+
+        let equality_ids =
+            equality_ids_for_indices(&iceberg_schema, &materialize_arrow_schema, &[1])
+                .expect("field lookup should succeed");
+
+        let expected_id = iceberg_schema
+            .as_struct()
+            .field_by_name("key_col")
+            .expect("top-level field should exist")
+            .id;
+        assert_eq!(equality_ids, vec![expected_id]);
+        assert_ne!(expected_id, 2);
+    }
+}
+
+/// Commit completed batches to Iceberg as snapshots.
+/// Batches are committed in timestamp order to ensure strong consistency guarantees downstream.
+/// Each snapshot includes the Materialize frontier in its metadata for resume support.
+fn commit_to_iceberg<'scope>(
+    name: String,
+    sink_id: GlobalId,
+    sink_version: u64,
+    batch_input: StreamVec<'scope, Timestamp, BoundedDataFile>,
+    batch_desc_input: StreamVec<'scope, Timestamp, (Antichain<Timestamp>, Antichain<Timestamp>)>,
+    table_ready_stream: StreamVec<'scope, Timestamp, Infallible>,
+    write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
+    connection: IcebergSinkConnection,
+    storage_configuration: StorageConfiguration,
+    write_handle: impl Future<
+        Output = anyhow::Result<WriteHandle<SourceData, (), Timestamp, StorageDiff>>,
+    > + 'static,
+    metrics: Arc<IcebergSinkMetrics>,
+    statistics: SinkStatistics,
+) -> (
+    StreamVec<'scope, Timestamp, HealthStatusMessage>,
+    PressOnDropButton,
+) {
+    let scope = batch_input.scope();
+    let mut builder = OperatorBuilder::new(name, scope.clone());
+
+    let hashed_id = sink_id.hashed();
+    let is_active_worker = usize::cast_from(hashed_id) % scope.peers() == scope.index();
+    let name_for_logging = format!("{sink_id}-commit-to-iceberg");
+
+    let mut input = builder.new_disconnected_input(batch_input, Exchange::new(move |_| hashed_id));
+    let mut batch_desc_input =
+        builder.new_disconnected_input(batch_desc_input, Exchange::new(move |_| hashed_id));
+    let mut table_ready_input = builder.new_disconnected_input(table_ready_stream, Pipeline);
+
+    let (button, errors) = builder.build_fallible(move |_caps| {
+        Box::pin(async move {
+            if !is_active_worker {
+                write_frontier.borrow_mut().clear();
+                return Ok(());
+            }
+
+            let catalog = connection
+                .catalog_connection
+                .connect(&storage_configuration, InTask::Yes)
+                .await
+                .with_context(|| {
+                    format!(
+                        "Failed to connect to Iceberg catalog '{}' for table '{}.{}'",
+                        connection.catalog_connection.uri, connection.namespace, connection.table
+                    )
+                })?;
+
+            let mut write_handle = write_handle.await?;
+
+            let namespace_ident = NamespaceIdent::new(connection.namespace.clone());
+            let table_ident = TableIdent::new(namespace_ident, connection.table.clone());
+            while let Some(_) = table_ready_input.next().await {
+                // Wait for table to be ready
+            }
+            let mut table = catalog.load_table(&table_ident).await.with_context(|| {
+                format!(
+                    "Failed to load Iceberg table '{}.{}' in commit_to_iceberg operator",
+                    connection.namespace, connection.table
+                )
+            })?;
+
+            #[allow(clippy::disallowed_types)]
+            let mut batch_descriptions: std::collections::HashMap<
+                (Antichain<Timestamp>, Antichain<Timestamp>),
+                BoundedDataFileSet,
+            > = std::collections::HashMap::new();
+
+            let mut batch_description_frontier = Antichain::from_elem(Timestamp::minimum());
+            let mut input_frontier = Antichain::from_elem(Timestamp::minimum());
+
+            while !(batch_description_frontier.is_empty() && input_frontier.is_empty()) {
+                tokio::select! {
+                    _ = batch_desc_input.ready() => {},
+                    _ = input.ready() => {}
+                }
+
+                while let Some(event) = batch_desc_input.next_sync() {
+                    match event {
+                        Event::Data(_cap, data) => {
+                            for batch_desc in data {
+                                let prev = batch_descriptions
+                                    .insert(batch_desc, BoundedDataFileSet { data_files: vec![] });
+                                if let Some(prev) = prev {
+                                    anyhow::bail!(
+                                        "Duplicate batch description received \
+                                         in commit operator: {:?}",
+                                        prev
+                                    );
+                                }
+                            }
+                        }
+                        Event::Progress(frontier) => {
+                            batch_description_frontier = frontier;
+                        }
+                    }
+                }
+
+                let ready_events = std::iter::from_fn(|| input.next_sync()).collect_vec();
+                for event in ready_events {
+                    match event {
+                        Event::Data(_cap, data) => {
+                            for bounded_data_file in data {
+                                let entry = batch_descriptions
+                                    .entry(bounded_data_file.batch_desc().clone())
+                                    .or_default();
+                                entry.data_files.push(bounded_data_file);
+                            }
+                        }
+                        Event::Progress(frontier) => {
+                            input_frontier = frontier;
+                        }
+                    }
+                }
+
+                // Collect batches whose data files have all arrived.
+                // The writer emits all data files for a batch at a capability <= the batch's
+                // lower bound, then downgrades its capability to the batch's upper bound.
+                // So once the input frontier advances past lower, we know the writer has
+                // finished emitting files for this batch and dropped its capability.
+                let mut done_batches: Vec<_> = batch_descriptions
+                    .keys()
+                    .filter(|(lower, _upper)| PartialOrder::less_than(lower, &input_frontier))
+                    .cloned()
+                    .collect();
+
+                // Commit batches in timestamp order to maintain consistency
+                done_batches.sort_by(|a, b| {
+                    if PartialOrder::less_than(a, b) {
+                        Ordering::Less
+                    } else if PartialOrder::less_than(b, a) {
+                        Ordering::Greater
+                    } else {
+                        Ordering::Equal
+                    }
+                });
+
+                for batch in done_batches {
+                    let file_set = batch_descriptions.remove(&batch).unwrap();
+
+                    let mut data_files = vec![];
+                    let mut delete_files = vec![];
+                    // Track totals for committed statistics
+                    let mut total_messages: u64 = 0;
+                    let mut total_bytes: u64 = 0;
+                    for file in file_set.data_files {
+                        total_messages += file.data_file().record_count();
+                        total_bytes += file.data_file().file_size_in_bytes();
+                        match file.data_file().content_type() {
+                            iceberg::spec::DataContentType::Data => {
+                                data_files.push(file.into_data_file());
+                            }
+                            iceberg::spec::DataContentType::PositionDeletes
+                            | iceberg::spec::DataContentType::EqualityDeletes => {
+                                delete_files.push(file.into_data_file());
+                            }
+                        }
+                    }
+
+                    debug!(
+                        ?sink_id,
+                        %name_for_logging,
+                        lower = %batch.0.pretty(),
+                        upper = %batch.1.pretty(),
+                        data_files = data_files.len(),
+                        delete_files = delete_files.len(),
+                        total_messages,
+                        total_bytes,
+                        "iceberg commit applying batch"
+                    );
+
+                    let instant = Instant::now();
+
+                    let frontier = batch.1.clone();
+                    let frontier_json = serde_json::to_string(&frontier.elements())
+                        .context("Failed to serialize frontier to JSON")?;
+                    let snapshot_properties = vec![
+                        ("mz-sink-id".to_string(), sink_id.to_string()),
+                        ("mz-frontier".to_string(), frontier_json),
+                        ("mz-sink-version".to_string(), sink_version.to_string()),
+                    ];
+
+                    let (table_state, commit_result) = Retry::default()
+                        .max_tries(5)
+                        .retry_async_with_state(table, |_, table| {
+                            let snapshot_properties = snapshot_properties.clone();
+                            let data_files = data_files.clone();
+                            let delete_files = delete_files.clone();
+                            let metrics = Arc::clone(&metrics);
+                            let catalog = Arc::clone(&catalog);
+                            let conn_namespace = connection.namespace.clone();
+                            let conn_table = connection.table.clone();
+                            let frontier = frontier.clone();
+                            let batch_lower = batch.0.clone();
+                            let batch_upper = batch.1.clone();
+                            async move {
+                                try_commit_batch(
+                                    table,
+                                    snapshot_properties,
+                                    data_files,
+                                    delete_files,
+                                    catalog.as_ref(),
+                                    &conn_namespace,
+                                    &conn_table,
+                                    sink_version,
+                                    &frontier,
+                                    &batch_lower,
+                                    &batch_upper,
+                                    &metrics,
+                                )
+                                .await
+                            }
+                        })
+                        .await;
+                    let commit_result = commit_result.with_context(|| {
+                        format!(
+                            "failed to commit batch to Iceberg table '{}.{}'",
+                            connection.namespace, connection.table
+                        )
+                    });
+                    table = table_state;
+                    let duration = instant.elapsed();
+                    metrics
+                        .commit_duration_seconds
+                        .observe(duration.as_secs_f64());
+                    commit_result?;
+
+                    debug!(
+                        ?sink_id,
+                        %name_for_logging,
+                        lower = %batch.0.pretty(),
+                        upper = %batch.1.pretty(),
+                        total_messages,
+                        total_bytes,
+                        ?duration,
+                        "iceberg commit applied batch"
+                    );
+
+                    metrics.snapshots_committed.inc();
+                    statistics.inc_messages_committed_by(total_messages);
+                    statistics.inc_bytes_committed_by(total_bytes);
+
+                    let mut expect_upper = write_handle.shared_upper();
+                    loop {
+                        if PartialOrder::less_equal(&frontier, &expect_upper) {
+                            // The frontier has already been advanced as far as necessary.
+                            break;
+                        }
+
+                        const EMPTY: &[((SourceData, ()), Timestamp, StorageDiff)] = &[];
+                        match write_handle
+                            .compare_and_append(EMPTY, expect_upper, frontier.clone())
+                            .await
+                            .expect("valid usage")
+                        {
+                            Ok(()) => break,
+                            Err(mismatch) => {
+                                expect_upper = mismatch.current;
+                            }
+                        }
+                    }
+                    write_frontier.borrow_mut().clone_from(&frontier);
+                }
+            }
+
+            Ok(())
+        })
+    });
+
+    let statuses = errors.map(|error| HealthStatusMessage {
+        id: None,
+        update: HealthStatusUpdate::halting(format!("{}", error.display_with_causes()), None),
+        namespace: StatusNamespace::Iceberg,
+    });
+
+    (statuses, button.press_on_drop())
+}
+
+impl<'scope> SinkRender<'scope> for IcebergSinkConnection {
+    fn get_key_indices(&self) -> Option<&[usize]> {
+        self.key_desc_and_indices
+            .as_ref()
+            .map(|(_, indices)| indices.as_slice())
+    }
+
+    fn get_relation_key_indices(&self) -> Option<&[usize]> {
+        self.relation_key_indices.as_deref()
+    }
+
+    fn render_sink(
+        &self,
+        storage_state: &mut StorageState,
+        sink: &StorageSinkDesc<CollectionMetadata, Timestamp>,
+        sink_id: GlobalId,
+        batches: SinkBatchStream<'scope>,
+        key_is_synthetic: bool,
+        _err_collection: VecCollection<'scope, Timestamp, DataflowError, Diff>,
+    ) -> (
+        StreamVec<'scope, Timestamp, HealthStatusMessage>,
+        Vec<PressOnDropButton>,
+    ) {
+        let scope = batches.scope();
+
+        let (input, walker_button) = walk_sink_arrangement(
+            format!("{sink_id}-iceberg-walker"),
+            batches,
+            sink_id,
+            sink.from,
+            key_is_synthetic,
+        );
+
+        let write_handle = {
+            let persist = Arc::clone(&storage_state.persist_clients);
+            let shard_meta = sink.to_storage_metadata.clone();
+            async move {
+                let client = persist.open(shard_meta.persist_location).await?;
+                let handle = client
+                    .open_writer(
+                        shard_meta.data_shard,
+                        Arc::new(shard_meta.relation_desc),
+                        Arc::new(UnitSchema),
+                        Diagnostics::from_purpose("sink handle"),
+                    )
+                    .await?;
+                Ok(handle)
+            }
+        };
+
+        let write_frontier = Rc::new(RefCell::new(Antichain::from_elem(Timestamp::minimum())));
+        storage_state
+            .sink_write_frontiers
+            .insert(sink_id, Rc::clone(&write_frontier));
+
+        let (arrow_schema_with_ids, iceberg_schema) =
+            match (|| -> Result<(ArrowSchema, Arc<Schema>), anyhow::Error> {
+                let (arrow_schema_with_ids, iceberg_schema) =
+                    relation_desc_to_iceberg_schema(&sink.from_desc)?;
+
+                Ok(if sink.envelope == SinkEnvelope::Append {
+                    // For append mode, extend the Arrow and Iceberg schemas with the user-visible
+                    // `_mz_diff` and `_mz_timestamp` columns. The minter uses `iceberg_schema` to create
+                    // the Iceberg table, and `write_data_files` uses `arrow_schema_with_ids` when
+                    // merging metadata. Both must include these columns before any operator starts.
+                    let extended_arrow = build_schema_with_append_columns(&arrow_schema_with_ids);
+                    let extended_iceberg = Arc::new(
+                        arrow_schema_to_schema(&extended_arrow)
+                            .context("Failed to build Iceberg schema with append columns")?,
+                    );
+                    (extended_arrow, extended_iceberg)
+                } else {
+                    (arrow_schema_with_ids, iceberg_schema)
+                })
+            })() {
+                Ok(schemas) => schemas,
+                Err(err) => {
+                    let error_stream = std::iter::once(HealthStatusMessage {
+                        id: None,
+                        update: HealthStatusUpdate::halting(
+                            format!("{}", err.display_with_causes()),
+                            None,
+                        ),
+                        namespace: StatusNamespace::Iceberg,
+                    })
+                    .to_stream(scope);
+                    return (error_stream, vec![]);
+                }
+            };
+
+        let metrics = Arc::new(
+            storage_state
+                .metrics
+                .get_iceberg_sink_metrics(sink_id, scope.index()),
+        );
+
+        let statistics = storage_state
+            .aggregated_statistics
+            .get_sink(&sink_id)
+            .expect("statistics initialized")
+            .clone();
+
+        let connection_for_minter = self.clone();
+        let (minted_input, batch_descriptions, table_ready, mint_status, mint_button) =
+            mint_batch_descriptions(
+                format!("{sink_id}-iceberg-mint"),
+                sink_id,
+                input,
+                sink,
+                connection_for_minter,
+                storage_state.storage_configuration.clone(),
+                Arc::clone(&iceberg_schema),
+            );
+
+        let connection_for_writer = self.clone();
+        let (datafiles, write_status, write_button) = match sink.envelope {
+            SinkEnvelope::Upsert => write_data_files::<UpsertEnvelopeHandler>(
+                format!("{sink_id}-write-data-files"),
+                minted_input,
+                batch_descriptions.clone(),
+                table_ready.clone(),
+                sink.as_of.clone(),
+                connection_for_writer,
+                storage_state.storage_configuration.clone(),
+                Arc::new(arrow_schema_with_ids.clone()),
+                Arc::clone(&metrics),
+                statistics.clone(),
+            ),
+            SinkEnvelope::Append => write_data_files::<AppendEnvelopeHandler>(
+                format!("{sink_id}-write-data-files"),
+                minted_input,
+                batch_descriptions.clone(),
+                table_ready.clone(),
+                sink.as_of.clone(),
+                connection_for_writer,
+                storage_state.storage_configuration.clone(),
+                Arc::new(arrow_schema_with_ids.clone()),
+                Arc::clone(&metrics),
+                statistics.clone(),
+            ),
+            SinkEnvelope::Debezium => {
+                unreachable!("Iceberg sink only supports Upsert and Append envelopes")
+            }
+        };
+
+        let connection_for_committer = self.clone();
+        let (commit_status, commit_button) = commit_to_iceberg(
+            format!("{sink_id}-commit-to-iceberg"),
+            sink_id,
+            sink.version,
+            datafiles,
+            batch_descriptions,
+            table_ready,
+            Rc::clone(&write_frontier),
+            connection_for_committer,
+            storage_state.storage_configuration.clone(),
+            write_handle,
+            Arc::clone(&metrics),
+            statistics,
+        );
+
+        let running_status = Some(HealthStatusMessage {
+            id: None,
+            update: HealthStatusUpdate::running(),
+            namespace: StatusNamespace::Iceberg,
+        })
+        .to_stream(scope);
+
+        let statuses =
+            scope.concatenate([running_status, mint_status, write_status, commit_status]);
+
+        (
+            statuses,
+            vec![walker_button, mint_button, write_button, commit_button],
+        )
+    }
+}
+
+/// Walks each arrangement batch and emits a stream of individual
+/// `(key, DiffPair)` records that feeds the rest of the Iceberg sink pipeline.
+///
+/// Tracks per-`(key, timestamp)` group sizes and rate-limits a warning when a
+/// non-synthetic key has more than one `DiffPair`. When `key_is_synthetic` the
+/// arrangement's hash-based key is stripped before emission.
+fn walk_sink_arrangement<'scope>(
+    name: String,
+    batches: SinkBatchStream<'scope>,
+    sink_id: GlobalId,
+    from_id: GlobalId,
+    key_is_synthetic: bool,
+) -> (
+    VecCollection<'scope, Timestamp, (Option<Row>, DiffPair<Row>), Diff>,
+    PressOnDropButton,
+) {
+    let mut builder = OperatorBuilder::new(name, batches.scope());
+    let (output, stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+    let mut input = builder.new_input_for(batches, Pipeline, &output);
+
+    let button = builder.build(move |_caps| async move {
+        let mut pk_warner = (!key_is_synthetic).then(|| PkViolationWarner::new(sink_id, from_id));
+
+        while let Some(event) = input.next().await {
+            if let Event::Data(cap, mut batches) = event {
+                for batch in batches.drain(..) {
+                    for_each_diff_pair(&batch, |key, time, diff_pair| {
+                        if let Some(warner) = pk_warner.as_mut() {
+                            warner.observe(key, time);
+                        }
+                        // The arrangement key is only used downstream for grouping and PK checks;
+                        // `write_data_files` discards it on both the stash and drain paths. Emit
+                        // None unconditionally to avoid per-`DiffPair` `Row` clones on this hot path.
+                        output.give(&cap, ((None, diff_pair), time, Diff::ONE));
+                    });
+                    // Flush after each batch so the final `(key, time)` group of the walk is
+                    // resolved immediately — a PK violation in the last group is otherwise held
+                    // until more data arrives or the operator shuts down.
+                    if let Some(warner) = pk_warner.as_mut() {
+                        warner.flush();
+                    }
+                }
+            }
+        }
+    });
+
+    (stream.as_collection(), button.press_on_drop())
+}

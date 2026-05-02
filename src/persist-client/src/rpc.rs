@@ -135,6 +135,12 @@ pub(crate) const PUBSUB_RECONNECT_BACKOFF: Config<Duration> = Config::new(
     "Backoff after an established connection to Persist PubSub service fails.",
 );
 
+/// Max message size, used to configure gRPC servers and clients.
+///
+/// While `max_encoding_message_size` defaults to `usize::MAX`, `max_decoding_message_size` only
+/// defaults to 4MB, so we bump it to avoid protocol errors.
+const MAX_GRPC_MESSAGE_SIZE: usize = usize::MAX;
+
 /// Top-level Trait to create a PubSubClient.
 ///
 /// Returns a [PubSubClientConnection] with a [PubSubSender] for issuing RPCs to the PubSub
@@ -324,7 +330,7 @@ impl GrpcPubSubClient {
                 .await;
 
             let mut client = match client {
-                Ok(client) => client,
+                Ok(client) => client.max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
                 Err(err) => {
                     error!("fatal error connecting to persist pubsub: {:?}", err);
                     return;
@@ -347,32 +353,53 @@ impl GrpcPubSubClient {
                 .broadcast_recv_lagged_count
                 .clone();
 
+            // `client.pub_sub(...)` starts a hyper background task reading from the
+            // `broadcast_messages` stream, to serve the HTTP2 connection. The broadcast stream
+            // doesn't normally terminate, which means the HTTP2 connection doesn't terminate
+            // either. We set up a cancelation token to force termination and avoid a connection
+            // leak.
+            let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+
             // shard subscriptions are tracked by connection on the server, so if our
             // gRPC stream is ever swapped out, we must inform the server which shards
             // our client intended to be subscribed to.
             let broadcast_messages = async_stream::stream! {
+                let mut cancel_rx = std::pin::pin!(cancel_rx);
                 'reconnect: loop {
                     // If we have active subscriptions, resend them.
                     for id in sender.subscriptions() {
                         debug!("re-subscribing to shard: {id}");
-                        yield create_request(proto_pub_sub_message::Message::Subscribe(ProtoSubscribe {
-                            shard_id: id.into_proto(),
-                        }));
+                        let msg = proto_pub_sub_message::Message::Subscribe(
+                            ProtoSubscribe {
+                                shard_id: id.into_proto(),
+                            },
+                        );
+                        yield create_request(msg);
                     }
 
                     // Forward on messages from the broadcast channel, reconnecting if necessary.
-                    while let Some(message) = broadcast.next().await {
-                        debug!("sending pubsub message: {:?}", message);
-                        match message {
-                            Ok(message) => yield message,
-                            Err(BroadcastStreamRecvError::Lagged(i)) => {
-                                broadcast_errors.inc_by(i);
-                                continue 'reconnect;
+                    loop {
+                        tokio::select! {
+                            message = broadcast.next() => {
+                                debug!("sending pubsub message: {:?}", message);
+                                match message {
+                                    Some(Ok(message)) => yield message,
+                                    Some(Err(BroadcastStreamRecvError::Lagged(i))) => {
+                                        broadcast_errors.inc_by(i);
+                                        continue 'reconnect;
+                                    }
+                                    None => {
+                                        debug!("exhausted pubsub broadcast stream; shutting down");
+                                        return;
+                                    }
+                                }
+                            }
+                            _ = &mut cancel_rx => {
+                                debug!("pubsub broadcast stream cancelled; shutting down");
+                                return;
                             }
                         }
                     }
-                    debug!("exhausted pubsub broadcast stream; shutting down");
-                    break;
                 }
             };
             let pubsub_request =
@@ -393,6 +420,8 @@ impl GrpcPubSubClient {
                 metrics.as_ref(),
             )
             .await;
+
+            drop(cancel_tx);
 
             match stream_completed {
                 // common case: reconnect due to some transient error
@@ -1061,7 +1090,10 @@ impl PersistGrpcPubSubServer {
     pub async fn serve(self, listen_addr: SocketAddr) -> Result<(), anyhow::Error> {
         // Increase the default message decoding limit to avoid unnecessary panics
         tonic::transport::Server::builder()
-            .add_service(ProtoPersistPubSubServer::new(self).max_decoding_message_size(usize::MAX))
+            .add_service(
+                ProtoPersistPubSubServer::new(self)
+                    .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
+            )
             .serve(listen_addr)
             .await?;
         Ok(())
@@ -1074,7 +1106,10 @@ impl PersistGrpcPubSubServer {
         listener: tokio_stream::wrappers::TcpListenerStream,
     ) -> Result<(), anyhow::Error> {
         tonic::transport::Server::builder()
-            .add_service(ProtoPersistPubSubServer::new(self))
+            .add_service(
+                ProtoPersistPubSubServer::new(self)
+                    .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
+            )
             .serve_with_incoming(listener)
             .await?;
         Ok(())
