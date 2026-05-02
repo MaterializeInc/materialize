@@ -5,12 +5,31 @@ In-process HTTP server that simulates the
 Materialize integration tests. Covers auth, user management, groups, SSO,
 SCIM 2.0, and tenant API tokens. Also ships a standalone CLI binary.
 
-## Subtree (≈ 5,281 LOC total)
+## Module surface (LOC ≈ 2,711 in `src/`)
 
-| Path | LOC | What it owns |
+| Module | LOC | Purpose |
 |---|---|---|
-| `src/` | 2,711 | Library modules |
-| `tests/` | ~2,570 | Integration test suite |
+| `handlers/user.rs` | 533 | User CRUD, API token management, role assignment |
+| `handlers/sso.rs` | 381 | SSO configuration CRUD + domain/group/role sub-resources |
+| `server.rs` | 325 | `FronteggMockServer`, `Context`, axum `Router` wiring, all route constants |
+| `models/sso.rs` | 221 | SSO request/response and storage types |
+| `models/user.rs` | 155 | User request/response and storage types |
+| `handlers/group.rs` | 155 | Group CRUD + role/user membership |
+| `main.rs` | 142 | CLI binary — parses args and calls `FronteggMockServer::start` |
+| `handlers/auth.rs` | 139 | Login (user + API-token) and token refresh handlers |
+| `models/group.rs` | 116 | Group request/response and storage types |
+| `utils.rs` | 97 | `encode_jwt`, `decode_jwt`, `RefreshTokenTarget` |
+| `models/token.rs` | 93 | API-token and tenant-token types |
+| `handlers/scim.rs` | 93 | SCIM 2.0 configuration handlers |
+| `models/utils.rs` | 51 | Shared model helpers |
+| `models/scim.rs` | 46 | SCIM request/response types |
+| `middleware/logging.rs` | 34 | Request logging middleware |
+| `middleware/role_update.rs` | 29 | In-band role-update channel middleware |
+| `middleware/latency.rs` | 27 | Artificial latency injection |
+| `models.rs` | 22 | Module re-exports |
+| `handlers.rs` | 20 | Module re-exports |
+
+Tests: ~2,570 LOC in `tests/`.
 
 ## Package identity
 

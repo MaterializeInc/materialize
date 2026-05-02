@@ -5,11 +5,21 @@ cloud deployments. Watches `Materialize`, `Balancer`, and `Console` custom
 resources and reconciles them to the desired Kubernetes state (StatefulSets,
 Deployments, Services, RBAC, NetworkPolicies, cert-manager certificates).
 
-## Subtree (≈ 5,052 LOC total)
+## Module surface (LOC ≈ 5,052)
 
-| Path | LOC | What it owns |
+| Module | LOC | Purpose |
 |---|---|---|
-| `src/` | 5,052 | All modules — see [`src/CONTEXT.md`](src/CONTEXT.md) |
+| `controller/materialize/generation.rs` | 1,468 | Generation-versioned K8s resource specs per Materialize minor version (V140…V161+); upgrade path logic |
+| `controller/materialize.rs` | 836 | `Materialize` CRD reconciler — Config struct, reconcile entry point, status conditions |
+| `controller/console.rs` | 636 | `Console` CRD reconciler — Deployment, Service, NetworkPolicy |
+| `controller/balancer.rs` | 598 | `Balancer` CRD reconciler — StatefulSet, Service, RBAC, cert |
+| `bin/orchestratord.rs` | 549 | Binary entry point — CLI args, kube client init, controller wiring, metrics server |
+| `controller/materialize/global.rs` | 439 | Global (cross-region) state reconciliation for Materialize resources |
+| `k8s.rs` | 142 | `apply_resource`, `delete_resource`, `get_resource` — idempotent kube API helpers |
+| `tls.rs` | 133 | `DefaultCertificateSpecs`, `issuer_ref_defined` — cert-manager integration |
+| `metrics.rs` | 129 | `Metrics` — Prometheus counters/histograms for reconcile loops |
+| `lib.rs` | 110 | `Error` enum, `parse_image_tag`, `matching_image_from_environmentd_image_ref` |
+| `controller.rs` | 12 | Module declarations for `balancer`, `console`, `materialize` |
 
 ## Package identity
 

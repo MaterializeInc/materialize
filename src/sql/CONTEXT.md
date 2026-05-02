@@ -63,6 +63,13 @@ pure planning.
   but a latent source of divergence when new session-settable system vars are
   added.
 
+## Subdirs reviewed (≥5K LOC)
+
+- [`src/plan/`](src/plan/CONTEXT.md) — SQL compiler: `Plan` enum, HIR IR, decorrelation, statement planners (36,204 LOC)
+- [`src/session/`](src/session/CONTEXT.md) — Session and system variables, `FeatureFlag`, user definitions (6,919 LOC)
+
+Other subdirs (`ast.rs`, `pure/`, `func.rs`, `catalog.rs`, `rbac.rs`, etc.) are summarized in the module structure table above.
+
 ## Cross-references
 
 - Primary downstream consumer: `mz_adapter` (catalog impl, sequencer,

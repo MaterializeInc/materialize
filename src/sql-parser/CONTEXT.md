@@ -44,6 +44,11 @@ resolve `Raw` to `Aug` via `mz-sql::names`.
 - **Flat `ast` re-export** — `mz_sql_parser::ast` exposes all node types in
   one namespace. Consumers do not need to track which sub-module a type lives in.
 
+## Subdirs reviewed (≥5K LOC)
+
+- [`src/ast/`](src/ast/CONTEXT.md) — AST node definitions and visitor traits (11,303 LOC)
+  - [`src/ast/defs/`](src/ast/defs/CONTEXT.md) — grammar-region split: statement, query, expr, name, etc. (10,256 LOC)
+
 ## Architecture notes
 
 - `mz-sql-parser` has **no planning logic** — it is a pure syntax layer.

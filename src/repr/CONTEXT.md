@@ -4,12 +4,35 @@ The lingua franca of Materialize: defines the core data types that all layers
 of the stack agree on at their boundaries. No Materialize crate sits below it
 (only `mz-ore`, `mz-proto`, `mz-pgtz`, `mz-persist-types`, `mz-sql-parser`).
 
-## Structure
+## Files (LOC ≈ 19,187 in top-level files, excluding subdirs)
 
-| Path | LOC | What it owns |
+| File | What it owns |
+|---|---|
+| `scalar.rs` | `Datum<'a>` value enum; dual-type system: `SqlScalarType` (36 variants, SQL-level with modifiers) and `ReprScalarType` (29 variants, collapsed for compute/storage); `DatumKind` copy-tag; proptest strategies |
+| `relation.rs` | `RelationDesc` (primary schema descriptor); dual-type split into `SqlColumnType`/`SqlRelationType` vs `ReprColumnType`/`ReprRelationType`; schema evolution (`RelationDescDiff`, `VersionedRelationDesc`) |
+| `row.rs` | `Row` (compact byte sequence), `RowRef`, `RowPacker`, `RowArena`, `DatumList`, `DatumMap`, `SharedRow` |
+| `strconv.rs` | String-to-value conversions matching PostgreSQL text format |
+| `explain.rs` | `Explain` trait, `ExplainConfig`, `ExplainFormat`, `ExprHumanizer` trait; `ExplainConfig` threads through the optimizer pipeline |
+| `stats.rs` | Persist pushdown statistics for complex types (numeric, timestamp, interval, JSONB) |
+| `timestamp.rs` | `Timestamp` (system-wide `u64` ms type implementing Timely/DD traits) |
+| `update.rs` | `UpdateCollection<T>` — columnar `(row, time, diff)` triples; `Rows`/`RowsBuilder`; `SharedSlice<T>` |
+| `optimize.rs` | `OptimizerFeatures`, `OptimizerFeatureOverrides`, `OverrideFrom` trait |
+| `refresh_schedule.rs` | REFRESH EVERY/AT schedule representation |
+| `global_id.rs` / `catalog_item_id.rs` / `role_id.rs` / `network_policy_id.rs` | Identifier newtypes (16-byte `GlobalId` size-asserted) |
+| `namespaces.rs` | Well-known schema name constants |
+| `fixed_length.rs` | `ToDatumIter` abstraction |
+| `datum_vec.rs` | Reusable `Datum` scratch buffer |
+| `bytes.rs` | PostgreSQL-compatible `ByteSize` |
+| `diff.rs` | `Diff` type alias (`Overflowing<i64>`) |
+| `user.rs` | External user auth metadata |
+
+## Subdirectories
+
+| Dir | LOC | What it owns |
 |---|---|---|
 | `src/adt/` | 11,937 | PostgreSQL-compatible ADT implementations — see [`src/adt/CONTEXT.md`](src/adt/CONTEXT.md) |
-| `src/` | 35,001 | All other repr modules — see [`src/CONTEXT.md`](src/CONTEXT.md) |
+| `src/row/` | — | Arrow columnar encoding (`encode.rs`) and abstract row iteration traits (`iter.rs`) |
+| `src/explain/` | — | Format-specific EXPLAIN renderers (text, JSON, DOT, tracing) |
 
 ## Key types (bubble-up summary)
 

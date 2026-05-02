@@ -5,12 +5,27 @@ system. Provides the two storage primitives and all concrete backend
 implementations. `mz-persist-client` builds the full persist API on top of
 these primitives.
 
-## Structure
+## Files (LOC ≈ 6,729 excluding indexed/)
 
-| Path | LOC | What it owns |
-|---|---|---|
+| File | What it owns |
+|---|---|
+| `src/location.rs` | `Blob` + `Consensus` traits; `SeqNo`, `VersionedData`, `CaSResult`, `ExternalError` (`Determinate`/`Indeterminate`); `Tasked<A>` wrapper; `SCAN_ALL` constant |
+| `src/s3.rs` | `S3Blob` — Amazon S3 backend; `ENABLE_S3_LGALLOC_*` dyn configs |
+| `src/postgres.rs` | `PostgresConsensus` — CockroachDB/Postgres CAS log backend; `USE_POSTGRES_TUNED_QUERIES` dyn config |
+| `src/azure.rs` | `AzureBlob` — Azure Blob Storage backend |
+| `src/mem.rs` | `MemBlob` + `MemConsensus` — in-memory backends for tests |
+| `src/file.rs` | `FileBlob` — local-filesystem blob backend |
+| `src/foundationdb.rs` | `FdbConsensus` — FoundationDB consensus backend (feature-gated) |
+| `src/turmoil.rs` | Network-simulation backends for chaos testing (feature-gated) |
+| `src/cfg.rs` | `BlobConfig` / `ConsensusConfig` enums; URI-based factory functions; dyn config registration |
+| `src/metrics.rs` | Prometheus metrics structs for all backends |
+| `src/retry.rs` | Exponential backoff with jitter |
+| `src/intercept.rs` | Test wrapper: intercept calls to inject errors |
+| `src/unreliable.rs` | Test wrapper: probabilistic fault injection |
+| `src/workload.rs` | Synthetic data generator for benchmarks |
+| `src/error.rs` | `Error` enum (persist-layer errors distinct from `ExternalError`) |
+| `src/generated.rs` | Re-export of protobuf-generated types |
 | `src/indexed/` | 2,119 | Columnar batch types and Parquet/Arrow codec — see [`src/indexed/CONTEXT.md`](src/indexed/CONTEXT.md) |
-| `src/` | 8,848 | All modules — see [`src/CONTEXT.md`](src/CONTEXT.md) |
 
 ## Key interfaces (exported)
 

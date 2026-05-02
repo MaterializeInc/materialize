@@ -5,12 +5,25 @@ files containing SQL queries with expected results and built-in commands that
 interact with Kafka, S3, schema registry, PostgreSQL, MySQL, DuckDB, SQL Server,
 Fivetran, and persist shards.
 
-## Structure (≈ 9,278 LOC)
+## Files / modules (LOC ≈ 9,219)
 
 | Path | LOC | What it owns |
 |---|---|---|
-| `src/` | 9,219 | All source — see `src/CONTEXT.md` |
-| `src/action/` | 5,617 | Built-in command implementations — see `src/action/CONTEXT.md` |
+| `src/action/` | 5,617 | All built-in command implementations — see [`src/action/CONTEXT.md`](src/action/CONTEXT.md) |
+| `src/parser.rs` | 854 | `parse()` → `Vec<PosCommand>`; `Command`, `SqlCommand`, `BuiltinCommand` |
+| `src/lib.rs` | 196 | Entry points: `run_file`, `run_stdin`, `run_string` |
+| `src/error.rs` | 187 | `PosError` wrapping `anyhow::Error` with source-file positions |
+| `src/util/postgres.rs` + `src/util/text.rs` | ~50 | Connection helpers, diff display |
+| `src/format/avro.rs` + `src/format/bytes.rs` | ~50 | Avro encode/decode, hex-byte decoding |
+| `src/bin/testdrive.rs` | 59 | CLI binary: arg parsing, drives `run_file`/`run_stdin` |
+
+## Key concepts
+
+- **Parse → Dispatch loop**: `parser::parse` produces `Vec<PosCommand>`; `lib.rs` iterates them, calling `action::create_state` once and dispatching each `PosCommand` via `Run::run` on the `action.rs` match arm.
+- **`State`** — all runtime connections and mutable test context; single instance per script run.
+- **`Config`** — large flat struct; every external system's address lives here (MZ pgwire, Kafka, S3/AWS, CSR, MySQL, DuckDB, SQL Server, Fivetran).
+- **`rewrite_results` mode** — `sql.rs` replaces expected-output sections using byte offsets captured at parse time.
+- **Production dependency** — `consistency.rs` directly imports `mz-adapter` and `mz-catalog`; the only part of testdrive that goes through internal catalog APIs rather than SQL.
 
 ## Package identity
 
@@ -39,4 +52,4 @@ Crate name: `mz-testdrive`. Binary: `testdrive`. Key dependencies:
 ## Cross-references
 
 - Generated docs: `doc/developer/generated/testdrive/`
-- See `src/CONTEXT.md` and `src/action/CONTEXT.md` for detail.
+- `src/action/CONTEXT.md` for built-in command breakdown.

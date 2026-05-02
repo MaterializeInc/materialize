@@ -7,8 +7,23 @@ persist-backed shard) and an in-memory object model consumed by the coordinator.
 
 | Path | LOC | What it owns |
 |---|---|---|
-| `src/` | 35,038 | All production Rust; see [`src/CONTEXT.md`](src/CONTEXT.md). |
+| `src/builtin.rs` | 14,931 | All hardcoded system objects (`BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>>`): types, views, MVs, logs, tables, sources, funcs, connections, roles, clusters, replicas. ~176 static constants. `BUILTINS` module exposes typed iterators (`logs()`, `types()`, `views()`, …). Ordered by dependency; ordering enforced by test. |
+| `src/durable/` | 13,781 | Persist-backed storage engine. See [`src/durable/CONTEXT.md`](src/durable/CONTEXT.md). |
+| `src/memory/objects.rs` | 3,985 | Rich in-memory catalog types (`CatalogItem`, `CatalogEntry`, `Database`, `Schema`, `Role`, `Cluster`, `ClusterReplica`, `NetworkPolicy`). `UpdateFrom<durable::*>` impls are the primary durable→memory conversion seam. `StateUpdate`/`StateUpdateKind` drive incremental replay. |
+| `src/memory/error.rs` | 228 | In-memory constraint violation error types. |
+| `src/expr_cache.rs` | 826 | `ExpressionCache` — persist-backed cache for optimized MIR and physical plans. Invalidated per-entry on optimizer feature change or index ID mismatch. Background compaction task. |
+| `src/durable.rs` | 561 | Trait definitions: `OpenableDurableCatalogState`, `ReadOnlyDurableCatalogState`, `DurableCatalogState`. Also `BootstrapArgs`, `Epoch`, `AuditLogIterator`, test helpers. |
+| `src/config.rs` | 345 | `Config` and `StateConfig` — catalog open parameters (build info, env ID, replica size map, license key, feature flags, etc.). `ClusterReplicaSizeMap`. |
+| `src/lib.rs` | 25 | Re-exports: `builtin`, `config`, `durable`, `expr_cache`, `memory`. Defines `SYSTEM_CONN_ID`. |
 | `tests/` | 2,184 | Integration tests: `open.rs` (catalog boot/open lifecycle), `read-write.rs` (Transaction DDL round-trips), `debug.rs` (DebugCatalogState inspection). |
+
+## Key concepts
+
+- **Durable / in-memory seam.** `durable::objects` key-value types are internal; only their combined structs (e.g. `durable::Database`) are re-exported. `memory::objects` consumes these via `UpdateFrom<durable::*>` — the sole approved conversion path. Adapter consumers touch only `memory::objects` types.
+- **`DurableCatalogState`** — single concrete implementation: `PersistCatalogState` in `durable/persist.rs`. All catalog DDL goes through `Transaction::commit → TransactionBatch → compare_and_append`.
+- **`BUILTINS_STATIC`** — dependency-ordered `LazyLock` of all system objects. Adding a builtin = add a `const` definition + insert into `BUILTINS_STATIC` in dependency order.
+- **`ExpressionCache`** — separate persist shard; not part of the main catalog shard. Lifecycle is independent of `DurableCatalogState`.
+- **Upgrade chain** — versioned and frozen. Current version: 81; minimum supported: 74. Each step isolated in its own submodule with frozen proto/serde types.
 
 ## What this crate does
 
@@ -44,7 +59,9 @@ structural friction point in the crate.
 
 ## Cross-references
 
-- [`src/CONTEXT.md`](src/CONTEXT.md) — module-level detail.
 - [`src/durable/CONTEXT.md`](src/durable/CONTEXT.md) — durable submodule.
 - [`src/durable/ARCH_REVIEW.md`](src/durable/ARCH_REVIEW.md) — structural findings.
+- Primary consumer: `mz-adapter` (coordinator `open_catalog`, `catalog_transact`).
+- Persist integration: `mz-persist-client` via `durable/persist.rs`.
+- Schema protos: `mz-catalog-protos` (owns `CATALOG_VERSION`).
 - Generated developer docs: `doc/developer/generated/catalog/`.

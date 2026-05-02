@@ -4,12 +4,23 @@ The `mz-storage` crate implements the storage layer of Materialize: it ingests
 data from external systems into persist shards and exports persist shards to
 external sinks, running as a timely dataflow cluster embedded in `clusterd`.
 
-## Crate at a glance (LOC ≈ 38,273)
+## Files (LOC ≈ 36,651 total for `src/`)
 
-| Subtree | LOC |
-|---|---|
-| `src/source/` (connectors + raw-source framework) | ~16,866 |
-| `src/` top-level files (upsert, render, storage_state, healthcheck, sink, …) | ~19,785 |
+| File / Dir | LOC | What it owns |
+|---|---|---|
+| `src/storage_state.rs` + `src/storage_state/` | 1,447 + 542 | `Worker` + `StorageState` main loop; external→internal command bridge; `AsyncStorageWorker` companion |
+| `src/upsert_continual_feedback_v2.rs` | 1,003 | Upsert-v2: differential-collection key state via persist feedback, selected by `ENABLE_UPSERT_V2` dyncfg |
+| `src/upsert_continual_feedback.rs` | 1,311 | Upsert-v1b: persist feedback loop for rehydration; RocksDB/memory backends |
+| `src/upsert.rs` + `src/upsert/` | 1,032 + 1,738 | Public entry points `upsert` / `upsert_v2`, dispatch shim; `UpsertKey`; `types`, `memory`, `rocksdb` backends |
+| `src/statistics.rs` | 1,167 | `SourceStatistics` / `SinkStatistics` aggregators; prometheus mirroring |
+| `src/healthcheck.rs` | 1,202 | `health_operator`; `StatusNamespace`; aggregates worker status → controller |
+| `src/sink/` | 4,047 | `SinkRender` impls: `kafka.rs` (1,656), `iceberg.rs` (2,391); `sink.rs` 13-line dispatch |
+| `src/render/` | 2,165 | Dataflow assembly: `sources.rs` (749), `sinks.rs` (215), `persist_sink.rs` (1,401); `render.rs` dispatch |
+| `src/source/` | 16,866 | Raw-source framework + connectors (see [`src/source/CONTEXT.md`](src/source/CONTEXT.md)) |
+| `src/internal_control.rs` | 330 | `InternalStorageCommand` bus; `setup_command_sequencer`; `DataflowParameters` |
+| `src/decode.rs` + `src/decode/` | 592 + 283 | `render_decode_delimited` / `render_decode_cdcv2`; avro, csv, protobuf sub-decoders |
+| `src/server.rs` | 120 | `serve`: initialises timely cluster, calls `Worker::run` |
+| `src/metrics/` | ~1,100 | Per-subsystem metric definitions (source, sink, upsert, decode) |
 
 ## What the crate owns
 

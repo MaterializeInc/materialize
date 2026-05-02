@@ -6,9 +6,33 @@
 
 | Subtree | LOC | Role |
 |---|---|---|
-| `src/` | ~12,106 | Library: server lifecycle, HTTP, 0dt deployment, telemetry *(see [src/CONTEXT.md](src/CONTEXT.md))* |
-| `src/http/` | ~5,716 | Axum HTTP server, all endpoints *(see [src/http/CONTEXT.md](src/http/CONTEXT.md))* |
+| `src/lib.rs` | ~892 | `Config`, `Listeners`, `Server`; startup sequence: TLS → HTTP boot → system-param sync → preflight → catalog open → adapter init → SQL boot → telemetry |
+| `src/http` / `src/http.rs` | ~5,716 | Axum HTTP server: auth middleware, SQL/WebSocket execution, MCP, webhooks, metrics, cluster proxy *(see [src/http/CONTEXT.md](src/http/CONTEXT.md))* |
+| `src/deployment/` | ~567 | 0dt state machine (`DeploymentState`: `Initializing → CatchingUp → ReadyToPromote → Promoting → IsLeader`) and preflight checks |
+| `src/telemetry.rs` | ~249 | Periodic Segment reporting loop (1-hour interval); queries adapter for environment stats; emits `group` + `track` events |
+| `src/test_util.rs` | ~1,831 | Integration test harness (feature-gated `"test"`): `TestServer`, `TestHarness`, helpers for starting a local environmentd |
 | `tests/` | ~16,303 | Integration tests *(see [tests/CONTEXT.md](tests/CONTEXT.md))* |
+
+## Key types
+
+- **`Config`** — flat struct (~60 fields) covering TLS, controller, catalog, adapter, bootstrap, LaunchDarkly, AWS, and observability options.
+- **`Listeners` / `Listener<C>`** — named map of pre-bound TCP sockets; split from `serve` so OS queues connections while the server boots.
+- **`Server`** — running server handle; drop-order matters (SQL handles, HTTP handles, `_adapter_handle`).
+- **`DeploymentState` / `DeploymentStateHandle`** — shared-state machine driving 0dt promotion; handle given to HTTP server so the orchestrator can poll and trigger promotion.
+
+## Startup sequence (in `Listeners::serve`)
+
+1. TLS context construction
+2. HTTP servers launched (adapter client deferred via `oneshot`)
+3. Catalog opened (`persist_backed_catalog_state`)
+4. System parameter sync (LaunchDarkly or file)
+5. 0dt preflight checks (`preflight_0dt`)
+6. Durable catalog open (savepoint if read-only, full if leader)
+7. Adapter init (`mz_adapter::serve`)
+8. OIDC authenticator constructed
+9. `adapter_client` sent to HTTP servers (unblocks deferred endpoints)
+10. SQL listeners launched
+11. Telemetry + system-param sync loops started
 
 ## Responsibilities
 
