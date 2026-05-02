@@ -213,8 +213,7 @@ mod container {
     impl<'a> DatumSeq<'a> {
         #[inline]
         pub fn copy_into(&self, row: &mut RowPacker) {
-            // SAFETY: `self.bytes` is a correctly formatted row.
-            unsafe { row.extend_by_slice_unchecked(self.bytes) }
+            row.extend_by_slice_unchecked(self.bytes)
         }
         #[inline]
         fn as_bytes(&self) -> &'a [u8] {
@@ -222,8 +221,7 @@ mod container {
         }
         #[inline]
         pub fn to_row(&self) -> Row {
-            // SAFETY: `self.bytes` is a correctly formatted row.
-            unsafe { Row::from_bytes_unchecked(self.bytes) }
+            Row::from_bytes_unchecked(self.bytes)
         }
     }
 
@@ -271,7 +269,7 @@ mod container {
             if self.bytes.is_empty() {
                 None
             } else {
-                let result = unsafe { read_datum(&mut self.bytes) };
+                let result = read_datum(&mut self.bytes);
                 Some(result)
             }
         }
