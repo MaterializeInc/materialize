@@ -52,6 +52,9 @@ use crate::visit::{Visit, VisitChildren};
 
 pub mod func;
 pub mod like_pattern;
+mod scalar_func;
+
+pub use scalar_func::{EagerScalarFunc, LazyScalarFunc};
 
 include!(concat!(env!("OUT_DIR"), "/mz_expr.scalar.rs"));
 

@@ -13,7 +13,37 @@ impl ArrayFill {
         unimplemented!()
     }
 }
-impl crate::func::variadic::EagerVariadicFunc for ArrayFill {
+impl crate::EagerScalarFunc for ArrayFill {
+    type Input<'a> = (Datum<'a>, Datum<'a>, OptionalArg<Datum<'a>>);
+    type Output<'a> = Result<Datum<'a>, EvalError>;
+    fn call<'a>(
+        &self,
+        (fill, dims, lb): Self::Input<'a>,
+        temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
+        self.array_fill(fill, dims, lb, temp_storage)
+    }
+    fn output_sql_type(
+        &self,
+        input_types: &[mz_repr::SqlColumnType],
+    ) -> mz_repr::SqlColumnType {
+        use mz_repr::AsColumnType;
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = crate::EagerScalarFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        let non_nullable_input_is_nullable = false;
+        let inputs_nullable = input_types.iter().any(|it| it.nullable);
+        output
+            .nullable(
+                nullable || non_nullable_input_is_nullable
+                    || (propagates_nulls && inputs_nullable),
+            )
+    }
+    fn introduces_nulls(&self) -> bool {
+        false
+    }
+}
+impl crate::func::EagerVariadicFunc for ArrayFill {
     type Input<'a> = (Datum<'a>, Datum<'a>, OptionalArg<Datum<'a>>);
     type Output<'a> = Result<Datum<'a>, EvalError>;
     fn call<'a>(
@@ -27,19 +57,7 @@ impl crate::func::variadic::EagerVariadicFunc for ArrayFill {
         &self,
         input_types: &[mz_repr::SqlColumnType],
     ) -> mz_repr::SqlColumnType {
-        use mz_repr::AsColumnType;
-        let output = Self::Output::as_column_type();
-        let propagates_nulls = crate::func::variadic::EagerVariadicFunc::propagates_nulls(
-            self,
-        );
-        let nullable = output.nullable;
-        let non_nullable_input_is_nullable = false;
-        let inputs_nullable = input_types.iter().any(|it| it.nullable);
-        output
-            .nullable(
-                nullable || non_nullable_input_is_nullable
-                    || (propagates_nulls && inputs_nullable),
-            )
+        crate::EagerScalarFunc::output_sql_type(self, input_types)
     }
     fn introduces_nulls(&self) -> bool {
         false

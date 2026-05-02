@@ -47,6 +47,7 @@ pub use relation::{
     canonicalize, compare_columns, non_nullable_columns,
 };
 pub use scalar::func::{self, BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc};
+pub use scalar::{EagerScalarFunc, LazyScalarFunc};
 pub use scalar::{
     EvalError, FilterCharacteristics, MirScalarExpr, ProtoDomainLimit, ProtoEvalError, like_pattern,
 };
