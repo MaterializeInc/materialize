@@ -86,3 +86,51 @@ Round 1 scoped each reviewer to a single crate; local friction appeared reasonab
 - **`catalog::durable::Transaction` god-struct (19 fields, 4K LOC)** — surfaced in round 1. The deletion test for a registry-based refactor passes structurally, but the `uniqueness_violation` closures and the `compare_and_append` commit path make the migration non-mechanical. This is a _local_ deepening opportunity in `mz-catalog`, not a cross-crate pattern; it does not recur in other crates, so it belongs in the per-crate ARCH_REVIEW rather than here.
 
 - **`typeconv` cross-crate crate-placement (`mz-sql` vs `mz-expr`)** — the 7 `TODO? if typeconv was in expr` comments in `expr/impls/` look like a cross-crate friction point. Verified: moving `typeconv` into `mz-expr` would create an upward `mz-expr → mz-sql` dependency cycle (mz-sql already depends on mz-expr). The deletion test fails — the fix would require a third crate to host the shared metadata. The cost of the split exceeds the optimizer benefit of more precise `introduces_nulls` values. Skipped.
+
+---
+
+## Findings surfaced in CONTEXT.md but not ARCH_REVIEW.md
+
+### mz-persist-types
+
+- **`src/persist-types/src/lib.rs:126`** — `Codec::encode_schema`/`decode_schema` carry a `TODO: Move this to instead be a new trait that is required by Self::Schema` comment; the methods are mis-homed on `Codec` rather than the `Schema` associated type. Source: [`src/persist-types/CONTEXT.md`](src/persist-types/CONTEXT.md).
+- **`src/persist-types/src/lib.rs:285`** — `StepForward` has `TODO: Unify this with repr's TimestampManipulation`; two parallel timestamp-step abstractions exist across `mz-persist-types` and `mz-repr`. Source: [`src/persist-types/CONTEXT.md`](src/persist-types/CONTEXT.md).
+
+### mz-compute-types
+
+- **`src/compute-types/src/plan/interpret/api.rs:51-117`** — Every method on the `Interpreter` trait carries `TODO(database-issues#7533): Add documentation`; the trait uses a non-obvious tagless-final encoding and is critical for plan analysis. Source: [`src/compute-types/src/CONTEXT.md`](src/compute-types/src/CONTEXT.md).
+- **`src/compute-types/src/plan/transform/api.rs:62`** — `BottomUpTransform` trait has exactly one concrete implementation (`RelaxMustConsolidate`); the framework adds indirection without a second user. Candidate to inline the single pass and delete the trait. Source: [`src/compute-types/CONTEXT.md`](src/compute-types/CONTEXT.md).
+
+### mz-storage-client
+
+- **`src/storage-client/src/controller.rs:76`** — `IntrospectionType` (24 variants) spans storage, compute, and statement-logging concerns inside the storage-client contract crate; compute and statement-logging variants are a layer overspill. Source: [`src/storage-client/CONTEXT.md`](src/storage-client/CONTEXT.md).
+- **`src/storage-client/src/storage_collections.rs` + `src/storage-controller/src/lib.rs`** — dual `BTreeMap<GlobalId, CollectionState>` (one per crate) require explicit cross-notifications on create/drop to stay in sync; merging them removes a coupling hotspot. Source: [`src/storage-client/CONTEXT.md`](src/storage-client/CONTEXT.md).
+
+### mz-storage-controller
+
+- **`src/storage-controller/src/lib.rs:737`** — `TODO(aljoscha): It would be swell if we could refactor this Leviathan` (4,070 LOC, appears twice); largest single file in the storage bundle, acknowledged refactor target. Source: [`src/storage-controller/CONTEXT.md`](src/storage-controller/CONTEXT.md).
+- **`src/storage-client/src/client.rs:386`** — `TODO(guswynn): cluster-unification`: storage and compute cluster management are parallel implementations; tracked but not started. Source: [`src/storage-controller/CONTEXT.md`](src/storage-controller/CONTEXT.md).
+
+### mz-sql (session)
+
+- **`src/sql/src/session/vars.rs:2332`** — `SESSION_SYSTEM_VARS` is a hardcoded parallel list of 19 session-settable system vars; `TODO(parkmycar): Instead of a separate list, make this a field on VarDefinition`; latent divergence when new session-settable vars are added. Source: [`src/sql/CONTEXT.md`](src/sql/CONTEXT.md).
+
+### mz-frontegg-mock
+
+- **`src/frontegg-mock/`** — no trait seam between the mock and real Frontegg; integration is URL substitution only, so API drift between mock and production is a latent risk with no compile-time detection. Source: [`src/CONTEXT.md`](src/CONTEXT.md).
+
+### mz-orchestratord
+
+- **`src/orchestratord/src/bin/orchestratord.rs`** — three CRD reconcilers (`materialize`, `balancer`, `console`) are wired independently via separate `mz_ore::task::spawn` calls with no shared `Reconciler` trait; adding a fourth CRD requires touching the binary directly. Source: [`src/orchestratord/CONTEXT.md`](src/orchestratord/CONTEXT.md).
+
+### misc/python — mzcompose
+
+- **`misc/python/materialize/mzcompose/composition.py`** — 1,876 LOC monolith owning subprocess management, SQL connections, testdrive orchestration, and workflow dispatch in a single class; no seam between compose-subprocess adapter and test-orchestration runtime. Source: [`misc/python/materialize/mzcompose/CONTEXT.md`](misc/python/materialize/mzcompose/CONTEXT.md).
+
+### misc/python — checks
+
+- **`misc/python/materialize/checks/checks.py:79-80`** — `Check.manipulate()` len==2 invariant is enforced only at runtime via `assert`; the return type `list[Testdrive]` does not carry the arity constraint, so violations surface as test failures rather than type errors. Source: [`misc/python/materialize/CONTEXT.md`](misc/python/materialize/CONTEXT.md).
+
+### misc/python — parallel testing frameworks
+
+- **`misc/python/materialize/parallel_workload/` + `misc/python/materialize/zippy/`** — two overlapping random-SQL-action frameworks with no documented distinction between them at the package level; maintenance burden doubles for cross-cutting changes. Source: [`misc/python/materialize/CONTEXT.md`](misc/python/materialize/CONTEXT.md).
