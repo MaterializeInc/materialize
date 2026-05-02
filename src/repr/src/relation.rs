@@ -822,6 +822,74 @@ impl RustType<ProtoRelationVersion> for RelationVersion {
     }
 }
 
+/// Semantic type annotation for a column in a builtin catalog relation.
+///
+/// These are compile-time metadata used by the catalog ontology layer to
+/// describe the meaning of a column (e.g., that it contains a catalog item ID
+/// or a role ID). Possible values correspond to the entries in
+/// `SEMANTIC_TYPE_DEFS` in the `mz-catalog` crate.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    serde::Serialize
+)]
+pub enum SemanticType {
+    CatalogItemId,
+    GlobalId,
+    ClusterId,
+    ReplicaId,
+    SchemaId,
+    DatabaseId,
+    RoleId,
+    NetworkPolicyId,
+    ShardId,
+    OID,
+    ObjectType,
+    ConnectionType,
+    SourceType,
+    MzTimestamp,
+    WallclockTimestamp,
+    ByteCount,
+    RecordCount,
+    CreditRate,
+    SqlDefinition,
+    RedactedSqlDefinition,
+}
+
+impl fmt::Display for SemanticType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            SemanticType::CatalogItemId => "CatalogItemId",
+            SemanticType::GlobalId => "GlobalId",
+            SemanticType::ClusterId => "ClusterId",
+            SemanticType::ReplicaId => "ReplicaId",
+            SemanticType::SchemaId => "SchemaId",
+            SemanticType::DatabaseId => "DatabaseId",
+            SemanticType::RoleId => "RoleId",
+            SemanticType::NetworkPolicyId => "NetworkPolicyId",
+            SemanticType::ShardId => "ShardId",
+            SemanticType::OID => "OID",
+            SemanticType::ObjectType => "ObjectType",
+            SemanticType::ConnectionType => "ConnectionType",
+            SemanticType::SourceType => "SourceType",
+            SemanticType::MzTimestamp => "MzTimestamp",
+            SemanticType::WallclockTimestamp => "WallclockTimestamp",
+            SemanticType::ByteCount => "ByteCount",
+            SemanticType::RecordCount => "RecordCount",
+            SemanticType::CreditRate => "CreditRate",
+            SemanticType::SqlDefinition => "SqlDefinition",
+            SemanticType::RedactedSqlDefinition => "RedactedSqlDefinition",
+        };
+        f.write_str(s)
+    }
+}
+
 /// Metadata (other than type) for a column in a [`RelationDesc`].
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 struct ColumnMetadata {
@@ -902,7 +970,7 @@ struct ColumnMetadata {
 /// the index in [`SqlRelationType`] that corresponds to a given column, and the
 /// version at which this column was added or dropped.
 ///
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, MzReflect)]
 pub struct RelationDesc {
     typ: SqlRelationType,
     metadata: BTreeMap<ColumnIndex, ColumnMetadata>,

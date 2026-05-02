@@ -30,7 +30,7 @@ use k8s_openapi::api::core::v1::{
     PersistentVolumeClaimTemplate, Pod, PodAffinity, PodAffinityTerm, PodAntiAffinity,
     PodSecurityContext, PodSpec, PodTemplateSpec, PreferredSchedulingTerm, ResourceRequirements,
     SeccompProfile, Secret, SecurityContext, Service as K8sService, ServicePort, ServiceSpec,
-    Toleration, TopologySpreadConstraint, Volume, VolumeMount, VolumeResourceRequirements,
+    Sysctl, Toleration, TopologySpreadConstraint, Volume, VolumeMount, VolumeResourceRequirements,
     WeightedPodAffinityTerm,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
@@ -1089,15 +1089,34 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             None
         };
 
+        let tcp_keepalive_sysctls = vec![
+            Sysctl {
+                name: "net.ipv4.tcp_keepalive_time".to_string(),
+                value: "300".to_string(),
+            },
+            Sysctl {
+                name: "net.ipv4.tcp_keepalive_intvl".to_string(),
+                value: "30".to_string(),
+            },
+            Sysctl {
+                name: "net.ipv4.tcp_keepalive_probes".to_string(),
+                value: "3".to_string(),
+            },
+        ];
+
         let security_context = if let Some(fs_group) = self.config.service_fs_group {
             Some(PodSecurityContext {
                 fs_group: Some(fs_group),
                 run_as_user: Some(fs_group),
                 run_as_group: Some(fs_group),
+                sysctls: Some(tcp_keepalive_sysctls),
                 ..Default::default()
             })
         } else {
-            None
+            Some(PodSecurityContext {
+                sysctls: Some(tcp_keepalive_sysctls),
+                ..Default::default()
+            })
         };
 
         let mut tolerations = vec![

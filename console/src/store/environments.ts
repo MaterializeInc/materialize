@@ -11,11 +11,11 @@ import * as Sentry from "@sentry/react";
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { add, Duration, formatDuration, sub } from "date-fns";
 import deepEqual from "fast-deep-equal";
-import { atom, useAtom, useAtomValue } from "jotai";
+import { atom, useAtom, useAtomValue, useSetAtom } from "jotai";
 import { atomFamily, loadable } from "jotai/utils";
 import { sql } from "kysely";
 import { PostgresError } from "pg-error-enum";
-import React, { useRef } from "react";
+import React from "react";
 import { gte as semverGte, parse as semverParse, SemVer } from "semver";
 
 import { buildGlobalQueryKey } from "~/api/buildQueryKeySchema";
@@ -311,48 +311,52 @@ export const environmentQueryKeys = {
 };
 
 /**
+ * Merge fresh poll results into the previous map via updateEnviromentState
+ * (preserves healthy state across transient booting/unknown blips). Skips the
+ * write when nothing changed so atom subscribers don't re-render on every
+ * poll tick.
+ */
+export const mergeEnvironmentsWithHealth = atom(
+  null,
+  (get, set, next: EnvironmentsWithHealth) => {
+    const previous = get(environmentsWithHealth);
+    if (!previous) {
+      set(environmentsWithHealth, next);
+      return;
+    }
+
+    let changed = false;
+    const merged = new Map<string, Environment>();
+    for (const [regionId, fresh] of next) {
+      const prev = previous.get(regionId);
+      const updated = updateEnviromentState(prev, fresh);
+      merged.set(regionId, updated);
+      if (!changed && !deepEqual(prev, updated)) {
+        changed = true;
+      }
+    }
+
+    if (!changed) return;
+    set(environmentsWithHealth, merged);
+  },
+);
+
+/**
  * Polls for region information and environment health.
  */
 export const usePollEnvironmentHealth = (options: { intervalMs: number }) => {
-  const [environmentMap, setValue] = useAtom(environmentsWithHealth);
-  const [cloudRegions] = useAtom(cloudRegionsSelector);
+  const mergeEnvironments = useSetAtom(mergeEnvironmentsWithHealth);
+  const cloudRegions = useAtomValue(cloudRegionsSelector);
   const appConfig = useAtomValue(appConfigAtom);
 
-  // The environment objects are used in dependency arrays,
-  // so the refrences need to be stable
-  const updateValue = (newEnvMap: Map<string, Environment>) => {
-    if (!environmentMap) {
-      setValue(newEnvMap);
-      return null;
-    }
-    let mapChanged = false;
-    for (const [key, newValue] of newEnvMap.entries()) {
-      const previousState = environmentMap.get(key);
-      const merged = updateEnviromentState(previousState, newValue);
-      newEnvMap.set(key, merged);
-      if (!deepEqual(previousState, merged)) {
-        mapChanged = true;
-      }
-    }
-    if (mapChanged) {
-      // Only update the state if something actually changed to prevent unnecessary
-      // rerenders. React query does this automatically for some types, but not maps.
-      setValue(newEnvMap);
-    }
-    return environmentMap;
-  };
-
-  const updateValueRef = useRef(updateValue);
-  React.useEffect(() => {
-    updateValueRef.current = updateValue;
-  });
-
+  // appConfig is intentionally excluded from queryKey — appConfig.consoleUrl
+  // is a live window.location reference that changes on every navigation,
+  // which would mint a new cache key on each route change and cause
+  // useSuspenseQuery to re-throw. mergeEnvironments is a stable useSetAtom
+  // reference.
+  // eslint-disable-next-line @tanstack/query/exhaustive-deps
   useSuspenseQuery({
-    queryKey: [
-      ...environmentQueryKeys.environmentHealth(cloudRegions),
-      appConfig,
-      updateValueRef,
-    ],
+    queryKey: [...environmentQueryKeys.environmentHealth(cloudRegions)],
     refetchInterval: options.intervalMs,
     queryFn: async () => {
       return Sentry.startSpan(
@@ -366,7 +370,8 @@ export const usePollEnvironmentHealth = (options: { intervalMs: number }) => {
             cloudRegions,
             appConfig,
           });
-          return updateValueRef.current(result);
+          mergeEnvironments(result);
+          return result;
         },
       );
     },
