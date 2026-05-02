@@ -80,8 +80,8 @@ Start here for a top-down read:
     - [`src/compute/src/render/CONTEXT.md`](src/compute/src/render/CONTEXT.md) — RenderPlan → Timely operators
     - [`src/compute/src/render/ARCH_REVIEW.md`](src/compute/src/render/ARCH_REVIEW.md) — per-source collection seam friction
 - [`src/compute-client/CONTEXT.md`](src/compute-client/CONTEXT.md) — client API
-  - [`src/compute-client/ARCH_REVIEW.md`](src/compute-client/ARCH_REVIEW.md) — `as_of_selection` misplacement; `read_capabilities` comment-only contract; `SequentialHydration` single-export assumption
   - [`src/compute-client/src/CONTEXT.md`](src/compute-client/src/CONTEXT.md)
+  - [`src/compute-client/src/ARCH_REVIEW.md`](src/compute-client/src/ARCH_REVIEW.md) — `as_of_selection` misplacement; `read_capabilities` comment-only contract; `SequentialHydration` single-export assumption
 
 ### Storage
 
@@ -124,8 +124,8 @@ Start here for a top-down read:
 - [`src/frontegg-mock/CONTEXT.md`](src/frontegg-mock/CONTEXT.md) — auth mock (no trait seam to real)
   - [`src/frontegg-mock/src/CONTEXT.md`](src/frontegg-mock/src/CONTEXT.md)
 - [`src/testdrive/CONTEXT.md`](src/testdrive/CONTEXT.md) — SQL test runner
-  - [`src/testdrive/ARCH_REVIEW.md`](src/testdrive/ARCH_REVIEW.md) — adapter+catalog direct prod deps; `Config` ~100-field monolith; built-in command string-match dispatch
   - [`src/testdrive/src/CONTEXT.md`](src/testdrive/src/CONTEXT.md)
+  - [`src/testdrive/src/ARCH_REVIEW.md`](src/testdrive/src/ARCH_REVIEW.md) — adapter+catalog direct prod deps; `Config` ~100-field monolith; built-in command string-match dispatch
     - [`src/testdrive/src/action/CONTEXT.md`](src/testdrive/src/action/CONTEXT.md)
 - [`src/avro/CONTEXT.md`](src/avro/CONTEXT.md) — Avro fork
   - [`src/avro/src/CONTEXT.md`](src/avro/src/CONTEXT.md)
