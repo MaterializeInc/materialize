@@ -396,9 +396,9 @@ impl TxnsCodec for TxnsCodecRow {
     fn should_fetch_part(data_id: &ShardId, stats: &PartStats) -> Option<bool> {
         let stats = stats
             .key
-            .col("key")?
+            .col("ok")?
             .try_as_optional_struct()
-            .map_err(|err| error!("unexpected stats type for col 'key': {}", err))
+            .map_err(|err| error!("unexpected stats type for col 'ok': {}", err))
             .ok()?;
         let stats = stats
             .some
