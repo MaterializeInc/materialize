@@ -73,14 +73,8 @@ pub enum IsolationLevel {
 
 `Duration` is `Copy`, so the enum stays `Copy`.
 
-* `parse`: accept strings of the form `bounded staleness <duration>`, where `<duration>` is a humantime-style spec (`5s`, `500ms`, `1m30s`).
-  Reject `D = 0` and negative durations; large bounds are accepted (they just behave like serializable when input frontiers stay within `D`, which is fine).
-* `as_str` returns the user-facing rendition (`"bounded staleness 5s"`) as `Cow<'static, str>`; round-trips through `SHOW transaction_isolation` and `Value::parse`.
-* `as_variant_str` returns the unit-cardinality variant identifier (`"bounded staleness"`, no duration) as `&'static str`.
-  This is used for Prometheus labels; using `as_str` there would create one bucket per duration value and blow up label cardinality.
-* `valid_values` lists the literal pattern `"bounded staleness <duration>"` for the error string.
-
-The literal strings (`"bounded staleness"`, `"strict serializable"`, ...) live as associated `const`s on `IsolationLevel` so that `as_str`, `as_variant_str`, `valid_values`, and `parse` all reference one source of truth.
+The parser accepts `bounded staleness <duration>` where `<duration>` is a humantime-style spec (`5s`, `500ms`, `1m30s`); zero and negative durations are rejected, large bounds are accepted (they degrade to serializable-like behavior when input frontiers stay within `D`).
+For Prometheus labels we expose a unit-cardinality variant identifier separate from the user-facing rendering, so the duration does not blow up label cardinality.
 
 `TRANSACTION_ISOLATION` itself does not change shape; it already stores an `IsolationLevel`.
 
