@@ -183,3 +183,86 @@ Source materialize.public.cities
 Target cluster: quickstart
 
 EOF
+
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/11292
+# i.e., that when `create_fast_path_plan` jumps through a TopK, it correctly takes into account the finishing's offset.
+statement ok
+CREATE TABLE t (x int);
+
+statement ok
+INSERT INTO t VALUES (1),(2),(3),(4),(5),(6),(7),(8),(9),(10),(11),(12),(13),(14),(15),(16),(17),(18),(19),(20);
+
+query I
+SELECT * FROM (SELECT * FROM t LIMIT 12) LIMIT 10 OFFSET 5;
+----
+6
+7
+8
+9
+10
+11
+12
+
+query I
+SELECT * FROM (SELECT * FROM t ORDER BY x LIMIT 12) ORDER BY x LIMIT 10 OFFSET 5;
+----
+6
+7
+8
+9
+10
+11
+12
+
+query I
+SELECT * FROM (SELECT * FROM t LIMIT 15) LIMIT 10 OFFSET 5;
+----
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+
+statement ok
+CREATE DEFAULT INDEX ON t;
+
+query I
+SELECT * FROM (SELECT * FROM t LIMIT 12) LIMIT 10 OFFSET 5;
+----
+6
+7
+8
+9
+10
+11
+12
+
+query I
+SELECT * FROM (SELECT * FROM t ORDER BY x LIMIT 12) ORDER BY x LIMIT 10 OFFSET 5;
+----
+6
+7
+8
+9
+10
+11
+12
+
+query I
+SELECT * FROM (SELECT * FROM t LIMIT 15) LIMIT 10 OFFSET 5;
+----
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
