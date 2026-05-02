@@ -188,6 +188,9 @@ pub struct WebhookState {
     webhook_cache: WebhookAppenderCache,
 }
 
+#[derive(Clone, Debug)]
+struct HelmChartVersion(Option<String>);
+
 #[derive(Debug)]
 pub struct HttpServer {
     tls: Option<ReloadingSslContext>,
@@ -278,7 +281,7 @@ impl HttpServer {
                     authenticator_kind,
                     adapter_client_rx: adapter_client_rx.clone(),
                     active_connection_counter: active_connection_counter.clone(),
-                    helm_chart_version,
+                    helm_chart_version: helm_chart_version.clone(),
                     allowed_roles,
                 });
             if let listeners::AuthenticatorKind::None = authenticator_kind {
@@ -465,7 +468,8 @@ impl HttpServer {
                 .route("/api/readyz", routing::get(probe::handle_ready))
                 .layer(auth_middleware.clone())
                 .layer(Extension(adapter_client_rx.clone()))
-                .layer(Extension(active_connection_counter.clone()));
+                .layer(Extension(active_connection_counter.clone()))
+                .layer(Extension(HelmChartVersion(helm_chart_version.clone())));
             router = router.merge(metrics_router);
         }
 
@@ -515,6 +519,7 @@ impl HttpServer {
                 .layer(auth_middleware.clone())
                 .layer(Extension(adapter_client_rx.clone()))
                 .layer(Extension(active_connection_counter.clone()))
+                .layer(Extension(HelmChartVersion(helm_chart_version.clone())))
                 .layer(Extension(mcp_allowed_origins))
                 .layer(
                     CorsLayer::new()
@@ -529,6 +534,7 @@ impl HttpServer {
             .layer(auth_middleware.clone())
             .layer(Extension(adapter_client_rx.clone()))
             .layer(Extension(active_connection_counter.clone()))
+            .layer(Extension(HelmChartVersion(helm_chart_version)))
             .layer(
                 CorsLayer::new()
                     .allow_credentials(false)
@@ -803,7 +809,11 @@ where
             (StatusCode::INTERNAL_SERVER_ERROR, "adapter client missing").into_response()
         })?;
         let active_connection_counter = req.extensions.get::<ConnectionCounter>().unwrap();
-        let helm_chart_version = None;
+        let helm_chart_version = req
+            .extensions
+            .get::<HelmChartVersion>()
+            .map(|h| h.0.clone())
+            .unwrap_or(None);
 
         let options = if params.options.is_empty() {
             // It's possible 'options' simply wasn't provided, we don't want that to
