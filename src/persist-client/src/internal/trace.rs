@@ -2439,7 +2439,7 @@ pub(crate) mod tests {
             trace
                 .fueled_merge_reqs_before_ms(
                     u64::MAX,
-                    Some(WriterKey::for_version(&Version::new(0, 50, 0)))
+                    Some(WriterKey::for_base_tier(&Version::new(0, 50, 0)))
                 )
                 .count(),
             0,
@@ -2449,7 +2449,7 @@ pub(crate) mod tests {
             trace
                 .fueled_merge_reqs_before_ms(
                     u64::MAX,
-                    Some(WriterKey::for_version(&Version::new(99, 99, 0)))
+                    Some(WriterKey::for_base_tier(&Version::new(99, 99, 0)))
                 )
                 .count(),
             1,

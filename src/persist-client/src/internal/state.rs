@@ -1803,7 +1803,7 @@ where
                 reqs_to_take += 1;
             }
             let threshold_ms = heartbeat_timestamp_ms.saturating_sub(lease_duration_ms);
-            let min_writer = claim_compaction_min_version.map(WriterKey::for_version);
+            let min_writer = claim_compaction_min_version.map(WriterKey::for_base_tier);
             merge_reqs.extend(
                 // We keep the oldest `reqs_to_take` batches, under the theory that they're least
                 // likely to be compacted soon for other reasons.

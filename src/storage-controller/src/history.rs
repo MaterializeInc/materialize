@@ -267,6 +267,7 @@ mod tests {
                         persist_location: PersistLocation {
                             blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
                             consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
+                            fast_tier_blob_uri: None,
                         },
                         data_shard: Default::default(),
                         relation_desc: RelationDesc::new(
@@ -306,6 +307,7 @@ mod tests {
                 persist_location: PersistLocation {
                     blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
                     consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
+                    fast_tier_blob_uri: None,
                 },
                 data_shard: Default::default(),
                 relation_desc: RelationDesc::new(
@@ -374,6 +376,7 @@ mod tests {
                 persist_location: PersistLocation {
                     blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
                     consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
+                    fast_tier_blob_uri: None,
                 },
                 data_shard: Default::default(),
                 relation_desc: RelationDesc::new(
@@ -389,6 +392,7 @@ mod tests {
                 persist_location: PersistLocation {
                     blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
                     consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
+                    fast_tier_blob_uri: None,
                 },
                 data_shard: Default::default(),
                 relation_desc: RelationDesc::new(

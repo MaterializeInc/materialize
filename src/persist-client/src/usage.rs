@@ -488,7 +488,7 @@ impl StorageUsageClient {
             referenced_batches_bytes: &referenced_batches_bytes,
             // In the future, this is likely to include a "grace period" so recent but non-current
             // versions are also considered live
-            minimum_key: WriterKey::for_version(&self.cfg.build_version),
+            minimum_key: WriterKey::for_base_tier(&self.cfg.build_version),
             blob_usage,
         });
 
@@ -790,7 +790,7 @@ mod tests {
         let versioned_size = usage
             .size(BlobKeyPrefix::Writer(
                 &shard_id_two,
-                &WriterKey::for_version(&build_version),
+                &WriterKey::for_base_tier(&build_version),
             ))
             .await
             .expect("must have shard size");
@@ -1032,7 +1032,7 @@ mod tests {
     }
 
     fn version(minor: u64) -> WriterKey {
-        WriterKey::for_version(&Version::new(0, minor, 0))
+        WriterKey::for_base_tier(&Version::new(0, minor, 0))
     }
 
     #[mz_ore::test]
