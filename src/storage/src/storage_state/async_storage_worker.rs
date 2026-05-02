@@ -320,6 +320,9 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
                                 }
                             }
                         }
+                        tracing::info!(
+                            "== as_of:{as_of:?} since:{remap_since:?} resume_uppers:{resume_uppers:?}"
+                        );
 
                         /// Convenience function to convert `BTreeMap<GlobalId, Antichain<C>>` to
                         /// `BTreeMap<GlobalId, Vec<Row>>`.
