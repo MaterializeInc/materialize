@@ -6,8 +6,9 @@ verifiable architectural friction.
 
 Start here for a top-down read:
 1. [`CONTEXT.md`](CONTEXT.md) — repo overview, core architecture commitments, workspace-wide friction.
-2. [`src/CONTEXT.md`](src/CONTEXT.md) — Rust workspace map, crates by tier, workspace-wide seams.
-3. Any individual crate or subtree below.
+2. [`ARCH_REVIEW.md`](ARCH_REVIEW.md) — round-2 cross-crate patterns (5 candidates + 2 honest skips). Read after the per-crate ARCH_REVIEW.md files have been internalized.
+3. [`src/CONTEXT.md`](src/CONTEXT.md) — Rust workspace map, crates by tier, workspace-wide seams.
+4. Any individual crate or subtree below.
 
 ## src/ — Rust workspace (27 top-level crates)
 

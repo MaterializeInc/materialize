@@ -106,6 +106,15 @@ reflects recurring shapes worth tracking:
   (`executeSql` v1 + `executeSqlV2`) with v1 marked for deprecation but
   ~15 remaining call sites.
 
+## Round-2 cross-crate review
+
+[`ARCH_REVIEW.md`](ARCH_REVIEW.md) at the repo root holds the round-2 findings:
+patterns visible only when the per-crate lenses are combined (parallel
+match-on-enum dispatch as a workspace habit; four concurrent v1/v2 migrations
+with no shared forcing function; `mz-repr` hosting optimizer + parser
+concepts; `mz-testdrive` importing production `mz-adapter`/`mz-catalog`
+directly; cross-crate broken `#[deprecated]` in `mz-transform`).
+
 ## Navigation
 
 - [`CONTEXT-MAP.md`](CONTEXT-MAP.md) — full index of all `CONTEXT.md` and
