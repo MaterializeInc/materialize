@@ -17,6 +17,7 @@ required-features = ["signing"]
 [dependencies]
 anyhow.workspace = true
 jsonwebtoken.workspace = true
+mz-ore = { path = "../ore" }
 serde.workspace = true
 
 aws-sdk-kms = { workspace = true, optional = true }
@@ -30,6 +31,7 @@ uuid = { workspace = true, optional = true, features = ["v4"] }
 [dev-dependencies]
 clap.workspace = true
 mz-aws-util = { path = "../aws-util" }
+mz-ore = { path = "../ore", features = ["test"] }
 tokio.workspace = true
 
 [features]
