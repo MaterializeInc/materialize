@@ -39,7 +39,7 @@
 --
 WITH tools AS (
     SELECT
-        '"' || op.database || '"."' || op.schema || '"."' || op.name || '"' AS object_name,
+        quote_ident(op.database) || '.' || quote_ident(op.schema) || '.' || quote_ident(op.name) AS object_name,
         c.name AS cluster,
         cts.comment AS description,
         jsonb_build_object(
