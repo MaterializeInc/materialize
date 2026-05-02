@@ -215,7 +215,7 @@ ERROR: cannot serve query under bounded staleness 5s; freshest available
        timestamp is 7000ms older than the bound
 ```
 
-Treat `40001` as a transient failure: retry once at the same isolation level, and if it persists fall back to `serializable` (no freshness bound) or surface a "data unavailable" state to the user.
+`40001` is a serialization failure; how to react is up to the application. Common responses include retrying, falling back to a different isolation level, or surfacing a "data unavailable" state.
 
 ### Restrictions
 
