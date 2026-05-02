@@ -191,34 +191,15 @@ fn transform_body(
             vec![Row::pack_slice(&[Datum::String(s)])]
         }
         WebhookBodyFormat::Json { array } => {
-            let objects = serde_json::Deserializer::from_slice(body)
-                // Automatically expand multiple JSON objects delimited by whitespace, e.g.
-                // newlines, into a single batch.
-                .into_iter::<serde_json::Value>()
-                // Optionally expand a JSON array into separate rows, if requested.
-                .flat_map(|value| match value {
-                    Ok(serde_json::Value::Array(inners)) if *array => {
-                        itertools::Either::Left(inners.into_iter().map(Result::Ok))
-                    }
-                    value => itertools::Either::Right(std::iter::once(value)),
-                })
-                .collect::<Result<Vec<_>, _>>()
+            let row = Jsonb::from_slice(body)
                 .map_err(|m| AppendWebhookError::InvalidJsonBody { msg: m.to_string() })?;
-
-            // Note: `into_iter()` should be re-using the underlying allocation of the `objects`
-            // vector, and it's more readable to split these into separate iterators.
-            let rows = objects
-                .into_iter()
-                // Map a JSON object into a Row.
-                .map(|o| {
-                    let row = Jsonb::from_serde_json(o)
-                        .map_err(|m| AppendWebhookError::InvalidJsonBody { msg: m.to_string() })?
-                        .into_row();
-                    Ok::<_, AppendWebhookError>(row)
-                })
-                .collect::<Result<_, _>>()?;
-
-            rows
+            if *array && let Datum::List(list) = row.as_ref().into_datum() {
+                list.into_iter()
+                    .map(|datum| Row::pack(std::iter::once(datum)))
+                    .collect()
+            } else {
+                vec![row.into_row()]
+            }
         }
     };
 
