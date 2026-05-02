@@ -117,7 +117,7 @@ use crate::internal_control::{
     self, DataflowParameters, InternalCommandReceiver, InternalCommandSender,
     InternalStorageCommand,
 };
-use crate::metrics::StorageMetrics;
+use crate::metrics::{StorageMetrics, StorageWorkerMetrics};
 use crate::statistics::{AggregatedStatistics, SinkStatistics, SourceStatistics};
 use crate::storage_state::async_storage_worker::{AsyncStorageWorker, AsyncStorageWorkerResponse};
 
@@ -203,6 +203,7 @@ impl<'w> Worker<'w> {
         );
         let cluster_memory_limit = instance_context.cluster_memory_limit;
 
+        let worker_metrics = metrics.for_worker(timely_worker.index());
         let storage_state = StorageState {
             source_uppers: BTreeMap::new(),
             source_tokens: BTreeMap::new(),
@@ -239,6 +240,7 @@ impl<'w> Worker<'w> {
             ),
             tracing_handle,
             server_maintenance_interval: Duration::ZERO,
+            worker_metrics,
         };
 
         // TODO(aljoscha): We might want `async_worker` and `internal_cmd_tx` to
@@ -359,6 +361,9 @@ pub struct StorageState {
     /// Interval at which to perform server maintenance tasks. Set to a zero interval to
     /// perform maintenance with every `step_or_park` invocation.
     pub server_maintenance_interval: Duration,
+
+    /// Per-worker metrics.
+    pub worker_metrics: StorageWorkerMetrics,
 }
 
 impl StorageState {
@@ -472,6 +477,13 @@ impl<'w> Worker<'w> {
             // pending commands or responses. The command may have already been
             // consumed by the call to `client_rx.recv`. See:
             // https://github.com/MaterializeInc/materialize/pull/13973#issuecomment-1200312212
+
+            // Step the timely worker, recording the time taken.
+            let step_timer = self
+                .storage_state
+                .worker_metrics
+                .timely_step_duration_seconds
+                .start_timer();
             if command_rx.is_empty() && self.storage_state.async_worker.is_empty() {
                 // Make sure we wake up again to report any pending statistics updates.
                 let mut park_duration = stats_interval.saturating_sub(last_stats_time.elapsed());
@@ -482,6 +494,7 @@ impl<'w> Worker<'w> {
             } else {
                 self.timely_worker.step();
             }
+            step_timer.observe_duration();
 
             // Rerport any dropped ids
             for id in std::mem::take(&mut self.storage_state.dropped_ids) {
