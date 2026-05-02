@@ -60,7 +60,7 @@ from materialize.parallel_workload.settings import Complexity, Scenario
 
 MAX_COLUMNS = 5
 MAX_INCLUDE_HEADERS = 5
-MAX_ROWS = 50
+MAX_ROWS = 50000
 MAX_CLUSTERS = 4
 MAX_CLUSTER_REPLICAS = 2
 MAX_DBS = 5
@@ -70,7 +70,7 @@ MAX_VIEWS = 15
 MAX_INDEXES = 15
 MAX_ROLES = 15
 MAX_WEBHOOK_SOURCES = 5
-MAX_KAFKA_SOURCES = 5
+MAX_KAFKA_SOURCES = 20
 MAX_MYSQL_SOURCES = 5
 MAX_SQL_SERVER_SOURCES = 5
 MAX_POSTGRES_SOURCES = 5
@@ -523,7 +523,7 @@ class KafkaSource(DBObject):
         for transaction_def in workload.cycle:
             for definition in transaction_def.operations:
                 if type(definition) == Insert and definition.count > MAX_ROWS:
-                    definition.count = 100
+                    definition.count = 5000
         self.generator = workload.generate(fields)
         self.lock = threading.Lock()
 
