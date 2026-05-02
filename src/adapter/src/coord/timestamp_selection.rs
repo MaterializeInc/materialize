@@ -242,6 +242,10 @@ pub trait TimestampProvider {
     /// Uses constraints and preferences to determine a timestamp for a query.
     /// Returns the determined timestamp, the constraints that were applied, and
     /// session_oracle_read_ts.
+    ///
+    /// A TLA+ specification of this function's logic lives in
+    /// `test/tla/TimestampSelection.tla`. If you change the constraint
+    /// generation or solver logic here, please update the spec as well.
     fn determine_timestamp_via_constraints(
         session: &Session,
         read_holds: &ReadHolds,
