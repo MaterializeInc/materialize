@@ -23,6 +23,8 @@ To help you get started, the following guides are available:
 
 - [Datadog using Prometheus SQL Exporter](/manage/monitor/self-managed/datadog/)
 
+For a full list of available Prometheus metrics, see the
+[Metrics reference](/manage/monitor/metrics/).
 
 ### Alerting
 
