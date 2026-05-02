@@ -222,6 +222,8 @@ FILTERED_ARGS = [
     "aws-access-key-id=",
     "aws-secret-access-key=",
     "default-sql-server-password=",
+    "Authorization: Bearer ",
+    "client_secret=",
     # Not a secret, but too spammy, filter too
     "CLUSTER_REPLICA_SIZES",
     "cluster-replica-sizes=",

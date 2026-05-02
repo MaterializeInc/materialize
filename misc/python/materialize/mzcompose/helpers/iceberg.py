@@ -187,6 +187,11 @@ def setup_polaris_for_iceberg(
 
     key = create_minio_user(username, minio_alias, c)
 
+    # Create a dedicated database for Polaris so its internal tables don't
+    # interfere with FOR ALL TABLES publications in PG CDC tests.
+    c.up("postgres")
+    c.exec("postgres", "psql", "-U", "postgres", "-c", "CREATE DATABASE polaris")
+
     with c.override(
         Polaris(
             extra_environment=[

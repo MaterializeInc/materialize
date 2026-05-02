@@ -16,6 +16,7 @@ from materialize.checks.actions import Action
 from materialize.checks.executors import Executor
 from materialize.docker import image_registry
 from materialize.mz_version import MzVersion
+from materialize.mzcompose.helpers.iceberg import setup_polaris_for_iceberg
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.materialized import DeploymentStatus, Materialized
 from materialize.mzcompose.services.ssh_bastion_host import (
@@ -210,6 +211,29 @@ class SetupSqlServerTesting(MzcomposeAction):
     def execute(self, e: Executor) -> None:
         with open(MZ_ROOT / "test" / "sql-server-cdc" / "setup" / "setup.td") as f:
             self.handle = e.testdrive(input=f.read(), mz_service=self.mz_service)
+
+    def join(self, e: Executor) -> None:
+        e.join(self.handle)
+
+
+class SetupIcebergTesting(MzcomposeAction):
+    def __init__(self, scenario: "Scenario", mz_service: str | None = None) -> None:
+        self.handle: Any | None = None
+        self.mz_service = mz_service
+        self.scenario = scenario
+
+    def execute(self, e: Executor) -> None:
+        c = e.mzcompose_composition()
+        iceberg_credentials = setup_polaris_for_iceberg(c)
+        input = dedent(
+            f"""
+            > CREATE VIEW iceberg_credentials AS SELECT '{iceberg_credentials[0]}' AS user, '{iceberg_credentials[1]}' AS key;
+            > CREATE SECRET iceberg_secret AS '{iceberg_credentials[1]}'
+            > CREATE CONNECTION aws_conn TO AWS (ACCESS KEY ID = '{iceberg_credentials[0]}', SECRET ACCESS KEY = SECRET iceberg_secret, ENDPOINT = 'http://minio:9000/', REGION = 'us-east-1');
+            > CREATE CONNECTION polaris_conn TO ICEBERG CATALOG (CATALOG TYPE = 'REST', URL = 'http://polaris:8181/api/catalog', CREDENTIAL = 'root:root', WAREHOUSE = 'default_catalog', SCOPE = 'PRINCIPAL_ROLE:ALL');"""
+        )
+
+        self.handle = e.testdrive(input=input, mz_service=self.mz_service)
 
     def join(self, e: Executor) -> None:
         e.join(self.handle)
