@@ -347,19 +347,103 @@ fn pack_val_as_datum(
 }
 
 fn check_char_length(
-    length: Option<u32>,
+    max_char_len: Option<u32>,
     val: &str,
     col_desc: &MySqlColumnDesc,
 ) -> Result<(), anyhow::Error> {
-    if let Some(length) = length {
-        if let Some(_) = val.char_indices().nth(usize::cast_from(length)) {
+    if let Some(max_char_len) = max_char_len {
+        let char_len = val.chars().count();
+        if char_len > usize::cast_from(max_char_len) {
             Err(anyhow::anyhow!(
-                "received string value of length {} for column {} which has a max length of {}",
-                val.len(),
-                col_desc.name,
-                length
+                "received string value of length {char_len} for column {col_name} which has a max length of {max_char_len}",
+                col_name = col_desc.name,
             ))?
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_col_desc() -> MySqlColumnDesc {
+        MySqlColumnDesc {
+            name: "test_col".to_string(),
+            column_type: None,
+            meta: None,
+        }
+    }
+
+    #[mz_ore::test]
+    fn check_char_length_no_limit() {
+        let col = test_col_desc();
+        // With no length set, any string is accepted.
+        assert!(check_char_length(None, "", &col).is_ok());
+        assert!(check_char_length(None, "abcdefghij", &col).is_ok());
+        assert!(check_char_length(None, "🦀🦀🦀🦀🦀", &col).is_ok());
+    }
+
+    #[mz_ore::test]
+    fn check_char_length_within_limit() {
+        let col = test_col_desc();
+        assert!(check_char_length(Some(5), "", &col).is_ok());
+        assert!(check_char_length(Some(5), "abc", &col).is_ok());
+        // Exactly at the limit is allowed.
+        assert!(check_char_length(Some(5), "abcde", &col).is_ok());
+    }
+
+    #[mz_ore::test]
+    fn check_char_length_exceeds_limit() {
+        let col = test_col_desc();
+        // 🦀 is a 4-byte UTF-8 codepoint but counts as one character. Four
+        // crabs = 4 chars / 16 bytes, which fits in a VARCHAR(4).
+        let err = check_char_length(Some(3), "🦀🦀🦀🦀", &col).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("test_col"),
+            "error should name the column: {msg}"
+        );
+        assert!(
+            msg.contains("max length of 3"),
+            "error should report the configured max: {msg}"
+        );
+        assert!(
+            msg.contains("value of length 4"),
+            "error should report the character count: {msg}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn check_char_length_counts_characters_not_bytes() {
+        let col = test_col_desc();
+        // Four crabs = 4 chars / 16 bytes, which fits in a VARCHAR(4).
+        assert!(check_char_length(Some(4), "🦀🦀🦀🦀", &col).is_ok());
+        // Five crabs (5 chars / 20 bytes) does not.
+        assert!(check_char_length(Some(4), "🦀🦀🦀🦀🦀", &col).is_err());
+
+        // Mix of 2-, 3-, and 4-byte codepoints: "é中🦀" is 3 characters / 9 bytes.
+        assert!(check_char_length(Some(3), "é中🦀", &col).is_ok());
+        assert!(check_char_length(Some(2), "é中🦀", &col).is_err());
+    }
+
+    #[mz_ore::test]
+    fn check_char_length_counts_codepoints_not_graphemes() {
+        let col = test_col_desc();
+        // The US flag 🇺🇸 is a single grapheme but two codepoints (Regional
+        // Indicator Symbols U+1F1FA + U+1F1F8). The check counts codepoints,
+        // matching MySQL's VARCHAR(N) character semantics, so three flags use
+        // six characters.
+        assert!(check_char_length(Some(6), "🇺🇸🇺🇸🇺🇸", &col).is_ok());
+        assert!(check_char_length(Some(5), "🇺🇸🇺🇸🇺🇸", &col).is_err());
+    }
+
+    #[mz_ore::test]
+    fn check_char_length_zero_limit() {
+        let col = test_col_desc();
+        // A zero limit accepts only the empty string.
+        assert!(check_char_length(Some(0), "", &col).is_ok());
+        assert!(check_char_length(Some(0), "a", &col).is_err());
+        assert!(check_char_length(Some(0), "🦀", &col).is_err());
+    }
 }
