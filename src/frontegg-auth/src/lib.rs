@@ -17,7 +17,7 @@ use std::path::PathBuf;
 
 pub use auth::{
     Authenticator, AuthenticatorConfig, ClaimMetadata, ClaimTokenType, Claims,
-    DEFAULT_REFRESH_DROP_FACTOR, DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
+    DEFAULT_REFRESH_DROP_FACTOR, DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE, TenantScope,
 };
 pub use client::Client;
 pub use client::tokens::{ApiTokenArgs, ApiTokenResponse};

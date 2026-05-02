@@ -6619,6 +6619,7 @@ name = "mz-frontegg-auth"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "aws-lc-rs",
  "axum",
  "base64 0.22.1",
  "clap",
@@ -6629,6 +6630,7 @@ dependencies = [
  "mz-auth",
  "mz-ore",
  "mz-repr",
+ "pem",
  "prometheus",
  "reqwest",
  "reqwest-middleware",

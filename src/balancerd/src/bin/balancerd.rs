@@ -26,7 +26,7 @@ use mz_balancerd::{
 };
 use mz_frontegg_auth::{
     Authenticator, AuthenticatorConfig, DEFAULT_REFRESH_DROP_FACTOR,
-    DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
+    DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE, TenantScope,
 };
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
@@ -225,7 +225,7 @@ pub async fn run(args: ServiceArgs, tracing_handle: TracingHandle) -> Result<(),
                             "exactly one of --frontegg-jwk or --frontegg-jwk-file must be present"
                         ),
                     },
-                    tenant_id: None,
+                    tenant_id: TenantScope::AcceptAny,
                     now: mz_ore::now::SYSTEM_TIME.clone(),
                     admin_role: args.frontegg_admin_role.expect("clap enforced"),
                     refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
