@@ -45,6 +45,12 @@
     )
   {%- endif %}
 
+  {# Partition by #}
+  {%- set partition_by = config.get('partition_by') -%}
+  {%- if partition_by -%}
+    with (partition by ({{ partition_by | join(', ') }}))
+  {%- endif %}
+
   {# History retention #}
   {%- set retain_history = config.get('retain_history') -%}
   {%- if retain_history -%}

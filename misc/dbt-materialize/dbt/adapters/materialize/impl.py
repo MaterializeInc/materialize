@@ -107,6 +107,7 @@ class MaterializeRefreshIntervalConfig(dbtClassMixin):
 @dataclass
 class MaterializeConfig(AdapterConfig):
     cluster: Optional[str] = None
+    partition_by: Optional[List[str]] = None
     refresh_interval: Optional[MaterializeRefreshIntervalConfig] = None
     retain_history: Optional[str] = None
 
