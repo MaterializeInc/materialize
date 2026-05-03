@@ -160,6 +160,14 @@ RESET transaction_isolation
 # previous version of the constraint solver would reach an `expect` on the
 # unset oracle anchor and panic the server. The user-chosen timestamp is the
 # sole timestamp constraint; bounded staleness adds nothing further.
+#
+# We use `EXPLAIN TIMESTAMP` rather than the underlying `SELECT` itself: a
+# `SELECT ... AS OF 18446744073709551615` would block on the input upper
+# advancing past `u64::MAX`, which never happens (and under
+# `--auto-index-selects` the runner wraps the SELECT in an indexed view that
+# inherits the same AS OF). `EXPLAIN TIMESTAMP` invokes the same
+# `determine_timestamp_via_constraints` path without executing the peek, so
+# it catches the panic regression without hanging.
 
 statement ok
 CREATE TABLE bs_as_of (a int)
@@ -167,14 +175,12 @@ CREATE TABLE bs_as_of (a int)
 statement ok
 SET transaction_isolation TO 'bounded staleness 5s'
 
-query I
-SELECT count(*) FROM bs_as_of AS OF 18446744073709551615
-----
-0
+statement ok
+EXPLAIN TIMESTAMP FOR SELECT * FROM bs_as_of AS OF 18446744073709551615
 
-# `EXPLAIN TIMESTAMP` and `SUBSCRIBE` go through the same
-# `determine_timestamp_via_constraints` path. Smoke-test that they at least
-# don't panic under bounded staleness.
+# Smoke-test the non-AS-OF path through the same constraint solver — under
+# bounded staleness, this exercises the `oracle_read_ts = Some(_)` branch
+# that the AS OF case skips.
 
 statement ok
 EXPLAIN TIMESTAMP FOR SELECT * FROM bs_as_of
@@ -195,9 +201,6 @@ SET transaction_isolation TO 'bounded staleness 1s'
 
 statement error writes are not permitted under bounded staleness isolation
 COPY bs_copy FROM stdin
-1
-2
-3
 
 statement ok
 RESET transaction_isolation
