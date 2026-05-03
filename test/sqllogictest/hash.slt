@@ -54,6 +54,16 @@ SELECT kafka_murmur2('lkjh234lh9fiuh90y23oiuhsafujhadof229phr9h19h89h8')
 ----
 2088585677
 
+# Verify catalog return type is uint8, not uint4.
+query T
+SELECT t.name
+FROM mz_functions f
+JOIN mz_types t ON f.return_type_id = t.id
+WHERE f.name = 'seahash'
+LIMIT 1
+----
+uint8
+
 query T
 SELECT seahash('');
 ----
