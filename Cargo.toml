@@ -528,7 +528,7 @@ walkdir = "2.5.0"
 which = "8"
 yansi = "1.0.1"
 zeroize = { version = "1.8.2", features = ["derive", "serde"] }
-zip = { version = "6.0.0", default-features = false, features = ["deflate-flate2"] }
+zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2"] }
 
 [profile.dev]
 split-debuginfo = "unpacked"
