@@ -20,6 +20,7 @@ from fixtures import (
     expected_indexes,
     test_materialized_view,
     test_materialized_view_index,
+    test_materialized_view_partition_by,
     test_materialized_view_retain_history,
     test_relation_name_length,
     test_sink,
@@ -50,6 +51,7 @@ class TestCustomMaterializations:
             "actual_indexes.sql": actual_indexes,
             "test_materialized_view.sql": test_materialized_view,
             "test_materialized_view_retain_history.sql": test_materialized_view_retain_history,
+            "test_materialized_view_partition_by.sql": test_materialized_view_partition_by,
             "test_materialized_view_index.sql": test_materialized_view_index,
             "test_relation_name_loooooooooooooooooonger_than_postgres_63_limit.sql": test_relation_name_length,
             "test_source.sql": test_source,
@@ -70,12 +72,12 @@ class TestCustomMaterializations:
         # run models
         results = run_dbt(["run"])
         # run result length
-        assert len(results) == 13
+        assert len(results) == 14
         # re-run models to ensure there are no lingering errors in recreating
         # the materializations
         results = run_dbt(["run"])
         # re-run result length
-        assert len(results) == 13
+        assert len(results) == 14
         # relations_equal
         check_relations_equal(
             project.adapter,

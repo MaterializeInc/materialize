@@ -30,6 +30,15 @@ test_materialized_view_retain_history = """
     SELECT * FROM (VALUES ('chicken', 'pig', 'bird'), ('cow', 'horse', 'bird'), (NULL, NULL, NULL)) _ (a, b, c)
 """
 
+test_materialized_view_partition_by = """
+{{ config(
+    materialized='materialized_view',
+    partition_by=['a']
+) }}
+
+    SELECT * FROM (VALUES ('chicken', 'pig', 'bird'), ('cow', 'horse', 'bird'), (NULL, NULL, NULL)) _ (a, b, c)
+"""
+
 test_materialized_view_index = """
 {{ config(
     materialized='materialized_view',
