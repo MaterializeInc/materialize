@@ -489,7 +489,7 @@ def retry(
             result = f()
             break
         except tuple(exception_types):
-            if attempt == max_attempts:
+            if attempt == max_attempts - 1:
                 raise
             sleep(sleep_secs)
     return result
