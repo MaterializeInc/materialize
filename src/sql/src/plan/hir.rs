@@ -325,6 +325,8 @@ impl WindowExpr {
     }
 }
 
+/// Yields the scalars in `func`'s arguments, plus those in `partition_by`
+/// and `order_by`; does not descend into them.
 impl VisitChildren<HirScalarExpr> for WindowExpr {
     fn visit_children<F>(&self, mut f: F)
     where
@@ -457,6 +459,8 @@ impl WindowExprType {
     }
 }
 
+/// Dispatches to the inner `Value` / `Aggregate` variant's scalar children;
+/// `Scalar` window functions have no scalar children.
 impl VisitChildren<HirScalarExpr> for WindowExprType {
     fn visit_children<F>(&self, f: F)
     where
@@ -684,6 +688,8 @@ impl ValueWindowExpr {
     }
 }
 
+/// Yields `args` (the value-window function's argument expression);
+/// does not descend into it.
 impl VisitChildren<HirScalarExpr> for ValueWindowExpr {
     fn visit_children<F>(&self, mut f: F)
     where
@@ -870,6 +876,8 @@ impl AggregateWindowExpr {
     }
 }
 
+/// Yields the aggregate's argument expression (`aggregate_expr.expr`);
+/// does not descend into it.
 impl VisitChildren<HirScalarExpr> for AggregateWindowExpr {
     fn visit_children<F>(&self, mut f: F)
     where
@@ -1973,6 +1981,10 @@ impl HirRelationExpr {
         f(self, depth)
     }
 
+    /// WARNING: `VisitChildren<HirRelationExpr>::try_visit_children` is NOT a
+    /// drop-in replacement: in addition to the relation children visited here,
+    /// it also descends into every subquery (`Exists`/`Select`) reachable
+    /// through `self`'s scalar children — at any depth of scalar nesting.
     #[deprecated = "Use `VisitChildren<HirRelationExpr>::try_visit_children` instead."]
     pub fn visit1<'a, F, E>(&'a self, depth: usize, mut f: F) -> Result<(), E>
     where
@@ -2060,6 +2072,10 @@ impl HirRelationExpr {
         f(self, depth)
     }
 
+    /// WARNING: `VisitChildren<HirRelationExpr>::try_visit_mut_children` is NOT a
+    /// drop-in replacement: in addition to the relation children visited here,
+    /// it also descends into every subquery (`Exists`/`Select`) reachable
+    /// through `self`'s scalar children — at any depth of scalar nesting.
     #[deprecated = "Use `VisitChildren<HirRelationExpr>::try_visit_mut_children` instead."]
     pub fn visit1_mut<'a, F, E>(&'a mut self, depth: usize, mut f: F) -> Result<(), E>
     where
@@ -2503,6 +2519,11 @@ impl CollectionPlan for HirRelationExpr {
     }
 }
 
+/// In addition to direct relation children of `self`, this also yields every
+/// subquery (`Exists` / `Select`) reachable through `self`'s scalar children,
+/// at any depth of scalar nesting. This is the asymmetry warned about on the
+/// [`VisitChildren`] trait; the matching impl on `HirScalarExpr` deliberately
+/// does not do the symmetric thing, to avoid mutual recursion.
 impl VisitChildren<Self> for HirRelationExpr {
     fn visit_children<F>(&self, mut f: F)
     where
@@ -2841,6 +2862,9 @@ impl VisitChildren<Self> for HirRelationExpr {
     }
 }
 
+/// Yields the scalars directly attached to relation nodes (e.g. `Map.scalars`,
+/// `Filter.predicates`, `Join.on`, `Reduce` aggregate args, `TopK.{limit,
+/// offset}`, `CallTable.exprs`); does not descend into them.
 impl VisitChildren<HirScalarExpr> for HirRelationExpr {
     fn visit_children<F>(&self, mut f: F)
     where
@@ -3893,6 +3917,11 @@ impl HirScalarExpr {
     }
 }
 
+/// Yields the direct scalar children of `self`. Stops at `Exists` / `Select`:
+/// scalars inside subquery bodies are not surfaced. The asymmetry with
+/// `VisitChildren<Self> for HirRelationExpr` (which does see through scalars
+/// into subqueries) is what avoids the mutual recursion warned about on the
+/// [`VisitChildren`] trait.
 impl VisitChildren<Self> for HirScalarExpr {
     fn visit_children<F>(&self, mut f: F)
     where
@@ -4027,6 +4056,8 @@ impl VisitChildren<Self> for HirScalarExpr {
     }
 }
 
+/// Yields the immediate `HirRelationExpr` children of `self` (the bodies of
+/// `Exists` / `Select`); does not descend into them.
 impl VisitChildren<HirRelationExpr> for HirScalarExpr {
     fn visit_children<F>(&self, mut f: F)
     where
