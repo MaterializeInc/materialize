@@ -138,7 +138,6 @@ use mz_timely_util::operator::{CollectionExt, StreamExt};
 use mz_timely_util::probe::{Handle as MzProbeHandle, ProbeNotify};
 use mz_timely_util::scope_label::ScopeExt;
 use timely::PartialOrder;
-use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::vec::ToStream;
 use timely::dataflow::operators::vec::{BranchWhen, Filter};
@@ -1318,10 +1317,10 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     keys,
                     input_key,
                     input_mfp,
+                    self.as_of_frontier.clone(),
                     self.until.clone(),
                     &self.config_set,
                     input_has_future_updates,
-                    self.as_of_frontier.clone(),
                 )
             }
         }
@@ -1475,13 +1474,11 @@ pub trait RenderTimestamp: MzTimestamp + Refines<mz_repr::Timestamp> {
     ///
     /// Temporal bucketing requires a total order on timestamps. For timestamp
     /// types without a total order (e.g., in iterative scopes), this is a no-op.
-    fn maybe_apply_temporal_bucketing<G>(
-        stream: StreamVec<G, (Row, G::Timestamp, Diff)>,
+    fn maybe_apply_temporal_bucketing<'scope>(
+        stream: StreamVec<'scope, Self, (Row, Self, Diff)>,
         as_of: Antichain<mz_repr::Timestamp>,
         summary: mz_repr::Timestamp,
-    ) -> VecCollection<G, Row, Diff>
-    where
-        G: Scope<Timestamp = Self>;
+    ) -> VecCollection<'scope, Self, Row, Diff>;
 }
 
 impl RenderTimestamp for mz_repr::Timestamp {
@@ -1503,14 +1500,11 @@ impl RenderTimestamp for mz_repr::Timestamp {
     fn step_back(&self) -> Self {
         self.saturating_sub(1)
     }
-    fn maybe_apply_temporal_bucketing<G>(
-        stream: StreamVec<G, (Row, G::Timestamp, Diff)>,
+    fn maybe_apply_temporal_bucketing<'scope>(
+        stream: StreamVec<'scope, Self, (Row, Self, Diff)>,
         as_of: Antichain<mz_repr::Timestamp>,
         summary: mz_repr::Timestamp,
-    ) -> VecCollection<G, Row, Diff>
-    where
-        G: Scope<Timestamp = Self>,
-    {
+    ) -> VecCollection<'scope, Self, Row, Diff> {
         use crate::extensions::temporal_bucket::TemporalBucketing;
         use differential_dataflow::AsCollection;
         use timely::container::CapacityContainerBuilder;
@@ -1547,14 +1541,11 @@ impl RenderTimestamp for Product<mz_repr::Timestamp, PointStamp<u64>> {
         }
         Product::new(self.outer.saturating_sub(1), PointStamp::new(vec))
     }
-    fn maybe_apply_temporal_bucketing<G>(
-        stream: StreamVec<G, (Row, G::Timestamp, Diff)>,
+    fn maybe_apply_temporal_bucketing<'scope>(
+        stream: StreamVec<'scope, Self, (Row, Self, Diff)>,
         _as_of: Antichain<mz_repr::Timestamp>,
         _summary: mz_repr::Timestamp,
-    ) -> VecCollection<G, Row, Diff>
-    where
-        G: Scope<Timestamp = Self>,
-    {
+    ) -> VecCollection<'scope, Self, Row, Diff> {
         use differential_dataflow::AsCollection;
         // TODO: Implement bucketing on outer timestamp for iterative scopes.
         stream.as_collection()

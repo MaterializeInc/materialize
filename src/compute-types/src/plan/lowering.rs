@@ -264,12 +264,16 @@ impl Context {
                     AvailableCollections::new_raw()
                 };
 
-                let has_future_updates = match &plan {
-                    GetPlan::Arrangement(_, _, mfp) | GetPlan::Collection(mfp) => {
-                        mfp.has_temporal_predicates()
-                    }
-                    GetPlan::PassArrangements => self.has_future_updates.contains(id),
-                };
+                // Even with a non-temporal MFP, we must propagate `has_future_updates`
+                // from the underlying binding — applying an MFP doesn't drop future-
+                // timestamped updates that already exist on the input.
+                let has_future_updates = self.has_future_updates.contains(id)
+                    || match &plan {
+                        GetPlan::Arrangement(_, _, mfp) | GetPlan::Collection(mfp) => {
+                            mfp.has_temporal_predicates()
+                        }
+                        GetPlan::PassArrangements => false,
+                    };
 
                 let lir_id = self.allocate_lir_id();
                 let node = PlanNode::Get {
@@ -579,12 +583,15 @@ impl Context {
                 let mut plans = Vec::new();
                 let mut input_keys = Vec::new();
                 let mut input_arities = Vec::new();
+                let mut input_futures = Vec::new();
                 for input in inputs.iter() {
-                    let (plan, keys, _input_future) = self.lower_mir_expr(input)?;
+                    let (plan, keys, input_future) = self.lower_mir_expr(input)?;
                     input_arities.push(input.arity());
                     plans.push(plan);
                     input_keys.push(keys);
+                    input_futures.push(input_future);
                 }
+                let any_input_future = input_futures.iter().any(|&f| f);
 
                 let input_mapper =
                     JoinInputMapper::new_from_input_arities(input_arities.iter().copied());
@@ -650,11 +657,12 @@ impl Context {
                 // The renderer will expect certain arrangements to exist; if any of those are not available, the join planning functions above should have returned them in
                 // `missing`. We thus need to plan them here so they'll exist.
                 let is_delta = matches!(plan, JoinPlan::Delta(_));
-                for (((input_plan, input_keys), missing), arity) in plans
+                for ((((input_plan, input_keys), missing), arity), input_future) in plans
                     .iter_mut()
                     .zip_eq(input_keys.iter())
                     .zip_eq(missing.into_iter())
                     .zip_eq(input_arities.iter().cloned())
+                    .zip_eq(input_futures.iter().copied())
                 {
                     if missing != Default::default() {
                         if is_delta {
@@ -690,7 +698,8 @@ This is not expected to cause incorrect results, but could indicate a performanc
                             }
                             .as_plan(lir_id),
                         );
-                        *input_plan = self.arrange_by(raw_plan, missing, input_keys, arity, false);
+                        *input_plan =
+                            self.arrange_by(raw_plan, missing, input_keys, arity, input_future);
                     }
                 }
                 // Return the plan, and no arrangements.
@@ -702,7 +711,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     }
                     .as_plan(lir_id),
                     AvailableCollections::new_raw(),
-                    false,
+                    any_input_future,
                 )
             }
             MirRelationExpr::Reduce {
@@ -743,7 +752,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 expected_group_size,
             } => {
                 let arity = input.arity();
-                let (input, keys, _input_future) = self.lower_mir_expr(input)?;
+                let (input, keys, input_future) = self.lower_mir_expr(input)?;
 
                 let top_k_plan = TopKPlan::create_from(
                     group_key.clone(),
@@ -758,7 +767,13 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 // We don't have an MFP here -- install an operator to permute the
                 // input, if necessary.
                 let input = if !keys.raw {
-                    self.arrange_by(input, AvailableCollections::new_raw(), &keys, arity, false)
+                    self.arrange_by(
+                        input,
+                        AvailableCollections::new_raw(),
+                        &keys,
+                        arity,
+                        input_future,
+                    )
                 } else {
                     input
                 };
@@ -771,7 +786,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     }
                     .as_plan(lir_id),
                     AvailableCollections::new_raw(),
-                    false,
+                    input_future,
                 )
             }
             MirRelationExpr::Negate { input } => {
@@ -803,7 +818,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 )
             }
             MirRelationExpr::Threshold { input } => {
-                let (plan, keys, _input_future) = self.lower_mir_expr(input)?;
+                let (plan, keys, input_future) = self.lower_mir_expr(input)?;
                 let arity = input.arity();
                 let (threshold_plan, required_arrangement) = ThresholdPlan::create_from(arity);
                 let plan = if !keys
@@ -816,7 +831,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         AvailableCollections::new_arranged(vec![required_arrangement]),
                         &keys,
                         arity,
-                        false,
+                        input_future,
                     )
                 } else {
                     plan
@@ -832,7 +847,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     }
                     .as_plan(lir_id),
                     output_keys,
-                    false,
+                    input_future,
                 )
             }
             MirRelationExpr::Union { base, inputs } => {
@@ -1039,7 +1054,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
         fused_unnest_list: bool,
     ) -> Result<(Plan, AvailableCollections, bool), String> {
         let input_arity = input.arity();
-        let (input, keys, _input_future) = self.lower_mir_expr(input)?;
+        let (input, keys, input_future) = self.lower_mir_expr(input)?;
         let (input_key, permutation_and_new_arity) =
             if let Some((input_key, permutation, thinning)) = keys.arbitrary_arrangement() {
                 (
@@ -1090,7 +1105,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
             }
             .as_plan(lir_id),
             output_keys,
-            false,
+            input_future,
         ))
     }
 
