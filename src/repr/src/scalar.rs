@@ -2473,10 +2473,22 @@ impl<'a, E> OutputDatumType<'a, E> for Array<'a> {
     }
 }
 
-/// A wrapper around [`Array`] that represents a PostgreSQL `int2vector` value.
+/// PostgreSQL's `int2vector` type: a thin wrapper over a 1-dimensional
+/// [`Array`] of `int2`, kept distinct from a regular `int2[]` array because
+/// it forbids `NULL` elements.
 ///
-/// This exists to allow distinguishing between `int2vector` and regular array
-/// values in the type system, which enables `#[sqlfunc]` conversions.
+/// All elements are non-nullable `int2`s. This is reflected in
+/// [`Int2Vector`]'s [`AsColumnType`] impl (always `nullable(false)`) and in
+/// the text I/O grammar: the legacy whitespace-separated vector syntax used
+/// by `int2vector` (see [`crate::strconv::parse_legacy_vector_inner`]) has
+/// no notation for `NULL`, unlike the curly-brace array syntax (see
+/// [`crate::strconv::parse_array`]).
+///
+/// The 1-dimensional restriction is enforced by
+/// [`Array::has_int2vector_dims`] (which also permits the empty array);
+/// regular arrays may be multi-dimensional. (The single dimension's lower
+/// bound is 0, matching PostgreSQL's `int2vector` convention, whereas
+/// regular arrays in Materialize use a lower bound of 1.)
 #[derive(Debug)]
 pub struct Int2Vector<'a>(pub Array<'a>);
 
@@ -4723,7 +4735,7 @@ pub enum ReprScalarType {
     String, // also includes SqlScalarType::{VarChar,Char,PgLegacyName}
     Uuid,
     Array(Box<ReprScalarType>),
-    Int2Vector, // differs from Array enough to stick around
+    Int2Vector, // See [`Int2Vector`] for why this is separate from `Array`.
     List { element_type: Box<ReprScalarType> },
     Record { fields: Box<[ReprColumnType]> },
     Map { value_type: Box<ReprScalarType> },
