@@ -448,7 +448,7 @@ reqwest-retry = "0.8.0"
 rlimit = "0.11.0"
 rocksdb = { version = "0.24.0", default-features = false, features = ["lz4", "snappy", "zstd"] }
 ropey = "1.6.1"
-rpassword = "7.4.0"
+rpassword = "7.5.1"
 ryu = "1.0.23"
 schemars = { version = "1.2.1", features = ["uuid1"] }
 scopeguard = "1.2.0"
