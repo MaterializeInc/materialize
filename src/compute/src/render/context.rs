@@ -739,10 +739,10 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         collections: AvailableCollections,
         input_key: Option<Vec<MirScalarExpr>>,
         input_mfp: MapFilterProject,
+        as_of: Antichain<mz_repr::Timestamp>,
         until: Antichain<mz_repr::Timestamp>,
         config_set: &ConfigSet,
         input_has_future_updates: bool,
-        as_of: Antichain<mz_repr::Timestamp>,
     ) -> Self {
         if collections == Default::default() {
             return self;
@@ -783,11 +783,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                     .try_into()
                     .expect("must fit");
                 bucketed = true;
-                <S::Timestamp as RenderTimestamp>::maybe_apply_temporal_bucketing(
-                    oks.inner,
-                    as_of.clone(),
-                    summary,
-                )
+                T::maybe_apply_temporal_bucketing(oks.inner, as_of.clone(), summary)
             } else {
                 oks
             };
@@ -815,11 +811,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                         .try_into()
                         .expect("must fit");
                     bucketed = true;
-                    <S::Timestamp as RenderTimestamp>::maybe_apply_temporal_bucketing(
-                        oks.inner,
-                        as_of.clone(),
-                        summary,
-                    )
+                    T::maybe_apply_temporal_bucketing(oks.inner, as_of.clone(), summary)
                 } else {
                     oks
                 };
