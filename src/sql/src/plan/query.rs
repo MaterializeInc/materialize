@@ -1634,12 +1634,13 @@ pub fn offset_into_value(offset: HirScalarExpr) -> Result<i64, PlanError> {
         .try_into_literal_int64()
         .map_err(|err| PlanError::InvalidOffset(err.to_string_with_causes()))?;
     if offset < 0 {
-        return Err(PlanError::InvalidOffset(format!(
-            "must not be negative, got {}",
-            offset
-        )));
+        return Err(negative_offset_error(offset));
     }
     Ok(offset)
+}
+
+pub fn negative_offset_error(offset: i64) -> PlanError {
+    PlanError::InvalidOffset(format!("must not be negative, got {}", offset))
 }
 
 generate_extracted_config!(
