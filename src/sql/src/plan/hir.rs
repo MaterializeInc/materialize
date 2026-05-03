@@ -2487,13 +2487,7 @@ impl VisitChildren<Self> for HirRelationExpr {
         // Exists or Select variants within HirScalarExpr trees
         // attached at the current node, and we want to visit them as well
         VisitChildren::visit_children(self, |expr: &HirScalarExpr| {
-            #[allow(deprecated)]
-            Visit::visit_post_nolimit(expr, &mut |expr| match expr {
-                HirScalarExpr::Exists(expr, _name) | HirScalarExpr::Select(expr, _name) => {
-                    f(expr.as_ref())
-                }
-                _ => (),
-            });
+            expr.visit_direct_subqueries(&mut f);
         });
 
         use HirRelationExpr::*;
@@ -2576,13 +2570,7 @@ impl VisitChildren<Self> for HirRelationExpr {
         // Exists or Select variants within HirScalarExpr trees
         // attached at the current node, and we want to visit them as well
         VisitChildren::visit_mut_children(self, |expr: &mut HirScalarExpr| {
-            #[allow(deprecated)]
-            Visit::visit_mut_post_nolimit(expr, &mut |expr| match expr {
-                HirScalarExpr::Exists(expr, _name) | HirScalarExpr::Select(expr, _name) => {
-                    f(expr.as_mut())
-                }
-                _ => (),
-            });
+            expr.visit_direct_subqueries_mut(&mut f);
         });
 
         use HirRelationExpr::*;
@@ -2666,12 +2654,7 @@ impl VisitChildren<Self> for HirRelationExpr {
         // Exists or Select variants within HirScalarExpr trees
         // attached at the current node, and we want to visit them as well
         VisitChildren::try_visit_children(self, |expr: &HirScalarExpr| {
-            Visit::try_visit_post(expr, &mut |expr| match expr {
-                HirScalarExpr::Exists(expr, _name) | HirScalarExpr::Select(expr, _name) => {
-                    f(expr.as_ref())
-                }
-                _ => Ok(()),
-            })
+            expr.try_visit_direct_subqueries(&mut f)
         })?;
 
         use HirRelationExpr::*;
@@ -2756,12 +2739,7 @@ impl VisitChildren<Self> for HirRelationExpr {
         // Exists or Select variants within HirScalarExpr trees
         // attached at the current node, and we want to visit them as well
         VisitChildren::try_visit_mut_children(self, |expr: &mut HirScalarExpr| {
-            Visit::try_visit_mut_post(expr, &mut |expr| match expr {
-                HirScalarExpr::Exists(expr, _name) | HirScalarExpr::Select(expr, _name) => {
-                    f(expr.as_mut())
-                }
-                _ => Ok(()),
-            })
+            expr.try_visit_direct_subqueries_mut(&mut f)
         })?;
 
         use HirRelationExpr::*;
