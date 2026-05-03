@@ -138,6 +138,7 @@ use mz_timely_util::operator::{CollectionExt, StreamExt};
 use mz_timely_util::probe::{Handle as MzProbeHandle, ProbeNotify};
 use mz_timely_util::scope_label::ScopeExt;
 use timely::PartialOrder;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::vec::ToStream;
 use timely::dataflow::operators::vec::{BranchWhen, Filter};
@@ -153,6 +154,7 @@ use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
+use crate::extensions::temporal_bucket::TemporalBucketing;
 use crate::logging::compute::{
     ComputeEvent, DataflowGlobal, LirMapping, LirMetadata, LogDataflowErrors, OperatorHydration,
 };
@@ -1505,9 +1507,6 @@ impl RenderTimestamp for mz_repr::Timestamp {
         as_of: Antichain<mz_repr::Timestamp>,
         summary: mz_repr::Timestamp,
     ) -> VecCollection<'scope, Self, Row, Diff> {
-        use crate::extensions::temporal_bucket::TemporalBucketing;
-        use differential_dataflow::AsCollection;
-        use timely::container::CapacityContainerBuilder;
         stream
             .bucket::<CapacityContainerBuilder<_>>(as_of, summary)
             .as_collection()
@@ -1546,7 +1545,6 @@ impl RenderTimestamp for Product<mz_repr::Timestamp, PointStamp<u64>> {
         _as_of: Antichain<mz_repr::Timestamp>,
         _summary: mz_repr::Timestamp,
     ) -> VecCollection<'scope, Self, Row, Diff> {
-        use differential_dataflow::AsCollection;
         // TODO: Implement bucketing on outer timestamp for iterative scopes.
         stream.as_collection()
     }
