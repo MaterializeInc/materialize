@@ -7,10 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-#
-# Test Common subexpression elimination for Relations.
-# PR https://github.com/MaterializeInc/materialize/pull/7715
-#
+# Tests the `Monotonic` MIR transform.
 
 statement ok
 CREATE SOURCE counter_src FROM LOAD GENERATOR COUNTER;

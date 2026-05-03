@@ -139,12 +139,10 @@ impl Interpreter for SingleTimeMonotonic<'_> {
         _input_key: &Option<Vec<MirScalarExpr>>,
         input: Self::Domain,
         _exprs: &Vec<MirScalarExpr>,
-        _func: &TableFunc,
+        func: &TableFunc,
         _mfp: &MapFilterProject,
     ) -> Self::Domain {
-        // In a single-time context, we just propagate the monotonicity
-        // status of the input
-        input
+        PhysicallyMonotonic(input.0 && func.preserves_monotonicity())
     }
 
     fn join(
