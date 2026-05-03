@@ -3170,6 +3170,57 @@ impl HirScalarExpr {
         }
     }
 
+    /// Visit every subquery, without descending into subqueries.
+    pub fn visit_direct_subqueries<F>(&self, mut f: F)
+    where
+        F: FnMut(&HirRelationExpr),
+    {
+        // The infallible variants of the post-walk are deprecated in favor
+        // of the limit-aware `try_visit_post`, but we have no error channel
+        // here (the surrounding signature is infallible, mirroring the
+        // infallible `VisitChildren::{visit_children, visit_mut_children}`
+        // impls that this helper is designed to be called from).
+        #[allow(deprecated)]
+        self.visit_post_nolimit(&mut |e| {
+            VisitChildren::<HirRelationExpr>::visit_children(e, &mut f);
+        });
+    }
+
+    /// Mutable counterpart of [`HirScalarExpr::visit_direct_subqueries`].
+    pub fn visit_direct_subqueries_mut<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&mut HirRelationExpr),
+    {
+        // See the comment on `visit_direct_subqueries` for why we use the
+        // deprecated `_nolimit` walk here.
+        #[allow(deprecated)]
+        self.visit_mut_post_nolimit(&mut |e| {
+            VisitChildren::<HirRelationExpr>::visit_mut_children(e, &mut f);
+        });
+    }
+
+    /// Fallible counterpart of [`HirScalarExpr::visit_direct_subqueries`].
+    pub fn try_visit_direct_subqueries<F, E>(&self, mut f: F) -> Result<(), E>
+    where
+        F: FnMut(&HirRelationExpr) -> Result<(), E>,
+        E: From<RecursionLimitError>,
+    {
+        self.try_visit_post(&mut |e| {
+            VisitChildren::<HirRelationExpr>::try_visit_children(e, &mut f)
+        })
+    }
+
+    /// Fallible mutable counterpart of [`HirScalarExpr::visit_direct_subqueries`].
+    pub fn try_visit_direct_subqueries_mut<F, E>(&mut self, mut f: F) -> Result<(), E>
+    where
+        F: FnMut(&mut HirRelationExpr) -> Result<(), E>,
+        E: From<RecursionLimitError>,
+    {
+        self.try_visit_mut_post(&mut |e| {
+            VisitChildren::<HirRelationExpr>::try_visit_mut_children(e, &mut f)
+        })
+    }
+
     /// Replaces any parameter references in the expression with the
     /// corresponding datum in `params`.
     pub fn bind_parameters(
@@ -3963,6 +4014,88 @@ impl VisitChildren<Self> for HirScalarExpr {
             }
             Exists(..) | Select(..) => (),
             Windowing(expr, _name) => expr.try_visit_mut_children(f)?,
+        }
+        Ok(())
+    }
+}
+
+impl VisitChildren<HirRelationExpr> for HirScalarExpr {
+    fn visit_children<F>(&self, mut f: F)
+    where
+        F: FnMut(&HirRelationExpr),
+    {
+        use HirScalarExpr::*;
+        match self {
+            Column(..)
+            | Parameter(..)
+            | Literal(..)
+            | CallUnmaterializable(..)
+            | CallUnary { .. }
+            | CallBinary { .. }
+            | CallVariadic { .. }
+            | If { .. }
+            | Windowing(..) => (),
+            Exists(expr, _name) | Select(expr, _name) => f(expr),
+        }
+    }
+
+    fn visit_mut_children<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&mut HirRelationExpr),
+    {
+        use HirScalarExpr::*;
+        match self {
+            Column(..)
+            | Parameter(..)
+            | Literal(..)
+            | CallUnmaterializable(..)
+            | CallUnary { .. }
+            | CallBinary { .. }
+            | CallVariadic { .. }
+            | If { .. }
+            | Windowing(..) => (),
+            Exists(expr, _name) | Select(expr, _name) => f(expr),
+        }
+    }
+
+    fn try_visit_children<F, E>(&self, mut f: F) -> Result<(), E>
+    where
+        F: FnMut(&HirRelationExpr) -> Result<(), E>,
+        E: From<RecursionLimitError>,
+    {
+        use HirScalarExpr::*;
+        match self {
+            Column(..)
+            | Parameter(..)
+            | Literal(..)
+            | CallUnmaterializable(..)
+            | CallUnary { .. }
+            | CallBinary { .. }
+            | CallVariadic { .. }
+            | If { .. }
+            | Windowing(..) => (),
+            Exists(expr, _name) | Select(expr, _name) => f(expr)?,
+        }
+        Ok(())
+    }
+
+    fn try_visit_mut_children<F, E>(&mut self, mut f: F) -> Result<(), E>
+    where
+        F: FnMut(&mut HirRelationExpr) -> Result<(), E>,
+        E: From<RecursionLimitError>,
+    {
+        use HirScalarExpr::*;
+        match self {
+            Column(..)
+            | Parameter(..)
+            | Literal(..)
+            | CallUnmaterializable(..)
+            | CallUnary { .. }
+            | CallBinary { .. }
+            | CallVariadic { .. }
+            | If { .. }
+            | Windowing(..) => (),
+            Exists(expr, _name) | Select(expr, _name) => f(expr)?,
         }
         Ok(())
     }
