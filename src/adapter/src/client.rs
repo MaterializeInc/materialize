@@ -735,12 +735,35 @@ impl SessionClient {
     ) -> Result<(ExecuteResponse, Instant), AdapterError> {
         let execute_started = Instant::now();
 
+        let mut outer_ctx_extra = outer_ctx_extra;
+
+        // Unroll SQL `EXECUTE <prepared> (...)` here so the inner
+        // statement goes through the frontend peek gate below, rather
+        // than being re-dispatched via `Command::Execute` from the
+        // coordinator's `Plan::Execute` handler (which bypasses the
+        // gate). The frontend gate is supposed to be the single point
+        // of routing for a given statement, so a prepared statement
+        // invoked via SQL `EXECUTE` must reach the same gate as a
+        // directly-issued one.
+        //
+        // Returns a catalog snapshot iff unrolling actually had work
+        // to do; we hand it to the gate below so we don't take a
+        // second snapshot on top. When unrolling actually happens,
+        // this also begins statement logging using the *outer*
+        // portal's logging/params (so the user-visible `EXECUTE foo`
+        // shows up in the log, not the inner statement) and installs
+        // an `ExecuteContextGuard` into `outer_ctx_extra` so the gate
+        // inherits the existing logging context instead of beginning
+        // a new one from the inner portal.
+        let (portal_name, catalog) = self
+            .unroll_sql_execute(portal_name, &mut outer_ctx_extra)
+            .await?;
+
         // Attempt peek sequencing in the session task.
         // If unsupported, fall back to the Coordinator path.
         // TODO(peek-seq): wire up cancel_future
-        let mut outer_ctx_extra = outer_ctx_extra;
         let peek_result = self
-            .try_frontend_peek(&portal_name, &mut outer_ctx_extra)
+            .try_frontend_peek(&portal_name, catalog, &mut outer_ctx_extra)
             .await?;
         if let Some(resp) = peek_result {
             debug!("frontend peek succeeded");
@@ -767,6 +790,192 @@ impl SessionClient {
             )
             .await?;
         Ok((response, execute_started))
+    }
+
+    /// If the named portal binds a SQL `EXECUTE <prepared>` statement,
+    /// resolve the prepared statement, install a fresh portal for the
+    /// inner statement (carrying the EXECUTE's actual parameter
+    /// values), and return that inner portal's name so the caller can
+    /// run the frontend gate against it. Mirrors what the
+    /// coordinator's `Plan::Execute` handler does
+    /// (`coord/sequencer/inner.rs`'s `sequence_execute`), but at the
+    /// session-client layer so the inner statement still flows through
+    /// `try_frontend_peek`.
+    ///
+    /// Only ever unrolls one level: chained `PREPARE foo AS EXECUTE
+    /// bar` is rejected at parse time
+    /// (`src/sql-parser/src/parser.rs::parse_prepare`), and Postgres
+    /// has the same restriction, so the inner statement is
+    /// guaranteed not to be another `EXECUTE`. We failsafe-check
+    /// that invariant below and surface an internal error if it's
+    /// ever violated.
+    ///
+    /// Returns the original portal name unchanged (and `None` for the
+    /// catalog) when the portal does not bind an EXECUTE — the common
+    /// case, which costs only a portal lookup. When unrolling does
+    /// happen, the catalog snapshot taken here is returned alongside
+    /// the new portal name so the caller can hand it to the gate
+    /// instead of taking another snapshot on top.
+    async fn unroll_sql_execute(
+        &mut self,
+        portal_name: String,
+        outer_ctx_extra: &mut Option<ExecuteContextGuard>,
+    ) -> Result<(String, Option<Arc<Catalog>>), AdapterError> {
+        use mz_sql::plan::Plan;
+
+        let (stmt, params, outer_logging, outer_lifecycle_timestamps) = {
+            let session = self.session.as_ref().expect("SessionClient invariant");
+            let portal = match session.get_portal_unverified(&portal_name) {
+                Some(p) => p,
+                // No portal: let the downstream gate surface the
+                // standard "missing portal" error.
+                None => return Ok((portal_name, None)),
+            };
+            match &portal.stmt {
+                Some(stmt) => (
+                    Arc::clone(stmt),
+                    portal.parameters.clone(),
+                    Arc::clone(&portal.logging),
+                    portal.lifecycle_timestamps.clone(),
+                ),
+                None => return Ok((portal_name, None)),
+            }
+        };
+
+        // Only EXECUTE statements need unrolling. Bail out before
+        // taking a catalog snapshot in the (overwhelmingly common)
+        // non-EXECUTE case.
+        if !matches!(&*stmt, Statement::Execute(_)) {
+            return Ok((portal_name, None));
+        }
+
+        let catalog = self.catalog_snapshot("unroll_sql_execute").await;
+
+        // Plan the EXECUTE to extract `(prepared_name, bound_params)`.
+        let execute_plan = {
+            let session = self.session.as_mut().expect("SessionClient invariant");
+            let conn_catalog = catalog.for_session(session);
+            let (resolved_stmt, resolved_ids) =
+                mz_sql::names::resolve(&conn_catalog, (*stmt).clone())?;
+            let pcx = session.pcx();
+            let plan = mz_sql::plan::plan(
+                Some(pcx),
+                &conn_catalog,
+                resolved_stmt,
+                &params,
+                &resolved_ids,
+            )?;
+            match plan {
+                Plan::Execute(plan) => plan,
+                other => {
+                    // Planning a `Statement::Execute` must yield
+                    // `Plan::Execute`. If it doesn't, the planner
+                    // contract is broken.
+                    return Err(AdapterError::Internal(format!(
+                        "planning Statement::Execute yielded unexpected plan: {:?}",
+                        mz_sql::plan::PlanKind::from(&other),
+                    )));
+                }
+            }
+        };
+
+        // Verify and install the inner portal. Mirrors
+        // `Coordinator::sequence_execute`. The inner portal carries
+        // the inner prepared statement's `logging`; the gate will
+        // see `outer_ctx_extra=Some(...)` (set below) and inherit the
+        // EXECUTE-level logging instead of starting fresh from this
+        // portal.
+        let session = self.session.as_mut().expect("SessionClient invariant");
+        Coordinator::verify_prepared_statement(&catalog, session, &execute_plan.name)?;
+        let ps = session
+            .get_prepared_statement_unverified(&execute_plan.name)
+            .expect("verified above");
+        let inner_stmt = ps.stmt().cloned();
+        let inner_desc = ps.desc().clone();
+        let state_revision = ps.state_revision;
+        let inner_logging = Arc::clone(ps.logging());
+
+        // Failsafe: `PREPARE foo AS EXECUTE bar` is rejected by the
+        // parser, so the resolved inner statement must not be
+        // another `EXECUTE`. If that ever changes, we'd silently
+        // skip OCC routing for the deeper EXECUTEs — surface it as
+        // an internal error instead.
+        if let Some(inner) = inner_stmt.as_ref() {
+            if matches!(inner, Statement::Execute(_)) {
+                return Err(AdapterError::Internal(format!(
+                    "nested EXECUTE: prepared statement {:?} resolves to another EXECUTE; \
+                     parser should reject `PREPARE ... AS EXECUTE ...`",
+                    execute_plan.name,
+                )));
+            }
+        }
+
+        let portal_name = session.create_new_portal(
+            inner_stmt,
+            inner_logging,
+            inner_desc,
+            execute_plan.params,
+            Vec::new(),
+            state_revision,
+        )?;
+
+        // Begin EXECUTE-level statement logging now that all the
+        // error-prone planning is done — running this after the
+        // unroll means a planning error doesn't leave an orphaned
+        // `Began` event behind.
+        //
+        // The legacy path logged the user-visible `EXECUTE foo`
+        // because `begin_statement_execution` ran on the outer portal
+        // before `Plan::Execute` swapped to the inner one; the inner
+        // re-dispatch then passed `outer_ctx_extra=Some(...)` so it
+        // didn't log a second time. We mimic that here: the gate
+        // only begins logging when `outer_ctx_extra` is `None`, so by
+        // installing a guard now we make it inherit our
+        // `EXECUTE`-level logging instead of starting a fresh entry
+        // from the inner portal (which would record the wrong SQL
+        // text and the wrong parameter set).
+        if outer_ctx_extra.is_none() {
+            let session = self.session.as_mut().expect("SessionClient invariant");
+            // Mirrors the inline begin-execution pattern in
+            // `try_frontend_peek::try_frontend_peek`. We pass the
+            // *outer* portal's `logging` and pgwire-bound `params`
+            // so the recorded entry shows the user-visible `EXECUTE
+            // foo (...)`, not the inner SQL.
+            let id = {
+                let result = self
+                    .peek_client
+                    .statement_logging_frontend
+                    .begin_statement_execution(
+                        session,
+                        &params,
+                        &outer_logging,
+                        catalog.system_config(),
+                        outer_lifecycle_timestamps,
+                    );
+                if let Some((logging_id, began_execution, mseh_update, prepared_statement)) = result
+                {
+                    self.peek_client.log_began_execution(
+                        began_execution,
+                        mseh_update,
+                        prepared_statement,
+                    );
+                    Some(logging_id)
+                } else {
+                    None
+                }
+            };
+            // Wrap the id in an `ExecuteContextGuard` so the gate's
+            // `outer_ctx_extra is Some` branch picks it up and
+            // inherits the logging context instead of starting a
+            // fresh entry from the inner portal. The dummy channel
+            // only matters if the guard is dropped without being
+            // consumed — which can't happen on the success/normal-error
+            // paths from here onward.
+            let (dummy_tx, _dummy_rx) = mpsc::unbounded_channel();
+            *outer_ctx_extra = Some(ExecuteContextGuard::new(id, dummy_tx));
+        }
+
+        Ok((portal_name, Some(catalog)))
     }
 
     fn now(&self) -> EpochMillis {
@@ -1172,12 +1381,13 @@ impl SessionClient {
     pub(crate) async fn try_frontend_peek(
         &mut self,
         portal_name: &str,
+        catalog: Option<Arc<Catalog>>,
         outer_ctx_extra: &mut Option<ExecuteContextGuard>,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         if self.enable_frontend_peek_sequencing {
             let session = self.session.as_mut().expect("SessionClient invariant");
             self.peek_client
-                .try_frontend_peek(portal_name, session, outer_ctx_extra)
+                .try_frontend_peek(portal_name, catalog, session, outer_ctx_extra)
                 .await
         } else {
             Ok(None)
