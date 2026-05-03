@@ -4759,9 +4759,9 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         },
         "seahash" => Scalar {
             params!(String) => UnaryFunc::SeahashString(func::SeahashString)
-                => UInt32, oid::FUNC_SEAHASH_STRING_OID;
+                => UInt64, oid::FUNC_SEAHASH_STRING_OID;
             params!(Bytes) => UnaryFunc::SeahashBytes(func::SeahashBytes)
-                => UInt32, oid::FUNC_SEAHASH_BYTES_OID;
+                => UInt64, oid::FUNC_SEAHASH_BYTES_OID;
         },
         "starts_with" => Scalar {
             params!(String, String) => BinaryFunc::from(func::StartsWith) => Bool, 3696;
