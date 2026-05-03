@@ -765,23 +765,23 @@ impl SessionClient {
         let mut outer_ctx_extra = outer_ctx_extra;
 
         // Unroll SQL `EXECUTE <prepared> (...)` here so the inner
-        // statement goes through the frontend peek gate below, rather
-        // than being re-dispatched via `Command::Execute` from the
-        // coordinator's `Plan::Execute` handler (which bypasses the
-        // gate). The frontend gate is supposed to be the single point
-        // of routing for a given statement, so a prepared statement
-        // invoked via SQL `EXECUTE` must reach the same gate as a
-        // directly-issued one.
+        // statement goes through the frontend peek / read-then-write
+        // gates below, rather than being re-dispatched via
+        // `Command::Execute` from the coordinator's `Plan::Execute`
+        // handler (which bypasses both gates). The frontend gates are
+        // supposed to be the single point of routing for a given
+        // statement, so a prepared statement invoked via SQL `EXECUTE`
+        // must reach the same gates as a directly-issued one.
         //
         // Returns a catalog snapshot iff unrolling actually had work
-        // to do; we hand it to the gate below so we don't take a
-        // second snapshot on top. When unrolling actually happens,
-        // this also begins statement logging using the *outer*
-        // portal's logging/params (so the user-visible `EXECUTE foo`
-        // shows up in the log, not the inner statement) and installs
-        // an `ExecuteContextGuard` into `outer_ctx_extra` so the gate
-        // inherits the existing logging context instead of beginning
-        // a new one from the inner portal.
+        // to do; we thread it through to the gates below so they
+        // don't each take their own snapshot on top. When unrolling
+        // actually happens, this also begins statement logging using
+        // the *outer* portal's logging/params (so the user-visible
+        // `EXECUTE foo` shows up in the log, not the inner statement)
+        // and installs an `ExecuteContextGuard` into `outer_ctx_extra`
+        // so the gates inherit the existing logging context instead
+        // of beginning a new one from the inner portal.
         let (portal_name, catalog) = self
             .unroll_sql_execute(portal_name, &mut outer_ctx_extra)
             .await?;
@@ -790,7 +790,7 @@ impl SessionClient {
         // If unsupported, fall back to the Coordinator path.
         // TODO(peek-seq): wire up cancel_future
         let peek_result = self
-            .try_frontend_peek(&portal_name, catalog, &mut outer_ctx_extra)
+            .try_frontend_peek(&portal_name, catalog.clone(), &mut outer_ctx_extra)
             .await?;
         if let Some(resp) = peek_result {
             debug!("frontend peek succeeded");
@@ -805,6 +805,7 @@ impl SessionClient {
         let rtw_result = self
             .try_frontend_read_then_write_with_cancel(
                 &portal_name,
+                catalog,
                 &mut outer_ctx_extra,
                 cancel_future.clone(),
             )
@@ -836,11 +837,11 @@ impl SessionClient {
     /// resolve the prepared statement, install a fresh portal for the
     /// inner statement (carrying the EXECUTE's actual parameter
     /// values), and return that inner portal's name so the caller can
-    /// run the frontend gate against it. Mirrors what the
-    /// coordinator's `Plan::Execute` handler does
-    /// (`coord/sequencer/inner.rs`'s `sequence_execute`), but at the
-    /// session-client layer so the inner statement still flows through
-    /// `try_frontend_peek`.
+    /// run the gates against it. Mirrors what the coordinator's
+    /// `Plan::Execute` handler does (`coord/sequencer/inner.rs`'s
+    /// `sequence_execute`), but at the session-client layer so the
+    /// inner statement still flows through `try_frontend_peek` and
+    /// `try_frontend_read_then_write`.
     ///
     /// Only ever unrolls one level: chained `PREPARE foo AS EXECUTE
     /// bar` is rejected at parse time
@@ -854,7 +855,7 @@ impl SessionClient {
     /// catalog) when the portal does not bind an EXECUTE — the common
     /// case, which costs only a portal lookup. When unrolling does
     /// happen, the catalog snapshot taken here is returned alongside
-    /// the new portal name so the caller can hand it to the gate
+    /// the new portal name so the caller can hand it to the gates
     /// instead of taking another snapshot on top.
     async fn unroll_sql_execute(
         &mut self,
@@ -867,7 +868,7 @@ impl SessionClient {
             let session = self.session.as_ref().expect("SessionClient invariant");
             let portal = match session.get_portal_unverified(&portal_name) {
                 Some(p) => p,
-                // No portal: let the downstream gate surface the
+                // No portal: let the downstream gates surface the
                 // standard "missing portal" error.
                 None => return Ok((portal_name, None)),
             };
@@ -921,7 +922,7 @@ impl SessionClient {
 
         // Verify and install the inner portal. Mirrors
         // `Coordinator::sequence_execute`. The inner portal carries
-        // the inner prepared statement's `logging`; the gate will
+        // the inner prepared statement's `logging`; the gates will
         // see `outer_ctx_extra=Some(...)` (set below) and inherit the
         // EXECUTE-level logging instead of starting fresh from this
         // portal.
@@ -968,49 +969,33 @@ impl SessionClient {
         // because `begin_statement_execution` ran on the outer portal
         // before `Plan::Execute` swapped to the inner one; the inner
         // re-dispatch then passed `outer_ctx_extra=Some(...)` so it
-        // didn't log a second time. We mimic that here: the gate
-        // only begins logging when `outer_ctx_extra` is `None`, so by
-        // installing a guard now we make it inherit our
+        // didn't log a second time. We mimic that here: the gates
+        // only begin logging when `outer_ctx_extra` is `None`, so by
+        // installing a guard now we make them inherit our
         // `EXECUTE`-level logging instead of starting a fresh entry
         // from the inner portal (which would record the wrong SQL
         // text and the wrong parameter set).
         if outer_ctx_extra.is_none() {
             let session = self.session.as_mut().expect("SessionClient invariant");
-            // Mirrors the inline begin-execution pattern in
-            // `try_frontend_peek::try_frontend_peek`. We pass the
-            // *outer* portal's `logging` and pgwire-bound `params`
-            // so the recorded entry shows the user-visible `EXECUTE
-            // foo (...)`, not the inner SQL.
-            let id = {
-                let result = self
-                    .peek_client
-                    .statement_logging_frontend
-                    .begin_statement_execution(
-                        session,
-                        &params,
-                        &outer_logging,
-                        catalog.system_config(),
-                        outer_lifecycle_timestamps,
-                    );
-                if let Some((logging_id, began_execution, mseh_update, prepared_statement)) = result
-                {
-                    self.peek_client.log_began_execution(
-                        began_execution,
-                        mseh_update,
-                        prepared_statement,
-                    );
-                    Some(logging_id)
-                } else {
-                    None
-                }
-            };
-            // Wrap the id in an `ExecuteContextGuard` so the gate's
-            // `outer_ctx_extra is Some` branch picks it up and
-            // inherits the logging context instead of starting a
-            // fresh entry from the inner portal. The dummy channel
-            // only matters if the guard is dropped without being
-            // consumed — which can't happen on the success/normal-error
-            // paths from here onward.
+            let mut none_guard: Option<ExecuteContextGuard> = None;
+            let logging_guard = self.peek_client.begin_statement_logging(
+                session,
+                &params,
+                &outer_logging,
+                &catalog,
+                outer_lifecycle_timestamps,
+                &mut none_guard,
+            );
+            let id = logging_guard.id();
+            // The gates manage end-of-execution themselves once they
+            // take ownership of `outer_ctx_extra`, so defuse ours to
+            // suppress this guard's auto-`Aborted` emission on drop.
+            logging_guard.defuse();
+            // The gate's `begin_statement_logging` immediately
+            // `take()`s and `defuse()`s the guard, so this dummy
+            // channel only matters if the guard is dropped without
+            // being consumed — which can't happen on the
+            // success/normal-error paths from here onward.
             let (dummy_tx, _dummy_rx) = mpsc::unbounded_channel();
             *outer_ctx_extra = Some(ExecuteContextGuard::new(id, dummy_tx));
         }
@@ -1444,6 +1429,7 @@ impl SessionClient {
     async fn try_frontend_read_then_write_with_cancel(
         &mut self,
         portal_name: &str,
+        catalog: Option<Arc<Catalog>>,
         outer_ctx_extra: &mut Option<ExecuteContextGuard>,
         cancel_future: impl Future<Output = ()> + Send,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
@@ -1495,7 +1481,7 @@ impl SessionClient {
         tokio::pin!(connection_cancel);
 
         let mut frontend_read_then_write =
-            pin::pin!(self.try_frontend_read_then_write(portal_name, outer_ctx_extra));
+            pin::pin!(self.try_frontend_read_then_write(portal_name, catalog, outer_ctx_extra));
 
         tokio::select! {
             response = &mut frontend_read_then_write => response,
@@ -1523,6 +1509,7 @@ impl SessionClient {
     pub(crate) async fn try_frontend_read_then_write(
         &mut self,
         portal_name: &str,
+        catalog: Option<Arc<Catalog>>,
         outer_ctx_extra: &mut Option<ExecuteContextGuard>,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         use mz_expr::RowSetFinishing;
@@ -1536,7 +1523,10 @@ impl SessionClient {
             return Ok(None);
         }
 
-        let catalog = self.catalog_snapshot("try_frontend_read_then_write").await;
+        let catalog = match catalog {
+            Some(c) => c,
+            None => self.catalog_snapshot("try_frontend_read_then_write").await,
+        };
 
         let (stmt, params, logging, lifecycle_timestamps) = {
             let session = self.session.as_ref().expect("SessionClient invariant");
