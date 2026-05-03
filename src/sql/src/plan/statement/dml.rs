@@ -111,7 +111,7 @@ pub fn plan_insert(
         .expr
         .into_iter()
         .map(|mut expr| {
-            expr.bind_parameters(scx, QueryLifetime::OneShot, params)?;
+            expr.bind_parameters_and_simplify_offset(scx, QueryLifetime::OneShot, params)?;
             expr.lower_uncorrelated(scx.catalog.system_vars())
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -171,7 +171,7 @@ pub fn plan_read_then_write(
     selection.bind_parameters_and_simplify_offset(scx, QueryLifetime::OneShot, params)?;
     let mut assignments_outer = BTreeMap::new();
     for (idx, mut set) in assignments {
-        set.bind_parameters(scx, QueryLifetime::OneShot, params)?;
+        set.bind_parameters_and_simplify_offset(scx, QueryLifetime::OneShot, params)?;
         let set = set.lower_uncorrelated(scx.catalog.system_vars())?;
         assignments_outer.insert(idx, set);
     }
@@ -237,7 +237,7 @@ fn plan_select_inner(
     let limit = match finishing.limit {
         None => None,
         Some(mut limit) => {
-            limit.bind_parameters(scx, lifetime, params)?;
+            limit.bind_parameters_and_simplify_offset(scx, lifetime, params)?;
             // TODO: Call `try_into_literal_int64` instead of `as_literal`.
             let Some(limit) = limit.as_literal() else {
                 sql_bail!(
@@ -257,7 +257,7 @@ fn plan_select_inner(
     };
     let offset = {
         let mut offset = finishing.offset.clone();
-        offset.bind_parameters(scx, lifetime, params)?;
+        offset.bind_parameters_and_simplify_offset(scx, lifetime, params)?;
         let offset = offset_into_value(offset.take())?;
         offset.try_into().map_err(|_| {
             // We already checked in bind_parameters_and_simplify_offset / offset_into_value.
