@@ -20,7 +20,7 @@ class TemporalFilter(Scenario):
 
 
 class TemporalFilterIndexed(TemporalFilter):
-    """Measure the time to create an index on a view with a temporal filter over 1M rows.
+    """Measure the time to create an index on a view with a temporal filter over 10M rows.
 
     The view applies a temporal filter (mz_now() range) on top of a materialized
     view joined with a table, ensuring the collection has future updates that
@@ -47,11 +47,11 @@ class TemporalFilterIndexed(TemporalFilter):
 
             > CREATE MATERIALIZED VIEW mv_temporal AS
               SELECT x, a
-              FROM generate_series(1, 1000000) AS x
+              FROM generate_series(1, 10000000) AS x
               CROSS JOIN anchor;
 
             > SELECT COUNT(*) FROM mv_temporal;
-            1000000
+            10000000
 
             > SELECT 1
               /* A */
@@ -66,5 +66,5 @@ class TemporalFilterIndexed(TemporalFilter):
 
             > SELECT COUNT(*) FROM v_temporal
               /* B */
-            1000000
+            10000000
         """))
