@@ -1857,7 +1857,7 @@ impl Coordinator {
         self.cancel_cluster_reconfigurations_for_conn(&conn_id)
             .await;
         self.cancel_pending_copy(&conn_id);
-        if let Some((tx, _rx)) = self.staged_cancellation.get_mut(&conn_id) {
+        if let Some((tx, _rx)) = self.connection_cancel_watches.get_mut(&conn_id) {
             let _ = tx.send(true);
         }
     }

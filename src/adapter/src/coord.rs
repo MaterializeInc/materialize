@@ -1877,9 +1877,14 @@ pub struct Coordinator {
     /// to stage Batches in Persist that we will then link into the shard.
     active_copies: BTreeMap<ConnectionId, ActiveCopyFrom>,
 
-    /// A map from connection ids to a watch channel that is set to `true` if the connection
-    /// received a cancel request.
-    staged_cancellation: BTreeMap<ConnectionId, (watch::Sender<bool>, watch::Receiver<bool>)>,
+    /// Connection-scoped cancellation watches.
+    ///
+    /// Each entry is a watch channel whose value is `false` until cancellation
+    /// is requested for that connection, at which point it is set to `true`.
+    ///
+    /// Consumers install/remove these watches while they have cancellable work
+    /// in flight.
+    connection_cancel_watches: BTreeMap<ConnectionId, (watch::Sender<bool>, watch::Receiver<bool>)>,
     /// Active introspection subscribes.
     introspection_subscribes: BTreeMap<GlobalId, IntrospectionSubscribe>,
 
@@ -4622,7 +4627,7 @@ pub fn serve(
                     active_compute_sinks: BTreeMap::new(),
                     active_webhooks: BTreeMap::new(),
                     active_copies: BTreeMap::new(),
-                    staged_cancellation: BTreeMap::new(),
+                    connection_cancel_watches: BTreeMap::new(),
                     introspection_subscribes: BTreeMap::new(),
                     write_locks: BTreeMap::new(),
                     deferred_write_ops: BTreeMap::new(),
