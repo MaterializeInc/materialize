@@ -29,6 +29,17 @@ use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
 use crate::plan::{AvailableCollections, GetPlan, LirId, Plan, PlanNode};
 
+/// The result of lowering a [`MirRelationExpr`] to a [`Plan`].
+struct LoweredExpr {
+    /// The lowered plan.
+    plan: Plan,
+    /// The arrangement keys that the plan is certain to produce.
+    keys: AvailableCollections,
+    /// Whether the plan's output may contain updates at future timestamps,
+    /// e.g., from a temporal MFP using `mz_now()`.
+    has_future_updates: bool,
+}
+
 pub(super) struct Context {
     /// Known bindings to (possibly arranged) collections.
     arrangements: BTreeMap<Id, AvailableCollections>,
@@ -106,7 +117,11 @@ impl Context {
         let mut objects_to_build = Vec::with_capacity(desc.objects_to_build.len());
         for build in desc.objects_to_build {
             self.debug_info.id = build.id;
-            let (plan, keys, has_future_updates) = self.lower_mir_expr(&build.plan)?;
+            let LoweredExpr {
+                plan,
+                keys,
+                has_future_updates,
+            } = self.lower_mir_expr(&build.plan)?;
 
             self.arrangements.insert(Id::Global(build.id), keys);
             if has_future_updates {
@@ -147,10 +162,7 @@ impl Context {
     ///
     /// An empty list of arrangement keys indicates that only a `Collection` stream can
     /// be assumed to exist.
-    fn lower_mir_expr(
-        &mut self,
-        expr: &MirRelationExpr,
-    ) -> Result<(Plan, AvailableCollections, bool), String> {
+    fn lower_mir_expr(&mut self, expr: &MirRelationExpr) -> Result<LoweredExpr, String> {
         // This function is recursive and can overflow its stack, so grow it if
         // needed. The growth here is unbounded. Our general solution for this problem
         // is to use [`ore::stack::RecursionGuard`] to additionally limit the stack
@@ -163,10 +175,7 @@ impl Context {
         mz_ore::stack::maybe_grow(|| self.lower_mir_expr_stack_safe(expr))
     }
 
-    fn lower_mir_expr_stack_safe(
-        &mut self,
-        expr: &MirRelationExpr,
-    ) -> Result<(Plan, AvailableCollections, bool), String> {
+    fn lower_mir_expr_stack_safe(&mut self, expr: &MirRelationExpr) -> Result<LoweredExpr, String> {
         // Extract a maximally large MapFilterProject from `expr`.
         // We will then try and push this in to the resulting expression.
         //
@@ -176,7 +185,11 @@ impl Context {
         let (mut mfp, expr) = MapFilterProject::extract_from_expression(expr);
         // We attempt to plan what we have remaining, in the context of `mfp`.
         // We may not be able to do this, and must wrap some operators with a `Mfp` stage.
-        let (mut plan, mut keys, mut has_future_updates) = match expr {
+        let LoweredExpr {
+            mut plan,
+            mut keys,
+            mut has_future_updates,
+        } = match expr {
             // These operators should have been extracted from the expression.
             MirRelationExpr::Map { .. } => {
                 panic!("This operator should have been extracted");
@@ -198,7 +211,11 @@ impl Context {
                     }),
                 };
                 // The plan, not arranged in any way.
-                (node.as_plan(lir_id), AvailableCollections::new_raw(), false)
+                LoweredExpr {
+                    plan: node.as_plan(lir_id),
+                    keys: AvailableCollections::new_raw(),
+                    has_future_updates: false,
+                }
             }
             MirRelationExpr::Get { id, typ: _, .. } => {
                 // This stage can absorb arbitrary MFP operators.
@@ -282,7 +299,11 @@ impl Context {
                     plan,
                 };
                 // Return the plan, and any keys if an identity `mfp`.
-                (node.as_plan(lir_id), out_keys, has_future_updates)
+                LoweredExpr {
+                    plan: node.as_plan(lir_id),
+                    keys: out_keys,
+                    has_future_updates,
+                }
             }
             MirRelationExpr::Let { id, value, body } => {
                 // It would be unfortunate to have a non-trivial `mfp` here, as we hope
@@ -291,7 +312,11 @@ impl Context {
 
                 // Plan the value using only the initial arrangements, but
                 // introduce any resulting arrangements bound to `id`.
-                let (value, v_keys, v_future) = self.lower_mir_expr(value)?;
+                let LoweredExpr {
+                    plan: value,
+                    keys: v_keys,
+                    has_future_updates: v_future,
+                } = self.lower_mir_expr(value)?;
                 let pre_existing = self.arrangements.insert(Id::Local(*id), v_keys);
                 assert_none!(pre_existing);
                 if v_future {
@@ -299,21 +324,25 @@ impl Context {
                 }
                 // Plan the body using initial and `value` arrangements,
                 // and then remove reference to the value arrangements.
-                let (body, b_keys, b_future) = self.lower_mir_expr(body)?;
+                let LoweredExpr {
+                    plan: body,
+                    keys: b_keys,
+                    has_future_updates: b_future,
+                } = self.lower_mir_expr(body)?;
                 self.arrangements.remove(&Id::Local(*id));
                 self.has_future_updates.remove(&Id::Local(*id));
                 // Return the plan, and any `body` arrangements.
                 let lir_id = self.allocate_lir_id();
-                (
-                    PlanNode::Let {
+                LoweredExpr {
+                    plan: PlanNode::Let {
                         id: id.clone(),
                         value: Box::new(value),
                         body: Box::new(body),
                     }
                     .as_plan(lir_id),
-                    b_keys,
-                    b_future,
-                )
+                    keys: b_keys,
+                    has_future_updates: b_future,
+                }
             }
             MirRelationExpr::LetRec {
                 ids,
@@ -329,7 +358,11 @@ impl Context {
                 // as we cannot circulate an arrangement through a `Variable` yet.
                 let mut lir_values = Vec::with_capacity(values.len());
                 for (id, value) in ids.iter().zip_eq(values) {
-                    let (mut lir_value, mut v_keys, v_future) = self.lower_mir_expr(value)?;
+                    let LoweredExpr {
+                        plan: mut lir_value,
+                        keys: mut v_keys,
+                        has_future_updates: v_future,
+                    } = self.lower_mir_expr(value)?;
                     // If `v_keys` does not contain an unarranged collection, we must form it.
                     if !v_keys.raw {
                         // Choose an "arbitrary" arrangement; TODO: prefer a specific one.
@@ -405,24 +438,28 @@ impl Context {
                 }
                 // Plan the body using initial and `value` arrangements,
                 // and then remove reference to the value arrangements.
-                let (body, b_keys, b_future) = self.lower_mir_expr(body)?;
+                let LoweredExpr {
+                    plan: body,
+                    keys: b_keys,
+                    has_future_updates: b_future,
+                } = self.lower_mir_expr(body)?;
                 for id in ids.iter() {
                     self.arrangements.remove(&Id::Local(*id));
                     self.has_future_updates.remove(&Id::Local(*id));
                 }
                 // Return the plan, and any `body` arrangements.
                 let lir_id = self.allocate_lir_id();
-                (
-                    PlanNode::LetRec {
+                LoweredExpr {
+                    plan: PlanNode::LetRec {
                         ids: ids.clone(),
                         values: lir_values,
                         limits: limits.clone(),
                         body: Box::new(body),
                     }
                     .as_plan(lir_id),
-                    b_keys,
-                    b_future,
-                )
+                    keys: b_keys,
+                    has_future_updates: b_future,
+                }
             }
             MirRelationExpr::FlatMap {
                 input: flat_map_input,
@@ -534,7 +571,11 @@ impl Context {
                     fused_with_reduce
                 } else {
                     // Couldn't fuse it with a `Reduce`, so lower as a normal `FlatMap`.
-                    let (input, keys, input_future) = self.lower_mir_expr(flat_map_input)?;
+                    let LoweredExpr {
+                        plan: input,
+                        keys,
+                        has_future_updates: input_future,
+                    } = self.lower_mir_expr(flat_map_input)?;
                     // This stage can absorb arbitrary MFP instances.
                     let mfp = mfp.take();
                     let mut exprs = exprs.clone();
@@ -557,8 +598,8 @@ impl Context {
 
                     let lir_id = self.allocate_lir_id();
                     // Return the plan, and no arrangements.
-                    (
-                        PlanNode::FlatMap {
+                    LoweredExpr {
+                        plan: PlanNode::FlatMap {
                             input_key,
                             input: Box::new(input),
                             exprs: exprs.clone(),
@@ -566,9 +607,9 @@ impl Context {
                             mfp_after: mfp,
                         }
                         .as_plan(lir_id),
-                        AvailableCollections::new_raw(),
-                        input_future,
-                    )
+                        keys: AvailableCollections::new_raw(),
+                        has_future_updates: input_future,
+                    }
                 }
             }
             MirRelationExpr::Join {
@@ -585,7 +626,11 @@ impl Context {
                 let mut input_arities = Vec::new();
                 let mut input_futures = Vec::new();
                 for input in inputs.iter() {
-                    let (plan, keys, input_future) = self.lower_mir_expr(input)?;
+                    let LoweredExpr {
+                        plan,
+                        keys,
+                        has_future_updates: input_future,
+                    } = self.lower_mir_expr(input)?;
                     input_arities.push(input.arity());
                     plans.push(plan);
                     input_keys.push(keys);
@@ -704,15 +749,15 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 }
                 // Return the plan, and no arrangements.
                 let lir_id = self.allocate_lir_id();
-                (
-                    PlanNode::Join {
+                LoweredExpr {
+                    plan: PlanNode::Join {
                         inputs: plans,
                         plan,
                     }
                     .as_plan(lir_id),
-                    AvailableCollections::new_raw(),
-                    any_input_future,
-                )
+                    keys: AvailableCollections::new_raw(),
+                    has_future_updates: any_input_future,
+                }
             }
             MirRelationExpr::Reduce {
                 input,
@@ -752,7 +797,11 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 expected_group_size,
             } => {
                 let arity = input.arity();
-                let (input, keys, input_future) = self.lower_mir_expr(input)?;
+                let LoweredExpr {
+                    plan: input,
+                    keys,
+                    has_future_updates: input_future,
+                } = self.lower_mir_expr(input)?;
 
                 let top_k_plan = TopKPlan::create_from(
                     group_key.clone(),
@@ -779,19 +828,23 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 };
                 // Return the plan, and no arrangements.
                 let lir_id = self.allocate_lir_id();
-                (
-                    PlanNode::TopK {
+                LoweredExpr {
+                    plan: PlanNode::TopK {
                         input: Box::new(input),
                         top_k_plan,
                     }
                     .as_plan(lir_id),
-                    AvailableCollections::new_raw(),
-                    input_future,
-                )
+                    keys: AvailableCollections::new_raw(),
+                    has_future_updates: input_future,
+                }
             }
             MirRelationExpr::Negate { input } => {
                 let arity = input.arity();
-                let (input, keys, input_future) = self.lower_mir_expr(input)?;
+                let LoweredExpr {
+                    plan: input,
+                    keys,
+                    has_future_updates: input_future,
+                } = self.lower_mir_expr(input)?;
 
                 // We don't have an MFP here -- install an operator to permute the
                 // input, if necessary.
@@ -808,17 +861,21 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 };
                 // Return the plan, and no arrangements.
                 let lir_id = self.allocate_lir_id();
-                (
-                    PlanNode::Negate {
+                LoweredExpr {
+                    plan: PlanNode::Negate {
                         input: Box::new(input),
                     }
                     .as_plan(lir_id),
-                    AvailableCollections::new_raw(),
-                    input_future,
-                )
+                    keys: AvailableCollections::new_raw(),
+                    has_future_updates: input_future,
+                }
             }
             MirRelationExpr::Threshold { input } => {
-                let (plan, keys, input_future) = self.lower_mir_expr(input)?;
+                let LoweredExpr {
+                    plan,
+                    keys,
+                    has_future_updates: input_future,
+                } = self.lower_mir_expr(input)?;
                 let arity = input.arity();
                 let (threshold_plan, required_arrangement) = ThresholdPlan::create_from(arity);
                 let plan = if !keys
@@ -840,59 +897,67 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 let output_keys = threshold_plan.keys();
                 // Return the plan, and any produced keys.
                 let lir_id = self.allocate_lir_id();
-                (
-                    PlanNode::Threshold {
+                LoweredExpr {
+                    plan: PlanNode::Threshold {
                         input: Box::new(plan),
                         threshold_plan,
                     }
                     .as_plan(lir_id),
-                    output_keys,
-                    input_future,
-                )
+                    keys: output_keys,
+                    has_future_updates: input_future,
+                }
             }
             MirRelationExpr::Union { base, inputs } => {
                 let arity = base.arity();
-                let mut plans_keys_futures = Vec::with_capacity(1 + inputs.len());
-                let (plan, keys, future) = self.lower_mir_expr(base)?;
-                plans_keys_futures.push((plan, keys, future));
+                let mut lowered_inputs = Vec::with_capacity(1 + inputs.len());
+                lowered_inputs.push(self.lower_mir_expr(base)?);
                 for input in inputs.iter() {
-                    let (plan, keys, future) = self.lower_mir_expr(input)?;
-                    plans_keys_futures.push((plan, keys, future));
+                    lowered_inputs.push(self.lower_mir_expr(input)?);
                 }
-                let any_future = plans_keys_futures.iter().any(|(_, _, f)| *f);
-                let plans = plans_keys_futures
+                let any_future = lowered_inputs.iter().any(|l| l.has_future_updates);
+                let plans = lowered_inputs
                     .into_iter()
-                    .map(|(plan, keys, future)| {
-                        // We don't have an MFP here -- install an operator to permute the
-                        // input, if necessary.
-                        if !keys.raw {
-                            self.arrange_by(
-                                plan,
-                                AvailableCollections::new_raw(),
-                                &keys,
-                                arity,
-                                future,
-                            )
-                        } else {
-                            plan
-                        }
-                    })
+                    .map(
+                        |LoweredExpr {
+                             plan,
+                             keys,
+                             has_future_updates: future,
+                         }| {
+                            // We don't have an MFP here -- install an operator to permute the
+                            // input, if necessary.
+                            if !keys.raw {
+                                self.arrange_by(
+                                    plan,
+                                    AvailableCollections::new_raw(),
+                                    &keys,
+                                    arity,
+                                    future,
+                                )
+                            } else {
+                                plan
+                            }
+                        },
+                    )
                     .collect();
                 // Return the plan and no arrangements.
                 let lir_id = self.allocate_lir_id();
-                (
-                    PlanNode::Union {
+                LoweredExpr {
+                    plan: PlanNode::Union {
                         inputs: plans,
                         consolidate_output: false,
                     }
                     .as_plan(lir_id),
-                    AvailableCollections::new_raw(),
-                    any_future,
-                )
+                    keys: AvailableCollections::new_raw(),
+                    has_future_updates: any_future,
+                }
             }
             MirRelationExpr::ArrangeBy { input, keys } => {
                 let input_mir = input;
-                let (input, mut input_keys, future) = self.lower_mir_expr(input)?;
+                let LoweredExpr {
+                    plan: input,
+                    keys: mut input_keys,
+                    has_future_updates: future,
+                } = self.lower_mir_expr(input)?;
                 // Fill the `types` in `input_keys` if not already present.
                 let arity = input_mir.arity();
 
@@ -903,7 +968,11 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     .cloned()
                     .collect::<Vec<_>>();
                 if new_keys.is_empty() {
-                    (input, input_keys, future)
+                    LoweredExpr {
+                        plan: input,
+                        keys: input_keys,
+                        has_future_updates: future,
+                    }
                 } else {
                     let mut new_keys = new_keys
                         .iter()
@@ -931,8 +1000,8 @@ This is not expected to cause incorrect results, but could indicate a performanc
 
                     // Return the plan and extended keys.
                     let lir_id = self.allocate_lir_id();
-                    (
-                        PlanNode::ArrangeBy {
+                    LoweredExpr {
+                        plan: PlanNode::ArrangeBy {
                             input_key,
                             input: Box::new(input),
                             input_mfp,
@@ -940,9 +1009,9 @@ This is not expected to cause incorrect results, but could indicate a performanc
                             input_has_future_updates: future,
                         }
                         .as_plan(lir_id),
-                        input_keys,
-                        future,
-                    )
+                        keys: input_keys,
+                        has_future_updates: future,
+                    }
                 }
             }
         };
@@ -1036,7 +1105,11 @@ This is not expected to cause incorrect results, but could indicate a performanc
             }
         }
 
-        Ok((plan, keys, has_future_updates))
+        Ok(LoweredExpr {
+            plan,
+            keys,
+            has_future_updates,
+        })
     }
 
     /// Lowers a `Reduce` with the given fields and an `mfp_on_top`, which is the MFP that is
@@ -1052,9 +1125,13 @@ This is not expected to cause incorrect results, but could indicate a performanc
         expected_group_size: &Option<u64>,
         mfp_on_top: &mut MapFilterProject,
         fused_unnest_list: bool,
-    ) -> Result<(Plan, AvailableCollections, bool), String> {
+    ) -> Result<LoweredExpr, String> {
         let input_arity = input.arity();
-        let (input, keys, input_future) = self.lower_mir_expr(input)?;
+        let LoweredExpr {
+            plan: input,
+            keys,
+            has_future_updates: input_future,
+        } = self.lower_mir_expr(input)?;
         let (input_key, permutation_and_new_arity) =
             if let Some((input_key, permutation, thinning)) = keys.arbitrary_arrangement() {
                 (
@@ -1095,8 +1172,8 @@ This is not expected to cause incorrect results, but could indicate a performanc
         );
         let output_keys = reduce_plan.keys(group_key.len(), output_arity);
         let lir_id = self.allocate_lir_id();
-        Ok((
-            PlanNode::Reduce {
+        Ok(LoweredExpr {
+            plan: PlanNode::Reduce {
                 input_key,
                 input: Box::new(input),
                 key_val_plan,
@@ -1104,9 +1181,9 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 mfp_after,
             }
             .as_plan(lir_id),
-            output_keys,
-            input_future,
-        ))
+            keys: output_keys,
+            has_future_updates: input_future,
+        })
     }
 
     /// Replace the plan with another one
