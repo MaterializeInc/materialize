@@ -54,7 +54,10 @@
     {%- do with_options.append("retain history for '" ~ retain_history ~ "'") -%}
   {%- endif -%}
 
-  {# Contracts and constraints #}
+  {# Contracts and constraints — NOTE(morsapaes): only column-level constraints
+     are handled here. Model-level constraints (model['constraints']) are silently
+     ignored because dbt-core's model-level constraints are intended for
+     multi-column constraints, which Materialize does not support. #}
   {%- set contract_config = config.get('contract') -%}
   {%- if contract_config.enforced -%}
     {# render_raw_columns_constraints returns a list of strings like
