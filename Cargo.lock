@@ -8084,6 +8084,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "differential-dataflow",
+ "fail",
  "futures",
  "itertools 0.14.0",
  "mz-build-info",
