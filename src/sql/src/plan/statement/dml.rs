@@ -51,7 +51,8 @@ use crate::catalog::CatalogItemType;
 use crate::names::{Aug, ResolvedItemName};
 use crate::normalize;
 use crate::plan::query::{
-    ExprContext, QueryLifetime, offset_into_value, plan_as_of_or_up_to, plan_expr,
+    ExprContext, QueryLifetime, negative_offset_error, offset_into_value, plan_as_of_or_up_to,
+    plan_expr,
 };
 use crate::plan::scope::Scope;
 use crate::plan::statement::show::ShowSelect;
@@ -258,9 +259,11 @@ fn plan_select_inner(
         let mut offset = finishing.offset.clone();
         offset.bind_parameters(scx, lifetime, params)?;
         let offset = offset_into_value(offset.take())?;
-        offset
-            .try_into()
-            .expect("checked in bind_parameters_and_simplify_offset/offset_into_value that it is not negative")
+        offset.try_into().map_err(|_| {
+            // We already checked in bind_parameters_and_simplify_offset / offset_into_value.
+            soft_panic_or_log!("unexpectedly negative OFFSET");
+            negative_offset_error(offset)
+        })?
     };
 
     // Unmaterializable functions are evaluated based on various information (e.g., the catalog)
