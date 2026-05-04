@@ -204,8 +204,58 @@ fn write_all_vectored(file: &File, slices: &[IoSlice<'_>]) -> std::io::Result<()
     Ok(())
 }
 
-pub(crate) fn read_at_file(_h: &Handle, _ranges: &[(usize, usize)], _dst: &mut Vec<u64>) {
-    unimplemented!("file backend read_at: see Task 10")
+pub(crate) fn read_at_file(handle: &Handle, ranges: &[(usize, usize)], dst: &mut Vec<u64>) {
+    use std::os::unix::fs::FileExt;
+
+    let inner = handle
+        .file_inner()
+        .expect("read_at_file called on non-file handle");
+    let total = inner.len_u64s;
+    for &(off, len) in ranges {
+        let end = off.checked_add(len).expect("range offset+len overflow");
+        assert!(
+            end <= total,
+            "read range out of bounds: {off}+{len} > {total}"
+        );
+    }
+    let path = scratch_path(inner.id);
+    let file = match File::open(&path) {
+        Ok(f) => f,
+        Err(err) => panic!("mz_ore::pager: failed to open scratch file {path:?}: {err}"),
+    };
+
+    let coalesced = coalesce(ranges);
+    for (off, len) in coalesced {
+        let byte_off = (off * 8) as u64;
+        let byte_len = len * 8;
+        let buf_start = dst.len();
+        dst.resize(buf_start + len, 0);
+        let buf: &mut [u8] = bytemuck::cast_slice_mut(&mut dst[buf_start..buf_start + len]);
+        let mut filled = 0;
+        while filled < byte_len {
+            let n = file
+                .read_at(&mut buf[filled..byte_len], byte_off + filled as u64)
+                .expect("pager pread failed");
+            if n == 0 {
+                panic!("pager pread short: expected {byte_len} got {filled}");
+            }
+            filled += n;
+        }
+    }
+}
+
+fn coalesce(ranges: &[(usize, usize)]) -> Vec<(usize, usize)> {
+    let mut out: Vec<(usize, usize)> = Vec::with_capacity(ranges.len());
+    for &(off, len) in ranges {
+        if let Some(last) = out.last_mut() {
+            if last.0 + last.1 == off {
+                last.1 += len;
+                continue;
+            }
+        }
+        out.push((off, len));
+    }
+    out
 }
 
 pub(crate) fn take_file(_h: Handle, _dst: &mut Vec<u64>) {
@@ -239,6 +289,37 @@ mod backend_tests {
         assert!(path.exists());
         let bytes = std::fs::read(&path).expect("read scratch");
         assert_eq!(bytes.len(), 5 * 8);
+    }
+
+    #[mz_ore::test]
+    fn file_read_at_basic() {
+        setup_dir();
+        let mut chunks = [vec![1u64, 2, 3, 4, 5]];
+        let h = pageout_file(&mut chunks);
+        let mut dst = Vec::new();
+        read_at_file(&h, &[(1, 3)], &mut dst);
+        assert_eq!(dst, vec![2, 3, 4]);
+    }
+
+    #[mz_ore::test]
+    fn file_read_at_many_concats_and_coalesces() {
+        setup_dir();
+        let mut chunks = [vec![10u64, 20, 30, 40, 50, 60]];
+        let h = pageout_file(&mut chunks);
+        let mut dst = Vec::new();
+        // (0,2) and (2,2) are adjacent => single pread internally.
+        read_at_file(&h, &[(0, 2), (2, 2), (5, 1)], &mut dst);
+        assert_eq!(dst, vec![10, 20, 30, 40, 60]);
+    }
+
+    #[mz_ore::test]
+    #[should_panic(expected = "out of bounds")]
+    fn file_read_at_panics_on_oob() {
+        setup_dir();
+        let mut chunks = [vec![1u64, 2]];
+        let h = pageout_file(&mut chunks);
+        let mut dst = Vec::new();
+        read_at_file(&h, &[(0, 99)], &mut dst);
     }
 }
 
