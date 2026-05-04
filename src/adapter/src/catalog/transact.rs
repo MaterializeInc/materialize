@@ -2642,6 +2642,8 @@ impl Catalog {
                     tx.reset_0dt_deployment_max_wait()?;
                 } else if name == WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.name() {
                     tx.reset_0dt_deployment_ddl_check_interval()?;
+                } else if name == ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT.name() {
+                    tx.reset_enable_0dt_deployment_panic_after_timeout()?;
                 }
 
                 CatalogState::add_to_audit_log(
@@ -2659,6 +2661,7 @@ impl Catalog {
                 tx.clear_system_configs();
                 tx.reset_0dt_deployment_max_wait()?;
                 tx.reset_0dt_deployment_ddl_check_interval()?;
+                tx.reset_enable_0dt_deployment_panic_after_timeout()?;
 
                 CatalogState::add_to_audit_log(
                     &state.system_configuration,
