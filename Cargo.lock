@@ -8354,7 +8354,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "similar 2.7.0",
+ "similar 3.1.0",
  "tempfile",
  "termcolor",
  "tiberius",
