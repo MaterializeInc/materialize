@@ -67,6 +67,20 @@ impl Handle {
             _ => None,
         }
     }
+
+    pub(crate) fn into_swap_inner(self) -> Option<SwapInner> {
+        match self.inner {
+            HandleInner::Swap(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn into_file_inner(self) -> Option<FileInner> {
+        match self.inner {
+            HandleInner::File(f) => Some(f),
+            _ => None,
+        }
+    }
 }
 
 /// Selects which backend stores paged-out data.
