@@ -149,13 +149,6 @@ pub const ENABLE_COLUMNATION_LGALLOC: Config<bool> = Config::new(
     "Enable allocating regions from lgalloc.",
 );
 
-/// Enable lgalloc for columnar.
-pub const ENABLE_COLUMNAR_LGALLOC: Config<bool> = Config::new(
-    "enable_columnar_lgalloc",
-    true,
-    "Enable allocating aligned regions in columnar from lgalloc.",
-);
-
 /// The interval at which the compute server performs maintenance tasks.
 pub const COMPUTE_SERVER_MAINTENANCE_INTERVAL: Config<Duration> = Config::new(
     "compute_server_maintenance_interval",
@@ -405,7 +398,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&MEMORY_LIMITER_BURST_FACTOR)
         .add(&ENABLE_LGALLOC_EAGER_RECLAMATION)
         .add(&ENABLE_COLUMNATION_LGALLOC)
-        .add(&ENABLE_COLUMNAR_LGALLOC)
         .add(&COMPUTE_SERVER_MAINTENANCE_INTERVAL)
         .add(&DATAFLOW_MAX_INFLIGHT_BYTES)
         .add(&DATAFLOW_MAX_INFLIGHT_BYTES_CC)
