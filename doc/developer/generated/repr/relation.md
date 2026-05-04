@@ -1,6 +1,6 @@
 ---
 source: src/repr/src/relation.rs
-revision: 3af9082af6
+revision: ea77b8b38b
 ---
 
 # mz-repr::relation
@@ -15,3 +15,5 @@ Defines a dual-type system for relation and column metadata:
 `RelationDesc` (an ordered sequence of named, typed columns using `SqlColumnType`) remains the primary schema descriptor. `RelationDescBuilder` provides a fluent construction API.
 `RelationDescDiff` and `VersionedRelationDesc` support schema evolution by tracking changes between relation versions.
 `ColumnName`, `ColumnIndex`, `NotNullViolation`, and `PropRelationDescDiff` provide naming, indexing, validation, and property-based testing support.
+
+`SemanticType` is a compile-time annotation enum used by the catalog ontology layer to describe the meaning of a column (e.g., `CatalogItemId`, `GlobalId`, `ClusterId`, `ReplicaId`, `SchemaId`, `DatabaseId`, `RoleId`, `NetworkPolicyId`, `ShardId`, `OID`, `ObjectType`, `ConnectionType`, `SourceType`, `MzTimestamp`, `WallclockTimestamp`, `ByteCount`, `RecordCount`, `CreditRate`, `SqlDefinition`, `RedactedSqlDefinition`). It is stored in `Ontology::column_semantic_types` in the `mz-catalog` crate rather than in `RelationDesc` to avoid persist schema mismatches.
