@@ -62,7 +62,7 @@ export const arrayMatchFilter =
     return value != null && selected.includes(value);
   };
 
-export const clusterFilterFn = arrayMatchFilter((r) => r.clusterName);
+export const clusterFilterFn = arrayMatchFilter((r) => r.cluster?.name);
 
 export const objectTypeFilterFn = arrayMatchFilter<MaintainedObjectType>(
   (r) => r.objectType,
@@ -78,8 +78,8 @@ export const freshnessFilterFn = (
   thresholdSeconds: number,
 ) => {
   if (thresholdSeconds === undefined) return true;
-  const lagMs = row.original.lagMs;
-  return lagMs !== null && lagMs >= thresholdSeconds * 1_000;
+  const lagMs = row.original.lag?.ms;
+  return lagMs !== undefined && lagMs >= thresholdSeconds * 1_000;
 };
 
 /**

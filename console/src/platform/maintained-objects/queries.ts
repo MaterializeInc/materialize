@@ -9,6 +9,7 @@
 
 import React from "react";
 
+import { isSystemId } from "~/api/materialize";
 import {
   MAINTAINED_OBJECT_TYPES,
   MaintainedObjectType,
@@ -28,27 +29,42 @@ import {
 import { useAllObjects } from "~/store/allObjects";
 import { sumPostgresIntervalMs } from "~/util";
 
+/** Cluster the object is maintained on. `null` for tables, which aren't
+ *  bound to a cluster. */
+export interface MaintainedObjectCluster {
+  id: string;
+  name: string;
+}
+
+/** pMAX lag snapshot. `null` until the SUBSCRIBE delivers a row. */
+export interface MaintainedObjectLag {
+  /** Raw Postgres interval, used for human-readable formatting. */
+  value: NonNullable<LagAggregateRow["lag"]>;
+  /** Same value flattened to milliseconds, used for filters and sorts. */
+  ms: number;
+}
+
 export interface MaintainedObjectListItem {
   id: string;
   name: string;
-  schemaName: string | null;
-  databaseName: string | null;
+  schemaName: string;
+  databaseName: string;
   objectType: MaintainedObjectType;
-  clusterId: string | null;
-  clusterName: string | null;
+  cluster: MaintainedObjectCluster | null;
   /** 0 until the hydration snapshot arrives. */
   hydratedReplicas: number;
   /** 0 until the hydration snapshot arrives. */
   totalReplicas: number;
-  /** null until the lag snapshot arrives. */
-  lag: LagAggregateRow["lag"];
-  /** null until the lag snapshot arrives. */
-  lagMs: number | null;
+  /** Null until the lag snapshot arrives. */
+  lag: MaintainedObjectLag | null;
 }
 
 const MAINTAINED_OBJECT_TYPE_SET: ReadonlySet<string> = new Set(
   MAINTAINED_OBJECT_TYPES,
 );
+
+const bigintToNumber = (v: bigint | null | undefined): number =>
+  v ? Number(v) : 0;
 
 const useSubscribeToLagAggregate = ({
   lookbackMinutes,
@@ -110,38 +126,42 @@ export const useMaintainedObjectsList = ({
   const hydration = useSubscribeToHydrationAggregate();
 
   const data = React.useMemo<MaintainedObjectListItem[]>(() => {
-    const lagById = new Map(lag.data.map((r) => [r.object_id, r]));
+    const lagById = new Map(lag.data.map((r) => [r.object_id, r.lag]));
     const hydrationById = new Map(hydration.data.map((r) => [r.object_id, r]));
-    const num = (v: bigint | null | undefined) => (v ? Number(v) : 0);
 
-    return allObjects.data
-      .filter((obj) => {
-        if (!obj.id.startsWith("u")) return false;
-        if (!MAINTAINED_OBJECT_TYPE_SET.has(obj.objectType)) return false;
-        // Subsources and progress sources are managed by their parent source.
-        return !(
-          obj.objectType === "source" &&
-          (obj.sourceType === "subsource" || obj.sourceType === "progress")
-        );
-      })
-      .map((obj) => {
-        const lagRow = lagById.get(obj.id);
-        const hydrationRow = hydrationById.get(obj.id);
-        return {
-          id: obj.id,
-          name: obj.name,
-          schemaName: obj.schemaName,
-          databaseName: obj.databaseName,
-          objectType: obj.objectType as MaintainedObjectType,
-          clusterId: obj.clusterId,
-          clusterName: obj.clusterName,
-          hydratedReplicas: num(hydrationRow?.hydratedReplicas),
-          totalReplicas: num(hydrationRow?.totalReplicas),
-          lag: lagRow?.lag ?? null,
-          lagMs: lagRow?.lag ? sumPostgresIntervalMs(lagRow.lag) : null,
-        };
-      })
-      .sort((a, b) => a.name.localeCompare(b.name));
+    const objectsById = new Map<string, MaintainedObjectListItem>();
+    for (const obj of allObjects.data) {
+      if (isSystemId(obj.id)) continue;
+      if (!MAINTAINED_OBJECT_TYPE_SET.has(obj.objectType)) continue;
+      // TODO(@leedqin): drop once `force_source_table_syntax` is on by
+      // default (#30483); until then mz_objects still returns subsources as
+      // sources, and we hide them and progress alongside their parent.
+      if (obj.sourceType === "subsource" || obj.sourceType === "progress") {
+        continue;
+      }
+      if (!obj.schemaName || !obj.databaseName) continue;
+      const lagInterval = lagById.get(obj.id);
+      const hydrationRow = hydrationById.get(obj.id);
+      objectsById.set(obj.id, {
+        id: obj.id,
+        name: obj.name,
+        schemaName: obj.schemaName,
+        databaseName: obj.databaseName,
+        objectType: obj.objectType as MaintainedObjectType,
+        cluster:
+          obj.clusterId && obj.clusterName
+            ? { id: obj.clusterId, name: obj.clusterName }
+            : null,
+        hydratedReplicas: bigintToNumber(hydrationRow?.hydratedReplicas),
+        totalReplicas: bigintToNumber(hydrationRow?.totalReplicas),
+        lag: lagInterval
+          ? { value: lagInterval, ms: sumPostgresIntervalMs(lagInterval) }
+          : null,
+      });
+    }
+    return [...objectsById.values()].sort((a, b) =>
+      a.name.localeCompare(b.name),
+    );
   }, [allObjects.data, lag.data, hydration.data]);
 
   return {

@@ -47,7 +47,7 @@ export interface TablePaginationProps<TData> {
 
 export interface TableSearchProps {
   /**
-   * Initial search value. Resad once on mount; the component is uncontrolled
+   * Initial search value. Read once on mount; the component is uncontrolled
    * thereafter. Pass a `key` prop to force a reset.
    */
   initialValue?: string;
