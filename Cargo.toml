@@ -457,7 +457,7 @@ segment = { version = "0.2.6", default-features = false, features = ["native-tls
 semver = "1.0.28"
 sentry = { version = "0.46.1", default-features = false, features = ["backtrace", "contexts", "debug-images", "transport"] }
 sentry-panic = "0.46.1"
-sentry-tracing = "0.46.1"
+sentry-tracing = "0.48.0"
 serde = { version = "1.0.219", features = ["derive"] }
 serde-aux = "4.7.0"
 serde_bytes = "0.11.19"
