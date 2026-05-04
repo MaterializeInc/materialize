@@ -42,6 +42,7 @@ allocation-counter = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion.workspace = true
+proptest.workspace = true
 
 [features]
 default = ["mz-ore/default"]

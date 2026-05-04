@@ -32,7 +32,7 @@ use differential_dataflow::Hashable;
 use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use timely::Accountable;
 use timely::bytes::arc::Bytes;
-use timely::container::{DrainContainer, PushInto};
+use timely::container::{DrainContainer, PushInto, SizableContainer};
 use timely::dataflow::channels::ContainerBytes;
 
 use crate::columnation::{ColInternalMerger, ColumnationStack};
@@ -135,6 +135,29 @@ where
                 unimplemented!("Pushing into Column::Bytes without first clearing");
             }
         }
+    }
+}
+
+impl<C: Columnar> SizableContainer for Column<C> {
+    fn at_capacity(&self) -> bool {
+        // The capacity policy is the load-bearing decision for merger
+        // throughput — too small and we ship many tiny chunks; too large and
+        // peak memory balloons. Candidate signals: record count, encoded byte
+        // size (`indexed::length_in_bytes`), or a hybrid. Spike: bail until we
+        // pick one.
+        unimplemented!("Column<C>::at_capacity: capacity policy unset");
+    }
+
+    fn ensure_capacity(&mut self, _stash: &mut Option<Self>) {
+        // No-op for `Column`: the chunker, merger, and `clear()` all maintain
+        // the invariant that pipeline-internal chunks are `Column::Typed`.
+        // Bytes/Align variants only appear at wire boundaries (Timely
+        // exchange) and never reach the merger's call sites.
+        debug_assert!(
+            matches!(self, Column::Typed(_)),
+            "Column::ensure_capacity invoked on a non-Typed variant — \
+             a wire-boundary `Column` reached the merger pipeline.",
+        );
     }
 }
 
