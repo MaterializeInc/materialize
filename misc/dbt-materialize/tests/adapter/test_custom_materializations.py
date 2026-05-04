@@ -14,12 +14,14 @@
 # limitations under the License.
 
 import pytest
-from dbt.tests.util import check_relations_equal, run_dbt
+from dbt.tests.util import check_relations_equal, run_dbt, run_sql_with_adapter
 from fixtures import (
     actual_indexes,
     expected_indexes,
     test_materialized_view,
     test_materialized_view_index,
+    test_materialized_view_multiple_with_options,
+    test_materialized_view_partition_by,
     test_materialized_view_retain_history,
     test_relation_name_length,
     test_sink,
@@ -50,6 +52,8 @@ class TestCustomMaterializations:
             "actual_indexes.sql": actual_indexes,
             "test_materialized_view.sql": test_materialized_view,
             "test_materialized_view_retain_history.sql": test_materialized_view_retain_history,
+            "test_materialized_view_partition_by.sql": test_materialized_view_partition_by,
+            "test_materialized_view_multiple_with_options.sql": test_materialized_view_multiple_with_options,
             "test_materialized_view_index.sql": test_materialized_view_index,
             "test_relation_name_loooooooooooooooooonger_than_postgres_63_limit.sql": test_relation_name_length,
             "test_source.sql": test_source,
@@ -70,12 +74,12 @@ class TestCustomMaterializations:
         # run models
         results = run_dbt(["run"])
         # run result length
-        assert len(results) == 13
+        assert len(results) == 15
         # re-run models to ensure there are no lingering errors in recreating
         # the materializations
         results = run_dbt(["run"])
         # re-run result length
-        assert len(results) == 13
+        assert len(results) == 15
         # relations_equal
         check_relations_equal(
             project.adapter,
@@ -83,6 +87,22 @@ class TestCustomMaterializations:
         )
 
         check_relations_equal(project.adapter, ["actual_indexes", "expected_indexes"])
+
+        # Verify that multiple WITH options are merged into a single WITH clause.
+        multiple_with_options_model = ".".join(
+            [
+                project.adapter.config.credentials.database,
+                project.adapter.config.credentials.schema,
+                "test_materialized_view_multiple_with_options",
+            ]
+        )
+        ddl = run_sql_with_adapter(
+            project.adapter,
+            f"SHOW CREATE MATERIALIZED VIEW {multiple_with_options_model}",
+            fetch="one",
+        )
+        assert "PARTITION BY" in ddl[1]
+        assert "RETAIN HISTORY" in ddl[1]
 
         # TODO(morsapaes): add test that ensures that the source/sink emit the
         # correct data once sinks land.

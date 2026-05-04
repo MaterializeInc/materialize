@@ -32,52 +32,54 @@
 {% macro materialize__create_materialized_view_as(relation, sql) -%}
   {%- set cluster = adapter.generate_final_cluster_name(config.get('cluster', target.cluster)) -%}
 
+  {# Collect all WITH-clause options into a single list, since Materialize
+     only allows one WITH (...) block per CREATE MATERIALIZED VIEW. #}
+  {%- set with_options = [] -%}
+
+  {# Scheduled refreshes #}
+  {%- set refresh_interval = config.get('refresh_interval') -%}
+  {%- if refresh_interval -%}
+    {%- do with_options.append(materialize__get_refresh_interval_sql(relation, refresh_interval) | trim) -%}
+  {%- endif -%}
+
+  {# Partition by #}
+  {%- set partition_by = config.get('partition_by') -%}
+  {%- if partition_by -%}
+    {%- do with_options.append('partition by (' ~ (partition_by | join(', ')) ~ ')') -%}
+  {%- endif -%}
+
+  {# History retention #}
+  {%- set retain_history = config.get('retain_history') -%}
+  {%- if retain_history -%}
+    {%- do with_options.append("retain history for '" ~ retain_history ~ "'") -%}
+  {%- endif -%}
+
+  {# Contracts and constraints — NOTE(morsapaes): only column-level constraints
+     are handled here. Model-level constraints (model['constraints']) are silently
+     ignored; not_null is not supported at model-level in dbt-core, and
+     model-level constraints are intended for multi-column constraints. #}
+  {%- set contract_config = config.get('contract') -%}
+  {%- if contract_config.enforced -%}
+    {# render_raw_columns_constraints returns a list of strings like
+       ["assert not null col_a", "assert not null col_b"] #}
+    {%- set rendered_constraints = adapter.render_raw_columns_constraints(model['columns']) -%}
+    {%- for constraint in rendered_constraints -%}
+      {%- do with_options.append(constraint) -%}
+    {%- endfor -%}
+  {%- endif -%}
+
   create materialized view {{ relation }}
   {% if cluster %}
     in cluster {{ cluster }}
   {% endif %}
 
-  {# Scheduled refreshes #}
-  {%- set refresh_interval = config.get('refresh_interval') -%}
-  {%- if refresh_interval -%}
-    with (
-      {{ materialize__get_refresh_interval_sql(relation, refresh_interval) }}
-    )
-  {%- endif %}
-
-  {# History retention #}
-  {%- set retain_history = config.get('retain_history') -%}
-  {%- if retain_history -%}
-    with (retain history for '{{ retain_history }}')
-  {%- endif %}
-
-  {# Contracts and constraints #}
-  {% set contract_config = config.get('contract') %}
-  {% if contract_config.enforced %}
+  {%- if contract_config.enforced -%}
     {{ get_assert_columns_equivalent(sql) }}
-
-    {% set ns = namespace(c_constraints=False, m_constraints=False) %}
-    {# Column-level constraints #}
-    {% set raw_columns = model['columns'] %}
-    {% for c_id, c_details in raw_columns.items() if c_details['constraints'] != [] %}
-      {% set ns.c_constraints = True %}
-    {%- endfor %}
-
-    {# Model-level constraints #}
-
-    -- NOTE(morsapaes): not_null constraints are not originally supported in
-    -- dbt-core at model-level, since model-level constraints are intended for
-    -- multi-columns constraints. Any model-level constraint is ignored in
-    -- dbt-materialize, albeit silently.
-    {% if model['constraints'] != [] %}
-      {% set ns.m_constraints = True %}
-    {%- endif %}
-
-    {% if ns.c_constraints %}
-      with
-        {{ get_table_columns_and_constraints() }}
-    {%- endif %}
   {%- endif %}
+
+  {% if with_options %}
+    with ({{ with_options | join(', ') }})
+  {% endif %}
 
   as (
     {{ sql }}
