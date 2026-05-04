@@ -5368,3 +5368,154 @@ async fn test_auth_oidc_non_login_role() {
     )
     .await;
 }
+
+/// Fetches the role names a user is a member of, sorted alphabetically.
+async fn fetch_user_role_memberships(
+    client: &tokio_postgres::Client,
+    user_name: &str,
+) -> Vec<String> {
+    let rows = client
+        .query(
+            "SELECT r.name FROM mz_role_members rm
+             JOIN mz_roles r ON rm.role_id = r.id
+             JOIN mz_roles m ON rm.member = m.id
+             WHERE m.name = $1
+             ORDER BY r.name",
+            &[&user_name],
+        )
+        .await
+        .unwrap();
+    rows.iter().map(|r| r.get(0)).collect()
+}
+
+/// Sets up a test harness with OIDC auth, creates roles, and enables group sync.
+/// Returns the server, admin client, OIDC mock server, and a TLS factory closure.
+async fn setup_group_sync_test() -> (
+    test_util::TestServer,
+    tokio_postgres::Client,
+    OidcMockServer,
+) {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+
+    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+
+    let oidc_server = OidcMockServer::start(
+        None,
+        encoding_key,
+        "test-key-1".to_string(),
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_oidc_auth(
+            Some(oidc_server.issuer.clone()),
+            Some("sub".to_string()),
+            None,
+        )
+        .start()
+        .await;
+
+    let admin_client = server.connect().internal().await.unwrap();
+
+    admin_client
+        .batch_execute("CREATE ROLE analytics")
+        .await
+        .unwrap();
+    admin_client
+        .batch_execute("CREATE ROLE platform_eng")
+        .await
+        .unwrap();
+    admin_client
+        .batch_execute("CREATE ROLE data_eng")
+        .await
+        .unwrap();
+
+    admin_client
+        .batch_execute("ALTER SYSTEM SET oidc_group_role_sync_enabled = true")
+        .await
+        .unwrap();
+
+    (server, admin_client, oidc_server)
+}
+
+const GROUP_SYNC_USER: &str = "alice@example.com";
+
+fn make_insecure_tls() -> postgres_openssl::MakeTlsConnector {
+    make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
+        Ok(b.set_verify(SslVerifyMode::NONE))
+    }))
+}
+
+/// Helper: connect as the OIDC user with the given token.
+async fn oidc_connect(
+    server: &test_util::TestServer,
+    token: &str,
+) -> Result<tokio_postgres::Client, anyhow::Error> {
+    server
+        .connect()
+        .ssl_mode(SslMode::Require)
+        .user(GROUP_SYNC_USER)
+        .password(token)
+        .options("--oidc_auth_enabled=true")
+        .with_tls(make_insecure_tls())
+        .await
+        .map_err(|e| anyhow::anyhow!(e))
+}
+
+/// Helper: generate a JWT with the given groups claim.
+fn jwt_with_groups(oidc_server: &OidcMockServer, groups: serde_json::Value) -> String {
+    oidc_server.generate_jwt(
+        GROUP_SYNC_USER,
+        GenerateJwtOptions {
+            extra_claims: Some(BTreeMap::from([("groups".to_string(), groups)])),
+            ..Default::default()
+        },
+    )
+}
+
+/// First login grants roles from JWT groups, with correct grantor and audit log entries.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method`
+async fn test_oidc_group_sync_first_login() {
+    let (server, admin_client, oidc_server) = setup_group_sync_test().await;
+
+    let token = jwt_with_groups(
+        &oidc_server,
+        serde_json::json!(["analytics", "platform_eng"]),
+    );
+    let _client = oidc_connect(&server, &token)
+        .await
+        .expect("login should succeed");
+
+    let role_names = fetch_user_role_memberships(&admin_client, GROUP_SYNC_USER).await;
+    assert_eq!(
+        role_names,
+        vec!["analytics", "platform_eng"],
+        "first login should grant analytics and platform_eng"
+    );
+
+    // Verify grantor is mz_jwt_sync.
+    let rows = admin_client
+        .query(
+            "SELECT g.name as grantor
+             FROM mz_role_members rm
+             JOIN mz_roles m ON rm.member = m.id
+             JOIN mz_roles g ON rm.grantor = g.id
+             WHERE m.name = $1
+             ORDER BY g.name",
+            &[&GROUP_SYNC_USER],
+        )
+        .await
+        .unwrap();
+    for row in &rows {
+        let grantor: String = row.get(0);
+        assert_eq!(grantor, "mz_jwt_sync", "grantor should be mz_jwt_sync");
+    }
+}
