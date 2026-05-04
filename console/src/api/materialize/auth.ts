@@ -30,6 +30,9 @@ const getApiClient = () => {
 
 export const LOGIN_PATH = "/account/login";
 
+// Search-param on LOGIN_PATH carrying a sanitized auth-error message.
+export const LOGIN_ERROR_PARAM = "error";
+
 // Login API for to self-managed in password auth mode.
 // Throws if the API isn't supported for the deployment/auth mode.
 export async function loginOrThrow(request: { payload: LoginRequest }) {
@@ -83,9 +86,13 @@ export async function logout(logoutParams: {
 
 export async function logoutAndRedirect(logoutParams: {
   apiClient: SelfManagedApiClient;
+  error?: string;
 }) {
   logout(logoutParams);
-  window.location.href = LOGIN_PATH;
+  const url = logoutParams.error
+    ? `${LOGIN_PATH}?${new URLSearchParams({ [LOGIN_ERROR_PARAM]: logoutParams.error }).toString()}`
+    : LOGIN_PATH;
+  window.location.href = url;
 }
 
 export async function logoutAndRedirectOrThrow() {
