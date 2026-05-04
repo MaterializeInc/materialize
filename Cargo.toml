@@ -515,7 +515,7 @@ tracing-capture = "0.1.0"
 tracing-core = "0.1.35"
 tracing-opentelemetry = "0.32.1"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "json", "tracing-log"] }
-tungstenite = "0.28.0"
+tungstenite = "0.29.0"
 turmoil = "0.7.1"
 uncased = "0.9.7"
 unicode-normalization = "0.1.25"
