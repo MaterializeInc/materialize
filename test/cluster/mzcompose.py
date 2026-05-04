@@ -2767,6 +2767,58 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     assert metrics.get_wallclock_lag_count(mv_id) is None
 
 
+def workflow_test_response_count_survives_replica_replacement(
+    c: Composition,
+) -> None:
+    """Test that response_{send,recv}_count metrics survive replica drops."""
+
+    c.up("materialized")
+
+    def fetch_metrics() -> Metrics:
+        resp = c.exec(
+            "materialized", "curl", "localhost:6878/metrics", capture=True
+        ).stdout
+        return Metrics(resp).for_instance("u2")
+
+    c.sql("""
+        CREATE CLUSTER test MANAGED, SIZE 'scale=1,workers=1';
+        SET cluster = test;
+        CREATE TABLE t (a int);
+        INSERT INTO t SELECT generate_series(1, 10);
+        CREATE INDEX idx ON t (a);
+        SELECT * FROM t;
+        """)
+    time.sleep(2)
+
+    metrics = fetch_metrics()
+    send_before = metrics.get_value("mz_compute_controller_response_send_count")
+    recv_before = metrics.get_value("mz_compute_controller_response_recv_count")
+    assert send_before > 0, f"got {send_before}"
+    assert recv_before > 0, f"got {recv_before}"
+
+    c.sql("ALTER CLUSTER test SET (SIZE 'scale=1,workers=2')")
+    time.sleep(2)
+
+    metrics = fetch_metrics()
+    assert len(metrics.with_name("mz_compute_controller_response_send_count")) > 0
+    assert len(metrics.with_name("mz_compute_controller_response_recv_count")) > 0
+
+    c.sql("""
+        SET cluster = test;
+        INSERT INTO t SELECT generate_series(11, 20);
+        SELECT * FROM t;
+        """)
+    time.sleep(2)
+
+    metrics = fetch_metrics()
+    send_after = metrics.get_value("mz_compute_controller_response_send_count")
+    recv_after = metrics.get_value("mz_compute_controller_response_recv_count")
+    assert send_after > send_before, f"got {send_before} -> {send_after}"
+    assert recv_after > recv_before, f"got {recv_before} -> {recv_after}"
+
+    c.sql("DROP CLUSTER test CASCADE")
+
+
 def workflow_test_storage_controller_metrics(c: Composition) -> None:
     """Test metrics exposed by the storage controller."""
 

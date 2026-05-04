@@ -30,6 +30,7 @@
 use std::borrow::Borrow;
 use std::collections::BTreeMap;
 use std::ops::Deref;
+use std::sync::Arc;
 
 use prometheus::core::{
     Atomic, GenericCounter, GenericCounterVec, GenericGauge, GenericGaugeVec, Metric, MetricVec,
@@ -171,10 +172,12 @@ impl PromLabelsExt for BTreeMap<&str, &str> {
     }
 }
 
-/// A [`Metric`] wrapper that deletes its labels from the vec when it is dropped.
+/// A [`Metric`] wrapper that deletes its labels from the vec when the last clone is dropped.
 ///
-/// It adds a method to create a concrete metric from the vector that gets removed from the vector
-/// when the concrete metric is dropped.
+/// Cloning is ref-counted: the labeled metric is unregistered from its parent vector exactly
+/// once, when the final clone drops. This means cloning is always safe — earlier versions of
+/// this type derived `Clone` directly, which made every clone's `Drop` unregister the metric
+/// and silently disabled the metric for surviving clones.
 ///
 /// NOTE: This type implements [`Borrow`], which imposes some constraints on implementers. To
 /// ensure these constraints, do *not* implement any of the `Eq`, `Ord`, or `Hash` traits on this.
@@ -186,6 +189,21 @@ where
     L: PromLabelsExt,
 {
     inner: V::M,
+    /// Shared cleanup handle. The label is removed from `vec` only when the last clone drops.
+    /// Held purely for its `Drop` side effect — never read directly.
+    #[allow(dead_code)]
+    cleanup: Arc<DeleteOnDropCleanup<V, L>>,
+}
+
+/// Owns the data needed to unregister a labeled metric from its parent vector. Held inside an
+/// [`Arc`] by [`DeleteOnDropMetric`] so that registration is reversed exactly once, when the
+/// last clone of the metric drops.
+#[derive(Debug)]
+struct DeleteOnDropCleanup<V, L>
+where
+    V: MetricVec_,
+    L: PromLabelsExt,
+{
     labels: L,
     vec: V,
 }
@@ -197,7 +215,10 @@ where
 {
     fn from_metric_vector(vec: V, labels: L) -> Self {
         let inner = labels.get_from_metric_vec(&vec);
-        Self { inner, labels, vec }
+        Self {
+            inner,
+            cleanup: Arc::new(DeleteOnDropCleanup { labels, vec }),
+        }
     }
 }
 
@@ -213,7 +234,7 @@ where
     }
 }
 
-impl<V, L> Drop for DeleteOnDropMetric<V, L>
+impl<V, L> Drop for DeleteOnDropCleanup<V, L>
 where
     V: MetricVec_,
     L: PromLabelsExt,
@@ -363,5 +384,36 @@ mod test {
         drop(metric_owned);
         let metrics = reg.gather();
         assert_eq!(metrics.len(), 0);
+    }
+
+    /// Cloning a `DeleteOnDropMetric` must not unregister the labeled metric until the last
+    /// clone is dropped. Regression test for CLU-63.
+    #[crate::test]
+    fn clones_share_registration() {
+        let reg = MetricsRegistry::new();
+        let vec: IntCounterVec = reg.register(metric!(
+            name: "test_metric",
+            help: "a test metric",
+            var_labels: ["dimension"]));
+
+        let metric_1 = vec.get_delete_on_drop_metric(&["one"][..]);
+        let metric_2 = metric_1.clone();
+        metric_1.inc();
+        metric_2.inc();
+
+        // Dropping one clone must not unregister the metric.
+        drop(metric_1);
+        let gathered = reg.gather();
+        assert_eq!(gathered.len(), 1);
+        assert_eq!(gathered[0].get_metric()[0].get_counter().get_value(), 2.0);
+
+        // Increment via the surviving clone is still observable.
+        metric_2.inc();
+        let gathered = reg.gather();
+        assert_eq!(gathered[0].get_metric()[0].get_counter().get_value(), 3.0);
+
+        // Dropping the last clone unregisters the metric.
+        drop(metric_2);
+        assert_eq!(reg.gather().len(), 0);
     }
 }
