@@ -188,6 +188,7 @@ impl ComputeMetrics {
                 name: "mz_index_peek_error_scan_seconds",
                 help: "Time scanning the error trace for errors.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
+
             )),
             index_peek_cursor_setup_seconds: registry.register(metric!(
                 name: "mz_index_peek_cursor_setup_seconds",
