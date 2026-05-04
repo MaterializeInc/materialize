@@ -6339,19 +6339,21 @@ def workflow_test_mv_apply_replacement_wait(c: Composition) -> None:
     # Wait for the since of mv2 to be greater than the upper of mv1.
     for _ in range(10):
         time.sleep(1)
-        mv1_upper = c.sql_query("""
+        mv1_rows = c.sql_query("""
             SELECT write_frontier
             FROM mz_internal.mz_frontiers
             JOIN mz_materialized_views ON id = object_id
             WHERE name = 'mv1'
-            """)[0][0]
-        mv2_since = c.sql_query("""
+            """)
+        mv2_rows = c.sql_query("""
             SELECT read_frontier
             FROM mz_internal.mz_frontiers
             JOIN mz_materialized_views ON id = object_id
             WHERE name = 'mv2'
-            """)[0][0]
-        if int(mv2_since) > int(mv1_upper):
+            """)
+        if not mv1_rows or not mv2_rows:
+            continue
+        if int(mv2_rows[0][0]) > int(mv1_rows[0][0]):
             break
     else:
         raise RuntimeError("mv2's since didn't advance beyond mv1's upper")
