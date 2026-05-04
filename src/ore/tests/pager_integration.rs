@@ -1,3 +1,18 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License in the LICENSE file at the
+// root of this repository, or online at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #![cfg(feature = "pager")]
 
 use mz_ore::pager::{Backend, Handle, pageout, read_at, set_backend, set_scratch_dir, take};
@@ -9,7 +24,7 @@ fn ensure_scratch() {
     set_scratch_dir(dir.path().to_owned());
 }
 
-#[test]
+#[test] // allow(test-attribute)
 fn round_trip_swap() {
     set_backend(Backend::Swap);
     let payload: Vec<u64> = (0..1024).collect();
@@ -20,7 +35,7 @@ fn round_trip_swap() {
     assert_eq!(dst, payload);
 }
 
-#[test]
+#[test] // allow(test-attribute)
 fn round_trip_file() {
     ensure_scratch();
     set_backend(Backend::File);
@@ -33,7 +48,7 @@ fn round_trip_file() {
     set_backend(Backend::Swap);
 }
 
-#[test]
+#[test] // allow(test-attribute)
 fn handle_survives_backend_flip() {
     ensure_scratch();
     set_backend(Backend::File);
@@ -53,7 +68,7 @@ fn handle_survives_backend_flip() {
     assert_eq!(dst2, payload);
 }
 
-#[test]
+#[test] // allow(test-attribute)
 fn empty_input_yields_zero_len_handle() {
     set_backend(Backend::Swap);
     let mut chunks: [Vec<u64>; 0] = [];
@@ -62,7 +77,7 @@ fn empty_input_yields_zero_len_handle() {
     assert!(h.is_empty());
 }
 
-#[test]
+#[test] // allow(test-attribute)
 fn scatter_round_trip() {
     set_backend(Backend::Swap);
     let mut chunks = [vec![1u64, 2, 3], vec![4, 5], vec![6, 7, 8, 9]];
