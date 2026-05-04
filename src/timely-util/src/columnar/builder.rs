@@ -59,7 +59,7 @@ where
             ) where
                 C: Columnar,
             {
-                let mut alloc = crate::containers::alloc_aligned_zeroed(round);
+                let mut alloc: Vec<u64> = vec![0; round];
                 let mut writer = std::io::Cursor::new(bytemuck::cast_slice_mut(&mut alloc[..]));
                 indexed::write(&mut writer, &current.borrow()).unwrap();
                 pending.push_back(Column::Align(alloc));

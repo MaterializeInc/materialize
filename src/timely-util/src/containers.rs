@@ -16,37 +16,3 @@
 //! Reusable containers.
 
 pub mod stack;
-
-pub(crate) use alloc::alloc_aligned_zeroed;
-pub use alloc::{enable_columnar_lgalloc, set_enable_columnar_lgalloc};
-
-mod alloc {
-    use mz_ore::region::Region;
-
-    /// Allocate a region of memory with a capacity of at least `len` that is properly aligned
-    /// and zeroed. The memory in Regions is always aligned to its content type.
-    #[inline]
-    pub(crate) fn alloc_aligned_zeroed<T: bytemuck::AnyBitPattern>(len: usize) -> Region<T> {
-        if enable_columnar_lgalloc() {
-            Region::new_auto_zeroed(len)
-        } else {
-            Region::new_heap_zeroed(len)
-        }
-    }
-
-    thread_local! {
-        static ENABLE_COLUMNAR_LGALLOC: std::cell::Cell<bool> =
-            const { std::cell::Cell::new(false) };
-    }
-
-    /// Returns `true` if columnar allocations should come from lgalloc.
-    #[inline]
-    pub fn enable_columnar_lgalloc() -> bool {
-        ENABLE_COLUMNAR_LGALLOC.get()
-    }
-
-    /// Set whether columnar allocations should come from lgalloc. Applies to future allocations.
-    pub fn set_enable_columnar_lgalloc(enabled: bool) {
-        ENABLE_COLUMNAR_LGALLOC.set(enabled);
-    }
-}
