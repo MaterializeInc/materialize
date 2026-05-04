@@ -80,6 +80,32 @@ pub(crate) fn alloc_scratch_id() -> u64 {
     SCRATCH_ID.fetch_add(1, Ordering::Relaxed)
 }
 
+/// Storage for a file-backed handle. The file at `scratch_path(id)` holds the bytes.
+/// No file descriptor is retained.
+#[derive(Debug)]
+pub(crate) struct FileInner {
+    pub(crate) id: u64,
+    pub(crate) len_u64s: usize,
+}
+
+impl FileInner {
+    pub(crate) fn new(id: u64, len_u64s: usize) -> Self {
+        Self { id, len_u64s }
+    }
+}
+
+impl Drop for FileInner {
+    fn drop(&mut self) {
+        let path = scratch_path(self.id);
+        if let Err(err) = std::fs::remove_file(&path) {
+            // ENOENT is fine: a successful `take` already unlinked.
+            if err.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(?path, %err, "mz_ore::pager: failed to unlink scratch file");
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -7,6 +7,54 @@ mod swap;
 
 pub use file::set_scratch_dir;
 
+use crate::pager::file::FileInner;
+use crate::pager::swap::SwapInner;
+
+/// An opaque handle to data paged out via [`pageout`]. The handle's backend variant
+/// is fixed at `pageout` time and is independent of any later `set_backend` call.
+#[derive(Debug)]
+pub struct Handle {
+    inner: HandleInner,
+}
+
+#[derive(Debug)]
+enum HandleInner {
+    Swap(SwapInner),
+    File(FileInner),
+}
+
+impl Handle {
+    /// Returns the logical length of the handle's payload in `u64`s.
+    pub fn len(&self) -> usize {
+        match &self.inner {
+            HandleInner::Swap(s) => *s.prefix.last().unwrap_or(&0),
+            HandleInner::File(f) => f.len_u64s,
+        }
+    }
+
+    /// Returns the logical length of the handle's payload in bytes (`len() * 8`).
+    pub fn len_bytes(&self) -> usize {
+        self.len() * 8
+    }
+
+    /// Returns `true` if the handle holds no data.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub(crate) fn from_swap(inner: SwapInner) -> Self {
+        Self {
+            inner: HandleInner::Swap(inner),
+        }
+    }
+
+    pub(crate) fn from_file(inner: FileInner) -> Self {
+        Self {
+            inner: HandleInner::File(inner),
+        }
+    }
+}
+
 /// Selects which backend stores paged-out data.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Backend {
