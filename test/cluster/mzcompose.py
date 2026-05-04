@@ -2461,6 +2461,16 @@ class Metrics:
         assert len(values) == 1
         return values[0]
 
+    def get_result_rows_first_to_last_byte_seconds_count(
+        self, statement_type: str
+    ) -> float:
+        metrics = self.with_name("mz_result_rows_first_to_last_byte_seconds_count")
+        values = [
+            v for k, v in metrics.items() if f'statement_type="{statement_type}"' in k
+        ]
+        assert len(values) == 1
+        return values[0]
+
     def get_last_command_received(self, server_name: str) -> float:
         metrics = self.with_name("mz_grpc_server_last_command_received")
         values = [v for k, v in metrics.items() if server_name in k]
@@ -3151,6 +3161,28 @@ def workflow_test_pgwire_metrics(c: Composition) -> None:
             rrftlbs_select_7 > rrftlbs_select_6
         ), f"got {rrftlbs_select_7} vs. {rrftlbs_select_6}"
 
+        # Regression: extra FETCHes on an already-exhausted cursor must NOT re-observe the metric.
+        # Before the fix, each extra FETCH would record an additional observation with an
+        # ever-growing duration (wall-clock time since the original first row).
+        count_before = metrics.get_result_rows_first_to_last_byte_seconds_count(
+            "select"
+        )
+        c.sql("""
+            BEGIN;
+            DECLARE c4b CURSOR FOR (SELECT * FROM t);
+            FETCH 1 c4b;
+            FETCH 1 c4b;
+            FETCH 1 c4b;
+            FETCH 1 c4b;
+            FETCH 1 c4b;
+            """)
+        metrics = fetch_metrics()
+        count_after = metrics.get_result_rows_first_to_last_byte_seconds_count("select")
+        assert count_after == count_before + 1, (
+            f"extra FETCHes on exhausted cursor should add exactly 1 observation, "
+            f"got {count_after - count_before}"
+        )
+
         # SUBSCRIBE should show up if it's on a constant collection.
         # We need two FETCHes, because the first one won't observe that there are no more rows, due to
         # `ExecuteTimeout::WaitOnce`.
@@ -3188,6 +3220,35 @@ def workflow_test_pgwire_metrics(c: Composition) -> None:
             rrftlbs_subscribe_2 > rrftlbs_subscribe_1
         ), f"got {rrftlbs_subscribe_2} vs. {rrftlbs_subscribe_1}"
 
+        # Regression: a third FETCH ALL on a constant SUBSCRIBE that's already exhausted
+        # should not re-observe the metric.
+        subscribe_count_before = (
+            metrics.get_result_rows_first_to_last_byte_seconds_count("subscribe")
+        )
+        c.sql(
+            """
+            BEGIN;
+            DECLARE c6b CURSOR FOR SUBSCRIBE (SELECT * FROM v1);
+            FETCH ALL c6b;
+            FETCH ALL c6b;
+            FETCH ALL c6b;
+            """,
+            reuse_connection=False,
+        )
+        metrics = fetch_metrics()
+        subscribe_count_after = (
+            metrics.get_result_rows_first_to_last_byte_seconds_count("subscribe")
+        )
+        assert subscribe_count_after == subscribe_count_before + 1, (
+            f"extra FETCH ALL on exhausted SUBSCRIBE should add exactly 1 observation, "
+            f"got {subscribe_count_after - subscribe_count_before}"
+        )
+
+        # Re-capture baseline after c6b added an observation to the histogram sum.
+        rrftlbs_subscribe_2 = metrics.get_result_rows_first_to_last_byte_seconds(
+            "subscribe"
+        )
+
         # Shouldn't increase for a non-const SUBSCRIBE, because there is no last row, ever.
         c.sql(
             """
@@ -3202,9 +3263,8 @@ def workflow_test_pgwire_metrics(c: Composition) -> None:
         rrftlbs_subscribe_3 = metrics.get_result_rows_first_to_last_byte_seconds(
             "subscribe"
         )
-        # See database-issues#9470
         assert (
-            rrftlbs_subscribe_3 - rrftlbs_subscribe_2 < 5
+            rrftlbs_subscribe_3 == rrftlbs_subscribe_2
         ), f"got {rrftlbs_subscribe_3} vs. {rrftlbs_subscribe_2}"
 
 

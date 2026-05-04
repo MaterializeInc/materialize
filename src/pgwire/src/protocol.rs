@@ -2520,7 +2520,12 @@ where
 
         let saw_rows = rows.remaining.saw_rows;
         let no_more_rows = rows.no_more_rows();
+        let metric_recorded = rows.remaining.metric_recorded;
         let recorded_first_row_instant = rows.remaining.recorded_first_row_instant;
+
+        if no_more_rows && !metric_recorded {
+            rows.remaining.metric_recorded = true;
+        }
 
         // Always return rows back, even if it's empty. This prevents an unclosed
         // portal from re-executing after it has been emptied.
@@ -2535,8 +2540,9 @@ where
         let response_message = get_response(max_rows, total_sent_rows, fetch_portal);
         self.send(response_message).await?;
 
-        // Attend to metrics if there are no more rows.
-        if no_more_rows {
+        // Attend to metrics if there are no more rows. Only record once per stream
+        // to avoid polluting the histogram when an exhausted cursor is FETCHed again.
+        if no_more_rows && !metric_recorded {
             let statement_type = if let Some(stmt) = &self
                 .adapter_client
                 .session()
