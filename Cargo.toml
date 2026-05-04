@@ -366,7 +366,7 @@ iceberg = "0.7.0"
 iceberg-catalog-rest = "0.7.0"
 imbl = { version = "7.0.0", features = ["serde"] }
 include_dir = "0.7.4"
-indexmap = { version = "2.10.0", default-features = false, features = ["std"] }
+indexmap = { version = "2.14.0", default-features = false, features = ["std"] }
 indicatif = "0.18.4"
 insta = { version = "1.47.2", features = ["json", "serde"] }
 ipnet = "2.12.0"
