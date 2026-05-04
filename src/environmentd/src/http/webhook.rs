@@ -311,6 +311,9 @@ impl BodyRow {
 /// errors also generally need to map to HTTP status codes that we can use to respond to a webhook
 /// request. As such, webhook errors don't cleanly map to any existing error type, hence the
 /// existence of this error type.
+///
+/// Note: 429 Too Many Requests is handled at the HTTP layer via Tower's
+/// `GlobalConcurrencyLimitLayer`, not through these error variants.
 #[derive(Error, Debug)]
 pub enum WebhookError {
     #[error("no object was found at the path {}", .0.quoted())]
@@ -387,9 +390,6 @@ impl IntoResponse for WebhookError {
             e @ WebhookError::Unavailable => {
                 (StatusCode::SERVICE_UNAVAILABLE, e.to_string()).into_response()
             }
-            e @ WebhookError::InternalStorageError(StorageError::ResourceExhausted(_)) => {
-                (StatusCode::TOO_MANY_REQUESTS, e.to_string()).into_response()
-            }
             e @ WebhookError::InternalStorageError(_) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
             }
@@ -452,14 +452,7 @@ mod tests {
 
     #[mz_ore::test]
     fn smoke_test_storage_error_response_status() {
-        // Resource exhausted should get mapped to a specific status code.
-        let resp = WebhookError::from(AppendWebhookError::StorageError(
-            StorageError::ResourceExhausted("test"),
-        ))
-        .into_response();
-        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
-
-        // IdentifierMissing should also get mapped to a specific status code.
+        // IdentifierMissing should get mapped to a specific status code.
         let resp = WebhookError::from(AppendWebhookError::StorageError(
             StorageError::IdentifierMissing(GlobalId::User(42)),
         ))
