@@ -1776,8 +1776,14 @@ where
                             .iter()
                             .flat_map(|(_, time, _)| u64::from(time).checked_add(slack_ms))
                         {
-                            let rounded_time =
-                                (time / slack_ms).saturating_add(1).saturating_mul(slack_ms);
+                            // `slack_ms == 0` means no rounding; otherwise round up to the next
+                            // multiple of `slack_ms`. Avoids a divide-by-zero panic when the
+                            // operator is configured without slack.
+                            let rounded_time = if slack_ms == 0 {
+                                time
+                            } else {
+                                (time / slack_ms).saturating_add(1).saturating_mul(slack_ms)
+                            };
                             if !upper.less_than(&rounded_time.into()) {
                                 pending_times.insert(rounded_time.into());
                             }
