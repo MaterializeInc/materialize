@@ -343,6 +343,10 @@ pub enum PlanNode {
         /// that will be added to those of the input. Does not include
         /// any other existing arrangements.
         forms: AvailableCollections,
+        /// Whether the input collection may contain updates with future timestamps,
+        /// e.g., from a temporal MFP using `mz_now()`. When true, the renderer
+        /// inserts temporal bucketing before forming arrangements.
+        input_has_future_updates: bool,
     },
 }
 
@@ -770,6 +774,7 @@ impl CollectionPlan for PlanNode {
                 input,
                 input_mfp: _,
                 forms: _,
+                input_has_future_updates: _,
             }
             | PlanNode::Reduce {
                 input_key: _,

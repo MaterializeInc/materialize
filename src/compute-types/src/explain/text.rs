@@ -488,6 +488,7 @@ impl Plan {
                 input,
                 input_mfp,
                 forms,
+                input_has_future_updates: _,
             } => {
                 ctx.indent.set();
                 if forms.raw && forms.arranged.is_empty() {
@@ -897,6 +898,7 @@ impl Plan {
                 input,
                 input_mfp,
                 forms,
+                input_has_future_updates,
             } => {
                 writeln!(f, "{}ArrangeBy{}", ctx.indent, annotations)?;
                 ctx.indented(|ctx| {
@@ -904,6 +906,9 @@ impl Plan {
                         let key = mode.seq(key, None);
                         let key = CompactScalars(key);
                         writeln!(f, "{}input_key=[{}]", ctx.indent, key)?;
+                    }
+                    if *input_has_future_updates {
+                        writeln!(f, "{}input_has_future_updates=true", ctx.indent)?;
                     }
                     mode.expr(input_mfp, None).fmt_text(f, ctx)?;
                     forms.fmt_text(f, ctx)?;

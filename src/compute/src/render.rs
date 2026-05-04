@@ -122,7 +122,7 @@ use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
 use mz_compute_types::dyncfgs::{
     COMPUTE_APPLY_COLUMN_DEMANDS, COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK,
     COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES, ENABLE_COMPUTE_LOGICAL_BACKPRESSURE,
-    ENABLE_TEMPORAL_BUCKETING, SUBSCRIBE_SNAPSHOT_OPTIMIZATION, TEMPORAL_BUCKETING_SUMMARY,
+    SUBSCRIBE_SNAPSHOT_OPTIMIZATION,
 };
 use mz_compute_types::plan::LirId;
 use mz_compute_types::plan::render_plan::{
@@ -453,18 +453,6 @@ pub fn build_compute_dataflow(
                 );
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
-                    let oks = if ENABLE_TEMPORAL_BUCKETING.get(&compute_state.worker_config) {
-                        let as_of = context.as_of_frontier.clone();
-                        let summary = TEMPORAL_BUCKETING_SUMMARY
-                            .get(&compute_state.worker_config)
-                            .try_into()
-                            .expect("must fit");
-                        oks.inner
-                            .bucket::<CapacityContainerBuilder<_>>(as_of, summary)
-                            .as_collection()
-                    } else {
-                        oks
-                    };
                     let bundle = crate::render::CollectionBundle::from_collections(
                         oks.enter_region(region),
                         errs.enter_region(region),
@@ -1324,14 +1312,17 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 input,
                 input_mfp,
                 forms: keys,
+                input_has_future_updates,
             } => {
                 let input = expect_input(input);
                 input.ensure_collections(
                     keys,
                     input_key,
                     input_mfp,
+                    self.as_of_frontier.clone(),
                     self.until.clone(),
                     &self.config_set,
+                    input_has_future_updates,
                 )
             }
         }
@@ -1481,6 +1472,15 @@ pub trait RenderTimestamp: MzTimestamp + Refines<mz_repr::Timestamp> {
     /// Steps the timestamp back so that logical compaction to the output will
     /// not conflate `self` with any historical times.
     fn step_back(&self) -> Self;
+    /// Apply temporal bucketing to a stream if the timestamp type supports it.
+    ///
+    /// Temporal bucketing requires a total order on timestamps. For timestamp
+    /// types without a total order (e.g., in iterative scopes), this is a no-op.
+    fn maybe_apply_temporal_bucketing<'scope>(
+        stream: StreamVec<'scope, Self, (Row, Self, Diff)>,
+        as_of: Antichain<mz_repr::Timestamp>,
+        summary: mz_repr::Timestamp,
+    ) -> VecCollection<'scope, Self, Row, Diff>;
 }
 
 impl RenderTimestamp for mz_repr::Timestamp {
@@ -1501,6 +1501,15 @@ impl RenderTimestamp for mz_repr::Timestamp {
     }
     fn step_back(&self) -> Self {
         self.saturating_sub(1)
+    }
+    fn maybe_apply_temporal_bucketing<'scope>(
+        stream: StreamVec<'scope, Self, (Row, Self, Diff)>,
+        as_of: Antichain<mz_repr::Timestamp>,
+        summary: mz_repr::Timestamp,
+    ) -> VecCollection<'scope, Self, Row, Diff> {
+        stream
+            .bucket::<CapacityContainerBuilder<_>>(as_of, summary)
+            .as_collection()
     }
 }
 
@@ -1530,6 +1539,14 @@ impl RenderTimestamp for Product<mz_repr::Timestamp, PointStamp<u64>> {
             *item = item.saturating_sub(1);
         }
         Product::new(self.outer.saturating_sub(1), PointStamp::new(vec))
+    }
+    fn maybe_apply_temporal_bucketing<'scope>(
+        stream: StreamVec<'scope, Self, (Row, Self, Diff)>,
+        _as_of: Antichain<mz_repr::Timestamp>,
+        _summary: mz_repr::Timestamp,
+    ) -> VecCollection<'scope, Self, Row, Diff> {
+        // TODO: Implement bucketing on outer timestamp for iterative scopes.
+        stream.as_collection()
     }
 }
 

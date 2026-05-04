@@ -19,7 +19,10 @@ use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, Data, VecCollection};
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::dyncfgs::ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION;
+use mz_compute_types::dyncfgs::{
+    ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION, ENABLE_TEMPORAL_BUCKETING,
+    TEMPORAL_BUCKETING_SUMMARY,
+};
 use mz_compute_types::plan::AvailableCollections;
 use mz_dyncfg::ConfigSet;
 use mz_expr::{Id, MapFilterProject, MirScalarExpr};
@@ -736,8 +739,10 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         collections: AvailableCollections,
         input_key: Option<Vec<MirScalarExpr>>,
         input_mfp: MapFilterProject,
+        as_of: Antichain<mz_repr::Timestamp>,
         until: Antichain<mz_repr::Timestamp>,
         config_set: &ConfigSet,
+        input_has_future_updates: bool,
     ) -> Self {
         if collections == Default::default() {
             return self;
@@ -757,19 +762,39 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             );
         }
 
+        // Track whether we applied temporal bucketing, to avoid double-bucketing.
+        let mut bucketed = false;
+
+        // True iff at least one new arrangement will actually be built below. Bucketing only
+        // pays off when something downstream merges/compacts the future-stamped updates; on a
+        // pure raw collection (no new arrangement) the work is wasted.
+        let will_create_arrangement = collections
+            .arranged
+            .iter()
+            .any(|(key, _, _)| !self.arranged.contains_key(key));
+
         // We need the collection if either (1) it is explicitly demanded, or (2) we are going to render any arrangement
-        let form_raw_collection = collections.raw
-            || collections
-                .arranged
-                .iter()
-                .any(|(key, _, _)| !self.arranged.contains_key(key));
+        let form_raw_collection = collections.raw || will_create_arrangement;
         if form_raw_collection && self.collection.is_none() {
-            self.collection = Some(self.as_collection_core(
-                input_mfp,
-                input_key.map(|k| (k, None)),
-                until,
-                config_set,
-            ));
+            let (oks, errs) =
+                self.as_collection_core(input_mfp, input_key.map(|k| (k, None)), until, config_set);
+            // Apply temporal bucketing if the input may contain future updates and we are
+            // going to build at least one arrangement. This path fires when the collection
+            // must be formed from scratch (e.g., from an arrangement via as_collection_core).
+            let oks = if will_create_arrangement
+                && input_has_future_updates
+                && ENABLE_TEMPORAL_BUCKETING.get(config_set)
+            {
+                let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
+                    .get(config_set)
+                    .try_into()
+                    .expect("must fit");
+                bucketed = true;
+                T::maybe_apply_temporal_bucketing(oks.inner, as_of.clone(), summary)
+            } else {
+                oks
+            };
+            self.collection = Some((oks, errs));
         }
         for (key, _, thinning) in collections.arranged {
             if !self.arranged.contains_key(&key) {
@@ -780,6 +805,23 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                     .collection
                     .take()
                     .expect("Collection constructed above");
+                // Apply temporal bucketing if the collection already existed on
+                // the bundle (e.g., from an upstream temporal Mfp or Get) and we
+                // haven't bucketed yet. This is the common path for temporal-MFP
+                // → ArrangeBy flows.
+                let oks = if !bucketed
+                    && input_has_future_updates
+                    && ENABLE_TEMPORAL_BUCKETING.get(config_set)
+                {
+                    let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
+                        .get(config_set)
+                        .try_into()
+                        .expect("must fit");
+                    bucketed = true;
+                    T::maybe_apply_temporal_bucketing(oks.inner, as_of.clone(), summary)
+                } else {
+                    oks
+                };
                 let (oks, errs_keyed, passthrough) =
                     Self::arrange_collection(&name, oks, key.clone(), thinning.clone());
                 let errs_concat: KeyCollection<_, _, _> = errs.clone().concat(errs_keyed).into();

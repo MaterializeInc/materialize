@@ -444,6 +444,7 @@ where
                     input,
                     input_mfp,
                     forms,
+                    input_has_future_updates: _,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
@@ -750,6 +751,7 @@ where
                     input,
                     input_mfp,
                     forms,
+                    input_has_future_updates: _,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
