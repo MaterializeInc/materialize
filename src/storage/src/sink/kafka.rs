@@ -786,22 +786,20 @@ fn sink_collection<'scope>(
                             producer.begin_transaction().await?;
                         }
 
-                        // N.B. Shrinking the Vec here is important because when starting the Sink
-                        // we might buffer a ton of updates into these collections, e.g. if someone
-                        // deleted the progress topic and the resume upper is 0, and we don't want
-                        // to keep around a massively oversized VEc.
-                        deferred_updates.shrink_to(buffer_min_capacity.get());
                         extra_updates.extend(
                             deferred_updates
                                 .extract_if(.., |(_, time, _)| !progress.less_equal(time)),
                         );
+                        // Shrink after draining items out, so the call actually
+                        // reduces capacity in the oversized-buffer scenario
+                        // (e.g. progress topic was deleted and resume upper is 0).
+                        deferred_updates.shrink_to(buffer_min_capacity.get());
                         extra_updates.sort_unstable_by(|a, b| a.1.cmp(&b.1));
 
-                        // N.B. See the comment above.
-                        extra_updates.shrink_to(buffer_min_capacity.get());
                         for (message, time, diff) in extra_updates.drain(..) {
                             producer.send(&message, time, diff)?;
                         }
+                        extra_updates.shrink_to(buffer_min_capacity.get());
 
                         debug!("{name}: committing transaction for {}", progress.pretty());
                         producer.commit_transaction(progress.clone()).await?;
