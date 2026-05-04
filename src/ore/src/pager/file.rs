@@ -258,8 +258,30 @@ fn coalesce(ranges: &[(usize, usize)]) -> Vec<(usize, usize)> {
     out
 }
 
-pub(crate) fn take_file(_h: Handle, _dst: &mut Vec<u64>) {
-    unimplemented!("file backend take: see Task 11")
+pub(crate) fn take_file(handle: Handle, dst: &mut Vec<u64>) {
+    use std::os::unix::fs::FileExt;
+
+    let inner = handle
+        .into_file_inner()
+        .expect("take_file called on non-file handle");
+    dst.clear();
+    let path = scratch_path(inner.id);
+    let file = File::open(&path).unwrap_or_else(|err| panic!("pager take: open {path:?}: {err}"));
+    dst.resize(inner.len_u64s, 0);
+    let buf: &mut [u8] = bytemuck::cast_slice_mut(dst.as_mut_slice());
+    let mut filled = 0;
+    while filled < buf.len() {
+        let n = file
+            .read_at(&mut buf[filled..], filled as u64)
+            .unwrap_or_else(|err| panic!("pager take: pread {path:?}: {err}"));
+        if n == 0 {
+            panic!("pager take: short read at {filled}");
+        }
+        filled += n;
+    }
+    drop(file);
+    // FileInner::drop will unlink the scratch file.
+    drop(inner);
 }
 
 #[cfg(test)]
@@ -320,6 +342,32 @@ mod backend_tests {
         let h = pageout_file(&mut chunks);
         let mut dst = Vec::new();
         read_at_file(&h, &[(0, 99)], &mut dst);
+    }
+
+    #[mz_ore::test]
+    fn file_take_returns_data_and_unlinks() {
+        setup_dir();
+        let mut chunks = [vec![7u64; 100]];
+        let h = pageout_file(&mut chunks);
+        let inner_id = h.file_inner().unwrap().id;
+        let path = scratch_path(inner_id);
+        assert!(path.exists());
+        let mut dst = Vec::new();
+        take_file(h, &mut dst);
+        assert_eq!(dst, vec![7u64; 100]);
+        assert!(!path.exists(), "scratch file should be unlinked after take");
+    }
+
+    #[mz_ore::test]
+    fn file_drop_unlinks_when_not_taken() {
+        setup_dir();
+        let mut chunks = [vec![1u64, 2, 3]];
+        let h = pageout_file(&mut chunks);
+        let id = h.file_inner().unwrap().id;
+        let path = scratch_path(id);
+        assert!(path.exists());
+        drop(h);
+        assert!(!path.exists(), "scratch file should be unlinked on drop");
     }
 }
 
