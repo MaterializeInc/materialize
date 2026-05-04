@@ -41,6 +41,7 @@ pub(crate) fn pageout_swap(chunks: &mut [Vec<u64>]) -> Handle {
 }
 
 #[cfg(target_os = "linux")]
+#[allow(clippy::as_conversions)] // ptr<->usize and *mut c_void casts have no safe wrapper
 fn madvise_cold(chunk: &[u64]) {
     if chunk.is_empty() {
         return;
@@ -69,6 +70,7 @@ fn madvise_cold(chunk: &[u64]) {
 fn madvise_cold(_chunk: &[u64]) {}
 
 #[cfg(target_os = "linux")]
+#[allow(clippy::as_conversions)] // libc::c_long -> usize is FFI; sysconf returns >0 here
 fn page_size() -> usize {
     // SAFETY: `sysconf` with a valid argument is safe.
     unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize }
