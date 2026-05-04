@@ -79,6 +79,45 @@ fn page_size() -> usize {
     4096
 }
 
+pub(crate) fn read_at_swap(handle: &Handle, ranges: &[(usize, usize)], dst: &mut Vec<u64>) {
+    let inner = handle
+        .swap_inner()
+        .expect("read_at_swap called on non-swap handle");
+    let total = inner.total_len();
+    let total_out: usize = ranges.iter().map(|(_, l)| *l).sum();
+    dst.reserve(total_out);
+    for &(off, len) in ranges {
+        let end = off.checked_add(len).expect("range offset+len overflow");
+        assert!(
+            end <= total,
+            "read range out of bounds: {off}+{len} > {total}"
+        );
+        copy_range(inner, off, len, dst);
+    }
+}
+
+fn copy_range(inner: &SwapInner, off: usize, len: usize, dst: &mut Vec<u64>) {
+    if len == 0 {
+        return;
+    }
+    let mut remaining = len;
+    let mut cur = off;
+    let mut idx = match inner.prefix.binary_search(&cur) {
+        Ok(i) => i,
+        Err(i) => i.saturating_sub(1),
+    };
+    while remaining > 0 {
+        let chunk_start = inner.prefix[idx];
+        let chunk = &inner.chunks[idx];
+        let local = cur - chunk_start;
+        let take = std::cmp::min(remaining, chunk.len() - local);
+        dst.extend_from_slice(&chunk[local..local + take]);
+        cur += take;
+        remaining -= take;
+        idx += 1;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -93,5 +132,41 @@ mod tests {
         assert_eq!(h.len(), 5);
         assert!(chunks[0].is_empty());
         assert!(chunks[1].is_empty());
+    }
+
+    #[mz_ore::test]
+    fn read_at_within_single_chunk() {
+        let mut chunks = [vec![10u64, 11, 12, 13, 14]];
+        let h = pageout_swap(&mut chunks);
+        let mut dst = Vec::new();
+        read_at_swap(&h, &[(1, 3)], &mut dst);
+        assert_eq!(dst, vec![11, 12, 13]);
+    }
+
+    #[mz_ore::test]
+    fn read_at_spans_chunks() {
+        let mut chunks = [vec![1u64, 2, 3], vec![4, 5, 6]];
+        let h = pageout_swap(&mut chunks);
+        let mut dst = Vec::new();
+        read_at_swap(&h, &[(2, 3)], &mut dst);
+        assert_eq!(dst, vec![3, 4, 5]);
+    }
+
+    #[mz_ore::test]
+    fn read_at_many_concats() {
+        let mut chunks = [vec![1u64, 2, 3, 4, 5]];
+        let h = pageout_swap(&mut chunks);
+        let mut dst = Vec::new();
+        read_at_swap(&h, &[(0, 2), (3, 2)], &mut dst);
+        assert_eq!(dst, vec![1, 2, 4, 5]);
+    }
+
+    #[mz_ore::test]
+    #[should_panic(expected = "out of bounds")]
+    fn read_at_panics_on_oob() {
+        let mut chunks = [vec![1u64, 2]];
+        let h = pageout_swap(&mut chunks);
+        let mut dst = Vec::new();
+        read_at_swap(&h, &[(1, 5)], &mut dst);
     }
 }
