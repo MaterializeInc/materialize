@@ -217,7 +217,7 @@ fn flatten_metrics(
 
             match metric_type {
                 MetricType::COUNTER => {
-                    let value = metric.get_counter().get_value();
+                    let value = metric.get_counter().value();
                     insert_row(
                         &mut snapshot,
                         base_name.to_string(),
@@ -228,7 +228,7 @@ fn flatten_metrics(
                     );
                 }
                 MetricType::GAUGE => {
-                    let value = metric.get_gauge().get_value();
+                    let value = metric.get_gauge().value();
                     insert_row(
                         &mut snapshot,
                         base_name.to_string(),

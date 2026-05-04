@@ -57,6 +57,7 @@ use prometheus::core::{
 };
 use prometheus::proto::MetricFamily;
 use prometheus::{HistogramOpts, Registry};
+use serde::{Deserialize, Serialize};
 
 mod delete_on_drop;
 
@@ -108,6 +109,43 @@ pub struct MakeCollectorOpts {
     pub buckets: Option<Vec<f64>>,
 }
 
+/// A declarative enrichment rule that tells consumers of a metrics endpoint
+/// (specifically environmentd's `/metrics/federated` handler) how to map an
+/// ID-bearing label on a metric to a human-readable name resolved from the
+/// catalog.
+///
+/// Rules are registered on a [`MetricsRegistry`] and serialized as JSON in
+/// the `X-Mz-Enrich-Rules` HTTP response header on every `/metrics` scrape.
+/// Standard Prometheus servers ignore unknown response headers, so external
+/// scrapers are unaffected.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum Rule {
+    /// For metrics that carry a cluster_id under whatever label name
+    /// `cluster_id_label` specifies. The federated handler resolves the
+    /// cluster via `Catalog::try_get_cluster` and attaches `cluster_name`.
+    ClusterNameLookup {
+        /// Name of the metric label whose value is a `ClusterId`.
+        cluster_id_label: String,
+    },
+    /// For metrics carrying both cluster and replica IDs. Attaches
+    /// `cluster_name` and `replica_name`.
+    ReplicaNameLookup {
+        /// Name of the metric label whose value is a `ClusterId`.
+        cluster_id_label: String,
+        /// Name of the metric label whose value is a `ReplicaId`.
+        replica_id_label: String,
+    },
+    /// For metrics carrying a `GlobalId`-shaped value under
+    /// `object_id_label`. Resolves via `Catalog::try_get_entry_by_global_id`
+    /// and attaches `object_name`. Used for `collection_id`, `source_id`,
+    /// `parent_source_id`, etc.
+    ObjectNameLookup {
+        /// Name of the metric label whose value is a `GlobalId`.
+        object_id_label: String,
+    },
+}
+
 /// The materialize metrics registry.
 #[derive(Clone, Derivative)]
 #[derivative(Debug)]
@@ -115,6 +153,7 @@ pub struct MetricsRegistry {
     inner: Registry,
     #[derivative(Debug = "ignore")]
     postprocessors: Arc<Mutex<Vec<Box<dyn FnMut(&mut Vec<MetricFamily>) + Send + Sync>>>>,
+    rules: Arc<Mutex<Vec<Rule>>>,
 }
 
 /// A wrapper for metrics to require delete on drop semantics
@@ -203,7 +242,24 @@ impl MetricsRegistry {
         MetricsRegistry {
             inner: Registry::new(),
             postprocessors: Arc::new(Mutex::new(vec![])),
+            rules: Arc::new(Mutex::new(vec![])),
         }
+    }
+
+    /// Registers an enrichment [`Rule`].
+    ///
+    /// Rules describe how to map an ID-bearing label on a metric to a
+    /// human-readable name. They are surfaced in the `X-Mz-Enrich-Rules`
+    /// header on every `/metrics` scrape and consumed by environmentd's
+    /// `/metrics/federated` handler.
+    pub fn register_rule(&self, rule: Rule) {
+        let mut rules = self.rules.lock().expect("lock poisoned");
+        rules.push(rule);
+    }
+
+    /// Returns a snapshot of the rules registered on this registry.
+    pub fn rules_snapshot(&self) -> Vec<Rule> {
+        self.rules.lock().expect("lock poisoned").clone()
     }
 
     /// Register a metric defined with the [`metric`] macro.

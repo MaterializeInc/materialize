@@ -121,6 +121,7 @@ use crate::http::sql::{ExistingUser, SqlError};
 mod catalog;
 mod cluster;
 mod console;
+mod federated_metrics;
 mod mcp;
 mod memory;
 mod metrics;
@@ -423,40 +424,58 @@ impl HttpServer {
         }
 
         if routes_enabled.metrics {
+            // Cloned once so the federated route can also access it via Extension —
+            // the `/metrics` closure below consumes its own copy by move.
+            let metrics_registry_for_federated = metrics_registry.clone();
             let metrics_router = Router::new()
                 .route(
                     "/metrics",
-                    routing::get(move || async move {
-                        mz_http_util::handle_prometheus(&metrics_registry).await
+                    routing::get(move |headers: axum::http::HeaderMap| async move {
+                        mz_http_util::handle_prometheus(&metrics_registry, headers).await
                     }),
+                )
+                .route(
+                    "/metrics/federated",
+                    routing::get(federated_metrics::handle_federated_metrics),
                 )
                 .route(
                     "/metrics/mz_usage",
-                    routing::get(|client: AuthedClient| async move {
-                        let registry = sql::handle_promsql(client, USAGE_METRIC_QUERIES).await;
-                        mz_http_util::handle_prometheus(&registry).await
-                    }),
+                    routing::get(
+                        |client: AuthedClient, headers: axum::http::HeaderMap| async move {
+                            let registry = sql::handle_promsql(client, USAGE_METRIC_QUERIES).await;
+                            mz_http_util::handle_prometheus(&registry, headers).await
+                        },
+                    ),
                 )
                 .route(
                     "/metrics/mz_frontier",
-                    routing::get(|client: AuthedClient| async move {
-                        let registry = sql::handle_promsql(client, FRONTIER_METRIC_QUERIES).await;
-                        mz_http_util::handle_prometheus(&registry).await
-                    }),
+                    routing::get(
+                        |client: AuthedClient, headers: axum::http::HeaderMap| async move {
+                            let registry =
+                                sql::handle_promsql(client, FRONTIER_METRIC_QUERIES).await;
+                            mz_http_util::handle_prometheus(&registry, headers).await
+                        },
+                    ),
                 )
                 .route(
                     "/metrics/mz_compute",
-                    routing::get(|client: AuthedClient| async move {
-                        let registry = sql::handle_promsql(client, COMPUTE_METRIC_QUERIES).await;
-                        mz_http_util::handle_prometheus(&registry).await
-                    }),
+                    routing::get(
+                        |client: AuthedClient, headers: axum::http::HeaderMap| async move {
+                            let registry =
+                                sql::handle_promsql(client, COMPUTE_METRIC_QUERIES).await;
+                            mz_http_util::handle_prometheus(&registry, headers).await
+                        },
+                    ),
                 )
                 .route(
                     "/metrics/mz_storage",
-                    routing::get(|client: AuthedClient| async move {
-                        let registry = sql::handle_promsql(client, STORAGE_METRIC_QUERIES).await;
-                        mz_http_util::handle_prometheus(&registry).await
-                    }),
+                    routing::get(
+                        |client: AuthedClient, headers: axum::http::HeaderMap| async move {
+                            let registry =
+                                sql::handle_promsql(client, STORAGE_METRIC_QUERIES).await;
+                            mz_http_util::handle_prometheus(&registry, headers).await
+                        },
+                    ),
                 )
                 .route(
                     "/api/livez",
@@ -465,7 +484,9 @@ impl HttpServer {
                 .route("/api/readyz", routing::get(probe::handle_ready))
                 .layer(auth_middleware.clone())
                 .layer(Extension(adapter_client_rx.clone()))
-                .layer(Extension(active_connection_counter.clone()));
+                .layer(Extension(active_connection_counter.clone()))
+                .layer(Extension(metrics_registry_for_federated))
+                .layer(Extension(Arc::clone(&replica_http_locator)));
             router = router.merge(metrics_router);
         }
 

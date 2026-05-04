@@ -16,6 +16,13 @@ fn main() -> Result<(), anyhow::Error> {
         .file("src/environmentd/sys.c")
         .compile("environmentd_sys");
 
+    // Generate prost types for Prometheus's client_model.proto. Used by
+    // `/metrics/federated` to decode delimited-protobuf bodies scraped from
+    // clusterd's `/metrics` endpoint.
+    prost_build::Config::new()
+        .protoc_executable(mz_build_tools::protoc())
+        .compile_protos(&["protos/io.prometheus.client.proto"], &["protos/"])?;
+
     let out_dir = std::env::var("OUT_DIR").ok().map(std::path::PathBuf::from);
     mz_npm::ensure(out_dir)
 }

@@ -11,12 +11,10 @@
 
 use askama::Template;
 use axum::Json;
-use axum::http::HeaderValue;
-use axum::http::Uri;
+use axum::http::header::{ACCEPT, CONTENT_TYPE};
 use axum::http::status::StatusCode;
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Uri};
 use axum::response::{Html, IntoResponse};
-use axum_extra::TypedHeader;
-use headers::ContentType;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::TracingHandle;
 use prometheus::Encoder;
@@ -113,15 +111,56 @@ pub async fn handle_liveness_check() -> impl IntoResponse {
     (StatusCode::OK, "Liveness check successful!")
 }
 
+/// HTTP header carrying the JSON-encoded enrichment rule manifest. Read by
+/// environmentd's `/metrics/federated` handler; ignored by standard
+/// Prometheus scrapers (per RFC 7230 §3.2.1, unknown headers MUST be
+/// passed through or ignored).
+const ENRICH_RULES_HEADER: HeaderName = HeaderName::from_static("x-mz-enrich-rules");
+
 /// Serves metrics from the selected metrics registry variant.
-#[allow(clippy::unused_async)]
-pub async fn handle_prometheus(registry: &MetricsRegistry) -> impl IntoResponse + use<> {
-    let mut buffer = Vec::new();
-    let encoder = prometheus::TextEncoder::new();
-    encoder
-        .encode(&registry.gather(), &mut buffer)
+///
+/// Honors `Accept` content negotiation: if any value of the `Accept`
+/// request header contains `application/vnd.google.protobuf`, the body is
+/// the delimited protobuf wire format; otherwise it's the standard
+/// Prometheus text format. Always attaches an `X-Mz-Enrich-Rules`
+/// response header carrying the registry's [`mz_ore::metrics::Rule`] list
+/// as JSON.
+pub async fn handle_prometheus(
+    registry: &MetricsRegistry,
+    request_headers: HeaderMap,
+) -> impl IntoResponse + use<> {
+    let want_proto = request_headers.get_all(ACCEPT).iter().any(|v| {
+        v.to_str()
+            .ok()
+            .map(|s| s.contains("application/vnd.google.protobuf"))
+            .unwrap_or(false)
+    });
+
+    let families = registry.gather();
+    let mut body = Vec::new();
+    let body_ct: &'static str = if want_proto {
+        prometheus::ProtobufEncoder::new()
+            .encode(&families, &mut body)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        prometheus::PROTOBUF_FORMAT
+    } else {
+        prometheus::TextEncoder::new()
+            .encode(&families, &mut body)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        "text/plain; version=0.0.4"
+    };
+
+    let rules_json = serde_json::to_string(&registry.rules_snapshot())
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok::<_, (StatusCode, String)>((TypedHeader(ContentType::text()), buffer))
+
+    let mut response_headers = HeaderMap::new();
+    response_headers.insert(CONTENT_TYPE, HeaderValue::from_static(body_ct));
+    response_headers.insert(
+        ENRICH_RULES_HEADER,
+        HeaderValue::from_str(&rules_json)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+    );
+    Ok::<_, (StatusCode, String)>((response_headers, body))
 }
 
 #[derive(Serialize, Deserialize)]

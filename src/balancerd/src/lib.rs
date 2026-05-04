@@ -384,8 +384,8 @@ impl BalancerService {
             let router = Router::new()
                 .route(
                     "/metrics",
-                    routing::get(move || async move {
-                        mz_http_util::handle_prometheus(&self.cfg.metrics_registry).await
+                    routing::get(move |headers: axum::http::HeaderMap| async move {
+                        mz_http_util::handle_prometheus(&self.cfg.metrics_registry, headers).await
                     }),
                 )
                 .route(
