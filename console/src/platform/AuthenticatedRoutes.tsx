@@ -34,6 +34,7 @@ import BlockedState from "~/platform/environment-not-ready/BlockedState";
 import { EnvironmentNotReadyRoutes } from "~/platform/environment-not-ready/EnvironmentNotReadyRoutes";
 import { EnvironmentOverviewRoutes } from "~/platform/environment-overview/EnvironmentOverviewRoutes";
 import IntegrationsRoutes from "~/platform/integrations/IntegrationsRoutes";
+import { MaintainedObjectsRoutes } from "~/platform/maintained-objects/MaintainedObjectsRoutes";
 import { ObjectExplorerDetailRoutes } from "~/platform/object-explorer/ObjectExplorerDetailRoutes";
 import { ObjectExplorerRoutes } from "~/platform/object-explorer/ObjectExplorerRoutes";
 import QueryHistoryRoutes from "~/platform/query-history/QueryHistoryRoutes";
@@ -329,6 +330,16 @@ const EnvironmentRoutes = () => {
             element={
               <BaseLayout>
                 <EnvironmentOverviewRoutes />
+              </BaseLayout>
+            }
+          />
+        )}
+        {flags["maintained-objects-ui-50"] && (
+          <Route
+            path="maintained-objects/*"
+            element={
+              <BaseLayout>
+                <MaintainedObjectsRoutes />
               </BaseLayout>
             }
           />
