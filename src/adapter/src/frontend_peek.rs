@@ -77,6 +77,7 @@ impl PeekClient {
     pub(crate) async fn try_frontend_peek(
         &mut self,
         portal_name: &str,
+        catalog: Option<Arc<Catalog>>,
         session: &mut Session,
         outer_ctx_extra: &mut Option<ExecuteContextGuard>,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
@@ -101,7 +102,10 @@ impl PeekClient {
         // catalog revision has changed, which we could see with an atomic read.
         // But anyhow, this problem will just go away when we reach the point that we never fall
         // back to the old sequencing.
-        let catalog = self.catalog_snapshot("try_frontend_peek").await;
+        let catalog = match catalog {
+            Some(c) => c,
+            None => self.catalog_snapshot("try_frontend_peek").await,
+        };
 
         // Extract things from the portal.
         let (stmt, params, logging, lifecycle_timestamps) = {
@@ -196,71 +200,60 @@ impl PeekClient {
 
         // Set up statement logging, and log the beginning of execution.
         // (But only if we're not executing in the context of another statement.)
-        let statement_logging_id = if outer_ctx_extra.is_none() {
-            // This is a new statement, so begin statement logging
-            let result = self.statement_logging_frontend.begin_statement_execution(
-                session,
-                &params,
-                &logging,
-                catalog.system_config(),
-                lifecycle_timestamps,
-            );
-
-            if let Some((logging_id, began_execution, mseh_update, prepared_statement)) = result {
-                self.log_began_execution(began_execution, mseh_update, prepared_statement);
-                Some(logging_id)
-            } else {
-                None
-            }
-        } else {
-            // We're executing in the context of another statement (e.g., FETCH),
-            // so extract the statement logging ID from the outer context if present.
-            // We take ownership and retire the outer context here. The end of execution will be
-            // logged in one of the following ways:
-            // - At the end of this function, if the execution is finished by then.
-            // - Later by the Coordinator, either due to RegisterFrontendPeek or ExecuteSlowPathPeek.
-            outer_ctx_extra
-                .take()
-                .and_then(|guard| guard.defuse().retire())
-        };
+        let logging_guard = self.begin_statement_logging(
+            session,
+            &params,
+            &logging,
+            &catalog,
+            lifecycle_timestamps,
+            outer_ctx_extra,
+        );
+        let statement_logging_id = logging_guard.id();
+        // Streaming peek/subscribe/slow-path/copy-to responses hand off the
+        // end-execution event to the coordinator (via
+        // `handle_peek_notification` / `cancel_pending_peeks`), so letting
+        // the RAII guard's `Drop` also emit `Aborted` on mid-flight drop
+        // would double-end and panic at `end_statement_execution`. Defuse
+        // and manage the lifecycle explicitly below: streaming arms skip
+        // emitting; non-streaming arms emit via `log_ended_execution`.
+        logging_guard.defuse();
 
         let result = self
             .try_frontend_peek_inner(session, catalog, stmt, params, statement_logging_id)
             .await;
 
-        // Log the end of execution if we are logging this statement and execution has already
-        // ended.
+        // Log the end of execution if we are logging this statement and
+        // execution has already ended.
         if let Some(logging_id) = statement_logging_id {
             let reason = match &result {
-                // Streaming results are handled asynchronously by the coordinator
+                // Streaming results are handled asynchronously by the
+                // coordinator — it will log the end via
+                // `handle_peek_notification`, so skip emitting here.
                 Ok(Some(
                     ExecuteResponse::SendingRowsStreaming { .. }
                     | ExecuteResponse::Subscribing { .. },
                 )) => {
-                    // Don't log here - the peek or subscribe is still executing.
-                    // It will be logged when handle_peek_notification is called.
                     return result;
                 }
-                // COPY TO needs to check its inner response
+                // COPY TO wrapping a streaming response: same handoff.
                 Ok(Some(resp @ ExecuteResponse::CopyTo { resp: inner, .. })) => {
                     match inner.as_ref() {
                         ExecuteResponse::SendingRowsStreaming { .. }
                         | ExecuteResponse::Subscribing { .. } => {
-                            // Don't log here - the peek or subscribe is still executing.
-                            // It will be logged when handle_peek_notification is called.
                             return result;
                         }
-                        // For non-streaming COPY TO responses, use the outer CopyTo for conversion
+                        // For non-streaming COPY TO responses, use the outer
+                        // CopyTo for conversion.
                         _ => resp.into(),
                     }
                 }
-                // Bailout case, which should not happen
+                // Bailout case, which should not happen.
                 Ok(None) => {
                     soft_panic_or_log!(
                         "Bailed out from `try_frontend_peek_inner` after we already logged the beginning of statement execution."
                     );
-                    // This statement will be handled by the old peek sequencing, which will do its
-                    // own statement logging from the beginning. So, let's close out this one.
+                    // The old peek sequencing would start its own statement
+                    // logging from scratch; close out this one as errored.
                     self.log_ended_execution(
                         logging_id,
                         StatementEndedExecutionReason::Errored {
@@ -270,10 +263,10 @@ impl PeekClient {
                     );
                     return result;
                 }
-                // All other success responses - use the From implementation
-                // TODO(peek-seq): After we delete the old peek sequencing, we'll be able to adjust
-                // the From implementation to do exactly what we need in the frontend peek
-                // sequencing, so that the above special cases won't be needed.
+                // All other success responses — use the `From` implementation.
+                // TODO(peek-seq): After we delete the old peek sequencing, we
+                // can adjust the `From` impl to do exactly what we need here,
+                // so the special cases above won't be needed.
                 Ok(Some(resp)) => resp.into(),
                 Err(e) => StatementEndedExecutionReason::Errored {
                     error: e.to_string(),

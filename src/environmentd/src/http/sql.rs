@@ -643,6 +643,12 @@ impl SqlResult {
                 PeekResponseUnary::Error(e) => {
                     return Ok(SqlResult::err(client, Error::Unstructured(anyhow!(e))));
                 }
+                PeekResponseUnary::DependencyDropped(dep) => {
+                    return Ok(SqlResult::err(
+                        client,
+                        Error::Unstructured(anyhow!(dep.query_terminated_error())),
+                    ));
+                }
                 PeekResponseUnary::Canceled => {
                     return Ok(SqlResult::err(client, AdapterError::Canceled));
                 }
@@ -1055,6 +1061,16 @@ impl ResultSender for WebSocket {
                             }
                         }
                         Some(PeekResponseUnary::Error(error)) => {
+                            break (
+                                true,
+                                vec![WebSocketResponse::Error(
+                                    Error::Unstructured(anyhow!(error.clone())).into(),
+                                )],
+                                Some((StatementEndedExecutionReason::Errored { error }, ctx_extra)),
+                            );
+                        }
+                        Some(PeekResponseUnary::DependencyDropped(dep)) => {
+                            let error = dep.query_terminated_error();
                             break (
                                 true,
                                 vec![WebSocketResponse::Error(

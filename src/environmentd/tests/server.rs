@@ -667,6 +667,122 @@ ORDER BY mseh.began_at",
     );
 }
 
+#[mz_ore::test]
+fn test_statement_logging_frontend_constant_insert_sets_cluster() {
+    let harness = test_util::TestHarness::default().with_system_parameter_default(
+        "enable_adapter_frontend_occ_read_then_write".to_string(),
+        "true".to_string(),
+    );
+    let (server, mut client) = setup_statement_logging_core(1.0, 1.0, "", harness);
+
+    client.execute("SET CLUSTER TO quickstart", &[]).unwrap();
+    client
+        .execute(
+            "CREATE TABLE statement_logging_constant_insert_t (x INT)",
+            &[],
+        )
+        .unwrap();
+    client
+        .execute(
+            "INSERT INTO statement_logging_constant_insert_t VALUES (1)",
+            &[],
+        )
+        .unwrap();
+
+    let mut client = server.connect_internal(postgres::NoTls).unwrap();
+    let row = Retry::default()
+        .max_duration(Duration::from_secs(30))
+        .retry(|_| {
+            let rows = client
+                .query(
+                    "SELECT mseh.cluster_name, mseh.finished_status
+FROM mz_internal.mz_statement_execution_history AS mseh
+LEFT JOIN mz_internal.mz_prepared_statement_history AS mpsh
+    ON mseh.prepared_statement_id = mpsh.id
+JOIN (SELECT DISTINCT sql, sql_hash FROM mz_internal.mz_sql_text) AS mst
+    ON mpsh.sql_hash = mst.sql_hash
+WHERE mst.sql ~~ 'INSERT INTO statement_logging_constant_insert_t%'
+    AND mseh.finished_at IS NOT NULL
+ORDER BY mseh.began_at DESC",
+                    &[],
+                )
+                .unwrap();
+
+            if let Some(row) = rows.into_iter().next() {
+                Ok(row)
+            } else {
+                Err(())
+            }
+        })
+        .expect("constant INSERT statement log entry should be recorded");
+
+    let cluster_name: Option<String> = row.get(0);
+    let finished_status: String = row.get(1);
+    assert_eq!(cluster_name.as_deref(), Some("quickstart"));
+    assert_eq!(finished_status, "success");
+}
+
+// Regression test: the frontend OCC read-then-write path must set
+// `execution_timestamp` on the statement's log entry. The old, coordinator
+// path does this through `set_statement_execution_timestamp` during group
+// commit; the frontend path needs to emit the equivalent signal once its
+// write commits.
+#[mz_ore::test]
+fn test_statement_logging_frontend_read_then_write_sets_execution_timestamp() {
+    let harness = test_util::TestHarness::default().with_system_parameter_default(
+        "enable_adapter_frontend_occ_read_then_write".to_string(),
+        "true".to_string(),
+    );
+    let (server, mut client) = setup_statement_logging_core(1.0, 1.0, "", harness);
+
+    client.execute("SET CLUSTER TO quickstart", &[]).unwrap();
+    client
+        .execute("CREATE TABLE statement_logging_rtw_t (x INT)", &[])
+        .unwrap();
+    client
+        .execute("INSERT INTO statement_logging_rtw_t VALUES (1), (2)", &[])
+        .unwrap();
+    // DELETE goes through the frontend OCC read-then-write path.
+    client
+        .execute("DELETE FROM statement_logging_rtw_t WHERE x = 1", &[])
+        .unwrap();
+
+    let mut client = server.connect_internal(postgres::NoTls).unwrap();
+    let row = Retry::default()
+        .max_duration(Duration::from_secs(30))
+        .retry(|_| {
+            let rows = client
+                .query(
+                    "SELECT mseh.execution_timestamp, mseh.finished_status
+FROM mz_internal.mz_statement_execution_history AS mseh
+LEFT JOIN mz_internal.mz_prepared_statement_history AS mpsh
+    ON mseh.prepared_statement_id = mpsh.id
+JOIN (SELECT DISTINCT sql, sql_hash FROM mz_internal.mz_sql_text) AS mst
+    ON mpsh.sql_hash = mst.sql_hash
+WHERE mst.sql ~~ 'DELETE FROM statement_logging_rtw_t%'
+    AND mseh.finished_at IS NOT NULL
+ORDER BY mseh.began_at DESC",
+                    &[],
+                )
+                .unwrap();
+
+            if let Some(row) = rows.into_iter().next() {
+                Ok(row)
+            } else {
+                Err(())
+            }
+        })
+        .expect("DELETE statement log entry should be recorded");
+
+    let execution_timestamp: Option<UInt8> = row.get(0);
+    let finished_status: String = row.get(1);
+    assert_eq!(finished_status, "success");
+    assert!(
+        execution_timestamp.is_some(),
+        "frontend OCC read-then-write DELETE must set execution_timestamp, got NULL"
+    );
+}
+
 fn run_throttling_test(use_prepared_statement: bool) {
     // The `target_data_rate` should be
     // - high enough so that the `SELECT 1` queries get throttled (even with high CPU load due to
@@ -1217,6 +1333,363 @@ fn test_cancel_long_running_query() {
     client
         .simple_query("SELECT 1")
         .expect("simple query succeeds after cancellation");
+}
+
+// Test that frontend-sequenced read-then-write statements honor pgwire cancel
+// requests and do not run to completion after cancellation.
+#[mz_ore::test]
+fn test_cancel_frontend_read_then_write_long_running_query() {
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .with_system_parameter_default(
+            "enable_adapter_frontend_occ_read_then_write".to_string(),
+            "true".to_string(),
+        )
+        .start_blocking();
+    server.enable_feature_flags(&["unsafe_enable_unsafe_functions"]);
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let cancel_token = client.cancel_token();
+
+    client
+        .batch_execute("CREATE TABLE t (a TEXT, ts INT)")
+        .unwrap();
+    client
+        .batch_execute("INSERT INTO t VALUES ('hello', 10)")
+        .unwrap();
+
+    let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel();
+    let cancel_thread = thread::spawn(move || {
+        loop {
+            thread::sleep(Duration::from_millis(200));
+            match shutdown_rx.try_recv() {
+                Ok(()) => return,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    let _ = cancel_token.cancel_query(postgres::NoTls);
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
+            }
+        }
+    });
+
+    match client.batch_execute(
+        "INSERT INTO t SELECT a, CASE WHEN mz_unsafe.mz_sleep(ts) > 0 THEN 0 END AS ts FROM t",
+    ) {
+        Err(e) if e.code() == Some(&SqlState::QUERY_CANCELED) => {}
+        Err(e) => panic!("expected error SqlState::QUERY_CANCELED, but got {e:?}"),
+        Ok(_) => panic!("expected error SqlState::QUERY_CANCELED, but query succeeded"),
+    }
+
+    shutdown_tx.send(()).unwrap();
+    cancel_thread.join().unwrap();
+
+    let rows = client
+        .query_one("SELECT count(*) FROM t", &[])
+        .unwrap()
+        .get::<_, i64>(0);
+    assert_eq!(
+        rows, 1,
+        "cancelled statement should not have committed writes"
+    );
+
+    // NOTE: mz_sleep with a constant ts gets evaluated differently. This gives
+    // us additional coverage for cancelling at different moments in the
+    // processing pipeline.
+    let cancel_token = client.cancel_token();
+    let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel();
+    let cancel_thread = thread::spawn(move || {
+        loop {
+            thread::sleep(Duration::from_millis(200));
+            match shutdown_rx.try_recv() {
+                Ok(()) => return,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    let _ = cancel_token.cancel_query(postgres::NoTls);
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
+            }
+        }
+    });
+
+    match client.batch_execute(
+        "INSERT INTO t SELECT a, CASE WHEN mz_unsafe.mz_sleep(10) > 0 THEN 0 END AS ts FROM t",
+    ) {
+        Err(e) if e.code() == Some(&SqlState::QUERY_CANCELED) => {}
+        Err(e) => panic!("expected error SqlState::QUERY_CANCELED, but got {e:?}"),
+        Ok(_) => panic!("expected error SqlState::QUERY_CANCELED, but query succeeded"),
+    }
+
+    shutdown_tx.send(()).unwrap();
+    cancel_thread.join().unwrap();
+
+    let rows = client
+        .query_one("SELECT count(*) FROM t", &[])
+        .unwrap()
+        .get::<_, i64>(0);
+    assert_eq!(
+        rows, 1,
+        "cancelled statement should not have committed writes"
+    );
+}
+
+#[mz_ore::test]
+fn test_frontend_read_then_write_constant_insert_prepares_unmaterializable_functions() {
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .with_system_parameter_default(
+            "enable_adapter_frontend_occ_read_then_write".to_string(),
+            "true".to_string(),
+        )
+        .start_blocking();
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    client.batch_execute("CREATE TABLE t (u text)").unwrap();
+    client.batch_execute("BEGIN").unwrap();
+    client
+        .execute("INSERT INTO t VALUES (current_user())", &[])
+        .unwrap();
+    client.batch_execute("COMMIT").unwrap();
+
+    let inserted_matches_current_user = client
+        .query_one("SELECT u = current_user() FROM t", &[])
+        .unwrap()
+        .get::<_, bool>(0);
+    assert!(inserted_matches_current_user);
+}
+
+#[mz_ore::test]
+fn test_frontend_read_then_write_constant_insert_respects_max_result_size() {
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .with_system_parameter_default(
+            "enable_adapter_frontend_occ_read_then_write".to_string(),
+            "true".to_string(),
+        )
+        .with_system_parameter_default("max_result_size".to_string(), "1MB".to_string())
+        .start_blocking();
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    client
+        .batch_execute("CREATE TABLE t2 (a int4, b text)")
+        .unwrap();
+
+    let err = client
+        .execute(
+            "INSERT INTO t2 SELECT * FROM generate_series(1, 10001), repeat('a', 100)",
+            &[],
+        )
+        .unwrap_err();
+    let db_err = err.as_db_error().expect("expected db error");
+    assert!(
+        db_err
+            .message()
+            .contains("result exceeds max size of 1.0 MiB"),
+        "unexpected error: {err}"
+    );
+}
+
+#[mz_ore::test]
+fn test_frontend_read_then_write_constant_insert_mz_now_uses_legacy_error() {
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .with_system_parameter_default(
+            "enable_adapter_frontend_occ_read_then_write".to_string(),
+            "true".to_string(),
+        )
+        .start_blocking();
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    client
+        .batch_execute("CREATE TABLE dec (d mz_timestamp)")
+        .unwrap();
+
+    let err = client
+        .execute("INSERT INTO dec VALUES (mz_now())", &[])
+        .unwrap_err();
+    let db_err = err.as_db_error().expect("expected db error");
+    assert!(
+        db_err
+            .message()
+            .contains("calls to mz_now in write statements"),
+        "unexpected error: {err}"
+    );
+}
+
+#[mz_ore::test]
+fn test_frontend_read_then_write_returning_error_does_not_commit_write() {
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .with_system_parameter_default(
+            "enable_adapter_frontend_occ_read_then_write".to_string(),
+            "true".to_string(),
+        )
+        .start_blocking();
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    client
+        .batch_execute("CREATE TABLE t (a INT, b INT)")
+        .unwrap();
+
+    let err = client
+        .query("INSERT INTO t VALUES (7, 8) RETURNING 1/0", &[])
+        .unwrap_err();
+    let db_err = err.as_db_error().expect("expected db error");
+    assert!(
+        db_err.message().contains("division by zero"),
+        "unexpected error message: {:?}",
+        db_err.message()
+    );
+
+    let rows = client
+        .query_one("SELECT count(*) FROM t", &[])
+        .unwrap()
+        .get::<_, i64>(0);
+    assert_eq!(rows, 0, "failing RETURNING must not commit the write");
+}
+
+// Regression test for the empty-snapshot branch of the OCC loop.
+//
+// `ActiveSubscribe::initialize` emits a progress message at `as_of` before
+// any data batch is processed, so the OCC loop must not conclude
+// `NoRowsMatched` on that first progress — the snapshot hasn't been
+// delivered yet. The check that distinguishes "initial progress" from
+// "snapshot complete and empty" is `ts > as_of`; this test exercises both
+// empty-match cases and asserts the operations return zero without
+// hanging or writing.
+#[mz_ore::test]
+fn test_frontend_read_then_write_empty_snapshot_returns_zero() {
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default(
+            "enable_adapter_frontend_occ_read_then_write".to_string(),
+            "true".to_string(),
+        )
+        .start_blocking();
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    client.batch_execute("CREATE TABLE t (x INT)").unwrap();
+
+    // DELETE on a completely empty table.
+    let deleted = client
+        .execute("DELETE FROM t", &[])
+        .expect("DELETE on empty table should return 0 rows");
+    assert_eq!(deleted, 0, "DELETE on empty table must report 0 rows");
+
+    // DELETE with a WHERE clause that matches no rows against a non-empty
+    // table. The snapshot is non-empty (contains row (1)) but the selection
+    // is empty after filtering.
+    client.batch_execute("INSERT INTO t VALUES (1)").unwrap();
+    let deleted = client
+        .execute("DELETE FROM t WHERE x = 999", &[])
+        .expect("DELETE with no matches should return 0 rows");
+    assert_eq!(deleted, 0, "DELETE with no matches must report 0 rows");
+
+    // UPDATE with a WHERE clause that matches no rows.
+    let updated = client
+        .execute("UPDATE t SET x = 2 WHERE x = 999", &[])
+        .expect("UPDATE with no matches should return 0 rows");
+    assert_eq!(updated, 0, "UPDATE with no matches must report 0 rows");
+
+    // The original row is still there.
+    let rows = client
+        .query_one("SELECT count(*) FROM t", &[])
+        .unwrap()
+        .get::<_, i64>(0);
+    assert_eq!(rows, 1);
+}
+
+// End-to-end coverage of the OCC retry path:
+//
+// N concurrent connections each issue M `UPDATE counter SET v = v + 1`
+// statements against the same single-row table. Without a working
+// `TimestampPassed` retry loop this would lose updates (two writers reading
+// `v = k` and both committing `v = k + 1`); the final value pinning down at
+// `N * M` proves retries actually re-read fresh state and re-apply the diff.
+//
+// Also asserts the `mz_occ_read_then_write_retry_count` histogram observes
+// every UPDATE and that at least one observation reports a retry, so the
+// retry-count metric stays wired up to the OCC loop.
+#[mz_ore::test]
+fn test_frontend_read_then_write_concurrent_updates_retry() {
+    const NUM_WORKERS: usize = 4;
+    const UPDATES_PER_WORKER: usize = 25;
+
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default(
+            "enable_adapter_frontend_occ_read_then_write".to_string(),
+            "true".to_string(),
+        )
+        .start_blocking();
+
+    let mut setup = server.connect(postgres::NoTls).unwrap();
+    setup
+        .batch_execute("CREATE TABLE counter (id INT, v INT)")
+        .unwrap();
+    setup
+        .batch_execute("INSERT INTO counter VALUES (1, 0)")
+        .unwrap();
+
+    let mut handles = Vec::with_capacity(NUM_WORKERS);
+    for _ in 0..NUM_WORKERS {
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        handles.push(thread::spawn(move || {
+            for _ in 0..UPDATES_PER_WORKER {
+                client
+                    .execute("UPDATE counter SET v = v + 1 WHERE id = 1", &[])
+                    .expect("UPDATE under contention should succeed via OCC retry");
+            }
+        }));
+    }
+    for handle in handles {
+        handle.join().expect("worker thread panicked");
+    }
+
+    let final_v: i32 = setup
+        .query_one("SELECT v FROM counter WHERE id = 1", &[])
+        .unwrap()
+        .get(0);
+    let expected = i32::try_from(NUM_WORKERS * UPDATES_PER_WORKER).unwrap();
+    assert_eq!(
+        final_v, expected,
+        "concurrent OCC UPDATEs lost updates: expected {expected}, got {final_v}",
+    );
+
+    // Inspect the OCC retry-count histogram. Every UPDATE that took the
+    // frontend OCC path should produce exactly one observation, so
+    // sample_count must be >= NUM_WORKERS * UPDATES_PER_WORKER. Same-row
+    // contention essentially guarantees at least one observation lands above
+    // the 0-retry bucket, so we assert that too.
+    let metrics = server.metrics_registry().gather();
+    let retry_metric = metrics
+        .iter()
+        .find(|m| m.name() == "mz_occ_read_then_write_retry_count")
+        .expect("mz_occ_read_then_write_retry_count metric should be registered");
+    let metric = retry_metric.get_metric();
+    assert_eq!(metric.len(), 1, "expected a single histogram series");
+    let histogram = metric[0].get_histogram();
+
+    let total_updates = u64::try_from(NUM_WORKERS * UPDATES_PER_WORKER).unwrap();
+    assert!(
+        histogram.get_sample_count() >= total_updates,
+        "expected at least {} OCC observations, got {}",
+        total_updates,
+        histogram.get_sample_count(),
+    );
+
+    let zero_retry_bucket = histogram
+        .get_bucket()
+        .iter()
+        .find(|b| b.upper_bound() == 0.0)
+        .expect("histogram should have a 0-retry bucket");
+    assert!(
+        zero_retry_bucket.cumulative_count() < histogram.get_sample_count(),
+        "expected at least one UPDATE to retry under contention; \
+         all {} observations landed in the 0-retry bucket",
+        histogram.get_sample_count(),
+    );
 }
 
 fn test_cancellation_cancels_dataflows(query: &str) {
@@ -3311,11 +3784,11 @@ fn test_github_20262() {
     }
 }
 
-// Test that the server properly handles cancellation requests of read-then-write queries.
+// Test that a timed-out read-then-write query does not commit its writes.
 // See database-issues#6134.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
-fn test_cancel_read_then_write() {
+fn test_timeout_read_then_write() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
         .start_blocking();
@@ -3325,53 +3798,27 @@ fn test_cancel_read_then_write() {
     client
         .batch_execute("CREATE TABLE foo (a TEXT, ts INT)")
         .unwrap();
-
-    // Lots of races here, so try this whole thing in a loop.
-    Retry::default()
-        .clamp_backoff(Duration::ZERO)
-        .retry(|_state| {
-            let mut client1 = server.connect(postgres::NoTls).unwrap();
-            let mut client2 = server.connect(postgres::NoTls).unwrap();
-            let cancel_token = client2.cancel_token();
-
-            client1.batch_execute("DELETE FROM foo").unwrap();
-            client1.batch_execute("SET statement_timeout = '5s'").unwrap();
-            client1
-                .batch_execute("INSERT INTO foo VALUES ('hello', 10)")
-                .unwrap();
-
-            let handle1 = thread::spawn(move || {
-                let err =  client1
-                    .batch_execute("insert into foo select a, case when mz_unsafe.mz_sleep(ts) > 0 then 0 end as ts from foo")
-                    .unwrap_err();
-                assert_contains!(
-                    err.to_string_with_causes(),
-                    "statement timeout"
-                );
-                client1
-            });
-            std::thread::sleep(Duration::from_millis(100));
-            let handle2 = thread::spawn(move || {
-                let err = client2
-                .batch_execute("insert into foo values ('blah', 1);")
-                .unwrap_err();
-                assert_contains!(
-                    err.to_string_with_causes(),
-                    "canceling statement"
-                );
-            });
-            std::thread::sleep(Duration::from_millis(100));
-            cancel_token.cancel_query(postgres::NoTls)?;
-            let mut client1 = handle1.join().unwrap();
-            handle2.join().unwrap();
-            let rows:i64 = client1.query_one ("SELECT count(*) FROM foo", &[]).unwrap().get(0);
-            // We ran 3 inserts. First succeeded. Second timedout. Third cancelled.
-            if rows !=1 {
-                anyhow::bail!("unexpected row count: {rows}");
-            }
-            Ok::<_, anyhow::Error>(())
-        })
+    client
+        .batch_execute("INSERT INTO foo VALUES ('hello', 10)")
         .unwrap();
+
+    client
+        .batch_execute("SET statement_timeout = '5s'")
+        .unwrap();
+
+    let err = client
+        .batch_execute("INSERT INTO foo SELECT a, CASE WHEN mz_unsafe.mz_sleep(ts) > 0 THEN 0 END AS ts FROM foo")
+        .unwrap_err();
+    assert_contains!(err.to_string_with_causes(), "statement timeout");
+
+    let rows: i64 = client
+        .query_one("SELECT count(*) FROM foo", &[])
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        rows, 1,
+        "timed-out statement should not have committed writes"
+    );
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]

@@ -86,6 +86,46 @@ pub enum PeekResponseUnary {
     Rows(Box<dyn RowIterator + Send + Sync>),
     Error(String),
     Canceled,
+    /// A dependency was dropped during execution.
+    ///
+    /// N.B. This is a bit of a workaround for the fact that our Error variant
+    /// is unstructured and right now we specifically care about this error and
+    /// need to render differently based on context.
+    DependencyDropped(DroppedDependency),
+}
+
+/// A dependency that was dropped while a peek or subscribe was in flight.
+///
+/// The `name` fields are already quoted (e.g. `"db.schema.t"` or `"c"`), so
+/// `Display` produces the canonical descriptor — `relation "db.schema.t"` or
+/// `cluster "c"` — that callers can drop directly into their error wording.
+#[derive(Clone, Debug)]
+pub enum DroppedDependency {
+    Relation { name: String },
+    Cluster { name: String },
+}
+
+impl fmt::Display for DroppedDependency {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Relation { name } => write!(f, "relation {name}"),
+            Self::Cluster { name } => write!(f, "cluster {name}"),
+        }
+    }
+}
+
+impl DroppedDependency {
+    /// User-facing error for a query (peek or DML-via-internal-subscribe) that
+    /// could not finish because this dependency was dropped mid-flight.
+    pub fn query_terminated_error(&self) -> String {
+        format!("query could not complete because {self} was dropped")
+    }
+
+    /// User-facing error for a `COPY ... TO` that was terminated because this
+    /// dependency was dropped mid-flight.
+    pub fn copy_terminated_error(&self) -> String {
+        format!("copy has been terminated because underlying {self} was dropped")
+    }
 }
 
 #[derive(Clone, Debug)]

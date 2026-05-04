@@ -172,7 +172,7 @@ use thiserror::Error;
 use timely::progress::{Antichain, Timestamp as _};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
-use tokio::sync::{OwnedMutexGuard, mpsc, oneshot, watch};
+use tokio::sync::{OwnedMutexGuard, Semaphore, mpsc, oneshot, watch};
 use tokio::time::{Interval, MissedTickBehavior};
 use tracing::{Instrument, Level, Span, debug, info, info_span, span, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -217,6 +217,7 @@ pub(crate) mod id_bundle;
 pub(crate) mod in_memory_oracle;
 pub(crate) mod peek;
 pub(crate) mod read_policy;
+pub(crate) mod read_then_write;
 pub(crate) mod sequencer;
 pub(crate) mod statement_logging;
 pub(crate) mod timeline;
@@ -458,6 +459,13 @@ impl Message {
                 Command::FrontendStatementLogging(..) => "frontend-statement-logging",
                 Command::StartCopyFromStdin { .. } => "start-copy-from-stdin",
                 Command::InjectAuditEvents { .. } => "inject-audit-events",
+                Command::RegisterConnectionCancelWatch { .. } => "register-connection-cancel-watch",
+                Command::UnregisterConnectionCancelWatch { .. } => {
+                    "unregister-connection-cancel-watch"
+                }
+                Command::CreateInternalSubscribe { .. } => "create-internal-subscribe",
+                Command::AttemptWrite { .. } => "attempt-write",
+                Command::DropInternalSubscribe { .. } => "drop-internal-subscribe",
             },
             Message::ControllerReady {
                 controller: ControllerReadiness::Compute,
@@ -1876,9 +1884,15 @@ pub struct Coordinator {
     /// to stage Batches in Persist that we will then link into the shard.
     active_copies: BTreeMap<ConnectionId, ActiveCopyFrom>,
 
-    /// A map from connection ids to a watch channel that is set to `true` if the connection
-    /// received a cancel request.
-    staged_cancellation: BTreeMap<ConnectionId, (watch::Sender<bool>, watch::Receiver<bool>)>,
+    /// Connection-scoped cancellation watches.
+    ///
+    /// Each entry is a watch channel whose value is `false` until cancellation
+    /// is requested for that connection, at which point it is set to `true`.
+    ///
+    /// Consumers install/remove these watches while they have cancellable work
+    /// in flight. This is used both by coordinator staged sequencing and by
+    /// frontend read-then-write sequencing.
+    connection_cancel_watches: BTreeMap<ConnectionId, (watch::Sender<bool>, watch::Receiver<bool>)>,
     /// Active introspection subscribes.
     introspection_subscribes: BTreeMap<GlobalId, IntrospectionSubscribe>,
 
@@ -1889,6 +1903,24 @@ pub struct Coordinator {
 
     /// Pending writes waiting for a group commit.
     pending_writes: Vec<PendingWriteTxn>,
+
+    /// Semaphore to limit concurrent OCC (optimistic concurrency control)
+    /// read-then-write operations.
+    ///
+    /// Each operation maintains a subscribe that continually receives and
+    /// consolidates updates; with N concurrent loops, every successful write
+    /// forces the other N-1 to redo work, so total work scales as `O(n^2)`.
+    /// The semaphore caps concurrency to keep that bounded.
+    ///
+    /// NOTE: The number of permits is read from `max_concurrent_occ_writes` at
+    /// coordinator startup; runtime changes require an `environmentd` restart.
+    occ_write_semaphore: Arc<Semaphore>,
+
+    /// Whether frontend OCC read-then-write is enabled. Read once at startup
+    /// from the `FRONTEND_READ_THEN_WRITE` dyncfg and fixed for the lifetime of
+    /// this process; see the module-level docs on `frontend_read_then_write`
+    /// for why mixed-mode operation is not allowed.
+    frontend_read_then_write_enabled: bool,
 
     /// For the realtime timeline, an explicit SELECT or INSERT on a table will bump the
     /// table's timestamps, but there are cases where timestamps are not bumped but
@@ -3599,8 +3631,9 @@ impl Coordinator {
                         // and make it follow from all the Spans in the pending
                         // writes.
                         let user_write_spans = self.pending_writes.iter().flat_map(|x| match x {
-                            PendingWriteTxn::User{span, ..} => Some(span),
-                            PendingWriteTxn::System{..} => None,
+                            PendingWriteTxn::User { span, .. } => Some(span),
+                            PendingWriteTxn::InternalTimestamped(w) => Some(&w.span),
+                            PendingWriteTxn::System { .. } => None,
                         });
                         let span = match user_write_spans.exactly_one() {
                             Ok(span) => span.clone(),
@@ -4602,6 +4635,15 @@ pub fn serve(
                 }
 
                 let catalog = Arc::new(catalog);
+                // Read once at startup; changing this system variable requires
+                // an environmentd restart to take effect (see field doc on
+                // `occ_write_semaphore`).
+                let max_concurrent_occ_writes =
+                    usize::cast_from(catalog.system_config().max_concurrent_occ_writes());
+                let frontend_read_then_write_enabled = {
+                    use mz_adapter_types::dyncfgs::FRONTEND_READ_THEN_WRITE;
+                    FRONTEND_READ_THEN_WRITE.get(catalog.system_config().dyncfgs())
+                };
 
                 let caching_secrets_reader = CachingSecretsReader::new(secrets_controller.reader());
                 let mut coord = Coordinator {
@@ -4621,11 +4663,13 @@ pub fn serve(
                     active_compute_sinks: BTreeMap::new(),
                     active_webhooks: BTreeMap::new(),
                     active_copies: BTreeMap::new(),
-                    staged_cancellation: BTreeMap::new(),
+                    connection_cancel_watches: BTreeMap::new(),
                     introspection_subscribes: BTreeMap::new(),
                     write_locks: BTreeMap::new(),
                     deferred_write_ops: BTreeMap::new(),
                     pending_writes: Vec::new(),
+                    occ_write_semaphore: Arc::new(Semaphore::new(max_concurrent_occ_writes)),
+                    frontend_read_then_write_enabled,
                     advance_timelines_interval,
                     secrets_controller,
                     caching_secrets_reader,

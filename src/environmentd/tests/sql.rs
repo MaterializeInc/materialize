@@ -1689,8 +1689,12 @@ fn test_subscribe_outlive_cluster() {
         .batch_execute("CREATE CLUSTER newcluster REPLICAS (r1 (size 'scale=1,workers=1'))")
         .unwrap();
     client2_cancel.cancel_query(postgres::NoTls).unwrap();
-    client2
-        .batch_execute("ROLLBACK; SET CLUSTER = default")
+    // The cancel is asynchronous and might race with subsequent commands.
+    // Retry ROLLBACK in a loop in case it gets canceled.
+    Retry::default()
+        .max_tries(5)
+        .clamp_backoff(Duration::from_millis(100))
+        .retry(|_| client2.batch_execute("ROLLBACK; SET CLUSTER = default"))
         .unwrap();
     assert_eq!(
         client2
@@ -2528,7 +2532,7 @@ fn test_subscribe_on_dropped_source() {
         assert!(
             res.unwrap_db_error()
                 .message()
-                .contains("subscribe has been terminated because underlying relation")
+                .contains("query could not complete because relation")
         );
     }
 
@@ -2584,7 +2588,7 @@ fn test_dont_drop_sinks_twice() {
     let err = out.read_to_end(&mut vec![]).unwrap_err();
     assert!(
         err.to_string_with_causes()
-            .contains("subscribe has been terminated")
+            .contains("copy has been terminated")
     );
 
     drop(out);

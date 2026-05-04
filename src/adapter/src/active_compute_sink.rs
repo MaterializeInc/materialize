@@ -29,7 +29,7 @@ use timely::progress::Antichain;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
-use crate::coord::peek::PeekResponseUnary;
+use crate::coord::peek::{DroppedDependency, PeekResponseUnary};
 use crate::{AdapterError, ExecuteContext, ExecuteResponse};
 
 #[derive(Debug)]
@@ -88,7 +88,7 @@ pub enum ActiveComputeSinkRetireReason {
     Canceled,
     /// The compute sink was forcibly terminated because an object it depended on
     /// was dropped.
-    DependencyDropped(String),
+    DependencyDropped(DroppedDependency),
 }
 
 /// A description of an active subscribe from coord's perspective
@@ -116,6 +116,9 @@ pub struct ActiveSubscribe {
     pub start_time: EpochMillis,
     /// How to present the subscribe's output.
     pub output: SubscribeOutput,
+    /// If true, this is an internal subscribe that should not appear in
+    /// introspection tables like mz_subscriptions.
+    pub internal: bool,
 }
 
 impl ActiveSubscribe {
@@ -386,9 +389,9 @@ impl ActiveSubscribe {
         let message = match reason {
             ActiveComputeSinkRetireReason::Finished => return,
             ActiveComputeSinkRetireReason::Canceled => PeekResponseUnary::Canceled,
-            ActiveComputeSinkRetireReason::DependencyDropped(d) => PeekResponseUnary::Error(
-                format!("subscribe has been terminated because underlying {d} was dropped"),
-            ),
+            ActiveComputeSinkRetireReason::DependencyDropped(d) => {
+                PeekResponseUnary::DependencyDropped(d)
+            }
         };
         self.send(message);
     }
@@ -440,9 +443,9 @@ impl ActiveCopyTo {
         let message = match reason {
             ActiveComputeSinkRetireReason::Finished => return,
             ActiveComputeSinkRetireReason::Canceled => Err(AdapterError::Canceled),
-            ActiveComputeSinkRetireReason::DependencyDropped(d) => Err(AdapterError::Unstructured(
-                anyhow!("copy has been terminated because underlying {d} was dropped"),
-            )),
+            ActiveComputeSinkRetireReason::DependencyDropped(dep) => Err(
+                AdapterError::Unstructured(anyhow!(dep.copy_terminated_error())),
+            ),
         };
         let _ = self.tx.send(message);
     }
