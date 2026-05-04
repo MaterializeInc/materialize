@@ -1328,14 +1328,18 @@ fn string_to_array<'a>(
     if delimiter.is_empty() {
         let mut row = Row::default();
         let mut packer = row.packer();
-        packer.try_push_array(
-            &[ArrayDimension {
-                lower_bound: 1,
-                length: 1,
-            }],
-            vec![string].into_iter().map(Datum::String),
-        )?;
-
+        let dims = &[ArrayDimension {
+            lower_bound: 1,
+            length: 1,
+        }];
+        match null_string.flatten() {
+            Some(null_string) if null_string == string => {
+                packer.try_push_array(dims, std::iter::once(Datum::Null))?;
+            }
+            _ => {
+                packer.try_push_array(dims, vec![string].into_iter().map(Datum::String))?;
+            }
+        }
         Ok(temp_storage.push_unary_row(row))
     } else {
         string_to_array_impl(string, delimiter, null_string.flatten(), temp_storage)

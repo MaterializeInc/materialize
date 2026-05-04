@@ -1841,9 +1841,19 @@ select string_to_array(word, ' ', 'hello') from string_to_array_words;
 {NULL,world}
 
 # string_to_array - empty string delimiter and null_string set to whole word.
-# expectation: null_string is ignored if no delimiter is passed.
+# expectation: null_string is still respected if delimiter is empty. (Same as Postgres.)
 query T
 select string_to_array(word, '', 'hello world') from string_to_array_words;
+----
+{NULL}
+
+query T
+select string_to_array(word, '', 'aaa') from string_to_array_words;
+----
+{"hello world"}
+
+query T
+select string_to_array(word, '', null) from string_to_array_words;
 ----
 {"hello world"}
 
