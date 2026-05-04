@@ -70,8 +70,14 @@ DELETE FROM t1;
 > SELECT * FROM t1_insert;
 1
 
-! SELECT * FROM t1_update;
-contains:Invalid data in source, saw retractions (1) for row that does not exist
+![version<2602300] SELECT * FROM t1_update;
+contains:Invalid data in source, saw retractions
 
-! SELECT * FROM t1_delete;
-contains:Invalid data in source, saw retractions (1) for row that does not exist
+![version>=2602300] SELECT * FROM t1_update;
+contains:negative record multiplicity
+
+![version<2602300] SELECT * FROM t1_delete;
+contains:Invalid data in source, saw retractions
+
+![version>=2602300] SELECT * FROM t1_delete;
+contains:negative record multiplicity

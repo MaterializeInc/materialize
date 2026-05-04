@@ -35,7 +35,7 @@ use mz_compute_types::dyncfgs::{
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::ConfigSet;
 use mz_expr::row::RowCollection;
-use mz_expr::{RowComparator, SafeMfpPlan};
+use mz_expr::{MultiplicityErrorKind, RowComparator, SafeMfpPlan, log_multiplicity_error};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::{MetricsRegistry, UIntGauge};
@@ -1356,15 +1356,15 @@ impl PersistPeek {
                 }
 
                 let count: usize = d.try_into().map_err(|_| {
-                    error!(
-                        shard = %metadata.data_shard, diff = d, ?row,
-                        "persist peek encountered negative multiplicities",
-                    );
-                    format!(
-                        "Invalid data in source, \
-                         saw retractions ({}) for row that does not exist: {:?}",
-                        -d, row,
-                    )
+                    let err = mz_expr::MultiplicityError {
+                        kind: MultiplicityErrorKind::Negative,
+                        code_place: "persist peek".into(),
+                        detail:
+                            format!("shard={}, diff={}, row={:?}", metadata.data_shard, d, row,)
+                                .into(),
+                    };
+                    log_multiplicity_error(&err);
+                    err.to_string()
                 })?;
                 let Some(count) = NonZeroUsize::new(count) else {
                     continue;
@@ -1502,15 +1502,19 @@ impl IndexPeek {
             });
             if copies.is_negative() {
                 let error = cursor.key(&storage);
-                error!(
-                    target = %self.peek.target.id(), diff = %copies, %error,
-                    "index peek encountered negative multiplicities in error trace",
-                );
-                return PeekStatus::Ready(PeekResponse::Error(format!(
-                    "Invalid data in source errors, \
-                    saw retractions ({}) for row that does not exist: {}",
-                    -copies, error,
-                )));
+                let err = mz_expr::MultiplicityError {
+                    kind: MultiplicityErrorKind::Negative,
+                    code_place: "index peek error trace".into(),
+                    detail: format!(
+                        "target={}, diff={}, error={}",
+                        self.peek.target.id(),
+                        copies,
+                        error,
+                    )
+                    .into(),
+                };
+                log_multiplicity_error(&err);
+                return PeekStatus::Ready(PeekResponse::Error(err.to_string()));
             }
             if copies.is_positive() {
                 return PeekStatus::Ready(PeekResponse::Error(cursor.key(&storage).to_string()));

@@ -81,6 +81,18 @@ message ProtoEvalError {
     string a = 2;
     string b = 3;
   }
+  message ProtoMultiplicityError {
+    ProtoMultiplicityErrorKind kind = 1;
+    string code_place = 2;
+    string detail = 3;
+  }
+  enum ProtoMultiplicityErrorKind {
+    MULTIPLICITY_ERROR_KIND_UNSPECIFIED = 0;
+    MULTIPLICITY_ERROR_KIND_NEGATIVE = 1;
+    MULTIPLICITY_ERROR_KIND_NON_POSITIVE = 2;
+    MULTIPLICITY_ERROR_KIND_NON_MONOTONIC_INPUT = 3;
+    MULTIPLICITY_ERROR_KIND_INCONSISTENT_ACCUMULATOR = 4;
+  }
   oneof kind {
     int32 character_not_valid_for_encoding = 1;
     int32 character_too_large_for_encoding = 2;
@@ -164,6 +176,12 @@ message ProtoEvalError {
     google.protobuf.Empty key_cannot_be_null = 80;
     string invalid_catalog_json = 81;
     string redact_error = 82;
+    // Kept solely for read-compat with persisted errors written before
+    // MultiplicityError was introduced. The corresponding Rust variant has
+    // been folded into MultiplicityError; on deserialization we map this
+    // onto MultiplicityError { Negative, "scalar subquery", "" }. We never
+    // emit this variant.
     google.protobuf.Empty negative_rows_from_subquery = 83;
+    ProtoMultiplicityError multiplicity_error = 84;
   }
 }

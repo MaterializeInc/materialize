@@ -28,7 +28,7 @@ use mz_compute_types::plan::top_k::{
     BasicTopKPlan, MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan,
 };
 use mz_expr::func::CastUint64ToInt64;
-use mz_expr::{BinaryFunc, EvalError, MirScalarExpr, UnaryFunc, func};
+use mz_expr::{BinaryFunc, EvalError, MirScalarExpr, MultiplicityErrorKind, UnaryFunc, func};
 use mz_ore::cast::CastFrom;
 use mz_ore::soft_assert_or_log;
 use mz_repr::{Datum, DatumVec, Diff, ReprScalarType, Row, SharedRow};
@@ -148,12 +148,16 @@ impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
                     // It should be now possible to ensure that we have a monotonic collection.
                     let error_logger = self.error_logger();
                     let (collection, errs) = collection.ensure_monotonic(move |data, diff| {
-                        error_logger.log(
-                            "Non-monotonic input to MonotonicTopK",
-                            &format!("data={data:?}, diff={diff}"),
-                        );
-                        let m = "tried to build monotonic top-k on non-monotonic input".into();
-                        (DataflowErrorSer::from(EvalError::Internal(m)), Diff::ONE)
+                        let err = mz_expr::MultiplicityError {
+                            kind: MultiplicityErrorKind::NonMonotonicInput,
+                            code_place: "MonotonicTopK".into(),
+                            detail: format!("data={data:?}, diff={diff}").into(),
+                        };
+                        error_logger.log_multiplicity_error(&err);
+                        (
+                            DataflowErrorSer::from(EvalError::MultiplicityError(err)),
+                            Diff::ONE,
+                        )
                     });
                     err_collection = err_collection.concat(errs);
 
@@ -420,9 +424,13 @@ impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
                         let mut hk_iter = hk.iter();
                         let h = hk_iter.next().unwrap().unwrap_uint64();
                         let k = SharedRow::pack(hk_iter);
-                        let message = "Negative multiplicities in TopK";
-                        error_logger.log(message, &format!("k={k:?}, h={h}, v={v:?}"));
-                        Err(EvalError::Internal(message.into()).into())
+                        let err = mz_expr::MultiplicityError {
+                            kind: MultiplicityErrorKind::Negative,
+                            code_place: "TopK".into(),
+                            detail: format!("k={k:?}, h={h}, v={v:?}").into(),
+                        };
+                        error_logger.log_multiplicity_error(&err);
+                        Err(EvalError::MultiplicityError(err).into())
                     }
                     Ok(t) => Ok((hk, t)),
                 },
@@ -477,12 +485,13 @@ impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
         // It should be now possible to ensure that we have a monotonic collection and process it.
         let error_logger = self.error_logger();
         let (partial, errs) = collection.ensure_monotonic(move |data, diff| {
-            error_logger.log(
-                "Non-monotonic input to MonotonicTop1",
-                &format!("data={data:?}, diff={diff}"),
-            );
-            let m = "tried to build monotonic top-1 on non-monotonic input".into();
-            (EvalError::Internal(m).into(), Diff::ONE)
+            let err = mz_expr::MultiplicityError {
+                kind: MultiplicityErrorKind::NonMonotonicInput,
+                code_place: "MonotonicTop1".into(),
+                detail: format!("data={data:?}, diff={diff}").into(),
+            };
+            error_logger.log_multiplicity_error(&err);
+            (EvalError::MultiplicityError(err).into(), Diff::ONE)
         });
         let partial: KeyCollection<_, _, _> = partial
             .explode_one(move |(group_key, row)| {

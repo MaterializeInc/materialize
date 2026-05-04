@@ -18,6 +18,7 @@ use anyhow::anyhow;
 use aws_types::sdk_config::SdkConfig;
 use differential_dataflow::Hashable;
 use futures::StreamExt;
+use mz_expr::MultiplicityErrorKind;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
@@ -380,16 +381,14 @@ where
                             let batch = row.hashed() % output_batch_count;
                             if !up_to.less_equal(ts) {
                                 if diff.is_negative() {
-                                    tracing::error!(
-                                        %sink_id, %diff, ?row,
-                                        "S3 oneshot sink encountered negative multiplicities",
-                                    );
-                                    anyhow::bail!(
-                                        "Invalid data in source, \
-                                         saw retractions ({}) for row that does not exist: {:?}",
-                                        -*diff,
-                                        row,
-                                    )
+                                    let err = mz_expr::MultiplicityError {
+                                        kind: MultiplicityErrorKind::Negative,
+                                        code_place: "S3 oneshot sink".into(),
+                                        detail: format!("sink={sink_id}, diff={diff}, row={row:?}")
+                                            .into(),
+                                    };
+                                    mz_expr::log_multiplicity_error(&err);
+                                    anyhow::bail!("{}", err);
                                 }
                                 row_count += u64::try_from(diff.into_inner()).unwrap();
                                 let uploader = match s3_uploaders.entry(batch) {

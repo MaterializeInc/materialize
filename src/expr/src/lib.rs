@@ -48,7 +48,8 @@ pub use relation::{
 };
 pub use scalar::func::{self, BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc};
 pub use scalar::{
-    EvalError, FilterCharacteristics, MirScalarExpr, ProtoDomainLimit, ProtoEvalError, like_pattern,
+    EvalError, FilterCharacteristics, MULTIPLICITY_ERROR_TITLE, MirScalarExpr, MultiplicityError,
+    MultiplicityErrorKind, ProtoDomainLimit, ProtoEvalError, like_pattern, log_multiplicity_error,
 };
 
 /// A [`MirRelationExpr`] that claims to have been optimized, e.g., by an

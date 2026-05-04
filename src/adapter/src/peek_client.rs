@@ -16,6 +16,7 @@ use mz_compute_client::controller::instance_client::InstanceClient;
 use mz_compute_client::controller::instance_client::{AcquireReadHoldsError, InstanceShutDown};
 use mz_compute_client::protocol::command::PeekTarget;
 use mz_compute_types::ComputeInstanceId;
+use mz_expr::MultiplicityErrorKind;
 use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
 use mz_persist_client::PersistClient;
@@ -265,9 +266,12 @@ impl PeekClient {
                 let count = match u64::try_from(count.into_inner()) {
                     Ok(u) => usize::cast_from(u),
                     Err(_) => {
-                        return Err(AdapterError::Unstructured(anyhow::anyhow!(
-                            "Negative multiplicity in constant result: {}",
-                            count
+                        return Err(AdapterError::Eval(mz_expr::EvalError::MultiplicityError(
+                            mz_expr::MultiplicityError {
+                                kind: MultiplicityErrorKind::Negative,
+                                code_place: "constant result".into(),
+                                detail: format!("count={}", count).into(),
+                            },
                         )));
                     }
                 };
