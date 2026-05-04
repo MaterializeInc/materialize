@@ -295,6 +295,11 @@ impl ComputeState {
             std::sync::atomic::Ordering::Relaxed,
         );
 
+        crate::row_spine::DICTIONARY_COMPRESSION.store(
+            ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION.get(config),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+
         // Remember the maintenance interval locally to avoid reading it from the config set on
         // every server iteration.
         self.server_maintenance_interval = COMPUTE_SERVER_MAINTENANCE_INTERVAL.get(config);
