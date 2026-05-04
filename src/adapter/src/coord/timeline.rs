@@ -331,7 +331,10 @@ impl Coordinator {
                 }
             };
             let read_ts = oracle.read_ts().await;
-            read_holds.downgrade(read_ts);
+            // Hold read holds back by a fixed lag so historical reads remain
+            // available. Hard-coded for now; will be made configurable.
+            let held = read_ts.saturating_sub(Timestamp::from(30_000u64));
+            read_holds.downgrade(held);
             self.global_timelines
                 .insert(timeline, TimelineState { oracle, read_holds });
         }
