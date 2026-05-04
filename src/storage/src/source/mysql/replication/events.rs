@@ -289,10 +289,17 @@ pub(super) async fn handle_rows_event(
             before_row.map(|r| (r, Diff::MINUS_ONE)),
             after_row.map(|r| (r, Diff::ONE)),
         ];
+        let gtid_str = format!("{new_gtid:?}");
         for (binlog_row, diff) in updates.into_iter().flatten() {
             let row = mysql_async::Row::try_from(binlog_row)?;
             for (output, row_val) in outputs.iter().repeat_clone(row) {
-                let event = match pack_mysql_row(&mut final_row, row_val, &output.desc) {
+                let event = match pack_mysql_row(
+                    &mut final_row,
+                    row_val,
+                    &output.desc,
+                    Some(&gtid_str),
+                    output.binlog_full_metadata,
+                ) {
                     Ok(row) => Ok(SourceMessage {
                         key: Row::default(),
                         value: row,

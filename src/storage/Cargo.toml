@@ -91,6 +91,7 @@ tracing.workspace = true
 thiserror.workspace = true
 uuid = { workspace = true, features = ["serde", "v4"] }
 arrow-ipc.workspace = true
+version-compare.workspace = true
 
 [dev-dependencies]
 async-trait.workspace = true
