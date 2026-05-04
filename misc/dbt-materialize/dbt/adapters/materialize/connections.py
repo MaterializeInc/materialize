@@ -54,6 +54,26 @@ DEFAULT_SESSION_PARAMETERS = {
 }
 
 
+def _escape_option_value(v: str) -> str:
+    # libpq's options-string parser splits on spaces so values containing
+    # them either must be escaped
+    return v.replace(" ", "\\ ")
+
+
+def _build_options_string(
+    user_options: Optional[Dict[str, str]], search_path: Optional[str]
+) -> str:
+    options_dict = dict(DEFAULT_SESSION_PARAMETERS)
+    if user_options:
+        options_dict.update(user_options)
+
+    options_parts = list(options_dict.items())
+    if search_path:
+        options_parts.append(("search_path", search_path))
+
+    return " ".join(f"--{k}={_escape_option_value(v)}" for k, v in options_parts)
+
+
 @dataclass
 class MaterializeCredentials(PostgresCredentials):
     # NOTE(morsapaes) The cluster parameter defined in `profiles.yml` is not
@@ -128,17 +148,9 @@ class MaterializeConnectionManager(PostgresConnectionManager):
         if credentials.application_name:
             kwargs["application_name"] = credentials.application_name
 
-        options_dict = dict(DEFAULT_SESSION_PARAMETERS)
-        if credentials.options:
-            options_dict.update(credentials.options)
-
-        options_parts = [(k, v) for k, v in options_dict.items()]
-
-        search_path = credentials.search_path
-        if search_path is not None and search_path != "":
-            options_parts.append(("search_path", search_path))
-
-        kwargs["options"] = " ".join([f"--{k}={v}" for k, v in options_parts])
+        kwargs["options"] = _build_options_string(
+            credentials.options, credentials.search_path
+        )
 
         def connect():
             handle = psycopg2.connect(
