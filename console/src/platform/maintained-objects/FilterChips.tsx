@@ -7,18 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import {
-  HStack,
-  Tag,
-  TagCloseButton,
-  TagLabel,
-  useTheme,
-} from "@chakra-ui/react";
-import { Table } from "@tanstack/react-table";
+import { HStack, Tag, TagCloseButton, TagLabel } from "@chakra-ui/react";
+import { Column, Table } from "@tanstack/react-table";
 import React from "react";
 
 import { MaintainedObjectType } from "~/api/materialize/maintained-objects/constants";
-import { MaterializeTheme } from "~/theme";
 
 import {
   FRESHNESS_THRESHOLD_OPTIONS,
@@ -33,60 +26,71 @@ interface Chip {
   onRemove: () => void;
 }
 
-const summarizeMulti = <T,>(
+type AnyColumn = Column<MaintainedObjectListItem, unknown>;
+
+/** Per-value remover for a multi-select column: drops `value` from the
+ *  current filter array and clears the filter when the array empties. */
+const removeMultiValue =
+  <T,>(column: AnyColumn, value: T) =>
+  () => {
+    const current = (column.getFilterValue() as T[] | undefined) ?? [];
+    const next = current.filter((v) => v !== value);
+    column.setFilterValue(next.length ? next : undefined);
+  };
+
+const multiSelectChips = <T,>(
+  column: AnyColumn,
   prefix: string,
-  values: readonly T[],
   itemLabel: (value: T) => string,
-): string =>
-  values.length === 1
-    ? `${prefix}: ${itemLabel(values[0])}`
-    : `${prefix}: ${values.length}`;
+): Chip[] => {
+  const values = (column.getFilterValue() as T[] | undefined) ?? [];
+  return values.map((value) => ({
+    key: `${column.id}:${String(value)}`,
+    label: `${prefix}: ${itemLabel(value)}`,
+    onRemove: removeMultiValue(column, value),
+  }));
+};
 
-type ChipBuilder<TValue> = (value: TValue) => string | null;
-
-interface ChipSource<TValue> {
+interface ChipSource {
   columnId: string;
-  build: ChipBuilder<TValue>;
+  build: (column: AnyColumn) => Chip[];
 }
 
-const isPresent = <T,>(v: T[] | undefined): v is T[] =>
-  Array.isArray(v) && v.length > 0;
-
-const CHIP_SOURCES: ChipSource<unknown>[] = [
+const CHIP_SOURCES: ChipSource[] = [
   {
     columnId: "clusterName",
-    build: (value) =>
-      isPresent(value as string[] | undefined)
-        ? summarizeMulti("Cluster", value as string[], (c) => c)
-        : null,
-  } as ChipSource<unknown>,
+    build: (column) => multiSelectChips<string>(column, "Cluster", (c) => c),
+  },
   {
     columnId: "objectType",
-    build: (value) =>
-      isPresent(value as MaintainedObjectType[] | undefined)
-        ? summarizeMulti("Type", value as MaintainedObjectType[], (t) => t)
-        : null,
-  } as ChipSource<unknown>,
+    build: (column) =>
+      multiSelectChips<MaintainedObjectType>(column, "Type", (t) => t),
+  },
   {
     columnId: "freshness",
-    build: (value) => {
-      if (typeof value !== "number") return null;
-      return (
-        FRESHNESS_THRESHOLD_OPTIONS[String(value)] ?? `Freshness: ${value}s`
-      );
+    build: (column) => {
+      const value = column.getFilterValue();
+      if (typeof value !== "number") return [];
+      const label =
+        FRESHNESS_THRESHOLD_OPTIONS[String(value)] ?? `Freshness: ${value}s`;
+      return [
+        {
+          key: column.id,
+          label,
+          onRemove: () => column.setFilterValue(undefined),
+        },
+      ];
     },
-  } as ChipSource<unknown>,
+  },
   {
     columnId: "hydration",
-    build: (value) =>
-      isPresent(value as HydrationBucket[] | undefined)
-        ? summarizeMulti(
-            "Hydration",
-            value as HydrationBucket[],
-            (b) => HYDRATION_LABELS[b],
-          )
-        : null,
-  } as ChipSource<unknown>,
+    build: (column) =>
+      multiSelectChips<HydrationBucket>(
+        column,
+        "Hydration",
+        (b) => HYDRATION_LABELS[b],
+      ),
+  },
 ];
 
 export interface FilterChipsProps {
@@ -94,19 +98,11 @@ export interface FilterChipsProps {
 }
 
 export const FilterChips = ({ table }: FilterChipsProps) => {
-  const { colors } = useTheme<MaterializeTheme>();
-
   const chips: Chip[] = [];
   for (const source of CHIP_SOURCES) {
     const column = table.getColumn(source.columnId);
     if (!column) continue;
-    const label = source.build(column.getFilterValue());
-    if (label === null) continue;
-    chips.push({
-      key: source.columnId,
-      label,
-      onRemove: () => column.setFilterValue(undefined),
-    });
+    chips.push(...source.build(column));
   }
 
   if (chips.length === 0) return null;
@@ -114,18 +110,12 @@ export const FilterChips = ({ table }: FilterChipsProps) => {
   return (
     <HStack spacing="2" flexWrap="wrap">
       {chips.map((chip) => (
-        <Tag
-          key={chip.key}
-          size="md"
-          variant="subtle"
-          bg={colors.background.secondary}
-          color={colors.foreground.primary}
-          borderRadius="full"
-        >
+        <Tag key={chip.key} size="md" borderRadius="md" px="3" py="1">
           <TagLabel>{chip.label}</TagLabel>
           <TagCloseButton
-            aria-label={`Remove ${chip.key} filter`}
+            aria-label={`Remove ${chip.label}`}
             onClick={chip.onRemove}
+            ml="2"
           />
         </Tag>
       ))}

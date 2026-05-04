@@ -37,12 +37,10 @@ const buildObject = (
   schemaName: "public",
   databaseName: "materialize",
   objectType: "materialized-view",
-  clusterId: "u1",
-  clusterName: "quickstart",
+  cluster: { id: "u1", name: "quickstart" },
   hydratedReplicas: 1,
   totalReplicas: 1,
   lag: null,
-  lagMs: null,
   ...overrides,
 });
 
@@ -50,7 +48,7 @@ const ordersMv = buildObject({
   id: "u101",
   name: "orders_mv",
   objectType: "materialized-view",
-  clusterName: "compute_cluster",
+  cluster: { id: "u101", name: "compute_cluster" },
   hydratedReplicas: 2,
   totalReplicas: 2,
 });
@@ -59,7 +57,7 @@ const inventoryIdx = buildObject({
   id: "u102",
   name: "inventory_idx",
   objectType: "index",
-  clusterName: "compute_cluster",
+  cluster: { id: "u101", name: "compute_cluster" },
   hydratedReplicas: 1,
   totalReplicas: 2,
 });
@@ -68,7 +66,7 @@ const eventsSrc = buildObject({
   id: "u103",
   name: "events_src",
   objectType: "source",
-  clusterName: "ingest_cluster",
+  cluster: { id: "u200", name: "ingest_cluster" },
   hydratedReplicas: 0,
   totalReplicas: 1,
 });

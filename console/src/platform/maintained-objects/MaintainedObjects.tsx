@@ -130,14 +130,11 @@ const ClusterCell = ({
   row: MaintainedObjectListItem;
   regionSlug: string;
 }) => {
-  if (!row.clusterId || !row.clusterName) return "-";
-  const path = absoluteClusterPath(regionSlug, {
-    id: row.clusterId,
-    name: row.clusterName,
-  });
+  if (!row.cluster) return "-";
+  const path = absoluteClusterPath(regionSlug, row.cluster);
   return (
     <TextLink as={RouterLink} to={path} textStyle="text-ui-med" noOfLines={1}>
-      {row.clusterName}
+      {row.cluster.name}
     </TextLink>
   );
 };
@@ -150,20 +147,19 @@ const FreshnessCell = ({
   ready: boolean;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
-  if (!row.lag || row.lagMs === null) {
+  if (!row.lag) {
     return ready ? "-" : <Skeleton height="3" width="14" />;
   }
+  const { value, ms } = row.lag;
   const color =
-    row.lagMs >= OUTDATED_MS
+    ms >= OUTDATED_MS
       ? colors.accent.red
-      : row.lagMs >= WARNING_MS
+      : ms >= WARNING_MS
         ? colors.accent.orange
         : colors.foreground.primary;
   return (
     <Text textStyle="text-ui-med" color={color}>
-      {formatIntervalShort(
-        row.lag as Parameters<typeof formatIntervalShort>[0],
-      )}
+      {formatIntervalShort(value as Parameters<typeof formatIntervalShort>[0])}
     </Text>
   );
 };
@@ -255,7 +251,7 @@ const columns = [
       renderFilter: (column) => <ObjectTypeFilterPanel column={column} />,
     },
   }),
-  columnHelper.accessor((row) => row.lagMs, {
+  columnHelper.accessor((row) => row.lag?.ms ?? null, {
     id: "freshness",
     header: "Freshness (pMAX)",
     sortingFn: sortingFunctions.nullsLast,
@@ -290,7 +286,7 @@ const columns = [
       },
     },
   ),
-  columnHelper.accessor("clusterName", {
+  columnHelper.accessor((row) => row.cluster?.name ?? null, {
     id: "clusterName",
     header: "Cluster",
     sortingFn: sortingFunctions.nullsLast,
@@ -353,7 +349,7 @@ const MaintainedObjects = () => {
     if (!objects) return [];
     const names = new Set<string>();
     for (const obj of objects) {
-      if (obj.clusterName) names.add(obj.clusterName);
+      if (obj.cluster) names.add(obj.cluster.name);
     }
     return [...names].sort();
   }, [objects]);
@@ -421,33 +417,26 @@ const MaintainedObjects = () => {
 
   return (
     <MainContentContainer>
-      <PageHeader boxProps={{ mb: "4" }}>
+      <PageHeader variant="compact" sticky boxProps={{ pb: "4" }}>
         <PageHeading>Maintained Objects</PageHeading>
-      </PageHeader>
-
-      <VStack alignItems="stretch" width="100%" spacing="4">
-        <HStack
-          width="100%"
-          justifyContent="space-between"
-          flexWrap="wrap"
-          gap="3"
-        >
-          <HStack spacing="3" flexWrap="wrap">
+        <VStack alignItems="stretch" width="100%" spacing="3" mt="4">
+          <HStack width="100%" flexWrap="wrap" gap="3">
+            <TableSearch
+              initialValue={initialState.globalFilter ?? ""}
+              onValueChange={table.setGlobalFilter}
+              placeholder="Search objects..."
+            />
             <TimePeriodSelect
               timePeriodMinutes={timePeriodMinutes}
               setTimePeriodMinutes={setTimePeriodMinutes}
               options={LOOKBACK_OPTIONS}
             />
           </HStack>
-          <TableSearch
-            initialValue={initialState.globalFilter ?? ""}
-            onValueChange={table.setGlobalFilter}
-            placeholder="Search objects..."
-          />
-        </HStack>
+          {hasFilters && <FilterChips table={table} />}
+        </VStack>
+      </PageHeader>
 
-        {hasFilters && <FilterChips table={table} />}
-
+      <VStack alignItems="stretch" width="100%" spacing="4">
         {showEmpty ? (
           <EmptyListWrapper>
             <EmptyListHeader>
