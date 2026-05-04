@@ -24,9 +24,11 @@ use mz_repr::Timestamp;
 use mz_repr::global_id::TransientIdGen;
 use mz_repr::{RelationDesc, Row};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
+use mz_sql::plan::Params;
 use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::TimestampOracle;
 use prometheus::Histogram;
+use qcell::QCell;
 use thiserror::Error;
 use timely::progress::Antichain;
 use tokio::sync::oneshot;
@@ -34,12 +36,12 @@ use uuid::Uuid;
 
 use crate::catalog::Catalog;
 use crate::command::{CatalogSnapshot, Command};
-use crate::coord::Coordinator;
 use crate::coord::peek::FastPathPlan;
-use crate::statement_logging::WatchSetCreation;
+use crate::coord::{Coordinator, ExecuteContextGuard};
+use crate::session::{LifecycleTimestamps, Session};
 use crate::statement_logging::{
-    FrontendStatementLoggingEvent, PreparedStatementEvent, StatementLoggingFrontend,
-    StatementLoggingId,
+    FrontendStatementLoggingEvent, PreparedStatementEvent, PreparedStatementLoggingInfo,
+    StatementLoggingFrontend, StatementLoggingId, WatchSetCreation,
 };
 use crate::{AdapterError, Client, CollectionIdBundle, ReadHolds, statement_logging};
 
@@ -416,7 +418,49 @@ impl PeekClient {
         })
     }
 
-    // Statement logging helper methods
+    /// Set up statement logging for a frontend-sequenced operation.
+    ///
+    /// If `outer_ctx_extra` is `None`, begins a new statement execution log
+    /// entry. If `outer_ctx_extra` is `Some` (e.g. EXECUTE/FETCH), reuses the
+    /// existing logging id and retires the outer context.
+    ///
+    /// The end of execution must be logged separately by the caller (via
+    /// [`Self::log_ended_execution`]) once the terminal outcome is known, or
+    /// handed off to the coordinator for streaming responses.
+    pub(crate) fn begin_statement_logging(
+        &self,
+        session: &mut Session,
+        params: &Params,
+        logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
+        catalog: &Catalog,
+        lifecycle_timestamps: Option<LifecycleTimestamps>,
+        outer_ctx_extra: &mut Option<ExecuteContextGuard>,
+    ) -> Option<StatementLoggingId> {
+        if outer_ctx_extra.is_none() {
+            // This is a new statement, so begin statement logging.
+            let result = self.statement_logging_frontend.begin_statement_execution(
+                session,
+                params,
+                logging,
+                catalog.system_config(),
+                lifecycle_timestamps,
+            );
+
+            if let Some((logging_id, began_execution, mseh_update, prepared_statement)) = result {
+                self.log_began_execution(began_execution, mseh_update, prepared_statement);
+                Some(logging_id)
+            } else {
+                None
+            }
+        } else {
+            // We're executing in the context of another statement (e.g. FETCH),
+            // so take ownership of the outer context and inherit its logging id
+            // (if any). The end of execution will be logged by the caller.
+            outer_ctx_extra
+                .take()
+                .and_then(|guard| guard.defuse().retire())
+        }
+    }
 
     /// Log the beginning of statement execution.
     pub(crate) fn log_began_execution(
