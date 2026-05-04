@@ -9,6 +9,8 @@
   not concurrent-DDL conflicts, for example, permission, syntax, or
   missing-object errors, are raised immediately and are not retried.
 
+* Support overriding the `options` PostgreSQL connection parameter
+
 ## 1.9.7 - 2026-03-16
 
 * Reduce catalog server load during

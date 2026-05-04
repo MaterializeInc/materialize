@@ -15,7 +15,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Dict, Optional
 
 import dbt_common.exceptions
 import psycopg2
@@ -31,43 +31,47 @@ SUPPORTED_MATERIALIZE_VERSIONS = ">=0.68.0"
 
 logger = AdapterLogger("Materialize")
 
-
-# Override the psycopg2 connect function in order to inject Materialize-specific
-# session parameter defaults.
-#
-# This approach is a bit hacky, but some of these session parameters *must* be
-# set as part of connection initiation, so we can't simply run `SET` commands
-# after the session is established.
-def connect(**kwargs):
-    options = [
-        # Ensure that dbt's catalog queries get routed to the
-        # `mz_catalog_server` cluster, even if the server or role's default is
-        # different.
-        "--auto_route_catalog_queries=on",
-        # dbt prints notices to stdout, which is very distracting because dbt
-        # can establish many new connections during `dbt run`.
-        "--welcome_message=off",
-        # Disable warnings about the session's default database or cluster not
-        # existing, as these get quite spammy, especially with multiple threads.
-        #
-        # Details: it's common for the default cluster for the role dbt is
-        # connecting as (often `quickstart`) to be absent. For many dbt
-        # deployments, clusters are explicitly specified on a model-by-model
-        # basis, and there in fact is no natural "default" cluster. So warning
-        # repeatedly that the default cluster doesn't exist isn't helpful, since
-        # each DDL statement will specify a different, valid cluster. If a DDL
-        # statement ever specifies an invalid cluster, dbt will still produce an
-        # error about the invalid cluster, even with this setting enabled.
-        "--current_object_missing_warnings=off",
-        *(kwargs.get("options") or []),
-    ]
-    kwargs["options"] = " ".join(options)
-
-    return _connect(**kwargs)
+DEFAULT_SESSION_PARAMETERS = {
+    # Ensure that dbt's catalog queries get routed to the
+    # `mz_catalog_server` cluster, even if the server or role's default is
+    # different.
+    "auto_route_catalog_queries": "on",
+    # dbt prints notices to stdout, which is very distracting because dbt
+    # can establish many new connections during `dbt run`.
+    "welcome_message": "off",
+    # Disable warnings about the session's default database or cluster not
+    # existing, as these get quite spammy, especially with multiple threads.
+    #
+    # Details: it's common for the default cluster for the role dbt is
+    # connecting as (often `quickstart`) to be absent. For many dbt
+    # deployments, clusters are explicitly specified on a model-by-model
+    # basis, and there in fact is no natural "default" cluster. So warning
+    # repeatedly that the default cluster doesn't exist isn't helpful, since
+    # each DDL statement will specify a different, valid cluster. If a DDL
+    # statement ever specifies an invalid cluster, dbt will still produce an
+    # error about the invalid cluster, even with this setting enabled.
+    "current_object_missing_warnings": "off",
+}
 
 
-_connect = psycopg2.connect
-psycopg2.connect = connect
+def _escape_option_value(v: str) -> str:
+    # libpq's options-string parser splits on spaces so values containing
+    # them either must be escaped
+    return v.replace(" ", "\\ ")
+
+
+def _build_options_string(
+    user_options: Optional[Dict[str, str]], search_path: Optional[str]
+) -> str:
+    options_dict = dict(DEFAULT_SESSION_PARAMETERS)
+    if user_options:
+        options_dict.update(user_options)
+
+    options_parts = list(options_dict.items())
+    if search_path:
+        options_parts.append(("search_path", search_path))
+
+    return " ".join(f"--{k}={_escape_option_value(v)}" for k, v in options_parts)
 
 
 @dataclass
@@ -84,6 +88,9 @@ class MaterializeCredentials(PostgresCredentials):
     # modified).
     cluster: Optional[str] = None
     application_name: Optional[str] = f"dbt-materialize v{__version__}"
+    # Additional session parameters to pass via the connection options string.
+    # User-provided options override DEFAULT_SESSION_PARAMETERS.
+    options: Optional[Dict[str, str]] = None
 
     @property
     def type(self):
@@ -103,6 +110,7 @@ class MaterializeCredentials(PostgresCredentials):
             "search_path",
             "retries",
             "application_name",
+            "options",
         )
 
 
@@ -111,7 +119,70 @@ class MaterializeConnectionManager(PostgresConnectionManager):
 
     @classmethod
     def open(cls, connection):
-        connection = super().open(connection)
+        # Much of the `open` method setup is copied from the `PostgresConnectionManager.open` method
+        # https://github.com/dbt-labs/dbt-adapters/blob/v1.17.3/dbt-postgres/src/dbt/adapters/postgres/connections.py#L102,
+        # except we allow users to override options.
+
+        if connection.state == "open":
+            logger.debug("Connection is already open, skipping open.")
+            return connection
+
+        credentials = cls.get_credentials(connection.credentials)
+        kwargs = {}
+
+        if credentials.keepalives_idle:
+            kwargs["keepalives_idle"] = credentials.keepalives_idle
+
+        if credentials.sslmode:
+            kwargs["sslmode"] = credentials.sslmode
+
+        if credentials.sslcert is not None:
+            kwargs["sslcert"] = credentials.sslcert
+
+        if credentials.sslkey is not None:
+            kwargs["sslkey"] = credentials.sslkey
+
+        if credentials.sslrootcert is not None:
+            kwargs["sslrootcert"] = credentials.sslrootcert
+
+        if credentials.application_name:
+            kwargs["application_name"] = credentials.application_name
+
+        kwargs["options"] = _build_options_string(
+            credentials.options, credentials.search_path
+        )
+
+        def connect():
+            handle = psycopg2.connect(
+                dbname=credentials.database,
+                user=credentials.user,
+                host=credentials.host,
+                password=credentials.password,
+                port=credentials.port,
+                connect_timeout=credentials.connect_timeout,
+                **kwargs,
+            )
+
+            if credentials.role:
+                handle.cursor().execute(f"set role {credentials.role}")
+
+            return handle
+
+        retryable_exceptions = [
+            psycopg2.errors.OperationalError,
+        ]
+
+        def exponential_backoff(attempt: int):
+            return attempt * attempt
+
+        connection = cls.retry_connection(
+            connection,
+            connect=connect,
+            logger=logger,
+            retry_limit=credentials.retries,
+            retry_timeout=exponential_backoff,
+            retryable_exceptions=retryable_exceptions,
+        )
 
         # Prevents psycopg connection from automatically opening transactions.
         # More info: https://www.psycopg.org/docs/usage.html#transactions-control
