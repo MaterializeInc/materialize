@@ -92,6 +92,7 @@ mz-ore = { path = "../ore", features = ["id_gen", "chrono"] }
 proptest.workspace = true
 scopeguard.workspace = true
 serde_json.workspace = true
+tempfile.workspace = true
 tokio.workspace = true
 tokio-test.workspace = true
 tracing-subscriber.workspace = true
@@ -144,6 +145,7 @@ assert-no-tracing = []
 assert = ["assert-no-tracing", "ctor", "tracing"]
 proptest = ["dep:proptest", "proptest-derive"]
 overflowing = ["assert"]
+pager = ["dep:bytemuck", "libc", "rand", "dep:tracing"]
 
 [[test]]
 name = "future"
