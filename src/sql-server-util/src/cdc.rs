@@ -287,7 +287,7 @@ impl<'a, M: SqlServerCdcMetrics> CdcStream<'a, M> {
                 if db_max_lsn > curr_lsn {
                     for (instance, instance_lsn) in &self.capture_instances {
                         let Some(instance_lsn) = instance_lsn.as_ref() else {
-                            tracing::error!(?instance, "found uninitialized LSN!");
+                            tracing::warn!(?instance, "found uninitialized LSN!");
                             continue;
                         };
 
