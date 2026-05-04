@@ -70,7 +70,7 @@ use crate::command::{
     CatalogSnapshot, Command, ExecuteResponse, Response, SASLChallengeResponse,
     SASLVerifyProofResponse, StartupResponse, SuperuserAttribute,
 };
-use crate::coord::appends::PendingWriteTxn;
+use crate::coord::appends::{PendingWriteTxn, UserWriteResponder};
 use crate::coord::peek::PendingPeek;
 use crate::coord::{
     ConnMeta, Coordinator, DeferredPlanStatement, Message, PendingTxn, PlanStatement, PlanValidity,
@@ -1808,13 +1808,13 @@ impl Coordinator {
         // Cancel pending writes. There is at most one pending write per session.
         let pending_write_idx = self.pending_writes.iter().position(|pending_write_txn| {
             matches!(pending_write_txn, PendingWriteTxn::User {
-                pending_txn: PendingTxn { ctx, .. },
+                responder: UserWriteResponder::Session(PendingTxn { ctx, .. }),
                 ..
             } if *ctx.session().conn_id() == conn_id)
         });
         if let Some(idx) = pending_write_idx {
             if let PendingWriteTxn::User {
-                pending_txn: PendingTxn { ctx, .. },
+                responder: UserWriteResponder::Session(PendingTxn { ctx, .. }),
                 ..
             } = self.pending_writes.remove(idx)
             {

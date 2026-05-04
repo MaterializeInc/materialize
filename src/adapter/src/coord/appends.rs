@@ -131,18 +131,29 @@ pub(crate) enum BuiltinTableUpdateSource {
     Background(oneshot::Sender<()>),
 }
 
+/// Where to deliver the result of a [`PendingWriteTxn::User`] write.
+#[derive(Debug)]
+pub(crate) enum UserWriteResponder {
+    /// Session-bound write. The coordinator retires the session's
+    /// `ExecuteContext` once the write commits.
+    Session(PendingTxn),
+}
+
 /// A pending write transaction that will be committing during the next group commit.
 #[derive(Debug)]
 pub(crate) enum PendingWriteTxn {
-    /// Write to a user table.
+    /// Write to a user table. The write timestamp is picked by the oracle
+    /// during group commit. The write lock is either handed off from the
+    /// submitting session (via `write_locks: Some(..)`) or acquired during
+    /// group commit (`write_locks: None`).
     User {
         span: Span,
         /// List of all write operations within the transaction.
         writes: BTreeMap<CatalogItemId, SmallVec<[TableData; 1]>>,
         /// If they exist, should contain locks for each [`CatalogItemId`] in `writes`.
         write_locks: Option<WriteLocks>,
-        /// Inner transaction.
-        pending_txn: PendingTxn,
+        /// Where to deliver the result once the write commits.
+        responder: UserWriteResponder,
     },
     /// Write to a system table.
     System {
@@ -259,7 +270,7 @@ impl Coordinator {
                     span,
                     writes,
                     write_locks,
-                    pending_txn,
+                    responder: UserWriteResponder::Session(pending_txn),
                 });
             }
         }
@@ -344,7 +355,7 @@ impl Coordinator {
                     span,
                     write_locks: Some(write_locks),
                     writes,
-                    pending_txn,
+                    responder: UserWriteResponder::Session(pending_txn),
                 } => match write_locks.validate(writes.keys().copied()) {
                     Ok(validated_locks) => {
                         // Merge all of our write locks together since we can allow concurrent
@@ -355,7 +366,7 @@ impl Coordinator {
                             span,
                             writes,
                             write_locks: None,
-                            pending_txn,
+                            responder: UserWriteResponder::Session(pending_txn),
                         };
                         validated_writes.push(validated_write);
                     }
@@ -376,7 +387,7 @@ impl Coordinator {
                     span,
                     writes,
                     write_locks: None,
-                    pending_txn,
+                    responder: UserWriteResponder::Session(pending_txn),
                 } => {
                     let missing = group_write_locks.missing_locks(writes.keys().copied());
 
@@ -386,7 +397,7 @@ impl Coordinator {
                             span,
                             writes,
                             write_locks: None,
-                            pending_txn,
+                            responder: UserWriteResponder::Session(pending_txn),
                         };
                         validated_writes.push(validated_write);
                     } else {
@@ -407,7 +418,7 @@ impl Coordinator {
                                     span,
                                     writes,
                                     write_locks: None,
-                                    pending_txn,
+                                    responder: UserWriteResponder::Session(pending_txn),
                                 };
                                 validated_writes.push(validated_write);
                             }
@@ -467,12 +478,12 @@ impl Coordinator {
                     span: _,
                     writes,
                     write_locks,
-                    pending_txn:
-                        PendingTxn {
+                    responder:
+                        UserWriteResponder::Session(PendingTxn {
                             ctx,
                             response,
                             action,
-                        },
+                        }),
                 } => {
                     assert_none!(write_locks, "should have merged together all locks above");
                     for (id, table_data) in writes {
