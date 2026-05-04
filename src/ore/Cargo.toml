@@ -168,6 +168,11 @@ name = "bytes"
 harness = false
 required-features = ["bytes", "region", "tracing"]
 
+[[bench]]
+name = "pager"
+harness = false
+required-features = ["pager"]
+
 [package.metadata.cargo-udeps.ignore]
 # Only used in doc-tests.
 development = ["tokio-test"]
