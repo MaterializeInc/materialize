@@ -9,7 +9,7 @@ exports[`buildIndexesListQuery > build query with all filters 1`] = `
     "%source%",
     "u%",
   ],
-  "sql": "select "i"."id", "d"."name" as "databaseName", "sc"."name" as "schemaName", "i"."name", "si"."key" as "indexedColumns", "r"."name" as "relationName", "r"."type" as "relationType" from "mz_indexes" as "i" inner join "mz_relations" as "r" on "r"."id" = "i"."on_id" inner join "mz_schemas" as "sc" on "sc"."id" = "r"."schema_id" left join "mz_databases" as "d" on "d"."id" = "sc"."database_id" inner join "mz_show_indexes" as "si" on "i"."name" = "si"."name" and "si"."schema_id" = "sc"."id" where "i"."cluster_id" = $1 and "d"."id" = $2 and "sc"."id" = $3 and "i"."name" like $4 and "i"."id" like $5 order by "d"."name", "sc"."name", "name"",
+  "sql": "select "i"."id", "d"."name" as "databaseName", "sc"."name" as "schemaName", "i"."name", "si"."key" as "indexedColumns", "r"."id" as "relationId", "r"."name" as "relationName", "r"."type" as "relationType" from "mz_indexes" as "i" inner join "mz_relations" as "r" on "r"."id" = "i"."on_id" inner join "mz_schemas" as "sc" on "sc"."id" = "r"."schema_id" left join "mz_databases" as "d" on "d"."id" = "sc"."database_id" inner join "mz_show_indexes" as "si" on "i"."name" = "si"."name" and "si"."schema_id" = "sc"."id" where "i"."cluster_id" = $1 and "d"."id" = $2 and "sc"."id" = $3 and "i"."name" like $4 and "i"."id" like $5 order by "d"."name", "sc"."name", "name"",
 }
 `;
 
@@ -18,6 +18,6 @@ exports[`buildIndexesListQuery > build query with no filters 1`] = `
   "parameters": [
     "s1",
   ],
-  "sql": "select "i"."id", "d"."name" as "databaseName", "sc"."name" as "schemaName", "i"."name", "si"."key" as "indexedColumns", "r"."name" as "relationName", "r"."type" as "relationType" from "mz_indexes" as "i" inner join "mz_relations" as "r" on "r"."id" = "i"."on_id" inner join "mz_schemas" as "sc" on "sc"."id" = "r"."schema_id" left join "mz_databases" as "d" on "d"."id" = "sc"."database_id" inner join "mz_show_indexes" as "si" on "i"."name" = "si"."name" and "si"."schema_id" = "sc"."id" where "i"."cluster_id" = $1 order by "d"."name", "sc"."name", "name"",
+  "sql": "select "i"."id", "d"."name" as "databaseName", "sc"."name" as "schemaName", "i"."name", "si"."key" as "indexedColumns", "r"."id" as "relationId", "r"."name" as "relationName", "r"."type" as "relationType" from "mz_indexes" as "i" inner join "mz_relations" as "r" on "r"."id" = "i"."on_id" inner join "mz_schemas" as "sc" on "sc"."id" = "r"."schema_id" left join "mz_databases" as "d" on "d"."id" = "sc"."database_id" inner join "mz_show_indexes" as "si" on "i"."name" = "si"."name" and "si"."schema_id" = "sc"."id" where "i"."cluster_id" = $1 order by "d"."name", "sc"."name", "name"",
 }
 `;

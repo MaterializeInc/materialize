@@ -8,10 +8,48 @@
 // by the Apache License, Version 2.0.
 
 import { SchemaObject } from "~/api/materialize";
-import {
-  relativeDatabasePath,
-  relativeObjectPath,
-} from "~/platform/object-explorer/routerHelpers";
+import { NULL_DATABASE_NAME } from "~/platform/constants";
+
+const OBJECT_TYPE_TO_SLUG: Record<string, string> = {
+  view: "views",
+  index: "indexes",
+  table: "tables",
+  secret: "secrets",
+  source: "sources",
+  sink: "sinks",
+  connection: "connections",
+  "materialized-view": "materialized-views",
+};
+
+function relativeDatabasePath(params: { databaseName: string | null }) {
+  return `${encodeURIComponent(params.databaseName ?? NULL_DATABASE_NAME)}`;
+}
+
+function relativeSchemaPath(params: {
+  databaseName: string | null;
+  schemaName: string;
+}) {
+  return `${relativeDatabasePath(params)}/schemas/${encodeURIComponent(params.schemaName)}`;
+}
+
+function relativeObjectTypePath(params: {
+  databaseName: string | null;
+  schemaName: string;
+  objectType: string;
+}) {
+  const objectLabel = OBJECT_TYPE_TO_SLUG[params.objectType] ?? "unknown";
+  return `${relativeSchemaPath(params)}/${objectLabel}`;
+}
+
+function relativeObjectPath(params: {
+  databaseName: string | null;
+  schemaName: string;
+  objectType: string;
+  objectName: string;
+  id: string;
+}) {
+  return `${relativeObjectTypePath(params)}/${encodeURIComponent(params.objectName)}/${params.id}`;
+}
 import { useRegionSlug } from "~/store/environments";
 
 export type RoutableObjectType =
@@ -67,6 +105,22 @@ export const shellPath = (regionSlug: string) => {
 };
 
 export { shellPath as homePagePath };
+
+/** URL for the connector monitor overlay (source/sink stats + errors). */
+export const monitorPath = (regionSlug: string, objectId: string) =>
+  `${shellPath(regionSlug)}/monitor/${objectId}`;
+
+/** URL for the connector monitor errors tab. */
+export const monitorErrorsPath = (regionSlug: string, objectId: string) =>
+  `${shellPath(regionSlug)}/monitor/${objectId}/errors`;
+
+/** URL for the workflow graph overlay (dependency DAG). */
+export const workflowPath = (regionSlug: string, objectId: string) =>
+  `${shellPath(regionSlug)}/workflow/${objectId}`;
+
+/** URL for the dataflow visualizer overlay (internal execution graph). */
+export const dataflowPath = (regionSlug: string, objectId: string) =>
+  `${shellPath(regionSlug)}/dataflow/${objectId}`;
 
 export interface ObjectPathParams {
   databaseName: string | null;

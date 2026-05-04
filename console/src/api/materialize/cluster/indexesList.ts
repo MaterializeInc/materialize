@@ -43,6 +43,7 @@ export function buildIndexesListQuery({
       "sc.name as schemaName",
       "i.name",
       "si.key as indexedColumns",
+      "r.id as relationId",
       "r.name as relationName",
       "r.type as relationType",
     ])

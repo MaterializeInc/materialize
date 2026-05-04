@@ -254,3 +254,45 @@ export function getMzDataTypeOid(
     return MzDataType[type as keyof typeof MzDataType];
   }
 }
+
+/** Display labels for each supported catalog object type. */
+export const OBJECT_TYPE_TO_LABEL = {
+  connection: "Connections",
+  index: "Indexes",
+  "materialized-view": "Materialized Views",
+  secret: "Secrets",
+  sink: "Sinks",
+  source: "Sources",
+  table: "Tables",
+  view: "Views",
+} as const;
+
+export type SupportedObjectType = keyof typeof OBJECT_TYPE_TO_LABEL;
+
+export interface ParameterStatus {
+  name: string;
+  value: string;
+}
+
+export interface CommandStarting {
+  has_rows: boolean;
+  is_streaming: boolean;
+}
+
+export interface BackendKeyData {
+  conn_id: number;
+  secret_key: number;
+}
+
+export type WebsocketRow = { type: "Row"; payload: unknown[] };
+
+export type WebSocketResult =
+  | { type: "ReadyForQuery"; payload: string }
+  | { type: "Notice"; payload: Notice }
+  | { type: "CommandComplete"; payload: string }
+  | { type: "Error"; payload: Error }
+  | { type: "Rows"; payload: { columns: Column[] } }
+  | { type: "Row"; payload: unknown[] }
+  | { type: "ParameterStatus"; payload: ParameterStatus }
+  | { type: "CommandStarting"; payload: CommandStarting }
+  | { type: "BackendKeyData"; payload: BackendKeyData };

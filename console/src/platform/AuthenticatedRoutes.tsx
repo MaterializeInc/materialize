@@ -28,14 +28,11 @@ import { AppConfigSwitch } from "~/config/AppConfigSwitch";
 import { getIsFronteggRoute } from "~/fronteggRoutes";
 import { useFlags } from "~/hooks/useFlags";
 import { BaseLayout } from "~/layouts/BaseLayout";
-import { ShellLayout } from "~/layouts/ShellLayout";
 import ClusterRoutes from "~/platform/clusters/ClusterRoutes";
 import BlockedState from "~/platform/environment-not-ready/BlockedState";
 import { EnvironmentNotReadyRoutes } from "~/platform/environment-not-ready/EnvironmentNotReadyRoutes";
 import { EnvironmentOverviewRoutes } from "~/platform/environment-overview/EnvironmentOverviewRoutes";
 import IntegrationsRoutes from "~/platform/integrations/IntegrationsRoutes";
-import { ObjectExplorerDetailRoutes } from "~/platform/object-explorer/ObjectExplorerDetailRoutes";
-import { ObjectExplorerRoutes } from "~/platform/object-explorer/ObjectExplorerRoutes";
 import QueryHistoryRoutes from "~/platform/query-history/QueryHistoryRoutes";
 import RolesRoutes from "~/platform/roles/RolesRoutes";
 import {
@@ -43,9 +40,8 @@ import {
   SHELL_SLUG as HOME_PAGE_SLUG,
   shellPath as homePagePath,
 } from "~/platform/routeHelpers";
-import ShellRoutes from "~/platform/shell/ShellRoutes";
-import { ShellWebsocketProvider } from "~/platform/shell/ShellWebsocketProvider";
 import SourceRoutes from "~/platform/sources/SourceRoutes";
+import WorksheetRoutes from "~/platform/worksheet/WorksheetRoutes";
 import { SentryRoutes } from "~/sentry";
 import { regionIdToSlug, useRegionSlugToId } from "~/store/cloudRegions";
 import {
@@ -266,108 +262,90 @@ const EnvironmentRoutes = () => {
     return null;
   }
 
-  const organizationId =
-    maybeOrganizationId !== null ? maybeOrganizationId.data : undefined;
-
   return (
-    <ShellWebsocketProvider regionId={regionId} organizationId={organizationId}>
-      <SentryRoutes>
+    <SentryRoutes>
+      <Route
+        path={`${HOME_PAGE_SLUG}/*`}
+        element={
+          <BaseLayout>
+            <WorksheetRoutes />
+          </BaseLayout>
+        }
+      />
+      <Route path="clusters">
         <Route
-          path={HOME_PAGE_SLUG}
-          element={
-            <BaseLayout>
-              <ShellLayout>
-                <ShellRoutes />
-              </ShellLayout>
-            </BaseLayout>
-          }
-        />
-        <Route path="objects">
-          <Route
-            index
-            path="*"
-            element={
-              <BaseLayout sectionNav={<ObjectExplorerRoutes />}>
-                <ObjectExplorerDetailRoutes />
-              </BaseLayout>
-            }
-          />
-        </Route>
-        <Route path="clusters">
-          <Route
-            index
-            path="*"
-            element={
-              <BaseLayout>
-                <ClusterRoutes />
-              </BaseLayout>
-            }
-          />
-        </Route>
-        <Route path="sources">
-          <Route
-            index
-            path="*"
-            element={
-              <BaseLayout>
-                <SourceRoutes />
-              </BaseLayout>
-            }
-          />
-        </Route>
-        <Route
-          path="sinks"
-          element={
-            <BaseLayout>
-              <SinksList />
-            </BaseLayout>
-          }
-        />
-        {flags["environment-overview-2855"] && (
-          <Route
-            path="environment-overview"
-            element={
-              <BaseLayout>
-                <EnvironmentOverviewRoutes />
-              </BaseLayout>
-            }
-          />
-        )}
-
-        <Route path="query-history">
-          <Route
-            index
-            path="*"
-            element={
-              <AppConfigSwitch
-                cloudConfigElement={
-                  <BaseLayout>
-                    <QueryHistoryRoutes />
-                  </BaseLayout>
-                }
-                // TODO (SangJunBak): Remove guard once we want to re-enable Query History for self managed, see <https://github.com/MaterializeInc/cloud/issues/10755>
-                selfManagedConfigElement={<RedirectToHome />}
-              />
-            }
-          />
-        </Route>
-        <Route path="integrations">
-          <Route
-            index
-            path="*"
-            element={
-              <BaseLayout>
-                <IntegrationsRoutes />
-              </BaseLayout>
-            }
-          />
-        </Route>
-        <Route
+          index
           path="*"
-          element={<Navigate to={homePagePath(params.regionSlug)} replace />}
+          element={
+            <BaseLayout>
+              <ClusterRoutes />
+            </BaseLayout>
+          }
         />
-      </SentryRoutes>
-    </ShellWebsocketProvider>
+      </Route>
+      <Route path="sources">
+        <Route
+          index
+          path="*"
+          element={
+            <BaseLayout>
+              <SourceRoutes />
+            </BaseLayout>
+          }
+        />
+      </Route>
+      <Route
+        path="sinks"
+        element={
+          <BaseLayout>
+            <SinksList />
+          </BaseLayout>
+        }
+      />
+      {flags["environment-overview-2855"] && (
+        <Route
+          path="environment-overview"
+          element={
+            <BaseLayout>
+              <EnvironmentOverviewRoutes />
+            </BaseLayout>
+          }
+        />
+      )}
+
+      <Route path="query-history">
+        <Route
+          index
+          path="*"
+          element={
+            <AppConfigSwitch
+              cloudConfigElement={
+                <BaseLayout>
+                  <QueryHistoryRoutes />
+                </BaseLayout>
+              }
+              // TODO (SangJunBak): Remove guard once we want to re-enable Query History for self managed, see <https://github.com/MaterializeInc/cloud/issues/10755>
+              selfManagedConfigElement={<RedirectToHome />}
+            />
+          }
+        />
+      </Route>
+      <Route path="integrations">
+        <Route
+          index
+          path="*"
+          element={
+            <BaseLayout>
+              <IntegrationsRoutes />
+            </BaseLayout>
+          }
+        />
+      </Route>
+      <Route
+        path="*"
+        element={<Navigate to={homePagePath(params.regionSlug)} replace />}
+      />
+    </SentryRoutes>
   );
 };
 
