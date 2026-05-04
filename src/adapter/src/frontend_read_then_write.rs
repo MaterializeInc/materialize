@@ -40,12 +40,14 @@ use std::num::{NonZeroI64, NonZeroUsize};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use bytesize::ByteSize;
 use differential_dataflow::consolidation;
 use itertools::Itertools;
 use mz_catalog::memory::error::ErrorKind;
 use mz_cluster_client::ReplicaId;
 use mz_compute_types::ComputeInstanceId;
-use mz_expr::{CollectionPlan, Id, LocalId, MirRelationExpr, MirScalarExpr};
+use mz_expr::row::RowCollection;
+use mz_expr::{CollectionPlan, Id, LocalId, MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::cast::CastFrom;
 use mz_ore::soft_panic_or_log;
 use mz_repr::optimize::OverrideFrom;
@@ -55,6 +57,7 @@ use mz_repr::{
 use mz_sql::catalog::CatalogError;
 use mz_sql::plan::{self, MutationKind, Params, QueryWhen};
 use mz_sql::session::metadata::SessionMetadata;
+use prometheus::Histogram;
 use qcell::QCell;
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
@@ -268,6 +271,8 @@ impl PeekClient {
         let session_uuid = session.uuid();
         let start_time = (self.statement_logging_frontend.now)();
         let max_result_size = catalog.system_config().max_result_size();
+        let max_query_result_size = session.vars().max_query_result_size();
+        let row_set_finishing_seconds = session.metrics().row_set_finishing_seconds().clone();
         let max_occ_retries = usize::cast_from(catalog.system_config().max_occ_retries());
         let statement_timeout = *session.vars().statement_timeout();
 
@@ -307,6 +312,8 @@ impl PeekClient {
                 kind,
                 returning,
                 max_result_size,
+                max_query_result_size,
+                row_set_finishing_seconds,
                 max_occ_retries,
                 table_desc,
                 statement_timeout,
@@ -633,6 +640,8 @@ impl PeekClient {
         kind: MutationKind,
         returning: Vec<MirScalarExpr>,
         max_result_size: u64,
+        max_query_result_size: u64,
+        row_set_finishing_seconds: Histogram,
         max_occ_retries: usize,
         table_desc: RelationDesc,
         statement_timeout: Duration,
@@ -685,11 +694,17 @@ impl PeekClient {
                     if state.all_diffs.is_empty() {
                         break build_no_rows_response(&kind, &returning);
                     }
-                    let success_response =
-                        match self.build_success_response(&kind, &returning, &state.all_diffs) {
-                            Ok(response) => response,
-                            Err(e) => break Err(e),
-                        };
+                    let success_response = match self.build_success_response(
+                        &kind,
+                        &returning,
+                        &state.all_diffs,
+                        max_result_size,
+                        max_query_result_size,
+                        &row_set_finishing_seconds,
+                    ) {
+                        Ok(response) => response,
+                        Err(e) => break Err(e),
+                    };
                     let diffs = state
                         .all_diffs
                         .iter()
@@ -779,11 +794,17 @@ impl PeekClient {
                     // (the bulk was already consolidated on the last progress).
                     state.consolidate(write_ts);
 
-                    let success_response =
-                        match self.build_success_response(&kind, &returning, &state.all_diffs) {
-                            Ok(response) => response,
-                            Err(e) => break Err(e),
-                        };
+                    let success_response = match self.build_success_response(
+                        &kind,
+                        &returning,
+                        &state.all_diffs,
+                        max_result_size,
+                        max_query_result_size,
+                        &row_set_finishing_seconds,
+                    ) {
+                        Ok(response) => response,
+                        Err(e) => break Err(e),
+                    };
 
                     // Submit write.
                     //
@@ -869,6 +890,9 @@ impl PeekClient {
         kind: &MutationKind,
         returning: &[MirScalarExpr],
         all_diffs: &[(Row, Timestamp, Diff)],
+        max_result_size: u64,
+        max_query_result_size: u64,
+        row_set_finishing_seconds: &Histogram,
     ) -> Result<ExecuteResponse, AdapterError> {
         if returning.is_empty() {
             // For UPDATE each changed row produces a retraction (-1) and an
@@ -889,6 +913,15 @@ impl PeekClient {
 
         let mut returning_rows = Vec::new();
         let arena = RowArena::new();
+        // RETURNING expressions are evaluated row-by-row in this loop, so an
+        // expression like `RETURNING repeat('x', 10_000_000)` will allocate
+        // unbounded data unless we bail mid-loop. The post-loop
+        // `RowSetFinishing::finish` below would also reject this, but only
+        // after we've materialized everything. The early-bail caps the
+        // temporary allocation. We pick the lower of the two configured
+        // caps — whichever fires first wins.
+        let mut projected_byte_size: u64 = 0;
+        let early_cap = std::cmp::min(max_result_size, max_query_result_size);
 
         for (row, _ts, diff) in all_diffs {
             let include = match kind {
@@ -916,16 +949,40 @@ impl PeekClient {
             )
             .map_err(AdapterError::from)?;
 
+            let row_bytes = u64::cast_from(returning_row.byte_len())
+                .saturating_mul(u64::cast_from(multiplicity.get()));
+            projected_byte_size = projected_byte_size.saturating_add(row_bytes);
+            if projected_byte_size > early_cap {
+                return Err(AdapterError::ResultSize(format!(
+                    "result exceeds max size of {}",
+                    ByteSize::b(early_cap)
+                )));
+            }
+
             returning_rows.push((returning_row, multiplicity));
         }
 
-        let rows: Vec<Row> = returning_rows
-            .into_iter()
-            .flat_map(|(row, count)| std::iter::repeat(row).take(count.get()))
-            .collect();
-        Ok(ExecuteResponse::SendingRowsImmediate {
-            rows: Box::new(rows.into_row_iter()),
-        })
+        // Run the canonical finish to enforce both caps with full precision
+        // (including the sorted-view memory overhead) and to register the
+        // row-set-finishing duration histogram, mirroring the legacy
+        // `send_diffs` path.
+        let finishing = RowSetFinishing {
+            order_by: Vec::new(),
+            limit: None,
+            offset: 0,
+            project: (0..returning.len()).collect(),
+        };
+        match finishing.finish(
+            RowCollection::new(returning_rows, &finishing.order_by),
+            max_result_size,
+            Some(max_query_result_size),
+            row_set_finishing_seconds,
+        ) {
+            Ok((rows, _size_bytes)) => Ok(ExecuteResponse::SendingRowsImmediate {
+                rows: Box::new(rows),
+            }),
+            Err(e) => Err(AdapterError::ResultSize(e)),
+        }
     }
 }
 
