@@ -73,3 +73,11 @@ roles. Regular database users cannot view or modify them.
 {{< /tab >}}
 
 {{< /tabs >}}
+
+## Privileges
+
+The privileges required to use this endpoint are:
+
+  * No object-level privileges are required. The user only needs to be able to log in to Materialize.
+
+  * Optional: `USAGE` privileges on any clusters for which you want to query replica-specific metrics from `mz_introspection`. Without this privilege, the endpoint can still access most system catalog information for troubleshooting.
