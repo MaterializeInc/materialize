@@ -1575,6 +1575,9 @@ async fn test_auth_oidc_audience_validation() {
         },
     );
 
+    let wrong_aud_headers = make_header(Authorization::bearer(&wrong_aud_token).unwrap());
+    let no_aud_headers = make_header(Authorization::bearer(&no_aud_token).unwrap());
+
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
         .with_oidc_auth(
@@ -1626,6 +1629,20 @@ async fn test_auth_oidc_audience_validation() {
                     );
                 })),
             },
+            // HTTP variant of the wrong-audience case: the response body
+            // should be the sanitized `OidcError::Display` so the console
+            // can render it on the login page.
+            TestCase::Http {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                scheme: Scheme::HTTPS,
+                headers: &wrong_aud_headers,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Err(Box::new(|code, message| {
+                    assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
+                    assert_eq!(message, "invalid audience");
+                })),
+            },
             // JWT with no audience should fail when audience is required.
             TestCase::Pgwire {
                 user_to_auth_as: oidc_user,
@@ -1637,6 +1654,18 @@ async fn test_auth_oidc_audience_validation() {
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid audience");
                     assert_eq!(*err.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
+                })),
+            },
+            // HTTP variant of the no-audience case.
+            TestCase::Http {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                scheme: Scheme::HTTPS,
+                headers: &no_aud_headers,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Err(Box::new(|code, message| {
+                    assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
+                    assert_eq!(message, "invalid audience");
                 })),
             },
         ],
@@ -2174,6 +2203,8 @@ async fn test_auth_oidc_no_matching_authentication_claim() {
         },
     );
 
+    let token_headers = make_header(Authorization::bearer(&token).unwrap());
+
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
         .with_oidc_auth(
@@ -2212,6 +2243,19 @@ async fn test_auth_oidc_no_matching_authentication_claim() {
                             .as_str()
                         )
                     );
+                })),
+            },
+            // HTTP variant: response body should be the sanitized
+            // `OidcError::Display` for the no-matching-claim error.
+            TestCase::Http {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                scheme: Scheme::HTTPS,
+                headers: &token_headers,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Err(Box::new(|code, message| {
+                    assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
+                    assert_eq!(message, "no matching authentication claim found in the JWT");
                 })),
             },
         ],
@@ -5323,26 +5367,42 @@ async fn test_auth_oidc_non_login_role() {
         .await
         .unwrap();
 
+    let jwt_headers = make_header(Authorization::bearer(&jwt_token).unwrap());
+
     // 1. Login should fail: role exists but has no LOGIN attribute.
     run_tests(
         "OIDC Non-Login Role - login rejected",
         &server,
-        &[TestCase::Pgwire {
-            user_to_auth_as: oidc_user,
-            user_reported_by_system: oidc_user,
-            password: Some(Cow::Borrowed(&jwt_token)),
-            ssl_mode: SslMode::Require,
-            options: Some("--oidc_auth_enabled=true"),
-            configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
-            assert: Assert::DbErr(Box::new(|err| {
-                assert_eq!(err.message(), "role is not allowed to login");
-                assert_eq!(*err.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
-                assert_eq!(
-                    err.detail(),
-                    Some("The role does not have the LOGIN attribute.")
-                );
-            })),
-        }],
+        &[
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(&jwt_token)),
+                ssl_mode: SslMode::Require,
+                options: Some("--oidc_auth_enabled=true"),
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::DbErr(Box::new(|err| {
+                    assert_eq!(err.message(), "role is not allowed to login");
+                    assert_eq!(*err.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
+                    assert_eq!(
+                        err.detail(),
+                        Some("The role does not have the LOGIN attribute.")
+                    );
+                })),
+            },
+            // HTTP variant: same sanitized message in the response body.
+            TestCase::Http {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                scheme: Scheme::HTTPS,
+                headers: &jwt_headers,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Err(Box::new(|code, message| {
+                    assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
+                    assert_eq!(message, "role is not allowed to login");
+                })),
+            },
+        ],
     )
     .await;
 

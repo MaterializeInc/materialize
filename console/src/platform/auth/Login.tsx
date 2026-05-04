@@ -23,9 +23,9 @@ import {
 import { useMutation } from "@tanstack/react-query";
 import React, { useState } from "react";
 import { useForm } from "react-hook-form";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
-import { loginOrThrow } from "~/api/materialize/auth";
+import { LOGIN_ERROR_PARAM, loginOrThrow } from "~/api/materialize/auth";
 import Alert from "~/components/Alert";
 import { LabeledInput } from "~/components/formComponentsV2";
 import { MaterializeLogo } from "~/components/MaterializeLogo";
@@ -35,42 +35,6 @@ import { AuthContentContainer, AuthLayout } from "~/layouts/AuthLayout";
 import EyeClosedIcon from "~/svg/EyeClosedIcon";
 import EyeOpenIcon from "~/svg/EyeOpenIcon";
 import { MaterializeTheme } from "~/theme";
-
-import {
-  buildAuthRejectedMessage,
-  LOGIN_REASON_MESSAGES,
-  LOGIN_REDIRECT_MESSAGE_KEY,
-  type LoginRedirectMessage,
-} from "./constants";
-
-const isLoginRedirectMessage = (
-  value: unknown,
-): value is LoginRedirectMessage => {
-  if (typeof value !== "object" || value === null) return false;
-  const v = value as { reason?: unknown; detail?: unknown };
-  const validReason =
-    v.reason === "auth_rejected" || v.reason === "session_expired";
-  const validDetail = v.detail === undefined || typeof v.detail === "string";
-  return validReason && validDetail;
-};
-
-/** Reads and clears the one-shot message set by {@link logoutAndRedirect}. */
-const consumeLoginRedirectMessage = (): LoginRedirectMessage | null => {
-  let raw: string | null = null;
-  try {
-    raw = sessionStorage.getItem(LOGIN_REDIRECT_MESSAGE_KEY);
-    sessionStorage.removeItem(LOGIN_REDIRECT_MESSAGE_KEY);
-  } catch {
-    return null;
-  }
-  if (!raw) return null;
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    return isLoginRedirectMessage(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
-};
 
 type LoginFormState = {
   username: string;
@@ -191,6 +155,8 @@ const SsoLoginLink = () => {
   const auth = useAuth();
   const [error, setError] = useState<string | null>(null);
 
+  if (!auth) return null;
+
   const handleSsoLogin = () => {
     setError(null);
     auth.signinRedirect().catch((err: unknown) => {
@@ -219,17 +185,11 @@ const SsoLoginLink = () => {
 
 export const Login = () => {
   const appConfig = useAppConfig();
+  const [searchParams] = useSearchParams();
   const isOidc =
     appConfig.mode === "self-managed" && appConfig.authMode === "Oidc";
 
-  // Consume once on mount so a manual refresh of the login page clears it.
-  const [redirectMessage] = useState(consumeLoginRedirectMessage);
-  const reasonMessage =
-    redirectMessage?.reason === "auth_rejected"
-      ? buildAuthRejectedMessage(redirectMessage.detail ?? null)
-      : redirectMessage
-        ? LOGIN_REASON_MESSAGES[redirectMessage.reason]
-        : null;
+  const errorMessage = searchParams.get(LOGIN_ERROR_PARAM);
 
   return (
     <AuthLayout>
@@ -238,13 +198,11 @@ export const Login = () => {
           <HStack my={{ base: "8", lg: "0" }} paddingBottom="8">
             <MaterializeLogo height="12" />
           </HStack>
-          {reasonMessage && (
+          {errorMessage && (
             <Alert
-              variant={
-                redirectMessage?.reason === "auth_rejected" ? "error" : "info"
-              }
+              variant="error"
               minWidth="100%"
-              message={reasonMessage}
+              message={errorMessage}
               mb="4"
             />
           )}

@@ -8,10 +8,6 @@
 // by the Apache License, Version 2.0.
 
 import { NOT_SUPPORTED_MESSAGE } from "~/config/AppConfig";
-import {
-  LOGIN_REDIRECT_MESSAGE_KEY,
-  type LoginRedirectMessage,
-} from "~/platform/auth/constants";
 
 import { apiClient, type SelfManagedApiClient } from "../apiClient";
 
@@ -33,6 +29,9 @@ const getApiClient = () => {
 };
 
 export const LOGIN_PATH = "/account/login";
+
+// Search-param on LOGIN_PATH carrying a sanitized auth-error message.
+export const LOGIN_ERROR_PARAM = "error";
 
 // Login API for to self-managed in password auth mode.
 // Throws if the API isn't supported for the deployment/auth mode.
@@ -87,21 +86,13 @@ export async function logout(logoutParams: {
 
 export async function logoutAndRedirect(logoutParams: {
   apiClient: SelfManagedApiClient;
-  message?: LoginRedirectMessage;
+  error?: string;
 }) {
   logout(logoutParams);
-  if (logoutParams.message) {
-    try {
-      sessionStorage.setItem(
-        LOGIN_REDIRECT_MESSAGE_KEY,
-        JSON.stringify(logoutParams.message),
-      );
-    } catch {
-      // Storage unavailable (private browsing, quota). Fall through to a
-      // silent redirect.
-    }
-  }
-  window.location.href = LOGIN_PATH;
+  const url = logoutParams.error
+    ? `${LOGIN_PATH}?${new URLSearchParams({ [LOGIN_ERROR_PARAM]: logoutParams.error }).toString()}`
+    : LOGIN_PATH;
+  window.location.href = url;
 }
 
 export async function logoutAndRedirectOrThrow() {
