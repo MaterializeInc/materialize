@@ -397,7 +397,7 @@ impl fmt::Display for AdapterNotice {
                 write!(
                     f,
                     "transaction isolation level {isolation_level} is unimplemented, the session will be upgraded to {}",
-                    IsolationLevel::Serializable.as_str()
+                    IsolationLevel::Serializable
                 )
             }
             AdapterNotice::StrongSessionSerializable => {

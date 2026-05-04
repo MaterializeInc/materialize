@@ -49,6 +49,33 @@ impl Coordinator {
         plan: plan::CopyFromPlan,
         target_cluster: TargetCluster,
     ) {
+        if ctx
+            .session()
+            .vars()
+            .transaction_isolation()
+            .is_bounded_staleness()
+        {
+            return ctx.retire(Err(AdapterError::BoundedStalenessReadOnly));
+        }
+
+        // STDIN is sequenced by handing control back to pgwire, which drives the
+        // CopyData/CopyDone exchange. URL/S3 sources stage a one-shot ingestion
+        // server-side and fall through to the rest of this function.
+        if let CopyFromSource::Stdin = plan.source {
+            let (tx, _, session, ctx_extra) = ctx.into_parts();
+            tx.send(
+                Ok(ExecuteResponse::CopyFrom {
+                    target_id: plan.target_id,
+                    target_name: plan.target_name,
+                    columns: plan.columns,
+                    params: plan.params,
+                    ctx_extra,
+                }),
+                session,
+            );
+            return;
+        }
+
         let plan::CopyFromPlan {
             target_name: _,
             target_id,
@@ -157,7 +184,7 @@ impl Coordinator {
                 }
             }
             CopyFromSource::Stdin => {
-                unreachable!("COPY FROM STDIN should be handled elsewhere")
+                unreachable!("STDIN handled by the early return above")
             }
         };
 

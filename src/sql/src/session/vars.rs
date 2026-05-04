@@ -869,7 +869,7 @@ impl SessionVars {
             .vars
             .get_mut(UncasedStr::new(TRANSACTION_ISOLATION.name()))
             .expect("transaction_isolation variable must exist");
-        var.set(VarInput::Flat(transaction_isolation.as_str()), true)
+        var.set(VarInput::Flat(&transaction_isolation.to_string()), true)
             .expect("setting transaction isolation must succeed");
     }
 

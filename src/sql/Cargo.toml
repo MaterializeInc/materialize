@@ -22,6 +22,7 @@ enum-kinds.workspace = true
 fail.workspace = true
 globset.workspace = true
 hex.workspace = true
+humantime.workspace = true
 http.workspace = true
 iceberg.workspace = true
 imbl.workspace = true

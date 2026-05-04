@@ -1,0 +1,230 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Bounded staleness isolation — SQL-surface coverage.
+
+mode cockroach
+
+reset-server
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_bounded_staleness_isolation = true;
+----
+COMPLETE 0
+
+# --- parse and SHOW round-trip -----------------------------------------------
+
+statement ok
+SET transaction_isolation TO 'bounded staleness 5s'
+
+query T
+SHOW transaction_isolation
+----
+bounded staleness 5s
+
+statement ok
+SET transaction_isolation TO 'bounded staleness 250ms'
+
+query T
+SHOW transaction_isolation
+----
+bounded staleness 250ms
+
+statement ok
+RESET transaction_isolation
+
+# --- rejected values ----------------------------------------------------------
+
+statement error invalid value for parameter "transaction_isolation"
+SET transaction_isolation TO 'bounded staleness 0s'
+
+statement error invalid value for parameter "transaction_isolation"
+SET transaction_isolation TO 'bounded staleness 0ms'
+
+statement error invalid value for parameter "transaction_isolation"
+SET transaction_isolation TO 'bounded staleness banana'
+
+statement error invalid value for parameter "transaction_isolation"
+SET transaction_isolation TO 'bounded staleness'
+
+# Long durations are accepted; there is no upper cap on the bound.
+
+statement ok
+SET transaction_isolation TO 'bounded staleness 1h'
+
+statement ok
+SET transaction_isolation TO 'bounded staleness 24h'
+
+statement ok
+RESET transaction_isolation
+
+# --- mutual exclusion with real_time_recency ----------------------------------
+
+statement ok
+SET transaction_isolation TO 'bounded staleness 1s'
+
+statement error real_time_recency cannot be combined with bounded staleness isolation
+SET real_time_recency TO on
+
+# A failed conflicting SET must not have mutated the *other* variable.
+query T
+SHOW real_time_recency
+----
+off
+
+statement ok
+RESET transaction_isolation
+
+statement ok
+SET real_time_recency TO on
+
+statement error real_time_recency cannot be combined with bounded staleness isolation
+SET transaction_isolation TO 'bounded staleness 1s'
+
+# A failed conflicting SET must not have mutated `transaction_isolation`. The
+# mutual-exclusion check fires after `vars.set` has updated the staged value;
+# this guards against the staged value leaking into subsequent statements.
+query T
+SHOW transaction_isolation
+----
+strict serializable
+
+statement ok
+RESET real_time_recency
+
+# --- writes are rejected ------------------------------------------------------
+
+statement ok
+CREATE TABLE bs_writes (a int)
+
+statement ok
+SET transaction_isolation TO 'bounded staleness 1s'
+
+statement error writes are not permitted under bounded staleness isolation
+INSERT INTO bs_writes VALUES (1)
+
+statement error writes are not permitted under bounded staleness isolation
+DELETE FROM bs_writes
+
+statement error writes are not permitted under bounded staleness isolation
+UPDATE bs_writes SET a = a + 1
+
+statement ok
+RESET transaction_isolation
+
+statement ok
+DROP TABLE bs_writes
+
+# --- sub-millisecond durations are rejected ----------------------------------
+
+statement error invalid value for parameter "transaction_isolation"
+SET transaction_isolation TO 'bounded staleness 1us'
+
+statement error invalid value for parameter "transaction_isolation"
+SET transaction_isolation TO 'bounded staleness 999us'
+
+statement error invalid value for parameter "transaction_isolation"
+SET transaction_isolation TO 'bounded staleness 1ns'
+
+# --- multi-component duration round-trip --------------------------------------
+
+statement ok
+SET transaction_isolation TO 'bounded staleness 1m30s'
+
+# `humantime::format_duration` emits the canonical `1m 30s` form.
+query T
+SHOW transaction_isolation
+----
+bounded staleness 1m 30s
+
+statement ok
+SET transaction_isolation TO 'bounded staleness 1m 30s'
+
+query T
+SHOW transaction_isolation
+----
+bounded staleness 1m 30s
+
+statement ok
+RESET transaction_isolation
+
+# --- AS OF queries do not panic under bounded staleness ----------------------
+#
+# `AS OF` skips the timestamp oracle round-trip (the user has chosen `T`); a
+# previous version of the constraint solver would reach an `expect` on the
+# unset oracle anchor and panic the server. The user-chosen timestamp is the
+# sole timestamp constraint; bounded staleness adds nothing further.
+#
+# We use `EXPLAIN TIMESTAMP` rather than the underlying `SELECT` itself: a
+# `SELECT ... AS OF 18446744073709551615` would block on the input upper
+# advancing past `u64::MAX`, which never happens (and under
+# `--auto-index-selects` the runner wraps the SELECT in an indexed view that
+# inherits the same AS OF). `EXPLAIN TIMESTAMP` invokes the same
+# `determine_timestamp_via_constraints` path without executing the peek, so
+# it catches the panic regression without hanging.
+
+statement ok
+CREATE TABLE bs_as_of (a int)
+
+statement ok
+SET transaction_isolation TO 'bounded staleness 5s'
+
+statement ok
+EXPLAIN TIMESTAMP FOR SELECT * FROM bs_as_of AS OF 18446744073709551615
+
+# Smoke-test the non-AS-OF path through the same constraint solver — under
+# bounded staleness, this exercises the `oracle_read_ts = Some(_)` branch
+# that the AS OF case skips.
+
+statement ok
+EXPLAIN TIMESTAMP FOR SELECT * FROM bs_as_of
+
+statement ok
+RESET transaction_isolation
+
+statement ok
+DROP TABLE bs_as_of
+
+# --- COPY FROM is rejected as a write -----------------------------------------
+
+statement ok
+CREATE TABLE bs_copy (a int)
+
+statement ok
+SET transaction_isolation TO 'bounded staleness 1s'
+
+statement error writes are not permitted under bounded staleness isolation
+COPY bs_copy FROM stdin
+
+statement ok
+RESET transaction_isolation
+
+statement ok
+DROP TABLE bs_copy
+
+# --- feature-flag gating ------------------------------------------------------
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_bounded_staleness_isolation;
+----
+COMPLETE 0
+
+statement error the `bounded staleness <duration>` transaction isolation level is not available
+SET transaction_isolation TO 'bounded staleness 5s'
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_bounded_staleness_isolation = true;
+----
+COMPLETE 0
+
+statement ok
+SET transaction_isolation TO 'bounded staleness 5s'
+
+statement ok
+RESET transaction_isolation

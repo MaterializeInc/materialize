@@ -31,7 +31,9 @@ use crate::plan::{
     ShowVariablePlan, VariableValue, describe, query,
 };
 use crate::session::vars;
-use crate::session::vars::{IsolationLevel, SCHEMA_ALIAS, TRANSACTION_ISOLATION_VAR_NAME};
+use crate::session::vars::{
+    IsolationLevel, SCHEMA_ALIAS, TRANSACTION_ISOLATION_VAR_NAME, Value, VarInput,
+};
 
 pub fn describe_set_variable(
     _: &StatementContext,
@@ -53,10 +55,23 @@ pub fn plan_set_variable(
 
     if let VariableValue::Values(values) = &value {
         if let Some(value) = values.first() {
-            if name.as_str() == TRANSACTION_ISOLATION_VAR_NAME
-                && value == IsolationLevel::StrongSessionSerializable.as_str()
-            {
-                scx.require_feature_flag(&vars::ENABLE_SESSION_TIMELINES)?;
+            if name.as_str() == TRANSACTION_ISOLATION_VAR_NAME {
+                // Parse the value to identify the isolation level kind. Parse
+                // failures are deliberately ignored here — the actual SET path
+                // surfaces them — but a successful parse lets us gate
+                // parameterised levels (like `bounded staleness 5s`) behind
+                // their feature flags.
+                if let Ok(level) = IsolationLevel::parse(VarInput::Flat(value)) {
+                    match level {
+                        IsolationLevel::StrongSessionSerializable => {
+                            scx.require_feature_flag(&vars::ENABLE_SESSION_TIMELINES)?;
+                        }
+                        IsolationLevel::BoundedStaleness(_) => {
+                            scx.require_feature_flag(&vars::ENABLE_BOUNDED_STALENESS_ISOLATION)?;
+                        }
+                        _ => {}
+                    }
+                }
             }
         }
     }
