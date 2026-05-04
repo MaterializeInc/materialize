@@ -1,11 +1,11 @@
 #![cfg(feature = "pager")]
 
+use std::hint::black_box;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use criterion::{
-    BatchSize, BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main,
-};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use mz_ore::cast::CastFrom;
 use mz_ore::pager::{self, Backend};
 
 fn ensure_scratch() {
@@ -19,7 +19,7 @@ fn ensure_scratch() {
 }
 
 fn fill_payload(len_u64s: usize) -> Vec<u64> {
-    (0..len_u64s as u64).collect()
+    (0..u64::cast_from(len_u64s)).collect()
 }
 
 fn bench_pageout_single(c: &mut Criterion) {
@@ -30,20 +30,18 @@ fn bench_pageout_single(c: &mut Criterion) {
         let len = (size_kib * 1024) / 8;
         for backend in [Backend::Swap, Backend::File] {
             pager::set_backend(backend);
-            group.throughput(Throughput::Bytes((size_kib * 1024) as u64));
-            group.bench_function(
-                BenchmarkId::new(format!("{backend:?}"), size_kib),
-                |b| {
-                    b.iter_batched(
-                        || [fill_payload(len)],
-                        |mut chunks| {
-                            let h = pager::pageout(&mut chunks);
-                            black_box(h);
-                        },
-                        BatchSize::SmallInput,
-                    );
-                },
-            );
+            let total_bytes = u64::cast_from(size_kib * 1024);
+            group.throughput(Throughput::Bytes(total_bytes));
+            group.bench_function(BenchmarkId::new(format!("{backend:?}"), size_kib), |b| {
+                b.iter_batched(
+                    || [fill_payload(len)],
+                    |mut chunks| {
+                        let h = pager::pageout(&mut chunks);
+                        black_box(h);
+                    },
+                    BatchSize::SmallInput,
+                );
+            });
         }
     }
     group.finish();
@@ -53,30 +51,28 @@ fn bench_pageout_scatter(c: &mut Criterion) {
     ensure_scratch();
     let mut group = c.benchmark_group("pager/pageout/scatter_2MiB");
     group.measurement_time(Duration::from_secs(2));
-    let total_bytes = 2 * 1024 * 1024;
+    let total_bytes: usize = 2 * 1024 * 1024;
     for chunk_count in [1usize, 2, 64] {
         let chunk_bytes = total_bytes / chunk_count;
         let chunk_len_u64s = chunk_bytes / 8;
         for backend in [Backend::Swap, Backend::File] {
             pager::set_backend(backend);
-            group.throughput(Throughput::Bytes(total_bytes as u64));
-            group.bench_function(
-                BenchmarkId::new(format!("{backend:?}"), chunk_count),
-                |b| {
-                    b.iter_batched(
-                        || {
-                            (0..chunk_count)
-                                .map(|_| fill_payload(chunk_len_u64s))
-                                .collect::<Vec<_>>()
-                        },
-                        |mut chunks| {
-                            let h = pager::pageout(chunks.as_mut_slice());
-                            black_box(h);
-                        },
-                        BatchSize::SmallInput,
-                    );
-                },
-            );
+            let total_bytes_u64 = u64::cast_from(total_bytes);
+            group.throughput(Throughput::Bytes(total_bytes_u64));
+            group.bench_function(BenchmarkId::new(format!("{backend:?}"), chunk_count), |b| {
+                b.iter_batched(
+                    || {
+                        (0..chunk_count)
+                            .map(|_| fill_payload(chunk_len_u64s))
+                            .collect::<Vec<_>>()
+                    },
+                    |mut chunks| {
+                        let h = pager::pageout(chunks.as_mut_slice());
+                        black_box(h);
+                    },
+                    BatchSize::SmallInput,
+                );
+            });
         }
     }
     group.finish();
