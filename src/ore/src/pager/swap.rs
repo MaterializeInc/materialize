@@ -118,6 +118,25 @@ fn copy_range(inner: &SwapInner, off: usize, len: usize, dst: &mut Vec<u64>) {
     }
 }
 
+pub(crate) fn take_swap(handle: Handle, dst: &mut Vec<u64>) {
+    let inner = match handle.into_swap_inner() {
+        Some(s) => s,
+        None => panic!("take_swap called on non-swap handle"),
+    };
+    dst.clear();
+    let mut chunks = inner.chunks;
+    if chunks.len() == 1 && dst.capacity() == 0 {
+        let only = chunks.pop().unwrap();
+        *dst = only;
+        return;
+    }
+    let total: usize = chunks.iter().map(|c| c.len()).sum();
+    dst.reserve(total);
+    for c in chunks {
+        dst.extend_from_slice(&c);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,5 +187,30 @@ mod tests {
         let h = pageout_swap(&mut chunks);
         let mut dst = Vec::new();
         read_at_swap(&h, &[(1, 5)], &mut dst);
+    }
+
+    #[mz_ore::test]
+    fn take_single_chunk_zero_copy() {
+        let v = vec![100u64; 1024];
+        let ptr_before = v.as_ptr();
+        let mut chunks = [v];
+        let h = pageout_swap(&mut chunks);
+        let mut dst = Vec::new();
+        take_swap(h, &mut dst);
+        assert_eq!(dst.len(), 1024);
+        assert_eq!(
+            dst.as_ptr(),
+            ptr_before,
+            "single-chunk take should be zero-copy"
+        );
+    }
+
+    #[mz_ore::test]
+    fn take_multi_chunk_concats() {
+        let mut chunks = [vec![1u64, 2], vec![3, 4, 5]];
+        let h = pageout_swap(&mut chunks);
+        let mut dst = Vec::new();
+        take_swap(h, &mut dst);
+        assert_eq!(dst, vec![1, 2, 3, 4, 5]);
     }
 }
