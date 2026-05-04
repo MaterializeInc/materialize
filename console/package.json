@@ -36,7 +36,7 @@
     "@codemirror/language": "^6.10.3",
     "@codemirror/state": "^6.6.0",
     "@codemirror/view": "^6.40.0",
-    "@dagrejs/dagre": "^1.1.4",
+    "@dagrejs/dagre": "^3.0.0",
     "@date-fns/utc": "^2.1.0",
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
