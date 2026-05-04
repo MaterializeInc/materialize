@@ -1203,21 +1203,20 @@ class Database:
             "CREATE CONNECTION IF NOT EXISTS aws_conn TO AWS (ENDPOINT 'http://minio:9000/', REGION 'minio', ACCESS KEY ID 'minioadmin', SECRET ACCESS KEY SECRET minio)"
         )
 
-        print("Creating relations")
-
-        for relation in self:
-            relation.create(exe)
-
         if self.scenario == Scenario.RepeatRow:
             # Hardcoded helper table for the table-driven `repeat_row(diff)`
-            # mode in `View`. The mix of small positives, zeros, and `-1`s
-            # ensures the function sees both insertion and retraction counts
-            # at runtime, exercising negative-multiplicity code paths.
+            # mode in `View`. Must be created before relations because some
+            # views reference it in their body.
             exe.execute("DROP TABLE IF EXISTS repeat_row_source CASCADE")
             exe.execute("CREATE TABLE repeat_row_source (diff bigint NOT NULL)")
             exe.execute(
                 "INSERT INTO repeat_row_source VALUES (1), (1), (-1), (-1), (0)"
             )
+
+        print("Creating relations")
+
+        for relation in self:
+            relation.create(exe)
 
         # Questionable use
         # result = composition.run(
