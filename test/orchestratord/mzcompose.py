@@ -1155,17 +1155,18 @@ EXPECTED_CLUSTERD_SYSCTLS = {
 }
 
 
-def validate_clusterd_pod(pod: dict[str, Any]) -> None:
+def validate_clusterd_pod(pod: dict[str, Any], version: MzVersion) -> None:
     """Validate always-on properties of a clusterd pod."""
-    sysctls = {
-        s["name"]: s["value"]
-        for s in pod["spec"].get("securityContext", {}).get("sysctls", [])
-    }
-    for name, expected in EXPECTED_CLUSTERD_SYSCTLS.items():
-        actual = sysctls.get(name)
-        assert (
-            actual == expected
-        ), f"Expected sysctl {name}={expected}, but got {actual}"
+    if version >= MzVersion.parse_mz("v26.24.0-dev.0"):
+        sysctls = {
+            s["name"]: s["value"]
+            for s in pod["spec"].get("securityContext", {}).get("sysctls", [])
+        }
+        for name, expected in EXPECTED_CLUSTERD_SYSCTLS.items():
+            actual = sysctls.get(name)
+            assert (
+                actual == expected
+            ), f"Expected sysctl {name}={expected}, but got {actual}"
 
 
 def validate_container_resources(
@@ -1216,7 +1217,7 @@ class SwapEnabledGlobal(Modification):
 
         def check_pods() -> None:
             clusterd = get_pod_data(labels)["items"][0]
-            validate_clusterd_pod(clusterd)
+            validate_clusterd_pod(clusterd, version)
 
             resources = clusterd["spec"]["containers"][0]["resources"]
             validate_container_resources(resources, self.value)
@@ -1272,7 +1273,7 @@ class StorageClass(Modification):
 
         def check_pods() -> None:
             clusterd = get_pod_data(labels)["items"][0]
-            validate_clusterd_pod(clusterd)
+            validate_clusterd_pod(clusterd, version)
 
             resources = clusterd["spec"]["containers"][0]["resources"]
             validate_container_resources(resources, mods[SwapEnabledGlobal])
@@ -1388,7 +1389,7 @@ class ClusterdCpu(Modification):
 
         def check_pods() -> None:
             clusterd = get_pod_data(labels)["items"][0]
-            validate_clusterd_pod(clusterd)
+            validate_clusterd_pod(clusterd, version)
             resources = clusterd["spec"]["containers"][0]["resources"]
             actual_cpu_request = resources.get("requests", {}).get("cpu")
             actual_cpu_limit = resources.get("limits", {}).get("cpu")

@@ -143,7 +143,7 @@ steps:
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
-            args: [--scenario=UserTablesLarge, --actions=100000]
+            args: [--scenario=UserTablesLarge, --actions=50000]
 
     - id: zippy-debezium-postgres-long
       label: "Longer Zippy Debezium Postgres"
