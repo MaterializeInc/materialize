@@ -62,6 +62,9 @@ pub mod option;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "overflowing")))]
 #[cfg(feature = "overflowing")]
 pub mod overflowing;
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "pager")))]
+#[cfg(feature = "pager")]
+pub mod pager;
 #[cfg(not(target_family = "wasm"))]
 #[cfg(feature = "panic")]
 pub mod panic;
