@@ -799,7 +799,7 @@ pub(crate) fn durable_migrate(
     const EXPR_CACHE_MIGRATION_DONE: u64 = 1;
     if tx.get_config(EXPR_CACHE_MIGRATION_KEY.to_string()) != Some(EXPR_CACHE_MIGRATION_DONE) {
         if let Some(shard_id) = tx.get_expression_cache_shard() {
-            tx.mark_shards_as_finalized(btreeset! {shard_id});
+            tx.insert_unfinalized_shards(btreeset! {shard_id})?;
             tx.set_expression_cache_shard(ShardId::new())?;
         }
         tx.set_config(
@@ -816,7 +816,7 @@ pub(crate) fn durable_migrate(
         != Some(BUILTIN_MIGRATION_SHARD_MIGRATION_DONE)
     {
         if let Some(shard_id) = tx.get_builtin_migration_shard() {
-            tx.mark_shards_as_finalized(btreeset! {shard_id});
+            tx.insert_unfinalized_shards(btreeset! {shard_id})?;
             tx.set_builtin_migration_shard(ShardId::new())?;
         }
         tx.set_config(
