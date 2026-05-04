@@ -49,24 +49,20 @@ where
         let words = indexed::length_in_words(&self.current.borrow());
         let round = (words + ((1 << 18) - 1)) & !((1 << 18) - 1);
         if round - words < round / 10 {
-            /// Move the contents from `current` to an aligned allocation, and push it to `pending`.
-            /// The contents must fit in `round` words (u64).
+            /// Move the contents from `current` to a `Vec<u64>` allocation built via
+            /// `indexed::encode` (so no zero-init pre-pass), and push it to `pending`.
             #[cold]
-            fn outlined_align<C>(
-                current: &mut C::Container,
-                round: usize,
-                pending: &mut VecDeque<Column<C>>,
-            ) where
+            fn outlined_align<C>(current: &mut C::Container, pending: &mut VecDeque<Column<C>>)
+            where
                 C: Columnar,
             {
-                let mut alloc = crate::containers::alloc_aligned_zeroed(round);
-                let mut writer = std::io::Cursor::new(bytemuck::cast_slice_mut(&mut alloc[..]));
-                indexed::write(&mut writer, &current.borrow()).unwrap();
+                let mut alloc: Vec<u64> = Vec::new();
+                indexed::encode(&mut alloc, &current.borrow());
                 pending.push_back(Column::Align(alloc));
                 current.clear();
             }
 
-            outlined_align(&mut self.current, round, &mut self.pending);
+            outlined_align(&mut self.current, &mut self.pending);
         }
     }
 }

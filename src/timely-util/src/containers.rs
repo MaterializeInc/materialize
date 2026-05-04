@@ -17,35 +17,26 @@
 
 pub mod stack;
 
-pub(crate) use alloc::alloc_aligned_zeroed;
 pub use alloc::{enable_columnar_lgalloc, set_enable_columnar_lgalloc};
 
 mod alloc {
-    use mz_ore::region::Region;
-
-    /// Allocate a region of memory with a capacity of at least `len` that is properly aligned
-    /// and zeroed. The memory in Regions is always aligned to its content type.
-    #[inline]
-    pub(crate) fn alloc_aligned_zeroed<T: bytemuck::AnyBitPattern>(len: usize) -> Region<T> {
-        if enable_columnar_lgalloc() {
-            Region::new_auto_zeroed(len)
-        } else {
-            Region::new_heap_zeroed(len)
-        }
-    }
-
     thread_local! {
         static ENABLE_COLUMNAR_LGALLOC: std::cell::Cell<bool> =
             const { std::cell::Cell::new(false) };
     }
 
     /// Returns `true` if columnar allocations should come from lgalloc.
+    ///
+    /// Currently a no-op: `Column::Align` is now backed by a plain `Vec<u64>` rather than an
+    /// lgalloc `Region`, so this flag has no effect. Kept for source compatibility with callers
+    /// in `mz-compute` that flip it via dyncfg.
     #[inline]
     pub fn enable_columnar_lgalloc() -> bool {
         ENABLE_COLUMNAR_LGALLOC.get()
     }
 
-    /// Set whether columnar allocations should come from lgalloc. Applies to future allocations.
+    /// Set whether columnar allocations should come from lgalloc. See
+    /// [`enable_columnar_lgalloc`] — currently has no effect on allocation behavior.
     pub fn set_enable_columnar_lgalloc(enabled: bool) {
         ENABLE_COLUMNAR_LGALLOC.set(enabled);
     }
