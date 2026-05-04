@@ -1,6 +1,8 @@
 //! File backend for the pager. See `mz_ore::pager` for the public API.
 
 use std::path::{Path, PathBuf};
+
+use crate::cast::CastFrom;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Once, OnceLock};
 
@@ -139,67 +141,26 @@ pub(crate) fn pageout_file(chunks: &mut [Vec<u64>]) -> Handle {
 
 fn write_chunks(path: &Path, chunks: &[Vec<u64>]) -> std::io::Result<()> {
     let file = File::options().write(true).create_new(true).open(path)?;
-    let slices: Vec<IoSlice<'_>> = chunks
+    let mut slices: Vec<IoSlice<'_>> = chunks
         .iter()
         .filter(|c| !c.is_empty())
         .map(|c| IoSlice::new(bytemuck::cast_slice(c.as_slice())))
         .collect();
-    write_all_vectored(&file, &slices)?;
+    write_all_vectored(&file, slices.as_mut_slice())?;
     Ok(())
 }
 
-#[cfg(unix)]
-fn write_all_vectored(file: &File, slices: &[IoSlice<'_>]) -> std::io::Result<()> {
-    use std::os::unix::io::AsRawFd;
-    let fd = file.as_raw_fd();
-    let mut offset: i64 = 0;
-    let mut idx = 0;
-    let mut consumed_in_idx: usize = 0;
-    while idx < slices.len() {
-        let remaining = &slices[idx..];
-        let iovs: Vec<libc::iovec> = remaining
-            .iter()
-            .enumerate()
-            .map(|(i, s)| {
-                let base_off = if i == 0 { consumed_in_idx } else { 0 };
-                // SAFETY: building an iovec from a live `IoSlice` is safe;
-                // the pointer/length describe the caller's buffer.
-                libc::iovec {
-                    iov_base: unsafe { s.as_ptr().add(base_off) } as *mut libc::c_void,
-                    iov_len: s.len() - base_off,
-                }
-            })
-            .collect();
-        // SAFETY: fd is valid and open for writing; iovs point into the live `slices`
-        // owned by the caller; pwritev does not retain pointers past the syscall.
-        let written =
-            unsafe { libc::pwritev(fd, iovs.as_ptr(), iovs.len() as libc::c_int, offset) };
-        if written < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        let mut left = written as usize;
-        offset += written as i64;
-        while left > 0 && idx < slices.len() {
-            let avail = slices[idx].len() - consumed_in_idx;
-            if left >= avail {
-                left -= avail;
-                idx += 1;
-                consumed_in_idx = 0;
-            } else {
-                consumed_in_idx += left;
-                left = 0;
-            }
-        }
-    }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn write_all_vectored(file: &File, slices: &[IoSlice<'_>]) -> std::io::Result<()> {
+fn write_all_vectored(mut file: &File, mut slices: &mut [IoSlice<'_>]) -> std::io::Result<()> {
     use std::io::Write;
-    let mut file = file;
-    for s in slices {
-        file.write_all(s)?;
+    while !slices.is_empty() {
+        let written = file.write_vectored(slices)?;
+        if written == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::WriteZero,
+                "write_vectored returned 0",
+            ));
+        }
+        IoSlice::advance_slices(&mut slices, written);
     }
     Ok(())
 }
@@ -226,15 +187,16 @@ pub(crate) fn read_at_file(handle: &Handle, ranges: &[(usize, usize)], dst: &mut
 
     let coalesced = coalesce(ranges);
     for (off, len) in coalesced {
-        let byte_off = (off * 8) as u64;
+        let byte_off = u64::cast_from(off * 8);
         let byte_len = len * 8;
         let buf_start = dst.len();
         dst.resize(buf_start + len, 0);
         let buf: &mut [u8] = bytemuck::cast_slice_mut(&mut dst[buf_start..buf_start + len]);
         let mut filled = 0;
         while filled < byte_len {
+            let pos = byte_off + u64::cast_from(filled);
             let n = file
-                .read_at(&mut buf[filled..byte_len], byte_off + filled as u64)
+                .read_at(&mut buf[filled..byte_len], pos)
                 .expect("pager pread failed");
             if n == 0 {
                 panic!("pager pread short: expected {byte_len} got {filled}");
@@ -271,8 +233,9 @@ pub(crate) fn take_file(handle: Handle, dst: &mut Vec<u64>) {
     let buf: &mut [u8] = bytemuck::cast_slice_mut(dst.as_mut_slice());
     let mut filled = 0;
     while filled < buf.len() {
+        let pos = u64::cast_from(filled);
         let n = file
-            .read_at(&mut buf[filled..], filled as u64)
+            .read_at(&mut buf[filled..], pos)
             .unwrap_or_else(|err| panic!("pager take: pread {path:?}: {err}"));
         if n == 0 {
             panic!("pager take: short read at {filled}");
