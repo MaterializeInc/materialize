@@ -5,6 +5,8 @@ use std::sync::atomic::{AtomicU8, Ordering};
 mod file;
 mod swap;
 
+pub use file::set_scratch_dir;
+
 /// Selects which backend stores paged-out data.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Backend {
