@@ -1662,6 +1662,7 @@ pub fn plan_create_subsource(
             SourceExportStatementDetails::MySql {
                 table,
                 initial_gtid_set,
+                binlog_full_metadata,
             } => SourceExportDetails::MySql(MySqlSourceExportDetails {
                 table,
                 initial_gtid_set,
@@ -1670,6 +1671,7 @@ pub fn plan_create_subsource(
                     .into_iter()
                     .map(|c| c.into_string())
                     .collect(),
+                binlog_full_metadata,
             }),
             SourceExportStatementDetails::SqlServer {
                 table,
@@ -1819,6 +1821,7 @@ pub fn plan_create_table_from_source(
         SourceExportStatementDetails::MySql {
             table,
             initial_gtid_set,
+            binlog_full_metadata,
         } => SourceExportDetails::MySql(MySqlSourceExportDetails {
             table,
             initial_gtid_set,
@@ -1827,6 +1830,7 @@ pub fn plan_create_table_from_source(
                 .into_iter()
                 .map(|c| c.into_string())
                 .collect(),
+            binlog_full_metadata,
         }),
         SourceExportStatementDetails::SqlServer {
             table,

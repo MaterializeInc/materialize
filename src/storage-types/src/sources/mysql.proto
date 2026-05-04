@@ -23,4 +23,5 @@ message ProtoMySqlSourceDetails {
 message ProtoMySqlSourceExportStatementDetails {
   mz_mysql_util.ProtoMySqlTableDesc table = 1;
   string initial_gtid_set = 2;
+  bool binlog_full_metadata = 3;
 }
