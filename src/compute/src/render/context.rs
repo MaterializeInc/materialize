@@ -765,19 +765,26 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         // Track whether we applied temporal bucketing, to avoid double-bucketing.
         let mut bucketed = false;
 
+        // True iff at least one new arrangement will actually be built below. Bucketing only
+        // pays off when something downstream merges/compacts the future-stamped updates; on a
+        // pure raw collection (no new arrangement) the work is wasted.
+        let will_create_arrangement = collections
+            .arranged
+            .iter()
+            .any(|(key, _, _)| !self.arranged.contains_key(key));
+
         // We need the collection if either (1) it is explicitly demanded, or (2) we are going to render any arrangement
-        let form_raw_collection = collections.raw
-            || collections
-                .arranged
-                .iter()
-                .any(|(key, _, _)| !self.arranged.contains_key(key));
+        let form_raw_collection = collections.raw || will_create_arrangement;
         if form_raw_collection && self.collection.is_none() {
             let (oks, errs) =
                 self.as_collection_core(input_mfp, input_key.map(|k| (k, None)), until, config_set);
-            // Apply temporal bucketing if the input may contain future updates.
-            // This path fires when the collection must be formed from scratch
-            // (e.g., from an arrangement via as_collection_core).
-            let oks = if input_has_future_updates && ENABLE_TEMPORAL_BUCKETING.get(config_set) {
+            // Apply temporal bucketing if the input may contain future updates and we are
+            // going to build at least one arrangement. This path fires when the collection
+            // must be formed from scratch (e.g., from an arrangement via as_collection_core).
+            let oks = if will_create_arrangement
+                && input_has_future_updates
+                && ENABLE_TEMPORAL_BUCKETING.get(config_set)
+            {
                 let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
                     .get(config_set)
                     .try_into()

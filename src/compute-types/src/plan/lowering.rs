@@ -357,12 +357,14 @@ impl Context {
                 // Arrangements made available cannot be used by prior bindings,
                 // as we cannot circulate an arrangement through a `Variable` yet.
                 let mut lir_values = Vec::with_capacity(values.len());
+                let mut any_v_future = false;
                 for (id, value) in ids.iter().zip_eq(values) {
                     let LoweredExpr {
                         plan: mut lir_value,
                         keys: mut v_keys,
                         has_future_updates: v_future,
                     } = self.lower_mir_expr(value)?;
+                    any_v_future |= v_future;
                     // If `v_keys` does not contain an unarranged collection, we must form it.
                     if !v_keys.raw {
                         // Choose an "arbitrary" arrangement; TODO: prefer a specific one.
@@ -380,6 +382,9 @@ impl Context {
                         // anything between two `LetRec`s. So if `lir_value` is itself a `LetRec`,
                         // then we insert the `ArrangeBy` on the `body` of the inner `LetRec`,
                         // instead of on top of the inner `LetRec`.
+                        //
+                        // We forward `v_future` for honesty; bucketing has no observable effect
+                        // inside an iterative scope, but the field should reflect reality.
                         lir_value = match lir_value {
                             Plan {
                                 node:
@@ -402,7 +407,7 @@ impl Context {
                                             input: body,
                                             input_mfp,
                                             forms,
-                                            input_has_future_updates: false,
+                                            input_has_future_updates: v_future,
                                         }
                                         .as_plan(inner_lir_id),
                                     ),
@@ -416,7 +421,7 @@ impl Context {
                                     input: Box::new(lir_value),
                                     input_mfp,
                                     forms,
-                                    input_has_future_updates: false,
+                                    input_has_future_updates: v_future,
                                 }
                                 .as_plan(lir_id)
                             }
@@ -448,6 +453,15 @@ impl Context {
                     self.has_future_updates.remove(&Id::Local(*id));
                 }
                 // Return the plan, and any `body` arrangements.
+                //
+                // The body's `b_future` alone can under-report: an earlier binding may only
+                // inherit `has_future_updates` via a Variable to a *later* binding, which the
+                // sequential sweep can't observe at the time the earlier binding is lowered.
+                // A precise fix would require a fixpoint (or the MIR `Analysis` framework with
+                // a `true ⊑ false` lattice). As a cheap correct alternative, OR with the
+                // bindings' future flags: any cross-binding propagation must originate from a
+                // local temporal predicate inside *some* binding, so the OR captures it
+                // without forcing bucketing on a fully non-temporal LetRec.
                 let lir_id = self.allocate_lir_id();
                 LoweredExpr {
                     plan: PlanNode::LetRec {
@@ -458,7 +472,7 @@ impl Context {
                     }
                     .as_plan(lir_id),
                     keys: b_keys,
-                    has_future_updates: b_future,
+                    has_future_updates: b_future || any_v_future,
                 }
             }
             MirRelationExpr::FlatMap {
@@ -597,6 +611,9 @@ impl Context {
                     };
 
                     let lir_id = self.allocate_lir_id();
+                    // The absorbed `mfp` may contain temporal predicates, which can
+                    // introduce future-stamped updates that aren't present on the input.
+                    let has_future_updates = input_future || mfp.has_temporal_predicates();
                     // Return the plan, and no arrangements.
                     LoweredExpr {
                         plan: PlanNode::FlatMap {
@@ -608,7 +625,7 @@ impl Context {
                         }
                         .as_plan(lir_id),
                         keys: AvailableCollections::new_raw(),
-                        has_future_updates: input_future,
+                        has_future_updates,
                     }
                 }
             }
@@ -748,6 +765,10 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     }
                 }
                 // Return the plan, and no arrangements.
+                // Both linear and delta join planning extract temporal predicates back into the
+                // residual `mfp` (see `LinearJoinPlan::create_from` / `DeltaJoinPlan::create_from`),
+                // so the absorbed MFP cannot introduce future updates — the join's output future
+                // flag is just the OR of its inputs.
                 let lir_id = self.allocate_lir_id();
                 LoweredExpr {
                     plan: PlanNode::Join {
@@ -1172,6 +1193,9 @@ This is not expected to cause incorrect results, but could indicate a performanc
         );
         let output_keys = reduce_plan.keys(group_key.len(), output_arity);
         let lir_id = self.allocate_lir_id();
+        // `extract_mfp_after` strips temporal predicates back into `*mfp_on_top` (the residual
+        // MFP installed above the reduce), so `mfp_after` is non-temporal and cannot introduce
+        // future updates. The output's future flag is just whatever the input had.
         Ok(LoweredExpr {
             plan: PlanNode::Reduce {
                 input_key,
