@@ -388,7 +388,7 @@ mime = "0.3.16"
 murmur2 = "0.1.0"
 mysql_async = { version = "0.36.2", default-features = false, features = ["binlog", "minimal", "native-tls-tls", "tracing"] }
 mysql_common = { version = "0.35.5", default-features = false, features = ["chrono"] }
-native-tls = { version = "0.2.14", features = ["alpn"] }
+native-tls = { version = "0.2.18", features = ["alpn"] }
 nix = { version = "0.31.2", features = ["fs", "signal"] }
 num = "0.4.3"
 num-traits = "0.2.15"
@@ -516,7 +516,7 @@ tracing-core = "0.1.35"
 tracing-opentelemetry = "0.32.1"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "json", "tracing-log"] }
 tungstenite = "0.28.0"
-turmoil = "0.7.1"
+turmoil = "0.7.2"
 uncased = "0.9.7"
 unicode-normalization = "0.1.25"
 unicode-width = "0.2.2"
