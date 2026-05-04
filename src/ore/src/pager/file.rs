@@ -106,6 +106,20 @@ impl Drop for FileInner {
     }
 }
 
+use crate::pager::Handle;
+
+pub(crate) fn pageout_file(_chunks: &mut [Vec<u64>]) -> Handle {
+    unimplemented!("file backend pageout: see Task 9")
+}
+
+pub(crate) fn read_at_file(_h: &Handle, _ranges: &[(usize, usize)], _dst: &mut Vec<u64>) {
+    unimplemented!("file backend read_at: see Task 10")
+}
+
+pub(crate) fn take_file(_h: Handle, _dst: &mut Vec<u64>) {
+    unimplemented!("file backend take: see Task 11")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
