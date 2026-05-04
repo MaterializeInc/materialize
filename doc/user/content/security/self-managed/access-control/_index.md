@@ -34,6 +34,10 @@ roles](/security/self-managed/access-control/manage-roles/).
 
 {{% include-headless "/headless/rbac-sm/create-users" %}}
 
+{{< note >}}
+{{% include-headless "/headless/rbac-sm/oidc-auto-provisioned-roles" %}}
+{{</ note >}}
+
 {{% include-headless "/headless/rbac-sm/create-functional-roles" %}}
 
 ### Managing privileges
