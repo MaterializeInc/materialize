@@ -500,7 +500,7 @@ tokio-postgres = "0.7.15"
 tokio-stream = "0.1.18"
 tokio-test = "0.4.5"
 tokio-util = "0.7.18"
-toml = "0.8.22"
+toml = "1.1.0"
 toml_edit = { version = "0.22.26", features = ["serde"] }
 tonic = { version = "0.14.2", features = ["gzip", "transport"] }
 tonic-prost = "0.14.5"
