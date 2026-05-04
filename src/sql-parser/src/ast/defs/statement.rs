@@ -5148,6 +5148,10 @@ impl_display!(AlterSystemResetAllStatement);
 pub enum AsOf<T: AstInfo> {
     At(Expr<T>),
     AtLeast(Expr<T>),
+    /// Timestamp is derived from the write frontiers of the named objects at
+    /// sequencing time: the maximum over `frontier - 1` across all names.
+    /// Only sources, tables, and materialized views are permitted.
+    AtLeastFrontierOf(Vec<T::ItemName>),
 }
 
 impl<T: AstInfo> AstDisplay for AsOf<T> {
@@ -5158,6 +5162,10 @@ impl<T: AstInfo> AstDisplay for AsOf<T> {
             AsOf::AtLeast(expr) => {
                 f.write_str("AT LEAST ");
                 f.write_node(expr);
+            }
+            AsOf::AtLeastFrontierOf(names) => {
+                f.write_str("AT LEAST FRONTIER OF ");
+                f.write_node(&display::comma_separated(names));
             }
         }
     }

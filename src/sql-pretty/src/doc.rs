@@ -671,11 +671,14 @@ impl Pretty {
     }
 
     fn doc_as_of<'a, T: AstInfo>(&'a self, v: &'a AsOf<T>) -> RcDoc<'a> {
-        let (title, expr) = match v {
-            AsOf::At(expr) => ("AS OF", expr),
-            AsOf::AtLeast(expr) => ("AS OF AT LEAST", expr),
-        };
-        nest_title(title, self.doc_expr(expr))
+        match v {
+            AsOf::At(expr) => nest_title("AS OF", self.doc_expr(expr)),
+            AsOf::AtLeast(expr) => nest_title("AS OF AT LEAST", self.doc_expr(expr)),
+            AsOf::AtLeastFrontierOf(names) => nest_title(
+                "AS OF AT LEAST FRONTIER OF",
+                comma_separate(|n| self.doc_display_pass(n), names),
+            ),
+        }
     }
 
     pub(crate) fn doc_create_view<'a, T: AstInfo>(

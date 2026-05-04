@@ -594,6 +594,44 @@ impl Coordinator {
         oracle_read_ts
     }
 
+    /// Resolves `QueryWhen::AtLeastFrontierOf` by reading the current write
+    /// frontiers of the named storage collections and converting to the
+    /// equivalent `AtLeastTimestamp`. Errors if any named collection has not
+    /// yet produced any output (write frontier is `[T::minimum()]` or empty),
+    /// since there is no readable timestamp to constrain against.
+    fn resolve_frontier_of(&self, when: &QueryWhen) -> Result<Option<QueryWhen>, AdapterError> {
+        let QueryWhen::AtLeastFrontierOf(item_ids) = when else {
+            return Ok(None);
+        };
+        let mut max_ts: Option<Timestamp> = None;
+        for item_id in item_ids {
+            let entry = self.catalog().get_entry(item_id);
+            let gid = entry.latest_global_id();
+            let (_since, upper) =
+                self.controller
+                    .storage
+                    .collection_frontiers(gid)
+                    .map_err(|_| {
+                        AdapterError::Internal(format!(
+                            "AS OF AT LEAST FRONTIER OF: no storage collection for {}",
+                            entry.name().item,
+                        ))
+                    })?;
+            let readable = upper.as_option().and_then(|upper| upper.step_back());
+            let Some(readable) = readable else {
+                return Err(AdapterError::Unstructured(anyhow::anyhow!(
+                    "AS OF AT LEAST FRONTIER OF: {} has no readable timestamp yet \
+                     (collection is unhydrated or closed)",
+                    entry.name().item,
+                )));
+            };
+            max_ts = Some(max_ts.map_or(readable, |cur| cur.max(readable)));
+        }
+        // `item_ids` was non-empty because we matched `AtLeastFrontierOf`, but
+        // the list could in principle be empty; treat that as no constraint.
+        Ok(max_ts.map(QueryWhen::AtLeastTimestamp))
+    }
+
     /// Determines the timestamp for a query, acquires read holds that ensure the
     /// query remains executable at that time, and returns those.
     /// The caller is responsible for eventually dropping those read holds.
@@ -608,6 +646,11 @@ impl Coordinator {
         oracle_read_ts: Option<Timestamp>,
         real_time_recency_ts: Option<mz_repr::Timestamp>,
     ) -> Result<(TimestampDetermination, ReadHolds), AdapterError> {
+        // Resolve `AS OF AT LEAST FRONTIER OF <names>` into a concrete
+        // `AtLeastTimestamp` using current write frontiers. This must happen
+        // here rather than at plan time because the frontiers move.
+        let resolved_when = self.resolve_frontier_of(when)?;
+        let when = resolved_when.as_ref().unwrap_or(when);
         let isolation_level = session.vars().transaction_isolation();
         let (det, read_holds) = self.determine_timestamp_for(
             session,
