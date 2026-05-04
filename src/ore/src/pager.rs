@@ -115,6 +115,47 @@ pub fn set_backend(b: Backend) {
     BACKEND.store(raw, Ordering::Relaxed);
 }
 
+/// Scatter pageout. Logical layout = chunks concatenated in order.
+/// After return, each `Vec` in `chunks` is empty.
+/// File backend preserves capacity; swap backend moves the alloc into the handle.
+/// Empty input returns a `len == 0` handle and performs no I/O.
+pub fn pageout(chunks: &mut [Vec<u64>]) -> Handle {
+    if total_len(chunks) == 0 {
+        return Handle::from_swap(SwapInner::new(Vec::new()));
+    }
+    match backend() {
+        Backend::Swap => swap::pageout_swap(chunks),
+        Backend::File => file::pageout_file(chunks),
+    }
+}
+
+/// Reads multiple ranges. Output appended to `dst` in request order (concat).
+/// Panics if any range is out of bounds.
+pub fn read_at_many(handle: &Handle, ranges: &[(usize, usize)], dst: &mut Vec<u64>) {
+    match &handle.inner {
+        HandleInner::Swap(_) => swap::read_at_swap(handle, ranges, dst),
+        HandleInner::File(_) => file::read_at_file(handle, ranges, dst),
+    }
+}
+
+/// Reads a single range. Convenience wrapper around `read_at_many`.
+pub fn read_at(handle: &Handle, offset: usize, len: usize, dst: &mut Vec<u64>) {
+    read_at_many(handle, &[(offset, len)], dst);
+}
+
+/// Consumes handle, writing the entire payload into `dst` (cleared first), then reclaims storage.
+/// Swap fast path: single-chunk handle into empty `dst` swaps in place, no copy.
+pub fn take(handle: Handle, dst: &mut Vec<u64>) {
+    match &handle.inner {
+        HandleInner::Swap(_) => swap::take_swap(handle, dst),
+        HandleInner::File(_) => file::take_file(handle, dst),
+    }
+}
+
+fn total_len(chunks: &[Vec<u64>]) -> usize {
+    chunks.iter().map(|c| c.len()).sum()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,5 +166,27 @@ mod tests {
         assert_eq!(backend(), Backend::File);
         set_backend(Backend::Swap);
         assert_eq!(backend(), Backend::Swap);
+    }
+}
+
+#[cfg(test)]
+mod dispatch_tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn end_to_end_swap() {
+        set_backend(Backend::Swap);
+        let mut chunks = [vec![1u64, 2, 3, 4]];
+        let h = pageout(&mut chunks);
+        assert_eq!(h.len(), 4);
+        assert!(chunks[0].is_empty());
+
+        let mut dst = Vec::new();
+        read_at(&h, 1, 2, &mut dst);
+        assert_eq!(dst, vec![2, 3]);
+
+        let mut dst2 = Vec::new();
+        take(h, &mut dst2);
+        assert_eq!(dst2, vec![1, 2, 3, 4]);
     }
 }
