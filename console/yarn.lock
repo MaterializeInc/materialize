@@ -2033,22 +2033,22 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@codemirror-toolkit/react@npm:^0.6.0":
-  version: 0.6.0
-  resolution: "@codemirror-toolkit/react@npm:0.6.0"
+"@codemirror-toolkit/react@npm:^0.7.1":
+  version: 0.7.1
+  resolution: "@codemirror-toolkit/react@npm:0.7.1"
   peerDependencies:
     "@codemirror/state": ^6.0.0
     "@codemirror/view": ^6.0.0
-    "@types/react": ^18.0.0
-    "@types/react-dom": ^18.0.0
-    react: ^18.0.0
-    react-dom: ^18.0.0
+    "@types/react": ">=16.7.0"
+    "@types/react-dom": ">=16.7.0"
+    react: ">=16.8.0"
+    react-dom: ">=16.8.0"
   peerDependenciesMeta:
     "@types/react":
       optional: true
     "@types/react-dom":
       optional: true
-  checksum: 10c0/70b9795d17d0fc7ace490f82b7a77627059d2ec284ebdd8607399367582c4db990306b336d259fa3166fb045388c0bb44124674202a857d62f24aeccdd76c223
+  checksum: 10c0/6c996b53bbb2a611ab9c144953b0a5c9ab3661fddbd51bdd0c63917efa83970ab7c1c1444e9b698b7a761a4ee61f5f8906f09a154c05a5c6d74ddbee31928383
   languageName: node
   linkType: hard
 
@@ -10922,7 +10922,7 @@ __metadata:
     "@chakra-ui/react": "npm:^2.8.2"
     "@chakra-ui/toast": "npm:^7.0.2"
     "@codemirror-toolkit/extensions": "npm:^0.6.3"
-    "@codemirror-toolkit/react": "npm:^0.6.0"
+    "@codemirror-toolkit/react": "npm:^0.7.1"
     "@codemirror/commands": "npm:^6.7.1"
     "@codemirror/lang-json": "npm:^6.0.1"
     "@codemirror/lang-sql": "npm:^6.8.0"
