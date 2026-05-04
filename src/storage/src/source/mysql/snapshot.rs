@@ -417,6 +417,9 @@ pub(crate) fn render<'scope>(
                         let row: MySqlRow = row;
                         snapshot_staged += 1;
                         for (output, row_val) in outputs.iter().repeat_clone(row) {
+                            // We don't need to verify if binlog_row_metadata matches the expected when snapshotting as
+                            // the snapshot query always returns rows with full metadata. If the output is configured
+                            // with binlog_full_metadata = false, then we will just ignore the metadata when decoding.
                             let event = match pack_mysql_row(
                                 &mut final_row,
                                 row_val,

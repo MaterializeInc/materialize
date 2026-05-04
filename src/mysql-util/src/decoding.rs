@@ -33,26 +33,6 @@ pub fn pack_mysql_row(
 ) -> Result<Row, MySqlError> {
     let mut packer = row_container.packer();
 
-    // If a column name begins with '@', then the binlog does not have full row metadata,
-    // meaning that full column names are not available and we need to rely on the order
-    // of the columns in the upstream table matching the order of the columns in the row.
-    // This is a fallback for MySQL servers that do not have `binlog_row_metadata` set to
-    // `FULL`. If the first column name does not begin with '@', then we can assume that
-    // full metadata is available and we can match columns by name.
-    let fallback_names = row
-        .columns_ref()
-        .first()
-        .is_some_and(|col| col.name_ref().starts_with(b"@"));
-
-    if binlog_full_metadata && fallback_names {
-        // This should never happen, but if it does, it's a sign that something is very wrong with the MySQL server's binlog configuration. We want to error rather than silently producing incorrect results.
-        return Err(MySqlError::ValueDecodeError {
-            column_name: "<unknown>".to_string(),
-            qualified_table_name: format!("{}.{}", table_desc.schema_name, table_desc.name),
-            error: "Table was created with binlog_row_metadata=FULL but binlog_row_metadata has since been set to a different value, meaning we cannot reliably decode the columns".to_string(),
-        });
-    }
-
     // For each column in `table_desc` (in descriptor order), resolve its wire
     // index. Non-fallback rows are matched by name so a reordered upstream
     // still decodes correctly; fallback rows have no names and are matched
