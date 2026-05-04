@@ -295,7 +295,7 @@ azure_storage_blobs = "0.21.0"
 backtrace = "0.3.76"
 base64 = "0.22.1"
 bincode = "1.3.3"
-bitflags = "1.3.2"
+bitflags = "2.11.0"
 buildid = "1.0.4"
 bytefmt = "0.1.7"
 bytemuck = { version = "1.23.1", features = ["extern_crate_alloc", "latest_stable_rust"] }
