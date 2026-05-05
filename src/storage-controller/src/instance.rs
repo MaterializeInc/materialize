@@ -748,7 +748,7 @@ impl Instance {
         } else if let Some(export) = self.active_exports.get(id) {
             export.active_replicas.clone()
         } else {
-            self.replicas.keys().copied().collect()
+            BTreeSet::new()
         }
     }
 }
