@@ -4,7 +4,7 @@
 The Materialize command-line interface (CLI).
 
 USAGE:
-    mz [OPTIONS] <SUBCOMMAND>
+    mzx [OPTIONS] <SUBCOMMAND>
 
 OPTIONS:
         --config <PATH>      Set the configuration file [env: MZ_CONFIG=]
@@ -26,7 +26,7 @@ SUBCOMMANDS:
 
 ## Getting started
 
-1. Install `mz`:
+1. Install `mzx`:
 
    ```shell
    # On macOS:
@@ -40,17 +40,17 @@ SUBCOMMANDS:
 2. Log in to your Materialize account:
 
    ```shell
-   mz profile init
+   mzx profile init
    ```
 
-   `mz` will launch your web browser and ask you to log in.
+   `mzx` will launch your web browser and ask you to log in.
 
    See [Configuration](#configuration) for alternative configuration methods.
 
 3. Show enabled regions in your organization:
 
    ```shell
-   mz region list
+   mzx region list
    ```
    ```
    aws/us-east-1  enabled
@@ -63,10 +63,10 @@ SUBCOMMANDS:
 
    ```shell
    # Selecting a specific region
-   mz sql --region=aws/us-east-1
+   mzx sql --region=aws/us-east-1
 
    # Using the default region
-   mz sql
+   mzx sql
    ```
    ```
    psql (14.2)
@@ -77,25 +77,25 @@ SUBCOMMANDS:
 
    Replace `aws/us-east-1` with the name of an enabled region in your
    organization. If you don't yet have an enabled region, use
-   [`mz region enable`](reference/region) to enable one.
+   [`mzx region enable`](reference/region) to enable one.
 
 ### Configuration
 
-`mz` is configured via a single TOML file stored at
+`mzx` is configured via a single TOML file stored at
 `$HOME/.config/materialize/mz.toml`.
 
 You typically manage configuration using the following commands:
 
-  * [`mz config`](../reference/config), which manages global configuration
+  * [`mzx config`](../reference/config), which manages global configuration
     parameters.
-  * [`mz profile`](../reference/profile), which manages authentication profiles.
+  * [`mzx profile`](../reference/profile), which manages authentication profiles.
 
 You can also edit the file directly, if you prefer. The format of the file is
 shown in the [Example](#example) section.
 
 ### Global parameters
 
-`mz` supports several global configuration parameters, documented in the table
+`mzx` supports several global configuration parameters, documented in the table
 below.
 
 Name      | Type   | Description
@@ -104,28 +104,28 @@ Name      | Type   | Description
 `vault`   | string | The default vault to use to store secret configuration parameters: `inline` or `keychain`. When set to `inline`, secrets are stored directly in the configuration file. When set to `keychain`, secrets are stored in the system keychain (macOS only).<br>Default (Linux): `inline`<br>Default (macOS): `keychain`
 
 
-Use [`mz config set`](../reference/config#set) to set these parameters.
+Use [`mzx config set`](../reference/config#set) to set these parameters.
 
 ## Authentication profiles
 
-You can configure `mz` with multiple **authentication profiles** to seamlessly
+You can configure `mzx` with multiple **authentication profiles** to seamlessly
 manage multiple Materialize user accounts. Each profile has a name, an
 associated app password, and a default region.
 
-When invoking an `mz` command that requires authentication, you can explicitly
+When invoking an `mzx` command that requires authentication, you can explicitly
 choose which profile to use by passing the `--profile` flag. For example, to use
-the `hooli` profile with the `mz sql` command:
+the `hooli` profile with the `mzx sql` command:
 
 ```
-mz sql --profile=hooli
+mzx sql --profile=hooli
 ```
 
-When the profile is not explicitly specified, `mz` uses the default profile
+When the profile is not explicitly specified, `mzx` uses the default profile
 specified in the configuration file. You can change the default profile using
-`mz config`. For example, to set the default profile to `hooli`:
+`mzx config`. For example, to set the default profile to `hooli`:
 
 ```
-mz config set profile hooli
+mzx config set profile hooli
 ```
 
 ### Profile parameters
