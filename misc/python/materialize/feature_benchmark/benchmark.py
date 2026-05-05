@@ -55,6 +55,9 @@ class Benchmark:
             self._memory_clusterd_aggregation = aggregation_class()
             self._memory_peak_mz_aggregation = aggregation_class()
             self._memory_peak_clusterd_aggregation = aggregation_class()
+            self._jemalloc_allocated_mz_aggregation = aggregation_class()
+            self._jemalloc_resident_mz_aggregation = aggregation_class()
+            self._jemalloc_retained_mz_aggregation = aggregation_class()
             self._jemalloc_allocated_clusterd_aggregation = aggregation_class()
             self._jemalloc_resident_clusterd_aggregation = aggregation_class()
             self._jemalloc_retained_clusterd_aggregation = aggregation_class()
@@ -114,6 +117,9 @@ class Benchmark:
                     self._memory_clusterd_aggregation,
                     self._memory_peak_mz_aggregation,
                     self._memory_peak_clusterd_aggregation,
+                    self._jemalloc_allocated_mz_aggregation,
+                    self._jemalloc_resident_mz_aggregation,
+                    self._jemalloc_retained_mz_aggregation,
                     self._jemalloc_allocated_clusterd_aggregation,
                     self._jemalloc_resident_clusterd_aggregation,
                     self._jemalloc_retained_clusterd_aggregation,
@@ -270,25 +276,39 @@ class Benchmark:
                 aggregation.append_measurement(memory_measurement)
 
     def _collect_jemalloc_measurements(self, i: int) -> None:
-        stats = self._executor.JemallocClusterd()
-        if stats is None:
-            # Endpoint unreachable or build lacks jemalloc support; leave
-            # aggregations empty. The report omits metrics with no values.
-            return
-
-        for measurement_type, key in (
-            (MeasurementType.JEMALLOC_ALLOCATED_CLUSTERD, "allocated"),
-            (MeasurementType.JEMALLOC_RESIDENT_CLUSTERD, "resident"),
-            (MeasurementType.JEMALLOC_RETAINED_CLUSTERD, "retained"),
+        for stats, type_by_key in (
+            (
+                self._executor.JemallocMz(),
+                (
+                    (MeasurementType.JEMALLOC_ALLOCATED_MZ, "allocated"),
+                    (MeasurementType.JEMALLOC_RESIDENT_MZ, "resident"),
+                    (MeasurementType.JEMALLOC_RETAINED_MZ, "retained"),
+                ),
+            ),
+            (
+                self._executor.JemallocClusterd(),
+                (
+                    (MeasurementType.JEMALLOC_ALLOCATED_CLUSTERD, "allocated"),
+                    (MeasurementType.JEMALLOC_RESIDENT_CLUSTERD, "resident"),
+                    (MeasurementType.JEMALLOC_RETAINED_CLUSTERD, "retained"),
+                ),
+            ),
         ):
-            aggregation = getattr(self, f"_{str(measurement_type)}_aggregation")
-            measurement = Measurement(
-                type=measurement_type,
-                value=stats[key] / 2**20,
-                unit=MeasurementUnit.MEGABYTE,
-            )
-            if measurement.value > 0 and (
-                not self._filter or not self._filter.filter(measurement)
-            ):
-                print(f"{i} {measurement}")
-                aggregation.append_measurement(measurement)
+            if stats is None:
+                # Endpoint unreachable or build lacks jemalloc support;
+                # leave aggregations empty. The report omits metrics with
+                # no values.
+                continue
+
+            for measurement_type, key in type_by_key:
+                aggregation = getattr(self, f"_{str(measurement_type)}_aggregation")
+                measurement = Measurement(
+                    type=measurement_type,
+                    value=stats[key] / 2**20,
+                    unit=MeasurementUnit.MEGABYTE,
+                )
+                if measurement.value > 0 and (
+                    not self._filter or not self._filter.filter(measurement)
+                ):
+                    print(f"{i} {measurement}")
+                    aggregation.append_measurement(measurement)
