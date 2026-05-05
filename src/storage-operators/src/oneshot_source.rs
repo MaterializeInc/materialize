@@ -188,6 +188,7 @@ where
                 connection_context,
                 uri,
                 use_checksum,
+                enforce_external_addresses,
             );
             SourceKind::AwsS3(source)
         }

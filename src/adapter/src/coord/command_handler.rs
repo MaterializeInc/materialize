@@ -471,6 +471,9 @@ impl Coordinator {
                     // Spawn a background task to perform the slow S3 preflight operations.
                     // This avoids blocking the coordinator's main task.
                     let connection_context = self.connection_context().clone();
+                    let enforce_external_addresses =
+                        mz_storage_types::dyncfgs::ENFORCE_EXTERNAL_ADDRESSES
+                            .get(self.controller.storage.config().config_set());
                     task::spawn(|| "copy_to_preflight", async move {
                         let result = mz_storage_types::sinks::s3_oneshot_sink::preflight(
                             connection_context,
@@ -478,6 +481,7 @@ impl Coordinator {
                             &s3_sink_connection.upload_info,
                             s3_sink_connection.connection_id,
                             sink_id,
+                            enforce_external_addresses,
                         )
                         .await
                         .map_err(AdapterError::from);

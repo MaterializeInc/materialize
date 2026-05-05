@@ -267,6 +267,7 @@ impl AwsConnection {
         connection_context: &ConnectionContext,
         connection_id: CatalogItemId,
         in_task: InTask,
+        enforce_external_addresses: bool,
     ) -> Result<SdkConfig, anyhow::Error> {
         let connection_context = connection_context.clone();
         let this = self.clone();
@@ -298,7 +299,7 @@ impl AwsConnection {
                         })?,
                 ),
             };
-            this.load_sdk_config_from_credentials(credentials)
+            this.load_sdk_config_from_credentials(credentials, enforce_external_addresses)
                 .await
                 .with_context(|| {
                     format!(
@@ -318,12 +319,16 @@ impl AwsConnection {
     async fn load_sdk_config_from_credentials(
         &self,
         credentials: impl ProvideCredentials + 'static,
+        enforce_external_addresses: bool,
     ) -> Result<SdkConfig, anyhow::Error> {
         let mut loader = mz_aws_util::defaults().credentials_provider(credentials);
         if let Some(region) = &self.region {
             loader = loader.region(Region::new(region.clone()));
         }
         if let Some(endpoint) = &self.endpoint {
+            loader = loader.http_client(mz_aws_util::http_client_with_resolver(
+                enforce_external_addresses,
+            ));
             loader = loader.endpoint_url(endpoint);
         }
         Ok(loader.load().await)
@@ -334,12 +339,15 @@ impl AwsConnection {
         id: CatalogItemId,
         storage_configuration: &StorageConfiguration,
     ) -> Result<(), AwsConnectionValidationError> {
+        let enforce_external_addresses =
+            crate::dyncfgs::ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set());
         let aws_config = self
             .load_sdk_config(
                 &storage_configuration.connection_context,
                 id,
                 // We are in a normal tokio context during validation, already.
                 InTask::No,
+                enforce_external_addresses,
             )
             .await?;
         let sts_client = aws_sdk_sts::Client::new(&aws_config);
@@ -358,7 +366,9 @@ impl AwsConnection {
                     external_id,
                 )
                 .await?;
-            let aws_config = self.load_sdk_config_from_credentials(credentials).await?;
+            let aws_config = self
+                .load_sdk_config_from_credentials(credentials, enforce_external_addresses)
+                .await?;
             let sts_client = aws_sdk_sts::Client::new(&aws_config);
             if sts_client.get_caller_identity().send().await.is_ok() {
                 return Err(AwsConnectionValidationError::RoleDoesNotRequireExternalId {
