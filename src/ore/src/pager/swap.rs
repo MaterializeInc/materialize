@@ -66,28 +66,31 @@ const MADV_COLD: i32 = 0;
 const MADV_WILLNEED: i32 = 0;
 
 #[cfg(target_os = "linux")]
-#[allow(clippy::as_conversions)] // ptr<->usize and *mut c_void casts have no safe wrapper
 fn madvise_range(chunk: &[u64], advice: libc::c_int) {
     if chunk.is_empty() {
         return;
     }
     let page = page_size();
-    let ptr = chunk.as_ptr() as usize;
+    let base_ptr = chunk.as_ptr();
+    let base_addr = base_ptr.addr();
     let len_bytes = chunk.len() * std::mem::size_of::<u64>();
-    let aligned_start = (ptr + page - 1) & !(page - 1);
-    let aligned_end = (ptr + len_bytes) & !(page - 1);
-    if aligned_end <= aligned_start {
+    let aligned_start_addr = (base_addr + page - 1) & !(page - 1);
+    let aligned_end_addr = (base_addr + len_bytes) & !(page - 1);
+    if aligned_end_addr <= aligned_start_addr {
         return;
     }
-    // SAFETY: pointer/length come from a live `&[u64]`; we restrict to a fully
-    // page-aligned subrange contained within that slice; `madvise` with these
-    // hints does not mutate the contents.
+    let aligned_len = aligned_end_addr - aligned_start_addr;
+    // SAFETY: `aligned_start_addr` lies within `[base_addr, base_addr+len_bytes]`,
+    // i.e. inside the live `&[u64]`. Reconstructing the pointer via `byte_add`
+    // preserves provenance.
+    let aligned_ptr = unsafe { base_ptr.byte_add(aligned_start_addr - base_addr) }
+        .cast::<libc::c_void>()
+        .cast_mut();
+    // SAFETY: pointer/length describe a fully page-aligned subrange contained
+    // within the live `&[u64]`. `madvise` with `MADV_COLD` / `MADV_WILLNEED`
+    // does not mutate the contents.
     unsafe {
-        libc::madvise(
-            aligned_start as *mut libc::c_void,
-            aligned_end - aligned_start,
-            advice,
-        );
+        libc::madvise(aligned_ptr, aligned_len, advice);
     }
 }
 
@@ -95,10 +98,10 @@ fn madvise_range(chunk: &[u64], advice: libc::c_int) {
 fn madvise_range(_chunk: &[u64], _advice: i32) {}
 
 #[cfg(target_os = "linux")]
-#[allow(clippy::as_conversions)] // libc::c_long -> usize is FFI; sysconf returns >0 here
 fn page_size() -> usize {
     // SAFETY: `sysconf` with a valid argument is safe.
-    unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize }
+    let raw = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    usize::try_from(raw).expect("page size is positive and fits usize")
 }
 
 #[cfg(not(target_os = "linux"))]
