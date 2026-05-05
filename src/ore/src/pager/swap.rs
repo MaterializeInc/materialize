@@ -50,14 +50,24 @@ pub(crate) fn pageout_swap(chunks: &mut [Vec<u64>]) -> Handle {
         taken.push(std::mem::take(c));
     }
     for c in &taken {
-        madvise_cold(c);
+        madvise_range(c, MADV_COLD);
     }
     Handle::from_swap(SwapInner::new(taken))
 }
 
 #[cfg(target_os = "linux")]
+const MADV_COLD: libc::c_int = libc::MADV_COLD;
+#[cfg(target_os = "linux")]
+const MADV_WILLNEED: libc::c_int = libc::MADV_WILLNEED;
+
+#[cfg(not(target_os = "linux"))]
+const MADV_COLD: i32 = 0;
+#[cfg(not(target_os = "linux"))]
+const MADV_WILLNEED: i32 = 0;
+
+#[cfg(target_os = "linux")]
 #[allow(clippy::as_conversions)] // ptr<->usize and *mut c_void casts have no safe wrapper
-fn madvise_cold(chunk: &[u64]) {
+fn madvise_range(chunk: &[u64], advice: libc::c_int) {
     if chunk.is_empty() {
         return;
     }
@@ -70,19 +80,19 @@ fn madvise_cold(chunk: &[u64]) {
         return;
     }
     // SAFETY: pointer/length come from a live `&[u64]`; we restrict to a fully
-    // page-aligned subrange contained within that slice; `MADV_COLD` does not
-    // mutate the contents.
+    // page-aligned subrange contained within that slice; `madvise` with these
+    // hints does not mutate the contents.
     unsafe {
         libc::madvise(
             aligned_start as *mut libc::c_void,
             aligned_end - aligned_start,
-            libc::MADV_COLD,
+            advice,
         );
     }
 }
 
 #[cfg(not(target_os = "linux"))]
-fn madvise_cold(_chunk: &[u64]) {}
+fn madvise_range(_chunk: &[u64], _advice: i32) {}
 
 #[cfg(target_os = "linux")]
 #[allow(clippy::as_conversions)] // libc::c_long -> usize is FFI; sysconf returns >0 here
@@ -131,6 +141,35 @@ fn copy_range(inner: &SwapInner, off: usize, len: usize, dst: &mut Vec<u64>) {
         dst.extend_from_slice(&chunk[local..local + take]);
         cur += take;
         remaining -= take;
+        idx += 1;
+    }
+}
+
+pub(crate) fn prefetch_at_swap(handle: &Handle, offset: usize, len: usize) {
+    let inner = handle
+        .swap_inner()
+        .expect("prefetch_at_swap called on non-swap handle");
+    let total = inner.total_len();
+    let end = offset.checked_add(len).expect("offset+len overflow");
+    assert!(
+        end <= total,
+        "prefetch range out of bounds: {offset}+{len} > {total}"
+    );
+    if len == 0 {
+        return;
+    }
+    let mut cur = offset;
+    let mut idx = match inner.prefix.binary_search(&cur) {
+        Ok(i) => i,
+        Err(i) => i.saturating_sub(1),
+    };
+    while cur < end {
+        let chunk_start = inner.prefix[idx];
+        let chunk = &inner.chunks[idx];
+        let local = cur - chunk_start;
+        let take = std::cmp::min(end - cur, chunk.len() - local);
+        madvise_range(&chunk[local..local + take], MADV_WILLNEED);
+        cur += take;
         idx += 1;
     }
 }
@@ -229,5 +268,25 @@ mod tests {
         let mut dst = Vec::new();
         take_swap(h, &mut dst);
         assert_eq!(dst, vec![1, 2, 3, 4, 5]);
+    }
+
+    #[mz_ore::test]
+    fn prefetch_does_not_corrupt_data() {
+        let payload: Vec<u64> = (0..1024).collect();
+        let mut chunks = [payload.clone()];
+        let h = pageout_swap(&mut chunks);
+        prefetch_at_swap(&h, 100, 200);
+        prefetch_at_swap(&h, 0, 1024);
+        let mut dst = Vec::new();
+        read_at_swap(&h, &[(0, 1024)], &mut dst);
+        assert_eq!(dst, payload);
+    }
+
+    #[mz_ore::test]
+    #[should_panic(expected = "out of bounds")]
+    fn prefetch_panics_on_oob() {
+        let mut chunks = [vec![1u64, 2]];
+        let h = pageout_swap(&mut chunks);
+        prefetch_at_swap(&h, 0, 99);
     }
 }

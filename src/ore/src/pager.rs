@@ -158,6 +158,25 @@ pub fn read_at(handle: &Handle, offset: usize, len: usize, dst: &mut Vec<u64>) {
     read_at_many(handle, &[(offset, len)], dst);
 }
 
+/// Hints that the entire payload will be read soon. Best-effort.
+/// Swap backend issues `madvise(MADV_WILLNEED)`; file backend issues
+/// `posix_fadvise(POSIX_FADV_WILLNEED)`. Both are async — the call returns
+/// promptly and the kernel populates pages or page cache in the background.
+/// Useful for overlapping I/O with computation in pipelines that know which
+/// handles they will read next.
+pub fn prefetch(handle: &Handle) {
+    prefetch_at(handle, 0, handle.len());
+}
+
+/// Hints that the range `[offset, offset+len)` of the handle will be read soon.
+/// Panics if the range is out of bounds.
+pub fn prefetch_at(handle: &Handle, offset: usize, len: usize) {
+    match &handle.inner {
+        HandleInner::Swap(_) => swap::prefetch_at_swap(handle, offset, len),
+        HandleInner::File(_) => file::prefetch_at_file(handle, offset, len),
+    }
+}
+
 /// Consumes handle, writing the entire payload into `dst` (cleared first), then reclaims storage.
 /// Swap fast path: single-chunk handle into empty `dst` swaps in place, no copy.
 pub fn take(handle: Handle, dst: &mut Vec<u64>) {
