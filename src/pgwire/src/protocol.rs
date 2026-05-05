@@ -2664,11 +2664,11 @@ where
                             .map(|state| (state, SendRowsEndedReason::Errored { error: text }));
                     }
                     Some(PeekResponseUnary::DependencyDropped(dep)) => {
-                        let text = dep.copy_terminated_error();
-                        let err =
-                            ErrorResponse::error(SqlState::UNDEFINED_OBJECT, text.clone());
+                        let err = dep.to_concurrent_dependency_drop();
+                        let text = err.to_string();
+                        let resp = err.into_response(Severity::Error);
                         return self
-                            .send_error_and_get_state(err)
+                            .send_error_and_get_state(resp)
                             .await
                             .map(|state| (state, SendRowsEndedReason::Errored { error: text }));
                     }
