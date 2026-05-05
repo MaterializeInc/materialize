@@ -204,10 +204,8 @@ pub(crate) fn prefetch_at_file(handle: &Handle, offset: usize, len: usize) {
 #[cfg(unix)]
 fn posix_fadvise_willneed(file: &File, byte_off: u64, byte_len: u64) {
     use std::os::unix::io::AsRawFd;
-    #[allow(clippy::as_conversions)] // u64 -> i64/off_t for FFI; values fit by construction
-    let off = byte_off as i64;
-    #[allow(clippy::as_conversions)]
-    let len = byte_len as i64;
+    let off = i64::try_from(byte_off).expect("scratch file offset fits i64");
+    let len = i64::try_from(byte_len).expect("scratch file length fits i64");
     // SAFETY: fd is valid for the life of `file`; `posix_fadvise` is a hint and
     // does not mutate user memory. The return value (errno) is intentionally ignored.
     unsafe {
