@@ -2582,10 +2582,7 @@ fn test_dont_drop_sinks_twice() {
         .cancel_query(postgres::NoTls)
         .expect("failed to cancel subscribe");
     let err = out.read_to_end(&mut vec![]).unwrap_err();
-    assert!(
-        err.to_string_with_causes()
-            .contains("copy has been terminated")
-    );
+    assert!(err.to_string_with_causes().contains("was dropped"));
 
     drop(out);
     client_a.close().expect("failed to drop client");
