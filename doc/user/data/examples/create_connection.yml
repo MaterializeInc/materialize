@@ -242,11 +242,57 @@
   syntax_elements:
     - name: "`AWS PRIVATELINK <privatelink_connection_name>`"
       description: |
+        *Value:* object name. Required.
+
         The name of an AWS PrivateLink connection through which network traffic
         should be routed.
     - name: "`PORT`"
       description: |
-        The port of the AWS PrivateLink service to connect to.
+        *Value:* `integer`
+
+        The port of the AWS PrivateLink service to connect to. Defaults to the broker's port.
+
+- name: "syntax-kafka-aws-privatelinks"
+  code: |
+    CREATE CONNECTION <connection_name> TO KAFKA (
+        BROKERS (
+            '<broker_address>' USING AWS PRIVATELINK <privatelink_connection>,
+            MATCHING '<pattern1>' USING AWS PRIVATELINK <privatelink_connection1> (
+                PORT <port1>,
+                AVAILABILITY ZONE = '<az_id1>'
+            ),
+            MATCHING '<pattern2>' USING AWS PRIVATELINK <privatelink_connection2>
+        ),
+        ...
+    );
+  syntax_elements:
+    - name: "`'<broker_address>' USING AWS PRIVATELINK ...`"
+      description: |
+        A static broker address used for bootstrapping the initial connection
+        to the Kafka cluster. At least one static broker is required when
+        using `MATCHING` rules. The broker is routed through the specified
+        AWS PrivateLink connection.
+    - name: "`MATCHING '<pattern>' USING AWS PRIVATELINK <connection_name>`"
+      description: |
+        Routes brokers whose advertised `host:port` matches `<pattern>` through
+        the named AWS PrivateLink connection.
+        A pattern may begin with `*` to match any prefix. A pattern may end with `*` to match any suffix.
+        All other characters in the pattern are matched literally.
+        Rules are evaluated in order. The first matching rule wins.
+        If no rule matches, Materialize will attempt to connect to the broker directly, without tunneling.
+    - name: "`AVAILABILITY ZONE`"
+      description: |
+        *Value:* `text`. Optional.
+
+        The ID of the availability zone of the AWS PrivateLink service in which
+        the broker is accessible. If omitted, traffic routes through the default
+        PrivateLink endpoint, which distributes across all configured availability
+        zones. Specify this only when you need to pin brokers to specific AZs.
+    - name: "`PORT`"
+      description: |
+        *Value:* `integer`. Optional.
+
+        The port of the AWS PrivateLink service to connect to. Defaults to the broker's port.
 
 - name: "syntax-csr"
   code: |
