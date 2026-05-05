@@ -121,12 +121,6 @@ impl DroppedDependency {
         format!("query could not complete because {self} was dropped")
     }
 
-    /// User-facing error for a `COPY ... TO` that was terminated because this
-    /// dependency was dropped mid-flight.
-    pub fn copy_terminated_error(&self) -> String {
-        format!("copy has been terminated because underlying {self} was dropped")
-    }
-
     /// Convert this dropped dependency into an [`AdapterError::ConcurrentDependencyDrop`].
     pub fn to_concurrent_dependency_drop(&self) -> AdapterError {
         let (kind, name) = match self {
