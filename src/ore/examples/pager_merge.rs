@@ -32,6 +32,8 @@
 
 use std::env;
 use std::path::PathBuf;
+use std::sync::{Arc, Barrier};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use mz_ore::cast::{CastFrom, CastLossy};
@@ -46,6 +48,7 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     let chain_gib: usize = parse_arg(&args, "--chain-gib", 16);
     let prefetch_depth: usize = parse_arg(&args, "--prefetch-depth", 1);
+    let threads: usize = parse_arg(&args, "--threads", 1).max(1);
     let backend = parse_backend(&args);
     let scratch: PathBuf = env::var_os("MZ_PAGER_SCRATCH")
         .map(PathBuf::from)
@@ -54,38 +57,67 @@ fn main() {
     pager::set_scratch_dir(scratch);
     pager::set_backend(backend);
 
-    let chain_bytes = chain_gib * 1024 * 1024 * 1024;
-    let chunks_per_chain = chain_bytes / CHUNK_BYTES;
+    let total_chain_bytes = chain_gib * 1024 * 1024 * 1024;
+    let per_thread_chain_bytes = total_chain_bytes / threads;
+    let chunks_per_chain = per_thread_chain_bytes / CHUNK_BYTES;
 
     println!(
-        "backend={backend:?} chain={chain_gib}GiB chunks_per_chain={chunks_per_chain} chunk={CHUNK_BYTES}B prefetch_depth={prefetch_depth}"
+        "backend={backend:?} threads={threads} per_thread_chain_chunks={chunks_per_chain} chunk={CHUNK_BYTES}B total_chain={chain_gib}GiB prefetch_depth={prefetch_depth}"
     );
 
+    let barrier = Arc::new(Barrier::new(threads));
+    let start = Instant::now();
+    let mut handles = Vec::with_capacity(threads);
+    for tid in 0..threads {
+        let barrier = Arc::clone(&barrier);
+        handles.push(thread::spawn(move || {
+            run_worker(tid, chunks_per_chain, prefetch_depth, &barrier)
+        }));
+    }
+    let mut per_thread = Vec::with_capacity(threads);
+    for h in handles {
+        per_thread.push(h.join().expect("worker panic"));
+    }
+    let total = start.elapsed();
+
+    // Total bytes through the merge across all threads (each thread reads
+    // 2 chain shares end-to-end, regardless of thread count).
+    let total_bytes = chunks_per_chain * threads * 2 * CHUNK_BYTES;
+    println!(
+        "wall: {:.2?} ({:.2} GiB/s through)",
+        total,
+        gib_per_sec(total_bytes, total)
+    );
+    for (tid, t) in per_thread.iter().enumerate() {
+        println!(
+            "  worker {tid}: build_a={:.2?} build_b={:.2?} merge={:.2?}",
+            t.build_a, t.build_b, t.merge
+        );
+    }
+}
+
+struct WorkerTimings {
+    build_a: Duration,
+    build_b: Duration,
+    merge: Duration,
+}
+
+fn run_worker(
+    _tid: usize,
+    chunks_per_chain: usize,
+    prefetch_depth: usize,
+    barrier: &Barrier,
+) -> WorkerTimings {
+    barrier.wait();
     let (chain_a, build_a) = time(|| build_chain(chunks_per_chain));
-    println!(
-        "build A: {:.2?} ({:.2} GiB/s)",
-        build_a,
-        gib_per_sec(chain_bytes, build_a)
-    );
-
     let (chain_b, build_b) = time(|| build_chain(chunks_per_chain));
-    println!(
-        "build B: {:.2?} ({:.2} GiB/s)",
+    let (chain_c, merge) = time(|| merge_pass(chain_a, chain_b, prefetch_depth));
+    drop(chain_c);
+    WorkerTimings {
+        build_a,
         build_b,
-        gib_per_sec(chain_bytes, build_b)
-    );
-
-    let (chain_c, merge_dur) = time(|| merge_pass(chain_a, chain_b, prefetch_depth));
-    let merged_bytes = chunks_per_chain * 2 * CHUNK_BYTES;
-    println!(
-        "merge: {:.2?} ({:.2} GiB/s through, output_chunks={})",
-        merge_dur,
-        gib_per_sec(merged_bytes, merge_dur),
-        chain_c.len()
-    );
-
-    let (_, drop_dur) = time(|| drop(chain_c));
-    println!("drop output chain: {:.2?}", drop_dur);
+        merge,
+    }
 }
 
 fn build_chain(n_chunks: usize) -> Vec<Handle> {
