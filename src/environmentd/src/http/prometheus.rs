@@ -8,6 +8,7 @@
 // by the Apach
 
 use mz_catalog::memory::objects::{Cluster, ClusterReplica};
+use mz_sql::ast::display::escaped_string_literal;
 
 use super::sql::SqlRequest;
 
@@ -28,8 +29,10 @@ impl<'a> PrometheusSqlQuery<'a> {
         SqlRequest::Simple {
             query: if let Some((cluster, replica)) = cluster {
                 format!(
-                    "SET auto_route_catalog_queries = false; SET CLUSTER = '{}'; SET CLUSTER_REPLICA = '{}'; {}",
-                    cluster.name, replica.name, self.query
+                    "SET auto_route_catalog_queries = false; SET CLUSTER = {}; SET CLUSTER_REPLICA = {}; {}",
+                    escaped_string_literal(&cluster.name),
+                    escaped_string_literal(&replica.name),
+                    self.query
                 )
             } else {
                 format!(
