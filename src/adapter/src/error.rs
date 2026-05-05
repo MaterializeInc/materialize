@@ -812,6 +812,22 @@ impl AdapterError {
         }
     }
 
+    pub fn concurrent_dependency_drop_from_collection_update_error(
+        e: compute_error::CollectionUpdateError,
+    ) -> Self {
+        use compute_error::CollectionUpdateError::*;
+        match e {
+            InstanceMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "cluster",
+                dependency_id: id.to_string(),
+            },
+            CollectionMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "collection",
+                dependency_id: id.to_string(),
+            },
+        }
+    }
+
     pub fn concurrent_dependency_drop_from_peek_error(
         e: mz_compute_client::controller::error::PeekError,
     ) -> AdapterError {
@@ -829,7 +845,9 @@ impl AdapterError {
                 dependency_kind: "replica",
                 dependency_id: id.to_string(),
             },
-            e @ SinceViolation(_) => AdapterError::internal("peek error", e),
+            e @ (ReadHoldIdMismatch(_) | SinceViolation(_)) => {
+                AdapterError::internal("peek error", e)
+            }
         }
     }
 
