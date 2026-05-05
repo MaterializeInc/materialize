@@ -29,12 +29,16 @@ pub(super) fn generate_views(builtins: &[Builtin<NameReference>]) -> Vec<Builtin
         .iter()
         .filter_map(|b| {
             let (name, schema, desc, ontology) = match b {
-                Builtin::Table(t) => (t.name, t.schema, &t.desc, t.ontology.as_ref()?),
-                Builtin::View(v) => (v.name, v.schema, &v.desc, v.ontology.as_ref()?),
+                Builtin::Table(t) => (t.name, t.schema, t.desc.clone(), t.ontology.as_ref()?),
+                Builtin::View(v) => (v.name, v.schema, v.desc.clone(), v.ontology.as_ref()?),
                 Builtin::MaterializedView(mv) => {
-                    (mv.name, mv.schema, &mv.desc, mv.ontology.as_ref()?)
+                    (mv.name, mv.schema, mv.desc.clone(), mv.ontology.as_ref()?)
                 }
-                Builtin::Source(s) => (s.name, s.schema, &s.desc, s.ontology.as_ref()?),
+                Builtin::Source(s) => (s.name, s.schema, s.desc.clone(), s.ontology.as_ref()?),
+                Builtin::Log(log) => {
+                    let ontology = log.ontology.as_ref()?;
+                    (log.name, log.schema, log.variant.desc(), ontology)
+                }
                 _ => return None,
             };
             let entity_name = ontology.entity_name.to_string();
@@ -68,7 +72,7 @@ struct Info<'a> {
     table_name: &'static str,
     schema_name: &'static str,
     entity_name: String,
-    desc: &'a RelationDesc,
+    desc: RelationDesc,
     ontology: &'a Ontology,
 }
 
@@ -215,7 +219,7 @@ fn entity_types_view(infos: &[Info]) -> BuiltinView {
             vec![
                 Lit::Str(i.entity_name.clone()),
                 Lit::Str(format!("{}.{}", i.schema_name, i.table_name)),
-                pk_lit(i.desc),
+                pk_lit(&i.desc),
                 Lit::Str(i.ontology.description.to_string()),
             ]
         })
@@ -457,3 +461,78 @@ pub(super) const SEMANTIC_TYPE_DEFS: &[(SemanticType, &str, &str)] = &[
         "A redacted SQL CREATE statement.",
     ),
 ];
+
+#[cfg(test)]
+mod tests {
+    use mz_compute_client::logging::{LogVariant, TimelyLog};
+    use mz_repr::namespaces::MZ_INTROSPECTION_SCHEMA;
+    use mz_sql::catalog::NameReference;
+
+    use crate::builtin::ontology::generate_views;
+    use crate::builtin::{Builtin, BuiltinLog, Ontology};
+
+    fn make_log(variant: LogVariant, ontology: Option<Ontology>) -> Builtin<NameReference> {
+        let log = BuiltinLog {
+            variant,
+            name: "test_log",
+            schema: MZ_INTROSPECTION_SCHEMA,
+            oid: 99999,
+            access: vec![],
+            ontology,
+        };
+        // Leaked to get a `&'static BuiltinLog`. Safe: the test process owns the
+        // allocation for its lifetime (same pattern as production `leak()`).
+        Builtin::Log(Box::leak(Box::new(log)))
+    }
+
+    #[mz_ore::test]
+    fn log_with_ontology_appears_in_entity_types() {
+        let builtins = vec![make_log(
+            LogVariant::Timely(TimelyLog::Operates),
+            Some(Ontology {
+                entity_name: "test_operator",
+                description: "test operator desc",
+                links: &[],
+                column_semantic_types: &[],
+            }),
+        )];
+        let views = generate_views(&builtins);
+        let entity_view = views
+            .iter()
+            .find_map(|b| match b {
+                Builtin::View(v) if v.name == "mz_ontology_entity_types" => Some(v),
+                _ => None,
+            })
+            .expect("entity_types view");
+        assert!(
+            entity_view.sql.contains("test_operator"),
+            "entity name should appear in entity_types SQL"
+        );
+        assert!(
+            entity_view.sql.contains("mz_introspection.test_log"),
+            "relation should be schema.name"
+        );
+        // Composite key ["id", "worker_id"] comes from TimelyLog::Operates.desc()
+        assert!(
+            entity_view.sql.contains(r#"["id", "worker_id"]"#),
+            "composite key should be rendered"
+        );
+    }
+
+    #[mz_ore::test]
+    fn log_without_ontology_excluded() {
+        let builtins = vec![make_log(LogVariant::Timely(TimelyLog::Operates), None)];
+        let views = generate_views(&builtins);
+        let entity_view = views
+            .iter()
+            .find_map(|b| match b {
+                Builtin::View(v) if v.name == "mz_ontology_entity_types" => Some(v),
+                _ => None,
+            })
+            .expect("entity_types view");
+        assert!(
+            !entity_view.sql.contains("test_log"),
+            "unannotated log should not appear"
+        );
+    }
+}

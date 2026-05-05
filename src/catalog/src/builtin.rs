@@ -160,6 +160,8 @@ pub struct BuiltinLog {
     pub oid: u32,
     /// ACL items to apply to the object
     pub access: Vec<MzAclItem>,
+    #[serde(default)]
+    pub ontology: Option<Ontology>,
 }
 
 /// Ontology metadata for a builtin catalog object.
@@ -178,7 +180,7 @@ pub struct BuiltinLog {
 /// are not `PartialEq`. Since the only consumers of semantic types are the
 /// ontology views (which already have access to `Ontology`), storing them here
 /// is both correct and avoids the schema-evolution problem entirely.
-#[derive(Clone, Hash, Debug, PartialEq, Eq)]
+#[derive(Clone, Hash, Debug, PartialEq, Eq, Serialize)]
 pub struct Ontology {
     /// The ontology entity name (e.g., "database", "table", "mv"). Names a
     /// single row of this relation, so prefer singular event/object nouns
@@ -461,7 +463,7 @@ impl LinkProperties {
 ///   namespaces.
 /// - [`LinkProperties::Measures`]: the source entity records metric
 ///   measurements about the target entity.
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, Serialize)]
 pub struct OntologyLink {
     /// Relationship name (e.g., "owned_by", "in_schema").
     pub name: &'static str,
@@ -2107,6 +2109,12 @@ pub static MZ_DATAFLOW_OPERATORS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::ne
     oid: oid::LOG_MZ_DATAFLOW_OPERATORS_PER_WORKER_OID,
     variant: LogVariant::Timely(TimelyLog::Operates),
     access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "dataflow_operator_per_worker",
+        description: "Timely dataflow operators present on a specific worker.",
+        links: &const { [] },
+        column_semantic_types: &[],
+    }),
 });
 
 pub static MZ_DATAFLOW_ADDRESSES_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2115,6 +2123,18 @@ pub static MZ_DATAFLOW_ADDRESSES_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::ne
     oid: oid::LOG_MZ_DATAFLOW_ADDRESSES_PER_WORKER_OID,
     variant: LogVariant::Timely(TimelyLog::Addresses),
     access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "dataflow_address_per_worker",
+        description: "Scope address of each Timely operator per worker.",
+        links: &const {
+            [OntologyLink {
+                name: "address_of",
+                target: "dataflow_operator_per_worker",
+                properties: LinkProperties::fk("id", "id", Cardinality::ManyToOne),
+            }]
+        },
+        column_semantic_types: &[],
+    }),
 });
 
 pub static MZ_DATAFLOW_CHANNELS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2123,6 +2143,25 @@ pub static MZ_DATAFLOW_CHANNELS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new
     oid: oid::LOG_MZ_DATAFLOW_CHANNELS_PER_WORKER_OID,
     variant: LogVariant::Timely(TimelyLog::Channels),
     access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "dataflow_channel_per_worker",
+        description: "Timely dataflow communication channels per worker.",
+        links: &const {
+            [
+                OntologyLink {
+                    name: "source_operator",
+                    target: "dataflow_operator_per_worker",
+                    properties: LinkProperties::fk("from_index", "id", Cardinality::ManyToOne),
+                },
+                OntologyLink {
+                    name: "target_operator",
+                    target: "dataflow_operator_per_worker",
+                    properties: LinkProperties::fk("to_index", "id", Cardinality::ManyToOne),
+                },
+            ]
+        },
+        column_semantic_types: &[],
+    }),
 });
 
 pub static MZ_SCHEDULING_ELAPSED_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2131,6 +2170,18 @@ pub static MZ_SCHEDULING_ELAPSED_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| Bu
     oid: oid::LOG_MZ_SCHEDULING_ELAPSED_RAW_OID,
     variant: LogVariant::Timely(TimelyLog::Elapsed),
     access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "scheduling_elapsed_per_worker",
+        description: "Cumulative scheduled time per Timely operator per worker.",
+        links: &const {
+            [OntologyLink {
+                name: "elapsed_of",
+                target: "dataflow_operator_per_worker",
+                properties: LinkProperties::fk("id", "id", Cardinality::ManyToOne),
+            }]
+        },
+        column_semantic_types: &[],
+    }),
 });
 
 pub static MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_RAW: LazyLock<BuiltinLog> =
@@ -2140,6 +2191,18 @@ pub static MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_RAW: LazyLock<BuiltinLog> =
         oid: oid::LOG_MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_RAW_OID,
         variant: LogVariant::Timely(TimelyLog::Histogram),
         access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "operator_duration_per_worker",
+            description: "Histogram of operator execution durations per worker.",
+            links: &const {
+                [OntologyLink {
+                    name: "duration_of",
+                    target: "dataflow_operator_per_worker",
+                    properties: LinkProperties::fk("id", "id", Cardinality::ManyToOne),
+                }]
+            },
+            column_semantic_types: &[],
+        }),
     });
 
 pub static MZ_SCHEDULING_PARKS_HISTOGRAM_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2148,6 +2211,12 @@ pub static MZ_SCHEDULING_PARKS_HISTOGRAM_RAW: LazyLock<BuiltinLog> = LazyLock::n
     oid: oid::LOG_MZ_SCHEDULING_PARKS_HISTOGRAM_RAW_OID,
     variant: LogVariant::Timely(TimelyLog::Parks),
     access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "scheduling_parks_per_worker",
+        description: "Histogram of worker park/unpark events per worker.",
+        links: &const { [] },
+        column_semantic_types: &[],
+    }),
 });
 
 pub static MZ_ARRANGEMENT_RECORDS_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2156,6 +2225,18 @@ pub static MZ_ARRANGEMENT_RECORDS_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| B
     oid: oid::LOG_MZ_ARRANGEMENT_RECORDS_RAW_OID,
     variant: LogVariant::Differential(DifferentialLog::ArrangementRecords),
     access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "arrangement_records_per_worker",
+        description: "Record count per arrangement per worker.",
+        links: &const {
+            [OntologyLink {
+                name: "records_of",
+                target: "dataflow_operator_per_worker",
+                properties: LinkProperties::fk("operator_id", "id", Cardinality::ManyToOne),
+            }]
+        },
+        column_semantic_types: &[],
+    }),
 });
 
 pub static MZ_ARRANGEMENT_BATCHES_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2164,6 +2245,18 @@ pub static MZ_ARRANGEMENT_BATCHES_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| B
     oid: oid::LOG_MZ_ARRANGEMENT_BATCHES_RAW_OID,
     variant: LogVariant::Differential(DifferentialLog::ArrangementBatches),
     access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "arrangement_batches_per_worker",
+        description: "Batch count per arrangement per worker.",
+        links: &const {
+            [OntologyLink {
+                name: "batches_of",
+                target: "dataflow_operator_per_worker",
+                properties: LinkProperties::fk("operator_id", "id", Cardinality::ManyToOne),
+            }]
+        },
+        column_semantic_types: &[],
+    }),
 });
 
 pub static MZ_ARRANGEMENT_SHARING_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2172,6 +2265,18 @@ pub static MZ_ARRANGEMENT_SHARING_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| B
     oid: oid::LOG_MZ_ARRANGEMENT_SHARING_RAW_OID,
     variant: LogVariant::Differential(DifferentialLog::Sharing),
     access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "arrangement_sharing_per_worker",
+        description: "Sharing count per arrangement per worker.",
+        links: &const {
+            [OntologyLink {
+                name: "sharing_of",
+                target: "dataflow_operator_per_worker",
+                properties: LinkProperties::fk("operator_id", "id", Cardinality::ManyToOne),
+            }]
+        },
+        column_semantic_types: &[],
+    }),
 });
 
 pub static MZ_ARRANGEMENT_BATCHER_RECORDS_RAW: LazyLock<BuiltinLog> =
@@ -2181,6 +2286,18 @@ pub static MZ_ARRANGEMENT_BATCHER_RECORDS_RAW: LazyLock<BuiltinLog> =
         oid: oid::LOG_MZ_ARRANGEMENT_BATCHER_RECORDS_RAW_OID,
         variant: LogVariant::Differential(DifferentialLog::BatcherRecords),
         access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "batcher_records_per_worker",
+            description: "Records staged in arrangement batchers per worker.",
+            links: &const {
+                [OntologyLink {
+                    name: "batcher_of",
+                    target: "dataflow_operator_per_worker",
+                    properties: LinkProperties::fk("operator_id", "id", Cardinality::ManyToOne),
+                }]
+            },
+            column_semantic_types: &[],
+        }),
     });
 
 pub static MZ_ARRANGEMENT_BATCHER_SIZE_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2189,6 +2306,18 @@ pub static MZ_ARRANGEMENT_BATCHER_SIZE_RAW: LazyLock<BuiltinLog> = LazyLock::new
     oid: oid::LOG_MZ_ARRANGEMENT_BATCHER_SIZE_RAW_OID,
     variant: LogVariant::Differential(DifferentialLog::BatcherSize),
     access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "batcher_size_per_worker",
+        description: "Byte size of arrangement batchers per worker.",
+        links: &const {
+            [OntologyLink {
+                name: "batcher_of",
+                target: "dataflow_operator_per_worker",
+                properties: LinkProperties::fk("operator_id", "id", Cardinality::ManyToOne),
+            }]
+        },
+        column_semantic_types: &[],
+    }),
 });
 
 pub static MZ_ARRANGEMENT_BATCHER_CAPACITY_RAW: LazyLock<BuiltinLog> =
@@ -2198,6 +2327,18 @@ pub static MZ_ARRANGEMENT_BATCHER_CAPACITY_RAW: LazyLock<BuiltinLog> =
         oid: oid::LOG_MZ_ARRANGEMENT_BATCHER_CAPACITY_RAW_OID,
         variant: LogVariant::Differential(DifferentialLog::BatcherCapacity),
         access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "batcher_capacity_per_worker",
+            description: "Allocated capacity of arrangement batchers per worker.",
+            links: &const {
+                [OntologyLink {
+                    name: "batcher_of",
+                    target: "dataflow_operator_per_worker",
+                    properties: LinkProperties::fk("operator_id", "id", Cardinality::ManyToOne),
+                }]
+            },
+            column_semantic_types: &[],
+        }),
     });
 
 pub static MZ_ARRANGEMENT_BATCHER_ALLOCATIONS_RAW: LazyLock<BuiltinLog> =
@@ -2207,6 +2348,18 @@ pub static MZ_ARRANGEMENT_BATCHER_ALLOCATIONS_RAW: LazyLock<BuiltinLog> =
         oid: oid::LOG_MZ_ARRANGEMENT_BATCHER_ALLOCATIONS_RAW_OID,
         variant: LogVariant::Differential(DifferentialLog::BatcherAllocations),
         access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "batcher_allocations_per_worker",
+            description: "Heap allocation count of arrangement batchers per worker.",
+            links: &const {
+                [OntologyLink {
+                    name: "batcher_of",
+                    target: "dataflow_operator_per_worker",
+                    properties: LinkProperties::fk("operator_id", "id", Cardinality::ManyToOne),
+                }]
+            },
+            column_semantic_types: &[],
+        }),
     });
 
 pub static MZ_COMPUTE_EXPORTS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2215,6 +2368,12 @@ pub static MZ_COMPUTE_EXPORTS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|
     oid: oid::LOG_MZ_COMPUTE_EXPORTS_PER_WORKER_OID,
     variant: LogVariant::Compute(ComputeLog::DataflowCurrent),
     access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "compute_export_per_worker",
+        description: "Active compute exports (dataflows) present per worker.",
+        links: &const { [] },
+        column_semantic_types: &[("export_id", SemanticType::GlobalId)],
+    }),
 });
 
 pub static MZ_COMPUTE_DATAFLOW_GLOBAL_IDS_PER_WORKER: LazyLock<BuiltinLog> =
@@ -2224,6 +2383,25 @@ pub static MZ_COMPUTE_DATAFLOW_GLOBAL_IDS_PER_WORKER: LazyLock<BuiltinLog> =
         oid: oid::LOG_MZ_COMPUTE_DATAFLOW_GLOBAL_IDS_PER_WORKER_OID,
         variant: LogVariant::Compute(ComputeLog::DataflowGlobal),
         access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "dataflow_global_id_per_worker",
+            description: "Mapping from internal dataflow IDs to GlobalIds per worker.",
+            links: &const {
+                [OntologyLink {
+                    name: "global_id_of",
+                    target: "compute_export_per_worker",
+                    properties: LinkProperties::MapsTo {
+                        source_column: Some("global_id"),
+                        target_column: Some("export_id"),
+                        via: None,
+                        from_type: Some(SemanticType::GlobalId),
+                        to_type: Some(SemanticType::GlobalId),
+                        note: None,
+                    },
+                }]
+            },
+            column_semantic_types: &[("global_id", SemanticType::GlobalId)],
+        }),
     });
 
 pub static MZ_CLUSTER_PROMETHEUS_METRICS: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2232,6 +2410,12 @@ pub static MZ_CLUSTER_PROMETHEUS_METRICS: LazyLock<BuiltinLog> = LazyLock::new(|
     oid: oid::LOG_MZ_CLUSTER_PROMETHEUS_METRICS_OID,
     variant: LogVariant::Compute(ComputeLog::PrometheusMetrics),
     access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "cluster_prometheus_metric",
+        description: "Prometheus metrics gathered from the cluster's metrics registry.",
+        links: &const { [] },
+        column_semantic_types: &[],
+    }),
 });
 
 pub static MZ_COMPUTE_FRONTIERS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2240,6 +2424,21 @@ pub static MZ_COMPUTE_FRONTIERS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new
     oid: oid::LOG_MZ_COMPUTE_FRONTIERS_PER_WORKER_OID,
     variant: LogVariant::Compute(ComputeLog::FrontierCurrent),
     access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "compute_frontier_per_worker",
+        description: "Per-worker output frontier timestamps for each compute export.",
+        links: &const {
+            [OntologyLink {
+                name: "frontier_of",
+                target: "compute_export_per_worker",
+                properties: LinkProperties::measures("export_id", "export_id", "time"),
+            }]
+        },
+        column_semantic_types: &[
+            ("export_id", SemanticType::GlobalId),
+            ("time", SemanticType::MzTimestamp),
+        ],
+    }),
 });
 
 pub static MZ_COMPUTE_IMPORT_FRONTIERS_PER_WORKER: LazyLock<BuiltinLog> =
@@ -2249,6 +2448,26 @@ pub static MZ_COMPUTE_IMPORT_FRONTIERS_PER_WORKER: LazyLock<BuiltinLog> =
         oid: oid::LOG_MZ_COMPUTE_IMPORT_FRONTIERS_PER_WORKER_OID,
         variant: LogVariant::Compute(ComputeLog::ImportFrontierCurrent),
         access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "compute_import_frontier_per_worker",
+            description: "Per-worker input frontier timestamps for each compute dataflow.",
+            links: &const {
+                [OntologyLink {
+                    name: "import_frontier_of",
+                    target: "compute_export_per_worker",
+                    properties: LinkProperties::fk(
+                        "export_id",
+                        "export_id",
+                        Cardinality::ManyToOne,
+                    ),
+                }]
+            },
+            column_semantic_types: &[
+                ("export_id", SemanticType::GlobalId),
+                ("import_id", SemanticType::GlobalId),
+                ("time", SemanticType::MzTimestamp),
+            ],
+        }),
     });
 
 pub static MZ_COMPUTE_ERROR_COUNTS_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2257,6 +2476,18 @@ pub static MZ_COMPUTE_ERROR_COUNTS_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| 
     oid: oid::LOG_MZ_COMPUTE_ERROR_COUNTS_RAW_OID,
     variant: LogVariant::Compute(ComputeLog::ErrorCount),
     access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "compute_error_per_worker",
+        description: "Error counts per dataflow export per worker.",
+        links: &const {
+            [OntologyLink {
+                name: "errors_in",
+                target: "compute_export_per_worker",
+                properties: LinkProperties::measures("export_id", "export_id", "count"),
+            }]
+        },
+        column_semantic_types: &[("export_id", SemanticType::GlobalId)],
+    }),
 });
 
 pub static MZ_COMPUTE_HYDRATION_TIMES_PER_WORKER: LazyLock<BuiltinLog> =
@@ -2266,6 +2497,18 @@ pub static MZ_COMPUTE_HYDRATION_TIMES_PER_WORKER: LazyLock<BuiltinLog> =
         oid: oid::LOG_MZ_COMPUTE_HYDRATION_TIMES_PER_WORKER_OID,
         variant: LogVariant::Compute(ComputeLog::HydrationTime),
         access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "hydration_time_per_worker",
+            description: "Time in nanoseconds for each compute export to hydrate per worker.",
+            links: &const {
+                [OntologyLink {
+                    name: "hydration_time_of",
+                    target: "compute_export_per_worker",
+                    properties: LinkProperties::measures("export_id", "export_id", "time_ns"),
+                }]
+            },
+            column_semantic_types: &[("export_id", SemanticType::GlobalId)],
+        }),
     });
 
 pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER: LazyLock<BuiltinLog> =
@@ -2275,6 +2518,22 @@ pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER: LazyLock<BuiltinLo
         oid: oid::LOG_MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER_OID,
         variant: LogVariant::Compute(ComputeLog::OperatorHydrationStatus),
         access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "hydration_status_per_worker",
+            description: "Hydration state for each LIR node per worker.",
+            links: &const {
+                [OntologyLink {
+                    name: "hydration_of",
+                    target: "compute_export_per_worker",
+                    properties: LinkProperties::fk(
+                        "export_id",
+                        "export_id",
+                        Cardinality::ManyToOne,
+                    ),
+                }]
+            },
+            column_semantic_types: &[("export_id", SemanticType::GlobalId)],
+        }),
     });
 
 pub static MZ_ACTIVE_PEEKS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2283,6 +2542,15 @@ pub static MZ_ACTIVE_PEEKS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|| B
     oid: oid::LOG_MZ_ACTIVE_PEEKS_PER_WORKER_OID,
     variant: LogVariant::Compute(ComputeLog::PeekCurrent),
     access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "active_peek_per_worker",
+        description: "In-flight peek requests currently executing per worker.",
+        links: &const { [] },
+        column_semantic_types: &[
+            ("object_id", SemanticType::GlobalId),
+            ("time", SemanticType::MzTimestamp),
+        ],
+    }),
 });
 
 pub static MZ_COMPUTE_LIR_MAPPING_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2291,6 +2559,18 @@ pub static MZ_COMPUTE_LIR_MAPPING_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::n
     oid: oid::LOG_MZ_COMPUTE_LIR_MAPPING_PER_WORKER_OID,
     variant: LogVariant::Compute(ComputeLog::LirMapping),
     access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "lir_mapping_per_worker",
+        description: "Mapping from LIR node IDs to dataflow operator address ranges per worker.",
+        links: &const {
+            [OntologyLink {
+                name: "lir_of",
+                target: "compute_export_per_worker",
+                properties: LinkProperties::fk("global_id", "export_id", Cardinality::ManyToOne),
+            }]
+        },
+        column_semantic_types: &[("global_id", SemanticType::GlobalId)],
+    }),
 });
 
 pub static MZ_PEEK_DURATIONS_HISTOGRAM_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2299,6 +2579,12 @@ pub static MZ_PEEK_DURATIONS_HISTOGRAM_RAW: LazyLock<BuiltinLog> = LazyLock::new
     oid: oid::LOG_MZ_PEEK_DURATIONS_HISTOGRAM_RAW_OID,
     variant: LogVariant::Compute(ComputeLog::PeekDuration),
     access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "peek_duration_per_worker",
+        description: "Histogram of peek completion latencies per worker.",
+        links: &const { [] },
+        column_semantic_types: &[],
+    }),
 });
 
 pub static MZ_ARRANGEMENT_HEAP_SIZE_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2307,6 +2593,18 @@ pub static MZ_ARRANGEMENT_HEAP_SIZE_RAW: LazyLock<BuiltinLog> = LazyLock::new(||
     oid: oid::LOG_MZ_ARRANGEMENT_HEAP_SIZE_RAW_OID,
     variant: LogVariant::Compute(ComputeLog::ArrangementHeapSize),
     access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "arrangement_heap_size_per_worker",
+        description: "Heap byte size per arrangement per worker.",
+        links: &const {
+            [OntologyLink {
+                name: "heap_size_of",
+                target: "dataflow_operator_per_worker",
+                properties: LinkProperties::fk("operator_id", "id", Cardinality::ManyToOne),
+            }]
+        },
+        column_semantic_types: &[],
+    }),
 });
 
 pub static MZ_ARRANGEMENT_HEAP_CAPACITY_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2315,6 +2613,18 @@ pub static MZ_ARRANGEMENT_HEAP_CAPACITY_RAW: LazyLock<BuiltinLog> = LazyLock::ne
     oid: oid::LOG_MZ_ARRANGEMENT_HEAP_CAPACITY_RAW_OID,
     variant: LogVariant::Compute(ComputeLog::ArrangementHeapCapacity),
     access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "arrangement_heap_capacity_per_worker",
+        description: "Allocated heap capacity per arrangement per worker.",
+        links: &const {
+            [OntologyLink {
+                name: "heap_capacity_of",
+                target: "dataflow_operator_per_worker",
+                properties: LinkProperties::fk("operator_id", "id", Cardinality::ManyToOne),
+            }]
+        },
+        column_semantic_types: &[],
+    }),
 });
 
 pub static MZ_ARRANGEMENT_HEAP_ALLOCATIONS_RAW: LazyLock<BuiltinLog> =
@@ -2324,6 +2634,18 @@ pub static MZ_ARRANGEMENT_HEAP_ALLOCATIONS_RAW: LazyLock<BuiltinLog> =
         oid: oid::LOG_MZ_ARRANGEMENT_HEAP_ALLOCATIONS_RAW_OID,
         variant: LogVariant::Compute(ComputeLog::ArrangementHeapAllocations),
         access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "arrangement_heap_allocations_per_worker",
+            description: "Heap allocation count per arrangement per worker.",
+            links: &const {
+                [OntologyLink {
+                    name: "heap_allocations_of",
+                    target: "dataflow_operator_per_worker",
+                    properties: LinkProperties::fk("operator_id", "id", Cardinality::ManyToOne),
+                }]
+            },
+            column_semantic_types: &[],
+        }),
     });
 
 pub static MZ_MESSAGE_BATCH_COUNTS_RECEIVED_RAW: LazyLock<BuiltinLog> =
@@ -2333,6 +2655,18 @@ pub static MZ_MESSAGE_BATCH_COUNTS_RECEIVED_RAW: LazyLock<BuiltinLog> =
         oid: oid::LOG_MZ_MESSAGE_BATCH_COUNTS_RECEIVED_RAW_OID,
         variant: LogVariant::Timely(TimelyLog::BatchesReceived),
         access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "message_batch_received_per_worker",
+            description: "Message batch receive count per channel per worker pair.",
+            links: &const {
+                [OntologyLink {
+                    name: "received_on",
+                    target: "dataflow_channel_per_worker",
+                    properties: LinkProperties::fk("channel_id", "id", Cardinality::ManyToOne),
+                }]
+            },
+            column_semantic_types: &[],
+        }),
     });
 
 pub static MZ_MESSAGE_BATCH_COUNTS_SENT_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2341,6 +2675,18 @@ pub static MZ_MESSAGE_BATCH_COUNTS_SENT_RAW: LazyLock<BuiltinLog> = LazyLock::ne
     oid: oid::LOG_MZ_MESSAGE_BATCH_COUNTS_SENT_RAW_OID,
     variant: LogVariant::Timely(TimelyLog::BatchesSent),
     access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "message_batch_sent_per_worker",
+        description: "Message batch send count per channel per worker pair.",
+        links: &const {
+            [OntologyLink {
+                name: "sent_on",
+                target: "dataflow_channel_per_worker",
+                properties: LinkProperties::fk("channel_id", "id", Cardinality::ManyToOne),
+            }]
+        },
+        column_semantic_types: &[],
+    }),
 });
 
 pub static MZ_MESSAGE_COUNTS_RECEIVED_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2349,6 +2695,18 @@ pub static MZ_MESSAGE_COUNTS_RECEIVED_RAW: LazyLock<BuiltinLog> = LazyLock::new(
     oid: oid::LOG_MZ_MESSAGE_COUNTS_RECEIVED_RAW_OID,
     variant: LogVariant::Timely(TimelyLog::MessagesReceived),
     access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "message_received_per_worker",
+        description: "Message receive count per channel per worker pair.",
+        links: &const {
+            [OntologyLink {
+                name: "received_on",
+                target: "dataflow_channel_per_worker",
+                properties: LinkProperties::fk("channel_id", "id", Cardinality::ManyToOne),
+            }]
+        },
+        column_semantic_types: &[],
+    }),
 });
 
 pub static MZ_MESSAGE_COUNTS_SENT_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2357,6 +2715,18 @@ pub static MZ_MESSAGE_COUNTS_SENT_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| B
     oid: oid::LOG_MZ_MESSAGE_COUNTS_SENT_RAW_OID,
     variant: LogVariant::Timely(TimelyLog::MessagesSent),
     access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "message_sent_per_worker",
+        description: "Message send count per channel per worker pair.",
+        links: &const {
+            [OntologyLink {
+                name: "sent_on",
+                target: "dataflow_channel_per_worker",
+                properties: LinkProperties::fk("channel_id", "id", Cardinality::ManyToOne),
+            }]
+        },
+        column_semantic_types: &[],
+    }),
 });
 
 pub static MZ_DATAFLOW_OPERATOR_REACHABILITY_RAW: LazyLock<BuiltinLog> =
@@ -2366,6 +2736,18 @@ pub static MZ_DATAFLOW_OPERATOR_REACHABILITY_RAW: LazyLock<BuiltinLog> =
         oid: oid::LOG_MZ_DATAFLOW_OPERATOR_REACHABILITY_RAW_OID,
         variant: LogVariant::Timely(TimelyLog::Reachability),
         access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "reachability_per_worker",
+            description: "Reachability tracking events per Timely operator per worker.",
+            links: &const {
+                [OntologyLink {
+                    name: "reachability_of",
+                    target: "dataflow_operator_per_worker",
+                    properties: LinkProperties::fk("id", "id", Cardinality::ManyToOne),
+                }]
+            },
+            column_semantic_types: &[("time", SemanticType::MzTimestamp)],
+        }),
     });
 
 pub static MZ_ICEBERG_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -17567,6 +17949,7 @@ mod tests {
                 Builtin::View(v) => v.ontology.as_ref(),
                 Builtin::MaterializedView(mv) => mv.ontology.as_ref(),
                 Builtin::Source(s) => s.ontology.as_ref(),
+                Builtin::Log(l) => l.ontology.as_ref(),
                 _ => None,
             };
             if let Some(ont) = ontology {
@@ -17604,6 +17987,7 @@ mod tests {
                 Builtin::View(v) => v.ontology.as_ref(),
                 Builtin::MaterializedView(mv) => mv.ontology.as_ref(),
                 Builtin::Source(s) => s.ontology.as_ref(),
+                Builtin::Log(l) => l.ontology.as_ref(),
                 _ => None,
             };
             if let Some(ont) = ontology {
@@ -17656,11 +18040,16 @@ mod tests {
 
         let mut uncovered_fk_cols = Vec::new();
         for builtin in BUILTINS_STATIC.iter() {
-            let (name, desc, ontology) = match builtin {
+            let desc_storage;
+            let (name, desc, ontology): (&str, &RelationDesc, Option<&Ontology>) = match builtin {
                 Builtin::Table(t) => (t.name, &t.desc, t.ontology.as_ref()),
                 Builtin::View(v) => (v.name, &v.desc, v.ontology.as_ref()),
                 Builtin::MaterializedView(mv) => (mv.name, &mv.desc, mv.ontology.as_ref()),
                 Builtin::Source(s) => (s.name, &s.desc, s.ontology.as_ref()),
+                Builtin::Log(l) => {
+                    desc_storage = l.variant.desc();
+                    (l.name, &desc_storage, l.ontology.as_ref())
+                }
                 _ => continue,
             };
             let Some(ont) = ontology else { continue };
@@ -17729,11 +18118,16 @@ mod tests {
         // we still need to verify the string value matches a real column.
         let mut bad_source_cols = Vec::new();
         for builtin in BUILTINS_STATIC.iter() {
-            let (name, desc, ontology) = match builtin {
+            let desc_storage;
+            let (name, desc, ontology): (&str, &RelationDesc, Option<&Ontology>) = match builtin {
                 Builtin::Table(t) => (t.name, &t.desc, t.ontology.as_ref()),
                 Builtin::View(v) => (v.name, &v.desc, v.ontology.as_ref()),
                 Builtin::MaterializedView(mv) => (mv.name, &mv.desc, mv.ontology.as_ref()),
                 Builtin::Source(s) => (s.name, &s.desc, s.ontology.as_ref()),
+                Builtin::Log(l) => {
+                    desc_storage = l.variant.desc();
+                    (l.name, &desc_storage, l.ontology.as_ref())
+                }
                 _ => continue,
             };
             let Some(ont) = ontology else { continue };
@@ -17768,8 +18162,8 @@ mod tests {
 
         // Sanity check: we have a reasonable number of annotated entities.
         assert!(
-            entity_names.len() > 90,
-            "expected > 90 ontology entities, found {}",
+            entity_names.len() > 120,
+            "expected > 120 ontology entities, found {}",
             entity_names.len()
         );
     }
