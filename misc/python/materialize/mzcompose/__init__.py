@@ -71,6 +71,7 @@ def get_minimal_system_parameters(
             "true" if version >= MzVersion.parse_mz("v0.132.0-dev") else "false"
         ),
         "enable_alter_swap": "true",
+        "enable_arrangement_dictionary_compression": "false",
         "enable_case_literal_transform": "true",
         "enable_cast_elimination": "true",
         "enable_coalesce_case_transform": "true",
@@ -111,9 +112,6 @@ def get_minimal_system_parameters(
         "with_0dt_deployment_max_wait": "1800s",
         # End of list (ordered by name)
     }
-
-    if version < MzVersion.parse_mz("v0.163.0-dev"):
-        config["enable_compute_active_dataflow_cancelation"] = "true"
 
     return config
 
