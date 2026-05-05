@@ -12,8 +12,8 @@ mod tests {
     use std::{fs, path::PathBuf, time::Duration};
 
     use assert_cmd::{Command, assert::Assert, cargo_bin};
-    use mzx::ui::OptionalStr;
     use mz_frontegg_auth::AppPassword;
+    use mzx::ui::OptionalStr;
     use serde::{Deserialize, Serialize};
     use tabled::settings::Style;
     use tabled::{Table, Tabled};

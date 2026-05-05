@@ -20,8 +20,8 @@ use std::process::exit;
 
 use mzx::error::Error;
 
-use mzx::context::{Context, ContextLoadArgs};
 use mz_ore::cli::CliConfig;
+use mzx::context::{Context, ContextLoadArgs};
 use upgrader::UpgradeChecker;
 
 use crate::command::app_password::AppPasswordCommand;

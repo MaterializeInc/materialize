@@ -15,8 +15,8 @@
 
 //! Driver for the `mz app-password` command.
 
-use mzx::context::Context;
 use mz_frontegg_client::client::app_password::CreateAppPasswordRequest;
+use mzx::context::Context;
 
 use mzx::error::Error;
 

@@ -9,8 +9,8 @@
 
 //! Command-line version checker.
 
-use mzx::{error::Error, ui::OutputFormatter};
 use mz_build_info::build_info;
+use mzx::{error::Error, ui::OutputFormatter};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 
