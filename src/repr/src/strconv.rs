@@ -1160,6 +1160,10 @@ where
         .map_err(|details| ParseError::invalid_input_syntax("int2vector", s).with_details(details))
 }
 
+/// Parses PostgreSQL's legacy whitespace-separated vector syntax (used in
+/// Materialize for `int2vector`). Unlike [`parse_array`], this grammar has
+/// no token for `NULL`, which is why `int2vector` cannot represent `NULL`
+/// elements. See [`crate::scalar::Int2Vector`].
 pub fn parse_legacy_vector_inner<'a, T, E>(
     s: &'a str,
     mut gen_elem: impl FnMut(Cow<'a, str>) -> Result<T, E>,
