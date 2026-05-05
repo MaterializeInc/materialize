@@ -138,73 +138,56 @@ where
     }
 }
 
-/// Reserve element capacity in a columnar leaf container.
+/// Words per 2 MiB. `length_in_words` returns serialized size in `u64` units,
+/// so this is the page count we round up to. Picked to match
+/// [`builder::ColumnBuilder`]'s output granularity so chunks shipped from the
+/// merger and chunks shipped from the builder are sized comparably.
+const SHIP_WORDS: usize = 1 << 18;
+
+/// Returns true once the serialized size of `borrow` is within 10% of the next
+/// `SHIP_WORDS` boundary.
 ///
-/// The columnar crate's `Container::reserve_for(iter)` is view-based — it
-/// reserves a sum of input view lengths, which is awkward to use for
-/// "preallocate N records" without a model view. This trait fills that gap
-/// with a simple element-count reserve, implemented for `Vec<T>` and
-/// tuple-of-leaves.
-///
-/// Used by [`Column::ensure_capacity`] to skip the geometric-grow cost of a
-/// fresh chunk's leaf Vecs filling up. Without it, each chunk's leaves grow
-/// from zero by doubling, and the cumulative realloc traffic shows up as
-/// allocator memmove cost on the hot path.
-pub trait LeafReserve {
-    /// Reserve capacity for at least `additional` elements.
-    fn reserve(&mut self, additional: usize);
+/// Same heuristic as `ColumnBuilder::push_into`; lifted out so the merger and
+/// the `SizableContainer` impl agree on the ship signal.
+#[inline]
+pub(crate) fn at_serialized_capacity<'a, A>(borrow: &A) -> bool
+where
+    A: columnar::AsBytes<'a>,
+{
+    let words = indexed::length_in_words(borrow);
+    let round = (words + (SHIP_WORDS - 1)) & !(SHIP_WORDS - 1);
+    round - words < round / 10
 }
 
-impl<T> LeafReserve for Vec<T> {
-    #[inline]
-    fn reserve(&mut self, additional: usize) {
-        Vec::reserve(self, additional);
-    }
-}
-
-macro_rules! tuple_leaf_reserve {
-    ($($T:ident $field:ident),+) => {
-        impl<$($T: LeafReserve),+> LeafReserve for ($($T,)+) {
-            #[inline]
-            fn reserve(&mut self, additional: usize) {
-                let ($($field,)+) = self;
-                $( $field.reserve(additional); )+
+impl<C: Columnar> SizableContainer for Column<C> {
+    fn at_capacity(&self) -> bool {
+        // Match `ColumnBuilder`'s ship heuristic: serialized size within 10%
+        // of the next 2 MiB. Aligns chunk-size choices across the two paths
+        // and keeps recipients dealing with a single granularity.
+        //
+        // The merger framework only ever observes `Column::Typed`; the
+        // `Bytes`/`Align` arms exist for total-function safety.
+        match self {
+            Column::Typed(c) => at_serialized_capacity(&c.borrow()),
+            Column::Bytes(b) => {
+                let words = b.len() / 8;
+                let round = (words + (SHIP_WORDS - 1)) & !(SHIP_WORDS - 1);
+                round - words < round / 10
+            }
+            Column::Align(a) => {
+                let words = a.len();
+                let round = (words + (SHIP_WORDS - 1)) & !(SHIP_WORDS - 1);
+                round - words < round / 10
             }
         }
-    };
-}
-
-tuple_leaf_reserve!(A a);
-tuple_leaf_reserve!(A a, B b);
-tuple_leaf_reserve!(A a, B b, C c);
-tuple_leaf_reserve!(A a, B b, C c, D d);
-
-impl<C: Columnar> SizableContainer for Column<C>
-where
-    C::Container: LeafReserve,
-{
-    fn at_capacity(&self) -> bool {
-        // Match Timely's standard chunk size budget: ~8KiB worth of records
-        // per chunk (`timely::container::buffer::default_capacity`). This is
-        // what `ColumnationStack` ends up using too via its `ensure_capacity`,
-        // so the merger flushes chunks at comparable granularity.
-        self.borrow().len() >= timely::container::buffer::default_capacity::<C>()
     }
 
     fn ensure_capacity(&mut self, _stash: &mut Option<Self>) {
-        debug_assert!(
-            matches!(self, Column::Typed(_)),
-            "Column::ensure_capacity invoked on a non-Typed variant — \
-             a wire-boundary `Column` reached the merger pipeline.",
-        );
-        // Pre-reserve `default_capacity::<C>()` elements in each leaf so that
-        // pushes during this chunk's lifetime never trigger Vec realloc /
-        // geometric copying. `Vec::reserve` is a no-op when capacity is
-        // already sufficient (e.g. when a chunk has been recycled with prior
-        // allocations intact).
-        if let Column::Typed(c) = self {
-            c.reserve(timely::container::buffer::default_capacity::<C>());
-        }
+        // No pre-reservation: chunks are recycled by the merge framework, so
+        // leaf capacities settle to steady-state after the first round and
+        // there is nothing useful to reserve up front. Required by the
+        // `SizableContainer` trait, which is required as a supertrait of
+        // `InternalMerge`.
     }
 }
 

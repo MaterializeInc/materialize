@@ -18,7 +18,6 @@
 use std::collections::VecDeque;
 
 use crate::columnation::ColumnationStack;
-use columnar::Borrow as _;
 use columnar::Container as _;
 use columnar::Push as _;
 use columnar::{Clear, Columnar, Index, Len};
@@ -298,15 +297,12 @@ where
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
     R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
     for<'a> <(D, T, R) as Columnar>::Container: columnar::Push<&'a (D, T, R)>,
-    for<'a> <(D, T, R) as Columnar>::Container:
-        columnar::Push<(
-            columnar::Ref<'a, D>,
-            columnar::Ref<'a, T>,
-            columnar::Ref<'a, R>,
-        )>,
-    <D as Columnar>::Container: crate::columnar::LeafReserve,
-    <T as Columnar>::Container: crate::columnar::LeafReserve,
-    <R as Columnar>::Container: crate::columnar::LeafReserve,
+    for<'a> <D as Columnar>::Container: columnar::Push<columnar::Ref<'a, D>>,
+    for<'a> <D as Columnar>::Container: columnar::Push<&'a D>,
+    for<'a> <T as Columnar>::Container: columnar::Push<columnar::Ref<'a, T>>,
+    for<'a> <T as Columnar>::Container: columnar::Push<&'a T>,
+    for<'a> <R as Columnar>::Container: columnar::Push<columnar::Ref<'a, R>>,
+    for<'a> <R as Columnar>::Container: columnar::Push<&'a R>,
 {
     type TimeOwned = T;
 
@@ -352,47 +348,74 @@ where
                     unreachable!("merger chunks are always Column::Typed");
                 };
 
-                // Pre-destructure the D and T views so the gallop predicate
-                // can index those columns directly.
+                // Split the input borrows into per-leaf views.
                 //
-                // The columnar tuple `Borrow::Ref` is recursive: for our
-                // record shape `((K, V), T, R)` the full ref is
-                // `((&K, &V), &T, &R)`, built by indexing each leaf array
-                // and constructing the nested tuple. Going through
-                // `left_borrow.get(i)` therefore touches every leaf — four
-                // bounds-checked array indices plus two tuple constructions
-                // — even when the caller only consults the `(D, T)` merge
-                // key. Indexing `l_d.get(i)` and `l_t.get(i)` directly cuts
-                // the work to two leaf indices and avoids dragging the diff
-                // column through the cache on each probe.
+                // The columnar tuple `Borrow::Ref` is recursive: for record
+                // shape `((K, V), T, R)` the full ref is `((&K, &V), &T, &R)`,
+                // built by indexing each leaf and constructing the nested
+                // tuple. Going through `left_borrow.get(i)` therefore touches
+                // every leaf — four bounds-checked array indices plus two
+                // tuple constructions — even when the merge step only needs
+                // the `(D, T)` key. Indexing each leaf view directly cuts the
+                // work to the columns we actually consult and lets the diff
+                // column stay out of the cache on probe paths.
                 let l_d = left_borrow.0;
                 let l_t = left_borrow.1;
+                let l_r = left_borrow.2;
                 let r_d = right_borrow.0;
                 let r_t = right_borrow.1;
+                let r_r = right_borrow.2;
                 let upper_l = l_d.len();
                 let upper_r = r_d.len();
+
+                // Hoist the same split on the output. `(D, T, R)::Container`
+                // is `(D::Container, T::Container, R::Container)`, so we can
+                // address each leaf independently and let the compiler treat
+                // each leaf-extend as a primitive bulk copy. The leaves stay
+                // length-synchronized as long as every record path pushes
+                // exactly one element to each.
+                let (sd, st, sr) = self_c;
 
                 let mut owned_d = D::default();
                 let mut owned_t = T::default();
                 let mut stash = R::default();
 
-                // Yield mid-merge when self has reached the target chunk size,
-                // so the driver swaps in a fresh pre-allocated chunk. Without
-                // this, a single `merge_from` call runs to one input's
-                // exhaustion, growing self past the capacity that
-                // `ensure_capacity` reserved and incurring the realloc cost
-                // that pre-allocation is meant to avoid. `borrow().len()`
-                // inlines through the leaf chain; tracking a local counter
-                // instead measured slower, presumably because the extra
-                // updates added register pressure to the hot loop.
-                let target = timely::container::buffer::default_capacity::<(D, T, R)>();
+                // Yield mid-merge once we hit the ship threshold, so the
+                // driver can swap in a fresh chunk and ship the full one.
+                // The check matches `Column::at_capacity` and `ColumnBuilder`:
+                // serialized size within 10% of the next 2 MiB boundary.
+                //
+                // We aggregate across the three leaf borrows by chaining
+                // their `as_bytes` iterators, which is what `length_in_words`
+                // walks; this matches what calling `at_serialized_capacity`
+                // on the parent borrow would compute, but avoids reborrowing
+                // the parent (which we've split into `sd`/`st`/`sr`).
+                //
+                // Calling this in the loop condition turned out to be
+                // cheaper than tick-amortizing it: the cold-path branch is
+                // well-predicted (always false on chunks below the ship
+                // threshold), the leaf-length sums inline cleanly, and any
+                // counter / labeled-break shape we tried added more inner
+                // loop overhead than it saved.
+                let at_ship_threshold = |sd: &D::Container, st: &T::Container, sr: &R::Container| {
+                    use columnar::AsBytes as _;
+                    use columnar::Borrow as _;
+                    let words = 1
+                        + sd.borrow().as_bytes().map(|(_a, b)| 1 + b.len().div_ceil(8)).sum::<usize>()
+                        + st.borrow().as_bytes().map(|(_a, b)| 1 + b.len().div_ceil(8)).sum::<usize>()
+                        + sr.borrow().as_bytes().map(|(_a, b)| 1 + b.len().div_ceil(8)).sum::<usize>();
+                    let round = (words + ((1 << 18) - 1)) & !((1 << 18) - 1);
+                    round - words < round / 10
+                };
 
                 while left_pos[0] < upper_l
                     && right_pos[0] < upper_r
-                    && self_c.borrow().len() < target
+                    && !at_ship_threshold(sd, st, sr)
                 {
-                    let (d1, t1, r1) = left_borrow.get(left_pos[0]);
-                    let (d2, t2, r2) = right_borrow.get(right_pos[0]);
+                    let d1 = l_d.get(left_pos[0]);
+                    let t1 = l_t.get(left_pos[0]);
+                    let d2 = r_d.get(right_pos[0]);
+                    let t2 = r_t.get(right_pos[0]);
                     match (d1, t1).cmp(&(d2, t2)) {
                         std::cmp::Ordering::Less => {
                             // Common case (interleaved data): single-record
@@ -402,7 +425,9 @@ where
                             // re-entering the outer loop. Galloping is only
                             // worthwhile when there's an actual run, which we
                             // detect with the peek check below.
-                            self_c.push((d1, t1, r1));
+                            sd.push(d1);
+                            st.push(t1);
+                            sr.push(l_r.get(left_pos[0]));
                             left_pos[0] += 1;
                             // Long-run case: peek at the next record; if it's
                             // still strictly less than `(d2, t2)`, we have a
@@ -414,12 +439,21 @@ where
                                 gallop(upper_l, &mut left_pos[0], |i| {
                                     (l_d.get(i), l_t.get(i)) < (d2, t2)
                                 });
-                                self_c.extend_from_self(left_borrow, start..left_pos[0]);
+                                // Per-leaf bulk copy of the run. Each call
+                                // resolves to a primitive `extend_from_slice`
+                                // on its leaf array (or recurses one level
+                                // for tuple D = (K, V)), which the compiler
+                                // can autovectorize.
+                                sd.extend_from_self(l_d, start..left_pos[0]);
+                                st.extend_from_self(l_t, start..left_pos[0]);
+                                sr.extend_from_self(l_r, start..left_pos[0]);
                             }
                         }
                         std::cmp::Ordering::Greater => {
                             // Symmetric on the right side.
-                            self_c.push((d2, t2, r2));
+                            sd.push(d2);
+                            st.push(t2);
+                            sr.push(r_r.get(right_pos[0]));
                             right_pos[0] += 1;
                             if right_pos[0] < upper_r
                                 && (r_d.get(right_pos[0]), r_t.get(right_pos[0])) < (d1, t1)
@@ -428,20 +462,22 @@ where
                                 gallop(upper_r, &mut right_pos[0], |i| {
                                     (r_d.get(i), r_t.get(i)) < (d1, t1)
                                 });
-                                self_c.extend_from_self(right_borrow, start..right_pos[0]);
+                                sd.extend_from_self(r_d, start..right_pos[0]);
+                                st.extend_from_self(r_t, start..right_pos[0]);
+                                sr.extend_from_self(r_r, start..right_pos[0]);
                             }
                         }
                         std::cmp::Ordering::Equal => {
+                            let r1 = l_r.get(left_pos[0]);
+                            let r2 = r_r.get(right_pos[0]);
                             R::copy_from(&mut stash, r1);
                             stash.plus_equals(&r2);
                             if !stash.is_zero() {
                                 D::copy_from(&mut owned_d, d1);
                                 T::copy_from(&mut owned_t, t1);
-                                let tuple = (owned_d, owned_t, stash);
-                                self_c.push(&tuple);
-                                // Reclaim the scratch slots from the tuple so
-                                // the inner allocations are reused next pass.
-                                (owned_d, owned_t, stash) = tuple;
+                                sd.push(&owned_d);
+                                st.push(&owned_t);
+                                sr.push(&stash);
                             }
                             left_pos[0] += 1;
                             right_pos[0] += 1;
