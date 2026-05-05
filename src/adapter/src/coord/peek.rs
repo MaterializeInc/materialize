@@ -96,9 +96,9 @@ pub enum PeekResponseUnary {
 
 /// A dependency that was dropped while a peek or subscribe was in flight.
 ///
-/// The `name` fields are already quoted (e.g. `"db.schema.t"` or `"c"`), so
-/// `Display` produces the canonical descriptor — `relation "db.schema.t"` or
-/// `cluster "c"` — that callers can drop directly into their error wording.
+/// The `name` fields hold the bare name (e.g. `db.schema.t` or `c`); `Display`
+/// applies SQL identifier quoting to produce `relation "db.schema.t"` or
+/// `cluster "c"` for direct use in error wording.
 #[derive(Clone, Debug)]
 pub enum DroppedDependency {
     Relation { name: String },
@@ -108,8 +108,8 @@ pub enum DroppedDependency {
 impl fmt::Display for DroppedDependency {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Relation { name } => write!(f, "relation {name}"),
-            Self::Cluster { name } => write!(f, "cluster {name}"),
+            Self::Relation { name } => write!(f, "relation {}", name.quoted()),
+            Self::Cluster { name } => write!(f, "cluster {}", name.quoted()),
         }
     }
 }

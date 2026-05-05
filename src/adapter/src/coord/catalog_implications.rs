@@ -47,7 +47,6 @@ use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::instrument;
 use mz_ore::retry::Retry;
-use mz_ore::str::StrExt;
 use mz_ore::task;
 use mz_repr::{CatalogItemId, GlobalId, RelationVersion, RelationVersionSelector};
 use mz_sql::plan::ConnectionDetails;
@@ -764,7 +763,7 @@ impl Coordinator {
             {
                 let name = dropped_item_names
                     .get(id)
-                    .map(|n| n.quoted().to_string())
+                    .cloned()
                     .expect("missing relation name");
                 active_compute_sinks_to_drop.insert(
                     *sink_id,
@@ -775,7 +774,7 @@ impl Coordinator {
             } else if clusters_to_drop.contains(&cluster_id) {
                 let name = dropped_cluster_names
                     .get(&cluster_id)
-                    .map(|n| n.quoted().to_string())
+                    .cloned()
                     .expect("missing cluster name");
                 active_compute_sinks_to_drop.insert(
                     *sink_id,
@@ -795,13 +794,13 @@ impl Coordinator {
             {
                 let name = dropped_item_names
                     .get(id)
-                    .map(|n| n.quoted().to_string())
+                    .cloned()
                     .expect("missing relation name");
                 peeks_to_drop.push((DroppedDependency::Relation { name }, uuid.clone()));
             } else if clusters_to_drop.contains(&pending_peek.cluster_id) {
                 let name = dropped_cluster_names
                     .get(&pending_peek.cluster_id)
-                    .map(|n| n.quoted().to_string())
+                    .cloned()
                     .expect("missing cluster name");
                 peeks_to_drop.push((DroppedDependency::Cluster { name }, uuid.clone()));
             }
