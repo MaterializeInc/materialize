@@ -176,19 +176,30 @@ fn configs(n: usize) -> [(&'static str, Vec<Tuple>, Vec<Tuple>); 3] {
 fn bench_merge(c: &mut Criterion) {
     let mut group = c.benchmark_group("merge_two_sorted_row");
 
+    // Per-record byte estimate used both for criterion's `Throughput::Bytes`
+    // reporting and for the post-bench summary table. Counts the encoded
+    // Row payload plus the (Time, Diff) suffix; ignores per-Row overhead
+    // and container metadata. Conservative (under-counts), so reported
+    // throughputs are a lower bound.
+    let bytes_per_record = ROW_PAYLOAD_BYTES + size_of::<Time>() + size_of::<Diff>();
+
+    let mut summary: Vec<(String, u64)> = Vec::new();
+
     for (size_label, payload_bytes_per_side) in SIZES {
         let n = payload_bytes_per_side / ROW_PAYLOAD_BYTES;
         let cfgs = configs(n);
 
         for (regime, a, b) in &cfgs {
-            // Throughput in elements (records merged) — bytes is awkward
-            // for variable-length data because each merge step's "bytes"
-            // depends on the row picked. Element-count is the apples-to-
-            // apples unit.
-            let elems = u64::try_from(a.len() + b.len()).unwrap();
-            group.throughput(Throughput::Elements(elems));
+            // Throughput in bytes — keeps GiB/s units consistent with the
+            // primitive bench. The element count would be apples-to-apples
+            // only against another bench at the same record shape; bytes
+            // give a meaningful comparison both within this bench and
+            // across record shapes.
+            let bytes = u64::try_from((a.len() + b.len()) * bytes_per_record).unwrap();
+            group.throughput(Throughput::Bytes(bytes));
 
             let id = format!("{regime}/{size_label}");
+            summary.push((id.clone(), bytes));
 
             // Build the columnar containers once, outside the timed
             // closure. `iter_batched` clones them each iteration; clone of
@@ -238,6 +249,183 @@ fn bench_merge(c: &mut Criterion) {
     let _ = size_of::<Tuple>();
 
     group.finish();
+
+    print_throughput_table(
+        "Throughput summary — Row (Int64 + 24-char string):",
+        "merge_two_sorted_row",
+        &summary,
+    );
+}
+
+// === Throughput summary helpers ===
+//
+// Duplicate of the helpers in `mz-timely-util/benches/columnar_merger.rs`;
+// bench files don't share a library easily, so we accept the copy.
+
+/// Locate the `target/criterion` directory by walking up from cwd. Needed
+/// because `cargo bench -p <pkg>` runs the bench binary with cwd set to
+/// the package dir (e.g. `src/repr`), not the workspace root.
+fn criterion_dir() -> std::path::PathBuf {
+    let mut cur = std::env::current_dir().unwrap_or_default();
+    loop {
+        let candidate = cur.join("target").join("criterion");
+        if candidate.is_dir() {
+            return candidate;
+        }
+        if !cur.pop() {
+            return std::path::PathBuf::from("target/criterion");
+        }
+    }
+}
+
+/// Reads the median point estimate (ns) out of criterion's
+/// `estimates.json` with a small string scanner instead of pulling in
+/// `serde_json` as a dev-dep just for this.
+fn read_criterion_median_ns(group: &str, bench_id: &str) -> Option<f64> {
+    let path = criterion_dir()
+        .join(group)
+        .join(bench_id)
+        .join("new")
+        .join("estimates.json");
+    let json = std::fs::read_to_string(&path).ok()?;
+    let median_idx = json.find("\"median\"")?;
+    let after = &json[median_idx..];
+    let pe_marker = "\"point_estimate\"";
+    let pe_idx = after.find(pe_marker)?;
+    let rest = after[pe_idx + pe_marker.len()..].trim_start();
+    let rest = rest.strip_prefix(':')?.trim_start();
+    let end = rest.find(|c: char| c == ',' || c == '}')?;
+    rest[..end].trim().parse::<f64>().ok()
+}
+
+fn fmt_throughput(bytes: u64, ns: f64) -> String {
+    if !ns.is_finite() || ns <= 0.0 {
+        return "—".to_string();
+    }
+    let bytes_per_sec = bytes as f64 * 1e9 / ns;
+    let gibs = bytes_per_sec / (1u64 << 30) as f64;
+    if gibs >= 1.0 {
+        format!("{gibs:.2} GiB/s")
+    } else {
+        let mibs = bytes_per_sec / (1u64 << 20) as f64;
+        format!("{mibs:.0} MiB/s")
+    }
+}
+
+fn fmt_time(ns: f64) -> String {
+    if !ns.is_finite() {
+        "—".to_string()
+    } else if ns < 1e3 {
+        format!("{:.0} ns", ns)
+    } else if ns < 1e6 {
+        format!("{:.1} µs", ns / 1e3)
+    } else if ns < 1e9 {
+        format!("{:.2} ms", ns / 1e6)
+    } else {
+        format!("{:.2} s", ns / 1e9)
+    }
+}
+
+fn print_throughput_table(title: &str, group: &str, rows: &[(String, u64)]) {
+    let cells: Vec<(String, String, String, String)> = rows
+        .iter()
+        .map(|(label, bytes)| {
+            let cmn_id = format!("columnation/{}", label.replace('/', "_"));
+            let col_id = format!("column/{}", label.replace('/', "_"));
+            let cmn_ns = read_criterion_median_ns(group, &cmn_id).unwrap_or(f64::NAN);
+            let col_ns = read_criterion_median_ns(group, &col_id).unwrap_or(f64::NAN);
+            let cmn_str = format!(
+                "{} ({})",
+                fmt_throughput(*bytes, cmn_ns),
+                fmt_time(cmn_ns)
+            );
+            let col_str = format!(
+                "{} ({})",
+                fmt_throughput(*bytes, col_ns),
+                fmt_time(col_ns)
+            );
+            let ratio = col_ns / cmn_ns;
+            let ratio_str = if !ratio.is_finite() {
+                "—".to_string()
+            } else if ratio < 1.0 {
+                format!("{:.2}× faster", 1.0 / ratio)
+            } else {
+                format!("{:.2}× slower", ratio)
+            };
+            (label.clone(), cmn_str, col_str, ratio_str)
+        })
+        .collect();
+
+    let max_chars = |i: usize, header: &str| -> usize {
+        cells
+            .iter()
+            .map(|c| {
+                let s = match i {
+                    0 => &c.0,
+                    1 => &c.1,
+                    2 => &c.2,
+                    3 => &c.3,
+                    _ => unreachable!(),
+                };
+                s.chars().count()
+            })
+            .max()
+            .unwrap_or(0)
+            .max(header.chars().count())
+    };
+
+    let w = [
+        max_chars(0, "Config"),
+        max_chars(1, "columnation"),
+        max_chars(2, "column"),
+        max_chars(3, "column vs columnation"),
+    ];
+
+    let bar = |l: char, m: char, r: char| -> String {
+        let mut s = String::new();
+        s.push(l);
+        for (i, &width) in w.iter().enumerate() {
+            for _ in 0..width + 2 {
+                s.push('─');
+            }
+            s.push(if i + 1 < w.len() { m } else { r });
+        }
+        s
+    };
+
+    println!();
+    println!("{title}");
+    println!();
+    println!("{}", bar('┌', '┬', '┐'));
+    println!(
+        "│ {:^w0$} │ {:^w1$} │ {:^w2$} │ {:^w3$} │",
+        "Config",
+        "columnation",
+        "column",
+        "column vs columnation",
+        w0 = w[0],
+        w1 = w[1],
+        w2 = w[2],
+        w3 = w[3],
+    );
+    println!("{}", bar('├', '┼', '┤'));
+    for (i, (cfg, cmn, col, rat)) in cells.iter().enumerate() {
+        if i > 0 {
+            println!("{}", bar('├', '┼', '┤'));
+        }
+        println!(
+            "│ {:<w0$} │ {:<w1$} │ {:<w2$} │ {:>w3$} │",
+            cfg,
+            cmn,
+            col,
+            rat,
+            w0 = w[0],
+            w1 = w[1],
+            w2 = w[2],
+            w3 = w[3],
+        );
+    }
+    println!("{}", bar('└', '┴', '┘'));
 }
 
 criterion_group!(benches, bench_merge);
