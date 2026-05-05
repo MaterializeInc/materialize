@@ -301,7 +301,9 @@ class Benchmark:
                 continue
 
             for measurement_type, key in type_by_key:
-                aggregation = getattr(self, f"_{str(measurement_type)}_aggregation")
+                aggregation = getattr(
+                    self, f"_{measurement_type.name.lower()}_aggregation"
+                )
                 measurement = Measurement(
                     type=measurement_type,
                     value=stats[key] / 2**20,
