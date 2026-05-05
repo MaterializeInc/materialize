@@ -43,8 +43,8 @@ from materialize.mzcompose.composition import (
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.environmentd import Environmentd
-from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.mz_debug import MzDebug
+from materialize.mzcompose.services.mzx import Mzx
 from materialize.mzcompose.services.orchestratord import Orchestratord
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.test_analytics.config.test_analytics_db_config import (
@@ -67,7 +67,7 @@ SERVICES = [
     Clusterd(),
     Balancerd(),
     MzDebug(),
-    Mz(app_password=""),
+    Mzx(app_password=""),
 ]
 
 KIND_CLUSTER_NAME = "kind"

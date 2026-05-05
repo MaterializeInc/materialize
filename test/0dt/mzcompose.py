@@ -33,7 +33,7 @@ from materialize.mzcompose.services.materialized import (
 )
 from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.mysql import MySql
-from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.mzx import Mzx
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.sql_server import (
@@ -56,7 +56,7 @@ SERVICES = [
     Kafka(),
     SchemaRegistry(),
     CockroachOrPostgresMetadata(),
-    Mz(app_password=""),
+    Mzx(app_password=""),
     Materialized(
         name="mz_old",
         sanity_restart=False,

@@ -10,7 +10,7 @@
 """mz env util"""
 
 from materialize.mzcompose.composition import Composition
-from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.mzx import Mzx
 
 
 def get_cloud_hostname(
@@ -21,6 +21,6 @@ def get_cloud_hostname(
     quiet: bool = False,
 ) -> str:
     with c.override(
-        Mz(region=region, environment=environment, app_password=app_password)
+        Mzx(region=region, environment=environment, app_password=app_password)
     ):
         return c.cloud_hostname(quiet=quiet)

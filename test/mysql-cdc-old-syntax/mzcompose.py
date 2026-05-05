@@ -32,7 +32,7 @@ from materialize.mzcompose.services.metadata_store import (
 )
 from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.mysql import MySql
-from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.mzx import Mzx
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.source_table_migration import (
@@ -58,7 +58,7 @@ def create_mysql_replica(mysql_version: str) -> MySql:
 
 
 SERVICES = [
-    Mz(app_password=""),
+    Mzx(app_password=""),
     Materialized(
         external_blob_store=True,
         additional_system_parameter_defaults={

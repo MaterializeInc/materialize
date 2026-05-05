@@ -46,7 +46,7 @@ from materialize.mzcompose.services.localstack import Localstack
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.minio import Minio
-from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.mzx import Mzx
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
@@ -64,7 +64,7 @@ SERVICES = [
     Clusterd(name="clusterd2", workers=2),
     Clusterd(name="clusterd3", workers=2),
     Clusterd(name="clusterd4", workers=2),
-    Mz(app_password=""),
+    Mzx(app_password=""),
     Minio(),
     Materialized(
         # We use mz_panic() in some test scenarios, so environmentd must stay up.

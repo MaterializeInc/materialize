@@ -31,7 +31,7 @@ from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.mysql import MySql
-from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.mzx import Mzx
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
@@ -49,7 +49,7 @@ SERVICES = [
     Postgres(),
     MySql(),
     Azurite(),
-    Mz(app_password=""),
+    Mzx(app_password=""),
     Minio(setup_materialize=False, additional_directories=["copytos3"]),
     Materialized(),
     FivetranDestination(volumes_extra=["tmp:/share/tmp"]),

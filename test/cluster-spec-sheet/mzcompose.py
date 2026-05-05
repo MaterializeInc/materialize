@@ -38,7 +38,7 @@ from materialize.mzcompose.composition import (
 )
 from materialize.mzcompose.service import Service as MzComposeService
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.mzx import Mzx
 from materialize.test_analytics.config.test_analytics_db_config import (
     create_test_analytics_config,
 )
@@ -71,7 +71,7 @@ VERSION = f"{MzVersion.parse_cargo()}--pr.g{os.getenv('BUILDKITE_COMMIT')}"
 
 SERVICES = [
     # Overridden below
-    Mz(app_password=""),
+    Mzx(app_password=""),
     Materialized(
         propagate_crashes=True,
         additional_system_parameter_defaults=MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS,
@@ -2191,9 +2191,9 @@ def disable_region(composition: Composition, hard: bool) -> None:
 
     try:
         if hard:
-            composition.run("mz", "region", "disable", "--hard", rm=True)
+            composition.run("mzx", "region", "disable", "--hard", rm=True)
         else:
-            composition.run("mz", "region", "disable", rm=True)
+            composition.run("mzx", "region", "disable", rm=True)
     except UIError:
         # Can return: status 404 Not Found
         pass
@@ -2223,10 +2223,10 @@ def cloud_disable_enable_and_wait(
     )
 
     if environmentd_cpu_allocation is None:
-        target.composition.run("mz", "region", "enable", *version_args, rm=True)
+        target.composition.run("mzx", "region", "enable", *version_args, rm=True)
     else:
         target.composition.run(
-            "mz",
+            "mzx",
             "region",
             "enable",
             "--environmentd-cpu-allocation",
@@ -2410,7 +2410,7 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
         target: BenchTarget = CloudTarget(
             composition, PRODUCTION_USERNAME, PRODUCTION_APP_PASSWORD or ""
         )
-        mz = Mz(
+        mz = Mzx(
             region=PRODUCTION_REGION,
             environment=PRODUCTION_ENVIRONMENT,
             app_password=PRODUCTION_APP_PASSWORD or "",
@@ -2422,14 +2422,14 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
             STAGING_APP_PASSWORD or "",
             is_staging=True,
         )
-        mz = Mz(
+        mz = Mzx(
             region=STAGING_REGION,
             environment=STAGING_ENVIRONMENT,
             app_password=STAGING_APP_PASSWORD or "",
         )
     elif args.target == "docker":
         target = DockerTarget(composition)
-        mz = Mz(app_password="")
+        mz = Mzx(app_password="")
     else:
         raise ValueError(f"Unknown target: {args.target}")
 
@@ -2704,7 +2704,7 @@ class CloudTarget(BenchTarget):
         # Create new app password.
         new_app_password_name = "Materialize CLI (mz) - Cluster Spec Sheet"
         output = self.composition.run(
-            "mz",
+            "mzx",
             "app-password",
             "create",
             new_app_password_name,
@@ -2916,7 +2916,7 @@ def run_scenario_envd_strong_scaling(
             print("--- Resetting Cloud environmentd CPUs to the default")
             version_args = ["--version", VERSION] if target.is_staging else []
             target.composition.run(
-                "mz",
+                "mzx",
                 "region",
                 "enable",
                 "--environmentd-cpu-allocation",

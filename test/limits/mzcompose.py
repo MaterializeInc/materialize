@@ -36,7 +36,7 @@ from materialize.mzcompose.services.frontegg import FronteggMock
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mysql import MySql
-from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.mzx import Mzx
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.sql_server import (
@@ -1835,7 +1835,7 @@ SERVICES = [
         listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth_https.json",
         support_external_clusterd=True,
     ),
-    Mz(app_password=""),
+    Mzx(app_password=""),
 ]
 
 for cluster_id in range(1, MAX_CLUSTERS + 1):
