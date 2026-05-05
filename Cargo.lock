@@ -8339,6 +8339,7 @@ dependencies = [
  "mz-ore",
  "num-traits",
  "proptest",
+ "rand 0.9.4",
  "serde",
  "timely",
  "tokio",

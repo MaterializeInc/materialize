@@ -17,6 +17,10 @@ harness = false
 name = "consolidating_column_builder"
 harness = false
 
+[[bench]]
+name = "columnar_merger"
+harness = false
+
 [dependencies]
 ahash.workspace = true
 bincode.workspace = true
@@ -43,6 +47,7 @@ allocation-counter = { workspace = true, optional = true }
 [dev-dependencies]
 criterion.workspace = true
 proptest.workspace = true
+rand.workspace = true
 
 [features]
 default = ["mz-ore/default"]

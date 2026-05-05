@@ -18,6 +18,7 @@
 use std::collections::VecDeque;
 
 use crate::columnation::ColumnationStack;
+use columnar::Borrow as _;
 use columnar::Container as _;
 use columnar::Push as _;
 use columnar::{Clear, Columnar, Index, Len};
@@ -237,30 +238,30 @@ where
     }
 }
 
-/// Advance `*lower` past every position in `input` where `cmp` returns true.
+/// Advance `*lower` past every position in `[*lower, upper)` where `cmp`
+/// returns true.
 ///
 /// On return, `*lower` is the first index `>= initial *lower` where `cmp`
-/// returns false, or `input.len()` if `cmp` holds through the end.
+/// returns false, or `upper` if `cmp` holds through the end.
+///
+/// Takes the predicate as `FnMut(usize) -> bool` rather than a value-bearing
+/// closure so callers can index whichever subset of the input columns they
+/// actually need to compare — for the merger's `(d, t)`-keyed sort, this lets
+/// each probe touch only the D and T leaf views, skipping the diff column.
 ///
 /// Compared to a linear scan, this is `O(log K)` for a run of length `K`
 /// satisfying `cmp` — useful when one side of a sorted merge has long runs
 /// dominated by the other side.
-fn gallop<C: columnar::Index + Len>(
-    input: C,
-    lower: &mut usize,
-    mut cmp: impl FnMut(<C as columnar::Index>::Ref) -> bool,
-) {
-    let upper = input.len();
-
+fn gallop(upper: usize, lower: &mut usize, mut cmp: impl FnMut(usize) -> bool) {
     // If `cmp` is already false at `*lower`, the run is empty — nothing to do.
-    if *lower < upper && cmp(input.get(*lower)) {
+    if *lower < upper && cmp(*lower) {
         // Phase 1 (overshoot): advance by exponentially growing steps as long
         // as `cmp` holds. After this loop, `*lower` is the last position we
         // confirmed satisfies `cmp`, and `*lower + step` either falls off the
         // end or fails `cmp`. The boundary is somewhere in `(*lower, *lower +
         // step]`.
         let mut step = 1;
-        while *lower + step < upper && cmp(input.get(*lower + step)) {
+        while *lower + step < upper && cmp(*lower + step) {
             *lower += step;
             step <<= 1;
         }
@@ -271,7 +272,7 @@ fn gallop<C: columnar::Index + Len>(
         // still satisfying `cmp`.
         step >>= 1;
         while step > 0 {
-            if *lower + step < upper && cmp(input.get(*lower + step)) {
+            if *lower + step < upper && cmp(*lower + step) {
                 *lower += step;
             }
             step >>= 1;
@@ -297,6 +298,15 @@ where
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
     R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
     for<'a> <(D, T, R) as Columnar>::Container: columnar::Push<&'a (D, T, R)>,
+    for<'a> <(D, T, R) as Columnar>::Container:
+        columnar::Push<(
+            columnar::Ref<'a, D>,
+            columnar::Ref<'a, T>,
+            columnar::Ref<'a, R>,
+        )>,
+    <D as Columnar>::Container: crate::columnar::LeafReserve,
+    <T as Columnar>::Container: crate::columnar::LeafReserve,
+    <R as Columnar>::Container: crate::columnar::LeafReserve,
 {
     type TimeOwned = T;
 
@@ -342,31 +352,84 @@ where
                     unreachable!("merger chunks are always Column::Typed");
                 };
 
+                // Pre-destructure the D and T views so the gallop predicate
+                // can index those columns directly.
+                //
+                // The columnar tuple `Borrow::Ref` is recursive: for our
+                // record shape `((K, V), T, R)` the full ref is
+                // `((&K, &V), &T, &R)`, built by indexing each leaf array
+                // and constructing the nested tuple. Going through
+                // `left_borrow.get(i)` therefore touches every leaf — four
+                // bounds-checked array indices plus two tuple constructions
+                // — even when the caller only consults the `(D, T)` merge
+                // key. Indexing `l_d.get(i)` and `l_t.get(i)` directly cuts
+                // the work to two leaf indices and avoids dragging the diff
+                // column through the cache on each probe.
+                let l_d = left_borrow.0;
+                let l_t = left_borrow.1;
+                let r_d = right_borrow.0;
+                let r_t = right_borrow.1;
+                let upper_l = l_d.len();
+                let upper_r = r_d.len();
+
                 let mut owned_d = D::default();
                 let mut owned_t = T::default();
                 let mut stash = R::default();
 
-                while left_pos[0] < left_borrow.len() && right_pos[0] < right_borrow.len() {
+                // Yield mid-merge when self has reached the target chunk size,
+                // so the driver swaps in a fresh pre-allocated chunk. Without
+                // this, a single `merge_from` call runs to one input's
+                // exhaustion, growing self past the capacity that
+                // `ensure_capacity` reserved and incurring the realloc cost
+                // that pre-allocation is meant to avoid. `borrow().len()`
+                // inlines through the leaf chain; tracking a local counter
+                // instead measured slower, presumably because the extra
+                // updates added register pressure to the hot loop.
+                let target = timely::container::buffer::default_capacity::<(D, T, R)>();
+
+                while left_pos[0] < upper_l
+                    && right_pos[0] < upper_r
+                    && self_c.borrow().len() < target
+                {
                     let (d1, t1, r1) = left_borrow.get(left_pos[0]);
                     let (d2, t2, r2) = right_borrow.get(right_pos[0]);
                     match (d1, t1).cmp(&(d2, t2)) {
                         std::cmp::Ordering::Less => {
-                            let start = left_pos[0];
-                            gallop(
-                                left_borrow,
-                                &mut left_pos[0],
-                                |(d, t, _)| (d, t) < (d2, t2),
-                            );
-                            self_c.extend_from_self(left_borrow, start..left_pos[0]);
+                            // Common case (interleaved data): single-record
+                            // advance. Skip the gallop call entirely — its
+                            // setup plus the first cmp probe is more
+                            // expensive than just pushing this record and
+                            // re-entering the outer loop. Galloping is only
+                            // worthwhile when there's an actual run, which we
+                            // detect with the peek check below.
+                            self_c.push((d1, t1, r1));
+                            left_pos[0] += 1;
+                            // Long-run case: peek at the next record; if it's
+                            // still strictly less than `(d2, t2)`, we have a
+                            // run worth galloping (and bulk-copying).
+                            if left_pos[0] < upper_l
+                                && (l_d.get(left_pos[0]), l_t.get(left_pos[0])) < (d2, t2)
+                            {
+                                let start = left_pos[0];
+                                gallop(upper_l, &mut left_pos[0], |i| {
+                                    (l_d.get(i), l_t.get(i)) < (d2, t2)
+                                });
+                                self_c.extend_from_self(left_borrow, start..left_pos[0]);
+                            }
                         }
                         std::cmp::Ordering::Greater => {
-                            let start = right_pos[0];
-                            gallop(
-                                right_borrow,
-                                &mut right_pos[0],
-                                |(d, t, _)| (d, t) < (d1, t1),
-                            );
-                            self_c.extend_from_self(right_borrow, start..right_pos[0]);
+                            // Symmetric on the right side.
+                            self_c.push((d2, t2, r2));
+                            right_pos[0] += 1;
+                            if right_pos[0] < upper_r
+                                && (r_d.get(right_pos[0]), r_t.get(right_pos[0])) < (d1, t1)
+                            {
+                                let start = right_pos[0];
+                                gallop(upper_r, &mut right_pos[0], |i| {
+                                    (r_d.get(i), r_t.get(i)) < (d1, t1)
+                                });
+                                self_c.extend_from_self(right_borrow, start..right_pos[0]);
+                            }
                         }
                         std::cmp::Ordering::Equal => {
                             R::copy_from(&mut stash, r1);
