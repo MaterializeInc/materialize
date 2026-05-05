@@ -12,19 +12,29 @@
 //!
 //! Each iteration drives a single 2-input merge through the framework's
 //! `InternalMerger::merge`, so we measure the same code path either merger
-//! ends up traveling at the trace level. Three input regimes:
+//! ends up traveling at the trace level.
 //!
-//! - **mixed**: identical key range; left and right interleave throughout.
-//! - **collisions**: small key range; lots of equal-key consolidation.
-//! - **disjoint**: non-overlapping key ranges; one side dominates locally,
-//!   so the column merger's galloping should pay off.
+//! Two axes:
+//!
+//! - **regime** — the input distribution shape:
+//!   - *mixed*: identical key range; left and right interleave throughout.
+//!   - *collisions*: small key range; lots of equal-key consolidation.
+//!   - *disjoint*: non-overlapping key ranges; one side dominates locally,
+//!     so the column merger's galloping should pay off.
+//!
+//! - **size** — the per-side heap footprint, swept across targets that
+//!   bracket the cache hierarchy. Each merger's curve crosses the cache
+//!   tiers at its own size, and a single fixed `n` would only show one
+//!   point on each curve. Stating size in bytes-per-side (rather than
+//!   element count) keeps the comparison meaningful when the record type
+//!   changes — a future `Row`-keyed variant exercises the same heap budget
+//!   even though its element count is smaller.
 //!
 //! TODO: add a `Row`-keyed variant once `Rows` (the columnar container for
 //! `Row`) is reachable from a dev-dep — currently it lives in a private
-//! module inside `mz-repr` and isn't re-exported. The expected payoff there
-//! is significant: variable-length keys amortize per-leaf trait dispatch
-//! over more per-row work, where parallel-array layout becomes more
-//! competitive with `ColumnationStack`'s flat-slice layout.
+//! module inside `mz-repr` and isn't re-exported.
+
+use std::mem::size_of;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use differential_dataflow::trace::implementations::merge_batcher::Merger;
@@ -38,6 +48,17 @@ type Data = (u64, u64);
 type Time = u64;
 type Diff = i64;
 type Tuple = (Data, Time, Diff);
+
+/// Per-side heap footprints to sweep across. Targets one point inside each
+/// cache tier on Apple Silicon (L1d ≈ 64–128 KiB per core, shared L2 a few
+/// MiB, then DRAM); on x86 the same picks straddle similar boundaries.
+/// Element counts are derived in `bench_merge` from `size_of::<Tuple>()`.
+const SIZES: &[(&str, usize)] = &[
+    ("32K", 32 * 1024),
+    ("512K", 512 * 1024),
+    ("8M", 8 * 1024 * 1024),
+    ("128M", 128 * 1024 * 1024),
+];
 
 /// Generate a sorted+consolidated `Vec<Tuple>` of approximately `n` records,
 /// with keys drawn uniformly from `[0, key_range)` and times from
@@ -88,9 +109,11 @@ fn build_column(data: &[Tuple]) -> Column<Tuple> {
     col
 }
 
-fn bench_merge(c: &mut Criterion) {
-    let n = 10_000usize;
-    let configs: [(&str, Vec<Tuple>, Vec<Tuple>); 3] = [
+/// Build the three regime input pairs at the given per-side element count.
+/// Key/time ranges scale with `n` so the regime properties (interleaving,
+/// collision density, disjoint-ness) hold across sizes.
+fn configs(n: usize) -> [(&'static str, Vec<Tuple>, Vec<Tuple>); 3] {
+    [
         // Same wide key range on both sides → records interleave.
         (
             "mixed",
@@ -104,8 +127,9 @@ fn bench_merge(c: &mut Criterion) {
             make(3, n, (n / 4) as u64, 2),
             make(4, n, (n / 4) as u64, 2),
         ),
-        // Left in [0, n), right in [n, 2n) → no overlap. Each `Less`/`Greater`
-        // run extends to the end of its side; galloping should win here.
+        // Left in `[0, n)`, right in `[n, 2n)` → no overlap. Each
+        // `Less`/`Greater` run extends to the end of its side; galloping
+        // should win here.
         (
             "disjoint",
             make(5, n, n as u64, 4),
@@ -114,40 +138,60 @@ fn bench_merge(c: &mut Criterion) {
                 .map(|((k1, k2), t, r)| ((k1 + n as u64, k2 + n as u64), t, r))
                 .collect(),
         ),
-    ];
+    ]
+}
 
+fn bench_merge(c: &mut Criterion) {
     let mut group = c.benchmark_group("merge_two_sorted");
 
-    for (name, a, b) in &configs {
-        group.throughput(Throughput::Elements((a.len() + b.len()) as u64));
+    let bytes_per_record = size_of::<Tuple>();
 
-        group.bench_with_input(BenchmarkId::new("columnation", name), &(), |bencher, _| {
-            bencher.iter_batched(
-                || (build_columnation(a), build_columnation(b)),
-                |(ca, cb)| {
-                    let mut merger: ColInternalMerger<Data, Time, Diff> = Default::default();
-                    let mut output = Vec::new();
-                    let mut stash = Vec::new();
-                    merger.merge(vec![ca], vec![cb], &mut output, &mut stash);
-                    output
-                },
-                BatchSize::LargeInput,
-            );
-        });
+    for (size_label, bytes_per_side) in SIZES {
+        let n = bytes_per_side / bytes_per_record;
+        let cfgs = configs(n);
 
-        group.bench_with_input(BenchmarkId::new("column", name), &(), |bencher, _| {
-            bencher.iter_batched(
-                || (build_column(a), build_column(b)),
-                |(ca, cb)| {
-                    let mut merger: ColumnMerger<Data, Time, Diff> = Default::default();
-                    let mut output = Vec::new();
-                    let mut stash = Vec::new();
-                    merger.merge(vec![ca], vec![cb], &mut output, &mut stash);
-                    output
+        for (regime, a, b) in &cfgs {
+            // Throughput in bytes; criterion converts to elements/s when we
+            // divide by record size at report time. Bytes is the more
+            // meaningful unit when comparing across record types.
+            let bytes = u64::try_from((a.len() + b.len()) * bytes_per_record).unwrap();
+            group.throughput(Throughput::Bytes(bytes));
+
+            let id = format!("{regime}/{size_label}");
+
+            group.bench_with_input(
+                BenchmarkId::new("columnation", &id),
+                &(),
+                |bencher, _| {
+                    bencher.iter_batched(
+                        || (build_columnation(a), build_columnation(b)),
+                        |(ca, cb)| {
+                            let mut merger: ColInternalMerger<Data, Time, Diff> =
+                                Default::default();
+                            let mut output = Vec::new();
+                            let mut stash = Vec::new();
+                            merger.merge(vec![ca], vec![cb], &mut output, &mut stash);
+                            output
+                        },
+                        BatchSize::LargeInput,
+                    );
                 },
-                BatchSize::LargeInput,
             );
-        });
+
+            group.bench_with_input(BenchmarkId::new("column", &id), &(), |bencher, _| {
+                bencher.iter_batched(
+                    || (build_column(a), build_column(b)),
+                    |(ca, cb)| {
+                        let mut merger: ColumnMerger<Data, Time, Diff> = Default::default();
+                        let mut output = Vec::new();
+                        let mut stash = Vec::new();
+                        merger.merge(vec![ca], vec![cb], &mut output, &mut stash);
+                        output
+                    },
+                    BatchSize::LargeInput,
+                );
+            });
+        }
     }
 
     group.finish();
