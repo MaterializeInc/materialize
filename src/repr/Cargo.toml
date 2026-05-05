@@ -25,6 +25,10 @@ harness = false
 name = "data_types"
 harness = false
 
+[[bench]]
+name = "columnar_merger_row"
+harness = false
+
 [dependencies]
 anyhow.workspace = true
 arrow.workspace = true
