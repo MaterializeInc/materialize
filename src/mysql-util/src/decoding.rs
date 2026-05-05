@@ -34,25 +34,32 @@ pub fn pack_mysql_row(
     let mut packer = row_container.packer();
 
     // For each column in `table_desc` (in descriptor order), resolve its wire
-    // index. Non-fallback rows are matched by name so a reordered upstream
-    // still decodes correctly; fallback rows have no names and are matched
-    // positionally. A `None` here means the upstream row is missing this
-    // column and is only tolerated for ignored columns.
+    // index. With binlog_full_metadata=true, columns are matched by name so a reordered upstream
+    // still decodes correctly; without binlog_full_metadata, rows have no column names and must be
+    // matched positionally. A `None` here means the upstream row is missing this column and is
+    // only tolerated for ignored columns, and for binlog_full_metadata = false, is only tolerated
+    // for ignored columns at the end of the table.
     for (i, col_desc) in table_desc.columns.iter().enumerate() {
-        let wire_idx = if !binlog_full_metadata {
-            (i < row.len()).then_some(i)
-        } else {
-            row.columns_ref()
-                .iter()
-                .position(|wc| wc.name_str() == col_desc.name.as_str())
-        };
         if col_desc.column_type.is_none() {
             // This column is ignored, so don't decode it.
             continue;
         }
+        let wire_idx = if !binlog_full_metadata {
+            // No column name metadata, so we match by index.
+            (i < row.len()).then_some(i)
+        } else {
+            // This means the row from the binlog has column name included in the metadata,
+            // so we can match on that instead of position.
+            row.columns_ref()
+                .iter()
+                .position(|wc| wc.name_str() == col_desc.name.as_str())
+        };
+
         let wire_idx = match wire_idx {
             Some(idx) => idx,
             None => {
+                // We could not find a column in the incoming row that matches this descriptor column.
+                // This is an error as the column is not ignored (ignored columns have already been skipped).
                 return Err(decode_error(
                     "extra column description",
                     col_desc,

@@ -78,7 +78,7 @@ impl MySqlTableDesc {
     pub fn determine_compatibility(
         &self,
         other: &MySqlTableDesc,
-        full_metadata: bool,
+        binlog_full_metadata: bool,
     ) -> Result<(), anyhow::Error> {
         if self == other {
             return Ok(());
@@ -95,28 +95,41 @@ impl MySqlTableDesc {
         }
 
         // In the case that we don't have full binlog row metadata, `columns` is ordered by the
-        // ordinal_position of each column in the table, so as long as `self.columns` is a
+        // ordinal position of each column in the table, so as long as `self.columns` is a
         // compatible prefix of `other.columns`, we can ignore extra columns from `other.columns`.
         //
         // If we do have full metadata, then we can match columns by name and just check that all
         // columns in `self.columns` are present and compatible with columns in `other.columns`.
-        let mut other_columns = other.columns.iter();
-        for self_column in self.columns.iter() {
-            let other_column = if full_metadata {
-                if self_column.column_type.is_none() {
-                    // This is an excluded column and can be ignored, as it may not have a
-                    // corresponding column in `other.columns` if the column was dropped upstream.
-                    continue;
-                }
-                other.columns.iter().find(|c| c.name == self_column.name)
-            } else {
-                other_columns.next()
-            };
+        for (i, self_column) in self.columns.iter().enumerate() {
             if self_column.column_type.is_none() {
                 // This is an excluded column and can be ignored.
                 continue;
             }
-            let other_column = other_column.ok_or_else(|| {
+            let wire_idx = if !binlog_full_metadata {
+                // No column name metadata, so we match by index.
+                (i < other.columns.len()).then_some(i)
+            } else {
+                // This means the row from the binlog has column name included in the metadata,
+                // so we can match on that instead of position.
+                other
+                    .columns
+                    .iter()
+                    .position(|oc| oc.name.as_str() == self_column.name.as_str())
+            };
+
+            let wire_idx = match wire_idx {
+                Some(idx) => idx,
+                None => {
+                    // We could not find a column in the incoming row that matches this descriptor column.
+                    // This is an error as the column is not ignored (ignored columns have already been skipped).
+                    return Err(anyhow::anyhow!(
+                        "column {} no longer present in table {}",
+                        self_column.name,
+                        self.name
+                    ));
+                }
+            };
+            let other_column = other.columns.get(wire_idx).ok_or_else(|| {
                 anyhow::anyhow!(
                     "column {} no longer present in table {}",
                     self_column.name,
