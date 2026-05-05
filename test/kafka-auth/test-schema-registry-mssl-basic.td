@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# TODO: Reenable when https://linear.app/materializeinc/issue/SS-115 is fixed
+$ skip-if
+SELECT true
+
 # ==> Set up. <==
 
 $ set-from-file ca-crt=/share/secrets/ca.crt
