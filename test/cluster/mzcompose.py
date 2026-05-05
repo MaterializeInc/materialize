@@ -359,14 +359,14 @@ def workflow_test_github_4443(c: Composition) -> None:
             controller_dataflow_count > 0
         ), "at least one dataflow expected in controller history"
         assert (
-            controller_dataflow_count < 5
+            controller_dataflow_count < 6
         ), "more dataflows than expected in controller history"
         assert replica_command_count > 0, "replica history cannot be empty"
         assert (
             replica_dataflow_count > 0
         ), "at least one dataflow expected in replica history"
         assert (
-            replica_dataflow_count < 5
+            replica_dataflow_count < 6
         ), "more dataflows than expected in replica history"
 
         # execute 400 fast- and slow-path peeks
@@ -412,7 +412,7 @@ def workflow_test_github_4443(c: Composition) -> None:
             controller_dataflow_count > 0
         ), f"at least one dataflow expected in controller history, got {controller_dataflow_count}"
         assert (
-            controller_dataflow_count < 5
+            controller_dataflow_count < 6
         ), f"more dataflows than expected in controller history, got {controller_dataflow_count}"
         assert (
             replica_command_count < 100
@@ -421,7 +421,7 @@ def workflow_test_github_4443(c: Composition) -> None:
             replica_dataflow_count > 0
         ), f"at least one dataflow expected in replica history, got {replica_dataflow_count}"
         assert (
-            replica_dataflow_count < 5
+            replica_dataflow_count < 6
         ), f"more dataflows than expected in replica history, got {replica_dataflow_count}"
 
 

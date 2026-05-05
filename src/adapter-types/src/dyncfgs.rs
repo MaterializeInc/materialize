@@ -230,6 +230,21 @@ pub const CONSOLE_OIDC_SCOPES: Config<&'static str> = Config::new(
     "Space-separated OIDC scopes requested by the web console.",
 );
 
+/// Interval at which to collect per-object arrangement size snapshots for the history table.
+pub const ARRANGEMENT_SIZE_HISTORY_COLLECTION_INTERVAL: Config<Duration> = Config::new(
+    "arrangement_size_history_collection_interval",
+    Duration::from_hours(1),
+    "Interval at which to collect and snapshot per-object arrangement sizes \
+     into mz_internal.mz_object_arrangement_size_history.",
+);
+
+/// How long to retain per-object arrangement size history.
+pub const ARRANGEMENT_SIZE_HISTORY_RETENTION_PERIOD: Config<Duration> = Config::new(
+    "arrangement_size_history_retention_period",
+    Duration::from_hours(7 * 24),
+    "How long to retain rows in mz_internal.mz_object_arrangement_size_history.",
+);
+
 /// Adds the full set of all adapter `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -263,4 +278,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&USER_ID_POOL_BATCH_SIZE)
         .add(&CONSOLE_OIDC_CLIENT_ID)
         .add(&CONSOLE_OIDC_SCOPES)
+        .add(&ARRANGEMENT_SIZE_HISTORY_COLLECTION_INTERVAL)
+        .add(&ARRANGEMENT_SIZE_HISTORY_RETENTION_PERIOD)
 }

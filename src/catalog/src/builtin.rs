@@ -10802,6 +10802,129 @@ pub static MZ_COMPUTE_HYDRATION_TIMES_IND: LazyLock<BuiltinIndex> =
         is_retained_metrics_object: true,
     });
 
+pub static MZ_OBJECT_ARRANGEMENT_SIZES_UNIFIED: LazyLock<BuiltinSource> = LazyLock::new(|| {
+    BuiltinSource {
+        name: "mz_object_arrangement_sizes",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::SOURCE_MZ_OBJECT_ARRANGEMENT_SIZES_OID,
+        desc: RelationDesc::builder()
+            .with_column("replica_id", SqlScalarType::String.nullable(false))
+            .with_column("object_id", SqlScalarType::String.nullable(false))
+            .with_column("size", SqlScalarType::Int64.nullable(true))
+            .finish(),
+        data_source: IntrospectionType::ComputeObjectArrangementSizes.into(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "replica_id",
+                "The ID of the cluster replica. Corresponds to `mz_cluster_replicas.id`.",
+            ),
+            (
+                "object_id",
+                "The ID of the compute object (index or materialized view). Corresponds to `mz_objects.id`.",
+            ),
+            (
+                "size",
+                "The total arrangement heap and batcher size in bytes for this object on this replica. \
+                 Objects smaller than 10 MiB are reported at their exact size; objects 10 MiB or larger \
+                 are rounded to the nearest 10 MiB boundary to reduce per-byte churn in the differential \
+                 collection.",
+            ),
+        ]),
+        is_retained_metrics_object: true,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    }
+});
+
+pub static MZ_OBJECT_ARRANGEMENT_SIZES_IND: LazyLock<BuiltinIndex> =
+    LazyLock::new(|| BuiltinIndex {
+        name: "mz_object_arrangement_sizes_ind",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::INDEX_MZ_OBJECT_ARRANGEMENT_SIZES_IND_OID,
+        sql: "IN CLUSTER mz_catalog_server
+    ON mz_internal.mz_object_arrangement_sizes (replica_id)",
+        is_retained_metrics_object: true,
+    });
+
+/// Identifies [`MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY`] for the schema-migration
+/// guard in `builtin_schema_migration.rs`, which forbids migrating this table
+/// because its startup pruner assumes it is the only source of retractions.
+pub static MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_DESCRIPTION: LazyLock<SystemObjectDescription> =
+    LazyLock::new(|| SystemObjectDescription {
+        schema_name: MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY.schema.to_string(),
+        object_type: CatalogItemType::Table,
+        object_name: MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY.name.to_string(),
+    });
+
+pub static MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY: LazyLock<BuiltinTable> = LazyLock::new(|| {
+    BuiltinTable {
+        name: "mz_object_arrangement_size_history",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::TABLE_MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_OID,
+        desc: RelationDesc::builder()
+            .with_column("replica_id", SqlScalarType::String.nullable(false))
+            .with_column("object_id", SqlScalarType::String.nullable(false))
+            .with_column("size", SqlScalarType::Int64.nullable(false))
+            .with_column(
+                "collection_timestamp",
+                SqlScalarType::TimestampTz { precision: None }.nullable(false),
+            )
+            .with_column("hydration_complete", SqlScalarType::Bool.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "replica_id",
+                "The ID of the cluster replica. Corresponds to `mz_cluster_replicas.id`.",
+            ),
+            (
+                "object_id",
+                "The ID of the compute object (index or materialized view). Corresponds to `mz_objects.id`.",
+            ),
+            (
+                "size",
+                "The total arrangement heap and batcher size in bytes for this object on this replica \
+                 at `collection_timestamp`. Objects below 10 MiB are dropped from the snapshot; \
+                 objects at or above the floor are rounded to the nearest 10 MiB to reduce \
+                 per-byte churn in the underlying differential collection. May reflect a mid-build \
+                 size if `hydration_complete` is `false`.",
+            ),
+            (
+                "collection_timestamp",
+                "The timestamp when this snapshot was collected.",
+            ),
+            (
+                "hydration_complete",
+                "Whether the arrangement had finished its initial hydration on this replica when \
+                 the snapshot was collected. Filter for `true` to consider only stable, post-build \
+                 sizes.",
+            ),
+        ]),
+        is_retained_metrics_object: true,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    }
+});
+
+pub static MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_OBJECT_IND: LazyLock<BuiltinIndex> =
+    LazyLock::new(|| BuiltinIndex {
+        name: "mz_object_arrangement_size_history_object_ind",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::INDEX_MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_OBJECT_IND_OID,
+        sql: "IN CLUSTER mz_catalog_server
+    ON mz_internal.mz_object_arrangement_size_history (object_id)",
+        is_retained_metrics_object: true,
+    });
+
+pub static MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_TS_IND: LazyLock<BuiltinIndex> =
+    LazyLock::new(|| BuiltinIndex {
+        name: "mz_object_arrangement_size_history_ts_ind",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::INDEX_MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_TS_IND_OID,
+        sql: "IN CLUSTER mz_catalog_server
+    ON mz_internal.mz_object_arrangement_size_history (collection_timestamp)",
+        is_retained_metrics_object: true,
+    });
+
 pub static MZ_COMPUTE_HYDRATION_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_compute_hydration_statuses",
     schema: MZ_INTERNAL_SCHEMA,
@@ -17085,6 +17208,11 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS),
         Builtin::Source(&MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED),
         Builtin::Source(&MZ_COMPUTE_HYDRATION_TIMES),
+        Builtin::Source(&MZ_OBJECT_ARRANGEMENT_SIZES_UNIFIED),
+        Builtin::Index(&MZ_OBJECT_ARRANGEMENT_SIZES_IND),
+        Builtin::Table(&MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY),
+        Builtin::Index(&MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_OBJECT_IND),
+        Builtin::Index(&MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_TS_IND),
         Builtin::Log(&MZ_COMPUTE_LIR_MAPPING_PER_WORKER),
         Builtin::View(&MZ_LIR_MAPPING),
         Builtin::Source(&MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES),

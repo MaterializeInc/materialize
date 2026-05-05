@@ -1,0 +1,53 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Exercises the `size` quantization formula used by the introspection subscribe
+# that populates `mz_internal.mz_object_arrangement_sizes`. The formula lives in
+# `src/adapter/src/coord/introspection.rs`.
+#
+# Semantics:
+#   - byte counts below 10 MiB (10485760) are reported exactly
+#   - byte counts >= 10 MiB round to the nearest 10 MiB boundary using
+#     `((n + 5 MiB) / 10 MiB) * 10 MiB`
+
+mode cockroach
+
+# Applies the quantization formula to a spread of raw byte counts.
+statement ok
+CREATE VIEW arrangement_size_quantize AS
+SELECT
+    n,
+    CASE
+        WHEN n < 10485760 THEN n::int8
+        ELSE ((n + 5242880) / 10485760 * 10485760)::int8
+    END AS size
+FROM (VALUES
+    (0),               -- zero bytes
+    (1),               -- tiny arrangement
+    (10485759),        -- one byte below the threshold: reported exactly
+    (10485760),        -- exactly 10 MiB: already on a boundary
+    (10485761),        -- one byte past threshold: rounds down to 10 MiB
+    (15728640),        -- 15 MiB (boundary midpoint): rounds up to 20 MiB
+    (15728639),        -- one byte below midpoint: rounds down to 10 MiB
+    (20971520),        -- 20 MiB: already on a boundary
+    (104857600)        -- 100 MiB: already on a boundary
+) AS v(n);
+
+query II
+SELECT n, size FROM arrangement_size_quantize ORDER BY n
+----
+0  0
+1  1
+10485759  10485759
+10485760  10485760
+10485761  10485760
+15728639  10485760
+15728640  20971520
+20971520  20971520
+104857600  104857600

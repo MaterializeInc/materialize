@@ -349,6 +349,9 @@ pub enum Message {
     StorageUsageFetch,
     StorageUsageUpdate(ShardsUsageReferenced),
     StorageUsagePrune(Vec<BuiltinTableUpdate>),
+    ArrangementSizesSchedule,
+    ArrangementSizesSnapshot,
+    ArrangementSizesPrune(Vec<BuiltinTableUpdate>),
     /// Performs any cleanup and logging actions necessary for
     /// finalizing a statement execution.
     RetireExecute {
@@ -485,6 +488,9 @@ impl Message {
             Message::StorageUsageFetch => "storage_usage_fetch",
             Message::StorageUsageUpdate(_) => "storage_usage_update",
             Message::StorageUsagePrune(_) => "storage_usage_prune",
+            Message::ArrangementSizesSchedule => "arrangement_sizes_schedule",
+            Message::ArrangementSizesSnapshot => "arrangement_sizes_snapshot",
+            Message::ArrangementSizesPrune(_) => "arrangement_sizes_prune",
             Message::RetireExecute { .. } => "retire_execute",
             Message::ExecuteSingleStatementTransaction { .. } => {
                 "execute_single_statement_transaction"
@@ -3537,6 +3543,7 @@ impl Coordinator {
             });
 
             self.schedule_storage_usage_collection().await;
+            self.schedule_arrangement_sizes_collection().await;
             self.spawn_privatelink_vpc_endpoints_watch_task();
             self.spawn_statement_logging_task();
             flags::tracing_config(self.catalog.system_config()).apply(&self.tracing_handle);
@@ -4153,6 +4160,49 @@ impl Coordinator {
         });
     }
 
+    /// Retracts `mz_object_arrangement_size_history` rows older than the
+    /// `arrangement_size_history_retention_period` dyncfg.
+    ///
+    /// Must only run at startup: it reads at the oracle read timestamp and
+    /// writes retractions at the current write timestamp, which is only safe
+    /// when no other writes are in flight. See [the equivalent storage-usage
+    /// pruner](Self::prune_storage_usage_events_on_startup) for the same
+    /// reasoning.
+    async fn prune_arrangement_sizes_history_on_startup(&self) {
+        // The catalog server is not writable in read-only mode.
+        if self.controller.read_only() {
+            return;
+        }
+
+        let retention_period = mz_adapter_types::dyncfgs::ARRANGEMENT_SIZE_HISTORY_RETENTION_PERIOD
+            .get(self.catalog().system_config().dyncfgs());
+        let item_id = self
+            .catalog()
+            .resolve_builtin_table(&mz_catalog::builtin::MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY);
+        let global_id = self.catalog.get_entry(&item_id).latest_global_id();
+        let read_ts = self.get_local_read_ts().await;
+        let current_contents_fut = self
+            .controller
+            .storage_collections
+            .snapshot(global_id, read_ts);
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+        spawn(|| "arrangement_sizes_history_prune", async move {
+            let mut current_contents = current_contents_fut
+                .await
+                .unwrap_or_terminate("cannot fail to fetch snapshot");
+            differential_dataflow::consolidation::consolidate(&mut current_contents);
+
+            let cutoff_ts = u128::from(read_ts).saturating_sub(retention_period.as_millis());
+            let expired =
+                arrangement_sizes_expired_retractions(current_contents, cutoff_ts, item_id);
+
+            // TODO(arrangement-sizes): when the writeable-catalog-server
+            // plumbing in https://github.com/MaterializeInc/materialize/pull/35436
+            // lands, retract directly on `mz_catalog_server`.
+            let _ = internal_cmd_tx.send(Message::ArrangementSizesPrune(expired));
+        });
+    }
+
     fn current_credit_consumption_rate(&self) -> Numeric {
         self.catalog()
             .user_cluster_replicas()
@@ -4170,6 +4220,40 @@ impl Coordinator {
             })
             .sum()
     }
+}
+
+/// Returns retraction updates for rows in a consolidated
+/// `mz_object_arrangement_size_history` snapshot whose `collection_timestamp`
+/// (column 3) is strictly before `cutoff_ts`.
+///
+/// Panics if any input row has `diff != 1`: the caller must consolidate first,
+/// and a consolidated history table should never contain retractions because
+/// the only source of retractions is this function itself.
+fn arrangement_sizes_expired_retractions(
+    rows: impl IntoIterator<Item = (mz_repr::Row, i64)>,
+    cutoff_ts: u128,
+    item_id: CatalogItemId,
+) -> Vec<BuiltinTableUpdate> {
+    let mut expired = Vec::new();
+    for (row, diff) in rows {
+        assert_eq!(
+            diff, 1,
+            "consolidated contents should not contain retractions: ({row:#?}, {diff:#?})"
+        );
+        let collection_timestamp = row
+            .unpack()
+            .get(3)
+            .expect("definition of mz_object_arrangement_size_history changed")
+            .unwrap_timestamptz()
+            .timestamp_millis();
+        let collection_timestamp: u128 = collection_timestamp
+            .try_into()
+            .expect("all collections happen after Jan 1 1970");
+        if collection_timestamp < cutoff_ts {
+            expired.push(BuiltinTableUpdate::row(item_id, row, Diff::MINUS_ONE));
+        }
+    }
+    expired
 }
 
 #[cfg(test)]
@@ -4679,6 +4763,8 @@ pub fn serve(
                             .await;
                     }
 
+                    coord.prune_arrangement_sizes_history_on_startup().await;
+
                     Ok(())
                 });
                 let ok = bootstrap.is_ok();
@@ -5094,5 +5180,58 @@ mod id_pool_tests {
     fn test_refill_invalid_range_panics() {
         let mut pool = IdPool::empty();
         pool.refill(10, 5);
+    }
+}
+
+#[cfg(test)]
+mod arrangement_sizes_pruner_tests {
+    use mz_repr::catalog_item_id::CatalogItemId;
+    use mz_repr::{Datum, Row};
+
+    use super::arrangement_sizes_expired_retractions;
+
+    // Pack a row shaped like `mz_object_arrangement_size_history`: the pruner
+    // only cares about column 3 (`collection_timestamp`), but we stuff the
+    // other three columns with realistic values so shape changes would fail.
+    fn history_row(ts_ms: i64) -> Row {
+        let dt = mz_ore::now::to_datetime(ts_ms.try_into().expect("non-negative"));
+        Row::pack_slice(&[
+            Datum::String("r1"),
+            Datum::String("u1"),
+            Datum::Int64(123),
+            Datum::TimestampTz(dt.try_into().expect("fits in TimestampTz")),
+        ])
+    }
+
+    fn item_id() -> CatalogItemId {
+        // Any CatalogItemId will do; tests don't dispatch on it.
+        CatalogItemId::User(42)
+    }
+
+    #[mz_ore::test]
+    fn empty_input_produces_no_retractions() {
+        let out = arrangement_sizes_expired_retractions(Vec::new(), 1_000, item_id());
+        assert!(out.is_empty());
+    }
+
+    #[mz_ore::test]
+    fn retracts_only_rows_strictly_before_cutoff() {
+        // Mixes both sides of the filter and includes a row at exactly
+        // the cutoff timestamp to pin down the strict-less-than boundary.
+        let rows = vec![
+            (history_row(100), 1),
+            (history_row(500), 1),
+            (history_row(1_000), 1), // at cutoff: kept (strict <)
+            (history_row(5_000), 1),
+        ];
+        let out = arrangement_sizes_expired_retractions(rows, 1_000, item_id());
+        assert_eq!(out.len(), 2);
+    }
+
+    #[mz_ore::test]
+    #[should_panic(expected = "consolidated contents should not contain retractions")]
+    fn retraction_in_input_panics() {
+        let rows = vec![(history_row(100), -1)];
+        let _ = arrangement_sizes_expired_retractions(rows, 1_000, item_id());
     }
 }

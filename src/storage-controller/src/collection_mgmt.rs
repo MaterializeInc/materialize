@@ -678,7 +678,8 @@ where
             | IntrospectionType::ComputeOperatorHydrationStatus
             | IntrospectionType::ComputeMaterializedViewRefreshes
             | IntrospectionType::ComputeErrorCounts
-            | IntrospectionType::ComputeHydrationTimes => {
+            | IntrospectionType::ComputeHydrationTimes
+            | IntrospectionType::ComputeObjectArrangementSizes => {
                 // Differential collections start with an empty
                 // desired state. No need to manually reset.
             }
@@ -1096,7 +1097,8 @@ impl AppendOnlyWriteTask {
                 | Some(introspection_type @ IntrospectionType::ComputeOperatorHydrationStatus)
                 | Some(introspection_type @ IntrospectionType::ComputeMaterializedViewRefreshes)
                 | Some(introspection_type @ IntrospectionType::ComputeErrorCounts)
-                | Some(introspection_type @ IntrospectionType::ComputeHydrationTimes) => {
+                | Some(introspection_type @ IntrospectionType::ComputeHydrationTimes)
+                | Some(introspection_type @ IntrospectionType::ComputeObjectArrangementSizes) => {
                     unreachable!("not append-only collection: {introspection_type:?}")
                 }
             };
@@ -1273,7 +1275,8 @@ impl AppendOnlyWriteTask {
             | introspection_type @ IntrospectionType::ComputeOperatorHydrationStatus
             | introspection_type @ IntrospectionType::ComputeMaterializedViewRefreshes
             | introspection_type @ IntrospectionType::ComputeErrorCounts
-            | introspection_type @ IntrospectionType::ComputeHydrationTimes => {
+            | introspection_type @ IntrospectionType::ComputeHydrationTimes
+            | introspection_type @ IntrospectionType::ComputeObjectArrangementSizes => {
                 unreachable!("not append-only collection: {introspection_type:?}")
             }
         };

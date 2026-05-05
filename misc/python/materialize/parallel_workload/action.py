@@ -1545,6 +1545,16 @@ class FlipFlagsAction(Action):
             "'1s'",
             "'10s'",
         ]
+        self.flags_with_values["arrangement_size_history_collection_interval"] = [
+            "'1s'",
+            "'10s'",
+            "'1h'",
+        ]
+        self.flags_with_values["arrangement_size_history_retention_period"] = [
+            "'1m'",
+            "'1h'",
+            "'7d'",
+        ]
         # Note: it's not safe to re-enable this flag after writing with `persist_validate_part_bounds_on_write`,
         # since those new-style parts may fail our old-style validation.
         self.flags_with_values["persist_validate_part_bounds_on_read"] = ["FALSE"]
