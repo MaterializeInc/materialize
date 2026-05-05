@@ -376,42 +376,61 @@ where
                 // exactly one element to each.
                 let (sd, st, sr) = self_c;
 
-                let mut owned_d = D::default();
-                let mut owned_t = T::default();
+                // Pre-size each output leaf for the worst-case merge
+                // (no consolidation): `len(left) + len(right)` records'
+                // worth of bytes. `reserve_for` walks each input's
+                // `as_bytes` so it sizes variable-length leaves like
+                // `Rows` correctly — both the `bounds: Vec<u64>` and the
+                // `values: Vec<u8>` get their share.
+                //
+                // Skip when chunks are very large: the input bound
+                // over-reserves any time consolidation is heavy, and the
+                // outer driver yields us near the ship threshold anyway,
+                // so headroom past a few MiB of output is wasted. Past
+                // `RESERVE_RECORD_THRESHOLD` we let `Vec`'s geometric
+                // grow handle it — amortized that's at most 2× the
+                // actual output, which beats committing pages we won't
+                // touch on a 256 MiB allocation.
+                const RESERVE_RECORD_THRESHOLD: usize = 1_000_000;
+                if upper_l + upper_r <= RESERVE_RECORD_THRESHOLD {
+                    use columnar::Container as _;
+                    let inputs = [left_borrow, right_borrow];
+                    sd.reserve_for(inputs.iter().map(|b| b.0));
+                    st.reserve_for(inputs.iter().map(|b| b.1));
+                    sr.reserve_for(inputs.iter().map(|b| b.2));
+                }
+
                 let mut stash = R::default();
 
-                // Yield mid-merge once we hit the ship threshold, so the
-                // driver can swap in a fresh chunk and ship the full one.
-                // The check matches `Column::at_capacity` and `ColumnBuilder`:
-                // serialized size within 10% of the next 2 MiB boundary.
+                // Mid-merge ship-threshold check, matching the heuristic
+                // used by `Column::at_capacity` and `ColumnBuilder`. The
+                // tuple `(sd.borrow(), st.borrow(), sr.borrow())` chains
+                // each leaf's `as_bytes` iterator, so passing it to
+                // `at_serialized_capacity` reuses the canonical
+                // `indexed::length_in_words` formula on the per-leaf
+                // borrows we split earlier.
                 //
-                // We aggregate across the three leaf borrows by chaining
-                // their `as_bytes` iterators, which is what `length_in_words`
-                // walks; this matches what calling `at_serialized_capacity`
-                // on the parent borrow would compute, but avoids reborrowing
-                // the parent (which we've split into `sd`/`st`/`sr`).
-                //
-                // Calling this in the loop condition turned out to be
-                // cheaper than tick-amortizing it: the cold-path branch is
-                // well-predicted (always false on chunks below the ship
-                // threshold), the leaf-length sums inline cleanly, and any
-                // counter / labeled-break shape we tried added more inner
-                // loop overhead than it saved.
-                let at_ship_threshold = |sd: &D::Container, st: &T::Container, sr: &R::Container| {
-                    use columnar::AsBytes as _;
-                    use columnar::Borrow as _;
-                    let words = 1
-                        + sd.borrow().as_bytes().map(|(_a, b)| 1 + b.len().div_ceil(8)).sum::<usize>()
-                        + st.borrow().as_bytes().map(|(_a, b)| 1 + b.len().div_ceil(8)).sum::<usize>()
-                        + sr.borrow().as_bytes().map(|(_a, b)| 1 + b.len().div_ceil(8)).sum::<usize>();
-                    let round = (words + ((1 << 18) - 1)) & !((1 << 18) - 1);
-                    round - words < round / 10
-                };
+                // The check walks 4–5 leaf slices per call, which is
+                // non-trivial on variable-length leaves like `Rows`; the
+                // caller checks every `THRESHOLD_PERIOD_MASK + 1`
+                // iterations rather than per-iter. At the ship threshold
+                // a chunk is ~65 K records, so overshooting by ~1 K
+                // records has no practical impact — the outer
+                // `at_capacity` check sees the oversize chunk and ships
+                // it regardless.
+                let at_ship_threshold =
+                    |sd: &D::Container, st: &T::Container, sr: &R::Container| {
+                        use columnar::Borrow as _;
+                        crate::columnar::at_serialized_capacity(&(
+                            sd.borrow(),
+                            st.borrow(),
+                            sr.borrow(),
+                        ))
+                    };
+                const THRESHOLD_PERIOD_MASK: u32 = 1023;
+                let mut iter: u32 = 0;
 
-                while left_pos[0] < upper_l
-                    && right_pos[0] < upper_r
-                    && !at_ship_threshold(sd, st, sr)
-                {
+                while left_pos[0] < upper_l && right_pos[0] < upper_r {
                     let d1 = l_d.get(left_pos[0]);
                     let t1 = l_t.get(left_pos[0]);
                     let d2 = r_d.get(right_pos[0]);
@@ -473,15 +492,20 @@ where
                             R::copy_from(&mut stash, r1);
                             stash.plus_equals(&r2);
                             if !stash.is_zero() {
-                                D::copy_from(&mut owned_d, d1);
-                                T::copy_from(&mut owned_t, t1);
-                                sd.push(&owned_d);
-                                st.push(&owned_t);
+                                sd.push(d1);
+                                st.push(t1);
                                 sr.push(&stash);
                             }
                             left_pos[0] += 1;
                             right_pos[0] += 1;
                         }
+                    }
+
+                    // Amortized ship-threshold check; see comment above
+                    // `at_ship_threshold` for rationale.
+                    iter = iter.wrapping_add(1);
+                    if iter & THRESHOLD_PERIOD_MASK == 0 && at_ship_threshold(sd, st, sr) {
+                        break;
                     }
                 }
             }
