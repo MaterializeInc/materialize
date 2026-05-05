@@ -1888,6 +1888,35 @@ impl StorageController for Controller {
         // For ingestions, we fabricate a new hold that will propagate through
         // the cluster and then back to us.
 
+        // Capture the active replicas for objects before set_hold_policies to avoid racing
+        // absorb_compaction.
+        let mut active_replicas_for_object: BTreeMap<GlobalId, BTreeSet<ReplicaId>> =
+            BTreeMap::new();
+        for id in ingestions_to_drop.iter().chain(collections_to_drop.iter()) {
+            let collection = self
+                .collections
+                .get(id)
+                .expect("list populated after checking that self.collections contains it");
+
+            let instance = match &collection.extra_state {
+                CollectionStateExtra::Ingestion(ingestion) => Some(ingestion.instance_id),
+                CollectionStateExtra::Export(export) => Some(export.cluster_id()),
+                CollectionStateExtra::None => None,
+            }
+            .and_then(|i| self.instances.get(&i));
+
+            // Record which replicas were running a collection, so that we can
+            // match DroppedId messages against them and eventually remove state
+            // from self.dropped_objects
+            if let Some(instance) = instance {
+                let active_replicas = instance.get_active_replicas_for_object(id);
+                if !active_replicas.is_empty() {
+                    let prev = active_replicas_for_object.insert(*id, active_replicas);
+                    assert_none!(prev, "duplicate object id {id}");
+                }
+            }
+        }
+
         // We don't explicitly remove read capabilities! Downgrading the
         // frontier of the source to `[]` (the empty Antichain), will propagate
         // to the storage dependencies.
@@ -1943,39 +1972,27 @@ impl StorageController for Controller {
                 .remove(id)
                 .expect("list populated after checking that self.collections contains it");
 
-            let instance = match &collection.extra_state {
-                CollectionStateExtra::Ingestion(ingestion) => Some(ingestion.instance_id),
-                CollectionStateExtra::Export(export) => Some(export.cluster_id()),
-                CollectionStateExtra::None => None,
-            }
-            .and_then(|i| self.instances.get(&i));
-
-            // Record which replicas were running a collection, so that we can
-            // match DroppedId messages against them and eventually remove state
-            // from self.dropped_objects
-            if let Some(instance) = instance {
-                let active_replicas = instance.get_active_replicas_for_object(id);
-                if !active_replicas.is_empty() {
-                    // The remap collection of an ingestion doesn't have extra
-                    // state and doesn't have an instance_id, but we still get
-                    // upper updates for them, so want to make sure to populate
-                    // dropped_ids.
-                    // TODO(aljoscha): All this is a bit icky. But here we are
-                    // for now...
-                    match &collection.data_source {
-                        DataSource::Ingestion(ingestion_desc) => {
-                            if *id != ingestion_desc.remap_collection_id {
-                                self.dropped_objects.insert(
-                                    ingestion_desc.remap_collection_id,
-                                    active_replicas.clone(),
-                                );
-                            }
+            // Populate `self.dropped_objects` with the active replicas captured before `set_hold_policies`.
+            if let Some(active_replicas) = active_replicas_for_object.remove(id) {
+                // The remap collection of an ingestion doesn't have extra
+                // state and doesn't have an instance_id, but we still get
+                // upper updates for them, so want to make sure to populate
+                // dropped_ids.
+                // TODO(aljoscha): All this is a bit icky. But here we are
+                // for now...
+                match &collection.data_source {
+                    DataSource::Ingestion(ingestion_desc) => {
+                        if *id != ingestion_desc.remap_collection_id {
+                            self.dropped_objects.insert(
+                                ingestion_desc.remap_collection_id,
+                                active_replicas.clone(),
+                            );
                         }
-                        _ => {}
                     }
-
-                    self.dropped_objects.insert(*id, active_replicas);
+                    _ => {}
                 }
+
+                self.dropped_objects.insert(*id, active_replicas);
             }
         }
 
@@ -2007,6 +2024,34 @@ impl StorageController for Controller {
 
         // TODO: ideally we'd advance the write frontier ourselves here, but this function's
         // not yet marked async.
+
+        // Capture active replicas before set_hold_policies to avoid racing absorb_compaction.
+        let mut active_replicas_for_object: BTreeMap<GlobalId, BTreeSet<ReplicaId>> =
+            BTreeMap::new();
+        for id in sinks_to_drop.iter() {
+            let collection = self
+                .collections
+                .get(id)
+                .expect("list populated after checking that self.collections contains it");
+
+            let instance = match &collection.extra_state {
+                CollectionStateExtra::Ingestion(ingestion) => Some(ingestion.instance_id),
+                CollectionStateExtra::Export(export) => Some(export.cluster_id()),
+                CollectionStateExtra::None => None,
+            }
+            .and_then(|i| self.instances.get(&i));
+
+            // Record how many replicas were running an export, so that we can
+            // match `DroppedId` messages against it and eventually remove state
+            // from `self.dropped_objects`.
+            if let Some(instance) = instance {
+                let active_replicas = instance.get_active_replicas_for_object(id);
+                if !active_replicas.is_empty() {
+                    let prev = active_replicas_for_object.insert(*id, active_replicas);
+                    assert_none!(prev, "duplicate object id {id}");
+                }
+            }
+        }
 
         // We don't explicitly remove read capabilities! Downgrading the
         // frontier of the source to `[]` (the empty Antichain), will propagate
@@ -2050,26 +2095,13 @@ impl StorageController for Controller {
         // Remove collection/export state
         for id in sinks_to_drop.iter() {
             tracing::info!(%id, "dropping export state");
-            let collection = self
-                .collections
+            self.collections
                 .remove(id)
                 .expect("list populated after checking that self.collections contains it");
 
-            let instance = match &collection.extra_state {
-                CollectionStateExtra::Ingestion(ingestion) => Some(ingestion.instance_id),
-                CollectionStateExtra::Export(export) => Some(export.cluster_id()),
-                CollectionStateExtra::None => None,
-            }
-            .and_then(|i| self.instances.get(&i));
-
-            // Record how many replicas were running an export, so that we can
-            // match `DroppedId` messages against it and eventually remove state
-            // from `self.dropped_objects`.
-            if let Some(instance) = instance {
-                let active_replicas = instance.get_active_replicas_for_object(id);
-                if !active_replicas.is_empty() {
-                    self.dropped_objects.insert(*id, active_replicas);
-                }
+            // Populate `self.dropped_objects` with active replicas captured before `set_hold_policies`.
+            if let Some(active_replicas) = active_replicas_for_object.remove(id) {
+                self.dropped_objects.insert(*id, active_replicas);
             }
         }
 
