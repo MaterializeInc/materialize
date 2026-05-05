@@ -55,7 +55,10 @@ class MeasurementType(Enum):
     JEMALLOC_RETAINED_CLUSTERD = auto()
 
     def __str__(self) -> str:
-        return self.name.lower()
+        # Short display names so the report's TYPE column stays narrow.
+        # Existing wallclock / memory_mz / memory_clusterd labels are
+        # preserved for compatibility with tooling that parses reports.
+        return _DISPLAY_NAMES.get(self, self.name.lower())
 
     def is_amount(self) -> bool:
         return self in {
@@ -73,6 +76,18 @@ class MeasurementType(Enum):
 
     def is_lower_value_better(self) -> bool:
         return True
+
+
+_DISPLAY_NAMES: dict[MeasurementType, str] = {
+    MeasurementType.MEMORY_PEAK_MZ: "peak_mz",
+    MeasurementType.MEMORY_PEAK_CLUSTERD: "peak_clusterd",
+    MeasurementType.JEMALLOC_ALLOCATED_MZ: "je_alloc_mz",
+    MeasurementType.JEMALLOC_RESIDENT_MZ: "je_resid_mz",
+    MeasurementType.JEMALLOC_RETAINED_MZ: "je_retain_mz",
+    MeasurementType.JEMALLOC_ALLOCATED_CLUSTERD: "je_alloc_clusterd",
+    MeasurementType.JEMALLOC_RESIDENT_CLUSTERD: "je_resid_clusterd",
+    MeasurementType.JEMALLOC_RETAINED_CLUSTERD: "je_retain_clusterd",
+}
 
 
 @dataclass
