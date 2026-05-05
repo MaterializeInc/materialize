@@ -76,3 +76,64 @@ fn is_global(addr: IpAddr) -> bool {
         IpAddr::V6(ip) => !(ip.is_loopback() || ip.is_unspecified()),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Use IP literals so the tests don't depend on /etc/hosts or DNS.
+    const PRIVATE_V4: &str = "127.0.0.1";
+    const PUBLIC_V4: &str = "8.8.8.8";
+    const LOOPBACK_V6: &str = "::1";
+
+    #[crate::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn resolve_address_rejects_loopback_v4_when_enforced() {
+        let err = resolve_address(PRIVATE_V4, true)
+            .await
+            .expect_err("loopback should be rejected");
+        assert!(
+            matches!(err, DnsResolutionError::PrivateAddress),
+            "got {err:?}"
+        );
+    }
+
+    #[crate::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn resolve_address_rejects_loopback_v6_when_enforced() {
+        let err = resolve_address(LOOPBACK_V6, true)
+            .await
+            .expect_err("::1 should be rejected");
+        assert!(
+            matches!(err, DnsResolutionError::PrivateAddress),
+            "got {err:?}"
+        );
+    }
+
+    #[crate::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn resolve_address_allows_public_v4_when_enforced() {
+        let ips = resolve_address(PUBLIC_V4, true)
+            .await
+            .expect("public IP should resolve");
+        assert!(ips.contains(&PUBLIC_V4.parse::<IpAddr>().unwrap()));
+    }
+
+    #[crate::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn resolve_address_allows_loopback_when_not_enforced() {
+        let ips = resolve_address(PRIVATE_V4, false)
+            .await
+            .expect("loopback should resolve when enforcement is off");
+        assert!(ips.contains(&PRIVATE_V4.parse::<IpAddr>().unwrap()));
+    }
+
+    #[crate::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn resolve_address_strips_port() {
+        let ips = resolve_address(&format!("{PUBLIC_V4}:443"), true)
+            .await
+            .expect("host:port form should parse");
+        assert!(ips.contains(&PUBLIC_V4.parse::<IpAddr>().unwrap()));
+    }
+}

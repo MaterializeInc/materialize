@@ -120,6 +120,67 @@ pub enum HttpChecksum {
     LastModified(String),
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `reqwest::dns::Name` has no public constructor, so we exercise
+    /// [`MzHttpResolver`] through a fully-built [`Client`]. `localhost`
+    /// resolves via /etc/hosts on supported platforms and stays inside the
+    /// resolver path (an IP literal would short-circuit DNS entirely).
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn build_http_client_rejects_localhost_when_enforced() {
+        let client = build_http_client(true).expect("build client");
+        let err = client
+            .get("http://localhost:1/")
+            .send()
+            .await
+            .expect_err("request must fail at DNS resolution");
+        // Walk the error chain for the resolver's PrivateAddress message —
+        // reqwest wraps it inside its connect error, so a `to_string()` on
+        // the top-level error is not enough.
+        let mut found = false;
+        let mut current: &dyn std::error::Error = &err;
+        loop {
+            if current.to_string().to_lowercase().contains("private") {
+                found = true;
+                break;
+            }
+            match current.source() {
+                Some(src) => current = src,
+                None => break,
+            }
+        }
+        assert!(found, "expected private-address rejection, got: {err:?}");
+    }
+
+    /// With enforcement off the resolver returns the loopback IP, so the
+    /// request reaches the connect stage and fails for a different reason
+    /// (port 1 is not listening). The point is that DNS does *not* fail.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn build_http_client_allows_localhost_when_not_enforced() {
+        let client = build_http_client(false).expect("build client");
+        let err = client
+            .get("http://localhost:1/")
+            .send()
+            .await
+            .expect_err("port 1 should not be listening");
+        let mut current: &dyn std::error::Error = &err;
+        loop {
+            assert!(
+                !current.to_string().to_lowercase().contains("private"),
+                "expected a connect error, not a DNS rejection: {err:?}"
+            );
+            match current.source() {
+                Some(src) => current = src,
+                None => break,
+            }
+        }
+    }
+}
+
 impl OneshotSource for HttpOneshotSource {
     type Object = HttpObject;
     type Checksum = HttpChecksum;

@@ -103,3 +103,57 @@ impl Service<Name> for MzAwsResolver {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::net::IpAddr;
+    use std::str::FromStr;
+
+    use mz_ore::netio::DnsResolutionError;
+
+    use super::*;
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn resolver_rejects_loopback_when_enforced() {
+        let mut resolver = MzAwsResolver {
+            enforce_external_addresses: true,
+        };
+        let name = Name::from_str("127.0.0.1").unwrap();
+        let err = resolver.call(name).await.expect_err("must reject loopback");
+        assert!(
+            matches!(err, DnsResolutionError::PrivateAddress),
+            "got {err:?}"
+        );
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn resolver_allows_loopback_when_not_enforced() {
+        let mut resolver = MzAwsResolver {
+            enforce_external_addresses: false,
+        };
+        let name = Name::from_str("127.0.0.1").unwrap();
+        let addrs: Vec<SocketAddr> = resolver
+            .call(name)
+            .await
+            .expect("loopback should resolve when enforcement is off")
+            .collect();
+        assert!(addrs.iter().any(|a| a.ip() == IpAddr::from([127, 0, 0, 1])));
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn resolver_allows_public_when_enforced() {
+        let mut resolver = MzAwsResolver {
+            enforce_external_addresses: true,
+        };
+        let name = Name::from_str("8.8.8.8").unwrap();
+        let addrs: Vec<SocketAddr> = resolver
+            .call(name)
+            .await
+            .expect("public IP should resolve")
+            .collect();
+        assert!(addrs.iter().any(|a| a.ip() == IpAddr::from([8, 8, 8, 8])));
+    }
+}
