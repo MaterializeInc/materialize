@@ -9,6 +9,11 @@
 
 import {
   Box,
+  Icon,
+  IconButton,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
   Skeleton,
   Table,
   Tbody,
@@ -17,11 +22,14 @@ import {
   Thead,
   Tooltip,
   Tr,
+  useTheme,
 } from "@chakra-ui/react";
 import { flexRender, Header, SortDirection } from "@tanstack/react-table";
 import React from "react";
 
-import { ChevronDownIcon, InfoIcon } from "~/icons";
+import { ChevronDownIcon, FilterIcon, InfoIcon } from "~/icons";
+import { MaterializeTheme } from "~/theme";
+import { viewportOverflowModifier } from "~/theme/components/Popover";
 
 import { UniversalTableProps } from "./tableTypes";
 
@@ -38,6 +46,58 @@ const SortIndicator = ({ direction }: { direction: SortDirection | false }) => {
   );
 };
 
+const ColumnFilterTrigger = <TData,>({
+  header,
+}: {
+  header: Header<TData, unknown>;
+}) => {
+  const { colors } = useTheme<MaterializeTheme>();
+  const renderFilter = header.column.columnDef.meta?.renderFilter;
+  if (!renderFilter) return null;
+  const isActive = header.column.getFilterValue() !== undefined;
+  return (
+    <Popover
+      gutter={2}
+      modifiers={viewportOverflowModifier}
+      variant="dropdown"
+      placement="bottom-end"
+    >
+      <PopoverTrigger>
+        <IconButton
+          aria-label={`Filter ${header.column.id}`}
+          icon={
+            <Icon
+              as={FilterIcon}
+              color={
+                isActive
+                  ? colors.accent.brightPurple
+                  : colors.foreground.secondary
+              }
+            />
+          }
+          size="xs"
+          variant="ghost"
+          minW="5"
+          height="5"
+          ml={1}
+          onClick={(e) => {
+            // Don't bubble into the header's sort-on-click handler.
+            e.stopPropagation();
+          }}
+        />
+      </PopoverTrigger>
+      <PopoverContent
+        motionProps={{ animate: false }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <Box width="280px">
+          {renderFilter(header.column, header.getContext().table)}
+        </Box>
+      </PopoverContent>
+    </Popover>
+  );
+};
+
 const ColumnHeader = <TData,>({
   header,
 }: {
@@ -45,6 +105,7 @@ const ColumnHeader = <TData,>({
 }) => {
   const tooltip = header.column.columnDef.meta?.tooltip;
   const canSort = header.column.getCanSort();
+  const canFilter = !!header.column.columnDef.meta?.renderFilter;
 
   return (
     <Th
@@ -68,6 +129,7 @@ const ColumnHeader = <TData,>({
             <InfoIcon ml={1} />
           </Tooltip>
         )}
+        {canFilter && <ColumnFilterTrigger header={header} />}
       </Box>
     </Th>
   );
@@ -99,6 +161,7 @@ export const UniversalTable = <TData,>({
   onRowClick,
   isLoading = false,
   skeletonRowCount = SKELETON_ROW_COUNT,
+  rowSx,
   "data-testid": testId,
 }: UniversalTableProps<TData>) => {
   const headerGroups = table.getHeaderGroups();
@@ -126,6 +189,7 @@ export const UniversalTable = <TData,>({
               onClick={onRowClick ? () => onRowClick(row.original) : undefined}
               sx={{
                 cursor: onRowClick ? "pointer" : undefined,
+                ...rowSx,
               }}
             >
               {row.getVisibleCells().map((cell) => (
