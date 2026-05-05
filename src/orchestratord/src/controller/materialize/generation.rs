@@ -1132,6 +1132,10 @@ fn create_environmentd_statefulset_object(
         mz.environmentd_app_name(),
     );
     pod_template_labels.insert("app".to_owned(), "environmentd".to_string());
+    pod_template_labels.insert(
+        "app.kubernetes.io/name".to_owned(),
+        "environmentd".to_string(),
+    );
     pod_template_labels.extend(
         mz.spec
             .pod_labels
@@ -1278,12 +1282,19 @@ fn create_environmentd_statefulset_object(
         ..Default::default()
     };
 
+    let mut statefulset_labels = mz.default_labels();
+    statefulset_labels.insert(
+        "app.kubernetes.io/name".to_owned(),
+        "environmentd".to_string(),
+    );
+
     StatefulSet {
         metadata: ObjectMeta {
             annotations: Some(btreemap! {
                 "materialize.cloud/generation".to_owned() => generation.to_string(),
                 "materialize.cloud/force".to_owned() => mz.spec.force_rollout.to_string(),
             }),
+            labels: Some(statefulset_labels),
             ..mz.managed_resource_meta(mz.environmentd_statefulset_name(generation))
         },
         spec: Some(statefulset_spec),
