@@ -56,12 +56,6 @@ class Executor:
     def DockerMemPeakResetClusterd(self) -> bool:
         raise NotImplementedError
 
-    def JemallocMz(self) -> dict[str, int] | None:
-        raise NotImplementedError
-
-    def JemallocClusterd(self) -> dict[str, int] | None:
-        raise NotImplementedError
-
 
 class Docker(Executor):
     def __init__(
@@ -122,13 +116,6 @@ class Docker(Executor):
 
     def DockerMemPeakResetClusterd(self) -> bool:
         return self._composition.mem_peak_reset("clusterd")
-
-    def JemallocMz(self) -> dict[str, int] | None:
-        # environmentd nests the prof router under `/prof/`.
-        return self._composition.jemalloc_stats("materialized", path="/prof/")
-
-    def JemallocClusterd(self) -> dict[str, int] | None:
-        return self._composition.jemalloc_stats("clusterd")
 
 
 class MzCloud(Executor):

@@ -156,20 +156,10 @@ For each iteration the framework records:
 
 * `memory_mz` / `memory_clusterd`: cgroup `memory.current` of the materialized
   and clusterd containers, sampled once after the workload completes.
-* `memory_peak_mz` / `memory_peak_clusterd`: cgroup `memory.peak` (cgroup v2)
-  or `memory.max_usage_in_bytes` (cgroup v1), reset before each iteration so
-  the value reflects this iteration's high-water mark rather than the peak
-  since container start.
-* `jemalloc_allocated_*`, `jemalloc_resident_*`, `jemalloc_retained_*`
-  (with `_mz` and `_clusterd` variants): jemalloc summary stats parsed
-  from each service's prof endpoint
-  (`clusterd:6878/?action=dump_stats`,
-  `materialized:6878/prof/?action=dump_stats`) with
-  `Accept: application/json`.
-  `allocated` is the logical bytes the application currently holds — the
-  cleanest signal for real regressions.
-  `resident` and `retained` track allocator behavior (decay, fragmentation)
-  and primarily help triage divergence from `allocated`.
+* `peak_mz` / `peak_clusterd`: cgroup `memory.peak` (cgroup v2) or
+  `memory.max_usage_in_bytes` (cgroup v1), reset before each iteration
+  so the value reflects this iteration's high-water mark rather than
+  the peak since container start.
 
 # Troubleshooting
 

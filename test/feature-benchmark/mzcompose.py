@@ -183,12 +183,6 @@ def run_one_scenario(
         measurement_types.append(MeasurementType.MEMORY_CLUSTERD)
         measurement_types.append(MeasurementType.MEMORY_PEAK_MZ)
         measurement_types.append(MeasurementType.MEMORY_PEAK_CLUSTERD)
-        measurement_types.append(MeasurementType.JEMALLOC_ALLOCATED_MZ)
-        measurement_types.append(MeasurementType.JEMALLOC_RESIDENT_MZ)
-        measurement_types.append(MeasurementType.JEMALLOC_RETAINED_MZ)
-        measurement_types.append(MeasurementType.JEMALLOC_ALLOCATED_CLUSTERD)
-        measurement_types.append(MeasurementType.JEMALLOC_RESIDENT_CLUSTERD)
-        measurement_types.append(MeasurementType.JEMALLOC_RETAINED_CLUSTERD)
 
     result = BenchmarkScenarioResult(scenario_class, measurement_types)
 

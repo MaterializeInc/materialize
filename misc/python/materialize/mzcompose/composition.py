@@ -1649,66 +1649,6 @@ class Composition:
 
         return False
 
-    _JEMALLOC_STAT_KEYS = (
-        "allocated",
-        "active",
-        "resident",
-        "mapped",
-        "retained",
-        "metadata",
-    )
-
-    def jemalloc_stats(
-        self,
-        service: str,
-        port: int = 6878,
-        path: str = "/",
-    ) -> dict[str, int] | None:
-        """Return jemalloc summary stats for the service's container.
-
-        Hits the ``dump_stats`` action on the service's internal HTTP
-        profiling endpoint with ``Accept: application/json`` and pulls the
-        top-level ``jemalloc.stats`` block. Returns ``None`` if the
-        endpoint is unreachable, the binary was built without jemalloc
-        support, or the response can't be parsed. Keys: ``allocated``,
-        ``active``, ``resident``, ``mapped``, ``retained``, ``metadata``,
-        all in bytes.
-
-        clusterd mounts the prof router at the root of its internal HTTP
-        listener (default ``/``); environmentd nests it under ``/prof/``.
-        Pass ``path`` accordingly.
-        """
-        container_id = self.container_id(service)
-        assert container_id is not None
-
-        url = f"http://localhost:{port}{path}?action=dump_stats"
-        try:
-            out = subprocess.check_output(
-                [
-                    "docker",
-                    "exec",
-                    container_id,
-                    "curl",
-                    "-fsS",
-                    "-H",
-                    "Accept: application/json",
-                    url,
-                ],
-                text=True,
-                stderr=subprocess.DEVNULL,
-            )
-        except subprocess.CalledProcessError:
-            return None
-
-        try:
-            stats = json.loads(out)["jemalloc"]["stats"]
-        except (json.JSONDecodeError, KeyError, TypeError):
-            return None
-
-        return {
-            key: int(stats[key]) for key in self._JEMALLOC_STAT_KEYS if key in stats
-        }
-
     def testdrive(
         self,
         input: str,

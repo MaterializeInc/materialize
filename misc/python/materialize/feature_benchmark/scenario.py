@@ -32,14 +32,6 @@ class RootScenario:
         # post-workload sample, but allocator decay still drives variance.
         MeasurementType.MEMORY_PEAK_MZ: 0.20,
         MeasurementType.MEMORY_PEAK_CLUSTERD: 0.50,
-        # Logical jemalloc allocations are the cleanest signal; resident and
-        # retained track allocator behavior and need wider thresholds.
-        MeasurementType.JEMALLOC_ALLOCATED_MZ: 0.20,
-        MeasurementType.JEMALLOC_RESIDENT_MZ: 0.50,
-        MeasurementType.JEMALLOC_RETAINED_MZ: 1.00,
-        MeasurementType.JEMALLOC_ALLOCATED_CLUSTERD: 0.20,
-        MeasurementType.JEMALLOC_RESIDENT_CLUSTERD: 0.50,
-        MeasurementType.JEMALLOC_RETAINED_CLUSTERD: 1.00,
     }
 
     def __init__(

@@ -1663,9 +1663,6 @@ class ManyKafkaSourcesOnSameCluster(Scenario):
         MeasurementType.MEMORY_MZ: 0.20,
         MeasurementType.MEMORY_CLUSTERD: 100.0,
         MeasurementType.MEMORY_PEAK_CLUSTERD: 100.0,
-        MeasurementType.JEMALLOC_ALLOCATED_CLUSTERD: 100.0,
-        MeasurementType.JEMALLOC_RESIDENT_CLUSTERD: 100.0,
-        MeasurementType.JEMALLOC_RETAINED_CLUSTERD: 100.0,
     }
 
     COUNT_SOURCE_ENTRIES = 100000
@@ -2004,12 +2001,6 @@ class SqlServerInitialLoad(SqlServerCdc):
         MeasurementType.MEMORY_CLUSTERD: 100.0,
         MeasurementType.MEMORY_PEAK_MZ: 0.20,
         MeasurementType.MEMORY_PEAK_CLUSTERD: 100.0,
-        MeasurementType.JEMALLOC_ALLOCATED_MZ: 0.20,
-        MeasurementType.JEMALLOC_RESIDENT_MZ: 0.50,
-        MeasurementType.JEMALLOC_RETAINED_MZ: 1.00,
-        MeasurementType.JEMALLOC_ALLOCATED_CLUSTERD: 100.0,
-        MeasurementType.JEMALLOC_RESIDENT_CLUSTERD: 100.0,
-        MeasurementType.JEMALLOC_RETAINED_CLUSTERD: 100.0,
     }
 
     def shared(self) -> Action:
