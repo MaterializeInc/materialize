@@ -34,7 +34,7 @@ use std::env;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use mz_ore::cast::CastFrom;
+use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::pager::{self, Backend, Handle};
 
 const CHUNK_BYTES: usize = 2 * 1024 * 1024;
@@ -45,6 +45,7 @@ const CACHE_LINE_U64: usize = CACHE_LINE_BYTES / 8;
 fn main() {
     let args: Vec<String> = env::args().collect();
     let chain_gib: usize = parse_arg(&args, "--chain-gib", 16);
+    let prefetch_depth: usize = parse_arg(&args, "--prefetch-depth", 1);
     let backend = parse_backend(&args);
     let scratch: PathBuf = env::var_os("MZ_PAGER_SCRATCH")
         .map(PathBuf::from)
@@ -57,7 +58,7 @@ fn main() {
     let chunks_per_chain = chain_bytes / CHUNK_BYTES;
 
     println!(
-        "backend={backend:?} chain={chain_gib}GiB chunks_per_chain={chunks_per_chain} chunk={CHUNK_BYTES}B"
+        "backend={backend:?} chain={chain_gib}GiB chunks_per_chain={chunks_per_chain} chunk={CHUNK_BYTES}B prefetch_depth={prefetch_depth}"
     );
 
     let (chain_a, build_a) = time(|| build_chain(chunks_per_chain));
@@ -74,7 +75,7 @@ fn main() {
         gib_per_sec(chain_bytes, build_b)
     );
 
-    let (chain_c, merge_dur) = time(|| merge_pass(chain_a, chain_b));
+    let (chain_c, merge_dur) = time(|| merge_pass(chain_a, chain_b, prefetch_depth));
     let merged_bytes = chunks_per_chain * 2 * CHUNK_BYTES;
     println!(
         "merge: {:.2?} ({:.2} GiB/s through, output_chunks={})",
@@ -105,7 +106,7 @@ fn build_chain(n_chunks: usize) -> Vec<Handle> {
     chain
 }
 
-fn merge_pass(a: Vec<Handle>, b: Vec<Handle>) -> Vec<Handle> {
+fn merge_pass(a: Vec<Handle>, b: Vec<Handle>, prefetch_depth: usize) -> Vec<Handle> {
     let n = a.len().min(b.len());
     let mut a: Vec<Option<Handle>> = a.into_iter().map(Some).collect();
     let mut b: Vec<Option<Handle>> = b.into_iter().map(Some).collect();
@@ -113,24 +114,28 @@ fn merge_pass(a: Vec<Handle>, b: Vec<Handle>) -> Vec<Handle> {
     let mut tmp_a: Vec<u64> = Vec::with_capacity(CHUNK_U64);
     let mut tmp_b: Vec<u64> = Vec::with_capacity(CHUNK_U64);
     let mut sink: u64 = 0;
-    // Issue the first prefetches so the kernel starts populating page cache /
-    // swap-in for the very first iteration.
-    if n > 0 {
-        if let Some(h) = a[0].as_ref() {
+    // Maintain a rolling window of `prefetch_depth` outstanding prefetches.
+    // Issue the initial wave for indices [0, prefetch_depth).
+    let initial = prefetch_depth.min(n);
+    for j in 0..initial {
+        if let Some(h) = a[j].as_ref() {
             pager::prefetch(h);
         }
-        if let Some(h) = b[0].as_ref() {
+        if let Some(h) = b[j].as_ref() {
             pager::prefetch(h);
         }
     }
     for i in 0..n {
-        // Prefetch one chunk ahead of the current pair so I/O overlaps with
-        // the cache-line touch and the output pageouts below.
-        if i + 1 < n {
-            if let Some(h) = a[i + 1].as_ref() {
+        // Each iteration extends the window by one: prefetch index `i +
+        // prefetch_depth` so that by the time we consume it the kernel has
+        // had `prefetch_depth` chunks worth of compute time to make pages
+        // available.
+        let pf = i + prefetch_depth;
+        if pf < n {
+            if let Some(h) = a[pf].as_ref() {
                 pager::prefetch(h);
             }
-            if let Some(h) = b[i + 1].as_ref() {
+            if let Some(h) = b[pf].as_ref() {
                 pager::prefetch(h);
             }
         }
@@ -181,8 +186,7 @@ fn gib_per_sec(bytes: usize, d: Duration) -> f64 {
     if secs == 0.0 {
         return 0.0;
     }
-    #[allow(clippy::as_conversions)] // usize -> f64 is intentionally lossy for reporting
-    let gib = bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+    let gib = f64::cast_lossy(bytes) / (1024.0 * 1024.0 * 1024.0);
     gib / secs
 }
 
