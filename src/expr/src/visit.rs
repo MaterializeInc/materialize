@@ -31,7 +31,7 @@
 //!   * `children`: only visit direct children
 //!   * `post`: recursively visit children in post-order
 //!   * `pre`: recursively visit children in pre-order
-//!   * no suffix: recursively visit children in pre- and post-oder
+//!   * no suffix: recursively visit children in pre- and post-order
 //!     using a ~Visitor~` that encapsulates the shared context.
 
 use std::marker::PhantomData;
@@ -51,7 +51,7 @@ use crate::RECURSION_LIMIT;
 /// not possible to implement versions of `VisitChildren<A> for A` such
 /// that A considers as its children all A-nodes occurring at leaf
 /// positions of B-children and vice versa for `VisitChildren<B> for B`.
-/// Doing this will result in recusion limit violations as indicated
+/// Doing this will result in recursion limit violations as indicated
 /// in the accompanying `test_recursive_types_b` test.
 pub trait VisitChildren<T> {
     /// Apply an infallible immutable function `f` to each direct child.
