@@ -27,8 +27,8 @@ use mz_adapter::session::{
 };
 use mz_adapter::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use mz_adapter::{
-    AdapterError, AdapterNotice, ExecuteContextGuard, ExecuteResponse, PeekResponseUnary, metrics,
-    verify_datum_desc,
+    AdapterError, AdapterNotice, DroppedDependency, ExecuteContextGuard, ExecuteResponse,
+    PeekResponseUnary, metrics, verify_datum_desc,
 };
 use mz_auth::Authenticated;
 use mz_auth::password::Password;
@@ -2428,7 +2428,7 @@ where
                         Some(PeekResponseUnary::Rows(rows)) => FetchResult::Rows(Some(rows)),
                         Some(PeekResponseUnary::Error(err)) => FetchResult::Error(err),
                         Some(PeekResponseUnary::DependencyDropped(dep)) => {
-                            FetchResult::Error(dep.query_terminated_error())
+                            FetchResult::DependencyDropped(dep)
                         }
                         Some(PeekResponseUnary::Canceled) => FetchResult::Canceled,
                     },
@@ -2504,6 +2504,16 @@ where
                     return self
                         .send_error_and_get_state(ErrorResponse::error(
                             SqlState::INTERNAL_ERROR,
+                            text.clone(),
+                        ))
+                        .await
+                        .map(|state| (state, SendRowsEndedReason::Errored { error: text }));
+                }
+                FetchResult::DependencyDropped(dep) => {
+                    let text = dep.query_terminated_error();
+                    return self
+                        .send_error_and_get_state(ErrorResponse::error(
+                            SqlState::UNDEFINED_OBJECT,
                             text.clone(),
                         ))
                         .await
@@ -2666,7 +2676,7 @@ where
                     Some(PeekResponseUnary::DependencyDropped(dep)) => {
                         let text = dep.copy_terminated_error();
                         let err =
-                            ErrorResponse::error(SqlState::INTERNAL_ERROR, text.clone());
+                            ErrorResponse::error(SqlState::UNDEFINED_OBJECT, text.clone());
                         return self
                             .send_error_and_get_state(err)
                             .await
@@ -3242,6 +3252,7 @@ enum FetchResult {
     Rows(Option<Box<dyn RowIterator + Send + Sync>>),
     Canceled,
     Error(String),
+    DependencyDropped(DroppedDependency),
     Notice(AdapterNotice),
 }
 

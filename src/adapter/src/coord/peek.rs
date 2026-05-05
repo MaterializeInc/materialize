@@ -126,6 +126,18 @@ impl DroppedDependency {
     pub fn copy_terminated_error(&self) -> String {
         format!("copy has been terminated because underlying {self} was dropped")
     }
+
+    /// Convert this dropped dependency into an [`AdapterError::ConcurrentDependencyDrop`].
+    pub fn to_concurrent_dependency_drop(&self) -> AdapterError {
+        let (kind, name) = match self {
+            Self::Relation { name } => ("relation", name.clone()),
+            Self::Cluster { name } => ("cluster", name.clone()),
+        };
+        AdapterError::ConcurrentDependencyDrop {
+            dependency_kind: kind,
+            dependency_id: name,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

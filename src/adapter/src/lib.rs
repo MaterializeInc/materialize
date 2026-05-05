@@ -69,7 +69,7 @@ pub use crate::coord::ExecuteContext;
 pub use crate::coord::ExecuteContextExtra;
 pub use crate::coord::ExecuteContextGuard;
 pub use crate::coord::id_bundle::CollectionIdBundle;
-pub use crate::coord::peek::PeekResponseUnary;
+pub use crate::coord::peek::{DroppedDependency, PeekResponseUnary};
 pub use crate::coord::read_policy::ReadHolds;
 pub use crate::coord::timeline::TimelineContext;
 pub use crate::coord::timestamp_selection::{

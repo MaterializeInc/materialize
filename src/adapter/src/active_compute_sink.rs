@@ -13,7 +13,6 @@ use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use std::num::NonZeroUsize;
 
-use anyhow::anyhow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_compute_client::protocol::response::SubscribeBatch;
 use mz_controller_types::ClusterId;
@@ -440,9 +439,9 @@ impl ActiveCopyTo {
         let message = match reason {
             ActiveComputeSinkRetireReason::Finished => return,
             ActiveComputeSinkRetireReason::Canceled => Err(AdapterError::Canceled),
-            ActiveComputeSinkRetireReason::DependencyDropped(dep) => Err(
-                AdapterError::Unstructured(anyhow!(dep.copy_terminated_error())),
-            ),
+            ActiveComputeSinkRetireReason::DependencyDropped(dep) => {
+                Err(dep.to_concurrent_dependency_drop())
+            }
         };
         let _ = self.tx.send(message);
     }
