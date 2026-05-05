@@ -15,10 +15,10 @@
 
 //! Driver for the `mz app-password` command.
 
-use mz::context::Context;
+use mzx::context::Context;
 use mz_frontegg_client::client::app_password::CreateAppPasswordRequest;
 
-use mz::error::Error;
+use mzx::error::Error;
 
 #[derive(Debug, clap::Args)]
 pub struct AppPasswordCommand {
@@ -45,11 +45,11 @@ pub async fn run(cx: Context, cmd: AppPasswordCommand) -> Result<(), Error> {
     let cx = cx.activate_profile()?;
     match &cmd.subcommand {
         AppPasswordSubcommand::Create { name } => {
-            mz::command::app_password::create(&cx, CreateAppPasswordRequest { description: name })
+            mzx::command::app_password::create(&cx, CreateAppPasswordRequest { description: name })
                 .await?;
         }
         AppPasswordSubcommand::List => {
-            mz::command::app_password::list(&cx).await?;
+            mzx::command::app_password::list(&cx).await?;
         }
     }
 

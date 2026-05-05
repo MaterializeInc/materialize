@@ -15,8 +15,8 @@
 
 //! Driver for the `mz region` command.
 
-use mz::context::Context;
-use mz::error::Error;
+use mzx::context::Context;
+use mzx::error::Error;
 
 #[derive(Debug, clap::Args)]
 pub struct RegionCommand {
@@ -59,7 +59,7 @@ pub async fn run(cx: Context, cmd: RegionCommand) -> Result<(), Error> {
             environmentd_cpu_allocation,
             environmentd_memory_allocation,
         } => {
-            mz::command::region::enable(
+            mzx::command::region::enable(
                 cx,
                 version,
                 environmentd_extra_arg,
@@ -68,8 +68,8 @@ pub async fn run(cx: Context, cmd: RegionCommand) -> Result<(), Error> {
             )
             .await
         }
-        RegionSubcommand::Disable { hard } => mz::command::region::disable(cx, hard).await,
-        RegionSubcommand::List => mz::command::region::list(cx).await,
-        RegionSubcommand::Show => mz::command::region::show(cx).await,
+        RegionSubcommand::Disable { hard } => mzx::command::region::disable(cx, hard).await,
+        RegionSubcommand::List => mzx::command::region::list(cx).await,
+        RegionSubcommand::Show => mzx::command::region::show(cx).await,
     }
 }

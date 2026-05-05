@@ -13,14 +13,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Command-line driver for `mz`.
+//! Command-line driver for `mzx`.
 
 use std::path::PathBuf;
 use std::process::exit;
 
-use mz::error::Error;
+use mzx::error::Error;
 
-use mz::context::{Context, ContextLoadArgs};
+use mzx::context::{Context, ContextLoadArgs};
 use mz_ore::cli::CliConfig;
 use upgrader::UpgradeChecker;
 
@@ -54,7 +54,7 @@ mod clap_clippy_hack {
     #[derive(Debug, clap::Parser)]
     #[clap(
         long_about = None,
-        version = mz::VERSION.as_str(),
+        version = mzx::VERSION.as_str(),
     )]
     pub struct Args {
         /// Set the configuration file.
@@ -84,12 +84,12 @@ mod clap_clippy_hack {
         Csv,
     }
 
-    impl From<OutputFormat> for mz::ui::OutputFormat {
+    impl From<OutputFormat> for mzx::ui::OutputFormat {
         fn from(value: OutputFormat) -> Self {
             match value {
-                OutputFormat::Text => mz::ui::OutputFormat::Text,
-                OutputFormat::Json => mz::ui::OutputFormat::Json,
-                OutputFormat::Csv => mz::ui::OutputFormat::Csv,
+                OutputFormat::Text => mzx::ui::OutputFormat::Text,
+                OutputFormat::Json => mzx::ui::OutputFormat::Json,
+                OutputFormat::Csv => mzx::ui::OutputFormat::Csv,
             }
         }
     }

@@ -15,9 +15,9 @@
 
 //! Driver for the `mz config` command.
 
-use mz::command::config::{GetArgs, RemoveArgs, SetArgs};
-use mz::context::Context;
-use mz::error::Error;
+use mzx::command::config::{GetArgs, RemoveArgs, SetArgs};
+use mzx::context::Context;
+use mzx::error::Error;
 
 #[derive(Debug, clap::Subcommand)]
 pub enum ConfigCommand {
@@ -46,13 +46,13 @@ pub enum ConfigCommand {
 
 pub async fn run(cx: Context, cmd: ConfigCommand) -> Result<(), Error> {
     match &cmd {
-        ConfigCommand::Get { name } => mz::command::config::get(&cx, GetArgs { name }),
-        ConfigCommand::List => mz::command::config::list(&cx),
+        ConfigCommand::Get { name } => mzx::command::config::get(&cx, GetArgs { name }),
+        ConfigCommand::List => mzx::command::config::list(&cx),
         ConfigCommand::Set { name, value } => {
-            mz::command::config::set(&cx, SetArgs { name, value }).await
+            mzx::command::config::set(&cx, SetArgs { name, value }).await
         }
         ConfigCommand::Remove { name } => {
-            mz::command::config::remove(&cx, RemoveArgs { name }).await
+            mzx::command::config::remove(&cx, RemoveArgs { name }).await
         }
     }
 }

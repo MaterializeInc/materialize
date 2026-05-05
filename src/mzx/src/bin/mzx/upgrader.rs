@@ -9,7 +9,7 @@
 
 //! Command-line version checker.
 
-use mz::{error::Error, ui::OutputFormatter};
+use mzx::{error::Error, ui::OutputFormatter};
 use mz_build_info::build_info;
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -42,7 +42,7 @@ struct CacheFile {
 /// to prevent disruption of a command execution,
 /// and ensure a seamless experience.
 pub struct UpgradeChecker {
-    /// Formats the warning output color at `mz::ui::OutputFormatter`.
+    /// Formats the warning output color at `mzx::ui::OutputFormatter`.
     no_color: bool,
 }
 
@@ -103,7 +103,7 @@ impl UpgradeChecker {
         Ok(Some((modified_time, cache_file.last_read_version)))
     }
 
-    /// Returns true if the installed version of `mz`
+    /// Returns true if the installed version of `mzx`
     /// is older than the version sent by parameter.
     fn is_installed_version_older_than(&self, version: Version) -> bool {
         let installed_version = build_info!().semver_version();
@@ -130,18 +130,18 @@ impl UpgradeChecker {
         Ok(latest_version)
     }
 
-    /// Prints the warning message to update mz if the check result is true.
+    /// Prints the warning message to update mzx if the check result is true.
     pub fn print_warning_if_needed(&self, check_result: Result<bool, Error>) {
         match check_result {
             Ok(check) => {
                 if check {
-                    let of = OutputFormatter::new(mz::ui::OutputFormat::Text, self.no_color);
+                    let of = OutputFormatter::new(mzx::ui::OutputFormat::Text, self.no_color);
 
                     // We can improve this, but I'm following a more KISS (Keep It Simple..) approach.
                     // Previously, there was a proper message for each operating system on how to
                     // apply the update, e.g., 'Run `brew upgrade ...`.'
                     // By doing this, we had to differentiate if the user
-                    // installed `mz` through Brew or by curling the binary.
+                    // installed `mzx` through Brew or by curling the binary.
                     // Displaying the version also requires making another
                     // request to verify if it is the latest version or not.
                     // This message is simple. It works. Nothing fancy.
@@ -152,7 +152,7 @@ impl UpgradeChecker {
         }
     }
 
-    /// This function checks if `mz` needs an update. The function
+    /// This function checks if `mzx` needs an update. The function
     /// returns true if the installed version is at least one version older.
     ///
     /// Additionally, the check caches the results for a week
