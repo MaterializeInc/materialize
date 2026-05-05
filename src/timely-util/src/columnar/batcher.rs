@@ -237,6 +237,52 @@ where
     }
 }
 
+/// Advance `*lower` past every position in `input` where `cmp` returns true.
+///
+/// On return, `*lower` is the first index `>= initial *lower` where `cmp`
+/// returns false, or `input.len()` if `cmp` holds through the end.
+///
+/// Compared to a linear scan, this is `O(log K)` for a run of length `K`
+/// satisfying `cmp` — useful when one side of a sorted merge has long runs
+/// dominated by the other side.
+fn gallop<C: columnar::Index + Len>(
+    input: C,
+    lower: &mut usize,
+    mut cmp: impl FnMut(<C as columnar::Index>::Ref) -> bool,
+) {
+    let upper = input.len();
+
+    // If `cmp` is already false at `*lower`, the run is empty — nothing to do.
+    if *lower < upper && cmp(input.get(*lower)) {
+        // Phase 1 (overshoot): advance by exponentially growing steps as long
+        // as `cmp` holds. After this loop, `*lower` is the last position we
+        // confirmed satisfies `cmp`, and `*lower + step` either falls off the
+        // end or fails `cmp`. The boundary is somewhere in `(*lower, *lower +
+        // step]`.
+        let mut step = 1;
+        while *lower + step < upper && cmp(input.get(*lower + step)) {
+            *lower += step;
+            step <<= 1;
+        }
+
+        // Phase 2 (binary descent): halve `step` and probe `*lower + step`,
+        // accepting the advance only when `cmp` still holds. This narrows the
+        // search range by half each iteration, settling on the largest index
+        // still satisfying `cmp`.
+        step >>= 1;
+        while step > 0 {
+            if *lower + step < upper && cmp(input.get(*lower + step)) {
+                *lower += step;
+            }
+            step >>= 1;
+        }
+
+        // `*lower` now points at the last index where `cmp` holds; the caller
+        // wants the first index where it doesn't, so step past it.
+        *lower += 1;
+    }
+}
+
 /// Counterpart to `ColInternalMerger` (which merges `ColumnationStack` chunks).
 /// Drives the merge batcher with [`Column`]-shaped chunks, no columnation
 /// detour, by way of [`InternalMerge`] below.
@@ -245,13 +291,11 @@ pub type ColumnMerger<D, T, R> = InternalMerger<Column<(D, T, R)>>;
 /// `InternalMerge` for [`Column`]-shaped sorted chunks.
 impl<D, T, R> InternalMerge for Column<(D, T, R)>
 where
-    D: Columnar + Default + Clone + 'static,
+    D: Columnar + Default,
     for<'a> columnar::Ref<'a, D>: Copy + Ord,
-    T: Columnar + PartialOrder + Default + Clone + 'static,
+    T: Columnar + Default + Clone + PartialOrder,
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
-    R: Columnar + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>> + Default + Clone + 'static,
-    for<'a> columnar::Ref<'a, R>: Ord,
-    <(D, T, R) as Columnar>::Container: Clone + 'static,
+    R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
     for<'a> <(D, T, R) as Columnar>::Container: columnar::Push<&'a (D, T, R)>,
 {
     type TimeOwned = T;
@@ -306,14 +350,23 @@ where
                     let (d1, t1, r1) = left_borrow.get(left_pos[0]);
                     let (d2, t2, r2) = right_borrow.get(right_pos[0]);
                     match (d1, t1).cmp(&(d2, t2)) {
-                        //TODO: gallop rather than naive one-at-a-time comparison.
                         std::cmp::Ordering::Less => {
-                            self_c.extend_from_self(left_borrow, left_pos[0]..left_pos[0] + 1);
-                            left_pos[0] += 1;
+                            let start = left_pos[0];
+                            gallop(
+                                left_borrow,
+                                &mut left_pos[0],
+                                |(d, t, _)| (d, t) < (d2, t2),
+                            );
+                            self_c.extend_from_self(left_borrow, start..left_pos[0]);
                         }
                         std::cmp::Ordering::Greater => {
-                            self_c.extend_from_self(right_borrow, right_pos[0]..right_pos[0] + 1);
-                            right_pos[0] += 1;
+                            let start = right_pos[0];
+                            gallop(
+                                right_borrow,
+                                &mut right_pos[0],
+                                |(d, t, _)| (d, t) < (d1, t1),
+                            );
+                            self_c.extend_from_self(right_borrow, start..right_pos[0]);
                         }
                         std::cmp::Ordering::Equal => {
                             R::copy_from(&mut stash, r1);
@@ -383,18 +436,13 @@ mod tests {
     /// consolidated output (if any) as owned tuples.
     fn run_chunker<D, T, R>(inputs: &[(D, T, R)]) -> Vec<(D, T, R)>
     where
-        D: Columnar + Clone + std::fmt::Debug + PartialEq,
+        D: Columnar + Clone,
         for<'a> columnar::Ref<'a, D>: Copy + Ord,
-        T: Columnar + Clone + std::fmt::Debug + PartialEq,
+        T: Columnar + Clone,
         for<'a> columnar::Ref<'a, T>: Copy + Ord,
-        R: Columnar
-            + Clone
-            + std::fmt::Debug
-            + PartialEq
-            + Semigroup
-            + for<'a> Semigroup<columnar::Ref<'a, R>>,
+        R: Columnar + Clone + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
         for<'a> columnar::Ref<'a, R>: Ord,
-        <(D, T, R) as Columnar>::Container: Clone + 'static,
+        <(D, T, R) as Columnar>::Container: Clone,
         for<'a> <(D, T, R) as Columnar>::Container: columnar::Push<&'a (D, T, R)>,
         <(D, T, R) as Columnar>::Container: columnar::Push<(D, T, R)>,
     {
