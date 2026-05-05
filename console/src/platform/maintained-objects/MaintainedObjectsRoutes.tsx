@@ -8,16 +8,21 @@
 // by the Apache License, Version 2.0.
 
 import React from "react";
-import { Route } from "react-router-dom";
+import { Navigate, Route } from "react-router-dom";
 
 import { SentryRoutes } from "~/sentry";
 
-import { MaintainedObjects } from "./MaintainedObjects";
+import { MaintainedObjectsLayout } from "./MaintainedObjectsLayout";
+import { ObjectDetailDrawer } from "./ObjectDetailDrawer";
 
 export const MaintainedObjectsRoutes = () => {
   return (
     <SentryRoutes>
-      <Route path="*" element={<MaintainedObjects />} />
+      <Route element={<MaintainedObjectsLayout />}>
+        <Route index element={null} />
+        <Route path=":objectId" element={<ObjectDetailDrawer />} />
+        <Route path="*" element={<Navigate to="." replace />} />
+      </Route>
     </SentryRoutes>
   );
 };

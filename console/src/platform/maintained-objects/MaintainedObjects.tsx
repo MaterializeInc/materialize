@@ -24,7 +24,7 @@ import {
   PaginationState,
 } from "@tanstack/react-table";
 import React from "react";
-import { Link as RouterLink, useLocation } from "react-router-dom";
+import { Link as RouterLink, useLocation, useNavigate } from "react-router-dom";
 
 import { createNamespace } from "~/api/materialize";
 import { OUTDATED_THRESHOLD_SECONDS } from "~/api/materialize/cluster/materializationLag";
@@ -39,7 +39,6 @@ import {
 import TextLink from "~/components/TextLink";
 import TimePeriodSelect from "~/components/TimePeriodSelect";
 import { useSyncObjectToSearchParams } from "~/hooks/useSyncObjectToSearchParams";
-import { useTimePeriodMinutes } from "~/hooks/useTimePeriodSelect";
 import {
   MainContentContainer,
   PageHeader,
@@ -57,6 +56,7 @@ import { truncateMaxWidth } from "~/theme/components/Table";
 import { pluralize } from "~/util";
 import { formatIntervalShort } from "~/utils/format";
 
+import { LOOKBACK_OPTIONS } from "./constants";
 import { FilterChips } from "./FilterChips";
 import {
   ClusterFilterPanel,
@@ -74,21 +74,9 @@ import {
   initialColumnFiltersFromUrl,
   objectTypeFilterFn,
 } from "./filters";
-import { MaintainedObjectListItem, useMaintainedObjectsList } from "./queries";
+import { MaintainedObjectListItem } from "./queries";
 
 const PAGE_SIZE = 25;
-
-// `mz_wallclock_global_lag_recent_history` retains up to 24 hours.
-const LOOKBACK_OPTIONS: Record<string, string> = {
-  "1": "Past 1 minute",
-  "5": "Past 5 minutes",
-  "15": "Past 15 minutes",
-  "30": "Past 30 minutes",
-  "60": "Past 1 hour",
-  "180": "Past 3 hours",
-  "360": "Past 6 hours",
-  "1440": "Past 24 hours",
-};
 
 const ObjectNameCell = ({ row }: { row: MaintainedObjectListItem }) => {
   const { colors } = useTheme<MaterializeTheme>();
@@ -308,25 +296,27 @@ const columns = [
   }),
 ];
 
-const MaintainedObjects = () => {
+export interface MaintainedObjectsProps {
+  objects: MaintainedObjectListItem[];
+  isLoading: boolean;
+  lagReady: boolean;
+  hydrationReady: boolean;
+  lookbackMinutes: number;
+  setLookbackMinutes: React.Dispatch<React.SetStateAction<number>>;
+}
+
+const MaintainedObjects = ({
+  objects,
+  isLoading,
+  lagReady,
+  hydrationReady,
+  lookbackMinutes: timePeriodMinutes,
+  setLookbackMinutes: setTimePeriodMinutes,
+}: MaintainedObjectsProps) => {
   const { colors } = useTheme<MaterializeTheme>();
   const location = useLocation();
+  const navigate = useNavigate();
   const regionSlug = useRegionSlug();
-
-  const [timePeriodMinutes, setTimePeriodMinutes] = useTimePeriodMinutes({
-    localStorageKey: "maintained-objects-time-period",
-    defaultValue: "15",
-    timePeriodOptions: LOOKBACK_OPTIONS,
-  });
-
-  const {
-    data: objects,
-    isLoading,
-    lagReady,
-    hydrationReady,
-  } = useMaintainedObjectsList({
-    lookbackMinutes: timePeriodMinutes,
-  });
 
   const [initialState] = React.useState(() =>
     getInitialTableState(location.search),
@@ -452,6 +442,7 @@ const MaintainedObjects = () => {
               table={table}
               variant="linkable"
               rowSx={{ cursor: "pointer" }}
+              onRowClick={(row) => navigate(row.id)}
               data-testid="maintained-objects-table"
             />
             <TablePagination table={table} itemLabel="objects" />
