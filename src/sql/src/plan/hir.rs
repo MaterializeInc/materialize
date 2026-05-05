@@ -38,7 +38,9 @@ use mz_repr::*;
 use serde::{Deserialize, Serialize};
 
 use crate::plan::error::PlanError;
-use crate::plan::query::{EXECUTE_CAST_CONTEXT, ExprContext, execute_expr_context};
+use crate::plan::query::{
+    EXECUTE_CAST_CONTEXT, ExprContext, execute_expr_context, offset_into_value,
+};
 use crate::plan::typeconv::{self, CastContext, plan_cast};
 use crate::plan::{Params, QueryContext, QueryLifetime, StatementContext};
 
@@ -2265,9 +2267,19 @@ impl HirRelationExpr {
         });
     }
 
-    /// Replaces any parameter references in the expression with the
-    /// corresponding datum from `params`.
-    pub fn bind_parameters(
+    /// Replaces parameter references in the expression with the corresponding datum from `params`.
+    /// Additionally, it simplifies OFFSET clauses to constants after parameter binding, and checks
+    /// them for non-negativity.
+    ///
+    /// TODO: This is currently quadratic with subquery nesting depth, because it calls
+    /// `bind_parameters` on each scalar expr at every nesting depth, but `bind_parameters` itself
+    /// also visits subqueries. I think we should
+    /// - make `bind_parameters_and_simplify_offset` call `bind_parameters` only on top-level scalar
+    ///   expressions,
+    /// - and make `bind_parameters` call back to us for subqueries.
+    /// (This would also fix another issue in `bind_parameters`, namely that it doesn't check OFFSET
+    /// clauses inside subqueries.)
+    pub fn bind_parameters_and_simplify_offset(
         &mut self,
         scx: &StatementContext,
         lifetime: QueryLifetime,
@@ -2276,7 +2288,20 @@ impl HirRelationExpr {
         #[allow(deprecated)]
         self.visit_scalar_expressions_mut(0, &mut |e: &mut HirScalarExpr, _: usize| {
             e.bind_parameters(scx, lifetime, params)
+        })?;
+
+        // OFFSET clauses in `expr` should become constants with the above binding of parameters.
+        // Let's check this and simplify them to literals.
+        self.try_visit_mut_pre(&mut |expr| {
+            if let HirRelationExpr::TopK { offset, .. } = expr {
+                let offset_value = offset_into_value(offset.take())?;
+                *offset = HirScalarExpr::literal(Datum::Int64(offset_value), SqlScalarType::Int64);
+            }
+            Ok::<(), PlanError>(())
         })
+        // (We don't need to simplify LIMIT clauses in `expr`, because we can handle non-constant
+        // expressions there. If they happen to be simplifiable to literals, then the optimizer will do
+        // so later.)
     }
 
     pub fn contains_parameters(&self) -> Result<bool, PlanError> {
@@ -3172,6 +3197,11 @@ impl HirScalarExpr {
 
     /// Replaces any parameter references in the expression with the
     /// corresponding datum in `params`.
+    ///
+    /// Warning: If calling this outside `HirRelationExpr::bind_parameters_and_simplify_offset`,
+    /// be sure that you only call it on expressions without subqueries, because this is currently
+    /// missing the OFFSET simplification inside subqueries that
+    /// `HirRelationExpr::bind_parameters_and_simplify_offset` performs.
     pub fn bind_parameters(
         &mut self,
         scx: &StatementContext,
