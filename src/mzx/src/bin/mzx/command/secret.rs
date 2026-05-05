@@ -15,9 +15,9 @@
 
 //! Driver for the `mz secret` command.
 
-use mz::command::secret::CreateArgs;
-use mz::context::Context;
-use mz::error::Error;
+use mzx::command::secret::CreateArgs;
+use mzx::context::Context;
+use mzx::error::Error;
 
 #[derive(Debug, clap::Args)]
 pub struct SecretCommand {
@@ -52,7 +52,7 @@ pub async fn run(cx: Context, cmd: SecretCommand) -> Result<(), Error> {
             name,
             force,
         } => {
-            mz::command::secret::create(
+            mzx::command::secret::create(
                 &cx,
                 CreateArgs {
                     database: database.as_deref(),

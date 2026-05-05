@@ -1,5 +1,5 @@
 [package]
-name = "mz"
+name = "mzx"
 description = "The Materialize command-line interface (CLI)."
 license = "Apache-2.0"
 version = "0.3.1"
@@ -53,7 +53,7 @@ maintainer = "Materialize, Inc."
 copyright = "Materialize, Inc. and contributors"
 section = "utility"
 assets = [
-    ["target/release/mz", "usr/bin/", "755"],
+    ["target/release/mzx", "usr/bin/", "755"],
 ]
 depends = "postgresql-client, $auto"
 

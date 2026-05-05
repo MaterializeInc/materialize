@@ -12,7 +12,7 @@ mod tests {
     use std::{fs, path::PathBuf, time::Duration};
 
     use assert_cmd::{Command, assert::Assert, cargo_bin};
-    use mz::ui::OptionalStr;
+    use mzx::ui::OptionalStr;
     use mz_frontegg_auth::AppPassword;
     use serde::{Deserialize, Serialize};
     use tabled::settings::Style;
@@ -46,9 +46,9 @@ mod tests {
         std::env::var("CI_PASSWORD").unwrap()
     }
 
-    /// Returns a command to execute mz.
+    /// Returns a command to execute mzx.
     fn cmd() -> Command {
-        let mut cmd = Command::new(cargo_bin!("mz"));
+        let mut cmd = Command::new(cargo_bin!("mzx"));
         cmd.timeout(Duration::from_secs(30));
         cmd
     }
@@ -65,14 +65,14 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `pipe2` on OS `linux`
     fn test_version() {
         // We don't make assertions about the build SHA because caching in CI can
-        // cause the test binary and `mz` to have different embedded SHAs.
-        let expected_version = mz::BUILD_INFO.version;
+        // cause the test binary and `mzx` to have different embedded SHAs.
+        let expected_version = mzx::BUILD_INFO.version;
         assert!(!expected_version.is_empty());
         cmd()
             .arg("-V")
             .assert()
             .success()
-            .stdout(format!("mz {}\n", expected_version));
+            .stdout(format!("mzx {}\n", expected_version));
     }
 
     /// Writes a valid config file at the [ConfigFile] default path.
@@ -248,11 +248,11 @@ mod tests {
         let vec = vec![
             ConfigParam {
                 name: "profile",
-                value: mz::ui::OptionalStr(Some("default")),
+                value: mzx::ui::OptionalStr(Some("default")),
             },
             ConfigParam {
                 name: "vault",
-                value: mz::ui::OptionalStr(Some("inline")),
+                value: mzx::ui::OptionalStr(Some("inline")),
             },
         ];
         let expected_command_output = Table::new(vec).with(Style::psql()).to_string();

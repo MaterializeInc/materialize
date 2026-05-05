@@ -13,21 +13,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! `mz` is the Materialize command-line interface (CLI).
-#![warn(missing_docs)]
+//! Driver for the `mz sql` command.
 
-use mz_build_info::{BuildInfo, build_info};
-use std::sync::LazyLock;
+use mzx::command::sql::RunArgs;
+use mzx::context::Context;
+use mzx::error::Error;
 
-/// Build information about MZ
-pub const BUILD_INFO: BuildInfo = build_info!();
-/// Variable holding the version of MZ
-pub static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.semver_version().to_string());
+#[derive(Debug, clap::Args)]
+#[clap(trailing_var_arg = true)]
+pub struct SqlCommand {
+    #[clap(long, env = "MZ_CLUSTER")]
+    /// Use the specified cluster
+    cluster: Option<String>,
+    /// Additional arguments to pass to `psql`.
+    psql_args: Vec<String>,
+}
 
-pub mod command;
-pub mod config_file;
-pub mod context;
-pub mod error;
-mod server;
-mod sql_client;
-pub mod ui;
+pub async fn run(cx: Context, cmd: SqlCommand) -> Result<(), Error> {
+    let cx = cx.activate_profile()?.activate_region()?;
+    mzx::command::sql::run(
+        &cx,
+        RunArgs {
+            cluster: cmd.cluster,
+            psql_args: cmd.psql_args,
+        },
+    )
+    .await
+}

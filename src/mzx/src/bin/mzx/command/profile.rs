@@ -15,9 +15,9 @@
 
 //! Driver for the `mz profile` command.
 
-use mz::command::profile::{ConfigGetArgs, ConfigRemoveArgs, ConfigSetArgs};
-use mz::context::Context;
-use mz::error::Error;
+use mzx::command::profile::{ConfigGetArgs, ConfigRemoveArgs, ConfigSetArgs};
+use mzx::context::Context;
+use mzx::error::Error;
 
 use crate::mixin::EndpointArgs;
 
@@ -85,7 +85,7 @@ pub async fn run(cx: Context, cmd: ProfileCommand) -> Result<(), Error> {
             endpoint,
             force,
         } => {
-            mz::command::profile::init(
+            mzx::command::profile::init(
                 &cx,
                 *no_browser,
                 *force,
@@ -94,22 +94,22 @@ pub async fn run(cx: Context, cmd: ProfileCommand) -> Result<(), Error> {
             )
             .await
         }
-        ProfileSubcommand::List => mz::command::profile::list(&cx),
-        ProfileSubcommand::Remove => mz::command::profile::remove(&cx).await,
+        ProfileSubcommand::List => mzx::command::profile::list(&cx),
+        ProfileSubcommand::Remove => mzx::command::profile::remove(&cx).await,
         ProfileSubcommand::Config(_) => {
             let cx = cx.activate_profile()?;
 
             match &cmd.subcommand {
                 ProfileSubcommand::Config(cmd) => match cmd {
                     ProfileConfigSubcommand::Get { name } => {
-                        mz::command::profile::config_get(&cx, ConfigGetArgs { name })
+                        mzx::command::profile::config_get(&cx, ConfigGetArgs { name })
                     }
-                    ProfileConfigSubcommand::List => mz::command::profile::config_list(&cx),
+                    ProfileConfigSubcommand::List => mzx::command::profile::config_list(&cx),
                     ProfileConfigSubcommand::Set { name, value } => {
-                        mz::command::profile::config_set(&cx, ConfigSetArgs { name, value }).await
+                        mzx::command::profile::config_set(&cx, ConfigSetArgs { name, value }).await
                     }
                     ProfileConfigSubcommand::Remove { name } => {
-                        mz::command::profile::config_remove(&cx, ConfigRemoveArgs { name }).await
+                        mzx::command::profile::config_remove(&cx, ConfigRemoveArgs { name }).await
                     }
                 },
                 ProfileSubcommand::Init {

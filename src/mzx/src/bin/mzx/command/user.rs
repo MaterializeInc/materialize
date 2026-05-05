@@ -15,9 +15,9 @@
 
 //! Driver for the `mz user` command.
 
-use mz::command::user::{CreateArgs, RemoveArgs};
-use mz::context::Context;
-use mz::error::Error;
+use mzx::command::user::{CreateArgs, RemoveArgs};
+use mzx::context::Context;
+use mzx::error::Error;
 
 #[derive(Debug, clap::Args)]
 pub struct UserCommand {
@@ -49,11 +49,11 @@ pub async fn run(cx: Context, cmd: UserCommand) -> Result<(), Error> {
     let cx = cx.activate_profile()?;
     match &cmd.subcommand {
         UserSubcommand::Create { email, name } => {
-            mz::command::user::create(&cx, CreateArgs { email, name }).await
+            mzx::command::user::create(&cx, CreateArgs { email, name }).await
         }
-        UserSubcommand::List => mz::command::user::list(&cx).await,
+        UserSubcommand::List => mzx::command::user::list(&cx).await,
         UserSubcommand::Remove { email } => {
-            mz::command::user::remove(&cx, RemoveArgs { email }).await
+            mzx::command::user::remove(&cx, RemoveArgs { email }).await
         }
     }
 }

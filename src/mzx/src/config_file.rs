@@ -65,7 +65,7 @@ static GLOBAL_PARAMS: LazyLock<BTreeMap<&'static str, GlobalParam>> = LazyLock::
     }
 });
 
-/// Represents an on-disk configuration file for `mz`.
+/// Represents an on-disk configuration file for `mzx`.
 #[derive(Clone)]
 pub struct ConfigFile {
     path: PathBuf,

@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Drivers for each `mz` command.
+//! Drivers for each `mzx` command.
 //!
 //! Each submodule here is responsible only for command-line argument parsing.
 //! The implementation of each command is in the corresponding `command`

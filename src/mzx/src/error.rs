@@ -20,7 +20,7 @@ use hyper::header::{InvalidHeaderValue, ToStrError};
 use thiserror::Error;
 use url::ParseError;
 
-/// A custom error type for `mz` extending the `Error` enums in
+/// A custom error type for `mzx` extending the `Error` enums in
 /// the internal crates `mz-frontegg-auth`, `cloud-api` and
 /// `mz_frontegg_auth` and external crates like `serde_json`,
 /// `toml_edit`, `uuid`, `std::io` and `csv`.
