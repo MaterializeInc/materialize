@@ -7,10 +7,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-name: mz
-description: The CLI for Materialize.
-mainline: false
-pre-image:
-  - type: cargo-build
-    bin: [mz]
-    strip: false
+MZFROM prod-base
+
+RUN apt-get update \
+    && apt-get -qy install --no-install-recommends postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY mzx /usr/local/bin/
+
+USER materialize
+
+ENTRYPOINT ["tini", "--", "mzx"]
