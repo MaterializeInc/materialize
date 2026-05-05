@@ -25,7 +25,7 @@
 //! cargo build --release --features pager --example pager_merge
 //! systemd-run --user --scope -p MemoryMax=16G -p MemorySwapMax=64G --quiet \
 //!   --setenv=MZ_PAGER_SCRATCH=/path/to/scratch \
-//!   -- target/release/examples/pager_merge --chain-gib 16 --backend swap
+//!   -- target/release/examples/pager_merge --chain-gib 16 --backend swap --threads 1
 //! ```
 
 #![cfg(feature = "pager")]
@@ -47,7 +47,6 @@ const CACHE_LINE_U64: usize = CACHE_LINE_BYTES / 8;
 fn main() {
     let args: Vec<String> = env::args().collect();
     let chain_gib: usize = parse_arg(&args, "--chain-gib", 16);
-    let prefetch_depth: usize = parse_arg(&args, "--prefetch-depth", 1);
     let threads: usize = parse_arg(&args, "--threads", 1).max(1);
     let backend = parse_backend(&args);
     let scratch: PathBuf = env::var_os("MZ_PAGER_SCRATCH")
@@ -62,7 +61,7 @@ fn main() {
     let chunks_per_chain = per_thread_chain_bytes / CHUNK_BYTES;
 
     println!(
-        "backend={backend:?} threads={threads} per_thread_chain_chunks={chunks_per_chain} chunk={CHUNK_BYTES}B total_chain={chain_gib}GiB prefetch_depth={prefetch_depth}"
+        "backend={backend:?} threads={threads} per_thread_chain_chunks={chunks_per_chain} chunk={CHUNK_BYTES}B total_chain={chain_gib}GiB"
     );
 
     let barrier = Arc::new(Barrier::new(threads));
@@ -71,7 +70,7 @@ fn main() {
     for tid in 0..threads {
         let barrier = Arc::clone(&barrier);
         handles.push(thread::spawn(move || {
-            run_worker(tid, chunks_per_chain, prefetch_depth, &barrier)
+            run_worker(tid, chunks_per_chain, &barrier)
         }));
     }
     let mut per_thread = Vec::with_capacity(threads);
@@ -102,16 +101,11 @@ struct WorkerTimings {
     merge: Duration,
 }
 
-fn run_worker(
-    _tid: usize,
-    chunks_per_chain: usize,
-    prefetch_depth: usize,
-    barrier: &Barrier,
-) -> WorkerTimings {
+fn run_worker(_tid: usize, chunks_per_chain: usize, barrier: &Barrier) -> WorkerTimings {
     barrier.wait();
     let (chain_a, build_a) = time(|| build_chain(chunks_per_chain));
     let (chain_b, build_b) = time(|| build_chain(chunks_per_chain));
-    let (chain_c, merge) = time(|| merge_pass(chain_a, chain_b, prefetch_depth));
+    let (chain_c, merge) = time(|| merge_pass(chain_a, chain_b));
     drop(chain_c);
     WorkerTimings {
         build_a,
@@ -138,7 +132,7 @@ fn build_chain(n_chunks: usize) -> Vec<Handle> {
     chain
 }
 
-fn merge_pass(a: Vec<Handle>, b: Vec<Handle>, prefetch_depth: usize) -> Vec<Handle> {
+fn merge_pass(a: Vec<Handle>, b: Vec<Handle>) -> Vec<Handle> {
     let n = a.len().min(b.len());
     let mut a: Vec<Option<Handle>> = a.into_iter().map(Some).collect();
     let mut b: Vec<Option<Handle>> = b.into_iter().map(Some).collect();
@@ -146,31 +140,7 @@ fn merge_pass(a: Vec<Handle>, b: Vec<Handle>, prefetch_depth: usize) -> Vec<Hand
     let mut tmp_a: Vec<u64> = Vec::with_capacity(CHUNK_U64);
     let mut tmp_b: Vec<u64> = Vec::with_capacity(CHUNK_U64);
     let mut sink: u64 = 0;
-    // Maintain a rolling window of `prefetch_depth` outstanding prefetches.
-    // Issue the initial wave for indices [0, prefetch_depth).
-    let initial = prefetch_depth.min(n);
-    for j in 0..initial {
-        if let Some(h) = a[j].as_ref() {
-            pager::prefetch(h);
-        }
-        if let Some(h) = b[j].as_ref() {
-            pager::prefetch(h);
-        }
-    }
     for i in 0..n {
-        // Each iteration extends the window by one: prefetch index `i +
-        // prefetch_depth` so that by the time we consume it the kernel has
-        // had `prefetch_depth` chunks worth of compute time to make pages
-        // available.
-        let pf = i + prefetch_depth;
-        if pf < n {
-            if let Some(h) = a[pf].as_ref() {
-                pager::prefetch(h);
-            }
-            if let Some(h) = b[pf].as_ref() {
-                pager::prefetch(h);
-            }
-        }
         let ha = a[i].take().expect("handle a present");
         let hb = b[i].take().expect("handle b present");
         pager::take(ha, &mut tmp_a);
