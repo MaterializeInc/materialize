@@ -27,7 +27,7 @@ from materialize.mzcompose.composition import (
 )
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mysql import MySql
-from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.mzx import Mzx
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
@@ -53,7 +53,7 @@ def create_mysql_replica(mysql_version: str) -> MySql:
 
 
 SERVICES = [
-    Mz(app_password=""),
+    Mzx(app_password=""),
     Materialized(
         additional_system_parameter_defaults={
             "log_filter": "mz_storage::source::mysql=trace,info"

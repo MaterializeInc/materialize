@@ -20,7 +20,7 @@ from materialize.feature_flag_consistency.input_data.feature_flag_configurations
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.mzx import Mzx
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.test_result import FailedTestExecutionError
 from materialize.output_consistency.execution.evaluation_strategy import (
@@ -40,7 +40,7 @@ SERVICES = [
     Postgres(),
     Materialized(name="mz_this"),  # Overridden below
     Materialized(name="mz_other"),  # Overridden below
-    Mz(app_password=""),
+    Mzx(app_password=""),
 ]
 
 

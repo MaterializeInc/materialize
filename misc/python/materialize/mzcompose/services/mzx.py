@@ -17,11 +17,11 @@ from materialize.mzcompose import loader
 from materialize.mzcompose.service import Service
 
 
-class Mz(Service):
+class Mzx(Service):
     def __init__(
         self,
         *,
-        name: str = "mz",
+        name: str = "mzx",
         region: str = "aws/us-east-1",
         environment: str = "staging",
         app_password: str,
@@ -62,7 +62,7 @@ class Mz(Service):
         super().__init__(
             name=name,
             config={
-                "mzbuild": "mz",
+                "mzbuild": "mzx",
                 "volumes": [
                     f"{config_name}:/home/materialize/.config/materialize/mz.toml"
                 ],

@@ -26,7 +26,7 @@ from materialize.mzcompose.composition import (
     Composition,
     WorkflowArgumentParser,
 )
-from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.mzx import Mzx
 from materialize.ui import UIError
 
 REGION = "aws/us-west-2"
@@ -41,7 +41,7 @@ CONFLUENT_API_KEY = os.getenv("CONFLUENT_CLOUD_QA_CANARY_KAFKA_USERNAME")
 CONFLUENT_API_SECRET = os.getenv("CONFLUENT_CLOUD_QA_CANARY_KAFKA_PASSWORD")
 
 SERVICES = [
-    Mz(
+    Mzx(
         region=REGION,
         environment=ENVIRONMENT,
         app_password=APP_PASSWORD or "",
@@ -73,7 +73,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     test_failed = True
     try:
         print("Enabling region using Mz ...")
-        c.run("mz", "region", "enable")
+        c.run("mzx", "region", "enable")
 
         time.sleep(10)
 
@@ -84,7 +84,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         # Assert `mz app-password create`
         new_app_password_name = "Materialize CLI (mz) - Nightlies"
         output = c.run(
-            "mz", "app-password", "create", new_app_password_name, capture=True
+            "mzx", "app-password", "create", new_app_password_name, capture=True
         )
         new_app_password = output.stdout.strip()
         assert "mzp_" in new_app_password
@@ -98,13 +98,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
 
         # Assert `mz app-password list`
-        output = c.run("mz", "app-password", "list", capture=True)
+        output = c.run("mzx", "app-password", "list", capture=True)
         assert new_app_password_name in output.stdout
 
         # // Test - `mz secrets`
         # Drop secret if exists
         output = c.run(
-            "mz",
+            "mzx",
             "sql",
             "--",
             "-q",
@@ -115,12 +115,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         secret = "decode('c2VjcmV0Cg==', 'base64')"
         output = c.run(
-            "mz", "secret", "create", "CI_SECRET", stdin=secret, capture=True
+            "mzx", "secret", "create", "CI_SECRET", stdin=secret, capture=True
         )
         assert output.returncode == 0
 
         output = c.run(
-            "mz",
+            "mzx",
             "secret",
             "create",
             "confluent_username",
@@ -130,7 +130,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         assert output.returncode == 0
 
         output = c.run(
-            "mz",
+            "mzx",
             "secret",
             "create",
             "confluent_password",
@@ -140,7 +140,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         assert output.returncode == 0
 
         output = c.run(
-            "mz",
+            "mzx",
             "sql",
             "--",
             "-q",
@@ -156,7 +156,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
 
         output = c.run(
-            "mz",
+            "mzx",
             "sql",
             "--",
             "-q",
@@ -166,35 +166,35 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
         assert output.returncode == 0
 
-        output = c.run("mz", "sql", "--", "-q", "-c", "SHOW SECRETS;", capture=True)
+        output = c.run("mzx", "sql", "--", "-q", "-c", "SHOW SECRETS;", capture=True)
         assert "ci_secret" in output.stdout
 
         # Assert using force
         output = c.run(
-            "mz", "secret", "create", "CI_SECRET", "--force", stdin=secret, capture=True
+            "mzx", "secret", "create", "CI_SECRET", "--force", stdin=secret, capture=True
         )
         assert output.returncode == 0
 
         # Test - `mz user`
         user_email = "mz_ci_e2e_test_nightlies@materialize.com"
 
-        output = c.run("mz", "user", "list", capture=True)
+        output = c.run("mzx", "user", "list", capture=True)
         if user_email in output.stdout:
             # Try to remove the username if it exist before trying to create one.
-            c.run("mz", "user", "remove", user_email, check=False)
+            c.run("mzx", "user", "remove", user_email, check=False)
 
-        output = c.run("mz", "user", "create", user_email, "MZ_CI", capture=True)
+        output = c.run("mzx", "user", "create", user_email, "MZ_CI", capture=True)
         assert output.returncode == 0
 
-        output = c.run("mz", "user", "list", capture=True)
+        output = c.run("mzx", "user", "list", capture=True)
         assert output.returncode == 0
         assert user_email in output.stdout
 
-        output = c.run("mz", "user", "remove", user_email, capture=True)
+        output = c.run("mzx", "user", "remove", user_email, capture=True)
         assert output.returncode == 0
 
         output = c.run(
-            "mz",
+            "mzx",
             "user",
             "list",
             "--format",
@@ -208,7 +208,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         # Test - `mz region list`
         # Enable, disable and show are already tested.
-        output = c.run("mz", "region", "list", "--format", "json", capture=True)
+        output = c.run("mzx", "region", "list", "--format", "json", capture=True)
         regions = json.loads(output.stdout)
         us_region = None
         for region in regions:
@@ -246,7 +246,7 @@ def disable_region(c: Composition) -> None:
     print(f"Shutting down region {REGION} ...")
 
     try:
-        c.run("mz", "region", "disable", "--hard")
+        c.run("mzx", "region", "disable", "--hard")
     except UIError:
         # Can return: status 404 Not Found
         pass

@@ -29,7 +29,7 @@ from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.metadata_store import metadata_store_services
 from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.mysql import MySql
-from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.mzx import Mzx
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
@@ -44,7 +44,7 @@ SERVICES = [
     Postgres(),
     MySql(),
     Azurite(),
-    Mz(app_password=""),
+    Mzx(app_password=""),
     Minio(setup_materialize=True, additional_directories=["copytos3", "copyfroms3"]),
     Materialized(
         external_blob_store=True,
