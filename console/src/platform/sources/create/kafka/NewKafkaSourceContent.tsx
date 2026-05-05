@@ -42,7 +42,8 @@ import {
 import { ObjectToastDescription } from "~/components/Toast";
 import { getSecretFromOption } from "~/forms/secretsFormControlAccessors";
 import { useToast } from "~/hooks/useToast";
-import { regionPath, useBuildSourcePath } from "~/platform/routeHelpers";
+import { regionPath } from "~/platform/routeHelpers";
+import { useOpenCatalogMonitor } from "~/store/catalog";
 import { currentEnvironmentState, useRegionSlug } from "~/store/environments";
 import { assert, capitalizeSentence } from "~/util";
 
@@ -153,7 +154,7 @@ const NewKafkaSourceContent = ({
   const navigate = useNavigate();
   const [environment] = useAtom(currentEnvironmentState);
   const [searchParams, setSearchParams] = useSearchParams();
-  const sourcePath = useBuildSourcePath();
+  const openCatalogMonitor = useOpenCatalogMonitor();
   const [isPending, setIsPending] = useState(false);
   const [generalFormError, setGeneralFormError] = useState<
     string | undefined
@@ -320,7 +321,13 @@ const NewKafkaSourceContent = ({
                 />
               ),
             });
-            navigate(sourcePath(newSource));
+            openCatalogMonitor({
+              id: newSource.id,
+              databaseName: newSource.databaseName ?? "",
+              schemaName: newSource.schemaName,
+              objectName: newSource.name,
+              objectType: "source",
+            });
           } catch (e) {
             Sentry.captureException(e);
             navigate(`${regionPath(regionSlug)}/sources/`);

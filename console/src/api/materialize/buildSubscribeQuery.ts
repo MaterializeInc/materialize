@@ -10,15 +10,45 @@
 import { Compilable, RawBuilder, sql } from "kysely";
 
 export interface SubscribeQueryOptions {
+  /**
+   * Column name(s) that uniquely identify a row. Generates the
+   * `ENVELOPE UPSERT (KEY (...))` clause so the subscribe stream sends
+   * upsert/delete operations instead of raw diffs.
+   *
+   * Single string for a single-column key, or an array for composite keys.
+   */
   upsertKey: string | string[];
+  /** If set, adds `AS OF AT LEAST TIMESTAMP <date>` for temporal consistency. */
   asOfAtLeast?: Date;
 }
 
 /**
- * Builds a subscribe query given a select query and options.
- * WITH PROGRESS is always specified.
- * `upsertKey` is required, it sets ENVELOPE UPSERT with the given key.
- * `asOfAtLeast` sets AS OF AT LEAST to the specified timestamp.
+ * Wraps a SELECT query in a Materialize `SUBSCRIBE` statement with the
+ * required `WITH (PROGRESS)` and `ENVELOPE UPSERT` clauses.
+ *
+ * The result is a Kysely `RawBuilder` that can be compiled to SQL and passed
+ * to {@link useSubscribe} or {@link useGlobalUpsertSubscribe}.
+ *
+ * @example
+ * ```ts
+ * // Single-column key
+ * const sub = buildSubscribeQuery(
+ *   queryBuilder.selectFrom("mz_objects").select(["id", "name"]),
+ *   { upsertKey: "id" },
+ * );
+ *
+ * // Composite key
+ * const sub = buildSubscribeQuery(
+ *   buildAllColumnsQuery(),
+ *   { upsertKey: ["objectId", "name"] },
+ * );
+ *
+ * // Raw SQL query
+ * const sub = buildSubscribeQuery(
+ *   sql<MyType>`SELECT id, name FROM mz_objects WHERE id LIKE 'u%'`,
+ *   { upsertKey: "id" },
+ * );
+ * ```
  */
 export function buildSubscribeQuery<T>(
   query: Compilable<T> | RawBuilder<unknown>,

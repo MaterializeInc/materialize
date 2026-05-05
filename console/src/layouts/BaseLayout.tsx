@@ -34,22 +34,109 @@ import {
   useTheme,
   VStack,
 } from "@chakra-ui/react";
+import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import React from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { NavLink, NavLinkProps } from "react-router-dom";
 
 import { AppErrorBoundary } from "~/components/AppErrorBoundary";
 import ImpersonationAlert from "~/components/ImpersonationAlert";
 import { MfaAlert } from "~/components/MfaAlert";
 import WelcomeDialog from "~/components/WelcomeDialog/WelcomeDialog";
+import FloatingResultPanel from "~/layouts/FloatingResultPanel";
 import { NavBar } from "~/layouts/NavBar";
 import PageFooter from "~/layouts/PageFooter";
+import { SHELL_SLUG } from "~/platform/routeHelpers";
+import {
+  resultsPanelOpenAtom,
+  resultsPanelPathAtom,
+} from "~/platform/worksheet/store";
+import { catalogDetailAtom, catalogVisibleAtom } from "~/store/catalog";
 import { useTrackPageHeaderHeight } from "~/store/stickyHeader";
 import SlashIcon from "~/svg/SlashIcon";
 import { MaterializeTheme } from "~/theme";
 
 import { OrgTag } from "./footerTagComponents";
 import { FIXED_TOP_BAR_Z_INDEX, MAIN_CONTENT_Z_INDEX } from "./zIndex";
+
+const CatalogPanel = React.lazy(
+  () => import("~/platform/worksheet/CatalogPanel"),
+);
+
+/** Default width of the data catalog side panel (pixels). */
+const DEFAULT_CATALOG_WIDTH = 350;
+
+/** Minimum width the catalog panel can be resized to (pixels). */
+const MIN_CATALOG_WIDTH = 200;
+
+/** Maximum width the catalog panel can be resized to (pixels). */
+const MAX_CATALOG_WIDTH = 600;
+
+/** Catalog panel with a draggable right edge for resizing. */
+const ResizableCatalogPanel = () => {
+  const { colors } = useTheme<MaterializeTheme>();
+  const [width, setWidth] = React.useState(DEFAULT_CATALOG_WIDTH);
+  const isDragging = React.useRef(false);
+
+  const handleMouseDown = React.useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      isDragging.current = true;
+      const startX = e.clientX;
+      const startWidth = width;
+
+      const handleMouseMove = (moveEvent: MouseEvent) => {
+        const delta = moveEvent.clientX - startX;
+        const newWidth = Math.min(
+          MAX_CATALOG_WIDTH,
+          Math.max(MIN_CATALOG_WIDTH, startWidth + delta),
+        );
+        setWidth(newWidth);
+      };
+
+      const handleMouseUp = () => {
+        isDragging.current = false;
+        document.removeEventListener("mousemove", handleMouseMove);
+        document.removeEventListener("mouseup", handleMouseUp);
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+      };
+
+      document.addEventListener("mousemove", handleMouseMove);
+      document.addEventListener("mouseup", handleMouseUp);
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+    },
+    [width],
+  );
+
+  return (
+    <React.Suspense fallback={<Box width={`${width}px`} flexShrink={0} />}>
+      <Flex
+        width={`${width}px`}
+        flexShrink={0}
+        overflow="hidden"
+        position="relative"
+      >
+        <Box flex="1" overflow="hidden">
+          <CatalogPanel />
+        </Box>
+        <Box
+          position="absolute"
+          right="0"
+          top="0"
+          bottom="0"
+          width="4px"
+          cursor="col-resize"
+          onMouseDown={handleMouseDown}
+          _hover={{ bg: colors.accent.purple }}
+          transition="background 0.15s"
+          zIndex={1}
+        />
+      </Flex>
+    </React.Suspense>
+  );
+};
 
 export interface BaseLayoutProps {
   children?: React.ReactNode;
@@ -91,6 +178,35 @@ export const MAIN_CONTENT_MARGIN = 10;
  */
 export const BaseLayout = (props: BaseLayoutProps) => {
   const NavigationBar = props.navBarOverride ? props.navBarOverride : NavBar;
+  const catalogVisible = useAtomValue(catalogVisibleAtom);
+  const setCatalogVisible = useSetAtom(catalogVisibleAtom);
+  const setCatalogDetail = useSetAtom(catalogDetailAtom);
+  const setResultsPanelOpen = useSetAtom(resultsPanelOpenAtom);
+  const [resultsPanelPath, setResultsPanelPath] = useAtom(resultsPanelPathAtom);
+  const location = useLocation();
+
+  React.useEffect(() => {
+    if (
+      !new RegExp(`/regions/[^/]+/${SHELL_SLUG}(/|$)`).test(location.pathname)
+    ) {
+      setCatalogVisible(false);
+      setCatalogDetail(undefined);
+    }
+  }, [location.pathname, setCatalogVisible, setCatalogDetail]);
+
+  // Dismiss the results panel when navigating to a different page
+  React.useEffect(() => {
+    if (resultsPanelPath !== null && location.pathname !== resultsPanelPath) {
+      setResultsPanelOpen(false);
+      setResultsPanelPath(null);
+    }
+  }, [
+    location.pathname,
+    resultsPanelPath,
+    setResultsPanelOpen,
+    setResultsPanelPath,
+  ]);
+
   return (
     <Flex
       direction="column"
@@ -106,7 +222,10 @@ export const BaseLayout = (props: BaseLayoutProps) => {
         flexGrow="1"
         minHeight="0"
       >
-        <NavigationBar isCollapsed={Boolean(props.sectionNav)} />
+        <NavigationBar
+          isCollapsed={Boolean(props.sectionNav) || catalogVisible}
+        />
+        {catalogVisible && <ResizableCatalogPanel />}
         <HStack
           alignItems="stretch"
           flexGrow="1"
@@ -122,6 +241,7 @@ export const BaseLayout = (props: BaseLayoutProps) => {
             minWidth="0"
             spacing="0"
             zIndex={MAIN_CONTENT_Z_INDEX}
+            position="relative"
           >
             <Flex
               as="main"
@@ -143,6 +263,7 @@ export const BaseLayout = (props: BaseLayoutProps) => {
                 </React.Suspense>
               </AppErrorBoundary>
             </Flex>
+            <FloatingResultPanel />
             <PageFooter>
               <OrgTag />
             </PageFooter>

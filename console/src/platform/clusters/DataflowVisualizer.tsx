@@ -257,11 +257,19 @@ const DotViz = ({ dot, onClickedNode }: DotVizProps) => {
 
 const defaultReplicas: Replica[] = [];
 
-const DataflowVisualizer = () => {
+export interface DataflowVisualizerProps {
+  /** Object ID to visualize. If omitted, reads from URL params (for old explorer routes). */
+  objectId?: string;
+}
+
+const DataflowVisualizer = ({
+  objectId: propObjectId,
+}: DataflowVisualizerProps) => {
   const { getClusterById } = useAllClusters();
   const params = useParams();
+  const resolvedObjectId = propObjectId ?? params.id;
   const { data: allObjects } = useAllObjects();
-  const object = allObjects.find((o) => o.id === params.id);
+  const object = allObjects.find((o) => o.id === resolvedObjectId);
   assert(object && object.clusterId);
   const cluster = getClusterById(object.clusterId);
   const replicas = cluster?.replicas ?? defaultReplicas;
@@ -281,7 +289,7 @@ const DataflowVisualizer = () => {
   // are the same across replicas, whereas operator IDs aren't
   React.useEffect(() => {
     setScopeBreadcrumb([]);
-  }, [params.id, replicaName]);
+  }, [resolvedObjectId, replicaName]);
   const dfStructureParams = React.useMemo(
     () =>
       cluster && replicaName

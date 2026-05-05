@@ -10,7 +10,7 @@
 // TODO: This class should not depend on the apiClient singleton for better modularity and testability
 import { apiClient } from "~/api/apiClient";
 
-import type { Column, Error, Notice, SessionVariables } from "./types";
+import type { SessionVariables, WebSocketResult } from "./types";
 import { SqlRequest } from "./types";
 import { Connectable } from "./WebsocketConnectionManager";
 
@@ -211,30 +211,10 @@ export class MaterializeWebsocket implements Connectable {
   };
 }
 
-export interface ParameterStatus {
-  name: string;
-  value: string;
-}
-
-export interface CommandStarting {
-  has_rows: boolean;
-  is_streaming: boolean;
-}
-
-export interface BackendKeyData {
-  conn_id: number;
-  secret_key: number;
-}
-
-export type WebsocketRow = { type: "Row"; payload: unknown[] };
-
-export type WebSocketResult =
-  | { type: "ReadyForQuery"; payload: string }
-  | { type: "Notice"; payload: Notice }
-  | { type: "CommandComplete"; payload: string }
-  | { type: "Error"; payload: Error }
-  | { type: "Rows"; payload: { columns: Column[] } }
-  | { type: "Row"; payload: unknown[] }
-  | { type: "ParameterStatus"; payload: ParameterStatus }
-  | { type: "CommandStarting"; payload: CommandStarting }
-  | { type: "BackendKeyData"; payload: BackendKeyData };
+export type {
+  BackendKeyData,
+  CommandStarting,
+  ParameterStatus,
+  WebSocketResult,
+  WebsocketRow,
+} from "./types";

@@ -33,7 +33,9 @@ export interface NavItemProps extends NavItemType {
 export const NavItem = (props: NavItemProps) => {
   const { colors } = useTheme<MaterializeTheme>();
   const location = useLocation();
-  const active = isSubroute(props.href, location.pathname);
+  const active =
+    props.isActive ??
+    (props.href ? isSubroute(props.href, location.pathname) : false);
   const hasChildren = props.navItems && props.navItems.length > 0;
   const showActiveStyle = props.isCollapsed || !hasChildren;
 
@@ -109,7 +111,10 @@ export const NavLink = ({
   href,
   state,
   ...props
-}: React.PropsWithChildren<FlexProps & { href: string; state?: object }>) => {
+}: React.PropsWithChildren<FlexProps & { href?: string; state?: object }>) => {
+  if (!href) {
+    return <Flex role="button" tabIndex={0} cursor="pointer" {...props} />;
+  }
   if (href.search("//") === -1) {
     return <Flex as={RouterLink} state={state} to={href} {...props} />;
   }

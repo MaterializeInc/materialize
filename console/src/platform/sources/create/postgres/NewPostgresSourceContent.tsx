@@ -29,8 +29,8 @@ import { getSecretFromOption } from "~/forms/secretsFormControlAccessors";
 import { useToast } from "~/hooks/useToast";
 import { useWaitForObjectInSubscription } from "~/hooks/useWaitForObjectInSubscription";
 import { connectionQueryKeys } from "~/platform/connections/queries";
-import { useBuildSourcePath } from "~/platform/routeHelpers";
 import { regionPath } from "~/platform/routeHelpers";
+import { useOpenCatalogMonitor } from "~/store/catalog";
 import { currentEnvironmentState, useRegionSlug } from "~/store/environments";
 import { assert } from "~/util";
 
@@ -96,7 +96,7 @@ const NewPostgresSourceContent = ({
   const navigate = useNavigate();
   const regionSlug = useRegionSlug();
   const toast = useToast();
-  const sourcePath = useBuildSourcePath();
+  const openCatalogMonitor = useOpenCatalogMonitor();
   const [environment] = useAtom(currentEnvironmentState);
   const { runSql: createSource } = useCreatePostgresSource();
   const queryClient = useQueryClient();
@@ -134,14 +134,13 @@ const NewPostgresSourceContent = ({
               // Wait for object to appear in WebSocket subscription to prevent race conditions on navigation
               await waitForObject(id);
 
-              navigate(
-                sourcePath({
-                  id,
-                  name: state.name,
-                  schemaName,
-                  databaseName,
-                }),
-              );
+              openCatalogMonitor({
+                id,
+                databaseName,
+                schemaName,
+                objectName: state.name,
+                objectType: "source",
+              });
             } catch (e) {
               Sentry.captureException(e);
               navigate(`${regionPath(regionSlug)}/sources/`);

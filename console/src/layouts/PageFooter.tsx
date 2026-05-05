@@ -7,8 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { HStack, StackProps } from "@chakra-ui/layout";
-import { Text, useTheme } from "@chakra-ui/react";
+import { HStack, StackProps, Text, useTheme } from "@chakra-ui/react";
 import React from "react";
 
 import TextLink from "~/components/TextLink";
