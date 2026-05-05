@@ -187,7 +187,7 @@ describe("QueryHistoryList", () => {
     expect(
       await screen.findByText(mockRow.sql, undefined, {
         // this is slow in CI
-        timeout: 5_000,
+        timeout: 10_000,
       }),
     ).toBeVisible();
 
