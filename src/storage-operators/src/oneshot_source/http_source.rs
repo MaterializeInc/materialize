@@ -9,11 +9,15 @@
 
 //! Generic HTTP oneshot source that will fetch a file from the public internet.
 
+use std::net::SocketAddr;
+use std::sync::Arc;
+
 use bytes::Bytes;
 use derivative::Derivative;
 use futures::TryStreamExt;
 use futures::stream::{BoxStream, StreamExt};
 use reqwest::Client;
+use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -21,6 +25,44 @@ use crate::oneshot_source::util::IntoRangeHeaderValue;
 use crate::oneshot_source::{
     Encoding, OneshotObject, OneshotSource, StorageErrorX, StorageErrorXContext, StorageErrorXKind,
 };
+
+/// reqwest DNS resolver that delegates to [`mz_ore::netio::resolve_address`].
+///
+/// Only the IP resolution step is overridden — reqwest still uses the URL's
+/// original hostname for SNI and TLS certificate validation, so HTTPS works
+/// normally.
+#[derive(Debug)]
+struct MzHttpResolver {
+    enforce_external_addresses: bool,
+}
+
+impl Resolve for MzHttpResolver {
+    fn resolve(&self, name: Name) -> Resolving {
+        let enforce = self.enforce_external_addresses;
+        Box::pin(async move {
+            let ips = mz_ore::netio::resolve_address(name.as_str(), enforce).await?;
+            // reqwest substitutes the conventional port (80/443) when the
+            // SocketAddr's port is 0 and no explicit port was given in the URL.
+            let addrs: Addrs = Box::new(
+                ips.into_iter()
+                    .map(|ip| SocketAddr::new(ip, 0))
+                    .collect::<Vec<_>>()
+                    .into_iter(),
+            );
+            Ok(addrs)
+        })
+    }
+}
+
+/// Build a reqwest [`Client`] for fetching `COPY FROM` URLs. This uses
+/// [`mz_ore::netio::resolve_address`] for DNS resolution.
+pub fn build_http_client(enforce_external_addresses: bool) -> Result<Client, reqwest::Error> {
+    Client::builder()
+        .dns_resolver(Arc::new(MzHttpResolver {
+            enforce_external_addresses,
+        }))
+        .build()
+}
 
 /// Generic oneshot source that fetches a file from a URL on the public internet.
 #[derive(Clone, Derivative)]

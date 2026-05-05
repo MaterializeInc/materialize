@@ -119,6 +119,20 @@ impl Coordinator {
                     .map_err(|err| AdapterError::Unstructured(anyhow::anyhow!("{err}")));
                 let url = return_if_err!(result, ctx);
 
+                // Only allow http(s) schemes. Technically we would fail later, as the current
+                // crate (reqwest) doesn't support other schemes.
+                // Prefer to fail early and explicitly in case the downstream ever changes.
+                // DNS resolution checks are performed at execution time to avoid stalls
+                // during sequencing.
+                match url.scheme() {
+                    "http" | "https" => {}
+                    other => {
+                        return ctx.retire(Err(AdapterError::Unstructured(anyhow::anyhow!(
+                            "only 'http://' and 'https://' urls are supported as COPY FROM \
+                             target, got '{other}://'"
+                        ))));
+                    }
+                }
                 mz_storage_types::oneshot_sources::ContentSource::Http { url }
             }
             CopyFromSource::AwsS3 {

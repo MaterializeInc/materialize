@@ -102,7 +102,9 @@ use tracing::info;
 
 use crate::oneshot_source::aws_source::{AwsS3Source, S3Checksum, S3Object};
 use crate::oneshot_source::csv::{CsvDecoder, CsvRecord, CsvWorkRequest};
-use crate::oneshot_source::http_source::{HttpChecksum, HttpObject, HttpOneshotSource};
+use crate::oneshot_source::http_source::{
+    HttpChecksum, HttpObject, HttpOneshotSource, build_http_client,
+};
 use crate::oneshot_source::parquet::{ParquetFormat, ParquetRowGroup, ParquetWorkRequest};
 
 pub mod csv;
@@ -137,6 +139,7 @@ pub fn render<'scope, F>(
     collection_id: GlobalId,
     collection_meta: CollectionMetadata,
     request: OneshotIngestionRequest,
+    enforce_external_addresses: bool,
     worker_callback: F,
 ) -> Vec<PressOnDropButton>
 where
@@ -151,7 +154,16 @@ where
 
     let source = match source {
         ContentSource::Http { url } => {
-            let source = HttpOneshotSource::new(reqwest::Client::default(), url);
+            let client = match build_http_client(enforce_external_addresses) {
+                Ok(client) => client,
+                Err(err) => {
+                    worker_callback(Err(format!(
+                        "failed to build HTTP client for COPY FROM: {err}"
+                    )));
+                    return Vec::new();
+                }
+            };
+            let source = HttpOneshotSource::new(client, url);
             SourceKind::Http(source)
         }
         ContentSource::AwsS3 {
