@@ -739,16 +739,15 @@ impl Instance {
     /// object (ingestion, ingestion export (aka. subsource), or export).
     pub fn get_active_replicas_for_object(&self, id: &GlobalId) -> BTreeSet<ReplicaId> {
         if let Some(ingestion_id) = self.ingestion_exports.get(id) {
-            // Right now, only ingestions can have per-replica scheduling decisions.
             match self.active_ingestions.get(ingestion_id) {
                 Some(ingestion) => ingestion.active_replicas.clone(),
-                None => {
-                    // The ingestion has already been compacted away (aka. stopped).
-                    BTreeSet::new()
-                }
+                None => BTreeSet::new(),
             }
+        } else if let Some(ingestion) = self.active_ingestions.get(id) {
+            ingestion.active_replicas.clone()
+        } else if let Some(export) = self.active_exports.get(id) {
+            export.active_replicas.clone()
         } else {
-            // For non-ingestion objects, all replicas are active
             self.replicas.keys().copied().collect()
         }
     }
@@ -959,5 +958,37 @@ impl ReplicaTask {
         if let StorageCommand::Hello { nonce } = command {
             *nonce = Uuid::new_v4();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn active_replicas_for_export() {
+        let reg = mz_ore::metrics::MetricsRegistry::new();
+        let ctrl = mz_cluster_client::metrics::ControllerMetrics::new(&reg);
+        let sm = mz_storage_client::metrics::StorageControllerMetrics::new(&reg, ctrl);
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut inst = Instance::new(
+            None,
+            sm.for_instance(mz_storage_types::instances::StorageInstanceId::System(0)),
+            mz_ore::now::NOW_ZERO.clone(),
+            tx,
+        );
+
+        let r1 = ReplicaId::User(1);
+        let sink = GlobalId::User(100);
+        inst.active_exports.insert(
+            sink,
+            ActiveExport {
+                active_replicas: BTreeSet::from([r1]),
+            },
+        );
+        assert_eq!(
+            inst.get_active_replicas_for_object(&sink),
+            BTreeSet::from([r1]),
+        );
     }
 }
