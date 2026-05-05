@@ -31,7 +31,7 @@ from materialize.mzcompose.services.metadata_store import (
     CockroachOrPostgresMetadata,
 )
 from materialize.mzcompose.services.minio import Minio
-from materialize.mzcompose.services.mysql import MySql
+from materialize.mzcompose.services.mysql import MySql, create_mysql_server_args
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -42,7 +42,10 @@ from materialize.source_table_migration import (
 
 def create_mysql(mysql_version: str) -> MySql:
     return MySql(
-        version=mysql_version, additional_args=["--binlog_row_metadata=MINIMAL"]
+        version=mysql_version,
+        additional_args=create_mysql_server_args(
+            server_id="1", is_master=True, binlog_row_metadata="minimal"
+        ),
     )
 
 
@@ -50,13 +53,9 @@ def create_mysql_replica(mysql_version: str) -> MySql:
     return MySql(
         name="mysql-replica",
         version=mysql_version,
-        additional_args=[
-            "--gtid_mode=ON",
-            "--enforce_gtid_consistency=ON",
-            "--skip-replica-start",
-            "--server-id=2",
-            "--binlog_row_metadata=MINIMAL",
-        ],
+        additional_args=create_mysql_server_args(
+            server_id="2", is_master=False, binlog_row_metadata="minimal"
+        ),
     )
 
 
