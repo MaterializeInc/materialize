@@ -1596,6 +1596,119 @@ class Composition:
             f"Could not read cgroup memory usage from container {container_id}"
         )
 
+    # cgroup peak file paths, in order of preference (v2 first).
+    _CGROUP_PEAK_PATHS = (
+        "/sys/fs/cgroup/memory.peak",
+        "/sys/fs/cgroup/memory/memory.max_usage_in_bytes",
+    )
+
+    def mem_peak(self, service: str) -> int | None:
+        """Return the high-water-mark memory usage in bytes for the service's
+        container since the last reset (or container start).
+
+        Reads the cgroup ``memory.peak`` (v2) or ``memory.max_usage_in_bytes``
+        (v1) file via ``docker exec``. Returns ``None`` if neither file can
+        be read.
+        """
+        container_id = self.container_id(service)
+        assert container_id is not None
+
+        for path in self._CGROUP_PEAK_PATHS:
+            try:
+                out = subprocess.check_output(
+                    ["docker", "exec", container_id, "cat", path],
+                    text=True,
+                    stderr=subprocess.DEVNULL,
+                ).strip()
+                return int(out)
+            except (subprocess.CalledProcessError, ValueError):
+                continue
+
+        return None
+
+    def mem_peak_reset(self, service: str) -> bool:
+        """Reset the cgroup peak counter for the service's container.
+
+        Writing ``0`` to ``memory.peak`` requires kernel >= 6.7 (cgroup v2);
+        writing ``0`` to ``memory.max_usage_in_bytes`` (cgroup v1) has been
+        supported for much longer. Returns whether a reset succeeded.
+        """
+        container_id = self.container_id(service)
+        assert container_id is not None
+
+        for path in self._CGROUP_PEAK_PATHS:
+            try:
+                subprocess.check_call(
+                    ["docker", "exec", container_id, "sh", "-c", f"echo 0 > {path}"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                return True
+            except subprocess.CalledProcessError:
+                continue
+
+        return False
+
+    _JEMALLOC_STAT_KEYS = (
+        "allocated",
+        "active",
+        "resident",
+        "mapped",
+        "retained",
+        "metadata",
+    )
+
+    def jemalloc_stats(
+        self,
+        service: str,
+        port: int = 6878,
+        path: str = "/",
+    ) -> dict[str, int] | None:
+        """Return jemalloc summary stats for the service's container.
+
+        Hits the ``dump_stats`` action on the service's internal HTTP
+        profiling endpoint with ``Accept: application/json`` and pulls the
+        top-level ``jemalloc.stats`` block. Returns ``None`` if the
+        endpoint is unreachable, the binary was built without jemalloc
+        support, or the response can't be parsed. Keys: ``allocated``,
+        ``active``, ``resident``, ``mapped``, ``retained``, ``metadata``,
+        all in bytes.
+
+        clusterd mounts the prof router at the root of its internal HTTP
+        listener (default ``/``); environmentd nests it under ``/prof/``.
+        Pass ``path`` accordingly.
+        """
+        container_id = self.container_id(service)
+        assert container_id is not None
+
+        url = f"http://localhost:{port}{path}?action=dump_stats"
+        try:
+            out = subprocess.check_output(
+                [
+                    "docker",
+                    "exec",
+                    container_id,
+                    "curl",
+                    "-fsS",
+                    "-H",
+                    "Accept: application/json",
+                    url,
+                ],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            )
+        except subprocess.CalledProcessError:
+            return None
+
+        try:
+            stats = json.loads(out)["jemalloc"]["stats"]
+        except (json.JSONDecodeError, KeyError, TypeError):
+            return None
+
+        return {
+            key: int(stats[key]) for key in self._JEMALLOC_STAT_KEYS if key in stats
+        }
+
     def testdrive(
         self,
         input: str,

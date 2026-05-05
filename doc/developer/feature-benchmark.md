@@ -152,7 +152,21 @@ output until reliably reproduced locally.
 
 If started with `--measure-memory`, the feature benchmark will measure memory consumption and report any regressions.
 
-`docker stats` is used to measure the memory consumption of the entire Materialize container, which includes CRDB.
+For each iteration the framework records:
+
+* `memory_mz` / `memory_clusterd`: cgroup `memory.current` of the materialized
+  and clusterd containers, sampled once after the workload completes.
+* `memory_peak_mz` / `memory_peak_clusterd`: cgroup `memory.peak` (cgroup v2)
+  or `memory.max_usage_in_bytes` (cgroup v1), reset before each iteration so
+  the value reflects this iteration's high-water mark rather than the peak
+  since container start.
+* `jemalloc_allocated_clusterd`, `jemalloc_resident_clusterd`,
+  `jemalloc_retained_clusterd`: jemalloc summary stats parsed from
+  `clusterd:6878/prof?action=dump_stats`.
+  `allocated` is the logical bytes the application currently holds — the
+  cleanest signal for real regressions.
+  `resident` and `retained` track allocator behavior (decay, fragmentation)
+  and primarily help triage divergence from `allocated`.
 
 # Troubleshooting
 

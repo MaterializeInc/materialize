@@ -38,6 +38,18 @@ class MeasurementType(Enum):
     WALLCLOCK = auto()
     MEMORY_MZ = auto()
     MEMORY_CLUSTERD = auto()
+    # Per-iteration peak RSS sampled from the cgroup memory.peak file. Reset
+    # before each measurement so the value reflects the high-water mark of the
+    # workload rather than steady-state.
+    MEMORY_PEAK_MZ = auto()
+    MEMORY_PEAK_CLUSTERD = auto()
+    # jemalloc statistics for clusterd, parsed from /prof?action=dump_stats.
+    # `allocated` is the logical bytes the application currently holds and is
+    # the most direct signal for real regressions; the other two help triage
+    # allocator-decay vs. real growth.
+    JEMALLOC_ALLOCATED_CLUSTERD = auto()
+    JEMALLOC_RESIDENT_CLUSTERD = auto()
+    JEMALLOC_RETAINED_CLUSTERD = auto()
 
     def __str__(self) -> str:
         return self.name.lower()
@@ -46,6 +58,11 @@ class MeasurementType(Enum):
         return self in {
             MeasurementType.MEMORY_MZ,
             MeasurementType.MEMORY_CLUSTERD,
+            MeasurementType.MEMORY_PEAK_MZ,
+            MeasurementType.MEMORY_PEAK_CLUSTERD,
+            MeasurementType.JEMALLOC_ALLOCATED_CLUSTERD,
+            MeasurementType.JEMALLOC_RESIDENT_CLUSTERD,
+            MeasurementType.JEMALLOC_RETAINED_CLUSTERD,
         }
 
     def is_lower_value_better(self) -> bool:

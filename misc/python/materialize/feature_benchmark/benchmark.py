@@ -53,6 +53,11 @@ class Benchmark:
         if measure_memory:
             self._memory_mz_aggregation = aggregation_class()
             self._memory_clusterd_aggregation = aggregation_class()
+            self._memory_peak_mz_aggregation = aggregation_class()
+            self._memory_peak_clusterd_aggregation = aggregation_class()
+            self._jemalloc_allocated_clusterd_aggregation = aggregation_class()
+            self._jemalloc_resident_clusterd_aggregation = aggregation_class()
+            self._jemalloc_retained_clusterd_aggregation = aggregation_class()
 
     def create_scenario_instance(self) -> Scenario:
         scale = self._scenario_cls.SCALE
@@ -107,6 +112,11 @@ class Benchmark:
                     self._performance_aggregation,
                     self._memory_mz_aggregation,
                     self._memory_clusterd_aggregation,
+                    self._memory_peak_mz_aggregation,
+                    self._memory_peak_clusterd_aggregation,
+                    self._jemalloc_allocated_clusterd_aggregation,
+                    self._jemalloc_resident_clusterd_aggregation,
+                    self._jemalloc_retained_clusterd_aggregation,
                 ]
 
             i = i + 1
@@ -143,6 +153,13 @@ class Benchmark:
         if before is not None:
             for before_item in before if isinstance(before, list) else [before]:
                 before_item.run(executor=self._executor)
+
+        # Reset cgroup peak counters so the peak measurement collected after
+        # the workload reflects this iteration's high-water mark, not the
+        # cumulative peak since container start.
+        if hasattr(self, "_memory_peak_mz_aggregation"):
+            self._executor.DockerMemPeakResetMz()
+            self._executor.DockerMemPeakResetClusterd()
 
     def shall_terminate(self, performance_measurement: Measurement) -> bool:
         for termination_condition in self._termination_conditions:
@@ -186,6 +203,19 @@ class Benchmark:
                 i, MeasurementType.MEMORY_CLUSTERD, self._memory_clusterd_aggregation
             )
 
+        if hasattr(self, "_memory_peak_mz_aggregation"):
+            self._collect_memory_measurement(
+                i,
+                MeasurementType.MEMORY_PEAK_MZ,
+                self._memory_peak_mz_aggregation,
+            )
+            self._collect_memory_measurement(
+                i,
+                MeasurementType.MEMORY_PEAK_CLUSTERD,
+                self._memory_peak_clusterd_aggregation,
+            )
+            self._collect_jemalloc_measurements(i)
+
         return performance_measurement
 
     def _validate_measurement_timestamps(
@@ -211,12 +241,23 @@ class Benchmark:
     def _collect_memory_measurement(
         self, i: int, memory_measurement_type: MeasurementType, aggregation: Aggregation
     ) -> None:
+        value: int | None
         if memory_measurement_type == MeasurementType.MEMORY_MZ:
             value = self._executor.DockerMemMz()
         elif memory_measurement_type == MeasurementType.MEMORY_CLUSTERD:
             value = self._executor.DockerMemClusterd()
+        elif memory_measurement_type == MeasurementType.MEMORY_PEAK_MZ:
+            value = self._executor.DockerMemPeakMz()
+        elif memory_measurement_type == MeasurementType.MEMORY_PEAK_CLUSTERD:
+            value = self._executor.DockerMemPeakClusterd()
         else:
             raise ValueError(f"Unknown measurement type {memory_measurement_type}")
+
+        # Peak readings can be unavailable on older kernels; skip silently
+        # rather than recording a misleading zero.
+        if value is None:
+            return
+
         memory_measurement = Measurement(
             type=memory_measurement_type,
             value=value / 2**20,  # Convert to Mb
@@ -227,3 +268,27 @@ class Benchmark:
             if not self._filter or not self._filter.filter(memory_measurement):
                 print(f"{i} {memory_measurement}")
                 aggregation.append_measurement(memory_measurement)
+
+    def _collect_jemalloc_measurements(self, i: int) -> None:
+        stats = self._executor.JemallocClusterd()
+        if stats is None:
+            # Endpoint unreachable or build lacks jemalloc support; leave
+            # aggregations empty. The report omits metrics with no values.
+            return
+
+        for measurement_type, key in (
+            (MeasurementType.JEMALLOC_ALLOCATED_CLUSTERD, "allocated"),
+            (MeasurementType.JEMALLOC_RESIDENT_CLUSTERD, "resident"),
+            (MeasurementType.JEMALLOC_RETAINED_CLUSTERD, "retained"),
+        ):
+            aggregation = getattr(self, f"_{str(measurement_type)}_aggregation")
+            measurement = Measurement(
+                type=measurement_type,
+                value=stats[key] / 2**20,
+                unit=MeasurementUnit.MEGABYTE,
+            )
+            if measurement.value > 0 and (
+                not self._filter or not self._filter.filter(measurement)
+            ):
+                print(f"{i} {measurement}")
+                aggregation.append_measurement(measurement)

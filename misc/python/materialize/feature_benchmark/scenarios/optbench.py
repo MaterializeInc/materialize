@@ -113,6 +113,11 @@ class OptbenchTPCH(Scenario):
         MeasurementType.WALLCLOCK: 0.30,  # increased because it's easy to regress
         MeasurementType.MEMORY_MZ: 0.20,
         MeasurementType.MEMORY_CLUSTERD: 0.50,
+        MeasurementType.MEMORY_PEAK_MZ: 0.20,
+        MeasurementType.MEMORY_PEAK_CLUSTERD: 0.50,
+        MeasurementType.JEMALLOC_ALLOCATED_CLUSTERD: 0.20,
+        MeasurementType.JEMALLOC_RESIDENT_CLUSTERD: 0.50,
+        MeasurementType.JEMALLOC_RETAINED_CLUSTERD: 1.00,
     }
 
     def init(self) -> list[Action]:

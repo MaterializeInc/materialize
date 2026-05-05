@@ -1998,6 +1998,11 @@ class SqlServerInitialLoad(SqlServerCdc):
         MeasurementType.WALLCLOCK: 0.10,
         MeasurementType.MEMORY_MZ: 0.20,
         MeasurementType.MEMORY_CLUSTERD: 100.0,
+        MeasurementType.MEMORY_PEAK_MZ: 0.20,
+        MeasurementType.MEMORY_PEAK_CLUSTERD: 100.0,
+        MeasurementType.JEMALLOC_ALLOCATED_CLUSTERD: 100.0,
+        MeasurementType.JEMALLOC_RESIDENT_CLUSTERD: 100.0,
+        MeasurementType.JEMALLOC_RETAINED_CLUSTERD: 100.0,
     }
 
     def shared(self) -> Action:
