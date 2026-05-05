@@ -106,11 +106,36 @@ fn build_chain(n_chunks: usize) -> Vec<Handle> {
 }
 
 fn merge_pass(a: Vec<Handle>, b: Vec<Handle>) -> Vec<Handle> {
-    let mut out = Vec::with_capacity(a.len() + b.len());
+    let n = a.len().min(b.len());
+    let mut a: Vec<Option<Handle>> = a.into_iter().map(Some).collect();
+    let mut b: Vec<Option<Handle>> = b.into_iter().map(Some).collect();
+    let mut out = Vec::with_capacity(2 * n);
     let mut tmp_a: Vec<u64> = Vec::with_capacity(CHUNK_U64);
     let mut tmp_b: Vec<u64> = Vec::with_capacity(CHUNK_U64);
     let mut sink: u64 = 0;
-    for (ha, hb) in a.into_iter().zip(b.into_iter()) {
+    // Issue the first prefetches so the kernel starts populating page cache /
+    // swap-in for the very first iteration.
+    if n > 0 {
+        if let Some(h) = a[0].as_ref() {
+            pager::prefetch(h);
+        }
+        if let Some(h) = b[0].as_ref() {
+            pager::prefetch(h);
+        }
+    }
+    for i in 0..n {
+        // Prefetch one chunk ahead of the current pair so I/O overlaps with
+        // the cache-line touch and the output pageouts below.
+        if i + 1 < n {
+            if let Some(h) = a[i + 1].as_ref() {
+                pager::prefetch(h);
+            }
+            if let Some(h) = b[i + 1].as_ref() {
+                pager::prefetch(h);
+            }
+        }
+        let ha = a[i].take().expect("handle a present");
+        let hb = b[i].take().expect("handle b present");
         pager::take(ha, &mut tmp_a);
         pager::take(hb, &mut tmp_b);
         // Touch every cache line of both inputs (1 u64 per 64-byte line).
@@ -156,6 +181,7 @@ fn gib_per_sec(bytes: usize, d: Duration) -> f64 {
     if secs == 0.0 {
         return 0.0;
     }
+    #[allow(clippy::as_conversions)] // usize -> f64 is intentionally lossy for reporting
     let gib = bytes as f64 / (1024.0 * 1024.0 * 1024.0);
     gib / secs
 }
