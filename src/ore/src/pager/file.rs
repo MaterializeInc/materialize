@@ -180,6 +180,44 @@ fn write_all_vectored(mut file: &File, mut slices: &mut [IoSlice<'_>]) -> std::i
     Ok(())
 }
 
+pub(crate) fn prefetch_at_file(handle: &Handle, offset: usize, len: usize) {
+    let inner = handle
+        .file_inner()
+        .expect("prefetch_at_file called on non-file handle");
+    let total = inner.len_u64s;
+    let end = offset.checked_add(len).expect("offset+len overflow");
+    assert!(
+        end <= total,
+        "prefetch range out of bounds: {offset}+{len} > {total}"
+    );
+    if len == 0 {
+        return;
+    }
+    let path = scratch_path(inner.id);
+    let Ok(file) = File::open(&path) else {
+        // Best-effort hint; if the file is gone the next read will surface the error.
+        return;
+    };
+    posix_fadvise_willneed(&file, u64::cast_from(offset * 8), u64::cast_from(len * 8));
+}
+
+#[cfg(unix)]
+fn posix_fadvise_willneed(file: &File, byte_off: u64, byte_len: u64) {
+    use std::os::unix::io::AsRawFd;
+    #[allow(clippy::as_conversions)] // u64 -> i64/off_t for FFI; values fit by construction
+    let off = byte_off as i64;
+    #[allow(clippy::as_conversions)]
+    let len = byte_len as i64;
+    // SAFETY: fd is valid for the life of `file`; `posix_fadvise` is a hint and
+    // does not mutate user memory. The return value (errno) is intentionally ignored.
+    unsafe {
+        libc::posix_fadvise(file.as_raw_fd(), off, len, libc::POSIX_FADV_WILLNEED);
+    }
+}
+
+#[cfg(not(unix))]
+fn posix_fadvise_willneed(_file: &File, _byte_off: u64, _byte_len: u64) {}
+
 pub(crate) fn read_at_file(handle: &Handle, ranges: &[(usize, usize)], dst: &mut Vec<u64>) {
     use std::os::unix::fs::FileExt;
 
@@ -346,6 +384,28 @@ mod backend_tests {
         assert!(path.exists());
         drop(h);
         assert!(!path.exists(), "scratch file should be unlinked on drop");
+    }
+
+    #[mz_ore::test]
+    fn file_prefetch_does_not_corrupt_data() {
+        setup_dir();
+        let payload: Vec<u64> = (0..1024).collect();
+        let mut chunks = [payload.clone()];
+        let h = pageout_file(&mut chunks);
+        prefetch_at_file(&h, 100, 200);
+        prefetch_at_file(&h, 0, 1024);
+        let mut dst = Vec::new();
+        read_at_file(&h, &[(0, 1024)], &mut dst);
+        assert_eq!(dst, payload);
+    }
+
+    #[mz_ore::test]
+    #[should_panic(expected = "out of bounds")]
+    fn file_prefetch_panics_on_oob() {
+        setup_dir();
+        let mut chunks = [vec![1u64, 2]];
+        let h = pageout_file(&mut chunks);
+        prefetch_at_file(&h, 0, 99);
     }
 }
 
