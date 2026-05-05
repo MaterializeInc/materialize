@@ -425,6 +425,7 @@ steps:
               composition: kafka-auth
         agents:
           queue: hetzner-aarch64-8cpu-16gb
+        skip: "https://linear.app/materializeinc/issue/SS-115"
 
       - id: kafka-exactly-once
         label: Kafka exactly-once
