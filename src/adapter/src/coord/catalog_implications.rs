@@ -47,7 +47,6 @@ use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::instrument;
 use mz_ore::retry::Retry;
-use mz_ore::str::StrExt;
 use mz_ore::task;
 use mz_repr::{CatalogItemId, GlobalId, RelationVersion, RelationVersionSelector};
 use mz_sql::plan::ConnectionDetails;
@@ -65,6 +64,7 @@ use crate::coord::Coordinator;
 use crate::coord::catalog_implications::parsed_state_updates::{
     ParsedStateUpdate, ParsedStateUpdateKind,
 };
+use crate::coord::peek::DroppedDependency;
 use crate::coord::timeline::TimelineState;
 use crate::statement_logging::{StatementEndedExecutionReason, StatementLoggingId};
 use crate::{AdapterError, CollectionIdBundle, ExecuteContext, ResultExt};
@@ -763,20 +763,24 @@ impl Coordinator {
             {
                 let name = dropped_item_names
                     .get(id)
-                    .map(|n| format!("relation {}", n.quoted()))
+                    .cloned()
                     .expect("missing relation name");
                 active_compute_sinks_to_drop.insert(
                     *sink_id,
-                    ActiveComputeSinkRetireReason::DependencyDropped(name),
+                    ActiveComputeSinkRetireReason::DependencyDropped(DroppedDependency::Relation {
+                        name,
+                    }),
                 );
             } else if clusters_to_drop.contains(&cluster_id) {
                 let name = dropped_cluster_names
                     .get(&cluster_id)
-                    .map(|n| format!("cluster {}", n.quoted()))
+                    .cloned()
                     .expect("missing cluster name");
                 active_compute_sinks_to_drop.insert(
                     *sink_id,
-                    ActiveComputeSinkRetireReason::DependencyDropped(name),
+                    ActiveComputeSinkRetireReason::DependencyDropped(DroppedDependency::Cluster {
+                        name,
+                    }),
                 );
             }
         }
@@ -790,15 +794,15 @@ impl Coordinator {
             {
                 let name = dropped_item_names
                     .get(id)
-                    .map(|n| format!("relation {}", n.quoted()))
+                    .cloned()
                     .expect("missing relation name");
-                peeks_to_drop.push((name, uuid.clone()));
+                peeks_to_drop.push((DroppedDependency::Relation { name }, uuid.clone()));
             } else if clusters_to_drop.contains(&pending_peek.cluster_id) {
                 let name = dropped_cluster_names
                     .get(&pending_peek.cluster_id)
-                    .map(|n| format!("cluster {}", n.quoted()))
+                    .cloned()
                     .expect("missing cluster name");
-                peeks_to_drop.push((name, uuid.clone()));
+                peeks_to_drop.push((DroppedDependency::Cluster { name }, uuid.clone()));
             }
         }
 
@@ -905,11 +909,9 @@ impl Coordinator {
             }
 
             if !peeks_to_drop.is_empty() {
-                for (dropped_name, uuid) in peeks_to_drop {
+                for (dep, uuid) in peeks_to_drop {
                     if let Some(pending_peek) = self.remove_pending_peek(&uuid) {
-                        let cancel_reason = PeekResponse::Error(format!(
-                            "query could not complete because {dropped_name} was dropped"
-                        ));
+                        let cancel_reason = PeekResponse::Error(dep.query_terminated_error());
                         self.controller
                             .compute
                             .cancel_peek(pending_peek.cluster_id, uuid, cancel_reason)

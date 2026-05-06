@@ -86,6 +86,52 @@ pub enum PeekResponseUnary {
     Rows(Box<dyn RowIterator + Send + Sync>),
     Error(String),
     Canceled,
+    /// A dependency was dropped during execution.
+    ///
+    /// N.B. This is a bit of a workaround for the fact that our Error variant
+    /// is unstructured and right now we specifically care about this error and
+    /// need to render differently based on context.
+    DependencyDropped(DroppedDependency),
+}
+
+/// A dependency that was dropped while a peek or subscribe was in flight.
+///
+/// The `name` fields hold the bare name (e.g. `db.schema.t` or `c`); `Display`
+/// applies SQL identifier quoting to produce `relation "db.schema.t"` or
+/// `cluster "c"` for direct use in error wording.
+#[derive(Clone, Debug)]
+pub enum DroppedDependency {
+    Relation { name: String },
+    Cluster { name: String },
+}
+
+impl fmt::Display for DroppedDependency {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Relation { name } => write!(f, "relation {}", name.quoted()),
+            Self::Cluster { name } => write!(f, "cluster {}", name.quoted()),
+        }
+    }
+}
+
+impl DroppedDependency {
+    /// User-facing error for a query (peek or subscribe) that could not finish
+    /// because this dependency was dropped mid-flight.
+    pub fn query_terminated_error(&self) -> String {
+        format!("query could not complete because {self} was dropped")
+    }
+
+    /// Convert this dropped dependency into an [`AdapterError::ConcurrentDependencyDrop`].
+    pub fn to_concurrent_dependency_drop(&self) -> AdapterError {
+        let (kind, name) = match self {
+            Self::Relation { name } => ("relation", name.clone()),
+            Self::Cluster { name } => ("cluster", name.clone()),
+        };
+        AdapterError::ConcurrentDependencyDrop {
+            dependency_kind: kind,
+            dependency_id: name,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -465,13 +511,16 @@ pub fn create_fast_path_plan(
             {
                 if let Some(finishing) = finishing {
                     if group_key.is_empty() && *order_key == finishing.order_by && *offset == 0 {
-                        // The following is roughly `limit >= finishing.limit`, but with Options.
+                        // The following is roughly `limit >= finishing.limit + finishing.offset`,
+                        // but with Options.
                         let finishing_limits_at_least_as_topk = match (limit, finishing.limit) {
                             (None, _) => true,
                             (Some(..), None) => false,
                             (Some(topk_limit), Some(finishing_limit)) => {
                                 if let Some(l) = topk_limit.as_literal_int64() {
-                                    l >= *finishing_limit
+                                    i128::cast_from(l)
+                                        >= i128::cast_from(*finishing_limit)
+                                            + i128::cast_from(finishing.offset)
                                 } else {
                                     false
                                 }

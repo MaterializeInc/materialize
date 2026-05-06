@@ -988,7 +988,7 @@ where
 pub(crate) fn emit_optimizer_notices(
     catalog: &Catalog,
     session: &Session,
-    notices: &Vec<RawOptimizerNotice>,
+    notices: &[RawOptimizerNotice],
 ) {
     // `for_session` below is expensive, so return early if there's nothing to do.
     if notices.is_empty() {

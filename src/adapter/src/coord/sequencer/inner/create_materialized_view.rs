@@ -35,6 +35,7 @@ use timely::progress::Antichain;
 use tracing::Span;
 
 use crate::ReadHolds;
+use crate::catalog::CatalogState;
 use crate::command::ExecuteResponse;
 use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::{
@@ -561,6 +562,7 @@ impl Coordinator {
                         plan::MaterializedView {
                             mut create_sql,
                             expr: raw_expr,
+                            column_names,
                             dependencies,
                             replacement_target,
                             cluster_id,
@@ -691,12 +693,57 @@ impl Coordinator {
             .take(global_lir_plan.df_meta().optimizer_notices.len())
             .collect::<Vec<_>>();
 
-        let transact_result = self
-            .catalog_transact_with_side_effects(Some(ctx), ops, move |coord, ctx| {
-                Box::pin(async move {
-                    let output_desc = global_lir_plan.desc().clone();
-                    let (mut df_desc, df_meta) = global_lir_plan.unapply();
+        // Render optimizer notices before the catalog transaction. We wrap
+        // the system-session humanizer with an `ExprHumanizerExt` so that
+        // references to the to-be-created materialized view's own
+        // `global_id` in the persisted notice text resolve to its intended
+        // human-readable name.
+        //
+        // We keep `raw_df_meta` live so that on success we can emit its raw
+        // notices to the user session (rendered against the user's
+        // session-aware humanizer). We deliberately do NOT emit to the user
+        // here, so that if the catalog transaction below fails the user
+        // isn't shown confusing notices about an item that wasn't actually
+        // created.
+        let output_desc = global_lir_plan.desc().clone();
+        let (mut df_desc, raw_df_meta) = global_lir_plan.unapply();
+        let df_meta = {
+            let system_catalog = self.catalog().for_system_session();
+            let full_name = self.catalog().resolve_full_name(&name, None);
+            let transient_items = btreemap! {
+                global_id => TransientItem::new(
+                    Some(full_name.into_parts()),
+                    Some(column_names.iter().map(|c| c.to_string()).collect()),
+                )
+            };
+            let humanizer = ExprHumanizerExt::new(transient_items, &system_catalog);
+            CatalogState::render_notices_core(
+                &humanizer,
+                (self.catalog().config().now)(),
+                &raw_df_meta,
+                notice_ids,
+                Some(global_id),
+            )
+        };
 
+        // Populate the durable expression cache before the catalog
+        // transaction and await the write. This way any other envd (or a
+        // subsequent bootstrap here) will observe the cached plans +
+        // rendered notices as soon as the item becomes visible.
+        self.catalog()
+            .cache_expressions(
+                global_id,
+                Some(local_mir_for_cache),
+                global_mir_plan.df_desc().clone(),
+                df_desc.clone(),
+                df_meta.clone(),
+                optimizer_features,
+            )
+            .await;
+
+        let transact_result = self
+            .catalog_transact_with_side_effects(Some(ctx), ops, move |coord, _ctx| {
+                Box::pin(async move {
                     // Save plan structures.
                     coord
                         .catalog_mut()
@@ -705,15 +752,8 @@ impl Coordinator {
                         .catalog_mut()
                         .set_physical_plan(global_id, df_desc.clone());
 
-                    let notice_builtin_updates_fut = coord
-                        .process_dataflow_metainfo(df_meta, global_id, ctx, notice_ids)
-                        .await;
-
-                    coord.catalog().cache_expressions(
-                        global_id,
-                        Some(local_mir_for_cache),
-                        optimizer_features,
-                    );
+                    let notice_builtin_updates_fut =
+                        coord.persist_dataflow_metainfo(df_meta, global_id).await;
 
                     df_desc.set_as_of(dataflow_as_of.clone());
                     df_desc.set_initial_as_of(initial_as_of);
@@ -769,7 +809,14 @@ impl Coordinator {
             .await;
 
         match transact_result {
-            Ok(_) => Ok(ExecuteResponse::CreatedMaterializedView),
+            Ok(_) => {
+                // Only emit optimizer notices to the user now that the
+                // catalog transaction has succeeded. If the transaction had
+                // failed, emitting notices would confuse the user with
+                // information about an item that wasn't actually created.
+                self.emit_raw_optimizer_notices_to_user(ctx, &raw_df_meta.optimizer_notices);
+                Ok(ExecuteResponse::CreatedMaterializedView)
+            }
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
                 kind:
                     mz_catalog::memory::error::ErrorKind::Sql(

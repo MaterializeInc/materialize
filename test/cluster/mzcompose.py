@@ -3965,7 +3965,7 @@ def workflow_blue_green_deployment(
                 # Expected
                 msg = str(e)
                 if ("cached plan must not change result type" in msg) or (
-                    "subscribe has been terminated because underlying relation" in msg
+                    "query could not complete because relation" in msg
                 ):
                     continue
                 raise e
@@ -4100,7 +4100,7 @@ def workflow_cluster_drop_concurrent(
                 except InternalError_ as e:
                     assert 'query could not complete because relation "materialize.public.counter_tbl" was dropped' in str(
                         e
-                    ) or 'subscribe has been terminated because underlying relation "materialize.public.counter_tbl" was dropped' in str(
+                    ) or 'query could not complete because relation "materialize.public.counter_tbl" was dropped' in str(
                         e
                     )
             for thread in threads:
@@ -4888,7 +4888,7 @@ def workflow_test_read_frontier_advancement(
         except DatabaseError as exc:
             assert (
                 exc.diag.message_primary
-                == 'subscribe has been terminated because underlying relation "materialize.public.mv2" was dropped'
+                == 'query could not complete because relation "materialize.public.mv2" was dropped'
             )
 
     subscribe_thread = Thread(target=subscribe)
@@ -6619,7 +6619,7 @@ def workflow_test_github_10102(c: Composition) -> None:
         except DatabaseError as exc:
             assert (
                 exc.diag.message_primary
-                == 'subscribe has been terminated because underlying relation "materialize.public.mv" was dropped'
+                == 'query could not complete because relation "materialize.public.mv" was dropped'
             ), exc
 
     subscribe_thread = Thread(target=subscribe)

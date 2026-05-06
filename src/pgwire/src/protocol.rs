@@ -2427,6 +2427,9 @@ where
                         None => FetchResult::Rows(None),
                         Some(PeekResponseUnary::Rows(rows)) => FetchResult::Rows(Some(rows)),
                         Some(PeekResponseUnary::Error(err)) => FetchResult::Error(err),
+                        Some(PeekResponseUnary::DependencyDropped(dep)) => {
+                            FetchResult::Error(dep.query_terminated_error())
+                        }
                         Some(PeekResponseUnary::Canceled) => FetchResult::Canceled,
                     },
                     notice = notice_fut => {
@@ -2657,6 +2660,15 @@ where
                             ErrorResponse::error(SqlState::INTERNAL_ERROR, text.clone());
                         return self
                             .send_error_and_get_state(err)
+                            .await
+                            .map(|state| (state, SendRowsEndedReason::Errored { error: text }));
+                    }
+                    Some(PeekResponseUnary::DependencyDropped(dep)) => {
+                        let err = dep.to_concurrent_dependency_drop();
+                        let text = err.to_string();
+                        let resp = err.into_response(Severity::Error);
+                        return self
+                            .send_error_and_get_state(resp)
                             .await
                             .map(|state| (state, SendRowsEndedReason::Errored { error: text }));
                     }
