@@ -9432,12 +9432,13 @@ impl<'a> Parser<'a> {
             None
         };
 
-        // Parse MOCK definitions (0 or more)
+        // Parse MOCK definitions (0 or more). Each MOCK clause must be
+        // followed by a comma — including the last one, before the trailing
+        // `EXPECTED` clause.
         let mut mocks = Vec::new();
         while self.parse_keyword(MOCK) {
             let mock_name = self.parse_raw_name()?;
 
-            // Parse column definitions
             self.expect_token(&Token::LParen)?;
             let columns = self.parse_comma_separated(|parser| {
                 Ok(ColumnDef {
@@ -9449,11 +9450,10 @@ impl<'a> Parser<'a> {
             })?;
             self.expect_token(&Token::RParen)?;
 
-            // Parse AS
             self.expect_keyword(AS)?;
-
-            // Parse query
+            self.expect_token(&Token::LParen)?;
             let query = self.parse_query()?;
+            self.expect_token(&Token::RParen)?;
 
             mocks.push(MockViewDef {
                 name: mock_name,
@@ -9461,14 +9461,11 @@ impl<'a> Parser<'a> {
                 query,
             });
 
-            // Consume optional comma
-            let _ = self.consume_token(&Token::Comma);
+            self.expect_token(&Token::Comma)?;
         }
 
-        // Parse EXPECTED definition (required, exactly 1)
         self.expect_keyword(EXPECTED)?;
 
-        // Parse column definitions
         self.expect_token(&Token::LParen)?;
         let expected_columns = self.parse_comma_separated(|parser| {
             Ok(ColumnDef {
@@ -9480,11 +9477,10 @@ impl<'a> Parser<'a> {
         })?;
         self.expect_token(&Token::RParen)?;
 
-        // Parse AS
         self.expect_keyword(AS)?;
-
-        // Parse query
+        self.expect_token(&Token::LParen)?;
         let expected_query = self.parse_query()?;
+        self.expect_token(&Token::RParen)?;
 
         let expected = ExpectedResultDef {
             columns: expected_columns,

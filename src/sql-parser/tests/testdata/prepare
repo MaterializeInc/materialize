@@ -35,6 +35,13 @@ EXECUTE a (a, 'b', 1 + 2)
 Execute(ExecuteStatement { name: Ident("a"), params: [Identifier([Ident("a")]), Value(String("b")), Op { op: Op { namespace: None, op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }] })
 
 parse-statement
+EXECUTE UNIT TEST t1 FOR v MOCK a (x int4) AS (SELECT 1), MOCK b (y int4) AS (SELECT 2), EXPECTED (z int4) AS (SELECT 3)
+----
+EXECUTE UNIT TEST t1 FOR v MOCK a(x int4) AS (SELECT 1), MOCK b(y int4) AS (SELECT 2), EXPECTED (z int4) AS (SELECT 3)
+=>
+ExecuteUnitTest(ExecuteUnitTestStatement { name: Ident("t1"), target: Name(UnresolvedItemName([Ident("v")])), at_time: None, mocks: [MockViewDef { name: Name(UnresolvedItemName([Ident("a")])), columns: [ColumnDef { name: Ident("x"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None } }, MockViewDef { name: Name(UnresolvedItemName([Ident("b")])), columns: [ColumnDef { name: Ident("y"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None } }], expected: ExpectedResultDef { columns: [ColumnDef { name: Ident("z"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("3")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None } } })
+
+parse-statement
 DEALLOCATE a
 ----
 DEALLOCATE a

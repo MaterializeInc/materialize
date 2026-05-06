@@ -5118,8 +5118,9 @@ impl<T: AstInfo> AstDisplay for ExecuteUnitTestStatement<T> {
         for mock in &self.mocks {
             f.write_str(" MOCK ");
             f.write_node(mock);
+            f.write_str(",");
         }
-        f.write_str(" EXPECTED");
+        f.write_str(" EXPECTED ");
         f.write_node(&self.expected);
     }
 }
@@ -5138,8 +5139,9 @@ impl<T: AstInfo> AstDisplay for MockViewDef<T> {
         f.write_node(&self.name);
         f.write_str("(");
         f.write_node(&display::comma_separated(&self.columns));
-        f.write_str(") AS ");
+        f.write_str(") AS (");
         f.write_node(&self.query);
+        f.write_str(")");
     }
 }
 impl_display_t!(MockViewDef);
@@ -5155,8 +5157,9 @@ impl<T: AstInfo> AstDisplay for ExpectedResultDef<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("(");
         f.write_node(&display::comma_separated(&self.columns));
-        f.write_str(") AS ");
+        f.write_str(") AS (");
         f.write_node(&self.query);
+        f.write_str(")");
     }
 }
 impl_display_t!(ExpectedResultDef);
