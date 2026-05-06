@@ -34,6 +34,7 @@ use std::mem::size_of;
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use differential_dataflow::trace::{Batcher, Builder, Description};
+use mz_ore::cast::{CastFrom, CastLossy, ReinterpretCast};
 use mz_repr::{Datum, Row};
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::batcher::{Chunker, ColumnChunker, ColumnMerger};
@@ -108,7 +109,7 @@ fn make_row(key: u64) -> Row {
     let s = format!("k{:024x}", key);
     let mut row = Row::default();
     row.packer()
-        .extend([Datum::Int64(key as i64), Datum::String(&s)]);
+        .extend([Datum::Int64(i64::reinterpret_cast(key)), Datum::String(&s)]);
     row
 }
 
@@ -182,19 +183,20 @@ fn bench_batcher(c: &mut Criterion) {
     for (size_label, payload_bytes_total) in SIZES {
         let n_total = payload_bytes_total / ROW_PAYLOAD_BYTES;
         let n_rounds = (n_total + PER_ROUND - 1) / PER_ROUND;
+        let n_total_u64 = u64::cast_from(n_total);
 
         let configs: [(&str, Vec<Vec<Tuple>>); 3] = [
             (
                 "mixed",
-                make_rounds(1, n_rounds, PER_ROUND, 2 * n_total as u64, 4),
+                make_rounds(1, n_rounds, PER_ROUND, 2 * n_total_u64, 4),
             ),
             (
                 "collisions",
-                make_rounds(2, n_rounds, PER_ROUND, (n_total / 4) as u64, 2),
+                make_rounds(2, n_rounds, PER_ROUND, u64::cast_from(n_total / 4), 2),
             ),
             (
                 "disjoint",
-                make_rounds(3, n_rounds, PER_ROUND, n_total as u64, 4),
+                make_rounds(3, n_rounds, PER_ROUND, n_total_u64, 4),
             ),
         ];
 
@@ -276,12 +278,12 @@ fn fmt_throughput(bytes: u64, ns: f64) -> String {
     if !ns.is_finite() || ns <= 0.0 {
         return "—".to_string();
     }
-    let bytes_per_sec = bytes as f64 * 1e9 / ns;
-    let gibs = bytes_per_sec / (1u64 << 30) as f64;
+    let bytes_per_sec = f64::cast_lossy(bytes) * 1e9 / ns;
+    let gibs = bytes_per_sec / f64::cast_lossy(1u64 << 30);
     if gibs >= 1.0 {
         format!("{gibs:.2} GiB/s")
     } else {
-        let mibs = bytes_per_sec / (1u64 << 20) as f64;
+        let mibs = bytes_per_sec / f64::cast_lossy(1u64 << 20);
         format!("{mibs:.0} MiB/s")
     }
 }
@@ -312,7 +314,7 @@ fn config_bytes(regime: &str, size_label: &str) -> Option<u64> {
     let total_records = n_rounds * PER_ROUND;
     let bytes_per_record = ROW_PAYLOAD_BYTES + size_of::<Time>() + size_of::<Diff>();
     let _ = regime; // record count is the same across regimes by construction
-    Some(u64::try_from(total_records * bytes_per_record).ok()?)
+    u64::try_from(total_records * bytes_per_record).ok()
 }
 
 fn print_throughput_table(title: &str, group: &str) {

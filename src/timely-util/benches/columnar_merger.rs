@@ -38,6 +38,7 @@ use std::mem::size_of;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use differential_dataflow::trace::implementations::merge_batcher::Merger;
+use mz_ore::cast::{CastFrom, CastLossy};
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::batcher::ColumnMerger;
 use mz_timely_util::columnation::{ColInternalMerger, ColumnationStack};
@@ -113,29 +114,26 @@ fn build_column(data: &[Tuple]) -> Column<Tuple> {
 /// Key/time ranges scale with `n` so the regime properties (interleaving,
 /// collision density, disjoint-ness) hold across sizes.
 fn configs(n: usize) -> [(&'static str, Vec<Tuple>, Vec<Tuple>); 3] {
+    let n_u64 = u64::cast_from(n);
     [
         // Same wide key range on both sides → records interleave.
-        (
-            "mixed",
-            make(1, n, 2 * n as u64, 4),
-            make(2, n, 2 * n as u64, 4),
-        ),
+        ("mixed", make(1, n, 2 * n_u64, 4), make(2, n, 2 * n_u64, 4)),
         // Tight key + time ranges → many records map to the same `(d, t)`,
         // exercising the equal-key diff-consolidation branch.
         (
             "collisions",
-            make(3, n, (n / 4) as u64, 2),
-            make(4, n, (n / 4) as u64, 2),
+            make(3, n, u64::cast_from(n / 4), 2),
+            make(4, n, u64::cast_from(n / 4), 2),
         ),
         // Left in `[0, n)`, right in `[n, 2n)` → no overlap. Each
         // `Less`/`Greater` run extends to the end of its side; galloping
         // should win here.
         (
             "disjoint",
-            make(5, n, n as u64, 4),
-            make(6, n, n as u64, 4)
+            make(5, n, n_u64, 4),
+            make(6, n, n_u64, 4)
                 .into_iter()
-                .map(|((k1, k2), t, r)| ((k1 + n as u64, k2 + n as u64), t, r))
+                .map(|((k1, k2), t, r)| ((k1 + n_u64, k2 + n_u64), t, r))
                 .collect(),
         ),
     ]
@@ -253,12 +251,12 @@ fn fmt_throughput(bytes: u64, ns: f64) -> String {
     if !ns.is_finite() || ns <= 0.0 {
         return "—".to_string();
     }
-    let bytes_per_sec = bytes as f64 * 1e9 / ns;
-    let gibs = bytes_per_sec / (1u64 << 30) as f64;
+    let bytes_per_sec = f64::cast_lossy(bytes) * 1e9 / ns;
+    let gibs = bytes_per_sec / f64::cast_lossy(1u64 << 30);
     if gibs >= 1.0 {
         format!("{gibs:.2} GiB/s")
     } else {
-        let mibs = bytes_per_sec / (1u64 << 20) as f64;
+        let mibs = bytes_per_sec / f64::cast_lossy(1u64 << 20);
         format!("{mibs:.0} MiB/s")
     }
 }

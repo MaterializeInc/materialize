@@ -1093,6 +1093,7 @@ mod proptests {
     //! ranges so that equal-key collisions are common and the consolidation
     //! path actually runs.
     use super::*;
+    use mz_ore::cast::CastFrom;
     use proptest::prelude::*;
     use timely::progress::frontier::Antichain;
 
@@ -1198,7 +1199,7 @@ mod proptests {
             // Cap at len so we always have a valid position.
             let len = data.len();
             let start_pos = if len == 0 { 0 } else {
-                ((pos_frac as usize) * len) / 101
+                (usize::cast_from(pos_frac) * len) / 101
             };
 
             // Self starts non-empty so we exercise the bulk-copy path, not the
