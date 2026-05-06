@@ -140,6 +140,65 @@ fn make_rounds(
         .collect()
 }
 
+/// Generate `n_rounds` rounds approximating the persist-hydration shape:
+/// one globally sorted+consolidated dataset of ~`n_rounds * per_round`
+/// records, sliced into contiguous rounds. Each round is sorted
+/// internally and its key range is non-overlapping with adjacent rounds.
+///
+/// This matches what compute sees when reading a sorted snapshot from
+/// persist: each on-the-wire batch is a tile of the same global sort
+/// order. The chunker still re-sorts on push (it has no
+/// already-sorted fast path), but the merger should fly — within a
+/// chain, every subsequent chunk is sortable-after the previous one,
+/// so `Merger::merge`'s whole-chunk passthrough fires on every chain
+/// compaction.
+fn make_sorted_rounds(
+    seed: u64,
+    n_rounds: usize,
+    per_round: usize,
+    key_range: u64,
+    time_range: u64,
+) -> Vec<Vec<Tuple>> {
+    let n_total = n_rounds * per_round;
+    let mut rng = StdRng::seed_from_u64(seed);
+
+    // Build the full dataset, sort, and consolidate.
+    let mut raw: Vec<Tuple> = (0..n_total)
+        .map(|_| {
+            let k = rng.random_range(0..key_range);
+            (
+                make_row(k),
+                rng.random_range(0..time_range),
+                rng.random_range(-3i64..=3),
+            )
+        })
+        .collect();
+    raw.sort();
+    let mut consolidated: Vec<Tuple> = Vec::with_capacity(raw.len());
+    for (d, t, r) in raw {
+        if let Some(last) = consolidated.last_mut() {
+            if last.0 == d && last.1 == t {
+                last.2 += r;
+                continue;
+            }
+        }
+        consolidated.push((d, t, r));
+    }
+    consolidated.retain(|x| x.2 != 0);
+
+    // Slice into contiguous rounds. Final round picks up any remainder
+    // from consolidation; keeps every record in some round.
+    let stride = consolidated.len().div_ceil(n_rounds.max(1));
+    let mut rounds: Vec<Vec<Tuple>> = Vec::with_capacity(n_rounds);
+    for chunk in consolidated.chunks(stride.max(1)) {
+        rounds.push(chunk.to_vec());
+    }
+    while rounds.len() < n_rounds {
+        rounds.push(Vec::new());
+    }
+    rounds
+}
+
 /// Convert each round's `Vec<Tuple>` into a `Column<Tuple>` so both
 /// batchers can read the same input shape. Done outside the timed
 /// closure so building the per-round columns isn't on the hot path.
@@ -185,7 +244,7 @@ fn bench_batcher(c: &mut Criterion) {
         let n_rounds = (n_total + PER_ROUND - 1) / PER_ROUND;
         let n_total_u64 = u64::cast_from(n_total);
 
-        let configs: [(&str, Vec<Vec<Tuple>>); 3] = [
+        let configs: [(&str, Vec<Vec<Tuple>>); 4] = [
             (
                 "mixed",
                 make_rounds(1, n_rounds, PER_ROUND, 2 * n_total_u64, 4),
@@ -197,6 +256,15 @@ fn bench_batcher(c: &mut Criterion) {
             (
                 "disjoint",
                 make_rounds(3, n_rounds, PER_ROUND, n_total_u64, 4),
+            ),
+            // Persist-hydration shape: one globally sorted dataset
+            // sliced into contiguous rounds. Adjacent rounds have
+            // non-overlapping key ranges, so chain compaction in
+            // `Merger::merge` should hit the whole-chunk passthrough
+            // fast path on every step.
+            (
+                "sorted",
+                make_sorted_rounds(4, n_rounds, PER_ROUND, 2 * n_total_u64, 4),
             ),
         ];
 
@@ -320,7 +388,7 @@ fn config_bytes(regime: &str, size_label: &str) -> Option<u64> {
 fn print_throughput_table(title: &str, group: &str) {
     let mut rows: Vec<(String, u64)> = Vec::new();
     for (size_label, _) in SIZES {
-        for regime in ["mixed", "collisions", "disjoint"] {
+        for regime in ["mixed", "collisions", "disjoint", "sorted"] {
             let id = format!("{regime}/{size_label}");
             if let Some(b) = config_bytes(regime, size_label) {
                 rows.push((id, b));
