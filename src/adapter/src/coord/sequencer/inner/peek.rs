@@ -921,9 +921,11 @@ impl Coordinator {
         copy_to: PeekStageCopyTo,
     ) -> Result<StageResult<Box<PeekStage>>, AdapterError> {
         let connection_context = self.connection_context().clone();
+        let enforce_external_addresses = mz_storage_types::dyncfgs::ENFORCE_EXTERNAL_ADDRESSES
+            .get(self.controller.storage.config().config_set());
         Ok(StageResult::Handle(mz_ore::task::spawn(
             || "peek copy to preflight",
-            async {
+            async move {
                 let sinks = &copy_to.global_lir_plan.df_desc().sink_exports;
                 if sinks.len() != 1 {
                     return Err(AdapterError::Internal(
@@ -941,6 +943,7 @@ impl Coordinator {
                             &conn.upload_info,
                             conn.connection_id,
                             *sink_id,
+                            enforce_external_addresses,
                         )
                         .await?;
                         Ok(Box::new(PeekStage::CopyToDataflow(copy_to)))

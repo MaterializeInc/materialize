@@ -5693,11 +5693,13 @@ dependencies = [
  "bytesize",
  "futures",
  "http 1.4.0",
+ "hyper 0.14.32",
  "hyper-tls 0.5.0",
  "mz-ore",
  "pin-project",
  "thiserror 2.0.18",
  "tokio",
+ "tower-service",
  "uuid",
 ]
 
@@ -7044,6 +7046,7 @@ dependencies = [
  "http 1.4.0",
  "hyper-tls 0.6.0",
  "hyper-util",
+ "ipnet",
  "itertools 0.14.0",
  "lgalloc",
  "libc",
