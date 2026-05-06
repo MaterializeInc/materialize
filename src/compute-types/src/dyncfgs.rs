@@ -66,13 +66,6 @@ pub const ENABLE_TEMPORAL_BUCKETING: Config<bool> = Config::new(
     "Whether to enable temporal bucketing in compute.",
 );
 
-/// The summary to apply to the frontier in temporal bucketing in compute.
-pub const TEMPORAL_BUCKETING_SUMMARY: Config<Duration> = Config::new(
-    "compute_temporal_bucketing_summary",
-    Duration::from_secs(2),
-    "The summary to apply to frontiers in temporal bucketing in compute.",
-);
-
 /// The yielding behavior with which linear joins should be rendered.
 pub const LINEAR_JOIN_YIELDING: Config<&str> = Config::new(
     "linear_join_yielding",
@@ -386,7 +379,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&CORRECTION_V2_CHAIN_PROPORTIONALITY)
         .add(&CORRECTION_V2_CHUNK_SIZE)
         .add(&ENABLE_TEMPORAL_BUCKETING)
-        .add(&TEMPORAL_BUCKETING_SUMMARY)
         .add(&LINEAR_JOIN_YIELDING)
         .add(&ENABLE_LGALLOC)
         .add(&LGALLOC_BACKGROUND_INTERVAL)
