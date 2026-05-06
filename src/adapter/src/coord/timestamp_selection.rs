@@ -553,7 +553,7 @@ pub trait TimestampProvider {
         {
             for (instance, compute_ids) in &id_bundle.compute_ids {
                 for id in compute_ids.iter() {
-                    upper.extend(self.compute_write_frontier(*instance, *id).into_iter());
+                    upper.extend(self.compute_write_frontier(*instance, *id));
                 }
             }
         }

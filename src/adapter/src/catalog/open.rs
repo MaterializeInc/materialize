@@ -356,7 +356,7 @@ impl Catalog {
                 .flat_map(|item| {
                     let gid = item.global_id.clone();
                     let gids: Vec<_> = item.extra_versions.values().cloned().collect();
-                    std::iter::once(gid).chain(gids.into_iter())
+                    std::iter::once(gid).chain(gids)
                 })
                 .chain(
                     txn.get_system_object_mappings()

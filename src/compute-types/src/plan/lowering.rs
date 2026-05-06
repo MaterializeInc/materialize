@@ -626,7 +626,7 @@ impl Context {
                 for (((input_plan, input_keys), missing), arity) in plans
                     .iter_mut()
                     .zip_eq(input_keys.iter())
-                    .zip_eq(missing.into_iter())
+                    .zip_eq(missing)
                     .zip_eq(input_arities.iter().cloned())
                 {
                     if missing != Default::default() {

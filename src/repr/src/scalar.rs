@@ -1558,7 +1558,7 @@ impl fmt::Display for Datum<'_> {
             Datum::Uuid(u) => write!(f, "{}", u),
             Datum::Array(array) => {
                 if array.dims().into_iter().any(|dim| dim.lower_bound != 1) {
-                    write_delimited(f, "", array.dims().into_iter(), |f, e| {
+                    write_delimited(f, "", array.dims(), |f, e| {
                         let (lower, upper) = e.dimension_bounds();
                         write!(f, "[{}:{}]", lower, upper)
                     })?;

@@ -245,7 +245,7 @@ impl Value {
                 let elements = elements?;
                 buf.try_make_datum(|packer| {
                     packer
-                        .try_push_array(&dims, elements.into_iter())
+                        .try_push_array(&dims, elements)
                         .map_err(IntoDatumError::from)
                 })?
             }
