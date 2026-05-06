@@ -445,6 +445,14 @@ mz_notices_redacted
 VIEW
 materialize
 mz_internal
+mz_object_arrangement_size_history
+BASE TABLE
+materialize
+mz_internal
+mz_object_arrangement_sizes
+SOURCE
+materialize
+mz_internal
 mz_object_dependencies
 BASE TABLE
 materialize

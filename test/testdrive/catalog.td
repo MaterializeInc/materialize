@@ -585,6 +585,7 @@ mz_compute_hydration_times                   source  <null>     ""
 mz_compute_operator_hydration_statuses       source  <null>     ""
 mz_frontiers                                 source  <null>     ""
 mz_materialized_view_refreshes               source  <null>     ""
+mz_object_arrangement_sizes                  source  <null>     ""
 mz_prepared_statement_history                source  <null>     ""
 mz_session_history                           source  <null>     ""
 mz_sink_statistics_raw                       source  <null>     ""
@@ -610,6 +611,7 @@ mz_kafka_source_tables                   ""
 mz_license_keys                          ""
 mz_materialized_view_refresh_strategies  ""
 mz_mysql_source_tables                   ""
+mz_object_arrangement_size_history       ""
 mz_object_dependencies                   ""
 mz_object_global_ids                     ""
 mz_optimizer_notices                     ""
@@ -819,11 +821,11 @@ test_table ""
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-53
+54
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-264
+267
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2
