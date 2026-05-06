@@ -22,11 +22,12 @@
 //!    column-shaped storage. A drain-multiple-of-half-cap trick keeps the leftover in staging,
 //!    so cross-batch keys with the same `(D, T)` continue consolidating on the next sort.
 //! 2. SoA accumulator: one sub-container per column (`D::Container`, `T::Container`,
-//!    `R::Container`). Drains from staging do three sequential passes (one per column), so
-//!    each pass writes a single cache-line stream. When the accumulator reaches the output
-//!    target byte size, it serializes into an aligned `Vec<u64>` (no zero-fill — written
-//!    exactly once by `indexed::write`) and ships as `Column::Align`. The trailing partial on
-//!    `finish` ships as `Column::Typed` to avoid one final serialize copy.
+//!    `R::Container`). Drains push in fixed-size chunks (`DRAIN_CHUNK_ROWS`) with three
+//!    sequential per-column passes per chunk, so the inner pushes autovectorize. After each
+//!    chunk, check the serialized size; once the accumulator reaches the flush threshold
+//!    (90% of `OUTPUT_TARGET_WORDS`), serialize into an aligned `Vec<u64>` (no zero-fill —
+//!    written by `indexed::encode`) and ship as `Column::Align`. Per-chunk granularity bounds
+//!    overshoot to `K * row_words`. The trailing partial on `finish` ships as `Column::Typed`.
 //!
 //! Generic over `(D, T, R): Columnar` via the columnar tuple decomposition
 //! `<(D, T, R) as Columnar>::Container = (D::Container, T::Container, R::Container)`.
@@ -48,17 +49,28 @@ const STAGING_CAP_ITEMS: usize = 16 * 1024;
 /// Drain a multiple of this on consolidate. Remainder stays in staging so cross-batch keys
 /// keep consolidating on the next sort.
 const DRAIN_GRAIN: usize = STAGING_CAP_ITEMS / 2;
-/// Target serialized size for output `Column::Align` chunks, in u64 words.
-/// 2 MiB matches the existing `ColumnBuilder` heuristic.
-const OUTPUT_TARGET_WORDS: usize = (2 << 20) / 8;
+/// Target serialized chunk size in u64 words (2 MiB). Bounded slop matters once we put these
+/// behind huge pages.
+const OUTPUT_TARGET_WORDS: usize = 1 << 18;
+/// Flush when within 10% of `OUTPUT_TARGET_WORDS` — matches `ColumnBuilder`'s slop heuristic.
+/// Computed at compile time so the hot loop is a single `cmp`/`jae` instead of a per-row
+/// round-up + divide-by-10.
+const FLUSH_THRESHOLD_WORDS: usize = OUTPUT_TARGET_WORDS - OUTPUT_TARGET_WORDS / 10;
+/// Drain rows from staging in chunks of this size. Inside each chunk we do three sequential
+/// per-column passes — long enough for autovectorization (4–8 vector iterations on NEON / SVE2
+/// 128-bit / AVX2 / SVE 256-bit) — while the outer per-chunk size check bounds overshoot to
+/// `K * row_words`. With a 1 KiB row (128 words) and K=16, worst-case overshoot is 2 KiB,
+/// well under the 10% slop budget on a 2 MiB target.
+const DRAIN_CHUNK_ROWS: usize = 16;
 
 /// A container builder that consolidates `(D, T, R)` updates and emits `Column<(D, T, R)>`.
 ///
 /// Stages updates in an AoS `Vec` for in-place consolidation, then drains consolidated rows
-/// in three sequential passes into SoA sub-containers. When the SoA accumulator reaches
-/// `OUTPUT_TARGET_WORDS` worth of serialized bytes, it is written into an aligned `Vec<u64>`
-/// (using `indexed::write` over uninitialized memory — no zero-fill) and queued as
-/// `Column::Align`. The trailing partial on `finish` ships as `Column::Typed`.
+/// in `DRAIN_CHUNK_ROWS`-sized chunks (three sequential per-column passes per chunk) into SoA
+/// sub-containers, flushing whenever the accumulator hits the flush threshold (90% of
+/// `OUTPUT_TARGET_WORDS`). Flushed accumulators are written into aligned `Vec<u64>` (via
+/// `indexed::encode`, no zero-fill) and queued as `Column::Align`. The trailing partial on
+/// `finish` ships as `Column::Typed`.
 ///
 /// Does **not** maintain FIFO ordering (consolidation reorders updates).
 pub struct ConsolidatingColumnBuilder<D, T, R>
@@ -110,7 +122,10 @@ where
     (D, T, R): Columnar<Container = (D::Container, T::Container, R::Container)>,
 {
     /// Sort and consolidate `staging`, then drain a multiple-of-`grain` prefix into the SoA
-    /// accumulator. Pass `1` to drain everything (used by `finish`).
+    /// accumulator. Pass `1` to drain everything (used by `finish`). Pushes in chunks of
+    /// `DRAIN_CHUNK_ROWS` and flushes mid-drain whenever the accumulator hits
+    /// `FLUSH_THRESHOLD_WORDS`, so a single drain can mint several aligned containers when the
+    /// prefix is large.
     #[cold]
     fn consolidate_and_drain(&mut self, grain: usize) {
         consolidate_updates(&mut self.staging);
@@ -119,32 +134,40 @@ where
             return;
         }
 
-        // Three sequential passes — one per column. Each pass writes a single cache-line stream
-        // and is branch-free (the sub-containers' `push` only checks per-call capacity).
-        let head = &self.staging[..drain_n];
-        for (d, _, _) in head {
-            self.cur_d.push(d);
-        }
-        for (_, t, _) in head {
-            self.cur_t.push(t);
-        }
-        for (_, _, r) in head {
-            self.cur_r.push(r);
-        }
-        self.cur_len += drain_n;
-        self.staging.drain(..drain_n);
+        // Drain in chunks of `DRAIN_CHUNK_ROWS` rows. Three sequential per-column passes inside
+        // the chunk give the compiler streamable loops it can autovectorize for primitive
+        // containers; the per-chunk size check bounds overshoot of the 90%-of-2-MiB threshold to
+        // ~`K * row_words`. After each chunk, check the serialized size (via `length_in_words`,
+        // not item count, so output Columns stay bounded for variable-width `D` like `Row`).
+        let mut consumed = 0;
+        while consumed < drain_n {
+            let take = (drain_n - consumed).min(DRAIN_CHUNK_ROWS);
+            let head = &self.staging[consumed..consumed + take];
+            for (d, _, _) in head {
+                self.cur_d.push(d);
+            }
+            for (_, t, _) in head {
+                self.cur_t.push(t);
+            }
+            for (_, _, r) in head {
+                self.cur_r.push(r);
+            }
+            self.cur_len += take;
+            consumed += take;
 
-        // Check serialized size; if past the target, flush as aligned bytes. Using
-        // `length_in_words` rather than item count gives bounded output Columns regardless of
-        // variable-width `D` (e.g. `Row` rows of varying length).
-        let view = (
-            self.cur_d.borrow(),
-            self.cur_t.borrow(),
-            self.cur_r.borrow(),
-        );
-        if indexed::length_in_words(&view) >= OUTPUT_TARGET_WORDS {
-            self.flush_aligned();
+            let words = {
+                let view = (
+                    self.cur_d.borrow(),
+                    self.cur_t.borrow(),
+                    self.cur_r.borrow(),
+                );
+                indexed::length_in_words(&view)
+            };
+            if words >= FLUSH_THRESHOLD_WORDS {
+                self.flush_aligned();
+            }
         }
+        self.staging.drain(..consumed);
     }
 
     /// Serialize the SoA accumulator into a `Column::Align` via `indexed::encode`, which
