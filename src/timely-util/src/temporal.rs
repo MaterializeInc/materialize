@@ -18,6 +18,7 @@
 use std::collections::BTreeMap;
 
 use mz_ore::cast::CastFrom;
+use timely::order::Product;
 use timely::progress::Timestamp;
 use timely::progress::frontier::AntichainRef;
 
@@ -30,6 +31,21 @@ pub trait BucketTimestamp: Timestamp {
     /// Advance this timestamp by `2^exponent`. Returns `None` if the
     /// timestamp would overflow.
     fn advance_by_power_of_two(&self, exponent: u32) -> Option<Self>;
+}
+
+/// Degenerate `BucketTimestamp` implementation for product timestamps.
+///
+/// Product timestamps are partially ordered, so power-of-two advancement is not meaningful.
+/// This impl always reports `DOMAIN = 0` and returns `None` from `advance_by_power_of_two`,
+/// turning any `BucketTimestamp`-keyed bucketing logic into a no-op for these timestamps.
+impl<TOuter, TInner> BucketTimestamp for Product<TOuter, TInner>
+where
+    Product<TOuter, TInner>: Timestamp,
+{
+    const DOMAIN: usize = 0;
+    fn advance_by_power_of_two(&self, _exponent: u32) -> Option<Self> {
+        None
+    }
 }
 
 /// A type that can be split into two parts based on a timestamp.

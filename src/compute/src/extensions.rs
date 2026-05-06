@@ -11,4 +11,4 @@
 
 pub(crate) mod arrange;
 pub(crate) mod reduce;
-pub(crate) mod temporal_bucket;
+pub(crate) mod temporal_bucketing_batcher;

@@ -19,7 +19,9 @@ use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, Data, VecCollection};
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::dyncfgs::ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION;
+use mz_compute_types::dyncfgs::{
+    ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION, ENABLE_TEMPORAL_BUCKETING,
+};
 use mz_compute_types::plan::AvailableCollections;
 use mz_dyncfg::ConfigSet;
 use mz_expr::{Id, MapFilterProject, MirScalarExpr};
@@ -40,7 +42,7 @@ use timely::progress::operate::FrontierInterest;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::compute_state::ComputeState;
-use crate::extensions::arrange::{KeyCollection, MzArrange, MzArrangeCore};
+use crate::extensions::arrange::{KeyCollection, MzArrange, MzArrangeCore, MzArrangeTemporalCore};
 use crate::render::errors::{DataflowErrorSer, ErrorLogger};
 use crate::render::{LinearJoinSpec, RenderTimestamp};
 use crate::row_spine::{DatumSeq, RowRowBuilder};
@@ -771,6 +773,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 config_set,
             ));
         }
+        let temporal_bucketing = ENABLE_TEMPORAL_BUCKETING.get(config_set);
         for (key, _, thinning) in collections.arranged {
             if !self.arranged.contains_key(&key) {
                 // TODO: Consider allowing more expressive names.
@@ -780,8 +783,13 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                     .collection
                     .take()
                     .expect("Collection constructed above");
-                let (oks, errs_keyed, passthrough) =
-                    Self::arrange_collection(&name, oks, key.clone(), thinning.clone());
+                let (oks, errs_keyed, passthrough) = Self::arrange_collection(
+                    &name,
+                    oks,
+                    key.clone(),
+                    thinning.clone(),
+                    temporal_bucketing,
+                );
                 let errs_concat: KeyCollection<_, _, _> = errs.clone().concat(errs_keyed).into();
                 self.collection = Some((passthrough, errs));
                 let errs =
@@ -810,6 +818,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         oks: VecCollection<'scope, T, Row, Diff>,
         key: Vec<MirScalarExpr>,
         thinning: Vec<usize>,
+        temporal_bucketing: bool,
     ) -> (
         Arranged<'scope, RowRowAgent<T, Diff>>,
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
@@ -861,18 +870,23 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             }
         });
 
-        let oks = ok_stream
-            .mz_arrange_core::<
+        let pact =
+            ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, T, Diff>);
+        let oks = if temporal_bucketing {
+            ok_stream.mz_arrange_temporal_core::<
                 _,
                 Col2ValBatcher<_, _, _, _>,
                 RowRowBuilder<_, _>,
                 RowRowSpine<_, _>,
-            >(
-                ExchangeCore::<ColumnBuilder<_>, _>::new_core(
-                    columnar_exchange::<Row, Row, T, Diff>,
-                ),
-                name
-            );
+            >(pact, name)
+        } else {
+            ok_stream.mz_arrange_core::<
+                _,
+                Col2ValBatcher<_, _, _, _>,
+                RowRowBuilder<_, _>,
+                RowRowSpine<_, _>,
+            >(pact, name)
+        };
         (
             oks,
             err_stream.as_collection(),

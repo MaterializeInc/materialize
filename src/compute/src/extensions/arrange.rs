@@ -17,12 +17,14 @@ use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::implementations::spine_fueled::Spine;
 use differential_dataflow::trace::{Batch, Batcher, Builder, Trace, TraceReader};
 use differential_dataflow::{Collection, Data, ExchangeData, Hashable, VecCollection};
+use mz_timely_util::temporal::BucketTimestamp;
 use timely::Container;
 use timely::dataflow::Stream;
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
 use timely::dataflow::operators::Operator;
 use timely::progress::Timestamp;
 
+use crate::extensions::temporal_bucketing_batcher::TemporalBucketingBatcher;
 use crate::logging::compute::{
     ArrangementHeapAllocations, ArrangementHeapCapacity, ArrangementHeapSize,
     ArrangementHeapSizeOperator, ComputeEvent, ComputeEventBuilder,
@@ -75,6 +77,30 @@ pub trait MzArrangeCore<'scope> {
         Arranged<'scope, TraceAgent<Tr>>: ArrangementSize;
 }
 
+/// Extension trait to arrange data with temporal bucketing applied to the merge batcher.
+///
+/// Identical to [`MzArrangeCore::mz_arrange_core`] except that `Ba` is wrapped in
+/// [`TemporalBucketingBatcher`], which coarsens `seal` calls onto power-of-two bucket boundaries.
+/// Only available when the timestamp implements [`BucketTimestamp`], i.e. for total-ordered
+/// timestamps used outside iterative scopes.
+pub trait MzArrangeTemporalCore<'scope>: MzArrangeCore<'scope>
+where
+    Self::Timestamp: BucketTimestamp,
+{
+    fn mz_arrange_temporal_core<P, Ba, Bu, Tr>(
+        self,
+        pact: P,
+        name: &str,
+    ) -> Arranged<'scope, TraceAgent<Tr>>
+    where
+        P: ParallelizationContract<Self::Timestamp, Self::Input>,
+        Ba: Batcher<Input = Self::Input, Time = Self::Timestamp> + 'static,
+        Bu: Builder<Time = Self::Timestamp, Input = Ba::Output, Output = Tr::Batch>,
+        Tr: Trace + TraceReader<Time = Self::Timestamp> + 'static,
+        Tr::Batch: Batch,
+        Arranged<'scope, TraceAgent<Tr>>: ArrangementSize;
+}
+
 impl<'scope, T, C> MzArrangeCore<'scope> for Stream<'scope, T, C>
 where
     T: Timestamp + Lattice,
@@ -95,6 +121,28 @@ where
         // Allow access to `arrange_named` because we're within Mz's wrapper.
         #[allow(clippy::disallowed_methods)]
         arrange_core::<_, Ba, Bu, _>(self, pact, name).log_arrangement_size()
+    }
+}
+
+impl<'scope, T, C> MzArrangeTemporalCore<'scope> for Stream<'scope, T, C>
+where
+    T: Timestamp + Lattice + BucketTimestamp,
+    C: Container + Clone + 'static,
+{
+    fn mz_arrange_temporal_core<P, Ba, Bu, Tr>(
+        self,
+        pact: P,
+        name: &str,
+    ) -> Arranged<'scope, TraceAgent<Tr>>
+    where
+        P: ParallelizationContract<T, Self::Input>,
+        Ba: Batcher<Input = Self::Input, Time = T> + 'static,
+        Bu: Builder<Time = T, Input = Ba::Output, Output = Tr::Batch>,
+        Tr: Trace + TraceReader<Time = T> + 'static,
+        Tr::Batch: Batch,
+        Arranged<'scope, TraceAgent<Tr>>: ArrangementSize,
+    {
+        self.mz_arrange_core::<_, TemporalBucketingBatcher<Ba>, Bu, _>(pact, name)
     }
 }
 
