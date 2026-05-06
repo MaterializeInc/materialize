@@ -855,9 +855,10 @@ impl<'a> Runner<'a> {
             .await?
         {
             let name: &str = row.get("name");
+            let name = Ident::new_unchecked(name).to_ast_string_simple();
             inner
                 .system_client
-                .batch_execute(&format!("DROP DATABASE \"{name}\""))
+                .batch_execute(&format!("DROP DATABASE {name}"))
                 .await?;
         }
         inner
@@ -928,9 +929,10 @@ impl<'a> Runner<'a> {
                 .await?
             {
                 let name: &str = row.get("name");
+                let name = Ident::new_unchecked(name).to_ast_string_simple();
                 inner
                     .system_client
-                    .batch_execute(&format!("DROP CLUSTER REPLICA quickstart.{}", name))
+                    .batch_execute(&format!("DROP CLUSTER REPLICA quickstart.{name}"))
                     .await?;
             }
             for i in 1..=self.config.replicas {
@@ -1448,9 +1450,10 @@ impl<'a> RunnerInner<'a> {
                 tsv_path,
             } => {
                 let tsv = tokio::fs::read(tsv_path).await?;
+                let table_name = Ident::new_unchecked(*table_name).to_ast_string_simple();
                 let copy = self
                     .client
-                    .copy_in(&*format!("COPY {} FROM STDIN", table_name))
+                    .copy_in(&*format!("COPY {table_name} FROM STDIN"))
                     .await?;
                 tokio::pin!(copy);
                 copy.send(bytes::Bytes::from(tsv)).await?;
