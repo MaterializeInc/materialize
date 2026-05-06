@@ -105,7 +105,7 @@ struct Args {
         long,
         env = "LOG_FILTER",
         value_name = "FILTER",
-        default_value = "warn"
+        default_value = "mz_adapter::catalog::open=error,mz_persist_client::internal::gc=error,mz_persist_client::rpc=error,warn"
     )]
     pub log_filter: CloneableEnvFilter,
 }
