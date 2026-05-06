@@ -331,7 +331,7 @@ class View(DBObject):
             col = self.columns[0].name(True)
             return (
                 f"SELECT r.diff::bigint AS {col} "
-                "FROM repeat_row_source r, repeat_row(r.diff)"
+                "FROM materialize.public.repeat_row_source r, repeat_row(r.diff)"
             )
 
         def select_str(exprs: str) -> str:
@@ -1207,10 +1207,14 @@ class Database:
             # Hardcoded helper table for the table-driven `repeat_row(diff)`
             # mode in `View`. Must be created before relations because some
             # views reference it in their body.
-            exe.execute("DROP TABLE IF EXISTS repeat_row_source CASCADE")
-            exe.execute("CREATE TABLE repeat_row_source (diff bigint NOT NULL)")
             exe.execute(
-                "INSERT INTO repeat_row_source VALUES (1), (1), (-1), (-1), (0)"
+                "DROP TABLE IF EXISTS materialize.public.repeat_row_source CASCADE"
+            )
+            exe.execute(
+                "CREATE TABLE materialize.public.repeat_row_source (diff bigint NOT NULL)"
+            )
+            exe.execute(
+                "INSERT INTO materialize.public.repeat_row_source VALUES (1), (1), (-1), (-1), (0)"
             )
 
         print("Creating relations")
