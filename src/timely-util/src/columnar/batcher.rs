@@ -171,9 +171,11 @@ where
     for<'b> columnar::Ref<'b, D>: Copy + Ord,
     T: Columnar,
     for<'b> columnar::Ref<'b, T>: Copy + Ord,
-    R: Columnar + Semigroup + for<'b> Semigroup<columnar::Ref<'b, R>>,
+    R: Columnar + Default + Semigroup + for<'b> Semigroup<columnar::Ref<'b, R>>,
     for<'b> columnar::Ref<'b, R>: Ord,
-    for<'b> <(D, T, R) as Columnar>::Container: columnar::Push<&'b (D, T, R)>,
+    for<'b> <D as Columnar>::Container: columnar::Push<columnar::Ref<'b, D>>,
+    for<'b> <T as Columnar>::Container: columnar::Push<columnar::Ref<'b, T>>,
+    for<'b> <R as Columnar>::Container: columnar::Push<&'b R>,
 {
     fn push_into(&mut self, container: &'a mut Column<(D, T, R)>) {
         // Reset target to an empty owned container. If it's already `Typed`
@@ -193,40 +195,43 @@ where
         Extend::extend(&mut permutation, borrowed.into_index_iter());
         permutation.sort();
 
-        // Sweep sorted refs, accumulating diffs for like (data, time) runs and
-        // pushing non-zero results into target. Reuses owned scratch slots
-        // across pushes by destructuring the tuple back after each push.
-        let mut iter = permutation.drain(..);
-        if let Some((data, time, diff)) = iter.next() {
-            let mut owned_data = D::into_owned(data);
-            let mut owned_time = T::into_owned(time);
+        // Sweep sorted refs, accumulating diffs over equal `(data, time)`
+        // pairs and pushing non-zero results to the target's leaves. Refs
+        // from the input borrow are valid through the sweep, so D and T
+        // are pushed directly via each leaf's `Push<Ref<_>>` impl. Only R
+        // needs an owned scratch since it carries the consolidated sum.
+        {
+            let Column::Typed(target_c) = &mut self.target else {
+                unreachable!("target reset to Typed above");
+            };
+            let (target_d, target_t, target_r) = target_c;
 
-            let mut prev_data = data;
-            let mut prev_time = time;
-            let mut prev_diff = <R as Columnar>::into_owned(diff);
+            let mut iter = permutation.drain(..);
+            if let Some((data, time, diff)) = iter.next() {
+                let mut prev_data = data;
+                let mut prev_time = time;
+                let mut prev_diff = <R as Columnar>::into_owned(diff);
 
-            for (data, time, diff) in iter {
-                if (&prev_data, &prev_time) == (&data, &time) {
-                    prev_diff.plus_equals(&diff);
-                } else {
-                    if !prev_diff.is_zero() {
-                        D::copy_from(&mut owned_data, prev_data);
-                        T::copy_from(&mut owned_time, prev_time);
-                        let tuple = (owned_data, owned_time, prev_diff);
-                        self.target.push_into(&tuple);
-                        (owned_data, owned_time, prev_diff) = tuple;
+                for (data, time, diff) in iter {
+                    if (&prev_data, &prev_time) == (&data, &time) {
+                        prev_diff.plus_equals(&diff);
+                    } else {
+                        if !prev_diff.is_zero() {
+                            target_d.push(prev_data);
+                            target_t.push(prev_time);
+                            target_r.push(&prev_diff);
+                        }
+                        prev_data = data;
+                        prev_time = time;
+                        R::copy_from(&mut prev_diff, diff);
                     }
-                    prev_data = data;
-                    prev_time = time;
-                    R::copy_from(&mut prev_diff, diff);
                 }
-            }
 
-            if !prev_diff.is_zero() {
-                D::copy_from(&mut owned_data, prev_data);
-                T::copy_from(&mut owned_time, prev_time);
-                let tuple = (owned_data, owned_time, prev_diff);
-                self.target.push_into(&tuple);
+                if !prev_diff.is_zero() {
+                    target_d.push(prev_data);
+                    target_t.push(prev_time);
+                    target_r.push(&prev_diff);
+                }
             }
         }
 
@@ -350,15 +355,13 @@ where
 
                 // Split the input borrows into per-leaf views.
                 //
-                // The columnar tuple `Borrow::Ref` is recursive: for record
-                // shape `((K, V), T, R)` the full ref is `((&K, &V), &T, &R)`,
-                // built by indexing each leaf and constructing the nested
-                // tuple. Going through `left_borrow.get(i)` therefore touches
-                // every leaf — four bounds-checked array indices plus two
-                // tuple constructions — even when the merge step only needs
-                // the `(D, T)` key. Indexing each leaf view directly cuts the
-                // work to the columns we actually consult and lets the diff
-                // column stay out of the cache on probe paths.
+                // A columnar tuple `Borrow::Ref` is recursive: indexing the
+                // tuple borrow walks every leaf (and reconstructs the nested
+                // ref tuple) regardless of which leaves the caller actually
+                // reads. Indexing each leaf view directly cuts probe-path
+                // work to the columns we consult — for the merge step
+                // that's the `(D, T)` key, with the diff column read only
+                // when we push.
                 let l_d = left_borrow.0;
                 let l_t = left_borrow.1;
                 let l_r = left_borrow.2;
@@ -368,29 +371,27 @@ where
                 let upper_l = l_d.len();
                 let upper_r = r_d.len();
 
-                // Hoist the same split on the output. `(D, T, R)::Container`
-                // is `(D::Container, T::Container, R::Container)`, so we can
-                // address each leaf independently and let the compiler treat
-                // each leaf-extend as a primitive bulk copy. The leaves stay
-                // length-synchronized as long as every record path pushes
-                // exactly one element to each.
+                // Mirror the split on the output container. Tuple
+                // containers split into per-leaf containers, which lets us
+                // address each leaf independently — both gallop bulk-copies
+                // and single-record pushes resolve to a primitive operation
+                // per leaf. The leaves stay length-synchronized as long as
+                // every record path pushes exactly one element to each.
                 let (sd, st, sr) = self_c;
 
                 // Pre-size each output leaf for the worst-case merge
-                // (no consolidation): `len(left) + len(right)` records'
-                // worth of bytes. `reserve_for` walks each input's
-                // `as_bytes` so it sizes variable-length leaves like
-                // `Rows` correctly — both the `bounds: Vec<u64>` and the
-                // `values: Vec<u8>` get their share.
+                // (no consolidation): `len(left) + len(right)` records.
+                // `reserve_for` walks each input's `as_bytes`, which is
+                // accurate for variable-length leaves (where reserving a
+                // record count wouldn't size the byte buffer correctly).
                 //
-                // Skip when chunks are very large: the input bound
-                // over-reserves any time consolidation is heavy, and the
-                // outer driver yields us near the ship threshold anyway,
-                // so headroom past a few MiB of output is wasted. Past
-                // `RESERVE_RECORD_THRESHOLD` we let `Vec`'s geometric
-                // grow handle it — amortized that's at most 2× the
-                // actual output, which beats committing pages we won't
-                // touch on a 256 MiB allocation.
+                // Gated by record count: above a few hundred thousand
+                // records the input bound over-reserves any time
+                // consolidation is heavy, and the framework's outer
+                // ship-threshold check yields us before we'd use the
+                // headroom. For inputs past that point, geometric grow
+                // is bounded by 2× the actual output and avoids
+                // committing pages we'd never touch.
                 const RESERVE_RECORD_THRESHOLD: usize = 1_000_000;
                 if upper_l + upper_r <= RESERVE_RECORD_THRESHOLD {
                     use columnar::Container as _;
@@ -405,19 +406,19 @@ where
                 // Mid-merge ship-threshold check, matching the heuristic
                 // used by `Column::at_capacity` and `ColumnBuilder`. The
                 // tuple `(sd.borrow(), st.borrow(), sr.borrow())` chains
-                // each leaf's `as_bytes` iterator, so passing it to
+                // its leaves' `as_bytes` iterators, so passing it to
                 // `at_serialized_capacity` reuses the canonical
-                // `indexed::length_in_words` formula on the per-leaf
-                // borrows we split earlier.
+                // `indexed::length_in_words` formula without needing the
+                // parent borrow we destructured.
                 //
-                // The check walks 4–5 leaf slices per call, which is
-                // non-trivial on variable-length leaves like `Rows`; the
-                // caller checks every `THRESHOLD_PERIOD_MASK + 1`
-                // iterations rather than per-iter. At the ship threshold
-                // a chunk is ~65 K records, so overshooting by ~1 K
-                // records has no practical impact — the outer
-                // `at_capacity` check sees the oversize chunk and ships
-                // it regardless.
+                // The check walks every leaf slice once per call, which
+                // is non-trivial on variable-length leaves; the caller
+                // runs it every `THRESHOLD_PERIOD_MASK + 1` iterations
+                // rather than per-iter. The ship threshold is ~65 K
+                // records, so overshooting by ~1 K records before the
+                // check fires has no practical impact — the framework's
+                // outer `at_capacity` check sees the oversize chunk and
+                // ships it regardless.
                 let at_ship_threshold =
                     |sd: &D::Container, st: &T::Container, sr: &R::Container| {
                         use columnar::Borrow as _;
@@ -442,15 +443,16 @@ where
                             // setup plus the first cmp probe is more
                             // expensive than just pushing this record and
                             // re-entering the outer loop. Galloping is only
-                            // worthwhile when there's an actual run, which we
-                            // detect with the peek check below.
+                            // worthwhile when there's an actual run, which
+                            // we detect with the peek check below.
                             sd.push(d1);
                             st.push(t1);
                             sr.push(l_r.get(left_pos[0]));
                             left_pos[0] += 1;
-                            // Long-run case: peek at the next record; if it's
-                            // still strictly less than `(d2, t2)`, we have a
-                            // run worth galloping (and bulk-copying).
+                            // Long-run case: peek at the next record; if
+                            // it's still strictly less than `(d2, t2)`,
+                            // we have a run worth galloping (and bulk-
+                            // copying).
                             if left_pos[0] < upper_l
                                 && (l_d.get(left_pos[0]), l_t.get(left_pos[0])) < (d2, t2)
                             {
@@ -458,11 +460,11 @@ where
                                 gallop(upper_l, &mut left_pos[0], |i| {
                                     (l_d.get(i), l_t.get(i)) < (d2, t2)
                                 });
-                                // Per-leaf bulk copy of the run. Each call
-                                // resolves to a primitive `extend_from_slice`
-                                // on its leaf array (or recurses one level
-                                // for tuple D = (K, V)), which the compiler
-                                // can autovectorize.
+                                // Per-leaf bulk copy of the run. Each
+                                // call resolves to an `extend_from_slice`
+                                // on its leaf (recursively for nested
+                                // leaves), which the compiler can
+                                // autovectorize.
                                 sd.extend_from_self(l_d, start..left_pos[0]);
                                 st.extend_from_self(l_t, start..left_pos[0]);
                                 sr.extend_from_self(l_r, start..left_pos[0]);
@@ -534,8 +536,17 @@ where
         let len = self_view.len();
 
         let mut owned_t = T::default();
-
-        while *position < len {
+        // Yield to the framework when either output buffer reaches the
+        // ship threshold, so it can ship a full chunk and hand back a
+        // fresh one. Required by `InternalMerge::extract`'s contract: the
+        // framework only checks `at_capacity` between calls, so without
+        // an inner-loop yield a single call can fill an output well past
+        // threshold.
+        use columnar::Borrow as _;
+        while *position < len
+            && !crate::columnar::at_serialized_capacity(&keep_c.borrow())
+            && !crate::columnar::at_serialized_capacity(&ship_c.borrow())
+        {
             let (_, time, _) = self_view.get(*position);
             T::copy_from(&mut owned_t, time);
             if upper.less_equal(&owned_t) {
@@ -563,11 +574,14 @@ mod tests {
         for<'a> columnar::Ref<'a, D>: Copy + Ord,
         T: Columnar + Clone,
         for<'a> columnar::Ref<'a, T>: Copy + Ord,
-        R: Columnar + Clone + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
+        R: Columnar + Clone + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
         for<'a> columnar::Ref<'a, R>: Ord,
         <(D, T, R) as Columnar>::Container: Clone,
         for<'a> <(D, T, R) as Columnar>::Container: columnar::Push<&'a (D, T, R)>,
         <(D, T, R) as Columnar>::Container: columnar::Push<(D, T, R)>,
+        for<'a> <D as Columnar>::Container: columnar::Push<columnar::Ref<'a, D>>,
+        for<'a> <T as Columnar>::Container: columnar::Push<columnar::Ref<'a, T>>,
+        for<'a> <R as Columnar>::Container: columnar::Push<&'a R>,
     {
         let mut input: Column<(D, T, R)> = Default::default();
         for tuple in inputs.iter().cloned() {
