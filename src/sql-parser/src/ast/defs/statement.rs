@@ -5115,10 +5115,9 @@ impl<T: AstInfo> AstDisplay for ExecuteUnitTestStatement<T> {
             f.write_str(" AT TIME ");
             f.write_node(at_time);
         }
-        for mock in &self.mocks {
-            f.write_str(" MOCK ");
+        for (i, mock) in self.mocks.iter().enumerate() {
+            f.write_str(if i == 0 { " MOCK " } else { ", MOCK " });
             f.write_node(mock);
-            f.write_str(",");
         }
         f.write_str(" EXPECTED ");
         f.write_node(&self.expected);
