@@ -5579,3 +5579,28 @@ async fn test_oidc_group_sync_first_login() {
         assert_eq!(grantor, "mz_jwt_sync", "grantor should be mz_jwt_sync");
     }
 }
+
+/// A JWT groups claim containing the user's own role name (common when an IdP
+/// echoes the username/email into groups) must not fail with CircularRoleMembership.
+/// The self-referential group should be silently skipped; other valid groups apply.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method`
+async fn test_oidc_group_sync_self_named_group() {
+    let (server, admin_client, oidc_server) = setup_group_sync_test().await;
+    admin_client
+        .batch_execute("ALTER SYSTEM SET oidc_group_role_sync_strict = true")
+        .await
+        .unwrap();
+    // "Alice@Example.com" normalizes to "alice@example.com" == GROUP_SYNC_USER,
+    // so it resolves to the user's own role. It should be skipped; "analytics"
+    // should still be granted.
+    let token = jwt_with_groups(
+        &oidc_server,
+        serde_json::json!(["Alice@Example.com", "analytics"]),
+    );
+    oidc_connect(&server, &token).await.unwrap();
+    assert_eq!(
+        fetch_user_role_memberships(&admin_client, GROUP_SYNC_USER).await,
+        vec!["analytics"],
+    );
+}

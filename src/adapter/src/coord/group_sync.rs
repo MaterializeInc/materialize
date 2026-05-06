@@ -179,6 +179,17 @@ impl Coordinator {
 
             match self.catalog().try_get_role_by_name_case_insensitive(group) {
                 Some(role) => {
+                    // Skip if the group resolves to the user's own role. This
+                    // happens when an IdP echoes the username/email into the
+                    // groups claim. Granting a role to itself would trigger
+                    // the catalog's circular-membership guard.
+                    if role.id == member_id {
+                        info!(
+                            group = group.as_str(),
+                            "OIDC group maps to the user's own role, skipping"
+                        );
+                        continue;
+                    }
                     target_role_ids.insert(role.id);
                 }
                 None => {

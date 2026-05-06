@@ -296,7 +296,6 @@ impl OidcClaims {
 pub struct ValidatedClaims {
     pub user: String,
     /// Groups extracted from the JWT group claim. None if claim absent.
-    #[zeroize(skip)]
     pub groups: Option<Vec<String>>,
     // Prevent construction outside of `GenericOidcAuthenticator::validate_token`.
     _private: (),
