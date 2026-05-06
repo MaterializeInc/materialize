@@ -256,7 +256,7 @@ resolver = "3"
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.94.1"
+rust-version = "1.95.0"
 
 [workspace.dependencies]
 ahash = { version = "0.8.12", default-features = false }

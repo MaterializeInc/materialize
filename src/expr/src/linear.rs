@@ -1889,9 +1889,7 @@ pub mod plan {
             for l in self.lower_bounds.iter() {
                 match l.eval(datums, arena) {
                     Err(e) => {
-                        return Some(Err((e.into(), time, diff)))
-                            .into_iter()
-                            .chain(None.into_iter());
+                        return Some(Err((e.into(), time, diff))).into_iter().chain(None);
                     }
                     Ok(Datum::MzTimestamp(d)) => {
                         lower_bound = lower_bound.max(d);
@@ -1917,9 +1915,7 @@ pub mod plan {
                 if upper_bound != Some(lower_bound) {
                     match u.eval(datums, arena) {
                         Err(e) => {
-                            return Some(Err((e.into(), time, diff)))
-                                .into_iter()
-                                .chain(None.into_iter());
+                            return Some(Err((e.into(), time, diff))).into_iter().chain(None);
                         }
                         Ok(Datum::MzTimestamp(d)) => {
                             if let Some(upper) = upper_bound {
