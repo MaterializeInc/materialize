@@ -16,6 +16,7 @@
 //! Types for consolidating, merging, and extracting columnar update collections.
 
 use std::collections::VecDeque;
+use std::marker::PhantomData;
 
 use crate::columnation::ColumnationStack;
 use columnar::Container as _;
@@ -23,12 +24,11 @@ use columnar::Push as _;
 use columnar::{Clear, Columnar, Index, Len};
 use columnation::Columnation;
 use differential_dataflow::difference::Semigroup;
-use differential_dataflow::trace::implementations::merge_batcher::InternalMerger;
-use differential_dataflow::trace::implementations::merge_batcher::container::InternalMerge;
+use differential_dataflow::trace::implementations::merge_batcher::Merger;
 use timely::Accountable;
 use timely::Container;
 use timely::PartialOrder;
-use timely::container::{ContainerBuilder, PushInto};
+use timely::container::{ContainerBuilder, PushInto, SizableContainer};
 use timely::progress::frontier::{Antichain, AntichainRef};
 
 use crate::columnar::Column;
@@ -290,11 +290,26 @@ fn gallop(upper: usize, lower: &mut usize, mut cmp: impl FnMut(usize) -> bool) {
 
 /// Counterpart to `ColInternalMerger` (which merges `ColumnationStack` chunks).
 /// Drives the merge batcher with [`Column`]-shaped chunks, no columnation
-/// detour, by way of [`InternalMerge`] below.
-pub type ColumnMerger<D, T, R> = InternalMerger<Column<(D, T, R)>>;
+/// detour, by way of the inherent `merge_from` / `extract` methods on
+/// `Column<(D, T, R)>` below.
+pub struct ColumnMerger<D, T, R> {
+    _marker: PhantomData<(D, T, R)>,
+}
 
-/// `InternalMerge` for [`Column`]-shaped sorted chunks.
-impl<D, T, R> InternalMerge for Column<(D, T, R)>
+impl<D, T, R> Default for ColumnMerger<D, T, R> {
+    fn default() -> Self {
+        Self {
+            _marker: PhantomData,
+        }
+    }
+}
+
+/// Per-chunk merge and extract for [`Column`]-shaped sorted chunks.
+///
+/// These are the building blocks that [`Merger for ColumnMerger`] orchestrates
+/// over chains of chunks. They're inherent methods rather than a trait impl
+/// so the merger can call them without going through any wrapper indirection.
+impl<D, T, R> Column<(D, T, R)>
 where
     D: Columnar + Default,
     for<'a> columnar::Ref<'a, D>: Copy + Ord,
@@ -309,22 +324,18 @@ where
     for<'a> <R as Columnar>::Container: columnar::Push<columnar::Ref<'a, R>>,
     for<'a> <R as Columnar>::Container: columnar::Push<&'a R>,
 {
-    type TimeOwned = T;
-
-    fn len(&self) -> usize {
-        self.borrow().len()
-    }
-
-    fn clear(&mut self) {
-        match self {
-            Column::Typed(c) => c.clear(),
-            Column::Bytes(_) | Column::Align(_) => {
-                *self = Column::Typed(Default::default());
-            }
-        }
-    }
-
-    fn merge_from(&mut self, others: &mut [Self], positions: &mut [usize]) {
+    /// Merge items from sorted inputs into `self`, advancing positions.
+    ///
+    /// Mirrors the dispatch shape used by the merge-batcher framework:
+    /// - **0**: no-op
+    /// - **1**: bulk copy (or swap, if `self` is empty and `*pos == 0`)
+    /// - **2**: merge two sorted streams, with diff consolidation on equal
+    ///   `(data, time)` keys and gallop bulk-copy of long single-side runs.
+    ///
+    /// Returns when the inputs are exhausted at their positions or when the
+    /// merger's amortized ship-threshold check fires; the caller swaps out a
+    /// full output buffer and resumes by calling `merge_from` again.
+    pub fn merge_from(&mut self, others: &mut [Self], positions: &mut [usize]) {
         match others.len() {
             0 => {}
             1 => {
@@ -517,11 +528,21 @@ where
         }
     }
 
-    fn extract(
+    /// Partition records starting at `*position` into `keep` (times beyond
+    /// `upper`, retained for the next round) and `ship` (times not beyond
+    /// `upper`, sealed into the output batch). Updates `frontier` with the
+    /// times of kept records.
+    ///
+    /// The caller invokes `extract` repeatedly until `*position >= self.len()`,
+    /// swapping out a full output buffer between calls. This shape exists
+    /// because the framework only checks `at_capacity()` between calls, so
+    /// without an inner-loop yield a single call could quietly produce
+    /// oversized output chunks.
+    pub fn extract(
         &mut self,
         position: &mut usize,
-        upper: AntichainRef<Self::TimeOwned>,
-        frontier: &mut Antichain<Self::TimeOwned>,
+        upper: AntichainRef<T>,
+        frontier: &mut Antichain<T>,
         keep: &mut Self,
         ship: &mut Self,
     ) {
@@ -538,7 +559,7 @@ where
         let mut owned_t = T::default();
         // Yield to the framework when either output buffer reaches the
         // ship threshold, so it can ship a full chunk and hand back a
-        // fresh one. Required by `InternalMerge::extract`'s contract: the
+        // fresh one. Required by the merger's extract contract: the
         // framework only checks `at_capacity` between calls, so without
         // an inner-loop yield a single call can fill an output well past
         // threshold.
@@ -560,6 +581,199 @@ where
             *position += 1;
         }
     }
+}
+
+/// `Merger` impl driving [`MergeBatcher`] over [`Column`]-shaped chunks.
+///
+/// `merge` walks two sorted chains of chunks in lockstep, calling
+/// `Column::merge_from` to consume up to one ship-threshold's worth of input
+/// per pass and shipping `result` to `output` whenever it crosses
+/// `at_capacity`. Exhausted input chunks are reset and pushed to `stash` for
+/// reuse. The drain phase appends remaining full chunks to `output`
+/// directly, with no per-element copy.
+///
+/// `extract` walks each chunk via `Column::extract`, partitioning records
+/// into `kept` (times beyond `upper`) and `ship` (sealed into the output
+/// batch); both grow chunk-by-chunk under the same `at_capacity` ship
+/// signal.
+///
+/// [`MergeBatcher`]: differential_dataflow::trace::implementations::merge_batcher::MergeBatcher
+impl<D, T, R> Merger for ColumnMerger<D, T, R>
+where
+    D: Columnar + Default + 'static,
+    for<'a> columnar::Ref<'a, D>: Copy + Ord,
+    T: Columnar + Default + Clone + Ord + PartialOrder + 'static,
+    for<'a> columnar::Ref<'a, T>: Copy + Ord,
+    R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>> + 'static,
+    for<'a> <(D, T, R) as Columnar>::Container: columnar::Push<&'a (D, T, R)>,
+    for<'a> <D as Columnar>::Container: columnar::Push<columnar::Ref<'a, D>>,
+    for<'a> <D as Columnar>::Container: columnar::Push<&'a D>,
+    for<'a> <T as Columnar>::Container: columnar::Push<columnar::Ref<'a, T>>,
+    for<'a> <T as Columnar>::Container: columnar::Push<&'a T>,
+    for<'a> <R as Columnar>::Container: columnar::Push<columnar::Ref<'a, R>>,
+    for<'a> <R as Columnar>::Container: columnar::Push<&'a R>,
+{
+    type Time = T;
+    type Chunk = Column<(D, T, R)>;
+
+    fn merge(
+        &mut self,
+        list1: Vec<Self::Chunk>,
+        list2: Vec<Self::Chunk>,
+        output: &mut Vec<Self::Chunk>,
+        stash: &mut Vec<Self::Chunk>,
+    ) {
+        let mut list1 = list1.into_iter();
+        let mut list2 = list2.into_iter();
+
+        let mut heads = [
+            list1.next().unwrap_or_default(),
+            list2.next().unwrap_or_default(),
+        ];
+        let mut positions = [0usize, 0usize];
+
+        let mut result = empty_chunk(stash);
+
+        // Main merge loop: both sides have data.
+        while positions[0] < heads[0].borrow().len() && positions[1] < heads[1].borrow().len() {
+            result.merge_from(&mut heads, &mut positions);
+
+            if positions[0] >= heads[0].borrow().len() {
+                let old = std::mem::replace(&mut heads[0], list1.next().unwrap_or_default());
+                recycle_chunk(old, stash);
+                positions[0] = 0;
+            }
+            if positions[1] >= heads[1].borrow().len() {
+                let old = std::mem::replace(&mut heads[1], list2.next().unwrap_or_default());
+                recycle_chunk(old, stash);
+                positions[1] = 0;
+            }
+            if result.at_capacity() {
+                output.push(std::mem::take(&mut result));
+                result = empty_chunk(stash);
+            }
+        }
+
+        // Drain remaining from each side: copy partial head, then append
+        // full chunks directly to output (no per-element copy).
+        drain_side(
+            &mut heads[0],
+            &mut positions[0],
+            &mut list1,
+            &mut result,
+            output,
+            stash,
+        );
+        drain_side(
+            &mut heads[1],
+            &mut positions[1],
+            &mut list2,
+            &mut result,
+            output,
+            stash,
+        );
+        if !result.is_empty() {
+            output.push(result);
+        }
+    }
+
+    fn extract(
+        &mut self,
+        merged: Vec<Self::Chunk>,
+        upper: AntichainRef<Self::Time>,
+        frontier: &mut Antichain<Self::Time>,
+        ship: &mut Vec<Self::Chunk>,
+        kept: &mut Vec<Self::Chunk>,
+        stash: &mut Vec<Self::Chunk>,
+    ) {
+        let mut keep = empty_chunk(stash);
+        let mut ready = empty_chunk(stash);
+
+        for mut buffer in merged {
+            let mut position = 0;
+            let len = buffer.borrow().len();
+            while position < len {
+                buffer.extract(&mut position, upper, frontier, &mut keep, &mut ready);
+                if keep.at_capacity() {
+                    kept.push(std::mem::take(&mut keep));
+                    keep = empty_chunk(stash);
+                }
+                if ready.at_capacity() {
+                    ship.push(std::mem::take(&mut ready));
+                    ready = empty_chunk(stash);
+                }
+            }
+            recycle_chunk(buffer, stash);
+        }
+        if !keep.is_empty() {
+            kept.push(keep);
+        }
+        if !ready.is_empty() {
+            ship.push(ready);
+        }
+    }
+
+    fn account(chunk: &Self::Chunk) -> (usize, usize, usize, usize) {
+        let records = usize::try_from(chunk.record_count()).unwrap_or(0);
+        (records, 0, 0, 0)
+    }
+}
+
+/// Pop a chunk from `stash` or allocate a fresh one. Stashed chunks are
+/// already cleared via `recycle_chunk`, so they're ready for push.
+#[inline]
+fn empty_chunk<C: Columnar>(stash: &mut Vec<Column<C>>) -> Column<C> {
+    stash.pop().unwrap_or_default()
+}
+
+/// Reset `chunk` to an empty `Typed` and push it to `stash` for reuse. The
+/// `Bytes` / `Align` arms exist for total-function safety; chunks recycled
+/// here come from the merger and chunker, both of which produce `Typed`.
+#[inline]
+fn recycle_chunk<C: Columnar>(mut chunk: Column<C>, stash: &mut Vec<Column<C>>) {
+    match &mut chunk {
+        Column::Typed(c) => c.clear(),
+        Column::Bytes(_) | Column::Align(_) => {
+            chunk = Column::Typed(Default::default());
+        }
+    }
+    stash.push(chunk);
+}
+
+/// Drain remaining items from one side into `result` / `output`.
+///
+/// Copies the partially-consumed head into `result` via `merge_from`'s 1-input
+/// path, then appends remaining full chunks directly to `output` without
+/// per-element copy.
+fn drain_side<D, T, R>(
+    head: &mut Column<(D, T, R)>,
+    pos: &mut usize,
+    list: &mut std::vec::IntoIter<Column<(D, T, R)>>,
+    result: &mut Column<(D, T, R)>,
+    output: &mut Vec<Column<(D, T, R)>>,
+    stash: &mut Vec<Column<(D, T, R)>>,
+) where
+    D: Columnar + Default,
+    for<'a> columnar::Ref<'a, D>: Copy + Ord,
+    T: Columnar + Default + Clone + PartialOrder,
+    for<'a> columnar::Ref<'a, T>: Copy + Ord,
+    R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
+    for<'a> <(D, T, R) as Columnar>::Container: columnar::Push<&'a (D, T, R)>,
+    for<'a> <D as Columnar>::Container: columnar::Push<columnar::Ref<'a, D>>,
+    for<'a> <D as Columnar>::Container: columnar::Push<&'a D>,
+    for<'a> <T as Columnar>::Container: columnar::Push<columnar::Ref<'a, T>>,
+    for<'a> <T as Columnar>::Container: columnar::Push<&'a T>,
+    for<'a> <R as Columnar>::Container: columnar::Push<columnar::Ref<'a, R>>,
+    for<'a> <R as Columnar>::Container: columnar::Push<&'a R>,
+{
+    if *pos < head.borrow().len() {
+        result.merge_from(std::slice::from_mut(head), std::slice::from_mut(pos));
+    }
+    if !result.is_empty() {
+        output.push(std::mem::take(result));
+        *result = empty_chunk(stash);
+    }
+    Extend::extend(output, list);
 }
 
 #[cfg(test)]
@@ -692,7 +906,7 @@ mod tests {
 
 #[cfg(test)]
 mod proptests {
-    //! Property tests for `InternalMerge for Column<(D, T, R)>`.
+    //! Property tests for `Column::merge_from` and `Column::extract`.
     //!
     //! Strategy: generate sorted+consolidated inputs (the merger's input
     //! contract), drive `merge_from` / `extract` the same way the framework
@@ -753,14 +967,14 @@ mod proptests {
             .collect()
     }
 
-    /// Drive a 2-way merge the same way `InternalMerger::merge` would: a
-    /// 2-input call until one side exhausts, then a 1-input drain for
-    /// whichever side still has data.
+    /// Drive a 2-way merge the same way `Merger::merge` would: a 2-input
+    /// call until one side exhausts, then a 1-input drain for whichever
+    /// side still has data.
     fn drive_merge(left: Column<Tuple>, right: Column<Tuple>) -> Column<Tuple> {
         let mut self_col: Column<Tuple> = Default::default();
         let mut others = [left, right];
         let mut positions = [0usize, 0];
-        InternalMerge::merge_from(&mut self_col, &mut others, &mut positions);
+        self_col.merge_from(&mut others, &mut positions);
 
         let [left_done, right_done] = others;
         let [left_pos, right_pos] = positions;
@@ -768,11 +982,11 @@ mod proptests {
         if left_pos < left_done.borrow().len() {
             let mut tail = [left_done];
             let mut p = [left_pos];
-            InternalMerge::merge_from(&mut self_col, &mut tail, &mut p);
+            self_col.merge_from(&mut tail, &mut p);
         } else if right_pos < right_done.borrow().len() {
             let mut tail = [right_done];
             let mut p = [right_pos];
-            InternalMerge::merge_from(&mut self_col, &mut tail, &mut p);
+            self_col.merge_from(&mut tail, &mut p);
         }
 
         self_col
@@ -818,7 +1032,7 @@ mod proptests {
 
             let mut others = [build_column(&data)];
             let mut positions = [start_pos];
-            InternalMerge::merge_from(&mut self_col, &mut others, &mut positions);
+            self_col.merge_from(&mut others, &mut positions);
 
             let mut expected = vec![sentinel];
             Extend::extend(&mut expected, data[start_pos..].iter().copied());
@@ -835,7 +1049,7 @@ mod proptests {
             let mut self_col: Column<Tuple> = Default::default();
             let mut others = [build_column(&data)];
             let mut positions = [0usize];
-            InternalMerge::merge_from(&mut self_col, &mut others, &mut positions);
+            self_col.merge_from(&mut others, &mut positions);
 
             prop_assert_eq!(collect_column(&self_col), data);
         }
@@ -858,8 +1072,7 @@ mod proptests {
             let mut ship: Column<Tuple> = Default::default();
             let mut position = 0;
 
-            InternalMerge::extract(
-                &mut self_col,
+            self_col.extract(
                 &mut position,
                 upper.borrow(),
                 &mut frontier,
@@ -915,8 +1128,7 @@ mod proptests {
             let mut ship: Column<Tuple> = Default::default();
             let mut position = 0;
 
-            InternalMerge::extract(
-                &mut self_col,
+            self_col.extract(
                 &mut position,
                 upper.borrow(),
                 &mut frontier,
