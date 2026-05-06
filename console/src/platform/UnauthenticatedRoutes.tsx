@@ -27,6 +27,11 @@ import { OidcCallback } from "./auth/OidcCallback";
 const OidcAuthGuard = ({ children }: React.PropsWithChildren) => {
   const auth = useAuth();
 
+  // OIDC initialization failed — `OidcProviderWrapper` rendered us without
+  // an `AuthProvider` so password sign-in still works. Skip the OIDC checks
+  // and let the user reach the app via their password session cookie.
+  if (!auth) return <>{children}</>;
+
   if (auth.isLoading || hasAuthParams()) {
     return <LoadingScreen />;
   }
