@@ -1,6 +1,6 @@
 ---
 source: src/storage-types/src/controller.rs
-revision: 68716f517f
+revision: a522da8a03
 ---
 
 # storage-types::controller

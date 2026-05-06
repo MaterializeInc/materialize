@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/util.rs
-revision: 00cc513fa5
+revision: a522da8a03
 ---
 
 # adapter::util
