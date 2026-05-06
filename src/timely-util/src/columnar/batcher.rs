@@ -332,19 +332,26 @@ where
     /// - **2**: merge two sorted streams, with diff consolidation on equal
     ///   `(data, time)` keys and gallop bulk-copy of long single-side runs.
     ///
-    /// Returns when the inputs are exhausted at their positions or when the
-    /// merger's amortized ship-threshold check fires; the caller swaps out a
-    /// full output buffer and resumes by calling `merge_from` again.
-    pub fn merge_from(&mut self, others: &mut [Self], positions: &mut [usize]) {
+    /// Returns `true` if the merge stopped because the amortized ship-threshold
+    /// check inside the inner loop fired (the caller should ship `self` before
+    /// the next call). Returns `false` if the merge stopped because at least
+    /// one input was exhausted at its position (the caller should refill that
+    /// side; `self` may still be at capacity from accumulation across short
+    /// calls and the caller should also check `at_capacity` in that case).
+    ///
+    /// The 0- and 1-input dispatches always return `false`: 0 does no work,
+    /// 1 is a bulk copy or swap that runs to completion.
+    #[must_use]
+    pub fn merge_from(&mut self, others: &mut [Self], positions: &mut [usize]) -> bool {
         match others.len() {
-            0 => {}
+            0 => false,
             1 => {
                 let other = &mut others[0];
                 let pos = &mut positions[0];
                 // If `self` is empty and `*pos == 0`, we can bulk swap in the other chunk.
                 if self.is_empty() && *pos == 0 {
                     std::mem::swap(self, other);
-                    return;
+                    return false;
                 }
                 // Otherwise, bulk copy the remaining data from `other[*pos..]` into `self`.
                 let Column::Typed(self_c) = self else {
@@ -353,6 +360,7 @@ where
                 let src_c = other.borrow();
                 self_c.extend_from_self(src_c, *pos..other.borrow().len());
                 *pos = other.borrow().len();
+                false
             }
             2 => {
                 let (left, right) = others.split_at(1);
@@ -441,6 +449,7 @@ where
                     };
                 const THRESHOLD_PERIOD_MASK: u32 = 1023;
                 let mut iter: u32 = 0;
+                let mut yielded = false;
 
                 while left_pos[0] < upper_l && right_pos[0] < upper_r {
                     let d1 = l_d.get(left_pos[0]);
@@ -518,9 +527,11 @@ where
                     // `at_ship_threshold` for rationale.
                     iter = iter.wrapping_add(1);
                     if iter & THRESHOLD_PERIOD_MASK == 0 && at_ship_threshold(sd, st, sr) {
+                        yielded = true;
                         break;
                     }
                 }
+                yielded
             }
             n => unimplemented!(
                 "Column-shaped k-way sorted merge with diff consolidation: {n} inputs"
@@ -635,8 +646,69 @@ where
         let mut result = empty_chunk(stash);
 
         // Main merge loop: both sides have data.
-        while positions[0] < heads[0].borrow().len() && positions[1] < heads[1].borrow().len() {
-            result.merge_from(&mut heads, &mut positions);
+        loop {
+            let upper_l = heads[0].borrow().len();
+            let upper_r = heads[1].borrow().len();
+            if positions[0] >= upper_l || positions[1] >= upper_r {
+                break;
+            }
+
+            // Whole-chunk passthrough fast path. When one head's tail (from
+            // its current position) is sortable-before the other head's
+            // current record, the entire tail can be appended to `output`
+            // without per-record compares or per-leaf byte copies.
+            //
+            // Two probes (one record from each side) settle this. Common
+            // case for hydration paths where chains compose pre-sorted
+            // batches with non-overlapping or tail-disjoint key ranges —
+            // skips an entire `merge_from` invocation, including its gallop
+            // bulk-copies, and replaces the byte-level extend with a
+            // `mem::replace` of the head into `output`.
+            //
+            // Restricted to `positions[i] == 0` so we can hand the head off
+            // wholesale; partial-tail passthrough would require a 1-input
+            // `merge_from` to materialize the tail into a new chunk, which
+            // is what gallop already handles inside the merge loop.
+            let lhs_passthrough = positions[0] == 0 && upper_l > 0 && {
+                let lhs = heads[0].borrow();
+                let rhs = heads[1].borrow();
+                let last_l = (lhs.0.get(upper_l - 1), lhs.1.get(upper_l - 1));
+                let cur_r = (rhs.0.get(positions[1]), rhs.1.get(positions[1]));
+                last_l < cur_r
+            };
+            if lhs_passthrough {
+                if !result.is_empty() {
+                    output.push(std::mem::take(&mut result));
+                    result = empty_chunk(stash);
+                }
+                let head = std::mem::replace(&mut heads[0], list1.next().unwrap_or_default());
+                output.push(head);
+                positions[0] = 0;
+                continue;
+            }
+
+            let rhs_passthrough = positions[1] == 0 && upper_r > 0 && {
+                let lhs = heads[0].borrow();
+                let rhs = heads[1].borrow();
+                let last_r = (rhs.0.get(upper_r - 1), rhs.1.get(upper_r - 1));
+                let cur_l = (lhs.0.get(positions[0]), lhs.1.get(positions[0]));
+                last_r < cur_l
+            };
+            if rhs_passthrough {
+                if !result.is_empty() {
+                    output.push(std::mem::take(&mut result));
+                    result = empty_chunk(stash);
+                }
+                let head = std::mem::replace(&mut heads[1], list2.next().unwrap_or_default());
+                output.push(head);
+                positions[1] = 0;
+                continue;
+            }
+
+            // Per-record merge. `merge_from` returns `true` when its inner
+            // amortized ship-threshold check fires — short-circuit the
+            // outer `at_capacity` walk in that case.
+            let yielded = result.merge_from(&mut heads, &mut positions);
 
             if positions[0] >= heads[0].borrow().len() {
                 let old = std::mem::replace(&mut heads[0], list1.next().unwrap_or_default());
@@ -648,7 +720,7 @@ where
                 recycle_chunk(old, stash);
                 positions[1] = 0;
             }
-            if result.at_capacity() {
+            if yielded || result.at_capacity() {
                 output.push(std::mem::take(&mut result));
                 result = empty_chunk(stash);
             }
@@ -767,7 +839,9 @@ fn drain_side<D, T, R>(
     for<'a> <R as Columnar>::Container: columnar::Push<&'a R>,
 {
     if *pos < head.borrow().len() {
-        result.merge_from(std::slice::from_mut(head), std::slice::from_mut(pos));
+        // 1-input dispatch — bulk copy that runs to completion; the yield
+        // signal is unused.
+        let _ = result.merge_from(std::slice::from_mut(head), std::slice::from_mut(pos));
     }
     if !result.is_empty() {
         output.push(std::mem::take(result));
@@ -902,6 +976,109 @@ mod tests {
             .collect();
         assert_eq!(collected, vec![(1, 0, 1), (3, 0, 1)]);
     }
+
+    /// Build a `Column<((u64, u64), u64, i64)>` from a slice of tuples.
+    fn col(rows: &[((u64, u64), u64, i64)]) -> Column<((u64, u64), u64, i64)> {
+        let mut c: Column<((u64, u64), u64, i64)> = Default::default();
+        for &t in rows {
+            c.push_into(t);
+        }
+        c
+    }
+
+    fn collect_chunks(chunks: &[Column<((u64, u64), u64, i64)>]) -> Vec<((u64, u64), u64, i64)> {
+        chunks
+            .iter()
+            .flat_map(|c| {
+                c.borrow().into_index_iter().map(|((k, v), t, r)| {
+                    (
+                        (u64::into_owned(k), u64::into_owned(v)),
+                        u64::into_owned(t),
+                        i64::into_owned(r),
+                    )
+                })
+            })
+            .collect()
+    }
+
+    /// Disjoint-range chains exercise the whole-chunk passthrough fast path:
+    /// every chunk in chain1 is sortable-before every chunk in chain2, so
+    /// each outer-loop iteration should hand a chunk straight to `output`
+    /// without recursing through the per-record merge.
+    #[mz_ore::test]
+    fn merger_disjoint_chains_passthrough() {
+        let chain1 = vec![
+            col(&[((0, 0), 0, 1), ((1, 0), 0, 1)]),
+            col(&[((2, 0), 0, 1), ((3, 0), 0, 1)]),
+        ];
+        let chain2 = vec![
+            col(&[((10, 0), 0, 1), ((11, 0), 0, 1)]),
+            col(&[((12, 0), 0, 1), ((13, 0), 0, 1)]),
+        ];
+
+        let mut merger: ColumnMerger<(u64, u64), u64, i64> = Default::default();
+        let mut output = Vec::new();
+        let mut stash = Vec::new();
+        Merger::merge(&mut merger, chain1, chain2, &mut output, &mut stash);
+
+        let collected = collect_chunks(&output);
+        let expected: Vec<_> = (0..4u64)
+            .map(|d| ((d, 0u64), 0u64, 1i64))
+            .chain((10..14u64).map(|d| ((d, 0u64), 0u64, 1i64)))
+            .collect();
+        assert_eq!(collected, expected);
+    }
+
+    /// Interleaved chains never satisfy the passthrough condition; each
+    /// outer iteration falls through to `merge_from`. Same correctness
+    /// expectation, exercises the non-passthrough path under
+    /// `Merger::merge`.
+    #[mz_ore::test]
+    fn merger_interleaved_chains() {
+        // Even keys on one chain, odd on the other; chunks alternate so the
+        // per-record path is the only viable route.
+        let chain1 = vec![
+            col(&[((0, 0), 0, 1), ((2, 0), 0, 1)]),
+            col(&[((4, 0), 0, 1), ((6, 0), 0, 1)]),
+        ];
+        let chain2 = vec![
+            col(&[((1, 0), 0, 1), ((3, 0), 0, 1)]),
+            col(&[((5, 0), 0, 1), ((7, 0), 0, 1)]),
+        ];
+
+        let mut merger: ColumnMerger<(u64, u64), u64, i64> = Default::default();
+        let mut output = Vec::new();
+        let mut stash = Vec::new();
+        Merger::merge(&mut merger, chain1, chain2, &mut output, &mut stash);
+
+        let collected = collect_chunks(&output);
+        let expected: Vec<_> = (0..8u64).map(|d| ((d, 0u64), 0u64, 1i64)).collect();
+        assert_eq!(collected, expected);
+    }
+
+    /// Passthrough must consolidate adjacent equal keys at chunk
+    /// boundaries — i.e., must NOT fire when `chain1`'s last record's
+    /// `(d, t)` equals `chain2`'s first.
+    #[mz_ore::test]
+    fn merger_passthrough_respects_equal_boundary() {
+        // chain1's last == chain2's first key: equal-key consolidation
+        // must kick in (sum of diffs would be 2). If passthrough fired
+        // erroneously, both records would land in different output chunks
+        // unconsolidated.
+        let chain1 = vec![col(&[((0, 0), 0, 1), ((5, 0), 0, 1)])];
+        let chain2 = vec![col(&[((5, 0), 0, 1), ((10, 0), 0, 1)])];
+
+        let mut merger: ColumnMerger<(u64, u64), u64, i64> = Default::default();
+        let mut output = Vec::new();
+        let mut stash = Vec::new();
+        Merger::merge(&mut merger, chain1, chain2, &mut output, &mut stash);
+
+        let collected = collect_chunks(&output);
+        assert_eq!(
+            collected,
+            vec![((0, 0), 0, 1), ((5, 0), 0, 2), ((10, 0), 0, 1)]
+        );
+    }
 }
 
 #[cfg(test)]
@@ -974,7 +1151,7 @@ mod proptests {
         let mut self_col: Column<Tuple> = Default::default();
         let mut others = [left, right];
         let mut positions = [0usize, 0];
-        self_col.merge_from(&mut others, &mut positions);
+        let _ = self_col.merge_from(&mut others, &mut positions);
 
         let [left_done, right_done] = others;
         let [left_pos, right_pos] = positions;
@@ -982,11 +1159,11 @@ mod proptests {
         if left_pos < left_done.borrow().len() {
             let mut tail = [left_done];
             let mut p = [left_pos];
-            self_col.merge_from(&mut tail, &mut p);
+            let _ = self_col.merge_from(&mut tail, &mut p);
         } else if right_pos < right_done.borrow().len() {
             let mut tail = [right_done];
             let mut p = [right_pos];
-            self_col.merge_from(&mut tail, &mut p);
+            let _ = self_col.merge_from(&mut tail, &mut p);
         }
 
         self_col
@@ -1032,7 +1209,7 @@ mod proptests {
 
             let mut others = [build_column(&data)];
             let mut positions = [start_pos];
-            self_col.merge_from(&mut others, &mut positions);
+            let _ = self_col.merge_from(&mut others, &mut positions);
 
             let mut expected = vec![sentinel];
             Extend::extend(&mut expected, data[start_pos..].iter().copied());
@@ -1049,7 +1226,7 @@ mod proptests {
             let mut self_col: Column<Tuple> = Default::default();
             let mut others = [build_column(&data)];
             let mut positions = [0usize];
-            self_col.merge_from(&mut others, &mut positions);
+            let _ = self_col.merge_from(&mut others, &mut positions);
 
             prop_assert_eq!(collect_column(&self_col), data);
         }
