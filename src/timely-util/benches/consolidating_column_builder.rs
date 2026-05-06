@@ -21,6 +21,7 @@
 use columnar::Len;
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
+use mz_ore::cast::CastFrom;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::consolidate::ConsolidatingColumnBuilder;
 use timely::container::{ContainerBuilder, PushInto};
@@ -37,11 +38,11 @@ fn run_cons<F: Fn(u64) -> Item>(mk: F) {
     for i in 0..N {
         builder.push_into(mk(std::hint::black_box(i)));
         while let Some(c) = builder.extract() {
-            sink = sink.wrapping_add(c.borrow().len() as u64);
+            sink = sink.wrapping_add(u64::cast_from(c.borrow().len()));
         }
     }
     while let Some(c) = builder.finish() {
-        sink = sink.wrapping_add(c.borrow().len() as u64);
+        sink = sink.wrapping_add(u64::cast_from(c.borrow().len()));
     }
     std::hint::black_box(sink);
 }
@@ -53,11 +54,11 @@ fn run_bare<F: Fn(u64) -> Item>(mk: F) {
     for i in 0..N {
         builder.push_into(mk(std::hint::black_box(i)));
         while let Some(c) = builder.extract() {
-            sink = sink.wrapping_add(c.borrow().len() as u64);
+            sink = sink.wrapping_add(u64::cast_from(c.borrow().len()));
         }
     }
     while let Some(c) = builder.finish() {
-        sink = sink.wrapping_add(c.borrow().len() as u64);
+        sink = sink.wrapping_add(u64::cast_from(c.borrow().len()));
     }
     std::hint::black_box(sink);
 }
@@ -69,11 +70,11 @@ fn run_dd<F: Fn(u64) -> Item>(mk: F) {
     for i in 0..N {
         builder.push_into(mk(std::hint::black_box(i)));
         while let Some(c) = builder.extract() {
-            sink = sink.wrapping_add(c.len() as u64);
+            sink = sink.wrapping_add(u64::cast_from(c.len()));
         }
     }
     while let Some(c) = builder.finish() {
-        sink = sink.wrapping_add(c.len() as u64);
+        sink = sink.wrapping_add(u64::cast_from(c.len()));
     }
     std::hint::black_box(sink);
 }
@@ -83,7 +84,9 @@ where
     F: Fn(u64) -> Item + Copy,
 {
     let mut group = c.benchmark_group(name);
-    group.throughput(Throughput::Bytes(N * std::mem::size_of::<Item>() as u64));
+    group.throughput(Throughput::Bytes(
+        N * u64::cast_from(std::mem::size_of::<Item>()),
+    ));
     group.bench_function("ConsolidatingColumnBuilder", |b| b.iter(|| run_cons(mk)));
     group.bench_function("ConsolidatingContainerBuilder", |b| b.iter(|| run_dd(mk)));
     group.bench_function("ColumnBuilder", |b| b.iter(|| run_bare(mk)));
