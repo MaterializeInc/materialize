@@ -9,7 +9,7 @@ PGHOST="${PGHOST:-materialized}"
 PGPORT="${PGPORT:-6875}"
 PGUSER="${PGUSER:-materialize}"
 
-result=$(psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -tAc "SELECT 1" 2>&1)
+result=$(psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -tAc "SELECT 1" 2>/dev/null)
 if [ "$result" = "1" ]; then
     echo "Health check passed"
     exit 0

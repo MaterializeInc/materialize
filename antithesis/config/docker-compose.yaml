@@ -15,7 +15,6 @@ services:
     environment:
     - POSTGRESDB=postgres
     - POSTGRES_PASSWORD=postgres
-    - LD_PRELOAD=libeatmydata.so
     - PGPORT=26257
     - POSTGRES_HOST_AUTH_METHOD=trust
     healthcheck:
@@ -27,10 +26,20 @@ services:
       interval: 1s
       start_period: 30s
     restart: 'no'
-    volumes:
-    - ../../misc/postgres/setup_materialize.sql:/docker-entrypoint-initdb.d/z_setup_materialize.sql
     platform: linux/amd64
     image: postgres:17.7
+    entrypoint:
+    - sh
+    - -c
+    - 'echo "CREATE ROLE root WITH LOGIN PASSWORD ''root'';CREATE DATABASE root;GRANT
+      ALL PRIVILEGES ON DATABASE root TO root;\c root;CREATE SCHEMA IF NOT EXISTS
+      consensus AUTHORIZATION root;CREATE SCHEMA IF NOT EXISTS adapter AUTHORIZATION
+      root;CREATE SCHEMA IF NOT EXISTS storage AUTHORIZATION root;CREATE SCHEMA IF
+      NOT EXISTS tsoracle AUTHORIZATION root;GRANT ALL PRIVILEGES ON SCHEMA public
+      TO root;" > /docker-entrypoint-initdb.d/z_setup_materialize.sql
+
+      exec docker-entrypoint.sh "$$@"'
+    - --
   minio:
     entrypoint:
     - sh
@@ -129,7 +138,6 @@ services:
     - MZ_INTERNAL_PERSIST_PUBSUB_LISTEN_ADDR=0.0.0.0:6879
     - MZ_PERSIST_PUBSUB_URL=http://127.0.0.1:6879
     - MZ_AWS_CONNECTION_ROLE_ARN=arn:aws:iam::123456789000:role/MaterializeConnection
-    - MZ_EXTERNAL_LOGIN_PASSWORD_MZ_SYSTEM=password
     - MZ_AWS_EXTERNAL_ID_PREFIX=eb5cb59b-e2fe-41f3-87ca-d2176a495345
     - MZ_CATALOG_STORE=persist
     - MZ_LOG_FILTER
@@ -269,9 +277,7 @@ services:
     - MZ_NO_BUILTIN_POSTGRES=1
     - MZ_NO_BUILTIN_COCKROACH=1
     - MZ_ADAPTER_STASH_URL=postgres://root@postgres-metadata:26257?options=--search_path=adapter
-    - MZ_LISTENERS_CONFIG_PATH=/listeners_config
     volumes:
-    - /home/mitch/src/customer/customer-materialize/materialize/src/materialized/ci/listener_configs/testdrive.json:/listeners_config
     - mzdata:/mzdata
     - mydata:/var/lib/mysql-files
     - tmp:/share/tmp

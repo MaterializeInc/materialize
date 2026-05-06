@@ -46,10 +46,54 @@ for name, svc in c.compose["services"].items():
         else:
             svc["image"] = MZBUILD_TO_IMAGE[mzbuild_name]
 
-    # Vanilla postgres needs trust auth to match the mzbuild image behavior
-    # (materialized connects as root with no password)
+    # Fixups for vanilla postgres (the mzbuild image has eatmydata, custom
+    # pg_hba.conf, and baked-in init SQL — none of which exist in the public image).
     if svc.get("image", "").startswith("postgres:"):
-        svc.setdefault("environment", []).append("POSTGRES_HOST_AUTH_METHOD=trust")
+        env = svc.get("environment", [])
+        # Remove eatmydata — not installed in vanilla postgres
+        env[:] = [e for e in env if not e.startswith("LD_PRELOAD=")]
+        # Trust auth so materialized can connect as root without a password
+        env.append("POSTGRES_HOST_AUTH_METHOD=trust")
+        # Remove host bind-mount for setup SQL — won't exist in Antithesis.
+        # Instead, inline the init SQL that creates the schemas materialized needs.
+        vols = svc.get("volumes", [])
+        vols[:] = [v for v in vols if "setup_materialize.sql" not in v]
+        if not vols:
+            del svc["volumes"]
+        # Inline the init SQL as a script volume
+        init_sql = (
+            "CREATE ROLE root WITH LOGIN PASSWORD 'root';"
+            "CREATE DATABASE root;"
+            "GRANT ALL PRIVILEGES ON DATABASE root TO root;"
+            r"\c root;"
+            "CREATE SCHEMA IF NOT EXISTS consensus AUTHORIZATION root;"
+            "CREATE SCHEMA IF NOT EXISTS adapter AUTHORIZATION root;"
+            "CREATE SCHEMA IF NOT EXISTS storage AUTHORIZATION root;"
+            "CREATE SCHEMA IF NOT EXISTS tsoracle AUTHORIZATION root;"
+            "GRANT ALL PRIVILEGES ON SCHEMA public TO root;"
+        )
+        svc.setdefault("entrypoint", [])
+        svc["entrypoint"] = ["sh", "-c", f"""
+echo "{init_sql}" > /docker-entrypoint-initdb.d/z_setup_materialize.sql
+exec docker-entrypoint.sh "$$@"
+""".strip(), "--"]
+
+    # Strip host bind-mounts — they won't resolve in Antithesis
+    if "volumes" in svc:
+        svc["volumes"] = [
+            v for v in svc["volumes"]
+            if not isinstance(v, str) or ":" not in v or not v.split(":")[0].startswith("/")
+        ]
+        if not svc["volumes"]:
+            del svc["volumes"]
+
+    # Remove env vars that point at host-only paths (the Docker image
+    # entrypoint provides sensible defaults when these are unset)
+    if "environment" in svc:
+        svc["environment"] = [
+            e for e in svc["environment"]
+            if not e.startswith(("MZ_LISTENERS_CONFIG_PATH=", "MZ_EXTERNAL_LOGIN_PASSWORD_"))
+        ]
 
     # Drop mzcompose-only keys that docker/podman compose doesn't understand
     for key in ["propagate_uid_gid", "allow_host_ports", "publish"]:

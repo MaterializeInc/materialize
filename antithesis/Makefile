@@ -39,17 +39,23 @@ export-compose:
 # ---------------------------------------------------------------------------
 # Build — build images that don't have public equivalents.
 # ---------------------------------------------------------------------------
-LOCAL_IMAGES  := workload
+LOCAL_IMAGES  := workload config
 BUILD_TARGETS := $(LOCAL_IMAGES:%=build-%)
 
 .PHONY: build $(BUILD_TARGETS)
-build: $(BUILD_TARGETS)
+build: export-compose $(BUILD_TARGETS)
 
-$(BUILD_TARGETS): build-%:
+build-workload:
 	$(RUNTIME) build \
 	  --platform linux/amd64 \
-	  -t $(PROJECT)-$*:latest \
-	  $(REPO_ROOT)/test/antithesis/$*
+	  -t $(PROJECT)-workload:latest \
+	  $(REPO_ROOT)/test/antithesis/workload
+
+build-config: export-compose
+	$(RUNTIME) build \
+	  --platform linux/amd64 \
+	  -t $(PROJECT)-config:latest \
+	  config
 
 # ---------------------------------------------------------------------------
 # Up / Down
