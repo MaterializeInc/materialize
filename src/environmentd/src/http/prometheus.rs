@@ -8,7 +8,7 @@
 // by the Apach
 
 use mz_catalog::memory::objects::{Cluster, ClusterReplica};
-use mz_sql::ast::display::escaped_string_literal;
+use mz_postgres_util::{Sql, sql};
 
 use super::sql::SqlRequest;
 
@@ -26,20 +26,25 @@ impl<'a> PrometheusSqlQuery<'a> {
         &self,
         cluster: Option<(&Cluster, &ClusterReplica)>,
     ) -> SqlRequest {
+        // The static `query` field is trusted SQL but its concrete type is only
+        // `&str`, so wrap it with `raw_unchecked` to compose with the `Sql`
+        // builder.
+        let query = Sql::raw_unchecked(self.query.to_string());
+        let query = if let Some((cluster, replica)) = cluster {
+            sql!(
+                "SET auto_route_catalog_queries = false; SET CLUSTER = {}; SET CLUSTER_REPLICA = {}; {}",
+                Sql::literal(&cluster.name),
+                Sql::literal(&replica.name),
+                query
+            )
+        } else {
+            sql!(
+                "SET auto_route_catalog_queries = true; RESET CLUSTER; RESET CLUSTER_REPLICA; {}",
+                query
+            )
+        };
         SqlRequest::Simple {
-            query: if let Some((cluster, replica)) = cluster {
-                format!(
-                    "SET auto_route_catalog_queries = false; SET CLUSTER = {}; SET CLUSTER_REPLICA = {}; {}",
-                    escaped_string_literal(&cluster.name),
-                    escaped_string_literal(&replica.name),
-                    self.query
-                )
-            } else {
-                format!(
-                    "SET auto_route_catalog_queries = true; RESET CLUSTER; RESET CLUSTER_REPLICA; {}",
-                    self.query
-                )
-            },
+            query: query.into_string(),
         }
     }
 }
