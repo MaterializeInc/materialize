@@ -185,9 +185,10 @@ impl<C: Columnar> SizableContainer for Column<C> {
     fn ensure_capacity(&mut self, _stash: &mut Option<Self>) {
         // No pre-reservation: chunks are recycled by the merge framework, so
         // leaf capacities settle to steady-state after the first round and
-        // there is nothing useful to reserve up front. Required by the
-        // `SizableContainer` trait, which is required as a supertrait of
-        // `InternalMerge`.
+        // there is nothing useful to reserve up front. The `SizableContainer`
+        // impl exists so `at_capacity` is callable on result chunks during
+        // `Merger::merge` orchestration; `ensure_capacity` is a required
+        // method on the trait but has no work to do here.
     }
 }
 

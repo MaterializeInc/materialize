@@ -70,7 +70,6 @@ where
     for<'b> columnar::Ref<'b, T>: Ord + Copy,
     R: Columnar + Columnation + Semigroup + for<'b> Semigroup<columnar::Ref<'b, R>>,
     for<'b> columnar::Ref<'b, R>: Ord,
-    // C2: Container + for<'b> PushInto<&'b (D, T, R)>,
 {
     fn push_into(&mut self, container: &'a mut Column<(D, T, R)>) {
         // Sort input data
@@ -533,9 +532,11 @@ where
                 }
                 yielded
             }
-            n => unimplemented!(
-                "Column-shaped k-way sorted merge with diff consolidation: {n} inputs"
-            ),
+            // `Merger::merge` only ever calls `merge_from` with 0/1/2-input
+            // slices (k-way merge isn't part of the merge-batcher contract).
+            // Defensive guard: if someone bumps that, this will panic
+            // immediately rather than silently produce wrong output.
+            n => unreachable!("merge_from called with {n} inputs; expected 0, 1, or 2"),
         }
     }
 
@@ -786,7 +787,7 @@ where
     }
 
     fn account(chunk: &Self::Chunk) -> (usize, usize, usize, usize) {
-        let records = usize::try_from(chunk.record_count()).unwrap_or(0);
+        let records = usize::try_from(chunk.record_count()).expect("record_count is non-negative");
         (records, 0, 0, 0)
     }
 }

@@ -241,7 +241,7 @@ fn bench_batcher(c: &mut Criterion) {
 
     for (size_label, payload_bytes_total) in SIZES {
         let n_total = payload_bytes_total / ROW_PAYLOAD_BYTES;
-        let n_rounds = (n_total + PER_ROUND - 1) / PER_ROUND;
+        let n_rounds = n_total.div_ceil(PER_ROUND);
         let n_total_u64 = u64::cast_from(n_total);
 
         let configs: [(&str, Vec<Vec<Tuple>>); 4] = [
@@ -305,9 +305,9 @@ fn bench_batcher(c: &mut Criterion) {
 // === Throughput summary helpers ===
 //
 // Same shape as the helpers in
-// `mz-timely-util/benches/columnar_merger.rs` and
-// `mz-repr/benches/columnar_merger_row.rs`. Pulls medians from criterion's
-// `estimates.json` so we don't add a `serde_json` dev-dep.
+// `mz-timely-util/benches/columnar_merger.rs` and the sister
+// `columnar_merger_row.rs` in this directory. Pulls medians from
+// criterion's `estimates.json` so we don't add a `serde_json` dev-dep.
 
 /// Locate the `target/criterion` directory by walking up from cwd. Cargo
 /// runs benches with cwd at the package dir, so a relative
@@ -378,7 +378,7 @@ fn config_bytes(regime: &str, size_label: &str) -> Option<u64> {
         .find(|(label, _)| *label == size_label)
         .map(|(_, bytes)| *bytes)?;
     let n_total = payload_bytes_total / ROW_PAYLOAD_BYTES;
-    let n_rounds = (n_total + PER_ROUND - 1) / PER_ROUND;
+    let n_rounds = n_total.div_ceil(PER_ROUND);
     let total_records = n_rounds * PER_ROUND;
     let bytes_per_record = ROW_PAYLOAD_BYTES + size_of::<Time>() + size_of::<Diff>();
     let _ = regime; // record count is the same across regimes by construction

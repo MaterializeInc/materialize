@@ -10,9 +10,9 @@
 //! Microbenchmark comparing the columnation-backed `ColInternalMerger`
 //! against the column-backed `ColumnMerger` on the merge-batcher's hot path.
 //!
-//! Each iteration drives a single 2-input merge through the framework's
-//! `InternalMerger::merge`, so we measure the same code path either merger
-//! ends up traveling at the trace level.
+//! Each iteration drives a single 2-input merge via `Merger::merge`, the
+//! same trait method the merge-batcher framework calls during chain
+//! compaction.
 //!
 //! Two axes:
 //!
@@ -27,12 +27,10 @@
 //!   tiers at its own size, and a single fixed `n` would only show one
 //!   point on each curve. Stating size in bytes-per-side (rather than
 //!   element count) keeps the comparison meaningful when the record type
-//!   changes — a future `Row`-keyed variant exercises the same heap budget
-//!   even though its element count is smaller.
+//!   changes.
 //!
-//! TODO: add a `Row`-keyed variant once `Rows` (the columnar container for
-//! `Row`) is reachable from a dev-dep — currently it lives in a private
-//! module inside `mz-repr` and isn't re-exported.
+//! See `mz-compute/benches/columnar_merger_row.rs` for the `Row`-keyed
+//! companion bench (variable-length payload regime).
 
 use std::mem::size_of;
 
@@ -207,9 +205,9 @@ fn bench_merge(c: &mut Criterion) {
 // buries throughput inside per-bench paragraphs. Once the group finishes we
 // pull the median time out of each bench's `estimates.json`, divide by the
 // bytes-per-iter we already configured, and emit a single side-by-side
-// table. The same helpers live (duplicated) in
-// `mz-repr/benches/columnar_merger_row.rs`; bench files don't share a
-// library easily so we accept the copy.
+// table. The same helpers live (duplicated) in the Row-keyed sister
+// benches under `mz-compute/benches/`; bench files don't share a library
+// easily so we accept the copy.
 
 /// Locate the `target/criterion` directory by walking up from cwd. Needed
 /// because `cargo bench -p <pkg>` runs the bench binary with cwd set to

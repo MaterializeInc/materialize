@@ -10,10 +10,10 @@
 //! Row-keyed merge-batcher microbench.
 //!
 //! Mirror of [`mz-timely-util/benches/columnar_merger.rs`] with
-//! `Data = Row`. Lives in `mz-repr` because [`mz_repr::Row`]'s columnar
-//! container `Rows` lives in a private module here, and `mz-repr` already
-//! depends on `mz-timely-util` (which would create a dev-dep cycle if the
-//! bench tried to live the other way around).
+//! `Data = Row`. Lives in `mz-compute` because [`mz_repr::Row`]'s columnar
+//! container `Rows` is reachable from `mz-compute` as a transitive dep
+//! and a bench in `mz-repr` itself would invert the existing dep edge
+//! (`mz-repr` → `mz-timely-util`).
 //!
 //! The thesis this answers: where does `Column` win against
 //! `ColumnationStack` once records carry a variable-length payload? The
@@ -258,7 +258,7 @@ fn bench_merge(c: &mut Criterion) {
 
 /// Locate the `target/criterion` directory by walking up from cwd. Needed
 /// because `cargo bench -p <pkg>` runs the bench binary with cwd set to
-/// the package dir (e.g. `src/repr`), not the workspace root.
+/// the package dir (e.g. `src/compute`), not the workspace root.
 fn criterion_dir() -> std::path::PathBuf {
     let mut cur = std::env::current_dir().unwrap_or_default();
     loop {
