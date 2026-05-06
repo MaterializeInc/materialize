@@ -67,6 +67,27 @@ pub async fn resolve_address(
     Ok(ips)
 }
 
+/// If `url`'s host is an IP literal, validates that it is a globally routable
+/// address, returning [`DnsResolutionError::PrivateAddress`] if not. Hostnames
+/// and URLs without a host are passed through; they are expected to be
+/// validated by a connector-level DNS resolver at connect time.
+///
+/// This closes the gap that reqwest/hyper custom DNS resolvers are only
+/// invoked for hostnames, so IP-literal URLs (e.g. `http://127.0.0.1`) would
+/// otherwise bypass global-address enforcement.
+pub fn ensure_url_ip_global(url: &url::Url) -> Result<(), DnsResolutionError> {
+    let ip = match url.host() {
+        Some(url::Host::Ipv4(ip)) => IpAddr::V4(ip),
+        Some(url::Host::Ipv6(ip)) => IpAddr::V6(ip),
+        Some(url::Host::Domain(_)) | None => return Ok(()),
+    };
+    if is_global(ip) {
+        Ok(())
+    } else {
+        Err(DnsResolutionError::PrivateAddress)
+    }
+}
+
 fn is_global(addr: IpAddr) -> bool {
     // TODO: Switch to `addr.is_global()` once stable:
     // https://github.com/rust-lang/rust/issues/27709

@@ -326,6 +326,13 @@ impl AwsConnection {
             loader = loader.region(Region::new(region.clone()));
         }
         if let Some(endpoint) = &self.endpoint {
+            // The custom DNS resolver wired into the AWS HTTP client is only
+            // invoked for hostnames; IP-literal endpoints (e.g. `http://127.0.0.1`)
+            // bypass it. Validate IP literals here so they cannot circumvent
+            // the global-address enforcement.
+            if enforce_external_addresses && let Ok(url) = url::Url::parse(endpoint) {
+                mz_ore::netio::ensure_url_ip_global(&url)?;
+            }
             loader = loader.http_client(mz_aws_util::http_client_with_resolver(
                 enforce_external_addresses,
             ));

@@ -72,6 +72,7 @@ use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use mz_expr::SafeMfpPlan;
 use mz_ore::cast::CastFrom;
+use mz_ore::error::ErrorExt;
 use mz_persist_client::Diagnostics;
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::cache::PersistClientCache;
@@ -1089,7 +1090,11 @@ impl From<csv_async::Error> for StorageErrorXKind {
 
 impl From<reqwest::Error> for StorageErrorXKind {
     fn from(err: reqwest::Error) -> Self {
-        StorageErrorXKind::Reqwest(err.to_string().into())
+        // Walk the source chain so that inner causes (like the custom DNS
+        // resolver's "Address resolved to a private IP" rejection) are
+        // visible. reqwest's top-level Display only says "error sending
+        // request for url ..." and hides the underlying cause.
+        StorageErrorXKind::Reqwest(err.to_string_with_causes().into())
     }
 }
 

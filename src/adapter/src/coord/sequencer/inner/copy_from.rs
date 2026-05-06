@@ -122,8 +122,9 @@ impl Coordinator {
                 // Only allow http(s) schemes. Technically we would fail later, as the current
                 // crate (reqwest) doesn't support other schemes.
                 // Prefer to fail early and explicitly in case the downstream ever changes.
-                // DNS resolution checks are performed at execution time to avoid stalls
-                // during sequencing.
+                // DNS resolution for hostnames is performed at execution time to avoid stalls
+                // during sequencing; IP-literal hosts are validated here because reqwest's
+                // custom DNS resolver is only invoked for hostnames.
                 match url.scheme() {
                     "http" | "https" => {}
                     other => {
@@ -131,6 +132,15 @@ impl Coordinator {
                             "only 'http://' and 'https://' urls are supported as COPY FROM \
                              target, got '{other}://'"
                         ))));
+                    }
+                }
+                let enforce_external_addresses =
+                    mz_storage_types::dyncfgs::ENFORCE_EXTERNAL_ADDRESSES
+                        .get(self.controller.storage.config().config_set());
+                if enforce_external_addresses {
+                    if let Err(err) = mz_ore::netio::ensure_url_ip_global(&url) {
+                        return ctx
+                            .retire(Err(AdapterError::Unstructured(anyhow::anyhow!("{err}"))));
                     }
                 }
                 mz_storage_types::oneshot_sources::ContentSource::Http { url }
