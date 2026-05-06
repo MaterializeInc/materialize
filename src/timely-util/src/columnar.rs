@@ -19,6 +19,7 @@
 
 pub mod batcher;
 pub mod builder;
+pub mod consolidate;
 
 use std::hash::Hash;
 
