@@ -7,9 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Throughput benchmark for `ConsolidatingColumnBuilder` against bare `ColumnBuilder` (no
-//! staging, no consolidation) — the latter is the upper bound for the consolidating builder
-//! on cancellation-free workloads.
+//! Throughput benchmark for `ConsolidatingColumnBuilder` against:
+//!
+//! * `ConsolidatingContainerBuilder<Vec<_>>` — DD's existing AoS consolidator, the
+//!   apples-to-apples comparison for what we are replacing.
+//! * Bare `ColumnBuilder` (no staging, no consolidation) — upper bound on push throughput
+//!   when consolidation has nothing to remove.
 //!
 //! Run with:
 //!
@@ -17,6 +20,7 @@
 
 use columnar::Len;
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::consolidate::ConsolidatingColumnBuilder;
 use timely::container::{ContainerBuilder, PushInto};
@@ -58,6 +62,22 @@ fn run_bare<F: Fn(u64) -> Item>(mk: F) {
     std::hint::black_box(sink);
 }
 
+#[inline]
+fn run_dd<F: Fn(u64) -> Item>(mk: F) {
+    let mut builder = ConsolidatingContainerBuilder::<Vec<Item>>::default();
+    let mut sink: u64 = 0;
+    for i in 0..N {
+        builder.push_into(mk(std::hint::black_box(i)));
+        while let Some(c) = builder.extract() {
+            sink = sink.wrapping_add(c.len() as u64);
+        }
+    }
+    while let Some(c) = builder.finish() {
+        sink = sink.wrapping_add(c.len() as u64);
+    }
+    std::hint::black_box(sink);
+}
+
 fn bench_workload<F>(c: &mut Criterion, name: &str, mk: F)
 where
     F: Fn(u64) -> Item + Copy,
@@ -65,6 +85,7 @@ where
     let mut group = c.benchmark_group(name);
     group.throughput(Throughput::Bytes(N * std::mem::size_of::<Item>() as u64));
     group.bench_function("ConsolidatingColumnBuilder", |b| b.iter(|| run_cons(mk)));
+    group.bench_function("ConsolidatingContainerBuilder", |b| b.iter(|| run_dd(mk)));
     group.bench_function("ColumnBuilder", |b| b.iter(|| run_bare(mk)));
     group.finish();
 }
