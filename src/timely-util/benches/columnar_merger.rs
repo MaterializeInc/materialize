@@ -164,24 +164,19 @@ fn bench_merge(c: &mut Criterion) {
             let id = format!("{regime}/{size_label}");
             summary.push((id.clone(), bytes));
 
-            group.bench_with_input(
-                BenchmarkId::new("columnation", &id),
-                &(),
-                |bencher, _| {
-                    bencher.iter_batched(
-                        || (build_columnation(a), build_columnation(b)),
-                        |(ca, cb)| {
-                            let mut merger: ColInternalMerger<Data, Time, Diff> =
-                                Default::default();
-                            let mut output = Vec::new();
-                            let mut stash = Vec::new();
-                            merger.merge(vec![ca], vec![cb], &mut output, &mut stash);
-                            output
-                        },
-                        BatchSize::LargeInput,
-                    );
-                },
-            );
+            group.bench_with_input(BenchmarkId::new("columnation", &id), &(), |bencher, _| {
+                bencher.iter_batched(
+                    || (build_columnation(a), build_columnation(b)),
+                    |(ca, cb)| {
+                        let mut merger: ColInternalMerger<Data, Time, Diff> = Default::default();
+                        let mut output = Vec::new();
+                        let mut stash = Vec::new();
+                        merger.merge(vec![ca], vec![cb], &mut output, &mut stash);
+                        output
+                    },
+                    BatchSize::LargeInput,
+                );
+            });
 
             group.bench_with_input(BenchmarkId::new("column", &id), &(), |bencher, _| {
                 bencher.iter_batched(
@@ -291,16 +286,8 @@ fn print_throughput_table(title: &str, group: &str, rows: &[(String, u64)]) {
             let col_id = format!("column/{}", label.replace('/', "_"));
             let cmn_ns = read_criterion_median_ns(group, &cmn_id).unwrap_or(f64::NAN);
             let col_ns = read_criterion_median_ns(group, &col_id).unwrap_or(f64::NAN);
-            let cmn_str = format!(
-                "{} ({})",
-                fmt_throughput(*bytes, cmn_ns),
-                fmt_time(cmn_ns)
-            );
-            let col_str = format!(
-                "{} ({})",
-                fmt_throughput(*bytes, col_ns),
-                fmt_time(col_ns)
-            );
+            let cmn_str = format!("{} ({})", fmt_throughput(*bytes, cmn_ns), fmt_time(cmn_ns));
+            let col_str = format!("{} ({})", fmt_throughput(*bytes, col_ns), fmt_time(col_ns));
             let ratio = col_ns / cmn_ns;
             let ratio_str = if !ratio.is_finite() {
                 "—".to_string()
