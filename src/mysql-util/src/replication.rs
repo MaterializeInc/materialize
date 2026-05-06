@@ -18,6 +18,10 @@ pub async fn query_sys_var(conn: &mut Conn, name: &str) -> Result<String, MySqlE
         return Err(anyhow::anyhow!("invalid MySQL system variable name: {name}").into());
     }
 
+    // System variable names are interpolated unparameterized, so this uses
+    // `query_first` rather than the prepared `exec_*` family. The
+    // `is_safe_sys_var_name` allowlist above keeps it safe.
+    #[allow(clippy::disallowed_methods)]
     let value: String = conn.query_first(format!("SELECT @@{name}")).await?.unwrap();
     Ok(value)
 }

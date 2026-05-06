@@ -879,7 +879,7 @@ async fn execute_sql(
     execute_request(
         client,
         SqlRequest::Simple {
-            query: query.to_string(),
+            query: mz_ore::sql::Sql::raw_unchecked(query.to_string()),
         },
         &mut response,
     )

@@ -2034,6 +2034,7 @@ async fn test_auth_oidc_issuer_and_audience_switch() {
 /// creating a distinct new user.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)]
+#[allow(clippy::disallowed_methods)]
 async fn test_auth_oidc_authentication_claim_switch() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -4968,6 +4969,7 @@ async fn test_password_auth_http_superuser() {
 /// `current_user` should equal `oidc_user`.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[allow(clippy::disallowed_methods)]
 async fn test_session_auth_does_not_override_credentials() {
     let ca = Ca::new_root("test ca").unwrap();
     let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
@@ -5117,6 +5119,7 @@ async fn test_session_auth_does_not_override_credentials() {
 /// `auto_provision_source = 'frontegg'` in `mz_audit_events`.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)]
+#[allow(clippy::disallowed_methods)]
 async fn test_auth_autoprovision_frontegg_audit_log() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -5261,6 +5264,7 @@ async fn test_auth_autoprovision_frontegg_audit_log() {
 /// `auto_provision_source = 'oidc'` in `mz_audit_events`.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)]
+#[allow(clippy::disallowed_methods)]
 async fn test_auth_autoprovision_oidc_audit_log() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -5363,6 +5367,7 @@ async fn test_auth_autoprovision_oidc_audit_log() {
 /// attribute, and succeeds after granting LOGIN.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[allow(clippy::disallowed_methods)]
 async fn test_auth_oidc_non_login_role() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca

@@ -702,7 +702,7 @@ async fn raw_stream<'a>(
     let query = sql!(
         "START_REPLICATION SLOT {} LOGICAL {} (\"proto_version\" '1', \"publication_names\" {})",
         Sql::ident(slot),
-        lsn,
+        Sql::raw_unchecked(lsn.to_string()),
         Sql::literal(publication)
     );
     let copy_stream = match replication_client.copy_both_simple(query.as_str()).await {

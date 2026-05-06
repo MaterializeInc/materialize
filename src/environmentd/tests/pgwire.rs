@@ -882,6 +882,7 @@ fn test_all_pt_files_have_test_wrappers() {
 // ensuring no partial message is left in the buffer. See
 // https://github.com/MaterializeInc/database-issues/issues/9496
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_many_columns() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
