@@ -7102,6 +7102,7 @@ dependencies = [
  "http 1.4.0",
  "hyper-tls 0.6.0",
  "hyper-util",
+ "ipnet",
  "itertools 0.14.0",
  "lgalloc",
  "libc",

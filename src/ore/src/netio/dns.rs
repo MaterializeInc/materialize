@@ -15,8 +15,10 @@
 
 use std::collections::BTreeSet;
 use std::io;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::sync::LazyLock;
 
+use ipnet::{Ipv4Net, Ipv6Net};
 use tokio::net::lookup_host;
 
 /// An error returned by `resolve_address`.
@@ -88,41 +90,66 @@ pub fn ensure_url_ip_global(url: &url::Url) -> Result<(), DnsResolutionError> {
     }
 }
 
+/// IPv4 CIDR blocks that are not globally routable. Anything outside this set
+/// is treated as a public address.
+// TODO: Switch to `Ipv4Addr::is_global()` once stable:
+// https://github.com/rust-lang/rust/issues/27709
+static V4_NON_GLOBAL: LazyLock<Vec<Ipv4Net>> = LazyLock::new(|| {
+    [
+        "0.0.0.0/8",       // unspecified / "this network"
+        "10.0.0.0/8",      // private (RFC 1918)
+        "100.64.0.0/10",   // shared address space / CGNAT (RFC 6598)
+        "127.0.0.0/8",     // loopback
+        "169.254.0.0/16",  // link-local
+        "172.16.0.0/12",   // private (RFC 1918)
+        "192.0.0.0/24",    // IETF protocol assignments
+        "192.0.2.0/24",    // documentation (TEST-NET-1)
+        "192.168.0.0/16",  // private (RFC 1918)
+        "198.18.0.0/15",   // benchmarking
+        "198.51.100.0/24", // documentation (TEST-NET-2)
+        "203.0.113.0/24",  // documentation (TEST-NET-3)
+        "224.0.0.0/4",     // multicast
+        "240.0.0.0/4",     // reserved (includes broadcast 255.255.255.255)
+    ]
+    .iter()
+    .map(|s| s.parse().expect("valid CIDR"))
+    .collect()
+});
+
+/// IPv6 CIDR blocks that are not globally routable.
+// TODO: Switch to `Ipv6Addr::is_global()` once stable:
+// https://github.com/rust-lang/rust/issues/27709
+static V6_NON_GLOBAL: LazyLock<Vec<Ipv6Net>> = LazyLock::new(|| {
+    [
+        "::/128",    // unspecified
+        "::1/128",   // loopback
+        "fc00::/7",  // unique local
+        "fe80::/10", // link-local
+    ]
+    .iter()
+    .map(|s| s.parse().expect("valid CIDR"))
+    .collect()
+});
+
 fn is_global(addr: IpAddr) -> bool {
-    // TODO: Switch to `addr.is_global()` once stable:
-    // https://github.com/rust-lang/rust/issues/27709
     match addr {
         IpAddr::V4(ip) => is_global_v4(ip),
-        IpAddr::V6(ip) => {
-            // Treat IPv4-mapped IPv6 addresses (`::ffff:a.b.c.d`) as their
-            // underlying IPv4 address — connecting to `::ffff:127.0.0.1`
-            // reaches loopback on dual-stack sockets.
-            if let Some(v4) = ip.to_ipv4_mapped() {
-                return is_global_v4(v4);
-            }
-            let segments = ip.segments();
-            !(ip.is_loopback()
-                || ip.is_unspecified()
-                // link-local (fe80::/10)
-                || (segments[0] & 0xffc0) == 0xfe80
-                // unique local (fc00::/7)
-                || (segments[0] & 0xfe00) == 0xfc00)
-        }
+        IpAddr::V6(ip) => is_global_v6(ip),
     }
 }
 
-fn is_global_v4(ip: std::net::Ipv4Addr) -> bool {
-    let octets = ip.octets();
-    !(ip.is_unspecified()
-        || ip.is_private()
-        || ip.is_loopback()
-        || ip.is_link_local()
-        || ip.is_broadcast()
-        || ip.is_documentation()
-        // shared address space / carrier-grade NAT (100.64.0.0/10)
-        || (octets[0] == 100 && (octets[1] & 0xc0) == 64)
-        // benchmarking (198.18.0.0/15)
-        || (octets[0] == 198 && (octets[1] & 0xfe) == 18))
+fn is_global_v4(ip: Ipv4Addr) -> bool {
+    !V4_NON_GLOBAL.iter().any(|net| net.contains(&ip))
+}
+
+fn is_global_v6(ip: Ipv6Addr) -> bool {
+    // Treat IPv4-mapped IPv6 addresses (`::ffff:a.b.c.d`) as their underlying
+    // IPv4 address — connecting to `::ffff:127.0.0.1` reaches loopback on
+    // dual-stack sockets.
+    if let Some(v4) = ip.to_ipv4_mapped() {
+        return is_global_v4(v4);
+    }
+    !V6_NON_GLOBAL.iter().any(|net| net.contains(&ip))
 }
 
 #[cfg(test)]
