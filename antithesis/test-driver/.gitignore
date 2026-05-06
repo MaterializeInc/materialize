@@ -1,0 +1,5 @@
+# Files copied in by `pre-image: copy` plugins. Excluded from the mzbuild
+# fingerprint and removed before each build.
+/misc
+/antithesis
+/td

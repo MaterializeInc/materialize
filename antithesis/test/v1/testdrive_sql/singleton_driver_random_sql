@@ -1,0 +1,34 @@
+#!/usr/bin/env python3
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Antithesis area template — pure SQL.
+#
+# Each timeline picks one .td from `BASE_SQL` (curated in
+# `materialize.antithesis.testdrive_corpus`) and runs it via the shared
+# `td_runner`. Selection goes through the Antithesis SDK's `random_choice`
+# so platform replay and search interact with which file we land on.
+#
+# Property: the chosen .td completes successfully under fault injection.
+# Coverage spans tables, DDL, joins, transactions, system catalog reads,
+# EXPLAIN, and runtime-error semantics.
+
+from helper_bootstrap import add_materialize_python_to_path
+
+add_materialize_python_to_path()
+
+from materialize.antithesis.sdk import random_choice
+from materialize.antithesis.td_runner import run_file
+from materialize.antithesis.testdrive_corpus import BASE_SQL
+
+chosen = random_choice(BASE_SQL)
+run_file(
+    f"/opt/materialize/td/testdrive/{chosen}",
+    source=f"antithesis/testdrive_sql/singleton_driver_random_sql:{chosen}",
+)

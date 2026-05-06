@@ -1,0 +1,33 @@
+#!/usr/bin/env python3
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Antithesis area template — LOAD GENERATOR sources.
+#
+# Picks one .td from `BASE_LOAD_GENERATOR`. These exercise the storage
+# ingest control plane and dataflow path independently of Kafka, so failures
+# under faults isolate to the MZ side rather than involving an external
+# broker.
+
+from helper_bootstrap import add_materialize_python_to_path
+
+add_materialize_python_to_path()
+
+from materialize.antithesis.sdk import random_choice
+from materialize.antithesis.td_runner import run_file
+from materialize.antithesis.testdrive_corpus import BASE_LOAD_GENERATOR
+
+chosen = random_choice(BASE_LOAD_GENERATOR)
+run_file(
+    f"/opt/materialize/td/testdrive/{chosen}",
+    source=(
+        "antithesis/testdrive_load_generator/"
+        f"singleton_driver_random_load_generator:{chosen}"
+    ),
+)

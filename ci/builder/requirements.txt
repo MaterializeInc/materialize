@@ -12,6 +12,12 @@
 --only-binary=confluent-kafka
 
 aiohttp==3.13.5
+# Antithesis Python SDK. Used by the workload helpers under
+# materialize.antithesis.* both locally (so type checkers see real types and
+# ad-hoc imports work in the venv) and inside the antithesis-test-driver
+# image (which pins the same version via pip3). Keep this version in sync
+# with antithesis/test-driver/Dockerfile.
+antithesis==0.2.0
 black==26.3.1
 # Pulls in dependencies that make launchdarkly/cloud tests fail, keep for now
 boto3-stubs[ec2,iam,kinesis,s3,sqs,ssm,sts,s3tables]==1.41.5

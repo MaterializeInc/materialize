@@ -1,0 +1,41 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Image used as the Antithesis Test Composer client container.
+#
+# It bundles:
+#   - the `testdrive` binary (via MZFROM testdrive)
+#   - the Antithesis Python SDK
+#   - misc/python (so `materialize.antithesis.*` and shared workload helpers
+#     are importable)
+#   - antithesis/test/v1 (so commands are discoverable at
+#     /opt/antithesis/test/v1)
+#   - the entire `test/testdrive/*.td` corpus, so the area templates under
+#     `antithesis/test/v1/testdrive_*/` can pick from
+#     `materialize.antithesis.testdrive_corpus.BASE_*` lists at runtime.
+#
+# Cost note: any change to any .td file in `test/testdrive/` invalidates
+# this image's mzbuild fingerprint. That's intentional — when the testdrive
+# corpus changes, we want the image to pick up the new content. CI's GHCR
+# cache + Docker's layer cache absorb the rebuild cost.
+name: antithesis-test-driver
+publish: false
+pre-image:
+  - type: copy
+    source: misc/python
+    destination: misc/python
+    matching: "**"
+  - type: copy
+    source: antithesis/test
+    destination: antithesis/test
+    matching: "**"
+  - type: copy
+    source: test/testdrive
+    destination: td/testdrive
+    matching: "*.td"

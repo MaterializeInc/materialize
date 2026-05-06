@@ -43,7 +43,7 @@ _shtab_mzcompose_completion_option_strings=('-h' '--help')
 
 _shtab_mzcompose_pos_0_choices=('build' 'config' 'cp' 'create' 'describe' 'ls' 'list' 'description' 'down' 'events' 'exec' 'gen-shortcuts' 'help' 'images' 'kill' 'list-compositions' 'list-workflows' 'logs' 'pause' 'port' 'ps' 'pull' 'push' 'restart' 'rm' 'run' 'scale' 'start' 'stop' 'sql' 'top' 'unpause' 'up' 'web' 'completion')
 _shtab_mzcompose___sanitizer_choices=('address' 'hwaddress' 'cfi' 'thread' 'leak' 'undefined' 'none')
-_shtab_mzcompose___arch_choices=('X86_64' 'AARCH64')
+_shtab_mzcompose___arch_choices=('x86_64' 'aarch64')
 _shtab_mzcompose_completion_pos_0_choices=('bash' 'zsh' 'tcsh')
 
 _shtab_mzcompose_pos_0_nargs=A...
