@@ -222,7 +222,7 @@ pub(super) async fn handle_query_event(
 /// frontier with which to advance the dataflow's progress.
 pub(super) async fn handle_rows_event(
     event: RowsEventData<'_>,
-    ctx: &ReplContext<'_>,
+    ctx: &mut ReplContext<'_>,
     new_gtid: &GtidPartition,
     event_buffer: &mut Vec<(
         (usize, Result<SourceMessage, DataflowError>),
@@ -300,8 +300,7 @@ pub(super) async fn handle_rows_event(
             let row = mysql_async::Row::try_from(binlog_row)?;
             for (output, row_val) in outputs.iter().repeat_clone(row) {
                 let event = if !has_full_metadata && output.binlog_full_metadata {
-                    tracing::warn!(%id, "timely-{worker_id} missing full metadata for {table:?} \
-                        - this can lead to incorrect decoding of some data types. This metadata is only available on MySQL 8.0+ with binlog_version=2, and must be enabled with the binlog_row_metadata configuration option.");
+                    ctx.errored_outputs.insert(output.output_index);
                     Err(DataflowError::from(DefiniteError::ValueDecodeError(
                         format!(
                             "Table {0} was created with binlog_row_metadata=FULL but binlog_row_metadata has since been set to a different value, meaning we cannot reliably decode the columns",
