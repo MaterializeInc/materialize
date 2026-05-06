@@ -71,11 +71,19 @@ pub trait ManagedResource: Resource<DynamicType = ()> + Sized {
         BTreeMap::new()
     }
 
+    fn app_name(&self) -> Option<&str> {
+        None
+    }
+
     fn managed_resource_meta(&self, name: String) -> ObjectMeta {
+        let mut labels = self.default_labels();
+        if let Some(app) = self.app_name() {
+            labels.insert("app.kubernetes.io/name".to_owned(), app.to_owned());
+        }
         ObjectMeta {
             namespace: Some(self.meta().namespace.clone().unwrap()),
             name: Some(name),
-            labels: Some(self.default_labels()),
+            labels: Some(labels),
             owner_references: Some(vec![owner_reference(self)]),
             ..Default::default()
         }
