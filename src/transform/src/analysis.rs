@@ -1308,7 +1308,7 @@ mod explain {
             if config.subtree_size {
                 for (expr, subtree_size) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<super::SubtreeSize>().into_iter(),
+                    &*derived.results::<super::SubtreeSize>(),
                 ) {
                     let analyses = annotations.entry(expr).or_default();
                     analyses.subtree_size = Some(*subtree_size);
@@ -1317,7 +1317,7 @@ mod explain {
             if config.non_negative {
                 for (expr, non_negative) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<super::NonNegative>().into_iter(),
+                    &*derived.results::<super::NonNegative>(),
                 ) {
                     let analyses = annotations.entry(expr).or_default();
                     analyses.non_negative = Some(*non_negative);
@@ -1325,10 +1325,9 @@ mod explain {
             }
 
             if config.arity {
-                for (expr, arity) in std::iter::zip(
-                    subtree_refs.iter(),
-                    derived.results::<super::Arity>().into_iter(),
-                ) {
+                for (expr, arity) in
+                    std::iter::zip(subtree_refs.iter(), &*derived.results::<super::Arity>())
+                {
                     let analyses = annotations.entry(expr).or_default();
                     analyses.arity = Some(*arity);
                 }
@@ -1337,7 +1336,7 @@ mod explain {
             if config.types {
                 for (expr, types) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<super::ReprRelationType>().into_iter(),
+                    &*derived.results::<super::ReprRelationType>(),
                 ) {
                     let analyses = annotations.entry(expr).or_default();
                     analyses.types = Some(types.clone());
@@ -1347,7 +1346,7 @@ mod explain {
             if config.keys {
                 for (expr, keys) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<super::UniqueKeys>().into_iter(),
+                    &*derived.results::<super::UniqueKeys>(),
                 ) {
                     let analyses = annotations.entry(expr).or_default();
                     analyses.keys = Some(keys.clone());
@@ -1357,7 +1356,7 @@ mod explain {
             if config.cardinality {
                 for (expr, card) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<super::Cardinality>().into_iter(),
+                    &*derived.results::<super::Cardinality>(),
                 ) {
                     let analyses = annotations.entry(expr).or_default();
                     analyses.cardinality = Some(card.to_string());
@@ -1367,7 +1366,7 @@ mod explain {
             if config.column_names || config.humanized_exprs {
                 for (expr, column_names) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<super::ColumnNames>().into_iter(),
+                    &*derived.results::<super::ColumnNames>(),
                 ) {
                     let analyses = annotations.entry(expr).or_default();
                     let value = column_names
@@ -1379,10 +1378,9 @@ mod explain {
             }
 
             if config.equivalences {
-                for (expr, equivs) in std::iter::zip(
-                    subtree_refs.iter(),
-                    derived.results::<Equivalences>().into_iter(),
-                ) {
+                for (expr, equivs) in
+                    std::iter::zip(subtree_refs.iter(), &*derived.results::<Equivalences>())
+                {
                     let analyses = annotations.entry(expr).or_default();
                     analyses.equivalences = Some(match equivs.as_ref() {
                         Some(equivs) => HumanizedEquivalenceClasses {

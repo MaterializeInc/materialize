@@ -518,6 +518,9 @@ async fn raw_stream(
     // Request that the stream provide us with a heartbeat message when no other messages have
     // been sent. This isn't strictly necessary, but is a lightweight additional general
     // health-check for the replication stream
+    //
+    // Interpolating an integer nanosecond value; not parameterizable in MySQL `SET`.
+    #[allow(clippy::disallowed_methods)]
     conn.query_drop(format!(
         "SET @master_heartbeat_period = {};",
         mz_storage_types::dyncfgs::MYSQL_REPLICATION_HEARTBEAT_INTERVAL

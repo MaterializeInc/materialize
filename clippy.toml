@@ -68,6 +68,13 @@ disallowed-methods = [
     { path = "postgres::Client::simple_query", reason = "avoid direct string SQL; use `Sql` composition and wrappers where possible" },
     { path = "postgres::Client::batch_execute", reason = "avoid direct string SQL; use `Sql` composition and wrappers where possible" },
 
+    { path = "mysql_async::queryable::Queryable::query", reason = "use `Queryable::exec` (prepared statements) instead, or validate inputs and `#[allow]` locally" },
+    { path = "mysql_async::queryable::Queryable::query_first", reason = "use `Queryable::exec_first` (prepared statements) instead, or validate inputs and `#[allow]` locally" },
+    { path = "mysql_async::queryable::Queryable::query_drop", reason = "use `Queryable::exec_drop` (prepared statements) instead, or validate inputs and `#[allow]` locally" },
+    { path = "mysql_async::queryable::Queryable::query_iter", reason = "use `Queryable::exec_iter` (prepared statements) instead, or validate inputs and `#[allow]` locally" },
+    { path = "mysql_async::queryable::Queryable::query_map", reason = "use `Queryable::exec_map` (prepared statements) instead, or validate inputs and `#[allow]` locally" },
+    { path = "mysql_async::queryable::Queryable::query_fold", reason = "use `Queryable::exec_fold` (prepared statements) instead, or validate inputs and `#[allow]` locally" },
+
     # Prevent access to Differential APIs that want to use the default trace or use a default name, or where we offer
     # our own wrapper
     { path = "differential_dataflow::Collection::consolidate", reason = "use the `mz_timely_util::operator::CollectionExt::consolidate_named` function instead" },

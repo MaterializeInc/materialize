@@ -8,7 +8,8 @@
 // by the Apach
 
 use mz_catalog::memory::objects::{Cluster, ClusterReplica};
-use mz_postgres_util::{Sql, sql};
+use mz_ore::sql;
+use mz_ore::sql::Sql;
 
 use super::sql::SqlRequest;
 
@@ -26,9 +27,6 @@ impl<'a> PrometheusSqlQuery<'a> {
         &self,
         cluster: Option<(&Cluster, &ClusterReplica)>,
     ) -> SqlRequest {
-        // The static `query` field is trusted SQL but its concrete type is only
-        // `&str`, so wrap it with `raw_unchecked` to compose with the `Sql`
-        // builder.
         let query = Sql::raw_unchecked(self.query.to_string());
         let query = if let Some((cluster, replica)) = cluster {
             sql!(
@@ -43,9 +41,7 @@ impl<'a> PrometheusSqlQuery<'a> {
                 query
             )
         };
-        SqlRequest::Simple {
-            query: query.into_string(),
-        }
+        SqlRequest::Simple { query }
     }
 }
 

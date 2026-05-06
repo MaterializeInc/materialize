@@ -28,6 +28,7 @@ pub mod tunnel;
 pub use tunnel::{Client, Config, DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT, TunnelConfig};
 
 pub mod query;
+pub use mz_ore::sql;
 pub use query::{
     Sql, SqlFormatError, batch_execute, execute, execute_prepared, query, query_one,
     query_one_prepared, query_opt, query_opt_prepared, query_prepared, simple_query,

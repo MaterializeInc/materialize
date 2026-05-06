@@ -39,6 +39,7 @@ use mz_interchange::json::{JsonNumberPolicy, ToJson};
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::{MakeCollectorOpts, MetricsRegistry};
 use mz_ore::result::ResultExt;
+use mz_ore::sql::Sql;
 use mz_repr::{Datum, RelationDesc, RowArena, RowIterator};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{CopyDirection, CopyStatement, CopyTarget, Raw, Statement, StatementKind};
@@ -517,7 +518,7 @@ pub enum SqlRequest {
     Simple {
         /// A query string containing zero or more queries delimited by
         /// semicolons.
-        query: String,
+        query: Sql,
     },
     /// An extended query request.
     Extended {
@@ -1305,7 +1306,7 @@ pub(in crate::http) async fn execute_request<S: ResultSender>(
     let mut stmt_groups = vec![];
 
     match request {
-        SqlRequest::Simple { query } => match parse(client, &query) {
+        SqlRequest::Simple { query } => match parse(client, query.as_str()) {
             Ok(stmts) => {
                 let mut stmt_group = Vec::with_capacity(stmts.len());
                 let mut stmt_err = None;

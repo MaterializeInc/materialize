@@ -5022,6 +5022,7 @@ fn test_webhook_request_compression() {
 // =============================================================================
 
 /// Helper to set up an MCP test server and run datadriven tests.
+#[allow(clippy::disallowed_methods)]
 fn run_mcp_datadriven(testdata_path: &str, harness: test_util::TestHarness) {
     let version_re = Regex::new(r#"\d+\.\d+\.\d+(\.\d+)?(-(dev|rc)(\.\d+)?)?"#).unwrap();
 
@@ -5152,6 +5153,7 @@ fn test_mcp_developer_disabled() {
 /// containing only system schemas before executing the query, so `mz_leak`
 /// cannot resolve to a user-created object.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_mcp_developer_search_path_defense() {
     let server = test_util::TestHarness::default()
         .with_mcp_routes(false, true)
@@ -5298,6 +5300,7 @@ fn mcp_post(url: &str, json: serde_json::Value) -> (reqwest::StatusCode, serde_j
 /// Tests get_data_products, get_data_product_details, and read_data_product against
 /// a real data product (view + index + comment).
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_mcp_agent_with_data_product() {
     let server = test_util::TestHarness::default()
         .with_mcp_routes(true, false)
@@ -5822,6 +5825,7 @@ fn test_mcp_agent_runtime_flag_toggle() {
 /// to any user with SELECT on the view. Cluster USAGE is not required for
 /// discovery — the view appears with a NULL cluster if no accessible index exists.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_mcp_agent_rbac() {
     let server = test_util::TestHarness::default()
         .with_mcp_routes(true, false)

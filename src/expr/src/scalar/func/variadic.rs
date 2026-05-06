@@ -194,7 +194,7 @@ fn array_create_multidim<'a>(
             }
             if let Some((e, a)) = expected
                 .into_iter()
-                .zip_eq(actual_dims.into_iter())
+                .zip_eq(actual_dims)
                 .find(|(e, a)| e != a)
             {
                 let actual = a.length;

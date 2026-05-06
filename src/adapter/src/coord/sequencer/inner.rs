@@ -458,9 +458,7 @@ impl Coordinator {
         let ids = self
             .allocate_user_ids(u64::cast_from(subsource_stmts.len()))
             .await?;
-        for (subsource_stmt, (item_id, global_id)) in
-            subsource_stmts.into_iter().zip_eq(ids.into_iter())
-        {
+        for (subsource_stmt, (item_id, global_id)) in subsource_stmts.into_iter().zip_eq(ids) {
             let s = self.plan_subsource(session, &params, subsource_stmt, item_id, global_id)?;
             subsource_plans.push(s);
         }
@@ -611,7 +609,7 @@ impl Coordinator {
         let ids = self
             .allocate_user_ids(u64::cast_from(subsource_stmts.len()))
             .await?;
-        for (stmt, (item_id, global_id)) in subsource_stmts.into_iter().zip_eq(ids.into_iter()) {
+        for (stmt, (item_id, global_id)) in subsource_stmts.into_iter().zip_eq(ids) {
             let plan = self.plan_subsource(ctx.session(), &params, stmt, item_id, global_id)?;
             create_source_plans.push(plan);
         }

@@ -148,7 +148,7 @@ fn collect_items<'i, 't>(
             }
             Item::Mod(nested_item_mod) => {
                 let nested_items = collect_items(nested_item_mod, expected_ty)?;
-                static_items.extend(nested_items.into_iter());
+                static_items.extend(nested_items);
             }
             _ => (),
         }
