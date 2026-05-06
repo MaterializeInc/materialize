@@ -23,7 +23,7 @@ use timely::container::{ContainerBuilder, PushInto};
 
 type Item = (u64, u64, i64);
 
-const N: u64 = 1_000_000;
+const N: u64 = 10_000_000;
 
 /// Mirror `timely::Session::give`: push one item, drain everything `extract` yields.
 #[inline]
