@@ -1621,6 +1621,14 @@ SELECT * FROM foo
 2  two
 2  two
 
+# Prepared statement parameter in a subquery's OFFSET
+statement ok
+PREPARE p8 AS
+SELECT (SELECT (SELECT (SELECT (SELECT 1 OFFSET $1))))
+
+query error Invalid OFFSET clause: must not be negative, got \-1
+EXECUTE p8(-1);
+
 # Prepared statement parameter in LIMIT
 statement ok
 PREPARE fizz_paginated AS
