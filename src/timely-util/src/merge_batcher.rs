@@ -785,56 +785,25 @@ mod temporal {
             }
         }
 
-        /// Recompute `self.frontier` as the held-data lower bound, walking
-        /// only [`Self::bucket_chain`] (the only place data is held after a
-        /// seal — flat chains are emptied during the seal extract).
-        ///
-        /// A bucket's start is only a range lower bound; to produce the
-        /// actual minimum we merge the chains in the lowest non-empty bucket
-        /// and use `Merger::extract` against the bucket start so every entry
-        /// is classified as `keep`, which is the side that updates the
-        /// frontier antichain. The merged chain replaces the bucket's chains
-        /// so subsequent seals pay only the linear extract cost.
+        /// Set `self.frontier` to the lower bound of the lowest non-empty
+        /// bucket, or empty when no held data exists. The bucket start is a
+        /// valid lower bound on the times in that bucket (every held time
+        /// satisfies `start.less_equal(t)`), so reporting it preserves the
+        /// `Batcher::frontier` contract — at the cost of up to one bucket
+        /// span of lag relative to the actual minimum held time. The
+        /// bucketing already trades input-side temporal precision for batched
+        /// releases; aligning the reported frontier with the same bucket
+        /// boundaries is internally consistent and removes the per-seal
+        /// merge+extract over the lowest non-empty bucket.
         fn recompute_frontier(&mut self) {
             self.frontier.clear();
-            // Walk buckets in order, taking chains out of the first non-empty one.
-            // Avoids the per-seal `Vec` allocation and per-bucket `find_mut` cost
-            // that an outer loop driven by cloned starts would incur.
-            let mut found: Option<(M::Time, Vec<Vec<M::Chunk>>)> = None;
-            for (start, bucket) in self.bucket_chain.iter_mut() {
-                if !bucket.is_empty() {
-                    found = Some((start.clone(), std::mem::take(&mut bucket.chains)));
-                    break;
-                }
-            }
-            let Some((start, chains)) = found else { return };
-
-            let merged = MergeBucket::<M> {
-                chains,
-                bounds: None,
-            }
-            .merge_into_one(&mut self.merger, &mut self.stash);
-            let upper = Antichain::from_elem(start.clone());
-            let mut ship = Vec::new();
-            let mut keep = Vec::new();
-            self.merger.extract(
-                merged,
-                upper.borrow(),
-                &mut self.frontier,
-                &mut ship,
-                &mut keep,
-                &mut self.stash,
-            );
-            debug_assert!(
-                ship.is_empty(),
-                "all times in a bucket must be >= the bucket's start"
-            );
-            let bucket = self
+            if let Some(start) = self
                 .bucket_chain
-                .find_mut(&start)
-                .expect("bucket still exists");
-            if !keep.is_empty() {
-                bucket.chains.push(keep);
+                .iter()
+                .find(|(_, b)| !b.is_empty())
+                .map(|(t, _)| t.clone())
+            {
+                self.frontier = Antichain::from_elem(start);
             }
         }
     }
@@ -1152,28 +1121,19 @@ mod temporal {
             push(&mut batcher, input);
 
             // Seal up to 4. Held data is {5, 7, 11}; the smallest is 5.
-            // The frontier reflects the actual minimum held time, not the
-            // surrounding bucket's start.
+            // The reported frontier is the start of the bucket holding 5,
+            // which is a valid lower bound on the held times (`<= 5`).
             let _ = seal(&mut batcher, Some(4));
-            assert_eq!(&*batcher.frontier(), &[5_u64]);
+            let f = batcher.frontier();
+            let bound = *f.first().expect("frontier non-empty while data is held");
+            assert!(
+                bound <= 5,
+                "reported frontier {bound} must be a lower bound of held min 5"
+            );
 
             // Drain everything.
             let _ = seal(&mut batcher, None);
             assert!(batcher.frontier().is_empty());
-        }
-
-        #[mz_ore::test]
-        fn frontier_is_actual_min_not_bucket_start() {
-            // The smallest held time is 1_000_000, well above any low bucket
-            // boundary. The frontier should reflect that exact value, not the
-            // power-of-two bucket boundary that contains it.
-            let mut batcher = TestBatcher::new(None, 0);
-            let input: Vec<TestUpdate> =
-                (1_000_000_u64..1_000_010).map(|i| (i, i, 1_i64)).collect();
-            push(&mut batcher, input);
-
-            let _ = seal(&mut batcher, Some(500));
-            assert_eq!(&*batcher.frontier(), &[1_000_000_u64]);
         }
 
         #[mz_ore::test]

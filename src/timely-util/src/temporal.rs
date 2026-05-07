@@ -198,13 +198,10 @@ impl<S: Bucket> BucketChain<S> {
         self.content = new;
     }
 
-    /// Iterate `(start, &mut bucket)` pairs in ascending start order.
-    ///
-    /// Used by callers that need to mutate buckets while walking the chain
-    /// without paying the per-bucket `find_mut` cost.
+    /// Iterate `(start, &bucket)` pairs in ascending start order.
     #[inline]
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = (&S::Timestamp, &mut S)> {
-        self.content.iter_mut().map(|(t, (_, s))| (t, s))
+    pub fn iter(&self) -> impl Iterator<Item = (&S::Timestamp, &S)> {
+        self.content.iter().map(|(t, (_, s))| (t, s))
     }
 
     /// Returns `true` if the chain is empty. This means there are no outstanding times left.
