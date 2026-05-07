@@ -308,6 +308,7 @@ impl OneshotSource for HttpOneshotSource {
             // got back an HTTP 206?
 
             let response = request.send().await.context("get")?;
+            check_not_redirect(&response)?;
             let bytes_stream = response.bytes_stream().err_into();
 
             Ok::<_, StorageErrorX>(bytes_stream)
