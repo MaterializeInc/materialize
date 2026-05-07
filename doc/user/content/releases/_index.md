@@ -102,6 +102,16 @@ improvements, and bug fixes.
   `cluster_topology_spread_soft = on` and `cluster_topology_spread_min_domains`
   caused all replica pod creation to fail with an admission error.
 
+### Agent Skills {#v26.23-agent-skills}
+
+- **`materialize-docs`**: A new AI agent skill bundling the Materialize
+  documentation (SQL syntax, data ingestion, concepts, integrations, and
+  deployment) so coding assistants can answer Materialize questions without
+  web access.
+- **`mcp-developer-analysis`**: A new AI agent skill that pairs with the
+  `/api/mcp/developer` endpoint to provide diagnostic workflows, system catalog
+  references, and remediation runbooks for AI-powered troubleshooting.
+
 ## v26.22.0
 *Released to Materialize Cloud: 2026-04-30* <br>
 *Released to Materialize Self-Managed: 2026-05-01* <br>
