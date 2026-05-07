@@ -8323,25 +8323,60 @@ UNION ALL
         ontology: Some(Ontology {
             entity_name: "object",
             description: "Union of all object types: relations, indexes, connections, etc. (convenience view)",
-            links: &const { [
-                OntologyLink { name: "union_includes", target: "relation", properties: LinkProperties::Union {
-     discriminator_column: None,
-     discriminator_value: None,
-     note: Some("mz_objects includes all relations plus indexes, connections, secrets, types, functions"),
- } },
-                OntologyLink { name: "union_includes", target: "index", properties: LinkProperties::union_disc("type", "index") },
-                OntologyLink { name: "union_includes", target: "connection", properties: LinkProperties::union_disc("type", "connection") },
-                OntologyLink { name: "union_includes", target: "secret", properties: LinkProperties::union_disc("type", "secret") },
-                OntologyLink { name: "maps_to_global_id", target: "object", properties: LinkProperties::MapsTo {
-     source_column: None,
-     target_column: None,
-     via: Some("mz_internal.mz_object_global_ids"),
-     from_type: Some(mz_repr::SemanticType::CatalogItemId),
-     to_type: Some(mz_repr::SemanticType::GlobalId),
-     note: Some("A CatalogItemId (SQL layer) maps to one or more GlobalIds (runtime layer)."),
- } },
-            ] },
-            column_semantic_types: &const {[("id", SemanticType::CatalogItemId), ("oid", SemanticType::OID), ("schema_id", SemanticType::SchemaId), ("type", SemanticType::ObjectType), ("owner_id", SemanticType::RoleId), ("cluster_id", SemanticType::ClusterId)]},
+            links: &const {
+                [
+                    OntologyLink {
+                        name: "union_includes",
+                        target: "relation",
+                        properties: LinkProperties::Union {
+                            discriminator_column: None,
+                            discriminator_value: None,
+                            note: Some(
+                                "mz_objects includes all relations plus indexes, connections, secrets, types, functions",
+                            ),
+                        },
+                    },
+                    OntologyLink {
+                        name: "union_includes",
+                        target: "index",
+                        properties: LinkProperties::union_disc("type", "index"),
+                    },
+                    OntologyLink {
+                        name: "union_includes",
+                        target: "connection",
+                        properties: LinkProperties::union_disc("type", "connection"),
+                    },
+                    OntologyLink {
+                        name: "union_includes",
+                        target: "secret",
+                        properties: LinkProperties::union_disc("type", "secret"),
+                    },
+                    OntologyLink {
+                        name: "maps_to_global_id",
+                        target: "object",
+                        properties: LinkProperties::MapsTo {
+                            source_column: None,
+                            target_column: None,
+                            via: Some("mz_internal.mz_object_global_ids"),
+                            from_type: Some(mz_repr::SemanticType::CatalogItemId),
+                            to_type: Some(mz_repr::SemanticType::GlobalId),
+                            note: Some(
+                                "A CatalogItemId (SQL layer) maps to one or more GlobalIds (runtime layer).",
+                            ),
+                        },
+                    },
+                ]
+            },
+            column_semantic_types: &const {
+                [
+                    ("id", SemanticType::CatalogItemId),
+                    ("oid", SemanticType::OID),
+                    ("schema_id", SemanticType::SchemaId),
+                    ("type", SemanticType::ObjectType),
+                    ("owner_id", SemanticType::RoleId),
+                    ("cluster_id", SemanticType::ClusterId),
+                ]
+            },
         }),
     }
 });
