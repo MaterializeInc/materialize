@@ -472,7 +472,11 @@ impl LinkProperties {
 /// kind of relationship.
 #[derive(Clone, Debug, Hash, PartialEq, Eq, Serialize)]
 pub struct OntologyLink {
-    /// Relationship name (e.g., "owned_by", "in_schema").
+    /// Relationship name describing the relationship FROM this entity TO the
+    /// target (e.g., `"owned_by"` means "this entity is owned by the target",
+    /// `"depends_on"` means "this entity depends on the target"). When the
+    /// same name appears on multiple links of the same entity, all links
+    /// share that relationship role (e.g., several `"union_includes"` links).
     pub name: &'static str,
     /// Target entity name (e.g., "role", "schema").
     pub target: &'static str,
@@ -8390,20 +8394,6 @@ UNION ALL
                         properties: LinkProperties::union_disc("type", "secret"),
                     },
                     OntologyLink {
-                        name: "maps_to_global_id",
-                        target: "object",
-                        properties: LinkProperties::MapsTo {
-                            source_column: "id",
-                            target_column: "global_id",
-                            via: Some("mz_internal.mz_object_global_ids"),
-                            from_type: Some(mz_repr::SemanticType::CatalogItemId),
-                            to_type: Some(mz_repr::SemanticType::GlobalId),
-                            note: Some(
-                                "A CatalogItemId (SQL layer) maps to one or more GlobalIds (runtime layer).",
-                            ),
-                        },
-                    },
-                    OntologyLink {
                         name: "in_schema",
                         target: "schema",
                         properties: LinkProperties::fk("schema_id", "id", Cardinality::ManyToOne),
@@ -8555,16 +8545,9 @@ pub static MZ_OBJECT_GLOBAL_IDS: LazyLock<BuiltinTable> = LazyLock::new(|| Built
         description: "Mapping between CatalogItemId (SQL layer) and GlobalId (runtime layer)",
         links: &const {
             [OntologyLink {
-                name: "has_global_id",
+                name: "id_references",
                 target: "object",
-                properties: LinkProperties::MapsTo {
-                    source_column: "id",
-                    target_column: "id",
-                    via: None,
-                    from_type: Some(mz_repr::SemanticType::CatalogItemId),
-                    to_type: Some(mz_repr::SemanticType::GlobalId),
-                    note: None,
-                },
+                properties: LinkProperties::fk("id", "id", Cardinality::ManyToOne),
             }]
         },
         column_semantic_types: &[("id", SemanticType::CatalogItemId)],
@@ -15669,7 +15652,7 @@ JOIN mz_catalog.mz_relations r ON (r.id = d.referenced_object_id)",
         links: &const {
             [
                 OntologyLink {
-                    name: "materialization_depends_on",
+                    name: "depends_on",
                     target: "object",
                     properties: LinkProperties::DependsOn {
                         source_column: "object_id",
@@ -15679,7 +15662,7 @@ JOIN mz_catalog.mz_relations r ON (r.id = d.referenced_object_id)",
                     },
                 },
                 OntologyLink {
-                    name: "materialization_dependency",
+                    name: "dependency_is",
                     target: "object",
                     properties: LinkProperties::fk("dependency_id", "id", Cardinality::ManyToOne),
                 },
