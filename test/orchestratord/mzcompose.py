@@ -2759,20 +2759,21 @@ def helm_install_operator(
 
 
 def init(definition: dict[str, Any]) -> None:
-    try:
-        spawn.capture(
-            [
-                "kubectl",
-                "delete",
-                "namespace",
-                "materialize-environment",
-                "--wait=true",
-                "--timeout=120s",
-            ],
-            stderr=subprocess.DEVNULL,
-        )
-    except subprocess.CalledProcessError:
-        pass
+    # `--wait=true` blocks until the namespace is fully terminated. If the
+    # timeout is hit and we proceed anyway, the next `kubectl apply` races the
+    # terminating namespace and fails with "is being terminated", so let any
+    # timeout error propagate instead of swallowing it.
+    spawn.runv(
+        [
+            "kubectl",
+            "delete",
+            "namespace",
+            "materialize-environment",
+            "--ignore-not-found",
+            "--wait=true",
+            "--timeout=300s",
+        ],
+    )
     try:
         spawn.capture(
             ["helm", "uninstall", "operator", "--namespace=materialize"],
