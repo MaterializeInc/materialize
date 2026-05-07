@@ -14,9 +14,9 @@
 //! because of Rust's orphan rules.
 
 use mz_audit_log::{
-    AlterApplyReplacementV1, AlterDefaultPrivilegeV1, AlterRetainHistoryV1, AlterSetClusterV1,
-    AlterSourceSinkV1, CreateClusterReplicaV1, CreateClusterReplicaV2, CreateClusterReplicaV3,
-    CreateClusterReplicaV4, CreateIndexV1, CreateMaterializedViewV1,
+    AlterAddColumnV1, AlterApplyReplacementV1, AlterDefaultPrivilegeV1, AlterRetainHistoryV1,
+    AlterSetClusterV1, AlterSourceSinkV1, CreateClusterReplicaV1, CreateClusterReplicaV2,
+    CreateClusterReplicaV3, CreateClusterReplicaV4, CreateIndexV1, CreateMaterializedViewV1,
     CreateOrDropClusterReplicaReasonV1, CreateRoleV1, CreateSourceSinkV1, CreateSourceSinkV2,
     CreateSourceSinkV3, CreateSourceSinkV4, DropClusterReplicaV1, DropClusterReplicaV2,
     DropClusterReplicaV3, EventDetails, EventType, EventV1, FromPreviousIdV1, FullNameV1,
@@ -1188,6 +1188,28 @@ impl RustType<crate::objects::audit_log_event_v1::AlterRetainHistoryV1> for Alte
     }
 }
 
+impl RustType<crate::objects::audit_log_event_v1::AlterAddColumnV1> for AlterAddColumnV1 {
+    fn into_proto(&self) -> crate::objects::audit_log_event_v1::AlterAddColumnV1 {
+        crate::objects::audit_log_event_v1::AlterAddColumnV1 {
+            id: self.id.to_string(),
+            column: self.column.clone(),
+            column_type: self.column_type.clone(),
+            nullable: self.nullable,
+        }
+    }
+
+    fn from_proto(
+        proto: crate::objects::audit_log_event_v1::AlterAddColumnV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(AlterAddColumnV1 {
+            id: proto.id,
+            column: proto.column,
+            column_type: proto.column_type,
+            nullable: proto.nullable,
+        })
+    }
+}
+
 impl RustType<crate::objects::audit_log_event_v1::ToNewIdV1> for ToNewIdV1 {
     fn into_proto(&self) -> crate::objects::audit_log_event_v1::ToNewIdV1 {
         crate::objects::audit_log_event_v1::ToNewIdV1 {
@@ -1342,6 +1364,7 @@ impl RustType<crate::objects::audit_log_event_v1::Details> for EventDetails {
             EventDetails::AlterRetainHistoryV1(details) => {
                 AlterRetainHistoryV1(details.into_proto())
             }
+            EventDetails::AlterAddColumnV1(details) => AlterAddColumnV1(details.into_proto()),
             EventDetails::ToNewIdV1(details) => ToNewIdV1(details.into_proto()),
             EventDetails::FromPreviousIdV1(details) => FromPreviousIdV1(details.into_proto()),
             EventDetails::SetV1(details) => SetV1(details.into_proto()),
@@ -1428,6 +1451,7 @@ impl RustType<crate::objects::audit_log_event_v1::Details> for EventDetails {
             ResetAllV1(Empty {}) => Ok(EventDetails::ResetAllV1),
             RotateKeysV1(details) => Ok(EventDetails::RotateKeysV1(details.into_rust()?)),
             CreateRoleV1(details) => Ok(EventDetails::CreateRoleV1(details.into_rust()?)),
+            AlterAddColumnV1(details) => Ok(EventDetails::AlterAddColumnV1(details.into_rust()?)),
         }
     }
 }
