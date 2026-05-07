@@ -451,7 +451,11 @@ impl Blob for S3Blob {
                 }
 
                 while let Some(data) = object.body.next().await {
-                    body_parts.push(data.context("s3 get body err")?);
+                    let data = data.context("s3 get body err")?;
+                    // Copy out of the hyper pool buffer so we don't pin the
+                    // entire shared backing allocation for the lifetime of the
+                    // returned blob.
+                    body_parts.push(Bytes::copy_from_slice(&data));
                 }
 
                 let body_elapsed = body_start.elapsed();
