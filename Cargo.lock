@@ -7460,6 +7460,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-prometheus-protobuf"
+version = "0.0.0"
+dependencies = [
+ "mz-ore",
+ "prometheus",
+ "protobuf",
+]
+
+[[package]]
 name = "mz-proto"
 version = "0.0.0"
 dependencies = [
