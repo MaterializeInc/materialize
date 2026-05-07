@@ -12,7 +12,7 @@ Use `ALTER SOURCE` to:
 - Rename a source.
 - Change owner of a source.
 - Change retain history configuration for the source.
-- Change timestamp interval for the source.
+- Change the timestamp interval for the source.
 
 ## Syntax
 
@@ -101,6 +101,12 @@ want to ingest it with its new schema, you can then add it as a new subsource.
 
 You cannot drop the "progress subsource".
 
+### Timestamp interval
+
+For details on how the timestamp interval works, including how the per-source
+value interacts with the `default_timestamp_interval` system parameter, see
+[Sources: Timestamp interval](/concepts/sources/#timestamp-interval).
+
 ## Examples
 
 ### Adding subsources
@@ -121,15 +127,13 @@ To drop a subsource, use the [`DROP SOURCE`](/sql/drop-source/) command:
 DROP SOURCE tbl_a, b CASCADE;
 ```
 
-### Changing the timestamp interval
-
-To set a custom timestamp interval for a source:
+### Setting the timestamp interval
 
 ```mzsql
 ALTER SOURCE kafka_src SET (TIMESTAMP INTERVAL = '500ms');
 ```
 
-To reset the timestamp interval to the system default:
+### Resetting the timestamp interval
 
 ```mzsql
 ALTER SOURCE kafka_src RESET (TIMESTAMP INTERVAL);
