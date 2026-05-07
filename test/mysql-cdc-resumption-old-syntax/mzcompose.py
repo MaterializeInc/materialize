@@ -32,16 +32,24 @@ SERVICES = [
     Alpine(),
     Mz(app_password=""),
     Materialized(default_replication_factor=2),
-    MySql(),
+    MySql(
+        additional_args=create_mysql_server_args(
+            server_id="1", is_master=True, binlog_row_metadata="minimal"
+        )
+    ),
     MySql(
         name="mysql-replica-1",
         version=MySql.DEFAULT_VERSION,
-        additional_args=create_mysql_server_args(server_id="2", is_master=False),
+        additional_args=create_mysql_server_args(
+            server_id="2", is_master=False, binlog_row_metadata="minimal"
+        ),
     ),
     MySql(
         name="mysql-replica-2",
         version=MySql.DEFAULT_VERSION,
-        additional_args=create_mysql_server_args(server_id="3", is_master=False),
+        additional_args=create_mysql_server_args(
+            server_id="3", is_master=False, binlog_row_metadata="minimal"
+        ),
     ),
     Toxiproxy(),
     Testdrive(
@@ -190,12 +198,16 @@ def workflow_master_changes(c: Composition) -> None:
         MySql(
             name="mysql-replica-1",
             version=MySql.DEFAULT_VERSION,
-            additional_args=create_mysql_server_args(server_id="2", is_master=False),
+            additional_args=create_mysql_server_args(
+                server_id="2", is_master=False, binlog_row_metadata="minimal"
+            ),
         ),
         MySql(
             name="mysql-replica-2",
             version=MySql.DEFAULT_VERSION,
-            additional_args=create_mysql_server_args(server_id="3", is_master=False),
+            additional_args=create_mysql_server_args(
+                server_id="3", is_master=False, binlog_row_metadata="minimal"
+            ),
         ),
     ):
         initialize(c, create_source=False)
@@ -277,7 +289,9 @@ def workflow_switch_to_replica_and_kill_master(c: Composition) -> None:
         MySql(
             name="mysql-replica-1",
             version=MySql.DEFAULT_VERSION,
-            additional_args=create_mysql_server_args(server_id="2", is_master=False),
+            additional_args=create_mysql_server_args(
+                server_id="2", is_master=False, binlog_row_metadata="minimal"
+            ),
         ),
     ):
         initialize(c)

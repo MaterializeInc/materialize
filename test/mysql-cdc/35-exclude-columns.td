@@ -68,5 +68,6 @@ contains:column "f2" does not exist
 $ mysql-execute name=mysql
 ALTER TABLE t1 DROP COLUMN f2;
 
-! select * from t1;
-contains:incompatible schema change
+> select * from t1;
+1 "test"
+1 "test"

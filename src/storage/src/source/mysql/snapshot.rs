@@ -417,8 +417,16 @@ pub(crate) fn render<'scope>(
                         let row: MySqlRow = row;
                         snapshot_staged += 1;
                         for (output, row_val) in outputs.iter().repeat_clone(row) {
-                            let event = match pack_mysql_row(&mut final_row, row_val, &output.desc)
-                            {
+                            // We don't need to verify if binlog_row_metadata matches the expected when snapshotting as
+                            // the snapshot query always returns rows with full metadata. If the output is configured
+                            // with binlog_full_metadata = false, then we will just ignore the metadata when decoding.
+                            let event = match pack_mysql_row(
+                                &mut final_row,
+                                row_val,
+                                &output.desc,
+                                None,
+                                output.binlog_full_metadata,
+                            ) {
                                 Ok(row) => Ok(SourceMessage {
                                     key: Row::default(),
                                     value: row,
@@ -527,8 +535,8 @@ where
 fn build_snapshot_query(outputs: &[SourceOutputInfo]) -> String {
     let info = outputs.first().expect("MySQL table info");
     for output in &outputs[1..] {
-        // the columns are decoded solely based on position, so we just need to ensure that
-        // all columns are accounted for.
+        // the columns may be decoded based on position, and different outputs may replicate
+        // different columns, so we need to ensure that all columns are accounted for.
         assert!(
             info.desc.columns.len() == output.desc.columns.len(),
             "Mismatch in table descriptions for {}",
@@ -603,6 +611,7 @@ mod tests {
             initial_gtid_set: Antichain::default(),
             resume_upper: Antichain::default(),
             export_id: mz_repr::GlobalId::User(1),
+            binlog_full_metadata: false,
         };
         let query = build_snapshot_query(&[info.clone(), info]);
         assert_eq!(
