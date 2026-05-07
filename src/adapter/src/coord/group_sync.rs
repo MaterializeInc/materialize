@@ -162,7 +162,6 @@ impl Coordinator {
         groups: &[String],
         notices: &mut Vec<AdapterNotice>,
     ) -> Result<(), AdapterError> {
-        // Build a lowercase name → role map once to avoid O(n) catalog scan per group.
         let role_map = self.catalog().roles_by_lowercase_name();
 
         // Resolve group names to role IDs (case-insensitive).
