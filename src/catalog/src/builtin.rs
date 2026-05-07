@@ -221,6 +221,28 @@ fn is_false(v: &bool) -> bool {
 /// Typed properties for an ontology link. Serialized to the `properties` JSONB
 /// column in `mz_ontology_link_types`. The `kind` field is inlined from the
 /// enum variant name via `#[serde(tag = "kind")]`.
+///
+/// Choosing the right variant matters:
+///
+/// - [`LinkProperties::ForeignKey`]: the source entity has a column whose
+///   value is an ID that directly references a row in the target entity.
+///   Use this when there is an explicit FK column (e.g. `schema_id` ->
+///   `schema`).
+/// - [`LinkProperties::DependsOn`]: this entity logically depends on the
+///   target entity via a graph-edge table (e.g. `mz_compute_dependencies`
+///   records that a compute object depends on another object). The
+///   `source_column` is the column **in this entity** that holds the
+///   dependent's ID; `target_column` is the column in the target entity
+///   being depended upon. Use this for dependency-graph tables, **not**
+///   `ForeignKey`.
+/// - [`LinkProperties::Union`]: the source entity is a superset view that
+///   contains the target entity as a subset, optionally filtered by a
+///   discriminator column.
+/// - [`LinkProperties::MapsTo`]: the source entity provides an ID translation
+///   to the target entity, possibly via an intermediate table or across ID
+///   namespaces.
+/// - [`LinkProperties::Measures`]: the source entity records metric
+///   measurements about the target entity.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, serde::Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LinkProperties {
@@ -267,11 +289,9 @@ pub enum LinkProperties {
     /// optionally via an intermediate table and/or with an ID-type conversion.
     MapsTo {
         /// Column in the source entity that holds the ID to map from.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        source_column: Option<&'static str>,
+        source_column: &'static str,
         /// Column in the target entity being mapped to.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        target_column: Option<&'static str>,
+        target_column: &'static str,
         /// Intermediate relation used to perform the mapping.
         #[serde(skip_serializing_if = "Option::is_none")]
         via: Option<&'static str>,
@@ -285,16 +305,21 @@ pub enum LinkProperties {
         #[serde(skip_serializing_if = "Option::is_none")]
         note: Option<&'static str>,
     },
-    /// A dependency relationship: the source entity directly depends on the
+    /// A dependency relationship: this entity directly depends on the
     /// target entity (e.g. a materialization that references an object).
     DependsOn {
-        /// Column in the source entity that holds the dependency ID.
+        /// Column in this entity that holds the dependency ID.
         source_column: &'static str,
         /// Column in the target entity being depended upon (usually `id`).
         target_column: &'static str,
         /// Semantic type of the source column.
         #[serde(skip_serializing_if = "Option::is_none")]
         source_id_type: Option<mz_repr::SemanticType>,
+        /// Intermediate mapping relation needed when `source_id_type` does not
+        /// directly match the target entity's ID type (e.g. GlobalId →
+        /// `mz_internal.mz_object_global_ids` to reach a catalog object).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        requires_mapping: Option<&'static str>,
     },
     /// A metric relationship: the source entity records measurements of a named
     /// metric on the target entity.
@@ -443,26 +468,8 @@ impl LinkProperties {
 /// A directed relationship from one ontology entity to another.
 ///
 /// Each link has a `name` (the relationship label, e.g. `"owned_by"`), a
-/// `target` entity name, and a `properties` variant that captures the
-/// *kind* of relationship. Choosing the right variant matters:
-///
-/// - [`LinkProperties::ForeignKey`]: the source entity has a column whose
-///   value is an ID that directly references a row in the target entity.
-///   Use this when there is an explicit FK column (e.g. `schema_id` ->
-///   `schema`).
-/// - [`LinkProperties::DependsOn`]: the source entity logically depends on
-///   the target entity, but the relationship is a graph edge rather than a
-///   simple column reference (e.g. `mz_compute_dependencies` records that a
-///   dataflow depends on an object). Use this for dependency-graph tables,
-///   **not** `ForeignKey`.
-/// - [`LinkProperties::Union`]: the source entity is a superset view that
-///   contains the target entity as a subset, optionally filtered by a
-///   discriminator column.
-/// - [`LinkProperties::MapsTo`]: the source entity provides an ID translation
-///   to the target entity, possibly via an intermediate table or across ID
-///   namespaces.
-/// - [`LinkProperties::Measures`]: the source entity records metric
-///   measurements about the target entity.
+/// `target` entity name, and a [`LinkProperties`] variant that captures the
+/// kind of relationship.
 #[derive(Clone, Debug, Hash, PartialEq, Eq, Serialize)]
 pub struct OntologyLink {
     /// Relationship name (e.g., "owned_by", "in_schema").
@@ -2391,8 +2398,8 @@ pub static MZ_COMPUTE_DATAFLOW_GLOBAL_IDS_PER_WORKER: LazyLock<BuiltinLog> =
                     name: "global_id_of",
                     target: "compute_export_per_worker",
                     properties: LinkProperties::MapsTo {
-                        source_column: Some("global_id"),
-                        target_column: Some("export_id"),
+                        source_column: "global_id",
+                        target_column: "export_id",
                         via: None,
                         from_type: Some(SemanticType::GlobalId),
                         to_type: Some(SemanticType::GlobalId),
@@ -3172,26 +3179,24 @@ pub static MZ_COMPUTE_DEPENDENCIES: LazyLock<BuiltinSource> = LazyLock::new(|| B
         links: &const {
             [
                 OntologyLink {
-                    name: "dependent_compute_object",
+                    name: "depends_on",
                     target: "object",
-                    properties: LinkProperties::fk_mapped(
-                        "object_id",
-                        "id",
-                        Cardinality::ManyToOne,
-                        mz_repr::SemanticType::GlobalId,
-                        "mz_internal.mz_object_global_ids",
-                    ),
+                    properties: LinkProperties::DependsOn {
+                        source_column: "object_id",
+                        target_column: "id",
+                        source_id_type: Some(mz_repr::SemanticType::GlobalId),
+                        requires_mapping: Some("mz_internal.mz_object_global_ids"),
+                    },
                 },
                 OntologyLink {
-                    name: "compute_dependency_target",
+                    name: "dependency_is",
                     target: "object",
-                    properties: LinkProperties::fk_mapped(
-                        "dependency_id",
-                        "id",
-                        Cardinality::ManyToOne,
-                        mz_repr::SemanticType::GlobalId,
-                        "mz_internal.mz_object_global_ids",
-                    ),
+                    properties: LinkProperties::DependsOn {
+                        source_column: "dependency_id",
+                        target_column: "id",
+                        source_id_type: Some(mz_repr::SemanticType::GlobalId),
+                        requires_mapping: Some("mz_internal.mz_object_global_ids"),
+                    },
                 },
             ]
         },
@@ -8196,7 +8201,7 @@ pub static MZ_RELATIONS: LazyLock<BuiltinView> = LazyLock::new(|| {
             ("oid", "A PostgreSQL-compatible OID for the relation."),
             ("schema_id", "The ID of the schema to which the relation belongs. Corresponds to `mz_schemas.id`."),
             ("name", "The name of the relation."),
-            ("type", "The type of the relation: either `table`, `source`, `view`, or `materialized view`."),
+            ("type", "The type of the relation: either `table`, `source`, `view`, or `materialized-view`."),
             ("owner_id", "The role ID of the owner of the relation. Corresponds to `mz_roles.id`."),
             ("cluster_id", "The ID of the cluster maintaining the source, materialized view, index, or sink. Corresponds to `mz_clusters.id`. `NULL` for other object types."),
             ("privileges", "The privileges belonging to the relation."),
@@ -8331,10 +8336,33 @@ UNION ALL
                         properties: LinkProperties::Union {
                             discriminator_column: None,
                             discriminator_value: None,
-                            note: Some(
-                                "mz_objects includes all relations plus indexes, connections, secrets, types, functions",
-                            ),
+                            note: Some("covers all mz_relations rows (table, source, view, mv)"),
                         },
+                    },
+                    OntologyLink {
+                        name: "union_includes",
+                        target: "table",
+                        properties: LinkProperties::union_disc("type", "table"),
+                    },
+                    OntologyLink {
+                        name: "union_includes",
+                        target: "source",
+                        properties: LinkProperties::union_disc("type", "source"),
+                    },
+                    OntologyLink {
+                        name: "union_includes",
+                        target: "view",
+                        properties: LinkProperties::union_disc("type", "view"),
+                    },
+                    OntologyLink {
+                        name: "union_includes",
+                        target: "mv",
+                        properties: LinkProperties::union_disc("type", "materialized-view"),
+                    },
+                    OntologyLink {
+                        name: "union_includes",
+                        target: "sink",
+                        properties: LinkProperties::union_disc("type", "sink"),
                     },
                     OntologyLink {
                         name: "union_includes",
@@ -8348,6 +8376,16 @@ UNION ALL
                     },
                     OntologyLink {
                         name: "union_includes",
+                        target: "type",
+                        properties: LinkProperties::union_disc("type", "type"),
+                    },
+                    OntologyLink {
+                        name: "union_includes",
+                        target: "function",
+                        properties: LinkProperties::union_disc("type", "function"),
+                    },
+                    OntologyLink {
+                        name: "union_includes",
                         target: "secret",
                         properties: LinkProperties::union_disc("type", "secret"),
                     },
@@ -8355,8 +8393,8 @@ UNION ALL
                         name: "maps_to_global_id",
                         target: "object",
                         properties: LinkProperties::MapsTo {
-                            source_column: None,
-                            target_column: None,
+                            source_column: "id",
+                            target_column: "global_id",
                             via: Some("mz_internal.mz_object_global_ids"),
                             from_type: Some(mz_repr::SemanticType::CatalogItemId),
                             to_type: Some(mz_repr::SemanticType::GlobalId),
@@ -8364,6 +8402,25 @@ UNION ALL
                                 "A CatalogItemId (SQL layer) maps to one or more GlobalIds (runtime layer).",
                             ),
                         },
+                    },
+                    OntologyLink {
+                        name: "in_schema",
+                        target: "schema",
+                        properties: LinkProperties::fk("schema_id", "id", Cardinality::ManyToOne),
+                    },
+                    OntologyLink {
+                        name: "owned_by",
+                        target: "role",
+                        properties: LinkProperties::fk("owner_id", "id", Cardinality::ManyToOne),
+                    },
+                    OntologyLink {
+                        name: "on_cluster",
+                        target: "cluster",
+                        properties: LinkProperties::fk_nullable(
+                            "cluster_id",
+                            "id",
+                            Cardinality::ManyToOne,
+                        ),
                     },
                 ]
             },
@@ -8400,7 +8457,7 @@ pub static MZ_OBJECT_FULLY_QUALIFIED_NAMES: LazyLock<BuiltinView> = LazyLock::ne
         ("name", "The name of the object."),
         (
             "object_type",
-            "The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.",
+            "The type of the object: one of `table`, `source`, `view`, `materialized-view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.",
         ),
         (
             "schema_id",
@@ -8501,8 +8558,8 @@ pub static MZ_OBJECT_GLOBAL_IDS: LazyLock<BuiltinTable> = LazyLock::new(|| Built
                 name: "has_global_id",
                 target: "object",
                 properties: LinkProperties::MapsTo {
-                    source_column: Some("id"),
-                    target_column: Some("id"),
+                    source_column: "id",
+                    target_column: "id",
                     via: None,
                     from_type: Some(mz_repr::SemanticType::CatalogItemId),
                     to_type: Some(mz_repr::SemanticType::GlobalId),
@@ -8534,7 +8591,7 @@ pub static MZ_OBJECT_LIFETIMES: LazyLock<BuiltinView> = LazyLock::new(|| Builtin
         ("previous_id", "The object's previous ID, if one exists."),
         (
             "object_type",
-            "The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.",
+            "The type of the object: one of `table`, `source`, `view`, `materialized-view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.",
         ),
         (
             "event_type",
@@ -8607,7 +8664,7 @@ pub static MZ_OBJECT_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinVi
         ),
         (
             "object_type",
-            "The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.",
+            "The type of the object: one of `table`, `source`, `view`, `materialized-view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.",
         ),
         (
             "created_at",
@@ -8814,8 +8871,8 @@ WHERE worker_id = 0::uint8",
                 name: "channel_in_dataflow",
                 target: "dataflow",
                 properties: LinkProperties::MapsTo {
-                    source_column: None,
-                    target_column: None,
+                    source_column: "from_index",
+                    target_column: "id",
                     via: Some("mz_introspection.mz_dataflow_operator_dataflows"),
                     from_type: None,
                     to_type: None,
@@ -9144,8 +9201,8 @@ WHERE worker_id = 0::uint8",
                     name: "introspection_uses_global_id",
                     target: "object_global_id",
                     properties: LinkProperties::MapsTo {
-                        source_column: None,
-                        target_column: None,
+                        source_column: "export_id",
+                        target_column: "global_id",
                         via: None,
                         from_type: None,
                         to_type: None,
@@ -15618,6 +15675,7 @@ JOIN mz_catalog.mz_relations r ON (r.id = d.referenced_object_id)",
                         source_column: "object_id",
                         target_column: "id",
                         source_id_type: Some(mz_repr::SemanticType::CatalogItemId),
+                        requires_mapping: None,
                     },
                 },
                 OntologyLink {
@@ -18097,10 +18155,7 @@ mod tests {
                     LinkProperties::ForeignKey { source_column, .. } => Some(*source_column),
                     LinkProperties::Measures { source_column, .. } => Some(*source_column),
                     LinkProperties::DependsOn { source_column, .. } => Some(*source_column),
-                    LinkProperties::MapsTo {
-                        source_column: Some(sc),
-                        ..
-                    } => Some(*sc),
+                    LinkProperties::MapsTo { source_column, .. } => Some(*source_column),
                     _ => None,
                 })
                 .collect();
@@ -18174,10 +18229,7 @@ mod tests {
                     LinkProperties::ForeignKey { source_column, .. } => Some(*source_column),
                     LinkProperties::Measures { source_column, .. } => Some(*source_column),
                     LinkProperties::DependsOn { source_column, .. } => Some(*source_column),
-                    LinkProperties::MapsTo {
-                        source_column: Some(sc),
-                        ..
-                    } => Some(*sc),
+                    LinkProperties::MapsTo { source_column, .. } => Some(*source_column),
                     _ => None,
                 };
                 let Some(col) = source_col else { continue };
@@ -18284,26 +18336,37 @@ mod tests {
             ),
             r#"{"kind":"measures","source_column":"object_id","target_column":"id","metric":"wallclock_lag","source_id_type":"GlobalId","requires_mapping":"mz_internal.mz_object_global_ids"}"#,
         );
-        // DependsOn
+        // DependsOn — with mapping
+        check(
+            LinkProperties::DependsOn {
+                source_column: "object_id",
+                target_column: "id",
+                source_id_type: Some(mz_repr::SemanticType::GlobalId),
+                requires_mapping: Some("mz_internal.mz_object_global_ids"),
+            },
+            r#"{"kind":"depends_on","source_column":"object_id","target_column":"id","source_id_type":"GlobalId","requires_mapping":"mz_internal.mz_object_global_ids"}"#,
+        );
+        // DependsOn — direct (CatalogItemId, no mapping)
         check(
             LinkProperties::DependsOn {
                 source_column: "object_id",
                 target_column: "id",
                 source_id_type: Some(mz_repr::SemanticType::CatalogItemId),
+                requires_mapping: None,
             },
             r#"{"kind":"depends_on","source_column":"object_id","target_column":"id","source_id_type":"CatalogItemId"}"#,
         );
         // MapsTo — via + from_type + to_type
         check(
             LinkProperties::MapsTo {
-                source_column: None,
-                target_column: None,
+                source_column: "id",
+                target_column: "global_id",
                 via: Some("mz_internal.mz_object_global_ids"),
                 from_type: Some(mz_repr::SemanticType::CatalogItemId),
                 to_type: Some(mz_repr::SemanticType::GlobalId),
                 note: None,
             },
-            r#"{"kind":"maps_to","via":"mz_internal.mz_object_global_ids","from_type":"CatalogItemId","to_type":"GlobalId"}"#,
+            r#"{"kind":"maps_to","source_column":"id","target_column":"global_id","via":"mz_internal.mz_object_global_ids","from_type":"CatalogItemId","to_type":"GlobalId"}"#,
         );
     }
 }
