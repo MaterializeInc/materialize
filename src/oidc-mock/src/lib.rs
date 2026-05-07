@@ -96,10 +96,7 @@ pub struct GenerateJwtOptions<'a> {
     /// Audience claim. If None, uses empty array.
     /// Use `AudClaim::Single` for a single string or `AudClaim::Multiple` for an array.
     pub aud: Option<AudClaim>,
-    /// Additional claims as string values.
-    pub unknown_claims: Option<BTreeMap<String, String>>,
     /// Additional claims as arbitrary JSON values (e.g., arrays for group claims).
-    /// These take precedence over `unknown_claims` for the same key.
     pub extra_claims: Option<BTreeMap<String, serde_json::Value>>,
 }
 
@@ -202,15 +199,11 @@ impl OidcMockServer {
         let now_secs = i64::try_from(now_ms / 1000).expect("timestamp must fit in i64");
         let sub_claim_map = BTreeMap::from([("sub".to_string(), sub.to_string())]);
 
-        let mut unknown_claims: BTreeMap<String, serde_json::Value> = opts
-            .unknown_claims
-            .unwrap_or_default()
+        let mut unknown_claims: BTreeMap<String, serde_json::Value> = sub_claim_map
             .into_iter()
-            .chain(sub_claim_map)
             .map(|(k, v)| (k, serde_json::Value::String(v)))
             .collect();
 
-        // Merge extra_claims (arbitrary JSON values), overriding string values.
         if let Some(extra) = opts.extra_claims {
             unknown_claims.extend(extra);
         }

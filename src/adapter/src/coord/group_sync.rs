@@ -162,6 +162,9 @@ impl Coordinator {
         groups: &[String],
         notices: &mut Vec<AdapterNotice>,
     ) -> Result<(), AdapterError> {
+        // Build a lowercase name → role map once to avoid O(n) catalog scan per group.
+        let role_map = self.catalog().roles_by_lowercase_name();
+
         // Resolve group names to role IDs (case-insensitive).
         let mut target_role_ids = BTreeSet::new();
         for group in groups {
@@ -177,7 +180,7 @@ impl Coordinator {
                 continue;
             }
 
-            match self.catalog().try_get_role_by_name_case_insensitive(group) {
+            match role_map.get(&group.to_lowercase()).copied() {
                 Some(role) => {
                     // Skip if the group resolves to the user's own role. This
                     // happens when an IdP echoes the username/email into the

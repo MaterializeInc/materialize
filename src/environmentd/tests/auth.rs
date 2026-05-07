@@ -2048,9 +2048,9 @@ async fn test_auth_oidc_authentication_claim_switch() {
     let token = oidc_server.generate_jwt(
         sub_user,
         GenerateJwtOptions {
-            unknown_claims: Some(BTreeMap::from([(
+            extra_claims: Some(BTreeMap::from([(
                 "email".to_string(),
-                email_user.to_string(),
+                serde_json::Value::String(email_user.to_string()),
             )])),
             ..Default::default()
         },
