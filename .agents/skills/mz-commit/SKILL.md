@@ -1,11 +1,9 @@
 ---
 name: mz-commit
 description: >
-  This skill should be used when the user wants to "commit", "prepare a commit",
-  "create a PR", "push", "open a pull request", or mentions committing,
-  pre-commit checks, or pull requests in the Materialize repository. Use this
-  skill even if the user just says "ship it" or "ready to merge" without being
-  specific. Note: for reviewing code, use mz-pr-review instead.
+  Trigger: "commit", "prepare commit", "create PR", "push", "open pull request",
+  or mentions committing, pre-commit checks, pull requests in Materialize. Also
+  "ship it", "ready to merge". For code review use mz-pr-review.
 ---
 
 # Committing in Materialize

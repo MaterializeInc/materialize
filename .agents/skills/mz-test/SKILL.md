@@ -1,16 +1,14 @@
 ---
 name: mz-test
 description: >
-  General guide for running tests and choosing the right test framework in
-  Materialize. Trigger when the user wants to "run tests", "run testdrive",
-  "run sqllogictest", "run mzcompose", "run cargo test", "run pgtest",
-  "rewrite test results", "add a test", "reproduce a bug", "write a regression
-  test", or mentions testing, testdrive, sqllogictest, mzcompose, pgtest,
-  cargo test, nextest, flaky tests, or test failures. Use this skill even if the
-  user just says "test this" or "how do I verify this works" without naming a
-  specific framework. For deep guidance on specific frameworks, see the dedicated
-  skills: mz-platform-checks (upgrade/restart survival), mz-parallel-workload
-  (concurrent stress testing), and mz-limits-test (scaling to many objects).
+  Run tests + pick test framework in Materialize. Trigger: "run tests",
+  "run testdrive", "run sqllogictest", "run mzcompose", "run cargo test",
+  "run pgtest", "rewrite test results", "add a test", "reproduce a bug",
+  "write a regression test", or mentions testing, testdrive, sqllogictest,
+  mzcompose, pgtest, cargo test, nextest, flaky tests, test failures. Also
+  "test this" or "how do I verify this works". Specifics: mz-platform-checks
+  (upgrade/restart survival), mz-parallel-workload (concurrent stress),
+  mz-limits-test (many objects).
 ---
 
 # Testing Materialize

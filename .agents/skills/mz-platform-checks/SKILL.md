@@ -1,11 +1,10 @@
 ---
 name: mz-platform-checks
 description: >
-  This skill should be used when the user wants to create, modify, or debug a
-  platform check. Trigger when the user mentions "platform check", "platform-checks",
-  "upgrade check", "restart check", or wants to write a Check class that tests
-  feature survival across restarts/upgrades. Also trigger when the user edits files
-  in misc/python/materialize/checks/all_checks/.
+  Create/modify/debug platform check. Trigger: "platform check",
+  "platform-checks", "upgrade check", "restart check", or writing Check class
+  testing feature survival across restarts/upgrades. Also edits in
+  misc/python/materialize/checks/all_checks/.
 ---
 
 # Platform Checks
