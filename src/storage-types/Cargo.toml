@@ -28,6 +28,7 @@ columnation.workspace = true
 dec.workspace = true
 derivative.workspace = true
 differential-dataflow.workspace = true
+gcp_auth.workspace = true
 hex.workspace = true
 http.workspace = true
 itertools.workspace = true

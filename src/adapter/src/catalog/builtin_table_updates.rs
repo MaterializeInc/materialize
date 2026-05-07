@@ -1039,6 +1039,7 @@ impl CatalogState {
                 updates.push(self.pack_ssh_tunnel_connection_update(id, key_1, key_2, diff));
             }
             ConnectionDetails::Csr(_)
+            | ConnectionDetails::Gcp(_)
             | ConnectionDetails::Postgres(_)
             | ConnectionDetails::MySql(_)
             | ConnectionDetails::SqlServer(_)

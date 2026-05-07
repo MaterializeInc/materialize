@@ -2777,6 +2777,7 @@ impl ConnectionResolver for CatalogState {
             Ssh(conn) => Ssh(conn),
             Aws(conn) => Aws(conn),
             AwsPrivatelink(conn) => AwsPrivatelink(conn),
+            Gcp(conn) => Gcp(conn),
             MySql(conn) => MySql(conn.into_inline_connection(self)),
             SqlServer(conn) => SqlServer(conn.into_inline_connection(self)),
             IcebergCatalog(conn) => IcebergCatalog(conn.into_inline_connection(self)),
