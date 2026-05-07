@@ -976,7 +976,7 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
     }
 }
 
-impl<'scope, T: RenderTimestamp> Context<'scope, T> {
+impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
     /// Renders a non-recursive plan to a differential dataflow, producing the collection of
     /// results.
     ///
@@ -1472,10 +1472,15 @@ pub trait RenderTimestamp: MzTimestamp + Refines<mz_repr::Timestamp> {
     /// Steps the timestamp back so that logical compaction to the output will
     /// not conflate `self` with any historical times.
     fn step_back(&self) -> Self;
-    /// Apply temporal bucketing to a stream if the timestamp type supports it.
-    ///
-    /// Temporal bucketing requires a total order on timestamps. For timestamp
-    /// types without a total order (e.g., in iterative scopes), this is a no-op.
+}
+
+/// Apply temporal bucketing to a stream when the timestamp type supports it.
+///
+/// Sibling to [`RenderTimestamp`]: bucketing is an arrangement-time concern, not a
+/// general property of a render timestamp, so the dispatch lives in its own trait.
+/// Total-ordered timestamps perform real bucketing; partially-ordered timestamps
+/// (e.g. `Product<…>` in iterative scopes) implement this as a no-op.
+pub trait MaybeBucketByTime: Timestamp {
     fn maybe_apply_temporal_bucketing<'scope>(
         stream: StreamVec<'scope, Self, (Row, Self, Diff)>,
         as_of: Antichain<mz_repr::Timestamp>,
@@ -1502,6 +1507,9 @@ impl RenderTimestamp for mz_repr::Timestamp {
     fn step_back(&self) -> Self {
         self.saturating_sub(1)
     }
+}
+
+impl MaybeBucketByTime for mz_repr::Timestamp {
     fn maybe_apply_temporal_bucketing<'scope>(
         stream: StreamVec<'scope, Self, (Row, Self, Diff)>,
         as_of: Antichain<mz_repr::Timestamp>,
@@ -1540,6 +1548,9 @@ impl RenderTimestamp for Product<mz_repr::Timestamp, PointStamp<u64>> {
         }
         Product::new(self.outer.saturating_sub(1), PointStamp::new(vec))
     }
+}
+
+impl MaybeBucketByTime for Product<mz_repr::Timestamp, PointStamp<u64>> {
     fn maybe_apply_temporal_bucketing<'scope>(
         stream: StreamVec<'scope, Self, (Row, Self, Diff)>,
         _as_of: Antichain<mz_repr::Timestamp>,
