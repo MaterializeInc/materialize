@@ -988,7 +988,10 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
     }
 }
 
-impl<'scope, T: RenderTimestamp> Context<'scope, T> {
+impl<'scope, T> Context<'scope, T>
+where
+    T: RenderTimestamp + crate::extensions::arrange::MaybeTemporalRowRowArrange,
+{
     /// Renders a non-recursive plan to a differential dataflow, producing the collection of
     /// results.
     ///

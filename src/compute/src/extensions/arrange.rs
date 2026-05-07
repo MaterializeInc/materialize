@@ -11,24 +11,31 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use differential_dataflow::difference::Semigroup;
+use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::arrange_core;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::implementations::spine_fueled::Spine;
 use differential_dataflow::trace::{Batch, Batcher, Builder, Trace, TraceReader};
 use differential_dataflow::{Collection, Data, ExchangeData, Hashable, VecCollection};
+use mz_repr::{Diff, Row};
+use mz_timely_util::columnar::builder::ColumnBuilder;
+use mz_timely_util::columnar::{Col2ValBatcher, Col2ValTemporalBatcher, Column, columnar_exchange};
 use timely::Container;
 use timely::dataflow::Stream;
-use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
+use timely::dataflow::channels::pact::{Exchange, ExchangeCore, ParallelizationContract, Pipeline};
 use timely::dataflow::operators::Operator;
+use timely::order::Product;
 use timely::progress::Timestamp;
 
 use crate::logging::compute::{
     ArrangementHeapAllocations, ArrangementHeapCapacity, ArrangementHeapSize,
     ArrangementHeapSizeOperator, ComputeEvent, ComputeEventBuilder,
 };
+use crate::row_spine::RowRowBuilder;
 use crate::typedefs::{
-    KeyAgent, KeyValAgent, MzArrangeData, MzData, MzTimestamp, RowAgent, RowRowAgent, RowValAgent,
+    KeyAgent, KeyValAgent, MzArrangeData, MzData, MzTimestamp, RowAgent, RowRowAgent, RowRowSpine,
+    RowValAgent,
 };
 
 /// Extension trait to arrange data.
@@ -424,5 +431,75 @@ where
             batch.storage.upds.diffs.heap_size(&mut callback);
             (size, capacity, allocations)
         })
+    }
+}
+
+/// Per-`RenderTimestamp` dispatch trait for the row-row arrangement built by
+/// [`crate::render::context::CollectionBundle::ensure_collections`].
+///
+/// Two impls exist, one per concrete `RenderTimestamp`. For
+/// [`mz_repr::Timestamp`] the dispatch picks
+/// [`Col2ValTemporalBatcher`] when temporal bucketing is enabled, else
+/// falls through to the plain [`Col2ValBatcher`]. For
+/// `Product<mz_repr::Timestamp, PointStamp<u64>>` (iterative scopes) it
+/// always uses the plain batcher because the timestamp is partially
+/// ordered and not bucketable.
+///
+/// This trait is intentionally **not** a supertrait of
+/// `crate::render::RenderTimestamp` so that the bucketing precondition does
+/// not leak into the generic timestamp interface.
+pub trait MaybeTemporalRowRowArrange: MzTimestamp {
+    /// Arrange a row-row stream into a [`RowRowAgent`], possibly via the
+    /// temporal-bucketing batcher.
+    fn arrange_row_row<'scope>(
+        stream: Stream<'scope, Self, Column<((Row, Row), Self, Diff)>>,
+        name: &str,
+        bucketing_enabled: bool,
+    ) -> Arranged<'scope, RowRowAgent<Self, Diff>>;
+}
+
+impl MaybeTemporalRowRowArrange for mz_repr::Timestamp {
+    fn arrange_row_row<'scope>(
+        stream: Stream<'scope, Self, Column<((Row, Row), Self, Diff)>>,
+        name: &str,
+        bucketing_enabled: bool,
+    ) -> Arranged<'scope, RowRowAgent<Self, Diff>> {
+        let pact = ExchangeCore::<ColumnBuilder<_>, _>::new_core(
+            columnar_exchange::<Row, Row, Self, Diff>,
+        );
+        if bucketing_enabled {
+            stream.mz_arrange_core::<
+                _,
+                Col2ValTemporalBatcher<Row, Row, Self, Diff>,
+                RowRowBuilder<Self, Diff>,
+                RowRowSpine<Self, Diff>,
+            >(pact, name)
+        } else {
+            stream.mz_arrange_core::<
+                _,
+                Col2ValBatcher<Row, Row, Self, Diff>,
+                RowRowBuilder<Self, Diff>,
+                RowRowSpine<Self, Diff>,
+            >(pact, name)
+        }
+    }
+}
+
+impl MaybeTemporalRowRowArrange for Product<mz_repr::Timestamp, PointStamp<u64>> {
+    fn arrange_row_row<'scope>(
+        stream: Stream<'scope, Self, Column<((Row, Row), Self, Diff)>>,
+        name: &str,
+        _bucketing_enabled: bool,
+    ) -> Arranged<'scope, RowRowAgent<Self, Diff>> {
+        // Iterative scope: timestamp is partially ordered, no bucketing.
+        let pact = ExchangeCore::<ColumnBuilder<_>, _>::new_core(
+            columnar_exchange::<Row, Row, Self, Diff>,
+        );
+        stream.mz_arrange_core::<
+            _,
+            Col2ValBatcher<Row, Row, Self, Diff>,
+            RowRowBuilder<Self, Diff>,
+            RowRowSpine<Self, Diff>,
+        >(pact, name)
     }
 }

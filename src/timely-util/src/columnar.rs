@@ -23,19 +23,20 @@ pub mod consolidate;
 
 use std::hash::Hash;
 
+use crate::merge_batcher::MergeBatcher;
 use columnar::Borrow;
 use columnar::bytes::indexed;
 use columnar::common::IterOwn;
 use columnar::{Columnar, Ref};
 use columnar::{FromBytes, Index, Len};
 use differential_dataflow::Hashable;
-use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use timely::Accountable;
 use timely::bytes::arc::Bytes;
 use timely::container::{DrainContainer, PushInto};
 use timely::dataflow::channels::ContainerBytes;
 
 use crate::columnation::{ColInternalMerger, ColumnationStack};
+use crate::merge_batcher::TemporalBucketingMergeBatcher;
 
 /// A batcher for columnar storage.
 pub type Col2ValBatcher<K, V, T, R> = MergeBatcher<
@@ -45,6 +46,17 @@ pub type Col2ValBatcher<K, V, T, R> = MergeBatcher<
 >;
 /// A batcher for columnar storage with unit values.
 pub type Col2KeyBatcher<K, T, R> = Col2ValBatcher<K, (), T, R>;
+
+/// A temporal-bucketing batcher for columnar storage.
+///
+/// Same chunker and merger as [`Col2ValBatcher`], but routes chunks through
+/// a [`TemporalBucketingMergeBatcher`] so that the arrangement spine sees
+/// fewer, bucket-aligned batches.
+pub type Col2ValTemporalBatcher<K, V, T, R> = TemporalBucketingMergeBatcher<
+    Column<((K, V), T, R)>,
+    batcher::Chunker<ColumnationStack<((K, V), T, R)>>,
+    ColInternalMerger<(K, V), T, R>,
+>;
 
 /// A container based on a columnar store, encoded in aligned bytes.
 ///
