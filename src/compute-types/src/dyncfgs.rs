@@ -60,7 +60,7 @@ pub const CORRECTION_V2_CHUNK_SIZE: Config<usize> = Config::new(
 );
 
 /// Whether to enable temporal bucketing in compute.
-pub const ENABLE_TEMPORAL_BUCKETING: Config<bool> = Config::new(
+pub const ENABLE_COMPUTE_TEMPORAL_BUCKETING: Config<bool> = Config::new(
     "enable_compute_temporal_bucketing",
     false,
     "Whether to enable temporal bucketing in compute.",
@@ -385,7 +385,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_CORRECTION_V2)
         .add(&CORRECTION_V2_CHAIN_PROPORTIONALITY)
         .add(&CORRECTION_V2_CHUNK_SIZE)
-        .add(&ENABLE_TEMPORAL_BUCKETING)
+        .add(&ENABLE_COMPUTE_TEMPORAL_BUCKETING)
         .add(&TEMPORAL_BUCKETING_SUMMARY)
         .add(&LINEAR_JOIN_YIELDING)
         .add(&ENABLE_LGALLOC)
