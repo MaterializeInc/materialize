@@ -17,8 +17,9 @@ use differential_dataflow::lattice::Lattice;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::plan::Plan;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection};
+use mz_expr::MirRelationExpr;
 use mz_ore::soft_assert_or_log;
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::{GlobalId, RelationDesc, Timestamp};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::{HirToMirConfig, SubscribeFrom, SubscribePlan};
 use mz_transform::TransformCtx;
@@ -113,6 +114,86 @@ impl Optimizer {
 
     pub fn sink_id(&self) -> GlobalId {
         self.sink_id
+    }
+
+    /// Optimize a subscribe dataflow starting from a pre-lowered MIR
+    /// expression. Used by the frontend read-then-write path which applies
+    /// mutation transformations in MIR before optimization.
+    pub fn optimize_mir(
+        &mut self,
+        expr: MirRelationExpr,
+        desc: RelationDesc,
+    ) -> Result<GlobalMirPlan<Unresolved>, OptimizerError> {
+        let time = Instant::now();
+
+        let mut df_builder = {
+            let compute = self.compute_instance.clone();
+            DataflowBuilder::new(&*self.catalog, compute).with_config(&self.config)
+        };
+        let mut df_desc = MirDataflowDescription::new(self.debug_name.clone());
+        let mut df_meta = DataflowMetainfo::default();
+
+        // MIR ⇒ MIR optimization (local)
+        let mut transform_ctx = TransformCtx::local(
+            &self.config.features,
+            &self.typecheck_ctx,
+            &mut df_meta,
+            Some(&mut self.metrics),
+            Some(self.view_id),
+        );
+        let expr = optimize_mir_local(expr, &mut transform_ctx)?;
+
+        df_builder.import_view_into_dataflow(
+            &self.view_id,
+            &expr,
+            &mut df_desc,
+            &self.config.features,
+        )?;
+        df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
+
+        let sink_description = ComputeSinkDesc {
+            from: self.view_id,
+            from_desc: desc,
+            connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection {
+                // Read-then-write subscribes use raw diffs.
+                output: vec![],
+            }),
+            with_snapshot: self.with_snapshot,
+            up_to: self.up_to.map(Antichain::from_elem).unwrap_or_default(),
+            non_null_assertions: vec![],
+            refresh_schedule: None,
+        };
+        df_desc.export_sink(self.sink_id, sink_description);
+
+        // Prepare expressions in the assembled dataflow.
+        let style = ExprPrepMaintained;
+        df_desc.visit_children(
+            |r| style.prep_relation_expr(r),
+            |s| style.prep_scalar_expr(s),
+        )?;
+
+        // Construct TransformCtx for global optimization.
+        let mut transform_ctx = TransformCtx::global(
+            &df_builder,
+            &mz_transform::EmptyStatisticsOracle,
+            &self.config.features,
+            &self.typecheck_ctx,
+            &mut df_meta,
+            Some(&mut self.metrics),
+        );
+        mz_transform::optimize_dataflow(&mut df_desc, &mut transform_ctx, false)?;
+
+        if self.config.mode == OptimizeMode::Explain {
+            trace_plan!(at: "global", &df_meta.used_indexes(&df_desc));
+        }
+
+        self.duration += time.elapsed();
+
+        Ok(GlobalMirPlan {
+            df_desc,
+            df_meta,
+            phantom: PhantomData::<Unresolved>,
+        })
     }
 }
 

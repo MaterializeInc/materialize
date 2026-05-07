@@ -245,6 +245,14 @@ pub const ARRANGEMENT_SIZE_HISTORY_RETENTION_PERIOD: Config<Duration> = Config::
     "How long to retain rows in mz_internal.mz_object_arrangement_size_history.",
 );
 
+pub const FRONTEND_READ_THEN_WRITE: Config<bool> = Config::new(
+    "enable_adapter_frontend_occ_read_then_write",
+    // WIP: true for testing in ci, Should be false before merging.
+    true,
+    "Use frontend sequencing (with optimistic concurrency control) for \
+     DELETE, UPDATE, and INSERT operations.",
+);
+
 /// Adds the full set of all adapter `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -280,4 +288,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&CONSOLE_OIDC_SCOPES)
         .add(&ARRANGEMENT_SIZE_HISTORY_COLLECTION_INTERVAL)
         .add(&ARRANGEMENT_SIZE_HISTORY_RETENTION_PERIOD)
+        .add(&FRONTEND_READ_THEN_WRITE)
 }

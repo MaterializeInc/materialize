@@ -67,6 +67,23 @@ impl Optimizer<ExprPrepNoop> {
 
 impl<S> Optimizer<S> {
     /// Creates an optimizer instance that takes an [`ExprPrep`] to handle
+    /// unmaterializable functions while preserving the usual constant-folding
+    /// size limit.
+    pub fn new_with_prep(
+        config: OptimizerConfig,
+        metrics: Option<OptimizerMetrics>,
+        expr_prep_style: S,
+    ) -> Optimizer<S> {
+        Self {
+            typecheck_ctx: empty_typechecking_context(),
+            config,
+            metrics,
+            expr_prep_style,
+            fold_constants_limit: true,
+        }
+    }
+
+    /// Creates an optimizer instance that takes an [`ExprPrep`] to handle
     /// unmaterializable functions. Additionally, this instance calls constant
     /// folding without a size limit.
     pub fn new_with_prep_no_limit(
