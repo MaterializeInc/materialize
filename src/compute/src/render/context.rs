@@ -20,7 +20,7 @@ use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, Data, VecCollection};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::{
-    ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION, ENABLE_TEMPORAL_BUCKETING,
+    ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION, ENABLE_COMPUTE_TEMPORAL_BUCKETING,
     TEMPORAL_BUCKETING_SUMMARY,
 };
 use mz_compute_types::plan::{ArrangementStrategy, AvailableCollections};
@@ -786,7 +786,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             // must be formed from scratch (e.g., from an arrangement via as_collection_core).
             let oks = if will_create_arrangement
                 && matches!(strategy, ArrangementStrategy::TemporalBucketing)
-                && ENABLE_TEMPORAL_BUCKETING.get(config_set)
+                && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(config_set)
             {
                 let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
                     .get(config_set)
@@ -814,7 +814,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 // → ArrangeBy flows.
                 let oks = if !bucketed
                     && matches!(strategy, ArrangementStrategy::TemporalBucketing)
-                    && ENABLE_TEMPORAL_BUCKETING.get(config_set)
+                    && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(config_set)
                 {
                     let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
                         .get(config_set)

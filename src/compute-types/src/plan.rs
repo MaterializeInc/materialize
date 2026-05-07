@@ -125,7 +125,7 @@ pub enum ArrangementStrategy {
     Direct,
     /// Insert temporal bucketing in front of the arrangement, to delay future-stamped
     /// updates (e.g., from `mz_now()` MFPs) until their bucket boundary releases them.
-    /// Honoured only when `ENABLE_TEMPORAL_BUCKETING` is set; otherwise behaves like
+    /// Honoured only when `ENABLE_COMPUTE_TEMPORAL_BUCKETING` is set; otherwise behaves like
     /// `Direct`.
     TemporalBucketing,
 }
