@@ -30,7 +30,8 @@ export const snapshotting = (connector: ConnectorStatusInfo) => {
   const supportsSnapshotting =
     connector.type === "postgres" ||
     connector.type === "kafka" ||
-    connector.type === "mysql";
+    connector.type === "mysql" ||
+    connector.type === "sql-server";
   return (
     supportsSnapshotting &&
     "snapshotCommitted" in connector &&
