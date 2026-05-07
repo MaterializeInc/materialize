@@ -7084,6 +7084,7 @@ pub fn plan_alter_connection(
     let connection_type = match connection {
         Connection::Aws(_) => CreateConnectionType::Aws,
         Connection::AwsPrivatelink(_) => CreateConnectionType::AwsPrivatelink,
+        Connection::Gcp(_) => CreateConnectionType::Gcp,
         Connection::Kafka(_) => CreateConnectionType::Kafka,
         Connection::Csr(_) => CreateConnectionType::Csr,
         Connection::GlueSchemaRegistry(_) => CreateConnectionType::GlueSchemaRegistry,
