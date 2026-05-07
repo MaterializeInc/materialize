@@ -57,6 +57,7 @@ use mz_sql_parser::ast::{
 };
 use mz_ssh_util::keys::SshKeyPair;
 use mz_storage_types::connections::aws::AwsConnection;
+use mz_storage_types::connections::gcp::GcpConnection;
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::{
     AwsPrivatelinkConnection, CsrConnection, IcebergCatalogConnection, KafkaConnection,
@@ -1676,6 +1677,7 @@ pub enum ConnectionDetails {
     },
     Aws(AwsConnection),
     AwsPrivatelink(AwsPrivatelinkConnection),
+    Gcp(GcpConnection),
     MySql(MySqlConnection<ReferencedConnection>),
     SqlServer(SqlServerConnectionDetails<ReferencedConnection>),
     IcebergCatalog(IcebergCatalogConnection<ReferencedConnection>),
@@ -1698,6 +1700,7 @@ impl ConnectionDetails {
             ConnectionDetails::AwsPrivatelink(c) => {
                 mz_storage_types::connections::Connection::AwsPrivatelink(c.clone())
             }
+            ConnectionDetails::Gcp(c) => mz_storage_types::connections::Connection::Gcp(c.clone()),
             ConnectionDetails::MySql(c) => {
                 mz_storage_types::connections::Connection::MySql(c.clone())
             }

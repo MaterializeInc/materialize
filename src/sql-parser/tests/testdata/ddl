@@ -562,6 +562,13 @@ CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (SERVICE NAME = 'com.amazon
 CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("privatelinkconn")]), connection_type: AwsPrivatelink, if_not_exists: false, values: [ConnectionOption { name: ServiceName, value: Some(Value(String("com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc"))) }, ConnectionOption { name: AvailabilityZones, value: Some(Sequence([Value(String("use1-az1")), Value(String("use1-az4"))])) }], with_options: [] })
 
 parse-statement
+CREATE CONNECTION gcpconn TO GCP (SERVICE ACCOUNT KEY = SECRET keyfile)
+----
+CREATE CONNECTION gcpconn TO GCP (SERVICE ACCOUNT KEY = SECRET keyfile)
+=>
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("gcpconn")]), connection_type: Gcp, if_not_exists: false, values: [ConnectionOption { name: ServiceAccountKey, value: Some(Secret(Name(UnresolvedItemName([Ident("keyfile")])))) }], with_options: [] })
+
+parse-statement
 CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc', AVAILABILITY ZONES ('use1-az1', 'use1-az4')) WITH (VALIDATE = FALSE)
 ----
 CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (SERVICE NAME = 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc', AVAILABILITY ZONES = ('use1-az1', 'use1-az4')) WITH (VALIDATE = false)

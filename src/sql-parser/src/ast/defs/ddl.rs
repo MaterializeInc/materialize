@@ -791,6 +791,7 @@ pub enum ConnectionOptionName {
     Scope,
     SecretAccessKey,
     SecurityProtocol,
+    ServiceAccountKey,
     ServiceName,
     SshTunnel,
     SslCertificate,
@@ -834,6 +835,7 @@ impl AstDisplay for ConnectionOptionName {
             ConnectionOptionName::Scope => "SCOPE",
             ConnectionOptionName::SecurityProtocol => "SECURITY PROTOCOL",
             ConnectionOptionName::SecretAccessKey => "SECRET ACCESS KEY",
+            ConnectionOptionName::ServiceAccountKey => "SERVICE ACCOUNT KEY",
             ConnectionOptionName::ServiceName => "SERVICE NAME",
             ConnectionOptionName::SshTunnel => "SSH TUNNEL",
             ConnectionOptionName::SslCertificate => "SSL CERTIFICATE",
@@ -883,6 +885,7 @@ impl WithOptionName for ConnectionOptionName {
             | ConnectionOptionName::Scope
             | ConnectionOptionName::SecurityProtocol
             | ConnectionOptionName::SecretAccessKey
+            | ConnectionOptionName::ServiceAccountKey
             | ConnectionOptionName::ServiceName
             | ConnectionOptionName::SshTunnel
             | ConnectionOptionName::SslCertificate
@@ -911,6 +914,7 @@ impl_display_t!(ConnectionOption);
 pub enum CreateConnectionType {
     Aws,
     AwsPrivatelink,
+    Gcp,
     Kafka,
     Csr,
     Postgres,
@@ -928,6 +932,7 @@ impl CreateConnectionType {
             Self::Postgres => "postgres",
             Self::Aws => "aws",
             Self::AwsPrivatelink => "aws-privatelink",
+            Self::Gcp => "gcp",
             Self::Ssh => "ssh-tunnel",
             Self::MySql => "mysql",
             Self::SqlServer => "sql-server",
@@ -953,6 +958,9 @@ impl AstDisplay for CreateConnectionType {
             }
             Self::AwsPrivatelink => {
                 f.write_str("AWS PRIVATELINK");
+            }
+            Self::Gcp => {
+                f.write_str("GCP");
             }
             Self::Ssh => {
                 f.write_str("SSH TUNNEL");
