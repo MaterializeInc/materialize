@@ -2138,11 +2138,17 @@ impl HirRelationExpr {
     }
 
     #[deprecated = "Use a combination of `Visit` and `VisitChildren` methods."]
-    /// Visits all scalar expressions within the sub-tree of the given relation.
+    /// Visits all scalar expressions directly held by relation nodes within the sub-tree of `self`.
     ///
-    /// The `depth` argument should indicate the subquery nesting depth of the expression,
-    /// which will be incremented when entering the RHS of a join or a subquery and
-    /// presented to the supplied function `f`.
+    /// Note: this does NOT descend into subqueries that may appear inside the visited
+    /// `HirScalarExpr`s (i.e., `HirScalarExpr::Exists` / `HirScalarExpr::Select`). The closure
+    /// `f` is invoked once per top-level scalar expression attached to a relation node, and it
+    /// is the closure's responsibility to recurse into any subqueries if desired.
+    ///
+    /// The `depth` argument is just a seed: it is the value passed to `f` for scalar expressions
+    /// at the root of `self`, and it is incremented by 1 when descending into the RHS of a
+    /// `Join` node (the only place this function increments it). It does NOT control or limit
+    /// recursion; passing `0` is the usual choice.
     pub fn visit_scalar_expressions<F, E>(&self, depth: usize, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&HirScalarExpr, usize) -> Result<(), E>,
@@ -2197,6 +2203,10 @@ impl HirRelationExpr {
 
     #[deprecated = "Use a combination of `Visit` and `VisitChildren` methods."]
     /// Like `visit_scalar_expressions`, but permits mutating the expressions.
+    ///
+    /// In particular, this also does NOT descend into subqueries inside the visited scalar
+    /// expressions, and `depth` is just a seed for the value passed to `f` (see
+    /// [`HirRelationExpr::visit_scalar_expressions`]).
     pub fn visit_scalar_expressions_mut<F, E>(&mut self, depth: usize, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&mut HirScalarExpr, usize) -> Result<(), E>,
@@ -2286,6 +2296,12 @@ impl HirRelationExpr {
     /// Replaces parameter references in the expression with the corresponding datum from `params`.
     /// Additionally, it simplifies OFFSET clauses to constants after parameter binding, and checks
     /// them for non-negativity.
+    ///
+    /// This walks the entire `HirRelationExpr` tree, including subqueries nested inside scalar
+    /// expressions: `visit_scalar_expressions_mut` covers the scalar expressions held directly
+    /// by relation nodes, and the corecursive call into
+    /// [`HirScalarExpr::bind_parameters_and_simplify_offset`] (made by the closure below) is
+    /// what descends into subqueries occurring inside those scalar expressions.
     pub fn bind_parameters_and_simplify_offset(
         &mut self,
         scx: &StatementContext,
@@ -3242,6 +3258,11 @@ impl HirScalarExpr {
     /// Replaces parameter references in the expression with the corresponding datum from `params`.
     /// Additionally, it simplifies OFFSET clauses to constants after parameter binding, and checks
     /// them for non-negativity.
+    ///
+    /// This handles subqueries nested inside `self` by calling back into
+    /// [`HirRelationExpr::bind_parameters_and_simplify_offset`] on each direct subquery; that
+    /// relation-level function in turn calls back here for the scalar expressions it holds, so
+    /// the two functions corecursively cover the entire HIR tree.
     pub fn bind_parameters_and_simplify_offset(
         &mut self,
         scx: &StatementContext,
