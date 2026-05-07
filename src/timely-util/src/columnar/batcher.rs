@@ -135,6 +135,10 @@ pub struct ColumnChunker<U: Columnar> {
     ready: VecDeque<Column<U>>,
 }
 
+// Manual impl rather than `#[derive(Default)]`: the derive would synthesize
+// `impl<U: Columnar + Default>`, but `Column<U>: Default` only requires
+// `U: Columnar`, and adding a spurious `U: Default` bound would propagate
+// through every `ContainerBuilder for ColumnChunker<U>` impl.
 impl<U: Columnar> Default for ColumnChunker<U> {
     fn default() -> Self {
         Self {
@@ -659,12 +663,10 @@ where
             // current record, the entire tail can be appended to `output`
             // without per-record compares or per-leaf byte copies.
             //
-            // Two probes (one record from each side) settle this. Common
-            // case for hydration paths where chains compose pre-sorted
-            // batches with non-overlapping or tail-disjoint key ranges —
-            // skips an entire `merge_from` invocation, including its gallop
-            // bulk-copies, and replaces the byte-level extend with a
-            // `mem::replace` of the head into `output`.
+            // Two probes (one record from each side) settle this — when it
+            // fires, it skips an entire `merge_from` invocation, including
+            // its gallop bulk-copies, and replaces the byte-level extend
+            // with a `mem::replace` of the head into `output`.
             //
             // Restricted to `positions[i] == 0` so we can hand the head off
             // wholesale; partial-tail passthrough would require a 1-input
@@ -787,8 +789,15 @@ where
     }
 
     fn account(chunk: &Self::Chunk) -> (usize, usize, usize, usize) {
+        use timely::dataflow::channels::ContainerBytes;
         let records = usize::try_from(chunk.record_count()).expect("record_count is non-negative");
-        (records, 0, 0, 0)
+        // Serialized footprint stands in for both `size` and `capacity`: the
+        // chunk owns one logical allocation worth of leaf storage, and we
+        // ship/recycle the whole thing rather than tracking per-leaf
+        // capacities. Treating `size == capacity` matches how the framework
+        // accounts already-shipped chunks (no slack to absorb).
+        let bytes = chunk.length_in_bytes();
+        (records, bytes, bytes, 1)
     }
 }
 
@@ -799,18 +808,20 @@ fn empty_chunk<C: Columnar>(stash: &mut Vec<Column<C>>) -> Column<C> {
     stash.pop().unwrap_or_default()
 }
 
-/// Reset `chunk` to an empty `Typed` and push it to `stash` for reuse. The
-/// `Bytes` / `Align` arms exist for total-function safety; chunks recycled
-/// here come from the merger and chunker, both of which produce `Typed`.
+/// Reset `chunk` to an empty `Typed` and push it to `stash` for reuse.
+///
+/// Chunks recycled here come from the merger and chunker, both of which
+/// produce `Typed`; only the typed allocations are worth caching for reuse.
+/// `Bytes` / `Align` chunks have no typed-side allocation to preserve, so we
+/// simply drop them — `empty_chunk` will produce a fresh default just as
+/// cheaply, and pushing them onto `stash` would only displace useful
+/// recycled allocations.
 #[inline]
 fn recycle_chunk<C: Columnar>(mut chunk: Column<C>, stash: &mut Vec<Column<C>>) {
-    match &mut chunk {
-        Column::Typed(c) => c.clear(),
-        Column::Bytes(_) | Column::Align(_) => {
-            chunk = Column::Typed(Default::default());
-        }
+    if let Column::Typed(c) = &mut chunk {
+        c.clear();
+        stash.push(chunk);
     }
-    stash.push(chunk);
 }
 
 /// Drain remaining items from one side into `result` / `output`.

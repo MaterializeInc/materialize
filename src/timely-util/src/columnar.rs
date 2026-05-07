@@ -165,20 +165,12 @@ impl<C: Columnar> SizableContainer for Column<C> {
         // of the next 2 MiB. Aligns chunk-size choices across the two paths
         // and keeps recipients dealing with a single granularity.
         //
-        // The merger framework only ever observes `Column::Typed`; the
-        // `Bytes`/`Align` arms exist for total-function safety.
+        // Serialized chunks (`Bytes` / `Align`) have no typed builder to push
+        // into, so they're trivially "at capacity" — there's no further work
+        // they can absorb.
         match self {
             Column::Typed(c) => at_serialized_capacity(&c.borrow()),
-            Column::Bytes(b) => {
-                let words = b.len() / 8;
-                let round = (words + (SHIP_WORDS - 1)) & !(SHIP_WORDS - 1);
-                round - words < round / 10
-            }
-            Column::Align(a) => {
-                let words = a.len();
-                let round = (words + (SHIP_WORDS - 1)) & !(SHIP_WORDS - 1);
-                round - words < round / 10
-            }
+            Column::Bytes(_) | Column::Align(_) => true,
         }
     }
 
