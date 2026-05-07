@@ -15,6 +15,93 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.23.0
+*Released to Materialize Cloud: 2026-05-07* <br>
+*Released to Materialize Self-Managed: 2026-05-08* <br>
+
+This release introduces enhanced Kafka PrivateLink routing options, security
+improvements, and bug fixes.
+
+### Features {#v26.23-features}
+
+- **Kafka MATCHING broker rules for PrivateLink**: Kafka connections now support
+  `MATCHING 'pattern' USING AWS PRIVATELINK conn (...)` inside `BROKERS (...)`,
+  enabling pattern-based routing rules for dynamically discovered brokers returned
+  in Kafka metadata, and a new `BOOTSTRAP BROKER 'addr' USING AWS PRIVATELINK
+  conn (...)` top-level option for specifying the initial bootstrap address with
+  an explicit PrivateLink tunnel. This resolves AZ-mapping issues with PrivateLink
+  Kafka connections that rely on broker discovery.
+
+### Improvements {#v26.23-improvements}
+
+- **New `repeat_row_non_negative` SQL function**: The new
+  `repeat_row_non_negative` table function generates a specified number of rows
+  but errors on negative input rather than silently producing incorrect results,
+  making it safer to use in general-purpose queries than the existing
+  `repeat_row`.
+- **Queries fail gracefully on internal errors**: Certain internal errors that
+  previously caused `environmentd` to crash now return a query error instead,
+  improving cluster stability.
+- **dbt deploy retries on concurrent DDL conflicts**: `dbt deploy` now
+  automatically retries the `ALTER SWAP` atomic deployment when it encounters a
+  DDL interrupt from concurrent catalog operations, preventing spurious
+  deployment failures in busy environments.
+- **Clearer temporal filter error messages**: Error messages for unsupported
+  temporal predicates now include the actual filter expression, making it easier
+  to identify and fix the offending query.
+- **`COPY TO S3` Parquet type validation at planning time**: `COPY TO S3` with
+  `FORMAT PARQUET` now rejects Parquet-incompatible column types (such as
+  `interval`) at query planning time with a clear error, rather than failing at
+  execution time with an opaque message.
+- **Continual Tasks feature removed**: The experimental Continual Tasks feature
+  has been removed; any existing continual task objects will be automatically
+  cleaned up during upgrade.
+
+### Bug Fixes {#v26.23-bug-fixes}
+
+- Fixed `statement_timeout = 0` (which means "disabled" in PostgreSQL semantics)
+  causing every `SELECT` and `EXPLAIN FILTER PUSHDOWN` to fail immediately with a
+  spurious `StatementTimeout` error.
+- Fixed a security issue in Self-Managed deployments where the
+  `x-materialize-user` HTTP header could be used to assume `mz_system` or
+  `mz_support` privileges on listeners with `authenticator_kind = None`,
+  bypassing `allowed_roles` restrictions.
+- Fixed session-based HTTP authentication not enforcing the listener's
+  `allowed_roles`, allowing session tokens to be obtained and used for roles that
+  should be disallowed.
+- Fixed `SHOW CREATE TYPE` emitting the bare type name instead of the
+  fully-qualified `database.schema.type` name, unlike every other `SHOW CREATE`
+  variant.
+- Fixed Self-Managed `orchestratord` `--enable-rbac False` silently inverting
+  the value and enabling RBAC instead of disabling it.
+- Fixed SQL Server source composite primary key columns being recorded in
+  non-deterministic order, causing incorrect constraint definitions and
+  non-deterministic behavior across `ALTER SOURCE` and re-purification.
+- Fixed PostgreSQL source RLS policy validation producing false positives that
+  blocked replication for users whose roles inherit BYPASSRLS through role
+  membership.
+- Fixed SQL Server source growing memory without bound during table snapshots due
+  to a `RowArena` that was never cleared between rows.
+- Fixed `SELECT` queries with both `LIMIT` and `OFFSET` processing all remaining
+  rows instead of stopping after the limit was reached.
+- Fixed SQL Server source opening one upstream connection per Timely worker
+  instead of one total, multiplying SQL Server connections and
+  `sp_cdc_cleanup_change_table` calls by the worker count.
+- Fixed SQL Server source with PrivateLink connections only attempting the first
+  resolved IP address instead of trying all available addresses.
+- Fixed `regexp_replace` returning an invalid regular expression error instead of
+  `NULL` when called with a `NULL` replacement column and a literal pattern that
+  fails to compile.
+- Fixed `pg_index.indnatts` counting columns of the indexed table instead of the
+  index itself, and `pg_class.relnatts` always reporting `0` for index rows,
+  improving compatibility with tools that introspect the PostgreSQL catalog.
+- Fixed toggling `memory_limiter_interval` from `0s` to a non-zero value at
+  runtime potentially triggering an immediate replica kill even when memory usage
+  was well below the limit.
+- Fixed Self-Managed Kubernetes deployments where setting both
+  `cluster_topology_spread_soft = on` and `cluster_topology_spread_min_domains`
+  caused all replica pod creation to fail with an admission error.
+
 ## v26.22.0
 *Released to Materialize Cloud: 2026-04-30* <br>
 *Released to Materialize Self-Managed: 2026-05-01* <br>
