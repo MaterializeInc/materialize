@@ -6657,6 +6657,7 @@ dependencies = [
  "http 1.4.0",
  "hyper 1.9.0",
  "include_dir",
+ "mime",
  "mz-ore",
  "prometheus",
  "serde",

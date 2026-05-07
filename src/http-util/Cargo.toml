@@ -19,6 +19,7 @@ http.workspace = true
 hyper.workspace = true
 include_dir.workspace = true
 mz-ore = { path = "../ore", default-features = false, features = ["metrics", "tracing"] }
+mime.workspace = true
 prometheus.workspace = true
 serde.workspace = true
 serde_json.workspace = true
