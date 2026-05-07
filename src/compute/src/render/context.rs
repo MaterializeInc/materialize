@@ -23,7 +23,7 @@ use mz_compute_types::dyncfgs::{
     ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION, ENABLE_TEMPORAL_BUCKETING,
     TEMPORAL_BUCKETING_SUMMARY,
 };
-use mz_compute_types::plan::AvailableCollections;
+use mz_compute_types::plan::{ArrangementStrategy, AvailableCollections};
 use mz_dyncfg::ConfigSet;
 use mz_expr::{Id, MapFilterProject, MirScalarExpr};
 use mz_ore::soft_assert_or_log;
@@ -742,7 +742,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         as_of: Antichain<mz_repr::Timestamp>,
         until: Antichain<mz_repr::Timestamp>,
         config_set: &ConfigSet,
-        input_has_future_updates: bool,
+        strategy: ArrangementStrategy,
     ) -> Self {
         if collections == Default::default() {
             return self;
@@ -778,11 +778,11 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         if form_raw_collection && self.collection.is_none() {
             let (oks, errs) =
                 self.as_collection_core(input_mfp, input_key.map(|k| (k, None)), until, config_set);
-            // Apply temporal bucketing if the input may contain future updates and we are
-            // going to build at least one arrangement. This path fires when the collection
+            // Apply temporal bucketing when the lowering selected `TemporalBucketing` and
+            // we will build at least one arrangement. This path fires when the collection
             // must be formed from scratch (e.g., from an arrangement via as_collection_core).
             let oks = if will_create_arrangement
-                && input_has_future_updates
+                && matches!(strategy, ArrangementStrategy::TemporalBucketing)
                 && ENABLE_TEMPORAL_BUCKETING.get(config_set)
             {
                 let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
@@ -810,7 +810,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 // haven't bucketed yet. This is the common path for temporal-MFP
                 // → ArrangeBy flows.
                 let oks = if !bucketed
-                    && input_has_future_updates
+                    && matches!(strategy, ArrangementStrategy::TemporalBucketing)
                     && ENABLE_TEMPORAL_BUCKETING.get(config_set)
                 {
                     let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY

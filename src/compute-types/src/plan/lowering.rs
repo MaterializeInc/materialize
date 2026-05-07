@@ -27,7 +27,17 @@ use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
-use crate::plan::{AvailableCollections, GetPlan, LirId, Plan, PlanNode};
+use crate::plan::{ArrangementStrategy, AvailableCollections, GetPlan, LirId, Plan, PlanNode};
+
+/// Pick an [`ArrangementStrategy`] based on whether the input may contain future-stamped
+/// updates. Future updates are the only case where temporal bucketing pays off.
+fn strategy_from_future(has_future_updates: bool) -> ArrangementStrategy {
+    if has_future_updates {
+        ArrangementStrategy::TemporalBucketing
+    } else {
+        ArrangementStrategy::Direct
+    }
+}
 
 /// The result of lowering a [`MirRelationExpr`] to a [`Plan`].
 struct LoweredExpr {
@@ -407,7 +417,7 @@ impl Context {
                                             input: body,
                                             input_mfp,
                                             forms,
-                                            input_has_future_updates: v_future,
+                                            strategy: strategy_from_future(v_future),
                                         }
                                         .as_plan(inner_lir_id),
                                     ),
@@ -421,7 +431,7 @@ impl Context {
                                     input: Box::new(lir_value),
                                     input_mfp,
                                     forms,
-                                    input_has_future_updates: v_future,
+                                    strategy: strategy_from_future(v_future),
                                 }
                                 .as_plan(lir_id)
                             }
@@ -1027,7 +1037,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                             input: Box::new(input),
                             input_mfp,
                             forms,
-                            input_has_future_updates: future,
+                            strategy: strategy_from_future(future),
                         }
                         .as_plan(lir_id),
                         keys: input_keys,
@@ -1227,7 +1237,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     input,
                     input_mfp,
                     mut forms,
-                    input_has_future_updates,
+                    strategy,
                 },
             lir_id,
         } = plan
@@ -1241,7 +1251,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 input,
                 input_mfp,
                 forms,
-                input_has_future_updates,
+                strategy,
             }
             .as_plan(lir_id)
         } else {
@@ -1261,7 +1271,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 input: Box::new(plan),
                 input_mfp,
                 forms: collections,
-                input_has_future_updates: has_future_updates,
+                strategy: strategy_from_future(has_future_updates),
             }
             .as_plan(lir_id)
         }

@@ -40,7 +40,7 @@ use crate::plan::reduce::{
     AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, MonotonicPlan, SingleBasicPlan,
 };
 use crate::plan::threshold::ThresholdPlan;
-use crate::plan::{AvailableCollections, LirId, Plan, PlanNode};
+use crate::plan::{ArrangementStrategy, AvailableCollections, LirId, Plan, PlanNode};
 
 impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
     fn fmt_text(
@@ -488,7 +488,7 @@ impl Plan {
                 input,
                 input_mfp,
                 forms,
-                input_has_future_updates: _,
+                strategy: _,
             } => {
                 ctx.indent.set();
                 if forms.raw && forms.arranged.is_empty() {
@@ -898,7 +898,7 @@ impl Plan {
                 input,
                 input_mfp,
                 forms,
-                input_has_future_updates,
+                strategy,
             } => {
                 writeln!(f, "{}ArrangeBy{}", ctx.indent, annotations)?;
                 ctx.indented(|ctx| {
@@ -907,8 +907,8 @@ impl Plan {
                         let key = CompactScalars(key);
                         writeln!(f, "{}input_key=[{}]", ctx.indent, key)?;
                     }
-                    if *input_has_future_updates {
-                        writeln!(f, "{}input_has_future_updates=true", ctx.indent)?;
+                    if !matches!(strategy, ArrangementStrategy::Direct) {
+                        writeln!(f, "{}strategy={:?}", ctx.indent, strategy)?;
                     }
                     mode.expr(input_mfp, None).fmt_text(f, ctx)?;
                     forms.fmt_text(f, ctx)?;

@@ -26,7 +26,7 @@ use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
 use crate::plan::reduce::{BucketedPlan, HierarchicalPlan, KeyValPlan, MonotonicPlan, ReducePlan};
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::{MonotonicTopKPlan, TopKPlan};
-use crate::plan::{AvailableCollections, GetPlan, LirId, Plan, PlanNode};
+use crate::plan::{ArrangementStrategy, AvailableCollections, GetPlan, LirId, Plan, PlanNode};
 
 /// A representation of LIR plans used for rendering.
 ///
@@ -273,10 +273,8 @@ pub enum Expr {
         /// A list of arrangement keys, and possibly a raw collection, that will be added to those
         /// of the input. Does not include any other existing arrangements.
         forms: AvailableCollections,
-        /// Whether the input collection may contain updates with future timestamps,
-        /// e.g., from a temporal MFP using `mz_now()`. When true, the renderer
-        /// inserts temporal bucketing before forming arrangements.
-        input_has_future_updates: bool,
+        /// How the renderer should form the arrangements requested by `forms`.
+        strategy: ArrangementStrategy,
     },
 }
 
@@ -502,14 +500,14 @@ impl TryFrom<Plan> for LetFreePlan {
                     input,
                     input_mfp,
                     forms,
-                    input_has_future_updates,
+                    strategy,
                 } => {
                     let expr = ArrangeBy {
                         input_key,
                         input: input.lir_id,
                         input_mfp,
                         forms,
-                        input_has_future_updates,
+                        strategy,
                     };
                     insert_node(lir_id, parent, expr, nesting);
 
@@ -981,7 +979,7 @@ impl<'a> std::fmt::Display for RenderPlanExprHumanizer<'a> {
                 input: _,
                 input_mfp: _,
                 forms,
-                input_has_future_updates: _,
+                strategy: _,
             } => {
                 if forms.arranged.is_empty() {
                     soft_assert_or_log!(forms.raw, "raw stream with no arrangements");
