@@ -2309,6 +2309,24 @@ pub mod audit_log_event_v1 {
         Deserialize,
         Arbitrary
     )]
+    pub struct AlterAddColumnV1 {
+        pub id: String,
+        pub column: String,
+        pub column_type: String,
+        pub nullable: bool,
+    }
+
+    #[derive(
+        Clone,
+        Debug,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
+    )]
     pub struct ToNewIdV1 {
         pub id: String,
         pub new_id: String,
@@ -2490,6 +2508,7 @@ pub mod audit_log_event_v1 {
         CreateMaterializedViewV1(CreateMaterializedViewV1),
         AlterApplyReplacementV1(AlterApplyReplacementV1),
         CreateRoleV1(CreateRoleV1),
+        AlterAddColumnV1(AlterAddColumnV1),
     }
 }
 

@@ -984,6 +984,9 @@ impl Catalog {
                 typ,
                 sql,
             } => {
+                let column_name = name.to_string();
+                let column_type = typ.to_string();
+                let nullable = typ.nullable;
                 let mut new_entry = state.get_entry(&id).clone();
                 let version = new_entry.item.add_column(name, typ, sql)?;
                 // All versions of a table share the same shard, so it shouldn't matter what
@@ -997,6 +1000,25 @@ impl Catalog {
                     return Err(AdapterError::Unsupported("adding columns to non-Table"));
                 };
                 table.collections.insert(version, new_global_id);
+
+                if Self::should_audit_log_item(new_entry.item()) {
+                    let details = EventDetails::AlterAddColumnV1(mz_audit_log::AlterAddColumnV1 {
+                        id: id.to_string(),
+                        column: column_name,
+                        column_type,
+                        nullable,
+                    });
+                    CatalogState::add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        EventType::Alter,
+                        catalog_type_to_audit_object_type(new_entry.item().typ()),
+                        details,
+                    )?;
+                }
 
                 tx.update_item(id, new_entry.into())?;
                 storage_collections_to_register.insert(new_global_id, shard_id);
