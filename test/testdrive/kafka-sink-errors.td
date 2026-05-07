@@ -50,7 +50,7 @@ contains:LEGACY IDs option is not supported
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
-contains:TOPIC METADATA REFRESH INTERVAL must be greater than zero
+contains:TOPIC METADATA REFRESH INTERVAL must be greater than one second
 
 #
 # Sink dependencies
