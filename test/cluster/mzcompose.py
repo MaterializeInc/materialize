@@ -4197,7 +4197,17 @@ def workflow_test_refresh_mv_warmup(
                 """))
 
 
-def check_read_frontiers_not_stuck(c: Composition, object_names: list[str]):
+def check_read_frontiers_not_stuck(
+    c: Composition, object_names: list[str], timeout: float = 60.0
+):
+    """
+    Poll mz_frontiers until every named object's read frontier has advanced
+    past its initial value, or until `timeout` seconds elapse.
+
+    Polling (vs. a fixed sleep) keeps total runtime well under the previous
+    fixed 3s wait in the common case — frontiers usually advance within a
+    second — while tolerating periodic-downgrade cadences longer than 3s.
+    """
     name_filter = ",".join(f"'{n}'" for n in object_names)
     query = f"""
         SELECT o.name, f.read_frontier
@@ -4206,25 +4216,37 @@ def check_read_frontiers_not_stuck(c: Composition, object_names: list[str]):
         WHERE o.name in ({name_filter});
         """
 
-    # Because `mz_frontiers` isn't a linearizable relation it's possible that
-    # we need to wait a bit for the objects' frontiers to show up.
-    result = c.sql_query(query)
-    if len(result) < len(object_names):
-        time.sleep(2)
+    deadline = time.monotonic() + timeout
+
+    # Initial sample. Because `mz_frontiers` isn't a linearizable relation
+    # it's possible that we need to wait a bit for the objects' frontiers
+    # to show up.
+    while True:
         result = c.sql_query(query)
+        if len(result) >= len(object_names):
+            break
+        if time.monotonic() >= deadline:
+            raise AssertionError(
+                f"frontiers for {object_names} never appeared in mz_frontiers "
+                f"within {timeout}s"
+            )
+        time.sleep(0.5)
 
     before = {r[0]: int(r[1]) for r in result}
-    time.sleep(3)
 
-    result = c.sql_query(query)
-    after = {r[0]: int(r[1]) for r in result}
+    pending = set(object_names)
+    after: dict[str, int] = dict(before)
+    while pending and time.monotonic() < deadline:
+        time.sleep(0.5)
+        result = c.sql_query(query)
+        after = {r[0]: int(r[1]) for r in result}
+        pending -= {n for n in pending if after.get(n, 0) > before[n]}
 
-    for name in object_names:
-        before_ = before[name]
-        after_ = after[name]
-        assert (
-            before_ < after_
-        ), f"read frontier of {name} is stuck, {before_} >= {after_}"
+    if pending:
+        stuck = "; ".join(
+            f"{n}: {before[n]} >= {after.get(n, 0)}" for n in sorted(pending)
+        )
+        raise AssertionError(f"read frontier(s) stuck: {stuck}")
 
 
 def workflow_test_refresh_mv_restart(
