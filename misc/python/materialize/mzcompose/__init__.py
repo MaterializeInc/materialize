@@ -658,6 +658,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "oidc_group_role_sync_strict",
     "console_oidc_client_id",
     "console_oidc_scopes",
+    "enable_external_metrics_endpoint",
     "enable_mcp_agent",
     "enable_mcp_agent_query_tool",
     "enable_mcp_developer",
