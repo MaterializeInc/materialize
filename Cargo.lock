@@ -6359,6 +6359,7 @@ dependencies = [
  "mz-pgwire",
  "mz-pgwire-common",
  "mz-prof-http",
+ "mz-prometheus-protobuf",
  "mz-repr",
  "mz-secrets",
  "mz-segment",

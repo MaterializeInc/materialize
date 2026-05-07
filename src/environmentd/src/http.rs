@@ -124,6 +124,7 @@ mod console;
 mod mcp;
 mod memory;
 mod metrics;
+mod metrics_external;
 mod metrics_viz;
 mod probe;
 mod prometheus;
@@ -255,6 +256,9 @@ impl HttpServer {
 
         let mut router = Router::new();
         let mut base_router = Router::new();
+        let cluster_proxy_config = Arc::new(cluster::ClusterProxyConfig::new(Arc::clone(
+            &replica_http_locator,
+        )));
         if routes_enabled.base {
             base_router = base_router
                 .route(
@@ -271,7 +275,13 @@ impl HttpServer {
                     "/metrics-viz",
                     routing::get(metrics_viz::handle_metrics_viz),
                 )
-                .route("/static/{*path}", routing::get(root::handle_static));
+                .route("/static/{*path}", routing::get(root::handle_static))
+                .route(
+                    "/metrics/external",
+                    routing::get(metrics_external::handle_external_metrics),
+                )
+                .layer(Extension(metrics_registry.clone()))
+                .layer(Extension(Arc::clone(&cluster_proxy_config)));
 
             let mut ws_router = Router::new()
                 .route("/api/experimental/sql", routing::get(sql::handle_sql_ws))
@@ -398,9 +408,6 @@ impl HttpServer {
                 .layer(Extension(console_config));
 
             // Cluster HTTP proxy routes.
-            let cluster_proxy_config = Arc::new(cluster::ClusterProxyConfig::new(Arc::clone(
-                &replica_http_locator,
-            )));
             base_router = base_router
                 .route("/clusters", routing::get(cluster::handle_clusters))
                 .route(
@@ -411,7 +418,7 @@ impl HttpServer {
                     "/api/cluster/{:cluster_id}/replica/{:replica_id}/process/{:process}/{*path}",
                     routing::any(cluster::handle_cluster_proxy),
                 )
-                .layer(Extension(cluster_proxy_config));
+                .layer(Extension(Arc::clone(&cluster_proxy_config)));
 
             let leader_router = Router::new()
                 .route("/api/leader/status", routing::get(handle_leader_status))
