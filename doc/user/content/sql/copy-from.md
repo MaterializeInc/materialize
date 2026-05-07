@@ -176,6 +176,13 @@ COPY INTO csv_table FROM 's3://my_bucket/my_data.csv' (FORMAT CSV, AWS CONNECTIO
 COPY INTO csv_table FROM '<s3 presigned URL>' (FORMAT CSV);
 ```
 
+{{< note >}}
+Materialize does not follow HTTP redirects when fetching from a URL. If the
+server returns a `3xx` response, the `COPY FROM` will fail rather than follow
+the `Location` header. Use the final URL directly (for example, the resolved
+presigned URL) instead of one that redirects.
+{{< /note >}}
+
 ## Privileges
 
 The privileges required to execute this statement are:
