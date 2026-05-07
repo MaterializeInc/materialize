@@ -872,9 +872,15 @@ impl Coordinator {
         // first refresh time would prevent warmup before the first refresh.
         if let Some(refresh_schedule) = &refresh_schedule {
             if let Some(least_valid_read_ts) = least_valid_read.as_option() {
-                if let Some(first_refresh_ts) =
-                    refresh_schedule.round_up_timestamp(*least_valid_read_ts)
-                {
+                // DNM: For REFRESH MVs, anchor the first refresh to wall-clock
+                // now (not to the inputs' since). This keeps the MV's first
+                // visible refresh in the future even when input sinces lag
+                // behind now (e.g., due to read-hold slack). Take the max with
+                // least_valid_read in case any input's since is ahead of now,
+                // so we don't violate `dataflow_as_of <= storage_as_of`.
+                let anchor_ts =
+                    std::cmp::max(mz_repr::Timestamp::from(self.now()), *least_valid_read_ts);
+                if let Some(first_refresh_ts) = refresh_schedule.round_up_timestamp(anchor_ts) {
                     storage_as_of = Antichain::from_elem(first_refresh_ts);
                     dataflow_as_of.join_assign(
                         &self
@@ -888,7 +894,7 @@ impl Coordinator {
 
                     return Err(AdapterError::MaterializedViewWouldNeverRefresh(
                         last_refresh,
-                        *least_valid_read_ts,
+                        anchor_ts,
                     ));
                 }
             } else {
