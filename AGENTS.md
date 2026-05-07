@@ -2,39 +2,40 @@
 
 ## Skills
 
-This repo's canonical agent skills live in `.agents/skills/`. The
-`.claude/skills` path is kept as a compatibility symlink for Claude Code.
-Before starting a task, check if a relevant `mz-*` skill exists — they encode
-project-specific conventions and save significant time.
+Canonical agent skills in `.agents/skills/`. `.claude/skills` is compat symlink
+for Claude Code. Check `mz-*` skill before tasks — encodes project conventions,
+saves time.
 
 ## Code navigation
 
-When tracing how an operation flows through the codebase, read these files first:
+For operation flow tracing, read first:
 
-* `doc/developer/generated/flows.md` — maps common operations (query lifecycle, source ingestion, MV creation, sink lifecycle, catalog DDL, timestamp selection, persist read/write, controller architecture) to exact `crate::module` paths in execution order.
-* `doc/developer/generated/<crate>/_crate.md` — per-crate overview with module structure, key types, and dependencies.
-* `doc/developer/generated/<crate>/<module>.md` — per-file documentation describing what each module provides.
+* `doc/developer/generated/flows.md` — maps operations (query lifecycle, source ingestion, MV creation, sink lifecycle, catalog DDL, timestamp selection, persist read/write, controller architecture) to `crate::module` paths in execution order.
+* `doc/developer/generated/<crate>/_crate.md` — per-crate overview: modules, key types, dependencies.
+* `doc/developer/generated/<crate>/<module>.md` — per-file docs.
 
 ## Dependency management
 
 ### Workspace dependencies
 
-All third-party dependency versions are declared in `[workspace.dependencies]` in the root `Cargo.toml`. Member crates reference them with `dep.workspace = true` or `dep = { workspace = true, optional = true }`.
+All third-party versions declared in `[workspace.dependencies]` in root
+`Cargo.toml`. Members use `dep.workspace = true` or
+`dep = { workspace = true, optional = true }`.
 
-* **Adding a new dependency**: add it to `[workspace.dependencies]` in the root `Cargo.toml` first, then use `dep.workspace = true` in the member crate.
-* **Never inline a version** in a member crate's `Cargo.toml` — `bin/lint-cargo` enforces this.
-* **Updating a version**: change it once in the root `Cargo.toml`.
-* Since Cargo unifies features workspace-wide, the workspace declaration includes the union of all features used across crates. Individual crates just use `dep.workspace = true`.
+* **Add new dep**: add to `[workspace.dependencies]` in root `Cargo.toml` first, then `dep.workspace = true` in member crate.
+* **Never inline version** in member `Cargo.toml` — `bin/lint-cargo` enforces.
+* **Update version**: change once in root `Cargo.toml`.
+* Cargo unifies features workspace-wide, so workspace declaration is union of all features across crates. Members just use `dep.workspace = true`.
 
 ### Cargo.lock
 
-Never regenerate the entire Cargo.lock. When adding or changing dependencies:
+Never regenerate full Cargo.lock. When changing deps:
 
-* **Adding a dep or changing features**: run `cargo check` — it adds/updates only what changed.
-* **Updating a specific crate**: use `cargo update -p <crate>` (optionally `--precise <version>`).
-* **Never run bare `cargo update`** — it bumps every semver-compatible dep in the workspace, causing unrelated breakage from transitive dependency changes.
-* **If the lock file was regenerated**, diff it before committing (`git diff Cargo.lock | grep '^[+-]version'`) and pin back any unintended bumps with `cargo update -p <crate> --precise <old-version>`.
+* **Add dep or change features**: run `cargo check` — updates only what changed.
+* **Update specific crate**: `cargo update -p <crate>` (optional `--precise <version>`).
+* **Never bare `cargo update`** — bumps every semver-compatible dep, causes unrelated breakage from transitive changes.
+* **If lock regenerated**, diff before commit (`git diff Cargo.lock | grep '^[+-]version'`) and pin back unintended bumps with `cargo update -p <crate> --precise <old-version>`.
 
 ### Licensing
 
-Two files control license policy and **must be kept in sync**: `deny.toml` (`[licenses].allow`) and `about.toml` (`accepted`). When a new dependency introduces a license not already allowed, add the SPDX identifier to both files.
+Two files control license policy, **keep in sync**: `deny.toml` (`[licenses].allow`) and `about.toml` (`accepted`). New dep with new license not already allowed: add SPDX identifier to both.

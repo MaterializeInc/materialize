@@ -1,13 +1,11 @@
 ---
 name: mz-run
 description: >
-  This skill should be used when the user wants to "run Materialize locally",
-  "start environmentd", "check compilation", "format code", "lint", "cargo
-  check", "cargo fmt", "cargo clippy", "bin/fmt", "bin/lint", or mentions
-  compiling, building, running, formatting, linting, log filters, jemalloc,
-  or CockroachDB setup in the Materialize repository. Use this skill even
-  if the user just says "how do I run this" or "it won't compile" without
-  being specific.
+  Trigger: "run Materialize locally", "start environmentd", "check compilation",
+  "format code", "lint", "cargo check", "cargo fmt", "cargo clippy", "bin/fmt",
+  "bin/lint", or mentions compiling, building, running, formatting, linting,
+  log filters, jemalloc, CockroachDB setup in Materialize. Also "how do I run
+  this" or "it won't compile".
 ---
 
 # Developing Materialize
