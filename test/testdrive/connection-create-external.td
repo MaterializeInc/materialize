@@ -71,4 +71,80 @@ $ kafka-ingest format=avro topic=csr_test key-format=avro key-schema=${keyschema
 contains:Address resolved to a private IP
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_copy_from_remote = true
+
+> CREATE TABLE copy_ssrf_target (a text, b text)
+
+# COPY FROM rejects non-http(s) schemes outright.
+! COPY INTO copy_ssrf_target FROM 'file:///etc/passwd' (FORMAT CSV);
+contains:only 'http://' and 'https://' urls are supported
+
+! COPY INTO copy_ssrf_target FROM 'ftp://example.com/file.csv' (FORMAT CSV);
+contains:only 'http://' and 'https://' urls are supported
+
+# IPv4 / IPv6 loopback literals bypass reqwest's DNS resolver and must be
+# caught by the upfront IP-literal check.
+! COPY INTO copy_ssrf_target FROM 'http://127.0.0.1:1/file.csv' (FORMAT CSV);
+contains:Address resolved to a private IP
+
+! COPY INTO copy_ssrf_target FROM 'http://[::1]:1/file.csv' (FORMAT CSV);
+contains:Address resolved to a private IP
+
+# IPv4-mapped IPv6 loopback (`::ffff:127.0.0.1`): on dual-stack sockets this
+# reaches loopback, so it must be rejected as IPv4 loopback.
+! COPY INTO copy_ssrf_target FROM 'http://[::ffff:127.0.0.1]:1/file.csv' (FORMAT CSV);
+contains:Address resolved to a private IP
+
+# Cloud instance metadata service is the canonical SSRF target. 169.254/16 is
+# link-local and must be rejected.
+! COPY INTO copy_ssrf_target FROM 'http://169.254.169.254/latest/meta-data/' (FORMAT CSV);
+contains:Address resolved to a private IP
+
+# Hostname resolving to loopback exercises the reqwest custom DNS resolver
+# path (as opposed to the upfront IP-literal check above).
+! COPY INTO copy_ssrf_target FROM 'http://localhost:1/file.csv' (FORMAT CSV);
+contains:Address resolved to a private IP
+
+> CREATE SECRET aws_ssrf_secret AS 'unused'
+
+! CREATE CONNECTION aws_ssrf_endpoint_v4 TO AWS (
+    ACCESS KEY ID = 'unused',
+    SECRET ACCESS KEY = SECRET aws_ssrf_secret,
+    ENDPOINT = 'http://127.0.0.1:1/',
+    REGION = 'us-east-1'
+  ) WITH (VALIDATE = true);
+contains:Address resolved to a private IP
+
+! CREATE CONNECTION aws_ssrf_endpoint_v6 TO AWS (
+    ACCESS KEY ID = 'unused',
+    SECRET ACCESS KEY = SECRET aws_ssrf_secret,
+    ENDPOINT = 'http://[::1]/',
+    REGION = 'us-east-1'
+  ) WITH (VALIDATE = true);
+contains:Address resolved to a private IP
+
+! CREATE CONNECTION aws_ssrf_endpoint_mapped TO AWS (
+    ACCESS KEY ID = 'unused',
+    SECRET ACCESS KEY = SECRET aws_ssrf_secret,
+    ENDPOINT = 'http://[::ffff:127.0.0.1]/',
+    REGION = 'us-east-1'
+  ) WITH (VALIDATE = true);
+contains:Address resolved to a private IP
+
+! CREATE CONNECTION aws_ssrf_endpoint_metadata TO AWS (
+    ACCESS KEY ID = 'unused',
+    SECRET ACCESS KEY = SECRET aws_ssrf_secret,
+    ENDPOINT = 'http://169.254.169.254/',
+    REGION = 'us-east-1'
+  ) WITH (VALIDATE = true);
+contains:Address resolved to a private IP
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET storage_enforce_external_addresses = false
+
+# Sanity check: with enforcement disabled, a previously-rejected loopback
+# literal makes it past validation and instead fails at connect time. The
+# absence of the "private IP" message proves the dyncfg actually gates the
+# check.
+! COPY INTO copy_ssrf_target FROM 'http://127.0.0.1:1/file.csv' (FORMAT CSV);
+contains:Connection refused

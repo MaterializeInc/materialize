@@ -14,7 +14,14 @@ Investigate CI failures for a Materialize PR.
 
 ## Prerequisites
 
-This skill requires both `gh` (GitHub CLI) and `bk` (Buildkite CLI) to be installed and authenticated. Before doing anything else, verify both are available by running `which gh` and `which bk`. If either tool is missing, **stop immediately** and tell the user which tool(s) need to be installed and configured. Do not attempt to use the REST API directly or any other workaround — this workflow only works with these CLI tools.
+This skill requires both `gh` (GitHub CLI) and `bk` (Buildkite CLI) to be installed *and authenticated*. Before doing anything else, verify both:
+
+```bash
+which gh && gh auth status
+which bk && bk auth status
+```
+
+If either tool is missing or unauthenticated, **stop immediately** and tell the user what to fix (`bk configure` or `bk auth login` for Buildkite). Do not attempt to use the REST API directly or any other workaround — this workflow only works with these CLI tools.
 
 Both `gh` and `bk` make network requests that are blocked by the default sandbox. All Bash commands in this workflow must use `dangerouslyDisableSandbox: true`.
 

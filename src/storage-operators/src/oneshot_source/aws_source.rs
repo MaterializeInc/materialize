@@ -46,6 +46,7 @@ pub struct AwsS3Source {
     #[derivative(Debug = "ignore")]
     client: std::sync::OnceLock<mz_aws_util::s3::Client>,
     use_checksum: bool,
+    enforce_external_addresses: bool,
 }
 
 impl AwsS3Source {
@@ -55,6 +56,7 @@ impl AwsS3Source {
         context: ConnectionContext,
         uri: String,
         use_checksum: bool,
+        enforce_external_addresses: bool,
     ) -> Self {
         let uri = http::Uri::from_str(&uri).expect("validated URI in sequencing");
 
@@ -86,13 +88,19 @@ impl AwsS3Source {
             prefix,
             client: std::sync::OnceLock::new(),
             use_checksum,
+            enforce_external_addresses,
         }
     }
 
     pub async fn initialize(&self) -> Result<mz_aws_util::s3::Client, anyhow::Error> {
         let sdk_config = self
             .connection
-            .load_sdk_config(&self.context, self.connection_id, InTask::Yes)
+            .load_sdk_config(
+                &self.context,
+                self.connection_id,
+                InTask::Yes,
+                self.enforce_external_addresses,
+            )
             .await?;
 
         let mut s3_config_builder = aws_sdk_s3::config::Builder::from(&sdk_config)

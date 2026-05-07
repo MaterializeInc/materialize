@@ -1185,3 +1185,8 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17078  mz_ontology_semantic_types
 17079  mz_ontology_properties
 17080  mz_ontology_link_types
+17081  mz_object_arrangement_sizes
+17082  mz_object_arrangement_sizes_ind
+17083  mz_object_arrangement_size_history
+17084  mz_object_arrangement_size_history_object_ind
+17085  mz_object_arrangement_size_history_ts_ind

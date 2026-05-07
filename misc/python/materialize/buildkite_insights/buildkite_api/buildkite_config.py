@@ -12,7 +12,6 @@ MZ_PIPELINES = [
     "cleanup",
     "coverage",
     "deploy",
-    "deploy-mz-lsp-server",
     "deploy-mz",
     "deploy-mz-debug",
     "deploy-website",

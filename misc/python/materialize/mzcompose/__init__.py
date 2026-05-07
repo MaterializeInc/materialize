@@ -399,6 +399,12 @@ def get_variable_system_parameters(
             "persist_state_update_lease_timeout", "1s", ["0s", "1s", "10s"]
         ),
         VariableSystemParameter(
+            "arrangement_size_history_collection_interval", "1h", ["1s", "10s", "1h"]
+        ),
+        VariableSystemParameter(
+            "arrangement_size_history_retention_period", "7d", ["1m", "1h", "7d"]
+        ),
+        VariableSystemParameter(
             "persist_validate_part_bounds_on_read", "false", ["true", "false"]
         ),
         VariableSystemParameter(

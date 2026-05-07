@@ -133,7 +133,13 @@ class Composition:
         self.workflows: dict[str, Callable[..., None]] = {}
         self.test_results: OrderedDict[str, TestResult] = OrderedDict()
         self.has_testdrive_junit: bool = False
-        self.files = {}
+        # Per-thread cached YAML file is held in self._tls.file_and_gen.
+        # When self.compose is mutated, _invalidate_compose_files() bumps
+        # self._compose_gen so each thread regenerates on its next invoke.
+        # Avoids cross-thread races on a shared dict that previously caused
+        # docker compose children to inherit the wrong /dev/fd/N.
+        self._compose_gen: object = object()
+        self._tls = threading.local()
         self.sources_and_sinks_ignored_from_validation = set()
         self.is_sanity_restart_mz = sanity_restart_mz
         self.current_test_case_name_override: str | None = None
@@ -215,7 +221,11 @@ class Composition:
         if munge_services:
             self.dependencies = self._munge_services(self.compose["services"].items())
 
-        self.files = {}
+        self._invalidate_compose_files()
+
+    def _invalidate_compose_files(self) -> None:
+        """Mark cached YAML files stale; each thread regenerates on its next invoke()."""
+        self._compose_gen = object()
 
     def override_current_testcase_name(self, test_case_name: str) -> None:
         """
@@ -365,16 +375,19 @@ class Composition:
             stderr = subprocess.PIPE if capture_stderr == True else capture_stderr
         project_name_args = ("--project-name", self.project_name)
 
-        # One file per thread to make sure we don't try to read a file which is
-        # not seeked to 0, leading to "empty compose file" errors
-        thread_id = threading.get_ident()
-        file = self.files.get(thread_id)
-        if not file:
+        # Per-thread cached YAML file via threading.local — each thread owns its
+        # tempfile, so no other thread can drop or close it. The generation
+        # sentinel makes the cache invalidate when self.compose is mutated.
+        gen = self._compose_gen
+        cached = getattr(self._tls, "file_and_gen", None)
+        if cached is None or cached[1] is not gen:
             file = TemporaryFile(mode="w")
             os.set_inheritable(file.fileno(), True)
             yaml.dump(self.compose, file)
             os.fsync(file.fileno())
-            self.files[thread_id] = file
+            self._tls.file_and_gen = (file, gen)
+        else:
+            file = cached[0]
 
         cmd = [
             "docker",
@@ -621,7 +634,7 @@ class Composition:
         # config for an `mzbuild` config.
         deps.acquire()
 
-        self.files = {}
+        self._invalidate_compose_files()
 
         # Ensure image freshness
         self.pull_if_variable([service.name for service in services])
@@ -651,7 +664,7 @@ class Composition:
 
             # Restore the old composition.
             self.compose = old_compose
-            self.files = {}
+            self._invalidate_compose_files()
 
     @contextmanager
     def test_case(self, name: str) -> Iterator[None]:
@@ -1192,7 +1205,7 @@ class Composition:
                     service["command"] = []
                     service.pop("depends_on", None)
                     service.pop("healthcheck", None)
-            self.files = {}
+            self._invalidate_compose_files()
 
         service_names = [
             service.name if isinstance(service, Service) else service
@@ -1212,7 +1225,7 @@ class Composition:
 
         if idle:
             self.compose = old_compose  # type: ignore
-            self.files = {}
+            self._invalidate_compose_files()
 
     def validate_sources_sinks_clusters(self) -> str | None:
         """Validate that all sources, sinks & clusters are in a good state"""

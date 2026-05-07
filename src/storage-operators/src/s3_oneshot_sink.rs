@@ -74,6 +74,7 @@ pub fn copy_to<'scope, F>(
     params: CopyToParameters,
     worker_callback: F,
     output_batch_count: u64,
+    enforce_external_addresses: bool,
 ) -> Rc<dyn Any>
 where
     F: FnOnce(Result<u64, String>) -> () + 'static,
@@ -98,6 +99,7 @@ where
             start_stream,
             params,
             output_batch_count,
+            enforce_external_addresses,
         ),
         S3SinkFormat::Parquet => render_upload_operator::<parquet::ParquetUploader>(
             scope.clone(),
@@ -111,6 +113,7 @@ where
             start_stream,
             params,
             output_batch_count,
+            enforce_external_addresses,
         ),
     };
 
@@ -123,6 +126,7 @@ where
         s3_key_manager,
         completion_stream,
         worker_callback,
+        enforce_external_addresses,
     );
 
     Rc::new(vec![start_token, upload_token, completion_token])
@@ -218,6 +222,7 @@ fn render_completion_operator<'scope, F>(
     s3_key_manager: S3KeyManager,
     completion_stream: StreamVec<'scope, Timestamp, Result<u64, String>>,
     worker_callback: F,
+    enforce_external_addresses: bool,
 ) -> PressOnDropButton
 where
     F: FnOnce(Result<u64, String>) -> () + 'static,
@@ -251,7 +256,12 @@ where
             if is_leader {
                 debug!(%sink_id, %worker_id, "s3 leader worker completion");
                 let sdk_config = aws_connection
-                    .load_sdk_config(&connection_context, connection_id, InTask::Yes)
+                    .load_sdk_config(
+                        &connection_context,
+                        connection_id,
+                        InTask::Yes,
+                        enforce_external_addresses,
+                    )
                     .await?;
 
                 let client = mz_aws_util::s3::new_client(&sdk_config);
@@ -308,6 +318,7 @@ fn render_upload_operator<'scope, T>(
     start_stream: StreamVec<'scope, Timestamp, Result<(), String>>,
     params: CopyToParameters,
     output_batch_count: u64,
+    enforce_external_addresses: bool,
 ) -> (
     StreamVec<'scope, Timestamp, Result<u64, String>>,
     PressOnDropButton,
@@ -346,7 +357,12 @@ where
         // fallible async block to use the `?` operator for convenience
         let res = async move {
             let sdk_config = aws_connection
-                .load_sdk_config(&connection_context, connection_id, InTask::Yes)
+                .load_sdk_config(
+                    &connection_context,
+                    connection_id,
+                    InTask::Yes,
+                    enforce_external_addresses,
+                )
                 .await?;
 
             // Map of an uploader per batch.

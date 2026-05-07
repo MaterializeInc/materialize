@@ -9,11 +9,15 @@
 
 //! Generic HTTP oneshot source that will fetch a file from the public internet.
 
+use std::net::SocketAddr;
+use std::sync::Arc;
+
 use bytes::Bytes;
 use derivative::Derivative;
 use futures::TryStreamExt;
 use futures::stream::{BoxStream, StreamExt};
 use reqwest::Client;
+use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -21,6 +25,44 @@ use crate::oneshot_source::util::IntoRangeHeaderValue;
 use crate::oneshot_source::{
     Encoding, OneshotObject, OneshotSource, StorageErrorX, StorageErrorXContext, StorageErrorXKind,
 };
+
+/// reqwest DNS resolver that delegates to [`mz_ore::netio::resolve_address`].
+///
+/// Only the IP resolution step is overridden — reqwest still uses the URL's
+/// original hostname for SNI and TLS certificate validation, so HTTPS works
+/// normally.
+#[derive(Debug)]
+struct MzHttpResolver {
+    enforce_external_addresses: bool,
+}
+
+impl Resolve for MzHttpResolver {
+    fn resolve(&self, name: Name) -> Resolving {
+        let enforce = self.enforce_external_addresses;
+        Box::pin(async move {
+            let ips = mz_ore::netio::resolve_address(name.as_str(), enforce).await?;
+            // reqwest substitutes the conventional port (80/443) when the
+            // SocketAddr's port is 0 and no explicit port was given in the URL.
+            let addrs: Addrs = Box::new(
+                ips.into_iter()
+                    .map(|ip| SocketAddr::new(ip, 0))
+                    .collect::<Vec<_>>()
+                    .into_iter(),
+            );
+            Ok(addrs)
+        })
+    }
+}
+
+/// Build a reqwest [`Client`] for fetching `COPY FROM` URLs. This uses
+/// [`mz_ore::netio::resolve_address`] for DNS resolution.
+pub fn build_http_client(enforce_external_addresses: bool) -> Result<Client, reqwest::Error> {
+    Client::builder()
+        .dns_resolver(Arc::new(MzHttpResolver {
+            enforce_external_addresses,
+        }))
+        .build()
+}
 
 /// Generic oneshot source that fetches a file from a URL on the public internet.
 #[derive(Clone, Derivative)]
@@ -76,6 +118,67 @@ pub enum HttpChecksum {
     ETag(String),
     /// The HTTP [`Last-Modified`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Last-Modified) header.
     LastModified(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `reqwest::dns::Name` has no public constructor, so we exercise
+    /// [`MzHttpResolver`] through a fully-built [`Client`]. `localhost`
+    /// resolves via /etc/hosts on supported platforms and stays inside the
+    /// resolver path (an IP literal would short-circuit DNS entirely).
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn build_http_client_rejects_localhost_when_enforced() {
+        let client = build_http_client(true).expect("build client");
+        let err = client
+            .get("http://localhost:1/")
+            .send()
+            .await
+            .expect_err("request must fail at DNS resolution");
+        // Walk the error chain for the resolver's PrivateAddress message —
+        // reqwest wraps it inside its connect error, so a `to_string()` on
+        // the top-level error is not enough.
+        let mut found = false;
+        let mut current: &dyn std::error::Error = &err;
+        loop {
+            if current.to_string().to_lowercase().contains("private") {
+                found = true;
+                break;
+            }
+            match current.source() {
+                Some(src) => current = src,
+                None => break,
+            }
+        }
+        assert!(found, "expected private-address rejection, got: {err:?}");
+    }
+
+    /// With enforcement off the resolver returns the loopback IP, so the
+    /// request reaches the connect stage and fails for a different reason
+    /// (port 1 is not listening). The point is that DNS does *not* fail.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn build_http_client_allows_localhost_when_not_enforced() {
+        let client = build_http_client(false).expect("build client");
+        let err = client
+            .get("http://localhost:1/")
+            .send()
+            .await
+            .expect_err("port 1 should not be listening");
+        let mut current: &dyn std::error::Error = &err;
+        loop {
+            assert!(
+                !current.to_string().to_lowercase().contains("private"),
+                "expected a connect error, not a DNS rejection: {err:?}"
+            );
+            match current.source() {
+                Some(src) => current = src,
+                None => break,
+            }
+        }
+    }
 }
 
 impl OneshotSource for HttpOneshotSource {

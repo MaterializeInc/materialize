@@ -1841,9 +1841,19 @@ select string_to_array(word, ' ', 'hello') from string_to_array_words;
 {NULL,world}
 
 # string_to_array - empty string delimiter and null_string set to whole word.
-# expectation: null_string is ignored if no delimiter is passed.
+# expectation: null_string is still respected if delimiter is empty. (Same as Postgres.)
 query T
 select string_to_array(word, '', 'hello world') from string_to_array_words;
+----
+{NULL}
+
+query T
+select string_to_array(word, '', 'aaa') from string_to_array_words;
+----
+{"hello world"}
+
+query T
+select string_to_array(word, '', null) from string_to_array_words;
 ----
 {"hello world"}
 
@@ -1886,5 +1896,76 @@ NULL
 # string_to_array - non string input results in error.
 query error
 select string_to_array('hello world', 0) from string_to_array_words;
+
+# string_to_array - consecutive delimiters produce empty fields.
+query T
+select string_to_array('a||b', '|') from string_to_array_words;
+----
+{a,"",b}
+
+# string_to_array - leading and trailing delimiters produce empty fields.
+query T
+select string_to_array('|a|b|', '|') from string_to_array_words;
+----
+{"",a,b,""}
+
+# string_to_array - null_string set to empty string replaces empty fields with NULL.
+query T
+select string_to_array('a||b', '|', '') from string_to_array_words;
+----
+{a,NULL,b}
+
+query T
+select string_to_array('|a|b|', '|', '') from string_to_array_words;
+----
+{NULL,a,b,NULL}
+
+# string_to_array - null_string matches a token in the middle.
+query T
+select string_to_array('a|b|c', '|', 'b') from string_to_array_words;
+----
+{a,NULL,c}
+
+# string_to_array - null_string matches the last token.
+query T
+select string_to_array('a|b|c', '|', 'c') from string_to_array_words;
+----
+{a,b,NULL}
+
+# string_to_array - NULL delimiter (split into chars) with null_string set.
+query T
+select string_to_array('hello', NULL, 'l') from string_to_array_words;
+----
+{h,e,NULL,NULL,o}
+
+# string_to_array - NULL delimiter (split into chars) with null_string set to NULL.
+query T
+select string_to_array('hello', NULL, NULL) from string_to_array_words;
+----
+{h,e,l,l,o}
+
+# string_to_array - multi-character delimiter.
+query T
+select string_to_array('a<>b<>c', '<>') from string_to_array_words;
+----
+{a,b,c}
+
+# string_to_array - multi-character delimiter with null_string matching middle token.
+query T
+select string_to_array('a<>b<>c', '<>', 'b') from string_to_array_words;
+----
+{a,NULL,c}
+
+# string_to_array - delimiter not present in input.
+query T
+select string_to_array('abc', '|') from string_to_array_words;
+----
+{abc}
+
+# string_to_array - delimiter not present in input, with null_string matching whole input.
+query T
+select string_to_array('abc', '|', 'abc') from string_to_array_words;
+----
+{NULL}
 
 # string_to_array - end.

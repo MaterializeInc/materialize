@@ -1132,12 +1132,7 @@ impl RelationDesc {
     pub fn concat(mut self, other: Self) -> Self {
         let self_len = self.typ.column_types.len();
 
-        for (typ, (_col_idx, meta)) in other
-            .typ
-            .column_types
-            .into_iter()
-            .zip_eq(other.metadata.into_iter())
-        {
+        for (typ, (_col_idx, meta)) in other.typ.column_types.into_iter().zip_eq(other.metadata) {
             assert_eq!(meta.added, RelationVersion::root());
             assert_none!(meta.dropped);
 

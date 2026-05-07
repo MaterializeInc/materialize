@@ -724,7 +724,7 @@ impl fmt::Debug for RowRef {
     /// Debug representation using the internal datums
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("RowRef{")?;
-        f.debug_list().entries(self.into_iter()).finish()?;
+        f.debug_list().entries(&*self).finish()?;
         f.write_str("}")
     }
 }
