@@ -863,11 +863,12 @@ impl SessionClient {
         //
         // We pass the *outer* portal's `logging` and pgwire-bound `params`
         // so the recorded entry shows the user-visible `EXECUTE foo (...)`,
-        // not the inner SQL. On success the id moves into `outer_ctx_extra`
-        // for `try_frontend_peek` to retire; on planning error we
+        // not the inner SQL. The id (if any) moves into `outer_ctx_extra`
+        // below for `try_frontend_peek` to retire; on planning error we
         // explicitly emit an `Errored` end-event below.
+        let began_outer_logging = outer_ctx_extra.is_none();
         let logging_id: Option<crate::statement_logging::StatementLoggingId> =
-            if outer_ctx_extra.is_none() {
+            if began_outer_logging {
                 let session = self.session.as_mut().expect("SessionClient invariant");
                 let result = self
                     .peek_client
@@ -909,9 +910,18 @@ impl SessionClient {
             }
         };
 
-        // Hand off the logging id to `outer_ctx_extra`. `try_frontend_peek`
-        // retires it itself once it takes ownership.
-        if let Some(id) = logging_id {
+        // Hand off to `outer_ctx_extra` whenever we entered the begin path
+        // for the outer EXECUTE — even if `begin_statement_execution`
+        // returned `None` (sampling decided not to sample, or logging is
+        // disabled for the user). This mirrors the original coord path,
+        // which always installs a guard via
+        // `ExecuteContextGuard::new(maybe_uuid, ...)`. Without this, the
+        // inner portal would be treated as a fresh statement by
+        // `try_frontend_peek` (or the fallback `Command::Execute` path)
+        // and re-account its bytes against
+        // `mz_statement_logging_unsampled_bytes`, double-counting the
+        // inner SQL.
+        if began_outer_logging {
             // Soft invariant: `try_frontend_peek` takes ownership of
             // `outer_ctx_extra` immediately, so this guard's `Drop` is
             // unreachable on the normal flow and the dummy channel is
@@ -920,7 +930,7 @@ impl SessionClient {
             // — an acceptable trade given the panic implies the
             // connection is going down anyway.
             let (dummy_tx, _dummy_rx) = mpsc::unbounded_channel();
-            *outer_ctx_extra = Some(ExecuteContextGuard::new(Some(id), dummy_tx));
+            *outer_ctx_extra = Some(ExecuteContextGuard::new(logging_id, dummy_tx));
         }
 
         Ok((new_portal_name, Some(catalog)))
