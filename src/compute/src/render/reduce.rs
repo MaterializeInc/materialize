@@ -23,7 +23,6 @@ use differential_dataflow::difference::{IsZero, Multiply, Semigroup};
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::implementations::BatchContainer;
-use differential_dataflow::trace::implementations::merge_batcher::container::InternalMerge;
 use differential_dataflow::trace::{Builder, Trace};
 use differential_dataflow::{Data, VecCollection};
 use itertools::Itertools;
@@ -37,6 +36,7 @@ use mz_expr::{
 use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{Datum, DatumVec, Diff, Row, RowArena, SharedRow};
+use mz_timely_util::merge_batcher::container::InternalMerge;
 use mz_timely_util::operator::CollectionExt;
 use serde::{Deserialize, Serialize};
 use timely::Container;

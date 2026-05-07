@@ -22,11 +22,11 @@
 use std::collections::VecDeque;
 use std::iter::FromIterator;
 
+use crate::merge_batcher::container::InternalMerge;
 use columnation::{Columnation, Region};
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::trace::implementations::merge_batcher::container::InternalMerge;
 use differential_dataflow::trace::implementations::{BatchContainer, BuilderInput};
 use timely::container::{ContainerBuilder, DrainContainer, PushInto, SizableContainer};
 use timely::progress::Timestamp;
@@ -653,6 +653,16 @@ where
             *position += 1;
         }
     }
+
+    fn time_range(&self) -> Option<(Antichain<T>, Antichain<T>)> {
+        let slice = &self[..];
+        if slice.is_empty() {
+            return None;
+        }
+        Some(crate::merge_batcher::build_time_bounds(
+            slice.iter().map(|(_, t, _)| t.clone()),
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -661,6 +671,4 @@ where
 
 /// A `Merger` using internal iteration for `ColumnationStack` containers.
 pub type ColInternalMerger<D, T, R> =
-    differential_dataflow::trace::implementations::merge_batcher::InternalMerger<
-        ColumnationStack<(D, T, R)>,
-    >;
+    crate::merge_batcher::InternalMerger<ColumnationStack<(D, T, R)>>;

@@ -163,6 +163,20 @@ impl<S: Bucket> BucketChain<S> {
     /// bucket of -2 bits just before the smallest bucket.
     #[inline]
     pub fn restore(&mut self, fuel: &mut i64) {
+        if self.content.is_empty() {
+            return;
+        }
+        // Fast path: if every bucket already satisfies the chain property, no work needed.
+        let mut last_bits = -2_isize;
+        let well_formed = self.content.values().all(|(bits, _)| {
+            let cur = isize::cast_from(*bits);
+            let ok = cur <= last_bits + 2;
+            last_bits = cur;
+            ok
+        });
+        if well_formed {
+            return;
+        }
         // We could write this in terms of a cursor API, but it's not stable yet. Instead, we
         // allocate a new map and move elements over.
         let mut new = BTreeMap::default();
@@ -184,10 +198,22 @@ impl<S: Bucket> BucketChain<S> {
         self.content = new;
     }
 
+    /// Iterate `(start, &bucket)` pairs in ascending start order.
+    #[inline]
+    pub fn iter(&self) -> impl Iterator<Item = (&S::Timestamp, &S)> {
+        self.content.iter().map(|(t, (_, s))| (t, s))
+    }
+
     /// Returns `true` if the chain is empty. This means there are no outstanding times left.
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.content.is_empty()
+    }
+
+    /// Iterate over bucket lower bounds in ascending order.
+    #[inline]
+    pub fn starts(&self) -> impl Iterator<Item = &S::Timestamp> {
+        self.content.keys()
     }
 
     /// The number of buckets in the chain.
@@ -210,21 +236,25 @@ impl<S: Bucket> BucketChain<S> {
     }
 }
 
+/// Test-only [`BucketTimestamp`] impls, hoisted to crate scope so other
+/// `#[cfg(test)]` modules in this crate can reuse them.
+#[cfg(test)]
+impl BucketTimestamp for u8 {
+    fn advance_by_power_of_two(&self, bits: u32) -> Option<Self> {
+        self.checked_add(1_u8.checked_shl(bits)?)
+    }
+}
+
+#[cfg(test)]
+impl BucketTimestamp for u64 {
+    fn advance_by_power_of_two(&self, bits: u32) -> Option<Self> {
+        self.checked_add(1_u64.checked_shl(bits)?)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    impl BucketTimestamp for u8 {
-        fn advance_by_power_of_two(&self, bits: u32) -> Option<Self> {
-            self.checked_add(1_u8.checked_shl(bits)?)
-        }
-    }
-
-    impl BucketTimestamp for u64 {
-        fn advance_by_power_of_two(&self, bits: u32) -> Option<Self> {
-            self.checked_add(1_u64.checked_shl(bits)?)
-        }
-    }
 
     struct TestStorage<T> {
         inner: Vec<T>,

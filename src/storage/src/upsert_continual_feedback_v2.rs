@@ -71,9 +71,6 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::agent::TraceAgent;
 use differential_dataflow::trace::implementations::ValSpine;
 use differential_dataflow::trace::implementations::chunker::ContainerChunker;
-use differential_dataflow::trace::implementations::merge_batcher::{
-    MergeBatcher, container::VecMerger,
-};
 use differential_dataflow::trace::{Batcher, Builder, Cursor, Description, TraceReader};
 use differential_dataflow::{AsCollection, VecCollection};
 use mz_repr::{Diff, GlobalId, Row};
@@ -81,6 +78,7 @@ use mz_storage_types::errors::{DataflowError, EnvelopeError};
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
+use mz_timely_util::merge_batcher::{MergeBatcher, container::VecMerger};
 use std::convert::Infallible;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::StreamVec;

@@ -14,11 +14,11 @@
 use columnar::{Container, Ref};
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::arrange::TraceAgent;
-use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use mz_repr::Diff;
 use mz_timely_util::columnation::{ColInternalMerger, ColumnationChunker};
+use mz_timely_util::merge_batcher::MergeBatcher;
 
 use crate::render::errors::DataflowErrorSer;
 use crate::row_spine::RowValBuilder;

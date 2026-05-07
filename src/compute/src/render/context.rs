@@ -19,7 +19,9 @@ use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, Data, VecCollection};
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::dyncfgs::ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION;
+use mz_compute_types::dyncfgs::{
+    ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION, ENABLE_TEMPORAL_BUCKETING,
+};
 use mz_compute_types::plan::AvailableCollections;
 use mz_dyncfg::ConfigSet;
 use mz_expr::{Id, MapFilterProject, MirScalarExpr};
@@ -28,10 +30,9 @@ use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
 use mz_timely_util::operator::CollectionExt;
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
+use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{OutputBuilder, OutputBuilderSession};
@@ -40,12 +41,12 @@ use timely::progress::operate::FrontierInterest;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::compute_state::ComputeState;
-use crate::extensions::arrange::{KeyCollection, MzArrange, MzArrangeCore};
+use crate::extensions::arrange::{KeyCollection, MaybeTemporalRowRowArrange, MzArrange};
 use crate::render::errors::{DataflowErrorSer, ErrorLogger};
 use crate::render::{LinearJoinSpec, RenderTimestamp};
-use crate::row_spine::{DatumSeq, RowRowBuilder};
+use crate::row_spine::DatumSeq;
 use crate::typedefs::{
-    ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, RowRowAgent, RowRowEnter, RowRowSpine,
+    ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, RowRowAgent, RowRowEnter,
 };
 
 /// Dataflow-local collections and arrangements.
@@ -738,7 +739,10 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         input_mfp: MapFilterProject,
         until: Antichain<mz_repr::Timestamp>,
         config_set: &ConfigSet,
-    ) -> Self {
+    ) -> Self
+    where
+        T: MaybeTemporalRowRowArrange,
+    {
         if collections == Default::default() {
             return self;
         }
@@ -756,6 +760,8 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 "LIR ArrangeBy tried to create an existing arrangement"
             );
         }
+
+        let bucketing_enabled = ENABLE_TEMPORAL_BUCKETING.get(config_set);
 
         // We need the collection if either (1) it is explicitly demanded, or (2) we are going to render any arrangement
         let form_raw_collection = collections.raw
@@ -780,8 +786,13 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                     .collection
                     .take()
                     .expect("Collection constructed above");
-                let (oks, errs_keyed, passthrough) =
-                    Self::arrange_collection(&name, oks, key.clone(), thinning.clone());
+                let (oks, errs_keyed, passthrough) = Self::arrange_collection(
+                    &name,
+                    oks,
+                    key.clone(),
+                    thinning.clone(),
+                    bucketing_enabled,
+                );
                 let errs_concat: KeyCollection<_, _, _> = errs.clone().concat(errs_keyed).into();
                 self.collection = Some((passthrough, errs));
                 let errs =
@@ -810,11 +821,15 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         oks: VecCollection<'scope, T, Row, Diff>,
         key: Vec<MirScalarExpr>,
         thinning: Vec<usize>,
+        bucketing_enabled: bool,
     ) -> (
         Arranged<'scope, RowRowAgent<T, Diff>>,
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
         VecCollection<'scope, T, Row, Diff>,
-    ) {
+    )
+    where
+        T: MaybeTemporalRowRowArrange,
+    {
         // This operator implements a `map_fallible`, but produces columnar updates for the ok
         // stream. The `map_fallible` cannot be used here because the closure cannot return
         // references, which is what we need to push into columnar streams. Instead, we use a
@@ -861,18 +876,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             }
         });
 
-        let oks = ok_stream
-            .mz_arrange_core::<
-                _,
-                Col2ValBatcher<_, _, _, _>,
-                RowRowBuilder<_, _>,
-                RowRowSpine<_, _>,
-            >(
-                ExchangeCore::<ColumnBuilder<_>, _>::new_core(
-                    columnar_exchange::<Row, Row, T, Diff>,
-                ),
-                name
-            );
+        let oks = T::arrange_row_row(ok_stream, name, bucketing_enabled);
         (
             oks,
             err_stream.as_collection(),
