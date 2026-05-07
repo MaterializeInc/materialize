@@ -1551,7 +1551,7 @@ class FlipFlagsAction(Action):
             "'1h'",
         ]
         self.flags_with_values["arrangement_size_history_retention_period"] = [
-            "'1m'",
+            "'1min'",
             "'1h'",
             "'7d'",
         ]
