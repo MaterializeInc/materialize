@@ -402,7 +402,7 @@ def get_variable_system_parameters(
             "arrangement_size_history_collection_interval", "1h", ["1s", "10s", "1h"]
         ),
         VariableSystemParameter(
-            "arrangement_size_history_retention_period", "7d", ["1m", "1h", "7d"]
+            "arrangement_size_history_retention_period", "7d", ["1min", "1h", "7d"]
         ),
         VariableSystemParameter(
             "persist_validate_part_bounds_on_read", "false", ["true", "false"]
