@@ -3799,6 +3799,10 @@ fn kafka_sink_builder(
         // This is a librdkafka-enforced restriction that, if violated,
         // would result in a runtime error for the source.
         sql_bail!("TOPIC METADATA REFRESH INTERVAL cannot be greater than 1 hour");
+    } else if topic_metadata_refresh_interval <= Duration::new(0, 0) {
+        // A non-positive refresh interval doesn't make sense, and would also cause tokio to panic
+        // at runtime.
+        sql_bail!("TOPIC METADATA REFRESH INTERVAL must be greater than zero");
     }
 
     let assert_positive = |val: Option<i32>, name: &str| {
