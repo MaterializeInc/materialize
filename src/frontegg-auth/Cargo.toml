@@ -32,8 +32,10 @@ tracing.workspace = true
 uuid = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
+aws-lc-rs.workspace = true
 axum.workspace = true
 mz-ore = { path = "../ore", features = ["network", "test"] }
+pem.workspace = true
 tokio.workspace = true
 
 [features]

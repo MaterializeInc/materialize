@@ -46,6 +46,24 @@ pub const DEFAULT_REFRESH_DROP_FACTOR: f64 = 0.05;
 /// The maximum length of a user name.
 pub const MAX_USER_NAME_LENGTH: usize = 255;
 
+/// Specifies how tenant validation is performed on incoming JWTs.
+///
+/// All organizations share a single Frontegg workspace (and thus a single RSA
+/// signing key). The `tenant_id` claim in the JWT and the per-environmentd
+/// tenant check are the **only** controls preventing cross-organization access.
+/// This enum forces callers to explicitly declare their tenant validation
+/// strategy rather than accidentally passing `None`.
+#[derive(Clone, Debug)]
+pub enum TenantScope {
+    /// Validate that the JWT's `tenant_id` matches this specific tenant.
+    /// Used by environmentd, where cross-tenant isolation is critical.
+    Specific(Uuid),
+    /// Accept JWTs from any tenant without checking `tenant_id`.
+    /// Only appropriate for routing services like balancerd that rely on
+    /// downstream environmentd instances to enforce tenant isolation.
+    AcceptAny,
+}
+
 /// Configures an [`Authenticator`].
 #[derive(Clone, Derivative)]
 #[derivative(Debug)]
@@ -55,8 +73,8 @@ pub struct AuthenticatorConfig {
     /// JWK used to validate JWTs.
     #[derivative(Debug = "ignore")]
     pub decoding_key: DecodingKey,
-    /// Optional tenant id used to validate JWTs.
-    pub tenant_id: Option<Uuid>,
+    /// Tenant validation strategy. See [`TenantScope`] for details.
+    pub tenant_id: TenantScope,
     /// Function to provide system time to validate exp (expires at) field of JWTs.
     pub now: NowFn,
     /// Name of admin role.
@@ -156,7 +174,7 @@ impl Authenticator {
                 AuthenticatorConfig {
                     admin_api_token_url,
                     decoding_key,
-                    tenant_id: Some(tenant_id),
+                    tenant_id: TenantScope::Specific(tenant_id),
                     now: mz_ore::now::SYSTEM_TIME.clone(),
                     admin_role,
                     refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
@@ -390,7 +408,7 @@ struct AuthenticatorInner {
     validation: Validation,
     #[derivative(Debug = "ignore")]
     decoding_key: DecodingKey,
-    tenant_id: Option<Uuid>,
+    tenant_id: TenantScope,
     admin_role: String,
     now: NowFn,
     /// Session tracking.
@@ -574,9 +592,14 @@ impl AuthenticatorInner {
         if msg.claims.exp < self.now.as_secs() {
             return Err(Error::TokenExpired);
         }
-        if let Some(expected_tenant_id) = self.tenant_id {
-            if msg.claims.tenant_id != expected_tenant_id {
-                return Err(Error::UnauthorizedTenant);
+        match &self.tenant_id {
+            TenantScope::Specific(expected_tenant_id) => {
+                if msg.claims.tenant_id != *expected_tenant_id {
+                    return Err(Error::UnauthorizedTenant);
+                }
+            }
+            TenantScope::AcceptAny => {
+                // No tenant validation — caller has explicitly opted out.
             }
         }
 
@@ -810,4 +833,224 @@ fn validate_user(user: &str, expected_user: &str) -> Result<(), Error> {
 
 const fn bool_as_str(x: bool) -> &'static str {
     if x { "true" } else { "false" }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aws_lc_rs::encoding::AsDer;
+    use aws_lc_rs::rsa::{KeyPair, KeySize};
+    use aws_lc_rs::signature::KeyPair as _;
+    use jsonwebtoken::{EncodingKey, Header};
+    use mz_ore::now::SYSTEM_TIME;
+
+    /// Helper: generate an RSA key pair and return (encoding_key, decoding_key).
+    fn generate_keys() -> (EncodingKey, DecodingKey) {
+        let key_pair = KeyPair::generate(KeySize::Rsa2048).unwrap();
+        let private_der = key_pair.as_der().unwrap();
+        let private_pem = pem::encode(&pem::Pem::new("PRIVATE KEY", private_der.as_ref()));
+        let public_der = key_pair.public_key().as_der().unwrap();
+        let public_pem = pem::encode(&pem::Pem::new("PUBLIC KEY", public_der.as_ref()));
+        (
+            EncodingKey::from_rsa_pem(private_pem.as_bytes()).unwrap(),
+            DecodingKey::from_rsa_pem(public_pem.as_bytes()).unwrap(),
+        )
+    }
+
+    /// Helper: create an Authenticator with the given tenant scope.
+    fn make_authenticator(decoding_key: DecodingKey, tenant_id: TenantScope) -> Authenticator {
+        let registry = mz_ore::metrics::MetricsRegistry::new();
+        Authenticator::new(
+            AuthenticatorConfig {
+                admin_api_token_url: "http://localhost:0/not-used".to_string(),
+                decoding_key,
+                tenant_id,
+                now: SYSTEM_TIME.clone(),
+                admin_role: "mzadmin".to_string(),
+                refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
+                refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
+            },
+            crate::Client::default(),
+            &registry,
+        )
+    }
+
+    /// Helper: mint a JWT signed with the given key.
+    fn mint_token(
+        encoding_key: &EncodingKey,
+        tenant_id: Uuid,
+        email: &str,
+        roles: Vec<String>,
+    ) -> String {
+        let claims = Claims {
+            sub: Uuid::new_v4(),
+            exp: SYSTEM_TIME.as_secs() + 600,
+            iss: "test-issuer".to_string(),
+            token_type: ClaimTokenType::UserToken,
+            email: Some(email.to_string()),
+            user_id: None,
+            tenant_id,
+            roles,
+            permissions: vec![],
+            metadata: None,
+        };
+        jsonwebtoken::encode(&Header::new(Algorithm::RS256), &claims, encoding_key).unwrap()
+    }
+
+    // -----------------------------------------------------------------------
+    // SEC-132: Cross-tenant regression tests
+    // -----------------------------------------------------------------------
+
+    #[mz_ore::test]
+    fn test_cross_tenant_token_rejected() {
+        // A JWT minted for tenant_b must be rejected by an authenticator
+        // configured for tenant_a, even though the signature is valid.
+        let (encoding_key, decoding_key) = generate_keys();
+        let tenant_a = Uuid::new_v4();
+        let tenant_b = Uuid::new_v4();
+
+        let authenticator = make_authenticator(decoding_key, TenantScope::Specific(tenant_a));
+        let token = mint_token(&encoding_key, tenant_b, "user@example.com", vec![]);
+
+        let result = authenticator.validate_access_token(&token, None);
+        let err = result.expect_err("cross-tenant token must be rejected");
+        assert!(
+            matches!(err, Error::UnauthorizedTenant),
+            "expected UnauthorizedTenant, got: {err:?}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_same_tenant_token_accepted() {
+        // A JWT minted for tenant_a is accepted by an authenticator for tenant_a.
+        let (encoding_key, decoding_key) = generate_keys();
+        let tenant_a = Uuid::new_v4();
+
+        let authenticator = make_authenticator(decoding_key, TenantScope::Specific(tenant_a));
+        let token = mint_token(&encoding_key, tenant_a, "user@example.com", vec![]);
+
+        let (claims, _authenticated) = authenticator
+            .validate_access_token(&token, None)
+            .expect("same-tenant token must be accepted");
+        assert_eq!(claims.tenant_id, tenant_a);
+    }
+
+    #[mz_ore::test]
+    fn test_none_tenant_id_accepts_any_tenant() {
+        // When AuthenticatorConfig.tenant_id is None (balancerd mode),
+        // JWTs from any tenant are accepted.
+        let (encoding_key, decoding_key) = generate_keys();
+        let tenant_a = Uuid::new_v4();
+        let tenant_b = Uuid::new_v4();
+
+        let authenticator = make_authenticator(decoding_key, TenantScope::AcceptAny);
+
+        let token_a = mint_token(&encoding_key, tenant_a, "alice@example.com", vec![]);
+        let token_b = mint_token(&encoding_key, tenant_b, "bob@example.com", vec![]);
+
+        let (claims_a, _) = authenticator
+            .validate_access_token(&token_a, None)
+            .expect("tenant_a token must be accepted when tenant_id is None");
+        assert_eq!(claims_a.tenant_id, tenant_a);
+
+        let (claims_b, _) = authenticator
+            .validate_access_token(&token_b, None)
+            .expect("tenant_b token must be accepted when tenant_id is None");
+        assert_eq!(claims_b.tenant_id, tenant_b);
+    }
+
+    #[mz_ore::test]
+    fn test_cross_tenant_with_valid_user_still_rejected() {
+        // Even if the expected_user matches the token's email, a tenant
+        // mismatch must still cause rejection. The tenant check must happen
+        // before (or regardless of) user validation.
+        let (encoding_key, decoding_key) = generate_keys();
+        let tenant_a = Uuid::new_v4();
+        let tenant_b = Uuid::new_v4();
+        let email = "user@example.com";
+
+        let authenticator = make_authenticator(decoding_key, TenantScope::Specific(tenant_a));
+        let token = mint_token(&encoding_key, tenant_b, email, vec![]);
+
+        let result = authenticator.validate_access_token(&token, Some(email));
+        let err = result.expect_err("cross-tenant must be rejected even with matching user");
+        assert!(
+            matches!(err, Error::UnauthorizedTenant),
+            "expected UnauthorizedTenant, got: {err:?}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_cross_tenant_admin_token_rejected() {
+        // An admin token from a different tenant must be rejected.
+        // This ensures admin role does not bypass tenant isolation.
+        let (encoding_key, decoding_key) = generate_keys();
+        let tenant_a = Uuid::new_v4();
+        let tenant_b = Uuid::new_v4();
+
+        let authenticator = make_authenticator(decoding_key, TenantScope::Specific(tenant_a));
+        let token = mint_token(
+            &encoding_key,
+            tenant_b,
+            "admin@evil.com",
+            vec!["mzadmin".to_string()],
+        );
+
+        let result = authenticator.validate_access_token(&token, None);
+        let err = result.expect_err("cross-tenant admin token must be rejected");
+        assert!(
+            matches!(err, Error::UnauthorizedTenant),
+            "expected UnauthorizedTenant, got: {err:?}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_wrong_signing_key_rejected() {
+        // A JWT signed by a different key must be rejected, even with a
+        // matching tenant_id. This is the baseline control.
+        let (_encoding_key_a, decoding_key_a) = generate_keys();
+        let (encoding_key_b, _decoding_key_b) = generate_keys();
+        let tenant = Uuid::new_v4();
+
+        let authenticator = make_authenticator(decoding_key_a, TenantScope::Specific(tenant));
+        let token = mint_token(&encoding_key_b, tenant, "user@example.com", vec![]);
+
+        let result = authenticator.validate_access_token(&token, None);
+        assert!(
+            result.is_err(),
+            "token with wrong signing key must be rejected"
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_expired_token_rejected() {
+        // Expired tokens must be rejected regardless of tenant match.
+        let (encoding_key, decoding_key) = generate_keys();
+        let tenant = Uuid::new_v4();
+
+        let authenticator = make_authenticator(decoding_key, TenantScope::Specific(tenant));
+
+        // Mint a token that expired 10 minutes ago.
+        let claims = Claims {
+            sub: Uuid::new_v4(),
+            exp: SYSTEM_TIME.as_secs() - 600,
+            iss: "test-issuer".to_string(),
+            token_type: ClaimTokenType::UserToken,
+            email: Some("user@example.com".to_string()),
+            user_id: None,
+            tenant_id: tenant,
+            roles: vec![],
+            permissions: vec![],
+            metadata: None,
+        };
+        let token =
+            jsonwebtoken::encode(&Header::new(Algorithm::RS256), &claims, &encoding_key).unwrap();
+
+        let result = authenticator.validate_access_token(&token, None);
+        let err = result.expect_err("expired token must be rejected");
+        assert!(
+            matches!(err, Error::TokenExpired),
+            "expected TokenExpired, got: {err:?}"
+        );
+    }
 }
