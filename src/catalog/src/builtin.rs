@@ -2175,7 +2175,12 @@ pub static MZ_DATAFLOW_ADDRESSES_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::ne
             [OntologyLink {
                 name: "address_of",
                 target: "dataflow_operator_per_worker",
-                properties: LinkProperties::fk_composite("id", "id", Cardinality::ManyToOne, &[("worker_id", "worker_id")]),
+                properties: LinkProperties::fk_composite(
+                    "id",
+                    "id",
+                    Cardinality::ManyToOne,
+                    &[("worker_id", "worker_id")],
+                ),
             }]
         },
         column_semantic_types: &[],
@@ -2196,12 +2201,22 @@ pub static MZ_DATAFLOW_CHANNELS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new
                 OntologyLink {
                     name: "source_operator",
                     target: "dataflow_operator_per_worker",
-                    properties: LinkProperties::fk_composite("from_index", "id", Cardinality::ManyToOne, &[("worker_id", "worker_id")]),
+                    properties: LinkProperties::fk_composite(
+                        "from_index",
+                        "id",
+                        Cardinality::ManyToOne,
+                        &[("worker_id", "worker_id")],
+                    ),
                 },
                 OntologyLink {
                     name: "target_operator",
                     target: "dataflow_operator_per_worker",
-                    properties: LinkProperties::fk_composite("to_index", "id", Cardinality::ManyToOne, &[("worker_id", "worker_id")]),
+                    properties: LinkProperties::fk_composite(
+                        "to_index",
+                        "id",
+                        Cardinality::ManyToOne,
+                        &[("worker_id", "worker_id")],
+                    ),
                 },
             ]
         },
@@ -2498,7 +2513,12 @@ pub static MZ_COMPUTE_LIR_MAPPING_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::n
             [OntologyLink {
                 name: "export_of",
                 target: "compute_export_per_worker",
-                properties: LinkProperties::fk_composite("global_id", "export_id", Cardinality::ManyToOne, &[("worker_id", "worker_id")]),
+                properties: LinkProperties::fk_composite(
+                    "global_id",
+                    "export_id",
+                    Cardinality::ManyToOne,
+                    &[("worker_id", "worker_id")],
+                ),
             }]
         },
         column_semantic_types: &[("global_id", SemanticType::GlobalId)],
@@ -17969,7 +17989,7 @@ mod tests {
                     LinkProperties::Measures { source_column, .. } => Some(*source_column),
                     LinkProperties::DependsOn { source_column, .. } => Some(*source_column),
                     LinkProperties::MapsTo { source_column, .. } => Some(*source_column),
-                    _ => None,
+                    LinkProperties::Union { .. } => None,
                 })
                 .collect();
 
@@ -18043,7 +18063,7 @@ mod tests {
                     LinkProperties::Measures { source_column, .. } => Some(*source_column),
                     LinkProperties::DependsOn { source_column, .. } => Some(*source_column),
                     LinkProperties::MapsTo { source_column, .. } => Some(*source_column),
-                    _ => None,
+                    LinkProperties::Union { .. } => None,
                 };
                 let Some(col) = source_col else { continue };
                 if !col_names.contains(col) {
@@ -18052,7 +18072,11 @@ mod tests {
                         ont.entity_name, name, link.name, col
                     ));
                 }
-                if let LinkProperties::ForeignKey { extra_key_columns: Some(extras), .. } = &link.properties {
+                if let LinkProperties::ForeignKey {
+                    extra_key_columns: Some(extras),
+                    ..
+                } = &link.properties
+                {
                     for (src_col, _) in *extras {
                         if !col_names.contains(*src_col) {
                             bad_source_cols.push(format!(
@@ -18100,7 +18124,12 @@ mod tests {
         );
         // fk_composite — extra_key_columns present
         check(
-            LinkProperties::fk_composite("operator_id", "id", Cardinality::ManyToOne, &[("worker_id", "worker_id")]),
+            LinkProperties::fk_composite(
+                "operator_id",
+                "id",
+                Cardinality::ManyToOne,
+                &[("worker_id", "worker_id")],
+            ),
             r#"{"kind":"foreign_key","source_column":"operator_id","target_column":"id","cardinality":"many_to_one","extra_key_columns":[["worker_id","worker_id"]]}"#,
         );
         // fk — one_to_one cardinality
