@@ -21,6 +21,9 @@ endif
 ifeq ($(RUNTIME),none)
   $(error neither podman nor docker found in PATH; set RUNTIME=docker or install podman)
 endif
+ifeq ($(RUNTIME),podman)
+  export MZ_DEV_CI_BUILDER_RUNTIME := podman
+endif
 
 COMPOSE := $(RUNTIME) compose -p $(PROJECT) -f config/docker-compose.yaml
 PSQL    := $(COMPOSE) exec materialized psql -h localhost -p 6875 -U materialize
@@ -39,11 +42,25 @@ export-compose:
 # ---------------------------------------------------------------------------
 # Build — build images that don't have public equivalents.
 # ---------------------------------------------------------------------------
-LOCAL_IMAGES  := workload config
+LOCAL_IMAGES  := materialized workload config
 BUILD_TARGETS := $(LOCAL_IMAGES:%=build-%)
 
-.PHONY: build $(BUILD_TARGETS)
+.PHONY: build $(BUILD_TARGETS) build-builder
 build: export-compose $(BUILD_TARGETS)
+
+build-builder:
+	cd $(REPO_ROOT) && $(REPO_ROOT)/bin/ci-builder build stable --load
+	@tag=$$(cd $(REPO_ROOT) && $(REPO_ROOT)/bin/ci-builder tag stable); \
+	  echo "Tagging materialize/ci-builder:$$tag -> $(PROJECT)-builder:latest"; \
+	  $(RUNTIME) tag "materialize/ci-builder:$$tag" $(PROJECT)-builder:latest
+
+build-materialized: build-builder
+	cd $(REPO_ROOT) && $(REPO_ROOT)/bin/mzimage acquire materialized --antithesis
+	@# Tag the mzbuild output to the name the compose file expects
+	@img=$$($(RUNTIME) images --format '{{.Repository}}:{{.Tag}}' \
+	  | grep 'materialized:mzbuild-' | head -1); \
+	  echo "Tagging $$img -> $(PROJECT)-materialized:latest"; \
+	  $(RUNTIME) tag "$$img" $(PROJECT)-materialized:latest
 
 build-workload:
 	$(RUNTIME) build \
@@ -85,6 +102,7 @@ test:
 push:
 	@$(RUNTIME) images --format '{{.Repository}}:{{.Tag}}' \
 	  | grep ':latest$$' | grep '^\(localhost/\)\?$(PROJECT)-' \
+	  | grep -v '$(PROJECT)-builder' \
 	  | while read item; do \
 	      nametag="$${item#localhost/}"; \
 	      name="$${nametag%:*}"; \

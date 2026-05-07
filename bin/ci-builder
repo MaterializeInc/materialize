@@ -18,6 +18,9 @@ set -euo pipefail
 
 NIGHTLY_RUST_DATE=2026-05-06
 
+# Allow overriding the container runtime (e.g. MZ_DEV_CI_BUILDER_RUNTIME=podman).
+DOCKER="${MZ_DEV_CI_BUILDER_RUNTIME:-docker}"
+
 workdir=$(pwd)
 cd "$(dirname "$0")/.."
 
@@ -128,10 +131,14 @@ gid=$(id -g)
 [[ "$gid" -lt 500 ]] && gid=$uid
 
 build() {
+    local cache_args=()
+    if [[ "$DOCKER" != "podman" ]]; then
+        cache_args+=(--cache-from=materialize/ci-builder:"$cache_tag")
+        cache_args+=(--cache-to=type=inline,mode=max)
+    fi
     # shellcheck disable=SC2086 # intentional splitting of build args string
-    docker buildx build --pull \
-        --cache-from=materialize/ci-builder:"$cache_tag" \
-        --cache-to=type=inline,mode=max \
+    "$DOCKER" buildx build --pull \
+        "${cache_args[@]}" \
         $docker_build_args \
         --tag materialize/ci-builder:"$tag" \
         --tag ghcr.io/materializeinc/materialize/ci-builder:"$tag" \
@@ -181,13 +188,13 @@ case "$cmd" in
         build "$@"
         ;;
     exists)
-        docker manifest inspect "$image_registry"/ci-builder:"$tag" &> /dev/null
+        "$DOCKER" manifest inspect "$image_registry"/ci-builder:"$tag" &> /dev/null
         ;;
     tag)
         echo "$tag"
         ;;
     push)
-        docker login ghcr.io -u materialize-bot --password "$GITHUB_GHCR_TOKEN"
+        "$DOCKER" login ghcr.io -u materialize-bot --password "$GITHUB_GHCR_TOKEN"
         build --push "$@"
         ;;
     run)
@@ -372,20 +379,26 @@ case "$cmd" in
             )
         fi
         if [[ "$(uname -s)" = Linux ]]; then
-            args+=(
-                --user "$(id -u):$(stat -c %g /var/run/docker.sock)"
-            )
+            if [[ "${MZ_DEV_CI_BUILDER_RUNTIME:-docker}" == "podman" ]]; then
+                args+=(--userns=keep-id)
+            else
+                args+=(
+                    --user "$(id -u):$(stat -c %g /var/run/docker.sock)"
+                )
+            fi
 
             if [[ $secrets == "true" ]]; then
                 # Allow Docker-in-Docker by mounting the Docker socket in the
                 # container. Host networking allows us to see ports created by
                 # containers that we launch.
                 args+=(
-                    --volume "/var/run/docker.sock:/var/run/docker.sock"
                     --network host
                     --env "DOCKER_TLS_VERIFY=${DOCKER_TLS_VERIFY-}"
                     --env "DOCKER_HOST=${DOCKER_HOST-}"
                 )
+                if [[ -S /var/run/docker.sock ]]; then
+                    args+=(--volume "/var/run/docker.sock:/var/run/docker.sock")
+                fi
 
                 # Forward Docker configuration too, if available.
                 docker_dir=${DOCKER_CONFIG:-$HOME/.docker}
@@ -431,14 +444,22 @@ case "$cmd" in
         image="$image_registry/ci-builder:$tag"
         # Try downloading the image a few times in case of registry flakiness
         if [[ "${CI:-}" ]]; then
-            if ! docker inspect "$image" > /dev/null 2>&1; then
-                docker pull "$image" || (sleep 3 && docker pull "$image") || (sleep 3 && docker pull "$image") || sleep 3
+            if ! "$DOCKER" inspect "$image" > /dev/null 2>&1; then
+                "$DOCKER" pull "$image" || (sleep 3 && "$DOCKER" pull "$image") || (sleep 3 && "$DOCKER" pull "$image") || sleep 3
             fi
         fi
-        docker run "${args[@]}" "$image" eatmydata "${docker_command[@]}"
+        if [[ "$DOCKER" == "podman" ]]; then
+            # --userns=keep-id already maps the host UID/GID into the
+            # container, so autouseradd is unnecessary.  Override the
+            # entrypoint to skip it.
+            args+=(--entrypoint eatmydata)
+            "$DOCKER" run "${args[@]}" "$image" "${docker_command[@]}"
+        else
+            "$DOCKER" run "${args[@]}" "$image" eatmydata "${docker_command[@]}"
+        fi
         ;;
     root-shell)
-        docker exec --interactive --tty --user 0:0 "$(<"$cid_file")" eatmydata ci/builder/root-shell.sh
+        "$DOCKER" exec --interactive --tty --user 0:0 "$(<"$cid_file")" eatmydata ci/builder/root-shell.sh
         ;;
     *)
         printf "unknown command %q\n" "$cmd"

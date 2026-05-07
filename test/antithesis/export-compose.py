@@ -22,7 +22,7 @@ from materialize.mzcompose.composition import Composition
 # Map mzbuild names → image references for the Antithesis compose.
 # Public images for infra; local build tag for the workload.
 MZBUILD_TO_IMAGE = {
-    "materialized": "materialize/materialized:latest",
+    "materialized": "materialize-materialized:latest",
     "postgres": "postgres:17.7",
     "minio": "minio/minio:latest",
     "antithesis-workload": "materialize-workload:latest",

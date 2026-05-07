@@ -294,7 +294,7 @@ services:
       start_period: 600s
     stop_grace_period: 120s
     platform: linux/amd64
-    image: materialize/materialized:latest
+    image: materialize-materialized:latest
   workload:
     depends_on:
       materialized:
