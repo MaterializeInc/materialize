@@ -393,6 +393,7 @@ impl ShouldTerminateGracefully for PeekError {
     fn should_terminate_gracefully(&self) -> bool {
         match self {
             PeekError::SinceViolation(_)
+            | PeekError::ReadHoldIdMismatch(_)
             | PeekError::InstanceMissing(_)
             | PeekError::CollectionMissing(_)
             | PeekError::ReplicaMissing(_) => false,

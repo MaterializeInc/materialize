@@ -279,22 +279,6 @@ impl Coordinator {
         became_empty
     }
 
-    pub(crate) fn remove_compute_ids_from_timeline<I>(&mut self, ids: I) -> Vec<Timeline>
-    where
-        I: IntoIterator<Item = (ComputeInstanceId, GlobalId)>,
-    {
-        let mut empty_timelines = BTreeSet::new();
-        for (compute_instance, id) in ids {
-            for (timeline, TimelineState { read_holds, .. }) in &mut self.global_timelines {
-                read_holds.remove_compute_collection(compute_instance, id);
-                if read_holds.is_empty() {
-                    empty_timelines.insert(timeline.clone());
-                }
-            }
-        }
-        empty_timelines.into_iter().collect()
-    }
-
     #[instrument(level = "debug")]
     pub(crate) async fn advance_timelines(&mut self) {
         let global_timelines = std::mem::take(&mut self.global_timelines);
