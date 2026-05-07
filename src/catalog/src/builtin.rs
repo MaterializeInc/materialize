@@ -347,6 +347,10 @@ pub enum LinkProperties {
         /// Free-form annotation for cases that need extra context.
         #[serde(skip_serializing_if = "Option::is_none")]
         note: Option<&'static str>,
+        /// Additional `(source_column, target_column)` pairs that together with
+        /// `source_column`/`target_column` form a composite join key.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        extra_key_columns: Option<&'static [(&'static str, &'static str)]>,
     },
 }
 
@@ -477,6 +481,25 @@ impl LinkProperties {
             source_id_type: None,
             requires_mapping: None,
             note: None,
+            extra_key_columns: None,
+        }
+    }
+
+    /// Measures link with a composite join key.
+    pub const fn measures_composite(
+        source_column: &'static str,
+        target_column: &'static str,
+        metric: &'static str,
+        extra_key_columns: &'static [(&'static str, &'static str)],
+    ) -> Self {
+        Self::Measures {
+            source_column,
+            target_column,
+            metric,
+            source_id_type: None,
+            requires_mapping: None,
+            note: None,
+            extra_key_columns: Some(extra_key_columns),
         }
     }
 
@@ -495,6 +518,7 @@ impl LinkProperties {
             source_id_type: Some(source_id_type),
             requires_mapping: Some(requires_mapping),
             note: None,
+            extra_key_columns: None,
         }
     }
 }
@@ -2387,7 +2411,12 @@ pub static MZ_COMPUTE_FRONTIERS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new
             [OntologyLink {
                 name: "frontier_of",
                 target: "compute_export_per_worker",
-                properties: LinkProperties::measures("export_id", "export_id", "time"),
+                properties: LinkProperties::measures_composite(
+                    "export_id",
+                    "export_id",
+                    "time",
+                    &[("worker_id", "worker_id")],
+                ),
             }]
         },
         column_semantic_types: &[
@@ -2450,7 +2479,12 @@ pub static MZ_COMPUTE_HYDRATION_TIMES_PER_WORKER: LazyLock<BuiltinLog> =
                 [OntologyLink {
                     name: "hydration_time_of",
                     target: "compute_export_per_worker",
-                    properties: LinkProperties::measures("export_id", "export_id", "time_ns"),
+                    properties: LinkProperties::measures_composite(
+                        "export_id",
+                        "export_id",
+                        "time_ns",
+                        &[("worker_id", "worker_id")],
+                    ),
                 }]
             },
             column_semantic_types: &[("export_id", SemanticType::GlobalId)],
@@ -11000,7 +11034,23 @@ WITH MUTUALLY RECURSIVE
     )
 SELECT * FROM all_errors",
         access: vec![PUBLIC_SELECT],
-        ontology: None,
+        ontology: Some(Ontology {
+            entity_name: "compute_error_per_worker",
+            description: "Error counts per compute collection per worker.",
+            links: &const {
+                [OntologyLink {
+                    name: "errors_in",
+                    target: "compute_export_per_worker",
+                    properties: LinkProperties::measures_composite(
+                        "export_id",
+                        "export_id",
+                        "count",
+                        &[("worker_id", "worker_id")],
+                    ),
+                }]
+            },
+            column_semantic_types: &[("export_id", SemanticType::GlobalId)],
+        }),
     });
 
 pub static MZ_COMPUTE_ERROR_COUNTS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
@@ -11820,6 +11870,7 @@ GROUP BY operator_id",
                     note: Some(
                         "Both IDs are local uint64 operator IDs within a dataflow, not GlobalIds.",
                     ),
+                    extra_key_columns: None,
                 },
             }]
         },
@@ -18072,12 +18123,19 @@ mod tests {
                         ont.entity_name, name, link.name, col
                     ));
                 }
-                if let LinkProperties::ForeignKey {
-                    extra_key_columns: Some(extras),
-                    ..
-                } = &link.properties
-                {
-                    for (src_col, _) in *extras {
+                let extra_key_columns = match &link.properties {
+                    LinkProperties::ForeignKey {
+                        extra_key_columns: Some(extras),
+                        ..
+                    } => Some(*extras),
+                    LinkProperties::Measures {
+                        extra_key_columns: Some(extras),
+                        ..
+                    } => Some(*extras),
+                    _ => None,
+                };
+                if let Some(extras) = extra_key_columns {
+                    for (src_col, _) in extras {
                         if !col_names.contains(*src_col) {
                             bad_source_cols.push(format!(
                                 "entity {:?} (builtin {}) link {:?} extra_key_columns references {:?} which does not exist in the relation",
@@ -18181,6 +18239,16 @@ mod tests {
         check(
             LinkProperties::measures("id", "id", "cpu_time_ns"),
             r#"{"kind":"measures","source_column":"id","target_column":"id","metric":"cpu_time_ns"}"#,
+        );
+        // measures_composite — extra_key_columns present
+        check(
+            LinkProperties::measures_composite(
+                "export_id",
+                "export_id",
+                "time_ns",
+                &[("worker_id", "worker_id")],
+            ),
+            r#"{"kind":"measures","source_column":"export_id","target_column":"export_id","metric":"time_ns","extra_key_columns":[["worker_id","worker_id"]]}"#,
         );
         // measures_mapped — source_id_type + requires_mapping present
         check(

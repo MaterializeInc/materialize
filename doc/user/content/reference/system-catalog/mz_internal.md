@@ -591,7 +591,7 @@ The `mz_object_fully_qualified_names` view enriches the [`mz_catalog.mz_objects`
 | --------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------                                                |
 | `id`            | [`text`]     | Materialize's unique ID for the object.                                                                                                                                                         |
 | `name`          | [`text`]     | The name of the object.                                                                                                                                                                         |
-| `object_type`   | [`text`]     | The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.                                                  |
+| `object_type`   | [`text`]     | The type of the object: one of `table`, `source`, `view`, `materialized-view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.                                                  |
 | `schema_id`     | [`text`]     | The ID of the schema to which the object belongs. Corresponds to [`mz_schemas.id`](/reference/system-catalog/mz_catalog/#mz_schemas).                                                                 |
 | `schema_name`   | [`text`]     | The name of the schema to which the object belongs. Corresponds to [`mz_schemas.name`](/reference/system-catalog/mz_catalog/#mz_schemas).                                                             |
 | `database_id`   | [`text`]     | The ID of the database to which the object belongs. Corresponds to [`mz_databases.id`](/reference/system-catalog/mz_catalog/#mz_schemas).                                                             |
@@ -607,7 +607,7 @@ The `mz_object_lifetimes` view enriches the [`mz_catalog.mz_objects`](/reference
 | --------------- | ------------------------------ | -------------------------------------------------                                                                                              |
 | `id`            | [`text`]                       | Materialize's unique ID for the object.                                                                                                        |
 | `previous_id`   | [`text`]                       | The object's previous ID, if one exists.                                                                                                       |
-| `object_type`   | [`text`]                       | The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`. |
+| `object_type`   | [`text`]                       | The type of the object: one of `table`, `source`, `view`, `materialized-view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`. |
 | `event_type`    | [`text`]                       | The lifetime event, either `create` or `drop`.                                                                                                 |
 | `occurred_at`   | [`timestamp with time zone`]   | Wall-clock timestamp of when the event occurred.                                                                                               |
 
@@ -620,7 +620,7 @@ The `mz_object_history` view enriches the [`mz_catalog.mz_objects`](/reference/s
 | --------------- | ------------------------------ | -------------------------------------------------                                                                                              |
 | `id`            | [`text`]                       | Materialize's unique ID for the object.                                                                                                        |
 | `cluster_id`   | [`text`]                       | The object's cluster ID. `NULL` if the object has no associated cluster.                                                                                                       |
-| `object_type`   | [`text`]                       | The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`. |
+| `object_type`   | [`text`]                       | The type of the object: one of `table`, `source`, `view`, `materialized-view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`. |
 | `created_at`    | [`timestamp with time zone`]                       | Wall-clock timestamp of when the object was created. `NULL` for built in system objects.                                                                                                |
 | `dropped_at`   | [`timestamp with time zone`]   | Wall-clock timestamp of when the object was dropped. `NULL` for built in system objects or if the object hasn't been dropped.                                              |
 
