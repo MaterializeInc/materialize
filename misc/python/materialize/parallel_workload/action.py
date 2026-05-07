@@ -1787,7 +1787,6 @@ class FlipFlagsAction(Action):
             "enable_introspection_subscribes",
             "plan_insights_notice_fast_path_clusters_optimize_duration",
             "enable_expression_cache",
-            "enable_multi_replica_sources",
             "enable_password_auth",
             "persist_fast_path_order",
             "enable_mcp_agent",

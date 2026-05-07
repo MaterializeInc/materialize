@@ -103,13 +103,6 @@ pub const ENABLE_EXPRESSION_CACHE: Config<bool> = Config::new(
     "Use a cache to store optimized expressions to help speed up start times.",
 );
 
-/// Whether we allow sources in multi-replica clusters.
-pub const ENABLE_MULTI_REPLICA_SOURCES: Config<bool> = Config::new(
-    "enable_multi_replica_sources",
-    true,
-    "Enable multi-replica sources.",
-);
-
 /// Whether to enable password authentication.
 pub const ENABLE_PASSWORD_AUTH: Config<bool> = Config::new(
     "enable_password_auth",
@@ -261,7 +254,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_FRONTEND_SUBSCRIBES)
         .add(&PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION)
         .add(&ENABLE_EXPRESSION_CACHE)
-        .add(&ENABLE_MULTI_REPLICA_SOURCES)
         .add(&ENABLE_PASSWORD_AUTH)
         .add(&OIDC_ISSUER)
         .add(&OIDC_AUDIENCE)
