@@ -32,6 +32,7 @@ from launchdarkly_api.model.variation import Variation  # type: ignore
 
 from materialize.mzcompose import DEFAULT_MZ_ENVIRONMENT_ID, DEFAULT_ORG_ID
 from materialize.mzcompose.composition import Composition, Service
+from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -52,6 +53,9 @@ LD_CONTEXT_KEY = DEFAULT_MZ_ENVIRONMENT_ID
 # A unique feature flag key to use for this test.
 LD_FEATURE_FLAG_KEY = f"ci-test-{BUILDKITE_JOB_ID}"
 
+# Balancerd has no key-map: LD flag keys must match config names exactly.
+BALANCERD_DURATION_FLAG = "balancerd_sigterm_connection_wait"
+
 SERVICES = [
     CockroachOrPostgresMetadata(),
     Materialized(
@@ -66,10 +70,31 @@ SERVICES = [
         external_metadata_store=True,
     ),
     Testdrive(no_reset=True, seed=1),
+    Balancerd(
+        command=[
+            "--startup-log-filter=info",
+            "service",
+            "--pgwire-listen-addr=0.0.0.0:6875",
+            "--https-listen-addr=0.0.0.0:6876",
+            "--internal-http-listen-addr=0.0.0.0:6878",
+            "--static-resolver-addr=localhost:6875",
+            "--https-resolver-template=localhost:6876",
+            f"--launchdarkly-sdk-key={LAUNCHDARKLY_SDK_KEY}",
+            "--config-sync-loop-interval=1s",
+        ],
+    ),
 ]
 
 
 def workflow_default(c: Composition) -> None:
+    for name in c.workflows:
+        if name == "default":
+            continue
+        with c.test_case(name):
+            c.workflow(name)
+
+
+def workflow_environmentd(c: Composition) -> None:
     if LAUNCHDARKLY_API_TOKEN is None:
         raise UIError("Missing LAUNCHDARKLY_API_TOKEN environment variable")
     if LAUNCHDARKLY_SDK_KEY is None:
@@ -244,6 +269,74 @@ def workflow_default(c: Composition) -> None:
             pass  # ignore exceptions on cleanup
 
 
+def workflow_balancerd_duration_sync(c: Composition) -> None:
+    """A malformed Duration flag blocks ALL balancerd config syncing."""
+    if LAUNCHDARKLY_API_TOKEN is None:
+        raise UIError("Missing LAUNCHDARKLY_API_TOKEN environment variable")
+    if LAUNCHDARKLY_SDK_KEY is None:
+        raise UIError("Missing LAUNCHDARKLY_SDK_KEY environment variable")
+
+    ld_client = LaunchDarklyClient(
+        configuration=launchdarkly_api.Configuration(
+            api_key=dict(ApiKey=LAUNCHDARKLY_API_TOKEN),
+        ),
+        project_key="default",
+        environment_key="ci-cd",
+    )
+
+    tags = (
+        ["ci-test", f"gh-{BUILDKITE_PULL_REQUEST}"]
+        if BUILDKITE_PULL_REQUEST
+        else ["ci-test"]
+    )
+
+    try:
+        # off=valid "9m", on=malformed "10 munites". Targeting starts OFF.
+        ld_client.create_flag(
+            BALANCERD_DURATION_FLAG,
+            tags=tags,
+            variations=[
+                Variation(value="9m", name="valid"),
+                Variation(value="10 munites", name="malformed"),
+            ],
+            defaults=Defaults(off_variation=0, on_variation=1),
+        )
+
+        sleep(3)
+
+        # Initial sync() succeeds with "9m", spawning the background sync loop.
+        c.up("balancerd")
+        sleep(5)
+
+        result = c.invoke("logs", "balancerd", capture_and_print=True)
+        logs = result.stdout + result.stderr
+        assert "SyncedConfigSet:" not in logs
+
+        # Switch to malformed value; the sync loop starts failing every tick.
+        ld_client.update_targeting(BALANCERD_DURATION_FLAG, on=True)
+        sleep(10)
+
+        result = c.invoke("logs", "balancerd", capture_and_print=True)
+        logs = result.stdout + result.stderr
+        assert "SyncedConfigSet:" in logs, f"logs={logs[-2000:]}"
+        assert "unknown time unit" in logs
+        error_count = logs.count("SyncedConfigSet:")
+        assert error_count >= 3, f"expected >=3 sync errors, got {error_count}"
+
+        c.stop("balancerd")
+    except launchdarkly_api.ApiException as e:
+        raise UIError(dedent(f"""
+            Error when calling the Launch Darkly API.
+            - Status: {e.status},
+            - Reason: {e.reason},
+            """))
+    finally:
+        try:
+            ld_client.delete_flag(BALANCERD_DURATION_FLAG)
+        except Exception:
+            pass
+
+
 class LaunchDarklyClient:
     """
     A test-specific LaunchDarkly client that simulates a client modifying
@@ -260,7 +353,22 @@ class LaunchDarklyClient:
         self.project_key = project_key
         self.environment_key = environment_key
 
-    def create_flag(self, feature_flag_key: str, tags: list[str] = []) -> Any:
+    def create_flag(
+        self,
+        feature_flag_key: str,
+        tags: list[str] = [],
+        variations: list[Any] | None = None,
+        defaults: Any | None = None,
+    ) -> Any:
+        if variations is None:
+            variations = [
+                Variation(value=1073741824, name="1 GiB"),
+                Variation(value=2147483648, name="2 GiB"),
+                Variation(value=3221225472, name="3 GiB"),
+                Variation(value=4294967295, name="4 GiB - 1 (max size)"),
+            ]
+        if defaults is None:
+            defaults = Defaults(off_variation=0, on_variation=1)
         with launchdarkly_api.ApiClient(self.configuration) as api_client:
             api = feature_flags_api.FeatureFlagsApi(api_client)
             return api.post_feature_flag(
@@ -272,18 +380,10 @@ class LaunchDarklyClient:
                         using_environment_id=True,
                         using_mobile_key=True,
                     ),
-                    variations=[
-                        Variation(value=1073741824, name="1 GiB"),
-                        Variation(value=2147483648, name="2 GiB"),
-                        Variation(value=3221225472, name="3 GiB"),
-                        Variation(value=4294967295, name="4 GiB - 1 (max size)"),
-                    ],
+                    variations=variations,
                     temporary=False,
                     tags=tags,
-                    defaults=Defaults(
-                        off_variation=0,
-                        on_variation=1,
-                    ),
+                    defaults=defaults,
                 ),
             )
 

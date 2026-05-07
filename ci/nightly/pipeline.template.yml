@@ -1420,7 +1420,6 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
-          # Requires LAUNCHDARKLY_API_TOKEN
           queue: linux-aarch64-small
         plugins:
           - ./ci/plugins/mzcompose:
