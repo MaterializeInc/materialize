@@ -56,12 +56,29 @@ impl Resolve for MzHttpResolver {
 
 /// Build a reqwest [`Client`] for fetching `COPY FROM` URLs. This uses
 /// [`mz_ore::netio::resolve_address`] for DNS resolution.
+///
+/// Redirects are disabled: the custom DNS resolver re-validates hostnames on
+/// every hop, but reqwest skips DNS for IP-literal targets, so a redirect to
+/// `http://127.0.0.1/` would bypass the SSRF check. Refusing to follow
+/// redirects closes that hole.
 pub fn build_http_client(enforce_external_addresses: bool) -> Result<Client, reqwest::Error> {
     Client::builder()
         .dns_resolver(Arc::new(MzHttpResolver {
             enforce_external_addresses,
         }))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
+}
+
+/// Returns an error if `response` is a 3xx redirect. Materialize disables
+/// redirect following on the HTTP client (see `build_http_client`) to close
+/// an SSRF hole, so callers must surface a meaningful error rather than
+/// letting the response fall through to header parsing.
+fn check_not_redirect(response: &reqwest::Response) -> Result<(), StorageErrorX> {
+    if response.status().is_redirection() {
+        return Err(StorageErrorXKind::Redirect(response.status().as_u16()).into());
+    }
+    Ok(())
 }
 
 /// Generic oneshot source that fetches a file from a URL on the public internet.
@@ -197,6 +214,8 @@ impl OneshotSource for HttpOneshotSource {
             .await
             .context("HEAD request")?;
 
+        check_not_redirect(&response)?;
+
         // Not all servers accept `HEAD` requests though, so we'll fallback to a `GET`
         // request and skip fetching the body.
         let headers = match response.error_for_status() {
@@ -210,6 +229,9 @@ impl OneshotSource for HttpOneshotSource {
                     .send()
                     .await
                     .context("GET request")?;
+
+                check_not_redirect(&response)?;
+
                 let headers = response.headers().clone();
 
                 // Immediately drop the response so we don't attempt to fetch the body.
@@ -286,6 +308,7 @@ impl OneshotSource for HttpOneshotSource {
             // got back an HTTP 206?
 
             let response = request.send().await.context("get")?;
+            check_not_redirect(&response)?;
             let bytes_stream = response.bytes_stream().err_into();
 
             Ok::<_, StorageErrorX>(bytes_stream)
