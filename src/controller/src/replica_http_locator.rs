@@ -62,4 +62,14 @@ impl ReplicaHttpLocator {
         let mut guard = self.replica_addresses.write().expect("lock poisoned");
         guard.remove(&(cluster_id, replica_id));
     }
+
+    /// Returns a snapshot of all currently registered replicas and their
+    /// process HTTP addresses.
+    pub fn list_replicas(&self) -> Vec<(ClusterId, ReplicaId, Vec<String>)> {
+        let guard = self.replica_addresses.read().expect("lock poisoned");
+        guard
+            .iter()
+            .map(|((cluster_id, replica_id), addrs)| (*cluster_id, *replica_id, addrs.clone()))
+            .collect()
+    }
 }
