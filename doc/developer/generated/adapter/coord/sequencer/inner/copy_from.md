@@ -1,10 +1,10 @@
 ---
 source: src/adapter/src/coord/sequencer/inner/copy_from.rs
-revision: 1d15c92c08
+revision: 122dfd0789
 ---
 
 # adapter::coord::sequencer::inner::copy_from
 
-Implements `sequence_copy_from`, which handles all `COPY FROM` variants: HTTP URL, AWS S3 / GCS (accepting `s3://` and `gs://` URIs via an S3-compatible connection), and STDIN.
-For URL and S3/GCS sources, it dispatches an `OneshotIngestionRequest` to the storage controller.
-For STDIN, it spawns parallel batch-builder tasks that decode raw bytes from the pgwire channel, writes completed `ProtoBatch`es to persist, and commits them to the target table in a group commit, returning a `CopyFromStdinWriter` to pgwire for streaming the raw bytes in.
+Implements two `COPY FROM` entry points.
+`sequence_copy_from` handles URL and AWS S3/GCS sources (accepting `http://`/`https://` URLs and `s3://`/`gs://` URIs via an S3-compatible connection) by dispatching an `OneshotIngestionRequest` to the storage controller.
+`setup_copy_from_stdin` handles STDIN: it spawns parallel batch-builder tasks on blocking threads that receive raw byte chunks, decode them, apply column defaults/reordering, and accumulate `ProtoBatch`es in persist; a collector task gathers the batches from all workers and sends them to the coordinator via `Message::StagedBatches`, returning a `CopyFromStdinWriter` to pgwire for distributing the raw byte stream across workers.

@@ -1,6 +1,6 @@
 ---
 source: src/storage-operators/src/oneshot_source/aws_source.rs
-revision: 8089fa9c25
+revision: 122dfd0789
 ---
 
 # storage-operators::oneshot_source::aws_source

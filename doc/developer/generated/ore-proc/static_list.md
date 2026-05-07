@@ -1,6 +1,6 @@
 ---
 source: src/ore-proc/src/static_list.rs
-revision: e757b4d11b
+revision: 07858c9fd7
 ---
 
 # ore-proc::static_list

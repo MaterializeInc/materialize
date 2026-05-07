@@ -1,6 +1,6 @@
 ---
 source: src/aws-util/src/lib.rs
-revision: 80414ab91c
+revision: 122dfd0789
 ---
 
 # mz-aws-util
@@ -9,7 +9,7 @@ Provides Materialize-specific wrappers and utilities for the AWS SDK, centering 
 
 ## Module structure
 
-* `lib.rs` — crate root; exports `defaults()` (a `ConfigLoader` with latest behavior version and native-TLS HTTP client) and `http_client()`.
+* `lib.rs` — crate root; exports `defaults()` (a `ConfigLoader` with latest behavior version and native-TLS HTTP client), `http_client()`, and `http_client_with_resolver()` (an HTTP client whose DNS resolution delegates to `mz_ore::netio::resolve_address`, with optional global-address enforcement).
 * `s3` — S3 client construction, object listing, and a `futures::Stream` adapter for `ByteStream` (feature-gated on `s3`).
 * `s3_uploader` — `S3MultiPartUploader`, a streaming multipart-upload helper with configurable part/file size limits (feature-gated on `s3`).
 

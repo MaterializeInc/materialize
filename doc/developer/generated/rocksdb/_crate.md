@@ -1,6 +1,6 @@
 ---
 source: src/rocksdb/src/lib.rs
-revision: a807c09b34
+revision: 07858c9fd7
 ---
 
 # mz-rocksdb

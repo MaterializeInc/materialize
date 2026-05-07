@@ -1,6 +1,6 @@
 ---
 source: src/catalog/src/builtin.rs
-revision: ea77b8b38b
+revision: 4d59d67c50
 ---
 
 # catalog::builtin
