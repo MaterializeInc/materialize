@@ -18,7 +18,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use itertools::Itertools;
 use mz_arrow_util::builder::ArrowBuilder;
 use mz_expr::RowSetFinishing;
-use mz_expr::visit::Visit;
 use mz_ore::num::NonNeg;
 use mz_ore::soft_panic_or_log;
 use mz_ore::str::separated;
@@ -52,14 +51,15 @@ use crate::catalog::CatalogItemType;
 use crate::names::{Aug, ResolvedItemName};
 use crate::normalize;
 use crate::plan::query::{
-    ExprContext, QueryLifetime, offset_into_value, plan_as_of_or_up_to, plan_expr,
+    ExprContext, QueryLifetime, negative_offset_error, offset_into_value, plan_as_of_or_up_to,
+    plan_expr,
 };
 use crate::plan::scope::Scope;
 use crate::plan::statement::show::ShowSelect;
 use crate::plan::statement::{StatementContext, StatementDesc, ddl};
 use crate::plan::{
     self, CopyFromFilter, CopyToPlan, CreateSinkPlan, ExplainPushdownPlan, ExplainSinkSchemaPlan,
-    ExplainTimestampPlan, HirRelationExpr, HirScalarExpr, side_effecting_func, transform_ast,
+    ExplainTimestampPlan, HirRelationExpr, side_effecting_func, transform_ast,
 };
 use crate::plan::{
     CopyFormat, CopyFromPlan, ExplainPlanPlan, InsertPlan, MutationKind, Params, Plan, PlanError,
@@ -106,7 +106,7 @@ pub fn plan_insert(
 ) -> Result<Plan, PlanError> {
     let (id, mut expr, returning) =
         query::plan_insert_query(scx, table_name, columns, source, returning)?;
-    expr.bind_parameters(scx, QueryLifetime::OneShot, params)?;
+    expr.bind_parameters_and_simplify_offset(scx, QueryLifetime::OneShot, params)?;
     let returning = returning
         .expr
         .into_iter()
@@ -168,7 +168,7 @@ pub fn plan_read_then_write(
         assignments,
     }: query::ReadThenWritePlan,
 ) -> Result<Plan, PlanError> {
-    selection.bind_parameters(scx, QueryLifetime::OneShot, params)?;
+    selection.bind_parameters_and_simplify_offset(scx, QueryLifetime::OneShot, params)?;
     let mut assignments_outer = BTreeMap::new();
     for (idx, mut set) in assignments {
         set.bind_parameters(scx, QueryLifetime::OneShot, params)?;
@@ -227,20 +227,7 @@ fn plan_select_inner(
         finishing,
         scope: _,
     } = query::plan_root_query(scx, select.query.clone(), lifetime)?;
-    expr.bind_parameters(scx, lifetime, params)?;
-
-    // OFFSET clauses in `expr` should become constants with the above binding of parameters.
-    // Let's check this and simplify them to literals.
-    expr.try_visit_mut_pre(&mut |expr| {
-        if let HirRelationExpr::TopK { offset, .. } = expr {
-            let offset_value = offset_into_value(offset.take())?;
-            *offset = HirScalarExpr::literal(Datum::Int64(offset_value), SqlScalarType::Int64);
-        }
-        Ok::<(), PlanError>(())
-    })?;
-    // (We don't need to simplify LIMIT clauses in `expr`, because we can handle non-constant
-    // expressions there. If they happen to be simplifiable to literals, then the optimizer will do
-    // so later.)
+    expr.bind_parameters_and_simplify_offset(scx, lifetime, params)?;
 
     // We need to concretize the `limit` and `offset` of the RowSetFinishing, so that we go from
     // `RowSetFinishing<HirScalarExpr, HirScalarExpr>` to `RowSetFinishing`.
@@ -272,9 +259,11 @@ fn plan_select_inner(
         let mut offset = finishing.offset.clone();
         offset.bind_parameters(scx, lifetime, params)?;
         let offset = offset_into_value(offset.take())?;
-        offset
-            .try_into()
-            .expect("checked in offset_into_value that it is not negative")
+        offset.try_into().map_err(|_| {
+            // We already checked in bind_parameters_and_simplify_offset / offset_into_value.
+            soft_panic_or_log!("unexpectedly negative OFFSET");
+            negative_offset_error(offset)
+        })?
     };
 
     // Unmaterializable functions are evaluated based on various information (e.g., the catalog)
@@ -1653,7 +1642,7 @@ pub fn plan_subscribe(
                 finishing,
                 scope,
             } = query::plan_root_query(scx, query, QueryLifetime::Subscribe)?;
-            expr.bind_parameters(scx, QueryLifetime::Subscribe, params)?;
+            expr.bind_parameters_and_simplify_offset(scx, QueryLifetime::Subscribe, params)?;
             let query = query::PlannedRootQuery {
                 expr,
                 desc,
