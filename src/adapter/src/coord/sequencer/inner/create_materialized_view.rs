@@ -873,22 +873,33 @@ impl Coordinator {
         // first refresh time would prevent warmup before the first refresh.
         if let Some(refresh_schedule) = &refresh_schedule {
             if let Some(least_valid_read_ts) = least_valid_read.as_option() {
-                // DNM: For REFRESH MVs, anchor the first refresh on the
-                // EpochMilliseconds oracle's read_ts, not on least_valid_read.
-                // The oracle tracks "now" linearizably and matches the
-                // plan-time `mz_now()` (in the typical case where no write
-                // happens between planning and select_timestamps), so:
-                //   - REFRESH AT mz_now() schedules find their AT point
-                //     (anchor == captured T_plan, not "now + Δ" like
-                //     self.now() would give us).
-                //   - REFRESH EVERY ALIGNED TO past schedules don't have
-                //     their first refresh fall in the past (which would
-                //     happen if we anchored on least_valid_read with slack).
-                // Take the max with least_valid_read so that
-                // `dataflow_as_of <= storage_as_of` continues to hold.
-                let oracle_read_ts = self.get_local_read_ts().await;
-                let anchor_ts = std::cmp::max(oracle_read_ts, *least_valid_read_ts);
-                if let Some(first_refresh_ts) = refresh_schedule.round_up_timestamp(anchor_ts) {
+                // Initial round-up anchored on least_valid_read (original
+                // behavior). For AT-only schedules this preserves the
+                // captured `REFRESH AT mz_now()` points, even if the oracle
+                // has advanced past them between MV planning and now.
+                let initial = refresh_schedule.round_up_timestamp(*least_valid_read_ts);
+
+                // DNM: For periodic schedules, ensure the first refresh
+                // isn't in the past — that can happen when read-hold slack
+                // pulls least_valid_read behind the schedule's periodic
+                // anchor (e.g. REFRESH EVERY 10s ALIGNED TO mz_now()-100s
+                // with slack lands round_up on a past tick). Bumping to
+                // the next tick at-or-after oracle.read_ts() avoids
+                // materializing the MV against a stale snapshot of its
+                // inputs.
+                let first_refresh_ts = if !refresh_schedule.everies.is_empty() {
+                    let oracle_read_ts = self.get_local_read_ts().await;
+                    match initial {
+                        Some(t) if t < oracle_read_ts => refresh_schedule
+                            .round_up_timestamp(oracle_read_ts)
+                            .or(Some(t)),
+                        other => other,
+                    }
+                } else {
+                    initial
+                };
+
+                if let Some(first_refresh_ts) = first_refresh_ts {
                     storage_as_of = Antichain::from_elem(first_refresh_ts);
                     dataflow_as_of.join_assign(
                         &self
@@ -902,7 +913,7 @@ impl Coordinator {
 
                     return Err(AdapterError::MaterializedViewWouldNeverRefresh(
                         last_refresh,
-                        anchor_ts,
+                        *least_valid_read_ts,
                     ));
                 }
             } else {
