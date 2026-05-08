@@ -25,8 +25,10 @@ import { formatDate } from "~/utils/dateFormat";
 
 import { LOOKBACK_OPTIONS } from "./constants";
 import { CriticalPathGraph } from "./CriticalPathGraph";
+import { computeFreshnessBreakdown } from "./freshnessBreakdown";
+import { FreshnessBreakdownStrip } from "./FreshnessBreakdownStrip";
 import { ObjectFreshnessChart } from "./ObjectFreshnessChart";
-import { MaintainedObjectListItem } from "./queries";
+import { MaintainedObjectListItem, useCriticalPath } from "./queries";
 
 export interface ObjectFreshnessProps {
   item: MaintainedObjectListItem;
@@ -50,6 +52,14 @@ export const ObjectFreshness = ({
   const bucketSizeMs = calculateBucketSizeFromLookback(
     timePeriodMinutes * 60 * 1000,
   );
+
+  const { data: criticalPath } = useCriticalPath({
+    objectId: item.id,
+    timestamp: lockedTimestamp,
+    bucketSizeMs,
+    lookbackMinutes: timePeriodMinutes,
+  });
+  const breakdown = computeFreshnessBreakdown(criticalPath?.directInputs ?? []);
 
   // Sources ingest from external systems and have no Materialize-internal
   // upstream chain to walk — hide the critical path section for them.
@@ -116,6 +126,8 @@ export const ObjectFreshness = ({
                   </Tag>
                 )}
               </HStack>
+
+              {breakdown && <FreshnessBreakdownStrip breakdown={breakdown} />}
 
               <CriticalPathGraph
                 probe={item}
