@@ -367,7 +367,10 @@ pub fn sql_impl(
         let qcx = QueryContext::root(&scx, ecx.qcx.lifetime);
 
         let (mut expr, new_ids) = names::resolve(qcx.scx.catalog, expr.clone())?;
-        scx.sql_impl_resolved_ids.lock().expect("planning is single-threaded").extend_from(&new_ids);
+        scx.sql_impl_resolved_ids
+            .lock()
+            .expect("planning is single-threaded")
+            .extend_from(&new_ids);
         // Desugar the expression
         transform_ast::transform(&scx, &mut expr)?;
 
@@ -459,7 +462,10 @@ fn sql_impl_table_func_inner(
 
         let query = query.clone();
         let (mut query, new_ids) = names::resolve(qcx.scx.catalog, query)?;
-        scx.sql_impl_resolved_ids.lock().expect("planning is single-threaded").extend_from(&new_ids);
+        scx.sql_impl_resolved_ids
+            .lock()
+            .expect("planning is single-threaded")
+            .extend_from(&new_ids);
         transform_ast::transform(&scx, &mut query)?;
 
         query::plan_nested_query(&mut qcx, &query)

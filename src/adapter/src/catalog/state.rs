@@ -1035,8 +1035,13 @@ impl CatalogState {
 
             let stmt = mz_sql::parse::parse(create_sql)?.into_element().ast;
             let (stmt, mut resolved_ids) = mz_sql::names::resolve(&session_catalog, stmt)?;
-            let plan =
-                mz_sql::plan::plan(pcx, &session_catalog, stmt, &Params::empty(), &mut resolved_ids)?;
+            let plan = mz_sql::plan::plan(
+                pcx,
+                &session_catalog,
+                stmt,
+                &Params::empty(),
+                &mut resolved_ids,
+            )?;
 
             Ok((plan, resolved_ids))
         })

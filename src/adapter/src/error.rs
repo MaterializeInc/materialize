@@ -1229,6 +1229,11 @@ impl From<OptimizerError> for AdapterError {
             EvalError(e) => Self::Eval(e),
             InternalUnsafeMfpPlan(e) => Self::Internal(e),
             Internal(e) => Self::Internal(e),
+            RestrictedFunction(func) => {
+                Self::Unauthorized(mz_sql::rbac::UnauthorizedError::RestrictedSystemObject {
+                    object_name: format!("function {func}"),
+                })
+            }
             e => Self::Optimizer(e),
         }
     }

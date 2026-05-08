@@ -459,7 +459,11 @@ pub fn plan(
 
     // Merge resolved IDs discovered during planning (from sql_impl function
     // bodies) into the caller's resolved_ids so the RBAC check sees them.
-    resolved_ids.extend_from(&scx.sql_impl_resolved_ids.lock().expect("planning is single-threaded"));
+    resolved_ids.extend_from(
+        &scx.sql_impl_resolved_ids
+            .lock()
+            .expect("planning is single-threaded"),
+    );
 
     if let Ok(plan) = &plan {
         mz_ore::soft_assert_no_log!(
