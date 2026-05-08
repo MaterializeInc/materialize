@@ -1805,8 +1805,14 @@ impl DurableCatalogState for PersistCatalogState {
             if catalog.mode == Mode::Readonly {
                 let updates: Vec<_> = StateUpdate::from_txn_batch(txn_batch).collect();
                 if !updates.is_empty() {
+                    let collection_types: Vec<_> = updates
+                        .iter()
+                        .filter_map(|u| u.0.collection_type())
+                        .collect();
                     return Err(DurableCatalogError::NotWritable(format!(
-                        "cannot commit a transaction in a read-only catalog: {updates:#?}"
+                        "cannot commit a transaction in a read-only catalog: \
+                         {} updates across collections: {collection_types:?}",
+                        updates.len(),
                     ))
                     .into());
                 }
