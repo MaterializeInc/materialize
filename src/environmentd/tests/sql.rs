@@ -3760,7 +3760,7 @@ async fn test_cancel_linearize_read_then_writes() {
     handle.await;
 }
 
-// Test that builtin objects are created in the schemas they advertise in builtin.rs.
+// Test that builtin objects are created in the schemas they advertise in the builtin submodules.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
 async fn test_builtin_schemas() {
@@ -3795,7 +3795,7 @@ async fn test_builtin_schemas() {
         assert_eq!(
             builtin_schema,
             Some(&schema.as_str()),
-            "wrong schema for {name}, builtin.rs has {builtin_schema:?}, database has {schema}"
+            "wrong schema for {name}, builtin submodules have {builtin_schema:?}, database has {schema}"
         );
     }
 }
