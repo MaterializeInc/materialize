@@ -758,11 +758,27 @@ impl Coordinator {
 
         match fut {
             Some(fut) => {
+                let catalog = Arc::clone(&self.catalog);
                 let span = Span::current();
                 Ok(StageResult::Handle(mz_ore::task::spawn(
                     || "peek real time recency",
                     async move {
-                        let real_time_recency_ts = fut.await?;
+                        let rtr_name = |id: &GlobalId| {
+                            catalog
+                                .try_get_entry_by_global_id(id)
+                                .map(|e| e.name().item.clone())
+                                .unwrap_or_else(|| id.to_string())
+                        };
+                        let real_time_recency_ts = match fut.await {
+                            Ok(ts) => ts,
+                            Err(mz_storage_types::controller::StorageError::RtrTimeout(id)) => {
+                                return Err(AdapterError::RtrTimeout(rtr_name(&id)));
+                            }
+                            Err(mz_storage_types::controller::StorageError::RtrDropFailure(id)) => {
+                                return Err(AdapterError::RtrDropFailure(rtr_name(&id)));
+                            }
+                            Err(e) => return Err(e.into()),
+                        };
                         let stage = PeekStage::TimestampReadHold(PeekStageTimestampReadHold {
                             validity,
                             plan,
