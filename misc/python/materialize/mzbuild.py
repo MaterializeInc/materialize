@@ -806,6 +806,8 @@ class Image:
                         f"mzbuild config in {self.path} has unknown pre-image type"
                     )
             self.build_args = data.pop("build-args", {})
+            self.publish_as: str | None = data.pop("publish-as", None)
+            self.tag_suffix: str = data.pop("tag-suffix", "")
 
         if re.search(r"[^A-Za-z0-9\-]", self.name):
             raise ValueError(
@@ -841,7 +843,7 @@ class Image:
                 f"--file={readme_path}",
                 *([f"--config={docker_config}/config.json"] if docker_config else []),
                 *([f"--short={self.description}"] if self.description else []),
-                self.docker_name(),
+                self.publish_docker_name(),
             ]
         )
 
@@ -850,6 +852,20 @@ class Image:
         name = f"{self.rd.image_registry}/{self.rd.image_prefix}{self.name}"
         if tag:
             name += f":{tag}"
+        return name
+
+    def publish_docker_name(self, tag: str | None = None) -> str:
+        """Return the name to use when publishing to Docker Hub.
+
+        If ``publish-as`` is set in mzbuild.yml, the image is published
+        under that name instead of its own.  If ``tag-suffix`` is set,
+        it is appended to the tag (e.g. ``-fdb`` turns ``latest`` into
+        ``latest-fdb``).
+        """
+        image_name = self.publish_as if self.publish_as else self.name
+        name = f"{self.rd.image_registry}/{self.rd.image_prefix}{image_name}"
+        if tag:
+            name += f":{tag}{self.tag_suffix}"
         return name
 
 
@@ -1656,7 +1672,7 @@ def publish_multiarch_images(
     for images in zip(*dependency_sets):
         names = set(image.image.name for image in images)
         assert len(names) == 1, "dependency sets did not contain identical images"
-        name = images[0].image.docker_name(tag)
+        name = images[0].image.publish_docker_name(tag)
         if tag in always_push_tags or not is_docker_image_pushed(name):
             spawn.run_with_retries(
                 lambda: (

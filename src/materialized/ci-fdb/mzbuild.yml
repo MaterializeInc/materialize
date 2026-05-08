@@ -9,6 +9,8 @@
 
 name: materialized-fdb
 description: Materialize is a fast, distributed SQL database built on streaming internals (FoundationDB backend).
+publish-as: materialized
+tag-suffix: -fdb
 pre-image:
   - type: cargo-build
     bin: [ materialized ]
