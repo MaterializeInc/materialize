@@ -16,7 +16,7 @@
 //! Scopes with profiling labels set at schedule time.
 //!
 //! [`ScopeExt::with_label`] wraps the body of a dataflow in a same-timestamp subgraph and
-//! installs that subgraph as a [`LabelledOperator`]. Whenever the resulting operator is
+//! installs that subgraph as a `LabelledOperator`. Whenever the resulting operator is
 //! scheduled, its child operators are scheduled inside a `custom_labels` scope that sets
 //! `timely-scope=<scope name>`. CPU profilers that read the `custom_labels` thread-local state
 //! (e.g., PolarSignals) attribute samples taken during the subgraph's execution to that label.
