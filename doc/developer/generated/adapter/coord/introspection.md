@@ -1,9 +1,10 @@
 ---
 source: src/adapter/src/coord/introspection.rs
-revision: 2982634c0d
+revision: 4d59d67c50
 ---
 
 # adapter::coord::introspection
 
-Implements the auto-routing logic for introspection queries: `auto_run_on_catalog_server` detects when a SELECT exclusively reads from per-replica introspection log sources and rewrites the target cluster to `mz_catalog_server` to avoid requiring a user cluster.
-Also provides `user_privilege_hack` which grants temporary introspection privileges to the session when accessing per-replica logs.
+Implements unified compute introspection: the process of collecting introspection data exported by individual replicas through their logging indexes and writing that data, tagged with the respective replica ID, to unified storage collections.
+`install_introspection_subscribes` installs all defined introspection subscribes on a given replica (and `bootstrap_introspection_subscribes` calls it for all existing replicas during coordinator startup); `handle_introspection_subscribe_batch` processes each batch response, writing updates to the corresponding storage-managed collection and reinstalling failed subscribes on disconnect; `drop_introspection_subscribes` removes all subscribes installed on a replica before it is dropped.
+Each introspection subscribe is sequenced through a multi-stage pipeline (`OptimizeMir` → `TimestampOptimizeLir` → `Finish`) using the `sequence_staged` driver.

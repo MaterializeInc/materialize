@@ -1,6 +1,6 @@
 ---
 source: src/cloud-resources/src/crd/console.rs
-revision: 4267863081
+revision: e9d99038f9
 ---
 
 # cloud-resources::crd::console

@@ -1,6 +1,6 @@
 ---
 source: src/pgrepr/src/value.rs
-revision: 35fe074497
+revision: 07858c9fd7
 ---
 
 # mz-pgrepr::value

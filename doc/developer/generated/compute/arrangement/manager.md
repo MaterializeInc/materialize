@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/arrangement/manager.rs
-revision: b0fa98e931
+revision: 3d006e33e0
 ---
 
 # mz-compute::arrangement::manager

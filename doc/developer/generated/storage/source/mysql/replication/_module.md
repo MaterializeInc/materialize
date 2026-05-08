@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/source/mysql/replication.rs
-revision: 5427dc5764
+revision: 47a81d6e64
 ---
 
 # mz-storage::source::mysql::replication
