@@ -99,6 +99,7 @@ export interface CopyableBoxProps extends BoxProps {
   contents: string;
   variant?: "default" | "compact";
   maxHeight?: string;
+  wrap?: boolean;
   onCopy?: () => void;
 }
 /** Copyable component with a bg box but no line breaks  */
@@ -106,6 +107,7 @@ export const CopyableBox: React.FC<CopyableBoxProps> = ({
   contents,
   variant = "default",
   maxHeight,
+  wrap,
   onCopy,
   ...props
 }) => {
@@ -127,9 +129,9 @@ export const CopyableBox: React.FC<CopyableBoxProps> = ({
         py={2}
         flex={1}
         lineHeight="4"
-        whiteSpace="nowrap"
+        whiteSpace={wrap ? "pre" : "nowrap"}
         overflow="hidden"
-        textOverflow="ellipsis"
+        textOverflow={wrap ? undefined : "ellipsis"}
         minWidth={0}
         {...(maxHeight && {
           maxHeight,
