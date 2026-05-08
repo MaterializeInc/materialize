@@ -40,6 +40,10 @@ SET restrict_to_user_objects = false;                   -- ERROR: parameter cann
 ALTER ROLE agent SET restrict_to_user_objects = false;   -- ERROR: requires superuser
 ALTER ROLE agent RESET restrict_to_user_objects;         -- ERROR: requires superuser
 DISCARD ALL;  -- Resets to role default (true), not the definition default (false)
+
+-- Superuser can change or remove the restriction at any time:
+ALTER ROLE agent SET restrict_to_user_objects = false;   -- disables on next connection
+ALTER ROLE agent RESET restrict_to_user_objects;         -- removes the default entirely
 ```
 
 - `SET` and `RESET` are blocked via `check_read_only()`.
