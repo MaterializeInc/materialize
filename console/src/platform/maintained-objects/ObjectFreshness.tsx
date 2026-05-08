@@ -7,13 +7,24 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { Card, HStack, Text, useTheme, VStack } from "@chakra-ui/react";
+import {
+  Card,
+  Divider,
+  HStack,
+  Tag,
+  Text,
+  useTheme,
+  VStack,
+} from "@chakra-ui/react";
 import React from "react";
 
+import { calculateBucketSizeFromLookback } from "~/api/materialize/freshness/lagHistory";
 import TimePeriodSelect from "~/components/TimePeriodSelect";
 import { MaterializeTheme } from "~/theme";
+import { formatDate } from "~/utils/dateFormat";
 
 import { LOOKBACK_OPTIONS } from "./constants";
+import { CriticalPathGraph } from "./CriticalPathGraph";
 import { ObjectFreshnessChart } from "./ObjectFreshnessChart";
 import { MaintainedObjectListItem } from "./queries";
 
@@ -36,6 +47,13 @@ export const ObjectFreshness = ({
 
   const isLocked = lockedTimestamp !== null;
   const selectedTimestamp = lockedTimestamp ?? hoverTimestamp;
+  const bucketSizeMs = calculateBucketSizeFromLookback(
+    timePeriodMinutes * 60 * 1000,
+  );
+
+  // Sources ingest from external systems and have no Materialize-internal
+  // upstream chain to walk — hide the critical path section for them.
+  const hasUpstreamChain = item.objectType !== "source";
 
   return (
     <VStack align="start" spacing={6} width="100%">
@@ -51,7 +69,9 @@ export const ObjectFreshness = ({
             <VStack align="start" spacing={1}>
               <Text textStyle="heading-sm">Freshness latency</Text>
               <Text textStyle="text-small" color={colors.foreground.secondary}>
-                The graph below shows the highest latencies over time.
+                The graph below shows the highest latencies over time. Pick a
+                point on the freshness graph to visualize the critical path of
+                lag on upstream dependencies on this object.
               </Text>
             </VStack>
             <TimePeriodSelect
@@ -69,6 +89,42 @@ export const ObjectFreshness = ({
             selectedTimestamp={selectedTimestamp}
             isLocked={isLocked}
           />
+
+          {hasUpstreamChain && (
+            <>
+              <Divider />
+
+              <HStack width="100%" justify="space-between" align="center">
+                <Text textStyle="heading-sm">Critical path</Text>
+                {isLocked ? (
+                  <Tag
+                    size="sm"
+                    borderRadius="md"
+                    bg={colors.background.accent}
+                    color={colors.accent.brightPurple}
+                  >
+                    Locked at {formatDate(lockedTimestamp, "h:mm:ss a")}
+                  </Tag>
+                ) : (
+                  <Tag
+                    size="sm"
+                    borderRadius="md"
+                    bg={colors.background.info}
+                    color={colors.accent.blue}
+                  >
+                    Live
+                  </Tag>
+                )}
+              </HStack>
+
+              <CriticalPathGraph
+                probe={item}
+                timestamp={lockedTimestamp}
+                bucketSizeMs={bucketSizeMs}
+                lookbackMinutes={timePeriodMinutes}
+              />
+            </>
+          )}
         </VStack>
       </Card>
     </VStack>
