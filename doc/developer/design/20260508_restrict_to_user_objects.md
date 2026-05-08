@@ -75,12 +75,12 @@ Fix: `StatementContext` carries a shared `Arc<Mutex<ResolvedIds>>` accumulator. 
 
 **Unmaterializable functions** (`mz_version()`, `mz_role_oid_memberships()`, `mz_environment_id()`, `pg_backend_pid()`, etc.) are evaluated at runtime directly from coordinator/session state. They never reference catalog items by ID, so resolved ID propagation cannot catch them.
 
-Fix: `UnmaterializableFunc` has an `is_safe_for_restricted_session()` method with an explicit match — no wildcard arm, so adding a new variant is a compile error until the developer classifies it. The check runs in `eval_unmaterializable_func()` during optimization.
+Fix: `UnmaterializableFunc` has an `allowed_in_restricted_session()` method with an explicit match — no wildcard arm, so adding a new variant is a compile error until the developer classifies it. The check runs in `eval_unmaterializable_func()` during optimization.
 
 | Classification | Functions |
 |---|---|
-| **Allowed** (session identity/time) | `current_database`, `current_schema`, `current_schemas`, `current_timestamp`, `current_user`, `session_user`, `mz_now`, `mz_session_id`, `is_rbac_enabled`, `viewable_variables` |
-| **Blocked** (system metadata) | `mz_version`, `mz_version_num`, `version`, `mz_environment_id`, `mz_is_superuser`, `mz_role_oid_memberships`, `mz_uptime`, `pg_postmaster_start_time`, `pg_backend_pid` |
+| **Allowed** (needed for query execution) | `current_database`, `current_schema`, `current_schemas`, `current_timestamp`, `current_user`, `session_user`, `mz_now`, `mz_session_id`, `is_rbac_enabled`, `viewable_variables` |
+| **Excluded** (internal system information, not relevant to data product queries) | `mz_version`, `mz_version_num`, `version`, `mz_environment_id`, `mz_is_superuser`, `mz_role_oid_memberships`, `mz_uptime`, `pg_postmaster_start_time`, `pg_backend_pid` |
 
 ### `pg_catalog` and `information_schema`
 

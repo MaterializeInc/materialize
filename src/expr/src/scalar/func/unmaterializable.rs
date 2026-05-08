@@ -115,12 +115,17 @@ impl UnmaterializableFunc {
 }
 
 impl UnmaterializableFunc {
-    /// Whether this function is safe to call when `restrict_to_user_objects` is active.
+    /// Whether this function is relevant to user data product queries when
+    /// `restrict_to_user_objects` is active. Functions that return internal
+    /// system information (version, uptime, role hierarchy, etc.) are excluded
+    /// — not because they are a security risk, but because they expose system
+    /// internals that are outside the scope of what an agent querying data
+    /// products should need.
     ///
-    /// No wildcard arm — adding a new variant forces a compile-time safety decision.
-    pub fn is_safe_for_restricted_session(&self) -> bool {
+    /// No wildcard arm — adding a new variant forces a compile-time decision.
+    pub fn allowed_in_restricted_session(&self) -> bool {
         match self {
-            // Session identity and time — the agent already knows these
+            // Session identity and time — needed for normal query execution
             Self::CurrentDatabase
             | Self::CurrentSchema
             | Self::CurrentSchemasWithSystem
@@ -130,9 +135,9 @@ impl UnmaterializableFunc {
             | Self::SessionUser
             | Self::MzNow
             | Self::MzSessionId => true,
-            // Session config inspection — not catalog data
+            // Session config inspection
             Self::IsRbacEnabled | Self::ViewableVariables => true,
-            // System metadata disclosure — blocked
+            // Internal system information — not relevant to data product queries
             Self::MzEnvironmentId
             | Self::MzIsSuperuser
             | Self::MzRoleOidMemberships
