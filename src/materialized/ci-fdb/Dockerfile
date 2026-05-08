@@ -18,6 +18,6 @@ RUN ln -s /usr/local/bin/materialized /usr/local/bin/environmentd \
 
 USER materialize
 
-ENV MZ_METADATA_STORE=fdb
+ENV MZ_METADATA_STORE=foundationdb
 
 ENTRYPOINT ["tini", "--", "entrypoint.sh"]

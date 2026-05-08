@@ -54,10 +54,10 @@ fi
 
 export PGUSER=root
 
-# Backend selection: "postgres" (default) or "foundationdb"/"fdb"
+# Backend selection: "postgres" (default) or "foundationdb"
 MZ_METADATA_STORE="${MZ_METADATA_STORE:-postgres}"
 
-if [[ "$MZ_METADATA_STORE" == "foundationdb" || "$MZ_METADATA_STORE" == "fdb" ]]; then
+if [[ "$MZ_METADATA_STORE" == "foundationdb" ]]; then
   # Start FoundationDB, unless suppressed.
   if ! is_truthy "${MZ_NO_BUILTIN_FDB:-0}"; then
     FDB_CLUSTER_FILE="${FDB_CLUSTER_FILE:-/mzdata/fdb.cluster}"
@@ -79,15 +79,31 @@ if [[ "$MZ_METADATA_STORE" == "foundationdb" || "$MZ_METADATA_STORE" == "fdb" ]]
       -d "$FDB_DATA_DIR" \
       -L "$FDB_LOG_DIR" \
       &
+    FDBPID=$!
 
-    # Wait for fdbserver to be ready and configure if needed
-    echo "Waiting for FoundationDB to be ready..."
-    sleep 2
-    if ! fdbcli -C "$FDB_CLUSTER_FILE" --exec "status minimal" --timeout 5 2>/dev/null; then
+    trap 'kill -INT $FDBPID; wait $FDBPID' SIGTERM SIGINT
+
+    # Wait for fdbserver to accept fdbcli connections. `status` returns
+    # successfully even on an unconfigured cluster, so this only checks
+    # reachability, not whether the database is configured.
+    echo "Waiting for FoundationDB to accept connections..."
+    deadline=$((SECONDS + 30))
+    until fdbcli -C "$FDB_CLUSTER_FILE" --exec "status" --timeout 2 > /dev/null 2>&1; do
+      if (( SECONDS >= deadline )); then
+        echo "error: timed out waiting for fdbserver to start" >&2
+        exit 1
+      fi
+      sleep 0.1
+    done
+
+    # Configure the database if it isn't already. `status minimal` returns
+    # nonzero on an unconfigured cluster; otherwise the cluster is already
+    # configured (e.g. on a restart against existing data).
+    if ! fdbcli -C "$FDB_CLUSTER_FILE" --exec "status minimal" --timeout 5 > /dev/null 2>&1; then
       echo "Configuring FoundationDB..."
-      fdbcli -C "$FDB_CLUSTER_FILE" --exec "configure new single ssd" --timeout 30 || true
+      fdbcli -C "$FDB_CLUSTER_FILE" --exec "configure new single ssd" --timeout 30
     fi
-    echo "FoundationDB started."
+    echo "FoundationDB ready."
   fi
 elif [[ "$MZ_METADATA_STORE" == "postgres" ]]; then
   # Start PostgreSQL, unless suppressed.
@@ -148,7 +164,7 @@ export MZ_INTERNAL_SQL_LISTEN_ADDR=${MZ_INTERNAL_SQL_LISTEN_ADDR:-0.0.0.0:6877}
 export MZ_INTERNAL_HTTP_LISTEN_ADDR=${MZ_INTERNAL_HTTP_LISTEN_ADDR:-0.0.0.0:6878}
 export MZ_BALANCER_SQL_LISTEN_ADDR=${MZ_BALANCER_SQL_LISTEN_ADDR:-0.0.0.0:6880}
 export MZ_BALANCER_HTTP_LISTEN_ADDR=${MZ_BALANCER_HTTP_LISTEN_ADDR:-0.0.0.0:6881}
-if [[ "$MZ_METADATA_STORE" == "foundationdb" || "$MZ_METADATA_STORE" == "fdb" ]]; then
+if [[ "$MZ_METADATA_STORE" == "foundationdb" ]]; then
   export FDB_CLUSTER_FILE="${FDB_CLUSTER_FILE:-/mzdata/fdb.cluster}"
   export MZ_PERSIST_CONSENSUS_URL=${MZ_PERSIST_CONSENSUS_URL:-foundationdb:?prefix=consensus}
   export MZ_TIMESTAMP_ORACLE_URL=${MZ_TIMESTAMP_ORACLE_URL:-foundationdb:?prefix=tsoracle}

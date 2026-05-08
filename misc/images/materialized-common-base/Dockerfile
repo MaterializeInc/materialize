@@ -10,13 +10,7 @@
 # Common base image shared by materialized-base (PostgreSQL) and
 # materialized-fdb-base (FoundationDB). Contains user setup, common apt
 # packages, console, and nginx configuration.
-
-# Package a pinned version of the console into the image, for ease of getting
-# started with Materialize. It's okay if this console lags a bit behind what's
-# deployed to production, but the version needs to be bumped whenever features
-# that the console depends upon are removed (to a version of the console that
-# doesn't depend on those features).
-FROM materialize/console:26.14.0-dev.0 AS console
+MZFROM console AS console
 
 MZFROM ubuntu-base
 

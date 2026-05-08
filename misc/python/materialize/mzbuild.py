@@ -1677,6 +1677,8 @@ def publish_multiarch_images(
     for images in zip(*dependency_sets):
         names = set(image.image.name for image in images)
         assert len(names) == 1, "dependency sets did not contain identical images"
+        if not images[0].image.publish:
+            continue
         name = images[0].image.publish_docker_name(tag)
         if tag in always_push_tags or not is_docker_image_pushed(name):
             spawn.run_with_retries(
