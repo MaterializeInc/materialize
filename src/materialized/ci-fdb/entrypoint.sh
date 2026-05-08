@@ -1,1 +1,0 @@
-../ci/entrypoint.sh

@@ -15,3 +15,11 @@ pre-image:
   - type: cargo-build
     bin: [ materialized ]
     features: [ mz-materialized/foundationdb ]
+  - type: copy
+    source: src/materialized/ci
+    destination: .
+    matching: entrypoint.sh
+  - type: copy
+    source: src/materialized/ci/listener_configs
+    destination: listener_configs
+    matching: "*.json"
