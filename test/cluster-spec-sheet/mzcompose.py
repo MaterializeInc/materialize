@@ -38,6 +38,7 @@ from materialize.mzcompose.composition import (
 )
 from materialize.mzcompose.service import Service as MzComposeService
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.metadata_store import metadata_store_services
 from materialize.mzcompose.services.mz import Mz
 from materialize.test_analytics.config.test_analytics_db_config import (
     create_test_analytics_config,
@@ -83,6 +84,7 @@ def staging_version() -> str:
 SERVICES = [
     # Overridden below
     Mz(app_password=""),
+    *metadata_store_services(),
     Materialized(
         propagate_crashes=True,
         additional_system_parameter_defaults=MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS,
