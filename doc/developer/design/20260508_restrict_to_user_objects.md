@@ -105,4 +105,3 @@ The implementation is on the `mcp-restrict-to-user-objects` branch and includes 
 **Allowlist approach (only allow access to specific schemas).** Rather than blocking system objects, the agent would only be allowed to access objects in explicitly granted schemas. This was considered but rejected because it requires changes to the schema resolution and search path machinery, and doesn't compose well with the existing RBAC privilege model.
 
 **Check functions at planning time instead of evaluation time.** For unmaterializable functions, we could check during planning (in `func.rs`) rather than at evaluation time (in `dataflows.rs`). This would return a `PlanError` instead of an `OptimizerError`. We chose evaluation-time checking because it keeps the check co-located with the function evaluation logic and avoids threading session state into the planning layer.
-
