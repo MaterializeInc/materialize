@@ -41,9 +41,10 @@ bin/mzcompose --find cluster-spec-sheet run default --target=docker
 
 ## Scenarios
 
-There are two kinds of scenarios:
+There are three kinds of scenarios:
 - cluster scaling: These measure run times and arrangement sizes.
-- envd scaling: These measure QPS.
+- envd scaling: These measure QPS while varying envd's CPU allocation.
+- envd scalability: These measure adapter/envd latency (DDL, simple peeks) as the number of catalog objects grows.
 
 Currently, the envd scaling scenarios can't be run in Production, because changing envd's CPU cores using `mz` is not allowed there. Therefore, these scenarios need to be run with `--target=cloud-staging`.
 
@@ -55,10 +56,25 @@ or
 ```
 bin/mzcompose --find cluster-spec-sheet run default cluster
 ```
+or
+```
+bin/mzcompose --find cluster-spec-sheet run default envd_scalability
+```
 
 You can also specify a specific scenario by name.
 
 For testing just the scaffolding of the cluster spec sheet itself, you can make the run much faster by using the various scaling options, e.g.:
 ```
---scale-tpch=0.01 --scale-tpch-queries=0.01 --scale-auction=1 --max-scale=4
+--scale-tpch=0.01 --scale-tpch-queries=0.01 --scale-auction=1 --max-scale=4 --envd-scalability-sizes=1,10,100
 ```
+
+### envd scalability scenarios
+
+The `envd_scalability_tables` and `envd_scalability_mvs` scenarios fix the
+measurement cluster size and vary the number of pre-existing catalog objects,
+measuring `CREATE TABLE` and `SELECT` latency at each size point. By default
+they walk the full size list (`1, 10, 100, 1000, 3000, 5000, 10000, 20000,
+30000, 50000, 100000`); the MV scenario shards across pad clusters at 10000
+materialized views per cluster (so 100000 MVs spans 10 single-replica
+clusters). Override the size list with `--envd-scalability-sizes`. These runs
+are long; expect hours for the full size range, especially the MV scenario.

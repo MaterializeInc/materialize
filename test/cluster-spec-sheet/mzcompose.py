@@ -65,6 +65,14 @@ STAGING_APP_PASSWORD = os.getenv("NIGHTLY_CANARY_APP_PASSWORD")
 MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = {
     "memory_limiter_interval": "0s",
     "max_credit_consumption_rate": "1024",
+    # Lifted for the envd_scalability scenarios, which can build up to 100k
+    # tables or materialized views in a single schema, plus 10 pad clusters
+    # (10000 MVs/cluster). Other scenarios are unaffected by these higher
+    # ceilings. Cloud targets need the same limits configured server-side.
+    "max_tables": "200000",
+    "max_materialized_views": "200000",
+    "max_objects_per_schema": "200000",
+    "max_clusters": "50",
 }
 
 
@@ -97,6 +105,8 @@ SCENARIO_TPCH_STRONG = "tpch_strong"
 SCENARIO_SOURCE_INGESTION_STRONG = "source_ingestion_strong"
 SCENARIO_QPS_ENVD_STRONG_SCALING = "qps_envd_strong_scaling"
 SCENARIO_COPY_FROM_STDIN_ENVD_STRONG_SCALING = "copy_from_stdin_envd_strong_scaling"
+SCENARIO_ENVD_SCALABILITY_TABLES = "envd_scalability_tables"
+SCENARIO_ENVD_SCALABILITY_MVS = "envd_scalability_mvs"
 
 SCENARIOS_CLUSTERD = [
     SCENARIO_AUCTION_STRONG,
@@ -122,17 +132,37 @@ SCENARIOS_ENVIRONMENTD = [
     SCENARIO_QPS_ENVD_STRONG_SCALING,
     SCENARIO_COPY_FROM_STDIN_ENVD_STRONG_SCALING,
 ]
-ALL_SCENARIOS = SCENARIOS_CLUSTERD + SCENARIOS_ENVIRONMENTD
+SCENARIOS_ENVD_SCALABILITY = [
+    SCENARIO_ENVD_SCALABILITY_TABLES,
+    SCENARIO_ENVD_SCALABILITY_MVS,
+]
+ALL_SCENARIOS = SCENARIOS_CLUSTERD + SCENARIOS_ENVIRONMENTD + SCENARIOS_ENVD_SCALABILITY
 
 SCENARIO_GROUPS = {
     "cluster": SCENARIOS_CLUSTERD,
     "cluster_compute": SCENARIOS_CLUSTERD_COMPUTE,
     "source_ingestion": SCENARIOS_SOURCE_INGESTION,
     "environmentd": SCENARIOS_ENVIRONMENTD,
+    "envd_scalability": SCENARIOS_ENVD_SCALABILITY,
     "all": ALL_SCENARIOS,
 }
 
 REPLICA_SCALES = [1, 2, 4, 8, 16, 32]
+
+ENVD_SCALABILITY_SIZES = [
+    1,
+    10,
+    100,
+    1_000,
+    3_000,
+    5_000,
+    10_000,
+    20_000,
+    30_000,
+    50_000,
+    100_000,
+]
+ENVD_SCALABILITY_MVS_PER_CLUSTER = 10_000
 
 
 class ConnectionHandler:
@@ -2186,6 +2216,212 @@ class SourceIngestionScenario(Scenario):
         )
 
 
+class EnvdScalabilityScenario(Scenario):
+    """
+    Base class for envd-scalability scenarios. These vary the number of catalog
+    objects and measure adapter/envd latency for a DDL and a simple peek.
+
+    The scale point (number of catalog objects, N) is driven externally by
+    `run_scenario_envd_scalability`. The same `runner` is reused across all N,
+    with `runner.scale` updated per step so that result rows carry N.
+    """
+
+    VERSION: str = "1.0.0"
+    REPETITIONS: int = 10
+
+    PAD_SCHEMA: str = "pad_schema"
+
+    def __init__(self, replica_size: str | None) -> None:
+        super().__init__(scale=0, replica_size=replica_size)
+        self._current_n = 0
+
+    def name(self) -> str:
+        raise NotImplementedError
+
+    def materialize_views(self) -> list[str]:
+        return []
+
+    # The framework-level `setup()` / `drop()` are unused here; everything
+    # specific to envd-scalability happens in `init()` / `add_objects()` /
+    # `teardown()`, which are driven by `run_scenario_envd_scalability`.
+    def setup(self) -> list[str]:
+        return []
+
+    def drop(self) -> list[str]:
+        return []
+
+    def init(self, runner: ScenarioRunner) -> None:
+        # Wipe any leftover pad schema from a previous run.
+        runner.run_query(f"DROP SCHEMA IF EXISTS {self.PAD_SCHEMA} CASCADE")
+        runner.run_query(f"CREATE SCHEMA {self.PAD_SCHEMA}")
+
+    def add_objects(self, runner: ScenarioRunner, target_n: int) -> None:
+        raise NotImplementedError
+
+    def teardown(self, runner: ScenarioRunner) -> None:
+        # Best-effort cleanup; if it fails, the next run's init() will retry.
+        try:
+            runner.run_query(f"DROP SCHEMA IF EXISTS {self.PAD_SCHEMA} CASCADE")
+        except Exception as e:
+            print(f"WARNING: failed to drop {self.PAD_SCHEMA}: {e}")
+
+    def run(self, runner: ScenarioRunner) -> None:
+        # Measure DDL (CREATE TABLE) latency. Each repetition creates a fresh
+        # `m_tmp` table and drops it afterwards; only the CREATE is timed.
+        runner.measure(
+            "adapter_ddl_latency",
+            "create_table",
+            setup=["DROP TABLE IF EXISTS m_tmp CASCADE"],
+            query=["CREATE TABLE m_tmp (a int)"],
+            after=["DROP TABLE m_tmp"],
+            repetitions=self.REPETITIONS,
+        )
+
+        # Measure simple peek latency against a 1-row table on the fixed
+        # measurement cluster `c`.
+        runner.measure(
+            "adapter_peek_latency",
+            "select_one_row",
+            setup=[],
+            query=["SELECT * FROM t"],
+            repetitions=self.REPETITIONS,
+        )
+
+
+def _bulk_run(runner: ScenarioRunner, statements: list[str], log_label: str) -> None:
+    """Execute a list of DDL statements with quiet progress logging.
+
+    Statements run one-by-one: this work is dominated by adapter/controller
+    serialisation, so per-statement round trips are not the bottleneck.
+    """
+    total = len(statements)
+    if total == 0:
+        return
+    print(f"  {log_label}: {total} statements")
+    log_every = max(1, total // 10)
+
+    def execute_one(stmt: str) -> None:
+        with runner.connection as cur:
+            cur.execute(stmt.encode())
+
+    start = time.time()
+    for i, stmt in enumerate(statements, 1):
+        runner.connection.retryable(lambda s=stmt: execute_one(s))
+        if i % log_every == 0 or i == total:
+            elapsed = time.time() - start
+            rate = i / elapsed if elapsed > 0 else 0
+            print(f"  {log_label}: {i}/{total} ({rate:.1f}/s)")
+
+
+class EnvdScalabilityTablesScenario(EnvdScalabilityScenario):
+    """N empty tables in the catalog. No controller load; pure catalog/adapter."""
+
+    def name(self) -> str:
+        return SCENARIO_ENVD_SCALABILITY_TABLES
+
+    def add_objects(self, runner: ScenarioRunner, target_n: int) -> None:
+        if target_n <= self._current_n:
+            return
+        statements = [
+            f"CREATE TABLE {self.PAD_SCHEMA}.pad_t_{i} (a int, b text)"
+            for i in range(self._current_n + 1, target_n + 1)
+        ]
+        _bulk_run(
+            runner,
+            statements,
+            f"create tables {self._current_n + 1}..{target_n}",
+        )
+        self._current_n = target_n
+
+
+class EnvdScalabilityMvsScenario(EnvdScalabilityScenario):
+    """N materialized views in the catalog, sharded across pad clusters.
+
+    To bound per-cluster dataflow count, MVs are spread across multiple
+    single-replica pad clusters (`pad_c_0`, `pad_c_1`, ...), at most
+    `ENVD_SCALABILITY_MVS_PER_CLUSTER` MVs per cluster.
+
+    Each MV is a trivial transformation of a single 1-row base table, with
+    the predicate parameterised on the index `i` so MVs are structurally
+    distinct (and not collapsible via plan caching).
+    """
+
+    MVS_PER_CLUSTER: int = ENVD_SCALABILITY_MVS_PER_CLUSTER
+    PAD_BASE: str = "pad_base"
+
+    def __init__(self, replica_size: str | None, pad_replica_size: str) -> None:
+        super().__init__(replica_size)
+        self._pad_replica_size = pad_replica_size
+        self._pad_clusters_created = 0
+
+    def name(self) -> str:
+        return SCENARIO_ENVD_SCALABILITY_MVS
+
+    def init(self, runner: ScenarioRunner) -> None:
+        # Drop any leftover pad clusters from a previous failed run.
+        # `%%` escapes the LIKE wildcard from psycopg's `%` placeholder syntax.
+        existing = runner.run_query(
+            "SELECT name FROM mz_clusters WHERE name LIKE 'pad_c_%%'",
+            fetch=True,
+        )
+        for row in existing or []:
+            runner.run_query(f"DROP CLUSTER IF EXISTS {row[0]} CASCADE")
+
+        super().init(runner)
+        runner.run_query(
+            f"CREATE TABLE {self.PAD_SCHEMA}.{self.PAD_BASE} (id int, val text)"
+        )
+        runner.run_query(
+            f"INSERT INTO {self.PAD_SCHEMA}.{self.PAD_BASE} VALUES (1, 'x')"
+        )
+
+    def _ensure_pad_cluster(self, runner: ScenarioRunner, cluster_idx: int) -> None:
+        while self._pad_clusters_created <= cluster_idx:
+            k = self._pad_clusters_created
+            print(f"  creating pad cluster pad_c_{k} (size {self._pad_replica_size})")
+            runner.run_query(f"DROP CLUSTER IF EXISTS pad_c_{k} CASCADE")
+            runner.run_query(
+                f"CREATE CLUSTER pad_c_{k} SIZE '{self._pad_replica_size}'"
+            )
+            self._pad_clusters_created += 1
+
+    def add_objects(self, runner: ScenarioRunner, target_n: int) -> None:
+        if target_n <= self._current_n:
+            return
+
+        next_i = self._current_n + 1
+        while next_i <= target_n:
+            cluster_idx = (next_i - 1) // self.MVS_PER_CLUSTER
+            self._ensure_pad_cluster(runner, cluster_idx)
+            cluster_end = min(target_n, (cluster_idx + 1) * self.MVS_PER_CLUSTER)
+            statements = [
+                f"CREATE MATERIALIZED VIEW {self.PAD_SCHEMA}.pad_mv_{i} "
+                f"IN CLUSTER pad_c_{cluster_idx} "
+                f"AS SELECT id, val FROM {self.PAD_SCHEMA}.{self.PAD_BASE} "
+                f"WHERE id < {i}"
+                for i in range(next_i, cluster_end + 1)
+            ]
+            _bulk_run(
+                runner,
+                statements,
+                f"create MVs {next_i}..{cluster_end} on pad_c_{cluster_idx}",
+            )
+            next_i = cluster_end + 1
+
+        self._current_n = target_n
+
+    def teardown(self, runner: ScenarioRunner) -> None:
+        # Drop the schema first so MVs (catalog entries) are removed; then
+        # drop the now-quiescent pad clusters.
+        super().teardown(runner)
+        for k in range(self._pad_clusters_created):
+            try:
+                runner.run_query(f"DROP CLUSTER IF EXISTS pad_c_{k} CASCADE")
+            except Exception as e:
+                print(f"WARNING: failed to drop pad_c_{k}: {e}")
+        self._pad_clusters_created = 0
+
+
 # TODO: We should factor out the below
 # `disable_region`, `cloud_disable_enable_and_wait`, `reconfigure_envd_cpus`, `wait_for_envd`
 # functions into a separate module. (Similar `disable_region` functions also occur in other tests.)
@@ -2389,10 +2625,20 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
         "--scale-auction", type=int, default=3, help="Auction scale factor."
     )
     parser.add_argument(
+        "--envd-scalability-sizes",
+        type=lambda s: [int(x) for x in s.split(",") if x.strip()],
+        default=ENVD_SCALABILITY_SIZES,
+        help=(
+            "Comma-separated list of catalog object counts to test for "
+            "envd_scalability scenarios. Defaults to "
+            f"{','.join(str(n) for n in ENVD_SCALABILITY_SIZES)}."
+        ),
+    )
+    parser.add_argument(
         "scenarios",
         nargs="*",
         choices=ALL_SCENARIOS + list(SCENARIO_GROUPS.keys()),
-        help="Scenarios to run, supports individual scenario names as well as 'all', 'cluster', 'environmentd'.",
+        help="Scenarios to run, supports individual scenario names as well as 'all', 'cluster', 'environmentd', 'envd_scalability'.",
     )
 
     args = parser.parse_args()
@@ -2447,13 +2693,15 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
 
         target.initialize()
 
-        # Derive two result files (cluster and envd-focused) from the provided --record path
+        # Derive result files (cluster, envd-focused, envd_scalability) from the provided --record path
         base_name = os.path.splitext(args.record)[0]
         cluster_path = f"{base_name}.cluster.csv"
         envd_path = f"{base_name}.envd.csv"
+        envd_scalability_path = f"{base_name}.envd_scalability.csv"
 
         cluster_file = open(cluster_path, "w", newline="")
         envd_file = open(envd_path, "w", newline="")
+        envd_scalability_file = open(envd_scalability_path, "w", newline="")
 
         # Traditional scenarios: cluster-focused schema
         cluster_writer = csv.DictWriter(
@@ -2491,6 +2739,27 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
             extrasaction="ignore",
         )
         envd_writer.writeheader()
+
+        # Envd-scalability scenarios reuse the cluster-focused schema:
+        # `scale` carries the catalog object count (N), `cluster_size` is the
+        # fixed measurement cluster, `time_ms` is the latency.
+        envd_scalability_writer = csv.DictWriter(
+            envd_scalability_file,
+            fieldnames=[
+                "scenario",
+                "scenario_version",
+                "scale",
+                "mode",
+                "category",
+                "test_name",
+                "cluster_size",
+                "repetition",
+                "size_bytes",
+                "time_ms",
+            ],
+            extrasaction="ignore",
+        )
+        envd_scalability_writer.writeheader()
 
         def process(scenario: str) -> None:
             with composition.test_case(scenario):
@@ -2603,6 +2872,29 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
                         target=target,
                         max_scale=max_scale,
                     )
+                if scenario == SCENARIO_ENVD_SCALABILITY_TABLES:
+                    print("--- SCENARIO: Running envd scalability (tables)")
+                    run_scenario_envd_scalability(
+                        scenario=EnvdScalabilityTablesScenario(
+                            target.replica_size_for_scale(1)
+                        ),
+                        results_writer=envd_scalability_writer,
+                        connection=conn,
+                        target=target,
+                        sizes=args.envd_scalability_sizes,
+                    )
+                if scenario == SCENARIO_ENVD_SCALABILITY_MVS:
+                    print("--- SCENARIO: Running envd scalability (materialized views)")
+                    run_scenario_envd_scalability(
+                        scenario=EnvdScalabilityMvsScenario(
+                            target.replica_size_for_scale(1),
+                            pad_replica_size=target.replica_size_for_scale(2),
+                        ),
+                        results_writer=envd_scalability_writer,
+                        connection=conn,
+                        target=target,
+                        sizes=args.envd_scalability_sizes,
+                    )
 
         test_failed = True
         try:
@@ -2612,6 +2904,7 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
         finally:
             cluster_file.close()
             envd_file.close()
+            envd_scalability_file.close()
             # Clean up
             if args.cleanup:
                 target.cleanup()
@@ -2622,18 +2915,25 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
         upload_environmentd_results_to_test_analytics(
             composition, envd_path, not test_failed
         )
+        # The envd_scalability rows share the cluster_spec_sheet_result schema
+        # (mode='envd_scalability' distinguishes them).
+        upload_cluster_results_to_test_analytics(
+            composition, envd_scalability_path, not test_failed
+        )
 
         assert not test_failed
 
         if buildkite.is_in_buildkite():
-            # Upload both CSVs as artifacts
+            # Upload all CSVs as artifacts
             buildkite.upload_artifact(cluster_path, cwd=MZ_ROOT, quiet=True)
             buildkite.upload_artifact(envd_path, cwd=MZ_ROOT, quiet=True)
+            buildkite.upload_artifact(envd_scalability_path, cwd=MZ_ROOT, quiet=True)
 
         if args.analyze:
-            # Analyze both files separately (each has its own schema)
+            # Analyze each file separately (each has its own schema/x-axis)
             analyze_cluster_results_file(cluster_path)
             analyze_envd_results_file(envd_path)
+            analyze_envd_scalability_results_file(envd_scalability_path)
 
 
 class BenchTarget:
@@ -2938,6 +3238,57 @@ def run_scenario_envd_strong_scaling(
             )
 
 
+def run_scenario_envd_scalability(
+    scenario: EnvdScalabilityScenario,
+    results_writer: csv.DictWriter,
+    connection: ConnectionHandler,
+    target: BenchTarget,
+    sizes: list[int],
+) -> None:
+    """
+    Run an envd-scalability scenario, where the cluster size is fixed and the
+    number of catalog objects (`scale`) varies across the points in `sizes`.
+
+    Builds the catalog incrementally so transitioning from N=k to the next
+    size point only adds (next - k) objects.
+    """
+    measurement_size = target.replica_size_for_scale(1)
+
+    runner = ScenarioRunner(
+        scenario.name(),
+        scenario.VERSION,
+        0,  # filled in per N below
+        "envd_scalability",
+        connection,
+        results_writer,
+        replica_size=measurement_size,
+        target=target,
+    )
+
+    # (Re)create the fixed-size measurement cluster and a tiny one-row table
+    # used by the simple-peek measurement.
+    runner.run_query("DROP CLUSTER IF EXISTS c CASCADE")
+    runner.run_query(f"CREATE CLUSTER c SIZE '{measurement_size}'")
+    runner.run_query("SET cluster = 'c'")
+    runner.run_query("DROP TABLE IF EXISTS t CASCADE")
+    runner.run_query("CREATE TABLE t (a int)")
+    runner.run_query("INSERT INTO t VALUES (1)")
+
+    scenario.init(runner)
+
+    try:
+        for n in sizes:
+            print(
+                f"--- envd_scalability {scenario.name()}: building catalog up to N={n}"
+            )
+            scenario.add_objects(runner, n)
+            runner.scale = n
+            print(f"--- envd_scalability {scenario.name()}: measuring at N={n}")
+            scenario.run(runner)
+    finally:
+        scenario.teardown(runner)
+
+
 def run_scenario_weak(
     scenario: Scenario,
     results_writer: csv.DictWriter,
@@ -3033,13 +3384,36 @@ def workflow_plot_envd(
         analyze_envd_results_file(str(file))
 
 
+def workflow_plot_envd_scalability(
+    composition: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Analyze envd-scalability results (latency vs catalog object count)."""
+
+    parser.add_argument(
+        "files",
+        nargs="*",
+        default="results_*.envd_scalability.csv",
+        type=str,
+        help="Glob pattern of envd_scalability result files to plot.",
+    )
+
+    args = parser.parse_args()
+
+    for file in itertools.chain(*map(glob.iglob, args.files)):
+        analyze_envd_scalability_results_file(str(file))
+
+
 def workflow_plot(composition: Composition, parser: WorkflowArgumentParser) -> None:
     """Analyze the results of the workflow."""
 
     parser.add_argument(
         "files",
         nargs="*",
-        default=["results_*.cluster.csv", "results_*.envd.csv"],
+        default=[
+            "results_*.cluster.csv",
+            "results_*.envd.csv",
+            "results_*.envd_scalability.csv",
+        ],
         type=str,
         help="Glob pattern of result files to plot.",
     )
@@ -3049,13 +3423,15 @@ def workflow_plot(composition: Composition, parser: WorkflowArgumentParser) -> N
     for file in itertools.chain(*map(glob.iglob, args.files)):
         file_str = str(file)
         base_name = os.path.basename(file_str)
-        if base_name.endswith(".cluster.csv"):
+        if base_name.endswith(".envd_scalability.csv"):
+            analyze_envd_scalability_results_file(file_str)
+        elif base_name.endswith(".cluster.csv"):
             analyze_cluster_results_file(file_str)
         elif base_name.endswith(".envd.csv"):
             analyze_envd_results_file(file_str)
         else:
             raise UIError(
-                f"Error: Filename '{file_str}' doesn't indicate whether it's a cluster or an envd results file (no .cluster/.envd suffix). Please use the explicit `plot-envd` or `plot-cluster` targets for such files."
+                f"Error: Filename '{file_str}' doesn't indicate whether it's a cluster, envd, or envd_scalability results file (no .cluster/.envd/.envd_scalability suffix). Please use the explicit `plot-envd`, `plot-cluster`, or `plot-envd-scalability` targets for such files."
             )
 
 
@@ -3173,6 +3549,44 @@ def analyze_envd_results_file(file: str) -> None:
             "QPS",
             "Normalized QPS",
             x="envd_cpus",
+        )
+
+
+def analyze_envd_scalability_results_file(file: str) -> None:
+    """Plot adapter/envd latency vs catalog object count (N).
+
+    Each (scenario, category) pair yields one plot, with `scale` (=N) as the
+    x-axis (categorical bar chart, since the values span 1..100k). The
+    accompanying normalized plot is produced by the shared `plot()` helper.
+    """
+    print(f"--- Analyzing envd_scalability results file {file} ...")
+    df = pd.read_csv(file)
+    if df.empty:
+        print(f"^^^ +++ File {file} is empty, skipping")
+        return
+
+    base_name = os.path.basename(file).split(".")[0]
+    plot_dir = os.path.join("test", "cluster-spec-sheet", "plots", base_name)
+    os.makedirs(plot_dir, exist_ok=True)
+
+    for (benchmark, category, mode), sub in df.groupby(
+        ["scenario", "category", "mode"]
+    ):
+        title = f"{str(benchmark).replace('_',' ')} - {str(category).replace('_',' ')} ({mode})"
+        slug = f"{benchmark}_{category}_{mode}".replace(" ", "_")
+        sub_t = sub[sub["time_ms"].notna()]
+        if sub_t.empty:
+            print(f"Warning: No time data for {title} in {file}")
+            continue
+        plot(
+            plot_dir,
+            sub_t,
+            "time_ms",
+            f"{title} (time)",
+            f"{slug}_time_ms",
+            "Time [ms]",
+            "Normalized time",
+            x="scale",
         )
 
 
