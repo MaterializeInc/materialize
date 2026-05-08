@@ -957,6 +957,7 @@ async fn supervise_existing_process(state_updater: &ProcessStateUpdater, pid_fil
         return;
     };
     let pid = process.pid();
+    let start_time = process.start_time();
 
     info!(%pid, "discovered existing process for {name}");
     state_updater.update_state(ProcessStatus::Ready { pid });
@@ -971,9 +972,17 @@ async fn supervise_existing_process(state_updater: &ProcessStateUpdater, pid_fil
         }
     }
 
-    // Periodically check if the process has terminated.
+    // Periodically check if the process has terminated. Verify start_time
+    // on each iteration to detect PID reuse.
     let mut system = System::new();
-    while system.refresh_process_specifics(pid, ProcessRefreshKind::new()) {
+    loop {
+        if !system.refresh_process_specifics(pid, ProcessRefreshKind::new()) {
+            break;
+        }
+        match system.process(pid) {
+            Some(p) if p.start_time() == start_time => {}
+            _ => break,
+        }
         time::sleep(Duration::from_secs(5)).await;
     }
 
