@@ -1266,7 +1266,6 @@ source materialize.public.t1 (u1, storage):
 
 binding constraints:
 lower:
-  (Storage inputs: [u1]): [<TIMESTAMP>]
   (Isolation level: StrictSerializable): [<TIMESTAMP>]\n";
 
     let row = client
@@ -1274,6 +1273,10 @@ lower:
         .unwrap();
     let explain: String = row.get(0);
     let explain = timestamp_re.replace_all(&explain, "<TIMESTAMP>");
+    // The storage inputs constraint appears non-deterministically depending on
+    // whether the storage frontier has advanced before the query runs.
+    let storage_inputs_re = Regex::new(r"  \(Storage inputs: \[.*\]\): \[<TIMESTAMP>\]\n").unwrap();
+    let explain = storage_inputs_re.replace_all(&explain, "");
     assert_eq!(explain, expect, "{explain}\n\n{expect}");
 }
 

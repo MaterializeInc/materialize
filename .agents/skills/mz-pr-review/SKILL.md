@@ -1,12 +1,10 @@
 ---
 name: mz-pr-review
 description: >
-  Perform a local code review of the current branch's changes against Materialize
-  project standards. Trigger when the user says "review my code", "review my
-  changes", "check my diff", "does this look ok", "what do you think of this
-  PR", "code review", or asks you to look over changes before merging. Also
-  trigger when the user passes a PR number and wants feedback on quality, style,
-  or correctness.
+  Local code review of current branch vs Materialize standards. Trigger:
+  "review my code", "review my changes", "check my diff", "does this look ok",
+  "what do you think of this PR", "code review", or look over changes before
+  merging. Also PR number + wants feedback on quality, style, correctness.
 argument-hint: [base-branch]
 allowed-tools: [Bash, Read, Grep, Glob, Task]
 ---

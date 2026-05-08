@@ -1,12 +1,11 @@
 ---
 name: mz-debug-ci
 description: >
-  Investigate CI failures on a PR using gh and bk CLI tools. Trigger when the
-  user asks about failing checks, Buildkite failures, or CI issues — including
-  casual phrases like "why is CI red", "build broken", "checks failing", "what
-  went wrong in CI", "nightly broke", "tests failing on this PR", or pastes a
-  Buildkite URL. Also trigger when the user mentions a specific PR number and
-  wants to understand why it's failing.
+  Investigate CI failures on PR via gh + bk CLI. Trigger: failing checks,
+  Buildkite failures, CI issues — "why is CI red", "build broken",
+  "checks failing", "what went wrong in CI", "nightly broke",
+  "tests failing on this PR", or pasted Buildkite URL. Also PR number +
+  why failing.
 argument-hint: <PR number or GitHub PR URL>
 ---
 

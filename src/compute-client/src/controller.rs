@@ -48,7 +48,6 @@ use mz_dyncfg::ConfigSet;
 use mz_expr::RowSetFinishing;
 use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
-use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -854,6 +853,11 @@ impl ComputeController {
     }
 
     /// Initiate a peek request for the contents of the given collection at `timestamp`.
+    ///
+    /// The caller supplies a `read_hold` for the peek target — via
+    /// [`ComputeController::acquire_read_hold`] for `PeekTarget::Index`, or via the storage
+    /// collections for `PeekTarget::Persist`. The hold keeps the collection's `since` at
+    /// `<= timestamp` until the peek completes.
     pub fn peek(
         &self,
         instance_id: ComputeInstanceId,
@@ -864,6 +868,7 @@ impl ComputeController {
         result_desc: RelationDesc,
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
+        read_hold: ReadHold,
         target_replica: Option<ReplicaId>,
         peek_response_tx: oneshot::Sender<PeekResponse>,
     ) -> Result<(), PeekError> {
@@ -878,14 +883,11 @@ impl ComputeController {
             }
         }
 
-        // Validation: peek target
-        let read_hold = match &peek_target {
-            PeekTarget::Index { id } => instance.acquire_read_hold(*id)?,
-            PeekTarget::Persist { id, .. } => self
-                .storage_collections
-                .acquire_read_holds(vec![*id])?
-                .into_element(),
-        };
+        // Validation: the read hold must target this collection and must hold its `since`
+        // at `<= timestamp`.
+        if read_hold.id() != peek_target.id() {
+            return Err(ReadHoldIdMismatch(read_hold.id()));
+        }
         if !read_hold.since().less_equal(&timestamp) {
             return Err(SinceViolation(peek_target.id()));
         }

@@ -75,7 +75,11 @@ impl MySqlTableDesc {
     /// exceptions:
     /// - `self`'s columns are a prefix of `other`'s columns.
     /// - `self`'s keys are all present in `other`
-    pub fn determine_compatibility(&self, other: &MySqlTableDesc) -> Result<(), anyhow::Error> {
+    pub fn determine_compatibility(
+        &self,
+        other: &MySqlTableDesc,
+        binlog_full_metadata: bool,
+    ) -> Result<(), anyhow::Error> {
         if self == other {
             return Ok(());
         }
@@ -90,12 +94,42 @@ impl MySqlTableDesc {
             );
         }
 
-        // `columns` is ordered by the ordinal_position of each column in the table,
-        // so as long as `self.columns` is a compatible prefix of `other.columns`, we can
-        // ignore extra columns from `other.columns`.
-        let mut other_columns = other.columns.iter();
-        for self_column in &self.columns {
-            let other_column = other_columns.next().ok_or_else(|| {
+        // In the case that we don't have full binlog row metadata, `columns` is ordered by the
+        // ordinal position of each column in the table, so as long as `self.columns` is a
+        // compatible prefix of `other.columns`, we can ignore extra columns from `other.columns`.
+        //
+        // If we do have full metadata, then we can match columns by name and just check that all
+        // columns in `self.columns` are present and compatible with columns in `other.columns`.
+        for (i, self_column) in self.columns.iter().enumerate() {
+            if self_column.column_type.is_none() {
+                // This is an excluded column and can be ignored.
+                continue;
+            }
+            let wire_idx = if !binlog_full_metadata {
+                // No column name metadata, so we match by index.
+                (i < other.columns.len()).then_some(i)
+            } else {
+                // This means the row from the binlog has column name included in the metadata,
+                // so we can match on that instead of position.
+                other
+                    .columns
+                    .iter()
+                    .position(|oc| oc.name.as_str() == self_column.name.as_str())
+            };
+
+            let wire_idx = match wire_idx {
+                Some(idx) => idx,
+                None => {
+                    // We could not find a column in the incoming row that matches this descriptor column.
+                    // This is an error as the column is not ignored (ignored columns have already been skipped).
+                    return Err(anyhow::anyhow!(
+                        "column {} no longer present in table {}",
+                        self_column.name,
+                        self.name
+                    ));
+                }
+            };
+            let other_column = other.columns.get(wire_idx).ok_or_else(|| {
                 anyhow::anyhow!(
                     "column {} no longer present in table {}",
                     self_column.name,
@@ -110,7 +144,6 @@ impl MySqlTableDesc {
                 );
             }
         }
-
         // Our keys are all still present in exactly the same shape.
         // TODO: Implement a more relaxed key compatibility check:
         // We should check that for all keys that we know about there exists an upstream key whose

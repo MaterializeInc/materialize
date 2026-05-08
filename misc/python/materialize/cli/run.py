@@ -227,8 +227,6 @@ def main() -> int:
                     _macos_codesign(program)
             if sys.platform != "darwin":
                 print("Ignoring --enable-mac-codesigning since we're not on macOS")
-        else:
-            print("Disabled macOS Codesigning")
 
         if args.wrapper:
             command = shlex.split(args.wrapper)
@@ -416,7 +414,8 @@ def main() -> int:
     os.setpgid(child_pid, child_pid)
 
     # Then, spawn the desired command.
-    print(f"$ {' '.join(command)}")
+    if args.program != "sqllogictest":
+        print(f"$ {' '.join(command)}")
     if args.program == "environmentd":
         # Automatically restart `environmentd` after it halts, but not more than
         # once every 5s to prevent hot loops. This simulates what happens when

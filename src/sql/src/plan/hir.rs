@@ -38,7 +38,9 @@ use mz_repr::*;
 use serde::{Deserialize, Serialize};
 
 use crate::plan::error::PlanError;
-use crate::plan::query::{EXECUTE_CAST_CONTEXT, ExprContext, execute_expr_context};
+use crate::plan::query::{
+    EXECUTE_CAST_CONTEXT, ExprContext, execute_expr_context, offset_into_value,
+};
 use crate::plan::typeconv::{self, CastContext, plan_cast};
 use crate::plan::{Params, QueryContext, QueryLifetime, StatementContext};
 
@@ -2136,11 +2138,17 @@ impl HirRelationExpr {
     }
 
     #[deprecated = "Use a combination of `Visit` and `VisitChildren` methods."]
-    /// Visits all scalar expressions within the sub-tree of the given relation.
+    /// Visits all scalar expressions directly held by relation nodes within the sub-tree of `self`.
     ///
-    /// The `depth` argument should indicate the subquery nesting depth of the expression,
-    /// which will be incremented when entering the RHS of a join or a subquery and
-    /// presented to the supplied function `f`.
+    /// Note: this does NOT descend into subqueries that may appear inside the visited
+    /// `HirScalarExpr`s (i.e., `HirScalarExpr::Exists` / `HirScalarExpr::Select`). The closure
+    /// `f` is invoked once per top-level scalar expression attached to a relation node, and it
+    /// is the closure's responsibility to recurse into any subqueries if desired.
+    ///
+    /// The `depth` argument is just a seed: it is the value passed to `f` for scalar expressions
+    /// at the root of `self`, and it is incremented by 1 when descending into the RHS of a
+    /// `Join` node (the only place this function increments it). It does NOT control or limit
+    /// recursion; passing `0` is the usual choice.
     pub fn visit_scalar_expressions<F, E>(&self, depth: usize, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&HirScalarExpr, usize) -> Result<(), E>,
@@ -2195,6 +2203,10 @@ impl HirRelationExpr {
 
     #[deprecated = "Use a combination of `Visit` and `VisitChildren` methods."]
     /// Like `visit_scalar_expressions`, but permits mutating the expressions.
+    ///
+    /// In particular, this also does NOT descend into subqueries inside the visited scalar
+    /// expressions, and `depth` is just a seed for the value passed to `f` (see
+    /// [`HirRelationExpr::visit_scalar_expressions`]).
     pub fn visit_scalar_expressions_mut<F, E>(&mut self, depth: usize, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&mut HirScalarExpr, usize) -> Result<(), E>,
@@ -2281,9 +2293,16 @@ impl HirRelationExpr {
         });
     }
 
-    /// Replaces any parameter references in the expression with the
-    /// corresponding datum from `params`.
-    pub fn bind_parameters(
+    /// Replaces parameter references in the expression with the corresponding datum from `params`.
+    /// Additionally, it simplifies OFFSET clauses to constants after parameter binding, and checks
+    /// them for non-negativity.
+    ///
+    /// This walks the entire `HirRelationExpr` tree, including subqueries nested inside scalar
+    /// expressions: `visit_scalar_expressions_mut` covers the scalar expressions held directly
+    /// by relation nodes, and the corecursive call into
+    /// [`HirScalarExpr::bind_parameters_and_simplify_offset`] (made by the closure below) is
+    /// what descends into subqueries occurring inside those scalar expressions.
+    pub fn bind_parameters_and_simplify_offset(
         &mut self,
         scx: &StatementContext,
         lifetime: QueryLifetime,
@@ -2291,8 +2310,21 @@ impl HirRelationExpr {
     ) -> Result<(), PlanError> {
         #[allow(deprecated)]
         self.visit_scalar_expressions_mut(0, &mut |e: &mut HirScalarExpr, _: usize| {
-            e.bind_parameters(scx, lifetime, params)
+            e.bind_parameters_and_simplify_offset(scx, lifetime, params)
+        })?;
+
+        // OFFSET clauses in `expr` should become constants with the above binding of parameters.
+        // Let's check this and simplify them to literals.
+        self.try_visit_mut_pre(&mut |expr| {
+            if let HirRelationExpr::TopK { offset, .. } = expr {
+                let offset_value = offset_into_value(offset.take())?;
+                *offset = HirScalarExpr::literal(Datum::Int64(offset_value), SqlScalarType::Int64);
+            }
+            Ok::<(), PlanError>(())
         })
+        // (We don't need to simplify LIMIT clauses in `expr`, because we can handle non-constant
+        // expressions there. If they happen to be simplifiable to literals, then the optimizer will do
+        // so later.)
     }
 
     pub fn contains_parameters(&self) -> Result<bool, PlanError> {
@@ -3223,16 +3255,23 @@ impl HirScalarExpr {
         })
     }
 
-    /// Replaces any parameter references in the expression with the
-    /// corresponding datum in `params`.
-    pub fn bind_parameters(
+    /// Replaces parameter references in the expression with the corresponding datum from `params`.
+    /// Additionally, it simplifies OFFSET clauses to constants after parameter binding, and checks
+    /// them for non-negativity.
+    ///
+    /// This handles subqueries nested inside `self` by calling back into
+    /// [`HirRelationExpr::bind_parameters_and_simplify_offset`] on each direct subquery; that
+    /// relation-level function in turn calls back here for the scalar expressions it holds, so
+    /// the two functions corecursively cover the entire HIR tree.
+    pub fn bind_parameters_and_simplify_offset(
         &mut self,
         scx: &StatementContext,
         lifetime: QueryLifetime,
         params: &Params,
     ) -> Result<(), PlanError> {
-        #[allow(deprecated)]
-        self.visit_recursively_mut(0, &mut |_: usize, e: &mut HirScalarExpr| {
+        // First, rewrite each `Parameter` node to a literal. This walks only the scalar tree;
+        // it does not yet descend into subqueries.
+        self.try_visit_mut_post(&mut |e: &mut HirScalarExpr| {
             if let HirScalarExpr::Parameter(n, name) = e {
                 let datum = match params.datums.iter().nth(*n - 1) {
                     None => return Err(PlanError::UnknownParameter(*n)),
@@ -3260,10 +3299,15 @@ impl HirScalarExpr {
                 .expect("checked in plan_params");
             }
             Ok(())
+        })?;
+        // Then descend into any subqueries; the relation-side `bind_parameters_and_simplify_offset`
+        // handles corecursion back into scalars.
+        self.try_visit_direct_subqueries_mut(|r: &mut HirRelationExpr| {
+            r.bind_parameters_and_simplify_offset(scx, lifetime, params)
         })
     }
 
-    /// Like [`HirScalarExpr::bind_parameters`], except that parameters are
+    /// Like [`HirScalarExpr::bind_parameters_and_simplify_offset`], except that parameters are
     /// replaced with the corresponding expression fragment from `params` rather
     /// than a datum.
     ///

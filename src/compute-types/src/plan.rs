@@ -105,6 +105,31 @@ impl AvailableCollections {
     }
 }
 
+/// How to render the arrangements requested by an `ArrangeBy`.
+///
+/// Decided during LIR lowering and consumed by the renderer. The variant says what the
+/// renderer will do, not what it knows about the input.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
+pub enum ArrangementStrategy {
+    /// Form arrangements directly from the input collection.
+    Direct,
+    /// Insert temporal bucketing in front of the arrangement, to delay future-stamped
+    /// updates (e.g., from `mz_now()` MFPs) until their bucket boundary releases them.
+    /// Honoured only when `ENABLE_COMPUTE_TEMPORAL_BUCKETING` is set; otherwise behaves like
+    /// `Direct`.
+    TemporalBucketing,
+}
+
 /// An identifier for an LIR node.
 #[derive(
     Clone,
@@ -343,6 +368,8 @@ pub enum PlanNode {
         /// that will be added to those of the input. Does not include
         /// any other existing arrangements.
         forms: AvailableCollections,
+        /// How the renderer should form the arrangements requested by `forms`.
+        strategy: ArrangementStrategy,
     },
 }
 
@@ -770,6 +797,7 @@ impl CollectionPlan for PlanNode {
                 input,
                 input_mfp: _,
                 forms: _,
+                strategy: _,
             }
             | PlanNode::Reduce {
                 input_key: _,

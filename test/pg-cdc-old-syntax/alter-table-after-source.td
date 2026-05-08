@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/7900 is fixed
+$ skip-if
+SELECT true
+
 #
 # Test ALTER TABLE -- source will error out for tables which existed when the source was created
 #

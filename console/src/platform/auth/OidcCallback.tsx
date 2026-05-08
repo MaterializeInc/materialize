@@ -18,6 +18,11 @@ import { useAuth } from "~/external-library-wrappers/oidc";
 // render in one place.
 export const OidcCallback = () => {
   const auth = useAuth();
+  // OIDC initialization failed — there's nothing to complete here, so send
+  // the user back to the login page.
+  if (!auth) {
+    return <Navigate to={LOGIN_PATH} replace />;
+  }
   if (auth.error) {
     const message = auth.error.message?.trim() || "Sign-in failed";
     const params = new URLSearchParams({ [LOGIN_ERROR_PARAM]: message });

@@ -176,7 +176,7 @@
       description: |
         *Value:* `int`
 
-        The partition count to use when creating the progress topic (if the Kafka
+        The replication factor to use when creating the progress topic (if the Kafka
         topic does not already exist).
 
         Default: Broker's default.

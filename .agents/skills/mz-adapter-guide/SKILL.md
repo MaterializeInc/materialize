@@ -1,12 +1,11 @@
 ---
 name: mz-adapter-guide
 description: >
-  Correctness invariants and architectural guidance for the adapter layer,
-  coordinator, pgwire, peek paths, and timestamp oracle. Trigger when the user
-  works on or asks questions about these subsystems — including "how does the
-  coordinator work", "what are read holds", "explain the peek path", "how does
-  timestamp selection work", "why does this query block". Also trigger when
-  editing files in src/adapter/, src/pgwire/, or src/timestamp-oracle/.
+  Correctness invariants + architecture: adapter, coordinator, pgwire, peek
+  paths, timestamp oracle. Trigger: questions about these subsystems —
+  "how does coordinator work", "what are read holds", "explain peek path",
+  "how does timestamp selection work", "why does this query block". Also
+  edits in src/adapter/, src/pgwire/, src/timestamp-oracle/.
 ---
 
 # Adapter Guide Skill

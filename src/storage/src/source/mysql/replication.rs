@@ -394,7 +394,7 @@ pub(crate) fn render<'scope>(
 
                         events::handle_rows_event(
                             data,
-                            &repl_context,
+                            &mut repl_context,
                             &cur_gtid,
                             &mut row_event_buffer,
                         )

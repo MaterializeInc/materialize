@@ -1,11 +1,9 @@
 ---
 name: mz-limits-test
 description: >
-  This skill should be used when the user wants to add, modify, or debug a limits
-  test. Trigger when the user mentions "limits test", "Generator subclass",
-  "many objects", "scaling test", or wants to stress-test Materialize with large
-  numbers of objects (tables, views, sources, indexes, etc.). Also trigger when
-  the user edits test/limits/mzcompose.py.
+  Add/modify/debug limits test. Trigger: "limits test", "Generator subclass",
+  "many objects", "scaling test", or stress-test Materialize with many objects
+  (tables, views, sources, indexes). Also edits in test/limits/mzcompose.py.
 ---
 
 # Limits Test Framework

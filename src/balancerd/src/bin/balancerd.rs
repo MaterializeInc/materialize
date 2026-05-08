@@ -195,7 +195,9 @@ fn main() {
 
     let root_span = info_span!("balancer");
     let res = match args.command {
-        Command::Service(args) => runtime.block_on(run(args, tracing_handle).instrument(root_span)),
+        Command::Service(args) => {
+            runtime.block_on(run(args, tracing_handle, metrics_registry).instrument(root_span))
+        }
     };
 
     if let Err(err) = res {
@@ -203,8 +205,11 @@ fn main() {
     }
 }
 
-pub async fn run(args: ServiceArgs, tracing_handle: TracingHandle) -> Result<(), anyhow::Error> {
-    let metrics_registry = MetricsRegistry::new();
+pub async fn run(
+    args: ServiceArgs,
+    tracing_handle: TracingHandle,
+    metrics_registry: MetricsRegistry,
+) -> Result<(), anyhow::Error> {
     let (resolver, cancellation_resolver) = match (
         args.static_resolver_addr,
         args.frontegg_resolver_template,

@@ -1078,6 +1078,8 @@ pub enum StorageErrorXKind {
     MfpEvalError(Arc<str>),
     #[error("no matching files found at the given url")]
     NoMatchingFiles,
+    #[error("server returned HTTP {0}; Redirects are not supported, use the final URL directly.")]
+    Redirect(u16),
     #[error("something went wrong: {0}")]
     Generic(String),
 }

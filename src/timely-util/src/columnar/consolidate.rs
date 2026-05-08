@@ -338,6 +338,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn emits_multiple_containers() {
         let mut builder: ConsolidatingColumnBuilder<u64, u64, i64> = Default::default();
         // Enough distinct rows to fill the SoA accumulator past the output target multiple
