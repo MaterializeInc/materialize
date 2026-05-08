@@ -19,7 +19,7 @@ import { ObjectDetailPanel } from "./ObjectDetailPanel";
 export const ObjectDetailDrawer = () => {
   const { objectId } = useParams<{ objectId: string }>();
   const navigate = useNavigate();
-  const { data, isLoading } =
+  const { data, isLoading, lookbackMinutes, setLookbackMinutes } =
     useOutletContext<MaintainedObjectsOutletContext>();
 
   const item = data.find((o) => o.id === objectId) ?? null;
@@ -35,7 +35,11 @@ export const ObjectDetailDrawer = () => {
       trapFocus={false}
     >
       {item ? (
-        <ObjectDetailPanel item={item} />
+        <ObjectDetailPanel
+          item={item}
+          lookbackMinutes={lookbackMinutes}
+          setLookbackMinutes={setLookbackMinutes}
+        />
       ) : (
         <Center py={10}>
           {isLoading ? <Spinner data-testid="loading-spinner" /> : null}

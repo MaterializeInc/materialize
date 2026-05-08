@@ -10,7 +10,12 @@
 import { useQuery } from "@tanstack/react-query";
 import React from "react";
 
+import {
+  buildQueryKeyPart,
+  buildRegionQueryKey,
+} from "~/api/buildQueryKeySchema";
 import { IPostgresInterval, isSystemId } from "~/api/materialize";
+import { fetchLagHistory } from "~/api/materialize/freshness/lagHistory";
 import {
   MAINTAINED_OBJECT_TYPES,
   MaintainedObjectType,
@@ -31,6 +36,8 @@ import {
 import { sourceQueryKeys } from "~/platform/sources/queries";
 import { useAllObjects } from "~/store/allObjects";
 import { sumPostgresIntervalMs } from "~/util";
+
+import { buildObjectFreshnessHistory } from "./freshnessHistory";
 
 /** Cluster the object is maintained on. `null` for tables, which aren't
  *  bound to a cluster. */
@@ -202,5 +209,37 @@ export function useObjectSourceStatistics(sourceId: string) {
         rehydrationLatency: row.rehydrationLatency as IPostgresInterval | null,
       };
     },
+  });
+}
+
+const freshnessHistoryQueryKey = (objectId: string, lookbackMs: number) =>
+  [
+    ...buildRegionQueryKey("maintainedObjects"),
+    buildQueryKeyPart("freshnessHistory", { objectId, lookbackMs }),
+  ] as const;
+
+export function useObjectFreshnessHistory({
+  objectId,
+  lookbackMs,
+}: {
+  objectId: string | undefined;
+  lookbackMs: number;
+}) {
+  return useQuery({
+    queryKey: freshnessHistoryQueryKey(objectId ?? "", lookbackMs),
+    queryFn: async ({ queryKey, signal }) => {
+      const { rows } = await fetchLagHistory({
+        params: {
+          lookback: { type: "historical", lookbackMs },
+          objectIds: [objectId!],
+        },
+        requestOptions: { signal },
+        queryKey,
+      });
+      return buildObjectFreshnessHistory(rows, lookbackMs);
+    },
+    enabled: !!objectId,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
   });
 }

@@ -30,7 +30,8 @@ import { MaterializeTheme } from "~/theme";
 import { pluralize } from "~/util";
 import { formatIntervalShort } from "~/utils/format";
 
-import { MaintainedObjectListItem } from "./queries";
+import { pMaxFromHistory } from "./freshnessHistory";
+import { MaintainedObjectListItem, useObjectFreshnessHistory } from "./queries";
 
 const OUTDATED_MS = OUTDATED_THRESHOLD_SECONDS * 1_000;
 const WARNING_MS = OUTDATED_MS / 2;
@@ -41,9 +42,13 @@ const formatReplicaName = (replica: { name: string; size: string | null }) =>
 
 export interface ObjectDetailsCardProps {
   item: MaintainedObjectListItem;
+  freshnessLookbackMinutes: number;
 }
 
-export const ObjectDetailsCard = ({ item }: ObjectDetailsCardProps) => {
+export const ObjectDetailsCard = ({
+  item,
+  freshnessLookbackMinutes,
+}: ObjectDetailsCardProps) => {
   const { colors } = useTheme<MaterializeTheme>();
   const regionSlug = useRegionSlug();
   const { getClusterById } = useAllClusters();
@@ -51,6 +56,14 @@ export const ObjectDetailsCard = ({ item }: ObjectDetailsCardProps) => {
   const cluster = item.cluster ? getClusterById(item.cluster.id) : undefined;
   const namespace = createNamespace(item.databaseName, item.schemaName);
   const replicas = cluster?.replicas ?? [];
+
+  const { data: freshness } = useObjectFreshnessHistory({
+    objectId: item.id,
+    lookbackMs: freshnessLookbackMinutes * 60 * 1000,
+  });
+  const badgeLag = freshness
+    ? pMaxFromHistory(freshness.historicalData, item.id)
+    : item.lag;
 
   return (
     <Card
@@ -63,7 +76,7 @@ export const ObjectDetailsCard = ({ item }: ObjectDetailsCardProps) => {
       <VStack align="start" spacing={4} width="100%">
         <HStack spacing={3} alignItems="center">
           <Text textStyle="heading-lg">{item.name}</Text>
-          <LagBadge lag={item.lag} />
+          <LagBadge lag={badgeLag} />
         </HStack>
 
         <Text textStyle="heading-sm" color={colors.foreground.secondary}>

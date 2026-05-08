@@ -7,25 +7,70 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { Center, Text, useTheme } from "@chakra-ui/react";
+import { Card, HStack, Text, useTheme, VStack } from "@chakra-ui/react";
 import React from "react";
 
+import TimePeriodSelect from "~/components/TimePeriodSelect";
 import { MaterializeTheme } from "~/theme";
 
+import { LOOKBACK_OPTIONS } from "./constants";
+import { ObjectFreshnessChart } from "./ObjectFreshnessChart";
 import { MaintainedObjectListItem } from "./queries";
 
 export interface ObjectFreshnessProps {
   item: MaintainedObjectListItem;
+  timePeriodMinutes: number;
+  setTimePeriodMinutes: React.Dispatch<React.SetStateAction<number>>;
 }
 
-// TODO: Add freshness graphs
-export const ObjectFreshness = (_props: ObjectFreshnessProps) => {
+export const ObjectFreshness = ({
+  item,
+  timePeriodMinutes,
+  setTimePeriodMinutes,
+}: ObjectFreshnessProps) => {
   const { colors } = useTheme<MaterializeTheme>();
+  const [hoverTimestamp, setHoverTimestamp] = React.useState<Date | null>(null);
+  const [lockedTimestamp, setLockedTimestamp] = React.useState<Date | null>(
+    null,
+  );
+
+  const isLocked = lockedTimestamp !== null;
+  const selectedTimestamp = lockedTimestamp ?? hoverTimestamp;
+
   return (
-    <Center py={10}>
-      <Text textStyle="text-base" color={colors.foreground.secondary}>
-        Freshness graphs placeholder
-      </Text>
-    </Center>
+    <VStack align="start" spacing={6} width="100%">
+      <Card
+        p={5}
+        width="100%"
+        borderRadius="md"
+        border="1px"
+        borderColor={colors.border.primary}
+      >
+        <VStack align="start" spacing={4} width="100%">
+          <HStack width="100%" justify="space-between" align="start">
+            <VStack align="start" spacing={1}>
+              <Text textStyle="heading-sm">Freshness latency</Text>
+              <Text textStyle="text-small" color={colors.foreground.secondary}>
+                The graph below shows the highest latencies over time.
+              </Text>
+            </VStack>
+            <TimePeriodSelect
+              timePeriodMinutes={timePeriodMinutes}
+              setTimePeriodMinutes={setTimePeriodMinutes}
+              options={LOOKBACK_OPTIONS}
+            />
+          </HStack>
+
+          <ObjectFreshnessChart
+            objectId={item.id}
+            timePeriodMinutes={timePeriodMinutes}
+            onTimestampSelect={isLocked ? undefined : setHoverTimestamp}
+            onTimestampLock={setLockedTimestamp}
+            selectedTimestamp={selectedTimestamp}
+            isLocked={isLocked}
+          />
+        </VStack>
+      </Card>
+    </VStack>
   );
 };
