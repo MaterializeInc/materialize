@@ -616,8 +616,9 @@ impl Coordinator {
             &read_holds_owned
         };
 
-        let (dataflow_as_of, storage_as_of, until) =
-            self.select_timestamps(id_bundle, refresh_schedule.as_ref(), read_holds)?;
+        let (dataflow_as_of, storage_as_of, until) = self
+            .select_timestamps(id_bundle, refresh_schedule.as_ref(), read_holds)
+            .await?;
 
         tracing::info!(
             dataflow_as_of = ?dataflow_as_of,
@@ -837,7 +838,7 @@ impl Coordinator {
 
     /// Select the initial `dataflow_as_of`, `storage_as_of`, and `until` frontiers for a
     /// materialized view.
-    fn select_timestamps(
+    async fn select_timestamps(
         &self,
         id_bundle: CollectionIdBundle,
         refresh_schedule: Option<&RefreshSchedule>,
@@ -872,14 +873,21 @@ impl Coordinator {
         // first refresh time would prevent warmup before the first refresh.
         if let Some(refresh_schedule) = &refresh_schedule {
             if let Some(least_valid_read_ts) = least_valid_read.as_option() {
-                // DNM: For REFRESH MVs, anchor the first refresh to wall-clock
-                // now (not to the inputs' since). This keeps the MV's first
-                // visible refresh in the future even when input sinces lag
-                // behind now (e.g., due to read-hold slack). Take the max with
-                // least_valid_read in case any input's since is ahead of now,
-                // so we don't violate `dataflow_as_of <= storage_as_of`.
-                let anchor_ts =
-                    std::cmp::max(mz_repr::Timestamp::from(self.now()), *least_valid_read_ts);
+                // DNM: For REFRESH MVs, anchor the first refresh on the
+                // EpochMilliseconds oracle's read_ts, not on least_valid_read.
+                // The oracle tracks "now" linearizably and matches the
+                // plan-time `mz_now()` (in the typical case where no write
+                // happens between planning and select_timestamps), so:
+                //   - REFRESH AT mz_now() schedules find their AT point
+                //     (anchor == captured T_plan, not "now + Δ" like
+                //     self.now() would give us).
+                //   - REFRESH EVERY ALIGNED TO past schedules don't have
+                //     their first refresh fall in the past (which would
+                //     happen if we anchored on least_valid_read with slack).
+                // Take the max with least_valid_read so that
+                // `dataflow_as_of <= storage_as_of` continues to hold.
+                let oracle_read_ts = self.get_local_read_ts().await;
+                let anchor_ts = std::cmp::max(oracle_read_ts, *least_valid_read_ts);
                 if let Some(first_refresh_ts) = refresh_schedule.round_up_timestamp(anchor_ts) {
                     storage_as_of = Antichain::from_elem(first_refresh_ts);
                     dataflow_as_of.join_assign(
