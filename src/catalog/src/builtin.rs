@@ -160,6 +160,8 @@ pub struct BuiltinLog {
     pub oid: u32,
     /// ACL items to apply to the object
     pub access: Vec<MzAclItem>,
+    #[serde(default)]
+    pub ontology: Option<Ontology>,
 }
 
 /// Ontology metadata for a builtin catalog object.
@@ -178,7 +180,7 @@ pub struct BuiltinLog {
 /// are not `PartialEq`. Since the only consumers of semantic types are the
 /// ontology views (which already have access to `Ontology`), storing them here
 /// is both correct and avoids the schema-evolution problem entirely.
-#[derive(Clone, Hash, Debug, PartialEq, Eq)]
+#[derive(Clone, Hash, Debug, PartialEq, Eq, Serialize)]
 pub struct Ontology {
     /// The ontology entity name (e.g., "database", "table", "mv"). Names a
     /// single row of this relation, so prefer singular event/object nouns
@@ -219,6 +221,28 @@ fn is_false(v: &bool) -> bool {
 /// Typed properties for an ontology link. Serialized to the `properties` JSONB
 /// column in `mz_ontology_link_types`. The `kind` field is inlined from the
 /// enum variant name via `#[serde(tag = "kind")]`.
+///
+/// Choosing the right variant matters:
+///
+/// - [`LinkProperties::ForeignKey`]: the source entity has a column whose
+///   value is an ID that directly references a row in the target entity.
+///   Use this when there is an explicit FK column (e.g. `schema_id` ->
+///   `schema`).
+/// - [`LinkProperties::DependsOn`]: this entity logically depends on the
+///   target entity via a graph-edge table (e.g. `mz_compute_dependencies`
+///   records that a compute object depends on another object). The
+///   `source_column` is the column **in this entity** that holds the
+///   dependent's ID; `target_column` is the column in the target entity
+///   being depended upon. Use this for dependency-graph tables, **not**
+///   `ForeignKey`.
+/// - [`LinkProperties::Union`]: the source entity is a superset view that
+///   contains the target entity as a subset, optionally filtered by a
+///   discriminator column.
+/// - [`LinkProperties::MapsTo`]: the source entity provides an ID translation
+///   to the target entity, possibly via an intermediate table or across ID
+///   namespaces.
+/// - [`LinkProperties::Measures`]: the source entity records metric
+///   measurements about the target entity.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, serde::Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LinkProperties {
@@ -247,6 +271,13 @@ pub enum LinkProperties {
         /// Free-form annotation for cases that need extra context.
         #[serde(skip_serializing_if = "Option::is_none")]
         note: Option<&'static str>,
+        /// Additional `(source_column, target_column)` pairs that together with
+        /// `source_column`/`target_column` form a composite join key. Used for
+        /// `_per_worker` entities whose primary key is `(id, worker_id)`, and
+        /// for message-count raw relations whose join key includes worker IDs.
+        /// Serialized as an array; omitted when `None`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        extra_key_columns: Option<&'static [(&'static str, &'static str)]>,
     },
     /// A union relationship: the source entity is a superset view that includes
     /// the target entity, optionally filtered by a discriminator column/value.
@@ -265,11 +296,9 @@ pub enum LinkProperties {
     /// optionally via an intermediate table and/or with an ID-type conversion.
     MapsTo {
         /// Column in the source entity that holds the ID to map from.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        source_column: Option<&'static str>,
+        source_column: &'static str,
         /// Column in the target entity being mapped to.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        target_column: Option<&'static str>,
+        target_column: &'static str,
         /// Intermediate relation used to perform the mapping.
         #[serde(skip_serializing_if = "Option::is_none")]
         via: Option<&'static str>,
@@ -283,16 +312,21 @@ pub enum LinkProperties {
         #[serde(skip_serializing_if = "Option::is_none")]
         note: Option<&'static str>,
     },
-    /// A dependency relationship: the source entity directly depends on the
+    /// A dependency relationship: this entity directly depends on the
     /// target entity (e.g. a materialization that references an object).
     DependsOn {
-        /// Column in the source entity that holds the dependency ID.
+        /// Column in this entity that holds the dependency ID.
         source_column: &'static str,
         /// Column in the target entity being depended upon (usually `id`).
         target_column: &'static str,
         /// Semantic type of the source column.
         #[serde(skip_serializing_if = "Option::is_none")]
         source_id_type: Option<mz_repr::SemanticType>,
+        /// Intermediate mapping relation needed when `source_id_type` does not
+        /// directly match the target entity's ID type (e.g. GlobalId →
+        /// `mz_internal.mz_object_global_ids` to reach a catalog object).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        requires_mapping: Option<&'static str>,
     },
     /// A metric relationship: the source entity records measurements of a named
     /// metric on the target entity.
@@ -313,6 +347,10 @@ pub enum LinkProperties {
         /// Free-form annotation for cases that need extra context.
         #[serde(skip_serializing_if = "Option::is_none")]
         note: Option<&'static str>,
+        /// Additional `(source_column, target_column)` pairs that together with
+        /// `source_column`/`target_column` form a composite join key.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        extra_key_columns: Option<&'static [(&'static str, &'static str)]>,
     },
 }
 
@@ -331,6 +369,7 @@ impl LinkProperties {
             requires_mapping: None,
             nullable: false,
             note: None,
+            extra_key_columns: None,
         }
     }
 
@@ -348,6 +387,7 @@ impl LinkProperties {
             requires_mapping: None,
             nullable: true,
             note: None,
+            extra_key_columns: None,
         }
     }
 
@@ -367,6 +407,7 @@ impl LinkProperties {
             requires_mapping: None,
             nullable: false,
             note: None,
+            extra_key_columns: None,
         }
     }
 
@@ -388,6 +429,30 @@ impl LinkProperties {
             requires_mapping: Some(requires_mapping),
             nullable: false,
             note: None,
+            extra_key_columns: None,
+        }
+    }
+
+    /// Foreign-key link with a composite join key. `extra_key_columns` lists
+    /// additional `(source_column, target_column)` pairs beyond the primary
+    /// `source_column`/`target_column` pair. Examples:
+    /// - `&[("worker_id", "worker_id")]` for `_per_worker` entities
+    /// - `&[("from_worker_id", "worker_id")]` for message-count raw relations
+    pub const fn fk_composite(
+        source_column: &'static str,
+        target_column: &'static str,
+        cardinality: Cardinality,
+        extra_key_columns: &'static [(&'static str, &'static str)],
+    ) -> Self {
+        Self::ForeignKey {
+            source_column,
+            target_column,
+            cardinality,
+            source_id_type: None,
+            requires_mapping: None,
+            nullable: false,
+            note: None,
+            extra_key_columns: Some(extra_key_columns),
         }
     }
 
@@ -416,6 +481,25 @@ impl LinkProperties {
             source_id_type: None,
             requires_mapping: None,
             note: None,
+            extra_key_columns: None,
+        }
+    }
+
+    /// Measures link with a composite join key.
+    pub const fn measures_composite(
+        source_column: &'static str,
+        target_column: &'static str,
+        metric: &'static str,
+        extra_key_columns: &'static [(&'static str, &'static str)],
+    ) -> Self {
+        Self::Measures {
+            source_column,
+            target_column,
+            metric,
+            source_id_type: None,
+            requires_mapping: None,
+            note: None,
+            extra_key_columns: Some(extra_key_columns),
         }
     }
 
@@ -434,6 +518,7 @@ impl LinkProperties {
             source_id_type: Some(source_id_type),
             requires_mapping: Some(requires_mapping),
             note: None,
+            extra_key_columns: None,
         }
     }
 }
@@ -441,29 +526,15 @@ impl LinkProperties {
 /// A directed relationship from one ontology entity to another.
 ///
 /// Each link has a `name` (the relationship label, e.g. `"owned_by"`), a
-/// `target` entity name, and a `properties` variant that captures the
-/// *kind* of relationship. Choosing the right variant matters:
-///
-/// - [`LinkProperties::ForeignKey`]: the source entity has a column whose
-///   value is an ID that directly references a row in the target entity.
-///   Use this when there is an explicit FK column (e.g. `schema_id` ->
-///   `schema`).
-/// - [`LinkProperties::DependsOn`]: the source entity logically depends on
-///   the target entity, but the relationship is a graph edge rather than a
-///   simple column reference (e.g. `mz_compute_dependencies` records that a
-///   dataflow depends on an object). Use this for dependency-graph tables,
-///   **not** `ForeignKey`.
-/// - [`LinkProperties::Union`]: the source entity is a superset view that
-///   contains the target entity as a subset, optionally filtered by a
-///   discriminator column.
-/// - [`LinkProperties::MapsTo`]: the source entity provides an ID translation
-///   to the target entity, possibly via an intermediate table or across ID
-///   namespaces.
-/// - [`LinkProperties::Measures`]: the source entity records metric
-///   measurements about the target entity.
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+/// `target` entity name, and a [`LinkProperties`] variant that captures the
+/// kind of relationship.
+#[derive(Clone, Debug, Hash, PartialEq, Eq, Serialize)]
 pub struct OntologyLink {
-    /// Relationship name (e.g., "owned_by", "in_schema").
+    /// Relationship name describing the relationship FROM this entity TO the
+    /// target (e.g., `"owned_by"` means "this entity is owned by the target",
+    /// `"depends_on"` means "this entity depends on the target"). When the
+    /// same name appears on multiple links of the same entity, all links
+    /// share that relationship role (e.g., several `"union_includes"` links).
     pub name: &'static str,
     /// Target entity name (e.g., "role", "schema").
     pub target: &'static str,
@@ -2107,6 +2178,12 @@ pub static MZ_DATAFLOW_OPERATORS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::ne
     oid: oid::LOG_MZ_DATAFLOW_OPERATORS_PER_WORKER_OID,
     variant: LogVariant::Timely(TimelyLog::Operates),
     access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "dataflow_operator_per_worker",
+        description: "Timely dataflow operators present on a specific worker.",
+        links: &const { [] },
+        column_semantic_types: &[],
+    }),
 });
 
 pub static MZ_DATAFLOW_ADDRESSES_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2115,6 +2192,23 @@ pub static MZ_DATAFLOW_ADDRESSES_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::ne
     oid: oid::LOG_MZ_DATAFLOW_ADDRESSES_PER_WORKER_OID,
     variant: LogVariant::Timely(TimelyLog::Addresses),
     access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "dataflow_address_per_worker",
+        description: "Scope address of each Timely operator per worker.",
+        links: &const {
+            [OntologyLink {
+                name: "address_of",
+                target: "dataflow_operator_per_worker",
+                properties: LinkProperties::fk_composite(
+                    "id",
+                    "id",
+                    Cardinality::ManyToOne,
+                    &[("worker_id", "worker_id")],
+                ),
+            }]
+        },
+        column_semantic_types: &[],
+    }),
 });
 
 pub static MZ_DATAFLOW_CHANNELS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2123,6 +2217,35 @@ pub static MZ_DATAFLOW_CHANNELS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new
     oid: oid::LOG_MZ_DATAFLOW_CHANNELS_PER_WORKER_OID,
     variant: LogVariant::Timely(TimelyLog::Channels),
     access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "dataflow_channel_per_worker",
+        description: "Timely dataflow communication channels per worker.",
+        links: &const {
+            [
+                OntologyLink {
+                    name: "source_operator",
+                    target: "dataflow_operator_per_worker",
+                    properties: LinkProperties::fk_composite(
+                        "from_index",
+                        "id",
+                        Cardinality::ManyToOne,
+                        &[("worker_id", "worker_id")],
+                    ),
+                },
+                OntologyLink {
+                    name: "target_operator",
+                    target: "dataflow_operator_per_worker",
+                    properties: LinkProperties::fk_composite(
+                        "to_index",
+                        "id",
+                        Cardinality::ManyToOne,
+                        &[("worker_id", "worker_id")],
+                    ),
+                },
+            ]
+        },
+        column_semantic_types: &[],
+    }),
 });
 
 pub static MZ_SCHEDULING_ELAPSED_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2131,6 +2254,7 @@ pub static MZ_SCHEDULING_ELAPSED_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| Bu
     oid: oid::LOG_MZ_SCHEDULING_ELAPSED_RAW_OID,
     variant: LogVariant::Timely(TimelyLog::Elapsed),
     access: vec![PUBLIC_SELECT],
+    ontology: None,
 });
 
 pub static MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_RAW: LazyLock<BuiltinLog> =
@@ -2140,6 +2264,7 @@ pub static MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_RAW: LazyLock<BuiltinLog> =
         oid: oid::LOG_MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_RAW_OID,
         variant: LogVariant::Timely(TimelyLog::Histogram),
         access: vec![PUBLIC_SELECT],
+        ontology: None,
     });
 
 pub static MZ_SCHEDULING_PARKS_HISTOGRAM_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2148,6 +2273,7 @@ pub static MZ_SCHEDULING_PARKS_HISTOGRAM_RAW: LazyLock<BuiltinLog> = LazyLock::n
     oid: oid::LOG_MZ_SCHEDULING_PARKS_HISTOGRAM_RAW_OID,
     variant: LogVariant::Timely(TimelyLog::Parks),
     access: vec![PUBLIC_SELECT],
+    ontology: None,
 });
 
 pub static MZ_ARRANGEMENT_RECORDS_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2156,6 +2282,7 @@ pub static MZ_ARRANGEMENT_RECORDS_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| B
     oid: oid::LOG_MZ_ARRANGEMENT_RECORDS_RAW_OID,
     variant: LogVariant::Differential(DifferentialLog::ArrangementRecords),
     access: vec![PUBLIC_SELECT],
+    ontology: None,
 });
 
 pub static MZ_ARRANGEMENT_BATCHES_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2164,6 +2291,7 @@ pub static MZ_ARRANGEMENT_BATCHES_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| B
     oid: oid::LOG_MZ_ARRANGEMENT_BATCHES_RAW_OID,
     variant: LogVariant::Differential(DifferentialLog::ArrangementBatches),
     access: vec![PUBLIC_SELECT],
+    ontology: None,
 });
 
 pub static MZ_ARRANGEMENT_SHARING_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2172,6 +2300,7 @@ pub static MZ_ARRANGEMENT_SHARING_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| B
     oid: oid::LOG_MZ_ARRANGEMENT_SHARING_RAW_OID,
     variant: LogVariant::Differential(DifferentialLog::Sharing),
     access: vec![PUBLIC_SELECT],
+    ontology: None,
 });
 
 pub static MZ_ARRANGEMENT_BATCHER_RECORDS_RAW: LazyLock<BuiltinLog> =
@@ -2181,6 +2310,7 @@ pub static MZ_ARRANGEMENT_BATCHER_RECORDS_RAW: LazyLock<BuiltinLog> =
         oid: oid::LOG_MZ_ARRANGEMENT_BATCHER_RECORDS_RAW_OID,
         variant: LogVariant::Differential(DifferentialLog::BatcherRecords),
         access: vec![PUBLIC_SELECT],
+        ontology: None,
     });
 
 pub static MZ_ARRANGEMENT_BATCHER_SIZE_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2189,6 +2319,7 @@ pub static MZ_ARRANGEMENT_BATCHER_SIZE_RAW: LazyLock<BuiltinLog> = LazyLock::new
     oid: oid::LOG_MZ_ARRANGEMENT_BATCHER_SIZE_RAW_OID,
     variant: LogVariant::Differential(DifferentialLog::BatcherSize),
     access: vec![PUBLIC_SELECT],
+    ontology: None,
 });
 
 pub static MZ_ARRANGEMENT_BATCHER_CAPACITY_RAW: LazyLock<BuiltinLog> =
@@ -2198,6 +2329,7 @@ pub static MZ_ARRANGEMENT_BATCHER_CAPACITY_RAW: LazyLock<BuiltinLog> =
         oid: oid::LOG_MZ_ARRANGEMENT_BATCHER_CAPACITY_RAW_OID,
         variant: LogVariant::Differential(DifferentialLog::BatcherCapacity),
         access: vec![PUBLIC_SELECT],
+        ontology: None,
     });
 
 pub static MZ_ARRANGEMENT_BATCHER_ALLOCATIONS_RAW: LazyLock<BuiltinLog> =
@@ -2207,6 +2339,7 @@ pub static MZ_ARRANGEMENT_BATCHER_ALLOCATIONS_RAW: LazyLock<BuiltinLog> =
         oid: oid::LOG_MZ_ARRANGEMENT_BATCHER_ALLOCATIONS_RAW_OID,
         variant: LogVariant::Differential(DifferentialLog::BatcherAllocations),
         access: vec![PUBLIC_SELECT],
+        ontology: None,
     });
 
 pub static MZ_COMPUTE_EXPORTS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2215,6 +2348,12 @@ pub static MZ_COMPUTE_EXPORTS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|
     oid: oid::LOG_MZ_COMPUTE_EXPORTS_PER_WORKER_OID,
     variant: LogVariant::Compute(ComputeLog::DataflowCurrent),
     access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "compute_export_per_worker",
+        description: "Active compute exports (dataflows) present per worker.",
+        links: &const { [] },
+        column_semantic_types: &[("export_id", SemanticType::GlobalId)],
+    }),
 });
 
 pub static MZ_COMPUTE_DATAFLOW_GLOBAL_IDS_PER_WORKER: LazyLock<BuiltinLog> =
@@ -2224,6 +2363,25 @@ pub static MZ_COMPUTE_DATAFLOW_GLOBAL_IDS_PER_WORKER: LazyLock<BuiltinLog> =
         oid: oid::LOG_MZ_COMPUTE_DATAFLOW_GLOBAL_IDS_PER_WORKER_OID,
         variant: LogVariant::Compute(ComputeLog::DataflowGlobal),
         access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "dataflow_global_id_per_worker",
+            description: "Mapping from internal dataflow IDs to GlobalIds per worker.",
+            links: &const {
+                [OntologyLink {
+                    name: "global_id_of",
+                    target: "compute_export_per_worker",
+                    properties: LinkProperties::MapsTo {
+                        source_column: "global_id",
+                        target_column: "export_id",
+                        via: None,
+                        from_type: Some(SemanticType::GlobalId),
+                        to_type: Some(SemanticType::GlobalId),
+                        note: None,
+                    },
+                }]
+            },
+            column_semantic_types: &[("global_id", SemanticType::GlobalId)],
+        }),
     });
 
 pub static MZ_CLUSTER_PROMETHEUS_METRICS: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2232,6 +2390,12 @@ pub static MZ_CLUSTER_PROMETHEUS_METRICS: LazyLock<BuiltinLog> = LazyLock::new(|
     oid: oid::LOG_MZ_CLUSTER_PROMETHEUS_METRICS_OID,
     variant: LogVariant::Compute(ComputeLog::PrometheusMetrics),
     access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "cluster_prometheus_metric",
+        description: "Prometheus metrics gathered from the cluster's metrics registry.",
+        links: &const { [] },
+        column_semantic_types: &[],
+    }),
 });
 
 pub static MZ_COMPUTE_FRONTIERS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2240,6 +2404,26 @@ pub static MZ_COMPUTE_FRONTIERS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new
     oid: oid::LOG_MZ_COMPUTE_FRONTIERS_PER_WORKER_OID,
     variant: LogVariant::Compute(ComputeLog::FrontierCurrent),
     access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "compute_frontier_per_worker",
+        description: "Per-worker output frontier timestamps for each compute export.",
+        links: &const {
+            [OntologyLink {
+                name: "frontier_of",
+                target: "compute_export_per_worker",
+                properties: LinkProperties::measures_composite(
+                    "export_id",
+                    "export_id",
+                    "time",
+                    &[("worker_id", "worker_id")],
+                ),
+            }]
+        },
+        column_semantic_types: &[
+            ("export_id", SemanticType::GlobalId),
+            ("time", SemanticType::MzTimestamp),
+        ],
+    }),
 });
 
 pub static MZ_COMPUTE_IMPORT_FRONTIERS_PER_WORKER: LazyLock<BuiltinLog> =
@@ -2249,6 +2433,27 @@ pub static MZ_COMPUTE_IMPORT_FRONTIERS_PER_WORKER: LazyLock<BuiltinLog> =
         oid: oid::LOG_MZ_COMPUTE_IMPORT_FRONTIERS_PER_WORKER_OID,
         variant: LogVariant::Compute(ComputeLog::ImportFrontierCurrent),
         access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "compute_import_frontier_per_worker",
+            description: "Per-worker input frontier timestamps for each compute dataflow.",
+            links: &const {
+                [OntologyLink {
+                    name: "import_frontier_of",
+                    target: "compute_export_per_worker",
+                    properties: LinkProperties::fk_composite(
+                        "export_id",
+                        "export_id",
+                        Cardinality::ManyToOne,
+                        &[("worker_id", "worker_id")],
+                    ),
+                }]
+            },
+            column_semantic_types: &[
+                ("export_id", SemanticType::GlobalId),
+                ("import_id", SemanticType::GlobalId),
+                ("time", SemanticType::MzTimestamp),
+            ],
+        }),
     });
 
 pub static MZ_COMPUTE_ERROR_COUNTS_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2257,6 +2462,7 @@ pub static MZ_COMPUTE_ERROR_COUNTS_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| 
     oid: oid::LOG_MZ_COMPUTE_ERROR_COUNTS_RAW_OID,
     variant: LogVariant::Compute(ComputeLog::ErrorCount),
     access: vec![PUBLIC_SELECT],
+    ontology: None,
 });
 
 pub static MZ_COMPUTE_HYDRATION_TIMES_PER_WORKER: LazyLock<BuiltinLog> =
@@ -2266,6 +2472,23 @@ pub static MZ_COMPUTE_HYDRATION_TIMES_PER_WORKER: LazyLock<BuiltinLog> =
         oid: oid::LOG_MZ_COMPUTE_HYDRATION_TIMES_PER_WORKER_OID,
         variant: LogVariant::Compute(ComputeLog::HydrationTime),
         access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "hydration_time_per_worker",
+            description: "Time in nanoseconds for each compute export to hydrate per worker.",
+            links: &const {
+                [OntologyLink {
+                    name: "hydration_time_of",
+                    target: "compute_export_per_worker",
+                    properties: LinkProperties::measures_composite(
+                        "export_id",
+                        "export_id",
+                        "time_ns",
+                        &[("worker_id", "worker_id")],
+                    ),
+                }]
+            },
+            column_semantic_types: &[("export_id", SemanticType::GlobalId)],
+        }),
     });
 
 pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER: LazyLock<BuiltinLog> =
@@ -2275,6 +2498,23 @@ pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER: LazyLock<BuiltinLo
         oid: oid::LOG_MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER_OID,
         variant: LogVariant::Compute(ComputeLog::OperatorHydrationStatus),
         access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "hydration_status_per_worker",
+            description: "Hydration state for each LIR node per worker.",
+            links: &const {
+                [OntologyLink {
+                    name: "hydration_of",
+                    target: "compute_export_per_worker",
+                    properties: LinkProperties::fk_composite(
+                        "export_id",
+                        "export_id",
+                        Cardinality::ManyToOne,
+                        &[("worker_id", "worker_id")],
+                    ),
+                }]
+            },
+            column_semantic_types: &[("export_id", SemanticType::GlobalId)],
+        }),
     });
 
 pub static MZ_ACTIVE_PEEKS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2283,6 +2523,15 @@ pub static MZ_ACTIVE_PEEKS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|| B
     oid: oid::LOG_MZ_ACTIVE_PEEKS_PER_WORKER_OID,
     variant: LogVariant::Compute(ComputeLog::PeekCurrent),
     access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "active_peek_per_worker",
+        description: "In-flight peek requests currently executing per worker.",
+        links: &const { [] },
+        column_semantic_types: &[
+            ("object_id", SemanticType::GlobalId),
+            ("time", SemanticType::MzTimestamp),
+        ],
+    }),
 });
 
 pub static MZ_COMPUTE_LIR_MAPPING_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2291,6 +2540,23 @@ pub static MZ_COMPUTE_LIR_MAPPING_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::n
     oid: oid::LOG_MZ_COMPUTE_LIR_MAPPING_PER_WORKER_OID,
     variant: LogVariant::Compute(ComputeLog::LirMapping),
     access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "lir_mapping_per_worker",
+        description: "Mapping from LIR node IDs to dataflow operator address ranges per worker.",
+        links: &const {
+            [OntologyLink {
+                name: "export_of",
+                target: "compute_export_per_worker",
+                properties: LinkProperties::fk_composite(
+                    "global_id",
+                    "export_id",
+                    Cardinality::ManyToOne,
+                    &[("worker_id", "worker_id")],
+                ),
+            }]
+        },
+        column_semantic_types: &[("global_id", SemanticType::GlobalId)],
+    }),
 });
 
 pub static MZ_PEEK_DURATIONS_HISTOGRAM_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2299,6 +2565,7 @@ pub static MZ_PEEK_DURATIONS_HISTOGRAM_RAW: LazyLock<BuiltinLog> = LazyLock::new
     oid: oid::LOG_MZ_PEEK_DURATIONS_HISTOGRAM_RAW_OID,
     variant: LogVariant::Compute(ComputeLog::PeekDuration),
     access: vec![PUBLIC_SELECT],
+    ontology: None,
 });
 
 pub static MZ_ARRANGEMENT_HEAP_SIZE_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2307,6 +2574,7 @@ pub static MZ_ARRANGEMENT_HEAP_SIZE_RAW: LazyLock<BuiltinLog> = LazyLock::new(||
     oid: oid::LOG_MZ_ARRANGEMENT_HEAP_SIZE_RAW_OID,
     variant: LogVariant::Compute(ComputeLog::ArrangementHeapSize),
     access: vec![PUBLIC_SELECT],
+    ontology: None,
 });
 
 pub static MZ_ARRANGEMENT_HEAP_CAPACITY_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2315,6 +2583,7 @@ pub static MZ_ARRANGEMENT_HEAP_CAPACITY_RAW: LazyLock<BuiltinLog> = LazyLock::ne
     oid: oid::LOG_MZ_ARRANGEMENT_HEAP_CAPACITY_RAW_OID,
     variant: LogVariant::Compute(ComputeLog::ArrangementHeapCapacity),
     access: vec![PUBLIC_SELECT],
+    ontology: None,
 });
 
 pub static MZ_ARRANGEMENT_HEAP_ALLOCATIONS_RAW: LazyLock<BuiltinLog> =
@@ -2324,6 +2593,7 @@ pub static MZ_ARRANGEMENT_HEAP_ALLOCATIONS_RAW: LazyLock<BuiltinLog> =
         oid: oid::LOG_MZ_ARRANGEMENT_HEAP_ALLOCATIONS_RAW_OID,
         variant: LogVariant::Compute(ComputeLog::ArrangementHeapAllocations),
         access: vec![PUBLIC_SELECT],
+        ontology: None,
     });
 
 pub static MZ_MESSAGE_BATCH_COUNTS_RECEIVED_RAW: LazyLock<BuiltinLog> =
@@ -2333,6 +2603,7 @@ pub static MZ_MESSAGE_BATCH_COUNTS_RECEIVED_RAW: LazyLock<BuiltinLog> =
         oid: oid::LOG_MZ_MESSAGE_BATCH_COUNTS_RECEIVED_RAW_OID,
         variant: LogVariant::Timely(TimelyLog::BatchesReceived),
         access: vec![PUBLIC_SELECT],
+        ontology: None,
     });
 
 pub static MZ_MESSAGE_BATCH_COUNTS_SENT_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2341,6 +2612,7 @@ pub static MZ_MESSAGE_BATCH_COUNTS_SENT_RAW: LazyLock<BuiltinLog> = LazyLock::ne
     oid: oid::LOG_MZ_MESSAGE_BATCH_COUNTS_SENT_RAW_OID,
     variant: LogVariant::Timely(TimelyLog::BatchesSent),
     access: vec![PUBLIC_SELECT],
+    ontology: None,
 });
 
 pub static MZ_MESSAGE_COUNTS_RECEIVED_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2349,6 +2621,7 @@ pub static MZ_MESSAGE_COUNTS_RECEIVED_RAW: LazyLock<BuiltinLog> = LazyLock::new(
     oid: oid::LOG_MZ_MESSAGE_COUNTS_RECEIVED_RAW_OID,
     variant: LogVariant::Timely(TimelyLog::MessagesReceived),
     access: vec![PUBLIC_SELECT],
+    ontology: None,
 });
 
 pub static MZ_MESSAGE_COUNTS_SENT_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
@@ -2357,6 +2630,7 @@ pub static MZ_MESSAGE_COUNTS_SENT_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| B
     oid: oid::LOG_MZ_MESSAGE_COUNTS_SENT_RAW_OID,
     variant: LogVariant::Timely(TimelyLog::MessagesSent),
     access: vec![PUBLIC_SELECT],
+    ontology: None,
 });
 
 pub static MZ_DATAFLOW_OPERATOR_REACHABILITY_RAW: LazyLock<BuiltinLog> =
@@ -2366,6 +2640,7 @@ pub static MZ_DATAFLOW_OPERATOR_REACHABILITY_RAW: LazyLock<BuiltinLog> =
         oid: oid::LOG_MZ_DATAFLOW_OPERATOR_REACHABILITY_RAW_OID,
         variant: LogVariant::Timely(TimelyLog::Reachability),
         access: vec![PUBLIC_SELECT],
+        ontology: None,
     });
 
 pub static MZ_ICEBERG_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -2734,24 +3009,24 @@ pub static MZ_OBJECT_DEPENDENCIES: LazyLock<BuiltinTable> = LazyLock::new(|| Bui
         links: &const {
             [
                 OntologyLink {
-                    name: "dependent_object",
+                    name: "depends_on",
                     target: "object",
-                    properties: LinkProperties::fk_typed(
-                        "object_id",
-                        "id",
-                        Cardinality::ManyToOne,
-                        mz_repr::SemanticType::CatalogItemId,
-                    ),
+                    properties: LinkProperties::DependsOn {
+                        source_column: "object_id",
+                        target_column: "id",
+                        source_id_type: Some(mz_repr::SemanticType::CatalogItemId),
+                        requires_mapping: None,
+                    },
                 },
                 OntologyLink {
-                    name: "referenced_object",
+                    name: "dependency_is",
                     target: "object",
-                    properties: LinkProperties::fk_typed(
-                        "referenced_object_id",
-                        "id",
-                        Cardinality::ManyToOne,
-                        mz_repr::SemanticType::CatalogItemId,
-                    ),
+                    properties: LinkProperties::DependsOn {
+                        source_column: "referenced_object_id",
+                        target_column: "id",
+                        source_id_type: Some(mz_repr::SemanticType::CatalogItemId),
+                        requires_mapping: None,
+                    },
                 },
             ]
         },
@@ -2790,26 +3065,24 @@ pub static MZ_COMPUTE_DEPENDENCIES: LazyLock<BuiltinSource> = LazyLock::new(|| B
         links: &const {
             [
                 OntologyLink {
-                    name: "dependent_compute_object",
+                    name: "depends_on",
                     target: "object",
-                    properties: LinkProperties::fk_mapped(
-                        "object_id",
-                        "id",
-                        Cardinality::ManyToOne,
-                        mz_repr::SemanticType::GlobalId,
-                        "mz_internal.mz_object_global_ids",
-                    ),
+                    properties: LinkProperties::DependsOn {
+                        source_column: "object_id",
+                        target_column: "id",
+                        source_id_type: Some(mz_repr::SemanticType::GlobalId),
+                        requires_mapping: Some("mz_internal.mz_object_global_ids"),
+                    },
                 },
                 OntologyLink {
-                    name: "compute_dependency_target",
+                    name: "dependency_is",
                     target: "object",
-                    properties: LinkProperties::fk_mapped(
-                        "dependency_id",
-                        "id",
-                        Cardinality::ManyToOne,
-                        mz_repr::SemanticType::GlobalId,
-                        "mz_internal.mz_object_global_ids",
-                    ),
+                    properties: LinkProperties::DependsOn {
+                        source_column: "dependency_id",
+                        target_column: "id",
+                        source_id_type: Some(mz_repr::SemanticType::GlobalId),
+                        requires_mapping: Some("mz_internal.mz_object_global_ids"),
+                    },
                 },
             ]
         },
@@ -3024,6 +3297,7 @@ pub static MZ_COLUMNS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
                     requires_mapping: None,
                     nullable: false,
                     note: Some("id in mz_columns is the relation ID, not a unique column ID"),
+                    extra_key_columns: None,
                 },
             }]
         },
@@ -5937,6 +6211,7 @@ WHERE mralt.sql_hash = mrst.sql_hash",
                         requires_mapping: Some("mz_internal.mz_object_global_ids"),
                         nullable: true,
                         note: None,
+                        extra_key_columns: None,
                     },
                 },
             ]
@@ -7814,7 +8089,7 @@ pub static MZ_RELATIONS: LazyLock<BuiltinView> = LazyLock::new(|| {
             ("oid", "A PostgreSQL-compatible OID for the relation."),
             ("schema_id", "The ID of the schema to which the relation belongs. Corresponds to `mz_schemas.id`."),
             ("name", "The name of the relation."),
-            ("type", "The type of the relation: either `table`, `source`, `view`, or `materialized view`."),
+            ("type", "The type of the relation: either `table`, `source`, `view`, or `materialized-view`."),
             ("owner_id", "The role ID of the owner of the relation. Corresponds to `mz_roles.id`."),
             ("cluster_id", "The ID of the cluster maintaining the source, materialized view, index, or sink. Corresponds to `mz_clusters.id`. `NULL` for other object types."),
             ("privileges", "The privileges belonging to the relation."),
@@ -7941,25 +8216,98 @@ UNION ALL
         ontology: Some(Ontology {
             entity_name: "object",
             description: "Union of all object types: relations, indexes, connections, etc. (convenience view)",
-            links: &const { [
-                OntologyLink { name: "union_includes", target: "relation", properties: LinkProperties::Union {
-     discriminator_column: None,
-     discriminator_value: None,
-     note: Some("mz_objects includes all relations plus indexes, connections, secrets, types, functions"),
- } },
-                OntologyLink { name: "union_includes", target: "index", properties: LinkProperties::union_disc("type", "index") },
-                OntologyLink { name: "union_includes", target: "connection", properties: LinkProperties::union_disc("type", "connection") },
-                OntologyLink { name: "union_includes", target: "secret", properties: LinkProperties::union_disc("type", "secret") },
-                OntologyLink { name: "maps_to_global_id", target: "object", properties: LinkProperties::MapsTo {
-     source_column: None,
-     target_column: None,
-     via: Some("mz_internal.mz_object_global_ids"),
-     from_type: Some(mz_repr::SemanticType::CatalogItemId),
-     to_type: Some(mz_repr::SemanticType::GlobalId),
-     note: Some("A CatalogItemId (SQL layer) maps to one or more GlobalIds (runtime layer)."),
- } },
-            ] },
-            column_semantic_types: &const {[("id", SemanticType::CatalogItemId), ("oid", SemanticType::OID), ("schema_id", SemanticType::SchemaId), ("type", SemanticType::ObjectType), ("owner_id", SemanticType::RoleId), ("cluster_id", SemanticType::ClusterId)]},
+            links: &const {
+                [
+                    OntologyLink {
+                        name: "union_includes",
+                        target: "relation",
+                        properties: LinkProperties::Union {
+                            discriminator_column: None,
+                            discriminator_value: None,
+                            note: Some("covers all mz_relations rows (table, source, view, mv)"),
+                        },
+                    },
+                    OntologyLink {
+                        name: "union_includes",
+                        target: "table",
+                        properties: LinkProperties::union_disc("type", "table"),
+                    },
+                    OntologyLink {
+                        name: "union_includes",
+                        target: "source",
+                        properties: LinkProperties::union_disc("type", "source"),
+                    },
+                    OntologyLink {
+                        name: "union_includes",
+                        target: "view",
+                        properties: LinkProperties::union_disc("type", "view"),
+                    },
+                    OntologyLink {
+                        name: "union_includes",
+                        target: "mv",
+                        properties: LinkProperties::union_disc("type", "materialized-view"),
+                    },
+                    OntologyLink {
+                        name: "union_includes",
+                        target: "sink",
+                        properties: LinkProperties::union_disc("type", "sink"),
+                    },
+                    OntologyLink {
+                        name: "union_includes",
+                        target: "index",
+                        properties: LinkProperties::union_disc("type", "index"),
+                    },
+                    OntologyLink {
+                        name: "union_includes",
+                        target: "connection",
+                        properties: LinkProperties::union_disc("type", "connection"),
+                    },
+                    OntologyLink {
+                        name: "union_includes",
+                        target: "type",
+                        properties: LinkProperties::union_disc("type", "type"),
+                    },
+                    OntologyLink {
+                        name: "union_includes",
+                        target: "function",
+                        properties: LinkProperties::union_disc("type", "function"),
+                    },
+                    OntologyLink {
+                        name: "union_includes",
+                        target: "secret",
+                        properties: LinkProperties::union_disc("type", "secret"),
+                    },
+                    OntologyLink {
+                        name: "in_schema",
+                        target: "schema",
+                        properties: LinkProperties::fk("schema_id", "id", Cardinality::ManyToOne),
+                    },
+                    OntologyLink {
+                        name: "owned_by",
+                        target: "role",
+                        properties: LinkProperties::fk("owner_id", "id", Cardinality::ManyToOne),
+                    },
+                    OntologyLink {
+                        name: "on_cluster",
+                        target: "cluster",
+                        properties: LinkProperties::fk_nullable(
+                            "cluster_id",
+                            "id",
+                            Cardinality::ManyToOne,
+                        ),
+                    },
+                ]
+            },
+            column_semantic_types: &const {
+                [
+                    ("id", SemanticType::CatalogItemId),
+                    ("oid", SemanticType::OID),
+                    ("schema_id", SemanticType::SchemaId),
+                    ("type", SemanticType::ObjectType),
+                    ("owner_id", SemanticType::RoleId),
+                    ("cluster_id", SemanticType::ClusterId),
+                ]
+            },
         }),
     }
 });
@@ -7983,7 +8331,7 @@ pub static MZ_OBJECT_FULLY_QUALIFIED_NAMES: LazyLock<BuiltinView> = LazyLock::ne
         ("name", "The name of the object."),
         (
             "object_type",
-            "The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.",
+            "The type of the object: one of `table`, `source`, `view`, `materialized-view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.",
         ),
         (
             "schema_id",
@@ -8081,16 +8429,9 @@ pub static MZ_OBJECT_GLOBAL_IDS: LazyLock<BuiltinTable> = LazyLock::new(|| Built
         description: "Mapping between CatalogItemId (SQL layer) and GlobalId (runtime layer)",
         links: &const {
             [OntologyLink {
-                name: "has_global_id",
+                name: "id_references",
                 target: "object",
-                properties: LinkProperties::MapsTo {
-                    source_column: Some("id"),
-                    target_column: Some("id"),
-                    via: None,
-                    from_type: Some(mz_repr::SemanticType::CatalogItemId),
-                    to_type: Some(mz_repr::SemanticType::GlobalId),
-                    note: None,
-                },
+                properties: LinkProperties::fk("id", "id", Cardinality::ManyToOne),
             }]
         },
         column_semantic_types: &[("id", SemanticType::CatalogItemId)],
@@ -8117,7 +8458,7 @@ pub static MZ_OBJECT_LIFETIMES: LazyLock<BuiltinView> = LazyLock::new(|| Builtin
         ("previous_id", "The object's previous ID, if one exists."),
         (
             "object_type",
-            "The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.",
+            "The type of the object: one of `table`, `source`, `view`, `materialized-view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.",
         ),
         (
             "event_type",
@@ -8190,7 +8531,7 @@ pub static MZ_OBJECT_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinVi
         ),
         (
             "object_type",
-            "The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.",
+            "The type of the object: one of `table`, `source`, `view`, `materialized-view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.",
         ),
         (
             "created_at",
@@ -8397,8 +8738,8 @@ WHERE worker_id = 0::uint8",
                 name: "channel_in_dataflow",
                 target: "dataflow",
                 properties: LinkProperties::MapsTo {
-                    source_column: None,
-                    target_column: None,
+                    source_column: "from_index",
+                    target_column: "id",
                     via: Some("mz_introspection.mz_dataflow_operator_dataflows"),
                     from_type: None,
                     to_type: None,
@@ -8652,24 +8993,24 @@ SELECT object_id, referenced_object_id FROM reach;",
             links: &const {
                 [
                     OntologyLink {
-                        name: "transitively_dependent_object",
+                        name: "depends_on",
                         target: "object",
-                        properties: LinkProperties::fk_typed(
-                            "object_id",
-                            "id",
-                            Cardinality::ManyToOne,
-                            mz_repr::SemanticType::CatalogItemId,
-                        ),
+                        properties: LinkProperties::DependsOn {
+                            source_column: "object_id",
+                            target_column: "id",
+                            source_id_type: Some(mz_repr::SemanticType::CatalogItemId),
+                            requires_mapping: None,
+                        },
                     },
                     OntologyLink {
-                        name: "transitively_referenced_object",
+                        name: "dependency_is",
                         target: "object",
-                        properties: LinkProperties::fk_typed(
-                            "referenced_object_id",
-                            "id",
-                            Cardinality::ManyToOne,
-                            mz_repr::SemanticType::CatalogItemId,
-                        ),
+                        properties: LinkProperties::DependsOn {
+                            source_column: "referenced_object_id",
+                            target_column: "id",
+                            source_id_type: Some(mz_repr::SemanticType::CatalogItemId),
+                            requires_mapping: None,
+                        },
                     },
                 ]
             },
@@ -8727,8 +9068,8 @@ WHERE worker_id = 0::uint8",
                     name: "introspection_uses_global_id",
                     target: "object_global_id",
                     properties: LinkProperties::MapsTo {
-                        source_column: None,
-                        target_column: None,
+                        source_column: "export_id",
+                        target_column: "global_id",
                         via: None,
                         from_type: None,
                         to_type: None,
@@ -10693,7 +11034,23 @@ WITH MUTUALLY RECURSIVE
     )
 SELECT * FROM all_errors",
         access: vec![PUBLIC_SELECT],
-        ontology: None,
+        ontology: Some(Ontology {
+            entity_name: "compute_error_per_worker",
+            description: "Error counts per compute collection per worker.",
+            links: &const {
+                [OntologyLink {
+                    name: "errors_in",
+                    target: "compute_export_per_worker",
+                    properties: LinkProperties::measures_composite(
+                        "export_id",
+                        "export_id",
+                        "count",
+                        &[("worker_id", "worker_id")],
+                    ),
+                }]
+            },
+            column_semantic_types: &[("export_id", SemanticType::GlobalId)],
+        }),
     });
 
 pub static MZ_COMPUTE_ERROR_COUNTS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
@@ -11513,6 +11870,7 @@ GROUP BY operator_id",
                     note: Some(
                         "Both IDs are local uint64 operator IDs within a dataflow, not GlobalIds.",
                     ),
+                    extra_key_columns: None,
                 },
             }]
         },
@@ -15195,16 +15553,17 @@ JOIN mz_catalog.mz_relations r ON (r.id = d.referenced_object_id)",
         links: &const {
             [
                 OntologyLink {
-                    name: "materialization_depends_on",
+                    name: "depends_on",
                     target: "object",
                     properties: LinkProperties::DependsOn {
                         source_column: "object_id",
                         target_column: "id",
                         source_id_type: Some(mz_repr::SemanticType::CatalogItemId),
+                        requires_mapping: None,
                     },
                 },
                 OntologyLink {
-                    name: "materialization_dependency",
+                    name: "dependency_is",
                     target: "object",
                     properties: LinkProperties::fk("dependency_id", "id", Cardinality::ManyToOne),
                 },
@@ -17567,6 +17926,7 @@ mod tests {
                 Builtin::View(v) => v.ontology.as_ref(),
                 Builtin::MaterializedView(mv) => mv.ontology.as_ref(),
                 Builtin::Source(s) => s.ontology.as_ref(),
+                Builtin::Log(l) => l.ontology.as_ref(),
                 _ => None,
             };
             if let Some(ont) = ontology {
@@ -17604,6 +17964,7 @@ mod tests {
                 Builtin::View(v) => v.ontology.as_ref(),
                 Builtin::MaterializedView(mv) => mv.ontology.as_ref(),
                 Builtin::Source(s) => s.ontology.as_ref(),
+                Builtin::Log(l) => l.ontology.as_ref(),
                 _ => None,
             };
             if let Some(ont) = ontology {
@@ -17656,11 +18017,16 @@ mod tests {
 
         let mut uncovered_fk_cols = Vec::new();
         for builtin in BUILTINS_STATIC.iter() {
-            let (name, desc, ontology) = match builtin {
+            let desc_storage;
+            let (name, desc, ontology): (&str, &RelationDesc, Option<&Ontology>) = match builtin {
                 Builtin::Table(t) => (t.name, &t.desc, t.ontology.as_ref()),
                 Builtin::View(v) => (v.name, &v.desc, v.ontology.as_ref()),
                 Builtin::MaterializedView(mv) => (mv.name, &mv.desc, mv.ontology.as_ref()),
                 Builtin::Source(s) => (s.name, &s.desc, s.ontology.as_ref()),
+                Builtin::Log(l) => {
+                    desc_storage = l.variant.desc();
+                    (l.name, &desc_storage, l.ontology.as_ref())
+                }
                 _ => continue,
             };
             let Some(ont) = ontology else { continue };
@@ -17673,11 +18039,8 @@ mod tests {
                     LinkProperties::ForeignKey { source_column, .. } => Some(*source_column),
                     LinkProperties::Measures { source_column, .. } => Some(*source_column),
                     LinkProperties::DependsOn { source_column, .. } => Some(*source_column),
-                    LinkProperties::MapsTo {
-                        source_column: Some(sc),
-                        ..
-                    } => Some(*sc),
-                    _ => None,
+                    LinkProperties::MapsTo { source_column, .. } => Some(*source_column),
+                    LinkProperties::Union { .. } => None,
                 })
                 .collect();
 
@@ -17729,11 +18092,16 @@ mod tests {
         // we still need to verify the string value matches a real column.
         let mut bad_source_cols = Vec::new();
         for builtin in BUILTINS_STATIC.iter() {
-            let (name, desc, ontology) = match builtin {
+            let desc_storage;
+            let (name, desc, ontology): (&str, &RelationDesc, Option<&Ontology>) = match builtin {
                 Builtin::Table(t) => (t.name, &t.desc, t.ontology.as_ref()),
                 Builtin::View(v) => (v.name, &v.desc, v.ontology.as_ref()),
                 Builtin::MaterializedView(mv) => (mv.name, &mv.desc, mv.ontology.as_ref()),
                 Builtin::Source(s) => (s.name, &s.desc, s.ontology.as_ref()),
+                Builtin::Log(l) => {
+                    desc_storage = l.variant.desc();
+                    (l.name, &desc_storage, l.ontology.as_ref())
+                }
                 _ => continue,
             };
             let Some(ont) = ontology else { continue };
@@ -17745,11 +18113,8 @@ mod tests {
                     LinkProperties::ForeignKey { source_column, .. } => Some(*source_column),
                     LinkProperties::Measures { source_column, .. } => Some(*source_column),
                     LinkProperties::DependsOn { source_column, .. } => Some(*source_column),
-                    LinkProperties::MapsTo {
-                        source_column: Some(sc),
-                        ..
-                    } => Some(*sc),
-                    _ => None,
+                    LinkProperties::MapsTo { source_column, .. } => Some(*source_column),
+                    LinkProperties::Union { .. } => None,
                 };
                 let Some(col) = source_col else { continue };
                 if !col_names.contains(col) {
@@ -17757,6 +18122,27 @@ mod tests {
                         "entity {:?} (builtin {}) link {:?} references source_column {:?} which does not exist in the relation",
                         ont.entity_name, name, link.name, col
                     ));
+                }
+                let extra_key_columns = match &link.properties {
+                    LinkProperties::ForeignKey {
+                        extra_key_columns: Some(extras),
+                        ..
+                    } => Some(*extras),
+                    LinkProperties::Measures {
+                        extra_key_columns: Some(extras),
+                        ..
+                    } => Some(*extras),
+                    _ => None,
+                };
+                if let Some(extras) = extra_key_columns {
+                    for (src_col, _) in extras {
+                        if !col_names.contains(*src_col) {
+                            bad_source_cols.push(format!(
+                                "entity {:?} (builtin {}) link {:?} extra_key_columns references {:?} which does not exist in the relation",
+                                ont.entity_name, name, link.name, src_col
+                            ));
+                        }
+                    }
                 }
             }
         }
@@ -17768,8 +18154,8 @@ mod tests {
 
         // Sanity check: we have a reasonable number of annotated entities.
         assert!(
-            entity_names.len() > 90,
-            "expected > 90 ontology entities, found {}",
+            entity_names.len() > 120,
+            "expected > 120 ontology entities, found {}",
             entity_names.len()
         );
     }
@@ -17793,6 +18179,16 @@ mod tests {
         check(
             LinkProperties::fk("owner_id", "id", Cardinality::ManyToOne),
             r#"{"kind":"foreign_key","source_column":"owner_id","target_column":"id","cardinality":"many_to_one"}"#,
+        );
+        // fk_composite — extra_key_columns present
+        check(
+            LinkProperties::fk_composite(
+                "operator_id",
+                "id",
+                Cardinality::ManyToOne,
+                &[("worker_id", "worker_id")],
+            ),
+            r#"{"kind":"foreign_key","source_column":"operator_id","target_column":"id","cardinality":"many_to_one","extra_key_columns":[["worker_id","worker_id"]]}"#,
         );
         // fk — one_to_one cardinality
         check(
@@ -17844,6 +18240,16 @@ mod tests {
             LinkProperties::measures("id", "id", "cpu_time_ns"),
             r#"{"kind":"measures","source_column":"id","target_column":"id","metric":"cpu_time_ns"}"#,
         );
+        // measures_composite — extra_key_columns present
+        check(
+            LinkProperties::measures_composite(
+                "export_id",
+                "export_id",
+                "time_ns",
+                &[("worker_id", "worker_id")],
+            ),
+            r#"{"kind":"measures","source_column":"export_id","target_column":"export_id","metric":"time_ns","extra_key_columns":[["worker_id","worker_id"]]}"#,
+        );
         // measures_mapped — source_id_type + requires_mapping present
         check(
             LinkProperties::measures_mapped(
@@ -17855,26 +18261,37 @@ mod tests {
             ),
             r#"{"kind":"measures","source_column":"object_id","target_column":"id","metric":"wallclock_lag","source_id_type":"GlobalId","requires_mapping":"mz_internal.mz_object_global_ids"}"#,
         );
-        // DependsOn
+        // DependsOn — with mapping
+        check(
+            LinkProperties::DependsOn {
+                source_column: "object_id",
+                target_column: "id",
+                source_id_type: Some(mz_repr::SemanticType::GlobalId),
+                requires_mapping: Some("mz_internal.mz_object_global_ids"),
+            },
+            r#"{"kind":"depends_on","source_column":"object_id","target_column":"id","source_id_type":"GlobalId","requires_mapping":"mz_internal.mz_object_global_ids"}"#,
+        );
+        // DependsOn — direct (CatalogItemId, no mapping)
         check(
             LinkProperties::DependsOn {
                 source_column: "object_id",
                 target_column: "id",
                 source_id_type: Some(mz_repr::SemanticType::CatalogItemId),
+                requires_mapping: None,
             },
             r#"{"kind":"depends_on","source_column":"object_id","target_column":"id","source_id_type":"CatalogItemId"}"#,
         );
         // MapsTo — via + from_type + to_type
         check(
             LinkProperties::MapsTo {
-                source_column: None,
-                target_column: None,
+                source_column: "id",
+                target_column: "global_id",
                 via: Some("mz_internal.mz_object_global_ids"),
                 from_type: Some(mz_repr::SemanticType::CatalogItemId),
                 to_type: Some(mz_repr::SemanticType::GlobalId),
                 note: None,
             },
-            r#"{"kind":"maps_to","via":"mz_internal.mz_object_global_ids","from_type":"CatalogItemId","to_type":"GlobalId"}"#,
+            r#"{"kind":"maps_to","source_column":"id","target_column":"global_id","via":"mz_internal.mz_object_global_ids","from_type":"CatalogItemId","to_type":"GlobalId"}"#,
         );
     }
 }
