@@ -549,6 +549,17 @@ impl CatalogState {
         let object_id = ObjectId::ClusterReplica((cluster_id, replica_id));
         if !seen.contains(&object_id) {
             seen.insert(object_id.clone());
+            // Materialized views that target this replica are implicitly
+            // dropped with it, so cascade to their dependents to avoid leaving
+            // dangling references.
+            let cluster = self.get_cluster(cluster_id);
+            for item_id in cluster.bound_objects() {
+                if let CatalogItem::MaterializedView(mv) = self.get_entry(item_id).item()
+                    && mv.target_replica == Some(replica_id)
+                {
+                    dependents.extend_from_slice(&self.item_dependents(*item_id, seen));
+                }
+            }
             dependents.push(object_id);
         }
         dependents

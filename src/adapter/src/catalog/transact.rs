@@ -3006,16 +3006,28 @@ impl ObjectsToDrop {
                 // Implicitly drop materialized views that target this replica.
                 // When the target replica is gone, no replica advances the
                 // persist shard's upper frontier, causing reads to hang.
+                //
+                // Also cascade to anything depending on the implicitly-dropped
+                // MV so we don't leave dangling references in the catalog.
+                // Plan-driven drops already include these via
+                // `cluster_replica_dependents`; this branch handles internal
+                // callers that build `Op::DropObjects` directly without going
+                // through the plan stage.
+                let mut seen: BTreeSet<ObjectId> =
+                    self.items.iter().copied().map(ObjectId::Item).collect();
                 for (_id, entry) in state.get_entries() {
-                    if let CatalogItem::MaterializedView(mv) = entry.item() {
-                        if mv.target_replica == Some(replica_id)
-                            && !self.items.contains(&entry.id())
-                        {
-                            tracing::warn!(
-                                "implicitly dropping materialized view {} because target replica was dropped",
-                                entry.name().item,
-                            );
-                            self.items.push(entry.id());
+                    if let CatalogItem::MaterializedView(mv) = entry.item()
+                        && mv.target_replica == Some(replica_id)
+                        && !seen.contains(&ObjectId::Item(entry.id()))
+                    {
+                        tracing::warn!(
+                            "implicitly dropping materialized view {} because target replica was dropped",
+                            entry.name().item,
+                        );
+                        for dep in state.item_dependents(entry.id(), &mut seen) {
+                            if let ObjectId::Item(dep_id) = dep {
+                                self.items.push(dep_id);
+                            }
                         }
                     }
                 }
