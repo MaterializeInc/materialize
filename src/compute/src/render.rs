@@ -218,322 +218,326 @@ pub fn build_compute_dataflow(
     let build_name = format!("BuildRegion: {}", &dataflow.debug_name);
 
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
-        let scope = scope.with_label();
+        scope.with_label(|scope| {
+            // The scope.clone() occurs to allow import in the region.
+            // We build a region here to establish a pattern of a scope inside the dataflow,
+            // so that other similar uses (e.g. with iterative scopes) do not require weird
+            // alternate type signatures.
+            let mut imported_sources = Vec::new();
+            let mut tokens: BTreeMap<_, Rc<dyn Any>> = BTreeMap::new();
+            let output_probe = MzProbeHandle::default();
 
-        // The scope.clone() occurs to allow import in the region.
-        // We build a region here to establish a pattern of a scope inside the dataflow,
-        // so that other similar uses (e.g. with iterative scopes) do not require weird
-        // alternate type signatures.
-        let mut imported_sources = Vec::new();
-        let mut tokens: BTreeMap<_, Rc<dyn Any>> = BTreeMap::new();
-        let output_probe = MzProbeHandle::default();
+            scope.clone().region_named(&input_name, |region| {
+                // Import declared sources into the rendering context.
+                for (source_id, import) in dataflow.source_imports.iter() {
+                    region.region_named(&format!("Source({:?})", source_id), |inner| {
+                        let mut read_schema = None;
+                        let mut mfp = import.desc.arguments.operators.clone().map(|mut ops| {
+                            // If enabled, we read from Persist with a `RelationDesc` that
+                            // omits uneeded columns.
+                            if apply_demands {
+                                let demands = ops.demand();
+                                let new_desc = import
+                                    .desc
+                                    .storage_metadata
+                                    .relation_desc
+                                    .apply_demand(&demands);
+                                let new_arity = demands.len();
+                                let remap: BTreeMap<_, _> = demands
+                                    .into_iter()
+                                    .enumerate()
+                                    .map(|(new, old)| (old, new))
+                                    .collect();
+                                ops.permute_fn(|old_idx| remap[&old_idx], new_arity);
+                                read_schema = Some(new_desc);
+                            }
 
-        scope.clone().region_named(&input_name, |region| {
-            // Import declared sources into the rendering context.
-            for (source_id, import) in dataflow.source_imports.iter() {
-                region.region_named(&format!("Source({:?})", source_id), |inner| {
-                    let mut read_schema = None;
-                    let mut mfp = import.desc.arguments.operators.clone().map(|mut ops| {
-                        // If enabled, we read from Persist with a `RelationDesc` that
-                        // omits uneeded columns.
-                        if apply_demands {
-                            let demands = ops.demand();
-                            let new_desc = import
-                                .desc
-                                .storage_metadata
-                                .relation_desc
-                                .apply_demand(&demands);
-                            let new_arity = demands.len();
-                            let remap: BTreeMap<_, _> = demands
-                                .into_iter()
-                                .enumerate()
-                                .map(|(new, old)| (old, new))
-                                .collect();
-                            ops.permute_fn(|old_idx| remap[&old_idx], new_arity);
-                            read_schema = Some(new_desc);
+                            mz_expr::MfpPlan::create_from(ops)
+                                .expect("Linear operators should always be valid")
+                        });
+
+                        let snapshot_mode =
+                            if import.with_snapshot || !subscribe_snapshot_optimization {
+                                SnapshotMode::Include
+                            } else {
+                                compute_state.metrics.inc_subscribe_snapshot_optimization();
+                                SnapshotMode::Exclude
+                            };
+                        let suppress_early_progress_as_of = dataflow.as_of.clone();
+
+                        // Note: For correctness, we require that sources only emit times advanced by
+                        // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
+                        let (mut ok_stream, err_stream, token) =
+                            persist_source::persist_source::<DataflowErrorSer>(
+                                inner,
+                                *source_id,
+                                Arc::clone(&compute_state.persist_clients),
+                                &compute_state.txns_ctx,
+                                import.desc.storage_metadata.clone(),
+                                read_schema,
+                                dataflow.as_of.clone(),
+                                snapshot_mode,
+                                until.clone(),
+                                mfp.as_mut(),
+                                compute_state.dataflow_max_inflight_bytes(),
+                                start_signal.clone().into_send_future(),
+                                ErrorHandler::Halt("compute_import"),
+                            );
+
+                        // If `mfp` is non-identity, we need to apply what remains.
+                        // For the moment, assert that it is either trivial or `None`.
+                        assert!(mfp.map(|x| x.is_identity()).unwrap_or(true));
+
+                        // To avoid a memory spike during arrangement hydration (database-issues#6368), need to
+                        // ensure that the first frontier we report into the dataflow is beyond the
+                        // `as_of`.
+                        if let Some(as_of) = suppress_early_progress_as_of {
+                            ok_stream = suppress_early_progress(ok_stream, as_of);
                         }
 
-                        mz_expr::MfpPlan::create_from(ops)
-                            .expect("Linear operators should always be valid")
+                        if ENABLE_COMPUTE_LOGICAL_BACKPRESSURE.get(&compute_state.worker_config) {
+                            // Apply logical backpressure to the source.
+                            let limit = COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES
+                                .get(&compute_state.worker_config);
+                            let slack = COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK
+                                .get(&compute_state.worker_config)
+                                .as_millis()
+                                .try_into()
+                                .expect("must fit");
+
+                            let stream = ok_stream.limit_progress(
+                                output_probe.clone(),
+                                slack,
+                                limit,
+                                import.upper.clone(),
+                                name.clone(),
+                            );
+                            ok_stream = stream;
+                        }
+
+                        // Attach a probe reporting the input frontier.
+                        let input_probe =
+                            compute_state.input_probe_for(*source_id, dataflow.export_ids());
+                        ok_stream = ok_stream.probe_with(&input_probe);
+
+                        let (oks, errs) = (
+                            ok_stream
+                                .as_collection()
+                                .leave_region(region)
+                                .leave_region(scope),
+                            err_stream
+                                .as_collection()
+                                .leave_region(region)
+                                .leave_region(scope),
+                        );
+
+                        imported_sources.push((mz_expr::Id::Global(*source_id), (oks, errs)));
+
+                        // Associate returned tokens with the source identifier.
+                        tokens.insert(*source_id, Rc::new(token));
                     });
+                }
+            });
 
-                    let snapshot_mode = if import.with_snapshot || !subscribe_snapshot_optimization
-                    {
-                        SnapshotMode::Include
-                    } else {
-                        compute_state.metrics.inc_subscribe_snapshot_optimization();
-                        SnapshotMode::Exclude
-                    };
-                    let suppress_early_progress_as_of = dataflow.as_of.clone();
-
-                    // Note: For correctness, we require that sources only emit times advanced by
-                    // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
-                    let (mut ok_stream, err_stream, token) =
-                        persist_source::persist_source::<DataflowErrorSer>(
-                            inner,
-                            *source_id,
-                            Arc::clone(&compute_state.persist_clients),
-                            &compute_state.txns_ctx,
-                            import.desc.storage_metadata.clone(),
-                            read_schema,
-                            dataflow.as_of.clone(),
-                            snapshot_mode,
-                            until.clone(),
-                            mfp.as_mut(),
-                            compute_state.dataflow_max_inflight_bytes(),
-                            start_signal.clone().into_send_future(),
-                            ErrorHandler::Halt("compute_import"),
-                        );
-
-                    // If `mfp` is non-identity, we need to apply what remains.
-                    // For the moment, assert that it is either trivial or `None`.
-                    assert!(mfp.map(|x| x.is_identity()).unwrap_or(true));
-
-                    // To avoid a memory spike during arrangement hydration (database-issues#6368), need to
-                    // ensure that the first frontier we report into the dataflow is beyond the
-                    // `as_of`.
-                    if let Some(as_of) = suppress_early_progress_as_of {
-                        ok_stream = suppress_early_progress(ok_stream, as_of);
-                    }
-
-                    if ENABLE_COMPUTE_LOGICAL_BACKPRESSURE.get(&compute_state.worker_config) {
-                        // Apply logical backpressure to the source.
-                        let limit = COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES
-                            .get(&compute_state.worker_config);
-                        let slack = COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK
-                            .get(&compute_state.worker_config)
-                            .as_millis()
-                            .try_into()
-                            .expect("must fit");
-
-                        let stream = ok_stream.limit_progress(
-                            output_probe.clone(),
-                            slack,
-                            limit,
-                            import.upper.clone(),
-                            name.clone(),
-                        );
-                        ok_stream = stream;
-                    }
-
-                    // Attach a probe reporting the input frontier.
-                    let input_probe =
-                        compute_state.input_probe_for(*source_id, dataflow.export_ids());
-                    ok_stream = ok_stream.probe_with(&input_probe);
-
-                    let (oks, errs) = (
-                        ok_stream
-                            .as_collection()
-                            .leave_region(region)
-                            .leave_region(scope),
-                        err_stream
-                            .as_collection()
-                            .leave_region(region)
-                            .leave_region(scope),
+            // If there exists a recursive expression, we'll need to use a non-region scope,
+            // in order to support additional timestamp coordinates for iteration.
+            if recursive {
+                scope.clone().iterative::<PointStamp<u64>, _, _>(|region| {
+                    let mut context = Context::for_dataflow_in(
+                        &dataflow,
+                        region.clone(),
+                        compute_state,
+                        until,
+                        dataflow_expiration,
                     );
 
-                    imported_sources.push((mz_expr::Id::Global(*source_id), (oks, errs)));
+                    for (id, (oks, errs)) in imported_sources.into_iter() {
+                        let bundle = crate::render::CollectionBundle::from_collections(
+                            oks.enter(region),
+                            errs.enter(region),
+                        );
+                        // Associate collection bundle with the source identifier.
+                        context.insert_id(id, bundle);
+                    }
 
-                    // Associate returned tokens with the source identifier.
-                    tokens.insert(*source_id, Rc::new(token));
+                    // Import declared indexes into the rendering context.
+                    for (idx_id, idx) in &dataflow.index_imports {
+                        let input_probe =
+                            compute_state.input_probe_for(*idx_id, dataflow.export_ids());
+                        let snapshot_mode = if idx.with_snapshot || !subscribe_snapshot_optimization
+                        {
+                            SnapshotMode::Include
+                        } else {
+                            compute_state.metrics.inc_subscribe_snapshot_optimization();
+                            SnapshotMode::Exclude
+                        };
+                        context.import_index(
+                            scope,
+                            compute_state,
+                            &mut tokens,
+                            input_probe,
+                            *idx_id,
+                            &idx.desc,
+                            &idx.typ,
+                            snapshot_mode,
+                            start_signal.clone(),
+                        );
+                    }
+
+                    // Build declared objects.
+                    for object in dataflow.objects_to_build {
+                        let bundle = context.scope.clone().region_named(
+                            &format!("BuildingObject({:?})", object.id),
+                            |region| {
+                                let depends = object.plan.depends();
+                                let in_let = object.plan.is_recursive();
+                                context
+                                    .enter_region(region, Some(&depends))
+                                    .render_recursive_plan(
+                                        object.id,
+                                        0,
+                                        object.plan,
+                                        // recursive plans _must_ have bodies in a let
+                                        BindingInfo::Body { in_let },
+                                    )
+                                    .leave_region(context.scope)
+                            },
+                        );
+                        let global_id = object.id;
+
+                        context.log_dataflow_global_id(
+                            *bundle
+                                .scope()
+                                .addr()
+                                .first()
+                                .expect("Dataflow root id must exist"),
+                            global_id,
+                        );
+                        context.insert_id(Id::Global(object.id), bundle);
+                    }
+
+                    // Export declared indexes.
+                    for (idx_id, dependencies, idx) in indexes {
+                        context.export_index_iterative(
+                            scope,
+                            compute_state,
+                            &tokens,
+                            dependencies,
+                            idx_id,
+                            &idx,
+                            &output_probe,
+                        );
+                    }
+
+                    // Export declared sinks.
+                    for (sink_id, dependencies, sink) in sinks {
+                        context.export_sink(
+                            compute_state,
+                            &tokens,
+                            dependencies,
+                            sink_id,
+                            &sink,
+                            start_signal.clone(),
+                            &output_probe,
+                            scope,
+                        );
+                    }
+                });
+            } else {
+                scope.clone().region_named(&build_name, |region| {
+                    let mut context = Context::for_dataflow_in(
+                        &dataflow,
+                        region.clone(),
+                        compute_state,
+                        until,
+                        dataflow_expiration,
+                    );
+
+                    for (id, (oks, errs)) in imported_sources.into_iter() {
+                        let bundle = crate::render::CollectionBundle::from_collections(
+                            oks.enter_region(region),
+                            errs.enter_region(region),
+                        );
+                        // Associate collection bundle with the source identifier.
+                        context.insert_id(id, bundle);
+                    }
+
+                    // Import declared indexes into the rendering context.
+                    for (idx_id, idx) in &dataflow.index_imports {
+                        let input_probe =
+                            compute_state.input_probe_for(*idx_id, dataflow.export_ids());
+                        let snapshot_mode = if idx.with_snapshot || !subscribe_snapshot_optimization
+                        {
+                            SnapshotMode::Include
+                        } else {
+                            compute_state.metrics.inc_subscribe_snapshot_optimization();
+                            SnapshotMode::Exclude
+                        };
+                        context.import_index(
+                            scope,
+                            compute_state,
+                            &mut tokens,
+                            input_probe,
+                            *idx_id,
+                            &idx.desc,
+                            &idx.typ,
+                            snapshot_mode,
+                            start_signal.clone(),
+                        );
+                    }
+
+                    // Build declared objects.
+                    for object in dataflow.objects_to_build {
+                        let bundle = context.scope.clone().region_named(
+                            &format!("BuildingObject({:?})", object.id),
+                            |region| {
+                                let depends = object.plan.depends();
+                                context
+                                    .enter_region(region, Some(&depends))
+                                    .render_plan(object.id, object.plan)
+                                    .leave_region(context.scope)
+                            },
+                        );
+                        let global_id = object.id;
+                        context.log_dataflow_global_id(
+                            *bundle
+                                .scope()
+                                .addr()
+                                .first()
+                                .expect("Dataflow root id must exist"),
+                            global_id,
+                        );
+                        context.insert_id(Id::Global(object.id), bundle);
+                    }
+
+                    // Export declared indexes.
+                    for (idx_id, dependencies, idx) in indexes {
+                        context.export_index(
+                            compute_state,
+                            &tokens,
+                            dependencies,
+                            idx_id,
+                            &idx,
+                            &output_probe,
+                        );
+                    }
+
+                    // Export declared sinks.
+                    for (sink_id, dependencies, sink) in sinks {
+                        context.export_sink(
+                            compute_state,
+                            &tokens,
+                            dependencies,
+                            sink_id,
+                            &sink,
+                            start_signal.clone(),
+                            &output_probe,
+                            scope,
+                        );
+                    }
                 });
             }
         });
-
-        // If there exists a recursive expression, we'll need to use a non-region scope,
-        // in order to support additional timestamp coordinates for iteration.
-        if recursive {
-            scope.clone().iterative::<PointStamp<u64>, _, _>(|region| {
-                let mut context = Context::for_dataflow_in(
-                    &dataflow,
-                    region.clone(),
-                    compute_state,
-                    until,
-                    dataflow_expiration,
-                );
-
-                for (id, (oks, errs)) in imported_sources.into_iter() {
-                    let bundle = crate::render::CollectionBundle::from_collections(
-                        oks.enter(region),
-                        errs.enter(region),
-                    );
-                    // Associate collection bundle with the source identifier.
-                    context.insert_id(id, bundle);
-                }
-
-                // Import declared indexes into the rendering context.
-                for (idx_id, idx) in &dataflow.index_imports {
-                    let input_probe = compute_state.input_probe_for(*idx_id, dataflow.export_ids());
-                    let snapshot_mode = if idx.with_snapshot || !subscribe_snapshot_optimization {
-                        SnapshotMode::Include
-                    } else {
-                        compute_state.metrics.inc_subscribe_snapshot_optimization();
-                        SnapshotMode::Exclude
-                    };
-                    context.import_index(
-                        scope,
-                        compute_state,
-                        &mut tokens,
-                        input_probe,
-                        *idx_id,
-                        &idx.desc,
-                        &idx.typ,
-                        snapshot_mode,
-                        start_signal.clone(),
-                    );
-                }
-
-                // Build declared objects.
-                for object in dataflow.objects_to_build {
-                    let bundle = context.scope.clone().region_named(
-                        &format!("BuildingObject({:?})", object.id),
-                        |region| {
-                            let depends = object.plan.depends();
-                            let in_let = object.plan.is_recursive();
-                            context
-                                .enter_region(region, Some(&depends))
-                                .render_recursive_plan(
-                                    object.id,
-                                    0,
-                                    object.plan,
-                                    // recursive plans _must_ have bodies in a let
-                                    BindingInfo::Body { in_let },
-                                )
-                                .leave_region(context.scope)
-                        },
-                    );
-                    let global_id = object.id;
-
-                    context.log_dataflow_global_id(
-                        *bundle
-                            .scope()
-                            .addr()
-                            .first()
-                            .expect("Dataflow root id must exist"),
-                        global_id,
-                    );
-                    context.insert_id(Id::Global(object.id), bundle);
-                }
-
-                // Export declared indexes.
-                for (idx_id, dependencies, idx) in indexes {
-                    context.export_index_iterative(
-                        scope,
-                        compute_state,
-                        &tokens,
-                        dependencies,
-                        idx_id,
-                        &idx,
-                        &output_probe,
-                    );
-                }
-
-                // Export declared sinks.
-                for (sink_id, dependencies, sink) in sinks {
-                    context.export_sink(
-                        compute_state,
-                        &tokens,
-                        dependencies,
-                        sink_id,
-                        &sink,
-                        start_signal.clone(),
-                        &output_probe,
-                        scope,
-                    );
-                }
-            });
-        } else {
-            scope.clone().region_named(&build_name, |region| {
-                let mut context = Context::for_dataflow_in(
-                    &dataflow,
-                    region.clone(),
-                    compute_state,
-                    until,
-                    dataflow_expiration,
-                );
-
-                for (id, (oks, errs)) in imported_sources.into_iter() {
-                    let bundle = crate::render::CollectionBundle::from_collections(
-                        oks.enter_region(region),
-                        errs.enter_region(region),
-                    );
-                    // Associate collection bundle with the source identifier.
-                    context.insert_id(id, bundle);
-                }
-
-                // Import declared indexes into the rendering context.
-                for (idx_id, idx) in &dataflow.index_imports {
-                    let input_probe = compute_state.input_probe_for(*idx_id, dataflow.export_ids());
-                    let snapshot_mode = if idx.with_snapshot || !subscribe_snapshot_optimization {
-                        SnapshotMode::Include
-                    } else {
-                        compute_state.metrics.inc_subscribe_snapshot_optimization();
-                        SnapshotMode::Exclude
-                    };
-                    context.import_index(
-                        scope,
-                        compute_state,
-                        &mut tokens,
-                        input_probe,
-                        *idx_id,
-                        &idx.desc,
-                        &idx.typ,
-                        snapshot_mode,
-                        start_signal.clone(),
-                    );
-                }
-
-                // Build declared objects.
-                for object in dataflow.objects_to_build {
-                    let bundle = context.scope.clone().region_named(
-                        &format!("BuildingObject({:?})", object.id),
-                        |region| {
-                            let depends = object.plan.depends();
-                            context
-                                .enter_region(region, Some(&depends))
-                                .render_plan(object.id, object.plan)
-                                .leave_region(context.scope)
-                        },
-                    );
-                    let global_id = object.id;
-                    context.log_dataflow_global_id(
-                        *bundle
-                            .scope()
-                            .addr()
-                            .first()
-                            .expect("Dataflow root id must exist"),
-                        global_id,
-                    );
-                    context.insert_id(Id::Global(object.id), bundle);
-                }
-
-                // Export declared indexes.
-                for (idx_id, dependencies, idx) in indexes {
-                    context.export_index(
-                        compute_state,
-                        &tokens,
-                        dependencies,
-                        idx_id,
-                        &idx,
-                        &output_probe,
-                    );
-                }
-
-                // Export declared sinks.
-                for (sink_id, dependencies, sink) in sinks {
-                    context.export_sink(
-                        compute_state,
-                        &tokens,
-                        dependencies,
-                        sink_id,
-                        &sink,
-                        start_signal.clone(),
-                        &output_probe,
-                        scope,
-                    );
-                }
-            });
-        }
     });
 }
 

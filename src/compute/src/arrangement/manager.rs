@@ -154,6 +154,13 @@ where
         let minimum_frontier = Antichain::from_elem(Tr::Time::minimum());
         if PartialOrder::less_than(&minimum_frontier.borrow(), &trace_since) {
             self.padded_since = Some(minimum_frontier);
+            debug_assert!(
+                PartialOrder::less_than(
+                    &self.padded_since.as_ref().unwrap().borrow(),
+                    &self.trace.get_logical_compaction(),
+                ),
+                "padded_since must be strictly less than the inner trace's logical compaction",
+            );
         }
         self
     }
@@ -192,6 +199,10 @@ where
             if PartialOrder::less_than(&padded_since.borrow(), &frontier) {
                 *padded_since = frontier.to_owned();
             }
+            debug_assert!(
+                PartialOrder::less_than(&padded_since.borrow(), &trace_since),
+                "padded_since must remain strictly less than the inner trace's logical compaction",
+            );
         } else {
             self.padded_since = None;
             self.trace.set_logical_compaction(frontier);

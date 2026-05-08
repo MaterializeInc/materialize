@@ -91,53 +91,53 @@ pub fn render(timely_worker: &mut TimelyWorker) -> (Sender, Receiver) {
     timely_worker.dataflow_named::<u64, _, _>("command_channel", {
         let activator = Arc::clone(&activator);
         move |scope| {
-            let scope = scope.with_label();
+            scope.with_label(|scope| {
+                source(scope, "command_channel::source", |cap, info| {
+                    let sync_activator = scope.worker().sync_activator_for(info.address.to_vec());
+                    *activator.lock().expect("poisoned") = Some(sync_activator);
 
-            source(scope, "command_channel::source", |cap, info| {
-                let sync_activator = scope.worker().sync_activator_for(info.address.to_vec());
-                *activator.lock().expect("poisoned") = Some(sync_activator);
+                    let worker_id = scope.index();
+                    let peers = scope.peers();
 
-                let worker_id = scope.index();
-                let peers = scope.peers();
+                    // Only worker 0 broadcasts commands, other workers must drop their capability
+                    // to avoid holding up dataflow progress.
+                    let mut capability = (worker_id == 0).then_some(cap);
 
-                // Only worker 0 broadcasts commands, other workers must drop their capability to
-                // avoid holding up dataflow progress.
-                let mut capability = (worker_id == 0).then_some(cap);
+                    move |output| {
+                        let Some(cap) = &mut capability else {
+                            // Non-leader workers will still receive `UpdateConfiguration` commands
+                            // and we must drain those to not leak memory.
+                            while let Ok((cmd, _nonce)) = input_rx.try_recv() {
+                                assert_ne!(worker_id, 0);
+                                assert!(matches!(cmd, ComputeCommand::UpdateConfiguration(_)));
+                            }
+                            return;
+                        };
 
-                move |output| {
-                    let Some(cap) = &mut capability else {
-                        // Non-leader workers will still receive `UpdateConfiguration` commands and
-                        // we must drain those to not leak memory.
-                        while let Ok((cmd, _nonce)) = input_rx.try_recv() {
-                            assert_ne!(worker_id, 0);
-                            assert!(matches!(cmd, ComputeCommand::UpdateConfiguration(_)));
+                        assert_eq!(worker_id, 0);
+
+                        let input: Vec<_> = input_rx.try_iter().collect();
+                        for (cmd, nonce) in input {
+                            let worker_cmds =
+                                split_command(cmd, peers).map(|(idx, cmd)| (idx, cmd, nonce));
+                            output.session(&cap).give_iterator(worker_cmds);
+
+                            cap.downgrade(&(cap.time() + 1));
                         }
-                        return;
-                    };
-
-                    assert_eq!(worker_id, 0);
-
-                    let input: Vec<_> = input_rx.try_iter().collect();
-                    for (cmd, nonce) in input {
-                        let worker_cmds =
-                            split_command(cmd, peers).map(|(idx, cmd)| (idx, cmd, nonce));
-                        output.session(&cap).give_iterator(worker_cmds);
-
-                        cap.downgrade(&(cap.time() + 1));
                     }
-                }
-            })
-            .sink(
-                Exchange::new(|(idx, _, _)| u64::cast_from(*idx)),
-                "command_channel::sink",
-                move |(input, _)| {
-                    input.for_each(|_time, data| {
-                        for (_idx, cmd, nonce) in data.drain(..) {
-                            let _ = output_tx.send((cmd, nonce));
-                        }
-                    });
-                },
-            );
+                })
+                .sink(
+                    Exchange::new(|(idx, _, _)| u64::cast_from(*idx)),
+                    "command_channel::sink",
+                    move |(input, _)| {
+                        input.for_each(|_time, data| {
+                            for (_idx, cmd, nonce) in data.drain(..) {
+                                let _ = output_tx.send((cmd, nonce));
+                            }
+                        });
+                    },
+                );
+            });
         }
     });
 
