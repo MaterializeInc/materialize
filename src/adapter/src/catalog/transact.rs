@@ -3015,16 +3015,17 @@ impl ObjectsToDrop {
                 // through the plan stage.
                 let mut seen: BTreeSet<ObjectId> =
                     self.items.iter().copied().map(ObjectId::Item).collect();
-                for (_id, entry) in state.get_entries() {
+                for item_id in &cluster.bound_objects {
+                    let entry = state.get_entry(item_id);
                     if let CatalogItem::MaterializedView(mv) = entry.item()
                         && mv.target_replica == Some(replica_id)
-                        && !seen.contains(&ObjectId::Item(entry.id()))
+                        && !seen.contains(&ObjectId::Item(*item_id))
                     {
-                        tracing::warn!(
+                        tracing::info!(
                             "implicitly dropping materialized view {} because target replica was dropped",
                             entry.name().item,
                         );
-                        for dep in state.item_dependents(entry.id(), &mut seen) {
+                        for dep in state.item_dependents(*item_id, &mut seen) {
                             if let ObjectId::Item(dep_id) = dep {
                                 self.items.push(dep_id);
                             }
