@@ -2048,9 +2048,9 @@ async fn test_auth_oidc_authentication_claim_switch() {
     let token = oidc_server.generate_jwt(
         sub_user,
         GenerateJwtOptions {
-            unknown_claims: Some(BTreeMap::from([(
+            extra_claims: Some(BTreeMap::from([(
                 "email".to_string(),
-                email_user.to_string(),
+                serde_json::Value::String(email_user.to_string()),
             )])),
             ..Default::default()
         },
@@ -5427,4 +5427,374 @@ async fn test_auth_oidc_non_login_role() {
         }],
     )
     .await;
+}
+
+/// Fetches the role names a user is a member of, sorted alphabetically.
+async fn fetch_user_role_memberships(
+    client: &tokio_postgres::Client,
+    user_name: &str,
+) -> Vec<String> {
+    let rows = client
+        .query(
+            "SELECT r.name FROM mz_role_members rm
+             JOIN mz_roles r ON rm.role_id = r.id
+             JOIN mz_roles m ON rm.member = m.id
+             WHERE m.name = $1
+             ORDER BY r.name",
+            &[&user_name],
+        )
+        .await
+        .unwrap();
+    rows.iter().map(|r| r.get(0)).collect()
+}
+
+/// Sets up a test harness with OIDC auth, creates roles, and enables group sync.
+/// Returns the server, admin client, OIDC mock server, and a TLS factory closure.
+async fn setup_group_sync_test() -> (
+    test_util::TestServer,
+    tokio_postgres::Client,
+    OidcMockServer,
+) {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+
+    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+
+    let oidc_server = OidcMockServer::start(
+        None,
+        encoding_key,
+        "test-key-1".to_string(),
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_oidc_auth(
+            Some(oidc_server.issuer.clone()),
+            Some("sub".to_string()),
+            None,
+        )
+        .start()
+        .await;
+
+    let admin_client = server.connect().internal().await.unwrap();
+
+    admin_client
+        .batch_execute("CREATE ROLE analytics")
+        .await
+        .unwrap();
+    admin_client
+        .batch_execute("CREATE ROLE platform_eng")
+        .await
+        .unwrap();
+    admin_client
+        .batch_execute("CREATE ROLE data_eng")
+        .await
+        .unwrap();
+
+    admin_client
+        .batch_execute("ALTER SYSTEM SET oidc_group_role_sync_enabled = true")
+        .await
+        .unwrap();
+
+    (server, admin_client, oidc_server)
+}
+
+const GROUP_SYNC_USER: &str = "alice@example.com";
+
+fn make_insecure_tls() -> postgres_openssl::MakeTlsConnector {
+    make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
+        Ok(b.set_verify(SslVerifyMode::NONE))
+    }))
+}
+
+/// Helper: connect as the OIDC user with the given token.
+async fn oidc_connect(
+    server: &test_util::TestServer,
+    token: &str,
+) -> Result<tokio_postgres::Client, anyhow::Error> {
+    server
+        .connect()
+        .ssl_mode(SslMode::Require)
+        .user(GROUP_SYNC_USER)
+        .password(token)
+        .options("--oidc_auth_enabled=true")
+        .with_tls(make_insecure_tls())
+        .await
+        .map_err(|e| anyhow::anyhow!(e))
+}
+
+/// Helper: generate a JWT with the given groups claim.
+fn jwt_with_groups(oidc_server: &OidcMockServer, groups: serde_json::Value) -> String {
+    oidc_server.generate_jwt(
+        GROUP_SYNC_USER,
+        GenerateJwtOptions {
+            extra_claims: Some(BTreeMap::from([("groups".to_string(), groups)])),
+            ..Default::default()
+        },
+    )
+}
+
+/// First login grants roles from JWT groups, with correct grantor and audit log entries.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method`
+async fn test_oidc_group_sync_first_login() {
+    let (server, admin_client, oidc_server) = setup_group_sync_test().await;
+
+    let token = jwt_with_groups(
+        &oidc_server,
+        serde_json::json!(["analytics", "platform_eng"]),
+    );
+    let _client = oidc_connect(&server, &token)
+        .await
+        .expect("login should succeed");
+
+    let role_names = fetch_user_role_memberships(&admin_client, GROUP_SYNC_USER).await;
+    assert_eq!(
+        role_names,
+        vec!["analytics", "platform_eng"],
+        "first login should grant analytics and platform_eng"
+    );
+
+    // Verify grantor is mz_jwt_sync.
+    let rows = admin_client
+        .query(
+            "SELECT g.name as grantor
+             FROM mz_role_members rm
+             JOIN mz_roles m ON rm.member = m.id
+             JOIN mz_roles g ON rm.grantor = g.id
+             WHERE m.name = $1
+             ORDER BY g.name",
+            &[&GROUP_SYNC_USER],
+        )
+        .await
+        .unwrap();
+    for row in &rows {
+        let grantor: String = row.get(0);
+        assert_eq!(grantor, "mz_jwt_sync", "grantor should be mz_jwt_sync");
+    }
+}
+
+/// A JWT groups claim containing the user's own role name (common when an IdP
+/// echoes the username/email into groups) must not fail with CircularRoleMembership.
+/// The self-referential group should be silently skipped; other valid groups apply.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method`
+async fn test_oidc_group_sync_self_named_group() {
+    let (server, admin_client, oidc_server) = setup_group_sync_test().await;
+    admin_client
+        .batch_execute("ALTER SYSTEM SET oidc_group_role_sync_strict = true")
+        .await
+        .unwrap();
+    // "Alice@Example.com" normalizes to "alice@example.com" == GROUP_SYNC_USER,
+    // so it resolves to the user's own role. It should be skipped; "analytics"
+    // should still be granted.
+    let token = jwt_with_groups(
+        &oidc_server,
+        serde_json::json!(["Alice@Example.com", "analytics"]),
+    );
+    oidc_connect(&server, &token).await.unwrap();
+    assert_eq!(
+        fetch_user_role_memberships(&admin_client, GROUP_SYNC_USER).await,
+        vec!["analytics"],
+    );
+}
+
+/// HTTP Bearer auth triggers group sync the same as pgwire.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method`
+async fn test_oidc_group_sync_http() {
+    let (server, admin_client, oidc_server) = setup_group_sync_test().await;
+
+    let token = jwt_with_groups(&oidc_server, serde_json::json!(["analytics"]));
+
+    let uri = Uri::builder()
+        .scheme("https")
+        .authority(format!(
+            "{}:{}",
+            Ipv4Addr::LOCALHOST,
+            server.http_local_addr().port()
+        ))
+        .path_and_query("/api/sql")
+        .build()
+        .unwrap();
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
+    );
+
+    let resp = hyper_util::client::legacy::Client::builder(TokioExecutor::new())
+        .build(make_http_tls(|b| Ok(b.set_verify(SslVerifyMode::NONE))))
+        .request({
+            let mut req = Request::post(&uri);
+            for (k, v) in headers.iter() {
+                req.headers_mut().unwrap().insert(k, v.clone());
+            }
+            req.headers_mut()
+                .unwrap()
+                .insert("Content-Type", HeaderValue::from_static("application/json"));
+            req.body(json!({ "query": "SELECT current_user()" }).to_string())
+                .unwrap()
+        })
+        .await
+        .expect("HTTP request should succeed");
+
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    assert_eq!(
+        fetch_user_role_memberships(&admin_client, GROUP_SYNC_USER).await,
+        vec!["analytics"],
+        "HTTP login should sync groups"
+    );
+}
+
+/// WebSocket Bearer auth triggers group sync the same as pgwire.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method`
+async fn test_oidc_group_sync_ws() {
+    let (server, admin_client, oidc_server) = setup_group_sync_test().await;
+
+    let token = jwt_with_groups(&oidc_server, serde_json::json!(["analytics"]));
+
+    let uri = Uri::builder()
+        .scheme("wss")
+        .authority(format!(
+            "{}:{}",
+            Ipv4Addr::LOCALHOST,
+            server.http_local_addr().port()
+        ))
+        .path_and_query("/api/experimental/sql")
+        .build()
+        .unwrap();
+
+    let request = ClientRequestBuilder::new(uri.clone());
+    let stream = make_ws_tls(&uri, |b| Ok(b.set_verify(SslVerifyMode::NONE)));
+    let (mut ws, _resp) = tungstenite::client(request, stream).unwrap();
+
+    let auth = WebSocketAuth::Bearer {
+        token: token.clone(),
+        options: BTreeMap::default(),
+    };
+    ws.send(Message::Text(serde_json::to_string(&auth).unwrap().into()))
+        .unwrap();
+    ws.send(Message::Text(
+        r#"{"query": "SELECT current_user()"}"#.into(),
+    ))
+    .unwrap();
+
+    // Drain messages until we see CommandComplete, confirming the query ran.
+    loop {
+        let msg = ws.read().unwrap();
+        if let Message::Text(text) = msg {
+            let resp: WebSocketResponse = serde_json::from_str(&text).unwrap();
+            if matches!(resp, WebSocketResponse::CommandComplete(_)) {
+                break;
+            }
+        }
+    }
+
+    assert_eq!(
+        fetch_user_role_memberships(&admin_client, GROUP_SYNC_USER).await,
+        vec!["analytics"],
+        "WebSocket login should sync groups"
+    );
+}
+
+/// Trigger a circular-membership catalog error to force sync_jwt_groups to fail.
+///
+/// Setup: grant alice's own role to r_cycle, so r_cycle is a member of alice.
+/// Then a JWT with group "r_cycle" makes sync try to grant r_cycle to alice,
+/// which would create a cycle (alice → r_cycle → alice).
+async fn setup_circular_group(
+    admin_client: &tokio_postgres::Client,
+    oidc_server: &OidcMockServer,
+    server: &test_util::TestServer,
+) {
+    // First login (no groups) to auto-provision alice's role.
+    let token = oidc_server.generate_jwt(GROUP_SYNC_USER, GenerateJwtOptions::default());
+    oidc_connect(server, &token)
+        .await
+        .expect("first login should succeed");
+
+    admin_client
+        .batch_execute("CREATE ROLE r_cycle")
+        .await
+        .unwrap();
+    // r_cycle becomes a member of alice; granting r_cycle back to alice is circular.
+    admin_client
+        .batch_execute(r#"GRANT "alice@example.com" TO r_cycle"#)
+        .await
+        .unwrap();
+}
+
+/// In strict mode, a sync error rejects the login entirely.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method`
+async fn test_oidc_group_sync_strict_rejects_on_error() {
+    let (server, admin_client, oidc_server) = setup_group_sync_test().await;
+    setup_circular_group(&admin_client, &oidc_server, &server).await;
+
+    admin_client
+        .batch_execute("ALTER SYSTEM SET oidc_group_role_sync_strict = true")
+        .await
+        .unwrap();
+
+    let token = jwt_with_groups(&oidc_server, serde_json::json!(["r_cycle"]));
+    let err = oidc_connect(&server, &token)
+        .await
+        .expect_err("strict mode should reject login on sync error");
+
+    // oidc_connect wraps tokio_postgres::Error in anyhow; downcast to get the DbError message.
+    let db_err = err
+        .downcast_ref::<tokio_postgres::Error>()
+        .and_then(|e| e.as_db_error())
+        .unwrap_or_else(|| panic!("expected a DbError, got: {err}"));
+
+    assert!(
+        db_err.message().contains("OIDC group-to-role sync failed"),
+        "unexpected error message: {}",
+        db_err.message()
+    );
+}
+
+/// In fail-open mode (default), a sync error lets login succeed and delivers a warning notice.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method`
+async fn test_oidc_group_sync_fail_open_sends_notice() {
+    let (server, admin_client, oidc_server) = setup_group_sync_test().await;
+    setup_circular_group(&admin_client, &oidc_server, &server).await;
+
+    let token = jwt_with_groups(&oidc_server, serde_json::json!(["r_cycle"]));
+
+    // Notice delivery happens in a background task (see test_util.rs ConnectBuilder), so we use a
+    // channel to await it rather than reading a Mutex immediately after connect.
+    let (notice_tx, mut notice_rx) = tokio::sync::mpsc::unbounded_channel();
+    let _client = server
+        .connect()
+        .ssl_mode(SslMode::Require)
+        .user(GROUP_SYNC_USER)
+        .password(&token)
+        .options("--oidc_auth_enabled=true")
+        .notice_callback(move |n| notice_tx.send(n).expect("notice channel open"))
+        .with_tls(make_insecure_tls())
+        .await
+        .expect("fail-open: login should succeed despite sync error");
+
+    let notice = tokio::time::timeout(Duration::from_secs(5), notice_rx.recv())
+        .await
+        .expect("timed out waiting for sync-error notice")
+        .expect("notice channel closed");
+
+    assert!(
+        notice.message().contains("OIDC group-to-role sync failed"),
+        "unexpected notice message: {}",
+        notice.message()
+    );
 }
