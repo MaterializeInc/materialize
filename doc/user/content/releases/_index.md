@@ -15,6 +15,21 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.23.2
+*Released to Materialize Cloud: 2026-05-11* <br>
+*Released to Materialize Self-Managed: 2026-05-11* <br>
+
+This patch release fixes memory and CPU regressions on storage replicas
+introduced in v26.23.0.
+
+### Bug Fixes {#v26.23.2-bug-fixes}
+
+- Fixed a regression in v26.23.0 that caused storage replicas to spend a large
+  share of their CPU time walking small data fragments during Parquet decode,
+  slowing queries that read from object storage.
+- Fixed a regression in v26.23.0 that caused storage replicas to retain extra
+  memory when reading from object storage.
+
 ## v26.23.0
 *Released to Materialize Cloud: 2026-05-07* <br>
 *Released to Materialize Self-Managed: 2026-05-08* <br>
