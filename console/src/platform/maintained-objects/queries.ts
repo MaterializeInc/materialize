@@ -21,6 +21,11 @@ import {
   MaintainedObjectType,
 } from "~/api/materialize/maintained-objects/constants";
 import {
+  CriticalPathRow,
+  fetchCriticalPathAtTime,
+  fetchCriticalPathPMaxInWindow,
+} from "~/api/materialize/maintained-objects/criticalPath";
+import {
   buildHydrationAggregateQuery,
   HydrationAggregateRow,
 } from "~/api/materialize/maintained-objects/hydrationAggregate";
@@ -243,3 +248,93 @@ export function useObjectFreshnessHistory({
     refetchInterval: 60_000,
   });
 }
+
+export interface CriticalPathData {
+  rows: CriticalPathRow[];
+  /** Immediate direct upstream inputs for the object. */
+  directInputs: CriticalPathRow[];
+}
+
+type CriticalPathMode =
+  | { kind: "live"; lookbackMinutes: number }
+  | { kind: "atTime"; timestamp: Date; bucketSizeMs: number };
+
+const criticalPathQueryKey = (objectId: string, mode: CriticalPathMode) =>
+  [
+    ...buildRegionQueryKey("maintainedObjects"),
+    buildQueryKeyPart("criticalPath", {
+      objectId,
+      mode:
+        mode.kind === "live"
+          ? { kind: "live", lookbackMinutes: mode.lookbackMinutes }
+          : {
+              kind: "atTime",
+              timestamp: mode.timestamp.toISOString(),
+              bucketSizeMs: mode.bucketSizeMs,
+            },
+    }),
+  ] as const;
+
+export function useCriticalPath({
+  objectId,
+  timestamp,
+  bucketSizeMs,
+  lookbackMinutes,
+}: {
+  objectId: string | undefined;
+  timestamp: Date | null;
+  bucketSizeMs: number;
+  lookbackMinutes: number;
+}) {
+  const isLive = timestamp === null;
+  const mode: CriticalPathMode = isLive
+    ? { kind: "live", lookbackMinutes }
+    : { kind: "atTime", timestamp, bucketSizeMs };
+  return useQuery({
+    queryKey: criticalPathQueryKey(objectId ?? "", mode),
+    queryFn: ({ queryKey, signal }) =>
+      fetchCriticalPath({
+        objectId: objectId!,
+        mode,
+        signal,
+        queryKey,
+      }),
+    enabled: !!objectId,
+    staleTime: isLive ? 30_000 : Infinity,
+    refetchInterval: isLive ? 30_000 : false,
+  });
+}
+
+const fetchCriticalPath = async ({
+  objectId,
+  mode,
+  signal,
+  queryKey,
+}: {
+  objectId: string;
+  mode: CriticalPathMode;
+  signal: AbortSignal | undefined;
+  queryKey: readonly unknown[];
+}): Promise<CriticalPathData> => {
+  const result =
+    mode.kind === "live"
+      ? await fetchCriticalPathPMaxInWindow({
+          objectId,
+          lookbackMinutes: mode.lookbackMinutes,
+          queryKey,
+          requestOptions: { signal },
+        })
+      : await fetchCriticalPathAtTime({
+          objectId,
+          timestamp: mode.timestamp,
+          bucketSizeMs: mode.bucketSizeMs,
+          queryKey,
+          requestOptions: { signal },
+        });
+
+  const rows = result.rows;
+  const directInputs = rows.filter(
+    (r) => r.childId === objectId && r.id !== objectId,
+  );
+  return { rows, directInputs };
+};
