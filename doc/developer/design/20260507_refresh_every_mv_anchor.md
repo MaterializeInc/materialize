@@ -80,34 +80,75 @@ back, etc.) silently shifts the MV's effective creation point into the past.
 > MV creation. The dataflow's `dataflow_as_of` may be earlier (so warmup can
 > begin), but the MV's *visible* contents do not regress before creation.
 
-Concretely: split the two anchors. `dataflow_as_of` keeps using
-`least_valid_read` (it must — the dataflow can't read earlier than that).
-`storage_as_of` uses `round_up(oracle.read_ts())` instead. That keeps the
-MV's first visible refresh in the future regardless of what slack, RETAIN
-HISTORY, or paused clusters do to input sinces.
+## What we tried, and what actually worked
 
-There's a small subtlety: if `oracle.read_ts() > least_valid_read`, you also
-need `dataflow_as_of ≤ storage_as_of`, which the existing
-`dataflow_as_of.join_assign(...)` line already arranges. So the change is
-roughly "replace the round_up anchor; keep the dataflow_as_of join."
+The first attempt was to anchor `storage_as_of` directly on "now" — first
+`self.now()`, then `oracle.read_ts()`. Both broke other cases:
+
+* `REFRESH AT mz_now()` schedules: the AT point captured at plan time is at
+  `T_plan`, but `self.now()` (and sometimes `oracle.read_ts()` at
+  `select_timestamps` time) is strictly greater than `T_plan` because of the
+  time spent between planning and timestamp selection. `round_up_timestamp`
+  is "smallest tick ≥ x" — pushing `x` past the only AT point makes it
+  return `None`, which surfaces as
+  `MaterializedViewWouldNeverRefresh`.
+* `REFRESH EVERY 1d` (no `ALIGNED TO`, defaulting to plan-time `mz_now()`):
+  same problem — pushing the anchor past the alignment point makes
+  `round_up` skip the at-creation tick and return the *next* tick, one full
+  period (a day) in the future. Subsequent SELECTs block waiting for an
+  upper that won't advance for 24h.
+
+The version that actually works (and is what's in the DNM stack today) is
+conditional. Keep `least_valid_read` as the default round-up anchor — that
+preserves the pre-slack behavior and continues to honor captured plan-time
+`mz_now()` points. Only for schedules with periodic refreshes (`!everies.is_empty()`),
+if the resulting `first_refresh_ts` is strictly less than `oracle.read_ts()`,
+bump it forward to the next tick at-or-after `oracle.read_ts()`. AT-only
+schedules are left untouched. Concretely:
+
+```rust
+let initial = refresh_schedule.round_up_timestamp(*least_valid_read_ts);
+let first_refresh_ts = if !refresh_schedule.everies.is_empty() {
+    let oracle_read_ts = self.get_local_read_ts().await;
+    match initial {
+        Some(t) if t < oracle_read_ts => refresh_schedule
+            .round_up_timestamp(oracle_read_ts)
+            .or(Some(t)),
+        other => other,
+    }
+} else {
+    initial
+};
+```
+
+CI on the slack PR confirms this fixes `mv_aligned_to_past` without
+regressing the `REFRESH AT mz_now()` / `REFRESH AT CREATION` /
+`REFRESH EVERY 1d` cases that the simpler anchor-on-now version had broken.
+
+## Known remaining corner case
+
+A periodic schedule whose first scheduled refresh is genuinely in the recent
+past *because of* a planner→`select_timestamps` gap (e.g., an MV body
+containing `mz_unsafe.mz_sleep(3)` makes the optimizer take a few seconds,
+during which the EpochMilliseconds oracle advances on background writes)
+will still be bumped one period forward instead of honoring the at-creation
+tick. The conditional `t < oracle_read_ts` check can't tell that case apart
+from the slack-induced past anchor case.
+
+The principled fix is to thread the captured plan-time `mz_now()` from
+`resolve_mz_now_for_create_materialized_view` (in
+`src/adapter/src/coord/command_handler.rs`) all the way through to
+`select_timestamps`, and use *that* value as the anchor (max'd with
+`least_valid_read` so `dataflow_as_of <= storage_as_of` continues to hold).
+That's invasive — it requires plumbing the captured timestamp through the
+sequencing stages or stashing it alongside `txn_read_holds` — so the DNM
+goes with the conditional bump. If we decide to ship the slack work for
+real, the threaded version is the right cleanup.
 
 ## Implications for the failing test
 
-If we adopt the contract above, the SLT does not need to change —
-`mv_aligned_to_past` will go back to blocking ~3 seconds for the next-future
-refresh and returning all 7 rows. The test is doing its job: it caught a real
-semantic regression, not a side-effect.
-
-If we *don't* adopt that contract — i.e., we explicitly decide "MVs created
-in a slack window may materialize in the past" — then the test becomes wrong:
-querying a freshly-created MV would no longer be guaranteed to reflect the
-inputs as of creation, and we'd need to update the SLT (and probably document
-the new semantics for users). I'd push back on this option; the
-surprise/sharp-edge cost seems much higher than the benefit.
-
-## Suggested next step
-
-Make the two-anchor change in `select_timestamps`, run the materialized-views
-SLT, and confirm the test passes unchanged. That removes one of the test
-failures from the slack PR's blast radius and resolves the design question
-without weakening any existing user-visible guarantee.
+`mv_aligned_to_past` does not need to be changed. With the conditional
+bump the test goes back to blocking ~3 seconds for the next future refresh
+and returning all 7 rows. The test was doing its job: it caught a real
+semantic regression introduced by the slack, not a side-effect of the
+test being too strict.
