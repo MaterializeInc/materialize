@@ -114,6 +114,38 @@ impl UnmaterializableFunc {
     }
 }
 
+impl UnmaterializableFunc {
+    /// Whether this function is safe to call when `restrict_to_user_objects` is active.
+    ///
+    /// No wildcard arm — adding a new variant forces a compile-time safety decision.
+    pub fn is_safe_for_restricted_session(&self) -> bool {
+        match self {
+            // Session identity and time — the agent already knows these
+            Self::CurrentDatabase
+            | Self::CurrentSchema
+            | Self::CurrentSchemasWithSystem
+            | Self::CurrentSchemasWithoutSystem
+            | Self::CurrentTimestamp
+            | Self::CurrentUser
+            | Self::SessionUser
+            | Self::MzNow
+            | Self::MzSessionId => true,
+            // Session config inspection — not catalog data
+            Self::IsRbacEnabled | Self::ViewableVariables => true,
+            // System metadata disclosure — blocked
+            Self::MzEnvironmentId
+            | Self::MzIsSuperuser
+            | Self::MzRoleOidMemberships
+            | Self::MzUptime
+            | Self::MzVersion
+            | Self::MzVersionNum
+            | Self::PgBackendPid
+            | Self::PgPostmasterStartTime
+            | Self::Version => false,
+        }
+    }
+}
+
 impl fmt::Display for UnmaterializableFunc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {

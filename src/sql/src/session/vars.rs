@@ -605,9 +605,12 @@ impl SessionVars {
 
     /// Returns true if the variable can be set as a role default even if it's
     /// otherwise read-only from direct SET commands.
+    ///
+    /// SECURITY: Any variable listed here must also have a corresponding
+    /// superuser RBAC check in `generate_rbac_requirements` in `rbac.rs`
+    /// (see the `PlannedAlterRoleOption::Variable` match arm). Without that
+    /// check, any role could set the variable on themselves via ALTER ROLE.
     fn allow_role_default(name: &UncasedStr) -> bool {
-        // restrict_to_user_objects is designed to be set via ALTER ROLE by superusers
-        // to restrict MCP tool queries from accessing system catalog objects.
         name == RESTRICT_TO_USER_OBJECTS.name
     }
 
@@ -894,23 +897,6 @@ impl SessionVars {
             .expect("cluster variable must exist");
         var.set(VarInput::Flat(&cluster), false)
             .expect("setting cluster must succeed");
-    }
-
-    /// Sets the `restrict_to_user_objects` session variable.
-    ///
-    /// This is an internal-only setter that bypasses the read-only check.
-    /// Used by the MCP adapter to restrict tool queries from accessing
-    /// system catalog objects. Users cannot set this via SQL.
-    pub fn set_restrict_to_user_objects(&mut self, restrict: bool) {
-        let var = self
-            .vars
-            .get_mut(UncasedStr::new(RESTRICT_TO_USER_OBJECTS.name()))
-            .expect("restrict_to_user_objects variable must exist");
-        var.set(
-            VarInput::Flat(if restrict { "true" } else { "false" }),
-            false,
-        )
-        .expect("setting restrict_to_user_objects must succeed");
     }
 
     pub fn set_local_transaction_isolation(&mut self, transaction_isolation: IsolationLevel) {

@@ -166,8 +166,8 @@ impl UnauthorizedError {
                 Some("Please disconnect and re-connect with a valid role.".into())
             }
             UnauthorizedError::RestrictedSystemObject { .. } => Some(
-                "The session has 'restrict_to_user_objects' enabled, which blocks access to \
-                system catalog objects. Use SET restrict_to_user_objects = false to disable."
+                "Access to system catalog objects is restricted for this role. \
+                Contact your administrator if you need access."
                     .into(),
             ),
             UnauthorizedError::Ownership { .. } | UnauthorizedError::RoleMembership { .. } => None,
@@ -318,21 +318,14 @@ pub fn check_usage(
                     // Only block data-bearing system objects, not functions or types
                     // which are needed for query execution.
                     match item.item_type() {
-                        CatalogItemType::Table
-                        | CatalogItemType::Source
-                        | CatalogItemType::View
-                        | CatalogItemType::MaterializedView
-                        | CatalogItemType::Sink
-                        | CatalogItemType::Connection
-                        | CatalogItemType::Secret
-                        | CatalogItemType::Index
-                        | CatalogItemType::ContinualTask => {
+                        // Allow functions and types - they're needed for query execution
+                        CatalogItemType::Func | CatalogItemType::Type => {}
+                        // Block all other system objects (tables, views, sources, etc.)
+                        _ => {
                             return Err(UnauthorizedError::RestrictedSystemObject {
                                 object_name: item.name().item.clone(),
                             });
                         }
-                        // Allow functions and types - they're needed for query execution
-                        CatalogItemType::Func | CatalogItemType::Type => {}
                     }
                 }
             }
@@ -1241,9 +1234,12 @@ fn generate_rbac_requirements(
                     ..Default::default()
                 }
             }
-            // restrict_to_user_objects can only be set by superuser
+            // restrict_to_user_objects can only be set by superuser.
+            // SECURITY: This must use case-insensitive comparison because
+            // var.name() comes from Ident::to_string() which preserves the
+            // original casing for quoted identifiers.
             plan::PlannedAlterRoleOption::Variable(var)
-                if var.name() == "restrict_to_user_objects" =>
+                if var.name().eq_ignore_ascii_case("restrict_to_user_objects") =>
             {
                 RbacRequirements {
                     superuser_action: Some("set restrict_to_user_objects".to_string()),

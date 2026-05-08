@@ -33,7 +33,7 @@ impl Coordinator {
         session: &Session,
         stmt: mz_sql::ast::Statement<Aug>,
         params: &mz_sql::plan::Params,
-        resolved_ids: &ResolvedIds,
+        resolved_ids: &mut ResolvedIds,
     ) -> Result<mz_sql::plan::Plan, AdapterError> {
         let pcx = session.pcx();
         let catalog = self.catalog().for_session(session);

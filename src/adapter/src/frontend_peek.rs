@@ -321,10 +321,10 @@ impl PeekClient {
         let conn_catalog = catalog.for_session(session);
         // (`resolved_ids` should be derivable from `stmt`. If `stmt` is later transformed to
         // remove/add IDs, then `resolved_ids` should be updated to also remove/add those IDs.)
-        let (stmt, resolved_ids) = mz_sql::names::resolve(&conn_catalog, (*stmt).clone())?;
+        let (stmt, mut resolved_ids) = mz_sql::names::resolve(&conn_catalog, (*stmt).clone())?;
 
         let pcx = session.pcx();
-        let plan = mz_sql::plan::plan(Some(pcx), &conn_catalog, stmt, &params, &resolved_ids)?;
+        let plan = mz_sql::plan::plan(Some(pcx), &conn_catalog, stmt, &params, &mut resolved_ids)?;
 
         /// What do we do with the result of the select?
         enum QueryPlan<'a> {

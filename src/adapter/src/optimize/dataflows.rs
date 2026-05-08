@@ -574,6 +574,10 @@ fn eval_unmaterializable_func(
     logical_time: EvalTime,
     session: &dyn SessionMetadata,
 ) -> Result<MirScalarExpr, OptimizerError> {
+    if session.restrict_to_user_objects() && !f.is_safe_for_restricted_session() {
+        return Err(OptimizerError::RestrictedFunction(f.clone()));
+    }
+
     let pack_1d_array = |datums: Vec<Datum>| {
         let mut row = Row::default();
         row.packer()
