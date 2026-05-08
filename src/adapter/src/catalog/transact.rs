@@ -3021,7 +3021,7 @@ impl ObjectsToDrop {
                         && mv.target_replica == Some(replica_id)
                         && !seen.contains(&ObjectId::Item(*item_id))
                     {
-                        tracing::info!(
+                        info!(
                             "implicitly dropping materialized view {} because target replica was dropped",
                             entry.name().item,
                         );
