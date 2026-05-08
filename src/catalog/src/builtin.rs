@@ -3009,24 +3009,24 @@ pub static MZ_OBJECT_DEPENDENCIES: LazyLock<BuiltinTable> = LazyLock::new(|| Bui
         links: &const {
             [
                 OntologyLink {
-                    name: "dependent_object",
+                    name: "depends_on",
                     target: "object",
-                    properties: LinkProperties::fk_typed(
-                        "object_id",
-                        "id",
-                        Cardinality::ManyToOne,
-                        mz_repr::SemanticType::CatalogItemId,
-                    ),
+                    properties: LinkProperties::DependsOn {
+                        source_column: "object_id",
+                        target_column: "id",
+                        source_id_type: Some(mz_repr::SemanticType::CatalogItemId),
+                        requires_mapping: None,
+                    },
                 },
                 OntologyLink {
-                    name: "referenced_object",
+                    name: "dependency_is",
                     target: "object",
-                    properties: LinkProperties::fk_typed(
-                        "referenced_object_id",
-                        "id",
-                        Cardinality::ManyToOne,
-                        mz_repr::SemanticType::CatalogItemId,
-                    ),
+                    properties: LinkProperties::DependsOn {
+                        source_column: "referenced_object_id",
+                        target_column: "id",
+                        source_id_type: Some(mz_repr::SemanticType::CatalogItemId),
+                        requires_mapping: None,
+                    },
                 },
             ]
         },
@@ -8993,24 +8993,24 @@ SELECT object_id, referenced_object_id FROM reach;",
             links: &const {
                 [
                     OntologyLink {
-                        name: "transitively_dependent_object",
+                        name: "depends_on",
                         target: "object",
-                        properties: LinkProperties::fk_typed(
-                            "object_id",
-                            "id",
-                            Cardinality::ManyToOne,
-                            mz_repr::SemanticType::CatalogItemId,
-                        ),
+                        properties: LinkProperties::DependsOn {
+                            source_column: "object_id",
+                            target_column: "id",
+                            source_id_type: Some(mz_repr::SemanticType::CatalogItemId),
+                            requires_mapping: None,
+                        },
                     },
                     OntologyLink {
-                        name: "transitively_referenced_object",
+                        name: "dependency_is",
                         target: "object",
-                        properties: LinkProperties::fk_typed(
-                            "referenced_object_id",
-                            "id",
-                            Cardinality::ManyToOne,
-                            mz_repr::SemanticType::CatalogItemId,
-                        ),
+                        properties: LinkProperties::DependsOn {
+                            source_column: "referenced_object_id",
+                            target_column: "id",
+                            source_id_type: Some(mz_repr::SemanticType::CatalogItemId),
+                            requires_mapping: None,
+                        },
                     },
                 ]
             },
