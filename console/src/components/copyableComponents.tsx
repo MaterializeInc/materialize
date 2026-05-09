@@ -126,11 +126,13 @@ export const CopyableBox: React.FC<CopyableBoxProps> = ({
         as="pre"
         fontFamily="mono"
         pl={4}
-        py={2}
+        pr={wrap ? 2 : 0}
+        py={wrap ? 3 : 2}
         flex={1}
-        lineHeight="4"
-        whiteSpace={wrap ? "pre" : "nowrap"}
-        overflow="hidden"
+        lineHeight={wrap ? "tall" : "4"}
+        whiteSpace={wrap ? "pre-wrap" : "nowrap"}
+        overflow={wrap ? "auto" : "hidden"}
+        overflowWrap={wrap ? "anywhere" : undefined}
         textOverflow={wrap ? undefined : "ellipsis"}
         minWidth={0}
         {...(maxHeight && {

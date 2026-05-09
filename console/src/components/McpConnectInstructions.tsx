@@ -72,31 +72,17 @@ const McpConnectInstructions = ({
   const claudeCodeCliCommand = `claude mcp add --transport http materialize-${endpoint} \\\n  ${endpointUrl} \\\n  --header "Authorization: Basic <mcp-token>"`;
 
   return (
-    <VStack
-      alignItems="stretch"
-      spacing="4"
-      p="6"
-      overflowY="auto"
-      maxHeight="60vh"
-      {...props}
-    >
+    <VStack alignItems="stretch" spacing="6" p="6" {...props}>
       <Text fontSize="sm" color={colors.foreground.secondary}>
         Connect your AI agent or coding assistant to Materialize using the
         built-in MCP server.
       </Text>
 
-    <VStack
-      alignItems="stretch"
-      spacing="6"
-      p="6"
-      overflowY="auto"
-      maxHeight="60vh"
-      {...props}
-    >
+      <VStack alignItems="stretch" spacing="4">
         <Text textStyle="heading-xs">1. Get your MCP token</Text>
 
         {isCloud && onGenerateToken && (
-   <VStack alignItems="stretch" spacing="4">
+          <VStack alignItems="stretch" spacing="4">
             <Text fontSize="sm" color={colors.foreground.secondary}>
               Generate a new token:
             </Text>
@@ -124,14 +110,23 @@ const McpConnectInstructions = ({
                 </Text>
               </VStack>
             ) : (
-              <Button
-                onClick={onGenerateToken}
-                variant="primary"
-                size="sm"
-                alignSelf="flex-start"
-              >
-                Generate MCP token
-              </Button>
+              <>
+                <Button
+                  onClick={onGenerateToken}
+                  variant="primary"
+                  size="sm"
+                  alignSelf="flex-start"
+                >
+                  Generate personal MCP token
+                </Button>
+                <Text fontSize="xs" color={colors.foreground.secondary}>
+                  For service accounts, create a{" "}
+                  <TextLink href="/access/app-passwords">
+                    service app password
+                  </TextLink>{" "}
+                  and Base64-encode it below.
+                </Text>
+              </>
             )}
           </VStack>
         )}
@@ -151,7 +146,7 @@ const McpConnectInstructions = ({
         </VStack>
       </VStack>
 
-      <VStack alignItems="stretch" spacing="3">
+      <VStack alignItems="stretch" spacing="4">
         <Text textStyle="heading-xs">2. Connect your client</Text>
         <Text fontSize="sm" color={colors.foreground.secondary}>
           See the{" "}
