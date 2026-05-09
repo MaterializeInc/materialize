@@ -85,7 +85,14 @@ const McpConnectInstructions = ({
         built-in MCP server.
       </Text>
 
-      <VStack alignItems="stretch" spacing="3">
+    <VStack
+      alignItems="stretch"
+      spacing="6"
+      p="6"
+      overflowY="auto"
+      maxHeight="60vh"
+      {...props}
+    >
         <Text textStyle="heading-xs">1. Get your MCP token</Text>
 
         {isCloud && onGenerateToken && (
