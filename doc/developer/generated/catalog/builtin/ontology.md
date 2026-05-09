@@ -1,6 +1,6 @@
 ---
 source: src/catalog/src/builtin/ontology.rs
-revision: ea77b8b38b
+revision: ac5e71acee
 ---
 
 # catalog::builtin::ontology
@@ -8,7 +8,7 @@ revision: ea77b8b38b
 Generates the four `mz_internal.mz_ontology_*` views derived from `Ontology` annotations on builtin catalog objects.
 
 `generate_views` is the public entry point.
-It iterates over all builtins, selects those with an `ontology: Some(...)` field (tables, views, materialized views, and sources), and produces four `Builtin::View` values that are leaked to `'static` lifetime via `leak` — one per view, bounded to startup.
+It iterates over all builtins, selects those with an `ontology: Some(...)` field (tables, views, materialized views, sources, and logs), and produces four `Builtin::View` values that are leaked to `'static` lifetime via `leak` — one per view, bounded to startup.
 
 The four generated views are:
 
