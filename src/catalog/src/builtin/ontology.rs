@@ -486,6 +486,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // intentional Box::leak for &'static BuiltinView
     fn log_with_ontology_appears_in_entity_types() {
         let builtins = vec![make_log(
             LogVariant::Timely(TimelyLog::Operates),
@@ -520,6 +521,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // intentional Box::leak for &'static BuiltinView
     fn log_without_ontology_excluded() {
         let builtins = vec![make_log(LogVariant::Timely(TimelyLog::Operates), None)];
         let views = generate_views(&builtins);
