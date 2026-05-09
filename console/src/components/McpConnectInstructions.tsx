@@ -96,7 +96,7 @@ const McpConnectInstructions = ({
         <Text textStyle="heading-xs">1. Get your MCP token</Text>
 
         {isCloud && onGenerateToken && (
-          <VStack alignItems="stretch" spacing="2">
+   <VStack alignItems="stretch" spacing="4">
             <Text fontSize="sm" color={colors.foreground.secondary}>
               Generate a new token:
             </Text>
