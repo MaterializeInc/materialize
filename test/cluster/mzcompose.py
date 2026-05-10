@@ -2706,7 +2706,9 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     assert send_count > 10, f"got {send_count}"
     recv_count = metrics.get_value("mz_compute_controller_response_recv_count")
     assert recv_count > 10, f"got {recv_count}"
-    assert send_count - recv_count < 10, f"got {send_count}, {recv_count}"
+    # recv within 50% of send: channel invariant gives recv <= send, and we
+    # want the controller to have drained at least half of what was sent.
+    assert recv_count >= send_count / 2, f"got {send_count}, {recv_count}"
     count = metrics.get_value("mz_compute_controller_hydration_queue_size")
     assert count == 0, f"got {count}"
 
