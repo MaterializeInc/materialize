@@ -243,8 +243,6 @@ Shuffle the list of tests before running them (using the value from --seed, if a
 
 #### `--rewrite-results`
 
-Note that this option is currently buggy!
-
 Automatically rewrite the testdrive file with the correct results when they are not as expected. Consider setting a lower `--default-max-tries` value too to get a result faster.
 
 ## Other options
