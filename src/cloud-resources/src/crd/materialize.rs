@@ -64,11 +64,9 @@ pub mod v1alpha1 {
         ManuallyPromote,
 
         /// {{<warning>}}
-        /// THIS WILL CAUSE YOUR MATERIALIZE INSTANCE TO BE UNAVAILABLE FOR SOME TIME!!!
+        /// This will cause your Materialize environment to be unavailable for some time.
         ///
-        /// This strategy should ONLY be used by customers with physical hardware who do not have
-        /// enough hardware for the `WaitUntilReady` strategy. If you think you want this, please
-        /// consult with Materialize engineering to discuss your situation.
+        /// This strategy should ONLY be used if there is insufficient hardware for the `WaitUntilReady` strategy.
         /// {{</warning>}}
         ///
         /// Tear down the old generation of pods and promote the new generation of pods immediately,
