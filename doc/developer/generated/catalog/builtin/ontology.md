@@ -1,6 +1,6 @@
 ---
 source: src/catalog/src/builtin/ontology.rs
-revision: ac5e71acee
+revision: fbb2bcd0d8
 ---
 
 # catalog::builtin::ontology
