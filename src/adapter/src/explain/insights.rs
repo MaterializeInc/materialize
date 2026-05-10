@@ -67,7 +67,8 @@ pub struct PlanInsights {
     /// this as fast path. That is: if this query were run on the cluster of the key, it would be
     /// fast because it would use the index of the value.
     pub fast_path_clusters: BTreeMap<String, Option<FastPathCluster>>,
-    /// For the current cluster, whether adding a LIMIT <= this will result in a fast path.
+    /// For the current cluster, adding a `LIMIT n` such that `n + OFFSET < this` will result in a
+    /// fast path. (If the query has no `OFFSET`, the condition simplifies to `LIMIT < this`.)
     pub fast_path_limit: Option<usize>,
     /// Names of persist sources over which a count(*) is done.
     pub persist_count: Vec<Name>,
