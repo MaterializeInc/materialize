@@ -82,7 +82,6 @@ steps:
         sanitizer: skip
         coverage: skip
         antithesis: skip
-        branches: "main"
 
       - id: build-rust-latest-beta
         label: "Build with Latest Rust Beta"
