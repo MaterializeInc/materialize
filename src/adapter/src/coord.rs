@@ -832,6 +832,7 @@ pub struct AlterClusterWaitForHydrated {
     validity: PlanValidity,
     plan: plan::AlterClusterPlan,
     new_config: ClusterVariantManaged,
+    workload_class: Option<String>,
     timeout_time: Instant,
     on_timeout: OnTimeoutAction,
 }
@@ -841,6 +842,7 @@ pub struct AlterClusterFinalize {
     validity: PlanValidity,
     plan: plan::AlterClusterPlan,
     new_config: ClusterVariantManaged,
+    workload_class: Option<String>,
 }
 
 #[derive(Debug)]

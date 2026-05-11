@@ -279,15 +279,6 @@ pub enum PlanError {
     MissingName(CatalogItemType),
     InvalidRefreshAt,
     InvalidRefreshEveryAlignedTo,
-    CreateReplicaFailStorageObjects {
-        /// The current number of replicas on the cluster
-        current_replica_count: usize,
-        /// THe number of internal replicas on the cluster
-        internal_replica_count: usize,
-        /// The number of replicas that executing this command would have
-        /// created
-        hypothetical_replica_count: usize,
-    },
     MismatchedObjectType {
         name: PartialItemName,
         is_type: ObjectType,
@@ -379,23 +370,6 @@ impl PlanError {
             Self::CsrPurification(e) => e.detail(),
             Self::KafkaSinkPurification(e) => e.detail(),
             Self::IcebergSinkPurification(e) => e.detail(),
-            Self::CreateReplicaFailStorageObjects {
-                current_replica_count: current,
-                internal_replica_count: internal,
-                hypothetical_replica_count: target,
-            } => {
-                Some(format!(
-                    "Currently have {} replica{}{}; command would result in {}",
-                    current,
-                    if *current != 1 { "s" } else { "" },
-                    if *internal > 0 {
-                        format!(" ({} internal)", internal)
-                    } else {
-                        "".to_string()
-                    },
-                    target
-                ))
-            },
             Self::SubsourceNameConflict {
                 name: _,
                 upstream_references,
@@ -833,9 +807,6 @@ impl fmt::Display for PlanError {
                 write!(f, "REFRESH EVERY ... ALIGNED TO argument must be an expression that can be simplified \
                            and/or cast to a constant whose type is mz_timestamp")
             }
-            Self::CreateReplicaFailStorageObjects {..} => {
-                write!(f, "cannot create more than one replica of a cluster containing sources or sinks")
-            },
             Self::MismatchedObjectType {
                 name,
                 is_type,

@@ -20,7 +20,7 @@ use futures::{Future, StreamExt, future};
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
-use mz_adapter_types::dyncfgs::{ENABLE_MULTI_REPLICA_SOURCES, ENABLE_PASSWORD_AUTH};
+use mz_adapter_types::dyncfgs::ENABLE_PASSWORD_AUTH;
 use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{
     CatalogItem, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
@@ -64,7 +64,6 @@ use mz_sql::plan::{
 };
 use mz_sql::pure::{PurifiedSourceExport, generate_subsource_statements};
 use mz_storage_types::sinks::StorageSinkDesc;
-use mz_storage_types::sources::GenericSourceConnection;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_sql::plan::{
     AlterConnectionAction, AlterConnectionPlan, CreateSourcePlanBundle, ExplainSinkSchemaPlan,
@@ -299,50 +298,6 @@ impl Coordinator {
         } in plans
         {
             let name = plan.name.clone();
-
-            match plan.source.data_source {
-                plan::DataSourceDesc::Ingestion(ref desc)
-                | plan::DataSourceDesc::OldSyntaxIngestion { ref desc, .. } => {
-                    let cluster_id = plan
-                        .in_cluster
-                        .expect("ingestion plans must specify cluster");
-                    match desc.connection {
-                        GenericSourceConnection::Postgres(_)
-                        | GenericSourceConnection::MySql(_)
-                        | GenericSourceConnection::SqlServer(_)
-                        | GenericSourceConnection::Kafka(_)
-                        | GenericSourceConnection::LoadGenerator(_) => {
-                            if let Some(cluster) = self.catalog().try_get_cluster(cluster_id) {
-                                let enable_multi_replica_sources = ENABLE_MULTI_REPLICA_SOURCES
-                                    .get(self.catalog().system_config().dyncfgs());
-
-                                if !enable_multi_replica_sources && cluster.replica_ids().len() > 1
-                                {
-                                    return Err(AdapterError::Unsupported(
-                                        "sources in clusters with >1 replicas",
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                }
-                plan::DataSourceDesc::Webhook { .. } => {
-                    let cluster_id = plan.in_cluster.expect("webhook plans must specify cluster");
-                    if let Some(cluster) = self.catalog().try_get_cluster(cluster_id) {
-                        let enable_multi_replica_sources = ENABLE_MULTI_REPLICA_SOURCES
-                            .get(self.catalog().system_config().dyncfgs());
-
-                        if !enable_multi_replica_sources {
-                            if cluster.replica_ids().len() > 1 {
-                                return Err(AdapterError::Unsupported(
-                                    "webhook sources in clusters with >1 replicas",
-                                ));
-                            }
-                        }
-                    }
-                }
-                plan::DataSourceDesc::IngestionExport { .. } | plan::DataSourceDesc::Progress => {}
-            }
 
             // Attempt to reduce the `CHECK` expression, we timeout if this takes too long.
             if let mz_sql::plan::DataSourceDesc::Webhook {

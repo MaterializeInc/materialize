@@ -104,12 +104,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         # and slow-seqno-hold are slow, run in separate CI step
         # concurrent-connections is too flaky
         # TODO: Reenable test-memory-limiter when database-issues/9502 is fixed
-        # TODO: Reenable test-compute-controller-metrics when https://linear.app/materializeinc/issue/CLU-78 is fixed
         if name in (
             "default",
             "test-concurrent-connections",
             "test-memory-limiter",
-            "test-compute-controller-metrics",
         ):
             return
 
