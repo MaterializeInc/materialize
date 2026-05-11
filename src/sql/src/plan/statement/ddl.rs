@@ -3321,8 +3321,6 @@ fn plan_sink(
                             | SqlScalarType::MzAclItem
                             | SqlScalarType::AclItem
                             | SqlScalarType::Int2Vector
-                            // ranges
-                            | SqlScalarType::Range { .. }
                     );
                     if !is_valid {
                         return Err(PlanError::IcebergSinkUnsupportedKeyType {
