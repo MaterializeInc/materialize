@@ -33,6 +33,15 @@ A deleted row reappears after restart. Compliance and correctness hazard. The li
 
 None. Workload-side check. The `StateValue::tombstone` construction path and the `ensure_decoded` tombstone branch are the relevant code; adding `assert_sometimes!(tombstone_emitted, ...)` inside the tombstone-emit path gives a coverage signal.
 
+## Implementation status
+
+Implemented 2026-05-11 (workload-side) inside the existing `parallel_driver_upsert_latest_value.py`:
+
+- Safety half: `always("upsert: tombstoned key has no row in source", ...)` (already existed for `upsert-key-reflects-latest-value`) — fires per key whose latest produced message was a tombstone.
+- Path-exercise anchor: new `sometimes("upsert: tombstone overwrote a live value at least once this invocation", ...)`. The driver counts `tombstoned_after_value` — the number of tombstone produces where the immediately-prior produced value for that key was a live value. Without this anchor, the `always` could be vacuously satisfied by tombstones against never-written keys.
+
+The "no resurrection across restart" half is covered structurally by `upsert-state-rehydrates-correctly`'s cross-cycle stability check, which includes tombstoned keys in its per-key assertion loop (`"upsert: rehydrated state matches local model (tombstoned key)"`).
+
 ## Provenance
 
 Surfaced by: Data Integrity, Lifecycle Transitions (delete operations).

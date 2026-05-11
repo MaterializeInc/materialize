@@ -41,6 +41,23 @@ Compounded by RocksDB merge operator behavior (commit `0d8d740b47`): if the merg
 
 None. Candidate SUT anchors: an `assert_sometimes!(upsert_snapshot_completed, "upsert: snapshot phase completed")` at the snapshot-completion call site, and `assert_always!(diff_sum_in_range, …)` mirroring the existing `panic!` in `ensure_decoded`.
 
+## Implementation status
+
+Implemented 2026-05-11 (workload-side) as `test/antithesis/workload/test/singleton_driver_upsert_state_rehydration.py`. The `singleton_driver_` runs exactly once per timeline and lives across multiple produce/settle/assert cycles, holding `expected_state` in process memory across cycles:
+
+| Message | Type | Fires when |
+|---------|------|------------|
+| `"upsert: rehydrated state matches local model (live key)"` | `always` | Per live key, per cycle, after catchup. Cross-cycle stability of `expected` is the rehydration check. |
+| `"upsert: rehydrated state matches local model (tombstoned key)"` | `always` | Per tombstoned key, per cycle, after catchup. |
+| `"upsert: rehydration driver ran 2+ assertion cycles"` | `sometimes` | Once per invocation; confirms the safety check ran against multiple settle cycles (not just one early cycle that masks rehydration). |
+| `"upsert: rehydration driver observed clusterd replica non-online"` | `sometimes` | Best-effort proxy: `mz_internal.mz_cluster_replica_statuses` showed an `antithesis_cluster` replica in a non-`online` status during the run. Not a guarantee that a restart happened, but a noisy yes-signal that something disturbed the cluster. |
+
+Knobs: `CYCLE_COUNT=8`, `PRODUCES_PER_CYCLE=30`, `DISTINCT_KEYS=6` (small enough that keys are revisited within and across cycles), `TOMBSTONE_PROB=0.20`, `QUIET_PERIOD_S=25`, `CATCHUP_TIMEOUT_S=120`, `INTER_CYCLE_SLEEP_S=2`.
+
+**Requires node-termination faults enabled** in the Antithesis tenant for the property to be exercised at full strength. Without restarts, the cross-cycle stability check still catches divergence from the operator processing a sequence of upserts/tombstones (i.e., it falls back to a slower version of `upsert-key-reflects-latest-value`).
+
+SUT-side anchors at the upsert snapshot-completion call sites are deferred and would tighten replay anchoring.
+
 ## Provenance
 
 Surfaced by: Failure Recovery, Data Integrity.

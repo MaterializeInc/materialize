@@ -250,6 +250,7 @@ Properties specific to the Kafka source ingestion pipeline: `KafkaSourceReader` 
 |---|---|
 | **Type** | Safety |
 | **Priority** | P1 — frontier regression panics downstream operators and breaks `AS OF` queries |
+| **Status** | **Implemented (workload-side)** — `test/antithesis/workload/test/anytime_kafka_frontier_monotonic.py`. Continuous `anytime_` driver polls `mz_internal.mz_source_statistics.offset_committed` for every known Kafka source every 500ms and asserts `always("kafka: source offset_committed non-monotonic", details)` whenever a new sample is less than the previous one. Faults are active throughout. SUT-side `assert_always!(new_upper >= prev_upper, ...)` in `append_batches` is deferred. |
 | **Property** | The `upper` frontier of the source's data persist shard never regresses across the lifetime of the source, including across clusterd restarts and `compare_and_append` retries. |
 | **Invariant** | `Always`: observed `upper(t2) >= upper(t1)` for any observation order `t1 < t2`. Checked on every observation in a workload polling loop, and ideally also as a SUT-side `assert_always!` next to the persist sink's `compare_and_append`. |
 | **Antithesis Angle** | Kill clusterd mid-`compare_and_append`; resume the source with a stale cached upper; concurrent reclock and persist-sink writers. Direct regression target for the `as_of`/reclock-upper race (commit e3805ad790, database-issues#8698) and the persist-sink cached upper bug (commit 505dc96aaa). |
@@ -295,6 +296,7 @@ Properties specific to the Kafka source ingestion pipeline: `KafkaSourceReader` 
 |---|---|
 | **Type** | Safety |
 | **Priority** | P1 — delete semantics are routinely relied on for GDPR/correctness |
+| **Status** | **Implemented (workload-side)** — `test/antithesis/workload/test/parallel_driver_upsert_latest_value.py`. The existing `always("upsert: tombstoned key has no row in source", ...)` covers the safety half; a new `sometimes("upsert: tombstone overwrote a live value at least once this invocation", ...)` confirms the *interesting* tombstone path (tombstone replacing a live value) is exercised rather than the trivial "tombstone a never-written key" case. |
 | **Property** | After producing a `(key, null)` tombstone message to the Kafka topic, the UPSERT source eventually contains no row for that key, and the row stays absent until a new non-null value is produced. |
 | **Invariant** | `Always`: at any settled observation after the tombstone has been ingested (resume_upper > tombstone offset), `SELECT * FROM source WHERE key = ?` returns 0 rows. The "no resurrection" half is also `Always`: a key that has been tombstoned and not re-inserted must not reappear after a clusterd restart or rehydration cycle. |
 | **Antithesis Angle** | Race the tombstone against a state-store snapshot completion. Crash clusterd between persist sink writing the retraction and the upsert state recording the tombstone. The `StateValue::Value` -> tombstone path in `upsert/types.rs` is the relevant code; bugs here look like resurrected rows. |
@@ -306,6 +308,7 @@ Properties specific to the Kafka source ingestion pipeline: `KafkaSourceReader` 
 |---|---|
 | **Type** | Safety |
 | **Priority** | P1 — incorrect rehydration produces wrong-but-plausible-looking output |
+| **Status** | **Implemented (workload-side)** — `test/antithesis/workload/test/singleton_driver_upsert_state_rehydration.py`. Long-running `singleton_driver_` runs N produce→settle→assert cycles holding `expected_state` in process memory. Cross-cycle stability is the rehydration check: if a clusterd restart lands between cycles, the next cycle's `always("upsert: rehydrated state matches local model (live key|tombstoned key)", ...)` verifies the rebuilt source matches the pre-restart model. Requires node-termination faults enabled. |
 | **Property** | After a clusterd restart, the rehydrated upsert state, as observed via `SELECT * FROM source`, equals the state at the most recent durable timestamp before the restart, for every key produced so far. |
 | **Invariant** | `Always`: after a kill+restart quiet period, the workload's local key/value model matches the source's contents for every key whose latest message has `offset <= resume_upper`. Combines with `kafka-source-no-data-duplication` (no double inserts on rehydration) and `upsert-key-reflects-latest-value` (correct value per key). |
 | **Antithesis Angle** | The interesting window is between `compare_and_append` of the persist sink and the upsert operator's feedback-driven snapshot completion. If the feedback replay deduplication is wrong, rehydrated state diverges from durable state. Direct regression target for the upsert snapshot-completion logic in `upsert/types.rs` and `upsert_continual_feedback*`. |

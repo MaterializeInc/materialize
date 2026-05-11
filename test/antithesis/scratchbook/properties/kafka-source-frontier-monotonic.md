@@ -35,6 +35,20 @@ A: The retry loop does protect — but only if `sync()` is called *before* the l
 
 None. The persist-side `panic!("compare_and_append failed: …")` in `reclock/compat.rs:306` is informational, not a property. Wrap with `assert_unreachable!` for the genuinely-invalid case and add an `assert_always!` for the workload-observable monotonicity.
 
+## Implementation status
+
+Implemented 2026-05-11 (workload-side) as `test/antithesis/workload/test/anytime_kafka_frontier_monotonic.py`. The `anytime_` driver runs throughout the timeline alongside other drivers while faults are active. Each poll iteration:
+
+1. Lists every source in `SOURCES = ["upsert_text_src", "none_text_src"]` that currently exists in the catalog (so an early-timeline poll before sources are created doesn't fire false negatives).
+2. For each source, calls `helper_source_stats.offset_committed()` (a `MAX(offset_committed)` over `mz_internal.mz_source_statistics` joined to `mz_sources` by name).
+3. Compares against the previous observation for that source in `last_seen`. The assertion `always("kafka: source offset_committed non-monotonic", details)` fires only when both observations succeeded — partition/clusterd unavailable is expected under faults and not an assertion target.
+
+`details` carries `source`, `previous`, `observed`, and `regression` (`previous - observed`).
+
+The SUT-side `assert_always!` in `append_batches` and the `reclock/compat.rs` `compare_and_append` paths (commit `e3805ad790`'s and `505dc96aaa`'s code paths) are deferred — the workload signal is sufficient to catch any externally-visible regression. Add SUT instrumentation later if Antithesis surfaces failures that need internal localization.
+
+The complementary `offset-known-not-below-committed` property is similar shape and could be added to this same driver with minimal cost; that's deliberately deferred to keep this commit scoped to the user-requested three properties.
+
 ## Provenance
 
 Surfaced by: Data Integrity, Distributed Coordination. Direct regression target for commits `e3805ad790` and `505dc96aaa`.

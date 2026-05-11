@@ -117,10 +117,19 @@ def main() -> int:
     # Value of None means "the last message was a tombstone".
     expected: dict[str, str | None] = {}
 
+    # Count of times we tombstoned a key whose immediately-prior produced
+    # value was a live value (not absent, not already tombstoned). This is
+    # the exact `upsert-tombstone-removes-key` exercise pattern: the
+    # interesting case is "remove a row that was just there," not "tombstone
+    # a key we never wrote to."
+    tombstoned_after_value = 0
+
     keys = [f"{prefix}-k{i}" for i in range(DISTINCT_KEYS)]
     for _ in range(PRODUCES_PER_INVOCATION):
         key = helper_random.random_choice(keys)
         if helper_random.random_bool(TOMBSTONE_PROB):
+            if expected.get(key) is not None:
+                tombstoned_after_value += 1
             _produce(producer, tracker, TOPIC_UPSERT_TEXT, key, None)
             expected[key] = None
         else:
@@ -202,6 +211,20 @@ def main() -> int:
                     "observed_value": observed,
                 },
             )
+
+    # Liveness anchor for `upsert-tombstone-removes-key`: confirms the
+    # interesting tombstone path (tombstone replacing a live value) was
+    # exercised at least once during the run. Without this, the
+    # `always(not found, "upsert: tombstoned key has no row in source", ...)`
+    # check above might fire only against keys that were never live.
+    sometimes(
+        tombstoned_after_value > 0,
+        "upsert: tombstone overwrote a live value at least once this invocation",
+        {
+            "tombstoned_after_value": tombstoned_after_value,
+            "produces": PRODUCES_PER_INVOCATION,
+        },
+    )
 
     LOG.info("driver done; asserted on %d keys", len(expected))
     return 0
