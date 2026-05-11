@@ -15,6 +15,7 @@ use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use antithesis_sdk::{assert_always, assert_unreachable};
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::{AsCollection, VecCollection};
 use futures::StreamExt;
@@ -34,6 +35,7 @@ use mz_timely_util::builder_async::{
     PressOnDropButton,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use sha2::{Digest, Sha256};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::{Capability, InputCapability, Operator};
@@ -538,6 +540,11 @@ fn stage_input<T, FromTime>(
     }
 
     stash.extend(data.drain(..).map(|((key, value, order), time, diff)| {
+        assert_always!(
+            diff.is_positive(),
+            "upsert: input diff positive (classic)",
+            &json!({"diff": diff.into_inner()})
+        );
         assert!(diff.is_positive(), "invalid upsert input");
         (time, key, Reverse(order), value)
     }));
@@ -633,6 +640,10 @@ async fn drain_staged_input<S, T, FromTime, E>(
         let mut command_state = if let Entry::Occupied(command_state) = commands_state.entry(key) {
             command_state
         } else {
+            assert_unreachable!(
+                "upsert: key missing from commands_state (classic)",
+                &json!({"source_id": source_config.id.to_string()})
+            );
             panic!("key missing from commands_state");
         };
 
@@ -1028,5 +1039,9 @@ async fn process_upsert_state_error<T: Timestamp>(
     let update = HealthStatusUpdate::halting(e.context(context).to_string_with_causes(), None);
     health_output.give(health_cap, (None, update));
     std::future::pending::<()>().await;
+    assert_unreachable!(
+        "upsert: pending future returned (classic)",
+        &json!({"site": "process_upsert_state_error"})
+    );
     unreachable!("pending future never returns");
 }
