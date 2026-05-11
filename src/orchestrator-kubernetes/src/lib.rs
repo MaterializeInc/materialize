@@ -791,10 +791,17 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                          so min_domains will be ignored"
                     );
                 }
+                if availability_zones.is_some() && config.min_domains.is_some() {
+                    warn!(
+                        "topology spread has min_domains set but availability_zones \
+                         constrains eligible topology domains via node affinity; \
+                         minDomains will be ignored to avoid preventing pod scheduling"
+                    );
+                }
 
                 let constraint = TopologySpreadConstraint {
                     label_selector: Some(ls),
-                    min_domains: if config.soft {
+                    min_domains: if config.soft || availability_zones.is_some() {
                         None
                     } else {
                         config.min_domains
