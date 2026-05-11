@@ -13,7 +13,7 @@ SHELL := /usr/bin/env bash
 .SHELLFLAGS := -eu -o pipefail -c
 
 PROJECT   := materialize
-REPO_ROOT := $(realpath $(dir $(lastword $(MAKEFILE_LIST)))/..)
+REPO_ROOT := $(realpath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
 
 ifndef RUNTIME
   RUNTIME := $(shell command -v podman >/dev/null 2>&1 && echo podman || (command -v docker >/dev/null 2>&1 && echo docker || echo none))
@@ -36,8 +36,8 @@ REGISTRY_PATH ?= /molten-verve-216720/materialize-repository
 # ---------------------------------------------------------------------------
 .PHONY: export-compose
 export-compose:
-	cd $(REPO_ROOT) && $(REPO_ROOT)/bin/pyactivate test/antithesis/export-compose.py > antithesis/config/docker-compose.yaml
-	@echo "Wrote config/docker-compose.yaml"
+	cd $(REPO_ROOT) && $(REPO_ROOT)/bin/pyactivate test/antithesis/export-compose.py > test/antithesis/config/docker-compose.yaml
+	@echo "Wrote test/antithesis/config/docker-compose.yaml"
 
 # ---------------------------------------------------------------------------
 # Build — build images that don't have public equivalents.
