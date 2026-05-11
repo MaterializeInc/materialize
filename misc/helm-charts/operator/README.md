@@ -107,6 +107,7 @@ The following table lists the configurable parameters of the Materialize operato
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
+| `availabilityZoneLabel` | The Kubernetes node label key used for availability zone affinity rules. Defaults to the standard topology.kubernetes.io/zone when unset. Set to topology.k8s.aws/zone-id for AWS zone IDs. | ``nil`` |
 | `balancerd.affinity` | Affinity to use for balancerd pods spawned by the operator | ``{}`` |
 | `balancerd.defaultResources.limits` | Default resource limits for balancerd's CPU and memory if not set in the Materialize CR | ``{"memory":"256Mi"}`` |
 | `balancerd.defaultResources.requests` | Default resources requested for balancerd's CPU and memory if not set in the Materialize CR | ``{"cpu":"500m","memory":"256Mi"}`` |
