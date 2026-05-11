@@ -623,7 +623,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         &self,
         key_val: Option<(Vec<LirScalarExpr>, Option<Row>)>,
         max_demand: usize,
-        mut logic: L,
+        logic: L,
     ) -> (
         Stream<'scope, T, DCB::Container>,
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
@@ -652,38 +652,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 .collection
                 .clone()
                 .expect("Invariant violated: CollectionBundle contains no collection.");
-            let oks = oks.expect_vec();
-            let scope = oks.inner.scope();
-            let mut builder = OperatorBuilder::new("CollectionFlatMap".to_string(), scope);
-            let (ok_output, ok_stream) = builder.new_output();
-            let mut ok_output = OutputBuilder::<_, DCB>::from(ok_output);
-            let (err_output, err_stream) = builder.new_output();
-            let mut err_output = OutputBuilder::<_, ECB<T>>::from(err_output);
-            let mut input = builder.new_input(oks.inner, Pipeline);
-            builder.build(move |_capabilities| {
-                let mut datums = DatumVec::new();
-                move |_frontiers| {
-                    let mut ok_output = ok_output.activate();
-                    let mut err_output = err_output.activate();
-                    input.for_each(|time, data| {
-                        // Retain the input capability to derive a `Capability` for each output;
-                        // the `Session` type alias is fixed to `Capability<T>`.
-                        let ok_cap = time.retain(0);
-                        let err_cap = time.retain(1);
-                        let mut ok_session = ok_output.session_with_builder(&ok_cap);
-                        let mut err_session = err_output.session_with_builder(&err_cap);
-                        for (v, t, d) in data.drain(..) {
-                            logic(
-                                &mut datums.borrow_with_limit(&v, max_demand),
-                                t,
-                                d,
-                                &mut ok_session,
-                                &mut err_session,
-                            );
-                        }
-                    });
-                }
-            });
+            let (ok_stream, err_stream) = oks.flat_map_datums::<DCB, _>(max_demand, logic);
             let errs = errs.concat(err_stream.as_collection());
             (ok_stream, errs)
         }
@@ -1246,14 +1215,14 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
 /// Type alias for a timely output `Session` whose capability is a `Capability<T>`. The container
 /// builder `CB` is left to the caller; sessions can therefore drive consolidating, capacity, or
 /// (in the future) columnar output builders without changing call sites.
-type Session<'a, 'b, T, CB> =
+pub(crate) type Session<'a, 'b, T, CB> =
     timely::dataflow::operators::generic::Session<'a, 'b, T, CB, Capability<T>>;
 
 /// Container builder used for the err output of every flat_map variant. Pre-refactor the
 /// merged Ok/Err stream flowed through a [`ConsolidatingContainerBuilder`] before the
 /// `map_fallible` demux split it; we preserve that consolidation here so errors with the
 /// same `(error, time)` cancel within a batch rather than propagating to downstream.
-type ECB<T> = ConsolidatingContainerBuilder<Vec<(DataflowErrorSer, T, Diff)>>;
+pub(crate) type ECB<T> = ConsolidatingContainerBuilder<Vec<(DataflowErrorSer, T, Diff)>>;
 
 /// Number of output records the arrangement flat_map operators may produce before yielding.
 /// See [`ArrangementFlavor::flat_map`] for the fuel rationale; the constant is a pragmatic
