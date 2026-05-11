@@ -1318,7 +1318,8 @@ impl Coordinator {
                     | Statement::RevokeRole(_)
                     | Statement::Update(_)
                     | Statement::ValidateConnection(_)
-                    | Statement::Comment(_) => {
+                    | Statement::Comment(_)
+                    | Statement::ExecuteUnitTest(_) => {
                         let txn_status = ctx.session_mut().transaction_mut();
 
                         // If we're not in an implicit transaction and we could generate exactly one
