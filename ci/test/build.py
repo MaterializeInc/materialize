@@ -47,7 +47,25 @@ def main() -> None:
         # Build and push any images that are not already available on Docker Hub,
         # so they are accessible to other build agents.
         print("--- Acquiring mzbuild images")
-        deps = repo.resolve_dependencies(image for image in repo if image.publish)
+        if antithesis:
+            # Antithesis only consumes these three images; everything else in
+            # the repo (balancerd, sqllogictest, testdrive, ...) is wasted CI
+            # time for this pipeline. resolve_dependencies walks depends_on
+            # transitively, so anything materialized actually needs still
+            # comes along. Keep this list in sync with ANTITHESIS_IMAGES in
+            # test/antithesis/push-antithesis.py.
+            antithesis_images = [
+                "materialized",
+                "antithesis-workload",
+                "antithesis-config",
+            ]
+            deps = repo.resolve_dependencies(
+                repo.images[name] for name in antithesis_images
+            )
+        else:
+            deps = repo.resolve_dependencies(
+                image for image in repo if image.publish
+            )
         deps.ensure(pre_build=lambda images: upload_debuginfo(repo, images))
         set_build_status("success")
         annotate_buildkite_with_tags(repo.rd.arch, deps)

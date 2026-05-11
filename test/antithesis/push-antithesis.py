@@ -37,6 +37,9 @@ from materialize.xcompile import Arch
 # Images Antithesis needs to be able to pull:
 #   - antithesis-config holds the docker-compose.yaml + .env Antithesis runs.
 #   - materialized + antithesis-workload are referenced by that compose.
+# Keep this list in sync with the `antithesis_images` branch in
+# ci/test/build.py — that's where CI_ANTITHESIS scopes the mzbuild walk so
+# the nightly doesn't waste time building images Antithesis never consumes.
 ANTITHESIS_IMAGES = ["materialized", "antithesis-workload", "antithesis-config"]
 
 
