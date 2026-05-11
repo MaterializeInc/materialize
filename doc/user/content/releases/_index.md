@@ -77,13 +77,8 @@ improvements, and bug fixes.
 - Fixed `statement_timeout = 0` (which means "disabled" in PostgreSQL semantics)
   causing every `SELECT` and `EXPLAIN FILTER PUSHDOWN` to fail immediately with a
   spurious `StatementTimeout` error.
-- Fixed a security issue in Self-Managed deployments where the
-  `x-materialize-user` HTTP header could be used to assume `mz_system` or
-  `mz_support` privileges on listeners with `authenticator_kind = None`,
-  bypassing `allowed_roles` restrictions.
-- Fixed session-based HTTP authentication not enforcing the listener's
-  `allowed_roles`, allowing session tokens to be obtained and used for roles that
-  should be disallowed.
+- Tightened default validation on headers in Self-Managed deployments.
+- Enhanced session-based HTTP authentication.
 - Fixed `SHOW CREATE TYPE` emitting the bare type name instead of the
   fully-qualified `database.schema.type` name, unlike every other `SHOW CREATE`
   variant.
