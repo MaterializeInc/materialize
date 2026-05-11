@@ -168,7 +168,10 @@ const CriticalPathGraphInner = ({
               const parentPosition = nodePositionMap.get(e.v);
               if (!dagreEdge || !parentPosition) return null;
               const [first, ...rest] = clampPoints(dagreEdge.points);
-              const points = [{ x: first.x, y: parentPosition.bottom }, ...rest];
+              const points = [
+                { x: first.x, y: parentPosition.bottom },
+                ...rest,
+              ];
               const isOffPath = !edges.find(
                 (re) => re.id === e.v && re.childId === e.w,
               )?.isBottleneck;

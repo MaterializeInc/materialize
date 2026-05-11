@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { Box, Text, useTheme } from "@chakra-ui/react";
+import { Box, Text, useColorModeValue, useTheme } from "@chakra-ui/react";
 import React from "react";
 
 import { MaterializeTheme } from "~/theme";
@@ -15,15 +15,14 @@ import { formatIntervalShort } from "~/utils/format";
 
 import { NodeKind, RenderableNode } from "./criticalPathRenderable";
 
-// Soft mint — matches the design's "healthy" tint, less saturated than
-// `background.success` would feel here.
-const HEALTHY_BG = "#F0FDF4";
-// Soft cream-yellow — less harsh than `background.warn` and closer to the
-// design's upstream-blocked tint.
-const UPSTREAM_BG = "#FFFCF0";
-
 const useNodeColors = (node: RenderableNode) => {
   const { colors } = useTheme<MaterializeTheme>();
+  // Soft mint / dark forest — matches the design's "healthy" tint, less
+  // saturated than `background.success` would feel here.
+  const healthyBg = useColorModeValue("#F0FDF4", "#1F352A");
+  // Soft cream-yellow / dark amber — less harsh than `background.warn` and
+  // closer to the design's upstream-blocked tint.
+  const upstreamBg = useColorModeValue("#FFFCF0", "#352F1A");
 
   const borderByKind: Record<NodeKind, string> = {
     primary: colors.accent.red,
@@ -33,8 +32,8 @@ const useNodeColors = (node: RenderableNode) => {
   };
   const bgByKind: Record<NodeKind, string> = {
     primary: colors.background.error,
-    healthy: HEALTHY_BG,
-    upstream: UPSTREAM_BG,
+    healthy: healthyBg,
+    upstream: upstreamBg,
     offPath: colors.background.primary,
   };
 

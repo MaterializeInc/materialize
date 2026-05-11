@@ -87,39 +87,42 @@ const buildChainMaps = (
   return { nodeById, chainParentsByChild, depthById };
 };
 
-/** Returns the chain node with the largest self-delay (own lag − max parent lag). */
-const findPrimaryBottleneck = (
+/** Returns every chain node tied at the largest self-delay (own lag − max parent lag). */
+const findPrimaryBottlenecks = (
   lagMsByChainId: Map<string, number>,
   chainParentsByChild: Map<string, string[]>,
   probeLagMs: number,
-): string | null => {
-  if (probeLagMs <= 0) return null;
+): Set<string> => {
+  if (probeLagMs <= 0) return new Set();
 
-  const [mostDelayed] = [...lagMsByChainId.entries()]
-    .map(([id, lag]) => {
-      const parents = chainParentsByChild.get(id) ?? [];
-      const maxParentLag = Math.max(
-        0,
-        ...parents.map((p) => lagMsByChainId.get(p) ?? 0),
-      );
-      return { id, selfDelay: lag - maxParentLag };
-    })
-    .sort((a, b) => b.selfDelay - a.selfDelay);
+  const withSelfDelay = [...lagMsByChainId.entries()].map(([id, lag]) => {
+    const parents = chainParentsByChild.get(id) ?? [];
+    const maxParentLag = Math.max(
+      0,
+      ...parents.map((p) => lagMsByChainId.get(p) ?? 0),
+    );
+    return { id, selfDelay: lag - maxParentLag };
+  });
 
-  return mostDelayed?.id ?? null;
+  const maxSelfDelay = Math.max(0, ...withSelfDelay.map((x) => x.selfDelay));
+  if (maxSelfDelay <= 0) return new Set();
+
+  return new Set(
+    withSelfDelay.filter((x) => x.selfDelay === maxSelfDelay).map((x) => x.id),
+  );
 };
 
 const classifyNode = ({
   id,
   lag,
-  primaryId,
+  primaryIds,
 }: {
   id: string;
   lag: IPostgresInterval | null;
-  primaryId: string | null;
+  primaryIds: Set<string>;
 }): NodeKind => {
   if (isHealthyLag(lag)) return "healthy";
-  if (id === primaryId) return "primary";
+  if (primaryIds.has(id)) return "primary";
   return "upstream";
 };
 
@@ -185,13 +188,14 @@ export const buildGraphView = (
 
   const probeLag = probe.lag?.value ?? null;
   const probeLagMs = lagMs(probeLag);
+  const allChainIds = [...depthById.keys()].filter((id) => id !== probe.id);
   const lagMsByChainId = new Map<string, number>([
-    ...visibleChainIds.map(
+    ...allChainIds.map(
       (id) => [id, lagMs(nodeById.get(id)?.lag ?? null)] as const,
     ),
     [probe.id, probeLagMs],
   ]);
-  const primaryId = findPrimaryBottleneck(
+  const primaryIds = findPrimaryBottlenecks(
     lagMsByChainId,
     chainParentsByChild,
     probeLagMs,
@@ -207,7 +211,7 @@ export const buildGraphView = (
     kind: classifyNode({
       id: probe.id,
       lag: probeLag,
-      primaryId,
+      primaryIds,
     }),
     offPathCount: 0,
     objectType: probe.objectType,
@@ -224,7 +228,7 @@ export const buildGraphView = (
         kind: classifyNode({
           id,
           lag: r.lag,
-          primaryId,
+          primaryIds,
         }),
         offPathCount: offPathCountById.get(id) ?? 0,
         objectType: r.objectType,
