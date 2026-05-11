@@ -887,15 +887,35 @@ impl Catalog {
                 }
 
                 let mut new_entry = entry.clone();
-                new_entry
+                let previous = new_entry
                     .item
-                    .update_timestamp_interval(value, interval)
+                    .update_timestamp_interval(value.clone(), interval)
                     .map_err(|_| {
                         AdapterError::Catalog(Error::new(ErrorKind::Internal(
                             "planner should have rejected invalid alter timestamp interval item type"
                                 .to_string(),
                         )))
                     })?;
+
+                if Self::should_audit_log_item(new_entry.item()) {
+                    let details = EventDetails::AlterSourceTimestampIntervalV1(
+                        mz_audit_log::AlterSourceTimestampIntervalV1 {
+                            id: id.to_string(),
+                            old_interval: previous.map(|previous| previous.to_string()),
+                            new_interval: value.map(|v| v.to_string()),
+                        },
+                    );
+                    CatalogState::add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        EventType::Alter,
+                        catalog_type_to_audit_object_type(new_entry.item().typ()),
+                        details,
+                    )?;
+                }
 
                 tx.update_item(id, new_entry.into())?;
 

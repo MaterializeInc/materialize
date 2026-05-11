@@ -2327,6 +2327,23 @@ pub mod audit_log_event_v1 {
         Deserialize,
         Arbitrary
     )]
+    pub struct AlterSourceTimestampIntervalV1 {
+        pub id: String,
+        pub old_interval: Option<String>,
+        pub new_interval: Option<String>,
+    }
+
+    #[derive(
+        Clone,
+        Debug,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
+    )]
     pub struct ToNewIdV1 {
         pub id: String,
         pub new_id: String,
@@ -2509,6 +2526,7 @@ pub mod audit_log_event_v1 {
         AlterApplyReplacementV1(AlterApplyReplacementV1),
         CreateRoleV1(CreateRoleV1),
         AlterAddColumnV1(AlterAddColumnV1),
+        AlterSourceTimestampIntervalV1(AlterSourceTimestampIntervalV1),
     }
 }
 

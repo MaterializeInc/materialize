@@ -233,6 +233,7 @@ pub enum EventDetails {
     RenameSchemaV1(RenameSchemaV1),
     AlterRetainHistoryV1(AlterRetainHistoryV1),
     AlterAddColumnV1(AlterAddColumnV1),
+    AlterSourceTimestampIntervalV1(AlterSourceTimestampIntervalV1),
     ToNewIdV1(ToNewIdV1),
     FromPreviousIdV1(FromPreviousIdV1),
     SetV1(SetV1),
@@ -1112,6 +1113,24 @@ pub struct AlterAddColumnV1 {
     Hash,
     Arbitrary
 )]
+pub struct AlterSourceTimestampIntervalV1 {
+    pub id: String,
+    pub old_interval: Option<String>,
+    pub new_interval: Option<String>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub struct UpdateItemV1 {
     pub id: String,
     #[serde(flatten)]
@@ -1213,6 +1232,9 @@ impl EventDetails {
                 serde_json::to_value(v).expect("must serialize")
             }
             EventDetails::AlterAddColumnV1(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::AlterSourceTimestampIntervalV1(v) => {
+                serde_json::to_value(v).expect("must serialize")
+            }
             EventDetails::ToNewIdV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::FromPreviousIdV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::SetV1(v) => serde_json::to_value(v).expect("must serialize"),
