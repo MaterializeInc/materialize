@@ -336,6 +336,7 @@ impl UpdateFrom<durable::RoleAuth> for RoleAuth {
     fn update_from(&mut self, from: durable::RoleAuth) {
         self.role_id = from.role_id;
         self.password_hash = from.password_hash;
+        self.updated_at = from.updated_at;
     }
 }
 
