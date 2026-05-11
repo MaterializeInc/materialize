@@ -677,8 +677,16 @@ fn merge_field_metadata_recursive(
 /// drop the materialize extension metadata for the value field, which then
 /// causes `ArrowBuilder` to fail with "Field 'value' missing extension metadata".
 ///
+/// Positional matching is safe because the Arrow spec defines Map structurally,
+/// not by field name: `List<entries: Struct<key: K, value: V>>` with exactly
+/// two struct children — key first, value second — and the names are only
+/// conventional. See `Map` in apache/arrow `format/Schema.fbs`:
+/// <https://github.com/apache/arrow/blob/main/format/Schema.fbs> — "The names
+/// of the child fields may be respectively 'entries', 'key', and 'value', but
+/// this is not enforced."
+///
 /// Future cleanup: we could instead align Materialize's arrow map field names
-/// with Iceberg's (`key_value`/`key`/`value`) in
+/// with the Parquet/Iceberg convention (`key_value`/`key`/`value`) in
 /// `mz_arrow_util::builder::scalar_to_arrow_datatype_impl` and drop this
 /// positional helper. That would also affect `COPY TO S3 ... FORMAT = 'parquet'`
 /// output schemas, so we'd need to confirm no downstream consumers depend on
