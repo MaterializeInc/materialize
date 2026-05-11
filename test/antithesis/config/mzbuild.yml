@@ -1,0 +1,19 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# FROM-scratch image holding the resolved docker-compose.yaml for the
+# Antithesis environment. Antithesis pulls this image and reads the compose
+# spec from `/docker-compose.yaml` to bring up the system under test.
+#
+# The compose file is generated from test/antithesis/mzcompose.py via
+# `bin/pyactivate test/antithesis/export-compose.py`. Re-run that whenever
+# the composition topology changes; CI verifies the committed copy is up to
+# date.
+
+name: antithesis-config
