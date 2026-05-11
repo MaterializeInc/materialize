@@ -28,7 +28,12 @@ import {
   Radio,
   RadioGroup,
   Stack,
+  Tab,
   Table,
+  TabList,
+  TabPanel,
+  TabPanels,
+  Tabs,
   Tbody,
   Td,
   Text,
@@ -495,34 +500,33 @@ const SecretBox = ({
     >
       <VStack alignItems="flex-start" width="100%">
         <AlertDescription width="100%" px={2}>
-          <VStack alignItems="start" spacing="3">
-            <VStack alignItems="start" spacing="1" width="100%">
-              <Text fontSize="md" fontWeight="500">
-                New password {`"${name}"`}:
-              </Text>
-              <SecretCopyableBox
-                label="clientId"
-                contents={password}
-                obfuscatedContent={obfuscatedContent}
-              />
-            </VStack>
-            <VStack alignItems="start" spacing="1" width="100%">
-              <Text fontSize="md" fontWeight="500">
-                MCP Token
-              </Text>
-              <SecretCopyableBox
-                label="mcpToken"
-                contents={base64Token}
-                obfuscatedContent={obfuscatedBase64Token}
-                overflow="hidden"
-                minWidth={0}
-              />
-              <Text fontSize="xs" color={colors.foreground.secondary}>
-                Base64-encoded <code>{userEmail}:&lt;password&gt;</code> for MCP
-                configuration.
-              </Text>
-            </VStack>
-          </VStack>
+          <Text fontSize="md" fontWeight="500" mb="1">
+            New password {`"${name}"`}
+          </Text>
+          <Tabs variant="line" size="sm">
+            <TabList>
+              <Tab>App password</Tab>
+              <Tab>MCP token</Tab>
+            </TabList>
+            <TabPanels>
+              <TabPanel px="0" pt="3" pb="0">
+                <SecretCopyableBox
+                  label="clientId"
+                  contents={password}
+                  obfuscatedContent={obfuscatedContent}
+                />
+              </TabPanel>
+              <TabPanel px="0" pt="3" pb="0">
+                <SecretCopyableBox
+                  label="mcpToken"
+                  contents={base64Token}
+                  obfuscatedContent={obfuscatedBase64Token}
+                  overflow="hidden"
+                  minWidth={0}
+                />
+              </TabPanel>
+            </TabPanels>
+          </Tabs>
           <Text pt={2} textStyle="text-base" color={colors.foreground.primary}>
             Write this down; you will not be able to see your credentials again
             after you reload!
