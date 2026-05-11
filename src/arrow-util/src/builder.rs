@@ -937,6 +937,11 @@ impl ArrowColumn {
             (ColBuilder::Int32Builder(builder), Datum::UInt16(i)) => {
                 builder.append_value(i32::from(i))
             }
+            // Lossless signed-to-signed widening for destinations that don't
+            // support narrow integers (e.g., Iceberg has no smallint).
+            (ColBuilder::Int32Builder(builder), Datum::Int16(i)) => {
+                builder.append_value(i32::from(i))
+            }
             (ColBuilder::Int64Builder(builder), Datum::UInt32(i)) => {
                 builder.append_value(i64::from(i))
             }
