@@ -36,10 +36,12 @@ use columnar::Columnar;
 use differential_dataflow::VecCollection;
 use mz_repr::{Diff, Row};
 use mz_timely_util::columnar::Column;
+use mz_timely_util::operator::CollectionExt;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Timestamp;
 
 use crate::render::RenderTimestamp;
+use crate::typedefs::KeyBatcher;
 
 /// A columnar collection of `(D, T, R)` updates traveling on a compute
 /// dataflow edge.
@@ -147,6 +149,40 @@ impl<'scope, T: RenderTimestamp> CollectionEdge<'scope, T> {
         match self {
             CollectionEdge::Vec(c) => CollectionEdge::Vec(c.negate()),
             CollectionEdge::Columnar(c) => CollectionEdge::Columnar(columnar_negate(c)),
+        }
+    }
+
+    /// Concatenates a collection of edges that all share the same variant.
+    ///
+    /// Mixing variants is rejected during the transition.
+    pub fn concat_many<I>(scope: Scope<'scope, T>, edges: I) -> Self
+    where
+        I: IntoIterator<Item = Self>,
+    {
+        let mut vec_arm = Vec::new();
+        for edge in edges {
+            match edge {
+                CollectionEdge::Vec(c) => vec_arm.push(c),
+                CollectionEdge::Columnar(_) => {
+                    // No producer emits the columnar arm yet; once one does,
+                    // this branch must either concatenate columnar streams or
+                    // reject mixed-variant inputs explicitly.
+                    todo!("CollectionEdge::concat_many: columnar arm");
+                }
+            }
+        }
+        CollectionEdge::Vec(differential_dataflow::collection::concatenate(scope, vec_arm))
+    }
+
+    /// Consolidates updates in the edge, preserving variant.
+    pub fn consolidate_named(self, name: &str) -> Self {
+        match self {
+            CollectionEdge::Vec(c) => {
+                CollectionEdge::Vec(CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(c, name))
+            }
+            CollectionEdge::Columnar(_) => {
+                todo!("CollectionEdge::Columnar::consolidate_named")
+            }
         }
     }
 }

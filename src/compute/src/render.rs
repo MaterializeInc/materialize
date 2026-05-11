@@ -1340,8 +1340,10 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                 let mut oks = Vec::new();
                 let mut errs = Vec::new();
                 for (input, strategy) in inputs.into_iter().zip_eq(temporal_bucketing_strategies) {
-                    let (os, es) =
-                        expect_input(input).as_specific_collection(None, &self.config_set);
+                    let (os, es) = expect_input(input)
+                        .collection
+                        .clone()
+                        .expect("Union input must be an unarranged collection");
                     // Apply per-input temporal bucketing. No-op for `Direct`.
                     // Only consolidating Unions carry non-`Direct` strategies;
                     // see the `Union` arm of `lower_mir_expr_stack_safe`.
@@ -1352,10 +1354,13 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                             .get(&self.config_set)
                             .try_into()
                             .expect("must fit");
-                        T::maybe_apply_temporal_bucketing(
-                            os.inner,
-                            self.as_of_frontier.clone(),
-                            summary,
+                        let os = os.expect_vec();
+                        crate::render::columnar::CollectionEdge::Vec(
+                            T::maybe_apply_temporal_bucketing(
+                                os.inner,
+                                self.as_of_frontier.clone(),
+                                summary,
+                            ),
                         )
                     } else {
                         os
@@ -1363,15 +1368,14 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                     oks.push(os);
                     errs.push(es);
                 }
-                let mut oks = differential_dataflow::collection::concatenate(self.scope, oks);
-                if consolidate_output {
-                    oks = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
-                        oks,
-                        "UnionConsolidation",
-                    )
-                }
+                let oks = crate::render::columnar::CollectionEdge::concat_many(self.scope, oks);
+                let oks = if consolidate_output {
+                    oks.consolidate_named("UnionConsolidation")
+                } else {
+                    oks
+                };
                 let errs = differential_dataflow::collection::concatenate(self.scope, errs);
-                CollectionBundle::from_collections(oks, errs)
+                CollectionBundle::from_edge(oks, errs)
             }
             ArrangeBy {
                 input_key,
