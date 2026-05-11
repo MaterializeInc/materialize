@@ -691,6 +691,10 @@ fn builder_for_datatype(
                     key: key_field.name().clone(),
                     value: value_field.name().clone(),
                 };
+                // Forward both inner fields so any metadata the schema set
+                // (e.g. Iceberg's PARQUET:field_id) survives onto the
+                // MapArray's nested fields; otherwise RecordBatch::try_new
+                // rejects the batch as schema-mismatched.
                 ColBuilder::MapBuilder(Box::new(
                     MapBuilder::with_capacity(
                         Some(field_names),
@@ -698,6 +702,7 @@ fn builder_for_datatype(
                         value_builder,
                         item_capacity,
                     )
+                    .with_keys_field(Arc::clone(key_field))
                     .with_values_field(Arc::clone(value_field)),
                 ))
             } else {
