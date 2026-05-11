@@ -2069,6 +2069,71 @@ mod tests {
         assert_eq!(equality_ids, vec![expected_id]);
         assert_ne!(expected_id, 2);
     }
+
+    /// Regression test: iceberg-rust names map fields `key_value`/`key`/`value`
+    /// while Materialize uses `entries`/`keys`/`values`. The schema merge must
+    /// still copy the value field's extension metadata across so ArrowBuilder
+    /// can build the inner builder.
+    #[mz_ore::test]
+    #[allow(clippy::disallowed_types)]
+    fn merge_map_entries_preserves_value_extension_metadata() {
+        use std::collections::HashMap;
+
+        let mz_value_metadata = HashMap::from([(
+            ARROW_EXTENSION_NAME_KEY.to_string(),
+            "materialize.v1.string".to_string(),
+        )]);
+        let mz_entries = Field::new(
+            "entries",
+            DataType::Struct(
+                vec![
+                    Field::new("keys", DataType::Utf8, false),
+                    Field::new("values", DataType::Utf8, true).with_metadata(mz_value_metadata),
+                ]
+                .into(),
+            ),
+            false,
+        );
+        let mz_map = Field::new("m", DataType::Map(Arc::new(mz_entries), false), true)
+            .with_metadata(HashMap::from([(
+                ARROW_EXTENSION_NAME_KEY.to_string(),
+                "materialize.v1.map".to_string(),
+            )]));
+
+        let iceberg_entries = Field::new(
+            "key_value",
+            DataType::Struct(
+                vec![
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("value", DataType::Utf8, true),
+                ]
+                .into(),
+            ),
+            false,
+        );
+        let iceberg_map = Field::new("m", DataType::Map(Arc::new(iceberg_entries), false), true);
+
+        let merged = merge_field_metadata_recursive(&iceberg_map, Some(&mz_map))
+            .expect("merge should succeed");
+
+        let entries = match merged.data_type() {
+            DataType::Map(entries, _) => entries.as_ref(),
+            other => panic!("expected Map, got {other:?}"),
+        };
+        let entry_fields = match entries.data_type() {
+            DataType::Struct(fields) => fields,
+            other => panic!("expected Struct, got {other:?}"),
+        };
+        // Iceberg naming must be preserved on the merged schema...
+        assert_eq!(entry_fields[0].name(), "key");
+        assert_eq!(entry_fields[1].name(), "value");
+        // ...and the materialize extension must have been copied positionally
+        // to the value field even though its name didn't match `values`.
+        assert_eq!(
+            entry_fields[1].metadata().get(ARROW_EXTENSION_NAME_KEY),
+            Some(&"materialize.v1.string".to_string()),
+        );
+    }
 }
 
 /// Commit completed batches to Iceberg as snapshots.
