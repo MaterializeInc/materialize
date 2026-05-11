@@ -331,6 +331,11 @@ rbac:
 # -- Optionally use a non-default kubernetes scheduler.
 schedulerName:
 
+# -- The Kubernetes node label key used for availability zone affinity rules.
+# Defaults to the standard topology.kubernetes.io/zone when unset.
+# Set to topology.k8s.aws/zone-id for AWS zone IDs.
+availabilityZoneLabel:
+
 # Service account settings
 serviceAccount:
   # -- Whether to create a new service account for the operator

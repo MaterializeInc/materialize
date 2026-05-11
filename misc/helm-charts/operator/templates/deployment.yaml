@@ -237,6 +237,9 @@ spec:
         {{- if .Values.schedulerName }}
         - "--scheduler-name={{ .Values.schedulerName }}"
         {{- end }}
+        {{- if .Values.availabilityZoneLabel }}
+        - "--orchestrator-kubernetes-az-label={{ .Values.availabilityZoneLabel }}"
+        {{- end }}
 
         {{- if .Values.operator.additionalMaterializeCRDColumns }}
         - >

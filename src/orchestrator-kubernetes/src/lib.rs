@@ -109,6 +109,12 @@ pub struct KubernetesOrchestratorConfig {
     pub collect_pod_metrics: bool,
     /// Whether to annotate pods for prometheus service discovery.
     pub enable_prometheus_scrape_annotations: bool,
+    /// The Kubernetes node label key used to identify availability zones.
+    ///
+    /// Defaults to the standard `topology.kubernetes.io/zone`. Can be set to
+    /// `topology.k8s.aws/zone-id` for AWS-specific zone IDs, or any other
+    /// topology label.
+    pub availability_zone_label: String,
 }
 
 impl KubernetesOrchestratorConfig {
@@ -879,7 +885,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         let node_affinity = if let Some(availability_zones) = availability_zones {
             let selector = NodeSelectorTerm {
                 match_expressions: Some(vec![NodeSelectorRequirement {
-                    key: "materialize.cloud/availability-zone".to_string(),
+                    key: self.config.availability_zone_label.clone(),
                     operator: "In".to_string(),
                     values: Some(availability_zones),
                 }]),
