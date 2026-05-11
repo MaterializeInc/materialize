@@ -17,8 +17,11 @@
 #    image fingerprint tracks the source it references — self-consistent.
 # 2. Run the standard `ci.test.build` to compile antithesis-flavored Rust
 #    binaries and build the docker images (pushed to GHCR via mzbuild).
-# 3. `docker login` the GCP Artifact Registry using
-#    `GCP_SERVICE_ACCOUNT_JSON` (already forwarded into ci-builder).
+# 3. `docker login` the Antithesis GCP Artifact Registry using
+#    `ANTITHESIS_GCP_SERVICE_ACCOUNT_JSON` (a service account scoped to
+#    `materialize-storage@molten-verve-216720.iam.gserviceaccount.com` —
+#    kept distinct from `GCP_SERVICE_ACCOUNT_JSON` which is used elsewhere
+#    for unrelated GCP integrations).
 # 4. Retag + push `materialized`, `antithesis-workload`, and
 #    `antithesis-config` to the Antithesis registry. Public images
 #    referenced by the compose (postgres, minio, kafka stack) stay on
@@ -41,12 +44,12 @@ echo "--- Building antithesis-flavored mzbuild images"
 bin/pyactivate -m ci.test.build
 
 echo "--- Authenticating to Antithesis registry"
-if [[ -z "${GCP_SERVICE_ACCOUNT_JSON:-}" ]]; then
-    echo "GCP_SERVICE_ACCOUNT_JSON is unset — pushing to the Antithesis registry will fail." >&2
+if [[ -z "${ANTITHESIS_GCP_SERVICE_ACCOUNT_JSON:-}" ]]; then
+    echo "ANTITHESIS_GCP_SERVICE_ACCOUNT_JSON is unset — pushing to the Antithesis registry will fail." >&2
     echo "Provision it as a Buildkite-agent env var (see bin/ci-builder env-forwarding)." >&2
     exit 1
 fi
-echo "$GCP_SERVICE_ACCOUNT_JSON" \
+echo "$ANTITHESIS_GCP_SERVICE_ACCOUNT_JSON" \
     | docker login -u _json_key --password-stdin "https://${ANTITHESIS_REGISTRY%%/*}"
 
 echo "--- Pushing Materialize-built images to the Antithesis registry"
