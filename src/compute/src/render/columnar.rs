@@ -56,11 +56,24 @@ where
     pub inner: Stream<'scope, T, Column<(D, T, R)>>,
 }
 
+impl<'scope, T, D, R> Clone for ColumnarCollection<'scope, T, D, R>
+where
+    T: Timestamp,
+    (D, T, R): Columnar,
+{
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
 /// A dataflow edge carrying records as either a row-based [`VecCollection`] or
 /// a [`ColumnarCollection`].
 ///
 /// Producers choose a variant; consumers must accept either. Mixing variants
 /// across a `concat` is rejected during the transition.
+#[derive(Clone)]
 pub enum CollectionEdge<'scope, T: RenderTimestamp> {
     /// Row-formatted collection. Today's default for every producer.
     Vec(VecCollection<'scope, T, Row, Diff>),
@@ -87,6 +100,42 @@ impl<'scope, T: RenderTimestamp> CollectionEdge<'scope, T> {
                 // the first producer emits this variant.
                 todo!("CollectionEdge::Columnar::enter_region")
             }
+        }
+    }
+
+    /// Leaves a sub-region back to the outer scope.
+    pub fn leave_region<'outer>(self, outer: Scope<'outer, T>) -> CollectionEdge<'outer, T> {
+        match self {
+            CollectionEdge::Vec(c) => CollectionEdge::Vec(c.leave_region(outer)),
+            CollectionEdge::Columnar(_) => {
+                todo!("CollectionEdge::Columnar::leave_region")
+            }
+        }
+    }
+
+    /// Extracts the [`VecCollection`] arm, panicking on the columnar arm.
+    ///
+    /// This is a transitional fence used at consumer sites that have not yet
+    /// been converted to handle the columnar arm natively. Each Phase-B
+    /// consumer PR removes one call.
+    pub fn expect_vec(self) -> VecCollection<'scope, T, Row, Diff> {
+        match self {
+            CollectionEdge::Vec(c) => c,
+            CollectionEdge::Columnar(_) => panic!(
+                "CollectionEdge::expect_vec called on columnar arm; consumer must convert first"
+            ),
+        }
+    }
+
+    /// Borrows the [`VecCollection`] arm mutably, panicking on the columnar arm.
+    ///
+    /// Transitional fence; see [`Self::expect_vec`].
+    pub fn expect_vec_mut(&mut self) -> &mut VecCollection<'scope, T, Row, Diff> {
+        match self {
+            CollectionEdge::Vec(c) => c,
+            CollectionEdge::Columnar(_) => panic!(
+                "CollectionEdge::expect_vec_mut called on columnar arm; consumer must convert first"
+            ),
         }
     }
 
