@@ -268,22 +268,25 @@ pub fn build_compute_dataflow(
 
                     // Note: For correctness, we require that sources only emit times advanced by
                     // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
-                    let (mut ok_stream, err_stream, token) =
-                        persist_source::persist_source::<DataflowErrorSer>(
-                            inner,
-                            *source_id,
-                            Arc::clone(&compute_state.persist_clients),
-                            &compute_state.txns_ctx,
-                            import.desc.storage_metadata.clone(),
-                            read_schema,
-                            dataflow.as_of.clone(),
-                            snapshot_mode,
-                            until.clone(),
-                            mfp.as_mut(),
-                            compute_state.dataflow_max_inflight_bytes(),
-                            start_signal.clone().into_send_future(),
-                            ErrorHandler::Halt("compute_import"),
-                        );
+                    let (mut ok_stream, err_stream, token) = persist_source::persist_source::<
+                        DataflowErrorSer,
+                        CapacityContainerBuilder<_>,
+                        CapacityContainerBuilder<_>,
+                    >(
+                        inner,
+                        *source_id,
+                        Arc::clone(&compute_state.persist_clients),
+                        &compute_state.txns_ctx,
+                        import.desc.storage_metadata.clone(),
+                        read_schema,
+                        dataflow.as_of.clone(),
+                        snapshot_mode,
+                        until.clone(),
+                        mfp.as_mut(),
+                        compute_state.dataflow_max_inflight_bytes(),
+                        start_signal.clone().into_send_future(),
+                        ErrorHandler::Halt("compute_import"),
+                    );
 
                     // If `mfp` is non-identity, we need to apply what remains.
                     // For the moment, assert that it is either trivial or `None`.

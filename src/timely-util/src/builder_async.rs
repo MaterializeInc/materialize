@@ -265,13 +265,13 @@ pub struct AsyncOutputHandle<T: Timestamp, CB: ContainerBuilder> {
     index: usize,
 }
 
-impl<T, C> AsyncOutputHandle<T, CapacityContainerBuilder<C>>
+impl<T, CB> AsyncOutputHandle<T, CB>
 where
     T: Timestamp,
-    C: Container + Clone + 'static,
+    CB: ContainerBuilder,
 {
     #[inline]
-    pub fn give_container(&self, cap: &Capability<T>, container: &mut C) {
+    pub fn give_container(&self, cap: &Capability<T>, container: &mut CB::Container) {
         let mut inner = self.inner.borrow_mut();
         inner.flush();
         inner.output.give(cap, container);
@@ -499,7 +499,7 @@ impl<'scope, T: Timestamp> OperatorBuilder<'scope, T> {
         pact: P,
     ) -> AsyncInputHandle<T, D, Disconnected>
     where
-        D: Container + Clone + 'static,
+        D: Container,
         P: ParallelizationContract<T, D>,
     {
         self.new_input_connection(stream, pact, Disconnected)
@@ -513,7 +513,7 @@ impl<'scope, T: Timestamp> OperatorBuilder<'scope, T> {
         connection: C,
     ) -> AsyncInputHandle<T, D, C>
     where
-        D: Container + Clone + 'static,
+        D: Container,
         P: ParallelizationContract<T, D>,
         C: InputConnection<T> + 'static,
     {
