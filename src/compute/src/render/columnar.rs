@@ -33,11 +33,11 @@
 #![allow(clippy::todo)]
 
 use columnar::Columnar;
-use differential_dataflow::VecCollection;
-use mz_repr::{Diff, Row};
+use differential_dataflow::{Data, VecCollection};
+use mz_repr::{DatumVec, DatumVecBorrow, Diff, Row};
 use mz_timely_util::columnar::Column;
 use mz_timely_util::operator::CollectionExt;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, Stream, StreamVec};
 use timely::progress::Timestamp;
 
 use crate::render::RenderTimestamp;
@@ -172,6 +172,44 @@ impl<'scope, T: RenderTimestamp> CollectionEdge<'scope, T> {
             }
         }
         CollectionEdge::Vec(differential_dataflow::collection::concatenate(scope, vec_arm))
+    }
+
+    /// Applies `logic` to each record in this edge, exposing the record as a
+    /// borrowed [`DatumVecBorrow`].
+    ///
+    /// `max_demand` bounds the number of columns decoded per row; pass
+    /// `usize::MAX` to decode all columns.
+    ///
+    /// This is the canonical unified entry point for "decoding consumers"
+    /// (operators that read [`mz_repr::Datum`]s from each row anyway). The
+    /// Vec arm uses [`DatumVec::borrow_with_limit`] on each [`Row`]; the
+    /// Columnar arm iterates the columnar batch directly without going
+    /// through an owned [`Row`].
+    pub fn flat_map_datums<D, I, L>(
+        self,
+        max_demand: usize,
+        mut logic: L,
+    ) -> StreamVec<'scope, T, I::Item>
+    where
+        I: IntoIterator<Item = (D, T, Diff)>,
+        D: Data,
+        L: for<'a> FnMut(&'a mut DatumVecBorrow<'_>, T, Diff) -> I + 'static,
+    {
+        match self {
+            CollectionEdge::Vec(c) => {
+                use timely::dataflow::operators::vec::Map;
+                let mut datums = DatumVec::new();
+                c.inner.flat_map(move |(v, t, d)| {
+                    logic(&mut datums.borrow_with_limit(&v, max_demand), t, d)
+                })
+            }
+            CollectionEdge::Columnar(_) => {
+                // Implementation will iterate `Column<(Row, T, Diff)>::borrow()`
+                // via the `Rows<_>::Index` impl (yielding `&RowRef`) and call
+                // `DatumVec::borrow_with_limit(row_ref, max_demand)` per row.
+                todo!("CollectionEdge::flat_map_datums: columnar arm")
+            }
+        }
     }
 
     /// Consolidates updates in the edge, preserving variant.

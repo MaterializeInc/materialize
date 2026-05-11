@@ -536,7 +536,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         &self,
         key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
         max_demand: usize,
-        mut logic: L,
+        logic: L,
     ) -> (
         StreamVec<'scope, T, I::Item>,
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
@@ -554,17 +554,11 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 .expect("Should have ensured during planning that this arrangement exists.")
                 .flat_map(val.as_ref(), max_demand, logic)
         } else {
-            use timely::dataflow::operators::vec::Map;
             let (oks, errs) = self
                 .collection
                 .clone()
                 .expect("Invariant violated: CollectionBundle contains no collection.");
-            let oks = oks.expect_vec();
-            let mut datums = DatumVec::new();
-            let oks = oks.inner.flat_map(move |(v, t, d)| {
-                logic(&mut datums.borrow_with_limit(&v, max_demand), t, d)
-            });
-            (oks, errs)
+            (oks.flat_map_datums(max_demand, logic), errs)
         }
     }
 
