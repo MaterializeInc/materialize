@@ -18,15 +18,11 @@ Defines the minimal topology needed to exercise Materialize under Antithesis:
   - workload: Python test driver with Antithesis SDK
 
 Usage:
-  bin/mzcompose --find antithesis run default        # bring up the cluster
-  bin/mzcompose --find antithesis run export-compose  # dump compose YAML
+  bin/mzcompose --find antithesis run default                       # bring up the cluster
+  bin/pyactivate test/antithesis/export-compose.py > config/...     # dump compose YAML
 """
 
-import sys
-
-import yaml
-
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.service import Service, ServiceConfig
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
@@ -76,13 +72,3 @@ def workflow_default(c: Composition) -> None:
     c.up("postgres-metadata", "minio", "redpanda")
     c.up("materialized")
     c.up("workload")
-
-
-def workflow_export_compose(c: Composition) -> None:
-    """Export the resolved docker-compose YAML to stdout.
-
-    Usage:
-      bin/mzcompose --find antithesis run export-compose > antithesis/config/docker-compose.yaml
-    """
-    # c.compose is the fully-resolved compose dict (mzbuild: replaced with image:)
-    yaml.dump(c.compose, sys.stdout, default_flow_style=False, sort_keys=False)
