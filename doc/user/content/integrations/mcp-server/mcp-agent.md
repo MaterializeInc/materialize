@@ -218,6 +218,13 @@ If a data product is missing, check that:
 
 ## Connect to the MCP server
 
+{{< note >}}
+Before connecting, make sure you've already created the agent role and granted
+it the necessary privileges (see [Required privileges](#required-privileges)).
+If you create a new service account or login role here without first setting up
+the role, you'll need to come back and grant the role afterward.
+{{< /note >}}
+
 ### Step 1. Get connection details
 
 {{< tabs >}}
@@ -242,8 +249,21 @@ If a data product is missing, check that:
      to generate a new app password and token for MCP Server. **Copy the app
      password and token** as they cannot be displayed again.
 
+     {{< note >}}
+     Creating a new app password in the Console also creates a new service
+     account. After creating it, go back to [Required
+     privileges](#required-privileges) and grant the agent role to the new
+     service account, otherwise it won't see any data products.
+     {{< /note >}}
+
 {{< /tab >}}
 {{< tab "Self-Managed" >}}
+
+{{< tip >}}
+If you're using the [Materialize Emulator](/get-started/install-materialize-emulator/),
+authenticate with a username and password. Unauthenticated connections won't
+have access to your data products.
+{{< /tip >}}
 
 1. You can connect using either an existing or new login role with password.
 
@@ -474,6 +494,40 @@ Read rows from a data product.
       {
         "type": "text",
         "text": "[\n  [\n    1001,\n    42,\n    \"shipped\",\n    \"2026-03-26T10:30:00Z\"\n  ]\n]"
+      }
+    ],
+    "isError": false
+  }
+}
+```
+
+### `query`
+
+{{< note >}}
+The `query` tool is **disabled by default** because it lets the agent run
+arbitrary SQL against data products. To enable it, set the
+`enable_mcp_agent_query_tool` system parameter to `true`.
+{{< /note >}}
+
+Execute a SQL `SELECT` statement against your data products. Useful for
+joining multiple data products together that are hosted on the same cluster.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `cluster` | string | Yes | Exact cluster name from the data product details. |
+| `sql_query` | string | Yes | PostgreSQL-compatible `SELECT` statement. |
+
+**Example response:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "[\n  [\n    \"42\",\n    \"shipped\"\n  ]\n]"
       }
     ],
     "isError": false

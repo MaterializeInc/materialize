@@ -57,6 +57,12 @@ tab")
 {{< /tab >}}
 {{< tab "Self-Managed" >}}
 
+{{< tip >}}
+If you're using the [Materialize Emulator](/get-started/install-materialize-emulator/),
+authenticate with a username and password. Unauthenticated connections won't
+have access to query the system catalog.
+{{< /tip >}}
+
 1. You can connect using either an existing or new login role with password.
 
    - To use an existing role, go to the next step.
