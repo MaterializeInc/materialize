@@ -7,9 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Antithesis config image: a FROM-scratch tarball holding the resolved
+# Antithesis config image: a FROM-scratch tarball holding the
 # docker-compose.yaml that Antithesis uses to bring up the system under
-# test. See mzbuild.yml for regeneration instructions.
+# test, plus a `.env` mapping `${MATERIALIZED_IMAGE}` /
+# `${ANTITHESIS_WORKLOAD_IMAGE}` to current mzbuild fingerprints. Compose
+# loads `.env` automatically at parse time. See mzbuild.yml for
+# regeneration instructions.
 
 FROM scratch
-COPY docker-compose.yaml /
+COPY docker-compose.yaml .env /

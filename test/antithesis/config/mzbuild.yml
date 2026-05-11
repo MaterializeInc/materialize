@@ -7,13 +7,20 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# FROM-scratch image holding the resolved docker-compose.yaml for the
-# Antithesis environment. Antithesis pulls this image and reads the compose
-# spec from `/docker-compose.yaml` to bring up the system under test.
+# FROM-scratch image holding the docker-compose.yaml + .env for the
+# Antithesis environment. Antithesis pulls this image and reads
+# `/docker-compose.yaml` to bring up the system under test; `.env` supplies
+# `${MATERIALIZED_IMAGE}` / `${ANTITHESIS_WORKLOAD_IMAGE}` at compose-parse
+# time.
 #
-# The compose file is generated from test/antithesis/mzcompose.py via
-# `bin/pyactivate test/antithesis/export-compose.py`. Re-run that whenever
-# the composition topology changes; CI verifies the committed copy is up to
-# date.
+# The compose YAML (committed, topology-only) is generated from
+# `test/antithesis/mzcompose.py` via `bin/pyactivate
+# test/antithesis/export-compose.py`. Regenerate when topology changes; CI
+# verifies the committed copy is up to date.
+#
+# `.env` (generated, gitignored) is written by
+# `bin/pyactivate test/antithesis/export-env.py` at build time. Its content
+# changes every materialized fingerprint shift, which is what propagates
+# fresh fingerprints into this image without touching the committed YAML.
 
 name: antithesis-config

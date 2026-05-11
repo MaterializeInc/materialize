@@ -209,7 +209,7 @@ services:
     restart: 'no'
     stop_grace_period: 120s
     platform: linux/amd64
-    image: ghcr.io/materializeinc/materialize/materialized:mzbuild-IIJDLZ77L7R7ZOGPATZYUWRESDF5LDN7
+    image: ${MATERIALIZED_IMAGE}
   materialized:
     hostname: materialized
     depends_on:
@@ -397,7 +397,7 @@ services:
       start_period: 600s
     stop_grace_period: 120s
     platform: linux/amd64
-    image: ghcr.io/materializeinc/materialize/materialized:mzbuild-IIJDLZ77L7R7ZOGPATZYUWRESDF5LDN7
+    image: ${MATERIALIZED_IMAGE}
   workload:
     depends_on:
       materialized:
@@ -418,7 +418,7 @@ services:
     - SCHEMA_REGISTRY_URL=http://schema-registry:8081
     - MZ_ANTITHESIS_CLUSTER=antithesis_cluster
     platform: linux/amd64
-    image: ghcr.io/materializeinc/materialize/antithesis-workload:mzbuild-XX2UEHO746TTSXP3JUOIMJTYD2WWEBLY
+    image: ${ANTITHESIS_WORKLOAD_IMAGE}
 networks: {}
 volumes:
   mzdata: null

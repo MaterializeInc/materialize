@@ -9,25 +9,45 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# build-antithesis.sh — antithesis-flavored build entry point.
+# build-antithesis.sh — antithesis-flavored build + Antithesis-registry push.
 #
-# Regenerates test/antithesis/config/docker-compose.yaml against the
-# current source tree before invoking ci.test.build, so that the
-# `antithesis-config` mzbuild image bakes in a compose YAML whose
-# materialized/antithesis-workload fingerprints match the fingerprints
-# this build is about to publish to GHCR.
-#
-# The committed YAML in test/antithesis/config/docker-compose.yaml is for
-# human review (PR diffs); its fingerprints can drift on every materialized
-# source change, and the staleness lint masks them by design. This script
-# is what guarantees Antithesis sees a self-consistent compose.
+# 1. Write `.env` so `antithesis-config` bakes in compose refs that point
+#    at the Antithesis GCP Artifact Registry (where we'll mirror to). The
+#    .env content is one of antithesis-config's mzbuild inputs, so the
+#    image fingerprint tracks the source it references — self-consistent.
+# 2. Run the standard `ci.test.build` to compile antithesis-flavored Rust
+#    binaries and build the docker images (pushed to GHCR via mzbuild).
+# 3. `docker login` the GCP Artifact Registry using
+#    `GCP_SERVICE_ACCOUNT_JSON` (already forwarded into ci-builder).
+# 4. Retag + push `materialized`, `antithesis-workload`, and
+#    `antithesis-config` to the Antithesis registry. Public images
+#    referenced by the compose (postgres, minio, kafka stack) stay on
+#    their upstream registries — Antithesis can reach those directly.
 
 set -euo pipefail
 
 : "${CI_ANTITHESIS:?build-antithesis.sh expects CI_ANTITHESIS=1}"
 
-echo "--- Regenerating test/antithesis/config/docker-compose.yaml"
-bin/pyactivate test/antithesis/export-compose.py \
-    > test/antithesis/config/docker-compose.yaml
+# GCP Artifact Registry path for Antithesis. Tags pushed under
+# $ANTITHESIS_REGISTRY/<name>:mzbuild-<fingerprint>.
+ANTITHESIS_REGISTRY="${ANTITHESIS_REGISTRY:-us-central1-docker.pkg.dev/molten-verve-216720/materialize-repository}"
 
-exec bin/pyactivate -m ci.test.build
+echo "--- Writing test/antithesis/config/.env (registry: $ANTITHESIS_REGISTRY)"
+bin/pyactivate test/antithesis/export-env.py \
+    --registry "$ANTITHESIS_REGISTRY" \
+    > test/antithesis/config/.env
+
+echo "--- Building antithesis-flavored mzbuild images"
+bin/pyactivate -m ci.test.build
+
+echo "--- Authenticating to Antithesis registry"
+if [[ -z "${GCP_SERVICE_ACCOUNT_JSON:-}" ]]; then
+    echo "GCP_SERVICE_ACCOUNT_JSON is unset — pushing to the Antithesis registry will fail." >&2
+    echo "Provision it as a Buildkite-agent env var (see bin/ci-builder env-forwarding)." >&2
+    exit 1
+fi
+echo "$GCP_SERVICE_ACCOUNT_JSON" \
+    | docker login -u _json_key --password-stdin "https://${ANTITHESIS_REGISTRY%%/*}"
+
+echo "--- Pushing Materialize-built images to the Antithesis registry"
+bin/pyactivate test/antithesis/push-antithesis.py --registry "$ANTITHESIS_REGISTRY"

@@ -12,9 +12,10 @@
 # check-antithesis-compose.sh — ensure test/antithesis/config/docker-compose.yaml
 # is in sync with test/antithesis/mzcompose.py.
 #
-# Fingerprint refs (`mzbuild-<fp>`) shift on every materialized code change,
-# so we mask them before diffing — we only want to catch composition
-# (services, ports, env, deps) drift, not transient fingerprint churn.
+# Image refs in the committed YAML are `${MATERIALIZED_IMAGE}` style
+# placeholders (resolved from `.env` at compose-parse time), so the file is
+# stable across materialized source changes. A plain diff catches any
+# composition (services/ports/env/deps) drift.
 
 set -euo pipefail
 
@@ -29,11 +30,7 @@ check_antithesis_compose() {
 
     bin/pyactivate test/antithesis/export-compose.py > "$generated"
 
-    # Mask `mzbuild-<FINGERPRINT>` so the diff is structural-only.
-    local mask='s/(mzbuild-)[A-Z0-9]+/\1FINGERPRINT/g'
-    if ! diff -u \
-        <(sed -E "$mask" "$committed") \
-        <(sed -E "$mask" "$generated"); then
+    if ! diff -u "$committed" "$generated"; then
         echo
         echo "$committed is out of sync with test/antithesis/mzcompose.py."
         echo "Regenerate with:"

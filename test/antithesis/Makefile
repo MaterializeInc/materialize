@@ -41,23 +41,28 @@ ifeq ($(RUNTIME),podman)
 endif
 
 COMPOSE_FILE := $(REPO_ROOT)/test/antithesis/config/docker-compose.yaml
-COMPOSE      := $(RUNTIME) compose -p $(PROJECT) -f $(COMPOSE_FILE)
+ENV_FILE     := $(REPO_ROOT)/test/antithesis/config/.env
+COMPOSE      := $(RUNTIME) compose -p $(PROJECT) --env-file $(ENV_FILE) -f $(COMPOSE_FILE)
 PSQL         := $(COMPOSE) exec materialized psql -h localhost -p 6875 -U materialize
 
 # mzbuild images we need built locally. Third-party images (postgres, minio,
-# redpanda) are pulled by `docker compose` from their upstream registries.
+# kafka, …) are pulled by `docker compose` from their upstream registries.
 MZBUILD_IMAGES := materialized antithesis-workload
 
 # ---------------------------------------------------------------------------
 # Build
 # ---------------------------------------------------------------------------
-.PHONY: build export-compose acquire-images
+.PHONY: build export-compose export-env acquire-images
 
-build: export-compose acquire-images
+build: export-compose export-env acquire-images
 
 export-compose:
 	cd $(REPO_ROOT) && bin/pyactivate test/antithesis/export-compose.py > $(COMPOSE_FILE)
 	@echo "Wrote $(COMPOSE_FILE)"
+
+export-env:
+	cd $(REPO_ROOT) && bin/pyactivate test/antithesis/export-env.py > $(ENV_FILE)
+	@echo "Wrote $(ENV_FILE)"
 
 acquire-images:
 	@for image in $(MZBUILD_IMAGES); do \
