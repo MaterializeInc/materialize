@@ -169,7 +169,7 @@ use crate::render::errors::DataflowErrorSer;
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp};
 use mz_row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
 
-mod columnar;
+pub(crate) mod columnar;
 pub mod context;
 pub(crate) mod errors;
 mod flat_map;
@@ -937,6 +937,7 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                 // We need to ensure that the raw collection exists, but do not have enough information
                 // here to cause that to happen.
                 let (oks, mut err) = bundle.collection.clone().unwrap();
+                let oks = oks.expect_vec();
                 self.insert_id(Id::Local(id), bundle);
                 let (oks_v, err_v) = variables.remove(&Id::Local(id)).unwrap();
 
@@ -992,6 +993,7 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
             for id in rec_ids.into_iter() {
                 let bundle = self.remove_id(Id::Local(id)).unwrap();
                 let (oks, err) = bundle.collection.unwrap();
+                let oks = oks.expect_vec();
                 self.insert_id(
                     Id::Local(id),
                     CollectionBundle::from_collections(
@@ -1317,8 +1319,11 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
             }
             Negate { input } => {
                 let input = expect_input(input);
-                let (oks, errs) = input.as_specific_collection(None, &self.config_set);
-                CollectionBundle::from_collections(oks.negate(), errs)
+                let (oks, errs) = input
+                    .collection
+                    .clone()
+                    .expect("Negate input must be an unarranged collection");
+                CollectionBundle::from_edge(oks.negate(), errs)
             }
             Threshold {
                 input,
@@ -1442,8 +1447,9 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                     .collection
                     .as_mut()
                     .expect("CollectionBundle invariant");
-                let stream = self.log_operator_hydration_inner(oks.inner.clone(), lir_id);
-                *oks = stream.as_collection();
+                let oks_vec = oks.expect_vec_mut();
+                let stream = self.log_operator_hydration_inner(oks_vec.inner.clone(), lir_id);
+                *oks_vec = stream.as_collection();
             }
         }
     }
