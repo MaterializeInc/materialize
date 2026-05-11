@@ -67,7 +67,12 @@ steps:
 
       - id: build-x86_64-antithesis
         label: ":rust: Build x86_64 (Antithesis)"
-        command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
+        # Regenerate the antithesis compose YAML before building so the
+        # `antithesis-config` image's fingerprint captures the same
+        # materialized fingerprint we're about to publish — otherwise
+        # Antithesis would try to pull a stale `materialized:mzbuild-…`
+        # whenever the committed YAML lagged behind source changes.
+        command: bin/ci-builder run stable ci/test/build-antithesis.sh
         inputs:
           - "*"
         depends_on: []
