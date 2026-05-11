@@ -671,8 +671,9 @@ fn builder_for_datatype(
                         fields.len()
                     )
                 }
-                let key_builder = StringBuilder::with_capacity(item_capacity, data_capacity);
+                let key_field = &fields[0];
                 let value_field = &fields[1];
+                let key_builder = StringBuilder::with_capacity(item_capacity, data_capacity);
                 let value_builder = ArrowColumn::new(
                     value_field.name().clone(),
                     value_field.is_nullable(),
@@ -681,9 +682,18 @@ fn builder_for_datatype(
                     item_capacity,
                     data_capacity,
                 )?;
+                // Use the names from the schema's entries struct rather than
+                // arrow-rs's defaults (`entries`/`keys`/`values`) — when the
+                // schema came from Iceberg (`key_value`/`key`/`value`) the
+                // RecordBatch validation rejects the mismatched DataType.
+                let field_names = MapFieldNames {
+                    entry: entries_field.name().clone(),
+                    key: key_field.name().clone(),
+                    value: value_field.name().clone(),
+                };
                 ColBuilder::MapBuilder(Box::new(
                     MapBuilder::with_capacity(
-                        Some(MapFieldNames::default()),
+                        Some(field_names),
                         key_builder,
                         value_builder,
                         item_capacity,
