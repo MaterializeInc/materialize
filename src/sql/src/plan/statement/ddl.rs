@@ -6954,7 +6954,7 @@ pub fn plan_alter_connection(
         Err(_) if if_exists => {
             scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
                 name: conn_name.to_string(),
-                object_type: ObjectType::Sink,
+                object_type: ObjectType::Connection,
             });
 
             return Ok(Plan::AlterNoop(AlterNoopPlan {
