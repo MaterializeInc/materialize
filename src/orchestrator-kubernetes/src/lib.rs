@@ -801,11 +801,11 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
 
                 let constraint = TopologySpreadConstraint {
                     label_selector: Some(ls),
-                    min_domains: if config.soft || availability_zones.is_some() {
-                        None
-                    } else {
-                        config.min_domains
-                    },
+                    min_domains: topology_spread_min_domains(
+                        config.soft,
+                        availability_zones.is_some(),
+                        config.min_domains,
+                    ),
                     max_skew: config.max_skew,
                     topology_key: "topology.kubernetes.io/zone".to_string(),
                     when_unsatisfiable: if config.soft {
@@ -1765,9 +1765,45 @@ impl Service for KubernetesService {
     }
 }
 
+/// Returns the `minDomains` value for a `TopologySpreadConstraint`.
+///
+/// `minDomains` must be suppressed when spread is soft (Kubernetes rejects
+/// `minDomains` with `ScheduleAnyway`) and when `availability_zones` is set
+/// (node affinity already constrains eligible domains; if `minDomains` exceeds
+/// the number of pinned zones the global minimum is treated as 0, causing all
+/// but one replica to remain pending with `maxSkew=1`).
+fn topology_spread_min_domains(
+    soft: bool,
+    az_pinned: bool,
+    min_domains: Option<i32>,
+) -> Option<i32> {
+    if soft || az_pinned {
+        None
+    } else {
+        min_domains
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[mz_ore::test]
+    fn topology_spread_min_domains_suppression() {
+        // min_domains is kept when neither soft nor az-pinned
+        assert_eq!(
+            topology_spread_min_domains(false, false, Some(3)),
+            Some(3)
+        );
+        // min_domains is None when not set regardless of flags
+        assert_eq!(topology_spread_min_domains(false, false, None), None);
+        // suppressed when soft (Kubernetes rejects minDomains with ScheduleAnyway)
+        assert_eq!(topology_spread_min_domains(true, false, Some(3)), None);
+        // suppressed when availability_zones pins to specific AZs
+        assert_eq!(topology_spread_min_domains(false, true, Some(3)), None);
+        // suppressed when both
+        assert_eq!(topology_spread_min_domains(true, true, Some(3)), None);
+    }
 
     #[mz_ore::test]
     fn k8s_quantity_base10_large() {
