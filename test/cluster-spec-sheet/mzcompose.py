@@ -67,7 +67,10 @@ MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = {
     "max_credit_consumption_rate": "1024",
 }
 
-VERSION = f"{MzVersion.parse_cargo()}--pr.g{os.getenv('BUILDKITE_COMMIT')}"
+
+def staging_version() -> str:
+    return f"{MzVersion.parse_cargo()}--pr.g{os.environ['BUILDKITE_COMMIT']}"
+
 
 SERVICES = [
     # Overridden below
@@ -2217,8 +2220,8 @@ def cloud_disable_enable_and_wait(
     disable_region(target.composition, hard=False)
 
     version_args = (
-        ["--version", VERSION]
-        if isinstance(target, CloudTarget) and target.is_staging
+        ["--version", target.version]
+        if isinstance(target, CloudTarget) and target.version is not None
         else []
     )
 
@@ -2421,6 +2424,7 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
             STAGING_USERNAME,
             STAGING_APP_PASSWORD or "",
             is_staging=True,
+            version=staging_version(),
         )
         mz = Mz(
             region=STAGING_REGION,
@@ -2671,12 +2675,18 @@ class CloudTarget(BenchTarget):
         username: str,
         app_password: str,
         is_staging: bool = False,
+        version: str | None = None,
     ) -> None:
         self.composition = composition
         self.username = username
         self.app_password = app_password
         self.new_app_password: str | None = None
         self.is_staging = is_staging
+        # Set for staging runs so `mz region enable --version <version>` pins the
+        # exact image built for this PR. Must be None for production (production
+        # doesn't accept a custom version).
+        self.version = version
+        assert (version is not None) == is_staging
 
     def dbbench_connection_flags(self) -> list[str]:
         assert self.new_app_password is not None
@@ -2914,7 +2924,9 @@ def run_scenario_envd_strong_scaling(
         if isinstance(target, CloudTarget):
             # We reset the cloud envd's core count in any case, to avoid accidentally burning a lot of money.
             print("--- Resetting Cloud environmentd CPUs to the default")
-            version_args = ["--version", VERSION] if target.is_staging else []
+            version_args = (
+                ["--version", target.version] if target.version is not None else []
+            )
             target.composition.run(
                 "mz",
                 "region",
