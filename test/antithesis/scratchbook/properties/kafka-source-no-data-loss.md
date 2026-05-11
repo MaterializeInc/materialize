@@ -37,6 +37,21 @@ The interesting window is mid-batch crash: a clusterd kill between the persist s
 
 None. No `assert_sometimes!` in the source path today (verified against `existing-assertions.md`). To implement: add an `assert_sometimes!` in the persist sink's `append_batches` after a successful append, plus a workload-side `assert_sometimes!` after the quiet-period catch-up check.
 
+## Implementation status
+
+Implemented 2026-05-11 (NONE envelope, workload-side) as `test/antithesis/workload/test/parallel_driver_kafka_none_envelope.py`. The driver shares a flight with `kafka-source-no-data-duplication` because both check the same dataflow:
+
+| Message | Type | Fires when |
+|---------|------|------------|
+| `"kafka source caught up to produced offsets after quiet period (none envelope)"` | `sometimes` | Once per invocation after `wait_for_catchup`; the liveness anchor |
+| `"kafka source: every produced payload is visible exactly once"` | `always` | Per produced payload, after catchup; carries `payload`, `present`, `observed_count` in details |
+
+The UPSERT-envelope arm of this property is covered by `upsert-key-reflects-latest-value`.
+
+The SUT-side `assert_sometimes!(persist_sink_appended_batch, ...)` anchor in `append_batches` is **deferred** — it would tighten replay anchoring but the workload check above is already specific enough that triage can localize a failure without it.
+
+New helper: `helper_none_source.py` — idempotent `CREATE SOURCE ... FORMAT TEXT INCLUDE PARTITION, OFFSET ENVELOPE NONE`, reusing the shared `antithesis_kafka_conn` connection from `helper_upsert_source.py`.
+
 ## Provenance
 
 Surfaced by: Data Integrity, Failure Recovery, Product Context.

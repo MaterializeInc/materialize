@@ -39,6 +39,15 @@ Aggregates over the source double-count. Joins fan out. Downstream MVs become wr
 
 The runtime `assert!` in upsert.rs already aborts on negative input diffs — it just doesn't surface as an Antithesis property. Wrapping each callsite with `assert_always!` (per-site unique message) gives Antithesis the signal it needs without changing semantics outside Antithesis (the underlying `assert!` already aborts on violation).
 
+## Implementation status
+
+Implemented 2026-05-11 in two halves:
+
+- **NONE envelope, workload-side**: `test/antithesis/workload/test/parallel_driver_kafka_none_envelope.py` runs `SELECT partition, "offset", COUNT(*) FROM none_text_src WHERE text LIKE prefix:% GROUP BY 1,2 HAVING COUNT(*) > 1` after each catchup and asserts the result is empty via `always("kafka source: no duplicate (partition, offset)", details)`. Up to five offending rows are carried in `details` for triage.
+- **UPSERT envelope, SUT-side**: the `assert_always!(diff.is_positive(), ...)` family added by `upsert-no-internal-panic` covers the "duplicate retraction on input" symptom directly inside the operator at the three call sites in `upsert.rs`, `upsert_continual_feedback.rs`, `upsert_continual_feedback_v2.rs`. The workload-side per-key dedup check is part of `upsert-key-reflects-latest-value`.
+
+Per-payload visibility (the inverse-pair `kafka-source-no-data-loss` check) shares the same driver — both run on the same produce + catchup cycle to maximize signal per invocation.
+
 ## Provenance
 
 Surfaced by: Data Integrity, Concurrency, Failure Recovery. Direct regression target for database-issues#9160.
