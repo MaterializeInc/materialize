@@ -655,8 +655,7 @@ fn merge_field_metadata_recursive(
             // Materialize (`key_value`/`key`/`value` vs `entries`/`keys`/`values`),
             // so name-based matching on the entries struct would drop the value
             // field's extension metadata. Merge the entries struct positionally.
-            let new_entries =
-                merge_map_entries_metadata(iceberg_entries, mz_entries.map(|f| f.as_ref()))?;
+            let new_entries = merge_map_entries_metadata(iceberg_entries, mz_entries)?;
             DataType::Map(Arc::new(new_entries), *sorted)
         }
         other => other.clone(),
