@@ -240,7 +240,7 @@ macro_rules! objects {
     }
 }
 
-objects!([v74, v75, v76, v77, v78], [v79, v80, v81, v82]);
+objects!([v74, v75, v76, v77, v78], [v79, v80, v81, v82, v83]);
 
 /// The current version of the `Catalog`.
 pub use mz_catalog_protos::CATALOG_VERSION;
@@ -260,6 +260,7 @@ mod v78_to_v79;
 mod v79_to_v80;
 mod v80_to_v81;
 mod v81_to_v82;
+mod v82_to_v83;
 
 /// Describes a single action to take during a migration from `V1` to `V2`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -414,6 +415,18 @@ async fn run_upgrade(
             )
             .await
         }
+        82 => {
+            // Uses the raw-bytes migration entry point because the migration
+            // needs to retract on-disk records by their exact bytes — see
+            // v82_to_v83.rs for the full reasoning.
+            run_versioned_upgrade_raw(
+                unopened_catalog_state,
+                version,
+                commit_ts,
+                v82_to_v83::upgrade,
+            )
+            .await
+        }
 
         // Up-to-date, no migration needed!
         CATALOG_VERSION => Ok((CATALOG_VERSION, commit_ts)),
@@ -466,6 +479,87 @@ async fn run_versioned_upgrade<V1: IntoStateUpdateKindJson, V2: IntoStateUpdateK
     updates.push(version_retraction);
     let version_insertion = (version_update_kind(next_version), Diff::ONE);
     updates.push(version_insertion);
+
+    // 4. Apply migration to catalog.
+    if matches!(unopened_catalog_state.mode, Mode::Writable) {
+        commit_ts = unopened_catalog_state
+            .compare_and_append(updates, commit_ts)
+            .await
+            .map_err(|e| e.unwrap_fence_error())?;
+    } else {
+        let ts = commit_ts;
+        let updates = updates
+            .into_iter()
+            .map(|(kind, diff)| StateUpdate { kind, ts, diff });
+        commit_ts = commit_ts.step_forward();
+        unopened_catalog_state.apply_updates_and_consolidate(updates)?;
+    }
+
+    // 5. Consolidate snapshot to remove old versions.
+    unopened_catalog_state.consolidate();
+
+    Ok((next_version, commit_ts))
+}
+
+/// Runs `migration_logic` on the contents of the current catalog with access to
+/// each record's raw on-disk JSON alongside its deserialized form, and returns
+/// raw `(StateUpdateKindJson, Diff)` updates that are written verbatim.
+///
+/// This is the byte-precise counterpart to [`run_versioned_upgrade`]. Use it
+/// when a migration needs to retract records by their *exact* on-disk bytes —
+/// e.g. when an earlier migration left records in a stale wire shape that
+/// `V1::Serialize` would no longer reproduce byte-equally from the deserialized
+/// value. Standard `MigrationAction::Update(old, new)` re-serializes `old`
+/// through `V1::Serialize`, which cannot reproduce stale shapes; retractions
+/// then fail to byte-match the on-disk record, and consolidation accumulates
+/// ghost records.
+///
+/// The migration function receives `Vec<(StateUpdateKindJson, V1)>` and returns
+/// `Vec<(StateUpdateKindJson, Diff)>`. Each returned update is appended to the
+/// catalog directly; the framework only adds the standard version-key
+/// retraction/insertion on top.
+///
+/// Returns the new version and upper.
+async fn run_versioned_upgrade_raw<V1, F>(
+    unopened_catalog_state: &mut UnopenedPersistCatalogState,
+    current_version: u64,
+    mut commit_ts: Timestamp,
+    migration_logic: F,
+) -> Result<(u64, Timestamp), CatalogError>
+where
+    V1: IntoStateUpdateKindJson,
+    F: FnOnce(Vec<(StateUpdateKindJson, V1)>) -> Vec<(StateUpdateKindJson, Diff)>,
+{
+    tracing::info!(current_version, "running versioned Catalog upgrade (raw)");
+
+    // 1. Pair each on-disk JSON record with its V1-deserialized form.
+    let snapshot: Vec<_> = unopened_catalog_state
+        .snapshot
+        .iter()
+        .map(|(kind, ts, diff)| {
+            soft_assert_eq_or_log!(
+                *diff,
+                Diff::ONE,
+                "snapshot is consolidated, ({kind:?}, {ts:?}, {diff:?})"
+            );
+            let typed = V1::try_from(kind.clone()).expect("invalid catalog data persisted");
+            (kind.clone(), typed)
+        })
+        .collect();
+
+    // 2. Run version-specific migration logic.
+    let mut updates = migration_logic(snapshot);
+    // Validate that we're not migrating an un-migratable collection.
+    for (update, _) in &updates {
+        if update.is_always_deserializable() {
+            panic!("migration to un-migratable collection: {update:?}\nall updates: {updates:?}");
+        }
+    }
+
+    // 3. Add the version-key retraction + insertion.
+    let next_version = current_version + 1;
+    updates.push((version_update_kind(current_version), Diff::MINUS_ONE));
+    updates.push((version_update_kind(next_version), Diff::ONE));
 
     // 4. Apply migration to catalog.
     if matches!(unopened_catalog_state.mode, Mode::Writable) {
