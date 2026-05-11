@@ -932,7 +932,7 @@ mod scalar {
                     for expr in [expr1, expr2] {
                         match expr {
                             MirScalarExpr::CallVariadic { func: f, exprs: es } if f == func => {
-                                exprs.extend(es.into_iter());
+                                exprs.extend(es);
                             }
                             expr => {
                                 exprs.push(expr);

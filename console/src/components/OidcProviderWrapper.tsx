@@ -12,7 +12,6 @@ import React, { useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { apiClient } from "~/api/apiClient";
-import Alert from "~/components/Alert";
 import LoadingScreen from "~/components/LoadingScreen";
 import { useAppConfig } from "~/config/useAppConfig";
 import { AuthProvider } from "~/external-library-wrappers/oidc";
@@ -58,16 +57,10 @@ export const OidcProviderWrapper = ({ children }: React.PropsWithChildren) => {
     return <LoadingScreen />;
   }
 
-  if (error) {
-    return (
-      <Alert
-        variant="error"
-        message={`Failed to initialize OIDC: ${error.message}`}
-      />
-    );
-  }
-
-  if (!oidcManager) {
+  // If OIDC isn't ready, render children without AuthProvider so password
+  // sign-in still works. Components that need OIDC must guard against
+  // `useAuth()` returning undefined.
+  if (error || !oidcManager) {
     return children;
   }
 

@@ -339,8 +339,7 @@ impl ShouldTerminateGracefully for FenceError {
 impl ShouldTerminateGracefully for StorageError {
     fn should_terminate_gracefully(&self) -> bool {
         match self {
-            StorageError::ResourceExhausted(_)
-            | StorageError::CollectionMetadataAlreadyExists(_)
+            StorageError::CollectionMetadataAlreadyExists(_)
             | StorageError::PersistShardAlreadyInUse(_)
             | StorageError::PersistSchemaEvolveRace { .. }
             | StorageError::PersistInvalidSchemaEvolve { .. }
@@ -394,6 +393,7 @@ impl ShouldTerminateGracefully for PeekError {
     fn should_terminate_gracefully(&self) -> bool {
         match self {
             PeekError::SinceViolation(_)
+            | PeekError::ReadHoldIdMismatch(_)
             | PeekError::InstanceMissing(_)
             | PeekError::CollectionMissing(_)
             | PeekError::ReplicaMissing(_) => false,

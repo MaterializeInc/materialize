@@ -140,13 +140,41 @@ SELECT * FROM mv1
 110
 
 
-# Cleanup
+# Test: dropping the target replica cascades to dependents of the implicitly-
+# dropped MV. See database-issues#11288 / SQL-266.
 
 statement ok
 DROP MATERIALIZED VIEW mv1;
 
 statement ok
 DROP MATERIALIZED VIEW mv2;
+
+statement ok
+CREATE MATERIALIZED VIEW mv_cascade IN CLUSTER test REPLICA r1 AS SELECT sum(a) AS s FROM t
+
+statement ok
+CREATE VIEW v_on_cascade AS SELECT s * 2 AS doubled FROM mv_cascade
+
+statement ok
+CREATE MATERIALIZED VIEW mv_on_cascade AS SELECT s + 100 AS plus100 FROM mv_cascade
+
+statement ok
+CREATE INDEX idx_on_cascade ON mv_cascade (s)
+
+statement ok
+DROP CLUSTER REPLICA test.r1
+
+statement error unknown catalog item 'mv_cascade'
+SELECT * FROM mv_cascade
+
+statement error unknown catalog item 'v_on_cascade'
+SELECT * FROM v_on_cascade
+
+statement error unknown catalog item 'mv_on_cascade'
+SELECT * FROM mv_on_cascade
+
+
+# Cleanup
 
 statement ok
 DROP TABLE t CASCADE

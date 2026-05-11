@@ -1,6 +1,6 @@
 ---
 source: src/compute-client/src/controller/error.rs
-revision: 681cdf1339
+revision: 4002e6039c
 ---
 
 # mz-compute-client::controller::error

@@ -51,7 +51,6 @@ members = [
     "src/license-keys",
     "src/lowertest",
     "src/lowertest-derive",
-    "src/lsp-server",
     "src/materialized",
     "src/materialized",
     "src/metabase",
@@ -176,7 +175,6 @@ default-members = [
     "src/license-keys",
     "src/lowertest",
     "src/lowertest-derive",
-    "src/lsp-server",
     "src/materialized",
     "src/metabase",
     "src/metrics",
@@ -258,7 +256,7 @@ resolver = "3"
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.94.1"
+rust-version = "1.95.0"
 
 [workspace.dependencies]
 ahash = { version = "0.8.12", default-features = false }
@@ -360,8 +358,12 @@ http-body-util = "0.1.3"
 httparse = "1.8.0"
 humantime = "2.3.0"
 hyper = { version = "1.9.0", features = ["http1", "server"] }
+# hyper 0.14 is used by AWS SDK. Used to override the DNS resolver used by the SDK,
+# which can only be done by constructing the HTTP Client
+hyper-0-14 = { package = "hyper", version = "0.14", features = ["client", "tcp"] }
 hyper-openssl = "0.10.2"
 hyper-util = "0.1.20"
+tower-service = "0.3.3"
 iceberg = "0.7.0"
 iceberg-catalog-rest = "0.7.0"
 imbl = { version = "7.0.0", features = ["serde"] }
@@ -397,7 +399,7 @@ num_enum = "0.7.6"
 open = "5.3.4"
 openssh = { version = "0.11.6", default-features = false, features = ["native-mux"] }
 openssh-mux-client = "0.17.9"
-openssl = { version = "0.10.78", features = ["vendored"] }
+openssl = { version = "0.10.79", features = ["vendored"] }
 openssl-probe = "0.1.6"
 openssl-sys = { version = "0.9.108", features = ["vendored"] }
 opentelemetry = { version = "0.31.0", features = ["trace"] }

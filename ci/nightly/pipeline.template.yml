@@ -1108,7 +1108,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=PreflightCheckRollback, "--seed=$BUILDKITE_JOB_ID"]
-        skip: "flaky due to database-issues#10095"
+        skip: "flaky due to https://linear.app/materializeinc/issue/DB-85"
 
       - id: checks-0dt-restart-entire-mz-forced-migrations
         label: "Checks 0dt restart of the entire Mz with forced migrations"
@@ -2115,7 +2115,7 @@ steps:
         agents:
           # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
           # queue: hetzner-aarch64-4cpu-8gb
-          queue: linux-aarch64
+          queue: linux-aarch64-medium
         sanitizer: skip
 
 

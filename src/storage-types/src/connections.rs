@@ -585,6 +585,7 @@ impl IcebergCatalogConnection<InlinedConnection> {
                 &storage_configuration.connection_context,
                 aws_ref.connection_id,
                 in_task,
+                ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
             )
             .await
             .with_context(|| {
@@ -1059,6 +1060,7 @@ impl KafkaConnection {
                         &storage_configuration.connection_context,
                         aws.connection_id,
                         in_task,
+                        ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
                     )
                     .await?,
             ),
@@ -2161,6 +2163,7 @@ impl MySqlConnection<InlinedConnection> {
                         &storage_configuration.connection_context,
                         aws_ref.connection_id,
                         in_task,
+                        ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
                     )
                     .await?,
             ),

@@ -615,6 +615,8 @@ async fn purify_create_sink(
                     &storage_configuration.connection_context,
                     aws_conn_id.clone(),
                     InTask::No,
+                    mz_storage_types::dyncfgs::ENFORCE_EXTERNAL_ADDRESSES
+                        .get(storage_configuration.config_set()),
                 )
                 .await
                 .map_err(|e| IcebergSinkPurificationError::AwsSdkContextError(Arc::new(e)))?;

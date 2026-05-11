@@ -1,6 +1,6 @@
 ---
 source: src/mz-debug/src/system_catalog_dumper.rs
-revision: 8963e3f04d
+revision: b6e9b7be14
 ---
 
 # mz-debug::system_catalog_dumper

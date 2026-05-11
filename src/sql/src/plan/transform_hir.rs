@@ -94,22 +94,14 @@ pub fn split_subquery_predicates(expr: &mut HirRelationExpr) -> Result<(), Recur
     }
 
     fn walk_scalar(expr: &mut HirScalarExpr) -> Result<(), RecursionLimitError> {
-        expr.try_visit_mut_post(&mut |expr| {
-            match expr {
-                HirScalarExpr::Exists(input, _name) | HirScalarExpr::Select(input, _name) => {
-                    walk_relation(input)?
-                }
-                _ => (),
-            }
-            Ok(())
-        })
+        expr.try_visit_direct_subqueries_mut(&mut walk_relation)
     }
 
     fn contains_subquery(expr: &HirScalarExpr) -> Result<bool, RecursionLimitError> {
         let mut found = false;
-        expr.visit_pre(&mut |expr| match expr {
-            HirScalarExpr::Exists(..) | HirScalarExpr::Select(..) => found = true,
-            _ => (),
+        expr.try_visit_direct_subqueries(|_| {
+            found = true;
+            Ok(())
         })?;
         Ok(found)
     }

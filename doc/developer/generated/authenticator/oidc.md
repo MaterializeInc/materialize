@@ -1,6 +1,6 @@
 ---
 source: src/authenticator/src/oidc.rs
-revision: 886e88a1bb
+revision: 0a20c581ea
 ---
 
 # mz-authenticator::oidc

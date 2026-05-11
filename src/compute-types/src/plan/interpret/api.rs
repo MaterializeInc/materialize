@@ -444,6 +444,7 @@ where
                     input,
                     input_mfp,
                     forms,
+                    strategy: _,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
@@ -750,6 +751,7 @@ where
                     input,
                     input_mfp,
                     forms,
+                    strategy: _,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;

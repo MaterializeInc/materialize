@@ -412,7 +412,7 @@ Field       | Type                 | Meaning
 `oid`       | [`oid`]              | A [PostgreSQL-compatible OID][`oid`] for the relation.
 `schema_id` | [`text`]             | The ID of the schema to which the relation belongs. Corresponds to [`mz_schemas.id`](/reference/system-catalog/mz_catalog/#mz_schemas).
 `name`      | [`text`]             | The name of the relation.
-`type`      | [`text`]             | The type of the relation: either `table`, `source`, `view`, or `materialized view`.
+`type`      | [`text`]             | The type of the relation: either `table`, `source`, `view`, or `materialized-view`.
 `owner_id`  | [`text`]             | The role ID of the owner of the relation. Corresponds to [`mz_roles.id`](/reference/system-catalog/mz_catalog/#mz_roles).
 `cluster_id`| [`text`]             | The ID of the cluster maintaining the source, materialized view, index, or sink. Corresponds to [`mz_clusters.id`](/reference/system-catalog/mz_catalog/#mz_clusters). `NULL` for other object types.
 `privileges`| [`mz_aclitem array`] | The privileges belonging to the relation.

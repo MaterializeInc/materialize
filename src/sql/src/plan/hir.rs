@@ -38,7 +38,9 @@ use mz_repr::*;
 use serde::{Deserialize, Serialize};
 
 use crate::plan::error::PlanError;
-use crate::plan::query::{EXECUTE_CAST_CONTEXT, ExprContext, execute_expr_context};
+use crate::plan::query::{
+    EXECUTE_CAST_CONTEXT, ExprContext, execute_expr_context, offset_into_value,
+};
 use crate::plan::typeconv::{self, CastContext, plan_cast};
 use crate::plan::{Params, QueryContext, QueryLifetime, StatementContext};
 
@@ -323,6 +325,8 @@ impl WindowExpr {
     }
 }
 
+/// Yields the scalars in `func`'s arguments, plus those in `partition_by`
+/// and `order_by`; does not descend into them.
 impl VisitChildren<HirScalarExpr> for WindowExpr {
     fn visit_children<F>(&self, mut f: F)
     where
@@ -455,6 +459,8 @@ impl WindowExprType {
     }
 }
 
+/// Dispatches to the inner `Value` / `Aggregate` variant's scalar children;
+/// `Scalar` window functions have no scalar children.
 impl VisitChildren<HirScalarExpr> for WindowExprType {
     fn visit_children<F>(&self, f: F)
     where
@@ -682,6 +688,8 @@ impl ValueWindowExpr {
     }
 }
 
+/// Yields `args` (the value-window function's argument expression);
+/// does not descend into it.
 impl VisitChildren<HirScalarExpr> for ValueWindowExpr {
     fn visit_children<F>(&self, mut f: F)
     where
@@ -868,6 +876,8 @@ impl AggregateWindowExpr {
     }
 }
 
+/// Yields the aggregate's argument expression (`aggregate_expr.expr`);
+/// does not descend into it.
 impl VisitChildren<HirScalarExpr> for AggregateWindowExpr {
     fn visit_children<F>(&self, mut f: F)
     where
@@ -1971,6 +1981,10 @@ impl HirRelationExpr {
         f(self, depth)
     }
 
+    /// WARNING: `VisitChildren<HirRelationExpr>::try_visit_children` is NOT a
+    /// drop-in replacement: in addition to the relation children visited here,
+    /// it also descends into every subquery (`Exists`/`Select`) reachable
+    /// through `self`'s scalar children — at any depth of scalar nesting.
     #[deprecated = "Use `VisitChildren<HirRelationExpr>::try_visit_children` instead."]
     pub fn visit1<'a, F, E>(&'a self, depth: usize, mut f: F) -> Result<(), E>
     where
@@ -2058,6 +2072,10 @@ impl HirRelationExpr {
         f(self, depth)
     }
 
+    /// WARNING: `VisitChildren<HirRelationExpr>::try_visit_mut_children` is NOT a
+    /// drop-in replacement: in addition to the relation children visited here,
+    /// it also descends into every subquery (`Exists`/`Select`) reachable
+    /// through `self`'s scalar children — at any depth of scalar nesting.
     #[deprecated = "Use `VisitChildren<HirRelationExpr>::try_visit_mut_children` instead."]
     pub fn visit1_mut<'a, F, E>(&'a mut self, depth: usize, mut f: F) -> Result<(), E>
     where
@@ -2120,11 +2138,17 @@ impl HirRelationExpr {
     }
 
     #[deprecated = "Use a combination of `Visit` and `VisitChildren` methods."]
-    /// Visits all scalar expressions within the sub-tree of the given relation.
+    /// Visits all scalar expressions directly held by relation nodes within the sub-tree of `self`.
     ///
-    /// The `depth` argument should indicate the subquery nesting depth of the expression,
-    /// which will be incremented when entering the RHS of a join or a subquery and
-    /// presented to the supplied function `f`.
+    /// Note: this does NOT descend into subqueries that may appear inside the visited
+    /// `HirScalarExpr`s (i.e., `HirScalarExpr::Exists` / `HirScalarExpr::Select`). The closure
+    /// `f` is invoked once per top-level scalar expression attached to a relation node, and it
+    /// is the closure's responsibility to recurse into any subqueries if desired.
+    ///
+    /// The `depth` argument is just a seed: it is the value passed to `f` for scalar expressions
+    /// at the root of `self`, and it is incremented by 1 when descending into the RHS of a
+    /// `Join` node (the only place this function increments it). It does NOT control or limit
+    /// recursion; passing `0` is the usual choice.
     pub fn visit_scalar_expressions<F, E>(&self, depth: usize, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&HirScalarExpr, usize) -> Result<(), E>,
@@ -2179,6 +2203,10 @@ impl HirRelationExpr {
 
     #[deprecated = "Use a combination of `Visit` and `VisitChildren` methods."]
     /// Like `visit_scalar_expressions`, but permits mutating the expressions.
+    ///
+    /// In particular, this also does NOT descend into subqueries inside the visited scalar
+    /// expressions, and `depth` is just a seed for the value passed to `f` (see
+    /// [`HirRelationExpr::visit_scalar_expressions`]).
     pub fn visit_scalar_expressions_mut<F, E>(&mut self, depth: usize, f: &mut F) -> Result<(), E>
     where
         F: FnMut(&mut HirScalarExpr, usize) -> Result<(), E>,
@@ -2265,9 +2293,16 @@ impl HirRelationExpr {
         });
     }
 
-    /// Replaces any parameter references in the expression with the
-    /// corresponding datum from `params`.
-    pub fn bind_parameters(
+    /// Replaces parameter references in the expression with the corresponding datum from `params`.
+    /// Additionally, it simplifies OFFSET clauses to constants after parameter binding, and checks
+    /// them for non-negativity.
+    ///
+    /// This walks the entire `HirRelationExpr` tree, including subqueries nested inside scalar
+    /// expressions: `visit_scalar_expressions_mut` covers the scalar expressions held directly
+    /// by relation nodes, and the corecursive call into
+    /// [`HirScalarExpr::bind_parameters_and_simplify_offset`] (made by the closure below) is
+    /// what descends into subqueries occurring inside those scalar expressions.
+    pub fn bind_parameters_and_simplify_offset(
         &mut self,
         scx: &StatementContext,
         lifetime: QueryLifetime,
@@ -2275,8 +2310,21 @@ impl HirRelationExpr {
     ) -> Result<(), PlanError> {
         #[allow(deprecated)]
         self.visit_scalar_expressions_mut(0, &mut |e: &mut HirScalarExpr, _: usize| {
-            e.bind_parameters(scx, lifetime, params)
+            e.bind_parameters_and_simplify_offset(scx, lifetime, params)
+        })?;
+
+        // OFFSET clauses in `expr` should become constants with the above binding of parameters.
+        // Let's check this and simplify them to literals.
+        self.try_visit_mut_pre(&mut |expr| {
+            if let HirRelationExpr::TopK { offset, .. } = expr {
+                let offset_value = offset_into_value(offset.take())?;
+                *offset = HirScalarExpr::literal(Datum::Int64(offset_value), SqlScalarType::Int64);
+            }
+            Ok::<(), PlanError>(())
         })
+        // (We don't need to simplify LIMIT clauses in `expr`, because we can handle non-constant
+        // expressions there. If they happen to be simplifiable to literals, then the optimizer will do
+        // so later.)
     }
 
     pub fn contains_parameters(&self) -> Result<bool, PlanError> {
@@ -2478,6 +2526,11 @@ impl CollectionPlan for HirRelationExpr {
     }
 }
 
+/// In addition to direct relation children of `self`, this also yields every
+/// subquery (`Exists` / `Select`) reachable through `self`'s scalar children,
+/// at any depth of scalar nesting. This is the asymmetry warned about on the
+/// [`VisitChildren`] trait; the matching impl on `HirScalarExpr` deliberately
+/// does not do the symmetric thing, to avoid mutual recursion.
 impl VisitChildren<Self> for HirRelationExpr {
     fn visit_children<F>(&self, mut f: F)
     where
@@ -2487,13 +2540,7 @@ impl VisitChildren<Self> for HirRelationExpr {
         // Exists or Select variants within HirScalarExpr trees
         // attached at the current node, and we want to visit them as well
         VisitChildren::visit_children(self, |expr: &HirScalarExpr| {
-            #[allow(deprecated)]
-            Visit::visit_post_nolimit(expr, &mut |expr| match expr {
-                HirScalarExpr::Exists(expr, _name) | HirScalarExpr::Select(expr, _name) => {
-                    f(expr.as_ref())
-                }
-                _ => (),
-            });
+            expr.visit_direct_subqueries(&mut f);
         });
 
         use HirRelationExpr::*;
@@ -2576,13 +2623,7 @@ impl VisitChildren<Self> for HirRelationExpr {
         // Exists or Select variants within HirScalarExpr trees
         // attached at the current node, and we want to visit them as well
         VisitChildren::visit_mut_children(self, |expr: &mut HirScalarExpr| {
-            #[allow(deprecated)]
-            Visit::visit_mut_post_nolimit(expr, &mut |expr| match expr {
-                HirScalarExpr::Exists(expr, _name) | HirScalarExpr::Select(expr, _name) => {
-                    f(expr.as_mut())
-                }
-                _ => (),
-            });
+            expr.visit_direct_subqueries_mut(&mut f);
         });
 
         use HirRelationExpr::*;
@@ -2666,12 +2707,7 @@ impl VisitChildren<Self> for HirRelationExpr {
         // Exists or Select variants within HirScalarExpr trees
         // attached at the current node, and we want to visit them as well
         VisitChildren::try_visit_children(self, |expr: &HirScalarExpr| {
-            Visit::try_visit_post(expr, &mut |expr| match expr {
-                HirScalarExpr::Exists(expr, _name) | HirScalarExpr::Select(expr, _name) => {
-                    f(expr.as_ref())
-                }
-                _ => Ok(()),
-            })
+            expr.try_visit_direct_subqueries(&mut f)
         })?;
 
         use HirRelationExpr::*;
@@ -2756,12 +2792,7 @@ impl VisitChildren<Self> for HirRelationExpr {
         // Exists or Select variants within HirScalarExpr trees
         // attached at the current node, and we want to visit them as well
         VisitChildren::try_visit_mut_children(self, |expr: &mut HirScalarExpr| {
-            Visit::try_visit_mut_post(expr, &mut |expr| match expr {
-                HirScalarExpr::Exists(expr, _name) | HirScalarExpr::Select(expr, _name) => {
-                    f(expr.as_mut())
-                }
-                _ => Ok(()),
-            })
+            expr.try_visit_direct_subqueries_mut(&mut f)
         })?;
 
         use HirRelationExpr::*;
@@ -2838,6 +2869,9 @@ impl VisitChildren<Self> for HirRelationExpr {
     }
 }
 
+/// Yields the scalars directly attached to relation nodes (e.g. `Map.scalars`,
+/// `Filter.predicates`, `Join.on`, `Reduce` aggregate args, `TopK.{limit,
+/// offset}`, `CallTable.exprs`); does not descend into them.
 impl VisitChildren<HirScalarExpr> for HirRelationExpr {
     fn visit_children<F>(&self, mut f: F)
     where
@@ -3170,16 +3204,74 @@ impl HirScalarExpr {
         }
     }
 
-    /// Replaces any parameter references in the expression with the
-    /// corresponding datum in `params`.
-    pub fn bind_parameters(
+    /// Visit every subquery, without descending into subqueries.
+    pub fn visit_direct_subqueries<F>(&self, mut f: F)
+    where
+        F: FnMut(&HirRelationExpr),
+    {
+        // The infallible variants of the post-walk are deprecated in favor
+        // of the limit-aware `try_visit_post`, but we have no error channel
+        // here (the surrounding signature is infallible, mirroring the
+        // infallible `VisitChildren::{visit_children, visit_mut_children}`
+        // impls that this helper is designed to be called from).
+        #[allow(deprecated)]
+        self.visit_post_nolimit(&mut |e| {
+            VisitChildren::<HirRelationExpr>::visit_children(e, &mut f);
+        });
+    }
+
+    /// Mutable counterpart of [`HirScalarExpr::visit_direct_subqueries`].
+    pub fn visit_direct_subqueries_mut<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&mut HirRelationExpr),
+    {
+        // See the comment on `visit_direct_subqueries` for why we use the
+        // deprecated `_nolimit` walk here.
+        #[allow(deprecated)]
+        self.visit_mut_post_nolimit(&mut |e| {
+            VisitChildren::<HirRelationExpr>::visit_mut_children(e, &mut f);
+        });
+    }
+
+    /// Fallible counterpart of [`HirScalarExpr::visit_direct_subqueries`].
+    pub fn try_visit_direct_subqueries<F, E>(&self, mut f: F) -> Result<(), E>
+    where
+        F: FnMut(&HirRelationExpr) -> Result<(), E>,
+        E: From<RecursionLimitError>,
+    {
+        self.try_visit_post(&mut |e| {
+            VisitChildren::<HirRelationExpr>::try_visit_children(e, &mut f)
+        })
+    }
+
+    /// Fallible mutable counterpart of [`HirScalarExpr::visit_direct_subqueries`].
+    pub fn try_visit_direct_subqueries_mut<F, E>(&mut self, mut f: F) -> Result<(), E>
+    where
+        F: FnMut(&mut HirRelationExpr) -> Result<(), E>,
+        E: From<RecursionLimitError>,
+    {
+        self.try_visit_mut_post(&mut |e| {
+            VisitChildren::<HirRelationExpr>::try_visit_mut_children(e, &mut f)
+        })
+    }
+
+    /// Replaces parameter references in the expression with the corresponding datum from `params`.
+    /// Additionally, it simplifies OFFSET clauses to constants after parameter binding, and checks
+    /// them for non-negativity.
+    ///
+    /// This handles subqueries nested inside `self` by calling back into
+    /// [`HirRelationExpr::bind_parameters_and_simplify_offset`] on each direct subquery; that
+    /// relation-level function in turn calls back here for the scalar expressions it holds, so
+    /// the two functions corecursively cover the entire HIR tree.
+    pub fn bind_parameters_and_simplify_offset(
         &mut self,
         scx: &StatementContext,
         lifetime: QueryLifetime,
         params: &Params,
     ) -> Result<(), PlanError> {
-        #[allow(deprecated)]
-        self.visit_recursively_mut(0, &mut |_: usize, e: &mut HirScalarExpr| {
+        // First, rewrite each `Parameter` node to a literal. This walks only the scalar tree;
+        // it does not yet descend into subqueries.
+        self.try_visit_mut_post(&mut |e: &mut HirScalarExpr| {
             if let HirScalarExpr::Parameter(n, name) = e {
                 let datum = match params.datums.iter().nth(*n - 1) {
                     None => return Err(PlanError::UnknownParameter(*n)),
@@ -3207,10 +3299,15 @@ impl HirScalarExpr {
                 .expect("checked in plan_params");
             }
             Ok(())
+        })?;
+        // Then descend into any subqueries; the relation-side `bind_parameters_and_simplify_offset`
+        // handles corecursion back into scalars.
+        self.try_visit_direct_subqueries_mut(|r: &mut HirRelationExpr| {
+            r.bind_parameters_and_simplify_offset(scx, lifetime, params)
         })
     }
 
-    /// Like [`HirScalarExpr::bind_parameters`], except that parameters are
+    /// Like [`HirScalarExpr::bind_parameters_and_simplify_offset`], except that parameters are
     /// replaced with the corresponding expression fragment from `params` rather
     /// than a datum.
     ///
@@ -3834,6 +3931,11 @@ impl HirScalarExpr {
     }
 }
 
+/// Yields the direct scalar children of `self`. Stops at `Exists` / `Select`:
+/// scalars inside subquery bodies are not surfaced. The asymmetry with
+/// `VisitChildren<Self> for HirRelationExpr` (which does see through scalars
+/// into subqueries) is what avoids the mutual recursion warned about on the
+/// [`VisitChildren`] trait.
 impl VisitChildren<Self> for HirScalarExpr {
     fn visit_children<F>(&self, mut f: F)
     where
@@ -3963,6 +4065,90 @@ impl VisitChildren<Self> for HirScalarExpr {
             }
             Exists(..) | Select(..) => (),
             Windowing(expr, _name) => expr.try_visit_mut_children(f)?,
+        }
+        Ok(())
+    }
+}
+
+/// Yields the immediate `HirRelationExpr` children of `self` (the bodies of
+/// `Exists` / `Select`); does not descend into them.
+impl VisitChildren<HirRelationExpr> for HirScalarExpr {
+    fn visit_children<F>(&self, mut f: F)
+    where
+        F: FnMut(&HirRelationExpr),
+    {
+        use HirScalarExpr::*;
+        match self {
+            Column(..)
+            | Parameter(..)
+            | Literal(..)
+            | CallUnmaterializable(..)
+            | CallUnary { .. }
+            | CallBinary { .. }
+            | CallVariadic { .. }
+            | If { .. }
+            | Windowing(..) => (),
+            Exists(expr, _name) | Select(expr, _name) => f(expr),
+        }
+    }
+
+    fn visit_mut_children<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&mut HirRelationExpr),
+    {
+        use HirScalarExpr::*;
+        match self {
+            Column(..)
+            | Parameter(..)
+            | Literal(..)
+            | CallUnmaterializable(..)
+            | CallUnary { .. }
+            | CallBinary { .. }
+            | CallVariadic { .. }
+            | If { .. }
+            | Windowing(..) => (),
+            Exists(expr, _name) | Select(expr, _name) => f(expr),
+        }
+    }
+
+    fn try_visit_children<F, E>(&self, mut f: F) -> Result<(), E>
+    where
+        F: FnMut(&HirRelationExpr) -> Result<(), E>,
+        E: From<RecursionLimitError>,
+    {
+        use HirScalarExpr::*;
+        match self {
+            Column(..)
+            | Parameter(..)
+            | Literal(..)
+            | CallUnmaterializable(..)
+            | CallUnary { .. }
+            | CallBinary { .. }
+            | CallVariadic { .. }
+            | If { .. }
+            | Windowing(..) => (),
+            Exists(expr, _name) | Select(expr, _name) => f(expr)?,
+        }
+        Ok(())
+    }
+
+    fn try_visit_mut_children<F, E>(&mut self, mut f: F) -> Result<(), E>
+    where
+        F: FnMut(&mut HirRelationExpr) -> Result<(), E>,
+        E: From<RecursionLimitError>,
+    {
+        use HirScalarExpr::*;
+        match self {
+            Column(..)
+            | Parameter(..)
+            | Literal(..)
+            | CallUnmaterializable(..)
+            | CallUnary { .. }
+            | CallBinary { .. }
+            | CallVariadic { .. }
+            | If { .. }
+            | Windowing(..) => (),
+            Exists(expr, _name) | Select(expr, _name) => f(expr)?,
         }
         Ok(())
     }

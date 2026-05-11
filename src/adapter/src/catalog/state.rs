@@ -549,6 +549,17 @@ impl CatalogState {
         let object_id = ObjectId::ClusterReplica((cluster_id, replica_id));
         if !seen.contains(&object_id) {
             seen.insert(object_id.clone());
+            // Materialized views that target this replica are implicitly
+            // dropped with it, so cascade to their dependents to avoid leaving
+            // dangling references.
+            let cluster = self.get_cluster(cluster_id);
+            for item_id in cluster.bound_objects() {
+                if let CatalogItem::MaterializedView(mv) = self.get_entry(item_id).item()
+                    && mv.target_replica == Some(replica_id)
+                {
+                    dependents.extend_from_slice(&self.item_dependents(*item_id, seen));
+                }
+            }
             dependents.push(object_id);
         }
         dependents
@@ -901,6 +912,31 @@ impl CatalogState {
         self.roles_by_name
             .get(role_name)
             .map(|id| &self.roles_by_id[id])
+    }
+
+    /// Case-insensitive role lookup for JWT group-to-role sync.
+    ///
+    /// Groups from JWTs are lowercased during extraction. SQL role names are
+    /// stored as-is (unquoted identifiers are lowercased by the parser, but
+    /// quoted identifiers preserve case). This method iterates all roles to
+    /// find a case-insensitive match.
+    pub fn try_get_role_by_name_case_insensitive(&self, role_name: &str) -> Option<&Role> {
+        let lower = role_name.to_lowercase();
+        self.roles_by_name
+            .iter()
+            .find(|(name, _)| name.to_lowercase() == lower)
+            .map(|(_, id)| &self.roles_by_id[id])
+    }
+
+    /// Returns a map from lowercased role name to `Role` for all roles.
+    ///
+    /// Use this when doing multiple case-insensitive lookups (e.g. iterating
+    /// JWT group claims) to avoid O(n) per lookup.
+    pub fn roles_by_lowercase_name(&self) -> BTreeMap<String, &Role> {
+        self.roles_by_name
+            .iter()
+            .map(|(name, id)| (name.to_lowercase(), &self.roles_by_id[id]))
+            .collect()
     }
 
     pub(super) fn get_role_auth(&self, id: &RoleId) -> &RoleAuth {

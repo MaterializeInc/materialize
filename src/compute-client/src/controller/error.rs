@@ -153,6 +153,9 @@ pub enum PeekError {
     /// The replica that the peek was issued against does not exist.
     #[error("replica does not exist: {0}")]
     ReplicaMissing(ReplicaId),
+    /// The caller-supplied read hold is for a different collection than the peek target.
+    #[error("read hold ID does not match peeked collection: {0}")]
+    ReadHoldIdMismatch(GlobalId),
     /// The read hold that was passed in is for a later time than the peek's timestamp.
     #[error("peek timestamp is not beyond the since of collection: {0}")]
     SinceViolation(GlobalId),

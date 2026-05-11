@@ -1602,6 +1602,33 @@ EXECUTE p6(2, 100, 200);
 11
 10
 
+# OFFSET in INSERT INTO ... SELECT
+statement ok
+PREPARE p7 AS INSERT INTO foo SELECT * FROM foo OFFSET $1;
+
+query error Invalid OFFSET clause: must not be negative, got \-1
+EXECUTE p7(-1);
+
+statement ok
+EXECUTE p7(1);
+
+query IT
+SELECT * FROM foo
+----
+0  zero
+1  one
+1  one
+2  two
+2  two
+
+# Prepared statement parameter in a subquery's OFFSET
+statement ok
+PREPARE p8 AS
+SELECT (SELECT (SELECT (SELECT (SELECT 1 OFFSET $1))))
+
+query error Invalid OFFSET clause: must not be negative, got \-1
+EXECUTE p8(-1);
+
 # Prepared statement parameter in LIMIT
 statement ok
 PREPARE fizz_paginated AS

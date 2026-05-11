@@ -471,6 +471,9 @@ impl Coordinator {
                     // Spawn a background task to perform the slow S3 preflight operations.
                     // This avoids blocking the coordinator's main task.
                     let connection_context = self.connection_context().clone();
+                    let enforce_external_addresses =
+                        mz_storage_types::dyncfgs::ENFORCE_EXTERNAL_ADDRESSES
+                            .get(self.controller.storage.config().config_set());
                     task::spawn(|| "copy_to_preflight", async move {
                         let result = mz_storage_types::sinks::s3_oneshot_sink::preflight(
                             connection_context,
@@ -478,6 +481,7 @@ impl Coordinator {
                             &s3_sink_connection.upload_info,
                             s3_sink_connection.connection_id,
                             sink_id,
+                            enforce_external_addresses,
                         )
                         .await
                         .map_err(AdapterError::from);
@@ -770,7 +774,10 @@ impl Coordinator {
         notice_tx: mpsc::UnboundedSender<AdapterNotice>,
     ) {
         // Early return if successful, otherwise cleanup any possible state.
-        match self.handle_startup_inner(&user, &conn_id, &client_ip).await {
+        match self
+            .handle_startup_inner(&user, &conn_id, &client_ip, &notice_tx)
+            .await
+        {
             Ok((role_id, superuser_attribute, session_defaults)) => {
                 let session_type = metrics::session_type_label_value(&user);
                 self.metrics
@@ -873,6 +880,7 @@ impl Coordinator {
         user: &User,
         _conn_id: &ConnectionId,
         client_ip: &Option<IpAddr>,
+        notice_tx: &mpsc::UnboundedSender<AdapterNotice>,
     ) -> Result<(RoleId, SuperuserAttribute, BTreeMap<String, OwnedVarInput>), AdapterError> {
         if self.catalog().try_get_role_by_name(&user.name).is_none() {
             // If the user has made it to this point, that means they have been fully authenticated.
@@ -909,8 +917,12 @@ impl Coordinator {
             .try_get_role_by_name(&user.name)
             .expect("created above");
         let role_id = role.id;
-
         let superuser_attribute = role.attributes.superuser;
+
+        // JWT group-to-role sync: reconcile role memberships with JWT group claims.
+        // Missing groups claim (None) → skip sync; empty (Some([])) → revoke all.
+        self.maybe_sync_jwt_groups(role_id, user.groups.as_deref(), notice_tx)
+            .await?;
 
         if role_id.is_user() && !ALLOW_USER_SESSIONS.get(self.catalog().system_config().dyncfgs()) {
             return Err(AdapterError::UserSessionsDisallowed);
@@ -1306,7 +1318,8 @@ impl Coordinator {
                     | Statement::RevokeRole(_)
                     | Statement::Update(_)
                     | Statement::ValidateConnection(_)
-                    | Statement::Comment(_) => {
+                    | Statement::Comment(_)
+                    | Statement::ExecuteUnitTest(_) => {
                         let txn_status = ctx.session_mut().transaction_mut();
 
                         // If we're not in an implicit transaction and we could generate exactly one

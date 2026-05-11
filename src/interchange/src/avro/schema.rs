@@ -260,9 +260,11 @@ fn validate_schema_2(
                     }
                 }
                 let next_node = schema.step(&f.schema);
-                columns.extend(
-                    get_named_columns(seen_avro_nodes, next_node, Some(&f.name))?.into_iter(),
-                );
+                columns.extend(get_named_columns(
+                    seen_avro_nodes,
+                    next_node,
+                    Some(&f.name),
+                )?);
                 if let Some(named_idx) = named_idx {
                     seen_avro_nodes.remove(&named_idx);
                 }

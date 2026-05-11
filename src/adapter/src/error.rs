@@ -265,6 +265,8 @@ pub enum AdapterError {
     ImpossibleTimestampConstraints {
         constraints: String,
     },
+    /// OIDC group-to-role sync failed and strict mode is enabled.
+    OidcGroupSyncFailed(String),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -725,6 +727,7 @@ impl AdapterError {
             }
             // similar to AbsurdSubscribeBounds
             AdapterError::ImpossibleTimestampConstraints { .. } => SqlState::DATA_EXCEPTION,
+            AdapterError::OidcGroupSyncFailed(_) => SqlState::INTERNAL_ERROR,
         }
     }
 
@@ -812,6 +815,22 @@ impl AdapterError {
         }
     }
 
+    pub fn concurrent_dependency_drop_from_collection_update_error(
+        e: compute_error::CollectionUpdateError,
+    ) -> Self {
+        use compute_error::CollectionUpdateError::*;
+        match e {
+            InstanceMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "cluster",
+                dependency_id: id.to_string(),
+            },
+            CollectionMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "collection",
+                dependency_id: id.to_string(),
+            },
+        }
+    }
+
     pub fn concurrent_dependency_drop_from_peek_error(
         e: mz_compute_client::controller::error::PeekError,
     ) -> AdapterError {
@@ -829,7 +848,9 @@ impl AdapterError {
                 dependency_kind: "replica",
                 dependency_id: id.to_string(),
             },
-            e @ SinceViolation(_) => AdapterError::internal("peek error", e),
+            e @ (ReadHoldIdMismatch(_) | SinceViolation(_)) => {
+                AdapterError::internal("peek error", e)
+            }
         }
     }
 
@@ -1121,6 +1142,9 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::ImpossibleTimestampConstraints { .. } => {
                 write!(f, "could not find a valid timestamp for the query")
+            }
+            AdapterError::OidcGroupSyncFailed(msg) => {
+                write!(f, "OIDC group-to-role sync failed: {msg}")
             }
         }
     }

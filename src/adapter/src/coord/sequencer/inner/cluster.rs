@@ -76,6 +76,7 @@ impl Staged for ClusterStage {
                     validity,
                     plan,
                     new_config,
+                    workload_class,
                     timeout_time,
                     on_timeout,
                 } = stage;
@@ -84,6 +85,7 @@ impl Staged for ClusterStage {
                         ctx.session(),
                         plan,
                         new_config,
+                        workload_class,
                         timeout_time,
                         on_timeout,
                         validity,
@@ -96,6 +98,7 @@ impl Staged for ClusterStage {
                         ctx.session(),
                         stage.plan.clone(),
                         stage.new_config.clone(),
+                        stage.workload_class.clone(),
                     )
                     .await
             }
@@ -295,6 +298,7 @@ impl Coordinator {
                             let span = Span::current();
                             let plan = plan.clone();
                             let duration = duration.clone().to_owned();
+                            let workload_class = new_config.workload_class.clone();
                             Ok(StageResult::Handle(mz_ore::task::spawn(
                                 || "Finalize Alter Cluster",
                                 async move {
@@ -303,6 +307,7 @@ impl Coordinator {
                                         validity,
                                         plan,
                                         new_config: new_config_managed,
+                                        workload_class,
                                     });
                                     Ok(Box::new(stage))
                                 }
@@ -317,6 +322,7 @@ impl Coordinator {
                                 validity,
                                 plan: plan.clone(),
                                 new_config: new_config_managed.clone(),
+                                workload_class: new_config.workload_class.clone(),
                                 timeout_time: Instant::now() + timeout.to_owned(),
                                 on_timeout: on_timeout.to_owned(),
                             }),
@@ -362,9 +368,9 @@ impl Coordinator {
             ..
         }: AlterClusterPlan,
         new_config: ClusterVariantManaged,
+        workload_class: Option<String>,
     ) -> Result<StageResult<Box<ClusterStage>>, AdapterError> {
         let cluster = self.catalog.get_cluster(cluster_id);
-        let workload_class = cluster.config.workload_class.clone();
         let mut ops = vec![];
 
         // Gather the ops to remove the non pending replicas
@@ -484,6 +490,7 @@ impl Coordinator {
         session: &Session,
         plan: AlterClusterPlan,
         new_config: ClusterVariantManaged,
+        workload_class: Option<String>,
         timeout_time: Instant,
         on_timeout: OnTimeoutAction,
         validity: PlanValidity,
@@ -529,6 +536,7 @@ impl Coordinator {
                                 validity,
                                 plan,
                                 new_config,
+                                workload_class,
                             });
                             Ok(Box::new(stage))
                         }
@@ -562,7 +570,8 @@ impl Coordinator {
                     Ok(Box::new(ClusterStage::Finalize(AlterClusterFinalize {
                         validity,
                         plan,
-                        new_config,
+                        new_config: new_config.clone(),
+                        workload_class: workload_class.clone(),
                     })))
                 } else {
                     // Check later
@@ -571,6 +580,7 @@ impl Coordinator {
                         validity,
                         plan,
                         new_config,
+                        workload_class,
                         timeout_time,
                         on_timeout,
                     });

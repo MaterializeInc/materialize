@@ -27,7 +27,7 @@ use aws_sdk_s3::error::{ProvideErrorMetadata, SdkError};
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart};
 use aws_types::region::Region;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use futures_util::stream::FuturesOrdered;
 use futures_util::{FutureExt, StreamExt};
 use mz_ore::bytes::SegmentedBytes;
@@ -443,20 +443,39 @@ impl Blob for S3Blob {
 
                 // Request the body.
                 let body_start = Instant::now();
-                let mut body_parts: Vec<Bytes> = Vec::new();
 
-                if let Some(len @ ..=-1) = object.content_length() {
-                    tracing::trace!(?len, "found invalid content-length");
-                    get_invalid_resp.inc();
-                }
+                // Coalesce all hyper chunks for this part into a single contiguous
+                // allocation. Pushing each SDK `Bytes` chunk separately into
+                // `SegmentedBytes` yields hundreds of segments per blob, which makes
+                // every parquet `ChunkReader::get_bytes` call O(N) and dominates CPU
+                // in `SegmentedBytes::advance`/`get_bytes` during decode. Copying
+                // also releases the hyper pool buffer so it doesn't stay pinned for
+                // the lifetime of the blob.
+                let mut buf = match object.content_length() {
+                    Some(len @ 1..) => BytesMut::with_capacity(usize::cast_from(
+                        u64::try_from(len).expect("positive integer"),
+                    )),
+                    Some(len @ ..=-1) => {
+                        tracing::trace!(?len, "found invalid content-length");
+                        get_invalid_resp.inc();
+                        BytesMut::new()
+                    }
+                    Some(0) | None => BytesMut::new(),
+                };
 
                 while let Some(data) = object.body.next().await {
-                    body_parts.push(data.context("s3 get body err")?);
+                    let data = data.context("s3 get body err")?;
+                    buf.extend_from_slice(&data);
                 }
 
                 let body_elapsed = body_start.elapsed();
                 min_body_elapsed.observe(body_elapsed, "s3 download part body");
 
+                let body_parts = if buf.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![buf.freeze()]
+                };
                 Ok::<_, anyhow::Error>(body_parts)
             };
 

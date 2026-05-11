@@ -416,5 +416,41 @@ ALTER CLUSTER foo set (SIZE 'scale=1,workers=4') WITH (WAIT UNTIL READY (TIMEOUT
 statement ok
 ALTER CLUSTER foo set (SIZE 'scale=1,workers=4') WITH (WAIT UNTIL READY (TIMEOUT '10ms', ON TIMEOUT 'ROLLBACK') )
 
+statement ok
+DROP CLUSTER foo
+
+# Regression: zero-downtime finalization (PR #28836) reads workload_class from
+# the catalog instead of the planned config, silently dropping the change.
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER wc_test SIZE 'scale=1,workers=1'
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER CLUSTER wc_test SET (SIZE 'scale=1,workers=2', WORKLOAD CLASS 'production') WITH (WAIT FOR '0s')
+----
+COMPLETE 0
+
+query T
+SELECT workload_class FROM mz_internal.mz_cluster_workload_classes WHERE id = (SELECT id FROM mz_clusters WHERE name = 'wc_test')
+----
+production
+
+simple conn=mz_system,user=mz_system
+ALTER CLUSTER wc_test SET (SIZE 'scale=1,workers=4', WORKLOAD CLASS NULL) WITH (WAIT UNTIL READY (TIMEOUT '0s', ON TIMEOUT 'COMMIT'))
+----
+COMPLETE 0
+
+query T
+SELECT workload_class FROM mz_internal.mz_cluster_workload_classes WHERE id = (SELECT id FROM mz_clusters WHERE name = 'wc_test')
+----
+NULL
+
+simple conn=mz_system,user=mz_system
+DROP CLUSTER wc_test
+----
+COMPLETE 0
+
 # Restore pristine server state
 reset-server

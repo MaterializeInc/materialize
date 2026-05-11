@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/side_effecting_func.rs
-revision: 17d21f7ae9
+revision: 13733326fb
 ---
 
 # mz-sql::plan::side_effecting_func

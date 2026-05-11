@@ -1,11 +1,10 @@
 ---
 name: mz-query-tracing
 description: >
-  Debug where time is spent during SQL execution using distributed tracing
-  (OpenTelemetry / Tempo). Trigger when the user asks "why is this query slow",
-  "where is the time going", "this SELECT takes forever", or wants a latency
-  breakdown for any SQL statement. Also trigger on mentions of tracing queries,
-  span analysis, Tempo traces, trace IDs, or opentelemetry_filter.
+  Debug SQL execution time via distributed tracing (OpenTelemetry / Tempo).
+  Trigger: "why is this query slow", "where is the time going",
+  "this SELECT takes forever", or latency breakdown for SQL statement. Also
+  tracing queries, span analysis, Tempo traces, trace IDs, opentelemetry_filter.
 ---
 
 # Query Tracing Skill

@@ -250,6 +250,68 @@ class IndexedViews(Generator):
             print(f"0 1 2 3 4 5 6 7 {i}")
 
 
+class ArrangementSizesHistory(Generator):
+    """Exercises the coordinator's periodic snapshot of
+    `mz_object_arrangement_sizes` at scale: creates many indexed views
+    and waits for a `collection_timestamp` that records every
+    `(replica_id, object_id)` pair in
+    `mz_object_arrangement_size_history`.
+
+    `COUNT` is capped to keep clusterd memory bounded — each index
+    holds ~30 MiB of arranged state per replica, so cluster memory grows
+    as `30 MiB × COUNT × N_replicas`. Raising `COUNT` requires also
+    shrinking per-index arrangement size (fewer/narrower rows in `t`).
+    """
+
+    # `quickstart` is the default cluster the indexes below land on; it is
+    # configured with two replicas in `setup()`. Each index produces one
+    # `(replica_id, object_id)` row per replica.
+    NUM_REPLICAS = 2
+
+    COUNT = min(Generator.COUNT, 100)
+    MAX_COUNT = 200
+
+    @classmethod
+    def body(cls) -> None:
+        expected_pairs = cls.COUNT * cls.NUM_REPLICAS
+        index_names = ", ".join(f"'i{i}'" for i in cls.all())
+
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
+        # Tighten the collection cadence so the test doesn't wait an hour
+        # for the default 1h interval.
+        print("$ postgres-execute connection=mz_system")
+        print("ALTER SYSTEM SET arrangement_size_history_collection_interval = '5s';")
+
+        # 30K rows × ~1 KiB → ~30 MiB arrangement per object, comfortably
+        # above the 10 MiB floor in `mz_object_arrangement_sizes`.
+        print("> CREATE TABLE t (f0 INTEGER, f1 TEXT);")
+        print(
+            "> INSERT INTO t SELECT g, repeat('x', 1024) "
+            "FROM generate_series(1, 30000) g;"
+        )
+
+        for i in cls.all():
+            print(f"> CREATE VIEW v{i} AS SELECT f0 + {i} AS k, f1 FROM t;")
+            print(f"> CREATE DEFAULT INDEX i{i} ON v{i}")
+
+        # `>` retries until the result matches; this waits for a
+        # `collection_timestamp` whose row count for our indexes equals
+        # `COUNT × N_replicas`, i.e. every expected pair was recorded at
+        # the same snapshot.
+        print(
+            "> SELECT EXISTS ("
+            "  SELECT 1"
+            "    FROM mz_internal.mz_object_arrangement_size_history h"
+            "    JOIN mz_objects o ON o.id = h.object_id"
+            f"  WHERE o.name IN ({index_names})"
+            "   GROUP BY h.collection_timestamp"
+            f"  HAVING COUNT(*) = {expected_pairs}"
+            ")"
+        )
+        print("true")
+
+
 class KafkaTopics(Generator):
     COUNT = min(Generator.COUNT, 20)  # CREATE SOURCE is slow
 

@@ -15,8 +15,8 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -y install -
 COPY protobuf-bin /usr/local/bin/
 COPY protobuf-include /usr/local/include
 RUN chmod +x /usr/local/bin/protoc
-ENV PROTOC /usr/local/bin/protoc
-ENV PROTOC_INCLUDE /usr/local/include
+ENV PROTOC=/usr/local/bin/protoc
+ENV PROTOC_INCLUDE=/usr/local/include
 # Install libduckdb.so that was downloaded
 COPY duckdb-download/*/*/libduckdb.so /usr/local/lib/
 RUN ldconfig

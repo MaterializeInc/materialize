@@ -119,6 +119,12 @@ name
 renamed_mz_data
 renamed_mz_data_tbl
 
+# Verify the table-from-source's create_sql references the renamed source, not
+# the old name. Regression test for the create_stmt_rename_refs no-op bug where
+# CreateTableFromSource's source field was not rewritten on rename.
+> SELECT create_sql LIKE '%"renamed_mz_data"%' AND create_sql NOT LIKE '%"mz_data"%' FROM mz_tables WHERE name = 'renamed_mz_data_tbl'
+true
+
 # Test that data can be selected from the source after renaming.
 > SELECT * FROM renamed_mz_data_tbl
 a  b
@@ -919,3 +925,7 @@ materialize.foo_bar.sink1    "CREATE SINK materialize.foo_bar.sink1 IN CLUSTER <
 name                                create_sql
 ---------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.foo_bar.sink1    "CREATE SINK materialize.foo_bar.sink1\nIN CLUSTER <VARIABLE_OUTPUT>\nFROM materialize.foo_bar.mz_data_tbl\nINTO\n    KAFKA CONNECTION materialize.public.kafka_conn (TOPIC = 'testdrive-snk1-rename-schema-${testdrive.seed}')\nFORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION materialize.public.csr_conn\nENVELOPE DEBEZIUM;"
+
+# Verify the table-from-source's create_sql references the renamed schema.
+> SELECT create_sql LIKE '%"foo_bar"."mz_data"%' FROM mz_tables WHERE name = 'mz_data_tbl' AND schema_id = (SELECT id FROM mz_schemas WHERE name = 'foo_bar')
+true

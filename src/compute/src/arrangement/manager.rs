@@ -210,7 +210,7 @@ where
     }
 
     fn get_physical_compaction(&mut self) -> AntichainRef<'_, Self::Time> {
-        self.trace.get_logical_compaction()
+        self.trace.get_physical_compaction()
     }
 
     fn map_batches<F: FnMut(&Self::Batch)>(&self, f: F) {

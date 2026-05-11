@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/config/backend.rs
-revision: aa7a1afd31
+revision: 0a20c581ea
 ---
 
 # adapter::config::backend

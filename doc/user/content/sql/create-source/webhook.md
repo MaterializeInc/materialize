@@ -318,7 +318,7 @@ Webhook sources apply the following limits to received requests:
 
 * The maximum size of the request body is **`2MB`**. Requests larger than this
   will fail with `413 Payload Too Large`.
-* The rate of concurrent requests/second across **all** webhook sources
+* The maximum number of concurrent requests across **all** webhook sources
   is **500**. Trying to connect when the server is at capacity will fail with
   `429 Too Many Requests`.
 * Requests that contain a header name specified more than once will be rejected

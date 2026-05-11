@@ -146,3 +146,45 @@ sink
 source
 table
 view
+
+# ── BuiltinLog / introspection entity tests ───────────────────────────────────
+
+# Spot-check: dataflow_operator_per_worker has the expected relation and key.
+
+query TTT
+SELECT name, relation, properties->>'primary_key'
+FROM mz_internal.mz_ontology_entity_types
+WHERE name = 'dataflow_operator_per_worker'
+----
+dataflow_operator_per_worker  mz_introspection.mz_dataflow_operators_per_worker  ["id","worker_id"]
+
+# Spot-check: compute_error_per_worker has a measures link to compute_export_per_worker.
+
+query TTT
+SELECT name, source_entity, target_entity
+FROM mz_internal.mz_ontology_link_types
+WHERE source_entity = 'compute_error_per_worker'
+----
+errors_in  compute_error_per_worker  compute_export_per_worker
+
+# Spot-check: export_id on compute_frontier_per_worker is annotated as GlobalId.
+
+query TT
+SELECT entity_type, semantic_type
+FROM mz_internal.mz_ontology_properties
+WHERE entity_type = 'compute_frontier_per_worker' AND column_name = 'export_id'
+----
+compute_frontier_per_worker  GlobalId
+
+# All log link targets are entities that exist in entity_types.
+
+query I
+SELECT count(*)
+FROM mz_internal.mz_ontology_link_types l
+WHERE l.source_entity LIKE '%_per_worker'
+  AND NOT EXISTS (
+      SELECT 1 FROM mz_internal.mz_ontology_entity_types e
+      WHERE e.name = l.target_entity
+  )
+----
+0
