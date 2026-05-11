@@ -32,6 +32,7 @@ from pathlib import Path
 
 from materialize import spawn, ui
 from materialize.mzbuild import Repository
+from materialize.xcompile import Arch
 
 # Images Antithesis needs to be able to pull:
 #   - antithesis-config holds the docker-compose.yaml + .env Antithesis runs.
@@ -53,7 +54,7 @@ def main() -> None:
     # produced (materialize/<name>:mzbuild-<fp>, not the GHCR-prefixed one).
     repo = Repository(
         Path("."),
-        arch="x86_64",
+        arch=Arch.X86_64,
         antithesis=True,
         image_registry="materialize",
     )

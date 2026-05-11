@@ -39,6 +39,7 @@ import sys
 from pathlib import Path
 
 from materialize.mzbuild import Repository
+from materialize.xcompile import Arch
 
 # Mapping of `.env` variable name → mzbuild image name. Keep in sync with
 # MATERIALIZE_IMAGES in export-compose.py.
@@ -60,7 +61,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    repo = Repository(Path("."), arch="x86_64", antithesis=True)
+    repo = Repository(Path("."), arch=Arch.X86_64, antithesis=True)
     images = [repo.images[name] for name in ENV_VARS.values()]
     deps = repo.resolve_dependencies(images)
 

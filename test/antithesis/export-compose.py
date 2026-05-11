@@ -51,6 +51,7 @@ import yaml
 from materialize import MZ_ROOT
 from materialize.mzbuild import Repository
 from materialize.mzcompose.composition import Composition
+from materialize.xcompile import Arch
 
 # mzbuild image names that we publish under our fingerprint. Each maps to
 # the compose env-var placeholder; `.env` (export-env.py) supplies the
@@ -194,7 +195,7 @@ def main() -> None:
     # binding. We do our own mzbuild→image substitution below and don't
     # need fingerprint resolution since Materialize-built images become
     # `${...}` placeholders.
-    repo = Repository(Path("."), arch="x86_64", antithesis=True)
+    repo = Repository(Path("."), arch=Arch.X86_64, antithesis=True)
     c = Composition(repo, "antithesis", munge_services=False)
 
     for svc in c.compose["services"].values():
