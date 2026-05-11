@@ -22,5 +22,12 @@
 # `bin/pyactivate test/antithesis/export-env.py` at build time. Its content
 # changes every materialized fingerprint shift, which is what propagates
 # fresh fingerprints into this image without touching the committed YAML.
+#
+# `publish: false` keeps the standard `ci.test.build` flow from trying to
+# build this image — it would fail on `COPY docker-compose.yaml .env /`
+# because `.env` is gitignored and only `build-antithesis.sh` writes it.
+# The antithesis nightly step builds and pushes the image directly via
+# push-antithesis.py.
 
 name: antithesis-config
+publish: false
