@@ -169,6 +169,7 @@ use crate::render::errors::DataflowErrorSer;
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp};
 use mz_row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
 
+mod columnar;
 pub mod context;
 pub(crate) mod errors;
 mod flat_map;
