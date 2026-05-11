@@ -1,20 +1,35 @@
-# Build / run helper for the Materialize Antithesis harness.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
 #
-# Usage:
-#   make build                 # build every local image
-#   make up                    # export compose, build, bring up the stack
-#   make test                  # smoke test against the running cluster
-#   make push                  # push locally-built images to Antithesis registry
-#   make down                  # tear down (preserves volumes)
-#   make clean                 # tear down + remove volumes + images
-#   make smoke                 # full cycle: build → up → test
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Local-dev helper for the Materialize Antithesis harness.
+#
+# Antithesis images ship via the standard mzbuild → GHCR flow; CI publishes
+# the same images CI publishes for everything else, fingerprint-tagged with
+# `mzbuild-<fp>`. Locally, we just acquire the mzbuild images, regenerate
+# the compose YAML, and let `docker compose` find them by their canonical
+# spec.
+#
+# Targets:
+#   make build    # regenerate compose YAML, acquire local mzbuild images
+#   make up       # build + bring up the stack
+#   make down     # tear down (preserves volumes)
+#   make smoke    # build + up + smoke test
+#   make test     # smoke test against a running stack
+#   make clean    # tear down + remove volumes
 
 SHELL := /usr/bin/env bash
 .SHELLFLAGS := -eu -o pipefail -c
 
-PROJECT   := materialize
+PROJECT   := materialize-antithesis
 REPO_ROOT := $(realpath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
 
+# Pick podman if available, else docker.
 ifndef RUNTIME
   RUNTIME := $(shell command -v podman >/dev/null 2>&1 && echo podman || (command -v docker >/dev/null 2>&1 && echo docker || echo none))
 endif
@@ -25,104 +40,55 @@ ifeq ($(RUNTIME),podman)
   export MZ_DEV_CI_BUILDER_RUNTIME := podman
 endif
 
-COMPOSE := $(RUNTIME) compose -p $(PROJECT) -f config/docker-compose.yaml
-PSQL    := $(COMPOSE) exec materialized psql -h localhost -p 6875 -U materialize
+COMPOSE_FILE := $(REPO_ROOT)/test/antithesis/config/docker-compose.yaml
+COMPOSE      := $(RUNTIME) compose -p $(PROJECT) -f $(COMPOSE_FILE)
+PSQL         := $(COMPOSE) exec materialized psql -h localhost -p 6875 -U materialize
 
-REGISTRY      ?= us-central1-docker.pkg.dev
-REGISTRY_PATH ?= /molten-verve-216720/materialize-repository
+# mzbuild images we need built locally. Third-party images (postgres, minio,
+# redpanda) are pulled by `docker compose` from their upstream registries.
+MZBUILD_IMAGES := materialized antithesis-workload
 
 # ---------------------------------------------------------------------------
-# Export — generate the resolved docker-compose YAML for Antithesis.
+# Build
 # ---------------------------------------------------------------------------
-.PHONY: export-compose
+.PHONY: build export-compose acquire-images
+
+build: export-compose acquire-images
+
 export-compose:
-	cd $(REPO_ROOT) && $(REPO_ROOT)/bin/pyactivate test/antithesis/export-compose.py > test/antithesis/config/docker-compose.yaml
-	@echo "Wrote test/antithesis/config/docker-compose.yaml"
+	cd $(REPO_ROOT) && bin/pyactivate test/antithesis/export-compose.py > $(COMPOSE_FILE)
+	@echo "Wrote $(COMPOSE_FILE)"
 
-# ---------------------------------------------------------------------------
-# Build — build images that don't have public equivalents.
-# ---------------------------------------------------------------------------
-LOCAL_IMAGES  := materialized workload config
-BUILD_TARGETS := $(LOCAL_IMAGES:%=build-%)
-
-.PHONY: build $(BUILD_TARGETS) build-builder
-build: export-compose $(BUILD_TARGETS)
-
-build-builder:
-	cd $(REPO_ROOT) && $(REPO_ROOT)/bin/ci-builder build stable --load
-	@tag=$$(cd $(REPO_ROOT) && $(REPO_ROOT)/bin/ci-builder tag stable); \
-	  echo "Tagging materialize/ci-builder:$$tag -> $(PROJECT)-builder:latest"; \
-	  $(RUNTIME) tag "materialize/ci-builder:$$tag" $(PROJECT)-builder:latest
-
-build-materialized: build-builder
-	cd $(REPO_ROOT) && $(REPO_ROOT)/bin/mzimage acquire materialized --antithesis
-	@# Tag the mzbuild output to the name the compose file expects
-	@img=$$($(RUNTIME) images --format '{{.Repository}}:{{.Tag}}' \
-	  | grep 'materialized:mzbuild-' | head -1); \
-	  echo "Tagging $$img -> $(PROJECT)-materialized:latest"; \
-	  $(RUNTIME) tag "$$img" $(PROJECT)-materialized:latest
-
-build-workload:
-	$(RUNTIME) build \
-	  --platform linux/amd64 \
-	  -t $(PROJECT)-workload:latest \
-	  $(REPO_ROOT)/test/antithesis/workload
-
-build-config: export-compose
-	$(RUNTIME) build \
-	  --platform linux/amd64 \
-	  -t $(PROJECT)-config:latest \
-	  config
+acquire-images:
+	@for image in $(MZBUILD_IMAGES); do \
+	  echo "--- Acquiring $$image (--antithesis)"; \
+	  cd $(REPO_ROOT) && bin/mzimage acquire "$$image" --antithesis; \
+	done
 
 # ---------------------------------------------------------------------------
 # Up / Down
 # ---------------------------------------------------------------------------
-.PHONY: up
-up: export-compose build
+.PHONY: up down clean
+
+up: build
 	$(COMPOSE) up -d
 
-.PHONY: down
 down:
 	$(COMPOSE) down
 
+clean: down
+	$(COMPOSE) down -v --remove-orphans 2>/dev/null || true
+
 # ---------------------------------------------------------------------------
-# Test — quick smoke test against the running cluster
+# Test
 # ---------------------------------------------------------------------------
-.PHONY: test
+.PHONY: test smoke
+
 test:
 	$(PSQL) -c "CREATE TABLE IF NOT EXISTS smoke_test (k INT, v TEXT)"
 	$(PSQL) -c "INSERT INTO smoke_test VALUES (1, 'hello'), (2, 'world')"
 	$(PSQL) -c "SELECT * FROM smoke_test ORDER BY k"
 	$(PSQL) -c "DROP TABLE smoke_test"
 
-# ---------------------------------------------------------------------------
-# Push — tag local images and push to the Antithesis registry
-# ---------------------------------------------------------------------------
-.PHONY: push
-push:
-	@$(RUNTIME) images --format '{{.Repository}}:{{.Tag}}' \
-	  | grep ':latest$$' | grep '^\(localhost/\)\?$(PROJECT)-' \
-	  | grep -v '$(PROJECT)-builder' \
-	  | while read item; do \
-	      nametag="$${item#localhost/}"; \
-	      name="$${nametag%:*}"; \
-	      remote="$(REGISTRY)$(REGISTRY_PATH)/$${name}:latest"; \
-	      echo "Pushing $${item} -> $${remote}"; \
-	      $(RUNTIME) tag "$${item}" "$${remote}" || exit 1; \
-	      $(RUNTIME) push "$${remote}" || exit 1; \
-	  done
-
-# ---------------------------------------------------------------------------
-# Clean
-# ---------------------------------------------------------------------------
-.PHONY: clean
-clean: down
-	$(COMPOSE) down -v --remove-orphans 2>/dev/null || true
-	-$(RUNTIME) rmi $$($(RUNTIME) images --format '{{.Repository}}:{{.Tag}}' | grep '^$(PROJECT)-' || true) 2>/dev/null
-
-# ---------------------------------------------------------------------------
-# Smoke — full cycle: build → up → test
-# ---------------------------------------------------------------------------
-.PHONY: smoke
 smoke: up test
 	@echo "[smoke] passed"
