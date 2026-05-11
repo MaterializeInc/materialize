@@ -11,7 +11,7 @@
 //!
 //! Defines [`CollectionEdge`], a wrapper that lets dataflow edges between Plan
 //! nodes carry either row-based ([`VecCollection`]) or columnar
-//! ([`mz_timely_util::columnar::Column`]) batches of `(Row, T, Diff)` updates.
+//! ([`ColumnarCollection`]) batches of `(D, T, R)` updates.
 //!
 //! # Migration model
 //!
@@ -32,29 +32,41 @@
 // producers begin emitting columnar batches.
 #![allow(clippy::todo)]
 
+use columnar::Columnar;
 use differential_dataflow::VecCollection;
 use mz_repr::{Diff, Row};
 use mz_timely_util::columnar::Column;
 use timely::dataflow::{Scope, Stream};
+use timely::progress::Timestamp;
 
 use crate::render::RenderTimestamp;
 
-/// Container for a columnar batch of `(Row, T, Diff)` updates traveling on a
-/// compute dataflow edge.
-pub type ColumnarBatch<T> = Column<(Row, T, Diff)>;
+/// A columnar collection of `(D, T, R)` updates traveling on a compute
+/// dataflow edge.
+///
+/// Mirrors differential's [`VecCollection<'scope, T, D, R>`] shape and
+/// parameters; the underlying container is [`Column<(D, T, R)>`] instead of
+/// `Vec<(D, T, R)>`.
+pub struct ColumnarCollection<'scope, T, D, R>
+where
+    T: Timestamp,
+    (D, T, R): Columnar,
+{
+    /// The underlying timely stream of columnar batches.
+    pub inner: Stream<'scope, T, Column<(D, T, R)>>,
+}
 
 /// A dataflow edge carrying records as either a row-based [`VecCollection`] or
-/// a columnar [`Stream`] of [`ColumnarBatch`]es.
+/// a [`ColumnarCollection`].
 ///
 /// Producers choose a variant; consumers must accept either. Mixing variants
-/// across a `concat` is rejected during the transition: see
-/// [`CollectionEdge::concat`].
+/// across a `concat` is rejected during the transition.
 pub enum CollectionEdge<'scope, T: RenderTimestamp> {
     /// Row-formatted collection. Today's default for every producer.
     Vec(VecCollection<'scope, T, Row, Diff>),
-    /// Columnar batch stream. Currently unused by any producer; reserved for
-    /// the producer flip at the end of the migration.
-    Columnar(Stream<'scope, T, ColumnarBatch<T>>),
+    /// Columnar collection. Currently unused by any producer; reserved for the
+    /// producer flip at the end of the migration.
+    Columnar(ColumnarCollection<'scope, T, Row, Diff>),
 }
 
 impl<'scope, T: RenderTimestamp> CollectionEdge<'scope, T> {
@@ -62,7 +74,7 @@ impl<'scope, T: RenderTimestamp> CollectionEdge<'scope, T> {
     pub fn scope(&self) -> Scope<'scope, T> {
         match self {
             CollectionEdge::Vec(c) => c.inner.scope(),
-            CollectionEdge::Columnar(s) => s.scope(),
+            CollectionEdge::Columnar(c) => c.inner.scope(),
         }
     }
 
@@ -71,8 +83,8 @@ impl<'scope, T: RenderTimestamp> CollectionEdge<'scope, T> {
         match self {
             CollectionEdge::Vec(c) => CollectionEdge::Vec(c.enter_region(region)),
             CollectionEdge::Columnar(_) => {
-                // Sub-region entry for columnar batches will be wired when the
-                // first producer emits this variant.
+                // Sub-region entry for columnar collections will be wired when
+                // the first producer emits this variant.
                 todo!("CollectionEdge::Columnar::enter_region")
             }
         }
@@ -85,22 +97,23 @@ impl<'scope, T: RenderTimestamp> CollectionEdge<'scope, T> {
     pub fn negate(self) -> Self {
         match self {
             CollectionEdge::Vec(c) => CollectionEdge::Vec(c.negate()),
-            CollectionEdge::Columnar(s) => CollectionEdge::Columnar(columnar_negate(s)),
+            CollectionEdge::Columnar(c) => CollectionEdge::Columnar(columnar_negate(c)),
         }
     }
 }
 
-/// Negates the diff column of every batch in a columnar stream without
+/// Negates the diff column of every batch in a [`ColumnarCollection`] without
 /// decoding the data column.
-pub fn columnar_negate<'scope, T>(
-    stream: Stream<'scope, T, ColumnarBatch<T>>,
-) -> Stream<'scope, T, ColumnarBatch<T>>
+pub fn columnar_negate<'scope, T, D, R>(
+    collection: ColumnarCollection<'scope, T, D, R>,
+) -> ColumnarCollection<'scope, T, D, R>
 where
-    T: RenderTimestamp,
+    T: Timestamp,
+    (D, T, R): Columnar,
 {
     // Implementation is deferred until the first producer emits the
     // [`CollectionEdge::Columnar`] variant. The signature is fixed here so
     // consumers can target it during the consumer-first phase.
-    let _ = stream;
-    todo!("columnar_negate: flip diff column in place over Column<(Row, T, Diff)>")
+    let _ = collection;
+    todo!("columnar_negate: flip diff column in place over Column<(D, T, R)>")
 }
