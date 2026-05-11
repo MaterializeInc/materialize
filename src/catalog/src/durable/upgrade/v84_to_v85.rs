@@ -12,7 +12,8 @@ use crate::durable::upgrade::objects_v84 as v84;
 use crate::durable::upgrade::objects_v85 as v85;
 
 /// No-op migration. All types are JSON-compatible between v84 and v85.
-/// The only change is adding the new `AlterAddColumnV1` audit log event type.
+/// The only changes are adding the new `AlterAddColumnV1` and
+/// `AlterSourceTimestampIntervalV1` audit log event types.
 pub fn upgrade(
     _snapshot: Vec<v84::StateUpdateKind>,
 ) -> Vec<MigrationAction<v84::StateUpdateKind, v85::StateUpdateKind>> {

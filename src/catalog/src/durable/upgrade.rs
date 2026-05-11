@@ -240,7 +240,10 @@ macro_rules! objects {
     }
 }
 
-objects!([v74, v75, v76, v77, v78], [v79, v80, v81, v82, v83, v84, v85]);
+objects!(
+    [v74, v75, v76, v77, v78],
+    [v79, v80, v81, v82, v83, v84, v85]
+);
 
 /// The current version of the `Catalog`.
 pub use mz_catalog_protos::CATALOG_VERSION;
