@@ -914,31 +914,6 @@ impl CatalogState {
             .map(|id| &self.roles_by_id[id])
     }
 
-    /// Case-insensitive role lookup for JWT group-to-role sync.
-    ///
-    /// Groups from JWTs are lowercased during extraction. SQL role names are
-    /// stored as-is (unquoted identifiers are lowercased by the parser, but
-    /// quoted identifiers preserve case). This method iterates all roles to
-    /// find a case-insensitive match.
-    pub fn try_get_role_by_name_case_insensitive(&self, role_name: &str) -> Option<&Role> {
-        let lower = role_name.to_lowercase();
-        self.roles_by_name
-            .iter()
-            .find(|(name, _)| name.to_lowercase() == lower)
-            .map(|(_, id)| &self.roles_by_id[id])
-    }
-
-    /// Returns a map from lowercased role name to `Role` for all roles.
-    ///
-    /// Use this when doing multiple case-insensitive lookups (e.g. iterating
-    /// JWT group claims) to avoid O(n) per lookup.
-    pub fn roles_by_lowercase_name(&self) -> BTreeMap<String, &Role> {
-        self.roles_by_name
-            .iter()
-            .map(|(name, id)| (name.to_lowercase(), &self.roles_by_id[id]))
-            .collect()
-    }
-
     pub(super) fn get_role_auth(&self, id: &RoleId) -> &RoleAuth {
         self.role_auth_by_id
             .get(id)

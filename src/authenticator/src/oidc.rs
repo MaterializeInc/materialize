@@ -251,8 +251,9 @@ impl OidcClaims {
     ///
     /// Returns `None` if the claim is absent (skip sync, preserve current state),
     /// `Some(vec![])` if the claim is present but empty (revoke all sync-granted
-    /// roles), or `Some(vec![...])` with normalized (lowercased, deduplicated,
-    /// sorted) group names.
+    /// roles), or `Some(vec![...])` with deduplicated, sorted group names
+    /// (exact case preserved — matching against catalog role names is
+    /// case-sensitive).
     ///
     /// Accepts arrays of strings, single strings, or mixed arrays (non-string
     /// elements are filtered out). Other JSON types are treated as absent.
@@ -280,15 +281,14 @@ impl OidcClaims {
             }
         };
 
-        let normalized: Vec<String> = raw_groups
+        let groups: Vec<String> = raw_groups
             .into_iter()
-            .map(|g| g.trim().to_lowercase())
             .filter(|g| !g.is_empty())
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
 
-        Some(normalized)
+        Some(groups)
     }
 }
 
@@ -752,9 +752,14 @@ mod tests {
     fn test_groups_mixed_case() {
         let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","groups":["Analytics","PLATFORM_ENG","analytics"]}"#;
         let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        // Case is preserved; "Analytics" and "analytics" are distinct groups.
         assert_eq!(
             claims.groups("groups"),
-            Some(vec!["analytics".to_string(), "platform_eng".to_string()])
+            Some(vec![
+                "Analytics".to_string(),
+                "PLATFORM_ENG".to_string(),
+                "analytics".to_string(),
+            ])
         );
     }
 
@@ -849,32 +854,32 @@ mod tests {
 
     #[mz_ore::test]
     fn test_groups_whitespace_only_single_string() {
-        // Whitespace-only string trims to empty and is filtered out.
+        // Whitespace-only string is preserved as-is (exact matching, no trim).
         let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","groups":"  "}"#;
         let claims: OidcClaims = serde_json::from_str(json).unwrap();
-        assert_eq!(claims.groups("groups"), Some(vec![]));
+        assert_eq!(claims.groups("groups"), Some(vec!["  ".to_string()]));
     }
 
     #[mz_ore::test]
     fn test_groups_whitespace_names() {
-        // Leading/trailing whitespace is trimmed from group names.
+        // Leading/trailing whitespace is preserved (exact matching, no trim).
         let json =
             r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","groups":["  spaces  ","eng"]}"#;
         let claims: OidcClaims = serde_json::from_str(json).unwrap();
         assert_eq!(
             claims.groups("groups"),
-            Some(vec!["eng".to_string(), "spaces".to_string()])
+            Some(vec!["  spaces  ".to_string(), "eng".to_string()])
         );
     }
 
     #[mz_ore::test]
     fn test_groups_unicode_names() {
-        // Unicode group names should be lowercased correctly
+        // Unicode group names are preserved as-is (no case folding).
         let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","groups":["Développeurs","INGÉNIEURS"]}"#;
         let claims: OidcClaims = serde_json::from_str(json).unwrap();
         assert_eq!(
             claims.groups("groups"),
-            Some(vec!["développeurs".to_string(), "ingénieurs".to_string()])
+            Some(vec!["Développeurs".to_string(), "INGÉNIEURS".to_string()])
         );
     }
 
@@ -895,11 +900,19 @@ mod tests {
     }
 
     #[mz_ore::test]
-    fn test_groups_case_insensitive_dedup() {
-        // "Eng" and "eng" and "ENG" should all collapse to one "eng"
+    fn test_groups_no_case_folding() {
+        // Case is preserved; "Eng", "eng", "ENG", "eNg" are four distinct groups.
         let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","groups":["Eng","eng","ENG","eNg"]}"#;
         let claims: OidcClaims = serde_json::from_str(json).unwrap();
-        assert_eq!(claims.groups("groups"), Some(vec!["eng".to_string()]));
+        assert_eq!(
+            claims.groups("groups"),
+            Some(vec![
+                "ENG".to_string(),
+                "Eng".to_string(),
+                "eNg".to_string(),
+                "eng".to_string(),
+            ])
+        );
     }
 
     #[mz_ore::test]
