@@ -34,11 +34,13 @@ def main() -> None:
         set_build_status("pending")
         coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
         sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
+        antithesis = ui.env_is_truthy("CI_ANTITHESIS")
 
         repo = mzbuild.Repository(
             Path("."),
             coverage=coverage,
             sanitizer=sanitizer,
+            antithesis=antithesis,
             image_registry="materialize",
         )
 
