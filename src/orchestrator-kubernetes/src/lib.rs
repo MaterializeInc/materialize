@@ -1777,11 +1777,7 @@ fn topology_spread_min_domains(
     az_pinned: bool,
     min_domains: Option<i32>,
 ) -> Option<i32> {
-    if soft || az_pinned {
-        None
-    } else {
-        min_domains
-    }
+    if soft || az_pinned { None } else { min_domains }
 }
 
 #[cfg(test)]
@@ -1791,10 +1787,7 @@ mod tests {
     #[mz_ore::test]
     fn topology_spread_min_domains_suppression() {
         // min_domains is kept when neither soft nor az-pinned
-        assert_eq!(
-            topology_spread_min_domains(false, false, Some(3)),
-            Some(3)
-        );
+        assert_eq!(topology_spread_min_domains(false, false, Some(3)), Some(3));
         // min_domains is None when not set regardless of flags
         assert_eq!(topology_spread_min_domains(false, false, None), None);
         // suppressed when soft (Kubernetes rejects minDomains with ScheduleAnyway)
