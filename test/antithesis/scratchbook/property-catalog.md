@@ -1,6 +1,6 @@
 ---
-commit: ca6deb6758e651876582ae7d4dec24ce32d87567
-updated: 2026-05-06
+commit: 007c7af9d9970fb2030c7212368b232e0fbc363e
+updated: 2026-05-11
 ---
 
 # Property Catalog: Materialize
@@ -52,6 +52,17 @@ Properties that verify data correctness when crashes, network partitions, and co
 | **Invariant** | `Always`: after retry with identical IdempotencyToken, the shard's upper reflects exactly one successful write. Duplicate data must never appear in the shard trace. |
 | **Antithesis Angle** | Inject network failures on consensus calls mid-flight. Kill writer after batch is queued but before state is committed. Antithesis explores the window between consensus write and acknowledgment. |
 | **Why It Matters** | Indeterminate errors are the hardest to handle correctly in distributed systems. Duplication or loss here silently corrupts downstream materialized views. Surfaced by: Data Integrity. |
+
+### critical-reader-fence-linearization — Critical Reader Opaque Token Linearizes
+
+| | |
+|---|---|
+| **Type** | Safety |
+| **Priority** | P1 — incorrect fencing allows premature GC causing data loss |
+| **Property** | When two concurrent critical readers attempt compare_and_downgrade_since with mismatched opaque tokens, exactly one succeeds in updating the shard's since. No reader can re-observe an old opaque value after a SeqNo increment. |
+| **Invariant** | `Always`: concurrent compare_and_downgrade_since operations with different opaques result in exactly one mutation. The winner's opaque is durably recorded; the loser gets a mismatch. |
+| **Antithesis Angle** | Inject network delays between state check and state commit. Fail CaS operations after token comparison but before state write. Antithesis explores concurrent reader contention. |
+| **Why It Matters** | Critical readers control garbage collection boundaries. Incorrect fencing allows premature GC, which deletes data needed by active readers. Surfaced by: Data Integrity. |
 
 ## Category 2: Consistency Model Enforcement
 
@@ -205,13 +216,183 @@ Properties that verify the system reaches interesting states under fault injecti
 | **Antithesis Angle** | Insert data, inject faults (compute replica crash, storage reconnection), then verify the MV eventually shows the data. Antithesis explores whether faults during the incremental update pipeline cause permanent stalls. |
 | **Why It Matters** | This is the end-to-end user-visible correctness property. Materialize's value proposition is that MVs are always up-to-date. Surfaced by: Product Context. |
 
-### critical-reader-fence-linearization — Critical Reader Opaque Token Linearizes
+## Category 7: Kafka Source Ingestion (Append-Only + UPSERT)
+
+Properties specific to the Kafka source ingestion pipeline: `KafkaSourceReader` → `ReclockOperator` → optional decode/UPSERT → `persist_sink`. Both envelopes are covered, with shared properties for reclocking and source-frontier behavior. Workload-level checks compare produced Kafka records against what a SQL `SELECT` over the source returns; SUT-side checks live in the source/upsert/reclock operators.
+
+### kafka-source-no-data-loss — Every Produced Record Is Eventually Visible
+
+| | |
+|---|---|
+| **Type** | Liveness |
+| **Priority** | P0 — primary user-visible contract; "data is in Kafka but not in Materialize" is the worst possible streaming bug |
+| **Property** | After producing a message to a Kafka topic, the Materialize source over that topic eventually contains a row corresponding to that message (NONE envelope) or a row reflecting the latest value for that key (UPSERT envelope). |
+| **Invariant** | `Sometimes(all_produced_records_visible)`: at least once during a run, after a quiet period, the workload observes `COUNT(*) FROM source` >= number of produced records (NONE) or every produced (key, value) pair is reflected in the source state (UPSERT). Liveness, so `Sometimes` on the catch-up event. |
+| **Antithesis Angle** | Network partitions between Materialize and Kafka, clusterd kills mid-ingestion, persist write retries, and rebalances. The interesting timing is the *crash mid-batch* window: some offsets are in persist, some are not, and the resume frontier determines what we re-read. Antithesis explores whether the re-read covers exactly the missing offsets. |
+| **Why It Matters** | This is the headline guarantee of a streaming database. A bug here is silent data loss visible to every user of the source. Supersedes the more generic `source-ingestion-progress` for Kafka specifically. |
+
+### kafka-source-no-data-duplication — No Record Appears Twice After Settling
 
 | | |
 |---|---|
 | **Type** | Safety |
-| **Priority** | P1 — incorrect fencing allows premature GC causing data loss |
-| **Property** | When two concurrent critical readers attempt compare_and_downgrade_since with mismatched opaque tokens, exactly one succeeds in updating the shard's since. No reader can re-observe an old opaque value after a SeqNo increment. |
-| **Invariant** | `Always`: concurrent compare_and_downgrade_since operations with different opaques result in exactly one mutation. The winner's opaque is durably recorded; the loser gets a mismatch. |
-| **Antithesis Angle** | Inject network delays between state check and state commit. Fail CaS operations after token comparison but before state write. Antithesis explores concurrent reader contention. |
-| **Why It Matters** | Critical readers control garbage collection boundaries. Incorrect fencing allows premature GC, which deletes data needed by active readers. Surfaced by: Data Integrity. |
+| **Priority** | P0 — silent duplication corrupts every aggregate downstream MV |
+| **Property** | After settling, the NONE-envelope source contains at most one row per `(partition, offset)` tuple; the UPSERT-envelope source contains at most one row per key. |
+| **Invariant** | `Always`: `SELECT partition, "offset", COUNT(*) FROM source GROUP BY 1,2 HAVING COUNT(*) > 1` returns no rows for NONE; `SELECT key, COUNT(*) FROM source GROUP BY 1 HAVING COUNT(*) > 1` returns no rows for UPSERT. Checked on every assertion firing — must hold on every observation. |
+| **Antithesis Angle** | Reader crashes between persist-sink batch write and `compare_and_append`; rehydration re-reads offsets we already wrote. The protection lives in `last_offsets` filtering (kafka.rs:1158) but only for the *current* incarnation — across restart, idempotency depends on the persist sink and (for UPSERT) the feedback-driven snapshot. Antithesis explores crash/restart timing across batch boundaries. Direct regression target for upsert double-retraction bug (commit 1accbe28b3, database-issues#9160). |
+| **Why It Matters** | Duplicate rows in the source flow into every downstream materialized view's aggregates and joins. Silent and devastating. |
+
+### kafka-source-frontier-monotonic — Source Persist Shard Upper Never Regresses
+
+| | |
+|---|---|
+| **Type** | Safety |
+| **Priority** | P1 — frontier regression panics downstream operators and breaks `AS OF` queries |
+| **Property** | The `upper` frontier of the source's data persist shard never regresses across the lifetime of the source, including across clusterd restarts and `compare_and_append` retries. |
+| **Invariant** | `Always`: observed `upper(t2) >= upper(t1)` for any observation order `t1 < t2`. Checked on every observation in a workload polling loop, and ideally also as a SUT-side `assert_always!` next to the persist sink's `compare_and_append`. |
+| **Antithesis Angle** | Kill clusterd mid-`compare_and_append`; resume the source with a stale cached upper; concurrent reclock and persist-sink writers. Direct regression target for the `as_of`/reclock-upper race (commit e3805ad790, database-issues#8698) and the persist-sink cached upper bug (commit 505dc96aaa). |
+| **Why It Matters** | Frontier regression manifests as panics (`as_of > upper`) or as observably incorrect AS OF queries. Documented invariant for persist. |
+
+### kafka-source-survives-broker-fault — Source Resumes After Broker Connectivity Restored
+
+| | |
+|---|---|
+| **Type** | Liveness |
+| **Priority** | P1 — operational expectation; broker faults are a routine condition |
+| **Property** | After a transient network partition or Kafka broker outage that prevents the source from making progress, once connectivity is restored, the source eventually ingests all messages that were produced during the outage. |
+| **Invariant** | `Sometimes(source_resumes_after_broker_fault)`: at least once per run, after injecting a network fault between materialized and Kafka and then calling `ANTITHESIS_STOP_FAULTS`, the workload observes the source's `COUNT(*)` advance past its pre-fault value. |
+| **Antithesis Angle** | Network partition between the `materialized` container and the Kafka container; persist+metadata stay reachable. Tests rdkafka reconnect, snapshot statistics restoration (commit 0a34b6c79d), and that no permanent stall mode is entered. |
+| **Why It Matters** | Cloud streaming setups routinely see transient Kafka unavailability. A source that gets stuck and never recovers is an outage. |
+
+### kafka-source-survives-clusterd-restart — Source Resumes After clusterd Crash
+
+| | |
+|---|---|
+| **Type** | Liveness |
+| **Priority** | P1 — recovery from clusterd kill is the most common operational fault path |
+| **Property** | After clusterd (storage worker) is killed and restarted, the Kafka source recovers, replays the right resume offsets, and ingests messages produced before, during, and after the restart. |
+| **Invariant** | `Sometimes(source_recovered_after_clusterd_restart)`: after a kill+restart, eventually `COUNT(*) FROM source >= produced_count`. Combined with `kafka-source-no-data-duplication` to also rule out double-counting. |
+| **Antithesis Angle** | Direct test of the `storage-command-replay-idempotent` mechanism end-to-end through Kafka. Antithesis explores crash timing across the reclock mint, persist-sink append, and upsert snapshot-completion windows. Requires node-termination faults to be enabled. |
+| **Why It Matters** | This is the recovery contract the storage controller is built around. Failure here makes every higher-level property meaningless. |
+
+### upsert-key-reflects-latest-value — UPSERT Source Reflects Latest Value Per Key
+
+| | |
+|---|---|
+| **Type** | Safety |
+| **Priority** | P0 — the entire user-visible promise of the UPSERT envelope |
+| **Status** | **Implemented** (workload-side) — `test/antithesis/workload/test/parallel_driver_upsert_latest_value.py`. Two `always()` assertions ("upsert: SELECT for key matches latest produced value", "upsert: tombstoned key has no row in source") plus one `sometimes()` liveness anchor ("upsert: source caught up to produced offsets after quiet period"). |
+| **Property** | At a settled timestamp, for each key produced by the workload, the UPSERT source contains exactly the value from the last `(key, value)` message produced — or no row if the last message for that key was a tombstone. |
+| **Invariant** | `Always`: for every workload-tracked key, `SELECT value FROM source WHERE key = ?` returns the expected value (or empty for tombstoned keys), as determined by the workload's local model of what it produced. Checked after `ANTITHESIS_STOP_FAULTS` quiet periods. |
+| **Antithesis Angle** | Reorder produce timing, kill clusterd between the prior-value lookup (`multi_get`) and the new-value write (`multi_put`), inject delays in the feedback-driven snapshot phase. Tests order-key monotonicity (commit f177db8286), state-backend consistency, and snapshot-completion correctness. |
+| **Why It Matters** | UPSERT semantics — "the source mirrors the upstream key/value store" — is the reason customers pick this envelope. Wrong value per key is silent corruption that flows into all downstream MVs. |
+
+### upsert-tombstone-removes-key — Tombstone Eventually Removes the Key
+
+| | |
+|---|---|
+| **Type** | Safety |
+| **Priority** | P1 — delete semantics are routinely relied on for GDPR/correctness |
+| **Property** | After producing a `(key, null)` tombstone message to the Kafka topic, the UPSERT source eventually contains no row for that key, and the row stays absent until a new non-null value is produced. |
+| **Invariant** | `Always`: at any settled observation after the tombstone has been ingested (resume_upper > tombstone offset), `SELECT * FROM source WHERE key = ?` returns 0 rows. The "no resurrection" half is also `Always`: a key that has been tombstoned and not re-inserted must not reappear after a clusterd restart or rehydration cycle. |
+| **Antithesis Angle** | Race the tombstone against a state-store snapshot completion. Crash clusterd between persist sink writing the retraction and the upsert state recording the tombstone. The `StateValue::Value` -> tombstone path in `upsert/types.rs` is the relevant code; bugs here look like resurrected rows. |
+| **Why It Matters** | A "deleted" row reappearing is both a correctness bug and a compliance hazard. |
+
+### upsert-state-rehydrates-correctly — UPSERT State Reconstructs Exactly After Restart
+
+| | |
+|---|---|
+| **Type** | Safety |
+| **Priority** | P1 — incorrect rehydration produces wrong-but-plausible-looking output |
+| **Property** | After a clusterd restart, the rehydrated upsert state, as observed via `SELECT * FROM source`, equals the state at the most recent durable timestamp before the restart, for every key produced so far. |
+| **Invariant** | `Always`: after a kill+restart quiet period, the workload's local key/value model matches the source's contents for every key whose latest message has `offset <= resume_upper`. Combines with `kafka-source-no-data-duplication` (no double inserts on rehydration) and `upsert-key-reflects-latest-value` (correct value per key). |
+| **Antithesis Angle** | The interesting window is between `compare_and_append` of the persist sink and the upsert operator's feedback-driven snapshot completion. If the feedback replay deduplication is wrong, rehydrated state diverges from durable state. Direct regression target for the upsert snapshot-completion logic in `upsert/types.rs` and `upsert_continual_feedback*`. |
+| **Why It Matters** | Wrong rehydration is silent — the source comes up "healthy" and serves bad data. Hardest class of bug to detect in production. |
+
+### upsert-decode-error-retractable — Bad Value Errors Are Retracted By Subsequent Good Value
+
+| | |
+|---|---|
+| **Type** | Safety |
+| **Priority** | P2 — documented contract; supports operational "fix the bad message and continue" recovery |
+| **Property** | When a Kafka message decoding produces an `UpsertError::Value` (or `UpsertError::KeyDecode` or `UpsertError::NullKey`) for a key, and a subsequent message produces a valid `(key, value)` pair for the same key, the source state for that key transitions from "row containing error" to "row containing the new value" — i.e. the error is retracted. |
+| **Invariant** | `Always`: at a settled timestamp after the corrective message has been ingested, `SELECT * FROM source WHERE key = ?` returns the corrected value with no remaining error row. Note this is the *upsert*-specific retractability (`EnvelopeError::Upsert(..)`); `EnvelopeError::Flat(..)` is explicitly non-retractable. |
+| **Antithesis Angle** | Produce an undecodable value, then a good value for the same key, while injecting delays between the two. Race against snapshot completion (errored value during snapshot vs. corrected value post-snapshot). |
+| **Why It Matters** | Encoded as the operational contract by which users recover from upstream schema mistakes without dropping the source. Code in `upsert_commands` (render/sources.rs) and `upsert.rs` is the relevant path. |
+
+### upsert-no-internal-panic — Upsert Operator's Internal Asserts Never Fire
+
+| | |
+|---|---|
+| **Type** | Reachability (Unreachable) |
+| **Priority** | P1 — these panics are explicit "should-never-happen" guards that bug history has hit |
+| **Property** | The explicit panics and `assert!`s in the upsert operator never fire under any Antithesis-injected fault sequence. Specifically: `assert!(diff.is_positive(), "invalid upsert input")` (upsert.rs:541, upsert_continual_feedback.rs:626, v2:315); `panic!("key missing from commands_state")` (upsert.rs:636, upsert_continual_feedback.rs:800); `unreachable!()` for `(None, None)` in continual-feedback v2 (v2:483); the order-key panic that used to live in `drain_staged_input` (now a skip; commit f177db8286). |
+| **Invariant** | `Unreachable`: each of these sites is converted to an Antithesis `assert_unreachable!("…")` (or `assert_always!(false, …)`) so that any firing produces an explicit Antithesis property failure rather than a process crash. Distinct, unique message per site. |
+| **Antithesis Angle** | These are the high-signal SUT-side anchors. They catch the same family of bugs that historically reached production: order-key regression, missing dedup entry, retraction-on-input. Adding them costs almost nothing in the SUT and gives Antithesis precise replay anchors. |
+| **Why It Matters** | These panics indicate the operator entered an internal state its author thought was impossible. Past bugs (commits f177db8286, 1accbe28b3) reached production exactly through these paths. The asserts already exist; we just need to wrap them with the Antithesis SDK so the failures become reportable properties rather than process kills. |
+
+### upsert-state-consolidation-wellformed — `ensure_decoded` Resolves To `diff_sum ∈ {0, 1}` With Matching Checksums
+
+| | |
+|---|---|
+| **Type** | Safety |
+| **Priority** | P0 — directly guards upsert state-store data integrity; catches XOR/checksum corruption |
+| **Property** | When the upsert state backend's `StateValue::ensure_decoded` finalizes a `Consolidating` cell into either a live `Value` or a `tombstone`, the consolidating accumulator is well-formed: `diff_sum ∈ {0, 1}`; if `diff_sum == 1` the recovered bytes match the recorded `len_sum` and `checksum_sum` (seahash of `value_xor[..len_sum]`); if `diff_sum == 0` then `len_sum == 0`, `checksum_sum == 0`, and every byte of `value_xor` is zero. |
+| **Invariant** | `Always`: the `panic!("invalid upsert state: non 0/1 diff_sum: …")` at `upsert/types.rs:672` becomes an `assert_always!(false, "upsert: non 0/1 diff_sum")` with a unique message. The intermediate `assert_eq!`s at :621, :632, :637 and the `assert!` at :642 are likewise upgraded to `assert_always!` so they report rather than crash. Each site gets a distinct, specific message. |
+| **Antithesis Angle** | The consolidating state collapses many `(diff, bytes)` updates per key into running `diff_sum`, `len_sum`, `checksum_sum`, and an XOR-merged `value_xor` blob. The invariant relies on (a) every retraction being paired with an identical insertion in the snapshot stream, and (b) the snapshot completion contract delivering exactly the durable state at the resume frontier. Antithesis explores: crash mid-snapshot-replay, RocksDB merge operator interleaved with multi_put, partial feedback delivery across restart, and (most subtly) duplicated retractions from multi-replica drain (commit 1accbe28b3). Any of these can break the XOR cancellation and trip a non-{0,1} diff_sum. |
+| **Why It Matters** | This is the deepest "the math broke" guard in the upsert pipeline. A trip here means either the feedback stream replayed wrong contents or a duplicate retraction snuck through. The existing panic already dumps a rich diagnostic — wrapping it as an Antithesis assertion turns it into a reportable, replayable property failure rather than a process abort. |
+
+### upsert-ensure-decoded-called-before-access — Consolidating State Is Always Decoded Before Use
+
+| | |
+|---|---|
+| **Type** | Reachability (Unreachable) |
+| **Priority** | P2 — type-state protocol invariant; high-signal as a replay anchor |
+| **Property** | Every accessor on `StateValue` that requires the cell to be in `Value` form is preceded by a call to `ensure_decoded` for that cell. The six accessor panics — `into_decoded` (297), `into_provisional_value` (369), `into_provisional_tombstone` (403), `provisional_order` (416), `provisional_value_ref` (430), `into_finalized_value` (440) — never fire. |
+| **Invariant** | `Unreachable`: each `panic!("called \`...\` without calling \`ensure_decoded\`")` site is converted to a distinct `assert_unreachable!("upsert: <accessor> on Consolidating")`. Six unique assertion messages, one per accessor, so an Antithesis report distinguishes which contract was violated. These are pure protocol-misuse guards — they cannot fire in valid execution. |
+| **Antithesis Angle** | These panics are most likely to fire after a code change to the upsert operator (e.g. a new code path that forgets `ensure_decoded` before reading `provisional_value`). Antithesis exercises every operator branch under fault injection; turning these into reachability assertions gives a cheap regression-detection net for future refactors of `upsert.rs` / `upsert_continual_feedback*.rs`. They are also useful replay anchors — if Antithesis ever does reach them, the bug is reproducible. |
+| **Why It Matters** | These guard a type-state contract that is currently enforced only at runtime. The cost of instrumenting them is essentially zero (rename `panic!` to `assert_unreachable!`), and the upside is that any future violation surfaces as a property failure that can be replayed deterministically. |
+
+### kafka-source-no-internal-panic — Kafka Source Reader's Explicit Panics Never Fire
+
+| | |
+|---|---|
+| **Type** | Reachability (Unreachable) |
+| **Priority** | P1 — direct regression target for topic-recreation and offset-handling bugs |
+| **Property** | The explicit panics in `kafka.rs` never fire: `panic!("got negative offset (...)")` (kafka.rs:1193); `panic!("unexpected source export details: ...")` (kafka.rs:276); the `assert!(self.last_offsets[output][partition])` (kafka.rs:1142); plus the `expect()` sites on resume-upper / statistics / offset arithmetic. |
+| **Invariant** | `Unreachable`: each site converted to a unique `assert_unreachable!("kafka: <site>")`. The "negative offset" panic in particular is a known structural-invariant violation that has fired before. |
+| **Antithesis Angle** | Topic deletion + recreation, partition rebalancing, manual offset reset on the Kafka broker, clock jumps that interact with Kafka's internal offset arithmetic. Direct regression target for commit 99ad668af5 (capability downgrade on topic recreation). |
+| **Why It Matters** | A panic in the source reader takes down the storage worker. Replacing the panic with an Antithesis assertion gives a *reportable* failure rather than a crash that masks itself as "clusterd was restarted." |
+
+### remap-shard-antichain-wellformed — Remap Shard Accumulates To Well-Formed Antichain
+
+| | |
+|---|---|
+| **Type** | Safety |
+| **Priority** | P1 — load-bearing invariant for reclock correctness; explicitly stated in source doc comment |
+| **Property** | At every Materialize timestamp `t`, the remap shard's contents accumulated to `t` form a well-formed `Antichain<KafkaTimestamp>`: each source-time element has frequency exactly 1, the antichain is not empty if any source data has been bound, and (under multi-partition source) there is one element per partition range with no overlaps. |
+| **Invariant** | `Always`: enforced as an `assert_always!` inside `ReclockOperator::mint`/`sync` after every state update — that's where the doc comment promises the invariant (reclock.rs:31-34). Workload-level approximation: a periodic SQL query that joins source/remap progress with computed offsets and verifies one-to-one. |
+| **Antithesis Angle** | Concurrent reclock writers (across restart), partition adds/removes between mints, `compare_and_append` retries that interleave with metadata refresh. The remap shard is the only place where source-time → into-time is durably recorded; a malformed antichain corrupts every subsequent restart's resume frontier. |
+| **Why It Matters** | This is the foundational reclock invariant. Violation here breaks recovery (resume_upper computed wrong), `AS OF` semantics, and the upsert operator's snapshot phase. |
+
+### reclock-mint-eventually-succeeds — Reclock Mint Completes Despite CaS Retries
+
+| | |
+|---|---|
+| **Type** | Liveness |
+| **Priority** | P2 — pre-existing concern under persist instability |
+| **Property** | Under transient persist outages or competing writers, the reclock mint loop (`compare_and_append` with `UpperMismatch` retry, reclock.rs:160-166) eventually completes for every source-frontier advance that has data to bind. |
+| **Invariant** | `Sometimes(mint_completed_after_cas_retry)`: at least once per run, Antithesis observes a reclock mint that took >1 CaS attempt and then completed (i.e. a successful retry path was exercised). Critically, the workload should also observe that the source frontier eventually advances past the value of `source_upper` captured at the time of the contention — i.e. the loop is not livelocked. |
+| **Antithesis Angle** | Inject persist consensus latency, kill+restart concurrently to create a competing writer, race the metadata fetcher's partition-add against a mint that is already in flight. The retry loop in `mint()` has no upper bound; this property confirms it is not livelocked even under adversarial schedules. |
+| **Why It Matters** | A livelocked mint loop manifests as a source that never advances its frontier — externally indistinguishable from a stalled Kafka consumer, but caused inside Materialize. |
+
+### offset-known-not-below-committed — Source Statistics Causality
+
+| | |
+|---|---|
+| **Type** | Safety |
+| **Priority** | P2 — observable statistics correctness; regression target for commit 3e32df1f69 |
+| **Property** | For every Kafka source, the source-statistics view always reports `offset_known >= offset_committed`. The metric `offset_known` reflects what the broker has told us is available; `offset_committed` reflects what Materialize has durably ingested. Causally, `offset_known` cannot lag `offset_committed`. |
+| **Invariant** | `Always`: a polling assertion in the workload — `SELECT offset_known, offset_committed FROM mz_internal.mz_source_statistics_per_worker WHERE id = ?` — invariant `offset_known >= offset_committed`. Mirror as an `assert_always!` inside the statistics update path in `src/storage/src/statistics.rs`. |
+| **Antithesis Angle** | Clusterd restart resets `offset_known` to broker-reported watermark while `offset_committed` is restored from persist. If the restoration order is wrong, the invariant flips. Direct regression target for commit 3e32df1f69. |
+| **Why It Matters** | The statistics view is consumed by users and by operational tooling to compute lag. A regression in causality makes lag metrics meaningless and is the kind of bug that survives unit tests but fails under adversarial timing. |

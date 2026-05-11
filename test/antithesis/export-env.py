@@ -72,7 +72,9 @@ def main() -> None:
     )
     for var, image_name in ENV_VARS.items():
         if args.registry:
-            ref = f"{args.registry}/{image_name}:mzbuild-{deps[image_name].fingerprint()}"
+            ref = (
+                f"{args.registry}/{image_name}:mzbuild-{deps[image_name].fingerprint()}"
+            )
         else:
             ref = deps[image_name].spec()
         sys.stdout.write(f"{var}={ref}\n")

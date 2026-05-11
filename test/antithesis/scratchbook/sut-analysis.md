@@ -215,3 +215,84 @@ Materialize is organized into three logical layers that run as separate processe
 - What is the preferred metadata store for Antithesis testing — CockroachDB or PostgreSQL?
 - Should we test with multiple compute replicas or single replica?
 - Are there specific failure scenarios the Materialize team wants prioritized?
+
+## Appendix A: Kafka Source Ingestion (Detail)
+
+Added 2026-05-11 in response to scoping toward Kafka source properties (append-only + UPSERT envelope).
+
+### Pipeline shape
+
+`KafkaSourceReader` → `ReclockOperator` → (optional `decode`) → (optional `upsert` operator) → `persist_sink`.
+
+The dataflow is rendered in `src/storage/src/render/sources.rs`. The reader and metadata-fetcher are constructed by `SourceRender for KafkaSourceConnection` in `src/storage/src/source/kafka.rs`. Reclocking is in `src/storage/src/source/reclock.rs` plus `reclock/compat.rs` (the persist-backed remap handle). UPSERT logic is in `src/storage/src/upsert.rs` (classic) and `src/storage/src/upsert_continual_feedback.rs` / `upsert_continual_feedback_v2.rs` (continual-feedback variants).
+
+### Source-time vs into-time
+
+* **Source time** for Kafka is `Partitioned<RangeBound<PartitionId>, MzOffset>` (`mz_storage_types::sources::kafka`). The frontier is a multi-partition antichain.
+* **Into time** is Materialize's `mz_repr::Timestamp` (ms since epoch). The mapping from source time → into time is the *remap shard*: a persist shard whose contents accumulate to a well-formed `Antichain<FromTime>` at every into-time. See `ReclockOperator` doc comment: "for any time `IntoTime` the remap collection accumulates into an Antichain where each `FromTime` timestamp has frequency `1`."
+* On startup the remap operator loads existing bindings, downgrades to the recovered upper, then mints new bindings when `mint()` receives a probe.
+
+### Partition handling
+
+* Partition → worker assignment is round-robin by hash: `((source_id + partition_id) % worker_count) == worker_id` (`kafka.rs`).
+* New partitions are picked up by the metadata fetcher and routed through reclocking.
+* Per-partition offsets are tracked in `last_offsets`. Code-stated invariant: "if we see offset x, we have seen all offsets [0, x-1] that we are ever going to see" (kafka.rs near line 1005).
+* Offsets that arrive `<=` `last_offset` are silently dropped (kafka.rs ~1158). This is the path that protects against rdkafka redelivery on reconnect.
+* Negative offsets from an otherwise non-errored message cause `panic!` in `construct_source_message` (kafka.rs ~1193).
+
+### Append-only (NONE envelope) workload shape
+
+Decoded rows flow directly into `persist_sink` keyed by Materialize timestamp. Each `(partition, offset)` produces exactly one row (plus metadata columns if requested). There is no retraction unless an upstream EvalError occurs in a downstream operator.
+
+### UPSERT envelope
+
+`upsert_commands` (render/sources.rs) maps each `DecodeResult` into `(UpsertKey, Option<UpsertValue>, FromTime)`:
+
+* `UpsertKey` is a 32-byte SHA-256 digest of the key bytes; collisions are treated as impossible (probabilistic).
+* `Some(value)` is an insert/update for `key`; `None` is a tombstone (delete).
+* Key decode failures produce `UpsertError::KeyDecode`; null keys produce `UpsertError::NullKey`; value decode failures produce `UpsertError::Value`. These flow as `Err` values keyed by the (errored) key and can be *retracted* by a subsequent good `(key, value)` for the same key — this is the contract that makes "fix the bad message" recovery possible without dropping the source.
+
+The upsert operator (`upsert_classic` in `upsert.rs`) consults a state store (`UpsertStateBackend`) for the prior value before emitting updates. Two backends ship:
+
+* `InMemoryHashMap` — `BTreeMap<UpsertKey, StateValue>`. Lost on restart.
+* `RocksDB` — persistent, with a merge operator. Bug history shows the merge operator must always return `Some` or RocksDB aborts the process (commit 0d8d740b47).
+
+State is reconstructed on restart by replaying the persist *feedback* stream (the output of the upsert operator's previous incarnation) up to the resume frontier. The operator passes through a *snapshot* phase that drains all feedback values for keys at or below the resume frontier, then transitions to normal mint-on-input mode.
+
+Key invariants stated in code:
+
+* `assert!(diff.is_positive(), "invalid upsert input")` (upsert.rs:541; mirrored in `upsert_continual_feedback*.rs`) — the upsert operator never sees retractions on its input; only inserts/tombstones.
+* `panic!("key missing from commands_state")` (upsert.rs:636) — the operator's internal dedup table must always contain a key it is about to emit for; missing key is a structural invariant violation.
+* Order-key monotonicity within a key is enforced by `consolidate_snapshot_chunk` / `drain_staged_input`. A regression here previously caused a panic that was "as close to data loss as possible" (commit f177db8286, issue materialize#26655). The fix skips violating updates rather than panicking.
+* In continual-feedback v2: `assert!(diff.is_positive())` again (v2:315) plus `unreachable!()` on `(None, None)` from joined prior/new state (v2:483) and an empty-output assertion in tests (v2:957).
+
+### Reclock invariants and failure modes
+
+* `compare_and_append` on the remap shard can return `UpperMismatch` if a racing writer (e.g. across restart) has advanced the shard. `ReclockOperator::mint` retries by `sync()`-ing and re-minting (reclock.rs:160-166).
+* `panic!("compare_and_append failed: {invalid_use}")` in `reclock/compat.rs:306` catches genuinely invalid persist calls (vs. retryable upper mismatch).
+* Reclock's cached `upper` has a known staleness pitfall (commit e3805ad790, issue database-issues#8698) — fixed by always fetching the recent upper for `as_of` calculation.
+
+### Statistics and progress signals
+
+`statistics.rs` reports per-source counters that have correctness invariants of their own:
+
+* `offset_known >= offset_committed` (commit 3e32df1f69 enforces clamping after a regression bug).
+* `snapshot_records_known >= snapshot_records_staged`, both decrease to zero (clear) at end of snapshot.
+
+These are user-visible numbers and form weak but easily-checkable correctness signals from the workload side.
+
+### Failure-prone areas relevant to Antithesis
+
+| Area | Risk | Code |
+|------|------|------|
+| Negative offset from rdkafka | hard panic | kafka.rs:1193 |
+| Late offset on reconnect | silent drop (correct behavior, but check via `assert_sometimes!(saw_late_offset)`) | kafka.rs:1158 |
+| Topic recreated with fewer offsets | previously panicked on capability downgrade (commit 99ad668af5) | source_reader_pipeline / kafka.rs |
+| Upsert key with timestamp regression | previously panicked (commit f177db8286) | upsert.rs:475-487 |
+| RocksDB merge returning `None` | SIGABRT (commit 0d8d740b47) | upsert/rocksdb.rs |
+| Reclock `compare_and_append` UpperMismatch retry loop | unbounded retry, can block forever under persist outage | reclock.rs:160 |
+| Multi-replica `drain_staged_input` double-pass | duplicate retractions (commit 1accbe28b3) | upsert_continual_feedback.rs |
+| Persist sink cached upper across concurrent sinks | stale read leads to false errors (commit 505dc96aaa) | render/persist_sink.rs |
+| Flag flip mid-append on persist sink | spurious `InvalidBatchBounds` (commit 68e1dfd86d) | render/persist_sink.rs |
+
+These are the seeds for the Kafka-specific property catalog in Category 7 of `property-catalog.md`.
