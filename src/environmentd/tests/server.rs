@@ -2686,6 +2686,57 @@ fn test_internal_console_proxy() {
 }
 
 #[mz_ore::test]
+fn test_metrics_external_endpoint() {
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default(
+            "enable_external_metrics_endpoint".to_string(),
+            "true".to_string(),
+        )
+        .start_blocking();
+
+    let cluster_name = "test_cluster_1";
+    let label = format!("cluster_name=\"{cluster_name}\"");
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client
+        .batch_execute(&format!(
+            "CREATE CLUSTER {cluster_name} REPLICAS (r1 (SIZE 'scale=2,workers=2'))"
+        ))
+        .unwrap();
+
+    let url = Url::parse(&format!(
+        "http://{}/metrics/external",
+        server.http_local_addr()
+    ))
+    .unwrap();
+    let fetch_body = || {
+        let res = Client::new().get(url.clone()).send().unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        res.text().unwrap()
+    };
+
+    // Retry the scrape until the replica's `http` listener is up;
+    // until then `/metrics/external` only returns env's local metrics with no
+    // cluster_name labels.
+    Retry::default()
+        .max_duration(Duration::from_secs(60))
+        .retry(|_| {
+            if fetch_body().contains(label.as_str()) {
+                Ok(())
+            } else {
+                Err(format!("{label} not yet in /metrics/external"))
+            }
+        })
+        .unwrap();
+
+    client
+        .batch_execute(&format!("DROP CLUSTER {cluster_name}"))
+        .unwrap();
+
+    assert!(!fetch_body().contains(label.as_str()));
+}
+
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_internal_http_auth() {
     let server = test_util::TestHarness::default().start_blocking();
