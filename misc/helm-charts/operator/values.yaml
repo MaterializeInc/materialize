@@ -332,8 +332,8 @@ rbac:
 schedulerName:
 
 # -- The Kubernetes node label key used for availability zone affinity rules.
-# Defaults to the standard topology.kubernetes.io/zone when unset.
-# Set to topology.k8s.aws/zone-id for AWS zone IDs.
+# When unset, defaults to topology.k8s.aws/zone-id for AWS cloud providers
+# and topology.kubernetes.io/zone otherwise.
 availabilityZoneLabel:
 
 # Service account settings
