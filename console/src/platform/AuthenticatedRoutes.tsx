@@ -339,15 +339,9 @@ const EnvironmentRoutes = () => {
             index
             path="*"
             element={
-              <AppConfigSwitch
-                cloudConfigElement={
-                  <BaseLayout>
-                    <QueryHistoryRoutes />
-                  </BaseLayout>
-                }
-                // TODO (SangJunBak): Remove guard once we want to re-enable Query History for self managed, see <https://github.com/MaterializeInc/cloud/issues/10755>
-                selfManagedConfigElement={<RedirectToHome />}
-              />
+              <BaseLayout>
+                <QueryHistoryRoutes />
+              </BaseLayout>
             }
           />
         </Route>
