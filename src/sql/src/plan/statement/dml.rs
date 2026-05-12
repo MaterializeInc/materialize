@@ -1248,10 +1248,10 @@ GROUP BY om.global_id"#));
                     ]);
 
                     order_by.extend([
-                        "max_operator_memory_ratio DESC",
-                        "max_operator_records_ratio DESC",
-                        "om.worker_memory DESC",
-                        "worker_records DESC",
+                        "max_operator_memory_ratio DESC NULLS LAST",
+                        "max_operator_records_ratio DESC NULLS LAST",
+                        "om.worker_memory DESC NULLS LAST",
+                        "worker_records DESC NULLS LAST",
                     ]);
 
                     if set_worker_id {
@@ -1289,7 +1289,10 @@ GROUP BY pomt.global_id
                         "pg_size_pretty(omt.total_memory) AS total_memory",
                         "omt.total_records AS total_records",
                     ]);
-                    order_by.extend(["omt.total_memory DESC", "total_records DESC"]);
+                    order_by.extend([
+                        "omt.total_memory DESC NULLS LAST",
+                        "total_records DESC NULLS LAST",
+                    ]);
                 }
             }
             ExplainAnalyzeComputationProperty::Cpu => {
@@ -1383,7 +1386,10 @@ GROUP BY oc.global_id"#,));
                         "oac.total_ns / 1000 * '1 microsecond'::interval AS total_elapsed",
                     ]);
 
-                    order_by.extend(["max_operator_cpu_ratio DESC", "worker_elapsed DESC"]);
+                    order_by.extend([
+                        "max_operator_cpu_ratio DESC NULLS LAST",
+                        "worker_elapsed DESC NULLS LAST",
+                    ]);
 
                     if set_worker_id {
                         order_by.push("worker_id");
@@ -1416,7 +1422,7 @@ GROUP BY poct.global_id
                     from.push("LEFT JOIN object_cpu_totals oct USING (global_id)");
                     columns
                         .push("oct.total_ns / 1000 * '1 microsecond'::interval AS total_elapsed");
-                    order_by.extend(["total_elapsed DESC"]);
+                    order_by.extend(["total_elapsed DESC NULLS LAST"]);
                 }
             }
         }
