@@ -48,14 +48,14 @@ CREATE CLUSTER ${CLUSTER} REPLICAS (
         STORAGE ADDRESSES ['clusterd1:2103'],
         COMPUTECTL ADDRESSES ['clusterd1:2101'],
         COMPUTE ADDRESSES ['clusterd1:2102'],
-        WORKERS 1
+        WORKERS 4
     ),
     replica2 (
         STORAGECTL ADDRESSES ['clusterd2:2100'],
         STORAGE ADDRESSES ['clusterd2:2103'],
         COMPUTECTL ADDRESSES ['clusterd2:2101'],
         COMPUTE ADDRESSES ['clusterd2:2102'],
-        WORKERS 1
+        WORKERS 4
     )
 );
 GRANT ALL ON CLUSTER ${CLUSTER} TO ${PGUSER};

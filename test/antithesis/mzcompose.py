@@ -116,9 +116,19 @@ SERVICES = [
     # Antithesis kill either replica's backing container without taking
     # the workload offline.
     #
+    # `workers=4` per clusterd means each replica runs four timely worker
+    # threads in one process. The extra intra-process parallelism is the
+    # surface area Antithesis's thread-pausing fault targets — with a
+    # single worker, "pause one thread" effectively pauses the whole
+    # process, which the container-pause fault already covers. The matching
+    # `WORKERS 4` in the CREATE CLUSTER REPLICAS statement must stay in
+    # lockstep with this value (it's read by the controller, not by
+    # clusterd).
+    #
     # Each clusterd MUST have its own /scratch volume — the upsert
     # operator's RocksDB state lives there and takes an exclusive file
-    # lock. The DEFAULT_MZ_VOLUMES list uses a single named volume
+    # lock per worker (`/scratch/storage/upsert/<id>/<worker>/LOCK`).
+    # The DEFAULT_MZ_VOLUMES list uses a single named volume
     # `scratch:/scratch` shared across containers; passing per-instance
     # named volumes (`clusterd1_scratch`, `clusterd2_scratch`) keeps the
     # locks separate while leaving the other volumes shared. Found via
@@ -128,6 +138,7 @@ SERVICES = [
     # corrupted the upsert state.
     Clusterd(
         name="clusterd1",
+        workers=4,
         volumes=[
             "mzdata:/mzdata",
             "mydata:/var/lib/mysql-files",
@@ -137,6 +148,7 @@ SERVICES = [
     ),
     Clusterd(
         name="clusterd2",
+        workers=4,
         volumes=[
             "mzdata:/mzdata",
             "mydata:/var/lib/mysql-files",
