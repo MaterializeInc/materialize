@@ -263,8 +263,10 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
     ///
     /// The `logic` callback receives a borrow of the decoded datum vector, a timestamp, a
     /// diff, and two output sessions: one for `ok` updates of type `(D, T, Diff)` and one for
-    /// MFP-style `DataflowErrorSer` updates. It must return the amount of work performed so
-    /// the underlying operator can budget activations.
+    /// MFP-style `DataflowErrorSer` updates. It must return the number of records *produced*
+    /// (written to either session), not the number of input tuples consumed. The underlying
+    /// operator uses this to bound output per activation while running input-to-completion
+    /// for inputs that produce no output (e.g. filtered-out rows).
     ///
     /// If `key` is set, this is a promise that `logic` will produce no results on
     /// records for which the key does not evaluate to the value. This is used to
@@ -332,8 +334,9 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
     }
 
     /// Ok-only variant of [`Self::flat_map`]. The `logic` callback receives a single output
-    /// session and cannot produce errors. The returned err collection comes solely from the
-    /// arrangement; no extra operator is built to carry an empty MFP-error stream.
+    /// session, cannot produce errors, and returns the number of records produced (see
+    /// [`Self::flat_map`] for fuel semantics). The returned err collection comes solely from
+    /// the arrangement; no extra operator is built to carry an empty MFP-error stream.
     pub fn flat_map_ok<D, L>(
         &self,
         key: Option<&Row>,
@@ -668,7 +671,9 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// The function presents the contents of the trace as `(key, value, time, delta)` tuples,
     /// where key and value are potentially specialized, but convertible into rows. The `logic`
     /// callback writes ok results into the first session and errors into the second, returning
-    /// the amount of work performed so the operator can fuel-limit its activations.
+    /// the number of records produced (not input tuples consumed). The operator uses the sum
+    /// as fuel to bound output per activation; input tuples that produce no output are
+    /// walked through to completion within a batch.
     fn flat_map_core_fallible<Tr, D, L>(
         trace: Arranged<'scope, Tr>,
         key: Option<&<Tr::KeyContainer as BatchContainer>::Owned>,
@@ -769,10 +774,11 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         (ok_stream, err_stream)
     }
 
-    /// Ok-only variant of [`Self::flat_map_core_fallible`]. The `logic` callback writes results into a
-    /// single output session and returns the amount of work performed. Use this when the caller
-    /// statically knows it will never produce `DataflowErrorSer` records, to avoid building a
-    /// second output port and the empty err stream that would follow it.
+    /// Ok-only variant of [`Self::flat_map_core_fallible`]. The `logic` callback writes results
+    /// into a single output session and returns the number of records produced (see the
+    /// fallible variant for fuel semantics). Use this when the caller statically knows it
+    /// will never produce `DataflowErrorSer` records, to avoid building a second output port
+    /// and the empty err stream that would follow it.
     fn flat_map_core_ok<Tr, D, L>(
         trace: Arranged<'scope, Tr>,
         key: Option<&<Tr::KeyContainer as BatchContainer>::Owned>,
@@ -1273,9 +1279,14 @@ where
 }
 
 /// Walk a cursor, calling `emit` for each consolidated `(key, val, time, diff)` tuple. If `key`
-/// is set, the cursor is seeked to it and only values for that key are produced. The cursor
-/// stops as soon as `emit` has reported at least `*fuel` units of work, leaving the cursor in
-/// place so that work can resume on a later call.
+/// is set, the cursor is seeked to it and only values for that key are produced.
+///
+/// `emit` returns the number of records it produced for the given input tuple (0 if it
+/// filtered the tuple out). The cursor stops as soon as the accumulated emit count reaches
+/// `*fuel`, leaving the cursor in place so work can resume on a later call. Because the
+/// metric is output-produced and not input-consumed, input tuples that produce no output are
+/// walked through to completion within a single call; this matches our run-to-completion
+/// preference for selective MFPs.
 fn walk_cursor<C, F>(
     cursor: &mut C,
     batch: &C::Storage,
