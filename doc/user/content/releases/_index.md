@@ -48,13 +48,24 @@ improvements, and bug fixes.
 
 ### Features {#v26.23-features}
 
-- **Dynamic Kafka brokers while using PrivateLink**: Kafka connections now support
-  `MATCHING 'pattern' USING AWS PRIVATELINK conn (...)` inside `BROKERS (...)`,
-  enabling pattern-based routing rules for dynamically discovered brokers returned
-  in Kafka metadata, and a new `BOOTSTRAP BROKER 'addr' USING AWS PRIVATELINK
-  conn (...)` top-level option for specifying the initial bootstrap address with
-  an explicit PrivateLink tunnel. This resolves AZ-mapping issues with PrivateLink
-  Kafka connections that rely on broker discovery.
+- **Dynamic Kafka brokers with AWS PrivateLink**: Kafka connections can now
+  route dynamically discovered brokers through a PrivateLink tunnel, rather than
+  requiring every advertised broker to be enumerated in the `BROKERS (...)`
+  clause. Two new options are available:
+  - `MATCHING 'pattern' USING AWS PRIVATELINK conn (...)` inside `BROKERS (...)`
+    associates a PrivateLink connection with any broker whose advertised
+    hostname matches `pattern`, including brokers that only appear in Kafka
+    metadata after the connection is established.
+  - `BOOTSTRAP BROKER 'addr' USING AWS PRIVATELINK conn (...)` pins the initial
+    bootstrap address to an explicit PrivateLink tunnel.
+
+  Together, these resolve availability-zone mismatches that previously affected
+  MSK and other Kafka clusters that rely on broker discovery, by ensuring every
+  broker, including those learned from metadata, is reached through a
+  PrivateLink endpoint in the broker's own AZ. Refer to our documentation on
+  [AWS PrivateLink connections](/ingest-data/network-security/privatelink/) and
+  the [Kafka `CREATE CONNECTION` PrivateLink syntax](/sql/create-connection/#kafka-privatelink-syntax)
+  for more information.
 
 ### Improvements {#v26.23-improvements}
 
@@ -77,9 +88,22 @@ improvements, and bug fixes.
   `FORMAT PARQUET` now rejects Parquet-incompatible column types (such as
   `interval`) at query planning time with a clear error, rather than failing at
   execution time with an opaque message.
-- **`mcp-developer-analysis`**: A new AI agent skill that pairs with the
+- **`mcp-developer-analysis`**: A new
+  [coding agent skill](/integrations/coding-agent-skills/) that pairs with the
   `/api/mcp/developer` endpoint to provide diagnostic workflows, system catalog
   references, and remediation runbooks for AI-powered troubleshooting.
+- **System catalog ontology for the MCP developer server**: The system
+  catalog now exposes an ontology that describes how `mz_*` tables relate to
+  one another and which tables to consult for common diagnostic questions. The
+  [MCP server for developers](/integrations/mcp-server/mcp-developer/) uses
+  this ontology to plan catalog queries directly instead of probing the schema,
+  reducing the number of round trips needed to answer questions about
+  hydration, freshness, and resource usage.
+- **~10% faster materialized view hydration**: We've reduced the work performed
+  during initial materialized view hydration, observing approximately 10%
+  faster hydration times across our benchmarks. This shortens the window
+  between creating (or restarting) a materialized view and the point at which
+  it begins serving up-to-date results.
 
 ### Bug Fixes {#v26.23-bug-fixes}
 
