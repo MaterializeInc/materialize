@@ -29,10 +29,8 @@ This patch release includes a bug fix.
 
 ## v26.23.2
 *Released to Materialize Cloud: 2026-05-11* <br>
-*Released to Materialize Self-Managed: 2026-05-11* <br>
 
-This patch release fixes memory and CPU regressions on storage replicas
-introduced in v26.23.0.
+This patch release includes bug fixes.
 
 ### Bug Fixes {#v26.23.2-bug-fixes}
 
@@ -44,14 +42,13 @@ introduced in v26.23.0.
 
 ## v26.23.0
 *Released to Materialize Cloud: 2026-05-07* <br>
-*Released to Materialize Self-Managed: 2026-05-08* <br>
 
 This release introduces enhanced Kafka PrivateLink routing options, security
 improvements, and bug fixes.
 
 ### Features {#v26.23-features}
 
-- **Kafka MATCHING broker rules for PrivateLink**: Kafka connections now support
+- **Dynamic Kafka brokers while using PrivateLink**: Kafka connections now support
   `MATCHING 'pattern' USING AWS PRIVATELINK conn (...)` inside `BROKERS (...)`,
   enabling pattern-based routing rules for dynamically discovered brokers returned
   in Kafka metadata, and a new `BOOTSTRAP BROKER 'addr' USING AWS PRIVATELINK
@@ -80,9 +77,9 @@ improvements, and bug fixes.
   `FORMAT PARQUET` now rejects Parquet-incompatible column types (such as
   `interval`) at query planning time with a clear error, rather than failing at
   execution time with an opaque message.
-- **Continual Tasks feature removed**: The experimental Continual Tasks feature
-  has been removed; any existing continual task objects will be automatically
-  cleaned up during upgrade.
+- **`mcp-developer-analysis`**: A new AI agent skill that pairs with the
+  `/api/mcp/developer` endpoint to provide diagnostic workflows, system catalog
+  references, and remediation runbooks for AI-powered troubleshooting.
 
 ### Bug Fixes {#v26.23-bug-fixes}
 
@@ -123,16 +120,6 @@ improvements, and bug fixes.
 - Fixed Self-Managed Kubernetes deployments where setting both
   `cluster_topology_spread_soft = on` and `cluster_topology_spread_min_domains`
   caused all replica pod creation to fail with an admission error.
-
-### Agent Skills {#v26.23-agent-skills}
-
-- **`materialize-docs`**: A new AI agent skill bundling the Materialize
-  documentation (SQL syntax, data ingestion, concepts, integrations, and
-  deployment) so coding assistants can answer Materialize questions without
-  web access.
-- **`mcp-developer-analysis`**: A new AI agent skill that pairs with the
-  `/api/mcp/developer` endpoint to provide diagnostic workflows, system catalog
-  references, and remediation runbooks for AI-powered troubleshooting.
 
 ## v26.22.0
 *Released to Materialize Cloud: 2026-04-30* <br>
