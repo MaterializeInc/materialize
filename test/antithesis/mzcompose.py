@@ -127,36 +127,24 @@ SERVICES = [
     # lockstep with this value (it's read by the controller, not by
     # clusterd).
     #
-    # Each clusterd MUST have its own /scratch volume — the upsert
-    # operator's RocksDB state lives there and takes an exclusive file
-    # lock per worker (`/scratch/storage/upsert/<id>/<worker>/LOCK`).
-    # The DEFAULT_MZ_VOLUMES list uses a single named volume
-    # `scratch:/scratch` shared across containers; passing per-instance
-    # named volumes (`clusterd1_scratch`, `clusterd2_scratch`) keeps the
-    # locks separate while leaving the other volumes shared. Found via
-    # an Antithesis run where clusterd1 deadlocked retrying to open
-    # `/scratch/storage/upsert/u3/0/LOCK` because clusterd2 held it,
-    # which then drove a continuous suspend-and-restart loop that
-    # corrupted the upsert state.
+    # `scratch_directory=None` matches production: cluster replicas in
+    # cloud deployments don't get a scratch disk, so the upsert operator's
+    # RocksDB initializes with `Env::mem_env()` and stores its state
+    # entirely in process memory. Passing a scratch directory would put
+    # us on a code path production never exercises, and would also
+    # require careful per-instance volume plumbing to avoid the two
+    # clusterds racing on the same `/scratch/storage/upsert/<id>/<w>/LOCK`
+    # file (which manifested as continuous Stalled/suspend-and-restart
+    # loops on clusterd1 in an earlier run).
     Clusterd(
         name="clusterd1",
         workers=4,
-        volumes=[
-            "mzdata:/mzdata",
-            "mydata:/var/lib/mysql-files",
-            "tmp:/share/tmp",
-            "clusterd1_scratch:/scratch",
-        ],
+        scratch_directory=None,
     ),
     Clusterd(
         name="clusterd2",
         workers=4,
-        volumes=[
-            "mzdata:/mzdata",
-            "mydata:/var/lib/mysql-files",
-            "tmp:/share/tmp",
-            "clusterd2_scratch:/scratch",
-        ],
+        scratch_directory=None,
     ),
     Materialized(
         external_blob_store=True,

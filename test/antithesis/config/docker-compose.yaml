@@ -241,7 +241,6 @@ services:
     - --
     command:
     - clusterd
-    - --scratch-directory=/scratch
     ports:
     - 2100
     - 2101
@@ -269,7 +268,7 @@ services:
     - mzdata:/mzdata
     - mydata:/var/lib/mysql-files
     - tmp:/share/tmp
-    - clusterd1_scratch:/scratch
+    - scratch:/scratch
     restart: 'no'
     stop_grace_period: 120s
     platform: linux/amd64
@@ -280,7 +279,6 @@ services:
     - --
     command:
     - clusterd
-    - --scratch-directory=/scratch
     ports:
     - 2100
     - 2101
@@ -308,7 +306,7 @@ services:
     - mzdata:/mzdata
     - mydata:/var/lib/mysql-files
     - tmp:/share/tmp
-    - clusterd2_scratch:/scratch
+    - scratch:/scratch
     restart: 'no'
     stop_grace_period: 120s
     platform: linux/amd64
@@ -548,5 +546,3 @@ volumes:
   scratch: null
   mysqldata_primary: null
   mysqldata_replica: null
-  clusterd1_scratch: null
-  clusterd2_scratch: null
