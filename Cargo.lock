@@ -5815,6 +5815,7 @@ dependencies = [
 name = "mz-catalog"
 version = "0.0.0"
 dependencies = [
+ "antithesis_sdk",
  "anyhow",
  "async-trait",
  "base64 0.22.1",

@@ -17,6 +17,7 @@ use std::str::FromStr;
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
+use antithesis_sdk::assert_always_greater_than;
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
 use futures::{FutureExt, StreamExt};
@@ -41,6 +42,7 @@ use mz_repr::Diff;
 use mz_storage_client::controller::PersistEpoch;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::sources::SourceData;
+use serde_json::json;
 use sha2::Digest;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tracing::{debug, info, warn};
@@ -145,6 +147,21 @@ impl FenceableToken {
                 current_token,
                 fence_token,
             } => {
+                // The two `assert!` calls below are the natural placement
+                // for an Antithesis `assert_always!` covering the
+                // FenceableToken state-machine invariant. They are not
+                // wrapped today because Materialize does not run multiple
+                // concurrent environmentd processes against the same
+                // catalog shard, so the `Fenced` state is unreachable in
+                // every supported topology — including the Antithesis
+                // topology in this repo. Wrapping them would create
+                // assertions Antithesis cannot exercise, which is dead
+                // weight in coverage reports. If we ever ship multi-
+                // environmentd (e.g. for a 0DT-preflight Antithesis run),
+                // convert these to `assert_always!` with distinct
+                // messages so a violation becomes a reportable property
+                // failure rather than a panic. See the
+                // `epoch-fencing-prevents-split-brain` catalog entry.
                 assert!(
                     fence_token > current_token,
                     "must be fenced by higher token; current={current_token:?}, fence={fence_token:?}"
@@ -1182,12 +1199,43 @@ impl UnopenedPersistCatalogState {
                 "fencing previous catalogs"
             );
             if matches!(self.mode, Mode::Writable) {
+                // Snapshot the prior durable epoch so the post-CaS anchor
+                // below can verify monotonicity. Captured before the write
+                // because `compare_and_append` may call `sync()` which
+                // reads new state into `self.fenceable_token`.
+                let prior_durable_epoch = self
+                    .fenceable_token
+                    .token()
+                    .map(|t| t.epoch.get())
+                    .unwrap_or(0);
                 match self
                     .compare_and_append(fence_updates.clone(), commit_ts)
                     .await
                 {
                     Ok(upper) => {
                         commit_ts = upper;
+                        // Antithesis anchor for `epoch-fencing-prevents-
+                        // split-brain`: after our fence-token CaS commits,
+                        // the freshly-minted epoch we just persisted must
+                        // be strictly greater than the prior durable
+                        // epoch. A regression here would mean a future
+                        // lower-epoch writer would not be fenced out by
+                        // the write we just made, opening the split-brain
+                        // window the catalog is supposed to close.
+                        let new_epoch = current_fenceable_token
+                            .token()
+                            .expect("freshly minted Unfenced token always has a current_token")
+                            .epoch
+                            .get();
+                        assert_always_greater_than!(
+                            new_epoch,
+                            prior_durable_epoch,
+                            "catalog fencing: new durable epoch did not strictly increase after fence-token CaS",
+                            &json!({
+                                "prior_durable_epoch": prior_durable_epoch,
+                                "new_epoch": new_epoch,
+                            })
+                        );
                     }
                     Err(CompareAndAppendError::Fence(e)) => return Err(e.into()),
                     Err(e @ CompareAndAppendError::UpperMismatch { .. }) => {
