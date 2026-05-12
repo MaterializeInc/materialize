@@ -326,6 +326,7 @@ impl Plan {
             StatementKind::Update => &[PlanKind::ReadThenWrite],
             StatementKind::ValidateConnection => &[PlanKind::ValidateConnection],
             StatementKind::AlterRetainHistory => &[PlanKind::AlterRetainHistory],
+            StatementKind::ExecuteUnitTest => &[],
         }
     }
 

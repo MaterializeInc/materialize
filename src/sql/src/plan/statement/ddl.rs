@@ -3256,7 +3256,7 @@ fn plan_sink(
             }
             let indices = key_columns
                 .iter()
-                .map(|col| -> anyhow::Result<usize> {
+                .map(|col| {
                     let name_idx =
                         desc.get_by_name(col)
                             .map(|(idx, _type)| idx)
@@ -3264,7 +3264,7 @@ fn plan_sink(
                                 sql_err!("column referenced in KEY does not exist: {}", col)
                             })?;
                     if desc.get_unambiguous_name(name_idx).is_none() {
-                        sql_err!("column referenced in KEY is ambiguous: {}", col);
+                        sql_bail!("column referenced in KEY is ambiguous: {}", col);
                     }
                     Ok(name_idx)
                 })
@@ -6954,7 +6954,7 @@ pub fn plan_alter_connection(
         Err(_) if if_exists => {
             scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
                 name: conn_name.to_string(),
-                object_type: ObjectType::Sink,
+                object_type: ObjectType::Connection,
             });
 
             return Ok(Plan::AlterNoop(AlterNoopPlan {

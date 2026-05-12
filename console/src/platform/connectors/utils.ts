@@ -28,7 +28,10 @@ const TB = 1024 * 1024 * 1024 * 1024;
  */
 export const snapshotting = (connector: ConnectorStatusInfo) => {
   const supportsSnapshotting =
-    connector.type === "postgres" || connector.type === "kakfa";
+    connector.type === "postgres" ||
+    connector.type === "kafka" ||
+    connector.type === "mysql" ||
+    connector.type === "sql-server";
   return (
     supportsSnapshotting &&
     "snapshotCommitted" in connector &&

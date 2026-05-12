@@ -247,6 +247,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     args = parser.parse_args()
 
+    if not os.getenv("BUILDKITE_COMMIT"):
+        raise UIError(
+            "BUILDKITE_COMMIT must be set (and valid) when running cloud-canary"
+        )
+
     files = list(
         itertools.chain.from_iterable(
             [

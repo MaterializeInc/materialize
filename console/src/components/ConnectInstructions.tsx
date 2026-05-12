@@ -35,12 +35,18 @@ export interface ConnectInstructionsProps extends BoxProps {
   mcpBase64Token?: string;
   /** Called when the active tab changes. */
   onTabChange?: (title: string) => void;
+  /** Callback to generate a new MCP token (creates an app password). */
+  onGenerateToken?: () => void;
+  /** Whether token generation is in progress. */
+  isGeneratingToken?: boolean;
 }
 
 const ConnectInstructions = ({
   user,
   onTabChange,
   mcpBase64Token,
+  onGenerateToken,
+  isGeneratingToken,
   ...props
 }: ConnectInstructionsProps): JSX.Element => {
   const [currentEnvironment] = useAtom(currentEnvironmentState);
@@ -129,6 +135,8 @@ const ConnectInstructions = ({
             <McpConnectInstructions
               userStr={userStr}
               mcpBase64Token={mcpBase64Token}
+              onGenerateToken={onGenerateToken}
+              isGeneratingToken={isGeneratingToken}
             />
           ),
           icon: <ConnectionIcon w="4" h="4" />,
