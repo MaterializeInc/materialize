@@ -22,7 +22,7 @@ import logging
 import os
 
 from helper_kafka import ensure_topic
-from helper_pg import execute_retry
+from helper_pg import create_source_idempotent
 from helper_upsert_source import ensure_kafka_connection
 
 LOG = logging.getLogger("antithesis.helper_none_source")
@@ -46,13 +46,14 @@ def ensure_none_text_source() -> None:
     # comes later in the driver. Pre-create via admin client so the metadata
     # fetch succeeds on the first run.
     ensure_topic(TOPIC_NONE_TEXT)
-    execute_retry(
+    create_source_idempotent(
         f"CREATE SOURCE IF NOT EXISTS {SOURCE_NONE_TEXT} "
         f"IN CLUSTER {CLUSTER} "
         f"FROM KAFKA CONNECTION antithesis_kafka_conn (TOPIC '{TOPIC_NONE_TEXT}') "
         f"FORMAT TEXT "
         f"INCLUDE PARTITION, OFFSET "
-        f"ENVELOPE NONE"
+        f"ENVELOPE NONE",
+        SOURCE_NONE_TEXT,
     )
     LOG.info(
         "none-envelope source %s ready (topic=%s)", SOURCE_NONE_TEXT, TOPIC_NONE_TEXT

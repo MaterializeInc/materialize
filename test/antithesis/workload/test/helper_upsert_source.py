@@ -22,7 +22,7 @@ import logging
 import os
 
 from helper_kafka import ensure_topic
-from helper_pg import execute_retry
+from helper_pg import create_source_idempotent, execute_retry
 
 LOG = logging.getLogger("antithesis.helper_upsert_source")
 
@@ -48,11 +48,12 @@ def ensure_upsert_text_source() -> None:
     """
     ensure_kafka_connection()
     ensure_topic(TOPIC_UPSERT_TEXT)
-    execute_retry(
+    create_source_idempotent(
         f"CREATE SOURCE IF NOT EXISTS {SOURCE_UPSERT_TEXT} "
         f"IN CLUSTER {CLUSTER} "
         f"FROM KAFKA CONNECTION {CONNECTION_NAME} (TOPIC '{TOPIC_UPSERT_TEXT}') "
         f"KEY FORMAT TEXT VALUE FORMAT TEXT "
-        f"ENVELOPE UPSERT"
+        f"ENVELOPE UPSERT",
+        SOURCE_UPSERT_TEXT,
     )
     LOG.info("upsert source %s ready (topic=%s)", SOURCE_UPSERT_TEXT, TOPIC_UPSERT_TEXT)
