@@ -37,6 +37,10 @@ const D_BEAVER_LABEL: &str = "dbeaver";
 const MZ_VSCODE_LABEL: &str = "mz_vscode";
 /// Prometheus label for [`ApplicationNameHint::MzGrafanaIntegration`].
 const MZ_GRAFANA_LABEL: &str = "mz_grafana";
+/// Prometheus label for [`ApplicationNameHint::MzMcpAgent`].
+const MZ_MCP_AGENT_LABEL: &str = "mz_mcp_agents";
+/// Prometheus label for [`ApplicationNameHint::MzMcpDeveloper`].
+const MZ_MCP_DEVELOPER_LABEL: &str = "mz_mcp_developer";
 
 /// A hint for what application is making a request to the adapter.
 ///
@@ -77,6 +81,10 @@ pub enum ApplicationNameHint {
     MzVscode(Private),
     /// Request came from our Grafana integration.
     MzGrafanaIntegration(Private),
+    /// Request came from the MCP agent endpoint.
+    MzMcpAgent(Private),
+    /// Request came from the MCP developer endpoint.
+    MzMcpDeveloper(Private),
 }
 
 impl ApplicationNameHint {
@@ -94,6 +102,8 @@ impl ApplicationNameHint {
             "tableplus" => ApplicationNameHint::TablePlus(Private),
             "mz_vscode" => ApplicationNameHint::MzVscode(Private),
             "mz_grafana_integration" => ApplicationNameHint::MzGrafanaIntegration(Private),
+            "mz_mcp_agents" => ApplicationNameHint::MzMcpAgent(Private),
+            "mz_mcp_developer" => ApplicationNameHint::MzMcpDeveloper(Private),
             // Terraform provides the version as a suffix.
             x if x.starts_with("terraform-provider-materialize") => {
                 ApplicationNameHint::TerraformProviderMaterialize(Private)
@@ -124,6 +134,8 @@ impl ApplicationNameHint {
             ApplicationNameHint::TablePlus(_) => TABLE_PLUS_LABEL,
             ApplicationNameHint::MzVscode(_) => MZ_VSCODE_LABEL,
             ApplicationNameHint::MzGrafanaIntegration(_) => MZ_GRAFANA_LABEL,
+            ApplicationNameHint::MzMcpAgent(_) => MZ_MCP_AGENT_LABEL,
+            ApplicationNameHint::MzMcpDeveloper(_) => MZ_MCP_DEVELOPER_LABEL,
             ApplicationNameHint::TerraformProviderMaterialize(_) => {
                 TERRAFORM_PROVIDER_MATERIALIZE_LABEL
             }
