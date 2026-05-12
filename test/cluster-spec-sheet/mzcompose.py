@@ -1487,8 +1487,8 @@ class TpchLeftJoinsScenario(Scenario):
 
     The driving relation is `lineitem` (~6M rows per TPCH scale factor), which
     is LEFT JOINed against `orders`, `customer`, `nation`, and `region` along
-    their natural FK chain. With SF=8 the driving side is ~48M rows; bump
-    `--scale-tpch-left-joins` for larger runs.
+    their natural FK chain. Default SF=1000 targets ~1TB of input data;
+    override `--scale-tpch-left-joins` (e.g. 8) for faster local runs.
     """
 
     def name(self) -> str:
@@ -2524,8 +2524,8 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
     parser.add_argument(
         "--scale-tpch-left-joins",
         type=float,
-        default=8,
-        help="TPCH LEFT JOINs scale factor.",
+        default=1000,
+        help="TPCH LEFT JOINs scale factor. Default ~1TB; override for faster local runs.",
     )
     parser.add_argument(
         "--scale-auction", type=int, default=3, help="Auction scale factor."
