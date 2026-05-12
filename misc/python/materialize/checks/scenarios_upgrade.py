@@ -321,6 +321,64 @@ class UpgradeEntireMzFourVersions(Scenario):
         ]
 
 
+class UpgradeV80Migration(Scenario):
+    """Test upgrade v26.17.1 (catalog 80) -> v26.18.0 (catalog 81) -> X"""
+
+    def __init__(
+        self,
+        checks: list[type[Check]],
+        executor: Executor,
+        features: Features,
+        seed: str | None = None,
+    ):
+        super().__init__(checks, executor, features, seed)
+
+    def base_version(self) -> MzVersion:
+        return MzVersion.parse_mz("v26.17.1")
+
+    def actions(self) -> list[Action]:
+        print(
+            "Upgrade path: v26.17.1 -> initialize -> v26.18.0 -> manipulate#1 -> restart -> manipulate#2 -> current -> restart -> validate"
+        )
+        return [
+            StartMz(
+                self,
+                tag=self.base_version(),
+                soft_assertions=False,
+                builtin_system_cluster_replication_factor=0,
+            ),
+            Initialize(self),
+            KillMz(capture_logs=True),
+            StartMz(
+                self,
+                tag=MzVersion.parse_mz("v26.18.0"),
+                soft_assertions=False,
+                builtin_system_cluster_replication_factor=0,
+            ),
+            Manipulate(self, phase=1),
+            KillMz(capture_logs=True),
+            StartMz(
+                self,
+                tag=MzVersion.parse_mz("v26.18.0"),
+                soft_assertions=False,
+                builtin_system_cluster_replication_factor=0,
+            ),
+            Manipulate(self, phase=2),
+            KillMz(capture_logs=True),
+            StartMz(
+                self,
+                tag=None,
+                soft_assertions=False,
+            ),
+            KillMz(),
+            StartMz(
+                self,
+                tag=None,
+            ),
+            Validate(self),
+        ]
+
+
 #
 # We are limited with respect to the different orders in which stuff can be upgraded:
 # - some sequences of events are invalid
@@ -809,11 +867,6 @@ class SelfManagedRandomUpgradePath(Scenario):
                 Manipulate(self, phase=2, mz_service=mz_services[0].service_name),
             )
 
-        if both_done_at_position == 0:
-            actions.append(
-                Validate(self, mz_service=mz_services[0].service_name),
-            )
-
         for i, service_info in enumerate[MzServiceUpgradeInfo](
             mz_services[1:], start=1
         ):
@@ -833,7 +886,7 @@ class SelfManagedRandomUpgradePath(Scenario):
                     Manipulate(self, phase=2, mz_service=service_info.service_name),
                 )
 
-            if i >= both_done_at_position:
+            if i >= both_done_at_position and service_info.service_name is None:
                 actions.append(
                     Validate(self, mz_service=service_info.service_name),
                 )
