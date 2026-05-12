@@ -18,6 +18,7 @@ use columnation::{Columnation, CopyRegion};
 use dec::OrderedDecimal;
 use differential_dataflow::Diff as _;
 use differential_dataflow::collection::AsCollection;
+use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::difference::{IsZero, Multiply, Semigroup};
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
@@ -102,50 +103,58 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             let max_demand = demand.iter().max().map(|x| *x + 1).unwrap_or(0);
             let skips = mz_compute_types::plan::reduce::convert_indexes_to_skips(demand);
 
-            let (key_val_input, err) = input.enter_region(inner).flat_map(
-                input_key.map(|k| (k, None)),
-                max_demand,
-                move |row_datums, time, diff, ok_session, err_session| {
-                    let mut row_builder = SharedRow::get();
-                    let temp_storage = RowArena::new();
+            let (key_val_input, err) = input
+                .enter_region(inner)
+                .flat_map::<_, ConsolidatingContainerBuilder<Vec<((Row, Row), T, Diff)>>, _>(
+                    input_key.map(|k| (k, None)),
+                    max_demand,
+                    move |row_datums, time, diff, ok_session, err_session| {
+                        let mut row_builder = SharedRow::get();
+                        let temp_storage = RowArena::new();
 
-                    let mut row_iter = row_datums.drain(..);
-                    let mut datums_local = datums.borrow();
-                    // Unpack only the demanded columns.
-                    for skip in skips.iter() {
-                        datums_local.push(row_iter.nth(*skip).unwrap());
-                    }
-
-                    // Evaluate the key expressions.
-                    let key =
-                        key_plan.evaluate_into(&mut datums_local, &temp_storage, &mut row_builder);
-                    let key = match key {
-                        Err(e) => {
-                            err_session.give((e.into(), time, diff));
-                            return 1;
+                        let mut row_iter = row_datums.drain(..);
+                        let mut datums_local = datums.borrow();
+                        // Unpack only the demanded columns.
+                        for skip in skips.iter() {
+                            datums_local.push(row_iter.nth(*skip).unwrap());
                         }
-                        Ok(Some(key)) => key.clone(),
-                        Ok(None) => panic!("Row expected as no predicate was used"),
-                    };
 
-                    // Evaluate the value expressions.
-                    // The prior evaluation may have left additional columns we should delete.
-                    datums_local.truncate(skips.len());
-                    let val =
-                        val_plan.evaluate_into(&mut datums_local, &temp_storage, &mut row_builder);
-                    let val = match val {
-                        Err(e) => {
-                            err_session.give((e.into(), time, diff));
-                            return 1;
-                        }
-                        Ok(Some(val)) => val.clone(),
-                        Ok(None) => panic!("Row expected as no predicate was used"),
-                    };
+                        // Evaluate the key expressions.
+                        let key = key_plan.evaluate_into(
+                            &mut datums_local,
+                            &temp_storage,
+                            &mut row_builder,
+                        );
+                        let key = match key {
+                            Err(e) => {
+                                err_session.give((e.into(), time, diff));
+                                return 1;
+                            }
+                            Ok(Some(key)) => key.clone(),
+                            Ok(None) => panic!("Row expected as no predicate was used"),
+                        };
 
-                    ok_session.give(((key, val), time, diff));
-                    1
-                },
-            );
+                        // Evaluate the value expressions.
+                        // The prior evaluation may have left additional columns we should delete.
+                        datums_local.truncate(skips.len());
+                        let val = val_plan.evaluate_into(
+                            &mut datums_local,
+                            &temp_storage,
+                            &mut row_builder,
+                        );
+                        let val = match val {
+                            Err(e) => {
+                                err_session.give((e.into(), time, diff));
+                                return 1;
+                            }
+                            Ok(Some(val)) => val.clone(),
+                            Ok(None) => panic!("Row expected as no predicate was used"),
+                        };
+
+                        ok_session.give(((key, val), time, diff));
+                        1
+                    },
+                );
 
             // Render the reduce plan
             self.render_reduce_plan(
