@@ -1,6 +1,6 @@
 ---
 commit: 007c7af9d9970fb2030c7212368b232e0fbc363e
-updated: 2026-05-11
+updated: 2026-05-12
 ---
 
 # Property Catalog: Materialize
@@ -189,6 +189,7 @@ Properties that verify the system reaches interesting states under fault injecti
 |---|---|
 | **Type** | Liveness |
 | **Priority** | P0 — most fundamental operational property; prerequisite for all others |
+| **Status** | **Implemented (workload-side)** — `test/antithesis/workload/test/anytime_fault_recovery_exercised.py`. Anytime driver probes `SELECT 1` with a short connect timeout (bypassing helper_pg's retry budget so the fault-active window is observable) and records `sometimes("...succeeded after a previously-observed connect failure", …)` for the recovery transition, plus corroborating `sometimes` anchors for "observed replica non-online" and "at least one probe succeeded this invocation". |
 | **Property** | After the coordinator (environmentd) crashes and restarts, the system eventually becomes healthy (readiness endpoint returns 200) and can serve SQL queries. |
 | **Invariant** | `Sometimes(healthy_after_crash)`: the system must reach a state where it can serve queries after a crash. This confirms recovery works end-to-end, not just in unit tests. |
 | **Antithesis Angle** | Kill environmentd at various points during operation. Verify it restarts, reconnects to persist, recovers catalog, and serves queries. Antithesis explores crash timing — during DDL, during peek, during group_commit. |
@@ -211,6 +212,7 @@ Properties that verify the system reaches interesting states under fault injecti
 |---|---|
 | **Type** | Liveness |
 | **Priority** | P1 — end-to-end user-visible correctness; Materialize's core value |
+| **Status** | **Implemented (workload-side, table-backed)** — `test/antithesis/workload/test/parallel_driver_mv_reflects_table_updates.py` + `helper_table_mv.py`. Each invocation inserts N rows tagged with a per-invocation prefix into `mv_input_table`, polls the rolling-count MV `mv_input_count` after a quiet period, and pairs `sometimes("mv: row_count caught up …", …)` (liveness anchor) with `always("mv: row_count equals inserted count …", …)` (safety on the settled count). Kafka-source-backed MV is covered indirectly by the Kafka-source drivers — direct MV-on-Kafka-source coverage is deferred. |
 | **Property** | After data is written to a source, materialized views that depend on that source eventually reflect the new data. |
 | **Invariant** | `Sometimes(mv_contains_new_data)`: after inserting data into a table or producing to a Kafka source, a SELECT on a dependent materialized view must eventually return the new data. |
 | **Antithesis Angle** | Insert data, inject faults (compute replica crash, storage reconnection), then verify the MV eventually shows the data. Antithesis explores whether faults during the incremental update pipeline cause permanent stalls. |
@@ -262,6 +264,7 @@ Properties specific to the Kafka source ingestion pipeline: `KafkaSourceReader` 
 |---|---|
 | **Type** | Liveness |
 | **Priority** | P1 — operational expectation; broker faults are a routine condition |
+| **Status** | **Implemented (workload-side, shared driver)** — `test/antithesis/workload/test/anytime_kafka_source_resumes_after_fault.py`. Continuous polling state machine per Kafka source: `OBSERVING` -> `STALLED` after N consecutive identical `offset_committed` samples, then `Reachable("...resumed advancing after a sustained stall", …)` on the first strictly-greater sample. The driver tags each recovery with `saw_kafka_metadata_failure` (broker-fault signal) and `saw_replica_non_online` (clusterd-restart signal) so triage can distinguish the two fault classes. |
 | **Property** | After a transient network partition or Kafka broker outage that prevents the source from making progress, once connectivity is restored, the source eventually ingests all messages that were produced during the outage. |
 | **Invariant** | `Sometimes(source_resumes_after_broker_fault)`: at least once per run, after injecting a network fault between materialized and Kafka and then calling `ANTITHESIS_STOP_FAULTS`, the workload observes the source's `COUNT(*)` advance past its pre-fault value. |
 | **Antithesis Angle** | Network partition between the `materialized` container and the Kafka container; persist+metadata stay reachable. Tests rdkafka reconnect, snapshot statistics restoration (commit 0a34b6c79d), and that no permanent stall mode is entered. |
@@ -273,6 +276,7 @@ Properties specific to the Kafka source ingestion pipeline: `KafkaSourceReader` 
 |---|---|
 | **Type** | Liveness |
 | **Priority** | P1 — recovery from clusterd kill is the most common operational fault path |
+| **Status** | **Implemented (workload-side, shared driver)** — same `test/antithesis/workload/test/anytime_kafka_source_resumes_after_fault.py` as `kafka-source-survives-broker-fault`. The stall-then-advance transition is fault-kind-agnostic; `saw_replica_non_online` corroborates that the source recovered specifically from a clusterd kill. Combines with the existing `kafka-source-no-data-duplication` and `kafka-source-no-data-loss` assertions to also rule out double-counting and gaps on the rehydrated path. Requires node-termination faults to be enabled in the Antithesis tenant. |
 | **Property** | After clusterd (storage worker) is killed and restarted, the Kafka source recovers, replays the right resume offsets, and ingests messages produced before, during, and after the restart. |
 | **Invariant** | `Sometimes(source_recovered_after_clusterd_restart)`: after a kill+restart, eventually `COUNT(*) FROM source >= produced_count`. Combined with `kafka-source-no-data-duplication` to also rule out double-counting. |
 | **Antithesis Angle** | Direct test of the `storage-command-replay-idempotent` mechanism end-to-end through Kafka. Antithesis explores crash timing across the reclock mint, persist-sink append, and upsert snapshot-completion windows. Requires node-termination faults to be enabled. |
@@ -390,6 +394,7 @@ Properties specific to the Kafka source ingestion pipeline: `KafkaSourceReader` 
 |---|---|
 | **Type** | Liveness |
 | **Priority** | P2 — pre-existing concern under persist instability |
+| **Status** | **Implemented (SUT-side anchor)** — `src/storage/src/source/reclock.rs`: `ReclockOperator::mint` carries a local `cas_retry_count` and fires `assert_reachable!("reclock: mint completed after at least one compare_and_append UpperMismatch", …)` after the while-loop terminates when at least one `UpperMismatch` was observed. The reachability anchor covers the "retry path was exercised AND mint terminated" half of the property. The workload-side "source frontier advanced past the contention point" liveness check is approximated by the existing `anytime_kafka_frontier_monotonic.py` + `anytime_kafka_source_resumes_after_fault.py` drivers and is not duplicated here. |
 | **Property** | Under transient persist outages or competing writers, the reclock mint loop (`compare_and_append` with `UpperMismatch` retry, reclock.rs:160-166) eventually completes for every source-frontier advance that has data to bind. |
 | **Invariant** | `Sometimes(mint_completed_after_cas_retry)`: at least once per run, Antithesis observes a reclock mint that took >1 CaS attempt and then completed (i.e. a successful retry path was exercised). Critically, the workload should also observe that the source frontier eventually advances past the value of `source_upper` captured at the time of the contention — i.e. the loop is not livelocked. |
 | **Antithesis Angle** | Inject persist consensus latency, kill+restart concurrently to create a competing writer, race the metadata fetcher's partition-add against a mint that is already in flight. The retry loop in `mint()` has no upper bound; this property confirms it is not livelocked even under adversarial schedules. |
@@ -401,6 +406,7 @@ Properties specific to the Kafka source ingestion pipeline: `KafkaSourceReader` 
 |---|---|
 | **Type** | Safety |
 | **Priority** | P2 — observable statistics correctness; regression target for commit 3e32df1f69 |
+| **Status** | **Implemented (workload-side)** — `test/antithesis/workload/test/anytime_kafka_offset_known_not_below_committed.py`. Continuous polling driver queries every Kafka source's `mz_source_statistics_per_worker` row and fires `always("kafka: source offset_known < offset_committed", …)` whenever a single per-worker row has `offset_known < offset_committed`. Both fields are read from the same row of the same query so the comparison cannot cross a metric-update boundary. The SUT-side mirror in `src/storage/src/statistics.rs` is deferred. |
 | **Property** | For every Kafka source, the source-statistics view always reports `offset_known >= offset_committed`. The metric `offset_known` reflects what the broker has told us is available; `offset_committed` reflects what Materialize has durably ingested. Causally, `offset_known` cannot lag `offset_committed`. |
 | **Invariant** | `Always`: a polling assertion in the workload — `SELECT offset_known, offset_committed FROM mz_internal.mz_source_statistics_per_worker WHERE id = ?` — invariant `offset_known >= offset_committed`. Mirror as an `assert_always!` inside the statistics update path in `src/storage/src/statistics.rs`. |
 | **Antithesis Angle** | Clusterd restart resets `offset_known` to broker-reported watermark while `offset_committed` is restored from persist. If the restoration order is wrong, the invariant flips. Direct regression target for commit 3e32df1f69. |
