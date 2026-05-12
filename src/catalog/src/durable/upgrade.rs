@@ -240,7 +240,7 @@ macro_rules! objects {
     }
 }
 
-objects!([v74, v75, v76, v77, v78], [v79, v80, v81, v82]);
+objects!([v74, v75, v76, v77, v78], [v79, v80, v81, v82, v83]);
 
 /// The current version of the `Catalog`.
 pub use mz_catalog_protos::CATALOG_VERSION;
@@ -260,6 +260,7 @@ mod v78_to_v79;
 mod v79_to_v80;
 mod v80_to_v81;
 mod v81_to_v82;
+mod v82_to_v83;
 
 /// Describes a single action to take during a migration from `V1` to `V2`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -414,6 +415,10 @@ async fn run_upgrade(
             )
             .await
         }
+        // v82→v83 is a one-shot byte-level repair, not a proto evolution. It
+        // needs raw access to the snapshot's diffs (which `run_versioned_upgrade`
+        // strips) so it plugs into `run_upgrade` directly.
+        82 => v82_to_v83::upgrade(unopened_catalog_state, commit_ts).await,
 
         // Up-to-date, no migration needed!
         CATALOG_VERSION => Ok((CATALOG_VERSION, commit_ts)),
