@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/catalog/migrate.rs
-revision: af9155582e
+revision: a9a6e4db0f
 ---
 
 # adapter::catalog::migrate
