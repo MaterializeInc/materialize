@@ -107,6 +107,19 @@ pub static CREATE_ITEM_USAGE: LazyLock<BTreeSet<CatalogItemType>> = LazyLock::ne
 });
 pub static EMPTY_ITEM_USAGE: LazyLock<BTreeSet<CatalogItemType>> = LazyLock::new(BTreeSet::new);
 
+/// System catalog objects exempted from `check_restrict_to_user_objects`.
+///
+/// These views are the mechanism by which the MCP agent endpoint discovers
+/// data products the user has access to. Blocking them defeats the isolation
+/// model, so they are explicitly allowed even in restricted sessions.
+static RESTRICT_TO_USER_OBJECTS_ALLOWED_OIDS: LazyLock<BTreeSet<u32>> = LazyLock::new(|| {
+    use mz_pgrepr::oid;
+    btreeset! {
+        oid::VIEW_MZ_MCP_DATA_PRODUCTS_OID,
+        oid::VIEW_MZ_MCP_DATA_PRODUCT_DETAILS_OID,
+    }
+});
+
 /// Errors that can occur due to an unauthorized action.
 #[derive(Debug, thiserror::Error)]
 pub enum UnauthorizedError {
@@ -321,6 +334,9 @@ fn check_restrict_to_user_objects(
                 match item.item_type() {
                     CatalogItemType::Func | CatalogItemType::Type => {}
                     _ => {
+                        if RESTRICT_TO_USER_OBJECTS_ALLOWED_OIDS.contains(&item.oid()) {
+                            continue;
+                        }
                         return Err(UnauthorizedError::RestrictedSystemObject {
                             object_name: item.name().item.clone(),
                         });

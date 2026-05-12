@@ -711,6 +711,12 @@ fn eval_unmaterializable_func(
             ))
         }
         UnmaterializableFunc::MzSessionId => pack(Datum::from(state.config().session_id)),
+        UnmaterializableFunc::MzSessionRoleMemberships => {
+            let role_id = session.current_role_id();
+            let mut names = session_role_memberships(state, role_id);
+            names.sort();
+            pack_1d_array(names.iter().map(|n| Datum::from(n.as_str())).collect())
+        }
         UnmaterializableFunc::MzUptime => {
             let uptime = state.config().start_instant.elapsed();
             let uptime = chrono::Duration::from_std(uptime).map_or(Datum::Null, Datum::from);
@@ -779,5 +785,30 @@ fn role_oid_memberships_inner<'a>(
             .get_mut(&role.oid)
             .expect("inserted above")
             .extend(parent_membership);
+    }
+}
+
+/// Returns the names of all roles that the given role is transitively a member
+/// of, including itself. Used to evaluate `mz_session_role_memberships()`.
+fn session_role_memberships(catalog: &CatalogState, role_id: &RoleId) -> Vec<String> {
+    let mut visited = BTreeSet::new();
+    session_role_memberships_inner(catalog, role_id, &mut visited);
+    visited.into_iter().collect()
+}
+
+fn session_role_memberships_inner(
+    catalog: &CatalogState,
+    role_id: &RoleId,
+    visited: &mut BTreeSet<String>,
+) {
+    let role = catalog.get_role(role_id);
+    // Role names are unique and role membership graphs are enforced to be
+    // DAGs by DDL, so this visited check is a safety guard rather than an
+    // expected cycle-breaker.
+    if !visited.insert(role.name.clone()) {
+        return;
+    }
+    for parent_role_id in role.membership.map.keys() {
+        session_role_memberships_inner(catalog, parent_role_id, visited);
     }
 }

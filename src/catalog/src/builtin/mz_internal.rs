@@ -5813,7 +5813,12 @@ FROM mz_internal.mz_show_object_privileges
 WHERE
     CASE
         WHEN grantee = 'PUBLIC' THEN true
-        ELSE pg_has_role(grantee, 'USAGE')
+        -- Semantically equivalent to pg_has_role(grantee, 'USAGE'), which checks
+        -- whether the current user holds role `grantee`. For a nonexistent grantee
+        -- name, both return false. We use mz_session_role_memberships() instead
+        -- because pg_has_role internally calls mz_role_oid_memberships(), which
+        -- loads the full system role graph and is blocked in restricted sessions.
+        ELSE grantee = ANY(mz_internal.mz_session_role_memberships())
     END"#,
     access: vec![PUBLIC_SELECT],
     ontology: None,

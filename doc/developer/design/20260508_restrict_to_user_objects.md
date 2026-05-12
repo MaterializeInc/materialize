@@ -79,8 +79,14 @@ Fix: `UnmaterializableFunc` has an `allowed_in_restricted_session()` method with
 
 | Classification | Functions |
 |---|---|
-| **Allowed** (needed for query execution) | `current_database`, `current_schema`, `current_schemas`, `current_timestamp`, `current_user`, `session_user`, `mz_now`, `mz_session_id`, `is_rbac_enabled`, `viewable_variables` |
+| **Allowed** (needed for query execution) | `current_database`, `current_schema`, `current_schemas`, `current_timestamp`, `current_user`, `session_user`, `mz_now`, `mz_session_id`, `mz_session_role_memberships`, `is_rbac_enabled`, `viewable_variables` |
 | **Excluded** (internal system information, not relevant to data product queries) | `mz_version`, `mz_version_num`, `version`, `mz_environment_id`, `mz_is_superuser`, `mz_role_oid_memberships`, `mz_uptime`, `pg_postmaster_start_time`, `pg_backend_pid` |
+
+### MCP data product discovery
+
+`mz_mcp_data_products` and `mz_mcp_data_product_details` are system views used by the MCP agent endpoint to discover data products the session has access to. They are exempted from the system object block via an OID allowlist in `check_restrict_to_user_objects`.
+
+These views depend on `mz_show_my_object_privileges`, which originally used `pg_has_role(grantee, 'USAGE')`. That function calls `mz_role_oid_memberships()`, which is correctly blocked because it exposes the full system role graph. `mz_show_my_object_privileges` now uses `mz_session_role_memberships()` instead, which returns only the current session's transitive role chain as role names. This is semantically equivalent for the filter purpose and safe to allow in restricted sessions.
 
 ### `pg_catalog` and `information_schema`
 

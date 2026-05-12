@@ -406,6 +406,64 @@ SELECT * FROM agent_objects.next_arrivals;
 1,Station A
 COMPLETE 1
 
+# MCP data product views are whitelisted — the agent endpoint queries these
+# internally to discover what objects the user has access to.
+
+# mz_mcp_data_products returns the agent's granted objects (not just a count —
+# verifies the full chain through mz_show_my_object_privileges works correctly).
+simple conn=agent_restricted,user=agent
+SELECT object_name FROM mz_internal.mz_mcp_data_products ORDER BY object_name;
+----
+"materialize"."agent_objects"."next_arrivals"
+"materialize"."agent_objects"."transfer_windows"
+COMPLETE 2
+
+simple conn=agent_restricted,user=agent
+SELECT object_name FROM mz_internal.mz_mcp_data_product_details ORDER BY object_name;
+----
+"materialize"."agent_objects"."next_arrivals"
+"materialize"."agent_objects"."transfer_windows"
+COMPLETE 2
+
+# mz_session_role_memberships() is callable in a restricted session (it only
+# exposes the current session's role chain, not the full system graph).
+# Verify it walks the full transitive chain: grant agent membership in a parent
+# role and confirm both appear. Role graphs are DAGs (DDL-enforced), so the
+# visited-name guard in session_role_memberships_inner is a safety net, not
+# expected to fire.
+simple conn=mz_system,user=mz_system
+CREATE ROLE agent_parent;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT agent_parent TO agent;
+----
+COMPLETE 0
+
+simple conn=agent_hierarchy,user=agent
+SELECT 'agent' = ANY(mz_internal.mz_session_role_memberships()) AND 'agent_parent' = ANY(mz_internal.mz_session_role_memberships());
+----
+t
+COMPLETE 1
+
+simple conn=mz_system,user=mz_system
+REVOKE agent_parent FROM agent;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP ROLE agent_parent;
+----
+COMPLETE 0
+
+# mz_role_oid_memberships() is still blocked (exposes full system role graph).
+simple conn=agent_restricted,user=agent
+SELECT mz_internal.mz_role_oid_memberships();
+----
+db error: ERROR: access to system object function mz_role_oid_memberships is restricted
+DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
+
 # =============================================================================
 # Test: Joins and complex queries on user objects work with restriction active
 # =============================================================================

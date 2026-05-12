@@ -5150,6 +5150,11 @@ pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLo
                     custom_id: None,
                 }, oid::FUNC_MZ_ROLE_OID_MEMBERSHIPS;
         },
+        "mz_session_role_memberships" => Scalar {
+            params!() => UnmaterializableFunc::MzSessionRoleMemberships
+                => SqlScalarType::Array(Box::new(SqlScalarType::String)),
+                oid::FUNC_MZ_SESSION_ROLE_MEMBERSHIPS_OID;
+        },
         // There is no regclass equivalent for databases to look up
         // oids, so we have this helper function instead.
         "mz_database_oid" => Scalar {
