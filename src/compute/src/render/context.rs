@@ -264,9 +264,25 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
     /// The `logic` callback receives a borrow of the decoded datum vector, a timestamp, a
     /// diff, and two output sessions: one for `ok` updates of type `(D, T, Diff)` and one for
     /// MFP-style `DataflowErrorSer` updates. It must return the number of records *produced*
-    /// (written to either session), not the number of input tuples consumed. The underlying
-    /// operator uses this to bound output per activation while running input-to-completion
-    /// for inputs that produce no output (e.g. filtered-out rows).
+    /// (written to either session), not the number of input tuples consumed.
+    ///
+    /// # Fuel
+    ///
+    /// The operator accumulates the returned counts as fuel and yields when the total reaches
+    /// an internal refuel threshold. The metric is output-produced (not input-consumed) on
+    /// purpose: it regulates two asymmetric pressures.
+    ///
+    /// * **Drain inputs.** The operator holds a clone of each pending `Batch` until its work
+    ///   item pops; we want to release that memory back to the upstream arrangement as soon
+    ///   as possible. A `filter(false)` MFP returns 0 for every tuple, so fuel never trips
+    ///   and the cursor runs to end-of-batch in one activation.
+    /// * **Throttle outputs.** A `map("1KB-string")` MFP produces large records per input;
+    ///   stopping when emit count hits the threshold caps how much data a single activation
+    ///   dumps on the next operator.
+    ///
+    /// The refuel constant is a pragmatic compromise: large enough to be a non-event in
+    /// steady-state, small enough that one activation can't flood downstream. There is no
+    /// universal value across MFP shapes.
     ///
     /// If `key` is set, this is a promise that `logic` will produce no results on
     /// records for which the key does not evaluate to the value. This is used to
@@ -295,9 +311,9 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
             ) -> usize
             + 'static,
     {
-        // Set a number of tuples after which the operator should yield.
-        // This allows us to remain responsive even when enumerating a substantial
-        // arrangement, as well as provides time to accumulate our produced output.
+        // Number of output records this activation may produce before yielding. See the
+        // `Fuel` section in the doc comment for the rationale behind both the metric and the
+        // magnitude.
         let refuel = 1000000;
 
         let mut datums = DatumVec::new();
@@ -356,6 +372,7 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
             ) -> usize
             + 'static,
     {
+        // See [`Self::flat_map`] for the fuel rationale.
         let refuel = 1000000;
 
         let mut datums = DatumVec::new();
@@ -671,9 +688,8 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// The function presents the contents of the trace as `(key, value, time, delta)` tuples,
     /// where key and value are potentially specialized, but convertible into rows. The `logic`
     /// callback writes ok results into the first session and errors into the second, returning
-    /// the number of records produced (not input tuples consumed). The operator uses the sum
-    /// as fuel to bound output per activation; input tuples that produce no output are
-    /// walked through to completion within a batch.
+    /// the number of records produced. See [`ArrangementFlavor::flat_map`] for the fuel
+    /// rationale.
     fn flat_map_core_fallible<Tr, D, L>(
         trace: Arranged<'scope, Tr>,
         key: Option<&<Tr::KeyContainer as BatchContainer>::Owned>,
@@ -1278,15 +1294,13 @@ where
     }
 }
 
-/// Walk a cursor, calling `emit` for each consolidated `(key, val, time, diff)` tuple. If `key`
-/// is set, the cursor is seeked to it and only values for that key are produced.
+/// Walk a cursor, calling `emit` for each consolidated `(key, val, time, diff)` tuple. If
+/// `key` is set, the cursor is seeked to it and only values for that key are produced.
 ///
-/// `emit` returns the number of records it produced for the given input tuple (0 if it
-/// filtered the tuple out). The cursor stops as soon as the accumulated emit count reaches
-/// `*fuel`, leaving the cursor in place so work can resume on a later call. Because the
-/// metric is output-produced and not input-consumed, input tuples that produce no output are
-/// walked through to completion within a single call; this matches our run-to-completion
-/// preference for selective MFPs.
+/// `emit` returns the number of records it produced for the given input tuple. The cursor
+/// stops as soon as the accumulated emit count reaches `*fuel`, leaving the cursor in place
+/// so work can resume on a later call. See [`ArrangementFlavor::flat_map`] for why fuel
+/// counts output rather than input.
 fn walk_cursor<C, F>(
     cursor: &mut C,
     batch: &C::Storage,
