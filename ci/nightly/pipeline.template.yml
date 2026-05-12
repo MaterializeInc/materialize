@@ -2087,6 +2087,16 @@ steps:
               args: ["--versions-source=docs", "--self-managed-upgrade"]
         agents:
           queue: hetzner-aarch64-4cpu-8gb
+      - id: catalog-migration-incident-1007
+        label: "v80->v81 catalog migration fix (incident-1007)"
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: incident-1007
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+
 
   - group: Cloud
     key: cloudtests
