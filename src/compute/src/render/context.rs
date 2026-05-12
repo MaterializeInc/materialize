@@ -314,11 +314,6 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
             ) -> usize
             + 'static,
     {
-        // Number of output records this activation may produce before yielding. See the
-        // `Fuel` section in the doc comment for the rationale behind both the metric and the
-        // magnitude.
-        let refuel = 1000000;
-
         let mut datums = DatumVec::new();
         let logic = move |k: DatumSeq,
                           v: DatumSeq,
@@ -339,7 +334,7 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
                     oks.clone(),
                     key,
                     logic,
-                    refuel,
+                    REFUEL,
                 );
                 let errs = errs.clone().as_collection(|k, &()| k.clone());
                 let errs = errs.concat(mfp_errs.as_collection());
@@ -350,7 +345,7 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
                     oks.clone(),
                     key,
                     logic,
-                    refuel,
+                    REFUEL,
                 );
                 let errs = errs.clone().as_collection(|k, &()| k.clone());
                 let errs = errs.concat(mfp_errs.as_collection());
@@ -378,9 +373,6 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
         L: for<'a, 'b> FnMut(&'a mut DatumVecBorrow<'b>, T, Diff, &mut Session<T, OkCB>) -> usize
             + 'static,
     {
-        // See [`Self::flat_map`] for the fuel rationale.
-        let refuel = 1000000;
-
         let mut datums = DatumVec::new();
         let logic = move |k: DatumSeq, v: DatumSeq, t, d, ok_session: &mut Session<T, OkCB>| {
             let mut datums_borrow = datums.borrow();
@@ -396,7 +388,7 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
                     oks.clone(),
                     key,
                     logic,
-                    refuel,
+                    REFUEL,
                 );
                 let errs = errs.clone().as_collection(|k, &()| k.clone());
                 (oks, errs)
@@ -406,7 +398,7 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
                     oks.clone(),
                     key,
                     logic,
-                    refuel,
+                    REFUEL,
                 );
                 let errs = errs.clone().as_collection(|k, &()| k.clone());
                 (oks, errs)
@@ -1184,6 +1176,11 @@ type Session<'a, 'b, T, CB> =
 /// default; this matches the pre-refactor behavior of the now-removed `map_fallible` demux.
 type ErrCB<T> = CapacityContainerBuilder<Vec<(DataflowErrorSer, T, Diff)>>;
 
+/// Number of output records the arrangement flat_map operators may produce before yielding.
+/// See [`ArrangementFlavor::flat_map`] for the fuel rationale; the constant is a pragmatic
+/// compromise and not tuned empirically.
+const REFUEL: usize = 1_000_000;
+
 struct PendingWork<C>
 where
     C: Cursor,
@@ -1294,8 +1291,10 @@ where
 ///
 /// `emit` returns the number of records it produced for the given input tuple. The cursor
 /// stops as soon as the accumulated emit count reaches `*fuel`, leaving the cursor in place
-/// so work can resume on a later call. See [`ArrangementFlavor::flat_map`] for why fuel
-/// counts output rather than input.
+/// so work can resume on a later call. Within a batch, both the inner val loop and the
+/// outer key loop are bounded only by emit count, so selective filters (`emit` returns 0)
+/// run to batch completion in a single activation — see [`ArrangementFlavor::flat_map`]
+/// for why fuel counts output rather than input.
 fn walk_cursor<C, F>(
     cursor: &mut C,
     batch: &C::Storage,
