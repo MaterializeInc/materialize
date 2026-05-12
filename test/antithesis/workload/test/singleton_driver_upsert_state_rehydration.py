@@ -34,10 +34,19 @@ Each cycle:
 
 The driver also records one `sometimes` anchor confirming that at least
 two assertion-bearing cycles ran (without this, the safety check could be
-vacuously satisfied by a single early settle), and a second anchor
-confirming clusterd was observed unavailable between cycles (best-effort
-proxy for "restart happened" — the helper_pg retry budget makes connect
-errors very rare under normal operation).
+vacuously satisfied by a single early settle).
+
+A previous version of this driver also recorded a "clusterd observed
+non-online" `sometimes` anchor via a once-per-cycle SELECT of
+`mz_internal.mz_cluster_replica_statuses`. That assertion was structurally
+unable to fire here: each cycle requests a 25-second Antithesis quiet
+period before its assertions, the probe runs *after* the quiet period
+(when faults are paused and killed containers have been restored), and
+the introspection view itself lags clusterd death by the
+orchestrator-process 5-second poll. The "did we see a replica go
+offline" signal lives in `anytime_fault_recovery_exercised.py` instead,
+which polls continuously and never requests a quiet period, so it has
+the right shape to observe the offline window.
 
 Distinct prefix per timeline keeps multiple parallel timelines independent.
 """
@@ -100,29 +109,6 @@ def _select_value_for_key(key: str) -> tuple[bool, str | None]:
             "`kafka-source-no-data-duplication`)"
         )
     return True, value
-
-
-def _saw_clusterd_unavailable() -> bool:
-    """Best-effort probe: does `mz_internal.mz_cluster_replica_statuses` show
-    any `antithesis_cluster` replica with `status != 'online'` right now?
-    The status column reports `online` or `offline`. Catching `offline`
-    in a snapshot doesn't *prove* a restart happened (we may have missed
-    a transient flap entirely), but it's a noisy yes-signal that something
-    disturbed the cluster during the cycle.
-    """
-    try:
-        row = query_one_retry("""
-            SELECT EXISTS (
-                SELECT 1
-                FROM mz_internal.mz_cluster_replica_statuses s
-                JOIN mz_cluster_replicas r ON r.id = s.replica_id
-                JOIN mz_clusters c ON c.id = r.cluster_id
-                WHERE c.name = 'antithesis_cluster' AND s.status != 'online'
-            )
-            """)
-    except Exception:  # noqa: BLE001
-        return False
-    return bool(row and row[0])
 
 
 def _run_cycle(
@@ -220,24 +206,21 @@ def main() -> int:
     expected: dict[str, str | None] = {}
 
     cycles_run = 0
-    saw_replica_unavailable = False
 
     for cycle_idx in range(CYCLE_COUNT):
         if _run_cycle(producer, tracker, expected, cycle_idx):
             cycles_run += 1
-        if _saw_clusterd_unavailable():
-            saw_replica_unavailable = True
         time.sleep(INTER_CYCLE_SLEEP_S)
 
+    # The "did this run actually span a clusterd restart" anchor is
+    # deliberately not in this driver — see the module docstring. The
+    # `cycles_run >= 2` check below is the rehydration-coverage anchor:
+    # without two post-quiet-period reads, the safety assertions could
+    # be vacuously satisfied by a single early settle.
     sometimes(
         cycles_run >= 2,
         "upsert: rehydration driver ran 2+ assertion cycles",
         {"cycles_run": cycles_run, "cycles_planned": CYCLE_COUNT},
-    )
-    sometimes(
-        saw_replica_unavailable,
-        "upsert: rehydration driver observed clusterd replica non-online",
-        {"cycles_run": cycles_run},
     )
 
     LOG.info("rehydration driver done; %d/%d cycles ran", cycles_run, CYCLE_COUNT)

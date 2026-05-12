@@ -37,8 +37,16 @@ PGUSER_INTERNAL = os.environ.get("PGUSER_INTERNAL", "mz_system")
 
 # Retry tuning. Antithesis injects partitions and node hangs; conservative bounds
 # keep drivers progressing without masking real correctness signals.
-_CONNECT_TIMEOUT_S = 5
-_RETRY_BUDGET_S = 60
+#
+# These need to absorb a full Antithesis quiet period plus restart time for the
+# system to come back. Quiet-period requests in the workload are typically
+# 20-25s; the container then takes a few seconds to become responsive, so the
+# overall budget must comfortably exceed ~30s. The per-attempt connect timeout
+# also has to be long enough to actually complete a TCP+TLS handshake against
+# a hung but recovering materialized — too short and every attempt fails fast
+# and the budget is burned without giving the system a chance to answer.
+_CONNECT_TIMEOUT_S = 15
+_RETRY_BUDGET_S = 120
 _RETRY_INITIAL_S = 0.1
 _RETRY_MAX_S = 2.0
 
