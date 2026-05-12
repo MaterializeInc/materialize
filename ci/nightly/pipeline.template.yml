@@ -1097,6 +1097,18 @@ steps:
               composition: platform-checks
               args: [--scenario=UpgradeEntireMzFromPreviousSelfManaged, "--seed=$BUILDKITE_JOB_ID"]
 
+      - id: checks-v80-migration
+        label: "Checks upgrade v80 migration"
+        depends_on: build-x86_64
+        timeout_in_minutes: 60
+        parallelism: 4
+        agents:
+          queue: hetzner-x86-64-12cpu-24gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=UpgradeV80Migration, "--seed=$BUILDKITE_JOB_ID"]
+
       - id: checks-preflight-check-rollback
         label: "Checks preflight-check and roll back upgrade"
         depends_on: build-x86_64
