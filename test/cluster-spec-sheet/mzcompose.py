@@ -94,6 +94,8 @@ SCENARIO_TPCH_MV_STRONG = "tpch_mv_strong"
 SCENARIO_TPCH_QUERIES_STRONG = "tpch_queries_strong"
 SCENARIO_TPCH_QUERIES_WEAK = "tpch_queries_weak"
 SCENARIO_TPCH_STRONG = "tpch_strong"
+SCENARIO_TPCH_LEFT_JOINS_STRONG = "tpch_left_joins_strong"
+SCENARIO_TPCH_LEFT_JOINS_WEAK = "tpch_left_joins_weak"
 SCENARIO_SOURCE_INGESTION_STRONG = "source_ingestion_strong"
 SCENARIO_QPS_ENVD_STRONG_SCALING = "qps_envd_strong_scaling"
 SCENARIO_COPY_FROM_STDIN_ENVD_STRONG_SCALING = "copy_from_stdin_envd_strong_scaling"
@@ -105,6 +107,8 @@ SCENARIOS_CLUSTERD = [
     SCENARIO_TPCH_QUERIES_STRONG,
     SCENARIO_TPCH_QUERIES_WEAK,
     SCENARIO_TPCH_STRONG,
+    SCENARIO_TPCH_LEFT_JOINS_STRONG,
+    SCENARIO_TPCH_LEFT_JOINS_WEAK,
     SCENARIO_SOURCE_INGESTION_STRONG,
 ]
 SCENARIOS_CLUSTERD_COMPUTE = [
@@ -114,6 +118,8 @@ SCENARIOS_CLUSTERD_COMPUTE = [
     SCENARIO_TPCH_QUERIES_STRONG,
     SCENARIO_TPCH_QUERIES_WEAK,
     SCENARIO_TPCH_STRONG,
+    SCENARIO_TPCH_LEFT_JOINS_STRONG,
+    SCENARIO_TPCH_LEFT_JOINS_WEAK,
 ]
 SCENARIOS_SOURCE_INGESTION = [
     SCENARIO_SOURCE_INGESTION_STRONG,
@@ -1473,6 +1479,136 @@ class TpchScenarioQueriesIndexedInputs(Scenario):
             )
 
 
+class TpchLeftJoinsScenario(Scenario):
+    """
+    Simple dataflow that LEFT JOINs the largest TPCH tables together. Models
+    customer setups that build a single denormalized materialized view over
+    very large fact + dimension tables (~10-50M driving rows).
+
+    The driving relation is `lineitem` (~6M rows per TPCH scale factor), which
+    is LEFT JOINed against `orders`, `customer`, `nation`, and `region` along
+    their natural FK chain. With SF=8 the driving side is ~48M rows; bump
+    `--scale-tpch-left-joins` for larger runs.
+    """
+
+    def name(self) -> str:
+        return "tpch_left_joins"
+
+    def materialize_views(self) -> list[str]:
+        return ["lineitem", "orders", "customer", "nation", "region"]
+
+    def setup(self) -> list[str]:
+        return [
+            "DROP SOURCE IF EXISTS lgtpch CASCADE;",
+            "DROP CLUSTER IF EXISTS lg CASCADE;",
+            f"CREATE CLUSTER lg SIZE '{self.replica_size}';",
+            f"CREATE SOURCE lgtpch IN CLUSTER lg FROM LOAD GENERATOR TPCH (SCALE FACTOR {self.scale}, TICK INTERVAL 1) FOR ALL TABLES;",
+            "SELECT COUNT(*) > 0 FROM region;",
+        ]
+
+    def drop(self) -> list[str]:
+        return ["DROP CLUSTER IF EXISTS lg CASCADE;"]
+
+    def run(self, runner: ScenarioRunner) -> None:
+        # Build the LEFT-JOIN materialized view from scratch and measure
+        # hydration time. This is the bread-and-butter "how long until my
+        # dataflow is ready" measurement.
+        runner.measure(
+            "materialized_view_formation",
+            "create_left_joins_mv",
+            setup=[
+                "DROP MATERIALIZED VIEW IF EXISTS mv_left_joins CASCADE;",
+                "SELECT * FROM t;",
+            ],
+            query=[
+                """
+                CREATE MATERIALIZED VIEW mv_left_joins AS
+                SELECT
+                    l_orderkey,
+                    l_linenumber,
+                    l_extendedprice,
+                    l_discount,
+                    l_shipdate,
+                    o_orderdate,
+                    o_orderstatus,
+                    o_orderpriority,
+                    c_custkey,
+                    c_name,
+                    c_nationkey,
+                    n_name,
+                    n_regionkey,
+                    r_name
+                FROM lineitem
+                LEFT JOIN orders   ON l_orderkey   = o_orderkey
+                LEFT JOIN customer ON o_custkey    = c_custkey
+                LEFT JOIN nation   ON c_nationkey  = n_nationkey
+                LEFT JOIN region   ON n_regionkey  = r_regionkey;
+                """,
+                "SELECT count(*) > 0 FROM mv_left_joins;",
+            ],
+        )
+
+        time.sleep(3)
+
+        # Re-hydrate the same MV from persist on a fresh replica. This
+        # measures cold-start time on the dataflow, which tends to be the
+        # painful case for users on ~1TB datasets.
+        runner.measure(
+            "materialized_view_formation",
+            "left_joins_mv_restart",
+            setup=[
+                "SELECT count(*) > 0 FROM mv_left_joins;",
+                "ALTER CLUSTER c SET (REPLICATION FACTOR 0);",
+            ],
+            query=[
+                "ALTER CLUSTER c SET (REPLICATION FACTOR 1);",
+                "WITH data AS (SELECT * FROM mv_left_joins WHERE l_orderkey = 123412341234 and l_linenumber = 123) SELECT * FROM data, t;",
+            ],
+        )
+
+        # Point lookup through the MV (slow path: forces a peek dataflow).
+        runner.measure(
+            "peek_serving",
+            "peek_left_joins_mv_key_slow_path",
+            setup=[],
+            query=[
+                "WITH data AS (SELECT * FROM mv_left_joins WHERE l_orderkey = 123412341234 and l_linenumber = 123) SELECT * FROM data, t;",
+            ],
+            repetitions=10,
+        )
+
+        # Point lookup through the MV (fast path: persist-backed).
+        runner.measure(
+            "peek_serving",
+            "peek_left_joins_mv_key_fast_path",
+            setup=[],
+            query=[
+                "SELECT * FROM mv_left_joins WHERE l_orderkey = 123412341234 and l_linenumber = 123;",
+            ],
+            repetitions=10,
+        )
+
+        # Same join, but as an ad-hoc SELECT (no MV in between). Useful for
+        # comparing "do the join every time" vs the maintained MV above.
+        runner.measure(
+            "peek_serving",
+            "peek_left_joins_adhoc",
+            setup=[],
+            query=[
+                """
+                SELECT count(*)
+                FROM lineitem
+                LEFT JOIN orders   ON l_orderkey   = o_orderkey
+                LEFT JOIN customer ON o_custkey    = c_custkey
+                LEFT JOIN nation   ON c_nationkey  = n_nationkey
+                LEFT JOIN region   ON n_regionkey  = r_regionkey
+                WHERE l_orderkey = 123412341234;
+                """,
+            ],
+            repetitions=3,
+        )
+
+
 class AuctionScenario(Scenario):
     def name(self) -> str:
         return "auction"
@@ -2386,6 +2522,12 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
         "--scale-tpch-queries", type=float, default=4, help="TPCH queries scale factor."
     )
     parser.add_argument(
+        "--scale-tpch-left-joins",
+        type=float,
+        default=8,
+        help="TPCH LEFT JOINs scale factor.",
+    )
+    parser.add_argument(
         "--scale-auction", type=int, default=3, help="Auction scale factor."
     )
     parser.add_argument(
@@ -2544,6 +2686,29 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
                     run_scenario_weak(
                         scenario=TpchScenarioQueriesIndexedInputs(
                             args.scale_tpch_queries, None
+                        ),
+                        results_writer=cluster_writer,
+                        connection=conn,
+                        target=target,
+                        max_scale=max_scale,
+                    )
+                if scenario == SCENARIO_TPCH_LEFT_JOINS_STRONG:
+                    print("--- SCENARIO: Running TPC-H LEFT JOINs strong scaling")
+                    run_scenario_strong(
+                        scenario=TpchLeftJoinsScenario(
+                            args.scale_tpch_left_joins,
+                            target.replica_size_for_scale(1),
+                        ),
+                        results_writer=cluster_writer,
+                        connection=conn,
+                        target=target,
+                        max_scale=max_scale,
+                    )
+                if scenario == SCENARIO_TPCH_LEFT_JOINS_WEAK:
+                    print("--- SCENARIO: Running TPC-H LEFT JOINs weak scaling")
+                    run_scenario_weak(
+                        scenario=TpchLeftJoinsScenario(
+                            args.scale_tpch_left_joins, None
                         ),
                         results_writer=cluster_writer,
                         connection=conn,
