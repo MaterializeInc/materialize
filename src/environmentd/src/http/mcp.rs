@@ -37,6 +37,7 @@ use mz_adapter_types::dyncfgs::{
 use mz_repr::namespaces::{self, SYSTEM_SCHEMAS};
 use mz_sql::parse::parse;
 use mz_sql::session::metadata::SessionMetadata;
+use mz_sql::session::vars::{APPLICATION_NAME, Var, VarInput};
 use mz_sql_parser::ast::display::{AstDisplay, escaped_string_literal};
 use mz_sql_parser::ast::visit::{self, Visit};
 use mz_sql_parser::ast::{Raw, RawItemName};
@@ -449,6 +450,20 @@ async fn handle_mcp_request(
 
     let query_tool_enabled = ENABLE_MCP_AGENT_QUERY_TOOL.get(dyncfgs);
     let max_response_size = MCP_MAX_RESPONSE_SIZE.get(dyncfgs);
+
+    // Tag MCP-originated sessions so they're distinguishable in
+    // mz_session_history / mz_statement_execution_history. set_default lets a
+    // caller still override via `?options={"application_name":"..."}`
+    let app_name = match endpoint_type {
+        McpEndpointType::Agent => "mz_mcp_agents",
+        McpEndpointType::Developer => "mz_mcp_developer",
+    };
+    client
+        .client
+        .session()
+        .vars_mut()
+        .set_default(APPLICATION_NAME.name(), VarInput::Flat(app_name))
+        .expect("application_name is a known session var");
 
     let user = client.client.session().user().name.clone();
     let is_notification = request.id.is_none();
