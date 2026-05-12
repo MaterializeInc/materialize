@@ -82,16 +82,18 @@ SERVICES = [
     Zookeeper(),
     Kafka(auto_create_topics=True),
     SchemaRegistry(),
-    # MySQL primary — GTID-enabled with WRITESET dependency tracking so the
-    # replica can safely use parallel workers without losing commit order.
+    # MySQL primary — GTID-enabled. WRITESET binlog dependency tracking
+    # is what lets the replica run parallel workers without losing commit
+    # order; in MySQL 8.4+ WRITESET is the default and the explicit knob
+    # was removed (`binlog_transaction_dependency_tracking` is unknown
+    # past 8.4, and the antithesis image is `mysql:9.5.0`).
     MySql(
         use_seeded_image=False,
         volumes=[
             "mysqldata_primary:/var/lib/mysql",
             "mydata:/var/lib/mysql-files",
         ],
-        additional_args=create_mysql_server_args(server_id="1", is_master=True)
-        + ["--binlog_transaction_dependency_tracking=WRITESET"],
+        additional_args=create_mysql_server_args(server_id="1", is_master=True),
     ),
     # MySQL replica — multithreaded replication (4 workers, commit-order
     # preserved).  Replication is configured at runtime by

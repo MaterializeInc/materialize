@@ -187,7 +187,6 @@ services:
     - --binlog-row-metadata=full
     - --server-id=1
     - --max-connections=500
-    - --binlog_transaction_dependency_tracking=WRITESET
     healthcheck:
       test:
       - CMD
