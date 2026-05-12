@@ -15,6 +15,18 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.23.3
+*Released to Materialize Self-Managed: 2026-05-12* <br>
+
+This patch release includes a bug fix.
+
+### Bug Fixes {#v26.23.3-bug-fixes}
+
+- Fixed divergent role rows in the catalog left behind by a silent no-op in an
+  earlier v26.18 catalog migration, which could trigger an internal assertion
+  during the v26.22 → v26.23 upgrade. v26.23.3 scans and repairs the affected
+  rows.
+
 ## v26.23.2
 *Released to Materialize Cloud: 2026-05-11* <br>
 *Released to Materialize Self-Managed: 2026-05-11* <br>
