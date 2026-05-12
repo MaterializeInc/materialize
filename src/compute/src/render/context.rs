@@ -330,6 +330,54 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
             }
         }
     }
+
+    /// Ok-only variant of [`Self::flat_map`]. The `logic` callback receives a single output
+    /// session and cannot produce errors. The returned err collection comes solely from the
+    /// arrangement; no extra operator is built to carry an empty MFP-error stream.
+    pub fn flat_map_ok<D, L>(
+        &self,
+        key: Option<&Row>,
+        max_demand: usize,
+        mut logic: L,
+    ) -> (
+        StreamVec<'scope, T, (D, T, Diff)>,
+        VecCollection<'scope, T, DataflowErrorSer, Diff>,
+    )
+    where
+        D: Data,
+        L: for<'a, 'b> FnMut(
+                &'a mut DatumVecBorrow<'b>,
+                T,
+                Diff,
+                &mut Session<T, (D, T, Diff)>,
+            ) -> usize
+            + 'static,
+    {
+        let refuel = 1000000;
+
+        let mut datums = DatumVec::new();
+        let logic =
+            move |k: DatumSeq, v: DatumSeq, t, d, ok_session: &mut Session<T, (D, T, Diff)>| {
+                let mut datums_borrow = datums.borrow();
+                datums_borrow.extend(k.to_datum_iter().take(max_demand));
+                let max_demand = max_demand.saturating_sub(datums_borrow.len());
+                datums_borrow.extend(v.to_datum_iter().take(max_demand));
+                logic(&mut datums_borrow, t, d, ok_session)
+            };
+
+        match &self {
+            ArrangementFlavor::Local(oks, errs) => {
+                let oks = CollectionBundle::<T>::flat_map_core_ok(oks.clone(), key, logic, refuel);
+                let errs = errs.clone().as_collection(|k, &()| k.clone());
+                (oks, errs)
+            }
+            ArrangementFlavor::Trace(_, oks, errs) => {
+                let oks = CollectionBundle::<T>::flat_map_core_ok(oks.clone(), key, logic, refuel);
+                let errs = errs.clone().as_collection(|k, &()| k.clone());
+                (oks, errs)
+            }
+        }
+    }
 }
 impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
     /// The scope containing the collection bundle.
@@ -509,14 +557,11 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 });
                 if ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION.get(config_set) {
                     // Decode all columns, pass max_demand as usize::MAX.
-                    let (ok, err) = arranged.flat_map(
-                        None,
-                        usize::MAX,
-                        |borrow, t, r, ok_session, _err_session| {
+                    let (ok, err) =
+                        arranged.flat_map_ok(None, usize::MAX, |borrow, t, r, ok_session| {
                             ok_session.give((SharedRow::pack(borrow.iter()), t, r));
                             1
-                        },
-                    );
+                        });
                     (ok.as_collection(), err)
                 } else {
                     #[allow(deprecated)]
@@ -722,6 +767,90 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         });
 
         (ok_stream, err_stream)
+    }
+
+    /// Ok-only variant of [`Self::flat_map_core`]. The `logic` callback writes results into a
+    /// single output session and returns the amount of work performed. Use this when the caller
+    /// statically knows it will never produce `DataflowErrorSer` records, to avoid building a
+    /// second output port and the empty err stream that would follow it.
+    fn flat_map_core_ok<Tr, D, L>(
+        trace: Arranged<'scope, Tr>,
+        key: Option<&<Tr::KeyContainer as BatchContainer>::Owned>,
+        mut logic: L,
+        refuel: usize,
+    ) -> StreamVec<'scope, T, (D, T, Diff)>
+    where
+        Tr: for<'a> TraceReader<
+                Key<'a>: ToDatumIter,
+                Val<'a>: ToDatumIter,
+                Time = T,
+                Diff = mz_repr::Diff,
+            > + Clone
+            + 'static,
+        <Tr::KeyContainer as BatchContainer>::Owned: PartialEq,
+        D: Data,
+        L: FnMut(
+                Tr::Key<'_>,
+                Tr::Val<'_>,
+                T,
+                mz_repr::Diff,
+                &mut Session<T, (D, T, Diff)>,
+            ) -> usize
+            + 'static,
+    {
+        let scope = trace.stream.scope();
+
+        let mut key_con = Tr::KeyContainer::with_capacity(1);
+        if let Some(key) = &key {
+            key_con.push_own(key);
+        }
+        let mode = if key.is_some() { "index" } else { "scan" };
+        let name = format!("ArrangementFlatMapOk({})", mode);
+
+        let mut builder = OperatorBuilder::new(name, scope.clone());
+        let (ok_output, ok_stream) = builder.new_output();
+        let mut ok_output =
+            OutputBuilder::<_, ConsolidatingContainerBuilder<Vec<(D, T, Diff)>>>::from(ok_output);
+        let mut input = builder.new_input(trace.stream.clone(), Pipeline);
+        let operator_info = builder.operator_info();
+
+        builder.build(move |_capabilities| {
+            let activator = scope.activator_for(operator_info.address);
+            let mut todo = std::collections::VecDeque::new();
+            move |_frontiers| {
+                let key = key_con.get(0);
+                let mut ok_output = ok_output.activate();
+
+                input.for_each(|time, data| {
+                    let cap = time.retain(0);
+                    for batch in data.iter() {
+                        todo.push_back(PendingWorkOk::new(
+                            cap.clone(),
+                            batch.cursor(),
+                            batch.clone(),
+                        ));
+                    }
+                });
+
+                let mut fuel = refuel;
+                while !todo.is_empty() && fuel > 0 {
+                    todo.front_mut().unwrap().do_work(
+                        key.as_ref(),
+                        &mut logic,
+                        &mut fuel,
+                        &mut ok_output,
+                    );
+                    if fuel > 0 {
+                        todo.pop_front();
+                    }
+                }
+                if !todo.is_empty() {
+                    activator.activate();
+                }
+            }
+        });
+
+        ok_stream
     }
 
     /// Look up an arrangement by the expressions that form the key.
@@ -1082,54 +1211,125 @@ where
             ) -> usize
             + 'static,
     {
-        use differential_dataflow::consolidation::consolidate;
-
-        // Attempt to make progress on this batch.
-        let mut work: usize = 0;
         let mut ok_session = ok_output.session_with_builder(&self.ok_capability);
         let mut err_session = err_output.session_with_builder(&self.err_capability);
-        let mut buffer = Vec::new();
-        if let Some(key) = key {
-            let key = C::KeyContainer::reborrow(*key);
-            if self.cursor.get_key(&self.batch).map(|k| k == key) != Some(true) {
-                self.cursor.seek_key(&self.batch, key);
-            }
-            if self.cursor.get_key(&self.batch).map(|k| k == key) == Some(true) {
-                let key = self.cursor.key(&self.batch);
-                while let Some(val) = self.cursor.get_val(&self.batch) {
-                    self.cursor.map_times(&self.batch, |time, diff| {
-                        buffer.push((C::owned_time(time), C::owned_diff(diff)));
-                    });
-                    consolidate(&mut buffer);
-                    for (time, diff) in buffer.drain(..) {
-                        work += logic(key, val, time, diff, &mut ok_session, &mut err_session);
-                    }
-                    self.cursor.step_val(&self.batch);
-                    if work >= *fuel {
-                        *fuel = 0;
-                        return;
-                    }
+        walk_cursor(&mut self.cursor, &self.batch, key, fuel, |k, v, t, d| {
+            logic(k, v, t, d, &mut ok_session, &mut err_session)
+        });
+    }
+}
+
+/// Pending work for the Ok-only variant of `flat_map_core`. Holds a single capability since
+/// the operator has only one output port.
+struct PendingWorkOk<C>
+where
+    C: Cursor,
+{
+    capability: Capability<C::Time>,
+    cursor: C,
+    batch: C::Storage,
+}
+
+impl<C> PendingWorkOk<C>
+where
+    C: Cursor<KeyContainer: BatchContainer<Owned: PartialEq + Sized>>,
+{
+    fn new(capability: Capability<C::Time>, cursor: C, batch: C::Storage) -> Self {
+        Self {
+            capability,
+            cursor,
+            batch,
+        }
+    }
+
+    /// Perform roughly `fuel` work through the cursor, applying `logic` and sending results to
+    /// the single output session.
+    fn do_work<D, L>(
+        &mut self,
+        key: Option<&C::Key<'_>>,
+        logic: &mut L,
+        fuel: &mut usize,
+        ok_output: &mut OutputBuilderSession<
+            '_,
+            C::Time,
+            ConsolidatingContainerBuilder<Vec<(D, C::Time, C::Diff)>>,
+        >,
+    ) where
+        D: Data,
+        L: FnMut(
+                C::Key<'_>,
+                C::Val<'_>,
+                C::Time,
+                C::Diff,
+                &mut Session<C::Time, (D, C::Time, C::Diff)>,
+            ) -> usize
+            + 'static,
+    {
+        let mut ok_session = ok_output.session_with_builder(&self.capability);
+        walk_cursor(&mut self.cursor, &self.batch, key, fuel, |k, v, t, d| {
+            logic(k, v, t, d, &mut ok_session)
+        });
+    }
+}
+
+/// Walk a cursor, calling `emit` for each consolidated `(key, val, time, diff)` tuple. If `key`
+/// is set, the cursor is seeked to it and only values for that key are produced. The cursor
+/// stops as soon as `emit` has reported at least `*fuel` units of work, leaving the cursor in
+/// place so that work can resume on a later call.
+fn walk_cursor<C, F>(
+    cursor: &mut C,
+    batch: &C::Storage,
+    key: Option<&C::Key<'_>>,
+    fuel: &mut usize,
+    mut emit: F,
+) where
+    C: Cursor<KeyContainer: BatchContainer<Owned: PartialEq + Sized>>,
+    F: FnMut(C::Key<'_>, C::Val<'_>, C::Time, C::Diff) -> usize,
+{
+    use differential_dataflow::consolidation::consolidate;
+
+    let mut work: usize = 0;
+    let mut buffer = Vec::new();
+    if let Some(key) = key {
+        let key = C::KeyContainer::reborrow(*key);
+        if cursor.get_key(batch).map(|k| k == key) != Some(true) {
+            cursor.seek_key(batch, key);
+        }
+        if cursor.get_key(batch).map(|k| k == key) == Some(true) {
+            let key = cursor.key(batch);
+            while let Some(val) = cursor.get_val(batch) {
+                cursor.map_times(batch, |time, diff| {
+                    buffer.push((C::owned_time(time), C::owned_diff(diff)));
+                });
+                consolidate(&mut buffer);
+                for (time, diff) in buffer.drain(..) {
+                    work += emit(key, val, time, diff);
                 }
-            }
-        } else {
-            while let Some(key) = self.cursor.get_key(&self.batch) {
-                while let Some(val) = self.cursor.get_val(&self.batch) {
-                    self.cursor.map_times(&self.batch, |time, diff| {
-                        buffer.push((C::owned_time(time), C::owned_diff(diff)));
-                    });
-                    consolidate(&mut buffer);
-                    for (time, diff) in buffer.drain(..) {
-                        work += logic(key, val, time, diff, &mut ok_session, &mut err_session);
-                    }
-                    self.cursor.step_val(&self.batch);
-                    if work >= *fuel {
-                        *fuel = 0;
-                        return;
-                    }
+                cursor.step_val(batch);
+                if work >= *fuel {
+                    *fuel = 0;
+                    return;
                 }
-                self.cursor.step_key(&self.batch);
             }
         }
-        *fuel -= work;
+    } else {
+        while let Some(key) = cursor.get_key(batch) {
+            while let Some(val) = cursor.get_val(batch) {
+                cursor.map_times(batch, |time, diff| {
+                    buffer.push((C::owned_time(time), C::owned_diff(diff)));
+                });
+                consolidate(&mut buffer);
+                for (time, diff) in buffer.drain(..) {
+                    work += emit(key, val, time, diff);
+                }
+                cursor.step_val(batch);
+                if work >= *fuel {
+                    *fuel = 0;
+                    return;
+                }
+            }
+            cursor.step_key(batch);
+        }
     }
+    *fuel -= work;
 }
