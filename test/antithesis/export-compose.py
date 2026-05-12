@@ -189,6 +189,31 @@ def strip_mzcompose_keys(svc: dict[str, Any]) -> None:
         svc.pop(key, None)
 
 
+def register_referenced_named_volumes(compose: dict[str, Any]) -> None:
+    """Declare any named volume referenced by a service that isn't already
+    declared at the top level. Docker Compose rejects the file otherwise.
+
+    mzcompose's `Composition` only auto-declares the fixed `DEFAULT_MZ_VOLUMES`
+    set; per-service custom named volumes (e.g. `clusterd1_scratch`) reference
+    names that have no top-level entry and fail `docker compose config`.
+    """
+    top_level: dict[str, Any] = compose.setdefault("volumes", {}) or {}
+    compose["volumes"] = top_level
+
+    for svc in compose.get("services", {}).values():
+        for entry in svc.get("volumes", []) or []:
+            if not isinstance(entry, str):
+                continue
+            # Bind mounts (`/host:/container`) start with `/`; named volumes
+            # are bare identifiers. We only auto-declare the latter.
+            if entry.startswith("/"):
+                continue
+            name = entry.split(":", 1)[0]
+            if not name or name in top_level:
+                continue
+            top_level[name] = None
+
+
 def main() -> None:
     # munge_services=False keeps ports bare (e.g., `6875` instead of
     # `127.0.0.1::6875`) — Antithesis is container-to-container, no host
@@ -206,6 +231,8 @@ def main() -> None:
         strip_host_bindmounts(svc)
         strip_incompatible_env(svc)
         strip_mzcompose_keys(svc)
+
+    register_referenced_named_volumes(c.compose)
 
     sys.stdout.write(HEADER)
     yaml.dump(c.compose, sys.stdout, default_flow_style=False, sort_keys=False)

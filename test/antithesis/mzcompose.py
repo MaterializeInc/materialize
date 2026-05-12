@@ -81,8 +81,35 @@ SERVICES = [
     # (notably the `compute-replica-epoch-isolation` property), and lets
     # Antithesis kill either replica's backing container without taking
     # the workload offline.
-    Clusterd(name="clusterd1"),
-    Clusterd(name="clusterd2"),
+    #
+    # Each clusterd MUST have its own /scratch volume — the upsert
+    # operator's RocksDB state lives there and takes an exclusive file
+    # lock. The DEFAULT_MZ_VOLUMES list uses a single named volume
+    # `scratch:/scratch` shared across containers; passing per-instance
+    # named volumes (`clusterd1_scratch`, `clusterd2_scratch`) keeps the
+    # locks separate while leaving the other volumes shared. Found via
+    # an Antithesis run where clusterd1 deadlocked retrying to open
+    # `/scratch/storage/upsert/u3/0/LOCK` because clusterd2 held it,
+    # which then drove a continuous suspend-and-restart loop that
+    # corrupted the upsert state.
+    Clusterd(
+        name="clusterd1",
+        volumes=[
+            "mzdata:/mzdata",
+            "mydata:/var/lib/mysql-files",
+            "tmp:/share/tmp",
+            "clusterd1_scratch:/scratch",
+        ],
+    ),
+    Clusterd(
+        name="clusterd2",
+        volumes=[
+            "mzdata:/mzdata",
+            "mydata:/var/lib/mysql-files",
+            "tmp:/share/tmp",
+            "clusterd2_scratch:/scratch",
+        ],
+    ),
     Materialized(
         external_blob_store=True,
         external_metadata_store=True,

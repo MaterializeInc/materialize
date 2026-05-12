@@ -205,7 +205,7 @@ services:
     - mzdata:/mzdata
     - mydata:/var/lib/mysql-files
     - tmp:/share/tmp
-    - scratch:/scratch
+    - clusterd1_scratch:/scratch
     restart: 'no'
     stop_grace_period: 120s
     platform: linux/amd64
@@ -244,7 +244,7 @@ services:
     - mzdata:/mzdata
     - mydata:/var/lib/mysql-files
     - tmp:/share/tmp
-    - scratch:/scratch
+    - clusterd2_scratch:/scratch
     restart: 'no'
     stop_grace_period: 120s
     platform: linux/amd64
@@ -475,3 +475,5 @@ volumes:
   tmp: null
   secrets: null
   scratch: null
+  clusterd1_scratch: null
+  clusterd2_scratch: null
