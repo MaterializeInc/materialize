@@ -373,24 +373,10 @@ impl Coordinator {
                         Ok(Some(fut)) => {
                             let catalog = Arc::clone(&self.catalog);
                             task::spawn(|| "determine real time recent timestamp", async move {
-                                let rtr_name = |id: &GlobalId| {
-                                    catalog
-                                        .try_get_entry_by_global_id(id)
-                                        .map(|e| e.name().item.clone())
-                                        .unwrap_or_else(|| id.to_string())
-                                };
-                                let result = match fut.await {
-                                    Ok(ts) => Ok(Some(ts)),
-                                    Err(
-                                        mz_storage_types::controller::StorageError::RtrTimeout(id),
-                                    ) => Err(AdapterError::RtrTimeout(rtr_name(&id))),
-                                    Err(
-                                        mz_storage_types::controller::StorageError::RtrDropFailure(
-                                            id,
-                                        ),
-                                    ) => Err(AdapterError::RtrDropFailure(rtr_name(&id))),
-                                    Err(e) => Err(AdapterError::from(e)),
-                                };
+                                let result =
+                                    Coordinator::await_real_time_recent_timestamp(catalog, fut)
+                                        .await
+                                        .map(Some);
                                 let _ = tx.send(result);
                             });
                         }

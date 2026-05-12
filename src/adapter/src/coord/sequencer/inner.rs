@@ -96,7 +96,7 @@ use timely::progress::Antichain;
 use tokio::sync::{oneshot, watch};
 use tracing::{Instrument, Span, info, warn};
 
-use crate::catalog::{self, ConnCatalog, DropObjectInfo, UpdatePrivilegeVariant};
+use crate::catalog::{self, Catalog, ConnCatalog, DropObjectInfo, UpdatePrivilegeVariant};
 use crate::command::{ExecuteResponse, Response};
 use crate::coord::appends::{BuiltinTableAppendNotify, DeferredOp, DeferredPlan, PendingWriteTxn};
 use crate::coord::read_then_write::validate_read_then_write_dependencies;
@@ -2357,6 +2357,32 @@ impl Coordinator {
             .await?;
 
         Ok(Some(r))
+    }
+
+    pub(crate) async fn await_real_time_recent_timestamp<F>(
+        catalog: Arc<Catalog>,
+        fut: F,
+    ) -> Result<Timestamp, AdapterError>
+    where
+        F: Future<Output = Result<Timestamp, StorageError>>,
+    {
+        fut.await
+            .map_err(|error| Self::real_time_recent_timestamp_error(&catalog, error))
+    }
+
+    fn real_time_recent_timestamp_error(catalog: &Catalog, error: StorageError) -> AdapterError {
+        let rtr_name = |id: &GlobalId| {
+            catalog
+                .try_get_entry_by_global_id(id)
+                .map(|e| e.name().item.clone())
+                .unwrap_or_else(|| id.to_string())
+        };
+
+        match error {
+            StorageError::RtrTimeout(id) => AdapterError::RtrTimeout(rtr_name(&id)),
+            StorageError::RtrDropFailure(id) => AdapterError::RtrDropFailure(rtr_name(&id)),
+            error => error.into(),
+        }
     }
 
     /// Checks to see if the session needs a real time recency timestamp and if so returns
