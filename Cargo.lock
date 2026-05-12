@@ -7203,6 +7203,7 @@ dependencies = [
 name = "mz-persist-client"
 version = "26.25.0-dev.0"
 dependencies = [
+ "antithesis_sdk",
  "anyhow",
  "arrayvec 0.7.6",
  "arrow",
