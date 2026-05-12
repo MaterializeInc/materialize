@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 import os
 
+from helper_kafka import ensure_topic
 from helper_pg import execute_retry
 from helper_upsert_source import ensure_kafka_connection
 
@@ -40,6 +41,11 @@ def ensure_none_text_source() -> None:
     drivers don't proliferate connections.
     """
     ensure_kafka_connection()
+    # CREATE SOURCE issues a Kafka metadata fetch that fails fast if the topic
+    # is missing; broker auto-create only fires on a producer write, which
+    # comes later in the driver. Pre-create via admin client so the metadata
+    # fetch succeeds on the first run.
+    ensure_topic(TOPIC_NONE_TEXT)
     execute_retry(
         f"CREATE SOURCE IF NOT EXISTS {SOURCE_NONE_TEXT} "
         f"IN CLUSTER {CLUSTER} "

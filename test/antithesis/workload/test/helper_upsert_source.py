@@ -9,9 +9,11 @@
 
 """Idempotent setup for the Antithesis UPSERT-envelope Kafka source.
 
-Used by all drivers that exercise UPSERT semantics. Topic is auto-created by
-the Kafka broker on first produce; the source/connection are created at most
-once across all drivers (CREATE ... IF NOT EXISTS).
+Used by all drivers that exercise UPSERT semantics. The topic is pre-created
+via the Kafka admin client (broker auto-create only triggers on producer
+write, but CREATE SOURCE does a metadata fetch that fails fast otherwise).
+The source/connection are created at most once across all drivers
+(CREATE ... IF NOT EXISTS).
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from __future__ import annotations
 import logging
 import os
 
+from helper_kafka import ensure_topic
 from helper_pg import execute_retry
 
 LOG = logging.getLogger("antithesis.helper_upsert_source")
@@ -44,6 +47,7 @@ def ensure_upsert_text_source() -> None:
     The resulting source has columns `key TEXT NOT NULL` and `text TEXT`.
     """
     ensure_kafka_connection()
+    ensure_topic(TOPIC_UPSERT_TEXT)
     execute_retry(
         f"CREATE SOURCE IF NOT EXISTS {SOURCE_UPSERT_TEXT} "
         f"IN CLUSTER {CLUSTER} "
