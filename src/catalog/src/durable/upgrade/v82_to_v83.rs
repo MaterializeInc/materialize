@@ -7,96 +7,58 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Repair Role rows whose stored byte image diverged from the bytes written
-//! by post-v80 catalog mutations.
+//! Repair Role rows left in an inconsistent state by the v80->v81 migration.
 //!
 //! # Background
 //!
-//! The catalog persist shard requires that every `(key_bytes, ts)` tuple has
-//! `Diff::ONE` after consolidation. `PersistPeek::do_peek` enforces this
-//! per-row when serving `mz_internal.mz_catalog_raw`, and `run_versioned_upgrade`
-//! checks it via `soft_assert_eq_or_log!("snapshot is consolidated", ...)` on
-//! every catalog version bump. The catalog *writers*, however, retract by
-//! re-serializing the in-memory parsed value through the current proto — sound
-//! only if that round-trip is byte-exact (database-issues#7179). It isn't,
-//! whenever a proto field has been added since a row was last written: the
-//! stored row lacks the key entirely, and the re-serialized retraction writes
-//! the key as explicit `null`. Different bytes, no cancellation under
-//! consolidation, dangling `-1`.
+//! The catalog persist shard requires that every `(key, ts)` tuple
+//! consolidate to `Diff::ONE`. Catalog writers retract by re-serializing the
+//! in-memory parsed value through the current proto; this only consolidates
+//! cleanly if the round-trip is byte-exact (database-issues#7179). Whenever
+//! a proto adds a field, that invariant breaks for rows written before the
+//! field existed: the stored row lacks the key entirely while the
+//! re-serialized retraction writes it as explicit `null`, so the retraction
+//! never cancels its target.
 //!
 //! # The specific failure this migration targets
 //!
 //! `v80_to_v81::upgrade` was supposed to backfill `auto_provision_source` on
-//! every existing Role row by retracting the v80 byte form and inserting a
-//! v81 byte form with the new field set. That backfill was gated on an
-//! `is_cloud` heuristic that, among other conditions, required the
-//! `mz_system` cluster to be a `ClusterVariant::Managed`:
+//! every existing Role row. That backfill was gated on an `is_cloud`
+//! heuristic that required the `mz_system` cluster to be
+//! `ClusterVariant::Managed`; on envs where it wasn't, the heuristic returned
+//! false and the migration silently no-opped. The version bump committed
+//! anyway, but every Role row kept its v80 form.
 //!
-//! ```text
-//! if let ClusterVariant::Managed(ManagedCluster { replication_factor, .. })
-//!     = cluster.value.config.variant
-//! { replication_factor > 0 && !has_password_auth }
-//! else { false }
-//! ```
+//! After v26.18 any DDL touching such a row (`ALTER ROLE`, role membership
+//! changes, `DROP ROLE`) parses the row, then writes a retract+insert pair
+//! through current protos that *do* include the new field. The retraction
+//! doesn't cancel, and the shard ends up holding three rows per affected
+//! role:
 //!
-//! On any env where `mz_system` was not in the `Managed` variant at upgrade
-//! time, the heuristic returned `false` and the migration silently no-opped.
-//! The version bump 80→81 still committed (it's unconditional in
-//! `run_versioned_upgrade`), but every Role row kept its v80 byte form: a
-//! JSON object with `attributes.{inherit, login, superuser}` and no
-//! `auto_provision_source` key at all. After v26.18 onwards, *any* DDL that
-//! touches one of these rows (`ALTER ROLE` of any kind, role membership
-//! changes, `DROP ROLE`) reads the row, parses it (the missing field becomes
-//! `None`), then writes a retract+insert pair through current protos — which
-//! always include the `auto_provision_source` key. The retraction bytes don't
-//! byte-match the stored row; the consolidation step doesn't merge them; the
-//! shard ends up holding three rows per affected role:
+//!   * a stale `+1` in the pre-v81 form,
+//!   * a dangling `-1` in the current form (the retraction that missed),
+//!   * a live `+1` in the current form reflecting whatever the DDL did.
 //!
-//!   * a stale `+1` in v80 byte form (no `auto_provision_source` key),
-//!   * a dangling `-1` in v82 byte form (the retraction that missed),
-//!   * a live `+1` in v82 byte form reflecting whatever change the DDL made.
-//!
-//! For a `DROP ROLE` the third row is absent — the role is gone, but the
-//! first two persist forever, polluting the shard.
-//!
-//! `PersistPeek` fires on the dangling `-1`. `run_versioned_upgrade`'s soft
-//! assert fires on the dangling `-1`. `apply()` in `persist.rs` does *not*
-//! fire because it keys by parsed `(RoleKey, RoleValue)` and the dangling
-//! `-1`'s parsed value equals the stale `+1`'s — both lack the field
-//! semantically, only the byte image diverges. So affected envs run quietly
-//! until either someone queries `mz_catalog_raw` or a new catalog version
-//! migration runs.
+//! For `DROP ROLE` the third row is absent — the role is gone, but the first
+//! two persist forever.
 //!
 //! # The repair
 //!
 //! For every Role with the structural signature of this bug — a dangling `-1`
-//! plus at least one `+1` whose parsed `RoleValue` equals the dangling row's
-//! parsed value, plus at most one *other* `+1` with a different parsed value
-//! (representing the live state, or absent if the role was dropped) — we
-//! issue:
+//! plus at least one `+1` whose parsed `RoleValue` equals it, plus at most
+//! one *other* `+1` with a different parsed value — we emit:
 //!
-//!   1. `+1` of the dangling row's exact bytes — cancels the dangling `-1`
-//!      under byte-keyed consolidation.
-//!   2. `-1` of every stale `+1` row's exact bytes — completes the retraction
-//!      the original DDL was supposed to perform.
+//!   1. `+1` of the dangling row, cancelling the dangling `-1`.
+//!   2. `-1` of every parsed-equal stale `+1`, completing the retraction the
+//!      original DDL intended.
 //!
-//! After commit, each affected `RoleKey` has either one row in the shard (the
-//! live `+1`) or zero (cleanly dropped). Both `PersistPeek`'s per-row
-//! non-negativity check and `apply()`'s parsed-value invariant hold.
+//! After commit, each affected `RoleKey` has either one live `+1` or no rows
+//! at all (for the dropped case).
 //!
-//! The predicate is structural, not symptomatic. We don't care *what* field
-//! the live `+1` differs from the dangling `-1` in — `login`, `superuser`,
-//! `inherit`, `name`, anything — because the cause is byte-form drift on the
-//! retraction side, not anything specific to which attribute got mutated.
-//! Two `+1`s for the same `RoleKey` with parsed-equal values is the
-//! fingerprint of the round-trip bug class; anything that fits the
-//! fingerprint gets cleaned up.
-//!
-//! Anything that *doesn't* fit — a dangling `-1` with no parsed-equal `+1`
-//! sibling, with multiple live candidates of distinct parsed values, with a
-//! non-Role kind, or with `|diff| > 1` — is logged at WARN and left for human
-//! review. Better to under-clean and surface unknown shapes for triage than
-//! over-clean and accidentally retire live state.
+//! Anything that doesn't fit the fingerprint — no parsed-equal sibling,
+//! multiple distinct live candidates, non-Role kinds, `|diff| > 1` — is
+//! logged at WARN and left for human review. Better to under-clean and
+//! surface unknown shapes for triage than over-clean and retire live state.
 
 use std::collections::BTreeMap;
 
@@ -115,13 +77,12 @@ const TO_VERSION: u64 = 83;
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct RepairStats {
     /// Role retraction phantoms matching the v80-form-drift signature that
-    /// were cancelled by writing a compensating `+1` of the same bytes.
+    /// were cancelled by writing a compensating `+1`.
     pub repaired: usize,
-    /// Stale `+1` rows (alternate byte forms of the same parsed Role value as
-    /// a repaired phantom) that were retracted as part of the repair.
+    /// Stale `+1` rows (alternate forms of the same parsed Role value as a
+    /// repaired phantom) that were retracted as part of the repair.
     pub stale_retracted: usize,
-    /// Dangling Role `-1`s that didn't fit the structural signature (no
-    /// parsed-equal `+1` sibling, multiple distinct live candidates, etc.).
+    /// Dangling Role `-1`s that didn't fit the structural signature.
     pub skipped_role: usize,
     /// Dangling rows for kinds other than `Role`. The known corruption only
     /// affects Role rows; everything else is left for human inspection.
@@ -135,7 +96,7 @@ pub async fn upgrade(
     tracing::info!(
         from_version = FROM_VERSION,
         to_version = TO_VERSION,
-        "running versioned Catalog upgrade (repair Role byte-form drift)",
+        "running versioned Catalog upgrade (repair Role row drift)",
     );
 
     let (repairs, stats) = compute_repairs(&unopened_catalog_state.snapshot);
@@ -144,7 +105,7 @@ pub async fn upgrade(
         tracing::info!(
             repaired = stats.repaired,
             stale_retracted = stats.stale_retracted,
-            "repairing Role rows left in inconsistent byte form by the v80->v81 migration's non-cloud no-op",
+            "repairing Role rows left inconsistent by the v80->v81 migration's non-cloud no-op",
         );
     }
     if stats.skipped_role > 0 || stats.skipped_non_role > 0 {
@@ -177,17 +138,17 @@ pub async fn upgrade(
     Ok((TO_VERSION, commit_ts))
 }
 
-/// Inspect a consolidated snapshot and return the byte-level updates needed
-/// to converge every Role login-mismatch site onto "exactly one `+1` per
-/// `RoleKey`, with the live login state."
+/// Inspect a consolidated snapshot and return the updates needed to converge
+/// every affected Role onto a single live `+1` (or zero rows, for the dropped
+/// case).
 ///
 /// The returned `Vec` is safe to feed straight into `compare_and_append`. For
-/// each repaired site we emit:
+/// each repair site we emit:
 ///
-///   * `+1` of the dangling row's exact bytes (cancels the existing `-1`);
+///   * `+1` of the dangling row (cancels the existing `-1`);
 ///   * one `-1` per *stale* `+1` row whose parsed value equals the dangling
-///     row's parsed value (retires the pre-evolution byte image the original
-///     retraction failed to byte-match).
+///     row's (completes the retraction the original DDL was supposed to
+///     perform).
 ///
 /// Separated from `upgrade` so it can be unit-tested without spinning up a
 /// real catalog handle.
@@ -196,7 +157,7 @@ pub(crate) fn compute_repairs(
 ) -> (Vec<(StateUpdateKindJson, Diff)>, RepairStats) {
     // Group every Role `+1` row by its parsed `RoleKey`. We need the full set
     // (not just one representative) so we can identify the live row vs any
-    // stale byte-form siblings — they all live under the same key.
+    // stale siblings — they all live under the same key.
     let mut role_plus_ones: BTreeMap<v83::RoleKey, Vec<RolePlusOne<'_>>> = BTreeMap::new();
     for (kind_json, _, diff) in snapshot {
         if *diff != Diff::ONE {
@@ -221,9 +182,8 @@ pub(crate) fn compute_repairs(
             continue;
         }
 
-        // Anything other than a Role row is outside the scope of this targeted
-        // repair. We don't pretend to know how to fix Database, Schema, Item,
-        // etc. dangling diffs — those need human triage.
+        // Non-Role dangling diffs are outside the scope of this targeted
+        // repair and need human triage.
         let Some(dangling) = try_as_role(kind_json) else {
             tracing::warn!(
                 ?kind_json,
@@ -246,23 +206,16 @@ pub(crate) fn compute_repairs(
             continue;
         }
 
-        // Structural classifier. For each `+1` sibling of this `-1`:
+        // Classify each `+1` sibling of this `-1`:
         //
-        //   - `stale`: parsed value EQUALS the dangling row's parsed value.
-        //     This is another byte form of "the state the original retraction
-        //     was supposed to cancel" — the v80-form-drift fingerprint. We'll
-        //     retract these.
-        //   - `live`: parsed value DIFFERS from the dangling row's. This is
-        //     the post-mutation state (e.g. after an `ALTER ROLE`). We leave
-        //     it untouched. At most one such row is allowed; multiple distinct
-        //     live values for the same key would be ambiguous.
+        //   - `stale`: parsed value equals the dangling row's. Another form
+        //     of "the state the original retraction was supposed to cancel".
+        //     We retract these.
+        //   - `live`: parsed value differs. The post-mutation state. At most
+        //     one such row is permitted; multiple is ambiguous and we bail.
         //
-        // The signature requires at least one stale row — that's the
-        // structural proof that the dangling `-1` is byte-form drift rather
-        // than some other class of corruption. A dangling `-1` with no stale
-        // sibling looks like a free-floating retraction and we won't act.
-        // A dangling `-1` with stale siblings but multiple distinct live
-        // candidates is ambiguous and we won't act.
+        // A dangling `-1` with no stale sibling looks like a free-floating
+        // retraction; we won't act on it either.
         let siblings = role_plus_ones
             .get(&dangling.key)
             .map(Vec::as_slice)
@@ -303,13 +256,13 @@ pub(crate) fn compute_repairs(
             has_live = live.is_some(),
             "repairing v80-form-drift phantom retraction",
         );
-        // 1. Cancel the dangling `-1` by writing `+1` of the same bytes.
+        // 1. Cancel the dangling `-1` by writing a matching `+1`.
         repairs.push((kind_json.clone(), Diff::ONE));
         // 2. Retract every stale `+1` row sharing the dangling row's parsed
         //    value. The original retraction was supposed to cancel one of
-        //    these; we replay that intent against the actual stored bytes.
+        //    these; we replay that intent against the actual stored row.
         for s in stale {
-            // Don't retract the dangling row's own byte image — step 1
+            // Don't retract the dangling row's own stored form — step 1
             // already cancels it.
             if s.bytes == kind_json {
                 continue;
@@ -323,18 +276,18 @@ pub(crate) fn compute_repairs(
     (repairs, stats)
 }
 
-/// A parsed `+1` Role row borrowed from the snapshot. Carries both the bytes
-/// (so we can emit retractions against the exact byte image) and the parsed
-/// value (so we can compare semantic equality across byte forms).
+/// A `+1` Role row borrowed from the snapshot. Carries both the stored form
+/// (so retractions can target the exact row) and the parsed value (so we can
+/// compare semantic equality across stored forms).
 struct RolePlusOne<'a> {
     bytes: &'a StateUpdateKindJson,
     parsed: v83::Role,
 }
 
 /// Returns the parsed Role iff `kind_json` is one. Returns `None` for any
-/// other kind, or for bytes we can't deserialize as the current Role shape
-/// (which we treat as "leave it alone" — losing that row to the repair would
-/// be worse than the soft_assert noise).
+/// other kind, or for rows we can't deserialize as the current Role shape
+/// (which we treat as "leave alone" — losing that row to the repair would be
+/// worse than the soft_assert noise).
 fn try_as_role(kind_json: &StateUpdateKindJson) -> Option<v83::Role> {
     let kind: v83::StateUpdateKind = kind_json.try_to_serde().ok()?;
     match kind {
@@ -393,11 +346,11 @@ mod tests {
     }
 
     /// Build a `StateUpdateKindJson` for a Role whose JSON intentionally omits
-    /// the `auto_provision_source` key — mirroring the v80-era byte form that
+    /// the `auto_provision_source` key — mirroring the v80-era form that
     /// survived a non-cloud-detecting `v80→v81` migration. Parses back to a
     /// Role with `auto_provision_source: None` (serde fills the missing
-    /// `Option` field with `None`) but has different stored bytes than the
-    /// post-v80 form that always writes the key explicitly.
+    /// `Option` field with `None`) but its stored form differs from the
+    /// post-v80 shape that always writes the key explicitly.
     fn stale_role_kind_with_dropped_field(
         user_id: u64,
         name: &str,
@@ -466,13 +419,12 @@ mod tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault` on OS `linux`
     fn production_shape_alter_login_is_repaired() {
-        // The shape we actually pulled out of the affected env for
-        // jan@materialize.com (User:8): a stale v80-form `+1` lacking the
-        // `auto_provision_source` key, a dangling v82-form `-1` with the key
-        // explicit, and a live v82-form `+1` reflecting ALTER ROLE LOGIN.
-        let live = role_kind(8, "jan@materialize.com", 20030, Some(true), None, None);
-        let dangling = role_kind(8, "jan@materialize.com", 20030, None, None, None);
-        let stale = stale_role_kind_with_dropped_field(8, "jan@materialize.com", 20030);
+        // The shape pulled from the affected env: a stale v80-form `+1`
+        // lacking `auto_provision_source`, a dangling v82-form `-1` with the
+        // key explicit, and a live v82-form `+1` reflecting ALTER ROLE LOGIN.
+        let live = role_kind(8, "alice@example.com", 20030, Some(true), None, None);
+        let dangling = role_kind(8, "alice@example.com", 20030, None, None, None);
+        let stale = stale_role_kind_with_dropped_field(8, "alice@example.com", 20030);
 
         assert_eq!(
             try_as_role(&stale).expect("parses as Role").value,
@@ -481,7 +433,7 @@ mod tests {
         );
         assert_ne!(
             stale, dangling,
-            "test fixture broken: stale and dangling must have different bytes",
+            "test fixture broken: stale and dangling must have distinct stored forms",
         );
 
         let snap = snapshot(vec![
@@ -508,8 +460,8 @@ mod tests {
     #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault` on OS `linux`
     fn alter_changing_superuser_is_repaired() {
         // Same structural shape as the login case but the live row differs
-        // in `superuser`. The predicate doesn't care which field changed —
-        // the bug is byte-form drift, not anything attribute-specific.
+        // in a different attribute. The predicate is structural, not
+        // attribute-specific.
         let live = role_kind(11, "ops@materialize.com", 20040, None, Some(true), None);
         let dangling = role_kind(11, "ops@materialize.com", 20040, None, None, None);
         let stale = stale_role_kind_with_dropped_field(11, "ops@materialize.com", 20040);
@@ -657,8 +609,8 @@ mod tests {
     #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault` on OS `linux`
     fn repair_with_multiple_stale_byte_forms_retracts_all() {
         // Pathological case: the same role has accreted *two* distinct stale
-        // byte forms (e.g. the v80 form plus another byte-form drift from
-        // some intermediate migration). The repair should retract both.
+        // stored forms (the v80 form plus another drift from some
+        // intermediate migration). The repair should retract both.
         let live = role_kind(40, "alice@materialize.com", 20070, Some(true), None, None);
         let dangling = role_kind(40, "alice@materialize.com", 20070, None, None, None);
         let stale_a = stale_role_kind_with_dropped_field(40, "alice@materialize.com", 20070);
@@ -692,12 +644,9 @@ mod tests {
         assert_eq!(stats.stale_retracted, 2);
     }
 
-    /// Like `stale_role_kind_with_dropped_field` but uses a different byte
-    /// shape — explicit `auto_provision_source: null` plus a benign field-
-    /// ordering tweak — to simulate yet another byte-form drift of the same
-    /// parsed value. We're not asserting any specific other migration
-    /// produces this exact shape; the test just exercises the repair's
-    /// multi-stale-row handling.
+    /// Like `stale_role_kind_with_dropped_field` but a different stored
+    /// shape that still parses to the same value, used to exercise the
+    /// repair's multi-stale-row handling.
     fn stale_role_kind_with_extra_whitespace(
         user_id: u64,
         name: &str,
@@ -705,8 +654,8 @@ mod tests {
     ) -> StateUpdateKindJson {
         use serde_json::json;
         // Differ from the canonical post-v82 form by including a stray
-        // `password: null` key inside attributes — present in some
-        // historical proto versions. Parses back the same; bytes differ.
+        // `password: null` key inside attributes. Parses back the same; the
+        // stored form differs.
         let v = json!({
             "kind": "Role",
             "key": { "id": { "User": user_id } },
