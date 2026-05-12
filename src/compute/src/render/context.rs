@@ -316,14 +316,14 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
         match &self {
             ArrangementFlavor::Local(oks, errs) => {
                 let (oks, mfp_errs) =
-                    CollectionBundle::<T>::flat_map_core(oks.clone(), key, logic, refuel);
+                    CollectionBundle::<T>::flat_map_core_fallible(oks.clone(), key, logic, refuel);
                 let errs = errs.clone().as_collection(|k, &()| k.clone());
                 let errs = errs.concat(mfp_errs.as_collection());
                 (oks, errs)
             }
             ArrangementFlavor::Trace(_, oks, errs) => {
                 let (oks, mfp_errs) =
-                    CollectionBundle::<T>::flat_map_core(oks.clone(), key, logic, refuel);
+                    CollectionBundle::<T>::flat_map_core_fallible(oks.clone(), key, logic, refuel);
                 let errs = errs.clone().as_collection(|k, &()| k.clone());
                 let errs = errs.concat(mfp_errs.as_collection());
                 (oks, errs)
@@ -669,7 +669,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// where key and value are potentially specialized, but convertible into rows. The `logic`
     /// callback writes ok results into the first session and errors into the second, returning
     /// the amount of work performed so the operator can fuel-limit its activations.
-    fn flat_map_core<Tr, D, L>(
+    fn flat_map_core_fallible<Tr, D, L>(
         trace: Arranged<'scope, Tr>,
         key: Option<&<Tr::KeyContainer as BatchContainer>::Owned>,
         mut logic: L,
@@ -769,7 +769,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         (ok_stream, err_stream)
     }
 
-    /// Ok-only variant of [`Self::flat_map_core`]. The `logic` callback writes results into a
+    /// Ok-only variant of [`Self::flat_map_core_fallible`]. The `logic` callback writes results into a
     /// single output session and returns the amount of work performed. Use this when the caller
     /// statically knows it will never produce `DataflowErrorSer` records, to avoid building a
     /// second output port and the empty err stream that would follow it.
@@ -1219,7 +1219,7 @@ where
     }
 }
 
-/// Pending work for the Ok-only variant of `flat_map_core`. Holds a single capability since
+/// Pending work for the Ok-only variant of `flat_map_core_fallible`. Holds a single capability since
 /// the operator has only one output port.
 struct PendingWorkOk<C>
 where
