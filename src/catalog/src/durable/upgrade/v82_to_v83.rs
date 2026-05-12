@@ -449,6 +449,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault` on OS `linux`
     fn healthy_snapshot_is_a_noop() {
         let snap = snapshot(vec![
             (
@@ -463,6 +464,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault` on OS `linux`
     fn production_shape_alter_login_is_repaired() {
         // The shape we actually pulled out of the affected env for
         // jan@materialize.com (User:8): a stale v80-form `+1` lacking the
@@ -503,6 +505,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault` on OS `linux`
     fn alter_changing_superuser_is_repaired() {
         // Same structural shape as the login case but the live row differs
         // in `superuser`. The predicate doesn't care which field changed —
@@ -526,6 +529,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault` on OS `linux`
     fn alter_changing_name_is_repaired() {
         // Live row differs in `name` (RENAME-style mutation).
         let live = role_kind(12, "renamed@materialize.com", 20050, None, None, None);
@@ -547,6 +551,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault` on OS `linux`
     fn drop_role_shape_is_repaired() {
         // DROP ROLE on a v80-form-stuck role leaves a stale `+1` and a
         // dangling `-1` with no live `+1` sibling at all. The repair zeros
@@ -574,6 +579,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault` on OS `linux`
     fn dangling_minus_one_with_no_parsed_equal_plus_one_is_skipped() {
         // The dangling `-1` has no `+1` sibling at all; the bare retraction
         // is outside the structural signature.
@@ -585,6 +591,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault` on OS `linux`
     fn dangling_minus_one_with_only_a_different_parsed_live_is_skipped() {
         // A `-1` sitting next to a single `+1` whose parsed value differs
         // looks like "free-floating retraction next to unrelated live state."
@@ -599,6 +606,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault` on OS `linux`
     fn ambiguous_two_distinct_live_rows_is_skipped() {
         // Two `+1` rows for the same key with parsed values that differ
         // from each other AND from the dangling `-1`. We can't pick a live
@@ -619,6 +627,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault` on OS `linux`
     fn dangling_non_role_is_skipped() {
         let dangling = database_kind(1, "ghostdb");
         let snap = snapshot(vec![(dangling, Diff::MINUS_ONE)]);
@@ -628,6 +637,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault` on OS `linux`
     fn dangling_diff_other_than_minus_one_is_skipped() {
         // Diff = -2 isn't the known bug — refuse to auto-fix.
         let dangling = role_kind(30, "arjun", 20032, None, None, None);
@@ -644,6 +654,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault` on OS `linux`
     fn repair_with_multiple_stale_byte_forms_retracts_all() {
         // Pathological case: the same role has accreted *two* distinct stale
         // byte forms (e.g. the v80 form plus another byte-form drift from
