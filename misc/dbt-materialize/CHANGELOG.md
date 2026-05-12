@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.9.8 - 2026-05-12
+
 * Automatically retry the atomic swap transaction in `deploy_promote` when
   it is aborted by a concurrent-DDL conflict (Materialize SQLSTATE 40001).
   Retries are capped by the new `max_retries` argument (default: 3) and
