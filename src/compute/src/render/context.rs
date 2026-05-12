@@ -32,8 +32,6 @@ use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow
 use mz_storage_types::controller::CollectionMetadata;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
-use mz_timely_util::operator::CollectionExt;
-use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
@@ -263,8 +261,10 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
 
     /// Constructs and applies logic to elements of `self` and returns the results.
     ///
-    /// The `logic` receives a vector of datums, a timestamp, and a diff, and produces
-    /// an iterator of `(D, T, Diff)` updates.
+    /// The `logic` callback receives a borrow of the decoded datum vector, a timestamp, a
+    /// diff, and two output sessions: one for `ok` updates of type `(D, T, Diff)` and one for
+    /// MFP-style `DataflowErrorSer` updates. It must return the amount of work performed so
+    /// the underlying operator can budget activations.
     ///
     /// If `key` is set, this is a promise that `logic` will produce no results on
     /// records for which the key does not evaluate to the value. This is used to
@@ -273,19 +273,25 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
     /// The `max_demand` parameter limits the number of columns decoded from the
     /// input. Only the first `max_demand` columns are decoded. Pass `usize::MAX` to
     /// decode all columns.
-    pub fn flat_map<D, I, L>(
+    pub fn flat_map<D, L>(
         &self,
         key: Option<&Row>,
         max_demand: usize,
         mut logic: L,
     ) -> (
-        StreamVec<'scope, T, I::Item>,
+        StreamVec<'scope, T, (D, T, Diff)>,
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
     )
     where
-        I: IntoIterator<Item = (D, T, Diff)>,
         D: Data,
-        L: for<'a, 'b> FnMut(&'a mut DatumVecBorrow<'b>, T, Diff) -> I + 'static,
+        L: for<'a, 'b> FnMut(
+                &'a mut DatumVecBorrow<'b>,
+                T,
+                Diff,
+                &mut Session<T, (D, T, Diff)>,
+                &mut Session<T, (DataflowErrorSer, T, Diff)>,
+            ) -> usize
+            + 'static,
     {
         // Set a number of tuples after which the operator should yield.
         // This allows us to remain responsive even when enumerating a substantial
@@ -293,23 +299,33 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
         let refuel = 1000000;
 
         let mut datums = DatumVec::new();
-        let logic = move |k: DatumSeq, v: DatumSeq, t, d| {
-            let mut datums_borrow = datums.borrow();
-            datums_borrow.extend(k.to_datum_iter().take(max_demand));
-            let max_demand = max_demand.saturating_sub(datums_borrow.len());
-            datums_borrow.extend(v.to_datum_iter().take(max_demand));
-            logic(&mut datums_borrow, t, d)
-        };
+        let logic =
+            move |k: DatumSeq,
+                  v: DatumSeq,
+                  t,
+                  d,
+                  ok_session: &mut Session<T, (D, T, Diff)>,
+                  err_session: &mut Session<T, (DataflowErrorSer, T, Diff)>| {
+                let mut datums_borrow = datums.borrow();
+                datums_borrow.extend(k.to_datum_iter().take(max_demand));
+                let max_demand = max_demand.saturating_sub(datums_borrow.len());
+                datums_borrow.extend(v.to_datum_iter().take(max_demand));
+                logic(&mut datums_borrow, t, d, ok_session, err_session)
+            };
 
         match &self {
             ArrangementFlavor::Local(oks, errs) => {
-                let oks = CollectionBundle::<T>::flat_map_core(oks.clone(), key, logic, refuel);
+                let (oks, mfp_errs) =
+                    CollectionBundle::<T>::flat_map_core(oks.clone(), key, logic, refuel);
                 let errs = errs.clone().as_collection(|k, &()| k.clone());
+                let errs = errs.concat(mfp_errs.as_collection());
                 (oks, errs)
             }
             ArrangementFlavor::Trace(_, oks, errs) => {
-                let oks = CollectionBundle::<T>::flat_map_core(oks.clone(), key, logic, refuel);
+                let (oks, mfp_errs) =
+                    CollectionBundle::<T>::flat_map_core(oks.clone(), key, logic, refuel);
                 let errs = errs.clone().as_collection(|k, &()| k.clone());
+                let errs = errs.concat(mfp_errs.as_collection());
                 (oks, errs)
             }
         }
@@ -493,9 +509,14 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 });
                 if ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION.get(config_set) {
                     // Decode all columns, pass max_demand as usize::MAX.
-                    let (ok, err) = arranged.flat_map(None, usize::MAX, |borrow, t, r| {
-                        Some((SharedRow::pack(borrow.iter()), t, r))
-                    });
+                    let (ok, err) = arranged.flat_map(
+                        None,
+                        usize::MAX,
+                        |borrow, t, r, ok_session, _err_session| {
+                            ok_session.give((SharedRow::pack(borrow.iter()), t, r));
+                            1
+                        },
+                    );
                     (ok.as_collection(), err)
                 } else {
                     #[allow(deprecated)]
@@ -520,19 +541,25 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// The `max_demand` parameter limits the number of columns decoded from the
     /// input. Only the first `max_demand` columns are decoded. Pass `usize::MAX` to
     /// decode all columns.
-    pub fn flat_map<D, I, L>(
+    pub fn flat_map<D, L>(
         &self,
         key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
         max_demand: usize,
         mut logic: L,
     ) -> (
-        StreamVec<'scope, T, I::Item>,
+        StreamVec<'scope, T, (D, T, Diff)>,
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
     )
     where
-        I: IntoIterator<Item = (D, T, Diff)>,
         D: Data,
-        L: for<'a> FnMut(&'a mut DatumVecBorrow<'_>, T, Diff) -> I + 'static,
+        L: for<'a> FnMut(
+                &'a mut DatumVecBorrow<'_>,
+                T,
+                Diff,
+                &mut Session<T, (D, T, Diff)>,
+                &mut Session<T, (DataflowErrorSer, T, Diff)>,
+            ) -> usize
+            + 'static,
     {
         // If `key_val` is set, we should have to use the corresponding arrangement.
         // If there isn't one, that implies an error in the contract between
@@ -542,16 +569,49 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 .expect("Should have ensured during planning that this arrangement exists.")
                 .flat_map(val.as_ref(), max_demand, logic)
         } else {
-            use timely::dataflow::operators::vec::Map;
             let (oks, errs) = self
                 .collection
                 .clone()
                 .expect("Invariant violated: CollectionBundle contains no collection.");
-            let mut datums = DatumVec::new();
-            let oks = oks.inner.flat_map(move |(v, t, d)| {
-                logic(&mut datums.borrow_with_limit(&v, max_demand), t, d)
+            let scope = oks.inner.scope();
+            let mut builder = OperatorBuilder::new("CollectionFlatMap".to_string(), scope);
+            let (ok_output, ok_stream) = builder.new_output();
+            let mut ok_output =
+                OutputBuilder::<_, ConsolidatingContainerBuilder<Vec<(D, T, Diff)>>>::from(
+                    ok_output,
+                );
+            let (err_output, err_stream) = builder.new_output();
+            let mut err_output = OutputBuilder::<
+                _,
+                ConsolidatingContainerBuilder<Vec<(DataflowErrorSer, T, Diff)>>,
+            >::from(err_output);
+            let mut input = builder.new_input(oks.inner, Pipeline);
+            builder.build(move |_capabilities| {
+                let mut datums = DatumVec::new();
+                move |_frontiers| {
+                    let mut ok_output = ok_output.activate();
+                    let mut err_output = err_output.activate();
+                    input.for_each(|time, data| {
+                        // Retain the input capability to derive a `Capability` for each output;
+                        // the `Session` type alias is fixed to `Capability<T>`.
+                        let ok_cap = time.retain(0);
+                        let err_cap = time.retain(1);
+                        let mut ok_session = ok_output.session_with_builder(&ok_cap);
+                        let mut err_session = err_output.session_with_builder(&err_cap);
+                        for (v, t, d) in data.iter() {
+                            logic(
+                                &mut datums.borrow_with_limit(v, max_demand),
+                                t.clone(),
+                                d.clone(),
+                                &mut ok_session,
+                                &mut err_session,
+                            );
+                        }
+                    });
+                }
             });
-            (oks, errs)
+            let errs = errs.concat(err_stream.as_collection());
+            (ok_stream, errs)
         }
     }
 
@@ -561,13 +621,18 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// once, and thereby avoid any skew in the two uses of the logic.
     ///
     /// The function presents the contents of the trace as `(key, value, time, delta)` tuples,
-    /// where key and value are potentially specialized, but convertible into rows.
-    fn flat_map_core<Tr, D, I, L>(
+    /// where key and value are potentially specialized, but convertible into rows. The `logic`
+    /// callback writes ok results into the first session and errors into the second, returning
+    /// the amount of work performed so the operator can fuel-limit its activations.
+    fn flat_map_core<Tr, D, L>(
         trace: Arranged<'scope, Tr>,
         key: Option<&<Tr::KeyContainer as BatchContainer>::Owned>,
         mut logic: L,
         refuel: usize,
-    ) -> StreamVec<'scope, T, I::Item>
+    ) -> (
+        StreamVec<'scope, T, (D, T, Diff)>,
+        StreamVec<'scope, T, (DataflowErrorSer, T, Diff)>,
+    )
     where
         Tr: for<'a> TraceReader<
                 Key<'a>: ToDatumIter,
@@ -577,11 +642,17 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             > + Clone
             + 'static,
         <Tr::KeyContainer as BatchContainer>::Owned: PartialEq,
-        I: IntoIterator<Item = (D, Tr::Time, Tr::Diff)>,
         D: Data,
-        L: FnMut(Tr::Key<'_>, Tr::Val<'_>, T, mz_repr::Diff) -> I + 'static,
+        L: FnMut(
+                Tr::Key<'_>,
+                Tr::Val<'_>,
+                T,
+                mz_repr::Diff,
+                &mut Session<T, (D, T, Diff)>,
+                &mut Session<T, (DataflowErrorSer, T, Diff)>,
+            ) -> usize
+            + 'static,
     {
-        use differential_dataflow::consolidation::ConsolidatingContainerBuilder as CB;
         let scope = trace.stream.scope();
 
         let mut key_con = Tr::KeyContainer::with_capacity(1);
@@ -590,48 +661,67 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         }
         let mode = if key.is_some() { "index" } else { "scan" };
         let name = format!("ArrangementFlatMap({})", mode);
-        use timely::dataflow::operators::Operator;
-        trace
-            .stream
-            .unary::<CB<_>, _, _, _>(Pipeline, &name, move |_, info| {
-                // Acquire an activator to reschedule the operator when it has unfinished work.
-                let activator = scope.activator_for(info.address);
-                // Maintain a list of work to do, cursor to navigate and process.
-                let mut todo = std::collections::VecDeque::new();
-                move |input, output| {
-                    let key = key_con.get(0);
-                    // First, dequeue all batches.
-                    input.for_each(|time, data| {
-                        let capability = time.retain(0);
-                        for batch in data.iter() {
-                            // enqueue a capability, cursor, and batch.
-                            todo.push_back(PendingWork::new(
-                                capability.clone(),
-                                batch.cursor(),
-                                batch.clone(),
-                            ));
-                        }
-                    });
 
-                    // Second, make progress on `todo`.
-                    let mut fuel = refuel;
-                    while !todo.is_empty() && fuel > 0 {
-                        todo.front_mut().unwrap().do_work(
-                            key.as_ref(),
-                            &mut logic,
-                            &mut fuel,
-                            output,
-                        );
-                        if fuel > 0 {
-                            todo.pop_front();
-                        }
+        let mut builder = OperatorBuilder::new(name, scope.clone());
+        let (ok_output, ok_stream) = builder.new_output();
+        let mut ok_output =
+            OutputBuilder::<_, ConsolidatingContainerBuilder<Vec<(D, T, Diff)>>>::from(ok_output);
+        let (err_output, err_stream) = builder.new_output();
+        let mut err_output = OutputBuilder::<
+            _,
+            ConsolidatingContainerBuilder<Vec<(DataflowErrorSer, T, Diff)>>,
+        >::from(err_output);
+        let mut input = builder.new_input(trace.stream.clone(), Pipeline);
+        let operator_info = builder.operator_info();
+
+        builder.build(move |_capabilities| {
+            // Acquire an activator to reschedule the operator when it has unfinished work.
+            let activator = scope.activator_for(operator_info.address);
+            // Maintain a list of work to do, cursor to navigate and process.
+            let mut todo = std::collections::VecDeque::new();
+            move |_frontiers| {
+                let key = key_con.get(0);
+                let mut ok_output = ok_output.activate();
+                let mut err_output = err_output.activate();
+
+                // First, dequeue all batches.
+                input.for_each(|time, data| {
+                    // Retain a capability for each output, as the work may complete across
+                    // multiple activations.
+                    let ok_cap = time.retain(0);
+                    let err_cap = time.retain(1);
+                    for batch in data.iter() {
+                        todo.push_back(PendingWork::new(
+                            ok_cap.clone(),
+                            err_cap.clone(),
+                            batch.cursor(),
+                            batch.clone(),
+                        ));
                     }
-                    // If we have not finished all work, re-activate the operator.
-                    if !todo.is_empty() {
-                        activator.activate();
+                });
+
+                // Second, make progress on `todo`.
+                let mut fuel = refuel;
+                while !todo.is_empty() && fuel > 0 {
+                    todo.front_mut().unwrap().do_work(
+                        key.as_ref(),
+                        &mut logic,
+                        &mut fuel,
+                        &mut ok_output,
+                        &mut err_output,
+                    );
+                    if fuel > 0 {
+                        todo.pop_front();
                     }
                 }
-            })
+                // If we have not finished all work, re-activate the operator.
+                if !todo.is_empty() {
+                    activator.activate();
+                }
+            }
+        });
+
+        (ok_stream, err_stream)
     }
 
     /// Look up an arrangement by the expressions that form the key.
@@ -690,49 +780,47 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         // Wrap in an `Rc` so that lifetimes work out.
         let until = std::rc::Rc::new(until);
 
-        let (stream, errors) = self.flat_map(key_val, max_demand, move |row_datums, time, diff| {
-            let mut row_builder = SharedRow::get();
-            let until = std::rc::Rc::clone(&until);
-            let temp_storage = RowArena::new();
-            let row_iter = row_datums.iter();
-            let mut datums_local = datum_vec.borrow();
-            datums_local.extend(row_iter);
-            let time = time.clone();
-            let event_time = time.event_time();
-            mfp_plan
-                .evaluate(
+        let (stream, errors) = self.flat_map(
+            key_val,
+            max_demand,
+            move |row_datums, time, diff, ok_session, err_session| {
+                let mut row_builder = SharedRow::get();
+                let until = std::rc::Rc::clone(&until);
+                let temp_storage = RowArena::new();
+                let row_iter = row_datums.iter();
+                let mut datums_local = datum_vec.borrow();
+                datums_local.extend(row_iter);
+                let event_time = time.event_time();
+                let mut work: usize = 0;
+                for result in mfp_plan.evaluate(
                     &mut datums_local,
                     &temp_storage,
                     event_time,
                     diff.clone(),
                     move |time| !until.less_equal(time),
                     &mut row_builder,
-                )
-                .map(move |x| match x {
-                    Ok((row, event_time, diff)) => {
-                        // Copy the whole time, and re-populate event time.
-                        let mut time: T = time.clone();
-                        *time.event_time_mut() = event_time;
-                        (Ok(row), time, diff)
+                ) {
+                    work += 1;
+                    match result {
+                        Ok((row, event_time, diff)) => {
+                            // Copy the whole time, and re-populate event time.
+                            let mut time: T = time.clone();
+                            *time.event_time_mut() = event_time;
+                            ok_session.give((row, time, diff));
+                        }
+                        Err((e, event_time, diff)) => {
+                            // Copy the whole time, and re-populate event time.
+                            let mut time: T = time.clone();
+                            *time.event_time_mut() = event_time;
+                            err_session.give((e, time, diff));
+                        }
                     }
-                    Err((e, event_time, diff)) => {
-                        // Copy the whole time, and re-populate event time.
-                        let mut time: T = time.clone();
-                        *time.event_time_mut() = event_time;
-                        (Err(e), time, diff)
-                    }
-                })
-        });
+                }
+                work
+            },
+        );
 
-        use differential_dataflow::AsCollection;
-        let (oks, errs) = stream
-            .as_collection()
-            .map_fallible::<CapacityContainerBuilder<_>, CapacityContainerBuilder<_>, _, _, _>(
-                "OkErr",
-                |x| x,
-            );
-
-        (oks, errors.concat(errs))
+        (stream.as_collection(), errors)
     }
     pub fn ensure_collections(
         mut self,
@@ -926,11 +1014,22 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     }
 }
 
+type Session<'a, 'b, T, D> = timely::dataflow::operators::generic::Session<
+    'a,
+    'b,
+    T,
+    ConsolidatingContainerBuilder<Vec<D>>,
+    Capability<T>,
+>;
+
 struct PendingWork<C>
 where
     C: Cursor,
 {
-    capability: Capability<C::Time>,
+    /// Capability for the `ok` output (output port 0).
+    ok_capability: Capability<C::Time>,
+    /// Capability for the `err` output (output port 1).
+    err_capability: Capability<C::Time>,
     cursor: C,
     batch: C::Storage,
 }
@@ -939,31 +1038,56 @@ impl<C> PendingWork<C>
 where
     C: Cursor<KeyContainer: BatchContainer<Owned: PartialEq + Sized>>,
 {
-    /// Create a new bundle of pending work, from the capability, cursor, and backing storage.
-    fn new(capability: Capability<C::Time>, cursor: C, batch: C::Storage) -> Self {
+    /// Create a new bundle of pending work, from a pair of capabilities (one per output),
+    /// a cursor, and backing storage.
+    fn new(
+        ok_capability: Capability<C::Time>,
+        err_capability: Capability<C::Time>,
+        cursor: C,
+        batch: C::Storage,
+    ) -> Self {
         Self {
-            capability,
+            ok_capability,
+            err_capability,
             cursor,
             batch,
         }
     }
-    /// Perform roughly `fuel` work through the cursor, applying `logic` and sending results to `output`.
-    fn do_work<I, D, L>(
+    /// Perform roughly `fuel` work through the cursor, applying `logic` and sending results to
+    /// the two output sessions.
+    fn do_work<D, L>(
         &mut self,
         key: Option<&C::Key<'_>>,
         logic: &mut L,
         fuel: &mut usize,
-        output: &mut OutputBuilderSession<'_, C::Time, ConsolidatingContainerBuilder<Vec<I::Item>>>,
+        ok_output: &mut OutputBuilderSession<
+            '_,
+            C::Time,
+            ConsolidatingContainerBuilder<Vec<(D, C::Time, C::Diff)>>,
+        >,
+        err_output: &mut OutputBuilderSession<
+            '_,
+            C::Time,
+            ConsolidatingContainerBuilder<Vec<(DataflowErrorSer, C::Time, C::Diff)>>,
+        >,
     ) where
-        I: IntoIterator<Item = (D, C::Time, C::Diff)>,
         D: Data,
-        L: FnMut(C::Key<'_>, C::Val<'_>, C::Time, C::Diff) -> I + 'static,
+        L: FnMut(
+                C::Key<'_>,
+                C::Val<'_>,
+                C::Time,
+                C::Diff,
+                &mut Session<C::Time, (D, C::Time, C::Diff)>,
+                &mut Session<C::Time, (DataflowErrorSer, C::Time, C::Diff)>,
+            ) -> usize
+            + 'static,
     {
         use differential_dataflow::consolidation::consolidate;
 
         // Attempt to make progress on this batch.
         let mut work: usize = 0;
-        let mut session = output.session_with_builder(&self.capability);
+        let mut ok_session = ok_output.session_with_builder(&self.ok_capability);
+        let mut err_session = err_output.session_with_builder(&self.err_capability);
         let mut buffer = Vec::new();
         if let Some(key) = key {
             let key = C::KeyContainer::reborrow(*key);
@@ -978,10 +1102,7 @@ where
                     });
                     consolidate(&mut buffer);
                     for (time, diff) in buffer.drain(..) {
-                        for datum in logic(key, val, time, diff) {
-                            session.give(datum);
-                            work += 1;
-                        }
+                        work += logic(key, val, time, diff, &mut ok_session, &mut err_session);
                     }
                     self.cursor.step_val(&self.batch);
                     if work >= *fuel {
@@ -998,10 +1119,7 @@ where
                     });
                     consolidate(&mut buffer);
                     for (time, diff) in buffer.drain(..) {
-                        for datum in logic(key, val, time, diff) {
-                            session.give(datum);
-                            work += 1;
-                        }
+                        work += logic(key, val, time, diff, &mut ok_session, &mut err_session);
                     }
                     self.cursor.step_val(&self.batch);
                     if work >= *fuel {
