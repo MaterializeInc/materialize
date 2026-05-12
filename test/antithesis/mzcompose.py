@@ -34,6 +34,7 @@ from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
+from materialize.mzcompose.services.mysql import MySql, create_mysql_server_args
 from materialize.mzcompose.services.postgres import PostgresMetadata
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.zookeeper import Zookeeper
@@ -51,6 +52,8 @@ class Workload(Service):
                 "clusterd2": {"condition": "service_started"},
                 "kafka": {"condition": "service_healthy"},
                 "schema-registry": {"condition": "service_started"},
+                "mysql": {"condition": "service_healthy"},
+                "mysql-replica": {"condition": "service_healthy"},
             },
             "environment": [
                 "PGHOST=materialized",
@@ -64,6 +67,10 @@ class Workload(Service):
                 # Name of the unmanaged cluster the workload-entrypoint
                 # provisions against clusterd1 before emitting setup-complete.
                 "MZ_ANTITHESIS_CLUSTER=antithesis_cluster",
+                # MySQL primary and replica connection details.
+                "MYSQL_HOST=mysql",
+                "MYSQL_REPLICA_HOST=mysql-replica",
+                f"MYSQL_PASSWORD={MySql.DEFAULT_ROOT_PASSWORD}",
             ],
         }
         super().__init__(name="workload", config=config)
@@ -75,6 +82,33 @@ SERVICES = [
     Zookeeper(),
     Kafka(auto_create_topics=True),
     SchemaRegistry(),
+    # MySQL primary — GTID-enabled with WRITESET dependency tracking so the
+    # replica can safely use parallel workers without losing commit order.
+    MySql(
+        use_seeded_image=False,
+        volumes=[
+            "mysqldata_primary:/var/lib/mysql",
+            "mydata:/var/lib/mysql-files",
+        ],
+        additional_args=create_mysql_server_args(server_id="1", is_master=True)
+        + ["--binlog_transaction_dependency_tracking=WRITESET"],
+    ),
+    # MySQL replica — multithreaded replication (4 workers, commit-order
+    # preserved).  Replication is configured at runtime by
+    # first_mysql_replica_setup.py after both containers are healthy.
+    MySql(
+        name="mysql-replica",
+        use_seeded_image=False,
+        volumes=[
+            "mysqldata_replica:/var/lib/mysql",
+            "mydata:/var/lib/mysql-files",
+        ],
+        additional_args=create_mysql_server_args(server_id="2", is_master=False)
+        + [
+            "--replica_parallel_workers=4",
+            "--replica_preserve_commit_order=ON",
+        ],
+    ),
     # Two clusterd processes, one per replica of the unmanaged
     # `antithesis_cluster`. Provisioning both replicas in the same cluster
     # exercises multi-replica source ingestion and compute paths
@@ -138,6 +172,8 @@ def workflow_default(c: Composition) -> None:
         "schema-registry",
         "clusterd1",
         "clusterd2",
+        "mysql",
+        "mysql-replica",
     )
     c.up("materialized")
     c.up("workload")

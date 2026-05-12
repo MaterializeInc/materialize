@@ -2,6 +2,7 @@
 commit: 007c7af9d9970fb2030c7212368b232e0fbc363e
 updated: 2026-05-12
 ---
+<!-- Category 8 (MySQL CDC) added 2026-05-12: mysql-source-no-data-loss -->
 
 # Property Catalog: Materialize
 
@@ -403,6 +404,25 @@ Properties specific to the Kafka source ingestion pipeline: `KafkaSourceReader` 
 | **Invariant** | `Sometimes(mint_completed_after_cas_retry)`: at least once per run, Antithesis observes a reclock mint that took >1 CaS attempt and then completed (i.e. a successful retry path was exercised). Critically, the workload should also observe that the source frontier eventually advances past the value of `source_upper` captured at the time of the contention — i.e. the loop is not livelocked. |
 | **Antithesis Angle** | Inject persist consensus latency, kill+restart concurrently to create a competing writer, race the metadata fetcher's partition-add against a mint that is already in flight. The retry loop in `mint()` has no upper bound; this property confirms it is not livelocked even under adversarial schedules. |
 | **Why It Matters** | A livelocked mint loop manifests as a source that never advances its frontier — externally indistinguishable from a stalled Kafka consumer, but caused inside Materialize. |
+
+## Category 8: MySQL CDC Source
+
+Properties specific to Materialize's MySQL CDC source pipeline, which reads
+from a multithreaded MySQL replica. The topology adds a MySQL primary (GTID +
+WRITESET dependency tracking) and a MySQL replica (4 parallel workers,
+commit-order preservation) to the Antithesis environment.
+
+### mysql-source-no-data-loss — Every Row Written to MySQL Primary Is Eventually Visible
+
+| | |
+|---|---|
+| **Type** | Liveness + Safety |
+| **Priority** | P1 — end-to-end correctness of the MySQL CDC pipeline; tests a distinct code path from Kafka |
+| **Status** | **Implemented (workload-side)** — `test/antithesis/workload/test/parallel_driver_mysql_cdc.py` + `first_mysql_replica_setup.py`. Each `parallel_driver_` invocation inserts 20 rows to MySQL primary, waits for a quiet period, then polls `antithesis_cdc` until all rows appear (or 90 s budget expires). `always("mysql: CDC source row has correct value after catchup", …)` and `always("mysql: CDC source row count matches inserted count after catchup", …)` fire per-row and per-batch after confirmed catchup; `sometimes("mysql: CDC source caught up to all primary inserts after quiet period", …)` is the liveness anchor. The `first_mysql_replica_setup.py` creates the MySQL schema, configures multithreaded replication (4 workers, `replica_preserve_commit_order=ON`), and creates the Materialize connection/source/table, firing `reachable("mysql: first-run setup complete …")` as a coverage anchor. |
+| **Property** | After inserting a row to the MySQL primary (via the binlog + GTID-based multithreaded replica), the Materialize CDC source eventually contains that row with the correct value. |
+| **Invariant** | `Always`: after catchup, for every row inserted to `antithesis.cdc_test` on the primary, `SELECT value FROM antithesis_cdc WHERE id = ?` returns the expected value. `Sometimes`: catchup completes within the quiet-period budget at least once per run. |
+| **Antithesis Angle** | Kills to the MySQL replica container (replica restarts from persisted GTID position); kills to the MySQL primary (replica and Materialize source must handle upstream silence gracefully); clusterd restarts (MySQL CDC resume exercises the same `storage-command-replay-idempotent` path as Kafka); parallel worker scheduling jitter that stresses the `replica_preserve_commit_order` protocol. |
+| **Why It Matters** | MySQL CDC is a distinct ingestion code path from Kafka. Wrong behavior here — dropped rows, wrong values after restart, duplicate rows after resume — is not caught by the Kafka-source drivers. |
 
 ### offset-known-not-below-committed — Source Statistics Causality
 

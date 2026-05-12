@@ -22,7 +22,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install --no-cache-dir \
     psycopg[binary]==3.2.9 \
     confluent-kafka==2.8.0 \
-    antithesis==0.2.0
+    antithesis==0.2.0 \
+    PyMySQL==1.1.1
 
 # setup-complete script
 COPY setup-complete.sh /usr/local/bin/setup-complete.sh

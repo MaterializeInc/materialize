@@ -171,6 +171,71 @@ services:
       interval: 1s
       start_period: 120s
     platform: linux/amd64
+  mysql:
+    init: true
+    ports:
+    - 3306
+    environment:
+    - MYSQL_ROOT_PASSWORD=p@ssw0rd
+    command:
+    - --secure-file-priv=/var/lib/mysql-files
+    - --log-bin=mysql-bin
+    - --gtid_mode=ON
+    - --enforce_gtid_consistency=ON
+    - --binlog-format=row
+    - --binlog-row-image=full
+    - --binlog-row-metadata=full
+    - --server-id=1
+    - --max-connections=500
+    - --binlog_transaction_dependency_tracking=WRITESET
+    healthcheck:
+      test:
+      - CMD
+      - mysqladmin
+      - ping
+      - --password=p@ssw0rd
+      - --protocol=TCP
+      interval: 1s
+      start_period: 180s
+    volumes:
+    - mysqldata_primary:/var/lib/mysql
+    - mydata:/var/lib/mysql-files
+    image: mysql:9.5.0
+    platform: linux/amd64
+  mysql-replica:
+    init: true
+    ports:
+    - 3306
+    environment:
+    - MYSQL_ROOT_PASSWORD=p@ssw0rd
+    command:
+    - --secure-file-priv=/var/lib/mysql-files
+    - --log-bin=mysql-bin
+    - --gtid_mode=ON
+    - --enforce_gtid_consistency=ON
+    - --binlog-format=row
+    - --binlog-row-image=full
+    - --binlog-row-metadata=full
+    - --server-id=2
+    - --max-connections=500
+    - --log-slave-updates
+    - --skip-replica-start
+    - --replica_parallel_workers=4
+    - --replica_preserve_commit_order=ON
+    healthcheck:
+      test:
+      - CMD
+      - mysqladmin
+      - ping
+      - --password=p@ssw0rd
+      - --protocol=TCP
+      interval: 1s
+      start_period: 180s
+    volumes:
+    - mysqldata_replica:/var/lib/mysql
+    - mydata:/var/lib/mysql-files
+    image: mysql:9.5.0
+    platform: linux/amd64
   clusterd1:
     entrypoint:
     - tini
@@ -419,6 +484,7 @@ services:
     - MZ_NO_BUILTIN_POSTGRES=1
     - MZ_NO_BUILTIN_COCKROACH=1
     - MZ_ADAPTER_STASH_URL=postgres://root@postgres-metadata:26257?options=--search_path=adapter
+    - MZ_LICENSE_KEY=/license_key/license_key
     volumes:
     - mzdata:/mzdata
     - mydata:/var/lib/mysql-files
@@ -449,6 +515,10 @@ services:
         condition: service_healthy
       schema-registry:
         condition: service_started
+      mysql:
+        condition: service_healthy
+      mysql-replica:
+        condition: service_healthy
     environment:
     - PGHOST=materialized
     - PGPORT=6875
@@ -458,6 +528,9 @@ services:
     - KAFKA_BROKER=kafka:9092
     - SCHEMA_REGISTRY_URL=http://schema-registry:8081
     - MZ_ANTITHESIS_CLUSTER=antithesis_cluster
+    - MYSQL_HOST=mysql
+    - MYSQL_REPLICA_HOST=mysql-replica
+    - MYSQL_PASSWORD=p@ssw0rd
     platform: linux/amd64
     image: ${ANTITHESIS_WORKLOAD_IMAGE}
 networks: {}
@@ -475,5 +548,7 @@ volumes:
   tmp: null
   secrets: null
   scratch: null
+  mysqldata_primary: null
+  mysqldata_replica: null
   clusterd1_scratch: null
   clusterd2_scratch: null
