@@ -15,8 +15,11 @@ Topology exercised under Antithesis:
   - minio             : S3-compatible blob storage for persist
   - zookeeper + kafka : Kafka broker for source ingestion
   - schema-registry   : Avro/Protobuf schemas for kafka sources
-  - clusterd1         : external compute+storage process — fenceable
-                        independently of materialized for fault testing
+  - clusterd1, clusterd2 : two external compute+storage processes — each
+                        backs one replica of `antithesis_cluster`, so
+                        Antithesis killing either container exercises the
+                        compute/storage-replica recovery and rebalancing
+                        paths without taking the cluster offline.
   - materialized      : the SUT (environmentd; clusterd is external)
   - workload          : Python test driver wired to the Antithesis SDK
 
@@ -45,6 +48,7 @@ class Workload(Service):
             "depends_on": {
                 "materialized": {"condition": "service_healthy"},
                 "clusterd1": {"condition": "service_started"},
+                "clusterd2": {"condition": "service_started"},
                 "kafka": {"condition": "service_healthy"},
                 "schema-registry": {"condition": "service_started"},
             },
@@ -71,7 +75,14 @@ SERVICES = [
     Zookeeper(),
     Kafka(auto_create_topics=True),
     SchemaRegistry(),
+    # Two clusterd processes, one per replica of the unmanaged
+    # `antithesis_cluster`. Provisioning both replicas in the same cluster
+    # exercises multi-replica source ingestion and compute paths
+    # (notably the `compute-replica-epoch-isolation` property), and lets
+    # Antithesis kill either replica's backing container without taking
+    # the workload offline.
     Clusterd(name="clusterd1"),
+    Clusterd(name="clusterd2"),
     Materialized(
         external_blob_store=True,
         external_metadata_store=True,
@@ -99,6 +110,7 @@ def workflow_default(c: Composition) -> None:
         "kafka",
         "schema-registry",
         "clusterd1",
+        "clusterd2",
     )
     c.up("materialized")
     c.up("workload")

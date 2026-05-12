@@ -25,24 +25,39 @@ until curl -sf http://materialized:6878/api/readyz > /dev/null 2>&1; do
 done
 echo "materialized is healthy."
 
-# Provision an unmanaged cluster backed by the external clusterd1 process.
-# This must run before setup-complete so Test Composer assertions can target
-# the cluster from the start. Idempotent — `IF NOT EXISTS` is unsupported on
-# `CREATE CLUSTER REPLICAS (...)`, so we query mz_clusters first.
+# Provision an unmanaged cluster with one replica per external clusterd
+# process. Multi-replica gives Antithesis the option to kill one
+# clusterd at a time without taking the workload offline, and exercises
+# the multi-replica compute/storage code paths (notably
+# `compute-replica-epoch-isolation`).
+#
+# This must run before setup-complete so Test Composer assertions can
+# target the cluster from the start. Idempotent — `IF NOT EXISTS` is
+# unsupported on `CREATE CLUSTER REPLICAS (...)`, so we query
+# mz_clusters first.
 existing=$(
     psql -h "$PGHOST" -p "$PGPORT_INTERNAL" -U "$PGUSER_INTERNAL" -tAc \
         "SELECT 1 FROM mz_clusters WHERE name = '$CLUSTER'"
 )
 if [[ -z "$existing" ]]; then
-    echo "Provisioning cluster '$CLUSTER' against clusterd1..."
+    echo "Provisioning cluster '$CLUSTER' with replicas on clusterd1 + clusterd2..."
     psql -h "$PGHOST" -p "$PGPORT_INTERNAL" -U "$PGUSER_INTERNAL" <<SQL
-CREATE CLUSTER ${CLUSTER} REPLICAS (replica1 (
-    STORAGECTL ADDRESSES ['clusterd1:2100'],
-    STORAGE ADDRESSES ['clusterd1:2103'],
-    COMPUTECTL ADDRESSES ['clusterd1:2101'],
-    COMPUTE ADDRESSES ['clusterd1:2102'],
-    WORKERS 1
-));
+CREATE CLUSTER ${CLUSTER} REPLICAS (
+    replica1 (
+        STORAGECTL ADDRESSES ['clusterd1:2100'],
+        STORAGE ADDRESSES ['clusterd1:2103'],
+        COMPUTECTL ADDRESSES ['clusterd1:2101'],
+        COMPUTE ADDRESSES ['clusterd1:2102'],
+        WORKERS 1
+    ),
+    replica2 (
+        STORAGECTL ADDRESSES ['clusterd2:2100'],
+        STORAGE ADDRESSES ['clusterd2:2103'],
+        COMPUTECTL ADDRESSES ['clusterd2:2101'],
+        COMPUTE ADDRESSES ['clusterd2:2102'],
+        WORKERS 1
+    )
+);
 GRANT ALL ON CLUSTER ${CLUSTER} TO ${PGUSER};
 SQL
 else
