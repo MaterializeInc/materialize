@@ -300,6 +300,38 @@ impl Default for RbacRequirements {
     }
 }
 
+/// When `restrict_to_user_objects` is active, rejects access to system catalog objects.
+///
+/// Functions and types are allowed through because they are needed for query execution.
+/// All other system items (tables, views, sources, sinks, etc.) are blocked. This is an
+/// allow-list — new catalog item types are blocked by default.
+///
+/// See: doc/developer/design/20260508_restrict_to_user_objects.md
+fn check_restrict_to_user_objects(
+    catalog: &impl SessionCatalog,
+    session: &dyn SessionMetadata,
+    resolved_ids: &ResolvedIds,
+) -> Result<(), UnauthorizedError> {
+    if !session.restrict_to_user_objects() {
+        return Ok(());
+    }
+    for item_id in resolved_ids.items() {
+        if item_id.is_system() {
+            if let Some(item) = catalog.try_get_item(item_id) {
+                match item.item_type() {
+                    CatalogItemType::Func | CatalogItemType::Type => {}
+                    _ => {
+                        return Err(UnauthorizedError::RestrictedSystemObject {
+                            object_name: item.name().item.clone(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Checks if a `session` is authorized to use `resolved_ids`. If not, an error is returned.
 pub fn check_usage(
     catalog: &impl SessionCatalog,
@@ -309,28 +341,8 @@ pub fn check_usage(
 ) -> Result<(), UnauthorizedError> {
     rbac_check_preamble(catalog, session)?;
 
-    // Check if the session is restricted from accessing system objects.
-    // This is used by MCP tool queries that should only access user-created data products.
-    if session.restrict_to_user_objects() {
-        for item_id in resolved_ids.items() {
-            if item_id.is_system() {
-                if let Some(item) = catalog.try_get_item(item_id) {
-                    // Only block data-bearing system objects, not functions or types
-                    // which are needed for query execution.
-                    match item.item_type() {
-                        // Allow functions and types - they're needed for query execution
-                        CatalogItemType::Func | CatalogItemType::Type => {}
-                        // Block all other system objects (tables, views, sources, etc.)
-                        _ => {
-                            return Err(UnauthorizedError::RestrictedSystemObject {
-                                object_name: item.name().item.clone(),
-                            });
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // See: doc/developer/design/20260508_restrict_to_user_objects.md
+    check_restrict_to_user_objects(catalog, session, resolved_ids)?;
 
     // Obtain all roles that the current session is a member of.
     let role_membership = catalog.collect_role_membership(&session.role_metadata().current_role);

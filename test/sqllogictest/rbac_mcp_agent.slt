@@ -346,6 +346,35 @@ ALTER ROLE agent RESET restrict_to_user_objects;
 db error: ERROR: permission denied to set restrict_to_user_objects
 DETAIL: You must be a superuser to set restrict_to_user_objects
 
+# Verify that even a role with CREATEROLE system privilege cannot set restrict_to_user_objects.
+# This tests that the RBAC superuser check (rbac.rs) and allow_role_default (vars.rs)
+# stay in sync — CREATEROLE alone is not enough, superuser is required.
+simple conn=mz_system,user=mz_system
+CREATE ROLE role_admin LOGIN;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATEROLE ON SYSTEM TO role_admin;
+----
+COMPLETE 0
+
+simple conn=role_admin,user=role_admin
+ALTER ROLE agent SET restrict_to_user_objects = true;
+----
+db error: ERROR: permission denied to set restrict_to_user_objects
+DETAIL: You must be a superuser to set restrict_to_user_objects
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATEROLE ON SYSTEM FROM role_admin;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP ROLE role_admin;
+----
+COMPLETE 0
+
 # Superuser can reset the role default
 simple conn=mz_system,user=mz_system
 ALTER ROLE agent RESET restrict_to_user_objects;
@@ -559,11 +588,11 @@ COMPLETE 1
 # (Category A: resolved IDs from sql_impl function bodies are now propagated)
 # =============================================================================
 
-# has_table_privilege internally queries mz_catalog.mz_relations
+# has_table_privilege internally queries system tables; mz_databases is the first blocked ID encountered
 simple conn=agent_restricted,user=agent
 SELECT has_table_privilege('agent', 'agent_objects.next_arrivals', 'SELECT');
 ----
-db error: ERROR: access to system object mz_relations is restricted
+db error: ERROR: access to system object mz_databases is restricted
 DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
 
 # pg_get_viewdef internally queries mz_catalog.mz_views
@@ -573,11 +602,11 @@ SELECT pg_get_viewdef('next_arrivals');
 db error: ERROR: access to system object mz_views is restricted
 DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
 
-# obj_description queries pg_description (a system view)
+# obj_description queries system tables; pg_class is the first blocked ID encountered
 simple conn=agent_restricted,user=agent
 SELECT obj_description(1, 'pg_class');
 ----
-db error: ERROR: access to system object pg_description is restricted
+db error: ERROR: access to system object pg_class is restricted
 DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
 
 # =============================================================================
