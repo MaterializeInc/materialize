@@ -522,8 +522,8 @@ pub(crate) fn try_lses_from_mses<'a>(
         .collect::<Result<Vec<LirScalarExpr>, _>>()
     {
         Ok(exprs) => exprs,
-        Err(_funcs) => {
-            panic!("unmaterializable functions cannot be translated to LirScalarExpr")
+        Err(funcs) => {
+            panic!("unmaterializable functions cannot be translated to LirScalarExpr: {funcs:?}")
         }
     }
 }

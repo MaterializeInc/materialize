@@ -63,8 +63,6 @@ pub struct JoinClosure {
     pub ready_equivalences: Vec<Vec<LirScalarExpr>>,
     /// MFP to run before the equivalence
     pub before: mz_expr::SafeMfpPlan,
-    /// Whether or not evaluating this term could produce an error
-    pub could_error: bool,
 }
 
 impl JoinClosure {
@@ -222,14 +220,9 @@ impl JoinClosure {
         ready_equivalences: Vec<Vec<LirScalarExpr>>,
     ) -> Self {
         let before = before.into_plan().unwrap().into_nontemporal().unwrap();
-        let could_error = before.could_error()
-            || ready_equivalences
-                .iter()
-                .any(|es| es.iter().any(|e| e.could_error()));
         Self {
             ready_equivalences,
             before,
-            could_error,
         }
     }
 
@@ -247,7 +240,11 @@ impl JoinClosure {
 
     /// Returns true if evaluation could introduce an error on non-error inputs.
     pub fn could_error(&self) -> bool {
-        self.could_error
+        self.before.could_error()
+            || self
+                .ready_equivalences
+                .iter()
+                .any(|es| es.iter().any(|e| e.could_error()))
     }
 }
 

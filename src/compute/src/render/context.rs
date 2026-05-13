@@ -23,7 +23,6 @@ use mz_compute_types::dyncfgs::{
     ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION, ENABLE_COMPUTE_TEMPORAL_BUCKETING,
     TEMPORAL_BUCKETING_SUMMARY,
 };
-use mz_compute_types::plan::AvailableCollections;
 use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_compute_types::plan::{ArrangementStrategy, AvailableCollections};
 use mz_dyncfg::ConfigSet;

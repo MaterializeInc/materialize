@@ -561,7 +561,7 @@ impl SpecialUnary {
                         ),
                         expr: Box::new(MirScalarExpr::column(0)),
                     };
-                    let eval = |d| specs.eval_result((&expr).eval(&[d], specs.arena));
+                    let eval = |d| specs.eval_result(expr.eval(&[d], specs.arena));
 
                     eagerly(range, |values| {
                         match values {

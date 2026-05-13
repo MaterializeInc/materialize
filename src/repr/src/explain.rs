@@ -657,11 +657,11 @@ pub trait ScalarOps {
 
 impl ScalarOps for usize {
     fn match_col_ref(&self) -> Option<usize> {
-        return Some(*self);
+        Some(*self)
     }
 
     fn references(&self, col_ref: usize) -> bool {
-        return *self == col_ref;
+        *self == col_ref
     }
 }
 
