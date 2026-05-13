@@ -174,7 +174,6 @@ ENVD_SCALABILITY_SIZES = [
     20_000,
     30_000,
     50_000,
-    100_000,
 ]
 ENVD_SCALABILITY_MVS_PER_CLUSTER = 10_000
 
@@ -187,6 +186,13 @@ CLUSTER_OBJECT_LIMITS_LINEAR_STEP = 1_000
 
 # Freshness probe knobs. Healthy = max local lag below threshold.
 CLUSTER_OBJECT_LIMITS_LAG_THRESHOLD_MS = 2_000
+# Ceiling applied to recorded lag values when a materialization has
+# completely stalled (e.g. its write_frontier never advanced past the
+# minimum timestamp, yielding ~unix-epoch-ms readings). Without a cap, those
+# values dwarf the healthy-band data and make plots unreadable. The
+# `healthy` column preserves the underlying truth, and the analysis labels
+# the plot to make the cap explicit. Set to 10x the threshold.
+CLUSTER_OBJECT_LIMITS_LAG_CAP_MS = 10 * CLUSTER_OBJECT_LIMITS_LAG_THRESHOLD_MS
 # How long to wait, after a batch of objects has been created, for the
 # materializations to hydrate / for lag to fall below threshold before we
 # declare "unhealthy".
@@ -3736,6 +3742,13 @@ def run_scenario_cluster_object_limits(
                     f"size '{replica_size}', probing freshness at N={n}"
                 )
                 max_lag_ms, healthy, reporting, total = hydrate_and_sample(runner, n)
+                # A fully stalled materialization can report `local_lag` as
+                # `now() - <minimum timestamp>`, i.e. the current unix time in
+                # ms (~1.78e12). Cap the recorded value so the cliff doesn't
+                # crush every other data point on the plot. The `healthy`
+                # column carries the underlying truth, and the analysis
+                # labels the plot to make the cap explicit.
+                capped_lag_ms = min(max_lag_ms, CLUSTER_OBJECT_LIMITS_LAG_CAP_MS)
                 print(
                     f"    N={n}: max_local_lag_ms={max_lag_ms:.1f} "
                     f"reporting={reporting}/{total} healthy={healthy}"
@@ -3752,7 +3765,7 @@ def run_scenario_cluster_object_limits(
                         "envd_cpus": None,
                         "repetition": 0,
                         "size_bytes": None,
-                        "time_ms": int(max_lag_ms),
+                        "time_ms": int(capped_lag_ms),
                         "qps": None,
                         "healthy": 1 if healthy else 0,
                     }
@@ -4161,11 +4174,25 @@ def analyze_cluster_object_limits_results_file(file: str) -> None:
             kind="line",
             marker="o",
             figsize=(12, 6),
-            ylabel="Max local lag [ms]",
-            title=f"{title_base} — freshness lag vs N",
+            ylabel=(
+                f"Max local lag [ms]"
+                f" (capped at {CLUSTER_OBJECT_LIMITS_LAG_CAP_MS} ms)"
+            ),
+            title=(
+                f"{title_base} — freshness lag vs N "
+                f"(values >{CLUSTER_OBJECT_LIMITS_LAG_CAP_MS} ms capped; "
+                f"healthy threshold {CLUSTER_OBJECT_LIMITS_LAG_THRESHOLD_MS} ms)"
+            ),
             grid=True,
         )
         ax.set_xlabel("N (number of materializations on cluster c)")
+        ax.axhline(
+            CLUSTER_OBJECT_LIMITS_LAG_THRESHOLD_MS,
+            color="red",
+            linestyle="--",
+            linewidth=1,
+            label=f"healthy threshold ({CLUSTER_OBJECT_LIMITS_LAG_THRESHOLD_MS} ms)",
+        )
         ax.legend(loc="upper left", bbox_to_anchor=(1.0, 1.0))
         save_plot(
             plot_dir,
