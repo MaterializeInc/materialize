@@ -233,26 +233,96 @@ _SETUP_RACE_PATTERNS = (
     "object state changed while transaction was in progress",
 )
 
+# Substring matches for setup-phase errors caused by Antithesis fault
+# injection rather than workload misuse. Antithesis can pause any container
+# (materialized, kafka, postgres-metadata, minio) at any time; if a pause
+# lands during the driver's setup phase we see one of these shapes. The
+# distinction matters because the always() assertion at the bottom of main()
+# treats setup failures as unexpected by default — a connection timeout to
+# materialized or a hostname-resolve failure for kafka is fault timing, not
+# a correctness bug to fail the run on.
+#
+#   "connection timeout"        — driver's psycopg.connect to materialized
+#                                 timed out (materialized container paused).
+#   "Multiple connection attempts failed"
+#                               — same shape, retry-exhaustion wording.
+#   "Failed to resolve hostname"— materialized's CREATE CONNECTION
+#                                 validation can't resolve `kafka` (kafka
+#                                 container paused or DNS path partitioned).
+#   "connection refused"        — target is up but socket closed; transient.
+#   "connection reset"          — TCP reset during a fault.
+#   "broken pipe"               — write to a socket the peer closed.
+#   "EOF detected"              — psycopg's wording for peer-closed during
+#                                 query.
+#   "server closed the connection unexpectedly"
+#                               — common psycopg flavour.
+_SETUP_FAULT_PATTERNS = (
+    "connection timeout",
+    "Multiple connection attempts failed",
+    "Failed to resolve hostname",
+    "connection refused",
+    "connection reset",
+    "broken pipe",
+    "EOF detected",
+    "server closed the connection unexpectedly",
+)
+
+
+def _matches_setup_tolerance(exc: BaseException) -> bool:
+    """True if `exc` is a setup-phase error we expect to see under either
+    concurrent-driver races or Antithesis fault injection. Used both inside
+    `_tolerate_setup_race` (to swallow per-statement) and around the whole
+    setup phase (to demote setup_failure from unexpected to a sometimes
+    signal).
+    """
+    msg = getattr(exc, "msg", None) or str(exc)
+    return any(
+        pat in msg for pat in (*_SETUP_RACE_PATTERNS, *_SETUP_FAULT_PATTERNS)
+    )
+
+
+def _worker_death_tolerable(occurred: Exception | None) -> bool:
+    """True when an early-exiting worker thread is plausibly a fault-injection
+    casualty rather than a bug to fail the run on.
+
+    `parallel_workload.worker.Worker.run` performs its initial
+    `psycopg.connect` / websocket / `SET` statements outside any try/except,
+    so a fault that lands during worker startup kills the thread with
+    `occurred_exception = None` (no captured cause). Once the worker is
+    inside its main action loop, captured `QueryError`s that don't match
+    `errors_to_ignore` populate `occurred_exception` — those are the ones
+    we want to look at. If the captured exception matches a fault shape
+    (`_SETUP_FAULT_PATTERNS`) it's still the fault that killed the worker,
+    not a SUT correctness bug.
+    """
+    if occurred is None:
+        return True
+    return _matches_setup_tolerance(occurred)
+
 
 def _tolerate_setup_race(fn, *args, **kwargs):
-    """Run `fn(...)`, swallowing the concurrent-race messages in
-    `_SETUP_RACE_PATTERNS` and propagating anything else.
+    """Run `fn(...)`, swallowing the messages in `_SETUP_RACE_PATTERNS` or
+    `_SETUP_FAULT_PATTERNS` and propagating anything else.
 
     The setup phase is invoked by every parallel-driver invocation, and the
     framework picks deterministic object names from a small pool. Concurrent
-    invocations therefore race to drop-then-create the same names; any single
-    race outcome is fine because the per-invocation Database object only
-    needs its named objects to exist by the time worker threads start.
+    invocations therefore race to drop-then-create the same names; any
+    single race outcome is fine because the per-invocation Database object
+    only needs its named objects to exist by the time worker threads start.
+
+    Fault-induced errors (container paused, DNS partitioned, socket reset)
+    are absorbed for the same reason: they're expected under Antithesis,
+    not workload bugs.
     """
     try:
         return fn(*args, **kwargs)
     except QueryError as exc:
-        if any(pat in (exc.msg or "") for pat in _SETUP_RACE_PATTERNS):
+        if _matches_setup_tolerance(exc):
             LOG.debug("setup tolerated: %s — %s", exc.query, exc.msg)
             return None
         raise
     except Exception as exc:  # noqa: BLE001
-        if any(pat in str(exc) for pat in _SETUP_RACE_PATTERNS):
+        if _matches_setup_tolerance(exc):
             LOG.debug("setup tolerated: %s", exc)
             return None
         raise
@@ -649,10 +719,42 @@ def _run_invocation(
         {"ignored_errors": total_ignored},
     )
 
+    # Setup-phase failures whose message matches `_SETUP_*_PATTERNS` are
+    # either concurrent-driver races or Antithesis fault-injection
+    # consequences (paused container, partitioned DNS, reset socket).
+    # Neither is a SUT correctness issue, so demote them out of the
+    # `always(...)` assertion and into a `sometimes(...)` for visibility.
+    setup_tolerated = setup_failure is not None and _matches_setup_tolerance(
+        setup_failure
+    )
+    sometimes(
+        setup_tolerated,
+        "parallel workload: setup phase tolerated a fault-injection or race error",
+        {"error": str(setup_failure) if setup_failure else None},
+    )
+
+    # Worker-thread death under fault injection has the same
+    # "expected-not-a-bug" shape: an uncaptured-exception death (typically
+    # initial psycopg.connect failing because materialized was paused) or a
+    # captured exception whose message matches a fault pattern.
+    worker_tolerated = worker_failed is not None and _worker_death_tolerable(
+        worker_failed.cause
+    )
+    sometimes(
+        worker_tolerated,
+        "parallel workload: worker thread death tolerated as fault-injection consequence",
+        {
+            "error": (
+                str(worker_failed.cause) if worker_failed and worker_failed.cause else None
+            ),
+            "uncaptured": worker_failed is not None and worker_failed.cause is None,
+        },
+    )
+
     unexpected = None
-    if setup_failure is not None:
+    if setup_failure is not None and not setup_tolerated:
         unexpected = {"phase": "setup", "error": str(setup_failure)}
-    elif worker_failed is not None:
+    elif worker_failed is not None and not worker_tolerated:
         unexpected = {
             "phase": "worker",
             "error": (
