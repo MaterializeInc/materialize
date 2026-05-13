@@ -648,9 +648,21 @@ where
     I: Iterator<Item = T> + Clone;
 
 pub trait ScalarOps {
+    /// If this expression is a column-reference, return the column referenced.
     fn match_col_ref(&self) -> Option<usize>;
 
+    /// Returns true if this expression is a reference to the given column.
     fn references(&self, col_ref: usize) -> bool;
+}
+
+impl ScalarOps for usize {
+    fn match_col_ref(&self) -> Option<usize> {
+        return Some(*self);
+    }
+
+    fn references(&self, col_ref: usize) -> bool {
+        return *self == col_ref;
+    }
 }
 
 /// A somewhat ad-hoc way to keep carry a plan with a set

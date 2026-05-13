@@ -31,9 +31,8 @@ use mz_compute_types::plan::reduce::{
     AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, MonotonicPlan,
     ReducePlan, ReductionType, SingleBasicPlan, reduction_type,
 };
-use mz_expr::{
-    AggregateExpr, AggregateFunc, EvalError, MapFilterProject, MirScalarExpr, SafeMfpPlan,
-};
+use mz_compute_types::plan::scalar::LirScalarExpr;
+use mz_expr::{AggregateExpr, AggregateFunc, EvalError, MapFilterProject, SafeMfpPlan};
 use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{Datum, DatumVec, Diff, Row, RowArena, SharedRow};
@@ -63,7 +62,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
     /// minimize worst-case incremental update times and memory footprint.
     pub fn render_reduce(
         &self,
-        input_key: Option<Vec<MirScalarExpr>>,
+        input_key: Option<Vec<LirScalarExpr>>,
         input: CollectionBundle<'scope, T>,
         key_val_plan: KeyValPlan,
         reduce_plan: ReducePlan,

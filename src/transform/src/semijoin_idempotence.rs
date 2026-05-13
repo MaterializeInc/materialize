@@ -29,7 +29,9 @@ use itertools::Itertools;
 use mz_repr::ReprRelationType;
 use std::collections::BTreeMap;
 
-use mz_expr::{Id, JoinInputMapper, LocalId, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
+use mz_expr::{
+    Columns, Id, JoinInputMapper, LocalId, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
+};
 use mz_ore::id_gen::IdGen;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 

@@ -21,7 +21,7 @@ use std::fmt::Formatter;
 use itertools::Itertools;
 use mz_expr::canonicalize::{UnionFind, canonicalize_equivalence_classes};
 use mz_expr::explain::{HumanizedExplain, HumanizerMode};
-use mz_expr::{AggregateFunc, Id, MirRelationExpr, MirScalarExpr};
+use mz_expr::{AggregateFunc, Columns, Id, MirRelationExpr, MirScalarExpr};
 use mz_ore::str::{bracketed, separated};
 use mz_repr::{Datum, ReprColumnType, ReprScalarType};
 

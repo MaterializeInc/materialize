@@ -951,7 +951,7 @@ mod column_names {
     use std::sync::Arc;
 
     use super::Analysis;
-    use mz_expr::{AggregateFunc, Id, MirRelationExpr, MirScalarExpr, TableFunc};
+    use mz_expr::{AggregateFunc, Columns, Id, MirRelationExpr, MirScalarExpr, TableFunc};
     use mz_repr::explain::ExprHumanizer;
     use mz_repr::{GlobalId, UNKNOWN_COLUMN_NAME};
     use mz_sql::ORDINALITY_COL_NAME;

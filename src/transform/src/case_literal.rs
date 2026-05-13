@@ -361,7 +361,7 @@ fn collect_if_chain_arms(
 #[cfg(test)]
 mod tests {
     use mz_expr::func::Eq;
-    use mz_expr::{MirRelationExpr, MirScalarExpr, VariadicFunc};
+    use mz_expr::{Eval, MirRelationExpr, MirScalarExpr, VariadicFunc};
     use mz_repr::{Datum, ReprColumnType, ReprRelationType, ReprScalarType};
 
     use super::*;

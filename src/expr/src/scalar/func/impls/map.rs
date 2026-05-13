@@ -15,8 +15,9 @@ use mz_lowertest::MzReflect;
 use mz_repr::{Datum, DatumMap, RowArena, SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
 
+use crate::EvalError;
+use crate::func::Eval;
 use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
-use crate::{EvalError, MirScalarExpr};
 
 #[derive(
     Ord,
@@ -39,7 +40,7 @@ impl LazyUnaryFunc for CastMapToString {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'a impl Eval,
     ) -> Result<Datum<'a>, EvalError> {
         let a = a.eval(datums, temp_storage)?;
         if a.is_null() {
@@ -115,7 +116,7 @@ impl LazyUnaryFunc for MapBuildFromRecordList {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'a impl Eval,
     ) -> Result<Datum<'a>, EvalError> {
         let a = a.eval(datums, temp_storage)?;
         if a.is_null() {

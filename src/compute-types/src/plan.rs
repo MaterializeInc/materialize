@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use columnar::Columnar;
 use mz_expr::{
-    CollectionPlan, EvalError, Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr,
+    CollectionPlan, EvalError, Id, LetRecLimit, LocalId, MapFilterProject,
     OptimizedMirRelationExpr, TableFunc,
 };
 use mz_ore::soft_assert_eq_no_log;
@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 use crate::dataflows::DataflowDescription;
 use crate::plan::join::JoinPlan;
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
+use crate::plan::scalar::LirScalarExpr;
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
 use crate::plan::transform::{Transform, TransformConfig};
@@ -39,6 +40,7 @@ pub mod interpret;
 pub mod join;
 pub mod reduce;
 pub mod render_plan;
+pub mod scalar;
 pub mod threshold;
 pub mod top_k;
 pub mod transform;
@@ -71,7 +73,7 @@ pub struct AvailableCollections {
     /// The list of available arrangements, presented as a `KeyValRowMapping`,
     /// but here represented by a triple `(to_key, to_val, to_row)` instead.
     /// The documentation for `KeyValRowMapping` explains these fields better.
-    pub arranged: Vec<(Vec<MirScalarExpr>, Vec<usize>, Vec<usize>)>,
+    pub arranged: Vec<(Vec<LirScalarExpr>, Vec<usize>, Vec<usize>)>,
 }
 
 impl AvailableCollections {
@@ -84,7 +86,7 @@ impl AvailableCollections {
     }
 
     /// Represent a collection that is arranged in the specified ways.
-    pub fn new_arranged(arranged: Vec<(Vec<MirScalarExpr>, Vec<usize>, Vec<usize>)>) -> Self {
+    pub fn new_arranged(arranged: Vec<(Vec<LirScalarExpr>, Vec<usize>, Vec<usize>)>) -> Self {
         assert!(
             !arranged.is_empty(),
             "Invariant violated: at least one collection must exist"
@@ -96,7 +98,7 @@ impl AvailableCollections {
     }
 
     /// Get some arrangement, if one exists.
-    pub fn arbitrary_arrangement(&self) -> Option<&(Vec<MirScalarExpr>, Vec<usize>, Vec<usize>)> {
+    pub fn arbitrary_arrangement(&self) -> Option<&(Vec<LirScalarExpr>, Vec<usize>, Vec<usize>)> {
         assert!(
             self.raw || !self.arranged.is_empty(),
             "Invariant violated: at least one collection must exist"
@@ -245,7 +247,7 @@ pub enum PlanNode {
         mfp: MapFilterProject,
         /// Whether the input is from an arrangement, and if so,
         /// whether we can seek to a specific value therein
-        input_key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
+        input_key_val: Option<(Vec<LirScalarExpr>, Option<Row>)>,
     },
     /// A variable number of output records for each input record.
     ///
@@ -262,11 +264,11 @@ pub enum PlanNode {
     FlatMap {
         /// The particular arrangement of the input we expect to use,
         /// if any
-        input_key: Option<Vec<MirScalarExpr>>,
+        input_key: Option<Vec<LirScalarExpr>>,
         /// The input collection.
         input: Box<Plan>,
         /// Expressions that for each row prepare the arguments to `func`.
-        exprs: Vec<MirScalarExpr>,
+        exprs: Vec<LirScalarExpr>,
         /// The variable-record emitting function.
         func: TableFunc,
         /// Linear operator to apply to each record produced by `func`.
@@ -291,7 +293,7 @@ pub enum PlanNode {
     Reduce {
         /// The particular arrangement of the input we expect to use,
         /// if any
-        input_key: Option<Vec<MirScalarExpr>>,
+        input_key: Option<Vec<LirScalarExpr>>,
         /// The input collection.
         input: Box<Plan>,
         /// A plan for changing input records into key, value pairs.
@@ -359,7 +361,7 @@ pub enum PlanNode {
     /// or to cap a `Plan` so that indexes can be exported.
     ArrangeBy {
         /// The key that must be used to access the input.
-        input_key: Option<Vec<MirScalarExpr>>,
+        input_key: Option<Vec<LirScalarExpr>>,
         /// The input collection.
         input: Box<Plan>,
         /// The MFP that must be applied to the input.
@@ -491,7 +493,7 @@ pub enum GetPlan {
     /// Simply pass input arrangements on to the next stage.
     PassArrangements,
     /// Using the supplied key, optionally seek the row, and apply the MFP.
-    Arrangement(Vec<MirScalarExpr>, Option<Row>, MapFilterProject),
+    Arrangement(Vec<LirScalarExpr>, Option<Row>, MapFilterProject),
     /// Scan the input collection (unarranged) and apply the MFP.
     Collection(MapFilterProject),
 }

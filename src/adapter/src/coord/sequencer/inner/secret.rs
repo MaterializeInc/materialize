@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{CatalogItem, Secret};
-use mz_expr::MirScalarExpr;
+use mz_expr::{Eval, MirScalarExpr};
 use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
 use mz_repr::{CatalogItemId, Datum, RowArena};

@@ -10,7 +10,7 @@
 //! `EXPLAIN ... AS TEXT` support for structures defined in this crate.
 
 use std::collections::BTreeMap;
-use std::fmt;
+use std::fmt::{self, Display as _};
 use std::sync::Arc;
 
 use itertools::Itertools;
@@ -1246,7 +1246,10 @@ where
     }
 }
 
-impl<'a, M> ScalarOps for HumanizedExpr<'a, MirScalarExpr, M> {
+impl<'a, T, M> ScalarOps for HumanizedExpr<'a, T, M>
+where
+    T: ScalarOps,
+{
     fn match_col_ref(&self) -> Option<usize> {
         self.expr.match_col_ref()
     }
@@ -1256,57 +1259,54 @@ impl<'a, M> ScalarOps for HumanizedExpr<'a, MirScalarExpr, M> {
     }
 }
 
-impl<'a, M> ScalarOps for HumanizedExpr<'a, usize, M> {
-    fn match_col_ref(&self) -> Option<usize> {
-        Some(*self.expr)
-    }
-
-    fn references(&self, col_ref: usize) -> bool {
-        col_ref == *self.expr
-    }
+pub trait HumanizeDisplay: Sized {
+    fn humanize<'a, M: HumanizerMode>(
+        e: &HumanizedExpr<'a, Self, M>,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result;
 }
 
-impl<'a, M> fmt::Display for HumanizedExpr<'a, MirScalarExpr, M>
-where
-    M: HumanizerMode,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl HumanizeDisplay for MirScalarExpr {
+    fn humanize<'a, M: HumanizerMode>(
+        e: &HumanizedExpr<'a, MirScalarExpr, M>,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         use MirScalarExpr::*;
 
-        match self.expr {
+        match e.expr {
             Column(i, TreatAsEqual(None)) => {
                 // Delegate to the `HumanizedExpr<'a, _>` implementation (plain column reference).
-                self.child(i).fmt(f)
+                e.child(i).fmt(f)
             }
             Column(i, TreatAsEqual(Some(name))) => {
                 // Delegate to the `HumanizedExpr<'a, _>` implementation (with stored name information)
-                self.child(&(i, name)).fmt(f)
+                e.child(&(i, name)).fmt(f)
             }
             Literal(row, _) => {
                 // Delegate to the `HumanizedExpr<'a, _>` implementation.
-                self.child(row).fmt(f)
+                e.child(row).fmt(f)
             }
             CallUnmaterializable(func) => write!(f, "{}()", func),
             CallUnary { func, expr } => {
                 if let crate::UnaryFunc::Not(_) = *func {
                     if let CallUnary { func, expr } = expr.as_ref() {
                         if let Some(is) = func.is() {
-                            let expr = self.child::<MirScalarExpr>(&*expr);
+                            let expr = e.child::<MirScalarExpr>(&*expr);
                             return write!(f, "({}) IS NOT {}", expr, is);
                         }
                     }
                 }
                 if let Some(is) = func.is() {
-                    let expr = self.child::<MirScalarExpr>(&*expr);
+                    let expr = e.child::<MirScalarExpr>(&*expr);
                     write!(f, "({}) IS {}", expr, is)
                 } else {
-                    let expr = self.child::<MirScalarExpr>(&*expr);
+                    let expr = e.child::<MirScalarExpr>(&*expr);
                     write!(f, "{}({})", func, expr)
                 }
             }
             CallBinary { func, expr1, expr2 } => {
-                let expr1 = self.child::<MirScalarExpr>(&*expr1);
-                let expr2 = self.child::<MirScalarExpr>(&*expr2);
+                let expr1 = e.child::<MirScalarExpr>(&*expr1);
+                let expr2 = e.child::<MirScalarExpr>(&*expr2);
                 if func.is_infix_op() {
                     write!(f, "({} {} {})", expr1, func, expr2)
                 } else {
@@ -1317,52 +1317,62 @@ where
                 use crate::VariadicFunc::*;
                 match func {
                     CaseLiteral(cl) => {
-                        let input = self.child::<MirScalarExpr>(&exprs[0]);
+                        let input = e.child::<MirScalarExpr>(&exprs[0]);
                         write!(f, "case_lookup {}", input)?;
                         for entry in &cl.lookup {
-                            let result = self.child::<MirScalarExpr>(&exprs[entry.expr_index]);
+                            let result = e.child::<MirScalarExpr>(&exprs[entry.expr_index]);
                             write!(f, " when ")?;
-                            self.mode.humanize_datum(entry.literal.unpack_first(), f)?;
+                            e.mode.humanize_datum(entry.literal.unpack_first(), f)?;
                             write!(f, " then {}", result)?;
                         }
-                        let els = self.child::<MirScalarExpr>(exprs.last().unwrap());
+                        let els = e.child::<MirScalarExpr>(exprs.last().unwrap());
                         write!(f, " else {} end", els)
                     }
                     ArrayCreate(..) => {
-                        let exprs = exprs.iter().map(|expr| self.child(expr));
+                        let exprs = exprs.iter().map(|expr| e.child(expr));
                         let exprs = separated(", ", exprs);
                         write!(f, "array[{}]", exprs)
                     }
                     ListCreate(..) => {
-                        let exprs = exprs.iter().map(|expr| self.child(expr));
+                        let exprs = exprs.iter().map(|expr| e.child(expr));
                         let exprs = separated(", ", exprs);
                         write!(f, "list[{}]", exprs)
                     }
                     RecordCreate(..) => {
-                        let exprs = exprs.iter().map(|expr| self.child(expr));
+                        let exprs = exprs.iter().map(|expr| e.child(expr));
                         let exprs = separated(", ", exprs);
                         write!(f, "row({})", exprs)
                     }
                     func if func.is_infix_op() && exprs.len() > 1 => {
-                        let exprs = exprs.iter().map(|expr| self.child(expr));
+                        let exprs = exprs.iter().map(|expr| e.child(expr));
                         let func = format!(" {} ", func);
                         let exprs = separated(&func, exprs);
                         write!(f, "({})", exprs)
                     }
                     func => {
-                        let exprs = exprs.iter().map(|expr| self.child(expr));
+                        let exprs = exprs.iter().map(|expr| e.child(expr));
                         let exprs = separated(", ", exprs);
                         write!(f, "{}({})", func, exprs)
                     }
                 }
             }
             If { cond, then, els } => {
-                let cond = self.child::<MirScalarExpr>(&*cond);
-                let then = self.child::<MirScalarExpr>(&*then);
-                let els = self.child::<MirScalarExpr>(&*els);
+                let cond = e.child::<MirScalarExpr>(&*cond);
+                let then = e.child::<MirScalarExpr>(&*then);
+                let els = e.child::<MirScalarExpr>(&*els);
                 write!(f, "case when {} then {} else {} end", cond, then, els)
             }
         }
+    }
+}
+
+impl<'a, T, M> fmt::Display for HumanizedExpr<'a, T, M>
+where
+    T: HumanizeDisplay,
+    M: HumanizerMode,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        T::humanize(self, f)
     }
 }
 

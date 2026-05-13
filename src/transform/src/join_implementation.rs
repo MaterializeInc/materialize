@@ -22,8 +22,8 @@ use itertools::Itertools;
 use mz_expr::JoinImplementation::{Differential, IndexedFilter, Unimplemented};
 use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{
-    FilterCharacteristics, Id, JoinInputCharacteristics, JoinInputMapper, MapFilterProject,
-    MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
+    Columns, FilterCharacteristics, Id, JoinInputCharacteristics, JoinInputMapper,
+    MapFilterProject, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
 };
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_ore::{soft_assert_or_log, soft_panic_or_log};
@@ -671,7 +671,7 @@ mod delta_queries {
 mod differential {
     use std::collections::BTreeSet;
 
-    use mz_expr::{JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr};
+    use mz_expr::{Columns, JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr};
     use mz_ore::soft_assert_eq_or_log;
     use mz_repr::optimize::OptimizerFeatures;
 

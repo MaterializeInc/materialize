@@ -128,6 +128,7 @@ use mz_compute_types::plan::LirId;
 use mz_compute_types::plan::render_plan::{
     self, BindStage, LetBind, LetFreePlan, RecBind, RenderPlan,
 };
+use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_expr::{EvalError, Id, LocalId, permutation_for_arrangement};
 use mz_persist_client::operators::shard_source::{ErrorHandler, SnapshotMode};
 use mz_repr::explain::DummyHumanizer;
@@ -198,7 +199,7 @@ pub fn build_compute_dataflow(
     let indexes = dataflow
         .index_exports
         .iter()
-        .map(|(idx_id, (idx, _typ))| (*idx_id, dataflow.depends_on(idx.on_id), idx.clone()))
+        .map(|(idx_id, (idx, _typ))| (*idx_id, dataflow.depends_on(idx.on_id), idx.as_lir()))
         .collect::<Vec<_>>();
 
     // Determine sinks to export, and their dependencies.
@@ -376,7 +377,7 @@ pub fn build_compute_dataflow(
                         &mut tokens,
                         input_probe,
                         *idx_id,
-                        &idx.desc,
+                        &idx.desc.as_lir(),
                         &idx.typ,
                         snapshot_mode,
                         start_signal.clone(),
@@ -476,7 +477,7 @@ pub fn build_compute_dataflow(
                         &mut tokens,
                         input_probe,
                         *idx_id,
-                        &idx.desc,
+                        &idx.desc.as_lir(),
                         &idx.typ,
                         snapshot_mode,
                         start_signal.clone(),
@@ -575,7 +576,7 @@ where
         tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
         input_probe: probe::Handle<mz_repr::Timestamp>,
         idx_id: GlobalId,
-        idx: &IndexDesc,
+        idx: &IndexDesc<LirScalarExpr>,
         typ: &ReprRelationType,
         snapshot_mode: SnapshotMode,
         start_signal: StartSignal,
@@ -670,7 +671,7 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
         tokens: &BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
         dependency_ids: BTreeSet<GlobalId>,
         idx_id: GlobalId,
-        idx: &IndexDesc,
+        idx: &IndexDesc<LirScalarExpr>,
         output_probe: &MzProbeHandle<mz_repr::Timestamp>,
     ) {
         // put together tokens that belong to the export
@@ -687,7 +688,8 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
             )
         });
 
-        match bundle.arrangement(&idx.key) {
+        let key = &idx.key;
+        match bundle.arrangement(key) {
             Some(ArrangementFlavor::Local(mut oks, mut errs)) => {
                 // Ensure that the frontier does not advance past the expiration time, if set.
                 // Otherwise, we might write down incorrect data.
@@ -729,7 +731,7 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
                 panic!(
                     "Arrangement alarmingly absent! id: {:?}, keys: {:?}",
                     Id::Global(idx_id),
-                    &idx.key
+                    &key
                 );
             }
         };
@@ -749,7 +751,7 @@ where
         tokens: &BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
         dependency_ids: BTreeSet<GlobalId>,
         idx_id: GlobalId,
-        idx: &IndexDesc,
+        idx: &IndexDesc<LirScalarExpr>,
         output_probe: &MzProbeHandle<mz_repr::Timestamp>,
     ) {
         // put together tokens that belong to the export
@@ -766,7 +768,8 @@ where
             )
         });
 
-        match bundle.arrangement(&idx.key) {
+        let key = &idx.key;
+        match bundle.arrangement(key) {
             Some(ArrangementFlavor::Local(oks, errs)) => {
                 // TODO: The following as_collection/leave/arrange sequence could be optimized.
                 //   * Combine as_collection and leave into a single function.
@@ -825,7 +828,7 @@ where
                 panic!(
                     "Arrangement alarmingly absent! id: {:?}, keys: {:?}",
                     Id::Global(idx_id),
-                    &idx.key
+                    &key,
                 );
             }
         };
