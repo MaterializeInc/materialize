@@ -5345,7 +5345,7 @@ SELECT * FROM (
         COALESCE(cts_idx.comment, cts_obj.comment) AS description,
         COALESCE(jsonb_build_object(
         'type', 'object',
-        'required', jsonb_agg(distinct ccol.name) FILTER (WHERE ccol.position = ic.on_position),
+        'indexedColumns', jsonb_agg(distinct ccol.name) FILTER (WHERE ccol.position = ic.on_position),
         'properties', jsonb_strip_nulls(jsonb_object_agg(
             ccol.name,
             CASE
