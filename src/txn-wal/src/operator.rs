@@ -19,7 +19,6 @@ use std::time::Duration;
 use differential_dataflow::Hashable;
 use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
-use futures::StreamExt;
 use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::cast::CastFrom;
 use mz_persist_client::cfg::RetryParameters;
@@ -31,12 +30,13 @@ use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 use mz_persist_types::txn::TxnsCodec;
 use mz_persist_types::{Codec, Codec64, StepForward};
 use mz_timely_util::builder_async::{
-    AsyncInputHandle, Event as AsyncEvent, InputConnection,
-    OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+    OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton, button,
 };
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::capture::Event;
+use timely::dataflow::operators::generic::OutputBuilder;
+use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
 use timely::dataflow::operators::vec::{Broadcast, Map};
 use timely::dataflow::operators::{Capture, Leave, Probe};
 use timely::dataflow::{ProbeHandle, Scope, StreamVec};
@@ -244,166 +244,161 @@ where
     P: Debug + Clone + 'static,
     C: TxnsCodec,
 {
+    let scope = passthrough.scope();
     let name = format!("txns_progress_frontiers({})", name);
-    let mut builder = AsyncOperatorBuilder::new(name.clone(), passthrough.scope());
+    let mut builder = OperatorBuilderRc::new(name.clone(), scope.clone());
+    let info = builder.operator_info();
     let name = format!(
         "{} [{}] {}/{} {:.9}",
         name,
         unique_id,
-        passthrough.scope().index(),
-        passthrough.scope().peers(),
+        scope.index(),
+        scope.peers(),
         data_id.to_string(),
     );
-    let (passthrough_output, passthrough_stream) =
-        builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
-    let mut remap_input = builder.new_disconnected_input(remap, Pipeline);
-    let mut passthrough_input = builder.new_disconnected_input(passthrough, Pipeline);
+    let (passthrough_output, passthrough_stream) = builder.new_output::<Vec<P>>();
+    let mut passthrough_output = OutputBuilder::from(passthrough_output);
+    // Both inputs are disconnected from the output: capability advancement is
+    // driven manually based on the remap stream and the passthrough frontier.
+    let mut remap_input = builder.new_input_connection(remap, Pipeline, []);
+    let mut passthrough_input = builder.new_input_connection(passthrough, Pipeline, []);
 
-    let shutdown_button = builder.build(move |capabilities| async move {
-        let [mut cap]: [_; 1] = capabilities.try_into().expect("one capability per output");
+    let (shutdown_handle, shutdown_button) = button(scope, info.address);
 
+    builder.build(move |capabilities| {
+        // The output capability's time tracks how far we've progressed in
+        // copying along the passthrough input. `None` indicates that we've
+        // dropped the capability to shut down.
+        let mut capability: Option<_> = capabilities.into_iter().next();
         // None is used to indicate that both uppers are the empty antichain.
         let mut remap = Some(DataRemapEntry {
             physical_upper: T::minimum(),
             logical_upper: T::minimum(),
         });
-        // NB: The following loop uses `cap.time()`` to track how far we've
-        // progressed in copying along the passthrough input.
-        loop {
-            debug!("{} remap {:?}", name, remap);
-            if let Some(r) = remap.as_ref() {
-                assert!(r.physical_upper <= r.logical_upper);
-                // If we've passed through data to at least `physical_upper`,
-                // then it means we can artificially advance the upper of the
-                // output to `logical_upper`. This also indicates that we need
-                // to wait for the next DataRemapEntry. It can either (A) have
-                // the same physical upper or (B) have a larger physical upper.
-                //
-                // - If (A), then we would again satisfy this `physical_upper`
-                //   check, again advance the logical upper again, ...
-                // - If (B), then we'd fall down to the code below, which copies
-                //   the passthrough data until the frontier passes
-                //   `physical_upper`, then loops back up here.
-                if r.physical_upper.less_equal(cap.time()) {
-                    if cap.time() < &r.logical_upper {
-                        cap.downgrade(&r.logical_upper);
+
+        move |frontiers| {
+            if shutdown_handle.local_pressed() {
+                capability = None;
+            }
+
+            // Drain new DataRemapEntries, keeping the one with the largest
+            // logical_upper. The ordering of incoming entries is not assumed.
+            remap_input.for_each(|_input_cap, data| {
+                for x in data.drain(..) {
+                    debug!("{} got remap {:?}", name, x);
+                    if let Some(r) = remap.as_mut() {
+                        if r.logical_upper < x.logical_upper {
+                            assert!(
+                                r.physical_upper <= x.physical_upper,
+                                "previous remap physical upper {:?} is ahead of new remap physical upper {:?}",
+                                r.physical_upper,
+                                x.physical_upper,
+                            );
+                            // TODO: If the physical upper has advanced, that's a very
+                            // strong hint that the data shard is about to be written to.
+                            // Because the data shard's upper advances sparsely (on write,
+                            // but not on passage of time) which invalidates the "every 1s"
+                            // assumption of the default tuning, we've had to de-tune the
+                            // listen sleeps on the paired persist_source. Maybe we use "one
+                            // state" to wake it up in case pubsub doesn't and remove the
+                            // listen polling entirely? (NB: This would have to happen in
+                            // each worker so that it's guaranteed to happen in each
+                            // process.)
+                            *r = x;
+                        }
                     }
-                    remap = txns_progress_frontiers_read_remap_input(
-                        &name,
-                        &mut remap_input,
-                        r.clone(),
-                    )
-                    .await;
-                    continue;
+                }
+            });
+
+            // Apply the remap input's frontier. Frontier advancement is a
+            // logical_upper bump; an empty frontier means the data shard is
+            // finished.
+            match frontiers[0].frontier().as_option() {
+                Some(logical_upper) => {
+                    if let Some(r) = remap.as_mut() {
+                        if r.logical_upper < *logical_upper {
+                            r.logical_upper = logical_upper.clone();
+                        }
+                    }
+                }
+                None => {
+                    // remap_input is closed, which indicates the data shard is finished.
+                    remap = None;
                 }
             }
 
-            // This only returns None when there are no more data left. Turn it
-            // into an empty frontier progress so we can re-use the shutdown
-            // code below.
-            let event = passthrough_input
-                .next()
-                .await
-                .unwrap_or_else(|| AsyncEvent::Progress(Antichain::new()));
-            match event {
-                // NB: Ignore the data_cap because this input is disconnected.
-                AsyncEvent::Data(_data_cap, mut data) => {
-                    // NB: Nothing to do here for `until` because both the
-                    // `shard_source` (before this operator) and
-                    // `mfp_and_decode` (after this operator) do the necessary
-                    // filtering.
-                    debug!("{} emitting data {:?}", name, data);
-                    passthrough_output.give_container(&cap, &mut data);
-                }
-                AsyncEvent::Progress(new_progress) => {
-                    // If `until.less_equal(new_progress)`, it means that all
-                    // subsequent batches will contain only times greater or
-                    // equal to `until`, which means they can be dropped in
-                    // their entirety.
-                    //
-                    // Ideally this check would live in `txns_progress_source`,
-                    // but that turns out to be much more invasive (requires
-                    // replacing lots of `T`s with `Antichain<T>`s). Given that
-                    // we've been thinking about reworking the operators, do the
-                    // easy but more wasteful thing for now.
-                    if PartialOrder::less_equal(&until, &new_progress) {
-                        debug!(
-                            "{} progress {:?} has passed until {:?}",
-                            name,
-                            new_progress.elements(),
-                            until.elements()
-                        );
-                        return;
-                    }
-                    // We reached the empty frontier! Shut down.
-                    let Some(new_progress) = new_progress.into_option() else {
-                        return;
-                    };
+            debug!("{} remap {:?}", name, remap);
 
-                    // Recall that any reads of the data shard are always
-                    // correct, so given that we've passed through any data
-                    // from the input, that means we're free to pass through
-                    // frontier updates too.
-                    if cap.time() < &new_progress {
+            // Apply the passthrough input's frontier.
+            //
+            // If `until.less_equal(pass_frontier)`, it means that all subsequent
+            // batches will contain only times greater or equal to `until`, which
+            // means they can be dropped in their entirety.
+            //
+            // Ideally this check would live in `txns_progress_source`, but that
+            // turns out to be much more invasive (requires replacing lots of
+            // `T`s with `Antichain<T>`s). Given that we've been thinking about
+            // reworking the operators, do the easy but more wasteful thing for
+            // now.
+            let pass_frontier = frontiers[1].frontier();
+            if PartialOrder::less_equal(&until.borrow(), &pass_frontier) {
+                debug!(
+                    "{} progress {:?} has passed until {:?}",
+                    name,
+                    pass_frontier,
+                    until.elements(),
+                );
+                capability = None;
+            } else if let Some(new_progress) = pass_frontier.as_option() {
+                // Recall that any reads of the data shard are always correct, so
+                // given that we've passed through any data from the input, that
+                // means we're free to pass through frontier updates too.
+                if let Some(cap) = capability.as_mut() {
+                    if cap.time() < new_progress {
                         debug!("{} downgrading cap to {:?}", name, new_progress);
-                        cap.downgrade(&new_progress);
+                        cap.downgrade(new_progress);
                     }
                 }
+            } else {
+                // Reached the empty frontier; shut down.
+                capability = None;
+            }
+
+            // If we've passed through data to at least `physical_upper`, then
+            // it means we can artificially advance the upper of the output to
+            // `logical_upper`. The next remap entry can either (A) have the
+            // same physical upper or (B) have a larger physical upper.
+            //
+            // - If (A), then on a later activation we again satisfy this
+            //   `physical_upper` check and advance the logical upper again.
+            // - If (B), then we keep copying passthrough data and frontier
+            //   updates until the passthrough frontier passes `physical_upper`,
+            //   at which point we can advance the logical upper.
+            if let (Some(cap), Some(r)) = (capability.as_mut(), remap.as_ref()) {
+                assert!(r.physical_upper <= r.logical_upper);
+                if r.physical_upper.less_equal(cap.time()) && cap.time() < &r.logical_upper {
+                    cap.downgrade(&r.logical_upper);
+                }
+            }
+
+            // Pass through any received data using the (now advanced) output
+            // capability. NB: Nothing to do here for `until` because both the
+            // `shard_source` (before this operator) and `mfp_and_decode` (after
+            // this operator) do the necessary filtering.
+            if let Some(cap) = capability.as_ref() {
+                let mut output = passthrough_output.activate();
+                passthrough_input.for_each(|_input_cap, data| {
+                    debug!("{} emitting data {:?}", name, data);
+                    output.session(cap).give_container(data);
+                });
+            } else {
+                // Still drain to avoid stalling the dataflow.
+                passthrough_input.for_each(|_input_cap, _data| {});
             }
         }
     });
-    (passthrough_stream, shutdown_button.press_on_drop())
-}
 
-async fn txns_progress_frontiers_read_remap_input<T, C>(
-    name: &str,
-    input: &mut AsyncInputHandle<T, Vec<DataRemapEntry<T>>, C>,
-    mut remap: DataRemapEntry<T>,
-) -> Option<DataRemapEntry<T>>
-where
-    T: Timestamp + TotalOrder,
-    C: InputConnection<T>,
-{
-    while let Some(event) = input.next().await {
-        let xs = match event {
-            AsyncEvent::Progress(logical_upper) => {
-                if let Some(logical_upper) = logical_upper.into_option() {
-                    if remap.logical_upper < logical_upper {
-                        remap.logical_upper = logical_upper;
-                        return Some(remap);
-                    }
-                }
-                continue;
-            }
-            AsyncEvent::Data(_cap, xs) => xs,
-        };
-        for x in xs {
-            debug!("{} got remap {:?}", name, x);
-            // Don't assume anything about the ordering.
-            if remap.logical_upper < x.logical_upper {
-                assert!(
-                    remap.physical_upper <= x.physical_upper,
-                    "previous remap physical upper {:?} is ahead of new remap physical upper {:?}",
-                    remap.physical_upper,
-                    x.physical_upper,
-                );
-                // TODO: If the physical upper has advanced, that's a very
-                // strong hint that the data shard is about to be written to.
-                // Because the data shard's upper advances sparsely (on write,
-                // but not on passage of time) which invalidates the "every 1s"
-                // assumption of the default tuning, we've had to de-tune the
-                // listen sleeps on the paired persist_source. Maybe we use "one
-                // state" to wake it up in case pubsub doesn't and remove the
-                // listen polling entirely? (NB: This would have to happen in
-                // each worker so that it's guaranteed to happen in each
-                // process.)
-                remap = x;
-            }
-        }
-        return Some(remap);
-    }
-    // remap_input is closed, which indicates the data shard is finished.
-    None
+    (passthrough_stream, shutdown_button.press_on_drop())
 }
 
 /// The process global [`TxnsRead`] that any operator can communicate with.
