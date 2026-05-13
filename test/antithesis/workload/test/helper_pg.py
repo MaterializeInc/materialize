@@ -108,13 +108,32 @@ def execute_retry(sql: str, params: Sequence[Any] | None = None) -> None:
             backoff = min(backoff * 2, _RETRY_MAX_S)
 
 
-def query_retry(sql: str, params: Sequence[Any] | None = None) -> list[tuple[Any, ...]]:
-    """Run a query and return all rows, retrying transient errors."""
+def query_retry(
+    sql: str,
+    params: Sequence[Any] | None = None,
+    real_time_recency: bool = False,
+) -> list[tuple[Any, ...]]:
+    """Run a query and return all rows, retrying transient errors.
+
+    Set `real_time_recency=True` when the query is a queryability gate after a
+    just-produced upstream write. With strict-serializable (the workload
+    default) plus real-time recency, the coordinator pushes the SELECT
+    timestamp's lower bound to the source's real-time frontier — i.e. the
+    SELECT waits for ingestion to reach the broker/upstream's current
+    high-water mark before responding. Without this, `wait_for_catchup` on
+    `mz_source_statistics.offset_committed` can clear before the just-ingested
+    rows are visible at the timestamp the SELECT chooses (`offset_committed`
+    tracks the data-shard upper, which can advance past `oracle_read_ts` while
+    the rows live at an mz_ts further forward — assigned by the reclock's
+    next-probe binding).
+    """
     deadline = time.monotonic() + _RETRY_BUDGET_S
     backoff = _RETRY_INITIAL_S
     while True:
         try:
             with connect() as conn, conn.cursor() as cur:
+                if real_time_recency:
+                    cur.execute("SET real_time_recency = TRUE")
                 cur.execute(sql, params or ())
                 return list(cur.fetchall())
         except Exception as exc:  # noqa: BLE001
@@ -126,9 +145,11 @@ def query_retry(sql: str, params: Sequence[Any] | None = None) -> list[tuple[Any
 
 
 def query_one_retry(
-    sql: str, params: Sequence[Any] | None = None
+    sql: str,
+    params: Sequence[Any] | None = None,
+    real_time_recency: bool = False,
 ) -> tuple[Any, ...] | None:
-    rows = query_retry(sql, params)
+    rows = query_retry(sql, params, real_time_recency=real_time_recency)
     return rows[0] if rows else None
 
 
