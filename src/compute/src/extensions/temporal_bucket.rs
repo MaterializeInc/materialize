@@ -22,7 +22,6 @@ use timely::container::PushInto;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Stream, StreamVec};
-use timely::order::TotalOrder;
 use timely::progress::{Antichain, PathSummary, Timestamp};
 use timely::{ContainerBuilder, ExchangeData, PartialOrder};
 
@@ -44,11 +43,15 @@ pub trait TemporalBucketing<'scope, T: Timestamp, O> {
         CB: ContainerBuilder + PushInto<O>;
 }
 
-/// Implementation for streams in scopes where timestamps define a total order.
+/// Implementation backed by [`Frontier`]. Works for totally-ordered timestamps
+/// (each bucket aligns 1:1 with a time interval) and for `Product`-style
+/// partially-ordered timestamps (bucketing happens along the outer axis, with
+/// the inner coordinate ignored — appropriate for iterative scopes whose inner
+/// is an iteration counter rather than a real time).
 impl<'scope, T, D> TemporalBucketing<'scope, T, (D, T, mz_repr::Diff)>
     for StreamVec<'scope, T, (D, T, mz_repr::Diff)>
 where
-    T: Timestamp + ExchangeData + MzData + Frontier + TotalOrder + Lattice,
+    T: Timestamp + ExchangeData + MzData + Frontier + Lattice,
     D: ExchangeData + MzData + Ord + Clone + std::fmt::Debug + Hashable,
 {
     fn bucket<CB>(
@@ -148,12 +151,17 @@ where
                     );
                 }
 
-                // Downgrade the cap to the current input frontier.
+                // Downgrade the cap to the current input frontier. For totally-ordered
+                // timestamps the projection returns the antichain's only element; for
+                // `Product` it returns `(min_outer, P::minimum())`, which is the
+                // chain's effective lower bound under outer-only bucketing and a valid
+                // downgrade target since outer is monotone.
                 if frontier.is_empty() || upper.is_empty() {
                     cap = None;
                 } else if let Some(cap) = cap.as_mut() {
-                    // TODO: This assumes that the time is total ordered.
-                    cap.downgrade(&upper[0]);
+                    let target = T::project_antichain(upper.borrow())
+                        .expect("upper is non-empty");
+                    cap.downgrade(&target);
                 }
 
                 // Maintain the bucket chain by restoring it with fuel.
@@ -204,7 +212,7 @@ where
 impl<D, T, R> Bucket for MergeBatcherWrapper<D, T, R>
 where
     D: MzData + Ord + Clone + 'static,
-    T: MzData + Ord + PartialOrder + Clone + 'static + Frontier,
+    T: MzData + Ord + Clone + 'static + Frontier,
     R: MzData + Semigroup + Default,
 {
     type Frontier = T;

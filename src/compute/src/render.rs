@@ -1553,11 +1553,21 @@ impl RenderTimestamp for Product<mz_repr::Timestamp, PointStamp<u64>> {
 impl MaybeBucketByTime for Product<mz_repr::Timestamp, PointStamp<u64>> {
     fn maybe_apply_temporal_bucketing<'scope>(
         stream: StreamVec<'scope, Self, (Row, Self, Diff)>,
-        _as_of: Antichain<mz_repr::Timestamp>,
-        _summary: mz_repr::Timestamp,
+        as_of: Antichain<mz_repr::Timestamp>,
+        summary: mz_repr::Timestamp,
     ) -> VecCollection<'scope, Self, Row, Diff> {
-        // TODO: Implement bucketing on outer timestamp for iterative scopes.
-        stream.as_collection()
+        // Bucket along the outer (wall-clock) axis. The inner `PointStamp` is an
+        // iteration counter and isn't a useful bucketing dimension; the
+        // `Frontier` impl for `Product` projects the antichain to its minimum
+        // outer with a zeroed inner, so this reduces to a 1D chain on outer.
+        let as_of_product: Antichain<Self> = as_of
+            .into_iter()
+            .map(|t| Product::new(t, PointStamp::default()))
+            .collect();
+        let summary_product = Product::new(summary, Default::default());
+        stream
+            .bucket::<CapacityContainerBuilder<_>>(as_of_product, summary_product)
+            .as_collection()
     }
 }
 
