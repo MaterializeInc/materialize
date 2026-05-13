@@ -214,7 +214,7 @@ fn get_statement_logging_record_counts(
                 .iter()
                 .any(|l| l.name() == "sample" && l.value() == "true")
         })
-        .map(|m| u64::cast_lossy(m.get_counter().get_value()))
+        .map(|m| u64::cast_lossy(m.get_counter().value()))
         .unwrap_or(0);
     let sampled_false = metric_entries
         .iter()
@@ -223,7 +223,7 @@ fn get_statement_logging_record_counts(
                 .iter()
                 .any(|l| l.name() == "sample" && l.value() == "false")
         })
-        .map(|m| u64::cast_lossy(m.get_counter().get_value()))
+        .map(|m| u64::cast_lossy(m.get_counter().value()))
         .unwrap_or(0);
 
     (sampled_true, sampled_false)
@@ -649,14 +649,14 @@ ORDER BY mseh.began_at",
         .expect("mz_statement_logging_actual_bytes metric should exist")
         .get_metric()[0]
         .get_counter()
-        .get_value();
+        .value();
     let unsampled_bytes = metrics
         .iter()
         .find(|m| m.name() == "mz_statement_logging_unsampled_bytes")
         .expect("mz_statement_logging_unsampled_bytes metric should exist")
         .get_metric()[0]
         .get_counter()
-        .get_value();
+        .value();
     assert!(
         actual_bytes > 0.0,
         "actual_bytes should be > 0 with 100% sample rate"
@@ -972,7 +972,7 @@ fn test_statement_logging_unsampled_metrics() {
         .unwrap()
         .take_metric()[0]
         .get_counter()
-        .get_value();
+        .value();
     let metric_value = usize::cast_from(u64::try_cast_from(metric_value).unwrap());
     assert_eq!(expected_total, metric_value);
 
@@ -3081,7 +3081,7 @@ async fn smoketest_webhook_source() {
         .find(|metric| metric.name() == "mz_http_requests_total")
         .unwrap();
     let total_requests_metric = &total_requests_metric.get_metric()[0];
-    assert_eq!(total_requests_metric.get_counter().get_value(), 100.0);
+    assert_eq!(total_requests_metric.get_counter().value(), 100.0);
 
     let path_label = &total_requests_metric.get_label()[0];
     assert_eq!(
@@ -3450,12 +3450,12 @@ async fn test_http_metrics() {
 
     let request_metric = request_metrics.pop().unwrap();
     let success_metric = &request_metric.get_metric()[0];
-    assert_eq!(success_metric.get_counter().get_value(), 2.0);
+    assert_eq!(success_metric.get_counter().value(), 2.0);
     assert_eq!(success_metric.get_label()[0].value(), "/api/sql");
     assert_eq!(success_metric.get_label()[2].value(), "200");
 
     let failure_metric = &request_metric.get_metric()[1];
-    assert_eq!(failure_metric.get_counter().get_value(), 1.0);
+    assert_eq!(failure_metric.get_counter().value(), 1.0);
     assert_eq!(failure_metric.get_label()[0].value(), "/api/sql");
     assert_eq!(failure_metric.get_label()[2].value(), "422");
 }
@@ -3771,7 +3771,7 @@ fn webhook_too_large_request() {
         })
         .unwrap()
         .get_counter()
-        .get_value();
+        .value();
     assert_eq!(payload_too_large, 1.0);
 }
 
@@ -3992,7 +3992,7 @@ async fn webhook_concurrent_swap() {
         .unwrap()
         .take_metric()[0]
         .get_counter()
-        .get_value();
+        .value();
 
     // We should only get a webhook appender from the Coordinator 4 times, once for each source
     // when we start posting, and then once again for each source after they are renamed.
