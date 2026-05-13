@@ -371,8 +371,12 @@ impl Coordinator {
 
                     match result {
                         Ok(Some(fut)) => {
+                            let catalog = Arc::clone(&self.catalog);
                             task::spawn(|| "determine real time recent timestamp", async move {
-                                let result = fut.await.map(Some).map_err(AdapterError::from);
+                                let result =
+                                    Coordinator::await_real_time_recent_timestamp(catalog, fut)
+                                        .await
+                                        .map(Some);
                                 let _ = tx.send(result);
                             });
                         }

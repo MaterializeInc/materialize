@@ -758,11 +758,13 @@ impl Coordinator {
 
         match fut {
             Some(fut) => {
+                let catalog = Arc::clone(&self.catalog);
                 let span = Span::current();
                 Ok(StageResult::Handle(mz_ore::task::spawn(
                     || "peek real time recency",
                     async move {
-                        let real_time_recency_ts = fut.await?;
+                        let real_time_recency_ts =
+                            Coordinator::await_real_time_recent_timestamp(catalog, fut).await?;
                         let stage = PeekStage::TimestampReadHold(PeekStageTimestampReadHold {
                             validity,
                             plan,
