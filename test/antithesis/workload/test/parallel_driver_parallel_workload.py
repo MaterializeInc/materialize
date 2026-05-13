@@ -111,10 +111,10 @@ NUM_THREADS = int(os.environ.get("PW_THREADS", "4"))
 # Number of clusterd-pool-{i} containers reserved for the parallel-workload
 # driver. Must match the pool actually deployed in
 # test/antithesis/mzcompose.py (ANTITHESIS_CLUSTERD_POOL_SIZE there →
-# CLUSTERD_POOL_SIZE here). Each parallel-workload invocation claims one
-# slot via `fcntl.flock` (see `_claim_pool_slot`); the lock is held for
-# the lifetime of the invocation so concurrent driver processes inside
-# the workload container can't pick the same clusterd.
+# CLUSTERD_POOL_SIZE here). Each parallel-workload invocation claims
+# slots via `fcntl.flock` (see `_claim_pool_slots`); the locks are held
+# for the lifetime of the invocation so concurrent driver processes
+# inside the workload container can't pick the same clusterd.
 CLUSTERD_POOL_SIZE = int(os.environ.get("CLUSTERD_POOL_SIZE", "8"))
 
 # Workers configured per clusterd-pool-{i} process. Must match the
@@ -122,6 +122,14 @@ CLUSTERD_POOL_SIZE = int(os.environ.get("CLUSTERD_POOL_SIZE", "8"))
 # or the unmanaged CREATE CLUSTER REPLICA's `WORKERS` count will diverge
 # from what clusterd actually runs.
 CLUSTERD_POOL_WORKERS = 4
+
+# Replicas to ask for per invocation's cluster. Best-effort: the driver
+# claims up to this many pool slots and runs whatever it gets (≥1). With
+# DESIRED_REPLICAS=2 and POOL_SIZE=8 we get multi-replica coverage for
+# the parallel-workload cluster (currently only `antithesis_cluster` is
+# multi-replica) when capacity allows, while degrading gracefully to a
+# single-replica cluster under contention.
+DESIRED_REPLICAS = int(os.environ.get("PW_DESIRED_REPLICAS", "2"))
 
 # Filesystem locks let concurrent parallel-workload invocations claim
 # distinct clusterd-pool members without coordinating through the SUT.
@@ -251,51 +259,52 @@ def _tolerate_setup_race(fn, *args, **kwargs):
 
 
 @contextlib.contextmanager
-def _claim_pool_slot(rng: random.Random):
-    """Hold an exclusive `fcntl.flock` on a pool-slot lockfile for the
-    duration of the `with` block. Yields the slot index, or `None` if every
-    slot is busy.
+def _claim_pool_slots(rng: random.Random, desired: int):
+    """Hold exclusive `fcntl.flock`s on up to `desired` pool-slot lockfiles
+    for the duration of the `with` block. Yields the list of claimed slot
+    indices (length 0–`desired`); the caller decides what to do with each
+    population (1 = single-replica fallback, ≥2 = multi-replica cluster,
+    0 = no slots available, exit cleanly).
 
-    Slots are tried in a randomized order so the slot a driver lands on
-    doesn't correlate with deterministic state (test composer seed, wall
-    clock). The lock is released when the context exits — either normally
-    or via exception — so a crashing driver doesn't strand the slot.
+    Slots are tried in randomized order so allocation is decorrelated
+    from invocation seed / wall clock. Every claimed flock is released
+    when the context exits — normally or via exception — so a crashing
+    driver doesn't strand any slot.
 
-    All parallel-workload driver invocations share the workload container's
-    filesystem, so a plain flock on a tmpfs path under `POOL_SLOT_LOCK_DIR`
-    is sufficient to serialize claims. If the path can't be created we fall
-    back to yielding `None` (caller must handle: the existing setup-tolerance
-    path can absorb a slot collision, it just costs us pool isolation for
-    that one invocation).
+    All parallel-workload driver invocations share the workload
+    container's filesystem, so plain flock on a tmpfs path under
+    `POOL_SLOT_LOCK_DIR` is sufficient serialization (no cross-container
+    coordination required).
     """
     try:
         os.makedirs(POOL_SLOT_LOCK_DIR, exist_ok=True)
     except OSError as exc:
         LOG.warning("pool slot lock dir %s unavailable: %s", POOL_SLOT_LOCK_DIR, exc)
-        yield None
+        yield []
         return
 
     slots = list(range(CLUSTERD_POOL_SIZE))
     rng.shuffle(slots)
-    for slot in slots:
-        path = os.path.join(POOL_SLOT_LOCK_DIR, f"{slot}.lock")
-        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            # Another invocation owns this slot; try the next one.
-            os.close(fd)
-            continue
-        try:
-            yield slot
-        finally:
+    held: list[tuple[int, int]] = []  # (slot, fd)
+    try:
+        for slot in slots:
+            if len(held) >= desired:
+                break
+            path = os.path.join(POOL_SLOT_LOCK_DIR, f"{slot}.lock")
+            fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                os.close(fd)
+                continue
+            held.append((slot, fd))
+        yield [slot for slot, _ in held]
+    finally:
+        for _, fd in held:
             try:
                 fcntl.flock(fd, fcntl.LOCK_UN)
             finally:
                 os.close(fd)
-        return
-    LOG.warning("all %d pool slots are claimed; running without isolation", CLUSTERD_POOL_SIZE)
-    yield None
 
 
 def _drop_seed_scoped_objects(seed: str) -> None:
@@ -482,50 +491,54 @@ def main() -> int:
 
     _prepare_system(NUM_THREADS)
 
-    # Claim one clusterd-pool-{i} container for this invocation. The flock
-    # is held until main() returns; concurrent invocations inside the
-    # workload container can't pick the same slot. If every slot is busy
-    # the context manager yields `None` — we tag that with a sometimes()
-    # for visibility and exit cleanly (the property surface for this
-    # invocation just doesn't get exercised).
+    # Claim up to DESIRED_REPLICAS pool slots; the cluster runs with as
+    # many replicas as we got (≥1). Locks are held until main() returns;
+    # if no slot is free we tag a sometimes() and exit cleanly.
     #
-    # Each parallel-workload cluster lands on its own clusterd-pool-{slot}
-    # container, giving Antithesis per-cluster fault isolation. Without
-    # this, every parallel-workload cluster would be a child process of
-    # environmentd under the materialized container's process orchestrator,
-    # and the only container-level fault would be "the whole world".
-    with _claim_pool_slot(rng) as pool_slot:
+    # Each replica lands on its own clusterd-pool-{slot} container, so
+    # Antithesis can fault one replica's container without taking the
+    # cluster offline — exercises the same multi-replica recovery paths
+    # `antithesis_cluster` covers, but on the workload-driven cluster.
+    with _claim_pool_slots(rng, DESIRED_REPLICAS) as pool_slots:
         sometimes(
-            pool_slot is not None,
-            "parallel workload: clusterd pool slot claimed",
-            {"pool_size": CLUSTERD_POOL_SIZE},
+            len(pool_slots) > 0,
+            "parallel workload: clusterd pool slots claimed",
+            {"pool_size": CLUSTERD_POOL_SIZE, "claimed": len(pool_slots)},
         )
-        if pool_slot is None:
+        sometimes(
+            len(pool_slots) >= DESIRED_REPLICAS,
+            "parallel workload: full multi-replica pool claim",
+            {"pool_size": CLUSTERD_POOL_SIZE, "desired": DESIRED_REPLICAS},
+        )
+        if not pool_slots:
             LOG.info(
-                "parallel-workload exiting cleanly: no pool slot available "
+                "parallel-workload exiting cleanly: no pool slots available "
                 "(pool_size=%d)",
                 CLUSTERD_POOL_SIZE,
             )
             return 0
-        pool_member = ClusterdPoolMember(
-            host=f"clusterd-pool-{pool_slot}",
-            workers=CLUSTERD_POOL_WORKERS,
-        )
+        pool_members = [
+            ClusterdPoolMember(
+                host=f"clusterd-pool-{slot}",
+                workers=CLUSTERD_POOL_WORKERS,
+            )
+            for slot in pool_slots
+        ]
         LOG.info(
-            "parallel-workload claimed pool slot %d (%s)",
-            pool_slot,
-            pool_member.host,
+            "parallel-workload claimed %d pool slot(s): %s",
+            len(pool_slots),
+            ", ".join(m.host for m in pool_members),
         )
-        return _run_invocation(seed, rng, pool_member)
+        return _run_invocation(seed, rng, pool_members)
 
 
 def _run_invocation(
     seed: str,
     rng: random.Random,
-    pool_member: ClusterdPoolMember,
+    pool_members: list[ClusterdPoolMember],
 ) -> int:
-    """The bulk of `main()` once a pool slot has been claimed. Split out so
-    the slot lock stays held across this whole call: the lock is released
+    """The bulk of `main()` once pool slot(s) have been claimed. Split out
+    so the slot locks stay held across this whole call: they are released
     when the enclosing `with` block in `main()` exits.
     """
 
@@ -537,10 +550,10 @@ def _run_invocation(
     # concurrent invocations share the SUT — see _SETUP_RACE_PATTERNS for
     # the fallback when they collide anyway.
     #
-    # `pool_members=[pool_member]` puts this invocation's single cluster
-    # on the pool member above; the framework forces managed=False and
-    # emits unmanaged CREATE CLUSTER with explicit STORAGECTL/COMPUTE
-    # ADDRESSES.
+    # `pool_members=pool_members` makes a single unmanaged cluster with one
+    # replica per member; the framework forces managed=False and emits
+    # unmanaged CREATE CLUSTER with explicit STORAGECTL/COMPUTE ADDRESSES
+    # for each replica.
     database = Database(
         rng=rng,
         seed=seed,
@@ -556,7 +569,7 @@ def _run_invocation(
         scenario=Scenario.Kill,
         naughty_identifiers=False,
         seed_scoped_names=True,
-        pool_members=[pool_member],
+        pool_members=pool_members,
     )
 
     end_time = time.time() + RUNTIME_S

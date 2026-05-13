@@ -27,10 +27,12 @@ environmentd's process orchestrator and the fault domain disappears.
 ## Solution
 
 A pool of identical pre-deployed clusterd containers
-(`clusterd-pool-{0..N-1}`), one container per parallel-workload
-invocation. Each invocation claims one slot via filesystem locking,
-provisions its sole cluster as an unmanaged replica pointed at that
-slot's clusterd, and releases the slot on exit.
+(`clusterd-pool-{0..N-1}`). Each invocation claims up to
+`PW_DESIRED_REPLICAS` (default 2) slots via filesystem locking and
+provisions a single unmanaged cluster with one replica per claimed
+slot, then releases the locks on exit. Best-effort: with N slots
+claimed the cluster runs as an N-replica cluster (1 ≤ N ≤ desired);
+no slots → exit cleanly.
 
 Components, bottom-up:
 
@@ -43,23 +45,24 @@ Components, bottom-up:
 
   - **`parallel_workload.Database(pool_members=...,
     seed_scoped_names=True)`**. Opt-in framework mode: when
-    `pool_members` is set, the framework provisions unmanaged clusters
-    with explicit STORAGECTL/STORAGE/COMPUTECTL/COMPUTE ADDRESSES
-    instead of managed SIZE/REPLICATION FACTOR; the CreateCluster /
+    `pool_members` is set, the framework provisions one unmanaged
+    cluster with `len(pool_members)` replicas, each pointed at a pool
+    member via explicit STORAGECTL/STORAGE/COMPUTECTL/COMPUTE ADDRESSES
+    (in place of managed SIZE/REPLICATION FACTOR); the CreateCluster /
     CreateReplica / DropReplica actions skip pool-backed clusters
     because there is no in-band allocator. `seed_scoped_names=True`
     renames `cluster{N}` / `role{N}` to `cluster-{seed}-{N}` /
     `role-{seed}-{N}` so concurrent invocations don't collide on
     global names.
 
-  - **`_claim_pool_slot()`** in
+  - **`_claim_pool_slots()`** in
     `test/antithesis/workload/test/parallel_driver_parallel_workload.py`.
-    Contextmanager that holds `fcntl.flock(LOCK_EX | LOCK_NB)` on
-    `/tmp/clusterd-pool-slots/{i}.lock` for the lifetime of the
-    invocation. Slots tried in randomized order so allocation is
-    decorrelated from invocation seed. The lock is released on context
-    exit (normal or exception), so a crashing driver doesn't strand the
-    slot.
+    Contextmanager that holds up to `PW_DESIRED_REPLICAS` exclusive
+    `fcntl.flock`s on `/tmp/clusterd-pool-slots/{i}.lock` for the
+    lifetime of the invocation. Slots are tried in randomized order so
+    allocation is decorrelated from invocation seed. Every claimed lock
+    is released on context exit (normal or exception), so a crashing
+    driver doesn't strand any slot.
 
   - **`_drop_seed_scoped_objects()`** in the same driver, called in
     `main()`'s `finally`. Drops every cluster / database / role whose
@@ -137,10 +140,6 @@ uses the same `ClusterSpec` pattern).
 
 ## v1 limitations (future work)
 
-  - **REPLICATION FACTOR 1, no multi-replica parallel-workload coverage.**
-    The pool gives each invocation one container; multi-replica
-    coverage for compute/storage paths remains in `antithesis_cluster`.
-
   - **No in-band allocator inside the framework.** Worker threads
     cannot grab additional pool members mid-run, so
     `CreateClusterAction` / `CreateClusterReplicaAction` /
@@ -159,5 +158,6 @@ uses the same `ClusterSpec` pattern).
 | `ANTITHESIS_CLUSTERD_POOL_SIZE` (compose) | 8 | Number of `clusterd-pool-{i}` containers deployed. |
 | `CLUSTERD_POOL_SIZE` (driver) | 8 | Number of slots the driver will attempt to claim. Must match the compose value. |
 | `CLUSTERD_POOL_SLOT_LOCK_DIR` (driver) | `/tmp/clusterd-pool-slots` | Directory holding the per-slot flock files. |
+| `PW_DESIRED_REPLICAS` (driver) | 2 | Replicas to ask for per invocation's cluster. Best-effort: driver claims up to this many slots and runs with whatever it gets (≥1). |
 | `PW_RUNTIME_S` (driver) | 20 | Per-invocation runtime; bound to keep the fault-injection budget granular. |
 | `PW_THREADS` (driver) | 4 | Worker threads inside one invocation. |

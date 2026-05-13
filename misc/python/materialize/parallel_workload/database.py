@@ -1205,26 +1205,25 @@ class Database:
         ]
         self.role_id = len(self.roles)
         # At least one storage cluster required for WebhookSources.
-        # In pool mode, each cluster claims one pool member from a
-        # deterministic slice; the number of clusters is the slice size, no
-        # rng.randint. Caller is responsible for sizing `pool_members` to
-        # the desired cluster count.
+        # In pool mode, the entire `pool_members` list is consumed by a
+        # single unmanaged cluster — one replica per member — so the
+        # caller controls both replica count and pool-member identity.
+        # This is the only initial cluster; CreateClusterAction is
+        # disabled in pool mode (no in-band allocator).
         if pool_members is not None:
-            initial_cluster_count = len(pool_members)
             self.clusters = [
                 Cluster(
-                    i,
+                    0,
                     # managed/size are ignored when pool-backed but kept as
                     # placeholder values for any code that reads them
                     # without consulting `is_pool_backed`.
                     managed=False,
-                    size=pool_members[i].host,
-                    replication_factor=1,
+                    size=pool_members[0].host,
+                    replication_factor=len(pool_members),
                     introspection_interval="1s",
                     name_scope=self.name_scope,
-                    pool_members=[pool_members[i]],
+                    pool_members=pool_members,
                 )
-                for i in range(initial_cluster_count)
             ]
         else:
             self.clusters = [
