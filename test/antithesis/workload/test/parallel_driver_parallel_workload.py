@@ -58,6 +58,7 @@ from helper_pg import (
     PGUSER_INTERNAL,
 )
 
+from materialize.parallel_workload import executor as _pw_executor
 from materialize.parallel_workload.action import (
     ddl_action_list,
     dml_nontrans_action_list,
@@ -82,6 +83,15 @@ from materialize.parallel_workload.executor import Executor
 from materialize.parallel_workload.settings import Complexity, Scenario
 from materialize.parallel_workload.worker import Worker
 from materialize.parallel_workload.worker_exception import WorkerFailedException
+
+# `parallel_workload.executor` declares module-level `logging: TextIO | None`
+# and `lock: threading.Lock` as PEP-526 annotations only; they are bound by
+# `initialize_logging()`. `Executor.log()` does `if not logging: return`,
+# which raises `NameError` before that initialiser runs. We don't want the
+# per-query log file (drivers run many times under Antithesis); bind both
+# names to no-op values so `log()` returns immediately.
+_pw_executor.logging = None
+_pw_executor.lock = threading.Lock()
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
