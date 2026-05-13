@@ -1411,6 +1411,7 @@ mod cardinality {
     use mz_repr::GlobalId;
 
     use ordered_float::OrderedFloat;
+    use tracing::{error, warn};
 
     use super::{Analysis, Arity, SubtreeSize, UniqueKeys};
 
@@ -1456,12 +1457,15 @@ mod cardinality {
             match self {
                 CardinalityEstimate::Estimate(OrderedFloat(f)) => {
                     let rounded = f.ceil();
-                    let flattened = usize::cast_from(
-                        u64::try_cast_from(rounded)
-                            .expect("positive and representable cardinality estimate"),
-                    );
 
-                    Some(flattened)
+                    if !rounded.is_normal() || rounded < 0.0 {
+                        warn!(
+                            "ignoring denormalized or negative cardinality estimate {f} rounded to {rounded}"
+                        );
+                    }
+
+                    // if we can't cast, the value is unknown
+                    u64::try_cast_from(rounded).map(usize::cast_from)
                 }
                 CardinalityEstimate::Unknown => None,
             }
@@ -1546,6 +1550,7 @@ mod cardinality {
 
         fn div(self, rhs: f64) -> Self::Output {
             use CardinalityEstimate::*;
+
             if let Estimate(lhs) = self {
                 Estimate(lhs / OrderedFloat(rhs))
             } else {
@@ -1590,6 +1595,11 @@ mod cardinality {
         fn flat_map(&self, tf: &TableFunc, input: CardinalityEstimate) -> CardinalityEstimate {
             match tf {
                 TableFunc::Wrap { types, width } => {
+                    // DBZ is harmless (produces inf, empty estimate), but still a broken invariant
+                    if *width == 0 {
+                        error!("cardinality estimation encountered TableFunc::Wrap with width 0");
+                    }
+
                     input * (f64::cast_lossy(types.len()) / f64::cast_lossy(*width))
                 }
                 _ => {
@@ -1800,8 +1810,10 @@ mod cardinality {
         ) -> CardinalityEstimate {
             // TODO(mgree): if no `group_key` is present, we can do way better
 
-            if let Some(group_size) = expected_group_size {
-                input / f64::cast_lossy(*group_size)
+            if let Some(expected_group_size) = expected_group_size {
+                // if expected group size is 0, treat it as 1 (to avoid DBZ/+inf estimates)
+                let group_size = u64::max(*expected_group_size, 1);
+                input / f64::cast_lossy(group_size)
             } else if group_key.is_empty() {
                 CardinalityEstimate::from(1.0)
             } else {
@@ -1823,8 +1835,10 @@ mod cardinality {
                 .and_then(|l| l.as_literal_int64())
                 .map_or(1, |l| std::cmp::max(0, l));
 
-            if let Some(group_size) = expected_group_size {
-                input * (f64::cast_lossy(k) / f64::cast_lossy(*group_size))
+            if let Some(expected_group_size) = expected_group_size {
+                // if expected group size is 0, treat it as 1 (to avoid DBZ/+inf estimates)
+                let group_size = u64::max(*expected_group_size, 1);
+                input * (f64::cast_lossy(k) / f64::cast_lossy(group_size))
             } else if group_key.is_empty() {
                 CardinalityEstimate::from(f64::cast_lossy(k))
             } else {
