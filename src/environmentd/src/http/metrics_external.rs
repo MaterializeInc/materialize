@@ -14,6 +14,7 @@
 //! `cluster_name`, and `replica_name` labels onto the clusterd-sourced
 //! metrics.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use axum::Extension;
@@ -110,6 +111,13 @@ pub(crate) async fn handle_external_metrics(
         }
     }
 
+    // env and clusterd both register many of the same metric names
+    // and every replica scrape may also redeclare names. The
+    // text encoder emits one `# HELP`/`# TYPE` block per `MetricFamily`, so
+    // without this we'd produce duplicate header lines and scrapers would
+    // reject the response.
+    let all_families = merge_families_by_name(all_families);
+
     // Re-emit as Prometheus text.
     let mut body = Vec::new();
     if let Err(e) = prometheus::TextEncoder::new().encode(&all_families, &mut body) {
@@ -186,6 +194,29 @@ fn add_replica_labels(
     }
 }
 
+/// Merges `MetricFamily` entries that share a name into a single entry, keeping
+/// the first occurrence's metadata (help text, type) and appending every
+/// subsequent same-named family's metrics into it.
+fn merge_families_by_name(
+    families: Vec<prometheus::proto::MetricFamily>,
+) -> Vec<prometheus::proto::MetricFamily> {
+    let mut merged_families: Vec<prometheus::proto::MetricFamily> =
+        Vec::with_capacity(families.len());
+    let mut first_family_index_by_name: BTreeMap<String, usize> = BTreeMap::new();
+    for mut family in families {
+        let name = family.name().to_owned();
+        if let Some(&index) = first_family_index_by_name.get(&name) {
+            for metric in family.take_metric() {
+                merged_families[index].mut_metric().push(metric);
+            }
+        } else {
+            first_family_index_by_name.insert(name, merged_families.len());
+            merged_families.push(family);
+        }
+    }
+    merged_families
+}
+
 fn label_pair(name: &str, value: String) -> prometheus::proto::LabelPair {
     let mut pair = prometheus::proto::LabelPair::default();
     pair.set_name(name.to_owned());
@@ -236,9 +267,10 @@ mod tests {
             Some("r1"),
         );
 
+        let merged = merge_families_by_name(vec![env_family, clusterd_family]);
         let mut body = Vec::new();
         prometheus::TextEncoder::new()
-            .encode(&[env_family, clusterd_family], &mut body)
+            .encode(&merged, &mut body)
             .unwrap();
         let text = String::from_utf8(body).unwrap();
 
