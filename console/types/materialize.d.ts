@@ -2365,7 +2365,7 @@ export interface MzRecentActivityLog {
    */
   execution_id: string;
   /**
-   * For `SELECT` queries, the strategy for executing the query. `constant` means computed in the control plane without the involvement of a cluster, `fast-path` means read by a cluster directly from an in-memory index, and `standard` means computed by a temporary dataflow.
+   * For `SELECT` statements (and similar statement types), the strategy for executing the query. `standard` means computed by a temporary dataflow, `fast-path` means read by a cluster directly from an in-memory index, `persist-fast-path` means read a source, table, or materialized view from blob storage (without an index or dataflow), and `constant` means computed in the control plane without the involvement of a cluster. (It's `NULL` for statements that errored/canceled/aborted and for non-query-like statement types.)
    */
   execution_strategy: string | null;
   /**
@@ -2377,7 +2377,7 @@ export interface MzRecentActivityLog {
    */
   finished_at: Timestamp | null;
   /**
-   * The final status of the statement (e.g., `success`, `canceled`, `error`, or `aborted`). `aborted` means that Materialize exited before the statement finished executing.
+   * The final status of the statement (e.g., `success`, `canceled`, `error`, or `aborted`). `aborted` means that the client disconnected before the statement finished executing.
    */
   finished_status: string | null;
   /**
@@ -2437,7 +2437,7 @@ export interface MzRecentActivityLog {
    */
   statement_type: string | null;
   /**
-   * The number of statements that were dropped due to throttling before the current one was seen. If you have a very high volume of queries and need to log them without throttling, contact our team.
+   * The number of statement executions dropped due to throttling between the previously logged statement and this one. If you have a very high volume of queries and need to log them without throttling, contact our team.
    */
   throttled_count: string;
   /**
