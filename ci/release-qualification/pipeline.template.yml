@@ -707,3 +707,31 @@ steps:
               args: [--cleanup, --target=cloud-staging, environmentd]
         agents:
           queue: linux-aarch64-small
+
+      - id: cluster-spec-sheet-envd-scalability
+        label: "Cluster spec sheet: Envd Scalability (against Staging)"
+        depends_on: build-aarch64
+        timeout_in_minutes: 3600
+        concurrency: 1
+        concurrency_group: 'cluster-spec-sheet-cluster'
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: cluster-spec-sheet
+              run: default
+              args: [--cleanup, --target=cloud-staging, envd_scalability]
+        agents:
+          queue: linux-aarch64-small
+
+      - id: cluster-spec-sheet-cluster-object-limits
+        label: "Cluster spec sheet: Cluster Object Limits (against Staging)"
+        depends_on: build-aarch64
+        timeout_in_minutes: 3600
+        concurrency: 1
+        concurrency_group: 'cluster-spec-sheet-cluster'
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: cluster-spec-sheet
+              run: default
+              args: [--cleanup, --target=cloud-staging, cluster_object_limits]
+        agents:
+          queue: linux-aarch64-small
