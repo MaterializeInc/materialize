@@ -270,11 +270,14 @@ where
         // copying along the passthrough input. `None` indicates that we've
         // dropped the capability to shut down.
         let mut capability: Option<_> = capabilities.into_iter().next();
-        // None is used to indicate that both uppers are the empty antichain.
-        let mut remap = Some(DataRemapEntry {
+        // The most recently observed remap state. Retained even after the
+        // remap input closes so we can still advance the output capability to
+        // the last known `logical_upper` while the passthrough input is
+        // still draining.
+        let mut remap = DataRemapEntry {
             physical_upper: T::minimum(),
             logical_upper: T::minimum(),
-        });
+        };
 
         move |frontiers| {
             if shutdown_handle.local_pressed() {
@@ -286,44 +289,37 @@ where
             remap_input.for_each(|_input_cap, data| {
                 for x in data.drain(..) {
                     debug!("{} got remap {:?}", name, x);
-                    if let Some(r) = remap.as_mut() {
-                        if r.logical_upper < x.logical_upper {
-                            assert!(
-                                r.physical_upper <= x.physical_upper,
-                                "previous remap physical upper {:?} is ahead of new remap physical upper {:?}",
-                                r.physical_upper,
-                                x.physical_upper,
-                            );
-                            // TODO: If the physical upper has advanced, that's a very
-                            // strong hint that the data shard is about to be written to.
-                            // Because the data shard's upper advances sparsely (on write,
-                            // but not on passage of time) which invalidates the "every 1s"
-                            // assumption of the default tuning, we've had to de-tune the
-                            // listen sleeps on the paired persist_source. Maybe we use "one
-                            // state" to wake it up in case pubsub doesn't and remove the
-                            // listen polling entirely? (NB: This would have to happen in
-                            // each worker so that it's guaranteed to happen in each
-                            // process.)
-                            *r = x;
-                        }
+                    if remap.logical_upper < x.logical_upper {
+                        assert!(
+                            remap.physical_upper <= x.physical_upper,
+                            "previous remap physical upper {:?} is ahead of new remap physical upper {:?}",
+                            remap.physical_upper,
+                            x.physical_upper,
+                        );
+                        // TODO: If the physical upper has advanced, that's a very
+                        // strong hint that the data shard is about to be written to.
+                        // Because the data shard's upper advances sparsely (on write,
+                        // but not on passage of time) which invalidates the "every 1s"
+                        // assumption of the default tuning, we've had to de-tune the
+                        // listen sleeps on the paired persist_source. Maybe we use "one
+                        // state" to wake it up in case pubsub doesn't and remove the
+                        // listen polling entirely? (NB: This would have to happen in
+                        // each worker so that it's guaranteed to happen in each
+                        // process.)
+                        remap = x;
                     }
                 }
             });
 
-            // Apply the remap input's frontier. Frontier advancement is a
-            // logical_upper bump; an empty frontier means the data shard is
-            // finished.
-            match frontiers[0].frontier().as_option() {
-                Some(logical_upper) => {
-                    if let Some(r) = remap.as_mut() {
-                        if r.logical_upper < *logical_upper {
-                            r.logical_upper = logical_upper.clone();
-                        }
-                    }
-                }
-                None => {
-                    // remap_input is closed, which indicates the data shard is finished.
-                    remap = None;
+            // Apply the remap input's frontier as a `logical_upper` bump.
+            // We intentionally do not treat an empty antichain specially: the
+            // last observed `DataRemapEntry` remains valid even after the
+            // remap input closes, so that the output capability can be
+            // advanced past `physical_upper` while the passthrough input is
+            // still draining.
+            if let Some(logical_upper) = frontiers[0].frontier().as_option() {
+                if remap.logical_upper < *logical_upper {
+                    remap.logical_upper = logical_upper.clone();
                 }
             }
 
@@ -374,10 +370,12 @@ where
             // - If (B), then we keep copying passthrough data and frontier
             //   updates until the passthrough frontier passes `physical_upper`,
             //   at which point we can advance the logical upper.
-            if let (Some(cap), Some(r)) = (capability.as_mut(), remap.as_ref()) {
-                assert!(r.physical_upper <= r.logical_upper);
-                if r.physical_upper.less_equal(cap.time()) && cap.time() < &r.logical_upper {
-                    cap.downgrade(&r.logical_upper);
+            if let Some(cap) = capability.as_mut() {
+                assert!(remap.physical_upper <= remap.logical_upper);
+                let phys_reached = remap.physical_upper.less_equal(cap.time());
+                let logical_ahead = cap.time() < &remap.logical_upper;
+                if phys_reached && logical_ahead {
+                    cap.downgrade(&remap.logical_upper);
                 }
             }
 
@@ -964,5 +962,100 @@ mod tests {
         {
             assert!(max_progress_ts < until, "{max_progress_ts} < {until}");
         }
+    }
+
+    /// Regression test for the case where the remap input closes while the
+    /// passthrough input is still draining. The operator must still advance
+    /// the output capability to the last observed `logical_upper` once the
+    /// passthrough frontier catches up to `physical_upper`. See PER-4.
+    #[mz_ore::test]
+    fn frontiers_advance_to_logical_after_remap_close() {
+        use timely::dataflow::operators::Capture;
+        use timely::dataflow::operators::vec::UnorderedInput;
+
+        let captured = timely::execute_directly(|worker| {
+            let (mut remap_handle, remap_cap, pass_handle, pass_cap, captured, _button) = worker
+                .dataflow::<u64, _, _>(|scope| {
+                    let ((remap_handle, remap_cap), remap_stream) =
+                        scope.new_unordered_input::<DataRemapEntry<u64>>();
+                    let ((pass_handle, pass_cap), pass_stream) = scope.new_unordered_input::<i32>();
+                    let (out, button) =
+                        txns_progress_frontiers::<String, (), u64, i64, i32, TxnsCodecDefault>(
+                            remap_stream,
+                            pass_stream,
+                            "test",
+                            ShardId::new(),
+                            Antichain::from_elem(u64::MAX),
+                            0,
+                        );
+                    let captured = out.capture();
+                    (
+                        remap_handle,
+                        remap_cap,
+                        pass_handle,
+                        pass_cap,
+                        captured,
+                        button,
+                    )
+                });
+
+            // Emit a single remap entry whose logical_upper (10) is ahead of
+            // its physical_upper (5), then close the remap input. The output
+            // capability is still at 0; the operator has not yet had a chance
+            // to advance to logical_upper because the passthrough frontier
+            // has not reached physical_upper.
+            remap_handle
+                .activate()
+                .session(&remap_cap)
+                .give(DataRemapEntry {
+                    physical_upper: 5,
+                    logical_upper: 10,
+                });
+            drop(remap_cap);
+
+            // Step the worker so the operator observes the remap entry and
+            // the remap input closing.
+            for _ in 0..5 {
+                worker.step();
+            }
+
+            // Now advance the passthrough frontier to 5 — matching
+            // physical_upper — without emitting any data. With the fix the
+            // operator should then advance its output capability to
+            // logical_upper (10).
+            let pass_cap_5 = pass_cap.delayed(&5);
+            drop(pass_cap);
+            for _ in 0..5 {
+                worker.step();
+            }
+
+            // Drop the remaining passthrough capability so the operator
+            // shuts down cleanly.
+            drop(pass_cap_5);
+            for _ in 0..5 {
+                worker.step();
+            }
+            // pass_handle must outlive the steps above so the unordered
+            // input is not dropped prematurely.
+            drop(pass_handle);
+            drop(remap_handle);
+
+            captured.into_iter().collect::<Vec<_>>()
+        });
+
+        let max_progress_ts = captured
+            .iter()
+            .filter_map(|event| match event {
+                Event::Progress(progress) => Some(progress.iter().map(|(ts, _diff)| *ts)),
+                Event::Messages(_, _) => None,
+            })
+            .flatten()
+            .max()
+            .expect("at least one progress event");
+        assert!(
+            max_progress_ts >= 10,
+            "output capability should have reached logical_upper=10 after remap close, \
+             but max progress was {max_progress_ts}",
+        );
     }
 }
