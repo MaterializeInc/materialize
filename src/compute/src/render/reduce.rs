@@ -31,9 +31,8 @@ use mz_compute_types::plan::reduce::{
     AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, MonotonicPlan,
     ReducePlan, ReductionType, SingleBasicPlan, reduction_type,
 };
-use mz_expr::{
-    AggregateExpr, AggregateFunc, EvalError, MapFilterProject, MirScalarExpr, SafeMfpPlan,
-};
+use mz_compute_types::plan::scalar::LirScalarExpr;
+use mz_expr::{AggregateExpr, AggregateFunc, EvalError, MfpPlan, SafeMfpPlan};
 use mz_ore::cast::CastLossy;
 use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
 use mz_repr::fixed_length::ExtendDatums;
@@ -66,21 +65,19 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
     /// minimize worst-case incremental update times and memory footprint.
     pub fn render_reduce(
         &self,
-        input_key: Option<Vec<MirScalarExpr>>,
+        input_key: Option<Vec<LirScalarExpr>>,
         input: CollectionBundle<'scope, T>,
         key_val_plan: KeyValPlan,
         reduce_plan: ReducePlan,
-        mfp_after: Option<MapFilterProject>,
+        mfp_after: Option<MfpPlan<LirScalarExpr>>,
         temporal_bucketing_strategy: ArrangementStrategy,
     ) -> CollectionBundle<'scope, T>
     where
         T: crate::render::MaybeBucketByTime,
     {
-        // Convert `mfp_after` to an actionable plan.
+        // Convert `mfp_after` to an actionable plan (non-temporal SafeMfpPlan).
         let mfp_after = mfp_after.map(|m| {
-            m.into_plan()
-                .expect("MFP planning must succeed")
-                .into_nontemporal()
+            m.into_nontemporal()
                 .expect("Fused Reduce MFPs do not have temporal predicates")
         });
 
@@ -203,7 +200,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         collection: VecCollection<'s, T, (Row, Row), Diff>,
         err_input: VecCollection<'s, T, DataflowErrorSer, Diff>,
         key_arity: usize,
-        mfp_after: Option<SafeMfpPlan>,
+        mfp_after: Option<SafeMfpPlan<LirScalarExpr>>,
     ) -> CollectionBundle<'s, T> {
         let mut errors = Default::default();
         let arrangement =
@@ -226,7 +223,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         collection: VecCollection<'s, T, (Row, Row), Diff>,
         errors: &mut Vec<VecCollection<'s, T, DataflowErrorSer, Diff>>,
         key_arity: usize,
-        mfp_after: Option<SafeMfpPlan>,
+        mfp_after: Option<SafeMfpPlan<LirScalarExpr>>,
     ) -> Arranged<'s, RowRowAgent<T, Diff>> {
         // TODO(vmarcos): Arrangement specialization here could eventually be extended to keys,
         // not only values (database-issues#6658).
@@ -290,7 +287,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
     fn build_distinct<'s>(
         &self,
         collection: VecCollection<'s, T, (Row, Row), Diff>,
-        mfp_after: Option<SafeMfpPlan>,
+        mfp_after: Option<SafeMfpPlan<LirScalarExpr>>,
     ) -> (
         Arranged<'s, TraceAgent<RowRowSpine<T, Diff>>>,
         VecCollection<'s, T, DataflowErrorSer, Diff>,
@@ -375,7 +372,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         input: VecCollection<'s, T, (Row, Row), Diff>,
         aggrs: Vec<AggregateExpr>,
         key_arity: usize,
-        mfp_after: Option<SafeMfpPlan>,
+        mfp_after: Option<SafeMfpPlan<LirScalarExpr>>,
     ) -> (
         RowRowArrangement<'s, T>,
         VecCollection<'s, T, DataflowErrorSer, Diff>,
@@ -485,7 +482,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         aggr: &AggregateExpr,
         validating: bool,
         key_arity: usize,
-        mfp_after: Option<SafeMfpPlan>,
+        mfp_after: Option<SafeMfpPlan<LirScalarExpr>>,
         fused_unnest_list: bool,
     ) -> (
         RowRowArrangement<'s, T>,
@@ -853,7 +850,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             buckets,
         }: BucketedPlan,
         key_arity: usize,
-        mfp_after: Option<SafeMfpPlan>,
+        mfp_after: Option<SafeMfpPlan<LirScalarExpr>>,
     ) -> (
         RowRowArrangement<'s, T>,
         VecCollection<'s, T, DataflowErrorSer, Diff>,
@@ -1228,7 +1225,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             aggr_funcs,
             must_consolidate,
         }: MonotonicPlan,
-        mfp_after: Option<SafeMfpPlan>,
+        mfp_after: Option<SafeMfpPlan<LirScalarExpr>>,
     ) -> (
         RowRowArrangement<'s, T>,
         VecCollection<'s, T, DataflowErrorSer, Diff>,
@@ -1356,7 +1353,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             distinct_aggrs,
         }: AccumulablePlan,
         key_arity: usize,
-        mfp_after: Option<SafeMfpPlan>,
+        mfp_after: Option<SafeMfpPlan<LirScalarExpr>>,
     ) -> (
         RowRowArrangement<'s, T>,
         VecCollection<'s, T, DataflowErrorSer, Diff>,
@@ -1572,7 +1569,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
 /// containing key and aggregate values, then returns a result `Row` or `None`
 /// if the MFP filters the result out.
 fn evaluate_mfp_after<'a, 'b>(
-    mfp_after: &'a Option<SafeMfpPlan>,
+    mfp_after: &'a Option<SafeMfpPlan<LirScalarExpr>>,
     datums_local: &'b mut mz_repr::DatumVecBorrow<'a>,
     temp_storage: &'a RowArena,
     key_len: usize,
