@@ -1171,10 +1171,11 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
 type Session<'a, 'b, T, CB> =
     timely::dataflow::operators::generic::Session<'a, 'b, T, CB, Capability<T>>;
 
-/// Container builder used for the err output of every flat_map variant. Errors are low volume
-/// and we don't expect within-batch duplicates, so [`CapacityContainerBuilder`] is the right
-/// default; this matches the pre-refactor behavior of the now-removed `map_fallible` demux.
-type ECB<T> = CapacityContainerBuilder<Vec<(DataflowErrorSer, T, Diff)>>;
+/// Container builder used for the err output of every flat_map variant. Pre-refactor the
+/// merged Ok/Err stream flowed through a [`ConsolidatingContainerBuilder`] before the
+/// `map_fallible` demux split it; we preserve that consolidation here so errors with the
+/// same `(error, time)` cancel within a batch rather than propagating to downstream.
+type ECB<T> = ConsolidatingContainerBuilder<Vec<(DataflowErrorSer, T, Diff)>>;
 
 /// Number of output records the arrangement flat_map operators may produce before yielding.
 /// See [`ArrangementFlavor::flat_map`] for the fuel rationale; the constant is a pragmatic
