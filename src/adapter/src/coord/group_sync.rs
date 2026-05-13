@@ -44,7 +44,7 @@ pub struct GroupSyncDiff {
 /// - `current_membership`: The user's current `RoleMembership.map`
 ///   (role_id → grantor_id).
 /// - `target_role_ids`: Role IDs resolved from the JWT group names via
-///   case-insensitive catalog lookup.
+///   exact (case-sensitive) catalog lookup.
 ///
 /// # Semantics
 /// - Only roles granted by the JWT sync sentinel (`MZ_JWT_SYNC_ROLE_ID`)
@@ -149,8 +149,8 @@ impl Coordinator {
 
     /// Syncs the user's role memberships based on JWT group claims.
     ///
-    /// Resolves group names to catalog role IDs (case-insensitive),
-    /// computes the diff against current memberships, and executes
+    /// Resolves group names to catalog role IDs via exact (case-sensitive)
+    /// lookup, computes the diff against current memberships, and executes
     /// grant/revoke operations via `catalog_transact`.
     ///
     /// Groups that map to reserved role names (`mz_`/`pg_` prefixes) are
@@ -162,13 +162,12 @@ impl Coordinator {
         groups: &[String],
         notices: &mut Vec<AdapterNotice>,
     ) -> Result<(), AdapterError> {
-        let role_map = self.catalog().roles_by_lowercase_name();
-
-        // Resolve group names to role IDs (case-insensitive).
+        // Resolve group names to role IDs (exact, case-sensitive match).
         let mut target_role_ids = BTreeSet::new();
         for group in groups {
             // Filter out reserved role names (mz_/pg_ prefixes, PUBLIC).
-            if catalog::is_reserved_role_name(group) {
+            // Check case-insensitively so "MZ_SYSTEM" is also blocked.
+            if catalog::is_reserved_role_name(&group.to_lowercase()) {
                 warn!(
                     group = group.as_str(),
                     "OIDC group maps to reserved role name, skipping"
@@ -179,7 +178,7 @@ impl Coordinator {
                 continue;
             }
 
-            match role_map.get(&group.to_lowercase()).copied() {
+            match self.catalog().try_get_role_by_name(group) {
                 Some(role) => {
                     // Skip if the group resolves to the user's own role. This
                     // happens when an IdP echoes the username/email into the
