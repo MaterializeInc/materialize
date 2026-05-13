@@ -200,6 +200,7 @@ mod tests {
     fn make_family(name: &str) -> prometheus::proto::MetricFamily {
         let mut family = prometheus::proto::MetricFamily::default();
         family.set_name(name.to_owned());
+        family.set_help(format!("help for {name}"));
         family.set_field_type(prometheus::proto::MetricType::COUNTER);
         let mut metric = prometheus::proto::Metric::default();
         let mut counter = prometheus::proto::Counter::default();
@@ -220,6 +221,37 @@ mod tests {
         assert_eq!(names, vec!["cluster_id", "replica_id", "process"]);
         let values: Vec<_> = labels.iter().map(|l| l.value()).collect();
         assert_eq!(values, vec!["u1", "u2", "7"]);
+    }
+
+    #[mz_ore::test]
+    fn shared_metric_name_emits_single_help_and_type() {
+        let env_family = make_family("mz_persist_test");
+        let mut clusterd_family = make_family("mz_persist_test");
+        add_replica_labels(
+            &mut clusterd_family,
+            "u1".parse().unwrap(),
+            "u2".parse().unwrap(),
+            0,
+            Some("quickstart"),
+            Some("r1"),
+        );
+
+        let mut body = Vec::new();
+        prometheus::TextEncoder::new()
+            .encode(&[env_family, clusterd_family], &mut body)
+            .unwrap();
+        let text = String::from_utf8(body).unwrap();
+
+        let help = text
+            .lines()
+            .filter(|l| l.starts_with("# HELP mz_persist_test "))
+            .count();
+        let type_ = text
+            .lines()
+            .filter(|l| l.starts_with("# TYPE mz_persist_test "))
+            .count();
+        assert_eq!(help, 1, "{text}");
+        assert_eq!(type_, 1, "{text}");
     }
 
     #[mz_ore::test]
