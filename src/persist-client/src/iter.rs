@@ -22,8 +22,7 @@ use arrow::array::{Array, Int64Array};
 use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use futures_util::StreamExt;
-use futures_util::stream::FuturesUnordered;
+use futures_util::future::try_join_all;
 use itertools::Itertools;
 use mz_ore::soft_assert_eq_or_log;
 use mz_ore::task::JoinHandle;
@@ -572,94 +571,94 @@ where
                 .unwrap_or(self.runs.len())
         };
 
-        let mut ready_futures: FuturesUnordered<_> = self.runs[0..first_larger]
-            .iter_mut()
-            .map(|run| async {
-                // It's possible for there to be multiple layers of indirection between us and the first available encoded part:
-                // if the first part is a `HollowRuns`, we'll need to fetch both that and the first part in the run to have data
-                // to consolidate. So: we loop, and bail out of the loop when either the first part in the run is available or we
-                // hit some unrecoverable error.
-                loop {
-                    let (mut part, size) = run.pop_front().expect("trimmed run should be nonempty");
+        let ready_futures = self.runs[0..first_larger].iter_mut().map(|run| async {
+            // It's possible for there to be multiple layers of indirection between us and the first available encoded part:
+            // if the first part is a `HollowRuns`, we'll need to fetch both that and the first part in the run to have data
+            // to consolidate. So: we loop, and bail out of the loop when either the first part in the run is available or we
+            // hit some unrecoverable error.
+            loop {
+                let (mut part, size) = run.pop_front().expect("trimmed run should be nonempty");
 
-                    let ConsolidationPart::Queued { data, task, .. } = &mut part else {
-                        run.push_front((part, size));
-                        return Ok(true);
-                    };
+                let ConsolidationPart::Queued { data, task, .. } = &mut part else {
+                    run.push_front((part, size));
+                    return Ok(true);
+                };
 
-                    let is_prefetched = task.as_ref().map_or(false, |t| t.is_finished());
-                    if is_prefetched {
-                        self.metrics.compaction.parts_prefetched.inc();
-                    } else {
-                        self.metrics.compaction.parts_waited.inc()
+                let is_prefetched = task.as_ref().map_or(false, |t| t.is_finished());
+                if is_prefetched {
+                    self.metrics.compaction.parts_prefetched.inc();
+                } else {
+                    self.metrics.compaction.parts_waited.inc()
+                }
+                self.metrics.consolidation.parts_fetched.inc();
+
+                let wrong_sort = data.run_meta.order != Some(RunOrder::Structured);
+                let fetch_result: anyhow::Result<FetchResult<T>> = match task.take() {
+                    Some(handle) => handle.await,
+                    None => {
+                        data.clone()
+                            .fetch(
+                                &self.cfg,
+                                self.shard_id,
+                                &*self.blob,
+                                &*self.metrics,
+                                &*self.shard_metrics,
+                                &self.read_metrics,
+                            )
+                            .await
                     }
-                    self.metrics.consolidation.parts_fetched.inc();
-
-                    let wrong_sort = data.run_meta.order != Some(RunOrder::Structured);
-                    let fetch_result: anyhow::Result<FetchResult<T>> = match task.take() {
-                        Some(handle) => handle.await,
-                        None => {
-                            data.clone()
-                                .fetch(
-                                    &self.cfg,
-                                    self.shard_id,
-                                    &*self.blob,
-                                    &*self.metrics,
-                                    &*self.shard_metrics,
-                                    &self.read_metrics,
-                                )
-                                .await
-                        }
-                    };
-                    match fetch_result {
-                        Err(err) => {
-                            run.push_front((part, size));
-                            return Err(err);
-                        }
-                        Ok(Err(run_part)) => {
-                            // Since we're pushing these onto the _front_ of the queue, we need to
-                            // iterate in reverse order.
-                            for part in run_part.parts.into_iter().rev() {
-                                let structured_lower = part.structured_key_lower();
-                                let size = part.max_part_bytes();
-                                run.push_front((
-                                    ConsolidationPart::Queued {
-                                        data: FetchData {
-                                            run_meta: data.run_meta.clone(),
-                                            part_desc: data.part_desc.clone(),
-                                            part,
-                                            structured_lower,
-                                        },
-                                        task: None,
-                                        _diff: Default::default(),
-                                    },
-                                    size,
-                                ));
-                            }
-                        }
-                        Ok(Ok(part)) => {
+                };
+                match fetch_result {
+                    Err(err) => {
+                        run.push_front((part, size));
+                        return Err(err);
+                    }
+                    Ok(Err(run_part)) => {
+                        // Since we're pushing these onto the _front_ of the queue, we need to
+                        // iterate in reverse order.
+                        for part in run_part.parts.into_iter().rev() {
+                            let structured_lower = part.structured_key_lower();
+                            let size = part.max_part_bytes();
                             run.push_front((
-                                ConsolidationPart::from_encoded(
-                                    part,
-                                    wrong_sort,
-                                    &self.metrics.columnar,
-                                    &self.sort,
-                                ),
+                                ConsolidationPart::Queued {
+                                    data: FetchData {
+                                        run_meta: data.run_meta.clone(),
+                                        part_desc: data.part_desc.clone(),
+                                        part,
+                                        structured_lower,
+                                    },
+                                    task: None,
+                                    _diff: Default::default(),
+                                },
                                 size,
                             ));
                         }
                     }
+                    Ok(Ok(part)) => {
+                        run.push_front((
+                            ConsolidationPart::from_encoded(
+                                part,
+                                wrong_sort,
+                                &self.metrics.columnar,
+                                &self.sort,
+                            ),
+                            size,
+                        ));
+                    }
                 }
-            })
-            .collect();
+            }
+        });
 
         // Wait for all the needed parts to be fetched, and assert that there's at least one.
-        let mut total_ready = 0;
-        while let Some(awaited) = ready_futures.next().await {
-            if awaited? {
-                total_ready += 1;
-            }
-        }
+        // We use `try_join_all` rather than `FuturesUnordered` here: the number of futures
+        // is small (runs sharing the minimum lower bound), they mostly complete synchronously
+        // against already-prefetched parts, and `try_join_all` avoids `FuturesUnordered`'s
+        // per-call setup and per-task `Arc` bookkeeping.
+        let total_ready = try_join_all(ready_futures)
+            .await?
+            .into_iter()
+            .filter(|awaited| *awaited)
+            .count();
         assert!(
             total_ready > 0,
             "at least one part should be fetched and ready to go"
