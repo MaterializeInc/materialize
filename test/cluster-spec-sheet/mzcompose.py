@@ -2820,6 +2820,57 @@ def wait_for_envd(target: "BenchTarget", timeout_secs: int = 300) -> None:
         )
 
 
+# System parameters we expect to be lifted server-side on cloud targets (via
+# LaunchDarkly defaults or equivalent). Local Docker sets these directly via
+# `MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS`. We log them at workflow
+# start so we can verify the environment we're actually talking to matches what
+# we configured.
+SYSTEM_PARAMETERS_TO_LOG: list[str] = [
+    "max_tables",
+    "max_materialized_views",
+    "max_objects_per_schema",
+    "max_clusters",
+    "max_credit_consumption_rate",
+    "memory_limiter_interval",
+]
+
+
+def log_environment_info(target: "BenchTarget") -> None:
+    """Print the environment id and key system parameters.
+
+    Best-effort: any error is logged and swallowed so a transient probe
+    failure does not abort the workflow.
+    """
+    print("--- Environment info")
+    try:
+        conn = target.new_connection()
+    except Exception as e:
+        print(f"  WARNING: could not open connection to log environment info: {e}")
+        return
+    try:
+        with conn.cursor() as cur:
+            try:
+                cur.execute("SELECT mz_environment_id()")
+                row = cur.fetchone()
+                env_id = row[0] if row else "<unknown>"
+                print(f"  mz_environment_id() = {env_id}")
+            except Exception as e:
+                print(f"  WARNING: failed to read mz_environment_id(): {e}")
+            for param in SYSTEM_PARAMETERS_TO_LOG:
+                try:
+                    cur.execute(f"SHOW {param}")
+                    row = cur.fetchone()
+                    val = row[0] if row else "<unknown>"
+                    print(f"  {param} = {val}")
+                except Exception as e:
+                    print(f"  WARNING: failed to SHOW {param}: {e}")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -> None:
     """
     Run the bench workflow by default
@@ -2969,6 +3020,8 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
             target.cleanup()
 
         target.initialize()
+
+        log_environment_info(target)
 
         # Derive result files (cluster, envd-focused, envd_objects_scalability,
         # cluster_object_limits) from the provided --record path.
