@@ -176,6 +176,10 @@ fn json_to_config_val(json: &JsonValue, template: &ConfigVal) -> Result<ConfigVa
             v.as_f64().ok_or_else(|| anyhow::anyhow!("not an f64"))?,
         )),
         (ConfigVal::String(_), JsonValue::String(v)) => Ok(ConfigVal::String(v.clone())),
+        (ConfigVal::OptString(_), JsonValue::Null) => Ok(ConfigVal::OptString(None)),
+        (ConfigVal::OptString(_), JsonValue::String(v)) => {
+            Ok(ConfigVal::OptString(Some(v.clone())))
+        }
         (ConfigVal::Duration(_), JsonValue::String(v)) => {
             Ok(ConfigVal::Duration(humantime::parse_duration(v)?))
         }
@@ -239,5 +243,43 @@ mod tests {
         assert!(updates_received.load(std::sync::atomic::Ordering::SeqCst));
         assert_eq!(BOOL_CONFIG.get(&set), false);
         assert_eq!(STRING_CONFIG.get(&set), "modified");
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_file_sync_opt_string() {
+        const OPT_STRING_CONFIG: Config<Option<&str>> =
+            Config::new("test_opt_string", None, "A test optional string config");
+        let set = ConfigSet::default().add(&OPT_STRING_CONFIG);
+
+        let mut config_file = tempfile::NamedTempFile::new().unwrap();
+        config_file
+            .write_all(b"{\"test_opt_string\": \"hello\"}")
+            .unwrap();
+        sync_file_to_configset(
+            set.clone(),
+            &config_file,
+            Duration::from_secs(1),
+            None,
+            |_, _| {},
+        )
+        .await
+        .unwrap();
+        assert_eq!(OPT_STRING_CONFIG.get(&set), Some("hello".to_string()));
+
+        // null clears the value back to None
+        let mut config_file = tempfile::NamedTempFile::new().unwrap();
+        config_file
+            .write_all(b"{\"test_opt_string\": null}")
+            .unwrap();
+        sync_file_to_configset(
+            set.clone(),
+            &config_file,
+            Duration::from_secs(1),
+            None,
+            |_, _| {},
+        )
+        .await
+        .unwrap();
+        assert_eq!(OPT_STRING_CONFIG.get(&set), None);
     }
 }
