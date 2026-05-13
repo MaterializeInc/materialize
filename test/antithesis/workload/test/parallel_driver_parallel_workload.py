@@ -58,6 +58,7 @@ from helper_pg import (
     PGUSER_INTERNAL,
 )
 
+from materialize.data_ingest.query_error import QueryError
 from materialize.parallel_workload import executor as _pw_executor
 from materialize.parallel_workload.action import (
     ddl_action_list,
@@ -175,47 +176,107 @@ def _prepare_system(num_threads: int) -> None:
             )
 
 
+# Expected substring matches for SQL errors raised during the setup phase when
+# multiple parallel-driver invocations race the same deterministic object
+# names (`role0`, `cluster-0`, etc.). Each invocation does best-effort cleanup
+# + create; whoever loses the race sees one of these and continues. The same
+# patterns are already tolerated by the parallel_workload framework itself in
+# `action.Action.errors_to_ignore` for the DDL complexity tier, so the setup
+# phase tolerates the same surface area.
+_SETUP_RACE_PATTERNS = (
+    "already exists",
+    "unknown role",
+    "unknown cluster",
+    "unknown schema",
+    "unknown catalog item",
+    "cannot be dropped because",
+    "was concurrently dropped",
+    "was removed",
+    "' was dropped",
+    "was dropped while executing a statement",
+    "another session modified the catalog",
+    "object state changed while transaction was in progress",
+)
+
+
+def _tolerate_setup_race(fn, *args, **kwargs):
+    """Run `fn(...)`, swallowing the concurrent-race messages in
+    `_SETUP_RACE_PATTERNS` and propagating anything else.
+
+    The setup phase is invoked by every parallel-driver invocation, and the
+    framework picks deterministic object names from a small pool. Concurrent
+    invocations therefore race to drop-then-create the same names; any single
+    race outcome is fine because the per-invocation Database object only
+    needs its named objects to exist by the time worker threads start.
+    """
+    try:
+        return fn(*args, **kwargs)
+    except QueryError as exc:
+        if any(pat in (exc.msg or "") for pat in _SETUP_RACE_PATTERNS):
+            LOG.debug("setup tolerated: %s — %s", exc.query, exc.msg)
+            return None
+        raise
+    except Exception as exc:  # noqa: BLE001
+        if any(pat in str(exc) for pat in _SETUP_RACE_PATTERNS):
+            LOG.debug("setup tolerated: %s", exc)
+            return None
+        raise
+
+
 def _create_database_for_antithesis(database: Database, exe: Executor) -> None:
     """Stand-in for `Database.create` that only sets up connections matching
     the Antithesis topology. Upstream's `create()` also wires polaris,
     sql-server, and an external postgres source — none of those are running
-    in this compose."""
+    in this compose.
+
+    Every statement is wrapped with `_tolerate_setup_race` because parallel
+    invocations of this driver race the same deterministic object names
+    (`role0..roleN`, `cluster-0..cluster-N`). Whoever loses the race for a
+    given object sees a known race message — already-exists, unknown-role,
+    unknown-cluster, or a transient DEPENDS-ON cleanup mismatch — and the
+    other invocation's outcome is fine for our purposes.
+    """
     from pg8000.native import identifier
 
     for db in database.dbs:
-        db.drop(exe)
-        db.create(exe)
+        _tolerate_setup_race(db.drop, exe)
+        _tolerate_setup_race(db.create, exe)
 
     exe.execute("SELECT name FROM mz_clusters WHERE name LIKE 'c%'")
     for row in exe.cur.fetchall():
-        exe.execute(f"DROP CLUSTER {identifier(row[0])} CASCADE")
+        _tolerate_setup_race(
+            exe.execute, f"DROP CLUSTER {identifier(row[0])} CASCADE"
+        )
 
-    exe.execute("DROP SECRET IF EXISTS minio CASCADE")
-    exe.execute("DROP CONNECTION IF EXISTS aws_conn CASCADE")
-    exe.execute("DROP CONNECTION IF EXISTS kafka_conn CASCADE")
-    exe.execute("DROP CONNECTION IF EXISTS csr_conn CASCADE")
+    _tolerate_setup_race(exe.execute, "DROP SECRET IF EXISTS minio CASCADE")
+    _tolerate_setup_race(exe.execute, "DROP CONNECTION IF EXISTS aws_conn CASCADE")
+    _tolerate_setup_race(exe.execute, "DROP CONNECTION IF EXISTS kafka_conn CASCADE")
+    _tolerate_setup_race(exe.execute, "DROP CONNECTION IF EXISTS csr_conn CASCADE")
 
     exe.execute("SELECT name FROM mz_roles WHERE name LIKE 'r%'")
     for row in exe.cur.fetchall():
-        exe.execute(f"DROP ROLE {identifier(row[0])}")
+        _tolerate_setup_race(exe.execute, f"DROP ROLE {identifier(row[0])}")
 
-    exe.execute(
+    _tolerate_setup_race(
+        exe.execute,
         "CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA "
-        "BROKER 'kafka:9092', SECURITY PROTOCOL PLAINTEXT"
+        "BROKER 'kafka:9092', SECURITY PROTOCOL PLAINTEXT",
     )
-    exe.execute(
+    _tolerate_setup_race(
+        exe.execute,
         "CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA "
-        "REGISTRY URL 'http://schema-registry:8081'"
+        "REGISTRY URL 'http://schema-registry:8081'",
     )
-    exe.execute("CREATE SECRET IF NOT EXISTS minio AS 'minioadmin'")
-    exe.execute(
+    _tolerate_setup_race(exe.execute, "CREATE SECRET IF NOT EXISTS minio AS 'minioadmin'")
+    _tolerate_setup_race(
+        exe.execute,
         "CREATE CONNECTION IF NOT EXISTS aws_conn TO AWS ("
         "ENDPOINT 'http://minio:9000/', REGION 'minio', "
-        "ACCESS KEY ID 'minioadmin', SECRET ACCESS KEY SECRET minio)"
+        "ACCESS KEY ID 'minioadmin', SECRET ACCESS KEY SECRET minio)",
     )
 
     for relation in database:
-        relation.create(exe)
+        _tolerate_setup_race(relation.create, exe)
 
 
 def _spawn_workers(
