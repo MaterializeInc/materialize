@@ -100,15 +100,21 @@ def _offset_committed(source_name: str) -> int | None:
 
 
 def _replica_non_online() -> bool:
+    """Did any antithesis_cluster replica record an `offline` status in this
+    timeline? Queries the audit history (`mz_cluster_replica_status_history`)
+    rather than the current-state view so a transient offline window between
+    two polls is still observable. See the matching helper in
+    `anytime_fault_recovery_exercised.py` for the full reasoning.
+    """
     try:
         row = query_one_retry(
             """
             SELECT EXISTS (
                 SELECT 1
-                FROM mz_internal.mz_cluster_replica_statuses s
-                JOIN mz_cluster_replicas r ON r.id = s.replica_id
+                FROM mz_internal.mz_cluster_replica_status_history h
+                JOIN mz_cluster_replicas r ON r.id = h.replica_id
                 JOIN mz_clusters c ON c.id = r.cluster_id
-                WHERE c.name = %s AND s.status != 'online'
+                WHERE c.name = %s AND h.status = 'offline'
             )
             """,
             (ANTITHESIS_CLUSTER,),

@@ -93,7 +93,17 @@ def _probe_select_one() -> bool:
 
 
 def _replica_non_online() -> bool:
-    """Best-effort: is any antithesis-cluster replica reporting non-online?
+    """Did any antithesis_cluster replica record an `offline` status at any
+    point in this timeline?
+
+    Queries `mz_cluster_replica_status_history` (audit log) rather than
+    `mz_cluster_replica_statuses` (current-state view). The current-state
+    view shows only the latest tick per (replica, process), so a transient
+    offline window — exactly the shape Antithesis fault injection creates
+    when it pauses or kills clusterd1 / clusterd2 for a few seconds — can
+    open and close between two consecutive polls and the assertion never
+    fires. The history table is sticky: once an offline event is recorded
+    it stays observable from any later poll within the retention window.
 
     Uses the retry-budgeted query helper because we want a clear yes/no, not
     a probe outcome — if the helper can't get an answer we conservatively
@@ -105,10 +115,10 @@ def _replica_non_online() -> bool:
             """
             SELECT EXISTS (
                 SELECT 1
-                FROM mz_internal.mz_cluster_replica_statuses s
-                JOIN mz_cluster_replicas r ON r.id = s.replica_id
+                FROM mz_internal.mz_cluster_replica_status_history h
+                JOIN mz_cluster_replicas r ON r.id = h.replica_id
                 JOIN mz_clusters c ON c.id = r.cluster_id
-                WHERE c.name = %s AND s.status != 'online'
+                WHERE c.name = %s AND h.status = 'offline'
             )
             """,
             (ANTITHESIS_CLUSTER,),
