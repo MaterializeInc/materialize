@@ -87,6 +87,22 @@ contains:cannot be used as an Iceberg equality delete key
     WITH (COMMIT INTERVAL '1s');
 contains:cannot be used as an Iceberg equality delete key
 
+# Range key — ranges lower to Iceberg structs, which iceberg-rust's
+# RecordBatchProjector skips as nested, so they cannot be equality delete keys.
+> CREATE TABLE key_range (k int4range, v text);
+
+! CREATE SINK key_range_sink
+    FROM key_range
+    INTO ICEBERG CATALOG CONNECTION polaris (
+        NAMESPACE 'default_namespace',
+        TABLE 'key_range_table'
+    )
+    USING AWS CONNECTION aws_conn
+    KEY (k) NOT ENFORCED
+    MODE UPSERT
+    WITH (COMMIT INTERVAL '1s');
+contains:cannot be used as an Iceberg equality delete key
+
 # Non-key float column is fine
 > CREATE TABLE val_float (k int, v float);
 
@@ -108,3 +124,4 @@ contains:cannot be used as an Iceberg equality delete key
 > DROP TABLE key_double;
 > DROP TABLE key_map;
 > DROP TABLE key_list;
+> DROP TABLE key_range;
