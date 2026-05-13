@@ -41,12 +41,13 @@ bin/mzcompose --find cluster-spec-sheet run default --target=docker
 
 ## Scenarios
 
-There are three kinds of scenarios:
+There are four kinds of scenarios:
 - cluster scaling: These measure run times and arrangement sizes.
 - envd scaling: These measure QPS while varying envd's CPU allocation.
 - envd scalability: These measure adapter/envd latency (DDL, simple peeks) as the number of catalog objects grows.
+- cluster object limits: These find the maximum number of idle indexes / materialized views a cluster can hold while remaining fresh.
 
-Currently, the envd scaling scenarios can't be run in Production, because changing envd's CPU cores using `mz` is not allowed there. Therefore, these scenarios need to be run with `--target=cloud-staging`.
+The envd scaling and cluster object limits scenarios can't be run in Production: the former because changing envd's CPU cores using `mz` is not allowed there, the latter because we don't want to burn production resources on long object-limit searches. Both need to be run with `--target=cloud-staging` (or `--target=docker`).
 
 You can invoke only one kind of scenarios by using the group name from `SCENARIO_GROUPS`. For example:
 ```
@@ -60,12 +61,16 @@ or
 ```
 bin/mzcompose --find cluster-spec-sheet run default envd_scalability
 ```
+or
+```
+bin/mzcompose --find cluster-spec-sheet run default cluster_object_limits --target=cloud-staging
+```
 
 You can also specify a specific scenario by name.
 
 For testing just the scaffolding of the cluster spec sheet itself, you can make the run much faster by using the various scaling options, e.g.:
 ```
---scale-tpch=0.01 --scale-tpch-queries=0.01 --scale-auction=1 --max-scale=4 --envd-scalability-sizes=1,10,100
+--scale-tpch=0.01 --scale-tpch-queries=0.01 --scale-auction=1 --max-scale=4 --envd-scalability-sizes=1,10,100 --cluster-object-limits-max=500
 ```
 
 ### envd scalability scenarios
@@ -78,3 +83,34 @@ they walk the full size list (`1, 10, 100, 1000, 3000, 5000, 10000, 20000,
 materialized views per cluster (so 100000 MVs spans 10 single-replica
 clusters). Override the size list with `--envd-scalability-sizes`. These runs
 are long; expect hours for the full size range, especially the MV scenario.
+
+### cluster object limits scenarios
+
+The `cluster_object_limits_indexes` and `cluster_object_limits_mvs` scenarios
+find, per cluster size, how many idle materializations (indexes or
+materialized views) one cluster can keep fresh. Each materialization is
+derived from a one-row base table that is never updated, so the only work the
+cluster has to do is keep advancing each materialization's `write_frontier`
+in step with the table's frontier. Once the cluster can't keep up, freshness
+collapses; we record the largest N at which freshness was still good.
+
+Procedure (per cluster size in `REPLICA_SCALES`, capped by `--max-scale`):
+1. (Re)create the test cluster `c` at that size, plus a one-row base table.
+2. Walk an N-list, adding objects incrementally and querying
+   `mz_internal.mz_materialization_lag` for max `local_lag` across the test
+   objects on `c`.
+3. Declare healthy if all N objects are reporting and max lag is below
+   `CLUSTER_OBJECT_LIMITS_LAG_THRESHOLD_MS` (default 2 s). Move to the next
+   cluster size on the first unhealthy N (the unhealthy point is still
+   recorded so the cliff is visible).
+
+The default N-list ramps geometrically up to 1000, then steps in +1000
+increments up to `--cluster-object-limits-max` (default 30000). Override
+explicitly with `--cluster-object-limits-sizes=...`. These runs are long;
+expect tens of minutes per cluster size on small replicas, longer on bigger
+ones.
+
+Results go to `*.cluster_object_limits.csv` (one row per (cluster_size, N)
+sample, with an extra `healthy` column). The analysis produces two plots per
+scenario: max-healthy-N per cluster size, and freshness lag vs N with one
+series per cluster size.
