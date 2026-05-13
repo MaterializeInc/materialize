@@ -91,9 +91,11 @@ INTER_CYCLE_SLEEP_S = 2.0
 def _select_value_for_key(key: str) -> tuple[bool, str | None]:
     """Duplicate of `_select_value_for_key` in `parallel_driver_upsert_latest_value.py`.
     Kept inline to avoid expanding helper surface for one shared private function."""
+    # See helper_pg.query_retry for why real_time_recency is required here.
     row = query_one_retry(
         f"SELECT count(*)::bigint, max(text) FROM {SOURCE_UPSERT_TEXT} WHERE key = %s",
         (key,),
+        real_time_recency=True,
     )
     if row is None:
         return False, None

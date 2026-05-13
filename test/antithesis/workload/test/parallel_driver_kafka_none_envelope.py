@@ -132,7 +132,9 @@ def main() -> int:
     # ----- no-data-duplication -----
     # `GROUP BY partition, "offset" HAVING COUNT(*) > 1` filtered to this
     # invocation's payloads. The catalog's `kafka-source-no-data-duplication`
-    # property names this exact query shape.
+    # property names this exact query shape. real_time_recency forces the
+    # SELECT past the kafka broker's real-time frontier — see
+    # helper_pg.query_retry for why this is required.
     dup_rows = query_retry(
         f"""
         SELECT partition, "offset", COUNT(*)::bigint
@@ -142,6 +144,7 @@ def main() -> int:
         HAVING COUNT(*) > 1
         """,
         (f"{prefix}:%",),
+        real_time_recency=True,
     )
     always(
         len(dup_rows) == 0,
@@ -175,6 +178,7 @@ def main() -> int:
         GROUP BY 1, 2, 3
         """,
         (f"{prefix}:%",),
+        real_time_recency=True,
     )
     by_payload: dict[str, tuple[int, int, int]] = {}
     for text, partition, offset, count in rows:

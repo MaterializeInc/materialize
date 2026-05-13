@@ -85,9 +85,14 @@ def _select_value_for_key(key: str) -> tuple[bool, str | None]:
     out of scope for this property and should be caught by
     `kafka-source-no-data-duplication`.
     """
+    # real_time_recency forces the SELECT timestamp past the kafka source's
+    # real-time upstream frontier, so the row written for this key is visible
+    # at chosen-ts. `wait_for_catchup` on `offset_committed` alone is not
+    # sufficient — see helper_pg.query_retry for the full reasoning.
     row = query_one_retry(
         f"SELECT count(*)::bigint, max(text) FROM {SOURCE_UPSERT_TEXT} WHERE key = %s",
         (key,),
+        real_time_recency=True,
     )
     if row is None:
         return False, None

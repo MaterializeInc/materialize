@@ -130,9 +130,14 @@ def _wait_for_catchup(batch_id: str, expected_count: int) -> bool:
 def _check_rows(expected: dict[str, str]) -> None:
     """Assert every expected row has the correct value in the Materialize source."""
     for row_id, want in expected.items():
+        # real_time_recency: the count-based catchup above can clear at a
+        # chosen-ts that just barely satisfies the COUNT, leaving a per-row
+        # SELECT moments later to race. RTR pushes chosen-ts to the mysql
+        # upstream's real-time frontier; see helper_pg.query_retry.
         rows = query_retry(
             f"SELECT value FROM {TABLE_NAME} WHERE id = %s",
             (row_id,),
+            real_time_recency=True,
         )
         found = bool(rows)
         observed = rows[0][0] if found else None
@@ -199,6 +204,7 @@ def main() -> int:
     rows = query_retry(
         f"SELECT COUNT(*)::bigint FROM {TABLE_NAME} WHERE batch_id = %s",
         (batch_id,),
+        real_time_recency=True,
     )
     count_in_mz = int(rows[0][0]) if rows and rows[0][0] is not None else 0
     always(
