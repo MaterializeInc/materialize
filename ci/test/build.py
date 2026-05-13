@@ -63,9 +63,7 @@ def main() -> None:
                 repo.images[name] for name in antithesis_images
             )
         else:
-            deps = repo.resolve_dependencies(
-                image for image in repo if image.publish
-            )
+            deps = repo.resolve_dependencies(image for image in repo if image.publish)
         deps.ensure(pre_build=lambda images: upload_debuginfo(repo, images))
         set_build_status("success")
         annotate_buildkite_with_tags(repo.rd.arch, deps)

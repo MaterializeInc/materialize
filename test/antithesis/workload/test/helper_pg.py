@@ -142,14 +142,17 @@ def execute_internal_retry(sql: str, params: Sequence[Any] | None = None) -> Non
     backoff = _RETRY_INITIAL_S
     while True:
         try:
-            with psycopg.connect(
-                host=PGHOST,
-                port=PGPORT_INTERNAL,
-                user=PGUSER_INTERNAL,
-                dbname=PGDATABASE,
-                connect_timeout=_CONNECT_TIMEOUT_S,
-                autocommit=True,
-            ) as conn, conn.cursor() as cur:
+            with (
+                psycopg.connect(
+                    host=PGHOST,
+                    port=PGPORT_INTERNAL,
+                    user=PGUSER_INTERNAL,
+                    dbname=PGDATABASE,
+                    connect_timeout=_CONNECT_TIMEOUT_S,
+                    autocommit=True,
+                ) as conn,
+                conn.cursor() as cur,
+            ):
                 cur.execute(sql, params or ())
             return
         except Exception as exc:  # noqa: BLE001

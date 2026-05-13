@@ -29,9 +29,8 @@ import logging
 import sys
 
 import helper_random
-from helper_pg import execute_internal_retry
-
 from antithesis.assertions import sometimes
+from helper_pg import execute_internal_retry
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"

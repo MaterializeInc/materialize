@@ -36,7 +36,7 @@ _RETRY_MAX_S = 4.0
 
 
 def _retryable(exc: BaseException) -> bool:
-    return isinstance(exc, (pymysql.OperationalError, pymysql.InterfaceError))
+    return isinstance(exc, pymysql.OperationalError | pymysql.InterfaceError)
 
 
 def _open(host: str, database: str) -> pymysql.connections.Connection:
@@ -116,16 +116,12 @@ def execute_replica(sql: str, params: tuple = (), database: str = "mysql") -> No
     _execute(MYSQL_REPLICA_HOST, sql, params, database)
 
 
-def query_primary(
-    sql: str, params: tuple = (), database: str = "mysql"
-) -> list[tuple]:
+def query_primary(sql: str, params: tuple = (), database: str = "mysql") -> list[tuple]:
     """Run a query on the MySQL primary and return all rows."""
     return _query(MYSQL_HOST, sql, params, database)
 
 
-def query_replica(
-    sql: str, params: tuple = (), database: str = "mysql"
-) -> list[tuple]:
+def query_replica(sql: str, params: tuple = (), database: str = "mysql") -> list[tuple]:
     """Run a query on the MySQL replica and return all rows."""
     return _query(MYSQL_REPLICA_HOST, sql, params, database)
 

@@ -473,13 +473,21 @@ class Copy(PreImage):
 
     def run(self, prep: Any) -> None:
         super().run(prep)
+        source = Path(self.source)
         for src in self.inputs():
-            dst = self.path / self.destination / src
+            rel = Path(src).relative_to(source)
+            dst = self.path / self.destination / rel
             dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy(self.rd.root / self.source / src, dst)
+            shutil.copy(self.rd.root / src, dst)
 
     def inputs(self) -> set[str]:
-        return set(git.expand_globs(self.rd.root / self.source, self.matching))
+        # Return repo-root-relative paths so that `ResolvedImage.fingerprint`
+        # (which resolves each input as `rd.root / rel_path`) can lstat them.
+        source = Path(self.source)
+        return {
+            str(source / p)
+            for p in git.expand_globs(self.rd.root / self.source, self.matching)
+        }
 
 
 class CargoPreImage(PreImage):

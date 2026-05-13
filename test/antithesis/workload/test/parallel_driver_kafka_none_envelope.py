@@ -45,6 +45,7 @@ import logging
 import sys
 
 import helper_random
+from antithesis.assertions import always, sometimes
 from helper_kafka import make_producer
 from helper_none_source import (
     SOURCE_NONE_TEXT,
@@ -54,8 +55,6 @@ from helper_none_source import (
 from helper_pg import query_retry
 from helper_quiet import request_quiet_period
 from helper_source_stats import wait_for_catchup
-
-from antithesis.assertions import always, sometimes
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"

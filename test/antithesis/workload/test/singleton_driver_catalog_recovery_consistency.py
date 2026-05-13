@@ -53,6 +53,7 @@ import time
 
 import helper_random
 import psycopg
+from antithesis.assertions import always, sometimes
 from helper_pg import (
     PGDATABASE,
     PGHOST,
@@ -61,8 +62,6 @@ from helper_pg import (
     execute_retry,
     query_retry,
 )
-
-from antithesis.assertions import always, sometimes
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
@@ -88,14 +87,17 @@ def _fresh_observed_tables(name_prefix: str) -> set[str] | None:
     rather than blaming the property for a fault-window read.
     """
     try:
-        with psycopg.connect(
-            host=PGHOST,
-            port=PGPORT,
-            user=PGUSER,
-            dbname=PGDATABASE,
-            connect_timeout=int(PROBE_CONNECT_TIMEOUT_S),
-            autocommit=True,
-        ) as conn, conn.cursor() as cur:
+        with (
+            psycopg.connect(
+                host=PGHOST,
+                port=PGPORT,
+                user=PGUSER,
+                dbname=PGDATABASE,
+                connect_timeout=int(PROBE_CONNECT_TIMEOUT_S),
+                autocommit=True,
+            ) as conn,
+            conn.cursor() as cur,
+        ):
             cur.execute(
                 "SELECT name FROM mz_tables WHERE name LIKE %s",
                 (f"{name_prefix}%",),
@@ -155,7 +157,12 @@ def _run_cycle(
         try:
             execute_retry(f"DROP TABLE {table}")
         except Exception as exc:  # noqa: BLE001
-            LOG.info("cycle %d: DROP %s failed (%s); not updating model", cycle_idx, table, exc)
+            LOG.info(
+                "cycle %d: DROP %s failed (%s); not updating model",
+                cycle_idx,
+                table,
+                exc,
+            )
             return False, new_id
         expected.discard(table)
     else:
@@ -163,7 +170,12 @@ def _run_cycle(
         try:
             execute_retry(f"CREATE TABLE {table} (id BIGINT NOT NULL)")
         except Exception as exc:  # noqa: BLE001
-            LOG.info("cycle %d: CREATE %s failed (%s); not updating model", cycle_idx, table, exc)
+            LOG.info(
+                "cycle %d: CREATE %s failed (%s); not updating model",
+                cycle_idx,
+                table,
+                exc,
+            )
             return False, new_id
         expected.add(table)
         new_id += 1
@@ -172,7 +184,9 @@ def _run_cycle(
     # assertion — a fault-window read is not regression evidence.
     observed = _fresh_observed_tables(name_prefix)
     if observed is None:
-        LOG.info("cycle %d: fresh-connection read failed; skipping assertion", cycle_idx)
+        LOG.info(
+            "cycle %d: fresh-connection read failed; skipping assertion", cycle_idx
+        )
         return False, new_id
 
     always(

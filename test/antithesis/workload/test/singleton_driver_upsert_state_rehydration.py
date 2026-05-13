@@ -58,6 +58,7 @@ import sys
 import time
 
 import helper_random
+from antithesis.assertions import always, sometimes
 from helper_kafka import make_producer
 from helper_pg import query_one_retry
 from helper_quiet import request_quiet_period
@@ -67,8 +68,6 @@ from helper_upsert_source import (
     TOPIC_UPSERT_TEXT,
     ensure_upsert_text_source,
 )
-
-from antithesis.assertions import always, sometimes
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"

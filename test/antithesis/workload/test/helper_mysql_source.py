@@ -28,7 +28,6 @@ import logging
 import os
 
 import psycopg
-
 from helper_pg import create_source_idempotent, execute_retry, query_retry
 
 LOG = logging.getLogger("antithesis.helper_mysql_source")
@@ -48,9 +47,7 @@ TABLE_NAME = "antithesis_cdc"
 
 def ensure_mysql_connection() -> None:
     """Create the MySQL secret and connection in Materialize (idempotent)."""
-    execute_retry(
-        f"CREATE SECRET IF NOT EXISTS {SECRET_NAME} AS '{MYSQL_PASSWORD}'"
-    )
+    execute_retry(f"CREATE SECRET IF NOT EXISTS {SECRET_NAME} AS '{MYSQL_PASSWORD}'")
     execute_retry(
         f"CREATE CONNECTION IF NOT EXISTS {CONNECTION_NAME} TO MYSQL ("
         f"HOST '{MYSQL_REPLICA_HOST}', "
@@ -58,7 +55,9 @@ def ensure_mysql_connection() -> None:
         f"PASSWORD SECRET {SECRET_NAME}"
         f")"
     )
-    LOG.info("mysql connection %s ready (replica=%s)", CONNECTION_NAME, MYSQL_REPLICA_HOST)
+    LOG.info(
+        "mysql connection %s ready (replica=%s)", CONNECTION_NAME, MYSQL_REPLICA_HOST
+    )
 
 
 def ensure_mysql_cdc_table() -> None:

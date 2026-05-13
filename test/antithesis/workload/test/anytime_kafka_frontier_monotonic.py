@@ -42,10 +42,9 @@ import logging
 import sys
 import time
 
+from antithesis.assertions import always
 from helper_pg import query_retry
 from helper_source_stats import offset_committed
-
-from antithesis.assertions import always
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"

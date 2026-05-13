@@ -30,9 +30,8 @@ import sys
 import time
 
 import helper_mysql
-from helper_mysql_source import ensure_mysql_cdc_source
-
 from antithesis.assertions import reachable, sometimes
+from helper_mysql_source import ensure_mysql_cdc_source
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"

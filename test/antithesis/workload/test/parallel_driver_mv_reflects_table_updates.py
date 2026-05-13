@@ -45,11 +45,10 @@ import sys
 import time
 
 import helper_random
+from antithesis.assertions import always, sometimes
 from helper_pg import execute_retry, query_one_retry
 from helper_quiet import request_quiet_period
 from helper_table_mv import MV_NAME, TABLE_MV_INPUT, ensure_table_and_mv
-
-from antithesis.assertions import always, sometimes
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"

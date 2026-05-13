@@ -39,11 +39,10 @@ import time
 
 import helper_mysql
 import helper_random
+from antithesis.assertions import always, sometimes
 from helper_mysql_source import SOURCE_NAME, TABLE_NAME
 from helper_pg import query_retry
 from helper_quiet import request_quiet_period
-
-from antithesis.assertions import always, sometimes
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"

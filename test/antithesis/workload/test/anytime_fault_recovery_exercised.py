@@ -45,6 +45,7 @@ import sys
 import time
 
 import psycopg
+from antithesis.assertions import sometimes
 from helper_pg import (
     PGDATABASE,
     PGHOST,
@@ -52,8 +53,6 @@ from helper_pg import (
     PGUSER,
     query_one_retry,
 )
-
-from antithesis.assertions import sometimes
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
@@ -75,14 +74,17 @@ def _probe_select_one() -> bool:
     the recovery transition we are looking for.
     """
     try:
-        with psycopg.connect(
-            host=PGHOST,
-            port=PGPORT,
-            user=PGUSER,
-            dbname=PGDATABASE,
-            connect_timeout=int(PROBE_CONNECT_TIMEOUT_S),
-            autocommit=True,
-        ) as conn, conn.cursor() as cur:
+        with (
+            psycopg.connect(
+                host=PGHOST,
+                port=PGPORT,
+                user=PGUSER,
+                dbname=PGDATABASE,
+                connect_timeout=int(PROBE_CONNECT_TIMEOUT_S),
+                autocommit=True,
+            ) as conn,
+            conn.cursor() as cur,
+        ):
             cur.execute("SELECT 1")
             row = cur.fetchone()
             return row is not None and row[0] == 1

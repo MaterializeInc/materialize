@@ -40,9 +40,8 @@ import logging
 import sys
 import time
 
-from helper_pg import query_retry
-
 from antithesis.assertions import always
+from helper_pg import query_retry
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"

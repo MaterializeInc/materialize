@@ -8,23 +8,32 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-"""Antithesis-native randomized parallel SQL workload.
+"""Antithesis driver wrapping the real `materialize.parallel_workload`.
 
-This ports the *intent* of `test/parallel-workload/mzcompose.py` into the
-existing Antithesis workload model without trying to ship the whole
-`materialize.parallel_workload` Python stack inside the workload image.
+Earlier versions of this file reimplemented the *idea* of parallel-workload
+(a fixed pool of objects, worker threads racing CREATE/DROP/INSERT/etc.).
+That diverged from the canonical stress driver and forced us to rederive the
+catalog-race error catalog by hand. This module instead bundles the real
+`materialize.parallel_workload` package into the workload image (see
+`mzbuild.yml` + `Dockerfile`) and invokes its `Worker`, `Action`,
+`ActionList`, and `Database` classes directly.
 
-The driver deliberately shares a small fixed pool of objects across all
-invocations and worker threads:
-  - one schema
-  - four tables
-  - four materialized views over those tables
+A few pieces of upstream's `parallel_workload.run()` orchestration don't
+translate to the Antithesis topology:
 
-Workers race CREATE/DROP/INSERT/UPDATE/DELETE/SELECT against that pool. The
-property is not result correctness; it is that concurrent randomized SQL under
-fault injection should not surface *unexpected* query errors. Expected catalog
-race/drop errors are counted and ignored, mirroring the philosophy of the
-original parallel workload.
+  * Faults are injected at the container layer by Antithesis itself, so we
+    don't spawn `KillAction`/`BackupRestoreAction`/`ZeroDowntimeDeployAction`
+    worker threads. We still tag the database with `Scenario.Kill` so each
+    `Action.errors_to_ignore` includes connection-shaped errors — those are
+    expected here.
+  * `Database.create` unconditionally calls `setup_polaris_for_iceberg(...)`
+    and creates `postgres_conn` / `sql_server_conn` against services that
+    aren't in the Antithesis compose. We override `create` to skip that
+    setup and only wire up the kafka + minio connections the topology
+    actually has.
+  * `parallel_workload.run()` tunes a long list of `ALTER SYSTEM SET` knobs
+    and recreates the `quickstart` cluster. We skip the recreate (would
+    fight with `antithesis_cluster`) and apply only the size-limit knobs.
 """
 
 from __future__ import annotations
@@ -35,332 +44,350 @@ import random
 import sys
 import threading
 import time
-from collections import Counter
-from dataclasses import dataclass, field
 from typing import Any
 
 import helper_random
 import psycopg
-from helper_pg import PGDATABASE, PGHOST, PGPORT, PGUSER, execute_retry
-
 from antithesis.assertions import always, sometimes
+from helper_pg import (
+    PGDATABASE,
+    PGHOST,
+    PGPORT,
+    PGPORT_INTERNAL,
+    PGUSER,
+    PGUSER_INTERNAL,
+)
+
+from materialize.parallel_workload.action import (
+    ddl_action_list,
+    dml_nontrans_action_list,
+    fetch_action_list,
+    read_action_list,
+    write_action_list,
+)
+from materialize.parallel_workload.database import (
+    MAX_CLUSTER_REPLICAS,
+    MAX_CLUSTERS,
+    MAX_KAFKA_SINKS,
+    MAX_KAFKA_SOURCES,
+    MAX_POSTGRES_SOURCES,
+    MAX_ROLES,
+    MAX_SCHEMAS,
+    MAX_TABLES,
+    MAX_VIEWS,
+    MAX_WEBHOOK_SOURCES,
+    Database,
+)
+from materialize.parallel_workload.executor import Executor
+from materialize.parallel_workload.settings import Complexity, Scenario
+from materialize.parallel_workload.worker import Worker
+from materialize.parallel_workload.worker_exception import WorkerFailedException
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
 )
 LOG = logging.getLogger("driver.parallel_workload")
 
-CLUSTER = os.environ.get("MZ_ANTITHESIS_CLUSTER", "antithesis_cluster")
-SCHEMA = "antithesis_parallel_workload"
-
-TABLE_COUNT = 4
-WORKER_THREADS = 4
-RUNTIME_S = 25.0
-CONNECT_TIMEOUT_S = 5
-MAX_KEY = 31
-MAX_VALUE = 1000
-
-EXPECTED_ERROR_SUBSTRINGS = [
-    "already exists",
-    "does not exist",
-    "unknown catalog item",
-    "unknown schema",
-    "was dropped while executing a statement",
-    "another session modified the catalog while this DDL transaction was open",
-    "object state changed while transaction was in progress",
-    "query could not complete",
-    "cached plan must not change result type",
-    "the transaction's active cluster has been dropped",
-    "concurrent transaction",
-]
+# Antithesis Test Composer invokes drivers in tight loops, so this script is
+# intentionally short. The cap exists so a single iteration can't monopolise
+# the fault-injection budget; the goal is repeated short bursts.
+RUNTIME_S = float(os.environ.get("PW_RUNTIME_S", "20"))
+NUM_THREADS = int(os.environ.get("PW_THREADS", "4"))
 
 
-@dataclass
-class WorkerStats:
-    successes: int = 0
-    reconnects: int = 0
-    ignored_errors: int = 0
-    actions: Counter[str] = field(default_factory=Counter)
-    ignored_by_reason: Counter[str] = field(default_factory=Counter)
-    unexpected: dict[str, Any] | None = None
+def _alter_system(cur: psycopg.Cursor[Any], stmt: str) -> None:
+    try:
+        cur.execute(stmt.encode())
+    except Exception as exc:  # noqa: BLE001
+        LOG.warning("ALTER SYSTEM tolerated: %s (%s)", stmt, exc)
 
 
-def table_name(idx: int) -> str:
-    return f"{SCHEMA}.t{idx}"
-
-
-def mv_name(idx: int) -> str:
-    return f"{SCHEMA}.mv{idx}"
-
-
-def ensure_shared_objects() -> None:
-    execute_retry(f"CREATE SCHEMA IF NOT EXISTS {SCHEMA}")
-    for idx in range(2):
-        execute_retry(
-            f"CREATE TABLE IF NOT EXISTS {table_name(idx)} ("
-            "worker TEXT NOT NULL, "
-            "k BIGINT NOT NULL, "
-            "v BIGINT NOT NULL"
-            ")"
+def _prepare_system(num_threads: int) -> None:
+    """Apply the catalog-size knobs from `parallel_workload.run()` so the
+    workload doesn't trip default limits. The privilege grants mirror upstream
+    so most queries don't fail on permissions. Idempotent across drivers."""
+    with (
+        psycopg.connect(
+            host=PGHOST,
+            port=PGPORT_INTERNAL,
+            user=PGUSER_INTERNAL,
+            dbname=PGDATABASE,
+            autocommit=True,
+            connect_timeout=15,
+        ) as conn,
+        conn.cursor() as cur,
+    ):
+        _alter_system(
+            cur,
+            f"ALTER SYSTEM SET max_schemas_per_database = {MAX_SCHEMAS * 40 + num_threads}",
         )
+        _alter_system(
+            cur, f"ALTER SYSTEM SET max_tables = {MAX_TABLES * 40 + num_threads}"
+        )
+        _alter_system(
+            cur,
+            f"ALTER SYSTEM SET max_materialized_views = {MAX_VIEWS * 40 + num_threads}",
+        )
+        _alter_system(
+            cur,
+            f"ALTER SYSTEM SET max_sources = "
+            f"{(MAX_WEBHOOK_SOURCES + MAX_KAFKA_SOURCES + MAX_POSTGRES_SOURCES) * 40 + num_threads}",
+        )
+        _alter_system(
+            cur, f"ALTER SYSTEM SET max_sinks = {MAX_KAFKA_SINKS * 40 + num_threads}"
+        )
+        _alter_system(
+            cur, f"ALTER SYSTEM SET max_roles = {MAX_ROLES * 1000 + num_threads}"
+        )
+        _alter_system(
+            cur, f"ALTER SYSTEM SET max_clusters = {MAX_CLUSTERS * 40 + num_threads}"
+        )
+        _alter_system(
+            cur,
+            f"ALTER SYSTEM SET max_replicas_per_cluster = "
+            f"{MAX_CLUSTER_REPLICAS * 40 + num_threads}",
+        )
+        _alter_system(cur, "ALTER SYSTEM SET max_secrets = 1000000")
+        _alter_system(cur, "ALTER SYSTEM SET idle_in_transaction_session_timeout = 0")
+        for object_type in (
+            "TABLES",
+            "TYPES",
+            "SECRETS",
+            "CONNECTIONS",
+            "DATABASES",
+            "SCHEMAS",
+            "CLUSTERS",
+        ):
+            _alter_system(
+                cur,
+                f"ALTER DEFAULT PRIVILEGES FOR ALL ROLES "
+                f"GRANT ALL PRIVILEGES ON {object_type} TO PUBLIC",
+            )
 
 
-def connect() -> psycopg.Connection[Any]:
-    return psycopg.connect(
-        host=PGHOST,
-        port=PGPORT,
-        user=PGUSER,
-        dbname=PGDATABASE,
-        connect_timeout=CONNECT_TIMEOUT_S,
-        autocommit=True,
+def _create_database_for_antithesis(database: Database, exe: Executor) -> None:
+    """Stand-in for `Database.create` that only sets up connections matching
+    the Antithesis topology. Upstream's `create()` also wires polaris,
+    sql-server, and an external postgres source — none of those are running
+    in this compose."""
+    from pg8000.native import identifier
+
+    for db in database.dbs:
+        db.drop(exe)
+        db.create(exe)
+
+    exe.execute("SELECT name FROM mz_clusters WHERE name LIKE 'c%'")
+    for row in exe.cur.fetchall():
+        exe.execute(f"DROP CLUSTER {identifier(row[0])} CASCADE")
+
+    exe.execute("DROP SECRET IF EXISTS minio CASCADE")
+    exe.execute("DROP CONNECTION IF EXISTS aws_conn CASCADE")
+    exe.execute("DROP CONNECTION IF EXISTS kafka_conn CASCADE")
+    exe.execute("DROP CONNECTION IF EXISTS csr_conn CASCADE")
+
+    exe.execute("SELECT name FROM mz_roles WHERE name LIKE 'r%'")
+    for row in exe.cur.fetchall():
+        exe.execute(f"DROP ROLE {identifier(row[0])}")
+
+    exe.execute(
+        "CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA "
+        "BROKER 'kafka:9092', SECURITY PROTOCOL PLAINTEXT"
+    )
+    exe.execute(
+        "CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA "
+        "REGISTRY URL 'http://schema-registry:8081'"
+    )
+    exe.execute("CREATE SECRET IF NOT EXISTS minio AS 'minioadmin'")
+    exe.execute(
+        "CREATE CONNECTION IF NOT EXISTS aws_conn TO AWS ("
+        "ENDPOINT 'http://minio:9000/', REGION 'minio', "
+        "ACCESS KEY ID 'minioadmin', SECRET ACCESS KEY SECRET minio)"
     )
 
-
-def choose_action(rng: random.Random) -> str:
-    return rng.choices(
-        [
-            "create_table",
-            "drop_table",
-            "insert",
-            "update",
-            "delete",
-            "select_table",
-            "create_mv",
-            "drop_mv",
-            "select_mv",
-        ],
-        weights=[6, 2, 25, 12, 10, 20, 6, 2, 17],
-        k=1,
-    )[0]
+    for relation in database:
+        relation.create(exe)
 
 
-def execute_action(
-    conn: psycopg.Connection[Any], rng: random.Random, worker_name: str, action: str
-) -> None:
-    idx = rng.randrange(TABLE_COUNT)
-    table = table_name(idx)
-    mv = mv_name(idx)
-
-    with conn.cursor() as cur:
-        if action == "create_table":
-            cur.execute(
-                f"CREATE TABLE IF NOT EXISTS {table} ("
-                "worker TEXT NOT NULL, "
-                "k BIGINT NOT NULL, "
-                "v BIGINT NOT NULL"
-                ")"
-            )
-        elif action == "drop_table":
-            cur.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
-        elif action == "insert":
-            cur.execute(
-                f"INSERT INTO {table} (worker, k, v) VALUES (%s, %s, %s)",
-                (
-                    worker_name,
-                    rng.randint(0, MAX_KEY),
-                    rng.randint(0, MAX_VALUE),
-                ),
-            )
-        elif action == "update":
-            cur.execute(
-                f"UPDATE {table} SET v = v + 1 WHERE k = %s",
-                (rng.randint(0, MAX_KEY),),
-            )
-        elif action == "delete":
-            cur.execute(
-                f"DELETE FROM {table} WHERE k = %s",
-                (rng.randint(0, MAX_KEY),),
-            )
-        elif action == "select_table":
-            cur.execute(
-                f"SELECT count(*)::bigint, min(v)::bigint, max(v)::bigint FROM {table}"
-            )
-            cur.fetchall()
-        elif action == "create_mv":
-            cur.execute(
-                f"CREATE MATERIALIZED VIEW IF NOT EXISTS {mv} "
-                f"IN CLUSTER {CLUSTER} AS "
-                f"SELECT worker, count(*)::bigint AS c, sum(v)::bigint AS s "
-                f"FROM {table} GROUP BY worker"
-            )
-        elif action == "drop_mv":
-            cur.execute(f"DROP MATERIALIZED VIEW IF EXISTS {mv}")
-        elif action == "select_mv":
-            cur.execute(
-                f"SELECT count(*)::bigint, sum(c)::bigint, sum(s)::bigint FROM {mv}"
-            )
-            cur.fetchall()
-        else:
-            raise ValueError(f"unknown action {action}")
-
-
-def expected_error_reason(exc: BaseException) -> str | None:
-    msg = str(exc)
-    for candidate in EXPECTED_ERROR_SUBSTRINGS:
-        if candidate in msg:
-            return candidate
-    return None
-
-
-def is_connection_error(exc: BaseException) -> bool:
-    return isinstance(exc, (psycopg.OperationalError, psycopg.InterfaceError))
-
-
-def run_worker(
-    worker_id: int,
-    seed: int,
-    deadline: float,
-    stop: threading.Event,
-    stats: WorkerStats,
-) -> None:
-    rng = random.Random(seed)
-    worker_name = f"pw{worker_id}"
-    conn: psycopg.Connection[Any] | None = None
-
-    try:
-        while time.monotonic() < deadline and not stop.is_set():
-            if conn is None or conn.closed:
-                try:
-                    conn = connect()
-                except Exception as exc:  # noqa: BLE001
-                    if not is_connection_error(exc):
-                        stats.unexpected = {
-                            "worker": worker_name,
-                            "action": "connect",
-                            "error": str(exc),
-                        }
-                        stop.set()
-                        return
-                    stats.reconnects += 1
-                    time.sleep(rng.uniform(0.05, 0.2))
-                    continue
-
-            action = choose_action(rng)
-            try:
-                execute_action(conn, rng, worker_name, action)
-                stats.successes += 1
-                stats.actions[action] += 1
-            except Exception as exc:  # noqa: BLE001
-                if is_connection_error(exc):
-                    stats.reconnects += 1
-                    try:
-                        conn.close()
-                    except Exception:  # noqa: BLE001
-                        pass
-                    conn = None
-                    continue
-
-                reason = expected_error_reason(exc)
-                if reason is not None:
-                    stats.ignored_errors += 1
-                    stats.ignored_by_reason[reason] += 1
-                    stats.actions[action] += 1
-                    continue
-
-                stats.unexpected = {
-                    "worker": worker_name,
-                    "action": action,
-                    "error": str(exc),
-                }
-                LOG.exception("unexpected parallel workload error")
-                stop.set()
-                return
-
-            time.sleep(rng.uniform(0.005, 0.05))
-    finally:
-        if conn is not None:
-            try:
-                conn.close()
-            except Exception:  # noqa: BLE001
-                pass
+def _spawn_workers(
+    rng: random.Random,
+    database: Database,
+    end_time: float,
+    num_threads: int,
+) -> tuple[list[Worker], list[threading.Thread]]:
+    """Build the same thread pool `parallel_workload.run()` does for
+    `Complexity.DDL`, minus the per-scenario kill/cancel/backup helper."""
+    weights = [60, 30, 30, 30, 100]
+    workers: list[Worker] = []
+    threads: list[threading.Thread] = []
+    for i in range(num_threads):
+        worker_rng = random.Random(rng.randrange(1_000_000))
+        action_list = worker_rng.choices(
+            [
+                read_action_list,
+                fetch_action_list,
+                write_action_list,
+                dml_nontrans_action_list,
+                ddl_action_list,
+            ],
+            weights,
+        )[0]
+        actions = [
+            action_class(worker_rng, None)
+            for action_class in action_list.action_classes
+        ]
+        worker = Worker(
+            worker_rng,
+            actions,
+            action_list.weights,
+            end_time,
+            action_list.autocommit,
+            system=False,
+            composition=None,
+            action_list=action_list,
+        )
+        workers.append(worker)
+        thread = threading.Thread(
+            name=f"pw-worker-{i}",
+            target=worker.run,
+            args=(PGHOST, PGPORT, 6876, PGUSER, database),
+        )
+        thread.start()
+        threads.append(thread)
+    return workers, threads
 
 
 def main() -> int:
-    ensure_shared_objects()
+    seed = str(helper_random.random_u64())
+    rng = random.Random(seed)
 
-    stop = threading.Event()
-    deadline = time.monotonic() + RUNTIME_S
-    seeds = [helper_random.random_u64() for _ in range(WORKER_THREADS)]
-    stats = [WorkerStats() for _ in range(WORKER_THREADS)]
-    threads = [
-        threading.Thread(
-            name=f"parallel-workload-{idx}",
-            target=run_worker,
-            args=(idx, seeds[idx], deadline, stop, stats[idx]),
-        )
-        for idx in range(WORKER_THREADS)
-    ]
+    LOG.info(
+        "parallel-workload starting: seed=%s threads=%d runtime=%ss",
+        seed,
+        NUM_THREADS,
+        RUNTIME_S,
+    )
 
-    LOG.info("parallel workload starting; schema=%s threads=%d", SCHEMA, WORKER_THREADS)
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
+    _prepare_system(NUM_THREADS)
 
-    total_successes = sum(worker.successes for worker in stats)
-    total_reconnects = sum(worker.reconnects for worker in stats)
-    total_ignored = sum(worker.ignored_errors for worker in stats)
-    action_counts = Counter[str]()
-    ignored_by_reason = Counter[str]()
-    unexpected = next((worker.unexpected for worker in stats if worker.unexpected), None)
-    for worker in stats:
-        action_counts.update(worker.actions)
-        ignored_by_reason.update(worker.ignored_by_reason)
+    # `Scenario.Kill` widens `Action.errors_to_ignore` to absorb connection
+    # drops, which mirrors what Antithesis container-pauses look like at the
+    # client. We never instantiate `KillAction` itself.
+    database = Database(
+        rng=rng,
+        seed=seed,
+        host=PGHOST,
+        ports={
+            "materialized": PGPORT,
+            "mz_system": PGPORT_INTERNAL,
+            "http": 6876,
+            "kafka": 9092,
+            "schema-registry": 8081,
+        },
+        complexity=Complexity.DDL,
+        scenario=Scenario.Kill,
+        naughty_identifiers=False,
+    )
+
+    end_time = time.time() + RUNTIME_S
+
+    setup_failure: Exception | None = None
+    try:
+        with (
+            psycopg.connect(
+                host=PGHOST,
+                port=PGPORT,
+                user=PGUSER,
+                dbname=PGDATABASE,
+                autocommit=True,
+                connect_timeout=15,
+            ) as setup_conn,
+            setup_conn.cursor() as setup_cur,
+        ):
+            setup_exe = Executor(rng, setup_cur, None, database)
+            _create_database_for_antithesis(database, setup_exe)
+    except Exception as exc:  # noqa: BLE001
+        setup_failure = exc
+        LOG.exception("parallel-workload setup failed")
+
+    workers: list[Worker] = []
+    threads: list[threading.Thread] = []
+    worker_failed: WorkerFailedException | None = None
+    if setup_failure is None:
+        workers, threads = _spawn_workers(rng, database, end_time, NUM_THREADS)
+        try:
+            while time.time() < end_time:
+                dead = [t for t in threads if not t.is_alive()]
+                if dead:
+                    occurred = next(
+                        (w.occurred_exception for w in workers if w.occurred_exception),
+                        None,
+                    )
+                    worker_failed = WorkerFailedException(
+                        f"thread {dead[0].name} exited early", occurred
+                    )
+                    for worker in workers:
+                        worker.end_time = time.time()
+                    break
+                time.sleep(0.5)
+        finally:
+            for worker in workers:
+                worker.end_time = time.time()
+            for thread in threads:
+                thread.join(timeout=30)
+
+    total_queries = sum(w.num_queries.total() for w in workers)
+    total_ignored = sum(
+        count
+        for w in workers
+        for counter in w.ignored_errors.values()
+        for count in counter.values()
+    )
 
     sometimes(
-        total_successes >= WORKER_THREADS * 5,
+        total_queries >= NUM_THREADS,
         "parallel workload: randomized concurrent SQL executed successfully",
         {
-            "successes": total_successes,
-            "threads": WORKER_THREADS,
-            "actions": dict(action_counts),
-            "reconnects": total_reconnects,
-        },
-    )
-    sometimes(
-        action_counts["create_table"]
-        + action_counts["drop_table"]
-        + action_counts["create_mv"]
-        + action_counts["drop_mv"]
-        > 0,
-        "parallel workload: DDL actions were exercised",
-        {
-            "create_table": action_counts["create_table"],
-            "drop_table": action_counts["drop_table"],
-            "create_mv": action_counts["create_mv"],
-            "drop_mv": action_counts["drop_mv"],
+            "queries": total_queries,
+            "threads": NUM_THREADS,
+            "ignored_errors": total_ignored,
         },
     )
     sometimes(
         total_ignored > 0,
         "parallel workload: expected concurrent-catalog races were observed",
-        {
-            "ignored_errors": total_ignored,
-            "ignored_by_reason": dict(ignored_by_reason),
-        },
+        {"ignored_errors": total_ignored},
     )
+
+    unexpected = None
+    if setup_failure is not None:
+        unexpected = {"phase": "setup", "error": str(setup_failure)}
+    elif worker_failed is not None:
+        unexpected = {
+            "phase": "worker",
+            "error": (
+                str(worker_failed.cause) if worker_failed.cause else str(worker_failed)
+            ),
+        }
+
     always(
         unexpected is None,
         "parallel workload: no unexpected SQL errors escaped the randomized stress driver",
         {
             "unexpected": unexpected,
-            "successes": total_successes,
+            "queries": total_queries,
             "ignored_errors": total_ignored,
-            "reconnects": total_reconnects,
-            "actions": dict(action_counts),
+            "threads": NUM_THREADS,
         },
     )
 
     LOG.info(
-        "parallel workload done; successes=%d ignored=%d reconnects=%d unexpected=%s",
-        total_successes,
+        "parallel-workload done: queries=%d ignored=%d unexpected=%s",
+        total_queries,
         total_ignored,
-        total_reconnects,
         unexpected,
     )
     return 1 if unexpected is not None else 0
 
 
 if __name__ == "__main__":
-    _ = (PGHOST, PGPORT, PGUSER, PGDATABASE, os)
     sys.exit(main())

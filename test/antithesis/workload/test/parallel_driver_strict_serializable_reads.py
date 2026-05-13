@@ -57,6 +57,7 @@ import time
 
 import helper_random
 import psycopg
+from antithesis.assertions import always, sometimes
 from helper_pg import (
     PGDATABASE,
     PGHOST,
@@ -66,8 +67,6 @@ from helper_pg import (
 )
 from helper_quiet import request_quiet_period
 from helper_table_mv import MV_NAME, TABLE_MV_INPUT, ensure_table_and_mv
-
-from antithesis.assertions import always, sometimes
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
@@ -91,14 +90,17 @@ def _fresh_select_count(prefix: str) -> int | None:
     but defends against future changes to the system default.
     """
     try:
-        with psycopg.connect(
-            host=PGHOST,
-            port=PGPORT,
-            user=PGUSER,
-            dbname=PGDATABASE,
-            connect_timeout=PROBE_CONNECT_TIMEOUT_S,
-            autocommit=True,
-        ) as conn, conn.cursor() as cur:
+        with (
+            psycopg.connect(
+                host=PGHOST,
+                port=PGPORT,
+                user=PGUSER,
+                dbname=PGDATABASE,
+                connect_timeout=PROBE_CONNECT_TIMEOUT_S,
+                autocommit=True,
+            ) as conn,
+            conn.cursor() as cur,
+        ):
             cur.execute("SET transaction_isolation TO 'strict serializable'")
             cur.execute(
                 f"SELECT row_count::bigint FROM {MV_NAME} WHERE prefix = %s",

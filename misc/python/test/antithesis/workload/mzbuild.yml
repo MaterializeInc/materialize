@@ -10,10 +10,12 @@
 name: antithesis-workload
 
 # The parallel-workload driver reuses the real `materialize.parallel_workload`
-# Python package rather than reimplementing it. Copy the needed slice of
-# `misc/python/materialize/` into the build context so the Dockerfile can
-# bundle it into the image. The list is intentionally narrow — everything
-# else is mocked out by the stubs in `stubs/materialize/mzcompose/...`.
+# Python package rather than reimplementing it. Copy the slice of
+# `misc/python/materialize/` it needs into the build context so the Dockerfile
+# can bundle it into the image. Everything in `materialize.mzcompose.*` is
+# replaced by tiny stubs (see `stubs/materialize/mzcompose/`) — Antithesis
+# injects faults at the container layer, so the workload container has no
+# docker-compose orchestration to call into.
 pre-image:
   - type: copy
     source: misc/python
@@ -30,8 +32,8 @@ pre-image:
   - type: copy
     source: misc/python
     destination: .
-    matching: materialize/parallel_workload/**
+    matching: materialize/parallel_workload
   - type: copy
     source: misc/python
     destination: .
-    matching: materialize/data_ingest/**
+    matching: materialize/data_ingest
