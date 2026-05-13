@@ -1361,7 +1361,7 @@ impl JoinClosure {
         ctx: &mut PlanRenderingContext<'_, Plan>,
     ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
-        if !self.before.expressions.is_empty() || !self.before.predicates.is_empty() {
+        if !self.before.is_identity() {
             mode.expr(self.before.deref(), None).fmt_text(f, ctx)?;
         }
         if !self.ready_equivalences.is_empty() {
