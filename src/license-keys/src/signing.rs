@@ -30,6 +30,7 @@ pub async fn get_pubkey_pem(client: &aws_sdk_kms::Client, key_id: &str) -> anyho
     Ok(pem.to_string())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn make_license_key(
     client: &aws_sdk_kms::Client,
     key_id: &str,
@@ -39,6 +40,7 @@ pub async fn make_license_key(
     max_credit_consumption_rate: f64,
     allow_credit_consumption_override: bool,
     expiration_behavior: ExpirationBehavior,
+    entitlements: Vec<String>,
 ) -> anyhow::Result<String> {
     let mut headers = Header::new(Algorithm::PS256);
     headers.typ = Some("JWT".to_string());
@@ -58,6 +60,7 @@ pub async fn make_license_key(
         max_credit_consumption_rate,
         allow_credit_consumption_override,
         expiration_behavior,
+        entitlements,
     };
     let payload = URL_SAFE_NO_PAD.encode(serde_json::to_string(&payload).unwrap().as_bytes());
 

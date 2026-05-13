@@ -641,6 +641,35 @@ mod write {
             ),
         );
 
+        // Read `MV_SINK_ADVANCE_PERSIST_FRONTIERS` exactly once and reuse the captured value for
+        // both the Tokio-side `corrections.since` initialization below and the Timely-side
+        // `persist_frontiers` initialization in `State::new`. Re-reading the dyncfg per init site
+        // would let the value flip between reads and produce the very inconsistency this fix
+        // addresses: `persist_frontiers = as_of` (gate open) with `corrections.since = MIN`
+        // (snapshot updates not advanced) reproduces the original `UpdateNotBeyondLower` panic.
+        let advance_persist_frontiers_at_startup =
+            MV_SINK_ADVANCE_PERSIST_FRONTIERS.get(&worker_config);
+
+        // Mirror the persist-frontier initialization performed by `State::new` below. With the
+        // flag enabled, `State` advances its Timely-side `persist_frontiers` to `as_of`, opening
+        // the `maybe_start_batch` write gate (`desc.lower <= persist_frontiers.frontier()`)
+        // immediately for the first description minted with `lower = as_of`. The corrections
+        // buffer lives on the Tokio task and only learns of frontier advancements through
+        // `WriteCommand::Batch { persist_frontier, .. }`, which the Timely closure populates only
+        // when an input frontier actually moves. On startup, the input frontiers begin at
+        // `Timestamp::MIN`, so no `Batch` carries `persist_frontier` until the persist input
+        // catches up — yet a `WriteBatch(desc)` with `desc.lower = as_of` can already be sent.
+        // Snapshot-replay updates inserted in the meantime stay at their original timestamps
+        // (`Correction::insert` rounds to `max(t, since)` and `since == MIN`), and slip into the
+        // batch, tripping persist's `UpdateNotBeyondLower` invariant. Advancing
+        // `corrections.since` here keeps the Tokio side in lockstep with the Timely side, the
+        // same invariant `materialized_view::write::State::new` upholds via
+        // `apply_persist_frontier_advancement`.
+        if advance_persist_frontiers_at_startup {
+            corrections.ok.advance_since(as_of.clone());
+            corrections.err.advance_since(as_of.clone());
+        }
+
         // Channels for commands and responses.
         let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<WriteCommand>();
         let (resp_tx, mut resp_rx) = mpsc::unbounded_channel::<WriteResponse>();
@@ -669,7 +698,12 @@ mod write {
             // need to hold onto the initial capabilities.
             drop(capabilities);
 
-            let mut state = State::new(sink_id, worker_id, as_of, &worker_config);
+            let mut state = State::new(
+                sink_id,
+                worker_id,
+                as_of,
+                advance_persist_frontiers_at_startup,
+            );
 
             // Whether a batch write is currently in flight in the Tokio task.
             let mut batch_in_flight: Option<(BatchDescription, Capability<Timestamp>)> = None;
@@ -873,7 +907,7 @@ mod write {
             sink_id: GlobalId,
             worker_id: usize,
             as_of: Antichain<Timestamp>,
-            worker_config: &ConfigSet,
+            advance_persist_frontiers_at_startup: bool,
         ) -> Self {
             // Force a consolidation of corrections after the snapshot updates have been fully
             // processed, to ensure we get rid of those as quickly as possible.
@@ -895,9 +929,15 @@ mod write {
             // its observed persist frontier is >= the batch description's `lower`, which (assuming
             // no other writers) would be never if we didn't advance the observed persist frontier
             // to the `as_of`.
-            if MV_SINK_ADVANCE_PERSIST_FRONTIERS.get(worker_config) {
-                state.advance_persist_ok_frontier(as_of.borrow());
-                state.advance_persist_err_frontier(as_of.borrow());
+            //
+            // The `must_use` bool returned by the advance helpers signals that a corresponding
+            // `corrections.advance_since` must be queued to the Tokio task. We drop it here
+            // because the Tokio-side `corrections.since` is initialized to the same `as_of` in
+            // `write::render` before the task is spawned (using the same captured flag value),
+            // keeping both sides in lockstep without an additional channel send.
+            if advance_persist_frontiers_at_startup {
+                let _ = state.advance_persist_ok_frontier(as_of.borrow());
+                let _ = state.advance_persist_err_frontier(as_of.borrow());
             }
 
             state
@@ -928,6 +968,12 @@ mod write {
         }
 
         /// Returns true if the persist frontier advanced.
+        ///
+        /// The caller must propagate a `true` return value into the next `WriteCommand::Batch`'s
+        /// `persist_frontier` field so the Tokio task advances `corrections.since` accordingly.
+        /// Dropping the bool leaves the Tokio-side `since` lagging behind `persist_frontiers`,
+        /// which can let updates with timestamps below `desc.lower` slip into a written batch.
+        #[must_use = "advance_persist_ok_frontier's return value gates a `corrections.advance_since` send to the Tokio task"]
         fn advance_persist_ok_frontier(&mut self, frontier: AntichainRef<Timestamp>) -> bool {
             if advance(&mut self.persist_frontiers.ok, frontier) {
                 self.trace("advanced `persist` ok frontier");
@@ -938,6 +984,12 @@ mod write {
         }
 
         /// Returns true if the persist frontier advanced.
+        ///
+        /// The caller must propagate a `true` return value into the next `WriteCommand::Batch`'s
+        /// `persist_frontier` field so the Tokio task advances `corrections.since` accordingly.
+        /// Dropping the bool leaves the Tokio-side `since` lagging behind `persist_frontiers`,
+        /// which can let updates with timestamps below `desc.lower` slip into a written batch.
+        #[must_use = "advance_persist_err_frontier's return value gates a `corrections.advance_since` send to the Tokio task"]
         fn advance_persist_err_frontier(&mut self, frontier: AntichainRef<Timestamp>) -> bool {
             if advance(&mut self.persist_frontiers.err, frontier) {
                 self.trace("advanced `persist` err frontier");

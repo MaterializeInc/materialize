@@ -6745,6 +6745,7 @@ dependencies = [
  "clap",
  "jsonwebtoken",
  "mz-aws-util",
+ "mz-ore",
  "pem",
  "serde",
  "serde_json",
