@@ -44,6 +44,7 @@ use timely::progress::{Antichain, Timestamp};
 
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange, MzArrangeCore};
+use crate::render::columnar::CollectionEdge;
 use crate::render::errors::{DataflowErrorSer, ErrorLogger};
 use crate::render::{LinearJoinSpec, MaybeBucketByTime, RenderTimestamp};
 use crate::row_spine::{DatumSeq, RowRowBuilder};
@@ -363,7 +364,7 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
 #[derive(Clone)]
 pub struct CollectionBundle<'scope, T: RenderTimestamp> {
     pub collection: Option<(
-        VecCollection<'scope, T, Row, Diff>,
+        CollectionEdge<'scope, T>,
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
     )>,
     pub arranged: BTreeMap<Vec<MirScalarExpr>, ArrangementFlavor<'scope, T>>,
@@ -373,6 +374,14 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// Construct a new collection bundle from update streams.
     pub fn from_collections(
         oks: VecCollection<'scope, T, Row, Diff>,
+        errs: VecCollection<'scope, T, DataflowErrorSer, Diff>,
+    ) -> Self {
+        Self::from_edge(CollectionEdge::Vec(oks), errs)
+    }
+
+    /// Construct a new collection bundle from a [`CollectionEdge`] and an error stream.
+    pub fn from_edge(
+        oks: CollectionEdge<'scope, T>,
         errs: VecCollection<'scope, T, DataflowErrorSer, Diff>,
     ) -> Self {
         Self {
@@ -409,7 +418,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// The scope containing the collection bundle.
     pub fn scope(&self) -> Scope<'scope, T> {
         if let Some((oks, _errs)) = &self.collection {
-            oks.inner.scope()
+            oks.scope()
         } else {
             self.arranged
                 .values()
@@ -483,10 +492,13 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         //
         // If it doesn't, we panic.
         match key {
-            None => self
-                .collection
-                .clone()
-                .expect("The unarranged collection doesn't exist."),
+            None => {
+                let (oks, errs) = self
+                    .collection
+                    .clone()
+                    .expect("The unarranged collection doesn't exist.");
+                (oks.expect_vec(), errs)
+            }
             Some(key) => {
                 let arranged = self.arranged.get(key).unwrap_or_else(|| {
                     panic!("The collection arranged by {:?} doesn't exist.", key)
@@ -524,7 +536,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         &self,
         key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
         max_demand: usize,
-        mut logic: L,
+        logic: L,
     ) -> (
         StreamVec<'scope, T, I::Item>,
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
@@ -542,16 +554,11 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 .expect("Should have ensured during planning that this arrangement exists.")
                 .flat_map(val.as_ref(), max_demand, logic)
         } else {
-            use timely::dataflow::operators::vec::Map;
             let (oks, errs) = self
                 .collection
                 .clone()
                 .expect("Invariant violated: CollectionBundle contains no collection.");
-            let mut datums = DatumVec::new();
-            let oks = oks.inner.flat_map(move |(v, t, d)| {
-                logic(&mut datums.borrow_with_limit(&v, max_demand), t, d)
-            });
-            (oks, errs)
+            (oks.flat_map_datums(max_demand, logic), errs)
         }
     }
 
@@ -797,7 +804,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             } else {
                 oks
             };
-            self.collection = Some((oks, errs));
+            self.collection = Some((CollectionEdge::Vec(oks), errs));
         }
         for (key, _, thinning) in collections.arranged {
             if !self.arranged.contains_key(&key) {
@@ -808,6 +815,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                     .collection
                     .take()
                     .expect("Collection constructed above");
+                let oks = oks.expect_vec();
                 // Apply temporal bucketing if the collection already existed on
                 // the bundle (e.g., from an upstream temporal Mfp or Get) and we
                 // haven't bucketed yet. This is the common path for temporal-MFP
@@ -828,7 +836,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 let (oks, errs_keyed, passthrough) =
                     Self::arrange_collection(&name, oks, key.clone(), thinning.clone());
                 let errs_concat: KeyCollection<_, _, _> = errs.clone().concat(errs_keyed).into();
-                self.collection = Some((passthrough, errs));
+                self.collection = Some((CollectionEdge::Vec(passthrough), errs));
                 let errs =
                     errs_concat.mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, ErrSpine<_, _>>(
                         &format!("{}-errors", name),
