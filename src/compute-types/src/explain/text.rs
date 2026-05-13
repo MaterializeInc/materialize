@@ -24,8 +24,8 @@ use std::fmt;
 use std::ops::Deref;
 
 use itertools::Itertools;
+use mz_expr::Id;
 use mz_expr::explain::{HumanizedExplain, HumanizerMode, fmt_text_constant_rows};
-use mz_expr::{Id, MirScalarExpr};
 use mz_ore::soft_assert_or_log;
 use mz_ore::str::{IndentLike, StrExt, separated};
 use mz_repr::explain::text::DisplayText;
@@ -33,12 +33,15 @@ use mz_repr::explain::{
     CompactScalarSeq, CompactScalars, ExplainConfig, ExprHumanizer, Indices, PlanRenderingContext,
 };
 
+use mz_expr::MfpPlan;
+
 use crate::plan::join::delta_join::{DeltaPathPlan, DeltaStagePlan};
 use crate::plan::join::linear_join::LinearStagePlan;
 use crate::plan::join::{DeltaJoinPlan, JoinClosure, LinearJoinPlan};
 use crate::plan::reduce::{
     AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, MonotonicPlan, SingleBasicPlan,
 };
+use crate::plan::scalar::LirScalarExpr;
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::{ArrangementStrategy, AvailableCollections, LirId, Plan, PlanNode};
 
@@ -121,7 +124,7 @@ impl Plan {
                         if !mfp.is_identity() {
                             writeln!(f, "{}→Fused with Child Map/Filter/Project", ctx.indent)?;
                             ctx.indent += 1;
-                            mode.expr(mfp, None).fmt_default_text(f, ctx)?;
+                            fmt_mfp_default_text(mfp, &mode, f, ctx)?;
                             ctx.indent += 1;
                         }
 
@@ -136,7 +139,7 @@ impl Plan {
                         if !mfp.is_identity() {
                             writeln!(f, "{}→Fused with Child Map/Filter/Project", ctx.indent)?;
                             ctx.indent += 1;
-                            mode.expr(mfp, None).fmt_default_text(f, ctx)?;
+                            fmt_mfp_default_text(mfp, &mode, f, ctx)?;
                             ctx.indent += 1;
                         }
 
@@ -149,7 +152,7 @@ impl Plan {
                         if !mfp.is_identity() {
                             writeln!(f, "{}→Fused with Child Map/Filter/Project", ctx.indent)?;
                             ctx.indent += 1;
-                            mode.expr(mfp, None).fmt_default_text(f, ctx)?;
+                            fmt_mfp_default_text(mfp, &mode, f, ctx)?;
                             ctx.indent += 1;
                         }
 
@@ -213,7 +216,7 @@ impl Plan {
                 ctx.indent.set();
 
                 ctx.indent += 1;
-                mode.expr(mfp, None).fmt_default_text(f, ctx)?;
+                fmt_mfp_default_text(mfp, &mode, f, ctx)?;
 
                 // one more nesting level if we showed anything for the MFP
                 if !mfp.is_identity() {
@@ -230,10 +233,10 @@ impl Plan {
                 mfp_after,
             } => {
                 ctx.indent.set();
-                if !mfp_after.expressions.is_empty() || !mfp_after.predicates.is_empty() {
+                if !mfp_after.is_identity() {
                     writeln!(f, "{}→Fused with Child Map/Filter/Project", ctx.indent)?;
                     ctx.indent += 1;
-                    mode.expr(mfp_after, None).fmt_default_text(f, ctx)?;
+                    fmt_mfp_default_text(mfp_after, &mode, f, ctx)?;
                     ctx.indent += 1;
                 }
 
@@ -317,10 +320,10 @@ impl Plan {
                 temporal_bucketing_strategy,
             } => {
                 ctx.indent.set();
-                if !mfp_after.expressions.is_empty() || !mfp_after.predicates.is_empty() {
+                if !mfp_after.is_identity() {
                     writeln!(f, "{}→Fused with Child Map/Filter/Project", ctx.indent)?;
                     ctx.indent += 1;
-                    mode.expr(mfp_after, None).fmt_default_text(f, ctx)?;
+                    fmt_mfp_default_text(mfp_after, &mode, f, ctx)?;
                     ctx.indent += 1;
                 }
 
@@ -581,7 +584,7 @@ impl Plan {
                 if !input_mfp.is_identity() {
                     ctx.indent += 1;
                     writeln!(f, "{}→Fused with Parent Map/Filter/Project", ctx.indent)?;
-                    ctx.indented(|ctx| mode.expr(input_mfp, None).fmt_default_text(f, ctx))?;
+                    ctx.indented(|ctx| fmt_mfp_default_text(input_mfp, &mode, f, ctx))?;
                 }
 
                 ctx.indent += 1;
@@ -662,7 +665,7 @@ impl Plan {
                     GetPlan::Arrangement(key, val, mfp) => {
                         writeln!(f, "{}Get::Arrangement {}{}", ctx.indent, id, annotations)?;
                         ctx.indent += 1;
-                        mode.expr(mfp, None).fmt_text(f, ctx)?;
+                        fmt_mfp_verbose_text(mfp, &mode, f, ctx)?;
                         {
                             let key = mode.seq(key, None);
                             let key = CompactScalars(key);
@@ -676,7 +679,7 @@ impl Plan {
                     GetPlan::Collection(mfp) => {
                         writeln!(f, "{}Get::Collection {}{}", ctx.indent, id, annotations)?;
                         ctx.indent += 1;
-                        mode.expr(mfp, None).fmt_text(f, ctx)?;
+                        fmt_mfp_verbose_text(mfp, &mode, f, ctx)?;
                     }
                 }
 
@@ -738,7 +741,7 @@ impl Plan {
             } => {
                 writeln!(f, "{}Mfp{}", ctx.indent, annotations)?;
                 ctx.indented(|ctx| {
-                    mode.expr(mfp, None).fmt_text(f, ctx)?;
+                    fmt_mfp_verbose_text(mfp, &mode, f, ctx)?;
                     if let Some((key, val)) = input_key_val {
                         {
                             let key = mode.seq(key, None);
@@ -775,7 +778,7 @@ impl Plan {
                     }
                     if !mfp_after.is_identity() {
                         writeln!(f, "{}mfp_after", ctx.indent)?;
-                        ctx.indented(|ctx| mode.expr(mfp_after, None).fmt_text(f, ctx))?;
+                        ctx.indented(|ctx| fmt_mfp_verbose_text(mfp_after, &mode, f, ctx))?;
                     }
                     input.fmt_text(f, ctx)
                 })?;
@@ -858,7 +861,7 @@ impl Plan {
                     }
                     if !mfp_after.is_identity() {
                         writeln!(f, "{}mfp_after", ctx.indent)?;
-                        ctx.indented(|ctx| mode.expr(mfp_after, None).fmt_text(f, ctx))?;
+                        ctx.indented(|ctx| fmt_mfp_verbose_text(mfp_after, &mode, f, ctx))?;
                     }
 
                     input.fmt_text(f, ctx)
@@ -1013,7 +1016,7 @@ impl Plan {
                     if !matches!(strategy, ArrangementStrategy::Direct) {
                         writeln!(f, "{}strategy={:?}", ctx.indent, strategy)?;
                     }
-                    mode.expr(input_mfp, None).fmt_text(f, ctx)?;
+                    fmt_mfp_verbose_text(input_mfp, &mode, f, ctx)?;
                     forms.fmt_text(f, ctx)?;
                     // Render input
                     input.fmt_text(f, ctx)
@@ -1023,6 +1026,69 @@ impl Plan {
 
         Ok(())
     }
+}
+
+/// Format the temporal bounds of an `MfpPlan` as `mz_now()` inequalities.
+///
+/// Renders as `TemporalFilter: <lowers> <= mz_now() < <uppers>`, omitting
+/// the `<lowers> <=` or `< <uppers>` parts when the corresponding bound
+/// list is empty.
+///
+/// Format an `MfpPlan` using concise (default) syntax: project/filter/map + temporal bounds.
+fn fmt_mfp_default_text(
+    mfp_plan: &MfpPlan<LirScalarExpr>,
+    mode: &HumanizedExplain,
+    f: &mut fmt::Formatter<'_>,
+    ctx: &mut PlanRenderingContext<'_, Plan>,
+) -> fmt::Result {
+    mode.expr(mfp_plan.safe_mfp().deref(), None)
+        .fmt_default_text(f, ctx)?;
+    fmt_temporal_bounds(mfp_plan, mode, f, ctx)
+}
+
+/// Format an `MfpPlan` using verbose syntax: project/filter/map + temporal bounds.
+fn fmt_mfp_verbose_text(
+    mfp_plan: &MfpPlan<LirScalarExpr>,
+    mode: &HumanizedExplain,
+    f: &mut fmt::Formatter<'_>,
+    ctx: &mut PlanRenderingContext<'_, Plan>,
+) -> fmt::Result {
+    mode.expr(mfp_plan.safe_mfp().deref(), None)
+        .fmt_text(f, ctx)?;
+    fmt_temporal_bounds(mfp_plan, mode, f, ctx)
+}
+
+/// Render temporal bounds as `TemporalFilter: <lowers> <= mz_now() < <uppers>`.
+///
+/// TODO(mgree): It is possible to recover equalities (`mz_now() = expr`) and
+/// other, finer-grained relationships from the bound expressions, but for now
+/// we just display `<=` and `<`.
+#[allow(clippy::needless_pass_by_ref_mut)]
+fn fmt_temporal_bounds(
+    mfp_plan: &MfpPlan<LirScalarExpr>,
+    mode: &HumanizedExplain,
+    f: &mut fmt::Formatter<'_>,
+    ctx: &mut PlanRenderingContext<'_, Plan>,
+) -> fmt::Result {
+    let (_, lower_bounds, upper_bounds) = mfp_plan.as_parts();
+
+    if lower_bounds.is_empty() && upper_bounds.is_empty() {
+        return Ok(());
+    }
+
+    write!(f, "{}TemporalFilter: ", ctx.indent)?;
+    if !lower_bounds.is_empty() {
+        let lowers = lower_bounds.iter().map(|b| mode.expr(b, None));
+        write!(f, "{} <= ", separated(", ", lowers))?;
+    }
+    write!(f, "mz_now()")?;
+    if !upper_bounds.is_empty() {
+        let uppers = upper_bounds.iter().map(|b| mode.expr(b, None));
+        write!(f, " < {}", separated(", ", uppers))?;
+    }
+    writeln!(f)?;
+
+    Ok(())
 }
 
 impl DisplayText<PlanRenderingContext<'_, Plan>> for AvailableCollections {
@@ -1103,11 +1169,11 @@ fn fmt_join_chain<'a, I>(
     mode: &HumanizedExplain,
     inputs: &[Plan],
     source_relation: usize,
-    source_key: Option<&'a Vec<MirScalarExpr>>,
+    source_key: Option<&'a Vec<LirScalarExpr>>,
     stages: I,
 ) -> fmt::Result
 where
-    I: IntoIterator<Item = (usize, &'a Vec<MirScalarExpr>)>,
+    I: IntoIterator<Item = (usize, &'a Vec<LirScalarExpr>)>,
 {
     write!(
         f,
@@ -1132,7 +1198,7 @@ where
 fn fmt_join_key_brackets(
     f: &mut fmt::Formatter<'_>,
     mode: &HumanizedExplain,
-    key: &Vec<MirScalarExpr>,
+    key: &Vec<LirScalarExpr>,
 ) -> fmt::Result {
     if key.is_empty() {
         write!(f, "[×]")
@@ -1778,14 +1844,14 @@ impl BasicPlan {
 
 /// Helper struct for rendering an arrangement.
 struct Arrangement<'a> {
-    key: &'a Vec<MirScalarExpr>,
+    key: &'a Vec<LirScalarExpr>,
     permutation: Permutation<'a>,
     thinning: &'a Vec<usize>,
 }
 
-impl<'a> From<&'a (Vec<MirScalarExpr>, Vec<usize>, Vec<usize>)> for Arrangement<'a> {
+impl<'a> From<&'a (Vec<LirScalarExpr>, Vec<usize>, Vec<usize>)> for Arrangement<'a> {
     fn from(
-        (key, permutation, thinning): &'a (Vec<MirScalarExpr>, Vec<usize>, Vec<usize>),
+        (key, permutation, thinning): &'a (Vec<LirScalarExpr>, Vec<usize>, Vec<usize>),
     ) -> Self {
         Arrangement {
             key,

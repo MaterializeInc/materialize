@@ -23,10 +23,11 @@
 //!     is beneficial to use this operator if the number of retractions is expected to be small, and
 //!     if a potential downstream operator does not expect its input to be arranged.
 
-use mz_expr::{MirScalarExpr, permutation_for_arrangement};
+use mz_expr::permutation_for_arrangement;
 use serde::{Deserialize, Serialize};
 
 use crate::plan::AvailableCollections;
+use crate::plan::scalar::LirScalarExpr;
 
 /// A plan describing how to compute a threshold operation.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
@@ -56,7 +57,7 @@ impl ThresholdPlan {
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct BasicThresholdPlan {
     /// Description of how the input has been arranged, and how to arrange the output
-    pub ensure_arrangement: (Vec<MirScalarExpr>, Vec<usize>, Vec<usize>),
+    pub ensure_arrangement: (Vec<LirScalarExpr>, Vec<usize>, Vec<usize>),
 }
 
 /// A plan to maintain all inputs with negative counts, which are subtracted from the output
@@ -64,24 +65,25 @@ pub struct BasicThresholdPlan {
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct RetractionsThresholdPlan {
     /// Description of how the input has been arranged
-    pub ensure_arrangement: (Vec<MirScalarExpr>, Vec<usize>, Vec<usize>),
+    pub ensure_arrangement: (Vec<LirScalarExpr>, Vec<usize>, Vec<usize>),
 }
 
 impl ThresholdPlan {
     /// Construct the plan from the number of columns (`arity`).
     ///
     /// Also returns the arrangement and thinning required for the input.
-    pub fn create_from(arity: usize) -> (Self, (Vec<MirScalarExpr>, Vec<usize>, Vec<usize>)) {
+    pub fn create_from(arity: usize) -> (Self, (Vec<LirScalarExpr>, Vec<usize>, Vec<usize>)) {
         // Arrange the input by all columns in order.
         let mut all_columns = Vec::new();
         for column in 0..arity {
-            all_columns.push(mz_expr::MirScalarExpr::column(column));
+            all_columns.push(LirScalarExpr::column(column));
         }
         let (permutation, thinning) = permutation_for_arrangement(&all_columns, arity);
-        let ensure_arrangement = (all_columns, permutation, thinning);
+        let ensure_arrangement = (all_columns, permutation.clone(), thinning.clone());
         let plan = ThresholdPlan::Basic(BasicThresholdPlan {
             ensure_arrangement: ensure_arrangement.clone(),
         });
+
         (plan, ensure_arrangement)
     }
 }

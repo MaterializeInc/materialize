@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use columnar::Columnar;
 use mz_expr::{
-    CollectionPlan, EvalError, Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr,
+    CollectionPlan, EvalError, Id, LetRecLimit, LocalId, MapFilterProject, MfpPlan, MirScalarExpr,
     OptimizedMirRelationExpr, TableFunc,
 };
 use mz_ore::soft_assert_eq_no_log;
@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 use crate::dataflows::DataflowDescription;
 use crate::plan::join::JoinPlan;
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
+use crate::plan::scalar::LirScalarExpr;
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
 use crate::plan::transform::{Transform, TransformConfig};
@@ -39,6 +40,7 @@ pub mod interpret;
 pub mod join;
 pub mod reduce;
 pub mod render_plan;
+pub mod scalar;
 pub mod threshold;
 pub mod top_k;
 pub mod transform;
@@ -71,7 +73,7 @@ pub struct AvailableCollections {
     /// The list of available arrangements, presented as a `KeyValRowMapping`,
     /// but here represented by a triple `(to_key, to_val, to_row)` instead.
     /// The documentation for `KeyValRowMapping` explains these fields better.
-    pub arranged: Vec<(Vec<MirScalarExpr>, Vec<usize>, Vec<usize>)>,
+    pub arranged: Vec<(Vec<LirScalarExpr>, Vec<usize>, Vec<usize>)>,
 }
 
 impl AvailableCollections {
@@ -84,7 +86,7 @@ impl AvailableCollections {
     }
 
     /// Represent a collection that is arranged in the specified ways.
-    pub fn new_arranged(arranged: Vec<(Vec<MirScalarExpr>, Vec<usize>, Vec<usize>)>) -> Self {
+    pub fn new_arranged(arranged: Vec<(Vec<LirScalarExpr>, Vec<usize>, Vec<usize>)>) -> Self {
         assert!(
             !arranged.is_empty(),
             "Invariant violated: at least one collection must exist"
@@ -96,7 +98,7 @@ impl AvailableCollections {
     }
 
     /// Get some arrangement, if one exists.
-    pub fn arbitrary_arrangement(&self) -> Option<&(Vec<MirScalarExpr>, Vec<usize>, Vec<usize>)> {
+    pub fn arbitrary_arrangement(&self) -> Option<&(Vec<LirScalarExpr>, Vec<usize>, Vec<usize>)> {
         assert!(
             self.raw || !self.arranged.is_empty(),
             "Invariant violated: at least one collection must exist"
@@ -251,10 +253,10 @@ pub enum PlanNode {
         /// The input collection.
         input: Box<Plan>,
         /// Linear operator to apply to each record.
-        mfp: MapFilterProject,
+        mfp: MfpPlan<LirScalarExpr>,
         /// Whether the input is from an arrangement, and if so,
         /// whether we can seek to a specific value therein
-        input_key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
+        input_key_val: Option<(Vec<LirScalarExpr>, Option<Row>)>,
     },
     /// A variable number of output records for each input record.
     ///
@@ -271,15 +273,15 @@ pub enum PlanNode {
     FlatMap {
         /// The particular arrangement of the input we expect to use,
         /// if any
-        input_key: Option<Vec<MirScalarExpr>>,
+        input_key: Option<Vec<LirScalarExpr>>,
         /// The input collection.
         input: Box<Plan>,
         /// Expressions that for each row prepare the arguments to `func`.
-        exprs: Vec<MirScalarExpr>,
+        exprs: Vec<LirScalarExpr>,
         /// The variable-record emitting function.
         func: TableFunc,
         /// Linear operator to apply to each record produced by `func`.
-        mfp_after: MapFilterProject,
+        mfp_after: MfpPlan<LirScalarExpr>,
     },
     /// A multiway relational equijoin, with fused map, filter, and projection.
     ///
@@ -300,7 +302,7 @@ pub enum PlanNode {
     Reduce {
         /// The particular arrangement of the input we expect to use,
         /// if any
-        input_key: Option<Vec<MirScalarExpr>>,
+        input_key: Option<Vec<LirScalarExpr>>,
         /// The input collection.
         input: Box<Plan>,
         /// A plan for changing input records into key, value pairs.
@@ -316,7 +318,7 @@ pub enum PlanNode {
         /// become undefined. Additionally, the MFP must be free from temporal
         /// predicates so that it can be readily evaluated.
         /// TODO(ggevay): should we wrap this in [`mz_expr::SafeMfpPlan`]?
-        mfp_after: MapFilterProject,
+        mfp_after: MfpPlan<LirScalarExpr>,
         /// Strategy for forming the internal input arrangement built by `Reduce`
         /// (materialized via `key_val_plan`).
         ///
@@ -399,11 +401,11 @@ pub enum PlanNode {
     /// or to cap a `Plan` so that indexes can be exported.
     ArrangeBy {
         /// The key that must be used to access the input.
-        input_key: Option<Vec<MirScalarExpr>>,
+        input_key: Option<Vec<LirScalarExpr>>,
         /// The input collection.
         input: Box<Plan>,
         /// The MFP that must be applied to the input.
-        input_mfp: MapFilterProject,
+        input_mfp: MfpPlan<LirScalarExpr>,
         /// A list of arrangement keys, and possibly a raw collection,
         /// that will be added to those of the input. Does not include
         /// any other existing arrangements.
@@ -531,9 +533,9 @@ pub enum GetPlan {
     /// Simply pass input arrangements on to the next stage.
     PassArrangements,
     /// Using the supplied key, optionally seek the row, and apply the MFP.
-    Arrangement(Vec<MirScalarExpr>, Option<Row>, MapFilterProject),
+    Arrangement(Vec<LirScalarExpr>, Option<Row>, MfpPlan<LirScalarExpr>),
     /// Scan the input collection (unarranged) and apply the MFP.
-    Collection(MapFilterProject),
+    Collection(MfpPlan<LirScalarExpr>),
 }
 
 impl Plan {
@@ -628,20 +630,35 @@ impl Plan {
         fields(path.segment = "refine_source_mfps")
     )]
     fn refine_source_mfps(dataflow: &mut DataflowDescription<Self>) {
-        // Extract MFPs from Get operators for sources, and extract what we can for the source.
-        // For each source, we want to find `&mut MapFilterProject` for each `Get` expression.
+        use crate::plan::scalar::{mfp_plan_lir_to_mir, mfp_plan_mir_to_lir};
+
         for (source_id, source_import) in dataflow.source_imports.iter_mut() {
             let source = &mut source_import.desc;
+            let source_id = *source_id;
             let mut identity_present = false;
-            let mut mfps = Vec::new();
+
+            // First pass: swap MfpPlans out of GetPlan::Collection nodes,
+            // recording their LirId so we can put them back.
+            let mut taken: Vec<(LirId, MfpPlan<LirScalarExpr>)> = Vec::new();
             for build_desc in dataflow.objects_to_build.iter_mut() {
                 let mut todo = vec![&mut build_desc.plan];
                 while let Some(expression) = todo.pop() {
+                    let lir_id = expression.lir_id;
                     let node = &mut expression.node;
                     if let PlanNode::Get { id, plan, .. } = node {
-                        if *id == mz_expr::Id::Global(*source_id) {
+                        if *id == mz_expr::Id::Global(source_id) {
                             match plan {
-                                GetPlan::Collection(mfp) => mfps.push(mfp),
+                                GetPlan::Collection(mfp_plan) => {
+                                    let arity = mfp_plan.safe_mfp().projection.len();
+                                    let placeholder = MfpPlan::from_parts(
+                                        mz_expr::SafeMfpPlan::from_mfp(MapFilterProject::new(
+                                            arity,
+                                        )),
+                                        Vec::new(),
+                                        Vec::new(),
+                                    );
+                                    taken.push((lir_id, std::mem::replace(mfp_plan, placeholder)));
+                                }
                                 GetPlan::PassArrangements => {
                                     identity_present = true;
                                 }
@@ -660,20 +677,72 @@ impl Plan {
             identity_present |= dataflow
                 .index_exports
                 .values()
-                .any(|(x, _)| x.on_id == *source_id);
-            identity_present |= dataflow.sink_exports.values().any(|x| x.from == *source_id);
+                .any(|(x, _)| x.on_id == source_id);
+            identity_present |= dataflow.sink_exports.values().any(|x| x.from == source_id);
 
-            if !identity_present && !mfps.is_empty() {
-                // Extract a common prefix `MapFilterProject` from `mfps`.
-                let common = MapFilterProject::extract_common(&mut mfps[..]);
-                // Apply common expressions to the source's `MapFilterProject`.
-                let mut mfp = if let Some(mfp) = source.arguments.operators.take() {
-                    MapFilterProject::compose(mfp, common)
+            // Build a map from LirId → new MfpPlan to put back.
+            let replacements: BTreeMap<LirId, MfpPlan<LirScalarExpr>> =
+                if !identity_present && !taken.is_empty() {
+                    // Convert LIR MfpPlans → MIR MapFilterProjects by folding
+                    // temporal bounds back as mz_now() predicates, so that
+                    // extract_common's column remapping applies uniformly.
+                    let mut mir_mfps: Vec<(LirId, MapFilterProject<MirScalarExpr>)> = taken
+                        .into_iter()
+                        .map(|(lir_id, lir_plan)| {
+                            let mir_mfp = mfp_plan_lir_to_mir(lir_plan).into_map_filter_project();
+                            (lir_id, mir_mfp)
+                        })
+                        .collect();
+                    let mut mfp_refs: Vec<&mut MapFilterProject<MirScalarExpr>> =
+                        mir_mfps.iter_mut().map(|(_, mfp)| mfp).collect();
+
+                    let common = MapFilterProject::extract_common(&mut mfp_refs[..]);
+                    let mut source_mfp = if let Some(mfp) = source.arguments.operators.take() {
+                        MapFilterProject::compose(mfp, common)
+                    } else {
+                        common
+                    };
+                    source_mfp.optimize();
+                    source.arguments.operators = Some(source_mfp);
+
+                    // Convert mutated MIR MFPs back to LIR MfpPlans.
+                    mir_mfps
+                        .into_iter()
+                        .map(|(lir_id, mir_mfp)| {
+                            (
+                                lir_id,
+                                mfp_plan_mir_to_lir(
+                                    mir_mfp
+                                        .into_plan()
+                                        .expect("MFP re-planning after extract_common"),
+                                ),
+                            )
+                        })
+                        .collect()
                 } else {
-                    common
+                    taken.into_iter().collect()
                 };
-                mfp.optimize();
-                source.arguments.operators = Some(mfp);
+
+            // Second pass: put the MfpPlans back by LirId.
+            for build_desc in dataflow.objects_to_build.iter_mut() {
+                let mut todo = vec![&mut build_desc.plan];
+                while let Some(expression) = todo.pop() {
+                    if let Some(replacement) = replacements.get(&expression.lir_id) {
+                        if let PlanNode::Get {
+                            plan: GetPlan::Collection(mfp_plan),
+                            ..
+                        } = &mut expression.node
+                        {
+                            *mfp_plan = replacement.clone();
+                        } else {
+                            panic!(
+                                "LirId {:?} was a GetPlan::Collection but is now {:?}",
+                                expression.lir_id, expression.node
+                            );
+                        }
+                    }
+                    todo.extend(expression.node.children_mut());
+                }
             }
         }
         mz_repr::explain::trace_plan(dataflow);
