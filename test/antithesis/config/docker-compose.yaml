@@ -311,6 +311,310 @@ services:
     stop_grace_period: 120s
     platform: linux/amd64
     image: ${MATERIALIZED_IMAGE}
+  clusterd-pool-0:
+    entrypoint:
+    - tini
+    - --
+    command:
+    - clusterd
+    ports:
+    - 2100
+    - 2101
+    - 6878
+    environment:
+    - CLUSTERD_GRPC_HOST=clusterd-pool-0
+    - CLUSTERD_USE_CTP=true
+    - MZ_SOFT_ASSERTIONS=1
+    - CLUSTERD_STORAGE_CONTROLLER_LISTEN_ADDR=0.0.0.0:2100
+    - CLUSTERD_COMPUTE_CONTROLLER_LISTEN_ADDR=0.0.0.0:2101
+    - CLUSTERD_INTERNAL_HTTP_LISTEN_ADDR=0.0.0.0:6878
+    - CLUSTERD_SECRETS_READER=local-file
+    - CLUSTERD_SECRETS_READER_LOCAL_FILE_DIR=/mzdata/secrets
+    - LD_PRELOAD=libeatmydata.so
+    - CLUSTERD_PERSIST_PUBSUB_URL=http://materialized:6879
+    - CLUSTERD_ENVIRONMENT_ID=mzcompose-us-east-1-00000000-0000-0000-0000-000000000000-0
+    - CLUSTERD_PROCESS=0
+    - 'CLUSTERD_COMPUTE_TIMELY_CONFIG={"workers": 4, "process": 0, "addresses": ["clusterd-pool-0:2102"],
+      "arrangement_exert_proportionality": 16, "enable_zero_copy": false, "enable_zero_copy_lgalloc":
+      false, "zero_copy_limit": null}'
+    - 'CLUSTERD_STORAGE_TIMELY_CONFIG={"workers": 4, "process": 0, "addresses": ["clusterd-pool-0:2103"],
+      "arrangement_exert_proportionality": 1337, "enable_zero_copy": false, "enable_zero_copy_lgalloc":
+      false, "zero_copy_limit": null}'
+    volumes:
+    - mzdata:/mzdata
+    - mydata:/var/lib/mysql-files
+    - tmp:/share/tmp
+    - scratch:/scratch
+    restart: 'no'
+    stop_grace_period: 120s
+    platform: linux/amd64
+    image: ${MATERIALIZED_IMAGE}
+  clusterd-pool-1:
+    entrypoint:
+    - tini
+    - --
+    command:
+    - clusterd
+    ports:
+    - 2100
+    - 2101
+    - 6878
+    environment:
+    - CLUSTERD_GRPC_HOST=clusterd-pool-1
+    - CLUSTERD_USE_CTP=true
+    - MZ_SOFT_ASSERTIONS=1
+    - CLUSTERD_STORAGE_CONTROLLER_LISTEN_ADDR=0.0.0.0:2100
+    - CLUSTERD_COMPUTE_CONTROLLER_LISTEN_ADDR=0.0.0.0:2101
+    - CLUSTERD_INTERNAL_HTTP_LISTEN_ADDR=0.0.0.0:6878
+    - CLUSTERD_SECRETS_READER=local-file
+    - CLUSTERD_SECRETS_READER_LOCAL_FILE_DIR=/mzdata/secrets
+    - LD_PRELOAD=libeatmydata.so
+    - CLUSTERD_PERSIST_PUBSUB_URL=http://materialized:6879
+    - CLUSTERD_ENVIRONMENT_ID=mzcompose-us-east-1-00000000-0000-0000-0000-000000000000-0
+    - CLUSTERD_PROCESS=0
+    - 'CLUSTERD_COMPUTE_TIMELY_CONFIG={"workers": 4, "process": 0, "addresses": ["clusterd-pool-1:2102"],
+      "arrangement_exert_proportionality": 16, "enable_zero_copy": false, "enable_zero_copy_lgalloc":
+      false, "zero_copy_limit": null}'
+    - 'CLUSTERD_STORAGE_TIMELY_CONFIG={"workers": 4, "process": 0, "addresses": ["clusterd-pool-1:2103"],
+      "arrangement_exert_proportionality": 1337, "enable_zero_copy": false, "enable_zero_copy_lgalloc":
+      false, "zero_copy_limit": null}'
+    volumes:
+    - mzdata:/mzdata
+    - mydata:/var/lib/mysql-files
+    - tmp:/share/tmp
+    - scratch:/scratch
+    restart: 'no'
+    stop_grace_period: 120s
+    platform: linux/amd64
+    image: ${MATERIALIZED_IMAGE}
+  clusterd-pool-2:
+    entrypoint:
+    - tini
+    - --
+    command:
+    - clusterd
+    ports:
+    - 2100
+    - 2101
+    - 6878
+    environment:
+    - CLUSTERD_GRPC_HOST=clusterd-pool-2
+    - CLUSTERD_USE_CTP=true
+    - MZ_SOFT_ASSERTIONS=1
+    - CLUSTERD_STORAGE_CONTROLLER_LISTEN_ADDR=0.0.0.0:2100
+    - CLUSTERD_COMPUTE_CONTROLLER_LISTEN_ADDR=0.0.0.0:2101
+    - CLUSTERD_INTERNAL_HTTP_LISTEN_ADDR=0.0.0.0:6878
+    - CLUSTERD_SECRETS_READER=local-file
+    - CLUSTERD_SECRETS_READER_LOCAL_FILE_DIR=/mzdata/secrets
+    - LD_PRELOAD=libeatmydata.so
+    - CLUSTERD_PERSIST_PUBSUB_URL=http://materialized:6879
+    - CLUSTERD_ENVIRONMENT_ID=mzcompose-us-east-1-00000000-0000-0000-0000-000000000000-0
+    - CLUSTERD_PROCESS=0
+    - 'CLUSTERD_COMPUTE_TIMELY_CONFIG={"workers": 4, "process": 0, "addresses": ["clusterd-pool-2:2102"],
+      "arrangement_exert_proportionality": 16, "enable_zero_copy": false, "enable_zero_copy_lgalloc":
+      false, "zero_copy_limit": null}'
+    - 'CLUSTERD_STORAGE_TIMELY_CONFIG={"workers": 4, "process": 0, "addresses": ["clusterd-pool-2:2103"],
+      "arrangement_exert_proportionality": 1337, "enable_zero_copy": false, "enable_zero_copy_lgalloc":
+      false, "zero_copy_limit": null}'
+    volumes:
+    - mzdata:/mzdata
+    - mydata:/var/lib/mysql-files
+    - tmp:/share/tmp
+    - scratch:/scratch
+    restart: 'no'
+    stop_grace_period: 120s
+    platform: linux/amd64
+    image: ${MATERIALIZED_IMAGE}
+  clusterd-pool-3:
+    entrypoint:
+    - tini
+    - --
+    command:
+    - clusterd
+    ports:
+    - 2100
+    - 2101
+    - 6878
+    environment:
+    - CLUSTERD_GRPC_HOST=clusterd-pool-3
+    - CLUSTERD_USE_CTP=true
+    - MZ_SOFT_ASSERTIONS=1
+    - CLUSTERD_STORAGE_CONTROLLER_LISTEN_ADDR=0.0.0.0:2100
+    - CLUSTERD_COMPUTE_CONTROLLER_LISTEN_ADDR=0.0.0.0:2101
+    - CLUSTERD_INTERNAL_HTTP_LISTEN_ADDR=0.0.0.0:6878
+    - CLUSTERD_SECRETS_READER=local-file
+    - CLUSTERD_SECRETS_READER_LOCAL_FILE_DIR=/mzdata/secrets
+    - LD_PRELOAD=libeatmydata.so
+    - CLUSTERD_PERSIST_PUBSUB_URL=http://materialized:6879
+    - CLUSTERD_ENVIRONMENT_ID=mzcompose-us-east-1-00000000-0000-0000-0000-000000000000-0
+    - CLUSTERD_PROCESS=0
+    - 'CLUSTERD_COMPUTE_TIMELY_CONFIG={"workers": 4, "process": 0, "addresses": ["clusterd-pool-3:2102"],
+      "arrangement_exert_proportionality": 16, "enable_zero_copy": false, "enable_zero_copy_lgalloc":
+      false, "zero_copy_limit": null}'
+    - 'CLUSTERD_STORAGE_TIMELY_CONFIG={"workers": 4, "process": 0, "addresses": ["clusterd-pool-3:2103"],
+      "arrangement_exert_proportionality": 1337, "enable_zero_copy": false, "enable_zero_copy_lgalloc":
+      false, "zero_copy_limit": null}'
+    volumes:
+    - mzdata:/mzdata
+    - mydata:/var/lib/mysql-files
+    - tmp:/share/tmp
+    - scratch:/scratch
+    restart: 'no'
+    stop_grace_period: 120s
+    platform: linux/amd64
+    image: ${MATERIALIZED_IMAGE}
+  clusterd-pool-4:
+    entrypoint:
+    - tini
+    - --
+    command:
+    - clusterd
+    ports:
+    - 2100
+    - 2101
+    - 6878
+    environment:
+    - CLUSTERD_GRPC_HOST=clusterd-pool-4
+    - CLUSTERD_USE_CTP=true
+    - MZ_SOFT_ASSERTIONS=1
+    - CLUSTERD_STORAGE_CONTROLLER_LISTEN_ADDR=0.0.0.0:2100
+    - CLUSTERD_COMPUTE_CONTROLLER_LISTEN_ADDR=0.0.0.0:2101
+    - CLUSTERD_INTERNAL_HTTP_LISTEN_ADDR=0.0.0.0:6878
+    - CLUSTERD_SECRETS_READER=local-file
+    - CLUSTERD_SECRETS_READER_LOCAL_FILE_DIR=/mzdata/secrets
+    - LD_PRELOAD=libeatmydata.so
+    - CLUSTERD_PERSIST_PUBSUB_URL=http://materialized:6879
+    - CLUSTERD_ENVIRONMENT_ID=mzcompose-us-east-1-00000000-0000-0000-0000-000000000000-0
+    - CLUSTERD_PROCESS=0
+    - 'CLUSTERD_COMPUTE_TIMELY_CONFIG={"workers": 4, "process": 0, "addresses": ["clusterd-pool-4:2102"],
+      "arrangement_exert_proportionality": 16, "enable_zero_copy": false, "enable_zero_copy_lgalloc":
+      false, "zero_copy_limit": null}'
+    - 'CLUSTERD_STORAGE_TIMELY_CONFIG={"workers": 4, "process": 0, "addresses": ["clusterd-pool-4:2103"],
+      "arrangement_exert_proportionality": 1337, "enable_zero_copy": false, "enable_zero_copy_lgalloc":
+      false, "zero_copy_limit": null}'
+    volumes:
+    - mzdata:/mzdata
+    - mydata:/var/lib/mysql-files
+    - tmp:/share/tmp
+    - scratch:/scratch
+    restart: 'no'
+    stop_grace_period: 120s
+    platform: linux/amd64
+    image: ${MATERIALIZED_IMAGE}
+  clusterd-pool-5:
+    entrypoint:
+    - tini
+    - --
+    command:
+    - clusterd
+    ports:
+    - 2100
+    - 2101
+    - 6878
+    environment:
+    - CLUSTERD_GRPC_HOST=clusterd-pool-5
+    - CLUSTERD_USE_CTP=true
+    - MZ_SOFT_ASSERTIONS=1
+    - CLUSTERD_STORAGE_CONTROLLER_LISTEN_ADDR=0.0.0.0:2100
+    - CLUSTERD_COMPUTE_CONTROLLER_LISTEN_ADDR=0.0.0.0:2101
+    - CLUSTERD_INTERNAL_HTTP_LISTEN_ADDR=0.0.0.0:6878
+    - CLUSTERD_SECRETS_READER=local-file
+    - CLUSTERD_SECRETS_READER_LOCAL_FILE_DIR=/mzdata/secrets
+    - LD_PRELOAD=libeatmydata.so
+    - CLUSTERD_PERSIST_PUBSUB_URL=http://materialized:6879
+    - CLUSTERD_ENVIRONMENT_ID=mzcompose-us-east-1-00000000-0000-0000-0000-000000000000-0
+    - CLUSTERD_PROCESS=0
+    - 'CLUSTERD_COMPUTE_TIMELY_CONFIG={"workers": 4, "process": 0, "addresses": ["clusterd-pool-5:2102"],
+      "arrangement_exert_proportionality": 16, "enable_zero_copy": false, "enable_zero_copy_lgalloc":
+      false, "zero_copy_limit": null}'
+    - 'CLUSTERD_STORAGE_TIMELY_CONFIG={"workers": 4, "process": 0, "addresses": ["clusterd-pool-5:2103"],
+      "arrangement_exert_proportionality": 1337, "enable_zero_copy": false, "enable_zero_copy_lgalloc":
+      false, "zero_copy_limit": null}'
+    volumes:
+    - mzdata:/mzdata
+    - mydata:/var/lib/mysql-files
+    - tmp:/share/tmp
+    - scratch:/scratch
+    restart: 'no'
+    stop_grace_period: 120s
+    platform: linux/amd64
+    image: ${MATERIALIZED_IMAGE}
+  clusterd-pool-6:
+    entrypoint:
+    - tini
+    - --
+    command:
+    - clusterd
+    ports:
+    - 2100
+    - 2101
+    - 6878
+    environment:
+    - CLUSTERD_GRPC_HOST=clusterd-pool-6
+    - CLUSTERD_USE_CTP=true
+    - MZ_SOFT_ASSERTIONS=1
+    - CLUSTERD_STORAGE_CONTROLLER_LISTEN_ADDR=0.0.0.0:2100
+    - CLUSTERD_COMPUTE_CONTROLLER_LISTEN_ADDR=0.0.0.0:2101
+    - CLUSTERD_INTERNAL_HTTP_LISTEN_ADDR=0.0.0.0:6878
+    - CLUSTERD_SECRETS_READER=local-file
+    - CLUSTERD_SECRETS_READER_LOCAL_FILE_DIR=/mzdata/secrets
+    - LD_PRELOAD=libeatmydata.so
+    - CLUSTERD_PERSIST_PUBSUB_URL=http://materialized:6879
+    - CLUSTERD_ENVIRONMENT_ID=mzcompose-us-east-1-00000000-0000-0000-0000-000000000000-0
+    - CLUSTERD_PROCESS=0
+    - 'CLUSTERD_COMPUTE_TIMELY_CONFIG={"workers": 4, "process": 0, "addresses": ["clusterd-pool-6:2102"],
+      "arrangement_exert_proportionality": 16, "enable_zero_copy": false, "enable_zero_copy_lgalloc":
+      false, "zero_copy_limit": null}'
+    - 'CLUSTERD_STORAGE_TIMELY_CONFIG={"workers": 4, "process": 0, "addresses": ["clusterd-pool-6:2103"],
+      "arrangement_exert_proportionality": 1337, "enable_zero_copy": false, "enable_zero_copy_lgalloc":
+      false, "zero_copy_limit": null}'
+    volumes:
+    - mzdata:/mzdata
+    - mydata:/var/lib/mysql-files
+    - tmp:/share/tmp
+    - scratch:/scratch
+    restart: 'no'
+    stop_grace_period: 120s
+    platform: linux/amd64
+    image: ${MATERIALIZED_IMAGE}
+  clusterd-pool-7:
+    entrypoint:
+    - tini
+    - --
+    command:
+    - clusterd
+    ports:
+    - 2100
+    - 2101
+    - 6878
+    environment:
+    - CLUSTERD_GRPC_HOST=clusterd-pool-7
+    - CLUSTERD_USE_CTP=true
+    - MZ_SOFT_ASSERTIONS=1
+    - CLUSTERD_STORAGE_CONTROLLER_LISTEN_ADDR=0.0.0.0:2100
+    - CLUSTERD_COMPUTE_CONTROLLER_LISTEN_ADDR=0.0.0.0:2101
+    - CLUSTERD_INTERNAL_HTTP_LISTEN_ADDR=0.0.0.0:6878
+    - CLUSTERD_SECRETS_READER=local-file
+    - CLUSTERD_SECRETS_READER_LOCAL_FILE_DIR=/mzdata/secrets
+    - LD_PRELOAD=libeatmydata.so
+    - CLUSTERD_PERSIST_PUBSUB_URL=http://materialized:6879
+    - CLUSTERD_ENVIRONMENT_ID=mzcompose-us-east-1-00000000-0000-0000-0000-000000000000-0
+    - CLUSTERD_PROCESS=0
+    - 'CLUSTERD_COMPUTE_TIMELY_CONFIG={"workers": 4, "process": 0, "addresses": ["clusterd-pool-7:2102"],
+      "arrangement_exert_proportionality": 16, "enable_zero_copy": false, "enable_zero_copy_lgalloc":
+      false, "zero_copy_limit": null}'
+    - 'CLUSTERD_STORAGE_TIMELY_CONFIG={"workers": 4, "process": 0, "addresses": ["clusterd-pool-7:2103"],
+      "arrangement_exert_proportionality": 1337, "enable_zero_copy": false, "enable_zero_copy_lgalloc":
+      false, "zero_copy_limit": null}'
+    volumes:
+    - mzdata:/mzdata
+    - mydata:/var/lib/mysql-files
+    - tmp:/share/tmp
+    - scratch:/scratch
+    restart: 'no'
+    stop_grace_period: 120s
+    platform: linux/amd64
+    image: ${MATERIALIZED_IMAGE}
   materialized:
     hostname: materialized
     depends_on:

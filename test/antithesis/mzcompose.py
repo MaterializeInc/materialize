@@ -20,6 +20,16 @@ Topology exercised under Antithesis:
                         Antithesis killing either container exercises the
                         compute/storage-replica recovery and rebalancing
                         paths without taking the cluster offline.
+  - clusterd-pool-{0..N-1} : a configurable pool of external clusterd
+                        containers that the parallel-workload driver
+                        claims one-per-cluster to give each
+                        parallel-workload cluster its own container.
+                        Without this pool, parallel-workload clusters
+                        would all share materialized's process orchestrator
+                        and Antithesis could only fault the entire
+                        container as a unit. Pool size is controlled by
+                        the `ANTITHESIS_CLUSTERD_POOL_SIZE` env var (read
+                        from the harness; defaults to 8).
   - materialized      : the SUT (environmentd; clusterd is external)
   - workload          : Python test driver wired to the Antithesis SDK
 
@@ -27,6 +37,8 @@ Usage:
   bin/mzcompose --find antithesis run default                       # bring up the cluster
   bin/pyactivate test/antithesis/export-compose.py > config/...     # dump compose YAML
 """
+
+import os
 
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.service import Service, ServiceConfig
@@ -38,6 +50,15 @@ from materialize.mzcompose.services.mysql import MySql, create_mysql_server_args
 from materialize.mzcompose.services.postgres import PostgresMetadata
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.zookeeper import Zookeeper
+
+# Number of pool clusterd containers reserved for parallel-workload clusters
+# (one container per cluster, giving each its own container-level fault
+# domain). Read from the env so CI/local runs can tune it without editing
+# this file. Default 8 — enough for ~8 concurrent parallel-driver
+# invocations under the v1 "one cluster per invocation, replication
+# factor 1" allocation, see test/antithesis/workload/test/
+# parallel_driver_parallel_workload.py.
+CLUSTERD_POOL_SIZE = int(os.environ.get("ANTITHESIS_CLUSTERD_POOL_SIZE", "8"))
 
 
 class Workload(Service):
@@ -146,6 +167,27 @@ SERVICES = [
         workers=4,
         scratch_directory=None,
     ),
+    # Pool of identical clusterd containers reserved for the
+    # parallel-workload driver. Each instance is a possible target for
+    # one parallel-workload cluster, giving that cluster its own
+    # container-level fault domain (Antithesis can kill / pause /
+    # partition / throttle a specific pool member without affecting any
+    # other cluster). Same settings as clusterd1/clusterd2: 4 timely
+    # workers per process, no scratch (matches production), restart=no
+    # so Antithesis fault injection isn't fought by docker-compose.
+    #
+    # Sizing rationale lives in test/antithesis/workload/test/
+    # parallel_driver_parallel_workload.py — the driver maps invocation
+    # seed → pool slot deterministically and assumes the pool is at
+    # least as big as the expected concurrent-invocation count.
+    *[
+        Clusterd(
+            name=f"clusterd-pool-{i}",
+            workers=4,
+            scratch_directory=None,
+        )
+        for i in range(CLUSTERD_POOL_SIZE)
+    ],
     Materialized(
         external_blob_store=True,
         external_metadata_store=True,
@@ -166,6 +208,7 @@ SERVICES = [
 
 def workflow_default(c: Composition) -> None:
     """Bring up the Antithesis test cluster."""
+    pool_services = [f"clusterd-pool-{i}" for i in range(CLUSTERD_POOL_SIZE)]
     c.up(
         "postgres-metadata",
         "minio",
@@ -174,6 +217,7 @@ def workflow_default(c: Composition) -> None:
         "schema-registry",
         "clusterd1",
         "clusterd2",
+        *pool_services,
         "mysql",
         "mysql-replica",
     )
