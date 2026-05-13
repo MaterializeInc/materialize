@@ -261,7 +261,7 @@ mod test {
             .iter()
             .find(|metric| metric.name().contains("requests_active"))
             .unwrap();
-        assert_eq!(active_requests.get_metric()[0].get_gauge().get_value(), 1.0);
+        assert_eq!(active_requests.get_metric()[0].get_gauge().value(), 1.0);
 
         // Drop the request before we finish polling it to completion.
         drop(future);
@@ -273,7 +273,7 @@ mod test {
             .iter()
             .find(|metric| metric.name().contains("requests_active"))
             .unwrap();
-        assert_eq!(active_requests.get_metric()[0].get_gauge().get_value(), 0.0);
+        assert_eq!(active_requests.get_metric()[0].get_gauge().value(), 0.0);
 
         // We should have discarded the in-flight timer.
         let active_requests = metrics

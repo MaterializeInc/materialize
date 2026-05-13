@@ -405,12 +405,12 @@ mod test {
         drop(metric_1);
         let gathered = reg.gather();
         assert_eq!(gathered.len(), 1);
-        assert_eq!(gathered[0].get_metric()[0].get_counter().get_value(), 2.0);
+        assert_eq!(gathered[0].get_metric()[0].get_counter().value(), 2.0);
 
         // Increment via the surviving clone is still observable.
         metric_2.inc();
         let gathered = reg.gather();
-        assert_eq!(gathered[0].get_metric()[0].get_counter().get_value(), 3.0);
+        assert_eq!(gathered[0].get_metric()[0].get_counter().value(), 3.0);
 
         // Dropping the last clone unregisters the metric.
         drop(metric_2);

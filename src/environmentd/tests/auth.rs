@@ -3258,13 +3258,13 @@ async fn test_auth_deduplication() {
     assert_eq!(metrics.len(), 2);
 
     let metric = &metrics[0];
-    assert_eq!(metric.get_counter().get_value(), 1.0);
+    assert_eq!(metric.get_counter().value(), 1.0);
     let labels = metric.get_label();
     assert_eq!(labels.len(), 1);
     let reason_1 = labels[0].value().to_string();
 
     let metric = &metrics[1];
-    assert_eq!(metric.get_counter().get_value(), 1.0);
+    assert_eq!(metric.get_counter().value(), 1.0);
     let labels = metric.get_label();
     assert_eq!(labels.len(), 1);
     let reason_2 = labels[0].value().to_string();
@@ -3402,7 +3402,7 @@ async fn test_refresh_task_metrics() {
     assert_eq!(metrics.len(), 1);
     let metric = metrics.pop().unwrap();
     let metric = &metric.get_metric()[0];
-    assert_eq!(metric.get_gauge().get_value(), 1.0);
+    assert_eq!(metric.get_gauge().value(), 1.0);
 
     drop(pg_client);
 
@@ -3420,7 +3420,7 @@ async fn test_refresh_task_metrics() {
     let metric = metrics.pop().unwrap();
     let metric = &metric.get_metric()[0];
 
-    let guage_value = metric.get_gauge().get_value();
+    let guage_value = metric.get_gauge().value();
     assert_eq!(guage_value, 0.0);
 }
 
@@ -3700,7 +3700,7 @@ async fn test_refresh_dropped_session() {
     assert_eq!(metrics.len(), 1);
     let metric = metrics.pop().unwrap();
     let metric = &metric.get_metric()[0];
-    assert_eq!(metric.get_counter().get_value(), 1.0);
+    assert_eq!(metric.get_counter().value(), 1.0);
 
     let labels = metric.get_label();
     assert_eq!(

@@ -11,10 +11,11 @@
 
 use askama::Template;
 use axum::Json;
+use axum::http::HeaderMap;
 use axum::http::HeaderValue;
 use axum::http::Uri;
 use axum::http::status::StatusCode;
-use axum::response::{Html, IntoResponse};
+use axum::response::{Html, IntoResponse, Response};
 use axum_extra::TypedHeader;
 use headers::ContentType;
 use mz_ore::metrics::MetricsRegistry;
@@ -24,6 +25,20 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tower_http::cors::AllowOrigin;
 use tracing_subscriber::EnvFilter;
+
+/// MIME type used for the Prometheus protobuf scrape format.
+/// <https://prometheus.io/docs/instrumenting/content_negotiation/#protocol-headers>
+pub const PROMETHEUS_PROTOBUF_CONTENT_TYPE: &str = "application/vnd.google.protobuf; \
+     proto=io.prometheus.client.MetricFamily; \
+     encoding=delimited";
+
+fn wants_prometheus_protobuf(headers: &HeaderMap) -> bool {
+    headers
+        .get_all(axum::http::header::ACCEPT)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .any(|v| v.contains(PROMETHEUS_PROTOBUF_CONTENT_TYPE))
+}
 
 /// Renders a template into an HTTP response.
 pub fn template_response<T>(template: T) -> Html<String>
@@ -114,14 +129,37 @@ pub async fn handle_liveness_check() -> impl IntoResponse {
 }
 
 /// Serves metrics from the selected metrics registry variant.
+///
+/// If the caller's `Accept` header advertises support for the Prometheus
+/// protobuf format (`application/vnd.google.protobuf`), the response is a
+/// length-delimited stream of `io.prometheus.client.MetricFamily` messages.
+/// Otherwise the standard Prometheus text format is returned.
 #[allow(clippy::unused_async)]
-pub async fn handle_prometheus(registry: &MetricsRegistry) -> impl IntoResponse + use<> {
-    let mut buffer = Vec::new();
-    let encoder = prometheus::TextEncoder::new();
-    encoder
-        .encode(&registry.gather(), &mut buffer)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok::<_, (StatusCode, String)>((TypedHeader(ContentType::text()), buffer))
+pub async fn handle_prometheus(
+    registry: &MetricsRegistry,
+    headers: HeaderMap,
+) -> Result<Response, (StatusCode, String)> {
+    let families = registry.gather();
+    let mut buf = Vec::new();
+    let content_type = if wants_prometheus_protobuf(&headers) {
+        prometheus::ProtobufEncoder::new()
+            .encode(&families, &mut buf)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        ContentType::from(
+            PROMETHEUS_PROTOBUF_CONTENT_TYPE
+                .parse::<mime::Mime>()
+                .map_err(|e: mime::FromStrError| {
+                    (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+                })?,
+        )
+    } else {
+        prometheus::TextEncoder::new()
+            .encode(&families, &mut buf)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        ContentType::text()
+    };
+
+    Ok((TypedHeader(content_type), buf).into_response())
 }
 
 #[derive(Serialize, Deserialize)]

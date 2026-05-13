@@ -192,6 +192,13 @@ pub const ENABLE_MCP_DEVELOPER: Config<bool> = Config::new(
     "Whether the MCP developer HTTP endpoint is enabled. When false, requests to /api/mcp/developer return 503 Service Unavailable.",
 );
 
+/// Whether the external metrics endpoint on environmentd is enabled.
+pub const ENABLE_PUBLIC_METRICS_ENDPOINT: Config<bool> = Config::new(
+    "enable_public_metrics_endpoint",
+    true,
+    "Whether the external metrics endpoint on environmentd is enabled. When false, requests return 503.",
+);
+
 /// Maximum size (in bytes) of MCP tool response content after JSON serialization.
 /// Responses exceeding this limit are rejected with a clear error telling the
 /// agent to narrow its query. Keeps responses within LLM context window limits.
@@ -266,6 +273,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_MCP_AGENT)
         .add(&ENABLE_MCP_AGENT_QUERY_TOOL)
         .add(&ENABLE_MCP_DEVELOPER)
+        .add(&ENABLE_PUBLIC_METRICS_ENDPOINT)
         .add(&MCP_MAX_RESPONSE_SIZE)
         .add(&USER_ID_POOL_BATCH_SIZE)
         .add(&CONSOLE_OIDC_CLIENT_ID)
