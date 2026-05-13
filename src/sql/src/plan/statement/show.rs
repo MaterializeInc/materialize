@@ -946,8 +946,13 @@ impl<'a> ShowSelect<'a> {
         order: Option<&str>,
         projection: Option<&[&str]>,
     ) -> Result<ShowSelect<'a>, PlanError> {
-        Self::new_with_resolved_ids(scx, query, filter, order, projection)
-            .map(|(show_select, _)| show_select)
+        let (show_select, new_resolved_ids) =
+            Self::new_with_resolved_ids(scx, query, filter, order, projection)?;
+        scx.sql_impl_resolved_ids
+            .lock()
+            .expect("planning is single-threaded")
+            .extend_from(&new_resolved_ids);
+        Ok(show_select)
     }
 
     fn new_with_resolved_ids(
