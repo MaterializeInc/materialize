@@ -278,6 +278,10 @@ where
             physical_upper: T::minimum(),
             logical_upper: T::minimum(),
         };
+        // Whether the remap input has reached the empty antichain. Once
+        // closed, the operator no longer needs to wait for further remap
+        // updates and can react to the passthrough frontier alone.
+        let mut remap_closed = false;
 
         move |frontiers| {
             if shutdown_handle.local_pressed() {
@@ -312,52 +316,71 @@ where
             });
 
             // Apply the remap input's frontier as a `logical_upper` bump.
-            // We intentionally do not treat an empty antichain specially: the
-            // last observed `DataRemapEntry` remains valid even after the
-            // remap input closes, so that the output capability can be
-            // advanced past `physical_upper` while the passthrough input is
-            // still draining.
+            // We do not discard `remap` when the remap input reaches the
+            // empty antichain: the last observed `DataRemapEntry` remains
+            // valid and lets the output capability still be advanced past
+            // `physical_upper` while the passthrough input is draining.
             if let Some(logical_upper) = frontiers[0].frontier().as_option() {
                 if remap.logical_upper < *logical_upper {
                     remap.logical_upper = logical_upper.clone();
                 }
+            } else {
+                remap_closed = true;
             }
 
-            debug!("{} remap {:?}", name, remap);
+            debug!("{} remap {:?} remap_closed={}", name, remap, remap_closed);
 
-            // Apply the passthrough input's frontier.
-            //
-            // If `until.less_equal(pass_frontier)`, it means that all subsequent
-            // batches will contain only times greater or equal to `until`, which
-            // means they can be dropped in their entirety.
-            //
-            // Ideally this check would live in `txns_progress_source`, but that
-            // turns out to be much more invasive (requires replacing lots of
-            // `T`s with `Antichain<T>`s). Given that we've been thinking about
-            // reworking the operators, do the easy but more wasteful thing for
-            // now.
-            let pass_frontier = frontiers[1].frontier();
-            if PartialOrder::less_equal(&until.borrow(), &pass_frontier) {
-                debug!(
-                    "{} progress {:?} has passed until {:?}",
-                    name,
-                    pass_frontier,
-                    until.elements(),
-                );
-                capability = None;
-            } else if let Some(new_progress) = pass_frontier.as_option() {
-                // Recall that any reads of the data shard are always correct, so
-                // given that we've passed through any data from the input, that
-                // means we're free to pass through frontier updates too.
-                if let Some(cap) = capability.as_mut() {
-                    if cap.time() < new_progress {
-                        debug!("{} downgrading cap to {:?}", name, new_progress);
-                        cap.downgrade(new_progress);
+            // Mirror the async state machine: only consult the passthrough
+            // frontier when the operator is in "WaitingForPassthrough" mode,
+            // i.e. either remap has indicated the physical upper has moved
+            // ahead of `cap` (so cap must advance through passthrough), or
+            // the remap input has closed entirely (no further logical_upper
+            // bumps are coming). In "WaitingForRemap" mode we ignore the
+            // passthrough frontier — including an empty antichain — to avoid
+            // shutting down prematurely while logical advances are still
+            // possible from a stuck remap stream (e.g., `SELECT AS OF MAX`
+            // where `txns_progress_source` blocks on `update_gt(MAX)` and
+            // never emits a remap update).
+            let waiting_for_remap = match capability.as_ref() {
+                Some(cap) => !remap_closed && remap.physical_upper.less_equal(cap.time()),
+                None => false,
+            };
+            if !waiting_for_remap {
+                // Apply the passthrough input's frontier.
+                //
+                // If `until.less_equal(pass_frontier)`, it means that all
+                // subsequent batches will contain only times greater or equal
+                // to `until`, which means they can be dropped in their entirety.
+                //
+                // Ideally this check would live in `txns_progress_source`, but
+                // that turns out to be much more invasive (requires replacing
+                // lots of `T`s with `Antichain<T>`s). Given that we've been
+                // thinking about reworking the operators, do the easy but more
+                // wasteful thing for now.
+                let pass_frontier = frontiers[1].frontier();
+                if PartialOrder::less_equal(&until.borrow(), &pass_frontier) {
+                    debug!(
+                        "{} progress {:?} has passed until {:?}",
+                        name,
+                        pass_frontier,
+                        until.elements(),
+                    );
+                    capability = None;
+                } else if let Some(new_progress) = pass_frontier.as_option() {
+                    // Recall that any reads of the data shard are always
+                    // correct, so given that we've passed through any data
+                    // from the input, that means we're free to pass through
+                    // frontier updates too.
+                    if let Some(cap) = capability.as_mut() {
+                        if cap.time() < new_progress {
+                            debug!("{} downgrading cap to {:?}", name, new_progress);
+                            cap.downgrade(new_progress);
+                        }
                     }
+                } else {
+                    // Reached the empty frontier; shut down.
+                    capability = None;
                 }
-            } else {
-                // Reached the empty frontier; shut down.
-                capability = None;
             }
 
             // If we've passed through data to at least `physical_upper`, then
