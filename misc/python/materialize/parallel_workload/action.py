@@ -1987,7 +1987,7 @@ class CreateRoleAction(Action):
                 return False
             role_id = exe.db.role_id
             exe.db.role_id += 1
-        role = Role(role_id)
+        role = Role(role_id, name_scope=exe.db.name_scope)
         role.create(exe)
         exe.db.roles.append(role)
         return True
@@ -2026,6 +2026,13 @@ class DropRoleAction(Action):
 
 class CreateClusterAction(Action):
     def run(self, exe: Executor) -> bool:
+        # In pool mode the Database's clusters are wired to pre-existing
+        # clusterd containers from a finite pool the caller passed in.
+        # Dynamically creating a new cluster would need to claim an unused
+        # pool member, and we don't have an allocator. Skip — the initial
+        # clusters set up at construction time are the test surface.
+        if exe.db.pool_members is not None:
+            return False
         with exe.db.lock:
             if len(exe.db.clusters) >= MAX_CLUSTERS:
                 return False
@@ -2037,6 +2044,7 @@ class CreateClusterAction(Action):
             size=self.rng.choice(["1", "2"]),
             replication_factor=self.rng.choice([1, 2]),
             introspection_interval="1s",
+            name_scope=exe.db.name_scope,
         )
         cluster.create(exe)
         exe.db.clusters.append(cluster)
@@ -2170,6 +2178,12 @@ class CreateClusterReplicaAction(Action):
         with exe.db.lock:
             # Keep cluster 0 with 1 replica for sources/sinks
             unmanaged_clusters = [c for c in exe.db.clusters[1:] if not c.managed]
+            # Pool-backed clusters can't grow their replica count — there's
+            # no pool allocator handing out a fresh ClusterdPoolMember per
+            # ALTER CLUSTER ADD REPLICA. Skip them.
+            unmanaged_clusters = [
+                c for c in unmanaged_clusters if not c.is_pool_backed
+            ]
             if not unmanaged_clusters:
                 return False
             cluster = self.rng.choice(unmanaged_clusters)
@@ -2193,6 +2207,13 @@ class DropClusterReplicaAction(Action):
         with exe.db.lock:
             # Keep cluster 0 with 1 replica for sources/sinks
             unmanaged_clusters = [c for c in exe.db.clusters[1:] if not c.managed]
+            # Pool-backed clusters can't shrink either — without an
+            # allocator to release the pool member back, the in-memory
+            # model would diverge from materialize's catalog and later
+            # creates targeting the freed slot would conflict.
+            unmanaged_clusters = [
+                c for c in unmanaged_clusters if not c.is_pool_backed
+            ]
             if not unmanaged_clusters:
                 return False
             cluster = self.rng.choice(unmanaged_clusters)

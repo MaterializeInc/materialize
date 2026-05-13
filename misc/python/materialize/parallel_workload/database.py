@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import dataclasses
 import random
 import threading
 import uuid
@@ -885,16 +886,53 @@ class Index:
 class Role:
     role_id: int
     lock: threading.Lock
+    # Inserted between `role` and `{role_id}` in the generated name. Empty by
+    # default (giving the historical `role0` shape). When set, gives
+    # `role{name_scope}{role_id}` — used by callers like the Antithesis
+    # parallel-driver where many concurrent Database instances against one
+    # materialize would otherwise collide on the same `role0..roleN` names.
+    name_scope: str
 
-    def __init__(self, role_id: int):
+    def __init__(self, role_id: int, name_scope: str = ""):
         self.role_id = role_id
         self.lock = threading.Lock()
+        self.name_scope = name_scope
 
     def __str__(self) -> str:
+        # Format: `role[-{name_scope}-]{role_id}`. The bracketed segment is
+        # only present when seed-scoping is on, so the historical `role0`
+        # shape (which non-Antithesis consumers parse) is preserved.
+        # Scoped names need identifier-quoting because dashes aren't valid
+        # in an unquoted identifier; unscoped names stay bare to match the
+        # original SQL the framework emits.
+        if self.name_scope:
+            return identifier(f"role-{self.name_scope}-{self.role_id}")
         return f"role{self.role_id}"
 
     def create(self, exe: Executor) -> None:
         exe.execute(f"CREATE ROLE {self}")
+
+
+@dataclasses.dataclass(frozen=True)
+class ClusterdPoolMember:
+    """One entry in an external clusterd pool that a `Cluster` can target as
+    an unmanaged replica.
+
+    Used by callers (Antithesis parallel-driver) that want fault-isolation
+    per cluster: each pool member is its own container, so Antithesis can
+    kill/pause/partition exactly one cluster's storage+compute without
+    taking down the other clusters that share the materialized container's
+    process orchestrator.
+
+    The default ports match clusterd's defaults; override per environment.
+    """
+
+    host: str
+    storagectl_port: int = 2100
+    computectl_port: int = 2101
+    compute_port: int = 2102
+    storage_port: int = 2103
+    workers: int = 4
 
 
 class ClusterReplica:
@@ -903,13 +941,26 @@ class ClusterReplica:
     cluster: "Cluster"
     rename: int
     lock: threading.Lock
+    # When non-None, the replica is wired to a pre-existing clusterd
+    # container via unmanaged-cluster syntax (STORAGECTL/COMPUTE ADDRESSES)
+    # rather than provisioned through the orchestrator. The replica's
+    # `size` field is ignored in that case; `pool_member.workers` provides
+    # the WORKERS clause.
+    pool_member: ClusterdPoolMember | None
 
-    def __init__(self, replica_id: int, size: str, cluster: "Cluster"):
+    def __init__(
+        self,
+        replica_id: int,
+        size: str,
+        cluster: "Cluster",
+        pool_member: ClusterdPoolMember | None = None,
+    ):
         self.replica_id = replica_id
         self.size = size
         self.cluster = cluster
         self.rename = 0
         self.lock = threading.Lock()
+        self.pool_member = pool_member
 
     def name(self) -> str:
         if self.rename:
@@ -935,6 +986,12 @@ class Cluster:
     introspection_interval: str
     rename: int
     lock: threading.Lock
+    # Inserted between `cluster` and `-{cluster_id}` in the generated name.
+    # Empty by default (giving the historical `cluster-N` shape). When set,
+    # gives `cluster{name_scope}-N` — used by callers like the Antithesis
+    # parallel-driver, where many concurrent Database instances against one
+    # materialize would otherwise collide on the same `cluster-N` names.
+    name_scope: str
 
     def __init__(
         self,
@@ -943,29 +1000,84 @@ class Cluster:
         size: str,
         replication_factor: int,
         introspection_interval: str,
+        name_scope: str = "",
+        pool_members: list[ClusterdPoolMember] | None = None,
     ):
         self.cluster_id = cluster_id
         self.managed = managed
         self.size = size
-        self.replicas = [
-            ClusterReplica(i, size, self) for i in range(replication_factor)
-        ]
+        # When `pool_members` is supplied, the cluster runs in unmanaged mode
+        # against one pre-existing clusterd container per replica. We force
+        # `managed=False` (the unmanaged-cluster syntax is what carries the
+        # STORAGECTL/COMPUTE ADDRESSES clauses) and ignore `replication_factor`
+        # in favour of `len(pool_members)`.
+        if pool_members is not None:
+            if not pool_members:
+                raise ValueError(
+                    "pool_members must be non-empty when provided; one member per replica"
+                )
+            self.managed = False
+            self.replicas = [
+                ClusterReplica(i, size, self, pool_member=pool_members[i])
+                for i in range(len(pool_members))
+            ]
+        else:
+            self.replicas = [
+                ClusterReplica(i, size, self) for i in range(replication_factor)
+            ]
         self.replica_id = len(self.replicas)
         self.introspection_interval = introspection_interval
         self.rename = 0
         self.lock = threading.Lock()
+        self.name_scope = name_scope
+
+    @property
+    def is_pool_backed(self) -> bool:
+        """True iff every replica is wired to a pre-existing clusterd
+        container rather than provisioned through the orchestrator. Action
+        classes that would mutate replica count check this and bail —
+        we don't dynamically allocate from the pool."""
+        return all(r.pool_member is not None for r in self.replicas)
 
     def name(self) -> str:
+        # Format: `cluster[-{name_scope}]-{cluster_id}[-{rename}]`. The
+        # bracketed `-{name_scope}` segment is only present when seed-
+        # scoping is on, so the historical `cluster-0` / `cluster-0-1`
+        # shapes (which non-Antithesis consumers parse) are preserved.
+        prefix = (
+            f"cluster-{self.name_scope}" if self.name_scope else "cluster"
+        )
         if self.rename:
-            return naughtify(f"cluster-{self.cluster_id}-{self.rename}")
-        return naughtify(f"cluster-{self.cluster_id}")
+            return naughtify(f"{prefix}-{self.cluster_id}-{self.rename}")
+        return naughtify(f"{prefix}-{self.cluster_id}")
 
     def __str__(self) -> str:
         return identifier(self.name())
 
     def create(self, exe: Executor) -> None:
         query = f"CREATE CLUSTER {self} "
-        if self.managed:
+        if self.is_pool_backed:
+            # Unmanaged cluster pointing at pre-existing clusterd containers.
+            # Each replica gets the STORAGECTL/STORAGE/COMPUTECTL/COMPUTE
+            # ADDRESSES of its pool member; WORKERS comes from the pool
+            # member's config. Requires
+            # `unsafe_enable_unorchestrated_cluster_replicas = true` on the
+            # SUT (see test/antithesis/mzcompose.py for the Antithesis case).
+            replica_specs = []
+            for replica in self.replicas:
+                assert replica.pool_member is not None
+                m = replica.pool_member
+                replica_specs.append(
+                    f"{replica} ("
+                    f"STORAGECTL ADDRESSES ['{m.host}:{m.storagectl_port}'], "
+                    f"STORAGE ADDRESSES ['{m.host}:{m.storage_port}'], "
+                    f"COMPUTECTL ADDRESSES ['{m.host}:{m.computectl_port}'], "
+                    f"COMPUTE ADDRESSES ['{m.host}:{m.compute_port}'], "
+                    f"WORKERS {m.workers}"
+                    f")"
+                )
+            query += "REPLICAS(" + ", ".join(replica_specs) + ")"
+        elif self.managed:
             query += f"SIZE = '{self.size}', REPLICATION FACTOR = {len(self.replicas)}, INTROSPECTION INTERVAL = '{self.introspection_interval}'"
         else:
             query += "REPLICAS("
@@ -1025,12 +1137,35 @@ class Database:
         complexity: Complexity,
         scenario: Scenario,
         naughty_identifiers: bool,
+        # When True, top-level objects whose names are not schema-qualified
+        # (clusters and roles) are scoped by the database seed so concurrent
+        # Database instances against one materialize don't collide. Off by
+        # default; opted into by the Antithesis parallel-driver where many
+        # invocations share the SUT. Tables / schemas / views are already
+        # qualified by DB.name() which includes the seed, so they don't
+        # need this.
+        seed_scoped_names: bool = False,
+        # When non-None, every cluster the Database creates uses the
+        # external clusterd-pool backend (unmanaged-with-explicit-addresses)
+        # rather than the orchestrator. The Database slices this list one
+        # member per replica across its clusters at construction time.
+        # See `ClusterdPoolMember` for the shape; sized to fit the
+        # database's initial cluster + replica plan.
+        pool_members: list[ClusterdPoolMember] | None = None,
     ):
         self.host = host
         self.ports = ports
         self.complexity = complexity
         self.scenario = scenario
         self.seed = seed
+        self.seed_scoped_names = seed_scoped_names
+        self.pool_members = pool_members
+        # The bare seed (no leading/trailing punctuation) used by Cluster /
+        # Role / etc. to assemble their scoped names. Empty when seed-scoping
+        # is off, in which case those classes fall back to their historical
+        # `cluster-N` / `role0` shapes. See Cluster.name() and Role.__str__()
+        # for how the seed gets inlaid.
+        self.name_scope = seed if seed_scoped_names else ""
         set_naughty_identifiers(naughty_identifiers)
 
         self.s3_path = 0
@@ -1064,21 +1199,47 @@ class Database:
             )
             self.views.append(view)
         self.view_id = len(self.views)
-        self.roles = [Role(i) for i in range(rng.randint(0, MAX_INITIAL_ROLES))]
-        self.role_id = len(self.roles)
-        # At least one storage cluster required for WebhookSources
-        self.clusters = [
-            Cluster(
-                i,
-                managed=rng.choice([True, False]),
-                size=rng.choice(
-                    ["scale=1,workers=1", "scale=1,workers=4", "scale=2,workers=2"]
-                ),
-                replication_factor=1,
-                introspection_interval="1s",
-            )
-            for i in range(rng.randint(1, MAX_INITIAL_CLUSTERS))
+        self.roles = [
+            Role(i, name_scope=self.name_scope)
+            for i in range(rng.randint(0, MAX_INITIAL_ROLES))
         ]
+        self.role_id = len(self.roles)
+        # At least one storage cluster required for WebhookSources.
+        # In pool mode, each cluster claims one pool member from a
+        # deterministic slice; the number of clusters is the slice size, no
+        # rng.randint. Caller is responsible for sizing `pool_members` to
+        # the desired cluster count.
+        if pool_members is not None:
+            initial_cluster_count = len(pool_members)
+            self.clusters = [
+                Cluster(
+                    i,
+                    # managed/size are ignored when pool-backed but kept as
+                    # placeholder values for any code that reads them
+                    # without consulting `is_pool_backed`.
+                    managed=False,
+                    size=pool_members[i].host,
+                    replication_factor=1,
+                    introspection_interval="1s",
+                    name_scope=self.name_scope,
+                    pool_members=[pool_members[i]],
+                )
+                for i in range(initial_cluster_count)
+            ]
+        else:
+            self.clusters = [
+                Cluster(
+                    i,
+                    managed=rng.choice([True, False]),
+                    size=rng.choice(
+                        ["scale=1,workers=1", "scale=1,workers=4", "scale=2,workers=2"]
+                    ),
+                    replication_factor=1,
+                    introspection_interval="1s",
+                    name_scope=self.name_scope,
+                )
+                for i in range(rng.randint(1, MAX_INITIAL_CLUSTERS))
+            ]
         self.cluster_id = len(self.clusters)
         self.indexes = set()
         self.webhook_sources = [
