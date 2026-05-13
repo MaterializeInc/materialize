@@ -1,6 +1,6 @@
 ---
 source: src/catalog/src/builtin.rs
-revision: 4d59d67c50
+revision: 36df04b4d9
 ---
 
 # catalog::builtin
@@ -11,8 +11,9 @@ Key types include `Builtin<T>` (a generic enum with variants Log, Table, View, M
 `MZ_CONNECTIONS` and `MZ_SECRETS` are `BuiltinMaterializedView` objects backed by queries over `mz_internal.mz_catalog_raw`, and are registered in `BUILTINS_STATIC` as `Builtin::MaterializedView`.
 Each builtin struct carries an optional `ontology` field of type `Option<Ontology>` that marks the object as a catalog ontology entity and provides entity-level metadata.
 `Ontology` captures an `entity_name`, a one-line `description`, a list of `OntologyLink` relationships, and per-column `column_semantic_types` annotations (`&'static [(&'static str, SemanticType)]`). Semantic types are stored here rather than in `RelationDesc` to avoid persist schema mismatches during zero-downtime upgrades.
-`OntologyLink` pairs a link `name` with a `LinkProperties` variant: `ForeignKey` (column-to-column reference with `Cardinality`, optional `source_id_type`, `requires_mapping`, `nullable`, and `note`), `Union` (superset view with optional `discriminator_column`/`discriminator_value`), `MapsTo` (ID-type conversion with optional `via` table and `from_type`/`to_type`), `DependsOn` (direct dependency), and `Measures` (metric measurement). `LinkProperties` serializes to JSONB via serde with `#[serde(tag = "kind")]`.
+`OntologyLink` pairs a link `name` with a `LinkProperties` variant: `ForeignKey` (column-to-column reference with `Cardinality`, optional `source_id_type`, `requires_mapping`, `nullable`, and `note`), `Union` (superset view with optional `discriminator_column`/`discriminator_value`), `MapsTo` (ID-type conversion with required `source_column`/`target_column` and optional `via` table and `from_type`/`to_type`), `DependsOn` (dependency via a graph-edge table with required `source_column`/`target_column` and optional `extra_key_columns` for composite join keys such as `(id, worker_id)`), and `Measures` (metric measurement). `LinkProperties` serializes to JSONB via serde with `#[serde(tag = "kind")]`.
 `Cardinality` is `OneToOne` or `ManyToOne`.
+Builtin object definitions are split across per-schema submodules: `pg_catalog`, `mz_catalog`, `mz_internal`, `mz_introspection`, and `information_schema`; each re-exports its contents into the parent namespace.
 The `builtin` submodule generates the `mz_builtin_materialized_views` view, which exposes metadata about all builtin materialized views.
 The `notice` submodule contains the optimizer-notice tables.
 The `ontology` submodule contains the static ontology entity definitions used to populate `mz_internal.mz_ontology_*` views.
