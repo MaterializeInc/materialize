@@ -44,6 +44,18 @@ class Executor:
     def DockerMemClusterd(self) -> int:
         raise NotImplementedError
 
+    def DockerMemPeakMz(self) -> int | None:
+        raise NotImplementedError
+
+    def DockerMemPeakClusterd(self) -> int | None:
+        raise NotImplementedError
+
+    def DockerMemPeakResetMz(self) -> bool:
+        raise NotImplementedError
+
+    def DockerMemPeakResetClusterd(self) -> bool:
+        raise NotImplementedError
+
 
 class Docker(Executor):
     def __init__(
@@ -92,6 +104,18 @@ class Docker(Executor):
 
     def DockerMemClusterd(self) -> int:
         return self._composition.mem("clusterd")
+
+    def DockerMemPeakMz(self) -> int | None:
+        return self._composition.mem_peak("materialized")
+
+    def DockerMemPeakClusterd(self) -> int | None:
+        return self._composition.mem_peak("clusterd")
+
+    def DockerMemPeakResetMz(self) -> bool:
+        return self._composition.mem_peak_reset("materialized")
+
+    def DockerMemPeakResetClusterd(self) -> bool:
+        return self._composition.mem_peak_reset("clusterd")
 
 
 class MzCloud(Executor):

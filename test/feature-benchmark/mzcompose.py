@@ -182,6 +182,8 @@ def run_one_scenario(
     if args.measure_memory:
         measurement_types.append(MeasurementType.MEMORY_MZ)
         measurement_types.append(MeasurementType.MEMORY_CLUSTERD)
+        measurement_types.append(MeasurementType.MEMORY_PEAK_MZ)
+        measurement_types.append(MeasurementType.MEMORY_PEAK_CLUSTERD)
 
     result = BenchmarkScenarioResult(scenario_class, measurement_types)
 
