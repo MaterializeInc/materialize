@@ -1,0 +1,69 @@
+# EXPECTED GROUP SIZE = 0 causes division by zero in cardinality estimation -> Infinity -> panic in rounded().
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_cardinality_estimates = true
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET optimizer_oneshot_stats_timeout TO '2s'
+----
+COMPLETE 0
+
+simple
+SET ENABLE_SESSION_CARDINALITY_ESTIMATES TO TRUE
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE t_card_panic (a INT NOT NULL, b INT NOT NULL)
+
+statement ok
+CREATE TABLE t_card_panic2 (a INT NOT NULL)
+
+statement ok
+INSERT INTO t_card_panic SELECT x, x * 10 FROM generate_series(1, 100) AS x
+
+statement ok
+INSERT INTO t_card_panic2 SELECT x FROM generate_series(1, 100) AS x
+
+statement ok
+SELECT mz_unsafe.mz_sleep(5)
+
+# Reduce path: input / 0.0 = Infinity → panic in rounded()
+statement ok
+SELECT sub.a, sub.cnt
+FROM (
+    SELECT a, COUNT(*) AS cnt
+    FROM t_card_panic
+    GROUP BY a
+    OPTIONS (EXPECTED GROUP SIZE = 0)
+) sub
+JOIN t_card_panic2 ON sub.a = t_card_panic2.a
+
+# TopK path: input * (limit / 0.0) = Infinity
+statement ok
+SELECT sub.a, sub.b
+FROM (
+    SELECT a, b FROM t_card_panic
+    OPTIONS (LIMIT INPUT GROUP SIZE = 0)
+    ORDER BY b LIMIT 10
+) sub
+JOIN t_card_panic2 ON sub.a = t_card_panic2.a
+
+# Cleanup
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_cardinality_estimates = false
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET optimizer_oneshot_stats_timeout
+----
+COMPLETE 0
+
+statement ok
+DROP TABLE t_card_panic CASCADE
+
+statement ok
+DROP TABLE t_card_panic2 CASCADE
