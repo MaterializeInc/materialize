@@ -127,77 +127,77 @@ pub(crate) struct LoggingTraces {
 impl LoggingContext<'_> {
     fn construct_dataflow(&mut self) -> BTreeMap<LogVariant, TraceBundle> {
         self.worker.dataflow_named("Dataflow: logging", |scope| {
-            let scope = scope.with_label();
+            scope.with_label(|scope| {
+                let mut collections = BTreeMap::new();
 
-            let mut collections = BTreeMap::new();
+                let super::timely::Return {
+                    collections: timely_collections,
+                } = super::timely::construct(
+                    scope,
+                    self.config,
+                    self.t_event_queue.clone(),
+                    Rc::clone(&self.shared_state),
+                    self.storage_log_reader.take(),
+                );
+                collections.extend(timely_collections);
 
-            let super::timely::Return {
-                collections: timely_collections,
-            } = super::timely::construct(
-                scope,
-                self.config,
-                self.t_event_queue.clone(),
-                Rc::clone(&self.shared_state),
-                self.storage_log_reader.take(),
-            );
-            collections.extend(timely_collections);
+                let super::reachability::Return {
+                    collections: reachability_collections,
+                } = super::reachability::construct(scope, self.config, self.r_event_queue.clone());
+                collections.extend(reachability_collections);
 
-            let super::reachability::Return {
-                collections: reachability_collections,
-            } = super::reachability::construct(scope, self.config, self.r_event_queue.clone());
-            collections.extend(reachability_collections);
+                let super::differential::Return {
+                    collections: differential_collections,
+                } = super::differential::construct(
+                    scope,
+                    self.config,
+                    self.d_event_queue.clone(),
+                    Rc::clone(&self.shared_state),
+                );
+                collections.extend(differential_collections);
 
-            let super::differential::Return {
-                collections: differential_collections,
-            } = super::differential::construct(
-                scope,
-                self.config,
-                self.d_event_queue.clone(),
-                Rc::clone(&self.shared_state),
-            );
-            collections.extend(differential_collections);
+                let super::compute::Return {
+                    collections: compute_collections,
+                } = super::compute::construct(
+                    scope.clone(),
+                    scope.activations(),
+                    self.config,
+                    self.c_event_queue.clone(),
+                    Rc::clone(&self.shared_state),
+                );
+                collections.extend(compute_collections);
 
-            let super::compute::Return {
-                collections: compute_collections,
-            } = super::compute::construct(
-                scope.clone(),
-                scope.activations(),
-                self.config,
-                self.c_event_queue.clone(),
-                Rc::clone(&self.shared_state),
-            );
-            collections.extend(compute_collections);
+                let super::prometheus::Return {
+                    collections: prometheus_collections,
+                } = super::prometheus::construct(
+                    scope,
+                    self.config,
+                    self.metrics_registry.clone(),
+                    self.now,
+                    self.start_offset,
+                    Rc::clone(&self.worker_config),
+                    self.workers_per_process,
+                );
+                collections.extend(prometheus_collections);
 
-            let super::prometheus::Return {
-                collections: prometheus_collections,
-            } = super::prometheus::construct(
-                scope,
-                self.config,
-                self.metrics_registry.clone(),
-                self.now,
-                self.start_offset,
-                Rc::clone(&self.worker_config),
-                self.workers_per_process,
-            );
-            collections.extend(prometheus_collections);
+                let errs = scope.scoped("logging errors", |scope| {
+                    let collection: KeyCollection<_, DataflowErrorSer, Diff> =
+                        VecCollection::empty(scope).into();
+                    collection
+                        .mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, _>("Arrange logging err")
+                        .trace
+                });
 
-            let errs = scope.scoped("logging errors", |scope| {
-                let collection: KeyCollection<_, DataflowErrorSer, Diff> =
-                    VecCollection::empty(scope).into();
-                collection
-                    .mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, _>("Arrange logging err")
-                    .trace
-            });
-
-            let traces = collections
-                .into_iter()
-                .map(|(log, collection)| {
-                    let bundle = TraceBundle::new(collection.trace, errs.clone())
-                        .with_drop(collection.token);
-                    (log, bundle)
-                })
-                .collect();
-            traces
+                let traces = collections
+                    .into_iter()
+                    .map(|(log, collection)| {
+                        let bundle = TraceBundle::new(collection.trace, errs.clone())
+                            .with_drop(collection.token);
+                        (log, bundle)
+                    })
+                    .collect();
+                traces
+            })
         })
     }
 

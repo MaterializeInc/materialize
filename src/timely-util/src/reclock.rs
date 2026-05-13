@@ -194,9 +194,17 @@ use timely::progress::{Antichain, Timestamp};
 /// into the corresponding `reclocked` collection varying over some time `IntoTime` using the
 /// provided `remap` collection.
 ///
-/// In order for the operator to read the `source` collection a `Pusher` is returned which can be
-/// used with timely's capture facilities to connect a collection from a foreign scope to this
-/// operator.
+/// # Pusher contract
+///
+/// The returned `Box<dyn Push<...>>` is the operator's source-side input. The operator activates
+/// only when the pusher pushes data or progress, so the caller **must** drive it from the foreign
+/// `FromTime` scope (typically by feeding `capture()` events into it). If the pusher is dropped
+/// without ever being used, the operator never observes a `FromTime` frontier advance and its
+/// `reclocked` output frontier stays pinned at `as_of`, which presents as a silent deadlock at
+/// the consumer.
+///
+/// To signal end of input, drop the pusher: this advances the source frontier to the empty
+/// antichain and lets the operator drain.
 pub fn reclock<'scope, D, FromTime, IntoTime, R>(
     remap_collection: VecCollection<'scope, IntoTime, FromTime, Overflowing<i64>>,
     as_of: Antichain<IntoTime>,
