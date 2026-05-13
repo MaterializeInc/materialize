@@ -5798,3 +5798,64 @@ async fn test_oidc_group_sync_fail_open_sends_notice() {
         notice.message()
     );
 }
+
+/// JWT group-to-role matching must be case-sensitive. A JWT group "Admin" must
+/// not grant the privileges of the distinct "admin" role (SQL-276).
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method`
+async fn test_oidc_group_sync_case_sensitive() {
+    let (server, admin_client, oidc_server) = setup_group_sync_test().await;
+
+    // Create two roles that differ only by case, grant privileges to the lowercase one.
+    admin_client
+        .batch_execute("CREATE ROLE admin")
+        .await
+        .unwrap();
+    admin_client
+        .batch_execute(r#"CREATE ROLE "Admin""#)
+        .await
+        .unwrap();
+    admin_client
+        .batch_execute("CREATE TABLE case_test_data (data TEXT)")
+        .await
+        .unwrap();
+    admin_client
+        .batch_execute("INSERT INTO case_test_data VALUES ('top-secret')")
+        .await
+        .unwrap();
+    admin_client
+        .batch_execute("GRANT SELECT ON case_test_data TO admin")
+        .await
+        .unwrap();
+
+    // JWT with "Admin" (capitalized) should grant only the "Admin" role, not "admin".
+    // "Admin" has no SELECT privilege on secrets, so the query must fail.
+    let token_wrong_case = jwt_with_groups(&oidc_server, serde_json::json!(["Admin"]));
+    let client = oidc_connect(&server, &token_wrong_case)
+        .await
+        .expect("login should succeed even with wrong-case group");
+
+    let err = client
+        .query("SELECT data FROM case_test_data", &[])
+        .await
+        .expect_err("capitalized 'Admin' group must not inherit lowercase 'admin' privileges");
+    assert!(
+        err.as_db_error()
+            .map(|e| e.message().contains("permission denied"))
+            .unwrap_or(false),
+        "expected permission denied, got: {err}"
+    );
+
+    // JWT with "admin" (lowercase) should grant the privileged role and succeed.
+    let token_exact = jwt_with_groups(&oidc_server, serde_json::json!(["admin"]));
+    let client = oidc_connect(&server, &token_exact)
+        .await
+        .expect("login should succeed with exact-case group");
+
+    let rows = client
+        .query("SELECT data FROM case_test_data", &[])
+        .await
+        .expect("exact 'admin' group should grant SELECT on secrets");
+    let val: String = rows[0].get(0);
+    assert_eq!(val, "top-secret");
+}
