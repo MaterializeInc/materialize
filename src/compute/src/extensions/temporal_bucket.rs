@@ -17,7 +17,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use differential_dataflow::trace::{Batcher, Builder, Description};
 use mz_timely_util::columnation::{ColInternalMerger, ColumnationChunker, ColumnationStack};
-use mz_timely_util::temporal::{Bucket, BucketChain, BucketTimestamp};
+use mz_timely_util::temporal::{Bucket, BucketChain, Frontier};
 use timely::container::PushInto;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Operator;
@@ -48,7 +48,7 @@ pub trait TemporalBucketing<'scope, T: Timestamp, O> {
 impl<'scope, T, D> TemporalBucketing<'scope, T, (D, T, mz_repr::Diff)>
     for StreamVec<'scope, T, (D, T, mz_repr::Diff)>
 where
-    T: Timestamp + ExchangeData + MzData + BucketTimestamp + TotalOrder + Lattice,
+    T: Timestamp + ExchangeData + MzData + Frontier + TotalOrder + Lattice,
     D: ExchangeData + MzData + Ord + Clone + std::fmt::Debug + Hashable,
 {
     fn bucket<CB>(
@@ -204,17 +204,17 @@ where
 impl<D, T, R> Bucket for MergeBatcherWrapper<D, T, R>
 where
     D: MzData + Ord + Clone + 'static,
-    T: MzData + Ord + PartialOrder + Clone + 'static + BucketTimestamp,
+    T: MzData + Ord + PartialOrder + Clone + 'static + Frontier,
     R: MzData + Semigroup + Default,
 {
-    type Timestamp = T;
+    type Frontier = T;
 
-    fn split(mut self, timestamp: &Self::Timestamp, fuel: &mut i64) -> (Self, Self) {
+    fn split(mut self, at: &Self::Frontier, fuel: &mut i64) -> (Self, Self) {
         // The implementation isn't tuned for performance. We should not bounce in and out of
         // different containers when not needed. The merge batcher we use can only accept
         // vectors as inputs, but not any other container type.
         // TODO: Allow the merge batcher to accept more generic containers.
-        let upper = Antichain::from_elem(timestamp.clone());
+        let upper = Antichain::from_elem(at.clone());
         let mut lower = Self::new(self.logger.clone(), self.operator_id);
         let mut buffer = Vec::new();
         for chunk in self.inner.seal::<CapturingBuilder<_, _>>(upper) {
