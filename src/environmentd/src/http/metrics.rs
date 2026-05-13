@@ -61,6 +61,53 @@ impl Metrics {
     }
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct McpMetrics {
+    /// Total MCP JSON-RPC requests by endpoint, method, and outcome.
+    pub requests_total: IntCounterVec,
+    /// Total MCP tool calls by endpoint, tool, and outcome.
+    pub tool_calls_total: IntCounterVec,
+    /// Duration of MCP tool call execution.
+    pub tool_duration_seconds: HistogramVec,
+    /// Total MCP errors by endpoint and error type.
+    pub errors_total: IntCounterVec,
+    /// Total MCP requests that timed out.
+    pub timeouts_total: IntCounterVec,
+}
+
+impl McpMetrics {
+    pub(crate) fn register_into(registry: &MetricsRegistry) -> Self {
+        Self {
+            requests_total: registry.register(metric!(
+                name: "mcp_requests_total",
+                help: "Total number of MCP JSON-RPC requests.",
+                var_labels: ["endpoint", "method", "status"],
+            )),
+            tool_calls_total: registry.register(metric!(
+                name: "mcp_tool_calls_total",
+                help: "Total number of MCP tool calls by tool and outcome.",
+                var_labels: ["endpoint", "tool", "status"],
+            )),
+            tool_duration_seconds: registry.register(metric!(
+                name: "mcp_tool_duration_seconds",
+                help: "Duration of MCP tool call execution in seconds.",
+                var_labels: ["endpoint", "tool"],
+                buckets: histogram_seconds_buckets(0.000_128, 8.0)
+            )),
+            errors_total: registry.register(metric!(
+                name: "mcp_errors_total",
+                help: "Total number of MCP errors by endpoint and error type.",
+                var_labels: ["endpoint", "error_type"],
+            )),
+            timeouts_total: registry.register(metric!(
+                name: "mcp_timeouts_total",
+                help: "Total number of MCP requests that timed out.",
+                var_labels: ["endpoint"],
+            )),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct PrometheusLayer {
     metrics: Metrics,

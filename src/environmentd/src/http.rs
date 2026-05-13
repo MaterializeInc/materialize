@@ -426,50 +426,57 @@ impl HttpServer {
         }
 
         if routes_enabled.metrics {
-            let metrics_router = Router::new()
-                .route(
-                    "/metrics",
-                    routing::get(move || async move {
-                        mz_http_util::handle_prometheus(&metrics_registry).await
-                    }),
-                )
-                .route(
-                    "/metrics/mz_usage",
-                    routing::get(|client: AuthedClient| async move {
-                        let registry = sql::handle_promsql(client, USAGE_METRIC_QUERIES).await;
-                        mz_http_util::handle_prometheus(&registry).await
-                    }),
-                )
-                .route(
-                    "/metrics/mz_frontier",
-                    routing::get(|client: AuthedClient| async move {
-                        let registry = sql::handle_promsql(client, FRONTIER_METRIC_QUERIES).await;
-                        mz_http_util::handle_prometheus(&registry).await
-                    }),
-                )
-                .route(
-                    "/metrics/mz_compute",
-                    routing::get(|client: AuthedClient| async move {
-                        let registry = sql::handle_promsql(client, COMPUTE_METRIC_QUERIES).await;
-                        mz_http_util::handle_prometheus(&registry).await
-                    }),
-                )
-                .route(
-                    "/metrics/mz_storage",
-                    routing::get(|client: AuthedClient| async move {
-                        let registry = sql::handle_promsql(client, STORAGE_METRIC_QUERIES).await;
-                        mz_http_util::handle_prometheus(&registry).await
-                    }),
-                )
-                .route(
-                    "/api/livez",
-                    routing::get(mz_http_util::handle_liveness_check),
-                )
-                .route("/api/readyz", routing::get(probe::handle_ready))
-                .layer(auth_middleware.clone())
-                .layer(Extension(adapter_client_rx.clone()))
-                .layer(Extension(active_connection_counter.clone()))
-                .layer(Extension(HelmChartVersion(helm_chart_version.clone())));
+            let metrics_router =
+                Router::new()
+                    .route(
+                        "/metrics",
+                        routing::get({
+                            let metrics_registry = metrics_registry.clone();
+                            move || async move {
+                                mz_http_util::handle_prometheus(&metrics_registry).await
+                            }
+                        }),
+                    )
+                    .route(
+                        "/metrics/mz_usage",
+                        routing::get(|client: AuthedClient| async move {
+                            let registry = sql::handle_promsql(client, USAGE_METRIC_QUERIES).await;
+                            mz_http_util::handle_prometheus(&registry).await
+                        }),
+                    )
+                    .route(
+                        "/metrics/mz_frontier",
+                        routing::get(|client: AuthedClient| async move {
+                            let registry =
+                                sql::handle_promsql(client, FRONTIER_METRIC_QUERIES).await;
+                            mz_http_util::handle_prometheus(&registry).await
+                        }),
+                    )
+                    .route(
+                        "/metrics/mz_compute",
+                        routing::get(|client: AuthedClient| async move {
+                            let registry =
+                                sql::handle_promsql(client, COMPUTE_METRIC_QUERIES).await;
+                            mz_http_util::handle_prometheus(&registry).await
+                        }),
+                    )
+                    .route(
+                        "/metrics/mz_storage",
+                        routing::get(|client: AuthedClient| async move {
+                            let registry =
+                                sql::handle_promsql(client, STORAGE_METRIC_QUERIES).await;
+                            mz_http_util::handle_prometheus(&registry).await
+                        }),
+                    )
+                    .route(
+                        "/api/livez",
+                        routing::get(mz_http_util::handle_liveness_check),
+                    )
+                    .route("/api/readyz", routing::get(probe::handle_ready))
+                    .layer(auth_middleware.clone())
+                    .layer(Extension(adapter_client_rx.clone()))
+                    .layer(Extension(active_connection_counter.clone()))
+                    .layer(Extension(HelmChartVersion(helm_chart_version.clone())));
             router = router.merge(metrics_router);
         }
 
@@ -489,6 +496,7 @@ impl HttpServer {
         if routes_enabled.mcp_agent || routes_enabled.mcp_developer {
             use tracing::info;
 
+            let mcp_metrics = Arc::new(metrics::McpMetrics::register_into(&metrics_registry));
             let mut mcp_router = Router::new();
 
             if routes_enabled.mcp_agent {
@@ -521,6 +529,7 @@ impl HttpServer {
                 .layer(Extension(active_connection_counter.clone()))
                 .layer(Extension(HelmChartVersion(helm_chart_version.clone())))
                 .layer(Extension(mcp_allowed_origins))
+                .layer(Extension(mcp_metrics))
                 .layer(
                     CorsLayer::new()
                         .allow_methods(Method::POST)
