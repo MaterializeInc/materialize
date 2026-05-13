@@ -73,3 +73,12 @@ roles. Regular database users cannot view or modify them.
 {{< /tab >}}
 
 {{< /tabs >}}
+
+## Privileges
+
+The privileges required to use this endpoint are:
+
+  * `USAGE` on system catalog schemas and `SELECT` on system catalog objects. These privileges are granted by default.
+
+  * If agents also need access to replica-specific metrics from
+    `mz_introspection`, `USAGE` privileges on the corresponding cluster.
