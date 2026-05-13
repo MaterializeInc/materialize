@@ -269,7 +269,10 @@ where
         // The output capability's time tracks how far we've progressed in
         // copying along the passthrough input. `None` indicates that we've
         // dropped the capability to shut down.
-        let mut capability: Option<_> = capabilities.into_iter().next();
+        let [cap]: [_; 1] = capabilities
+            .try_into()
+            .expect("one capability per output");
+        let mut capability = Some(cap);
         // The most recently observed remap state. Retained even after the
         // remap input closes so we can still advance the output capability to
         // the last known `logical_upper` while the passthrough input is
@@ -330,17 +333,21 @@ where
 
             debug!("{} remap {:?} remap_closed={}", name, remap, remap_closed);
 
-            // Mirror the async state machine: only consult the passthrough
-            // frontier when the operator is in "WaitingForPassthrough" mode,
-            // i.e. either remap has indicated the physical upper has moved
-            // ahead of `cap` (so cap must advance through passthrough), or
-            // the remap input has closed entirely (no further logical_upper
-            // bumps are coming). In "WaitingForRemap" mode we ignore the
-            // passthrough frontier — including an empty antichain — to avoid
-            // shutting down prematurely while logical advances are still
-            // possible from a stuck remap stream (e.g., `SELECT AS OF MAX`
-            // where `txns_progress_source` blocks on `update_gt(MAX)` and
-            // never emits a remap update).
+            // Only consult the passthrough frontier when we are not still
+            // waiting on remap to push `physical_upper` past the current
+            // capability. We are "waiting on remap" while `physical_upper <=
+            // cap.time()` and the remap input is still open: in that state,
+            // the next event we expect is a remap update that lets us jump
+            // `cap` forward to `logical_upper`, not a passthrough frontier
+            // advance. Consulting the passthrough frontier in that state can
+            // drop the capability prematurely — for example, `SELECT AS OF
+            // MAX` causes `txns_progress_source` to block on
+            // `update_gt(MAX)`, so no remap update ever arrives and the
+            // passthrough side eventually reports the empty antichain; if we
+            // dropped the capability on that, the SELECT would complete
+            // instead of blocking until the timestamp exists. Once the remap
+            // input is closed, no further `logical_upper` bumps are possible
+            // and the passthrough frontier is the only remaining driver.
             let waiting_for_remap = match capability.as_ref() {
                 Some(cap) => !remap_closed && remap.physical_upper.less_equal(cap.time()),
                 None => false,
