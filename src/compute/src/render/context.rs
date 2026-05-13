@@ -671,11 +671,11 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                         let err_cap = time.retain(1);
                         let mut ok_session = ok_output.session_with_builder(&ok_cap);
                         let mut err_session = err_output.session_with_builder(&err_cap);
-                        for (v, t, d) in data.iter() {
+                        for (v, t, d) in data.drain(..) {
                             logic(
-                                &mut datums.borrow_with_limit(v, max_demand),
-                                t.clone(),
-                                d.clone(),
+                                &mut datums.borrow_with_limit(&v, max_demand),
+                                t,
+                                d,
                                 &mut ok_session,
                                 &mut err_session,
                             );
