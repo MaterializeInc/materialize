@@ -66,7 +66,7 @@ STAGING_APP_PASSWORD = os.getenv("NIGHTLY_CANARY_APP_PASSWORD")
 MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = {
     "memory_limiter_interval": "0s",
     "max_credit_consumption_rate": "1024",
-    # Lifted for the envd_scalability scenarios, which can build up to 100k
+    # Lifted for the envd_objects_scalability scenarios, which can build up to 100k
     # tables or materialized views in a single schema, plus 10 pad clusters
     # (10000 MVs/cluster). Other scenarios are unaffected by these higher
     # ceilings. Cloud targets need the same limits configured server-side.
@@ -107,8 +107,8 @@ SCENARIO_TPCH_STRONG = "tpch_strong"
 SCENARIO_SOURCE_INGESTION_STRONG = "source_ingestion_strong"
 SCENARIO_QPS_ENVD_STRONG_SCALING = "qps_envd_strong_scaling"
 SCENARIO_COPY_FROM_STDIN_ENVD_STRONG_SCALING = "copy_from_stdin_envd_strong_scaling"
-SCENARIO_ENVD_SCALABILITY_TABLES = "envd_scalability_tables"
-SCENARIO_ENVD_SCALABILITY_MVS = "envd_scalability_mvs"
+SCENARIO_ENVD_OBJECTS_SCALABILITY_TABLES = "envd_objects_scalability_tables"
+SCENARIO_ENVD_OBJECTS_SCALABILITY_MVS = "envd_objects_scalability_mvs"
 SCENARIO_CLUSTER_OBJECT_LIMITS_INDEXES = "cluster_object_limits_indexes"
 SCENARIO_CLUSTER_OBJECT_LIMITS_MVS = "cluster_object_limits_mvs"
 
@@ -132,13 +132,13 @@ SCENARIOS_CLUSTERD_COMPUTE = [
 SCENARIOS_SOURCE_INGESTION = [
     SCENARIO_SOURCE_INGESTION_STRONG,
 ]
-SCENARIOS_ENVIRONMENTD = [
+SCENARIOS_ENVD_QPS_SCALABILITY = [
     SCENARIO_QPS_ENVD_STRONG_SCALING,
     SCENARIO_COPY_FROM_STDIN_ENVD_STRONG_SCALING,
 ]
-SCENARIOS_ENVD_SCALABILITY = [
-    SCENARIO_ENVD_SCALABILITY_TABLES,
-    SCENARIO_ENVD_SCALABILITY_MVS,
+SCENARIOS_ENVD_OBJECTS_SCALABILITY = [
+    SCENARIO_ENVD_OBJECTS_SCALABILITY_TABLES,
+    SCENARIO_ENVD_OBJECTS_SCALABILITY_MVS,
 ]
 SCENARIOS_CLUSTER_OBJECT_LIMITS = [
     SCENARIO_CLUSTER_OBJECT_LIMITS_INDEXES,
@@ -146,8 +146,8 @@ SCENARIOS_CLUSTER_OBJECT_LIMITS = [
 ]
 ALL_SCENARIOS = (
     SCENARIOS_CLUSTERD
-    + SCENARIOS_ENVIRONMENTD
-    + SCENARIOS_ENVD_SCALABILITY
+    + SCENARIOS_ENVD_QPS_SCALABILITY
+    + SCENARIOS_ENVD_OBJECTS_SCALABILITY
     + SCENARIOS_CLUSTER_OBJECT_LIMITS
 )
 
@@ -155,15 +155,15 @@ SCENARIO_GROUPS = {
     "cluster": SCENARIOS_CLUSTERD,
     "cluster_compute": SCENARIOS_CLUSTERD_COMPUTE,
     "source_ingestion": SCENARIOS_SOURCE_INGESTION,
-    "environmentd": SCENARIOS_ENVIRONMENTD,
-    "envd_scalability": SCENARIOS_ENVD_SCALABILITY,
+    "envd_qps_scalability": SCENARIOS_ENVD_QPS_SCALABILITY,
+    "envd_objects_scalability": SCENARIOS_ENVD_OBJECTS_SCALABILITY,
     "cluster_object_limits": SCENARIOS_CLUSTER_OBJECT_LIMITS,
     "all": ALL_SCENARIOS,
 }
 
 REPLICA_SCALES = [1, 2, 4, 8, 16, 32]
 
-ENVD_SCALABILITY_SIZES = [
+ENVD_OBJECTS_SCALABILITY_SIZES = [
     1,
     10,
     100,
@@ -175,7 +175,7 @@ ENVD_SCALABILITY_SIZES = [
     30_000,
     50_000,
 ]
-ENVD_SCALABILITY_MVS_PER_CLUSTER = 10_000
+ENVD_OBJECTS_SCALABILITY_MVS_PER_CLUSTER = 10_000
 
 # Default N-walk for the cluster_object_limits scenarios: geometric up to 1k,
 # then +1k increments. The cap is configurable via --cluster-object-limits-max
@@ -2267,13 +2267,13 @@ class SourceIngestionScenario(Scenario):
         )
 
 
-class EnvdScalabilityScenario(Scenario):
+class EnvdObjectsScalabilityScenario(Scenario):
     """
-    Base class for envd-scalability scenarios. These vary the number of catalog
+    Base class for envd_objects_scalability scenarios. These vary the number of catalog
     objects and measure adapter/envd latency for a DDL and a simple peek.
 
     The scale point (number of catalog objects, N) is driven externally by
-    `run_scenario_envd_scalability`. The same `runner` is reused across all N,
+    `run_scenario_envd_objects_scalability`. The same `runner` is reused across all N,
     with `runner.scale` updated per step so that result rows carry N.
     """
 
@@ -2293,8 +2293,8 @@ class EnvdScalabilityScenario(Scenario):
         return []
 
     # The framework-level `setup()` / `drop()` are unused here; everything
-    # specific to envd-scalability happens in `init()` / `add_objects()` /
-    # `teardown()`, which are driven by `run_scenario_envd_scalability`.
+    # specific to envd_objects_scalability happens in `init()` / `add_objects()` /
+    # `teardown()`, which are driven by `run_scenario_envd_objects_scalability`.
     def setup(self) -> list[str]:
         return []
 
@@ -2364,11 +2364,11 @@ def _bulk_run(runner: ScenarioRunner, statements: list[str], log_label: str) -> 
             print(f"  {log_label}: {i}/{total} ({rate:.1f}/s)")
 
 
-class EnvdScalabilityTablesScenario(EnvdScalabilityScenario):
+class EnvdObjectsScalabilityTablesScenario(EnvdObjectsScalabilityScenario):
     """N empty tables in the catalog. No controller load; pure catalog/adapter."""
 
     def name(self) -> str:
-        return SCENARIO_ENVD_SCALABILITY_TABLES
+        return SCENARIO_ENVD_OBJECTS_SCALABILITY_TABLES
 
     def add_objects(self, runner: ScenarioRunner, target_n: int) -> None:
         if target_n <= self._current_n:
@@ -2385,19 +2385,19 @@ class EnvdScalabilityTablesScenario(EnvdScalabilityScenario):
         self._current_n = target_n
 
 
-class EnvdScalabilityMvsScenario(EnvdScalabilityScenario):
+class EnvdObjectsScalabilityMvsScenario(EnvdObjectsScalabilityScenario):
     """N materialized views in the catalog, sharded across pad clusters.
 
     To bound per-cluster dataflow count, MVs are spread across multiple
     single-replica pad clusters (`pad_c_0`, `pad_c_1`, ...), at most
-    `ENVD_SCALABILITY_MVS_PER_CLUSTER` MVs per cluster.
+    `ENVD_OBJECTS_SCALABILITY_MVS_PER_CLUSTER` MVs per cluster.
 
     Each MV is a trivial transformation of a single 1-row base table, with
     the predicate parameterised on the index `i` so MVs are structurally
     distinct (and not collapsible via plan caching).
     """
 
-    MVS_PER_CLUSTER: int = ENVD_SCALABILITY_MVS_PER_CLUSTER
+    MVS_PER_CLUSTER: int = ENVD_OBJECTS_SCALABILITY_MVS_PER_CLUSTER
     PAD_BASE: str = "pad_base"
 
     def __init__(self, replica_size: str | None, pad_replica_size: str) -> None:
@@ -2406,7 +2406,7 @@ class EnvdScalabilityMvsScenario(EnvdScalabilityScenario):
         self._pad_clusters_created = 0
 
     def name(self) -> str:
-        return SCENARIO_ENVD_SCALABILITY_MVS
+        return SCENARIO_ENVD_OBJECTS_SCALABILITY_MVS
 
     def init(self, runner: ScenarioRunner) -> None:
         # Drop any leftover pad clusters from a previous failed run.
@@ -2863,13 +2863,13 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
         "--scale-auction", type=int, default=3, help="Auction scale factor."
     )
     parser.add_argument(
-        "--envd-scalability-sizes",
+        "--envd-objects-scalability-sizes",
         type=lambda s: [int(x) for x in s.split(",") if x.strip()],
-        default=ENVD_SCALABILITY_SIZES,
+        default=ENVD_OBJECTS_SCALABILITY_SIZES,
         help=(
             "Comma-separated list of catalog object counts to test for "
-            "envd_scalability scenarios. Defaults to "
-            f"{','.join(str(n) for n in ENVD_SCALABILITY_SIZES)}."
+            "envd_objects_scalability scenarios. Defaults to "
+            f"{','.join(str(n) for n in ENVD_OBJECTS_SCALABILITY_SIZES)}."
         ),
     )
     parser.add_argument(
@@ -2897,7 +2897,7 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
         "scenarios",
         nargs="*",
         choices=ALL_SCENARIOS + list(SCENARIO_GROUPS.keys()),
-        help="Scenarios to run, supports individual scenario names as well as 'all', 'cluster', 'environmentd', 'envd_scalability', 'cluster_object_limits'.",
+        help="Scenarios to run, supports individual scenario names as well as 'all', 'cluster', 'envd_qps_scalability', 'envd_objects_scalability', 'cluster_object_limits'.",
     )
 
     args = parser.parse_args()
@@ -2970,17 +2970,19 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
 
         target.initialize()
 
-        # Derive result files (cluster, envd-focused, envd_scalability,
+        # Derive result files (cluster, envd-focused, envd_objects_scalability,
         # cluster_object_limits) from the provided --record path.
         base_name = os.path.splitext(args.record)[0]
         cluster_path = f"{base_name}.cluster.csv"
         envd_path = f"{base_name}.envd.csv"
-        envd_scalability_path = f"{base_name}.envd_scalability.csv"
+        envd_objects_scalability_path = f"{base_name}.envd_objects_scalability.csv"
         cluster_object_limits_path = f"{base_name}.cluster_object_limits.csv"
 
         cluster_file = open(cluster_path, "w", newline="")
         envd_file = open(envd_path, "w", newline="")
-        envd_scalability_file = open(envd_scalability_path, "w", newline="")
+        envd_objects_scalability_file = open(
+            envd_objects_scalability_path, "w", newline=""
+        )
         cluster_object_limits_file = open(cluster_object_limits_path, "w", newline="")
 
         # Traditional scenarios: cluster-focused schema
@@ -3023,8 +3025,8 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
         # Envd-scalability scenarios reuse the cluster-focused schema:
         # `scale` carries the catalog object count (N), `cluster_size` is the
         # fixed measurement cluster, `time_ms` is the latency.
-        envd_scalability_writer = csv.DictWriter(
-            envd_scalability_file,
+        envd_objects_scalability_writer = csv.DictWriter(
+            envd_objects_scalability_file,
             fieldnames=[
                 "scenario",
                 "scenario_version",
@@ -3039,7 +3041,7 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
             ],
             extrasaction="ignore",
         )
-        envd_scalability_writer.writeheader()
+        envd_objects_scalability_writer.writeheader()
 
         # cluster_object_limits scenarios: per-(cluster_size, N) freshness
         # sample. `scale` carries N, `time_ms` carries the max local lag,
@@ -3174,28 +3176,28 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
                         target=target,
                         max_scale=max_scale,
                     )
-                if scenario == SCENARIO_ENVD_SCALABILITY_TABLES:
+                if scenario == SCENARIO_ENVD_OBJECTS_SCALABILITY_TABLES:
                     print("--- SCENARIO: Running envd scalability (tables)")
-                    run_scenario_envd_scalability(
-                        scenario=EnvdScalabilityTablesScenario(
+                    run_scenario_envd_objects_scalability(
+                        scenario=EnvdObjectsScalabilityTablesScenario(
                             target.replica_size_for_scale(1)
                         ),
-                        results_writer=envd_scalability_writer,
+                        results_writer=envd_objects_scalability_writer,
                         connection=conn,
                         target=target,
-                        sizes=args.envd_scalability_sizes,
+                        sizes=args.envd_objects_scalability_sizes,
                     )
-                if scenario == SCENARIO_ENVD_SCALABILITY_MVS:
+                if scenario == SCENARIO_ENVD_OBJECTS_SCALABILITY_MVS:
                     print("--- SCENARIO: Running envd scalability (materialized views)")
-                    run_scenario_envd_scalability(
-                        scenario=EnvdScalabilityMvsScenario(
+                    run_scenario_envd_objects_scalability(
+                        scenario=EnvdObjectsScalabilityMvsScenario(
                             target.replica_size_for_scale(1),
                             pad_replica_size=target.replica_size_for_scale(2),
                         ),
-                        results_writer=envd_scalability_writer,
+                        results_writer=envd_objects_scalability_writer,
                         connection=conn,
                         target=target,
-                        sizes=args.envd_scalability_sizes,
+                        sizes=args.envd_objects_scalability_sizes,
                     )
                 if scenario == SCENARIO_CLUSTER_OBJECT_LIMITS_INDEXES:
                     print("--- SCENARIO: Running cluster object limits (indexes)")
@@ -3228,7 +3230,7 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
         finally:
             cluster_file.close()
             envd_file.close()
-            envd_scalability_file.close()
+            envd_objects_scalability_file.close()
             cluster_object_limits_file.close()
             # Clean up
             if args.cleanup:
@@ -3240,10 +3242,10 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
         upload_environmentd_results_to_test_analytics(
             composition, envd_path, not test_failed
         )
-        # The envd_scalability rows share the cluster_spec_sheet_result schema
-        # (mode='envd_scalability' distinguishes them).
+        # The envd_objects_scalability rows share the cluster_spec_sheet_result schema
+        # (mode='envd_objects_scalability' distinguishes them).
         upload_cluster_results_to_test_analytics(
-            composition, envd_scalability_path, not test_failed
+            composition, envd_objects_scalability_path, not test_failed
         )
         # The cluster_object_limits rows reuse the cluster_spec_sheet_result
         # schema as well. The extra `healthy` column is dropped on upload
@@ -3259,7 +3261,9 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
             # Upload all CSVs as artifacts
             buildkite.upload_artifact(cluster_path, cwd=MZ_ROOT, quiet=True)
             buildkite.upload_artifact(envd_path, cwd=MZ_ROOT, quiet=True)
-            buildkite.upload_artifact(envd_scalability_path, cwd=MZ_ROOT, quiet=True)
+            buildkite.upload_artifact(
+                envd_objects_scalability_path, cwd=MZ_ROOT, quiet=True
+            )
             buildkite.upload_artifact(
                 cluster_object_limits_path, cwd=MZ_ROOT, quiet=True
             )
@@ -3268,7 +3272,7 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
             # Analyze each file separately (each has its own schema/x-axis)
             analyze_cluster_results_file(cluster_path)
             analyze_envd_results_file(envd_path)
-            analyze_envd_scalability_results_file(envd_scalability_path)
+            analyze_envd_objects_scalability_results_file(envd_objects_scalability_path)
             analyze_cluster_object_limits_results_file(cluster_object_limits_path)
 
 
@@ -3574,15 +3578,15 @@ def run_scenario_envd_strong_scaling(
             )
 
 
-def run_scenario_envd_scalability(
-    scenario: EnvdScalabilityScenario,
+def run_scenario_envd_objects_scalability(
+    scenario: EnvdObjectsScalabilityScenario,
     results_writer: csv.DictWriter,
     connection: ConnectionHandler,
     target: BenchTarget,
     sizes: list[int],
 ) -> None:
     """
-    Run an envd-scalability scenario, where the cluster size is fixed and the
+    Run an envd-objects-scalability scenario, where the cluster size is fixed and the
     number of catalog objects (`scale`) varies across the points in `sizes`.
 
     Builds the catalog incrementally so transitioning from N=k to the next
@@ -3594,7 +3598,7 @@ def run_scenario_envd_scalability(
         scenario.name(),
         scenario.VERSION,
         0,  # filled in per N below
-        "envd_scalability",
+        "envd_objects_scalability",
         connection,
         results_writer,
         replica_size=measurement_size,
@@ -3615,11 +3619,11 @@ def run_scenario_envd_scalability(
     try:
         for n in sizes:
             print(
-                f"--- envd_scalability {scenario.name()}: building catalog up to N={n}"
+                f"--- envd_objects_scalability {scenario.name()}: building catalog up to N={n}"
             )
             scenario.add_objects(runner, n)
             runner.scale = n
-            print(f"--- envd_scalability {scenario.name()}: measuring at N={n}")
+            print(f"--- envd_objects_scalability {scenario.name()}: measuring at N={n}")
             scenario.run(runner)
     finally:
         scenario.teardown(runner)
@@ -3877,23 +3881,23 @@ def workflow_plot_envd(
         analyze_envd_results_file(str(file))
 
 
-def workflow_plot_envd_scalability(
+def workflow_plot_envd_objects_scalability(
     composition: Composition, parser: WorkflowArgumentParser
 ) -> None:
-    """Analyze envd-scalability results (latency vs catalog object count)."""
+    """Analyze envd-objects-scalability results (latency vs catalog object count)."""
 
     parser.add_argument(
         "files",
         nargs="*",
-        default="results_*.envd_scalability.csv",
+        default="results_*.envd_objects_scalability.csv",
         type=str,
-        help="Glob pattern of envd_scalability result files to plot.",
+        help="Glob pattern of envd_objects_scalability result files to plot.",
     )
 
     args = parser.parse_args()
 
     for file in itertools.chain(*map(glob.iglob, args.files)):
-        analyze_envd_scalability_results_file(str(file))
+        analyze_envd_objects_scalability_results_file(str(file))
 
 
 def workflow_plot_cluster_object_limits(
@@ -3924,7 +3928,7 @@ def workflow_plot(composition: Composition, parser: WorkflowArgumentParser) -> N
         default=[
             "results_*.cluster.csv",
             "results_*.envd.csv",
-            "results_*.envd_scalability.csv",
+            "results_*.envd_objects_scalability.csv",
             "results_*.cluster_object_limits.csv",
         ],
         type=str,
@@ -3936,20 +3940,20 @@ def workflow_plot(composition: Composition, parser: WorkflowArgumentParser) -> N
     for file in itertools.chain(*map(glob.iglob, args.files)):
         file_str = str(file)
         base_name = os.path.basename(file_str)
-        # Order matters: `.cluster_object_limits.csv` and `.envd_scalability.csv`
+        # Order matters: `.cluster_object_limits.csv` and `.envd_objects_scalability.csv`
         # both happen to end in something that would also match `.cluster` or
         # `.envd` if matched naively, so check the longer suffixes first.
         if base_name.endswith(".cluster_object_limits.csv"):
             analyze_cluster_object_limits_results_file(file_str)
-        elif base_name.endswith(".envd_scalability.csv"):
-            analyze_envd_scalability_results_file(file_str)
+        elif base_name.endswith(".envd_objects_scalability.csv"):
+            analyze_envd_objects_scalability_results_file(file_str)
         elif base_name.endswith(".cluster.csv"):
             analyze_cluster_results_file(file_str)
         elif base_name.endswith(".envd.csv"):
             analyze_envd_results_file(file_str)
         else:
             raise UIError(
-                f"Error: Filename '{file_str}' doesn't indicate whether it's a cluster, envd, envd_scalability, or cluster_object_limits results file. Please use the explicit `plot-envd`, `plot-cluster`, `plot-envd-scalability`, or `plot-cluster-object-limits` targets for such files."
+                f"Error: Filename '{file_str}' doesn't indicate whether it's a cluster, envd, envd_objects_scalability, or cluster_object_limits results file. Please use the explicit `plot-envd`, `plot-cluster`, `plot-envd-objects-scalability`, or `plot-cluster-object-limits` targets for such files."
             )
 
 
@@ -4070,14 +4074,14 @@ def analyze_envd_results_file(file: str) -> None:
         )
 
 
-def analyze_envd_scalability_results_file(file: str) -> None:
+def analyze_envd_objects_scalability_results_file(file: str) -> None:
     """Plot adapter/envd latency vs catalog object count (N).
 
     Each (scenario, category) pair yields one plot, with `scale` (=N) as the
     x-axis (categorical bar chart, since the values span 1..100k). The
     accompanying normalized plot is produced by the shared `plot()` helper.
     """
-    print(f"--- Analyzing envd_scalability results file {file} ...")
+    print(f"--- Analyzing envd_objects_scalability results file {file} ...")
     df = pd.read_csv(file)
     if df.empty:
         print(f"^^^ +++ File {file} is empty, skipping")
