@@ -1203,3 +1203,169 @@ Explained Query:
 Target cluster: quickstart
 
 EOF
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_repeat_row = true
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_repeat_row_non_negative = true
+----
+COMPLETE 0
+
+statement ok
+CREATE SOURCE mono_src FROM WEBHOOK BODY FORMAT TEXT;
+
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/11310, i.e., that we set the
+# `must_consolidate` flag when `repeat_row` is involved.
+# Relies on RelaxMustConsolidate's SingleTimeMonotonic correctly handling FlatMap's TableFunc being !preserves_monotonicity.
+# Note that the plans are still somewhat wrong, in that monotonic operators won't produce correct results when presented
+# with negative accumulations even with the `must_consolidate` flag set. However, the expectation is that they'll have
+# an easier time detecting negative accumulations and cleanly erroring out when the `must_consolidate` flag is set.
+# See also https://github.com/MaterializeInc/materialize/pull/36184 for more discussion, where we considered not
+# choosing monotonic operators when `repeat_row` is involved, but eventually decided to go with the current behavior.
+query T multiline
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
+SELECT MAX(body) FROM mono_src, repeat_row(length(body));
+----
+Explained Query:
+  With
+    cte l0 =
+      Reduce::Hierarchical
+        aggr_funcs=[max]
+        monotonic
+        must_consolidate
+        key_plan
+          project=()
+        val_plan=id
+        FlatMap repeat_row(integer_to_bigint(char_length(#0{body})))
+          Get::PassArrangements materialize.public.mono_src
+            raw=true
+  Return
+    Union
+      ArrangeBy
+        input_key=[]
+        raw=true
+        Get::PassArrangements l0
+          raw=false
+          arrangements[0]={ key=[], permutation=id, thinning=(#0) }
+      Mfp
+        project=(#0)
+        map=(null)
+        Union consolidate_output=true
+          Negate
+            Get::Arrangement l0
+              project=()
+              key=
+              raw=false
+              arrangements[0]={ key=[], permutation=id, thinning=(#0) }
+          Constant
+            - ()
+
+Source materialize.public.mono_src
+
+Target cluster: quickstart
+
+EOF
+
+# Relies on RelaxMustConsolidate's SingleTimeMonotonic correctly handling negative diffs in Constants.
+query T multiline
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
+SELECT MAX(body) FROM mono_src, repeat_row(-1);
+----
+Explained Query:
+  With
+    cte l0 =
+      Reduce::Hierarchical
+        aggr_funcs=[max]
+        monotonic
+        must_consolidate
+        key_plan
+          project=()
+        val_plan=id
+        Join::Linear
+          linear_stage[0]
+            lookup={ relation=1, key=[] }
+            stream={ key=[], thinning=(#0) }
+          source={ relation=0, key=[] }
+          ArrangeBy
+            raw=true
+            arrangements[0]={ key=[], permutation=id, thinning=(#0) }
+            Get::PassArrangements materialize.public.mono_src
+              raw=true
+          ArrangeBy
+            raw=true
+            arrangements[0]={ key=[], permutation=id, thinning=() }
+            Constant
+              - (() x -1)
+  Return
+    Union
+      ArrangeBy
+        input_key=[]
+        raw=true
+        Get::PassArrangements l0
+          raw=false
+          arrangements[0]={ key=[], permutation=id, thinning=(#0) }
+      Mfp
+        project=(#0)
+        map=(null)
+        Union consolidate_output=true
+          Negate
+            Get::Arrangement l0
+              project=()
+              key=
+              raw=false
+              arrangements[0]={ key=[], permutation=id, thinning=(#0) }
+          Constant
+            - ()
+
+Source materialize.public.mono_src
+
+Target cluster: quickstart
+
+EOF
+
+# Relies on `repeat_row_non_negative` being marked as `preserves_monotonicity` (as opposed to `repeat_row`).
+query T multiline
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
+SELECT MAX(body) FROM mono_src, repeat_row_non_negative(length(body));
+----
+Explained Query:
+  With
+    cte l0 =
+      Reduce::Hierarchical
+        aggr_funcs=[max]
+        monotonic
+        key_plan
+          project=()
+        val_plan=id
+        FlatMap repeat_row_non_negative(integer_to_bigint(char_length(#0{body})))
+          Get::PassArrangements materialize.public.mono_src
+            raw=true
+  Return
+    Union
+      ArrangeBy
+        input_key=[]
+        raw=true
+        Get::PassArrangements l0
+          raw=false
+          arrangements[0]={ key=[], permutation=id, thinning=(#0) }
+      Mfp
+        project=(#0)
+        map=(null)
+        Union consolidate_output=true
+          Negate
+            Get::Arrangement l0
+              project=()
+              key=
+              raw=false
+              arrangements[0]={ key=[], permutation=id, thinning=(#0) }
+          Constant
+            - ()
+
+Source materialize.public.mono_src
+
+Target cluster: quickstart
+
+EOF
