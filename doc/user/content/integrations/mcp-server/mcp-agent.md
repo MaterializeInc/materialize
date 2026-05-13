@@ -178,8 +178,11 @@ CREATE MATERIALIZED VIEW mcp_schema.payment_status AS
 SELECT order_id, status, updated_at FROM ...;
 ```
 
-If you want to expose a regular view instead, add an index on it. Every
-indexed column becomes a required input parameter in the tool's schema.
+If you want to expose a regular view instead, add an index on it. Indexed
+columns are surfaced in the tool's input schema as preferred lookup keys,
+signaling to the agent that filtering on them benefits from fast,
+index-served reads. The MCP server does not reject queries that filter on
+other columns; those queries still work but don't benefit from the index.
 
 ```mzsql
 CREATE INDEX payment_status_order_id_idx ON mcp_schema.payment_status (order_id);
