@@ -89,7 +89,7 @@ use anyhow::{Context, anyhow, bail};
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::StreamExt;
 use maplit::btreemap;
-use mz_expr::MirScalarExpr;
+use mz_expr::{Eval, MirScalarExpr};
 use mz_interchange::avro::AvroEncoder;
 use mz_interchange::encode::Encode;
 use mz_interchange::envelopes::{dbz_format, for_each_diff_pair};

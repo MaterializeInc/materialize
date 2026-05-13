@@ -24,8 +24,8 @@ use std::fmt;
 use std::ops::Deref;
 
 use itertools::Itertools;
+use mz_expr::Id;
 use mz_expr::explain::{HumanizedExplain, HumanizerMode, fmt_text_constant_rows};
-use mz_expr::{Id, MirScalarExpr};
 use mz_ore::soft_assert_or_log;
 use mz_ore::str::{IndentLike, StrExt, separated};
 use mz_repr::explain::text::DisplayText;
@@ -39,6 +39,7 @@ use crate::plan::join::{DeltaJoinPlan, JoinClosure, LinearJoinPlan};
 use crate::plan::reduce::{
     AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, MonotonicPlan, SingleBasicPlan,
 };
+use crate::plan::scalar::LirScalarExpr;
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::{ArrangementStrategy, AvailableCollections, LirId, Plan, PlanNode};
 
@@ -1598,14 +1599,14 @@ impl BasicPlan {
 
 /// Helper struct for rendering an arrangement.
 struct Arrangement<'a> {
-    key: &'a Vec<MirScalarExpr>,
+    key: &'a Vec<LirScalarExpr>,
     permutation: Permutation<'a>,
     thinning: &'a Vec<usize>,
 }
 
-impl<'a> From<&'a (Vec<MirScalarExpr>, Vec<usize>, Vec<usize>)> for Arrangement<'a> {
+impl<'a> From<&'a (Vec<LirScalarExpr>, Vec<usize>, Vec<usize>)> for Arrangement<'a> {
     fn from(
-        (key, permutation, thinning): &'a (Vec<MirScalarExpr>, Vec<usize>, Vec<usize>),
+        (key, permutation, thinning): &'a (Vec<LirScalarExpr>, Vec<usize>, Vec<usize>),
     ) -> Self {
         Arrangement {
             key,

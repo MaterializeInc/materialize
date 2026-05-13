@@ -12,7 +12,8 @@
 use mz_ore::assert_none;
 use mz_repr::{Datum, InputDatumType, OutputDatumType, ReprColumnType, RowArena, SqlColumnType};
 
-use crate::{EvalError, MirScalarExpr};
+use crate::EvalError;
+use crate::func::Eval;
 
 /// A description of an SQL binary function that has the ability to lazy evaluate its arguments
 // This trait will eventually be annotated with #[enum_dispatch] to autogenerate the UnaryFunc enum
@@ -21,7 +22,7 @@ pub(crate) trait LazyBinaryFunc {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        exprs: &[&'a MirScalarExpr],
+        exprs: &[&'a impl Eval],
     ) -> Result<Datum<'a>, EvalError>;
 
     /// The output SqlColumnType of this function.
@@ -130,7 +131,7 @@ impl<T: EagerBinaryFunc> LazyBinaryFunc for T {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        exprs: &[&'a MirScalarExpr],
+        exprs: &[&'a impl Eval],
     ) -> Result<Datum<'a>, EvalError> {
         let mut datums = exprs
             .into_iter()
@@ -189,9 +190,9 @@ mod derive {
 
     use mz_repr::{Datum, ReprColumnType, RowArena, SqlColumnType};
 
+    use crate::EvalError;
     use crate::scalar::func::binary::LazyBinaryFunc;
     use crate::scalar::func::*;
-    use crate::{EvalError, MirScalarExpr};
 
     derive_binary! {
         AddInt16(AddInt16),

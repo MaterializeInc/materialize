@@ -10,8 +10,8 @@
 use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use mz_expr::MirScalarExpr;
 use mz_expr::func::{BinaryFunc, Eq};
+use mz_expr::{Eval, MirScalarExpr};
 use mz_repr::{Datum, ReprColumnType, ReprRelationType, ReprScalarType, RowArena};
 use mz_transform::Transform;
 use mz_transform::case_literal::CaseLiteralTransform;

@@ -16,8 +16,8 @@ use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::implementations::merge_batcher::container::InternalMerge;
 use differential_dataflow::trace::{Builder, Trace, TraceReader};
+use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_compute_types::plan::threshold::{BasicThresholdPlan, ThresholdPlan};
-use mz_expr::MirScalarExpr;
 use mz_repr::Diff;
 use timely::Container;
 use timely::container::PushInto;
@@ -82,7 +82,7 @@ where
 /// zero. It returns a [CollectionBundle] populated from a local arrangement.
 pub fn build_threshold_basic<'scope, T: RenderTimestamp>(
     input: CollectionBundle<'scope, T>,
-    key: Vec<MirScalarExpr>,
+    key: Vec<LirScalarExpr>,
 ) -> CollectionBundle<'scope, T> {
     let arrangement = input
         .arrangement(&key)

@@ -15,7 +15,7 @@ use columnar::Len;
 use itertools::Itertools;
 use mz_expr::JoinImplementation::{DeltaQuery, Differential, IndexedFilter, Unimplemented};
 use mz_expr::{
-    AggregateExpr, Id, JoinInputMapper, MapFilterProject, MirRelationExpr, MirScalarExpr,
+    AggregateExpr, Columns, Id, JoinInputMapper, MapFilterProject, MirRelationExpr, MirScalarExpr,
     OptimizedMirRelationExpr, TableFunc, permutation_for_arrangement,
 };
 use mz_ore::{assert_none, soft_assert_eq_or_log, soft_panic_or_log};
@@ -25,6 +25,7 @@ use mz_repr::{GlobalId, Timestamp};
 use crate::dataflows::{BuildDesc, DataflowDescription, IndexImport};
 use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
+use crate::plan::scalar::{LirScalarExpr, try_lses_from_mses};
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
 use crate::plan::{ArrangementStrategy, AvailableCollections, GetPlan, LirId, Plan, PlanNode};
@@ -101,7 +102,7 @@ impl Context {
             ..
         } in desc.index_imports.values()
         {
-            let key = index_desc.key.clone();
+            let key = try_lses_from_mses(&index_desc.key);
             // TODO[btv] - We should be told the permutation by
             // `index_desc`, and it should have been generated
             // at the same point the thinning logic was.
@@ -245,8 +246,10 @@ impl Context {
                     .arranged
                     .iter()
                     .filter_map(|key| {
-                        mfp.literal_constraints(&key.0)
-                            .map(|val| (key.clone(), val))
+                        mfp.literal_constraints(
+                            &key.0.iter().map(MirScalarExpr::from).collect_vec(),
+                        )
+                        .map(|val| (key.clone(), val))
                     })
                     .max_by_key(|(key, _val)| key.0.len());
 
@@ -275,8 +278,9 @@ impl Context {
                         in_keys.arbitrary_arrangement().cloned()
                     {
                         mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
-                        in_keys.arranged = vec![(key.clone(), permutation, thinning)];
-                        GetPlan::Arrangement(key, None, mfp)
+                        in_keys.arranged =
+                            vec![(key.clone(), permutation.clone(), thinning.clone())];
+                        GetPlan::Arrangement(key.clone(), None, mfp)
                     } else {
                         GetPlan::Collection(mfp)
                     }
@@ -629,7 +633,7 @@ impl Context {
                         plan: PlanNode::FlatMap {
                             input_key,
                             input: Box::new(input),
-                            exprs: exprs.clone(),
+                            exprs: try_lses_from_mses(&exprs),
                             func: func.clone(),
                             mfp_after: mfp,
                         }
@@ -678,7 +682,7 @@ impl Context {
                         // All columns of the constant input will be part of the arrangement key.
                         let source_arrangement = (
                             (0..key.len())
-                                .map(MirScalarExpr::column)
+                                .map(LirScalarExpr::column)
                                 .collect::<Vec<_>>(),
                             (0..key.len()).collect::<Vec<_>>(),
                             Vec::<usize>::new(),
@@ -696,10 +700,11 @@ impl Context {
                     }
                     Differential((start, start_arr, _start_characteristic), order) => {
                         let source_arrangement = start_arr.as_ref().and_then(|key| {
+                            let key = try_lses_from_mses(key);
                             input_keys[*start]
                                 .arranged
                                 .iter()
-                                .find(|(k, _, _)| k == key)
+                                .find(|(k, _, _)| k == &key)
                                 .clone()
                         });
                         let (ljp, missing) = LinearJoinPlan::create_from(
@@ -995,7 +1000,11 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 // Determine keys that are not present in `input_keys`.
                 let new_keys = keys
                     .iter()
-                    .filter(|k1| !input_keys.arranged.iter().any(|(k2, _, _)| k1 == &k2))
+                    .filter(|k1| {
+                        !input_keys.arranged.iter().any(|(k2, _, _)| {
+                            *k1 == &k2.iter().map(MirScalarExpr::from).collect_vec()
+                        })
+                    })
                     .cloned()
                     .collect::<Vec<_>>();
                 if new_keys.is_empty() {
@@ -1007,8 +1016,8 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 } else {
                     let mut new_keys = new_keys
                         .iter()
-                        .cloned()
                         .map(|k| {
+                            let k = try_lses_from_mses(k);
                             let (permutation, thinning) = permutation_for_arrangement(&k, arity);
                             (k, permutation, thinning)
                         })
@@ -1060,7 +1069,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 .filter_map(|(key, permutation, thinning)| {
                     let mut mfp = mfp.clone();
                     mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
-                    mfp.literal_constraints(key)
+                    mfp.literal_constraints(&key.iter().map(MirScalarExpr::from).collect_vec())
                         .map(|val| (key.clone(), permutation, thinning, val))
                 })
                 .max_by_key(|(key, _, _, _)| key.len());
@@ -1120,7 +1129,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     plan = PlanNode::Mfp {
                         input: Box::new(plan),
                         mfp,
-                        input_key_val: Some((key, val)),
+                        input_key_val: Some((key.clone(), val)),
                     }
                     .as_plan(lir_id)
                 }

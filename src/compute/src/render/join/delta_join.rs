@@ -25,8 +25,9 @@ use differential_dataflow::{AsCollection, VecCollection};
 use mz_compute_types::dyncfgs::ENABLE_HALF_JOIN2;
 use mz_compute_types::plan::join::JoinClosure;
 use mz_compute_types::plan::join::delta_join::{DeltaJoinPlan, DeltaPathPlan, DeltaStagePlan};
+use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_dyncfg::ConfigSet;
-use mz_expr::MirScalarExpr;
+use mz_expr::func::Eval;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
@@ -324,7 +325,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
 fn build_halfjoin<'scope, T, Tr, CF>(
     updates: VecCollection<'scope, T, (Row, T), Diff>,
     trace: Arranged<'scope, Tr>,
-    prev_key: Vec<MirScalarExpr>,
+    prev_key: Vec<LirScalarExpr>,
     prev_thinning: Vec<usize>,
     comparison: CF,
     closure: JoinClosure,

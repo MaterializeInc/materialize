@@ -12,6 +12,7 @@ use std::fmt::Display;
 use mz_repr::{Datum, Row};
 use serde::{Deserialize, Serialize};
 
+use crate::scalar::columns::Columns;
 use crate::visit::Visit;
 use crate::{MirRelationExpr, MirScalarExpr};
 
@@ -1509,6 +1510,7 @@ pub mod util {
     use std::collections::BTreeMap;
 
     use crate::MirScalarExpr;
+    use crate::scalar::columns::Columns;
 
     #[allow(dead_code)]
     /// A triple of actions that map from rows to (key, val) pairs and back again.
@@ -1524,8 +1526,9 @@ pub mod util {
     /// Derive supporting logic to support transforming rows to (key, val) pairs,
     /// and back again.
     ///
-    /// We are given as input a list of key expressions and an input arity, and the
-    /// requirement the produced key should be the application of the key expressions.
+    /// We are given as input a list of mappings from columns to key indices, a key length,
+    /// and an input arity. (The produced key should be the application of the key expressions.)
+    ///
     /// To produce the `val` output, we will identify those input columns not found in
     /// the key expressions, and name all other columns.
     /// To reconstitute the original row, we identify the sequence of columns from the
@@ -1536,10 +1539,10 @@ pub mod util {
     /// of a row that should become the value associated with its key.
     ///
     /// The permutations and thinning expressions generated here will be tracked in
-    /// `dataflow::plan::AvailableCollections`; see the
+    /// `compute_types::plan::AvailableCollections`; see the
     /// documentation there for more details.
     pub fn permutation_for_arrangement(
-        key: &[MirScalarExpr],
+        key: &[impl Columns],
         unthinned_arity: usize,
     ) -> (Vec<usize>, Vec<usize>) {
         let columns_in_key: BTreeMap<_, _> = key
@@ -1547,7 +1550,9 @@ pub mod util {
             .enumerate()
             .filter_map(|(i, key_col)| key_col.as_column().map(|c| (c, i)))
             .collect();
-        let mut input_cursor = key.len();
+        let key_len = key.len();
+
+        let mut input_cursor = key_len;
         let permutation = (0..unthinned_arity)
             .map(|c| {
                 if let Some(c) = columns_in_key.get(&c) {
@@ -1604,6 +1609,7 @@ pub mod plan {
     use mz_repr::{Datum, Diff, Row, RowArena};
     use serde::{Deserialize, Serialize};
 
+    use crate::func::Eval;
     use crate::{BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, UnaryFunc, func};
 
     /// A wrapper type which indicates it is safe to simply evaluate all expressions.

@@ -23,9 +23,11 @@ use mz_compute_types::dyncfgs::{
     ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION, ENABLE_COMPUTE_TEMPORAL_BUCKETING,
     TEMPORAL_BUCKETING_SUMMARY,
 };
+use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_compute_types::plan::{ArrangementStrategy, AvailableCollections};
 use mz_dyncfg::ConfigSet;
-use mz_expr::{Id, MapFilterProject, MirScalarExpr};
+use mz_expr::func::Eval;
+use mz_expr::{Id, MapFilterProject};
 use mz_ore::soft_assert_or_log;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
@@ -457,7 +459,7 @@ pub struct CollectionBundle<'scope, T: RenderTimestamp> {
         VecCollection<'scope, T, Row, Diff>,
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
     )>,
-    pub arranged: BTreeMap<Vec<MirScalarExpr>, ArrangementFlavor<'scope, T>>,
+    pub arranged: BTreeMap<Vec<LirScalarExpr>, ArrangementFlavor<'scope, T>>,
 }
 
 impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
@@ -474,7 +476,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
 
     /// Inserts arrangements by the expressions on which they are keyed.
     pub fn from_expressions(
-        exprs: Vec<MirScalarExpr>,
+        exprs: Vec<LirScalarExpr>,
         arrangements: ArrangementFlavor<'scope, T>,
     ) -> Self {
         let mut arranged = BTreeMap::new();
@@ -492,7 +494,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     ) -> Self {
         let mut keys = Vec::new();
         for column in columns {
-            keys.push(MirScalarExpr::column(column));
+            keys.push(LirScalarExpr::column(column));
         }
         Self::from_expressions(keys, arrangements)
     }
@@ -562,7 +564,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// [`ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION`].
     pub fn as_specific_collection(
         &self,
-        key: Option<&[MirScalarExpr]>,
+        key: Option<&[LirScalarExpr]>,
         config_set: &ConfigSet,
     ) -> (
         VecCollection<'scope, T, Row, Diff>,
@@ -621,7 +623,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// decode all columns.
     pub fn flat_map<D, DCB, L>(
         &self,
-        key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
+        key_val: Option<(Vec<LirScalarExpr>, Option<Row>)>,
         max_demand: usize,
         mut logic: L,
     ) -> (
@@ -878,7 +880,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     ///
     /// The result may be `None` if no such arrangement exists, or it may be one of many
     /// "arrangement flavors" that represent the types of arranged data we might have.
-    pub fn arrangement(&self, key: &[MirScalarExpr]) -> Option<ArrangementFlavor<'scope, T>> {
+    pub fn arrangement(&self, key: &[LirScalarExpr]) -> Option<ArrangementFlavor<'scope, T>> {
         self.arranged.get(key).map(|x| x.clone())
     }
 }
@@ -895,7 +897,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     pub fn as_collection_core(
         &self,
         mut mfp: MapFilterProject,
-        key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
+        key_val: Option<(Vec<LirScalarExpr>, Option<Row>)>,
         until: Antichain<mz_repr::Timestamp>,
         config_set: &ConfigSet,
     ) -> (
@@ -976,7 +978,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     pub fn ensure_collections(
         mut self,
         collections: AvailableCollections,
-        input_key: Option<Vec<MirScalarExpr>>,
+        input_key: Option<Vec<LirScalarExpr>>,
         input_mfp: MapFilterProject,
         as_of: Antichain<mz_repr::Timestamp>,
         until: Antichain<mz_repr::Timestamp>,
@@ -1092,7 +1094,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     fn arrange_collection(
         name: &String,
         oks: VecCollection<'scope, T, Row, Diff>,
-        key: Vec<MirScalarExpr>,
+        key: Vec<LirScalarExpr>,
         thinning: Vec<usize>,
     ) -> (
         Arranged<'scope, RowRowAgent<T, Diff>>,

@@ -29,7 +29,8 @@
 
 use std::collections::BTreeMap;
 
-use mz_expr::{MapFilterProject, MirScalarExpr};
+use mz_expr::func::Eval;
+use mz_expr::{Columns, MapFilterProject, MirScalarExpr};
 use mz_repr::{Datum, Row, RowArena};
 use serde::{Deserialize, Serialize};
 
@@ -38,6 +39,8 @@ pub mod linear_join;
 
 pub use delta_join::DeltaJoinPlan;
 pub use linear_join::LinearJoinPlan;
+
+use crate::plan::scalar::{LirScalarExpr, try_lses_from_mses};
 
 /// A complete enumeration of possible join plans to render.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
@@ -56,9 +59,9 @@ pub enum JoinPlan {
 /// this with a Rust closure (glorious battle was waged, but ultimately lost).
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct JoinClosure {
-    /// TODO(database-issues#7533): Add documentation.
-    pub ready_equivalences: Vec<Vec<MirScalarExpr>>,
-    /// TODO(database-issues#7533): Add documentation.
+    /// Ordered list of equivalences to evaluate.
+    pub ready_equivalences: Vec<Vec<LirScalarExpr>>,
+    /// MFP to run before the equivalence
     pub before: mz_expr::SafeMfpPlan,
 }
 
@@ -97,7 +100,7 @@ impl JoinClosure {
     /// be ignored).
     fn build(
         columns: &mut BTreeMap<usize, usize>,
-        equivalences: &mut Vec<Vec<MirScalarExpr>>,
+        equivalences: &mut Vec<Vec<LirScalarExpr>>,
         mfp: &mut MapFilterProject,
         permutation: BTreeMap<usize, usize>,
         thinned_arity_with_key: usize,
@@ -205,9 +208,21 @@ impl JoinClosure {
         before.optimize();
 
         // Cons up an instance of the closure with the closed-over state.
+        Self::new(before, ready_equivalences)
+    }
+
+    /// Constructs a `JoinClosure` from an MFP to be run before and an ordered list of equivalences.
+    ///
+    /// You should _probably_ not be calling this function directly---it's a shim for taking MIR forms
+    /// and producing the LIR forms we'll ultimately need.
+    pub(crate) fn new(
+        before: MapFilterProject,
+        ready_equivalences: Vec<Vec<LirScalarExpr>>,
+    ) -> Self {
+        let before = before.into_plan().unwrap().into_nontemporal().unwrap();
         Self {
             ready_equivalences,
-            before: before.into_plan().unwrap().into_nontemporal().unwrap(),
+            before,
         }
     }
 
@@ -252,7 +267,7 @@ pub struct JoinBuildState {
     /// the join expression. Importantly, "the same" should be evaluated with `Datum`s Rust
     /// equality, rather than the equality presented by the `BinaryFunc` equality operator.
     /// The distinction is important for null handling, at the least.
-    equivalences: Vec<Vec<MirScalarExpr>>,
+    equivalences: Vec<Vec<LirScalarExpr>>,
     /// The linear operator logic (maps, filters, and projection) that remains to be applied
     /// to the output of the join.
     ///
@@ -276,6 +291,10 @@ impl JoinBuildState {
         }
         let mut equivalences = equivalences.to_vec();
         mz_expr::canonicalize::canonicalize_equivalence_classes(&mut equivalences);
+        let equivalences = equivalences
+            .into_iter()
+            .map(|equiv| try_lses_from_mses(&equiv))
+            .collect();
         Self {
             column_map,
             equivalences,
@@ -287,7 +306,7 @@ impl JoinBuildState {
     fn add_columns(
         &mut self,
         new_columns: std::ops::Range<usize>,
-        bound_expressions: &[MirScalarExpr],
+        bound_expressions: &[LirScalarExpr],
         thinned_arity_with_key: usize,
         // The permutation to run on the join of the thinned collections
         permutation: BTreeMap<usize, usize>,
@@ -334,10 +353,7 @@ impl JoinBuildState {
         mfp.permute_fn(|c| column_map[&c], column_map_len);
         mfp.optimize();
 
-        JoinClosure {
-            ready_equivalences: equivalences,
-            before: mfp.into_plan().unwrap().into_nontemporal().unwrap(),
-        }
+        JoinClosure::new(mfp, equivalences)
     }
 
     /// A method on `self` that extracts an available closure.

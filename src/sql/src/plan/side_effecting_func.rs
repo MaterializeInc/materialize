@@ -34,6 +34,7 @@ use std::sync::LazyLock;
 
 use enum_kinds::EnumKind;
 use itertools::Itertools;
+use mz_expr::Eval;
 use mz_ore::cast::ReinterpretCast;
 use mz_ore::collections::CollectionExt;
 use mz_ore::result::ResultExt;

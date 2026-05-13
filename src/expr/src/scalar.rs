@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::ops::BitOrAssign;
 use std::sync::Arc;
 use std::{fmt, mem};
@@ -39,6 +39,8 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::explain::{HumanizedExplain, HumanizerMode};
+pub use crate::func::Eval;
+pub use crate::scalar::columns::Columns;
 use crate::scalar::func::format::DateTimeFormat;
 use crate::scalar::func::variadic::{
     And, Coalesce, ListCreate, ListIndex, Or, RegexpMatch, RegexpReplace, RegexpSplitToArray,
@@ -50,6 +52,7 @@ use crate::scalar::func::{
 use crate::scalar::proto_eval_error::proto_incompatible_array_dimensions::ProtoDims;
 use crate::visit::{Visit, VisitChildren};
 
+pub mod columns;
 pub mod func;
 pub mod like_pattern;
 
@@ -466,52 +469,6 @@ impl MirScalarExpr {
         }
     }
 
-    /// Rewrites column indices with their value in `permutation`.
-    ///
-    /// This method is applicable even when `permutation` is not a
-    /// strict permutation, and it only needs to have entries for
-    /// each column referenced in `self`.
-    pub fn permute(&mut self, permutation: &[usize]) {
-        self.visit_columns(|c| *c = permutation[*c]);
-    }
-
-    /// Rewrites column indices with their value in `permutation`.
-    ///
-    /// This method is applicable even when `permutation` is not a
-    /// strict permutation, and it only needs to have entries for
-    /// each column referenced in `self`.
-    pub fn permute_map(&mut self, permutation: &BTreeMap<usize, usize>) {
-        self.visit_columns(|c| *c = permutation[c]);
-    }
-
-    /// Visits each column reference and applies `action` to the column.
-    ///
-    /// Useful for remapping columns, or for collecting expression support.
-    pub fn visit_columns<F>(&mut self, mut action: F)
-    where
-        F: FnMut(&mut usize),
-    {
-        self.visit_pre_mut(|e| {
-            if let MirScalarExpr::Column(col, _) = e {
-                action(col);
-            }
-        });
-    }
-
-    pub fn support(&self) -> BTreeSet<usize> {
-        let mut support = BTreeSet::new();
-        self.support_into(&mut support);
-        support
-    }
-
-    pub fn support_into(&self, support: &mut BTreeSet<usize>) {
-        self.visit_pre(|e| {
-            if let MirScalarExpr::Column(i, _) = e {
-                support.insert(*i);
-            }
-        });
-    }
-
     pub fn take(&mut self) -> Self {
         mem::replace(self, MirScalarExpr::literal_null(ReprScalarType::String))
     }
@@ -590,10 +547,6 @@ impl MirScalarExpr {
 
     pub fn is_literal_err(&self) -> bool {
         matches!(self, MirScalarExpr::Literal(Err(_), _typ))
-    }
-
-    pub fn is_column(&self) -> bool {
-        matches!(self, MirScalarExpr::Column(_col, _name))
     }
 
     pub fn is_error_if_null(&self) -> bool {
@@ -702,15 +655,6 @@ impl MirScalarExpr {
             worklist.extend(expr.children());
         }
         false
-    }
-
-    /// If self is a column, return the column index, otherwise `None`.
-    pub fn as_column(&self) -> Option<usize> {
-        if let MirScalarExpr::Column(c, _) = self {
-            Some(*c)
-        } else {
-            None
-        }
     }
 
     /// Reduces a complex expression where possible.
@@ -2047,38 +1991,6 @@ impl MirScalarExpr {
         }
     }
 
-    pub fn eval<'a>(
-        &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-    ) -> Result<Datum<'a>, EvalError> {
-        match self {
-            MirScalarExpr::Column(index, _name) => Ok(datums[*index]),
-            MirScalarExpr::Literal(res, _column_type) => match res {
-                Ok(row) => Ok(row.unpack_first()),
-                Err(e) => Err(e.clone()),
-            },
-            // Unmaterializable functions must be transformed away before
-            // evaluation. Their purpose is as a placeholder for data that is
-            // not known at plan time but can be inlined before runtime.
-            MirScalarExpr::CallUnmaterializable(x) => Err(EvalError::Internal(
-                format!("cannot evaluate unmaterializable function: {:?}", x).into(),
-            )),
-            MirScalarExpr::CallUnary { func, expr } => func.eval(datums, temp_storage, expr),
-            MirScalarExpr::CallBinary { func, expr1, expr2 } => {
-                func.eval(datums, temp_storage, &[expr1, expr2])
-            }
-            MirScalarExpr::CallVariadic { func, exprs } => func.eval(datums, temp_storage, exprs),
-            MirScalarExpr::If { cond, then, els } => match cond.eval(datums, temp_storage)? {
-                Datum::True => then.eval(datums, temp_storage),
-                Datum::False | Datum::Null => els.eval(datums, temp_storage),
-                d => Err(EvalError::Internal(
-                    format!("if condition evaluated to non-boolean datum: {:?}", d).into(),
-                )),
-            },
-        }
-    }
-
     /// True iff the expression contains
     /// `UnmaterializableFunc::MzNow`.
     pub fn contains_temporal(&self) -> bool {
@@ -2145,9 +2057,7 @@ impl MirScalarExpr {
         });
         size
     }
-}
 
-impl MirScalarExpr {
     /// True iff evaluation could possibly error on non-error input `Datum`.
     pub fn could_error(&self) -> bool {
         match self {
@@ -2164,6 +2074,77 @@ impl MirScalarExpr {
             MirScalarExpr::If { cond, then, els } => {
                 cond.could_error() || then.could_error() || els.could_error()
             }
+        }
+    }
+}
+
+impl Columns for MirScalarExpr {
+    fn is_column(&self) -> bool {
+        matches!(self, MirScalarExpr::Column(_col, _name))
+    }
+
+    fn as_column(&self) -> Option<usize> {
+        if let MirScalarExpr::Column(c, _) = self {
+            Some(*c)
+        } else {
+            None
+        }
+    }
+
+    fn support_into(&self, support: &mut BTreeSet<usize>) {
+        self.visit_pre(|e| {
+            if let MirScalarExpr::Column(i, _) = e {
+                support.insert(*i);
+            }
+        });
+    }
+
+    fn visit_columns<F>(&mut self, mut action: F)
+    where
+        F: FnMut(&mut usize),
+    {
+        self.visit_pre_mut(|e| {
+            if let MirScalarExpr::Column(col, _) = e {
+                action(col);
+            }
+        });
+    }
+}
+
+impl Eval for MirScalarExpr {
+    fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+    ) -> Result<Datum<'a>, EvalError> {
+        match self {
+            MirScalarExpr::Column(index, _name) => Ok(datums[*index]),
+            MirScalarExpr::Literal(res, _column_type) => match res {
+                Ok(row) => Ok(row.unpack_first()),
+                Err(e) => Err(e.clone()),
+            },
+            // Unmaterializable functions must be transformed away before
+            // evaluation. Their purpose is as a placeholder for data that is
+            // not known at plan time but can be inlined before runtime.
+            MirScalarExpr::CallUnmaterializable(x) => Err(EvalError::Internal(
+                format!("cannot evaluate unmaterializable function: {:?}", x).into(),
+            )),
+            MirScalarExpr::CallUnary { func, expr } => {
+                func.eval(datums, temp_storage, expr.as_ref())
+            }
+            MirScalarExpr::CallBinary { func, expr1, expr2 } => {
+                func.eval(datums, temp_storage, &[expr1.as_ref(), expr2.as_ref()])
+            }
+            MirScalarExpr::CallVariadic { func, exprs } => {
+                func.eval(datums, temp_storage, exprs.as_slice())
+            }
+            MirScalarExpr::If { cond, then, els } => match cond.eval(datums, temp_storage)? {
+                Datum::True => then.eval(datums, temp_storage),
+                Datum::False | Datum::Null => els.eval(datums, temp_storage),
+                d => Err(EvalError::Internal(
+                    format!("if condition evaluated to non-boolean datum: {:?}", d).into(),
+                )),
+            },
         }
     }
 }

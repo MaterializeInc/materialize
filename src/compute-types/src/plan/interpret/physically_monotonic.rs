@@ -14,13 +14,14 @@ use std::cmp::Reverse;
 use std::collections::BTreeSet;
 
 use differential_dataflow::lattice::Lattice;
-use mz_expr::{EvalError, Id, MapFilterProject, MirScalarExpr, TableFunc};
+use mz_expr::{EvalError, Id, MapFilterProject, TableFunc};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use timely::PartialOrder;
 
 use crate::plan::interpret::{BoundedLattice, Context, Interpreter};
 use crate::plan::join::JoinPlan;
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
+use crate::plan::scalar::LirScalarExpr;
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
 use crate::plan::{AvailableCollections, GetPlan};
@@ -126,7 +127,7 @@ impl Interpreter for SingleTimeMonotonic<'_> {
         _ctx: &Context<Self::Domain>,
         input: Self::Domain,
         _mfp: &MapFilterProject,
-        _input_key_val: &Option<(Vec<MirScalarExpr>, Option<Row>)>,
+        _input_key_val: &Option<(Vec<LirScalarExpr>, Option<Row>)>,
     ) -> Self::Domain {
         // In a single-time context, we just propagate the monotonicity
         // status of the input
@@ -136,9 +137,9 @@ impl Interpreter for SingleTimeMonotonic<'_> {
     fn flat_map(
         &self,
         _ctx: &Context<Self::Domain>,
-        _input_key: &Option<Vec<MirScalarExpr>>,
+        _input_key: &Option<Vec<LirScalarExpr>>,
         input: Self::Domain,
-        _exprs: &Vec<MirScalarExpr>,
+        _exprs: &Vec<LirScalarExpr>,
         _func: &TableFunc,
         _mfp: &MapFilterProject,
     ) -> Self::Domain {
@@ -164,7 +165,7 @@ impl Interpreter for SingleTimeMonotonic<'_> {
     fn reduce(
         &self,
         ctx: &Context<Self::Domain>,
-        _input_key: &Option<Vec<MirScalarExpr>>,
+        _input_key: &Option<Vec<LirScalarExpr>>,
         _input: Self::Domain,
         _key_val_plan: &KeyValPlan,
         _plan: &ReducePlan,
@@ -227,7 +228,7 @@ impl Interpreter for SingleTimeMonotonic<'_> {
         _ctx: &Context<Self::Domain>,
         input: Self::Domain,
         _forms: &AvailableCollections,
-        _input_key: &Option<Vec<MirScalarExpr>>,
+        _input_key: &Option<Vec<LirScalarExpr>>,
         _input_mfp: &MapFilterProject,
     ) -> Self::Domain {
         // `Plan::ArrangeBy` is better thought of as `ensure_collections`, i.e., it
