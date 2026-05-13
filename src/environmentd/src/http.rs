@@ -124,7 +124,7 @@ mod console;
 mod mcp;
 mod memory;
 mod metrics;
-mod metrics_external;
+mod metrics_public;
 mod metrics_viz;
 mod probe;
 mod prometheus;
@@ -277,8 +277,8 @@ impl HttpServer {
                 )
                 .route("/static/{*path}", routing::get(root::handle_static))
                 .route(
-                    "/metrics/external",
-                    routing::get(metrics_external::handle_external_metrics),
+                    "/metrics/public",
+                    routing::get(metrics_public::handle_public_metrics),
                 )
                 .layer(Extension(metrics_registry.clone()))
                 .layer(Extension(Arc::clone(&cluster_proxy_config)));

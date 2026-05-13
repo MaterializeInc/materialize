@@ -193,8 +193,8 @@ pub const ENABLE_MCP_DEVELOPER: Config<bool> = Config::new(
 );
 
 /// Whether the external metrics endpoint on environmentd is enabled.
-pub const ENABLE_EXTERNAL_METRICS_ENDPOINT: Config<bool> = Config::new(
-    "enable_external_metrics_endpoint",
+pub const ENABLE_PUBLIC_METRICS_ENDPOINT: Config<bool> = Config::new(
+    "enable_public_metrics_endpoint",
     true,
     "Whether the external metrics endpoint on environmentd is enabled. When false, requests return 503.",
 );
@@ -273,7 +273,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_MCP_AGENT)
         .add(&ENABLE_MCP_AGENT_QUERY_TOOL)
         .add(&ENABLE_MCP_DEVELOPER)
-        .add(&ENABLE_EXTERNAL_METRICS_ENDPOINT)
+        .add(&ENABLE_PUBLIC_METRICS_ENDPOINT)
         .add(&MCP_MAX_RESPONSE_SIZE)
         .add(&USER_ID_POOL_BATCH_SIZE)
         .add(&CONSOLE_OIDC_CLIENT_ID)

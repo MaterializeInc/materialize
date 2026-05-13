@@ -25,7 +25,7 @@ use futures::future::join_all;
 use headers::ContentType;
 use http::{Method, Request, StatusCode};
 use http_body_util::BodyExt;
-use mz_adapter_types::dyncfgs::ENABLE_EXTERNAL_METRICS_ENDPOINT;
+use mz_adapter_types::dyncfgs::ENABLE_PUBLIC_METRICS_ENDPOINT;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::metrics::MetricsRegistry;
 use prometheus::Encoder;
@@ -39,13 +39,13 @@ use crate::http::cluster::{
 ///
 /// Aggregates environmentd's local metrics with every clusterd replica's
 /// `/metrics` output.
-pub(crate) async fn handle_external_metrics(
+pub(crate) async fn handle_public_metrics(
     client: AuthedClient,
     Extension(config): Extension<Arc<ClusterProxyConfig>>,
     Extension(metrics_registry): Extension<MetricsRegistry>,
 ) -> Response {
-    let catalog = client.client.catalog_snapshot("metrics_external").await;
-    if !ENABLE_EXTERNAL_METRICS_ENDPOINT.get(catalog.system_config().dyncfgs()) {
+    let catalog = client.client.catalog_snapshot("metrics_public").await;
+    if !ENABLE_PUBLIC_METRICS_ENDPOINT.get(catalog.system_config().dyncfgs()) {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
 

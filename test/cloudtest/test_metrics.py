@@ -70,8 +70,8 @@ def test_prometheus_sql_metrics(mz: MaterializeApplication) -> None:
     check_metrics("mz_storage", "mz_storage_objects")
 
 
-def test_external_metrics_endpoint(mz: MaterializeApplication) -> None:
-    """Verify that `/metrics/external` federates clusterd replica scrapes
+def test_public_metrics_endpoint(mz: MaterializeApplication) -> None:
+    """Verify that `/metrics/public` federates clusterd replica scrapes
     and stamps `cluster_name` labels onto replica-sourced metrics, and that
     those labels disappear once the cluster is dropped."""
 
@@ -99,10 +99,10 @@ def test_external_metrics_endpoint(mz: MaterializeApplication) -> None:
         no_reset=True,
     )
 
-    body = mz.environmentd.http_get("metrics/external")
+    body = mz.environmentd.http_get("metrics/public")
     if label not in body:
         raise AssertionError(
-            f"Expected {label} in /metrics/external after CREATE CLUSTER."
+            f"Expected {label} in /metrics/public after CREATE CLUSTER."
         )
 
     mz.testdrive.run(
@@ -114,8 +114,8 @@ def test_external_metrics_endpoint(mz: MaterializeApplication) -> None:
         no_reset=True,
     )
 
-    body = mz.environmentd.http_get("metrics/external")
+    body = mz.environmentd.http_get("metrics/public")
     if label in body:
         raise AssertionError(
-            f"{label} still appears in /metrics/external after DROP CLUSTER."
+            f"{label} still appears in /metrics/public after DROP CLUSTER."
         )

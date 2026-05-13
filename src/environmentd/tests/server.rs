@@ -2686,10 +2686,10 @@ fn test_internal_console_proxy() {
 }
 
 #[mz_ore::test]
-fn test_metrics_external_endpoint() {
+fn test_metrics_public_endpoint() {
     let server = test_util::TestHarness::default()
         .with_system_parameter_default(
-            "enable_external_metrics_endpoint".to_string(),
+            "enable_public_metrics_endpoint".to_string(),
             "true".to_string(),
         )
         .start_blocking();
@@ -2705,7 +2705,7 @@ fn test_metrics_external_endpoint() {
         .unwrap();
 
     let url = Url::parse(&format!(
-        "http://{}/metrics/external",
+        "http://{}/metrics/public",
         server.http_local_addr()
     ))
     .unwrap();
@@ -2716,7 +2716,7 @@ fn test_metrics_external_endpoint() {
     };
 
     // Retry the scrape until the replica's `http` listener is up;
-    // until then `/metrics/external` only returns env's local metrics with no
+    // until then `/metrics/public` only returns env's local metrics with no
     // cluster_name labels.
     Retry::default()
         .max_duration(Duration::from_secs(60))
@@ -2724,7 +2724,7 @@ fn test_metrics_external_endpoint() {
             if fetch_body().contains(label.as_str()) {
                 Ok(())
             } else {
-                Err(format!("{label} not yet in /metrics/external"))
+                Err(format!("{label} not yet in /metrics/public"))
             }
         })
         .unwrap();
