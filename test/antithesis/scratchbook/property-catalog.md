@@ -405,7 +405,25 @@ Properties specific to the Kafka source ingestion pipeline: `KafkaSourceReader` 
 | **Antithesis Angle** | Inject persist consensus latency, kill+restart concurrently to create a competing writer, race the metadata fetcher's partition-add against a mint that is already in flight. The retry loop in `mint()` has no upper bound; this property confirms it is not livelocked even under adversarial schedules. |
 | **Why It Matters** | A livelocked mint loop manifests as a source that never advances its frontier — externally indistinguishable from a stalled Kafka consumer, but caused inside Materialize. |
 
-## Category 8: MySQL CDC Source
+## Category 8: Randomized Concurrency Stress
+
+Properties that use intentionally adversarial concurrent SQL workloads to flush
+out catalog, planning, and recovery bugs that are hard to encode as a single
+deterministic correctness scenario.
+
+### parallel-workload-no-unexpected-errors — Randomized Concurrent SQL Only Hits Expected Race Errors
+
+| | |
+|---|---|
+| **Type** | Safety |
+| **Priority** | P2 — broad regression net rather than one product contract, but good at finding real crashes and catalog races |
+| **Status** | **Implemented (workload-side)** — `test/antithesis/workload/test/parallel_driver_parallel_workload.py`. A shared schema plus four tables/four materialized views are stressed by multiple worker threads racing `CREATE`, `DROP`, `INSERT`, `UPDATE`, `DELETE`, and `SELECT`. The driver records `sometimes("parallel workload: randomized concurrent SQL executed successfully", …)` for liveness, `sometimes("parallel workload: DDL actions were exercised", …)` for coverage, `sometimes("parallel workload: expected concurrent-catalog races were observed", …)` to confirm the workload is hitting the intended contention paths, and one `always("parallel workload: no unexpected SQL errors escaped the randomized stress driver", …)` safety assertion for the failure signal itself. This is intentionally a subset port of `test/parallel-workload/mzcompose.py`, scoped to the existing Antithesis topology rather than the full mzcompose service matrix. |
+| **Property** | Under fault injection and concurrent randomized SQL, Materialize may return expected dropped-object / concurrent-catalog errors, but it must not surface *unexpected* query failures. |
+| **Invariant** | `Always`: every SQL exception raised by the randomized workload matches the driver's expected-concurrency ignore list; any uncategorized error is a property failure. |
+| **Antithesis Angle** | Antithesis can pause or restart environmentd/clusterd while several client threads concurrently create/drop objects and query them. The interesting windows are plan invalidation, catalog transaction races, and recovery of half-finished DDL. |
+| **Why It Matters** | This is a broad bug-finder for timing-sensitive failures that do not map cleanly to one narrow user contract but still produce visible query failures or crashes. It complements the more specific properties by covering the "something went wrong under concurrent SQL churn" space. |
+
+## Category 9: MySQL CDC Source
 
 Properties specific to Materialize's MySQL CDC source pipeline, which reads
 from a multithreaded MySQL replica. The topology adds a MySQL primary (GTID +
