@@ -807,8 +807,8 @@ impl Coordinator {
                 // Determine all dependencies, not just those in the statement
                 // itself.
                 let catalog = self.catalog().for_session(ctx.session());
-                let resolved_ids = mz_sql::names::visit_dependencies(&catalog, &stmt);
-                self.plan_statement(ctx.session(), stmt, &params, &resolved_ids)
+                let mut resolved_ids = mz_sql::names::visit_dependencies(&catalog, &stmt);
+                self.plan_statement(ctx.session(), stmt, &params, &mut resolved_ids)
                     .map(|plan| (plan, resolved_ids))
             }
         };

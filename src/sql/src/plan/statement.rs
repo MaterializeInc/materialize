@@ -13,6 +13,7 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{Arc, Mutex};
 
 use mz_repr::namespaces::is_system_schema;
 use mz_repr::{
@@ -117,6 +118,7 @@ pub fn describe(
         catalog,
         param_types: RefCell::new(param_types),
         ambiguous_columns: RefCell::new(false),
+        sql_impl_resolved_ids: Arc::new(Mutex::new(ResolvedIds::empty())),
     };
 
     let desc = match stmt {
@@ -288,7 +290,7 @@ pub fn plan(
     catalog: &dyn SessionCatalog,
     stmt: Statement<Aug>,
     params: &Params,
-    resolved_ids: &ResolvedIds,
+    resolved_ids: &mut ResolvedIds,
 ) -> Result<Plan, PlanError> {
     let param_types = params
         // We need the `expected_types` here, not the `actual_types`! This is because
@@ -308,6 +310,7 @@ pub fn plan(
         catalog,
         param_types: RefCell::new(param_types),
         ambiguous_columns: RefCell::new(false),
+        sql_impl_resolved_ids: Arc::new(Mutex::new(ResolvedIds::empty())),
     };
 
     if resolved_ids
@@ -454,6 +457,14 @@ pub fn plan(
         }
     };
 
+    // Merge resolved IDs discovered during planning (from sql_impl function
+    // bodies) into the caller's resolved_ids so the RBAC check sees them.
+    resolved_ids.extend_from(
+        &scx.sql_impl_resolved_ids
+            .lock()
+            .expect("planning is single-threaded"),
+    );
+
     if let Ok(plan) = &plan {
         mz_ore::soft_assert_no_log!(
             permitted_plans.contains(&PlanKind::from(plan)),
@@ -521,6 +532,16 @@ pub struct StatementContext<'a> {
     /// Whether the statement contains an expression that can make the exact column list
     /// ambiguous. For example `NATURAL JOIN` or `SELECT *`. This is filled in as planning occurs.
     pub ambiguous_columns: RefCell<bool>,
+    /// Accumulates resolved IDs from SQL-implemented function bodies (`sql_impl_func`,
+    /// `sql_impl_table_func`). These functions re-parse and re-resolve static SQL
+    /// strings during planning; without this accumulator, the resolved IDs from
+    /// those inner resolutions would be lost.
+    ///
+    /// Uses `Arc<Mutex<_>>` so that cloned `StatementContext`s (as in `sql_impl`)
+    /// share the same underlying storage — mutations in the clone propagate back.
+    /// `Arc` (vs `Rc`) is needed because `StatementContext` must be `Send` for
+    /// use in async contexts, even though planning itself is synchronous.
+    pub sql_impl_resolved_ids: Arc<Mutex<ResolvedIds>>,
 }
 
 impl<'a> StatementContext<'a> {
@@ -533,6 +554,7 @@ impl<'a> StatementContext<'a> {
             catalog,
             param_types: Default::default(),
             ambiguous_columns: RefCell::new(false),
+            sql_impl_resolved_ids: Arc::new(Mutex::new(ResolvedIds::empty())),
         }
     }
 

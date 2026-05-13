@@ -361,13 +361,13 @@ impl Coordinator {
         global_id: GlobalId,
     ) -> Result<CreateSourcePlanBundle, AdapterError> {
         let catalog = self.catalog().for_session(session);
-        let resolved_ids = mz_sql::names::visit_dependencies(&catalog, &subsource_stmt);
+        let mut resolved_ids = mz_sql::names::visit_dependencies(&catalog, &subsource_stmt);
 
         let plan = self.plan_statement(
             session,
             Statement::CreateSubsource(subsource_stmt),
             params,
-            &resolved_ids,
+            &mut resolved_ids,
         )?;
         let plan = match plan {
             Plan::CreateSource(plan) => plan,
@@ -503,7 +503,7 @@ impl Coordinator {
         }
 
         let catalog = self.catalog().for_session(ctx.session());
-        let resolved_ids = mz_sql::names::visit_dependencies(&catalog, &source_stmt);
+        let mut resolved_ids = mz_sql::names::visit_dependencies(&catalog, &source_stmt);
 
         let propagated_with_options: Vec<_> = source_stmt
             .with_options
@@ -522,7 +522,7 @@ impl Coordinator {
             ctx.session(),
             Statement::CreateSource(source_stmt),
             &params,
-            &resolved_ids,
+            &mut resolved_ids,
         )? {
             Plan::CreateSource(plan) => plan,
             p => unreachable!("s must be CreateSourcePlan but got {:?}", p),
@@ -3509,7 +3509,7 @@ impl Coordinator {
             let catalog = self.catalog().for_system_session();
 
             // Resolve items in statement
-            let (mut create_conn_stmt, resolved_ids) =
+            let (mut create_conn_stmt, mut resolved_ids) =
                 mz_sql::names::resolve(&catalog, create_conn_stmt)
                     .map_err(|e| AdapterError::internal("ALTER CONNECTION", e))?;
 
@@ -3536,7 +3536,7 @@ impl Coordinator {
                 &catalog,
                 Statement::CreateConnection(create_conn_stmt),
                 &Params::empty(),
-                &resolved_ids,
+                &mut resolved_ids,
             )
             .map_err(|e| AdapterError::InvalidAlter("CONNECTION", e))?
             {
@@ -3720,7 +3720,7 @@ impl Coordinator {
                 } = options.try_into()?;
 
                 // Resolve items in statement
-                let (mut create_source_stmt, resolved_ids) =
+                let (mut create_source_stmt, mut resolved_ids) =
                     create_sql_to_stmt_deps(self, ALTER_SOURCE, cur_entry.create_sql())?;
 
                 // Get all currently referred-to items
@@ -3935,7 +3935,7 @@ impl Coordinator {
                     &catalog,
                     Statement::CreateSource(create_source_stmt),
                     &Params::empty(),
-                    &resolved_ids,
+                    &mut resolved_ids,
                 )
                 .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
                 let plan = match planned {

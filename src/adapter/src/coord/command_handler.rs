@@ -1420,7 +1420,7 @@ impl Coordinator {
         //   - In the handler for `Message::PurifiedStatementReady`, before we handle the purified statement.
         // If we add special handling for more types of `Statement`s, we'll need to ensure similar verification
         // occurs.
-        let (stmt, resolved_ids) = match stmt {
+        let (stmt, mut resolved_ids) = match stmt {
             // Various statements must be purified off the main coordinator thread of control.
             stmt if Self::must_spawn_purification(&stmt) => {
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
@@ -1580,7 +1580,7 @@ impl Coordinator {
             _ => (stmt, resolved_ids),
         };
 
-        match self.plan_statement(ctx.session(), stmt, &params, &resolved_ids) {
+        match self.plan_statement(ctx.session(), stmt, &params, &mut resolved_ids) {
             Ok(plan) => self.sequence_plan(ctx, plan, resolved_ids).await,
             Err(e) => ctx.retire(Err(e)),
         }

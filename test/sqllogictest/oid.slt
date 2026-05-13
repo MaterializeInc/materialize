@@ -1190,3 +1190,4 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17083  mz_object_arrangement_size_history
 17084  mz_object_arrangement_size_history_object_ind
 17085  mz_object_arrangement_size_history_ts_ind
+17086  mz_session_role_memberships

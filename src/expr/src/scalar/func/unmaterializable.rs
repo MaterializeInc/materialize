@@ -47,6 +47,7 @@ pub enum UnmaterializableFunc {
     MzNow,
     MzRoleOidMemberships,
     MzSessionId,
+    MzSessionRoleMemberships,
     MzUptime,
     MzVersion,
     MzVersionNum,
@@ -89,6 +90,9 @@ impl UnmaterializableFunc {
             }
             .nullable(false),
             UnmaterializableFunc::MzSessionId => SqlScalarType::Uuid.nullable(false),
+            UnmaterializableFunc::MzSessionRoleMemberships => {
+                SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false)
+            }
             UnmaterializableFunc::MzUptime => SqlScalarType::Interval.nullable(true),
             UnmaterializableFunc::MzVersion => SqlScalarType::String.nullable(false),
             UnmaterializableFunc::MzVersionNum => SqlScalarType::Int32.nullable(false),
@@ -114,6 +118,45 @@ impl UnmaterializableFunc {
     }
 }
 
+impl UnmaterializableFunc {
+    /// Whether this function is relevant to user data product queries when
+    /// `restrict_to_user_objects` is active. Functions that return internal
+    /// system information (version, uptime, role hierarchy, etc.) are excluded
+    /// because they expose system internals outside the scope of data product queries.
+    ///
+    /// No wildcard arm: adding a new variant forces a compile-time decision.
+    pub fn allowed_in_restricted_session(&self) -> bool {
+        match self {
+            // Session identity and time: needed for normal query execution.
+            // MzSessionRoleMemberships returns only the current session's role
+            // chain (not the full system graph), used by mz_show_my_object_privileges
+            // in mz_mcp_data_products.
+            Self::CurrentDatabase
+            | Self::CurrentSchema
+            | Self::CurrentSchemasWithSystem
+            | Self::CurrentSchemasWithoutSystem
+            | Self::CurrentTimestamp
+            | Self::CurrentUser
+            | Self::SessionUser
+            | Self::MzNow
+            | Self::MzSessionId
+            | Self::MzSessionRoleMemberships => true,
+            // Session config inspection
+            Self::IsRbacEnabled | Self::ViewableVariables => true,
+            // Internal system information: not relevant to data product queries
+            Self::MzEnvironmentId
+            | Self::MzIsSuperuser
+            | Self::MzRoleOidMemberships
+            | Self::MzUptime
+            | Self::MzVersion
+            | Self::MzVersionNum
+            | Self::PgBackendPid
+            | Self::PgPostmasterStartTime
+            | Self::Version => false,
+        }
+    }
+}
+
 impl fmt::Display for UnmaterializableFunc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -131,6 +174,9 @@ impl fmt::Display for UnmaterializableFunc {
             UnmaterializableFunc::MzNow => f.write_str("mz_now"),
             UnmaterializableFunc::MzRoleOidMemberships => f.write_str("mz_role_oid_memberships"),
             UnmaterializableFunc::MzSessionId => f.write_str("mz_session_id"),
+            UnmaterializableFunc::MzSessionRoleMemberships => {
+                f.write_str("mz_session_role_memberships")
+            }
             UnmaterializableFunc::MzUptime => f.write_str("mz_uptime"),
             UnmaterializableFunc::MzVersion => f.write_str("mz_version"),
             UnmaterializableFunc::MzVersionNum => f.write_str("mz_version_num"),

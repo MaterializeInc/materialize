@@ -2354,6 +2354,16 @@ impl ResolvedIds {
         self.entries.remove(item);
     }
 
+    /// Merges all entries from `other` into `self`.
+    pub fn extend_from(&mut self, other: &ResolvedIds) {
+        for (id, gids) in &other.entries {
+            self.entries
+                .entry(*id)
+                .or_default()
+                .extend(gids.iter().copied());
+        }
+    }
+
     /// Create a new [`ResolvedIds`] that contains the elements from `self`
     /// where `predicate` returns `true`.
     pub fn retain_items<F>(&self, predicate: F) -> Self

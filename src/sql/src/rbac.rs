@@ -107,6 +107,19 @@ pub static CREATE_ITEM_USAGE: LazyLock<BTreeSet<CatalogItemType>> = LazyLock::ne
 });
 pub static EMPTY_ITEM_USAGE: LazyLock<BTreeSet<CatalogItemType>> = LazyLock::new(BTreeSet::new);
 
+/// System catalog objects exempted from `check_restrict_to_user_objects`.
+///
+/// These views are the mechanism by which the MCP agent endpoint discovers
+/// data products the user has access to. Blocking them defeats the isolation
+/// model, so they are explicitly allowed even in restricted sessions.
+static RESTRICT_TO_USER_OBJECTS_ALLOWED_OIDS: LazyLock<BTreeSet<u32>> = LazyLock::new(|| {
+    use mz_pgrepr::oid;
+    btreeset! {
+        oid::VIEW_MZ_MCP_DATA_PRODUCTS_OID,
+        oid::VIEW_MZ_MCP_DATA_PRODUCT_DETAILS_OID,
+    }
+});
+
 /// Errors that can occur due to an unauthorized action.
 #[derive(Debug, thiserror::Error)]
 pub enum UnauthorizedError {
@@ -137,6 +150,9 @@ pub enum UnauthorizedError {
     /// The active role was dropped while a user was logged in.
     #[error("role {0} was concurrently dropped")]
     ConcurrentRoleDrop(RoleId),
+    /// Access to system objects is restricted by the restrict_to_user_objects session variable.
+    #[error("access to system object {object_name} is restricted")]
+    RestrictedSystemObject { object_name: String },
 }
 
 impl UnauthorizedError {
@@ -162,6 +178,11 @@ impl UnauthorizedError {
             UnauthorizedError::ConcurrentRoleDrop(_) => {
                 Some("Please disconnect and re-connect with a valid role.".into())
             }
+            UnauthorizedError::RestrictedSystemObject { .. } => Some(
+                "Access to system catalog objects is restricted for this role. \
+                Contact your administrator if you need access."
+                    .into(),
+            ),
             UnauthorizedError::Ownership { .. } | UnauthorizedError::RoleMembership { .. } => None,
         }
     }
@@ -292,6 +313,41 @@ impl Default for RbacRequirements {
     }
 }
 
+/// When `restrict_to_user_objects` is active, rejects access to system catalog objects.
+///
+/// Functions and types are allowed through because they are needed for query execution.
+/// All other system items (tables, views, sources, sinks, etc.) are blocked. This is an
+/// allow-list — new catalog item types are blocked by default.
+///
+/// See: doc/developer/design/20260508_restrict_to_user_objects.md
+fn check_restrict_to_user_objects(
+    catalog: &impl SessionCatalog,
+    session: &dyn SessionMetadata,
+    resolved_ids: &ResolvedIds,
+) -> Result<(), UnauthorizedError> {
+    if !session.restrict_to_user_objects() {
+        return Ok(());
+    }
+    for item_id in resolved_ids.items() {
+        if item_id.is_system() {
+            if let Some(item) = catalog.try_get_item(item_id) {
+                match item.item_type() {
+                    CatalogItemType::Func | CatalogItemType::Type => {}
+                    _ => {
+                        if RESTRICT_TO_USER_OBJECTS_ALLOWED_OIDS.contains(&item.oid()) {
+                            continue;
+                        }
+                        return Err(UnauthorizedError::RestrictedSystemObject {
+                            object_name: item.name().item.clone(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Checks if a `session` is authorized to use `resolved_ids`. If not, an error is returned.
 pub fn check_usage(
     catalog: &impl SessionCatalog,
@@ -300,6 +356,9 @@ pub fn check_usage(
     item_types: &BTreeSet<CatalogItemType>,
 ) -> Result<(), UnauthorizedError> {
     rbac_check_preamble(catalog, session)?;
+
+    // See: doc/developer/design/20260508_restrict_to_user_objects.md
+    check_restrict_to_user_objects(catalog, session, resolved_ids)?;
 
     // Obtain all roles that the current session is a member of.
     let role_membership = catalog.collect_role_membership(&session.role_metadata().current_role);
@@ -1203,7 +1262,19 @@ fn generate_rbac_requirements(
                     ..Default::default()
                 }
             }
-            // Roles are allowed to change their own variables.
+            // restrict_to_user_objects can only be set by superuser.
+            // SECURITY: This must use case-insensitive comparison because
+            // var.name() comes from Ident::to_string() which preserves the
+            // original casing for quoted identifiers.
+            plan::PlannedAlterRoleOption::Variable(var)
+                if var.name().eq_ignore_ascii_case("restrict_to_user_objects") =>
+            {
+                RbacRequirements {
+                    superuser_action: Some("set restrict_to_user_objects".to_string()),
+                    ..Default::default()
+                }
+            }
+            // Roles are allowed to change their own other variables.
             plan::PlannedAlterRoleOption::Variable(_) if role_id == *id => {
                 RbacRequirements::default()
             }
