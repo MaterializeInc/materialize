@@ -46,11 +46,11 @@ genuinely reads post-restart state, not just the same state as N).
 
 from __future__ import annotations
 
-import logging
 import os
 import sys
 import time
 
+import helper_logging
 import helper_random
 import psycopg
 from helper_pg import (
@@ -64,10 +64,7 @@ from helper_pg import (
 
 from antithesis.assertions import always, sometimes
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
-)
-LOG = logging.getLogger("driver.catalog_recovery_consistency")
+LOG = helper_logging.setup_logging("driver.catalog_recovery_consistency")
 
 # Long-running knobs: the driver owns its timeline and the per-cycle budget
 # has to comfortably exceed environmentd's restart time so a fault landing

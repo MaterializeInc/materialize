@@ -47,10 +47,10 @@ Each invocation:
 
 from __future__ import annotations
 
-import logging
 import sys
 import time
 
+import helper_logging
 import helper_mysql
 import helper_random
 from helper_mysql_source import (
@@ -63,10 +63,7 @@ from helper_pg import query_retry
 
 from antithesis.assertions import always, sometimes
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
-)
-LOG = logging.getLogger("driver.mysql_myisam")
+LOG = helper_logging.setup_logging("driver.mysql_myisam")
 
 ROWS_PER_INVOCATION = 20
 # Sized to span at least one MAX_OFF window from the global fault-

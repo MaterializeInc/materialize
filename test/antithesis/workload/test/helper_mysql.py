@@ -49,11 +49,22 @@ def _retryable(exc: BaseException) -> bool:
 
 def _open(host: str, database: str) -> pymysql.connections.Connection:
     """Open a single MySQL connection with retries on transient errors."""
-    deadline = time.monotonic() + _RETRY_BUDGET_S
+    start = time.monotonic()
+    deadline = start + _RETRY_BUDGET_S
     backoff = _RETRY_INITIAL_S
+    attempt = 0
+    LOG.debug(
+        "mysql connect: starting (host=%s db=%s timeout=%ds budget=%ds)",
+        host,
+        database,
+        _CONNECT_TIMEOUT_S,
+        _RETRY_BUDGET_S,
+    )
     while True:
+        attempt += 1
+        attempt_start = time.monotonic()
         try:
-            return pymysql.connect(
+            conn = pymysql.connect(
                 host=host,
                 port=MYSQL_PORT,
                 user="root",
@@ -62,12 +73,35 @@ def _open(host: str, database: str) -> pymysql.connections.Connection:
                 connect_timeout=_CONNECT_TIMEOUT_S,
                 autocommit=True,
             )
+            LOG.info(
+                "mysql connect: %s established on attempt %d in %.2fs (total %.2fs)",
+                host,
+                attempt,
+                time.monotonic() - attempt_start,
+                time.monotonic() - start,
+            )
+            return conn
         except Exception as exc:  # noqa: BLE001
+            elapsed_attempt = time.monotonic() - attempt_start
+            elapsed_total = time.monotonic() - start
             if not _retryable(exc) or time.monotonic() > deadline:
+                LOG.warning(
+                    "mysql connect: %s giving up after attempt %d (%.2fs attempt, %.2fs total): %s",
+                    host,
+                    attempt,
+                    elapsed_attempt,
+                    elapsed_total,
+                    exc,
+                )
                 raise
             LOG.info(
-                "mysql connect to %s retrying after %s; backoff=%.2fs",
+                "mysql connect: %s attempt %d failed in %.2fs (%.2fs of %ds used): %s; "
+                "sleeping %.2fs",
                 host,
+                attempt,
+                elapsed_attempt,
+                elapsed_total,
+                _RETRY_BUDGET_S,
                 exc,
                 backoff,
             )

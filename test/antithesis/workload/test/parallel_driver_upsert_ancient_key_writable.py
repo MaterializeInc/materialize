@@ -55,9 +55,9 @@ ones.
 
 from __future__ import annotations
 
-import logging
 import sys
 
+import helper_logging
 import helper_random
 from helper_kafka import FLUSH_TIMEOUT_S, make_producer
 from helper_pg import query_retry
@@ -70,10 +70,7 @@ from helper_upsert_source import (
 
 from antithesis.assertions import always, sometimes
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
-)
-LOG = logging.getLogger("driver.upsert_ancient_key_writable")
+LOG = helper_logging.setup_logging("driver.upsert_ancient_key_writable")
 
 # Fixed key ring owned exclusively by this driver. No other driver writes
 # keys matching this prefix, so the property's assertions are race-free

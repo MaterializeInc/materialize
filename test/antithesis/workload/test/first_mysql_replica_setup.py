@@ -25,18 +25,16 @@ Steps:
 
 from __future__ import annotations
 
-import logging
 import sys
 import time
 
+import helper_logging
 import helper_mysql
-from antithesis.assertions import reachable, sometimes
 from helper_mysql_source import ensure_mysql_cdc_source
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
-)
-LOG = logging.getLogger("first.mysql_replica_setup")
+from antithesis.assertions import reachable, sometimes
+
+LOG = helper_logging.setup_logging("first.mysql_replica_setup")
 
 
 def setup_primary() -> None:
@@ -80,7 +78,9 @@ def setup_primary() -> None:
         """,
         database="antithesis",
     )
-    LOG.info("antithesis.cdc_test (InnoDB) and cdc_test_myisam (MyISAM) ready on primary")
+    LOG.info(
+        "antithesis.cdc_test (InnoDB) and cdc_test_myisam (MyISAM) ready on primary"
+    )
 
 
 def configure_replica() -> None:

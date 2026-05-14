@@ -25,17 +25,15 @@ goes 0/N across the run, we've lost that arm of coverage.
 
 from __future__ import annotations
 
-import logging
 import sys
 
+import helper_logging
 import helper_random
-from antithesis.assertions import sometimes
 from helper_pg import execute_internal_retry
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
-)
-LOG = logging.getLogger("first.select_upsert_implementation")
+from antithesis.assertions import sometimes
+
+LOG = helper_logging.setup_logging("first.select_upsert_implementation")
 
 
 def main() -> int:

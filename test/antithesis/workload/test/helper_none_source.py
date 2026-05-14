@@ -40,6 +40,11 @@ def ensure_none_text_source() -> None:
     Reuses the shared `antithesis_kafka_conn` Kafka connection so multiple
     drivers don't proliferate connections.
     """
+    LOG.info(
+        "ensure_none_text_source: starting (source=%s topic=%s)",
+        SOURCE_NONE_TEXT,
+        TOPIC_NONE_TEXT,
+    )
     ensure_kafka_connection()
     # CREATE SOURCE issues a Kafka metadata fetch that fails fast if the topic
     # is missing; broker auto-create only fires on a producer write, which
@@ -56,5 +61,7 @@ def ensure_none_text_source() -> None:
         SOURCE_NONE_TEXT,
     )
     LOG.info(
-        "none-envelope source %s ready (topic=%s)", SOURCE_NONE_TEXT, TOPIC_NONE_TEXT
+        "ensure_none_text_source: ready (source=%s topic=%s)",
+        SOURCE_NONE_TEXT,
+        TOPIC_NONE_TEXT,
     )

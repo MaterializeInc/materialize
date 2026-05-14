@@ -34,9 +34,9 @@ multiple drivers exercise the source without colliding.
 
 from __future__ import annotations
 
-import logging
 import sys
 
+import helper_logging
 import helper_random
 from helper_kafka import FLUSH_TIMEOUT_S, make_producer
 from helper_pg import query_one_retry
@@ -49,10 +49,7 @@ from helper_upsert_source import (
 
 from antithesis.assertions import always, sometimes
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
-)
-LOG = logging.getLogger("driver.upsert_latest_value")
+LOG = helper_logging.setup_logging("driver.upsert_latest_value")
 
 # Knobs. Kept small per-invocation because Antithesis launches the driver many
 # times; total coverage comes from re-invocations, not from one huge run.

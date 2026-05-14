@@ -41,18 +41,16 @@ The complementary SUT-side assertion lives in
 
 from __future__ import annotations
 
-import logging
 import sys
 import time
 
-from antithesis.assertions import always
+import helper_logging
 from helper_mysql_source import SOURCE_NAME
 from helper_pg import query_retry
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
-)
-LOG = logging.getLogger("driver.mysql_source_no_gtid_errors")
+from antithesis.assertions import always
+
+LOG = helper_logging.setup_logging("driver.mysql_source_no_gtid_errors")
 
 # Knobs.
 POLL_INTERVAL_S = 2.0

@@ -38,13 +38,13 @@ translate to the Antithesis topology:
 
 from __future__ import annotations
 
-import logging
 import os
 import sys
 import threading
 import time
 from typing import Any
 
+import helper_logging
 import helper_random
 import psycopg
 from helper_pg import (
@@ -94,10 +94,7 @@ from materialize.parallel_workload.worker_exception import WorkerFailedException
 _pw_executor.logging = None
 _pw_executor.lock = threading.Lock()
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
-)
-LOG = logging.getLogger("driver.parallel_workload")
+LOG = helper_logging.setup_logging("driver.parallel_workload")
 
 # Antithesis Test Composer invokes drivers in tight loops, so this script is
 # intentionally short. The cap exists so a single iteration can't monopolise

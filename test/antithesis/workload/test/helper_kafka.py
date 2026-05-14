@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from dataclasses import dataclass, field
 
 from confluent_kafka import KafkaException, Producer
@@ -97,26 +98,64 @@ def make_producer(client_id: str | None = None) -> tuple[Producer, DeliveryTrack
     }
     if client_id:
         config["client.id"] = client_id
+    LOG.info(
+        "kafka producer: building (broker=%s client_id=%s request_timeout=%dms delivery_timeout=%dms)",
+        BROKER,
+        client_id or "<auto>",
+        _REQUEST_TIMEOUT_MS,
+        _DELIVERY_TIMEOUT_MS,
+    )
     return Producer(config), DeliveryTracker()
 
 
 def ensure_topic(topic: str, num_partitions: int = 1) -> None:
     """Create the topic if it doesn't already exist. No-op on race with auto-create."""
+    LOG.info("kafka admin: probing topic %s (broker=%s)", topic, BROKER)
     admin = AdminClient({"bootstrap.servers": BROKER})
-    existing = admin.list_topics(timeout=ADMIN_TIMEOUT_S).topics
+    list_start = time.monotonic()
+    try:
+        existing = admin.list_topics(timeout=ADMIN_TIMEOUT_S).topics
+    except Exception as exc:  # noqa: BLE001
+        LOG.warning(
+            "kafka admin: list_topics failed in %.2fs (timeout=%ds): %s",
+            time.monotonic() - list_start,
+            ADMIN_TIMEOUT_S,
+            exc,
+        )
+        raise
+    LOG.info(
+        "kafka admin: list_topics returned %d topics in %.2fs",
+        len(existing),
+        time.monotonic() - list_start,
+    )
     if topic in existing:
+        LOG.info("kafka admin: topic %s already present; skipping create", topic)
         return
-    LOG.info("creating kafka topic %s with %d partition(s)", topic, num_partitions)
+    LOG.info(
+        "kafka admin: creating topic %s with %d partition(s)", topic, num_partitions
+    )
+    create_start = time.monotonic()
     futures = admin.create_topics(
         [NewTopic(topic, num_partitions=num_partitions, replication_factor=1)]
     )
     for t, fut in futures.items():
         try:
             fut.result(timeout=ADMIN_TIMEOUT_S)
+            LOG.info(
+                "kafka admin: topic %s created in %.2fs",
+                t,
+                time.monotonic() - create_start,
+            )
         except KafkaException as exc:
             # TOPIC_ALREADY_EXISTS = 36
             err = exc.args[0] if exc.args else None
             if err is not None and getattr(err, "code", lambda: None)() == 36:
-                LOG.info("kafka topic %s raced with auto-create; continuing", t)
+                LOG.info("kafka admin: topic %s raced with auto-create; continuing", t)
                 continue
+            LOG.warning(
+                "kafka admin: topic %s create failed in %.2fs: %s",
+                t,
+                time.monotonic() - create_start,
+                exc,
+            )
             raise

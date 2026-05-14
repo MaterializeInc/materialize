@@ -52,11 +52,11 @@ stream, and prefix-scoping isolates each instance's expected count.
 
 from __future__ import annotations
 
-import logging
 import os
 import sys
 import time
 
+import helper_logging
 import helper_random
 import psycopg
 from helper_pg import (
@@ -70,10 +70,7 @@ from helper_table_mv import MV_NAME, TABLE_MV_INPUT, ensure_table_and_mv
 
 from antithesis.assertions import always, sometimes
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
-)
-LOG = logging.getLogger("driver.strict_serializable_reads")
+LOG = helper_logging.setup_logging("driver.strict_serializable_reads")
 
 STEPS_PER_INVOCATION = 12
 # Sized to span at least one MAX_OFF window from the global fault-

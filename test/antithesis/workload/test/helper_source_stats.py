@@ -56,30 +56,41 @@ def wait_for_catchup(
 
     Returns True if catchup completed within `timeout_s`, False on timeout.
     """
-    deadline = time.monotonic() + timeout_s
+    LOG.info(
+        "wait_for_catchup: starting (source=%s target=%d timeout=%.1fs)",
+        source_name,
+        target_offset,
+        timeout_s,
+    )
+    start = time.monotonic()
+    deadline = start + timeout_s
     last_seen: int | None = None
     while time.monotonic() < deadline:
         observed = offset_committed(source_name)
         if observed is not None and observed >= target_offset:
             LOG.info(
-                "source %s caught up: observed=%d target=%d",
+                "wait_for_catchup: source %s caught up in %.2fs (observed=%d target=%d)",
                 source_name,
+                time.monotonic() - start,
                 observed,
                 target_offset,
             )
             return True
         if observed != last_seen:
             LOG.info(
-                "source %s waiting for catchup: observed=%s target=%d",
+                "wait_for_catchup: source %s progress (observed=%s target=%d, %.1fs of %.1fs)",
                 source_name,
                 observed,
                 target_offset,
+                time.monotonic() - start,
+                timeout_s,
             )
             last_seen = observed
         time.sleep(poll_interval_s)
     LOG.warning(
-        "source %s catchup timeout: observed=%s target=%d",
+        "wait_for_catchup: source %s timed out after %.2fs (observed=%s target=%d)",
         source_name,
+        time.monotonic() - start,
         last_seen,
         target_offset,
     )

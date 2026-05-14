@@ -36,17 +36,15 @@ just skip the sample.
 
 from __future__ import annotations
 
-import logging
 import sys
 import time
 
-from antithesis.assertions import always
+import helper_logging
 from helper_pg import query_retry
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
-)
-LOG = logging.getLogger("driver.kafka_offset_known_not_below_committed")
+from antithesis.assertions import always
+
+LOG = helper_logging.setup_logging("driver.kafka_offset_known_not_below_committed")
 
 POLL_INTERVAL_S = 0.5
 RUN_BUDGET_S = 30.0

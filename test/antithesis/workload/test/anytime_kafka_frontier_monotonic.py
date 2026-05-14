@@ -38,18 +38,16 @@ the same source.
 
 from __future__ import annotations
 
-import logging
 import sys
 import time
 
-from antithesis.assertions import always
+import helper_logging
 from helper_pg import query_retry
 from helper_source_stats import offset_committed
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
-)
-LOG = logging.getLogger("driver.kafka_frontier_monotonic")
+from antithesis.assertions import always
+
+LOG = helper_logging.setup_logging("driver.kafka_frontier_monotonic")
 
 # Knobs.
 POLL_INTERVAL_S = 0.5

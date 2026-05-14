@@ -43,9 +43,9 @@ without colliding because each invocation owns its prefix range.
 
 from __future__ import annotations
 
-import logging
 import sys
 
+import helper_logging
 import helper_random
 from helper_kafka import FLUSH_TIMEOUT_S, make_producer
 from helper_none_source import (
@@ -58,10 +58,7 @@ from helper_source_stats import wait_for_catchup
 
 from antithesis.assertions import always, sometimes
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
-)
-LOG = logging.getLogger("driver.kafka_none_envelope")
+LOG = helper_logging.setup_logging("driver.kafka_none_envelope")
 
 # Knobs. Tuned so each invocation is a small, self-contained unit of work
 # — Antithesis launches the driver many times and accumulates coverage

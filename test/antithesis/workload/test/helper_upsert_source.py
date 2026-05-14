@@ -35,10 +35,16 @@ SOURCE_UPSERT_TEXT = "upsert_text_src"
 
 
 def ensure_kafka_connection() -> None:
+    LOG.info(
+        "ensure_kafka_connection: starting (name=%s broker=%s)",
+        CONNECTION_NAME,
+        KAFKA_BROKER,
+    )
     execute_retry(
         f"CREATE CONNECTION IF NOT EXISTS {CONNECTION_NAME} "
         f"TO KAFKA (BROKER '{KAFKA_BROKER}', SECURITY PROTOCOL = 'PLAINTEXT')"
     )
+    LOG.info("ensure_kafka_connection: done (name=%s)", CONNECTION_NAME)
 
 
 def ensure_upsert_text_source() -> None:
@@ -46,6 +52,11 @@ def ensure_upsert_text_source() -> None:
 
     The resulting source has columns `key TEXT NOT NULL` and `text TEXT`.
     """
+    LOG.info(
+        "ensure_upsert_text_source: starting (source=%s topic=%s)",
+        SOURCE_UPSERT_TEXT,
+        TOPIC_UPSERT_TEXT,
+    )
     ensure_kafka_connection()
     ensure_topic(TOPIC_UPSERT_TEXT)
     create_source_idempotent(
@@ -56,4 +67,8 @@ def ensure_upsert_text_source() -> None:
         f"ENVELOPE UPSERT",
         SOURCE_UPSERT_TEXT,
     )
-    LOG.info("upsert source %s ready (topic=%s)", SOURCE_UPSERT_TEXT, TOPIC_UPSERT_TEXT)
+    LOG.info(
+        "ensure_upsert_text_source: ready (source=%s topic=%s)",
+        SOURCE_UPSERT_TEXT,
+        TOPIC_UPSERT_TEXT,
+    )

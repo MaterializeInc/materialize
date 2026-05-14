@@ -50,6 +50,12 @@ def ensure_table_and_mv() -> None:
     cluster so dataflow execution is colocated with the rest of the
     workload's compute.
     """
+    LOG.info(
+        "ensure_table_and_mv: starting (table=%s mv=%s cluster=%s)",
+        TABLE_MV_INPUT,
+        MV_NAME,
+        CLUSTER,
+    )
     execute_retry(
         f"CREATE TABLE IF NOT EXISTS {TABLE_MV_INPUT} "
         f"(id BIGINT NOT NULL, prefix TEXT NOT NULL)"
@@ -61,4 +67,4 @@ def ensure_table_and_mv() -> None:
         f"FROM {TABLE_MV_INPUT} "
         f"GROUP BY prefix"
     )
-    LOG.info("table %s and MV %s ready", TABLE_MV_INPUT, MV_NAME)
+    LOG.info("ensure_table_and_mv: ready (table=%s mv=%s)", TABLE_MV_INPUT, MV_NAME)

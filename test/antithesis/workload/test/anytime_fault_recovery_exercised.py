@@ -39,13 +39,12 @@ short-lived. Recovery transitions accumulate across invocations.
 
 from __future__ import annotations
 
-import logging
 import os
 import sys
 import time
 
+import helper_logging
 import psycopg
-from antithesis.assertions import sometimes
 from helper_pg import (
     PGDATABASE,
     PGHOST,
@@ -54,10 +53,9 @@ from helper_pg import (
     query_one_retry,
 )
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
-)
-LOG = logging.getLogger("driver.fault_recovery_exercised")
+from antithesis.assertions import sometimes
+
+LOG = helper_logging.setup_logging("driver.fault_recovery_exercised")
 
 POLL_INTERVAL_S = 0.5
 RUN_BUDGET_S = 30.0

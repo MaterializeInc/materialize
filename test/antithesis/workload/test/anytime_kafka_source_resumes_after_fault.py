@@ -45,18 +45,16 @@ this property cluster cares about:
 
 from __future__ import annotations
 
-import logging
 import os
 import sys
 import time
 
-from antithesis.assertions import reachable, sometimes
+import helper_logging
 from helper_pg import query_one_retry, query_retry
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
-)
-LOG = logging.getLogger("driver.kafka_source_resumes_after_fault")
+from antithesis.assertions import reachable, sometimes
+
+LOG = helper_logging.setup_logging("driver.kafka_source_resumes_after_fault")
 
 POLL_INTERVAL_S = 1.0
 RUN_BUDGET_S = 45.0
