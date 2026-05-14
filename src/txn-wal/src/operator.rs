@@ -32,6 +32,7 @@ use mz_persist_types::{Codec, Codec64, StepForward};
 use mz_timely_util::builder_async::{
     OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton, button,
 };
+use mz_timely_util::containers::NoopContainerBuilder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::capture::Event;
@@ -39,11 +40,11 @@ use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
 use timely::dataflow::operators::vec::{Broadcast, Map};
 use timely::dataflow::operators::{Capture, Leave, Probe};
-use timely::dataflow::{ProbeHandle, Scope, StreamVec};
+use timely::dataflow::{ProbeHandle, Scope, Stream, StreamVec};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use timely::worker::Worker;
-use timely::{PartialOrder, WorkerConfig};
+use timely::{Container, PartialOrder, WorkerConfig};
 use tracing::debug;
 
 use crate::TxnsCodecDefault;
@@ -93,7 +94,7 @@ use crate::txn_read::{DataRemapEntry, TxnsRead};
 ///   on data from its input until the input has progressed to 10, at which
 ///   point it can itself downgrade to 10.
 pub fn txns_progress<'scope, K, V, T, D, P, C, F>(
-    passthrough: StreamVec<'scope, T, P>,
+    passthrough: Stream<'scope, T, P>,
     name: &str,
     ctx: &TxnsContext,
     client_fn: impl Fn() -> F,
@@ -103,13 +104,13 @@ pub fn txns_progress<'scope, K, V, T, D, P, C, F>(
     until: Antichain<T>,
     data_key_schema: Arc<K::Schema>,
     data_val_schema: Arc<V::Schema>,
-) -> (StreamVec<'scope, T, P>, Vec<PressOnDropButton>)
+) -> (Stream<'scope, T, P>, Vec<PressOnDropButton>)
 where
     K: Debug + Codec + Send + Sync,
     V: Debug + Codec + Send + Sync,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
     D: Debug + Clone + 'static + Monoid + Ord + Codec64 + Send + Sync,
-    P: Debug + Clone + 'static,
+    P: Container,
     C: TxnsCodec + 'static,
     F: Future<Output = PersistClient> + Send + 'static,
 {
@@ -170,7 +171,7 @@ where
     V: Debug + Codec + Send + Sync,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
     D: Debug + Clone + 'static + Monoid + Ord + Codec64 + Send + Sync,
-    P: Debug + Clone + 'static,
+    P: Container,
     C: TxnsCodec + 'static,
 {
     let worker_idx = scope.index();
@@ -230,18 +231,18 @@ where
 
 fn txns_progress_frontiers<'scope, K, V, T, D, P, C>(
     remap: StreamVec<'scope, T, DataRemapEntry<T>>,
-    passthrough: StreamVec<'scope, T, P>,
+    passthrough: Stream<'scope, T, P>,
     name: &str,
     data_id: ShardId,
     until: Antichain<T>,
     unique_id: u64,
-) -> (StreamVec<'scope, T, P>, PressOnDropButton)
+) -> (Stream<'scope, T, P>, PressOnDropButton)
 where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
     D: Clone + 'static + Monoid + Codec64 + Send + Sync,
-    P: Debug + Clone + 'static,
+    P: Container,
     C: TxnsCodec,
 {
     let scope = passthrough.scope();
@@ -256,8 +257,9 @@ where
         scope.peers(),
         data_id.to_string(),
     );
-    let (passthrough_output, passthrough_stream) = builder.new_output::<Vec<P>>();
-    let mut passthrough_output = OutputBuilder::from(passthrough_output);
+    let (passthrough_output, passthrough_stream) = builder.new_output::<P>();
+    let mut passthrough_output =
+        OutputBuilder::<T, NoopContainerBuilder<P>>::from(passthrough_output);
     // Both inputs are disconnected from the output: capability advancement is
     // driven manually based on the remap stream and the passthrough frontier.
     let mut remap_input = builder.new_input_connection(remap, Pipeline, []);
@@ -416,8 +418,7 @@ where
             if let Some(cap) = capability.as_ref() {
                 let mut output = passthrough_output.activate();
                 passthrough_input.for_each(|_input_cap, data| {
-                    debug!("{} emitting data {:?}", name, data);
-                    output.session(cap).give_container(data);
+                    output.session_with_builder(cap).give_container(data);
                 });
             } else {
                 // Still drain to avoid stalling the dataflow.
@@ -1009,15 +1010,21 @@ mod tests {
                     let ((remap_handle, remap_cap), remap_stream) =
                         scope.new_unordered_input::<DataRemapEntry<u64>>();
                     let ((pass_handle, pass_cap), pass_stream) = scope.new_unordered_input::<i32>();
-                    let (out, button) =
-                        txns_progress_frontiers::<String, (), u64, i64, i32, TxnsCodecDefault>(
-                            remap_stream,
-                            pass_stream,
-                            "test",
-                            ShardId::new(),
-                            Antichain::from_elem(u64::MAX),
-                            0,
-                        );
+                    let (out, button) = txns_progress_frontiers::<
+                        String,
+                        (),
+                        u64,
+                        i64,
+                        Vec<i32>,
+                        TxnsCodecDefault,
+                    >(
+                        remap_stream,
+                        pass_stream,
+                        "test",
+                        ShardId::new(),
+                        Antichain::from_elem(u64::MAX),
+                        0,
+                    );
                     let captured = out.capture();
                     (
                         remap_handle,
