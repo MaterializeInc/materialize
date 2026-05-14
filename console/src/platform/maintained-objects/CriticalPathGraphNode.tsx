@@ -9,11 +9,13 @@
 
 import { Box, Text, useColorModeValue, useTheme } from "@chakra-ui/react";
 import React from "react";
+import { Link as RouterLink } from "react-router-dom";
 
 import { MaterializeTheme } from "~/theme";
 import { formatIntervalShort } from "~/utils/format";
 
 import { NodeKind, RenderableNode } from "./criticalPathRenderable";
+import { useJourneyLinkState } from "./useJourneyLinkState";
 
 const useNodeColors = (node: RenderableNode) => {
   const { colors } = useTheme<MaterializeTheme>();
@@ -51,6 +53,9 @@ const useNodeColors = (node: RenderableNode) => {
 
 export interface CriticalPathGraphNodeProps {
   node: RenderableNode;
+  /** Id of the object the page is currently rendering. Used to extend the
+   *  breadcrumb journey when navigating to a different node. */
+  pageObjectId: string;
   /** True when the user has clicked the off-path counter to splice in
    *  this bottleneck's siblings. */
   expanded: boolean;
@@ -67,6 +72,7 @@ export interface CriticalPathGraphNodeProps {
 
 export const CriticalPathGraphNode = ({
   node,
+  pageObjectId,
   expanded,
   selected,
   left,
@@ -76,11 +82,14 @@ export const CriticalPathGraphNode = ({
   onToggleExpand,
   onSelect,
 }: CriticalPathGraphNodeProps) => {
-  const { colors } = useTheme<MaterializeTheme>();
+  const { colors, shadows } = useTheme<MaterializeTheme>();
   const { borderColor, bg } = useNodeColors(node);
   const lagText = node.lag ? formatIntervalShort(node.lag) : "—";
   const borderStyle = node.isProbe || expanded ? "dashed" : "solid";
   const isOffPath = node.kind === "offPath";
+
+  const journeyLinkState = useJourneyLinkState(pageObjectId);
+  const objectLinkTarget = `../${node.parentSourceId ?? node.id}`;
 
   return (
     <Box
@@ -91,7 +100,7 @@ export const CriticalPathGraphNode = ({
       minHeight={`${height}px`}
       height={selected ? "auto" : `${height}px`}
       zIndex={selected ? 10 : 1}
-      boxShadow={selected ? "md" : undefined}
+      boxShadow={selected ? shadows.input.focus : undefined}
       borderRadius="md"
       borderWidth="2px"
       borderStyle={borderStyle}
@@ -105,15 +114,38 @@ export const CriticalPathGraphNode = ({
       justifyContent="center"
       overflow={selected ? "visible" : "hidden"}
       cursor="pointer"
+      transition="box-shadow 0.15s, transform 0.15s"
+      _hover={{
+        boxShadow: selected ? shadows.input.focus : shadows.level1,
+      }}
       onClick={onSelect}
     >
-      <Text
-        textStyle="text-ui-med"
-        noOfLines={selected ? undefined : 1}
-        wordBreak={selected ? "break-all" : undefined}
-      >
-        {node.name}
-      </Text>
+      {node.isProbe ? (
+        <Text
+          textStyle="text-ui-med"
+          noOfLines={selected ? undefined : 1}
+          wordBreak={selected ? "break-all" : undefined}
+        >
+          {node.name}
+        </Text>
+      ) : (
+        <Text
+          as={RouterLink}
+          to={objectLinkTarget}
+          relative="path"
+          state={journeyLinkState}
+          onClick={(e) => e.stopPropagation()}
+          textStyle="text-ui-med"
+          noOfLines={selected ? undefined : 1}
+          wordBreak={selected ? "break-all" : undefined}
+          _hover={{
+            color: colors.accent.brightPurple,
+            textDecoration: "underline",
+          }}
+        >
+          {node.name}
+        </Text>
+      )}
       <Text
         textStyle="text-small"
         color={colors.foreground.secondary}

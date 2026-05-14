@@ -15,6 +15,7 @@ import { SideDrawer } from "~/components/SideDrawer";
 
 import { MaintainedObjectsOutletContext } from "./MaintainedObjectsLayout";
 import { ObjectDetailPanel } from "./ObjectDetailPanel";
+import { ObjectJourneyBreadcrumb } from "./ObjectJourneyBreadcrumb";
 
 export const ObjectDetailDrawer = () => {
   const { objectId } = useParams<{ objectId: string }>();
@@ -30,7 +31,14 @@ export const ObjectDetailDrawer = () => {
     <SideDrawer
       isOpen
       onClose={handleClose}
-      title={item?.name}
+      title={
+        item ? (
+          <ObjectJourneyBreadcrumb
+            currentId={item.id}
+            currentName={item.name}
+          />
+        ) : undefined
+      }
       width="66%"
       trapFocus={false}
     >
