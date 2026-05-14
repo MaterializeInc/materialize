@@ -40,7 +40,6 @@ from __future__ import annotations
 
 import logging
 import os
-import random
 import sys
 import threading
 import time
@@ -426,18 +425,27 @@ def _create_database_for_antithesis(database: Database, exe: Executor) -> None:
 
 
 def _spawn_workers(
-    rng: random.Random,
+    rng: helper_random.AntithesisRandom,
     database: Database,
     end_time: float,
     num_threads: int,
 ) -> tuple[list[Worker], list[threading.Thread]]:
     """Build the same thread pool `parallel_workload.run()` does for
-    `Complexity.DDL`, minus the per-scenario kill/cancel/backup helper."""
+    `Complexity.DDL`, minus the per-scenario kill/cancel/backup helper.
+
+    Each worker gets its own `AntithesisRandom` instance so the framework's
+    per-Action `self.rng.choice/randint/random/sample` calls route through
+    Antithesis on every draw. The framework expects a `random.Random`;
+    `AntithesisRandom` is a subclass that overrides the entropy primitives
+    to read from the SDK, so action selection, expression shape, DDL
+    choices, and every other decision are driven by the fuzzer instead of
+    being locked in after one seed.
+    """
     weights = [60, 30, 30, 30, 100]
     workers: list[Worker] = []
     threads: list[threading.Thread] = []
     for i in range(num_threads):
-        worker_rng = random.Random(rng.randrange(1_000_000))
+        worker_rng = helper_random.AntithesisRandom()
         action_list = worker_rng.choices(
             [
                 read_action_list,
@@ -475,7 +483,12 @@ def _spawn_workers(
 
 def main() -> int:
     seed = str(helper_random.random_u64())
-    rng = random.Random(seed)
+    # AntithesisRandom routes every getrandbits/random call through the
+    # Antithesis SDK, so every decision the parallel_workload framework
+    # makes downstream of this rng draws fresh entropy on each call. A
+    # stdlib `random.Random(seed)` would lock the timeline in after one
+    # draw and the fuzzer couldn't drive differing branches.
+    rng = helper_random.AntithesisRandom()
 
     LOG.info(
         "parallel-workload starting: seed=%s threads=%d runtime=%ss",
@@ -513,7 +526,7 @@ def main() -> int:
 
 def _run_invocation(
     seed: str,
-    rng: random.Random,
+    rng: helper_random.AntithesisRandom,
     cluster_name: str,
 ) -> int:
     """The bulk of `main()` once a pool slot has been claimed. Split out
