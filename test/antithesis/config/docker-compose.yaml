@@ -68,6 +68,10 @@ services:
 
       exec docker-entrypoint.sh "$$@"'
     - --
+    container_name: postgres-metadata
+    hostname: postgres-metadata
+    networks:
+    - antithesis-net
   minio:
     entrypoint:
     - sh
@@ -93,6 +97,10 @@ services:
       start_period: 30s
     platform: linux/amd64
     image: minio/minio:latest
+    container_name: minio
+    hostname: minio
+    networks:
+    - antithesis-net
   zookeeper:
     image: confluentinc/cp-zookeeper:7.9.4
     ports:
@@ -109,6 +117,10 @@ services:
       interval: 1s
       start_period: 120s
     platform: linux/amd64
+    container_name: zookeeper
+    hostname: zookeeper
+    networks:
+    - antithesis-net
   kafka:
     image: confluentinc/cp-kafka:7.9.4
     ports:
@@ -140,13 +152,16 @@ services:
       interval: 1s
       start_period: 120s
     platform: linux/amd64
+    container_name: kafka
+    hostname: kafka
+    networks:
+    - antithesis-net
   schema-registry:
     image: confluentinc/cp-schema-registry:7.9.4
     ports:
     - 8081
     networks:
-      default:
-        aliases: []
+    - antithesis-net
     environment:
     - SCHEMA_REGISTRY_KAFKASTORE_TIMEOUT_MS=10000
     - SCHEMA_REGISTRY_KAFKASTORE_TOPIC_REPLICATION_FACTOR=1
@@ -171,6 +186,8 @@ services:
       interval: 1s
       start_period: 120s
     platform: linux/amd64
+    container_name: schema-registry
+    hostname: schema-registry
   mysql:
     init: true
     ports:
@@ -201,6 +218,10 @@ services:
     - mydata:/var/lib/mysql-files
     image: mysql:9.5.0
     platform: linux/amd64
+    container_name: mysql
+    hostname: mysql
+    networks:
+    - antithesis-net
   mysql-replica:
     init: true
     ports:
@@ -235,6 +256,10 @@ services:
     - mydata:/var/lib/mysql-files
     image: mysql:9.5.0
     platform: linux/amd64
+    container_name: mysql-replica
+    hostname: mysql-replica
+    networks:
+    - antithesis-net
   clusterd1:
     entrypoint:
     - tini
@@ -273,6 +298,10 @@ services:
     stop_grace_period: 120s
     platform: linux/amd64
     image: ${MATERIALIZED_IMAGE}
+    container_name: clusterd1
+    hostname: clusterd1
+    networks:
+    - antithesis-net
   clusterd2:
     entrypoint:
     - tini
@@ -311,6 +340,10 @@ services:
     stop_grace_period: 120s
     platform: linux/amd64
     image: ${MATERIALIZED_IMAGE}
+    container_name: clusterd2
+    hostname: clusterd2
+    networks:
+    - antithesis-net
   clusterd-pool-0:
     entrypoint:
     - tini
@@ -349,6 +382,10 @@ services:
     stop_grace_period: 120s
     platform: linux/amd64
     image: ${MATERIALIZED_IMAGE}
+    container_name: clusterd-pool-0
+    hostname: clusterd-pool-0
+    networks:
+    - antithesis-net
   clusterd-pool-1:
     entrypoint:
     - tini
@@ -387,6 +424,10 @@ services:
     stop_grace_period: 120s
     platform: linux/amd64
     image: ${MATERIALIZED_IMAGE}
+    container_name: clusterd-pool-1
+    hostname: clusterd-pool-1
+    networks:
+    - antithesis-net
   materialized:
     hostname: materialized
     depends_on:
@@ -575,6 +616,9 @@ services:
     stop_grace_period: 120s
     platform: linux/amd64
     image: ${MATERIALIZED_IMAGE}
+    container_name: materialized
+    networks:
+    - antithesis-net
   workload:
     depends_on:
       materialized:
@@ -608,7 +652,13 @@ services:
     - MYSQL_PASSWORD=p@ssw0rd
     platform: linux/amd64
     image: ${ANTITHESIS_WORKLOAD_IMAGE}
-networks: {}
+    container_name: workload
+    hostname: workload
+    networks:
+    - antithesis-net
+networks:
+  antithesis-net:
+    driver: bridge
 volumes:
   mzdata: null
   pgdata: null

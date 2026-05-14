@@ -189,6 +189,66 @@ def strip_mzcompose_keys(svc: dict[str, Any]) -> None:
         svc.pop(key, None)
 
 
+# Single user-defined bridge network every service joins. Defining the
+# network explicitly (rather than relying on docker-compose's auto-
+# generated `default`) gives us deterministic container-DNS regardless
+# of how the Antithesis platform's surrounding orchestration parses the
+# compose file. Antithesis support flagged the auto-network as a likely
+# cause of a kafka -> zookeeper UnknownHostException during setup; the
+# fix is to make the network explicit.
+#
+# Must NOT set `internal: true` per Antithesis docker best practices —
+# that would cut us off from the Antithesis-side network used for
+# instrumentation. Plain bridge is the recommended shape.
+ANTITHESIS_NETWORK = "antithesis-net"
+
+
+def assign_network(svc: dict[str, Any]) -> None:
+    """Place the service on the single named bridge network so docker-DNS
+    is deterministic. Overwrites any pre-existing `networks` entry — some
+    upstream Service classes set a vestigial `default: aliases: []` block
+    that we don't want carried through.
+    """
+    svc["networks"] = [ANTITHESIS_NETWORK]
+
+
+def declare_top_level_network(compose: dict[str, Any]) -> None:
+    """Declare the bridge network at the compose top level. Overwrites any
+    pre-existing top-level `networks:` entry (mzcompose currently emits
+    an empty dict).
+    """
+    compose["networks"] = {
+        ANTITHESIS_NETWORK: {"driver": "bridge"},
+    }
+
+
+def set_explicit_names(name: str, svc: dict[str, Any]) -> None:
+    """Set `container_name` and `hostname` to the service key.
+
+    Per Antithesis docker best practices (https://antithesis.com/docs/
+    best_practices/docker_best_practices/), every service should declare
+    its container_name and hostname explicitly and use the same value
+    for both. Triage reports attribute log lines and assertions by
+    `hostname`; if it isn't set, Antithesis falls back to an inferred
+    value (possibly the container id) that's harder to recognize.
+
+    Set here at export time rather than per-service in mzcompose.py so
+    that local mzcompose runs aren't constrained to one global
+    container_name namespace.
+
+    Asserts the service key is DNS-safe (no underscores, RFC-1123).
+    Docker Compose itself rejects underscored service keys, so this is
+    a sanity check, not a transform.
+    """
+    if "_" in name:
+        raise ValueError(
+            f"service {name!r}: underscores in hostnames break DNS resolution "
+            f"under Antithesis (RFC-1123). Rename the service to use hyphens."
+        )
+    svc["container_name"] = name
+    svc["hostname"] = name
+
+
 def register_referenced_named_volumes(compose: dict[str, Any]) -> None:
     """Declare any named volume referenced by a service that isn't already
     declared at the top level. Docker Compose rejects the file otherwise.
@@ -223,7 +283,7 @@ def main() -> None:
     repo = Repository(Path("."), arch=Arch.X86_64, antithesis=True)
     c = Composition(repo, "antithesis", munge_services=False)
 
-    for svc in c.compose["services"].values():
+    for name, svc in c.compose["services"].items():
         svc["platform"] = "linux/amd64"
         if "mzbuild" in svc:
             resolve_mzbuild(svc)
@@ -231,7 +291,10 @@ def main() -> None:
         strip_host_bindmounts(svc)
         strip_incompatible_env(svc)
         strip_mzcompose_keys(svc)
+        set_explicit_names(name, svc)
+        assign_network(svc)
 
+    declare_top_level_network(c.compose)
     register_referenced_named_volumes(c.compose)
 
     sys.stdout.write(HEADER)
