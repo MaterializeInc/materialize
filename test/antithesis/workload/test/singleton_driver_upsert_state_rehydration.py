@@ -60,7 +60,7 @@ import sys
 import time
 
 import helper_random
-from helper_kafka import make_producer
+from helper_kafka import FLUSH_TIMEOUT_S, make_producer
 from helper_pg import query_one_retry
 from helper_source_stats import wait_for_catchup
 from helper_upsert_source import (
@@ -156,7 +156,7 @@ def _run_cycle(
             expected[key] = value
         producer.poll(0)
 
-    pending = producer.flush(timeout=30)
+    pending = producer.flush(timeout=FLUSH_TIMEOUT_S)
     if pending > 0 or tracker.last_error is not None:
         LOG.info(
             "cycle %d: skipping assertions; flush pending=%d last_error=%s",

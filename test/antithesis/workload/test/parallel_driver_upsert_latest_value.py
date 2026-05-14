@@ -38,7 +38,7 @@ import logging
 import sys
 
 import helper_random
-from helper_kafka import make_producer
+from helper_kafka import FLUSH_TIMEOUT_S, make_producer
 from helper_pg import query_one_retry
 from helper_source_stats import wait_for_catchup
 from helper_upsert_source import (
@@ -159,7 +159,7 @@ def main() -> int:
 
     # Flush all pending deliveries. We poll callbacks while flushing so the
     # tracker reflects the true max produced offset.
-    pending = producer.flush(timeout=30)
+    pending = producer.flush(timeout=FLUSH_TIMEOUT_S)
     if pending > 0 or tracker.last_error is not None:
         # Under sustained fault injection we cannot prove which of the just-
         # produced messages Kafka actually accepted, so `expected` may name

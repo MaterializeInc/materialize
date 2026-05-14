@@ -59,7 +59,7 @@ import logging
 import sys
 
 import helper_random
-from helper_kafka import make_producer
+from helper_kafka import FLUSH_TIMEOUT_S, make_producer
 from helper_pg import query_retry
 from helper_source_stats import wait_for_catchup
 from helper_upsert_source import (
@@ -173,7 +173,7 @@ def main() -> int:
         _produce(producer, tracker, TOPIC_UPSERT_TEXT, key, new_value)
         producer.poll(0)
 
-    pending = producer.flush(timeout=30)
+    pending = producer.flush(timeout=FLUSH_TIMEOUT_S)
     if pending > 0 or tracker.last_error is not None:
         # Under sustained fault injection we can't prove which produces
         # Kafka accepted. Bail before asserting — "writes that landed got

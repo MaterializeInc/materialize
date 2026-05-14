@@ -30,7 +30,15 @@ MYSQL_REPLICA_HOST = os.environ.get("MYSQL_REPLICA_HOST", "mysql-replica")
 MYSQL_PORT = int(os.environ.get("MYSQL_PORT", "3306"))
 MYSQL_PASSWORD = os.environ.get("MYSQL_PASSWORD", "p@ssw0rd")
 
-_RETRY_BUDGET_S = 120
+# See helper_pg for the rationale on these values. The global fault-
+# orchestrator's MAX_ON/MAX_OFF defaults (40s each) mean a per-attempt
+# connect_timeout shorter than ~MAX_ON will fast-fail entirely inside a
+# faults-ON window, and a retry budget shorter than ~one full ON+OFF cycle
+# won't give an attempt a chance to land in the next quiet window. MySQL
+# also adds the primary→replica replication path, so the budget is sized
+# the same as helper_pg's.
+_CONNECT_TIMEOUT_S = 30
+_RETRY_BUDGET_S = 180
 _RETRY_INITIAL_S = 0.5
 _RETRY_MAX_S = 4.0
 
@@ -51,7 +59,7 @@ def _open(host: str, database: str) -> pymysql.connections.Connection:
                 user="root",
                 password=MYSQL_PASSWORD,
                 database=database,
-                connect_timeout=15,
+                connect_timeout=_CONNECT_TIMEOUT_S,
                 autocommit=True,
             )
         except Exception as exc:  # noqa: BLE001

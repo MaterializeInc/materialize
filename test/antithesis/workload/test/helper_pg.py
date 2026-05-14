@@ -38,15 +38,22 @@ PGUSER_INTERNAL = os.environ.get("PGUSER_INTERNAL", "mz_system")
 # Retry tuning. Antithesis injects partitions and node hangs; conservative bounds
 # keep drivers progressing without masking real correctness signals.
 #
-# These need to absorb a full Antithesis quiet period plus restart time for the
-# system to come back. Quiet-period requests in the workload are typically
-# 20-25s; the container then takes a few seconds to become responsive, so the
-# overall budget must comfortably exceed ~30s. The per-attempt connect timeout
-# also has to be long enough to actually complete a TCP+TLS handshake against
-# a hung but recovering materialized — too short and every attempt fails fast
-# and the budget is burned without giving the system a chance to answer.
-_CONNECT_TIMEOUT_S = 15
-_RETRY_BUDGET_S = 120
+# The global fault-orchestrator alternates faults-ON/OFF windows of up to
+# MAX_ON / MAX_OFF seconds each (defaults 40s, defined in
+# test/antithesis/mzcompose.py FaultOrchestrator). One full
+# fault-ON+fault-OFF cycle is up to MAX_ON+MAX_OFF ~= 80s.
+#
+# Per-attempt connect_timeout must be long enough that an attempt starting
+# late in a faults-ON window has a real chance of completing across the
+# transition into the next faults-OFF window. A 15s timeout entirely inside
+# a 40s faults-ON window fast-fails before the orchestrator opens a quiet
+# period, burning retry budget on TCP timeouts rather than waiting for
+# materialized to be reachable.
+#
+# Retry budget must comfortably span at least one full ON+OFF cycle plus
+# margin for the system to actually respond once faults pause.
+CONNECT_TIMEOUT_S = 30
+_RETRY_BUDGET_S = 180
 _RETRY_INITIAL_S = 0.1
 _RETRY_MAX_S = 2.0
 
@@ -72,7 +79,7 @@ def connect(autocommit: bool = True) -> Iterator[psycopg.Connection]:
                 port=PGPORT,
                 user=PGUSER,
                 dbname=PGDATABASE,
-                connect_timeout=_CONNECT_TIMEOUT_S,
+                connect_timeout=CONNECT_TIMEOUT_S,
                 autocommit=autocommit,
             )
             break
@@ -169,7 +176,7 @@ def execute_internal_retry(sql: str, params: Sequence[Any] | None = None) -> Non
                     port=PGPORT_INTERNAL,
                     user=PGUSER_INTERNAL,
                     dbname=PGDATABASE,
-                    connect_timeout=_CONNECT_TIMEOUT_S,
+                    connect_timeout=CONNECT_TIMEOUT_S,
                     autocommit=True,
                 ) as conn,
                 conn.cursor() as cur,

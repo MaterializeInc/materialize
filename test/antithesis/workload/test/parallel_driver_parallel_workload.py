@@ -48,6 +48,7 @@ from typing import Any
 import helper_random
 import psycopg
 from helper_pg import (
+    CONNECT_TIMEOUT_S,
     PGDATABASE,
     PGHOST,
     PGPORT,
@@ -141,7 +142,7 @@ def _prepare_system(num_threads: int) -> None:
             user=PGUSER_INTERNAL,
             dbname=PGDATABASE,
             autocommit=True,
-            connect_timeout=15,
+            connect_timeout=CONNECT_TIMEOUT_S,
         ) as conn,
         conn.cursor() as cur,
     ):
@@ -334,7 +335,7 @@ def _drop_seed_scoped_objects(seed: str) -> None:
                 user=PGUSER,
                 dbname=PGDATABASE,
                 autocommit=True,
-                connect_timeout=15,
+                connect_timeout=CONNECT_TIMEOUT_S,
             ) as conn,
             conn.cursor() as cur,
         ):
@@ -579,7 +580,7 @@ def _run_invocation(
                     user=PGUSER,
                     dbname=PGDATABASE,
                     autocommit=True,
-                    connect_timeout=15,
+                    connect_timeout=CONNECT_TIMEOUT_S,
                 ) as setup_conn,
                 setup_conn.cursor() as setup_cur,
             ):

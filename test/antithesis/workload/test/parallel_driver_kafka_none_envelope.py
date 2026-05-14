@@ -47,7 +47,7 @@ import logging
 import sys
 
 import helper_random
-from helper_kafka import make_producer
+from helper_kafka import FLUSH_TIMEOUT_S, make_producer
 from helper_none_source import (
     SOURCE_NONE_TEXT,
     TOPIC_NONE_TEXT,
@@ -95,7 +95,7 @@ def main() -> int:
         expected_payloads.add(payload)
         producer.poll(0)
 
-    pending = producer.flush(timeout=30)
+    pending = producer.flush(timeout=FLUSH_TIMEOUT_S)
     if pending > 0 or tracker.last_error is not None:
         # Same fail-closed pattern as the upsert driver: under sustained
         # fault injection we cannot prove which messages Kafka accepted, so
