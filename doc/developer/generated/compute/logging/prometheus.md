@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/logging/prometheus.rs
-revision: b0fa98e931
+revision: 8b77a4950e
 ---
 
 # mz-compute::logging::prometheus

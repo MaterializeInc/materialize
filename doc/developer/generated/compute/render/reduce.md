@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/render/reduce.rs
-revision: bf9d3f5f53
+revision: 6146179729
 ---
 
 # mz-compute::render::reduce

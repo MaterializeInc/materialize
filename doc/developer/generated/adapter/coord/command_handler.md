@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/command_handler.rs
-revision: dcf61051e7
+revision: 3df8ae2fd8
 ---
 
 # adapter::coord::command_handler
@@ -10,3 +10,4 @@ Covers session startup and teardown (`Startup`, `Terminate`), authentication, SQ
 `handle_startup` performs privilege checks, triggers JWT group-to-role membership sync via `maybe_sync_jwt_groups`, sets session defaults, and emits the initial builtin-table writes for session tracking.
 `CheckRoleCanLogin` (`handle_role_can_login`) handles pre-authentication role existence and login-attribute checks; `InjectAuditEvents` inserts manually injected audit log entries via a catalog transaction.
 A module-private `RoleLoginStatus` enum (`NotFound`, `CanLogin`, `NonLogin`) and `role_login_status` helper are shared among authentication handlers (`handle_authenticate_password`, `handle_generate_sasl_challenge`, `handle_authenticate_verify_sasl_proof`).
+When handling `Command::DetermineRealTimeRecentTimestamp`, the RTR future is awaited via `Coordinator::await_real_time_recent_timestamp` so that `StorageError::RtrTimeout` and `StorageError::RtrDropFailure` are converted to humanized `AdapterError` variants before propagating.
