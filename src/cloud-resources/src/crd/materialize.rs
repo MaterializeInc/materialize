@@ -107,6 +107,12 @@ pub mod v1alpha1 {
         pub environmentd_extra_args: Option<Vec<String>>,
         /// Extra environment variables to pass to the environmentd binary.
         pub environmentd_extra_env: Option<Vec<EnvVar>>,
+        /// The name of a ConfigMap containing a FoundationDB cluster file.
+        /// The ConfigMap must contain a `cluster-file` key whose value is
+        /// the FoundationDB cluster file contents. When set, orchestratord
+        /// will mount the cluster file and set the `FDB_CLUSTER_FILE`
+        /// environment variable automatically.
+        pub fdb_cluster_config_map_name: Option<String>,
         /// {{<warning>}}
         /// Deprecated.
         ///
