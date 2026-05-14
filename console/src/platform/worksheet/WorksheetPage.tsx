@@ -12,7 +12,11 @@ import { useAtomValue, useSetAtom } from "jotai";
 import React, { useCallback, useRef } from "react";
 import { Outlet, useMatch } from "react-router-dom";
 
-import { resultsPanelOpenAtom, tutorialVisibleAtom } from "./store";
+import {
+  resultsPanelOpenAtom,
+  tutorialVisibleAtom,
+  worksheetStashedSqlResultAtom,
+} from "./store";
 import Tutorial from "./Tutorial";
 import { ROW_RETURNING_KINDS, useExecution } from "./useExecution";
 import { useSubscribe } from "./useSubscribe";
@@ -29,11 +33,17 @@ const WorksheetPage = () => {
   const tutorialVisible = useAtomValue(tutorialVisibleAtom);
   const editorRef = useRef<WorksheetEditorHandle>(null);
   const setResultsPanelOpen = useSetAtom(resultsPanelOpenAtom);
+  const setStashedSqlResult = useSetAtom(worksheetStashedSqlResultAtom);
 
   const handleExecute = useCallback(
     (sql: string, kind: string, offset: number) => {
       if (ROW_RETURNING_KINDS.has(kind)) {
         setResultsPanelOpen(true);
+        // An editor-initiated row-returning query replaces the results panel,
+        // so any SHOW CREATE stashed by the SQL/Explain/Analyze toggle is no
+        // longer relevant. The toggle bypasses this path and calls execute
+        // directly, so its own stash is preserved.
+        setStashedSqlResult(null);
       }
       if (kind === "subscribe" || kind === "tail") {
         startSubscribe(sql, offset);
@@ -44,7 +54,13 @@ const WorksheetPage = () => {
         execute(sql, kind, offset);
       }
     },
-    [execute, startSubscribe, resetSubscribe, setResultsPanelOpen],
+    [
+      execute,
+      startSubscribe,
+      resetSubscribe,
+      setResultsPanelOpen,
+      setStashedSqlResult,
+    ],
   );
 
   const handleRunCommand = useCallback(
