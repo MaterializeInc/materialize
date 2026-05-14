@@ -19,7 +19,7 @@ Materialize accepts the following isolation levels:
 
 -   **Additional levels in Materialize**:
     -   [**Strict Serializable**](#strict-serializable) (*Default*)
-    -   [**Bounded Staleness**](#bounded-staleness) (*Private preview*)
+    -   [**Bounded Staleness**](#bounded-staleness) (*Public preview*)
 
 The isolation level is a configuration parameter that can be set on a
 per-session basis.
@@ -38,7 +38,7 @@ SET TRANSACTION_ISOLATION TO|= <isolation_level>
 | [Repeatable Read](#serializable)                     | Behaves as **Serializable**   |
 | [Serializable](#serializable)                        |                               |
 | [Strict Serializable](#strict-serializable)          | *(default)*                   |
-| [Bounded Staleness `<duration>`](#bounded-staleness) | *(private preview)*           |
+| [Bounded Staleness `<duration>`](#bounded-staleness) | *(public preview)*            |
 
 ## Examples
 
@@ -178,7 +178,7 @@ made available to us (e.g., querying PostgreSQL for the replication slot's LSN).
 
 ## Bounded staleness
 
-{{< private-preview />}}
+{{< public-preview />}}
 
 The Bounded Staleness isolation level lets you trade exact freshness for predictable latency.
 A query under bounded staleness is served at a timestamp that is at most `D` stale --- but never blocks waiting for input collections to catch up.
