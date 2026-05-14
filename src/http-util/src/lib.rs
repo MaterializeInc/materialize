@@ -32,12 +32,26 @@ pub const PROMETHEUS_PROTOBUF_CONTENT_TYPE: &str = "application/vnd.google.proto
      proto=io.prometheus.client.MetricFamily; \
      encoding=delimited";
 
+/// Request header sent by callers that understand and want
+/// [`MATERIALIZE_ENRICH_RULES_HEADER`] in the response.
+pub const MATERIALIZE_ACCEPT_ENRICH_RULES_HEADER: &str = "x-materialize-accept-enrich-rules";
+
+/// Response header listing the [`mz_ore::metrics::Rule`]s registered on the
+/// metrics registry, serialized as a JSON array. Emitted by
+/// [`handle_prometheus`] only when the caller opts in via
+/// [`MATERIALIZE_ACCEPT_ENRICH_RULES_HEADER`].
+pub const MATERIALIZE_ENRICH_RULES_HEADER: &str = "x-materialize-enrich-rules";
+
 fn wants_prometheus_protobuf(headers: &HeaderMap) -> bool {
     headers
         .get_all(axum::http::header::ACCEPT)
         .iter()
         .filter_map(|v| v.to_str().ok())
         .any(|v| v.contains(PROMETHEUS_PROTOBUF_CONTENT_TYPE))
+}
+
+fn wants_enrich_rules(headers: &HeaderMap) -> bool {
+    headers.contains_key(MATERIALIZE_ACCEPT_ENRICH_RULES_HEADER)
 }
 
 /// Renders a template into an HTTP response.
@@ -159,7 +173,20 @@ pub async fn handle_prometheus(
         ContentType::text()
     };
 
-    Ok((TypedHeader(content_type), buf).into_response())
+    let mut resp = (TypedHeader(content_type), buf).into_response();
+    if wants_enrich_rules(&headers) {
+        let rules_by_metric = registry.rules_by_metric();
+        if !rules_by_metric.is_empty() {
+            let json = serde_json::to_string(&rules_by_metric)
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            resp.headers_mut().insert(
+                MATERIALIZE_ENRICH_RULES_HEADER,
+                HeaderValue::from_str(&json)
+                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            );
+        }
+    }
+    Ok(resp)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -267,10 +294,81 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
+    use axum::http::HeaderMap;
     use http::header::{ACCESS_CONTROL_ALLOW_ORIGIN, ORIGIN};
     use http::{HeaderValue, Method, Request, Response};
+    use mz_ore::metric;
+    use mz_ore::metrics::{MetricsRegistry, Rule};
     use tower::{Service, ServiceBuilder, ServiceExt};
     use tower_http::cors::CorsLayer;
+
+    use super::{
+        MATERIALIZE_ACCEPT_ENRICH_RULES_HEADER, MATERIALIZE_ENRICH_RULES_HEADER, handle_prometheus,
+    };
+
+    fn registry_with_rules() -> MetricsRegistry {
+        let registry = MetricsRegistry::new();
+        let _: prometheus::IntCounter = registry.register(metric!(
+            name: "mz_test_handle_prometheus_metric",
+            help: "test metric carrying a per-metric enrichment rule",
+            rules: [
+                Rule::ClusterNameLookup {
+                    cluster_id_label: "cluster_id".into(),
+                    output_label: "cluster_name".into(),
+                },
+            ],
+        ));
+        registry
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn handle_prometheus_emits_rules_header_when_opted_in() {
+        let registry = registry_with_rules();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            MATERIALIZE_ACCEPT_ENRICH_RULES_HEADER,
+            HeaderValue::from_static("1"),
+        );
+        let resp = handle_prometheus(&registry, headers).await.unwrap();
+        let value = resp
+            .headers()
+            .get(MATERIALIZE_ENRICH_RULES_HEADER)
+            .expect("rules header present");
+        let parsed: BTreeMap<String, Vec<Rule>> =
+            serde_json::from_str(value.to_str().unwrap()).unwrap();
+        assert_eq!(parsed, registry.rules_by_metric());
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn handle_prometheus_omits_header_without_opt_in() {
+        let registry = registry_with_rules();
+        let resp = handle_prometheus(&registry, HeaderMap::new())
+            .await
+            .unwrap();
+        assert!(
+            resp.headers()
+                .get(MATERIALIZE_ENRICH_RULES_HEADER)
+                .is_none()
+        );
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn handle_prometheus_omits_header_when_no_rules() {
+        let registry = MetricsRegistry::new();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            MATERIALIZE_ACCEPT_ENRICH_RULES_HEADER,
+            HeaderValue::from_static("1"),
+        );
+        let resp = handle_prometheus(&registry, headers).await.unwrap();
+        assert!(
+            resp.headers()
+                .get(MATERIALIZE_ENRICH_RULES_HEADER)
+                .is_none()
+        );
+    }
 
     #[mz_ore::test(tokio::test)]
     async fn test_cors() {
