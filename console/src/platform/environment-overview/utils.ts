@@ -11,6 +11,7 @@ import {
   Bucket,
   OfflineEvent,
 } from "~/api/materialize/cluster/replicaUtilizationHistory";
+import { MaterializeTheme } from "~/theme";
 
 // Console-specific categories of a cluster. Compute implies the cluster has compute objects only, storage likewise, and hybrid means both.
 export type ClusterCategory = "compute" | "storage" | "hybrid" | "empty";
@@ -73,9 +74,25 @@ const COMPUTE_AND_HYBRID_THRESHOLD_PERCENTAGES = {
 /**
  * Generic thresholds for replicas that don't have compute objects.
  */
-const DEFAULT_THRESHOLD_PERCENTAGES = {
+export const DEFAULT_THRESHOLD_PERCENTAGES = {
   optimal: 0.7,
   suboptimal: 0.85,
+};
+
+export const utilizationStatusToColor = (
+  status: MemDiskUtilizationStatus,
+  colors: MaterializeTheme["colors"],
+) => {
+  switch (status) {
+    case "empty":
+      return colors.foreground.tertiary;
+    case "optimal":
+      return colors.green[400];
+    case "suboptimal":
+      return colors.yellow[600];
+    case "underProvisioned":
+      return colors.accent.red;
+  }
 };
 
 export function calculateClusterCategory({

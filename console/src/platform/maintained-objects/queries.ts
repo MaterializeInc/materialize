@@ -15,6 +15,10 @@ import {
   buildRegionQueryKey,
 } from "~/api/buildQueryKeySchema";
 import { IPostgresInterval, isSystemId } from "~/api/materialize";
+import {
+  Bucket,
+  fetchReplicaUtilizationHistory,
+} from "~/api/materialize/cluster/replicaUtilizationHistory";
 import { fetchLagHistory } from "~/api/materialize/freshness/lagHistory";
 import {
   MAINTAINED_OBJECT_TYPES,
@@ -337,4 +341,61 @@ const fetchCriticalPath = async ({
     (r) => r.childId === objectId && r.id !== objectId,
   );
   return { rows, directInputs };
+};
+
+export interface ReplicaInWindow {
+  replicaId: string;
+  name: string;
+  size: string | null;
+  lastSeenAt: Date;
+}
+
+/** Returns each replica's metric buckets in a `lookbackMs`-long window
+ *  ending at `anchorTimestamp` (or now if `anchorTimestamp` is null).
+ *  Polls every 30s when anchored to now; otherwise stays static. */
+export const useClusterBucketsInWindow = ({
+  clusterId,
+  lookbackMs,
+  bucketSizeMs,
+  anchorTimestamp,
+}: {
+  clusterId: string | null;
+  lookbackMs: number;
+  bucketSizeMs: number;
+  anchorTimestamp: Date | null;
+}) => {
+  const isLive = anchorTimestamp === null;
+  const anchorMs = (anchorTimestamp ?? new Date()).getTime();
+  const startMs =
+    Math.floor((anchorMs - lookbackMs) / bucketSizeMs) * bucketSizeMs;
+
+  return useQuery({
+    queryKey: [
+      ...buildRegionQueryKey("maintainedObjects"),
+      buildQueryKeyPart("clusterBucketsInWindow", {
+        clusterId: clusterId ?? "",
+        startMs,
+        bucketSizeMs,
+      }),
+    ],
+    queryFn: async ({
+      queryKey,
+      signal,
+    }): Promise<Record<string, Bucket[]>> => {
+      if (clusterId === null) return {};
+      const { bucketsByReplicaId } = await fetchReplicaUtilizationHistory({
+        params: {
+          clusterIds: [clusterId],
+          startDate: new Date(startMs).toISOString(),
+          bucketSizeMs,
+        },
+        queryKey,
+        requestOptions: { signal },
+      });
+      return bucketsByReplicaId;
+    },
+    enabled: !!clusterId,
+    staleTime: isLive ? 30_000 : Infinity,
+    refetchInterval: isLive ? 30_000 : false,
+  });
 };

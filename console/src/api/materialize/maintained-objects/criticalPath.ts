@@ -24,6 +24,7 @@ export interface CriticalPathRow {
   objectType: string;
   schemaName: string;
   databaseName: string | null;
+  clusterId: string | null;
   clusterName: string | null;
   lag: IPostgresInterval | null;
   targetLag: IPostgresInterval | null;
@@ -138,6 +139,7 @@ SELECT
   o.type AS "objectType",
   fqn.schema_name AS "schemaName",
   fqn.database_name AS "databaseName",
+  c.id AS "clusterId",
   c.name AS "clusterName",
   ls.lag AS "lag",
   lt.lag AS "targetLag",

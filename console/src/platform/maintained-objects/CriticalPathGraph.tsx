@@ -9,10 +9,10 @@
 
 import {
   Box,
-  Button,
   Center,
   HStack,
   Spinner,
+  Text,
   useTheme,
   VStack,
 } from "@chakra-ui/react";
@@ -22,6 +22,7 @@ import { Canvas, GraphEdgeContainer, STROKE_WIDTH } from "~/components/Graph";
 import { useDagreGraph } from "~/hooks/useDagreGraph";
 import { MaterializeTheme } from "~/theme";
 
+import { CriticalPathClusterMetrics } from "./CriticalPathClusterMetrics";
 import { CriticalPathGraphNode } from "./CriticalPathGraphNode";
 import { buildGraphView } from "./criticalPathRenderable";
 import {
@@ -63,16 +64,31 @@ export const CriticalPathGraph = ({
   });
 
   if (isLoading || !data) return <LoadingSpinner />;
-  return <CriticalPathGraphInner probe={probe} data={data} />;
+  return (
+    <CriticalPathGraphInner
+      probe={probe}
+      data={data}
+      timestamp={timestamp}
+      bucketSizeMs={bucketSizeMs}
+      lookbackMs={lookbackMinutes * 60 * 1000}
+    />
+  );
 };
 
 const CriticalPathGraphInner = ({
   probe,
   data,
+  timestamp,
+  bucketSizeMs,
+  lookbackMs,
 }: {
   probe: MaintainedObjectListItem;
   data: CriticalPathData;
+  timestamp: Date | null;
+  bucketSizeMs: number;
+  lookbackMs: number;
 }) => {
+  const { colors } = useTheme<MaterializeTheme>();
   const [expandedBottleneckId, setExpandedBottleneckId] = React.useState<
     string | null
   >(null);
@@ -120,20 +136,29 @@ const CriticalPathGraphInner = ({
   const isExpanded = visibleDepth > DEFAULT_VISIBLE_DEPTH;
   const toggle = (id: string) => (curr: string | null) =>
     curr === id ? null : id;
+  const displayedNode =
+    nodes.find((n) => n.id === selectedNodeId) ??
+    nodes.find((n) => n.isProbe) ??
+    nodes[0];
 
   return (
-    <VStack align="stretch" width="100%" spacing={2}>
+    <VStack align="stretch" width="100%" spacing={4}>
       {(hiddenChainCount > 0 || isExpanded) && (
         <HStack justify="flex-end">
-          <Button
-            size="sm"
-            variant="ghost"
+          <Text
+            as="button"
+            textStyle="text-small"
+            color={colors.accent.brightPurple}
+            cursor="pointer"
+            _hover={{ textDecoration: "underline" }}
             onClick={() =>
               setVisibleDepth(isExpanded ? DEFAULT_VISIBLE_DEPTH : Infinity)
             }
           >
-            {isExpanded ? "Collapse" : `Show ${hiddenChainCount} more upstream`}
-          </Button>
+            {isExpanded
+              ? "Collapse"
+              : `+ ${hiddenChainCount} more upstream paths`}
+          </Text>
         </HStack>
       )}
       <Box
@@ -151,6 +176,7 @@ const CriticalPathGraphInner = ({
               <CriticalPathGraphNode
                 key={node.id}
                 node={node}
+                pageObjectId={probe.id}
                 expanded={expandedBottleneckId === node.id}
                 selected={selectedNodeId === node.id}
                 left={position.left}
@@ -186,6 +212,15 @@ const CriticalPathGraphInner = ({
           </GraphEdgeContainer>
         </Canvas>
       </Box>
+      {displayedNode && (
+        <CriticalPathClusterMetrics
+          node={displayedNode}
+          pageObjectId={probe.id}
+          timestamp={timestamp}
+          bucketSizeMs={bucketSizeMs}
+          lookbackMs={lookbackMs}
+        />
+      )}
     </VStack>
   );
 };

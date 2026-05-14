@@ -24,6 +24,10 @@ export interface RenderableNode {
   /** Count of off-path sibling inputs sharing the same child as this node. */
   offPathCount: number;
   objectType: string | null;
+  /** For subsources, the parent source id — link targets should use this. */
+  parentSourceId: string | null;
+  /** Cluster the node runs on. Null for objects without a cluster (tables). */
+  cluster: { id: string; name: string } | null;
 }
 
 /** A node renders green ("healthy") when its lag is within this threshold. */
@@ -215,6 +219,8 @@ export const buildGraphView = (
     }),
     offPathCount: 0,
     objectType: probe.objectType,
+    parentSourceId: null,
+    cluster: probe.cluster,
   };
   const chainNodes: RenderableNode[] = visibleChainIds.flatMap((id) => {
     const r = nodeById.get(id);
@@ -232,6 +238,11 @@ export const buildGraphView = (
         }),
         offPathCount: offPathCountById.get(id) ?? 0,
         objectType: r.objectType,
+        parentSourceId: r.parentSourceId,
+        cluster:
+          r.clusterId && r.clusterName
+            ? { id: r.clusterId, name: r.clusterName }
+            : null,
       },
     ];
   });
@@ -273,6 +284,11 @@ export const buildGraphView = (
     kind: "offPath",
     offPathCount: 0,
     objectType: r.objectType,
+    parentSourceId: r.parentSourceId,
+    cluster:
+      r.clusterId && r.clusterName
+        ? { id: r.clusterId, name: r.clusterName }
+        : null,
   }));
 
   return {

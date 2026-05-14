@@ -215,6 +215,9 @@ export function formatDurationForAxis(durationMs: number): string {
   }
 }
 
+export const formatPercentage = (percentage: number) =>
+  `${(percentage * 100).toFixed(2)}%`;
+
 /** Units exposed in human-readable duration controls (filters, inputs). */
 export type DurationUnit = "seconds" | "minutes" | "hours";
 

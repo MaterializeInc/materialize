@@ -22,6 +22,7 @@ const buildRow = (
   objectType: "materialized-view",
   schemaName: "public",
   databaseName: "materialize",
+  clusterId: "u1",
   clusterName: "default",
   lag: parse("00:00:01"),
   targetLag: parse("00:00:10"),
