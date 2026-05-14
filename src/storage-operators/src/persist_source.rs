@@ -45,15 +45,15 @@ use mz_storage_types::stats::RelationPartStats;
 use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
-use mz_timely_util::operator::StreamExt as _;
 use mz_timely_util::probe::ProbeNotify;
 use mz_txn_wal::operator::{TxnsContext, txns_progress};
 use serde::{Deserialize, Serialize};
-use timely::container::{CapacityContainerBuilder, PushInto};
+use timely::PartialOrder;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{OutputBuilder, OutputBuilderSession};
-use timely::dataflow::operators::{Capability, Leave};
+use timely::dataflow::operators::{Capability, Leave, OkErr};
 use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Feedback};
 use timely::dataflow::{Scope, Stream, StreamVec};
 use timely::order::TotalOrder;
@@ -61,7 +61,6 @@ use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
 use timely::progress::timestamp::PathSummary;
 use timely::scheduling::Activator;
-use timely::{ContainerBuilder, PartialOrder};
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::{error, trace};
 
@@ -155,14 +154,11 @@ impl Subtime {
 /// flow control upper by an amount that is related to the size of batches.
 ///
 /// If no flow control is desired an empty stream whose frontier immediately advances
-/// to the empty antichain can be used. An easy way of creating such stream is by
+/// to the empty antichain can be used. An easy easy of creating such stream is by
 /// using [`timely::dataflow::operators::generic::operator::empty`].
 ///
-/// The caller must specify container builders for row and error data (`DCB`, `ECB`),
-/// which the persist source uses to produce finished batches of data.
-///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
-pub fn persist_source<'scope, E, DCB, ECB>(
+pub fn persist_source<'scope, E>(
     scope: Scope<'scope, mz_repr::Timestamp>,
     source_id: GlobalId,
     persist_clients: Arc<PersistClientCache>,
@@ -177,14 +173,12 @@ pub fn persist_source<'scope, E, DCB, ECB>(
     start_signal: impl Future<Output = ()> + Send + 'static,
     error_handler: ErrorHandler,
 ) -> (
-    Stream<'scope, Timestamp, DCB::Container>,
-    Stream<'scope, Timestamp, ECB::Container>,
+    StreamVec<'scope, mz_repr::Timestamp, (Row, Timestamp, Diff)>,
+    StreamVec<'scope, mz_repr::Timestamp, (E, Timestamp, Diff)>,
     Vec<PressOnDropButton>,
 )
 where
     E: timely::ExchangeData + Ord + Clone + Debug + From<DataflowError> + From<EvalError>,
-    DCB: ContainerBuilder + PushInto<(Row, Timestamp, Diff)>,
-    ECB: ContainerBuilder + PushInto<(E, Timestamp, Diff)>,
 {
     let shard_metrics = persist_clients.shard_metrics(&metadata.data_shard, &source_id.to_string());
 
@@ -285,22 +279,10 @@ where
         None => (stream, vec![]),
     };
     tokens.extend(txns_tokens);
-
-    let (ok_stream, err_stream) =
-        stream.unary_fallible::<DCB, ECB, _, _>(Pipeline, "persist ok err demux", |_, _| {
-            Box::new(|input, oks, errs| {
-                input.for_each(|time, data| {
-                    let mut oks = oks.session_with_builder(&time);
-                    let mut errs = errs.session_with_builder(&time);
-                    for (d, t, r) in data.drain(..) {
-                        match d {
-                            Ok(row) => oks.give((row, t.0, r)),
-                            Err(err) => errs.give((err, t.0, r)),
-                        }
-                    }
-                });
-            })
-        });
+    let (ok_stream, err_stream) = stream.ok_err(|(d, t, r)| match d {
+        Ok(row) => Ok((row, t.0, r)),
+        Err(err) => Err((err, t.0, r)),
+    });
     (ok_stream, err_stream, tokens)
 }
 

@@ -408,25 +408,22 @@ pub(super) fn persist_source<'s>(
     let until = Antichain::new();
     let map_filter_project = None;
 
-    let (ok_stream, err_stream, token) = mz_storage_operators::persist_source::persist_source::<
-        DataflowErrorSer,
-        CapacityContainerBuilder<_>,
-        CapacityContainerBuilder<_>,
-    >(
-        scope,
-        sink_id,
-        Arc::clone(&compute_state.persist_clients),
-        &compute_state.txns_ctx,
-        target,
-        None,
-        as_of,
-        SnapshotMode::Include,
-        until,
-        map_filter_project,
-        compute_state.dataflow_max_inflight_bytes(),
-        start_signal.into_send_future(),
-        ErrorHandler::Halt("compute persist sink"),
-    );
+    let (ok_stream, err_stream, token) =
+        mz_storage_operators::persist_source::persist_source::<DataflowErrorSer>(
+            scope,
+            sink_id,
+            Arc::clone(&compute_state.persist_clients),
+            &compute_state.txns_ctx,
+            target,
+            None,
+            as_of,
+            SnapshotMode::Include,
+            until,
+            map_filter_project,
+            compute_state.dataflow_max_inflight_bytes(),
+            start_signal.into_send_future(),
+            ErrorHandler::Halt("compute persist sink"),
+        );
 
     let streams = OkErr::new(ok_stream, err_stream);
     (streams, token)

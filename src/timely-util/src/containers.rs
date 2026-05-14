@@ -15,39 +15,4 @@
 
 //! Reusable containers.
 
-use std::marker::PhantomData;
-
-use timely::container::ContainerBuilder;
-
 pub mod stack;
-
-/// A no-op [`ContainerBuilder`] that never emits a container.
-///
-/// Useful for outputs that require a `ContainerBuilder` type parameter but only ever push whole
-/// containers (e.g. through a `give_container`-style API), never individual elements. The builder
-/// holds no state and returns `None` from both `extract` and `finish`; there is no [`PushInto`]
-/// impl, so element-wise pushes are a compile error.
-///
-/// [`PushInto`]: timely::container::PushInto
-#[derive(Debug, Copy, Clone)]
-pub struct NoopContainerBuilder<C>(PhantomData<C>);
-
-impl<C> Default for NoopContainerBuilder<C> {
-    fn default() -> Self {
-        Self(PhantomData)
-    }
-}
-
-impl<C> ContainerBuilder for NoopContainerBuilder<C> {
-    type Container = C;
-
-    #[inline]
-    fn extract(&mut self) -> Option<&mut Self::Container> {
-        None
-    }
-
-    #[inline]
-    fn finish(&mut self) -> Option<&mut Self::Container> {
-        None
-    }
-}

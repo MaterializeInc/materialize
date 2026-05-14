@@ -1045,7 +1045,7 @@ where
     let hashed_id = sink_id.hashed();
     let is_active_worker = usize::cast_from(hashed_id) % scope.peers() == scope.index();
     let (_, table_ready_stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
-    let (output, output_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (output, output_stream) = builder.new_output();
     let (batch_desc_output, batch_desc_stream) =
         builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
     let mut input =
