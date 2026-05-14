@@ -1,6 +1,6 @@
 ---
 source: src/environmentd/src/http.rs
-revision: 2b1840a2cd
+revision: 8b77a4950e
 ---
 
 # environmentd::http
@@ -19,6 +19,7 @@ Submodules:
 * `mcp` — Model Context Protocol (AI agent) handlers.
 * `memory` — memory/heap profiling endpoints.
 * `metrics` — HTTP-level metrics collection.
+* `metrics_public` — public metrics endpoint.
 * `metrics_viz` — metrics visualization.
 * `probe` — liveness/readiness probes.
 * `prometheus` — Prometheus metric query endpoints.

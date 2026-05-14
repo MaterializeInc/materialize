@@ -1,6 +1,6 @@
 ---
 source: src/ore/src/metrics/delete_on_drop.rs
-revision: 7fad528e70
+revision: 8b77a4950e
 ---
 
 # mz-ore::metrics::delete_on_drop

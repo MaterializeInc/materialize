@@ -1,6 +1,6 @@
 ---
 source: src/catalog/src/builtin/mz_internal.rs
-revision: 36df04b4d9
+revision: 3df8ae2fd8
 ---
 
 # catalog::builtin::mz_internal
@@ -15,10 +15,10 @@ This is the largest builtin submodule, exporting 186 public items: sources, tabl
 
 **Materialized views** (`BuiltinMaterializedView`) — Derived catalog views backed by queries over `mz_catalog_raw` and other sources: aggregated statistics, lag histograms, and other derived metrics.
 
-**Views** (`BuiltinView`) — 161 entries covering the full `mz_internal` SQL surface: cluster introspection, compute operator metrics, peek durations, arrangement sizes, source/sink status, wall-clock lag, statement execution history, privilege management, dependency graph views, and more. Views carry inline SQL queries over `mz_catalog`, `mz_introspection`, and `mz_internal` tables. Access levels vary: most grant `PUBLIC_SELECT`; sensitive views use `MONITOR_SELECT`, `MONITOR_REDACTED_SELECT`, `SUPPORT_SELECT`, or `ANALYTICS_SELECT`.
+**Views** (`BuiltinView`) — 80 entries covering the full `mz_internal` SQL surface: cluster introspection, compute operator metrics, peek durations, arrangement sizes, source/sink status, wall-clock lag, statement execution history, privilege management, dependency graph views, and more. Views carry inline SQL queries over `mz_catalog`, `mz_introspection`, and `mz_internal` tables. Access levels vary: most grant `PUBLIC_SELECT`; sensitive views use `MONITOR_SELECT`, `MONITOR_REDACTED_SELECT`, `SUPPORT_SELECT`, or `ANALYTICS_SELECT`. `MZ_MCP_DATA_PRODUCTS` and `MZ_MCP_DATA_PRODUCT_DETAILS` are MCP-agent-facing views listing data products and their column/key details that are exempted from `restrict_to_user_objects` blocking.
 
 **Connections** (`BuiltinConnection`) — System-level connection definitions.
 
-**Indexes** (`BuiltinIndex`) — 111 index constants accelerating queries on frequently accessed `mz_internal` views and tables.
+**Indexes** (`BuiltinIndex`) — 55 index constants accelerating queries on frequently accessed `mz_internal` views and tables.
 
 Many items carry `Ontology` annotations with `OntologyLink` relationships (foreign keys, union views, dependency edges) for the catalog ontology graph.

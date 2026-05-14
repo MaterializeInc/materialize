@@ -1,6 +1,6 @@
 ---
 source: src/environmentd/src/http/metrics.rs
-revision: ff5e83bfeb
+revision: 8b77a4950e
 ---
 
 # environmentd::http::metrics
