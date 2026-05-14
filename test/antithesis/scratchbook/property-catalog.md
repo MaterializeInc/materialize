@@ -1,8 +1,9 @@
 ---
 commit: 007c7af9d9970fb2030c7212368b232e0fbc363e
-updated: 2026-05-12
+updated: 2026-05-14
 ---
 <!-- Category 8 (MySQL CDC) added 2026-05-12: mysql-source-no-data-loss -->
+<!-- 2026-05-14: mysql-source-gtid-monotonicity-violation added to Category 9 -->
 
 # Property Catalog: Materialize
 
@@ -441,6 +442,18 @@ commit-order preservation) to the Antithesis environment.
 | **Invariant** | `Always`: after catchup, for every row inserted to `antithesis.cdc_test` on the primary, `SELECT value FROM antithesis_cdc WHERE id = ?` returns the expected value. `Sometimes`: catchup completes within the quiet-period budget at least once per run. |
 | **Antithesis Angle** | Kills to the MySQL replica container (replica restarts from persisted GTID position); kills to the MySQL primary (replica and Materialize source must handle upstream silence gracefully); clusterd restarts (MySQL CDC resume exercises the same `storage-command-replay-idempotent` path as Kafka); parallel worker scheduling jitter that stresses the `replica_preserve_commit_order` protocol. |
 | **Why It Matters** | MySQL CDC is a distinct ingestion code path from Kafka. Wrong behavior here — dropped rows, wrong values after restart, duplicate rows after resume — is not caught by the Kafka-source drivers. |
+
+### mysql-source-gtid-monotonicity-violation — MySQL Source Must Not Error Due to Out-of-Order GTIDs
+
+| | |
+|---|---|
+| **Type** | Safety (Unreachable) |
+| **Priority** | P1 — permanent source error with no self-recovery path; directly testable by Antithesis fault injection against the multithreaded replica's commit-order protocol |
+| **Status** | **Implemented (SUT-side + workload-side)** — `src/storage/src/source/mysql/replication/partitions.rs`: `assert_unreachable!("mysql: BinlogGtidMonotonicityViolation — received out-of-order GTID from multithreaded replica", …)` fires immediately before `DefiniteError::BinlogGtidMonotonicityViolation` is returned in `advance_frontier`, giving Antithesis a precise replay anchor at the exact causal site. Workload-side: `test/antithesis/workload/test/anytime_mysql_source_no_gtid_errors.py` polls `mz_internal.mz_source_statuses` every 2 s and fires `always(not is_gtid_error, "mysql: source must not enter errored state due to out-of-order GTIDs", …)` at the user-visible error surface. |
+| **Property** | The Materialize MySQL CDC source must never receive a GTID with a lower transaction-id than one already observed for the same UUID. With `replica_preserve_commit_order=ON` and 4 parallel replica workers, the commit-order protocol must hold even under Antithesis fault injection. |
+| **Invariant** | `Unreachable`: the `BinlogGtidMonotonicityViolation` error site in `advance_frontier` must never be reached. `Always`: `mz_internal.mz_source_statuses` for the MySQL CDC source must never show `status = 'errored'` with `error` containing `"out of order gtids"`. |
+| **Antithesis Angle** | Scheduling jitter under 4 parallel replica workers; container kills of the replica at arbitrary replication progress points; network delays between primary and replica that could desynchronize the commit-order queue. The property tests whether `replica_preserve_commit_order=ON` holds its guarantee when Antithesis controls the scheduler. |
+| **Why It Matters** | `BinlogGtidMonotonicityViolation` is a `DefiniteError` — the source is permanently stuck with no self-recovery path. It also silently neutralizes the `mysql-source-no-data-loss` liveness assertions (catchup never completes once the source is errored). Surfaced by: MySQL CDC source configuration, multithreaded replication correctness. |
 
 ### offset-known-not-below-committed — Source Statistics Causality
 
