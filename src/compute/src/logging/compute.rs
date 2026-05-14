@@ -40,7 +40,7 @@ use crate::logging::{
     ComputeLog, EventQueue, LogCollection, LogVariant, OutputSessionColumnar, PermutedRowPacker,
     SharedLoggingState, Update,
 };
-use crate::row_spine::RowRowBuilder;
+use mz_row_spine::RowRowBuilder;
 use crate::typedefs::RowRowSpine;
 
 /// Type alias for a logger of compute events.

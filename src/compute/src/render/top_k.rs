@@ -44,7 +44,7 @@ use crate::render::Pairer;
 use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::errors::MaybeValidatingRow;
-use crate::row_spine::{
+use mz_row_spine::{
     DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBuilder, RowValSpine,
 };
 use crate::typedefs::{KeyBatcher, MzTimestamp, RowRowSpine, RowSpine};

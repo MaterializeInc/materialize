@@ -30,7 +30,7 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 
 use crate::extensions::arrange::MzArrangeCore;
 use crate::logging::{ComputeLog, LogCollection, LogVariant, PermutedRowPacker};
-use crate::row_spine::RowRowBuilder;
+use mz_row_spine::RowRowBuilder;
 use crate::typedefs::RowRowSpine;
 
 /// The return type of [`construct`].

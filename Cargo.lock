@@ -6063,6 +6063,7 @@ dependencies = [
  "mz-persist-types",
  "mz-proto",
  "mz-repr",
+ "mz-row-spine",
  "mz-storage-operators",
  "mz-storage-types",
  "mz-timely-util",
@@ -7602,6 +7603,18 @@ dependencies = [
  "mz-ore",
  "serde",
  "uncased",
+]
+
+[[package]]
+name = "mz-row-spine"
+version = "0.0.0"
+dependencies = [
+ "columnation",
+ "differential-dataflow",
+ "mz-ore",
+ "mz-repr",
+ "mz-timely-util",
+ "timely",
 ]
 
 [[package]]

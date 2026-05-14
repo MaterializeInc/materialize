@@ -36,7 +36,7 @@ use crate::logging::{
     DifferentialLog, EventQueue, LogCollection, LogVariant, SharedLoggingState,
     consolidate_and_pack,
 };
-use crate::row_spine::RowRowBuilder;
+use mz_row_spine::RowRowBuilder;
 use crate::typedefs::{KeyBatcher, RowRowSpine};
 
 /// The return type of [`construct`].
