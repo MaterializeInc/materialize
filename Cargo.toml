@@ -385,6 +385,7 @@ launchdarkly-server-sdk = { version = "2.6.2", default-features = false }
 lgalloc = "0.6.0"
 libc = "0.2.184"
 lru = "0.16.3"
+lz4_flex = { version = "0.12.1", default-features = false, features = ["frame", "std"] }
 maplit = "1.0.2"
 mappings = "0.7.2"
 md-5 = "0.10.6"
