@@ -21,6 +21,10 @@ harness = false
 name = "columnar_merger"
 harness = false
 
+[[bench]]
+name = "column_pager"
+harness = false
+
 [dependencies]
 ahash.workspace = true
 bincode.workspace = true
