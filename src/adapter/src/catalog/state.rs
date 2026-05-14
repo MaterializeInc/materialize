@@ -1009,14 +1009,9 @@ impl CatalogState {
             let session_catalog = state.for_system_session();
 
             let stmt = mz_sql::parse::parse(create_sql)?.into_element().ast;
-            let (stmt, mut resolved_ids) = mz_sql::names::resolve(&session_catalog, stmt)?;
-            let plan = mz_sql::plan::plan(
-                pcx,
-                &session_catalog,
-                stmt,
-                &Params::empty(),
-                &mut resolved_ids,
-            )?;
+            let (stmt, resolved_ids) = mz_sql::names::resolve(&session_catalog, stmt)?;
+            let (plan, _sql_impl_ids) =
+                mz_sql::plan::plan(pcx, &session_catalog, stmt, &Params::empty(), &resolved_ids)?;
 
             Ok((plan, resolved_ids))
         })
@@ -1030,8 +1025,9 @@ impl CatalogState {
         catalog: &ConnCatalog,
     ) -> Result<(Plan, ResolvedIds), AdapterError> {
         let stmt = mz_sql::parse::parse(create_sql)?.into_element().ast;
-        let (stmt, mut resolved_ids) = mz_sql::names::resolve(catalog, stmt)?;
-        let plan = mz_sql::plan::plan(pcx, catalog, stmt, &Params::empty(), &mut resolved_ids)?;
+        let (stmt, resolved_ids) = mz_sql::names::resolve(catalog, stmt)?;
+        let (plan, _sql_impl_ids) =
+            mz_sql::plan::plan(pcx, catalog, stmt, &Params::empty(), &resolved_ids)?;
 
         Ok((plan, resolved_ids))
     }

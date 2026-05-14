@@ -94,6 +94,19 @@ SELECT * FROM agent_objects.transfer_windows;
 COMPLETE 1
 
 # =============================================================================
+# Regression test: views using SQL-implemented functions (has_table_privilege,
+# etc.) must not be rejected with "unstable dependencies". The sql_impl
+# resolved IDs are implementation details of the function, not real
+# dependencies of the view.
+# =============================================================================
+
+statement ok
+CREATE VIEW agent_objects.privilege_check AS SELECT has_table_privilege('agent', 'agent_objects.next_arrivals', 'SELECT') AS has_priv;
+
+statement ok
+DROP VIEW agent_objects.privilege_check;
+
+# =============================================================================
 # Test: mz_internal tables that ARE properly blocked by RBAC
 # These tables use MONITOR_SELECT or similar restricted access
 # =============================================================================

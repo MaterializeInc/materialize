@@ -246,8 +246,13 @@ impl Coordinator {
                     };
 
                     // Note: This plan is not guaranteed to run, it may get deferred again.
-                    self.sequence_plan(deferred.ctx, deferred.plan, resolved_ids)
-                        .await;
+                    self.sequence_plan(
+                        deferred.ctx,
+                        deferred.plan,
+                        resolved_ids,
+                        ResolvedIds::empty(),
+                    )
+                    .await;
                 }
             }
             DeferredOp::Write(DeferredWrite {

@@ -28,17 +28,21 @@ use crate::util::describe;
 use crate::{AdapterError, ExecuteContext, ExecuteResponse, metrics};
 
 impl Coordinator {
+    /// Plans a statement and returns the plan along with any resolved IDs
+    /// discovered inside SQL-implemented function bodies. The extra IDs should
+    /// only be used for the `restrict_to_user_objects` RBAC check.
     pub(crate) fn plan_statement(
         &self,
         session: &Session,
         stmt: mz_sql::ast::Statement<Aug>,
         params: &mz_sql::plan::Params,
-        resolved_ids: &mut ResolvedIds,
-    ) -> Result<mz_sql::plan::Plan, AdapterError> {
+        resolved_ids: &ResolvedIds,
+    ) -> Result<(mz_sql::plan::Plan, ResolvedIds), AdapterError> {
         let pcx = session.pcx();
         let catalog = self.catalog().for_session(session);
-        let plan = mz_sql::plan::plan(Some(pcx), &catalog, stmt, params, resolved_ids)?;
-        Ok(plan)
+        let (plan, sql_impl_ids) =
+            mz_sql::plan::plan(Some(pcx), &catalog, stmt, params, resolved_ids)?;
+        Ok((plan, sql_impl_ids))
     }
 
     pub(crate) fn declare(

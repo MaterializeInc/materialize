@@ -955,15 +955,15 @@ impl SessionClient {
         let execute_plan = {
             let session = self.session.as_mut().expect("SessionClient invariant");
             let conn_catalog = catalog.for_session(session);
-            let (resolved_stmt, mut resolved_ids) =
+            let (resolved_stmt, resolved_ids) =
                 mz_sql::names::resolve(&conn_catalog, (**stmt).clone())?;
             let pcx = session.pcx();
-            let plan = mz_sql::plan::plan(
+            let (plan, _sql_impl_ids) = mz_sql::plan::plan(
                 Some(pcx),
                 &conn_catalog,
                 resolved_stmt,
                 params,
-                &mut resolved_ids,
+                &resolved_ids,
             )?;
             match plan {
                 Plan::Execute(plan) => plan,
