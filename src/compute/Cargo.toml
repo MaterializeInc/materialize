@@ -53,7 +53,17 @@ uuid = { workspace = true, features = ["serde", "v4"] }
 core_affinity = "0.8.3"
 
 [dev-dependencies]
+criterion.workspace = true
 proptest.workspace = true
+rand.workspace = true
 
 [features]
 default = []
+
+[[bench]]
+name = "columnar_merger_row"
+harness = false
+
+[[bench]]
+name = "columnar_merge_batcher_row"
+harness = false
