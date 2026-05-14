@@ -73,8 +73,12 @@ LOG = logging.getLogger("driver.catalog_recovery_consistency")
 # mid-DDL still resolves before the next cycle. CYCLE_COUNT high enough to
 # give Antithesis multiple windows to land a restart between cycles.
 CYCLE_COUNT = 10
-DROP_PROBABILITY = 0.20
 INTER_CYCLE_SLEEP_S = 2.0
+
+# Drop fraction is swarmed per-invocation in main(). Wide range so different
+# timelines exercise create-heavy (catalog grows) and drop-heavy (churn-
+# through-recovery) modes without rebuilding the driver.
+DROP_PROBABILITY_RANGE = (0.10, 0.50)
 
 PROBE_CONNECT_TIMEOUT_S = 2.0
 
@@ -134,6 +138,7 @@ def _run_cycle(
     name_prefix: str,
     cycle_idx: int,
     next_id: int,
+    drop_probability: float,
 ) -> tuple[bool, int]:
     """One create-or-drop + verify cycle.
 
@@ -150,7 +155,7 @@ def _run_cycle(
     missing from the post-recovery catalog.
     """
     new_id = next_id
-    if expected and helper_random.random_bool(DROP_PROBABILITY):
+    if expected and helper_random.random_bool(drop_probability):
         # Drop a random existing table. Choosing from `expected` keeps the
         # drop deterministic w.r.t. the local model.
         table = sorted(expected)[helper_random.random_int(0, len(expected) - 1)]
@@ -210,7 +215,12 @@ def main() -> int:
     # Per-timeline namespace so concurrent timelines and any future
     # parallel_driver_ instances do not collide on table names.
     name_prefix = f"catrec_{helper_random.random_u64():016x}"
-    LOG.info("catalog recovery driver starting; name_prefix=%s", name_prefix)
+    drop_probability = helper_random.random_float(*DROP_PROBABILITY_RANGE)
+    LOG.info(
+        "catalog recovery driver starting; name_prefix=%s drop_probability=%.3f",
+        name_prefix,
+        drop_probability,
+    )
 
     expected: set[str] = set()
     next_id = 0
@@ -218,7 +228,9 @@ def main() -> int:
     saw_coord_unavailable = False
 
     for cycle_idx in range(CYCLE_COUNT):
-        ran, next_id = _run_cycle(expected, name_prefix, cycle_idx, next_id)
+        ran, next_id = _run_cycle(
+            expected, name_prefix, cycle_idx, next_id, drop_probability
+        )
         if ran:
             cycles_ran += 1
         if _saw_coord_unavailable():

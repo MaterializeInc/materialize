@@ -58,7 +58,14 @@ LOG = logging.getLogger("driver.upsert_latest_value")
 PRODUCES_PER_INVOCATION = 40
 DISTINCT_KEYS = 8  # small key space so we re-write the same key often
 DISTINCT_VALUES = 16
-TOMBSTONE_PROB = 0.15
+
+# Tombstone probability is drawn per-invocation in main() from a wide
+# range. Different timelines see different mixes — heavy-tombstone runs
+# stress upsert removal, mostly-live runs stress value-overwrite — and
+# the fuzzer drives which one each timeline gets. A fixed constant would
+# make every invocation identical in this respect and waste fuzzer
+# budget on the same workload shape.
+TOMBSTONE_PROB_RANGE = (0.05, 0.50)
 
 QUIET_PERIOD_S = 20
 CATCHUP_TIMEOUT_S = 60.0
@@ -113,7 +120,14 @@ def main() -> int:
     # Per-invocation prefix isolates this driver's keys from other concurrent
     # drivers and from previous invocations of this same driver.
     prefix = f"p{helper_random.random_u64():016x}"
-    LOG.info("driver starting; prefix=%s", prefix)
+
+    # Swarm: pick this invocation's tombstone fraction from the configured
+    # range. The fuzzer sees this as one of the first decisions in the
+    # timeline and can drive it toward whichever extreme reveals a bug.
+    tombstone_prob = helper_random.random_float(*TOMBSTONE_PROB_RANGE)
+    LOG.info(
+        "driver starting; prefix=%s tombstone_prob=%.3f", prefix, tombstone_prob
+    )
 
     producer, tracker = make_producer(client_id=f"antithesis-{prefix}")
 
@@ -131,7 +145,7 @@ def main() -> int:
     keys = [f"{prefix}-k{i}" for i in range(DISTINCT_KEYS)]
     for _ in range(PRODUCES_PER_INVOCATION):
         key = helper_random.random_choice(keys)
-        if helper_random.random_bool(TOMBSTONE_PROB):
+        if helper_random.random_bool(tombstone_prob):
             if expected.get(key) is not None:
                 tombstoned_after_value += 1
             _produce(producer, tracker, TOPIC_UPSERT_TEXT, key, None)

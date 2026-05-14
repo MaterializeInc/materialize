@@ -81,7 +81,14 @@ CYCLE_COUNT = 8
 PRODUCES_PER_CYCLE = 30
 DISTINCT_KEYS = 6
 DISTINCT_VALUES = 12
-TOMBSTONE_PROB = 0.20
+
+# Tombstone fraction is swarmed once per driver invocation (see main()) so
+# different timelines exercise different live/dead mixes — heavy-tombstone
+# runs stress the upsert-state-remove rehydration path, mostly-live runs
+# stress value-overwrite rehydration. The choice is fixed for the whole
+# driver lifetime so cross-cycle stability of `expected` still tests
+# rehydration, not just per-cycle convergence.
+TOMBSTONE_PROB_RANGE = (0.05, 0.50)
 
 QUIET_PERIOD_S = 25
 CATCHUP_TIMEOUT_S = 120.0
@@ -113,7 +120,11 @@ def _select_value_for_key(key: str) -> tuple[bool, str | None]:
 
 
 def _run_cycle(
-    producer, tracker, expected: dict[str, str | None], cycle_idx: int
+    producer,
+    tracker,
+    expected: dict[str, str | None],
+    cycle_idx: int,
+    tombstone_prob: float,
 ) -> bool:
     """Produce one batch, settle, and assert state for every tracked key.
 
@@ -122,7 +133,7 @@ def _run_cycle(
     keys = [f"reh-k{i}" for i in range(DISTINCT_KEYS)]
     for _ in range(PRODUCES_PER_CYCLE):
         key = helper_random.random_choice(keys)
-        if helper_random.random_bool(TOMBSTONE_PROB):
+        if helper_random.random_bool(tombstone_prob):
             producer.produce(
                 topic=TOPIC_UPSERT_TEXT,
                 key=key.encode("utf-8"),
@@ -201,7 +212,14 @@ def _run_cycle(
 
 def main() -> int:
     ensure_upsert_text_source()
-    LOG.info("rehydration driver starting; %d cycles planned", CYCLE_COUNT)
+    # Swarm once per invocation, fixed for the run so cross-cycle stability
+    # of `expected` keeps testing rehydration rather than per-cycle drift.
+    tombstone_prob = helper_random.random_float(*TOMBSTONE_PROB_RANGE)
+    LOG.info(
+        "rehydration driver starting; %d cycles planned tombstone_prob=%.3f",
+        CYCLE_COUNT,
+        tombstone_prob,
+    )
 
     producer, tracker = make_producer(client_id="antithesis-rehydration")
     expected: dict[str, str | None] = {}
@@ -209,7 +227,7 @@ def main() -> int:
     cycles_run = 0
 
     for cycle_idx in range(CYCLE_COUNT):
-        if _run_cycle(producer, tracker, expected, cycle_idx):
+        if _run_cycle(producer, tracker, expected, cycle_idx, tombstone_prob):
             cycles_run += 1
         time.sleep(INTER_CYCLE_SLEEP_S)
 
