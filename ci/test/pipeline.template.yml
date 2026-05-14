@@ -755,6 +755,16 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
         coverage: skip
         sanitizer: skip
+        # Fortify against intermittent agent timeouts and DockerHub/GHCR
+        # pull issues during the npm install step.
+        retry:
+          automatic:
+            - exit_status: -1 # Agent lost
+              limit: 2
+            - exit_status: 143 # SIGTERM (Buildkite timeout)
+              limit: 2
+            - exit_status: 255 # SSH/network
+              limit: 2
 
       - id: doc-examples
         label: Documentation Examples Code
