@@ -2695,12 +2695,24 @@ fn test_metrics_public_endpoint() {
         .start_blocking();
 
     let cluster_name = "test_cluster_1";
-    let label = format!("cluster_name=\"{cluster_name}\"");
+    let cluster_label = format!("cluster_name=\"{cluster_name}\"");
 
     let mut client = server.connect(postgres::NoTls).unwrap();
     client
         .batch_execute(&format!(
             "CREATE CLUSTER {cluster_name} REPLICAS (r1 (SIZE 'scale=2,workers=2'))"
+        ))
+        .unwrap();
+
+    // Create a materialized view on the cluster so a compute dataflow runs and
+    // reports `mz_dataflow_wallclock_lag_seconds`. That metric carries a
+    // `collection_id` label, which the federated endpoint resolves to a
+    // `collection_name` via the metric's advertised `ObjectNameLookup` rule.
+    let view_name = "test_mv_1";
+    let collection_label = format!("collection_name=\"{view_name}\"");
+    client
+        .batch_execute(&format!(
+            "CREATE MATERIALIZED VIEW {view_name} IN CLUSTER {cluster_name} AS SELECT 1"
         ))
         .unwrap();
 
@@ -2715,25 +2727,35 @@ fn test_metrics_public_endpoint() {
         res.text().unwrap()
     };
 
-    // Retry the scrape until the replica's `http` listener is up;
-    // until then `/metrics/public` only returns env's local metrics with no
-    // cluster_name labels.
+    // Retry the scrape until the replica's `http` listener is up and the
+    // wallclock-lag dataflow has reported. Until then `/metrics/public` only
+    // returns env's local metrics, without the cluster_name/collection_name
+    // labels resolved from the replica's metrics.
     Retry::default()
         .max_duration(Duration::from_secs(60))
         .retry(|_| {
-            if fetch_body().contains(label.as_str()) {
-                Ok(())
-            } else {
-                Err(format!("{label} not yet in /metrics/public"))
+            let body = fetch_body();
+            match (
+                body.contains(cluster_label.as_str()),
+                body.contains(collection_label.as_str()),
+            ) {
+                (true, true) => Ok(()),
+                (cluster, collection) => Err(format!(
+                    "labels not yet in /metrics/public \
+                     (cluster_name={cluster}, collection_name={collection})"
+                )),
             }
         })
         .unwrap();
 
+    // Dropping the cluster (and its dependent view) removes both labels.
     client
-        .batch_execute(&format!("DROP CLUSTER {cluster_name}"))
+        .batch_execute(&format!("DROP CLUSTER {cluster_name} CASCADE"))
         .unwrap();
 
-    assert!(!fetch_body().contains(label.as_str()));
+    let body = fetch_body();
+    assert!(!body.contains(cluster_label.as_str()));
+    assert!(!body.contains(collection_label.as_str()));
 }
 
 #[mz_ore::test]

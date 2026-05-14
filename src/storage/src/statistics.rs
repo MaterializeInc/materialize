@@ -29,7 +29,7 @@ use std::time::Instant;
 
 use mz_ore::metric;
 use mz_ore::metrics::{
-    DeleteOnDropCounter, DeleteOnDropGauge, IntCounterVec, IntGaugeVec, MetricsRegistry,
+    DeleteOnDropCounter, DeleteOnDropGauge, IntCounterVec, IntGaugeVec, MetricsRegistry, Rule,
     UIntGaugeVec,
 };
 use mz_repr::{GlobalId, Timestamp};
@@ -66,6 +66,27 @@ pub(crate) struct SourceStatisticsMetricDefs {
     pub(crate) envelope_state_tombstones: UIntGaugeVec,
 }
 
+fn source_name_rule() -> Rule {
+    Rule::ObjectNameLookup {
+        object_id_label: "source_id".into(),
+        output_label: "source_name".into(),
+    }
+}
+
+fn parent_source_name_rule() -> Rule {
+    Rule::ObjectNameLookup {
+        object_id_label: "parent_source_id".into(),
+        output_label: "parent_source_name".into(),
+    }
+}
+
+fn sink_name_rule() -> Rule {
+    Rule::ObjectNameLookup {
+        object_id_label: "sink_id".into(),
+        output_label: "sink_name".into(),
+    }
+}
+
 impl SourceStatisticsMetricDefs {
     pub(crate) fn register_with(registry: &MetricsRegistry) -> Self {
         Self {
@@ -73,66 +94,79 @@ impl SourceStatisticsMetricDefs {
                 name: "mz_source_snapshot_committed",
                 help: "Whether or not the worker has committed the initial snapshot for a source.",
                 var_labels: ["source_id", "worker_id", "parent_source_id", "shard_id"],
+                rules: [source_name_rule(), parent_source_name_rule()],
             )),
             messages_received: registry.register(metric!(
                 name: "mz_source_messages_received",
                 help: "The number of raw messages the worker has received from upstream.",
                 var_labels: ["source_id", "worker_id", "parent_source_id"],
+                rules: [source_name_rule(), parent_source_name_rule()],
             )),
             updates_staged: registry.register(metric!(
                 name: "mz_source_updates_staged",
                 help: "The number of updates (inserts + deletes) the worker has written but not yet committed to the storage layer.",
                 var_labels: ["source_id", "worker_id", "parent_source_id", "shard_id"],
+                rules: [source_name_rule(), parent_source_name_rule()],
             )),
             updates_committed: registry.register(metric!(
                 name: "mz_source_updates_committed",
                 help: "The number of updates (inserts + deletes) the worker has committed into the storage layer.",
                 var_labels: ["source_id", "worker_id", "parent_source_id", "shard_id"],
+                rules: [source_name_rule(), parent_source_name_rule()],
             )),
             bytes_received: registry.register(metric!(
                 name: "mz_source_bytes_received",
                 help: "The number of bytes worth of messages the worker has received from upstream. The way the bytes are counted is source-specific.",
                 var_labels: ["source_id", "worker_id", "parent_source_id"],
+                rules: [source_name_rule(), parent_source_name_rule()],
             )),
             bytes_indexed: registry.register(metric!(
                 name: "mz_source_bytes_indexed",
                 help: "The number of bytes of the source envelope state kept. This will be specific to the envelope in use.",
                 var_labels: ["source_id", "worker_id", "parent_source_id", "shard_id"],
+                rules: [source_name_rule(), parent_source_name_rule()],
             )),
             records_indexed: registry.register(metric!(
                 name: "mz_source_records_indexed",
                 help: "The number of records in the source envelope state. This will be specific to the envelope in use",
                 var_labels: ["source_id", "worker_id", "parent_source_id", "shard_id"],
+                rules: [source_name_rule(), parent_source_name_rule()],
             )),
             envelope_state_tombstones: registry.register(metric!(
                 name: "mz_source_envelope_state_tombstones",
                 help: "The number of outstanding tombstones in the source envelope state. This will be specific to the envelope in use",
                 var_labels: ["source_id", "worker_id", "parent_source_id", "shard_id"],
+                rules: [source_name_rule(), parent_source_name_rule()],
             )),
             rehydration_latency_ms: registry.register(metric!(
                 name: "mz_source_rehydration_latency_ms",
                 help: "The amount of time in milliseconds it took for the worker to rehydrate the source envelope state. This will be specific to the envelope in use.",
                 var_labels: ["source_id", "worker_id", "parent_source_id", "shard_id", "envelope"],
+                rules: [source_name_rule(), parent_source_name_rule()],
             )),
             offset_known: registry.register(metric!(
                 name: "mz_source_offset_known",
                 help: "The total number of _values_ (source-defined unit) present in upstream.",
                 var_labels: ["source_id", "worker_id", "shard_id"],
+                rules: [source_name_rule()],
             )),
             offset_committed: registry.register(metric!(
                 name: "mz_source_offset_committed",
                 help: "The total number of _values_ (source-defined unit) we have fully processed, and storage and committed.",
                 var_labels: ["source_id", "worker_id", "shard_id"],
+                rules: [source_name_rule()],
             )),
             snapshot_records_known: registry.register(metric!(
                 name: "mz_source_snapshot_records_known",
                 help: "The total number of records in the source's snapshot",
                 var_labels: ["source_id", "worker_id", "shard_id", "parent_source_id"],
+                rules: [source_name_rule(), parent_source_name_rule()],
             )),
             snapshot_records_staged: registry.register(metric!(
                 name: "mz_source_snapshot_records_staged",
                 help: "The total number of records read from the source's snapshot",
                 var_labels: ["source_id", "worker_id", "shard_id", "parent_source_id"],
+                rules: [source_name_rule(), parent_source_name_rule()],
             )),
         }
     }
@@ -276,21 +310,25 @@ impl SinkStatisticsMetricDefs {
                 name: "mz_sink_messages_staged",
                 help: "The number of messages staged but possibly not committed to the sink.",
                 var_labels: ["sink_id", "worker_id"],
+                rules: [sink_name_rule()],
             )),
             messages_committed: registry.register(metric!(
                 name: "mz_sink_messages_committed",
                 help: "The number of messages committed to the sink.",
                 var_labels: ["sink_id", "worker_id"],
+                rules: [sink_name_rule()],
             )),
             bytes_staged: registry.register(metric!(
                 name: "mz_sink_bytes_staged",
                 help: "The number of bytes staged but possibly not committed to the sink.",
                 var_labels: ["sink_id", "worker_id"],
+                rules: [sink_name_rule()],
             )),
             bytes_committed: registry.register(metric!(
                 name: "mz_sink_bytes_committed",
                 help: "The number of bytes committed to the sink.",
                 var_labels: ["sink_id", "worker_id"],
+                rules: [sink_name_rule()],
             )),
         }
     }
