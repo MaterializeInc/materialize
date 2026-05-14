@@ -135,10 +135,17 @@ pub fn set_backend(b: Backend) {
 /// File backend preserves capacity; swap backend moves the alloc into the handle.
 /// Empty input returns a `len == 0` handle and performs no I/O.
 pub fn pageout(chunks: &mut [Vec<u64>]) -> Handle {
+    pageout_with(backend(), chunks)
+}
+
+/// Same as [`pageout`], but selects the backend explicitly. Bypasses the global
+/// atomic so callers (such as the column-pager layer) can dispatch per call
+/// without racing other writers.
+pub fn pageout_with(b: Backend, chunks: &mut [Vec<u64>]) -> Handle {
     if total_len(chunks) == 0 {
         return Handle::from_swap(SwapInner::new(Vec::new()));
     }
-    match backend() {
+    match b {
         Backend::Swap => swap::pageout_swap(chunks),
         Backend::File => file::pageout_file(chunks),
     }
