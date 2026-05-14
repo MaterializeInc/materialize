@@ -27,6 +27,7 @@ use mz_ore::{soft_assert_or_log, task};
 use mz_persist_client::usage::ShardsUsageReferenced;
 use mz_repr::{Datum, Diff, Row};
 use mz_sql::ast::Statement;
+use mz_sql::names::ResolvedIds;
 use mz_sql::pure::PurifiedStatement;
 use mz_storage_client::controller::IntrospectionType;
 use opentelemetry::trace::TraceContextExt;
@@ -751,8 +752,8 @@ impl Coordinator {
                 create_source_stmt,
                 subsources,
                 available_source_references,
-            } => {
-                self.plan_purified_create_source(
+            } => self
+                .plan_purified_create_source(
                     &ctx,
                     params,
                     create_progress_subsource_stmt,
@@ -761,13 +762,13 @@ impl Coordinator {
                     available_source_references,
                 )
                 .await
-            }
+                .map(|(plan, resolved_ids)| (plan, resolved_ids, ResolvedIds::empty())),
             PurifiedStatement::PurifiedAlterSourceAddSubsources {
                 source_name,
                 options,
                 subsources,
-            } => {
-                self.plan_purified_alter_source_add_subsource(
+            } => self
+                .plan_purified_alter_source_add_subsource(
                     ctx.session(),
                     params,
                     source_name,
@@ -775,16 +776,18 @@ impl Coordinator {
                     subsources,
                 )
                 .await
-            }
+                .map(|(plan, resolved_ids)| (plan, resolved_ids, ResolvedIds::empty())),
             PurifiedStatement::PurifiedAlterSourceRefreshReferences {
                 source_name,
                 available_source_references,
-            } => self.plan_purified_alter_source_refresh_references(
-                ctx.session(),
-                params,
-                source_name,
-                available_source_references,
-            ),
+            } => self
+                .plan_purified_alter_source_refresh_references(
+                    ctx.session(),
+                    params,
+                    source_name,
+                    available_source_references,
+                )
+                .map(|(plan, resolved_ids)| (plan, resolved_ids, ResolvedIds::empty())),
             o @ (PurifiedStatement::PurifiedAlterSource { .. }
             | PurifiedStatement::PurifiedCreateSink(..)
             | PurifiedStatement::PurifiedCreateTableFromSource { .. }) => {
@@ -807,14 +810,17 @@ impl Coordinator {
                 // Determine all dependencies, not just those in the statement
                 // itself.
                 let catalog = self.catalog().for_session(ctx.session());
-                let mut resolved_ids = mz_sql::names::visit_dependencies(&catalog, &stmt);
-                self.plan_statement(ctx.session(), stmt, &params, &mut resolved_ids)
-                    .map(|plan| (plan, resolved_ids))
+                let resolved_ids = mz_sql::names::visit_dependencies(&catalog, &stmt);
+                self.plan_statement(ctx.session(), stmt, &params, &resolved_ids)
+                    .map(|(plan, sql_impl_ids)| (plan, resolved_ids, sql_impl_ids))
             }
         };
 
         match plan {
-            Ok((plan, resolved_ids)) => self.sequence_plan(ctx, plan, resolved_ids).await,
+            Ok((plan, resolved_ids, sql_impl_ids)) => {
+                self.sequence_plan(ctx, plan, resolved_ids, sql_impl_ids)
+                    .await
+            }
             Err(e) => ctx.retire(Err(e)),
         }
     }

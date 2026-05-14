@@ -361,13 +361,13 @@ impl Coordinator {
         global_id: GlobalId,
     ) -> Result<CreateSourcePlanBundle, AdapterError> {
         let catalog = self.catalog().for_session(session);
-        let mut resolved_ids = mz_sql::names::visit_dependencies(&catalog, &subsource_stmt);
+        let resolved_ids = mz_sql::names::visit_dependencies(&catalog, &subsource_stmt);
 
-        let plan = self.plan_statement(
+        let (plan, _sql_impl_ids) = self.plan_statement(
             session,
             Statement::CreateSubsource(subsource_stmt),
             params,
-            &mut resolved_ids,
+            &resolved_ids,
         )?;
         let plan = match plan {
             Plan::CreateSource(plan) => plan,
@@ -503,7 +503,7 @@ impl Coordinator {
         }
 
         let catalog = self.catalog().for_session(ctx.session());
-        let mut resolved_ids = mz_sql::names::visit_dependencies(&catalog, &source_stmt);
+        let resolved_ids = mz_sql::names::visit_dependencies(&catalog, &source_stmt);
 
         let propagated_with_options: Vec<_> = source_stmt
             .with_options
@@ -522,10 +522,10 @@ impl Coordinator {
             ctx.session(),
             Statement::CreateSource(source_stmt),
             &params,
-            &mut resolved_ids,
+            &resolved_ids,
         )? {
-            Plan::CreateSource(plan) => plan,
-            p => unreachable!("s must be CreateSourcePlan but got {:?}", p),
+            (Plan::CreateSource(plan), _sql_impl_ids) => plan,
+            (p, _) => unreachable!("s must be CreateSourcePlan but got {:?}", p),
         };
 
         let (item_id, global_id) = self.allocate_user_id().await?;
@@ -3509,7 +3509,7 @@ impl Coordinator {
             let catalog = self.catalog().for_system_session();
 
             // Resolve items in statement
-            let (mut create_conn_stmt, mut resolved_ids) =
+            let (mut create_conn_stmt, resolved_ids) =
                 mz_sql::names::resolve(&catalog, create_conn_stmt)
                     .map_err(|e| AdapterError::internal("ALTER CONNECTION", e))?;
 
@@ -3536,12 +3536,14 @@ impl Coordinator {
                 &catalog,
                 Statement::CreateConnection(create_conn_stmt),
                 &Params::empty(),
-                &mut resolved_ids,
+                &resolved_ids,
             )
             .map_err(|e| AdapterError::InvalidAlter("CONNECTION", e))?
             {
-                Plan::CreateConnection(plan) => plan,
-                _ => unreachable!("create source plan is only valid response"),
+                (Plan::CreateConnection(plan), _sql_impl_ids) => plan,
+                (p, _) => {
+                    unreachable!("create connection plan is only valid response, got {:?}", p)
+                }
             };
 
             // Parse statement.
@@ -3720,7 +3722,7 @@ impl Coordinator {
                 } = options.try_into()?;
 
                 // Resolve items in statement
-                let (mut create_source_stmt, mut resolved_ids) =
+                let (mut create_source_stmt, resolved_ids) =
                     create_sql_to_stmt_deps(self, ALTER_SOURCE, cur_entry.create_sql())?;
 
                 // Get all currently referred-to items
@@ -3935,12 +3937,14 @@ impl Coordinator {
                     &catalog,
                     Statement::CreateSource(create_source_stmt),
                     &Params::empty(),
-                    &mut resolved_ids,
+                    &resolved_ids,
                 )
                 .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
                 let plan = match planned {
-                    Plan::CreateSource(plan) => plan,
-                    _ => unreachable!("create source plan is only valid response"),
+                    (Plan::CreateSource(plan), _sql_impl_ids) => plan,
+                    (p, _) => {
+                        unreachable!("create source plan is only valid response, got {:?}", p)
+                    }
                 };
 
                 // Asserting that we've done the right thing with dependencies
@@ -4581,8 +4585,13 @@ impl Coordinator {
             crate::coord::PlanStatement::Statement { stmt, params } => {
                 self.handle_execute_inner(stmt, params, ctx).await;
             }
-            crate::coord::PlanStatement::Plan { plan, resolved_ids } => {
-                self.sequence_plan(ctx, plan, resolved_ids).await;
+            crate::coord::PlanStatement::Plan {
+                plan,
+                resolved_ids,
+                sql_impl_resolved_ids,
+            } => {
+                self.sequence_plan(ctx, plan, resolved_ids, sql_impl_resolved_ids)
+                    .await;
             }
         }
     }

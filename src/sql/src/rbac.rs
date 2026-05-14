@@ -393,6 +393,11 @@ pub fn check_usage(
 }
 
 /// Checks if a session is authorized to execute a plan. If not, an error is returned.
+///
+/// `sql_impl_resolved_ids` contains resolved IDs discovered inside SQL-implemented function
+/// bodies during planning. These are kept separate from `resolved_ids` because they are
+/// implementation details of the functions, not dependencies of the statement. They are
+/// only checked by the `restrict_to_user_objects` restriction.
 pub fn check_plan(
     catalog: &impl SessionCatalog,
     // Function mapping a connection ID to an authenticated role. The roles may have been dropped concurrently.
@@ -405,8 +410,14 @@ pub fn check_plan(
     plan: &Plan,
     target_cluster_id: Option<ClusterId>,
     resolved_ids: &ResolvedIds,
+    sql_impl_resolved_ids: &ResolvedIds,
 ) -> Result<(), UnauthorizedError> {
     rbac_check_preamble(catalog, session)?;
+
+    // Check sql_impl function body dependencies against restrict_to_user_objects.
+    // These are checked separately from the main resolved_ids because they are
+    // implementation details that should not affect dependency tracking.
+    check_restrict_to_user_objects(catalog, session, sql_impl_resolved_ids)?;
 
     let rbac_requirements = generate_rbac_requirements(
         catalog,

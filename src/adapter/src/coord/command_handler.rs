@@ -322,7 +322,8 @@ impl Coordinator {
                     };
 
                     let conn_id = ctx.session().conn_id().clone();
-                    self.sequence_plan(ctx, plan, ResolvedIds::empty()).await;
+                    self.sequence_plan(ctx, plan, ResolvedIds::empty(), ResolvedIds::empty())
+                        .await;
                     // Part of the Command::Commit contract is that the Coordinator guarantees that
                     // it has cleared its transaction state for the connection.
                     self.clear_connection(&conn_id).await;
@@ -1420,7 +1421,7 @@ impl Coordinator {
         //   - In the handler for `Message::PurifiedStatementReady`, before we handle the purified statement.
         // If we add special handling for more types of `Statement`s, we'll need to ensure similar verification
         // occurs.
-        let (stmt, mut resolved_ids) = match stmt {
+        let (stmt, resolved_ids) = match stmt {
             // Various statements must be purified off the main coordinator thread of control.
             stmt if Self::must_spawn_purification(&stmt) => {
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
@@ -1580,8 +1581,11 @@ impl Coordinator {
             _ => (stmt, resolved_ids),
         };
 
-        match self.plan_statement(ctx.session(), stmt, &params, &mut resolved_ids) {
-            Ok(plan) => self.sequence_plan(ctx, plan, resolved_ids).await,
+        match self.plan_statement(ctx.session(), stmt, &params, &resolved_ids) {
+            Ok((plan, sql_impl_ids)) => {
+                self.sequence_plan(ctx, plan, resolved_ids, sql_impl_ids)
+                    .await
+            }
             Err(e) => ctx.retire(Err(e)),
         }
     }
