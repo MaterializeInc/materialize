@@ -15,6 +15,55 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.24.0
+*Released to Materialize Cloud: 2026-05-14* <br>
+*Released to Materialize Self-Managed: 2026-05-15* <br>
+
+This release includes MySQL source schema evolution support, improvements,
+and bug fixes.
+
+### Features {#v26.24-features}
+
+- **MySQL source schema evolution**: MySQL sources now support certain upstream
+  schema changes (such as adding or removing columns) without requiring source
+  recreation, when the upstream MySQL server has `binlog_row_metadata` set to
+  `FULL`.
+
+### Improvements {#v26.24-improvements}
+
+- **`dbt-materialize` connection overrides**: The dbt adapter now supports
+  passing custom connection options via the `options` field in `profiles.yml`,
+  enabling OIDC authentication and other advanced connection configurations.
+- **`COPY FROM` rejects HTTP redirects**: `COPY FROM` now returns a clear error
+  if the target URL responds with an HTTP redirect, preventing unexpected data
+  sources and potential security issues.
+
+### Bug Fixes {#v26.24-bug-fixes}
+
+- Fixed MySQL sources with RDS IAM authentication failing when the database
+  username contains special characters like `&` or `#`.
+- Fixed joins incorrectly failing with a type mismatch error when join columns
+  differed only in nullability.
+- Fixed fast-path `SELECT` queries returning incorrect results when using
+  `OFFSET`.
+- Fixed `string_to_array` returning incorrect results when `null_string` is
+  specified and the delimiter is empty.
+- Fixed `INSERT INTO ... SELECT` ignoring the `OFFSET` clause.
+- Fixed `seahash` function catalog metadata reporting the wrong return type
+  (`uint4` instead of `uint8`).
+- Fixed `mz_egress_ips` storing non-canonical CIDR notation (e.g.,
+  `10.0.5.7/24` instead of `10.0.5.0/24`).
+- Fixed Console crashing on OIDC-protected routes when the identity provider
+  initialization fails, instead of falling through to password-based sign-in.
+
+### Agent Skills {#v26.24-agent-skills}
+
+- **`mcp-developer-analysis` client setup**: The skill now includes a
+  comprehensive playbook for connecting MCP-capable clients (Claude Code,
+  Cursor, VS Code, Zed, Continue, Windsurf, Claude Desktop) to the Materialize
+  MCP server, with a guided first-time-setup walkthrough and connection triage
+  flow.
+
 ## v26.23.2
 *Released to Materialize Cloud: 2026-05-11* <br>
 
@@ -132,7 +181,6 @@ improvements, and bug fixes.
 - Fixed Self-Managed Kubernetes deployments where setting both
   `cluster_topology_spread_soft = on` and `cluster_topology_spread_min_domains`
   caused all replica pod creation to fail with an admission error.
-
 ## v26.22.0
 *Released to Materialize Cloud: 2026-04-30* <br>
 *Released to Materialize Self-Managed: 2026-05-01* <br>
