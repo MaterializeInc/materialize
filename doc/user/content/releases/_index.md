@@ -15,6 +15,124 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.23.2
+*Released to Materialize Cloud: 2026-05-11* <br>
+
+This patch release includes bug fixes.
+
+### Bug Fixes {#v26.23.2-bug-fixes}
+
+- Fixed a regression in v26.23.0 that caused storage replicas to spend a large
+  share of their CPU time walking small data fragments during Parquet decode,
+  slowing queries that read from object storage.
+- Fixed a regression in v26.23.0 that caused storage replicas to retain extra
+  memory when reading from object storage.
+
+## v26.23.0
+*Released to Materialize Cloud: 2026-05-07* <br>
+
+This release introduces enhanced Kafka PrivateLink routing options, security
+improvements, and bug fixes.
+
+### Features {#v26.23-features}
+
+- **Dynamic Kafka brokers with AWS PrivateLink**: Kafka connections can now
+  route dynamically discovered brokers through a PrivateLink tunnel, rather than
+  requiring every advertised broker to be enumerated in the `BROKERS (...)`
+  clause. Two new options are available:
+  - `MATCHING 'pattern' USING AWS PRIVATELINK conn (...)` inside `BROKERS (...)`
+    associates a PrivateLink connection with any broker whose advertised
+    hostname matches `pattern`, including brokers that only appear in Kafka
+    metadata after the connection is established.
+  - `BOOTSTRAP BROKER 'addr' USING AWS PRIVATELINK conn (...)` pins the initial
+    bootstrap address to an explicit PrivateLink tunnel.
+
+  Together, these resolve availability-zone mismatches that previously affected
+  MSK and other Kafka clusters that rely on broker discovery, by ensuring every
+  broker, including those learned from metadata, is reached through a
+  PrivateLink endpoint in the broker's own AZ. Refer to our documentation on
+  [AWS PrivateLink connections](/ingest-data/network-security/privatelink/) and
+  the [Kafka `CREATE CONNECTION` PrivateLink syntax](/sql/create-connection/#kafka-privatelink-syntax)
+  for more information.
+
+### Improvements {#v26.23-improvements}
+
+- **New `repeat_row_non_negative` SQL function**: The new
+  `repeat_row_non_negative` table function generates a specified number of rows
+  but errors on negative input rather than silently producing incorrect results,
+  making it safer to use in general-purpose queries than the existing
+  `repeat_row`.
+- **Queries fail gracefully on internal errors**: Certain internal errors that
+  previously caused `environmentd` to crash now return a query error instead,
+  improving cluster stability.
+- **dbt deploy retries on concurrent DDL conflicts**: `dbt deploy` now
+  automatically retries the `ALTER SWAP` atomic deployment when it encounters a
+  DDL interrupt from concurrent catalog operations, preventing spurious
+  deployment failures in busy environments.
+- **Clearer temporal filter error messages**: Error messages for unsupported
+  temporal predicates now include the actual filter expression, making it easier
+  to identify and fix the offending query.
+- **`COPY TO S3` Parquet type validation at planning time**: `COPY TO S3` with
+  `FORMAT PARQUET` now rejects Parquet-incompatible column types (such as
+  `interval`) at query planning time with a clear error, rather than failing at
+  execution time with an opaque message.
+- **`mcp-developer-analysis`**: A new
+  [coding agent skill](/integrations/coding-agent-skills/) that pairs with the
+  `/api/mcp/developer` endpoint to provide diagnostic workflows, system catalog
+  references, and remediation runbooks for AI-powered troubleshooting.
+- **System catalog ontology for the MCP developer server**: The system
+  catalog now exposes an ontology that describes how `mz_*` tables relate to
+  one another and which tables to consult for common diagnostic questions. The
+  [MCP server for developers](/integrations/mcp-server/mcp-developer/) uses
+  this ontology to plan catalog queries directly instead of probing the schema,
+  reducing the number of round trips needed to answer questions about
+  hydration, freshness, and resource usage.
+- **~10% faster materialized view hydration**: We've reduced the work performed
+  during initial materialized view hydration, observing approximately 10%
+  faster hydration times across our benchmarks. This shortens the window
+  between creating (or restarting) a materialized view and the point at which
+  it begins serving up-to-date results.
+
+### Bug Fixes {#v26.23-bug-fixes}
+
+- Fixed `statement_timeout = 0` (which means "disabled" in PostgreSQL semantics)
+  causing every `SELECT` and `EXPLAIN FILTER PUSHDOWN` to fail immediately with a
+  spurious `StatementTimeout` error.
+- Tightened default validation on headers in Self-Managed deployments.
+- Enhanced session-based HTTP authentication.
+- Fixed `SHOW CREATE TYPE` emitting the bare type name instead of the
+  fully-qualified `database.schema.type` name, unlike every other `SHOW CREATE`
+  variant.
+- Fixed Self-Managed `orchestratord` `--enable-rbac False` silently inverting
+  the value and enabling RBAC instead of disabling it.
+- Fixed SQL Server source composite primary key columns being recorded in
+  non-deterministic order, causing incorrect constraint definitions and
+  non-deterministic behavior across `ALTER SOURCE` and re-purification.
+- Fixed PostgreSQL source RLS policy validation producing false positives that
+  blocked replication for users whose roles inherit BYPASSRLS through role
+  membership.
+- Fixed SQL Server source growing memory without bound during table snapshots due
+  to a `RowArena` that was never cleared between rows.
+- Fixed `SELECT` queries with both `LIMIT` and `OFFSET` processing all remaining
+  rows instead of stopping after the limit was reached.
+- Fixed SQL Server source opening one upstream connection per Timely worker
+  instead of one total, multiplying SQL Server connections and
+  `sp_cdc_cleanup_change_table` calls by the worker count.
+- Fixed SQL Server source with PrivateLink connections only attempting the first
+  resolved IP address instead of trying all available addresses.
+- Fixed `regexp_replace` returning an invalid regular expression error instead of
+  `NULL` when called with a `NULL` replacement column and a literal pattern that
+  fails to compile.
+- Fixed `pg_index.indnatts` counting columns of the indexed table instead of the
+  index itself, and `pg_class.relnatts` always reporting `0` for index rows,
+  improving compatibility with tools that introspect the PostgreSQL catalog.
+- Fixed toggling `memory_limiter_interval` from `0s` to a non-zero value at
+  runtime potentially triggering an immediate replica kill even when memory usage
+  was well below the limit.
+- Fixed Self-Managed Kubernetes deployments where setting both
+  `cluster_topology_spread_soft = on` and `cluster_topology_spread_min_domains`
+  caused all replica pod creation to fail with an admission error.
+
 ## v26.22.0
 *Released to Materialize Cloud: 2026-04-30* <br>
 *Released to Materialize Self-Managed: 2026-05-01* <br>
