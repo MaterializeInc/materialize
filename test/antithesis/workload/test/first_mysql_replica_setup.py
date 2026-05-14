@@ -40,8 +40,23 @@ LOG = logging.getLogger("first.mysql_replica_setup")
 
 
 def setup_primary() -> None:
-    """Create the antithesis schema and cdc_test table on the MySQL primary."""
-    LOG.info("creating antithesis database and cdc_test table on primary")
+    """Create the antithesis schema and both cdc_test tables on the MySQL
+    primary.
+
+    Two tables on different engines so we exercise both the transactional
+    (InnoDB) and non-transactional (MyISAM) DML paths through the binlog
+    and the Materialize MySQL source. MyISAM differences worth noting for
+    triage:
+      * BEGIN/COMMIT around MyISAM statements is silently ignored — each
+        statement commits immediately.
+      * Each MyISAM statement is its own GTID-tagged binlog event (no
+        bundling into a multi-statement transaction).
+      * No rollback semantics: a MyISAM statement that fails partway
+        through leaves whatever rows it managed to write committed.
+      * No ON UPDATE TIMESTAMP support before MySQL 5.6 — we use a
+        simpler schema (no updated_at) on MyISAM to avoid version churn.
+    """
+    LOG.info("creating antithesis database and cdc_test tables on primary")
     helper_mysql.execute_primary("CREATE DATABASE IF NOT EXISTS antithesis")
     helper_mysql.execute_primary(
         """
@@ -51,11 +66,21 @@ def setup_primary() -> None:
             value TEXT NOT NULL,
             updated_at TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP(6)
                 ON UPDATE CURRENT_TIMESTAMP(6)
-        )
+        ) ENGINE=InnoDB
         """,
         database="antithesis",
     )
-    LOG.info("antithesis.cdc_test ready on primary")
+    helper_mysql.execute_primary(
+        """
+        CREATE TABLE IF NOT EXISTS antithesis.cdc_test_myisam (
+            id VARCHAR(64) NOT NULL PRIMARY KEY,
+            batch_id VARCHAR(64) NOT NULL,
+            value TEXT NOT NULL
+        ) ENGINE=MyISAM
+        """,
+        database="antithesis",
+    )
+    LOG.info("antithesis.cdc_test (InnoDB) and cdc_test_myisam (MyISAM) ready on primary")
 
 
 def configure_replica() -> None:
@@ -94,26 +119,33 @@ def configure_replica() -> None:
     LOG.info("MySQL replica started")
 
 
-def wait_for_replica_table(timeout_s: float = 90.0) -> bool:
-    """Wait until antithesis.cdc_test is visible on the replica.
+def wait_for_replica_tables(timeout_s: float = 90.0) -> bool:
+    """Wait until both antithesis.cdc_test (InnoDB) and cdc_test_myisam
+    (MyISAM) are visible on the replica.
 
-    Returns True when the table appears (replication is flowing), False on
-    timeout.
+    Returns True when both tables appear (replication is flowing across
+    both engines), False on timeout.
     """
     deadline = time.monotonic() + timeout_s
+    needed = {"cdc_test", "cdc_test_myisam"}
     while time.monotonic() < deadline:
         try:
             rows = helper_mysql.query_replica(
-                "SELECT 1 FROM information_schema.tables "
-                "WHERE table_schema = 'antithesis' AND table_name = 'cdc_test'",
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema = 'antithesis' "
+                "AND table_name IN ('cdc_test', 'cdc_test_myisam')",
             )
-            if rows:
-                LOG.info("antithesis.cdc_test visible on replica — replication flowing")
+            seen = {r[0] for r in rows}
+            if needed.issubset(seen):
+                LOG.info(
+                    "antithesis cdc tables visible on replica — replication flowing (%s)",
+                    sorted(seen),
+                )
                 return True
         except Exception as exc:  # noqa: BLE001
-            LOG.info("waiting for replica table: %s", exc)
+            LOG.info("waiting for replica tables: %s", exc)
         time.sleep(2)
-    LOG.warning("timed out waiting for antithesis.cdc_test on replica")
+    LOG.warning("timed out waiting for antithesis.cdc_test{,_myisam} on replica")
     return False
 
 
@@ -127,10 +159,10 @@ def main() -> int:
     setup_primary()
     configure_replica()
 
-    replica_ready = wait_for_replica_table()
+    replica_ready = wait_for_replica_tables()
     sometimes(
         replica_ready,
-        "mysql replica: antithesis.cdc_test replicated from primary within 90s",
+        "mysql replica: both cdc_test tables replicated from primary within 90s",
         {
             "primary": helper_mysql.MYSQL_HOST,
             "replica": helper_mysql.MYSQL_REPLICA_HOST,
@@ -139,7 +171,7 @@ def main() -> int:
     if not replica_ready:
         # Proceed anyway — replication may catch up before Materialize tries to
         # validate the source, but log a warning so triage can correlate.
-        LOG.warning("replica table not yet visible; proceeding with source creation")
+        LOG.warning("replica tables not yet visible; proceeding with source creation")
 
     ensure_mysql_cdc_source()
 
