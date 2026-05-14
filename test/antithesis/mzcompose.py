@@ -120,9 +120,14 @@ class FaultOrchestrator(Service):
             # `sleep` via busybox — everything the script uses. Public
             # image, so it sails through export-compose.py untouched.
             "image": "bash:5",
-            # `bash -s` reads the script from stdin via a here-string;
-            # keeps the YAML readable instead of one giant `-c` blob.
-            "entrypoint": ["bash", "-s"],
+            # `bash -c <script>` runs the script string. Earlier this used
+            # `bash -s`, which reads commands from stdin — in a docker
+            # container there's nothing on stdin so bash exited cleanly
+            # with no output and the orchestrator silently no-op'd. Net
+            # effect: Antithesis fault injection ran unconstrained with
+            # no quiet windows ever opening, which starved every driver
+            # that needed more than one connection.
+            "entrypoint": ["bash", "-c"],
             "command": [script],
             "environment": [
                 # Defaults chosen so MAX_ON stays well under the smallest

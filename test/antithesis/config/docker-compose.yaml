@@ -623,7 +623,7 @@ services:
     image: bash:5
     entrypoint:
     - bash
-    - -s
+    - -c
     command:
     - "#!/usr/bin/env bash\n\n# Copyright Materialize, Inc. and contributors. All\
       \ rights reserved.\n#\n# Use of this software is governed by the Business Source\
