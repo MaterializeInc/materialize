@@ -32,6 +32,13 @@ Topology exercised under Antithesis:
                         from the harness; defaults to 8).
   - materialized      : the SUT (environmentd; clusterd is external)
   - workload          : Python test driver wired to the Antithesis SDK
+  - fault-orchestrator : single bash container alternating quiet and
+                        faulting windows globally via
+                        `ANTITHESIS_STOP_FAULTS`. Centralising the
+                        cadence avoids the failure mode where every
+                        driver requests its own quiet window and the
+                        union of overlapping requests keeps the system
+                        in a quiet state most of the time.
 
 Usage:
   bin/mzcompose --find antithesis run default                       # bring up the cluster
@@ -39,6 +46,7 @@ Usage:
 """
 
 import os
+from pathlib import Path
 
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.service import Service, ServiceConfig
@@ -73,6 +81,71 @@ CLUSTERD_POOL_SIZE = int(os.environ.get("ANTITHESIS_CLUSTERD_POOL_SIZE", "2"))
 # driver consumes the same env via the framework's pool-cluster
 # wrapper).
 CLUSTERD_WORKERS = 16
+
+
+class FaultOrchestrator(Service):
+    """Single bash container that drives Antithesis fault windows globally.
+
+    Invokes `${ANTITHESIS_STOP_FAULTS} <seconds>` to open quiet windows,
+    then sleeps through faults-ON windows, on a randomised cadence
+    (MIN_ON..MAX_ON / MIN_OFF..MAX_OFF). The script is bundled in
+    `test/antithesis/fault-orchestrator/pause_faults.sh` and inlined into
+    the compose `command:` here so we don't need a new mzbuild image
+    just to ship 30 lines of bash.
+
+    The Antithesis engagement team flagged per-driver quiet-period
+    requests as an anti-pattern: with many concurrent drivers each
+    asking for a quiet window, the union of overlapping windows leaves
+    the SUT mostly un-faulted. Centralising the cadence here means
+    faults arrive in one coordinated rhythm; drivers stay robust to
+    quiet/faulting transitions by relying on `wait_for_catchup` with
+    generous timeouts.
+
+    Outside Antithesis `ANTITHESIS_STOP_FAULTS` is unset and the script
+    exits immediately, so this service is a no-op for local validate.
+    """
+
+    def __init__(self) -> None:
+        script_path = Path(__file__).parent / "fault-orchestrator" / "pause_faults.sh"
+        # Compose interpolates `${VAR}` in every string value at parse
+        # time, which would eat the script's shell variable references
+        # (`${RANDOM}`, `${MIN_ON}`, `${ANTITHESIS_STOP_FAULTS}`, etc.)
+        # before bash ever sees them. Double the `$` to pass through a
+        # literal `$` and let bash do its own expansion at runtime. The
+        # underlying .sh file stays normal so shellcheck and direct
+        # execution work.
+        script = script_path.read_text().replace("$", "$$")
+        config: ServiceConfig = {
+            # bash:5 is alpine-based and ships `bash`, `od`, `tr`, and
+            # `sleep` via busybox — everything the script uses. Public
+            # image, so it sails through export-compose.py untouched.
+            "image": "bash:5",
+            # `bash -s` reads the script from stdin via a here-string;
+            # keeps the YAML readable instead of one giant `-c` blob.
+            "entrypoint": ["bash", "-s"],
+            "command": [script],
+            "environment": [
+                # Defaults chosen so MAX_ON stays well under the smallest
+                # driver's CATCHUP_TIMEOUT_S (currently 90s) — every
+                # driver lifetime has a chance to span at least one quiet
+                # window.
+                "START_DELAY=30",
+                "MIN_ON=20",
+                "MAX_ON=40",
+                "MIN_OFF=20",
+                "MAX_OFF=40",
+            ],
+            # Wait for materialized so the orchestrator's first
+            # ANTITHESIS_STOP_FAULTS call doesn't precede the SUT being
+            # ready. Timing is not safety-critical: Antithesis only
+            # starts injecting faults after setup-complete fires from
+            # the workload container.
+            "depends_on": {
+                "materialized": {"condition": "service_healthy"},
+            },
+            "restart": "no",
+        }
+        super().__init__(name="fault-orchestrator", config=config)
 
 
 class Workload(Service):
@@ -233,6 +306,7 @@ SERVICES = [
             "unsafe_enable_unorchestrated_cluster_replicas": "true",
         },
     ),
+    FaultOrchestrator(),
     Workload(),
 ]
 
@@ -253,4 +327,5 @@ def workflow_default(c: Composition) -> None:
         "mysql-replica",
     )
     c.up("materialized")
+    c.up("fault-orchestrator")
     c.up("workload")

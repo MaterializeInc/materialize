@@ -37,7 +37,9 @@ Approach:
          invariant.
        - `always(final >= max(count), …)` for the closing observation.
        - `sometimes(...)` liveness anchor confirming the closing
-         observation reached the inserted count after the quiet period.
+         observation reached the inserted count within the final-read
+         budget (which is sized to span at least one quiet window from
+         the global fault-orchestrator).
 
 Read failures (connect timeout, server unavailable mid-fault) are skipped
 rather than recorded — they are not regression evidence, and a False
@@ -57,7 +59,6 @@ import time
 
 import helper_random
 import psycopg
-from antithesis.assertions import always, sometimes
 from helper_pg import (
     PGDATABASE,
     PGHOST,
@@ -65,8 +66,9 @@ from helper_pg import (
     PGUSER,
     execute_retry,
 )
-from helper_quiet import request_quiet_period
 from helper_table_mv import MV_NAME, TABLE_MV_INPUT, ensure_table_and_mv
+
+from antithesis.assertions import always, sometimes
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
@@ -74,8 +76,10 @@ logging.basicConfig(
 LOG = logging.getLogger("driver.strict_serializable_reads")
 
 STEPS_PER_INVOCATION = 12
-QUIET_PERIOD_S = 15
-FINAL_READ_TIMEOUT_S = 30.0
+# Sized to span at least one MAX_OFF window from the global fault-
+# orchestrator (default 40s) plus the time the final read needs after
+# the MV catches up.
+FINAL_READ_TIMEOUT_S = 90.0
 FINAL_READ_POLL_S = 0.5
 PROBE_CONNECT_TIMEOUT_S = 5
 
@@ -150,8 +154,8 @@ def main() -> int:
         observations.append((step, observed))
 
     # Settle and take the closing observation. The driver is short and the
-    # observations list is small, so a generous timeout here is fine.
-    request_quiet_period(QUIET_PERIOD_S)
+    # observations list is small, so a generous timeout here is fine — long
+    # enough to span at least one global-orchestrator quiet window.
     expected_final = len(observations) and observations[-1][0]
     # `expected_final` is the largest step that was actually INSERTed (we
     # may have bailed early). It's an *upper bound* on the count — the

@@ -59,16 +59,16 @@ import logging
 import sys
 
 import helper_random
-from antithesis.assertions import always, sometimes
 from helper_kafka import make_producer
 from helper_pg import query_retry
-from helper_quiet import request_quiet_period
 from helper_source_stats import wait_for_catchup
 from helper_upsert_source import (
     SOURCE_UPSERT_TEXT,
     TOPIC_UPSERT_TEXT,
     ensure_upsert_text_source,
 )
+
+from antithesis.assertions import always, sometimes
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
@@ -89,8 +89,10 @@ ANCIENT_KEY_RING_SIZE = 32
 # many short invocations rather than one big one.
 ANCIENT_KEYS_PER_INVOCATION = 5
 
-QUIET_PERIOD_S = 20
-CATCHUP_TIMEOUT_S = 60.0
+# Sized to span at least one MAX_OFF window from the global fault-
+# orchestrator (default 40s) plus the time the upsert source needs to
+# advance offset_committed past our produces.
+CATCHUP_TIMEOUT_S = 90.0
 
 
 def _produce(producer, tracker, topic: str, key: str, value: str) -> None:
@@ -188,13 +190,12 @@ def main() -> int:
         LOG.info("no produces confirmed; exiting cleanly")
         return 0
 
-    request_quiet_period(QUIET_PERIOD_S)
     caught_up = wait_for_catchup(
         SOURCE_UPSERT_TEXT, max_produced, timeout_s=CATCHUP_TIMEOUT_S
     )
     sometimes(
         caught_up,
-        "upsert: source caught up after cross-invocation produces",
+        "upsert: source caught up after cross-invocation produces within catchup budget",
         {"source": SOURCE_UPSERT_TEXT, "target_offset": max_produced},
     )
     if not caught_up:

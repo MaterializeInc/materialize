@@ -26,7 +26,7 @@ Each `parallel_driver_` invocation:
 3. Requests an Antithesis quiet period (25 s) and polls `antithesis_cdc` in
    Materialize until all expected rows appear or the 90 s budget expires.
 4. Fires:
-   - `sometimes("mysql: CDC source caught up to all primary inserts after quiet period", …)`
+   - `sometimes("mysql: CDC source caught up to all primary inserts within catchup budget", …)`
      — liveness anchor; confirms at least one invocation reaches full catchup.
    - `always("mysql: CDC source row has correct value after catchup", …)` — safety;
      fired once per row, catches wrong-value corruption.

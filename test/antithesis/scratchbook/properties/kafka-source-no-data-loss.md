@@ -43,7 +43,7 @@ Implemented 2026-05-11 (NONE envelope, workload-side) as `test/antithesis/worklo
 
 | Message | Type | Fires when |
 |---------|------|------------|
-| `"kafka source caught up to produced offsets after quiet period (none envelope)"` | `sometimes` | Once per invocation after `wait_for_catchup`; the liveness anchor |
+| `"kafka source caught up to produced offsets within catchup budget (none envelope)"` | `sometimes` | Once per invocation after `wait_for_catchup`; the liveness anchor |
 | `"kafka source: every produced payload is visible exactly once"` | `always` | Per produced payload, after catchup; carries `payload`, `present`, `observed_count` in details |
 
 The UPSERT-envelope arm of this property is covered by `upsert-key-reflects-latest-value`.

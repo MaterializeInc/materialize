@@ -47,7 +47,6 @@ from typing import Any
 
 import helper_random
 import psycopg
-from antithesis.assertions import always, sometimes
 from helper_pg import (
     PGDATABASE,
     PGHOST,
@@ -57,6 +56,7 @@ from helper_pg import (
     PGUSER_INTERNAL,
 )
 
+from antithesis.assertions import always, sometimes
 from materialize.data_ingest.query_error import QueryError
 from materialize.parallel_workload import executor as _pw_executor
 from materialize.parallel_workload.action import (
@@ -258,9 +258,7 @@ def _matches_setup_tolerance(exc: BaseException) -> bool:
     signal).
     """
     msg = getattr(exc, "msg", None) or str(exc)
-    return any(
-        pat in msg for pat in (*_SETUP_RACE_PATTERNS, *_SETUP_FAULT_PATTERNS)
-    )
+    return any(pat in msg for pat in (*_SETUP_RACE_PATTERNS, *_SETUP_FAULT_PATTERNS))
 
 
 def _worker_death_tolerable(occurred: Exception | None) -> bool:
@@ -412,7 +410,9 @@ def _create_database_for_antithesis(database: Database, exe: Executor) -> None:
         "CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA "
         "REGISTRY URL 'http://schema-registry:8081'",
     )
-    _tolerate_setup_race(exe.execute, "CREATE SECRET IF NOT EXISTS minio AS 'minioadmin'")
+    _tolerate_setup_race(
+        exe.execute, "CREATE SECRET IF NOT EXISTS minio AS 'minioadmin'"
+    )
     _tolerate_setup_race(
         exe.execute,
         "CREATE CONNECTION IF NOT EXISTS aws_conn TO AWS ("
@@ -596,7 +596,11 @@ def _run_invocation(
                     dead = [t for t in threads if not t.is_alive()]
                     if dead:
                         occurred = next(
-                            (w.occurred_exception for w in workers if w.occurred_exception),
+                            (
+                                w.occurred_exception
+                                for w in workers
+                                if w.occurred_exception
+                            ),
                             None,
                         )
                         worker_failed = WorkerFailedException(
@@ -667,7 +671,9 @@ def _run_invocation(
         "parallel workload: worker thread death tolerated as fault-injection consequence",
         {
             "error": (
-                str(worker_failed.cause) if worker_failed and worker_failed.cause else None
+                str(worker_failed.cause)
+                if worker_failed and worker_failed.cause
+                else None
             ),
             "uncaptured": worker_failed is not None and worker_failed.cause is None,
         },

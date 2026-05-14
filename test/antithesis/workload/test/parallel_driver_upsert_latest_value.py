@@ -10,9 +10,9 @@
 
 """Antithesis driver for property `upsert-key-reflects-latest-value`.
 
-For each key produced to a Kafka UPSERT-envelope source, after a quiet period
-that lets Materialize catch up, the source's row for that key must reflect the
-last value produced — or be absent if the last message was a tombstone.
+For each key produced to a Kafka UPSERT-envelope source, once Materialize
+catches up, the source's row for that key must reflect the last value
+produced — or be absent if the last message was a tombstone.
 
 Each invocation:
   1. Ensures the upsert source exists (idempotent CREATE ... IF NOT EXISTS).
@@ -20,8 +20,9 @@ Each invocation:
      interfere with each other's expected-state model.
   3. Produces a deterministic mix of upserts and tombstones, tracking the
      local "what should the source say" model.
-  4. Requests an Antithesis quiet period and waits for offset_committed to
-     reach the highest produced offset.
+  4. Waits for offset_committed to reach the highest produced offset. The
+     global fault-orchestrator drives quiet/active windows; this driver
+     just polls until catchup completes or the budget expires.
   5. For every tracked key, asserts that what's in the source matches the
      local model. Live keys use one assertion message, tombstoned keys use
      another, so triage can distinguish the two failure modes.
@@ -37,16 +38,16 @@ import logging
 import sys
 
 import helper_random
-from antithesis.assertions import always, sometimes
 from helper_kafka import make_producer
 from helper_pg import query_one_retry
-from helper_quiet import request_quiet_period
 from helper_source_stats import wait_for_catchup
 from helper_upsert_source import (
     SOURCE_UPSERT_TEXT,
     TOPIC_UPSERT_TEXT,
     ensure_upsert_text_source,
 )
+
+from antithesis.assertions import always, sometimes
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
@@ -67,8 +68,10 @@ DISTINCT_VALUES = 16
 # budget on the same workload shape.
 TOMBSTONE_PROB_RANGE = (0.05, 0.50)
 
-QUIET_PERIOD_S = 20
-CATCHUP_TIMEOUT_S = 60.0
+# Sized to span at least one MAX_OFF window from the global fault-
+# orchestrator (default 40s) plus the time the upsert source needs to
+# advance offset_committed past our produces.
+CATCHUP_TIMEOUT_S = 90.0
 
 
 def _produce(producer, tracker, topic: str, key: str, value: str | None) -> None:
@@ -125,9 +128,7 @@ def main() -> int:
     # range. The fuzzer sees this as one of the first decisions in the
     # timeline and can drive it toward whichever extreme reveals a bug.
     tombstone_prob = helper_random.random_float(*TOMBSTONE_PROB_RANGE)
-    LOG.info(
-        "driver starting; prefix=%s tombstone_prob=%.3f", prefix, tombstone_prob
-    )
+    LOG.info("driver starting; prefix=%s tombstone_prob=%.3f", prefix, tombstone_prob)
 
     producer, tracker = make_producer(client_id=f"antithesis-{prefix}")
 
@@ -178,8 +179,9 @@ def main() -> int:
         LOG.info("no messages confirmed delivered this invocation; exiting cleanly")
         return 0
 
-    # Now ask Antithesis to pause faults and wait for Materialize to catch up.
-    request_quiet_period(QUIET_PERIOD_S)
+    # Wait for Materialize to catch up. Quiet windows are driven globally by
+    # the fault-orchestrator service; this catchup timeout is sized to span
+    # at least one such window so the source can advance during it.
     caught_up = wait_for_catchup(
         SOURCE_UPSERT_TEXT, max_produced, timeout_s=CATCHUP_TIMEOUT_S
     )
@@ -189,7 +191,7 @@ def main() -> int:
     # vacuous and the run is uninteresting.
     sometimes(
         caught_up,
-        "upsert: source caught up to produced offsets after quiet period",
+        "upsert: source caught up to produced offsets within catchup budget",
         {"source": SOURCE_UPSERT_TEXT, "target_offset": max_produced},
     )
 

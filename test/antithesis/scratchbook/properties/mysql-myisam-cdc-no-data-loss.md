@@ -72,7 +72,7 @@ Implemented as `test/antithesis/workload/test/parallel_driver_mysql_myisam.py`.
 |---------|------|------------|
 | `"mysql myisam: CDC source row has correct value after catchup"` | `always` | Per row, after catchup. False ⟺ row missing or value wrong. |
 | `"mysql myisam: CDC source row count matches inserted count after catchup"` | `always` | Per invocation, after catchup. False ⟺ extra or missing rows for this batch. |
-| `"mysql myisam: CDC source caught up to all primary inserts after quiet period"` | `sometimes` | Per invocation. Liveness for the catchup gate. |
+| `"mysql myisam: CDC source caught up to all primary inserts within catchup budget"` | `sometimes` | Per invocation. Liveness for the catchup gate. |
 | `"mysql replica: both cdc_test tables replicated from primary within 90s"` | `sometimes` | Per timeline (fires once from `first_mysql_replica_setup`). Confirms replication is flowing for both engines. |
 
 Knobs: `ROWS_PER_INVOCATION=20`, `QUIET_PERIOD_S=25`, `CATCHUP_TIMEOUT_S=90.0`.

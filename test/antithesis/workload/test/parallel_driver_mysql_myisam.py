@@ -40,7 +40,7 @@ Each invocation:
   2. Picks a per-invocation `batch_id` prefix so concurrent drivers
      (including the InnoDB sibling) don't collide.
   3. Inserts ROWS_PER_INVOCATION rows to the MyISAM table on the primary.
-  4. Requests an Antithesis quiet period and polls the Materialize source
+  4. Polls the Materialize source
      table until all expected rows appear (or the budget expires).
   5. Asserts correctness via `always(...)` on count and per-row values.
 """
@@ -53,7 +53,6 @@ import time
 
 import helper_mysql
 import helper_random
-from antithesis.assertions import always, sometimes
 from helper_mysql_source import (
     MYSQL_DATABASE,
     MYSQL_TABLE_MYISAM,
@@ -61,7 +60,8 @@ from helper_mysql_source import (
     TABLE_NAME_MYISAM,
 )
 from helper_pg import query_retry
-from helper_quiet import request_quiet_period
+
+from antithesis.assertions import always, sometimes
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
@@ -69,8 +69,9 @@ logging.basicConfig(
 LOG = logging.getLogger("driver.mysql_myisam")
 
 ROWS_PER_INVOCATION = 20
-QUIET_PERIOD_S = 25
-CATCHUP_TIMEOUT_S = 90.0
+# Sized to span at least one MAX_OFF window from the global fault-
+# orchestrator (default 40s) plus replica → source → MZ catchup time.
+CATCHUP_TIMEOUT_S = 120.0
 POLL_INTERVAL_S = 1.0
 
 
@@ -199,14 +200,12 @@ def main() -> int:
         LOG.info("no rows inserted successfully this invocation; exiting cleanly")
         return 0
 
-    LOG.info("inserted %d rows; requesting quiet period", len(expected))
-    request_quiet_period(QUIET_PERIOD_S)
-
+    LOG.info("inserted %d rows; waiting for catchup", len(expected))
     caught_up = _wait_for_catchup(batch_id, len(expected))
 
     sometimes(
         caught_up,
-        "mysql myisam: CDC source caught up to all primary inserts after quiet period",
+        "mysql myisam: CDC source caught up to all primary inserts within catchup budget",
         {
             "source": TABLE_NAME_MYISAM,
             "batch_id": batch_id,

@@ -25,8 +25,10 @@ Each invocation:
   2. Picks a per-invocation prefix so concurrent driver instances scope to
      disjoint MV rows.
   3. INSERTs N rows tagged with the prefix.
-  4. Requests an Antithesis quiet period and polls the MV until the count
-     for the prefix equals N.
+  4. Polls the MV until the count for the prefix equals N. The global
+     fault-orchestrator service drives quiet/active windows on its own
+     cadence; this driver's catchup timeout is sized to span at least
+     one quiet window so the read can complete during it.
   5. Asserts:
        - `always(...)` the MV count matches what was inserted (no over- or
          under-counting after settle).
@@ -45,10 +47,10 @@ import sys
 import time
 
 import helper_random
-from antithesis.assertions import always, sometimes
 from helper_pg import execute_retry, query_one_retry
-from helper_quiet import request_quiet_period
 from helper_table_mv import MV_NAME, TABLE_MV_INPUT, ensure_table_and_mv
+
+from antithesis.assertions import always, sometimes
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
@@ -56,8 +58,10 @@ logging.basicConfig(
 LOG = logging.getLogger("driver.mv_reflects_table_updates")
 
 INSERTS_PER_INVOCATION = 40
-QUIET_PERIOD_S = 20
-CATCHUP_TIMEOUT_S = 60.0
+# Sized to span at least one MAX_OFF window from the global fault-
+# orchestrator (default 40s) plus enough buffer for the MV catchup itself
+# during that window.
+CATCHUP_TIMEOUT_S = 90.0
 CATCHUP_POLL_INTERVAL_S = 0.5
 
 
@@ -97,8 +101,6 @@ def main() -> int:
         params,
     )
 
-    request_quiet_period(QUIET_PERIOD_S)
-
     # Poll the MV until the row_count for this prefix reaches N. The MV's
     # `COUNT(*) GROUP BY prefix` shape means the row for this prefix may
     # appear partially populated during the catchup window.
@@ -112,7 +114,7 @@ def main() -> int:
 
     sometimes(
         caught_up,
-        "mv: row_count caught up to inserted count after quiet period",
+        "mv: row_count caught up to inserted count within catchup budget",
         {
             "mv": MV_NAME,
             "table": TABLE_MV_INPUT,

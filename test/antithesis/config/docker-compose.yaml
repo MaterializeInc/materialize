@@ -619,6 +619,70 @@ services:
     container_name: materialized
     networks:
     - antithesis-net
+  fault-orchestrator:
+    image: bash:5
+    entrypoint:
+    - bash
+    - -s
+    command:
+    - "#!/usr/bin/env bash\n\n# Copyright Materialize, Inc. and contributors. All\
+      \ rights reserved.\n#\n# Use of this software is governed by the Business Source\
+      \ License\n# included in the LICENSE file at the root of this repository.\n\
+      #\n# As of the Change Date specified in that file, in accordance with\n# the\
+      \ Business Source License, use of this software will be governed\n# by the Apache\
+      \ License, Version 2.0.\n\n# Drive Antithesis fault windows globally.\n#\n#\
+      \ Antithesis injects faults into the system continuously by default.\n# Calling\
+      \ `ANTITHESIS_STOP_FAULTS <seconds>` requests a quiet window \u2014\n# Antithesis\
+      \ pauses fault injection for that many seconds. The Antithesis\n# engagement\
+      \ team's recommendation: drive these quiet windows from a\n# single dedicated\
+      \ container, not per-driver, otherwise overlapping\n# per-driver requests keep\
+      \ the system in a quiet state most of the time\n# and we never actually fault.\n\
+      #\n# This script alternates faults-OFF (quiet) and faults-ON (active)\n# windows\
+      \ at randomized intervals so each timeline sees a different\n# cadence. Adapted\
+      \ from the Antithesis hands-on tutorial:\n#   https://github.com/antithesishq/hands-on-tutorial-1/blob/main/python/antithesis/pause_faults.sh\n\
+      #\n# Outside Antithesis (snouty local validate) `ANTITHESIS_STOP_FAULTS` is\n\
+      # unset; the script exits immediately so the rest of the compose works.\n\n\
+      set -euo pipefail\n\nif [[ -z \"$${ANTITHESIS_STOP_FAULTS:-}\" ]]; then\n  \
+      \  echo \"ANTITHESIS_STOP_FAULTS not set; fault-orchestrator exiting (no-op)\"\
+      \n    exit 0\nfi\n\n# Tunable via the service `environment:` block. Defaults\
+      \ sized so that:\n#   * MAX_ON is comfortably shorter than any driver's CATCHUP_TIMEOUT_S\n\
+      #     (smallest is 60s in parallel_driver_upsert_latest_value) \u2014 a\n# \
+      \    driver's catchup window can always span at least one full quiet\n#    \
+      \ period.\n#   * MIN_OFF is long enough for materialized to commit a few timestamps\n\
+      #     and for sources to advance offset_committed past the most recent\n#  \
+      \   batch of produced offsets.\n#   * START_DELAY gives setup-complete + bootstrap\
+      \ a window of un-faulted\n#     time before the alternation begins.\nSTART_DELAY=\"\
+      $${START_DELAY:-30}\"\nMIN_ON=\"$${MIN_ON:-20}\"\nMAX_ON=\"$${MAX_ON:-40}\"\n\
+      MIN_OFF=\"$${MIN_OFF:-20}\"\nMAX_OFF=\"$${MAX_OFF:-40}\"\n\necho \"fault-orchestrator:\
+      \ ON $${MIN_ON}-$${MAX_ON}s / OFF $${MIN_OFF}-$${MAX_OFF}s, initial pause $${START_DELAY}s\"\
+      \n\n# Initial quiet window so the rest of the stack reaches steady state\n#\
+      \ before Antithesis starts faulting. Antithesis may or may not honour\n# this\
+      \ depending on when fault injection begins relative to setup-\n# complete; either\
+      \ way the local sleep gives drivers a clean start.\n\"$${ANTITHESIS_STOP_FAULTS}\"\
+      \ \"$${START_DELAY}\"\nsleep \"$${START_DELAY}\"\n\nwhile true; do\n    # Re-seed\
+      \ $$RANDOM from /dev/urandom so successive iterations don't\n    # repeat the\
+      \ same on/off period (the shell's RANDOM is a 16-bit LCG;\n    # without reseeding\
+      \ it can produce predictable sequences).\n    RANDOM=$$(od -An -N2 -tu2 /dev/urandom\
+      \ | tr -d ' ')\n    ON_PERIOD=$$((MIN_ON + (RANDOM % (MAX_ON - MIN_ON + 1))))\n\
+      \    OFF_PERIOD=$$((MIN_OFF + (RANDOM % (MAX_OFF - MIN_OFF + 1))))\n\n    echo\
+      \ \"fault-orchestrator: faults OFF for $${OFF_PERIOD}s\"\n    \"$${ANTITHESIS_STOP_FAULTS}\"\
+      \ \"$${OFF_PERIOD}\"\n    sleep \"$${OFF_PERIOD}\"\n\n    echo \"fault-orchestrator:\
+      \ faults ON for $${ON_PERIOD}s\"\n    sleep \"$${ON_PERIOD}\"\ndone\n"
+    environment:
+    - START_DELAY=30
+    - MIN_ON=20
+    - MAX_ON=40
+    - MIN_OFF=20
+    - MAX_OFF=40
+    depends_on:
+      materialized:
+        condition: service_healthy
+    restart: 'no'
+    platform: linux/amd64
+    container_name: fault-orchestrator
+    hostname: fault-orchestrator
+    networks:
+    - antithesis-net
   workload:
     depends_on:
       materialized:

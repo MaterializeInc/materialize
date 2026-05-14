@@ -52,9 +52,9 @@ Implemented 2026-05-11 as `test/antithesis/workload/test/parallel_driver_upsert_
 |---------|------|------|
 | `"upsert: SELECT for key matches latest produced value"` | `always` | Per sampled live key after quiet-period catchup |
 | `"upsert: tombstoned key has no row in source"` | `always` | Per sampled key whose last produced message was a tombstone |
-| `"upsert: source caught up to produced offsets after quiet period"` | `sometimes` | Once per invocation; liveness anchor proving the safety assertions ran against settled data |
+| `"upsert: source caught up to produced offsets within catchup budget"` | `sometimes` | Once per invocation; liveness anchor proving the safety assertions ran against settled data |
 
-Shared helpers introduced for this property and reusable by every subsequent Kafka source property: `helper_pg.py` (resilient pgwire), `helper_kafka.py` (producer + delivery tracker), `helper_quiet.py` (`ANTITHESIS_STOP_FAULTS` wrapper), `helper_random.py` (deterministic randomness with Antithesis SDK), `helper_source_stats.py` (catchup polling on `mz_internal.mz_source_statistics`), `helper_upsert_source.py` (idempotent `CREATE CONNECTION` + `CREATE SOURCE`).
+Shared helpers introduced for this property and reusable by every subsequent Kafka source property: `helper_pg.py` (resilient pgwire), `helper_kafka.py` (producer + delivery tracker), `helper_random.py` (Antithesis SDK randomness, including an `AntithesisRandom` subclass for code expecting a `random.Random`), `helper_source_stats.py` (catchup polling on `mz_internal.mz_source_statistics`), `helper_upsert_source.py` (idempotent `CREATE CONNECTION` + `CREATE SOURCE`). Quiet windows are driven globally by a `fault-orchestrator` service (alternating randomized faults-ON / faults-OFF intervals); drivers no longer call `ANTITHESIS_STOP_FAULTS` themselves and rely on `wait_for_catchup` with a budget sized to span one quiet window.
 
 No SUT-side instrumentation added in this pass — that is the candidate work in `properties/upsert-no-internal-panic.md`, `properties/upsert-state-consolidation-wellformed.md`, and `properties/upsert-ensure-decoded-called-before-access.md`.
 

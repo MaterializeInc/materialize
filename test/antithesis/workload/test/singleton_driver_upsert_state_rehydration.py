@@ -25,8 +25,10 @@ output is exactly the property's failure mode.
 Each cycle:
   1. Produce a batch of (key, value) and (key, null) messages, updating the
      in-memory `expected_state` model.
-  2. Request a quiet period and wait for `offset_committed` to reach the
-     highest produced offset.
+  2. Wait for `offset_committed` to reach the highest produced offset.
+     The global fault-orchestrator drives quiet/active windows on its
+     own cadence; the per-cycle catchup timeout is sized to span at
+     least one quiet window so settle has somewhere to land.
   3. SELECT every tracked key's current source state and assert it matches
      `expected_state` via `always("upsert: rehydrated state equals
      local model", ...)`. Across-cycle stability is exactly what
@@ -38,15 +40,15 @@ vacuously satisfied by a single early settle).
 
 A previous version of this driver also recorded a "clusterd observed
 non-online" `sometimes` anchor via a once-per-cycle SELECT of
-`mz_internal.mz_cluster_replica_statuses`. That assertion was structurally
-unable to fire here: each cycle requests a 25-second Antithesis quiet
-period before its assertions, the probe runs *after* the quiet period
-(when faults are paused and killed containers have been restored), and
-the introspection view itself lags clusterd death by the
-orchestrator-process 5-second poll. The "did we see a replica go
-offline" signal lives in `anytime_fault_recovery_exercised.py` instead,
-which polls continuously and never requests a quiet period, so it has
-the right shape to observe the offline window.
+`mz_internal.mz_cluster_replica_statuses`. That assertion was
+structurally unable to fire here: when faults are paused (either by
+the old per-driver `ANTITHESIS_STOP_FAULTS` calls or by the new global
+fault-orchestrator's quiet window) killed containers are restored
+before the probe runs, and the introspection view itself lags clusterd
+death by the orchestrator-process 5-second poll. The "did we see a
+replica go offline" signal lives in `anytime_fault_recovery_exercised.py`
+instead, which polls continuously and is unaffected by quiet windows,
+so it has the right shape to observe the offline window.
 
 Distinct prefix per timeline keeps multiple parallel timelines independent.
 """
@@ -58,16 +60,16 @@ import sys
 import time
 
 import helper_random
-from antithesis.assertions import always, sometimes
 from helper_kafka import make_producer
 from helper_pg import query_one_retry
-from helper_quiet import request_quiet_period
 from helper_source_stats import wait_for_catchup
 from helper_upsert_source import (
     SOURCE_UPSERT_TEXT,
     TOPIC_UPSERT_TEXT,
     ensure_upsert_text_source,
 )
+
+from antithesis.assertions import always, sometimes
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
@@ -90,8 +92,10 @@ DISTINCT_VALUES = 12
 # rehydration, not just per-cycle convergence.
 TOMBSTONE_PROB_RANGE = (0.05, 0.50)
 
-QUIET_PERIOD_S = 25
-CATCHUP_TIMEOUT_S = 120.0
+# Sized to span at least one MAX_OFF window from the global fault-
+# orchestrator (default 40s) and survive a clusterd restart inside it;
+# rehydration after a kill is the whole point of this driver.
+CATCHUP_TIMEOUT_S = 180.0
 INTER_CYCLE_SLEEP_S = 2.0
 
 
@@ -167,7 +171,8 @@ def _run_cycle(
         LOG.info("cycle %d: no messages confirmed delivered; skipping", cycle_idx)
         return False
 
-    request_quiet_period(QUIET_PERIOD_S)
+    # The global fault-orchestrator drives quiet windows; this catchup
+    # timeout is sized to span one and survive a clusterd kill in it.
     caught_up = wait_for_catchup(
         SOURCE_UPSERT_TEXT, max_produced, timeout_s=CATCHUP_TIMEOUT_S
     )
@@ -234,7 +239,7 @@ def main() -> int:
     # The "did this run actually span a clusterd restart" anchor is
     # deliberately not in this driver — see the module docstring. The
     # `cycles_run >= 2` check below is the rehydration-coverage anchor:
-    # without two post-quiet-period reads, the safety assertions could
+    # without two settle-then-read cycles, the safety assertions could
     # be vacuously satisfied by a single early settle.
     sometimes(
         cycles_run >= 2,

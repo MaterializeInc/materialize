@@ -24,8 +24,10 @@ Each invocation:
      workload can filter the source down to its own rows when asserting.
   3. Produces N distinct payloads, recording the broker-assigned `(partition,
      offset)` for each via the delivery callback.
-  4. Requests an Antithesis quiet period and waits for `offset_committed`
-     to reach the highest produced offset.
+  4. Waits for `offset_committed` to reach the highest produced offset.
+     The global fault-orchestrator service drives quiet/active windows
+     on its own cadence; the catchup timeout is sized to span at least
+     one quiet window so the source can advance during it.
   5. Runs two `assert_always` checks:
        - "kafka source: no duplicate (partition, offset)" — `GROUP BY 1, 2 HAVING COUNT(*) > 1` is empty
        - "kafka source: every produced payload is visible exactly once" —
@@ -45,7 +47,6 @@ import logging
 import sys
 
 import helper_random
-from antithesis.assertions import always, sometimes
 from helper_kafka import make_producer
 from helper_none_source import (
     SOURCE_NONE_TEXT,
@@ -53,8 +54,9 @@ from helper_none_source import (
     ensure_none_text_source,
 )
 from helper_pg import query_retry
-from helper_quiet import request_quiet_period
 from helper_source_stats import wait_for_catchup
+
+from antithesis.assertions import always, sometimes
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
@@ -65,8 +67,9 @@ LOG = logging.getLogger("driver.kafka_none_envelope")
 # — Antithesis launches the driver many times and accumulates coverage
 # across invocations, not within one giant batch.
 PRODUCES_PER_INVOCATION = 50
-QUIET_PERIOD_S = 20
-CATCHUP_TIMEOUT_S = 60.0
+# Sized to span at least one MAX_OFF window from the global fault-
+# orchestrator (default 40s) plus enough buffer for catchup itself.
+CATCHUP_TIMEOUT_S = 90.0
 
 
 def main() -> int:
@@ -114,14 +117,13 @@ def main() -> int:
     # source query below joins payloads back to (partition, offset)
     # assignments without us needing to track them at produce time.
 
-    request_quiet_period(QUIET_PERIOD_S)
     caught_up = wait_for_catchup(
         SOURCE_NONE_TEXT, max_produced, timeout_s=CATCHUP_TIMEOUT_S
     )
 
     sometimes(
         caught_up,
-        "kafka source caught up to produced offsets after quiet period (none envelope)",
+        "kafka source caught up to produced offsets within catchup budget (none envelope)",
         {"source": SOURCE_NONE_TEXT, "target_offset": max_produced},
     )
 

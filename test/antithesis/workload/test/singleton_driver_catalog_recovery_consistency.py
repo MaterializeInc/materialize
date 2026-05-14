@@ -53,7 +53,6 @@ import time
 
 import helper_random
 import psycopg
-from antithesis.assertions import always, sometimes
 from helper_pg import (
     PGDATABASE,
     PGHOST,
@@ -62,6 +61,8 @@ from helper_pg import (
     execute_retry,
     query_retry,
 )
+
+from antithesis.assertions import always, sometimes
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
