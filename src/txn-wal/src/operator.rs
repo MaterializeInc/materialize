@@ -10,6 +10,7 @@
 //! Timely operators for the crate
 
 use std::any::Any;
+use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::future::Future;
 use std::sync::mpsc::TryRecvError;
@@ -228,6 +229,54 @@ where
     (remap_stream, shutdown_button.press_on_drop())
 }
 
+/// Re-emit `passthrough` with a translated output frontier, bounded by
+/// `until`.
+///
+/// The operator does not inspect the contents of `passthrough` containers
+/// — they are forwarded verbatim. Only the output frontier is computed by
+/// this operator.
+///
+/// # Contract
+///
+/// Let *T_until* be the first input-stream time at which the `passthrough`
+/// frontier satisfies `until.less_equal(pass_frontier)`. If `until` is the
+/// empty antichain *T_until* is infinity; the empty `passthrough` frontier
+/// is treated as crossing any finite `until`.
+///
+/// 1. **Lossless forwarding under `until`.** For every container `c`
+///    arriving on `passthrough` at input-stream time `t < T_until`, `c` is
+///    forwarded on the output verbatim. This holds regardless of how the
+///    operator's activations interleave data arrivals and frontier
+///    advances: a container that arrives in the same activation as the
+///    until-crossing frontier is still forwarded before the output
+///    capability is dropped.
+/// 2. **No emission past `until`.** Once the `passthrough` frontier
+///    crosses `until` (or reaches the empty antichain), the operator
+///    drops its output capability and emits nothing further.
+/// 3. **Output frontier translation.** The output frontier reports the
+///    largest `logical_upper` observed on the remap input whose
+///    corresponding `physical_upper` has been crossed by `pass_frontier`,
+///    or by an earlier `logical_upper`. Between those bumps, it tracks
+///    `pass_frontier`. While waiting on the first remap entry (queue
+///    empty and remap input still open), the operator does not advance
+///    on `pass_frontier` alone: that prevents `SELECT AS OF MAX` from
+///    completing prematurely when the data shard's frontier reaches the
+///    empty antichain before the remap source has emitted anything.
+/// 4. **Termination.** The output reaches the empty antichain iff the
+///    `passthrough` frontier does, the `passthrough` frontier crosses
+///    `until`, or the operator is shut down via its `PressOnDropButton`.
+///
+/// # Inputs
+///
+/// * `remap` — physical/logical upper pairs from
+///   [`txns_progress_source_global`]. `physical_upper` is monotone
+///   non-decreasing across entries. The stream may close while
+///   `passthrough` is still draining; the last observed entry remains
+///   usable for output-frontier advances afterwards.
+/// * `passthrough` — opaque records; the operator does not look at them.
+/// * `until` — upper bound on the input-stream times that produce
+///   output. The contents of records, including any per-record times
+///   carried inside `P`, are not consulted.
 fn txns_progress_frontiers<'scope, K, V, T, D, P, C>(
     remap: StreamVec<'scope, T, DataRemapEntry<T>>,
     passthrough: StreamVec<'scope, T, P>,
@@ -273,17 +322,35 @@ where
             .try_into()
             .expect("one capability per output");
         let mut capability = Some(cap);
-        // The most recently observed remap state. Retained even after the
-        // remap input closes so we can still advance the output capability to
-        // the last known `logical_upper` while the passthrough input is
-        // still draining.
-        let mut remap = DataRemapEntry {
-            physical_upper: T::minimum(),
-            logical_upper: T::minimum(),
-        };
+        // Pending `DataRemapEntry`s observed from the remap input, in
+        // arrival order. Each entry `(phys, log)` asserts that
+        // `[phys, log)` is empty on the data shard. The async original
+        // consumed remap entries via `passthrough_input.next().await`
+        // strictly FIFO, which let it advance the cap stepwise at every
+        // `phys_i`. The sync `for_each` flattens that into a single
+        // activation, so we have to retain the queue ourselves to recover
+        // that stepwise advancement; otherwise the cap can only ever hop
+        // to the largest seen `logical_upper`, never to an intermediate
+        // one, and stalls when the passthrough frontier sits at an
+        // intermediate `physical_upper`.
+        //
+        // Invariant: `physical_upper` is non-decreasing across the queue.
+        // Consecutive entries with equal `physical_upper` are coalesced
+        // into a single entry whose `logical_upper` is the max.
+        let mut remap_queue: VecDeque<DataRemapEntry<T>> = VecDeque::new();
+        // The largest `logical_upper` ever observed on the remap input
+        // (whether from an emitted `DataRemapEntry` or from the remap
+        // input frontier alone). `txns_progress_source` only emits a new
+        // entry when `physical_upper` changes, but downgrades its cap to
+        // `logical_upper` every iteration; that means the remap input
+        // frontier can advance past the last entry's `logical_upper`
+        // without producing a new entry, and we need to remember that
+        // bound so the output cap can still advance after the queue has
+        // been fully consumed.
+        let mut latest_remap_log: T = T::minimum();
         // Whether the remap input has reached the empty antichain. Once
-        // closed, the operator no longer needs to wait for further remap
-        // updates and can react to the passthrough frontier alone.
+        // closed, no further remap updates can arrive and the passthrough
+        // frontier is the only remaining driver of cap advancement.
         let mut remap_closed = false;
 
         move |frontiers| {
@@ -291,128 +358,85 @@ where
                 capability = None;
             }
 
-            // Drain new DataRemapEntries, keeping the one with the largest
-            // logical_upper. The ordering of incoming entries is not assumed.
+            // Drain new DataRemapEntries into the queue. Coalesce equal
+            // `physical_upper`s and assert monotonicity. Track the
+            // largest observed `logical_upper` separately so we don't
+            // lose it once the queue is fully consumed.
             remap_input.for_each(|_input_cap, data| {
                 for x in data.drain(..) {
                     debug!("{} got remap {:?}", name, x);
-                    if remap.logical_upper < x.logical_upper {
+                    if latest_remap_log < x.logical_upper {
+                        latest_remap_log = x.logical_upper.clone();
+                    }
+                    if let Some(last) = remap_queue.back_mut() {
                         assert!(
-                            remap.physical_upper <= x.physical_upper,
+                            last.physical_upper <= x.physical_upper,
                             "previous remap physical upper {:?} is ahead of new remap physical upper {:?}",
-                            remap.physical_upper,
+                            last.physical_upper,
                             x.physical_upper,
                         );
-                        // TODO: If the physical upper has advanced, that's a very
-                        // strong hint that the data shard is about to be written to.
-                        // Because the data shard's upper advances sparsely (on write,
-                        // but not on passage of time) which invalidates the "every 1s"
-                        // assumption of the default tuning, we've had to de-tune the
-                        // listen sleeps on the paired persist_source. Maybe we use "one
-                        // state" to wake it up in case pubsub doesn't and remove the
-                        // listen polling entirely? (NB: This would have to happen in
-                        // each worker so that it's guaranteed to happen in each
-                        // process.)
-                        remap = x;
+                        if last.physical_upper == x.physical_upper {
+                            if last.logical_upper < x.logical_upper {
+                                last.logical_upper = x.logical_upper;
+                            }
+                            continue;
+                        }
                     }
+                    remap_queue.push_back(x);
                 }
             });
 
             // Apply the remap input's frontier as a `logical_upper` bump.
-            // We do not discard `remap` when the remap input reaches the
-            // empty antichain: the last observed `DataRemapEntry` remains
-            // valid and lets the output capability still be advanced past
+            // `txns_progress_source` only emits a `DataRemapEntry` when
+            // `physical_upper` changes; when its cap is downgraded for a
+            // `logical_upper`-only advance (e.g. a txn at an unrelated
+            // data shard advanced the txns shard upper), that shows up
+            // here as a frontier advance without a corresponding entry.
+            // Track that bump in both the queue tail (if any) and in
+            // `latest_remap_log`, so that even after the queue is fully
+            // consumed the cap can still advance up to the frontier. We
+            // do not discard queued entries when the remap input reaches
+            // the empty antichain: each `[phys, log)` claim remains valid
+            // and lets the output capability still be advanced past
             // `physical_upper` while the passthrough input is draining.
             if let Some(logical_upper) = frontiers[0].frontier().as_option() {
-                if remap.logical_upper < *logical_upper {
-                    remap.logical_upper = logical_upper.clone();
+                if latest_remap_log < *logical_upper {
+                    latest_remap_log = logical_upper.clone();
+                }
+                if let Some(last) = remap_queue.back_mut() {
+                    if last.logical_upper < *logical_upper {
+                        last.logical_upper = logical_upper.clone();
+                    }
                 }
             } else {
                 remap_closed = true;
             }
 
-            debug!("{} remap {:?} remap_closed={}", name, remap, remap_closed);
+            debug!(
+                "{} remap_queue.len={} remap_closed={}",
+                name,
+                remap_queue.len(),
+                remap_closed,
+            );
 
-            // Only consult the passthrough frontier when we are not still
-            // waiting on remap to push `physical_upper` past the current
-            // capability. We are "waiting on remap" while `physical_upper <=
-            // cap.time()` and the remap input is still open: in that state,
-            // the next event we expect is a remap update that lets us jump
-            // `cap` forward to `logical_upper`, not a passthrough frontier
-            // advance. Consulting the passthrough frontier in that state can
-            // drop the capability prematurely — for example, `SELECT AS OF
-            // MAX` causes `txns_progress_source` to block on
-            // `update_gt(MAX)`, so no remap update ever arrives and the
-            // passthrough side eventually reports the empty antichain; if we
-            // dropped the capability on that, the SELECT would complete
-            // instead of blocking until the timestamp exists. Once the remap
-            // input is closed, no further `logical_upper` bumps are possible
-            // and the passthrough frontier is the only remaining driver.
-            let waiting_for_remap = match capability.as_ref() {
-                Some(cap) => !remap_closed && remap.physical_upper.less_equal(cap.time()),
-                None => false,
-            };
-            if !waiting_for_remap {
-                // Apply the passthrough input's frontier.
-                //
-                // If `until.less_equal(pass_frontier)`, it means that all
-                // subsequent batches will contain only times greater or equal
-                // to `until`, which means they can be dropped in their entirety.
-                //
-                // Ideally this check would live in `txns_progress_source`, but
-                // that turns out to be much more invasive (requires replacing
-                // lots of `T`s with `Antichain<T>`s). Given that we've been
-                // thinking about reworking the operators, do the easy but more
-                // wasteful thing for now.
-                let pass_frontier = frontiers[1].frontier();
-                if PartialOrder::less_equal(&until.borrow(), &pass_frontier) {
-                    debug!(
-                        "{} progress {:?} has passed until {:?}",
-                        name,
-                        pass_frontier,
-                        until.elements(),
-                    );
-                    capability = None;
-                } else if let Some(new_progress) = pass_frontier.as_option() {
-                    // Recall that any reads of the data shard are always
-                    // correct, so given that we've passed through any data
-                    // from the input, that means we're free to pass through
-                    // frontier updates too.
-                    if let Some(cap) = capability.as_mut() {
-                        if cap.time() < new_progress {
-                            debug!("{} downgrading cap to {:?}", name, new_progress);
-                            cap.downgrade(new_progress);
-                        }
-                    }
-                } else {
-                    // Reached the empty frontier; shut down.
-                    capability = None;
-                }
-            }
-
-            // If we've passed through data to at least `physical_upper`, then
-            // it means we can artificially advance the upper of the output to
-            // `logical_upper`. The next remap entry can either (A) have the
-            // same physical upper or (B) have a larger physical upper.
+            // Pass through any received data using the *current* output
+            // capability, before any cap advancement below. This preserves
+            // the differential invariant `send_time <= record_time` for
+            // buffered data: the cap at this point reflects either
+            // `T::minimum()` (first activation) or whatever frontier the
+            // previous activation last advanced to, and incoming records
+            // were emitted by upstream at times `>= prev pass_frontier`,
+            // so `cap.time() <= record_time` holds.
             //
-            // - If (A), then on a later activation we again satisfy this
-            //   `physical_upper` check and advance the logical upper again.
-            // - If (B), then we keep copying passthrough data and frontier
-            //   updates until the passthrough frontier passes `physical_upper`,
-            //   at which point we can advance the logical upper.
-            if let Some(cap) = capability.as_mut() {
-                assert!(remap.physical_upper <= remap.logical_upper);
-                let phys_reached = remap.physical_upper.less_equal(cap.time());
-                let logical_ahead = cap.time() < &remap.logical_upper;
-                if phys_reached && logical_ahead {
-                    cap.downgrade(&remap.logical_upper);
-                }
-            }
-
-            // Pass through any received data using the (now advanced) output
-            // capability. NB: Nothing to do here for `until` because both the
-            // `shard_source` (before this operator) and `mfp_and_decode` (after
-            // this operator) do the necessary filtering.
+            // Draining before the cap is advanced and *before* the until
+            // check below is what fixes the data-loss bug: any record
+            // buffered when the passthrough frontier crosses `until` is
+            // still emitted at the held cap, instead of being silently
+            // discarded after the cap was dropped to `None`.
+            //
+            // NB: Nothing to do here for `until` because the upstream
+            // operator and downstream consumer do per-record filtering;
+            // this operator forwards containers unchanged.
             if let Some(cap) = capability.as_ref() {
                 let mut output = passthrough_output.activate();
                 passthrough_input.for_each(|_input_cap, data| {
@@ -422,6 +446,110 @@ where
             } else {
                 // Still drain to avoid stalling the dataflow.
                 passthrough_input.for_each(|_input_cap, _data| {});
+            }
+
+            // Advance the cap based on the queue head and the passthrough
+            // frontier, alternating until neither makes progress. Walking
+            // the queue lets the cap hop forward whenever the head's
+            // `physical_upper` has been reached (we know `[phys, log)` is
+            // empty); applying `pass_frontier` lets it advance into the
+            // gap between consecutive queue entries when the frontier has
+            // already moved past it. Either step can unblock the other,
+            // so we loop until quiescent.
+            //
+            // "Waiting for remap" means the queue is empty and the remap
+            // input is still open: in that state we expect a remap update
+            // to tell us the next `logical_upper`, and applying the
+            // passthrough frontier alone could drop the cap to the empty
+            // antichain prematurely. For example, `SELECT AS OF MAX`
+            // causes `txns_progress_source` to block on `update_gt(MAX)`,
+            // so no remap update ever arrives and the passthrough side
+            // eventually reports the empty antichain; we must not drop
+            // the capability on that, or the SELECT would complete
+            // instead of blocking until the timestamp exists.
+            let pass_frontier = frontiers[1].frontier();
+            if let Some(cap) = capability.as_mut() {
+                loop {
+                    let mut advanced = false;
+                    while let Some(head) = remap_queue.front() {
+                        if !head.physical_upper.less_equal(cap.time()) {
+                            break;
+                        }
+                        let log = head.logical_upper.clone();
+                        remap_queue.pop_front();
+                        if cap.time() < &log {
+                            debug!("{} downgrading cap to {:?} via queue", name, log);
+                            cap.downgrade(&log);
+                            advanced = true;
+                        }
+                    }
+                    // Once the queue is fully consumed, the remap input
+                    // frontier (captured in `latest_remap_log`) is a
+                    // valid further bound: the source's cap has been
+                    // downgraded past every emitted entry's
+                    // `logical_upper`, and any range between the last
+                    // entry's `logical_upper` and `latest_remap_log` is
+                    // also empty on the data shard (no entry would have
+                    // been emitted otherwise, because `physical_upper`
+                    // did not change).
+                    if remap_queue.is_empty() && cap.time() < &latest_remap_log {
+                        debug!(
+                            "{} downgrading cap to {:?} via latest_remap_log",
+                            name, latest_remap_log,
+                        );
+                        cap.downgrade(&latest_remap_log);
+                        advanced = true;
+                    }
+                    let waiting_for_remap = !remap_closed
+                        && remap_queue.is_empty()
+                        && cap.time() == &latest_remap_log;
+                    if !waiting_for_remap {
+                        if let Some(new_progress) = pass_frontier.as_option() {
+                            if cap.time() < new_progress {
+                                debug!(
+                                    "{} downgrading cap to {:?} via pass_frontier",
+                                    name, new_progress,
+                                );
+                                cap.downgrade(new_progress);
+                                advanced = true;
+                            }
+                        }
+                    }
+                    if !advanced {
+                        break;
+                    }
+                }
+            }
+
+            // Drop the capability when the passthrough frontier has
+            // crossed `until` or reached the empty antichain — but only
+            // when we are not still waiting on a remap update, for the
+            // `SELECT AS OF MAX` reason above. Doing this after the drain
+            // is what makes the data-loss bug impossible.
+            let waiting_for_remap = !remap_closed
+                && remap_queue.is_empty()
+                && capability.as_ref().is_some_and(|c| c.time() == &latest_remap_log);
+            if !waiting_for_remap {
+                if PartialOrder::less_equal(&until.borrow(), &pass_frontier) {
+                    // If `until.less_equal(pass_frontier)`, all subsequent
+                    // batches contain only times `>= until`, which can be
+                    // dropped in their entirety. Ideally this check would
+                    // live in `txns_progress_source`, but that turns out
+                    // to be much more invasive (requires replacing lots
+                    // of `T`s with `Antichain<T>`s). Given that we've
+                    // been thinking about reworking the operators, do
+                    // the easy but more wasteful thing for now.
+                    debug!(
+                        "{} progress {:?} has passed until {:?}",
+                        name,
+                        pass_frontier,
+                        until.elements(),
+                    );
+                    capability = None;
+                } else if pass_frontier.as_option().is_none() {
+                    // Reached the empty frontier; shut down.
+                    capability = None;
+                }
             }
         }
     });
@@ -975,11 +1103,39 @@ mod tests {
                 Event::Progress(progress) => Either::Left(progress),
                 Event::Messages(ts, data) => Either::Right((ts, data)),
             });
-        let expected = vec![
-            (3, vec![("2".to_owned(), 3, 1), ("3".to_owned(), 3, 1)]),
-            (3, vec![("4".to_owned(), 4, 1)]),
+        // Aggregate the captured records, ignoring the stream-level
+        // timestamp on each batch. The operator emits each container at
+        // whatever capability it currently holds (which is determined by
+        // its scheduling cadence and the upstream frontiers it has
+        // observed), so the per-batch `ts` is not deterministic and not
+        // part of the operator's contract. Per-record `(key, time, diff)`
+        // tuples are what callers see, and the differential invariant
+        // (stream `ts <= record time`) is checked separately below.
+        let mut actual_records: Vec<(String, u64, i64)> = actual_events
+            .iter()
+            .flat_map(|(_ts, data)| data.iter().cloned())
+            .collect();
+        actual_records.sort();
+        let expected_records: Vec<(String, u64, i64)> = vec![
+            ("2".to_owned(), 3, 1),
+            ("3".to_owned(), 3, 1),
+            ("4".to_owned(), 4, 1),
         ];
-        assert_eq!(actual_events, expected);
+        assert_eq!(actual_records, expected_records);
+
+        // Verify the differential invariant: each batch's stream
+        // timestamp `ts` must be `<= record_time` for every record it
+        // carries. The operator's contract requires this so that
+        // downstream differential operators can integrate the records
+        // at their declared times.
+        for (ts, data) in &actual_events {
+            for (_key, record_ts, _diff) in data {
+                assert!(
+                    ts <= record_ts,
+                    "differential invariant violated: stream ts {ts} > record time {record_ts}",
+                );
+            }
+        }
 
         // The number and contents of progress messages is not guaranteed and
         // depends on the downgrade behavior. The only thing we can assert is
@@ -1086,6 +1242,99 @@ mod tests {
             max_progress_ts >= 10,
             "output capability should have reached logical_upper=10 after remap close, \
              but max progress was {max_progress_ts}",
+        );
+    }
+
+    /// Regression test for SQL-299: when the passthrough frontier crosses
+    /// `until` in the same activation as a buffered passthrough record,
+    /// the record must still be emitted before the output capability is
+    /// dropped. The pre-fix `txns_progress_frontiers` reacted to the
+    /// frontier first and drained-and-discarded the buffer afterwards.
+    #[mz_ore::test]
+    fn passthrough_drained_before_until_drop() {
+        use timely::dataflow::operators::Capture;
+        use timely::dataflow::operators::vec::UnorderedInput;
+
+        let captured = timely::execute_directly(|worker| {
+            let (mut remap_handle, remap_cap, mut pass_handle, pass_cap, captured, _button) =
+                worker.dataflow::<u64, _, _>(|scope| {
+                    let ((remap_handle, remap_cap), remap_stream) =
+                        scope.new_unordered_input::<DataRemapEntry<u64>>();
+                    let ((pass_handle, pass_cap), pass_stream) = scope.new_unordered_input::<i32>();
+                    let (out, button) =
+                        txns_progress_frontiers::<String, (), u64, i64, i32, TxnsCodecDefault>(
+                            remap_stream,
+                            pass_stream,
+                            "test",
+                            ShardId::new(),
+                            Antichain::from_elem(5),
+                            0,
+                        );
+                    let captured = out.capture();
+                    (
+                        remap_handle,
+                        remap_cap,
+                        pass_handle,
+                        pass_cap,
+                        captured,
+                        button,
+                    )
+                });
+
+            // Queue a remap entry whose `physical_upper` is above
+            // `until`. The operator cannot consume it at the initial
+            // cap, so the queue stays non-empty for the activation
+            // below — that makes `waiting_for_remap` false, which is
+            // the state in which the until check actually fires (the
+            // `SELECT AS OF MAX` guard does not apply).
+            remap_handle
+                .activate()
+                .session(&remap_cap)
+                .give(DataRemapEntry {
+                    physical_upper: 10,
+                    logical_upper: 10,
+                });
+
+            // Queue a passthrough record at the initial cap (time 0).
+            // It must end up on the output before the cap is dropped.
+            pass_handle.activate().session(&pass_cap).give(42i32);
+
+            // Advance the passthrough frontier to `until` *without*
+            // stepping the worker first. The next activation sees both
+            // the buffered record on the passthrough input and the
+            // until-crossing frontier, which is exactly the state that
+            // the buggy ordering silently drops data in.
+            let pass_cap_5 = pass_cap.delayed(&5);
+            drop(pass_cap);
+
+            for _ in 0..10 {
+                worker.step();
+            }
+
+            // Clean up so the dataflow shuts down.
+            drop(pass_cap_5);
+            drop(remap_cap);
+            drop(pass_handle);
+            drop(remap_handle);
+            for _ in 0..5 {
+                worker.step();
+            }
+
+            captured.into_iter().collect::<Vec<_>>()
+        });
+
+        let total_records: usize = captured
+            .iter()
+            .filter_map(|event| match event {
+                Event::Messages(_, data) => Some(data.len()),
+                Event::Progress(_) => None,
+            })
+            .sum();
+        assert_eq!(
+            total_records, 1,
+            "expected the buffered passthrough record to be emitted before \
+             the until-crossing dropped the output capability, got events: \
+             {captured:?}",
         );
     }
 }
