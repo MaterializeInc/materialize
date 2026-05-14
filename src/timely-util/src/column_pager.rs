@@ -32,6 +32,8 @@
 
 #![deny(missing_docs)]
 
+pub mod policy;
+
 use std::io::{self, Read};
 use std::sync::Arc;
 
@@ -109,6 +111,15 @@ pub enum PageEvent {
         /// Underlying I/O error.
         err: io::Error,
     },
+    /// A resident column has been dropped. Fires from [`ResidentTicket::drop`]
+    /// when the [`PagedColumn::Resident`] holding the ticket is consumed by
+    /// [`ColumnPager::take`] or dropped without being taken. Policies use this
+    /// to return budget allocated when [`PagingPolicy::decide`] answered
+    /// [`PageDecision::Skip`].
+    ResidentReleased {
+        /// Uncompressed body size returned to the policy.
+        bytes: usize,
+    },
 }
 
 /// Decides whether/how to page a column out, and records page events.
@@ -139,8 +150,12 @@ pub struct Meta {
 ///
 /// Each variant corresponds to one of the [`PageDecision`] outcomes.
 pub enum PagedColumn<C: Columnar> {
-    /// Body kept resident. Returned when the policy answered [`PageDecision::Skip`].
-    Resident(Column<C>),
+    /// Body kept resident. Returned when the policy answered
+    /// [`PageDecision::Skip`]. The accompanying [`ResidentTicket`] fires a
+    /// [`PageEvent::ResidentReleased`] when the variant is dropped or
+    /// consumed by [`ColumnPager::take`], so the policy can reclaim the
+    /// budget it granted in [`PagingPolicy::decide`].
+    Resident(Column<C>, ResidentTicket),
     /// Raw `ContainerBytes` payload stored via [`pager::Handle`]. The backend
     /// (Swap or File) is baked into the handle.
     Paged {
@@ -157,6 +172,25 @@ pub enum PagedColumn<C: Columnar> {
         /// Sizing metadata.
         meta: Meta,
     },
+}
+
+/// Drop guard that returns budget to a [`PagingPolicy`] when a
+/// [`PagedColumn::Resident`] is destroyed.
+///
+/// The ticket holds an `Arc` to the policy and the byte count it was charged
+/// for at [`PagingPolicy::decide`] time. On drop it fires a
+/// [`PageEvent::ResidentReleased`] event; the policy implementation decides
+/// what to credit and where (local pool, shared pool, both).
+pub struct ResidentTicket {
+    bytes: usize,
+    policy: Arc<dyn PagingPolicy>,
+}
+
+impl Drop for ResidentTicket {
+    fn drop(&mut self) {
+        self.policy
+            .record(PageEvent::ResidentReleased { bytes: self.bytes });
+    }
 }
 
 /// Storage location for the lz4-framed bytes inside a compressed paged column.
@@ -207,7 +241,13 @@ impl ColumnPager {
         let hint = PageHint { len_bytes };
 
         let (backend, codec) = match self.policy.decide(hint) {
-            PageDecision::Skip => return PagedColumn::Resident(std::mem::take(col)),
+            PageDecision::Skip => {
+                let ticket = ResidentTicket {
+                    bytes: len_bytes,
+                    policy: Arc::clone(&self.policy),
+                };
+                return PagedColumn::Resident(std::mem::take(col), ticket);
+            }
             PageDecision::Page { backend, codec } => (backend, codec),
         };
         let meta = Meta { len_bytes };
@@ -270,7 +310,8 @@ impl ColumnPager {
     /// `Vec`).
     pub fn take<C: Columnar>(&self, paged: PagedColumn<C>) -> Column<C> {
         match paged {
-            PagedColumn::Resident(c) => c,
+            // `_ticket` drops here and fires `PageEvent::ResidentReleased`.
+            PagedColumn::Resident(c, _ticket) => c,
             PagedColumn::Paged { handle, meta } => {
                 let mut body: Vec<u64> = Vec::with_capacity(handle.len());
                 pager::take(handle, &mut body);
@@ -382,7 +423,7 @@ mod tests {
                 PageEvent::PagedIn { .. } => {
                     self.r#in.fetch_add(1, Ordering::Relaxed);
                 }
-                PageEvent::Failed { .. } => {}
+                PageEvent::ResidentReleased { .. } | PageEvent::Failed { .. } => {}
             }
         }
     }
@@ -407,7 +448,7 @@ mod tests {
         let cp = ColumnPager::new(as_dyn(&policy));
         let mut col = sample_typed();
         let paged = cp.page(&mut col);
-        assert!(matches!(paged, PagedColumn::Resident(_)));
+        assert!(matches!(paged, PagedColumn::Resident(_, _)));
         let rt = cp.take(paged);
         assert_eq!(collect_i64(&rt), (0i64..1024).collect::<Vec<_>>());
         assert_eq!(policy.out.load(Ordering::Relaxed), 0);
