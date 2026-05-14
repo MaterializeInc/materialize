@@ -828,6 +828,8 @@ services:
     - KAFKA_BROKER=kafka:9092
     - SCHEMA_REGISTRY_URL=http://schema-registry:8081
     - MZ_ANTITHESIS_CLUSTER=antithesis_cluster
+    - ANTITHESIS_CLUSTERD_POOL_SIZE=8
+    - CLUSTERD_POOL_SIZE=8
     - MYSQL_HOST=mysql
     - MYSQL_REPLICA_HOST=mysql-replica
     - MYSQL_PASSWORD=p@ssw0rd

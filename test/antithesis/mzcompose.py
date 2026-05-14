@@ -88,6 +88,12 @@ class Workload(Service):
                 # Name of the unmanaged cluster the workload-entrypoint
                 # provisions against clusterd1 before emitting setup-complete.
                 "MZ_ANTITHESIS_CLUSTER=antithesis_cluster",
+                # Pool size for the long-lived `pool_cluster_{i}` clusters
+                # the entrypoint bootstraps. Mirrored to the parallel-
+                # workload driver (CLUSTERD_POOL_SIZE) so they agree on the
+                # slot count.
+                f"ANTITHESIS_CLUSTERD_POOL_SIZE={CLUSTERD_POOL_SIZE}",
+                f"CLUSTERD_POOL_SIZE={CLUSTERD_POOL_SIZE}",
                 # MySQL primary and replica connection details.
                 "MYSQL_HOST=mysql",
                 "MYSQL_REPLICA_HOST=mysql-replica",

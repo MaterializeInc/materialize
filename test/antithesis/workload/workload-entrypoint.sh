@@ -17,6 +17,10 @@ PGUSER="${PGUSER:-materialize}"
 PGPORT_INTERNAL="${PGPORT_INTERNAL:-6877}"
 PGUSER_INTERNAL="${PGUSER_INTERNAL:-mz_system}"
 CLUSTER="${MZ_ANTITHESIS_CLUSTER:-antithesis_cluster}"
+# Number of long-lived pool clusters to bootstrap, each bound to its own
+# clusterd-pool-{i} container. Must match `ANTITHESIS_CLUSTERD_POOL_SIZE`
+# in mzcompose.py and `CLUSTERD_POOL_SIZE` in the parallel-workload driver.
+CLUSTERD_POOL_SIZE="${ANTITHESIS_CLUSTERD_POOL_SIZE:-8}"
 
 # Wait for materialized to be ready.
 echo "Waiting for materialized to become healthy..."
@@ -63,6 +67,42 @@ SQL
 else
     echo "Cluster '$CLUSTER' already exists; skipping provisioning."
 fi
+
+# Bootstrap a long-lived `pool_cluster_{i}` for each clusterd-pool-{i}
+# container. Each pool cluster has exactly one replica wired to its
+# matching pool clusterd. Parallel-workload driver invocations claim a
+# slot (via fcntl.flock on the workload container's filesystem) and run
+# against `pool_cluster_{slot}` for their entire lifetime. The cluster
+# identity is tied to the clusterd identity, so reconnects don't trip
+# clusterd's `instance configuration not compatible` halt; only the
+# seed-scoped database / roles get dropped between invocations.
+#
+# Idempotent: skip pool clusters that already exist (the SUT's catalog
+# survives across `docker compose up` if metadata volumes aren't wiped).
+for i in $(seq 0 $((CLUSTERD_POOL_SIZE - 1))); do
+    POOL_CLUSTER="pool_cluster_$i"
+    existing_pool=$(
+        psql -h "$PGHOST" -p "$PGPORT_INTERNAL" -U "$PGUSER_INTERNAL" -tAc \
+            "SELECT 1 FROM mz_clusters WHERE name = '$POOL_CLUSTER'"
+    )
+    if [[ -n "$existing_pool" ]]; then
+        echo "Pool cluster '$POOL_CLUSTER' already exists; skipping provisioning."
+        continue
+    fi
+    echo "Provisioning pool cluster '$POOL_CLUSTER' on clusterd-pool-$i..."
+    psql -h "$PGHOST" -p "$PGPORT_INTERNAL" -U "$PGUSER_INTERNAL" <<SQL
+CREATE CLUSTER ${POOL_CLUSTER} REPLICAS (
+    r1 (
+        STORAGECTL ADDRESSES ['clusterd-pool-${i}:2100'],
+        STORAGE ADDRESSES ['clusterd-pool-${i}:2103'],
+        COMPUTECTL ADDRESSES ['clusterd-pool-${i}:2101'],
+        COMPUTE ADDRESSES ['clusterd-pool-${i}:2102'],
+        WORKERS 4
+    )
+);
+GRANT ALL ON CLUSTER ${POOL_CLUSTER} TO ${PGUSER};
+SQL
+done
 
 # Emit setup_complete — Antithesis begins test commands after this.
 /usr/local/bin/setup-complete.sh

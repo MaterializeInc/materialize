@@ -27,12 +27,19 @@ environmentd's process orchestrator and the fault domain disappears.
 ## Solution
 
 A pool of identical pre-deployed clusterd containers
-(`clusterd-pool-{0..N-1}`). Each invocation claims up to
-`PW_DESIRED_REPLICAS` (default 2) slots via filesystem locking and
-provisions a single unmanaged cluster with one replica per claimed
-slot, then releases the locks on exit. Best-effort: with N slots
-claimed the cluster runs as an N-replica cluster (1 ≤ N ≤ desired);
-no slots → exit cleanly.
+(`clusterd-pool-{0..N-1}`) with a corresponding pool of long-lived
+unmanaged clusters (`pool_cluster_{0..N-1}`), each bound to its slot's
+clusterd. Pool clusters are bootstrapped once by the workload-entrypoint
+and outlive every individual parallel-workload invocation. Each
+parallel-workload invocation picks a slot at random and runs against
+`pool_cluster_{slot}`. There is no coordination between concurrent
+invocations: every workload object lives in a seed-scoped database
+(`db-pw-{seed}-*`) with seed-scoped roles, so two invocations sharing a
+pool cluster don't collide. Antithesis faults containers, not
+invocations, so the per-container fault domain is preserved either way;
+two invocations witnessing the same fault is a feature (more
+independent reproductions per failure). The pool cluster itself is
+never dropped.
 
 Components, bottom-up:
 
@@ -43,121 +50,123 @@ Components, bottom-up:
     mem_env RocksDB (matches production, no scratch volume to fight over).
     Pool size from env (`ANTITHESIS_CLUSTERD_POOL_SIZE`, default 8).
 
-  - **`parallel_workload.Database(pool_members=...,
-    seed_scoped_names=True)`**. Opt-in framework mode: when
-    `pool_members` is set, the framework provisions one unmanaged
-    cluster with `len(pool_members)` replicas, each pointed at a pool
-    member via explicit STORAGECTL/STORAGE/COMPUTECTL/COMPUTE ADDRESSES
-    (in place of managed SIZE/REPLICATION FACTOR); the CreateCluster /
-    CreateReplica / DropReplica actions skip pool-backed clusters
-    because there is no in-band allocator. `seed_scoped_names=True`
-    renames `cluster{N}` / `role{N}` to `cluster-{seed}-{N}` /
-    `role-{seed}-{N}` so concurrent invocations don't collide on
-    global names.
+  - **Pool-cluster bootstrap** in
+    `test/antithesis/workload/workload-entrypoint.sh`. After materialized
+    becomes healthy, the script loops over `0..POOL_SIZE-1` and issues
+    `CREATE CLUSTER pool_cluster_{i} REPLICAS (r1 (STORAGECTL ADDRESSES
+    ['clusterd-pool-{i}:2100'], ...))` for each pool member that doesn't
+    already exist. Idempotent across compose-up cycles. Once setup-
+    complete is emitted, every pool cluster is ready for the test
+    composer to start invoking the parallel-workload driver.
 
-  - **`_claim_pool_slots()`** in
-    `test/antithesis/workload/test/parallel_driver_parallel_workload.py`.
-    Contextmanager that holds up to `PW_DESIRED_REPLICAS` exclusive
-    `fcntl.flock`s on `/tmp/clusterd-pool-slots/{i}.lock` for the
-    lifetime of the invocation. Slots are tried in randomized order so
-    allocation is decorrelated from invocation seed. Every claimed lock
-    is released on context exit (normal or exception), so a crashing
-    driver doesn't strand any slot.
+  - **`parallel_workload.Database(existing_cluster_name=...,
+    seed_scoped_names=True)`**. Opt-in framework mode: when
+    `existing_cluster_name` is set, the framework's single initial
+    cluster is a wrapper around the pre-existing cluster — `create()`
+    and `drop()` are no-ops, `is_pool_backed` is True (which gates the
+    CreateCluster / CreateReplica / DropReplica actions). `Cluster.name()`
+    returns the literal cluster name supplied by the caller, bypassing
+    the framework's normal `cluster-{seed}-{id}` shape. Roles still get
+    seed-scoped naming (`role-{seed}-{N}`) so concurrent invocations
+    don't collide on those.
+
+  - **Slot pick** in
+    `test/antithesis/workload/test/parallel_driver_parallel_workload.py`:
+    `rng.randrange(CLUSTERD_POOL_SIZE)`. Stateless, no coordination,
+    no failure mode. Concurrent invocations may share a pool cluster
+    (see the no-collision argument above).
 
   - **`_drop_seed_scoped_objects()`** in the same driver, called in
-    `main()`'s `finally`. Drops every cluster / database / role whose
-    name starts with `cluster-{seed}-` / `db-pw-{seed}-` /
-    `role-{seed}-`. The DROP CLUSTER re-arms the clusterd to be
-    claimed by the next invocation through the reconcile path
-    (see below).
+    `main()`'s `finally`. Drops every database and role whose name
+    starts with `db-pw-{seed}-` / `role-{seed}-`. **Pool clusters are
+    NOT dropped** — they're permanent state shared across invocations.
+    The DROP DATABASE CASCADE transitively drops every workload-created
+    table / MV / index / source / sink, which tears down the
+    corresponding dataflows on the bound clusterd container, so the
+    cluster returns to an idle baseline before the next claimant.
 
-## Clusterd reuse correctness
+## Why pool clusters must be permanent: the clusterd-reuse constraint
 
-The pool design assumes a DROP CLUSTER followed by a CREATE CLUSTER
-pointed at the same clusterd is a supported transition. It is — this is
-the same reconciliation path that handles environmentd restart. The
-three pieces:
+The first iteration of this design dropped and recreated the parallel-
+workload cluster on every invocation. That failed on the second
+invocation against the same pool slot with a clusterd halt:
 
-  1. **Transport cancels the prior connection on every new connect.**
-     `src/service/src/transport.rs::serve` drops the old
-     connection-task token and awaits the task before installing a
-     fresh handler from `handler_fn()`. The new `ClusterClient` is a
-     blank-slate wrapper around the same `Arc<Mutex<TimelyContainer>>`.
+> `WARN ...: halting process: new instance configuration not compatible
+> with existing instance configuration: ... index_logs:
+> {Timely(Operates): IntrospectionSourceIndex(144115188075856897), ...}
+> vs Some(... IntrospectionSourceIndex(144115188075856641), ...)`
 
-  2. **The worker `run` loop survives client disconnects.**
-     `src/storage/src/storage_state.rs::Worker::run` is
-     `while let Some((nonce, rx, tx)) = client_rx.blocking_recv() {
-     run_client(rx, tx); }`. When the old `cmd_tx` is dropped (because
-     the cancel above tore down the prior client), `run_client` returns
-     and the outer loop awaits the next `(nonce, rx, tx)` — the new
-     controller's connection. Worker in-memory state stays resident
-     between connections.
+The check is `InstanceConfig::compatible_with` in
+`src/compute-client/src/protocol/command.rs`. It compares `LoggingConfig`
+including `index_logs: BTreeMap<LogVariant, IntrospectionSourceIndex>`.
+Those introspection-source-index IDs are per-cluster catalog allocations
+— every CREATE CLUSTER produces a fresh batch. Pointing a *different*
+cluster identity at a clusterd that already saw a prior cluster's
+introspection indexes trips this check and the clusterd halts on the
+first `CreateInstance` command.
 
-  3. **`reconcile()` drops stale state.** The new controller's first
-     batch of commands ending in `InitializationComplete` is processed
-     by `storage_state::reconcile`: it computes `expected_objects` from
-     the new commands, identifies `stale_objects` as anything the
-     worker knows about that the new controller did not ask for, and
-     `drop_collection`s each one — releasing source tokens (which tears
-     down Kafka consumers, persist write handles, upsert RocksDB state),
-     dropping dataflows, clearing reported frontiers.
+Reconcile (`storage_state::reconcile`, `compute::server`) handles the
+case where the *same* cluster reconnects after an environmentd restart:
+the worker drops stale collections, takes the new commands, and resumes.
+But it does not handle the case where a different cluster claims the
+clusterd, because the introspection indexes don't match.
 
-Collection IDs do not collide across cluster lifetimes because
-Materialize allocates them globally (`u<n>`, `t<n>`), not per cluster.
-
-The one piece intentionally shared across reconnects is the
-`Arc<PersistClientCache>`. It is keyed by URL+credentials, not by
-cluster identity, and reusing it is the standard production behavior
-(avoids reauthenticating to S3 / postgres-metadata on every reconnect).
-
-The same analysis holds for the compute side (`src/compute/src/server.rs`
-uses the same `ClusterSpec` pattern).
+Pinning cluster identity to clusterd identity — one permanent pool
+cluster per pool clusterd container — sidesteps the check entirely. The
+only reconnect events the pool clusterds see across the lifetime of a
+compose are environmentd restarts (and Antithesis-injected pauses /
+restarts of the pool clusterd itself), both of which exercise the same
+cluster identity reconnecting. That's the path reconcile is designed for.
 
 ## Failure modes
 
-  - **All pool slots held.** Driver tags `sometimes(...)` for
-    visibility and exits cleanly. With the default pool size (8) and
-    the test composer's normal concurrency this is not expected to
-    fire, but if it does we'll see it in the run report.
+  - **Crash before drop-on-exit runs.** The seed-scoped database and
+    roles are left in the catalog until they're explicitly cleaned up.
+    Catalog leftovers do not break correctness (each seed is u64-random,
+    no cross-invocation collisions) but they accumulate. The next
+    invocation that lands on the same pool cluster will inherit MVs /
+    indexes / sources still rendered on the bound clusterd from the
+    crashed invocation, which is more state pressure than a clean
+    handoff. A periodic / startup-time sweep against `mz_databases` /
+    `mz_roles` would close this; deferred until it shows up as a
+    problem.
 
-  - **Crash before drop-on-exit runs.** The flock is released
-    automatically when the process dies (kernel-level lock release).
-    The clusterd is left holding stale state until the next claimant
-    reconciles. Catalog leftovers (`cluster-{seed}-*`,
-    `role-{seed}-*`, `db-pw-{seed}-*`) accumulate until the next
-    invocation with the same seed runs its setup sweep — extremely
-    unlikely since seeds are u64-random. The setup sweep is scoped
-    to the current seed only, so it does not clean cross-invocation
-    leftovers. A periodic external cleanup or a startup-time scan
-    against `mz_clusters` / `mz_roles` / `mz_databases` would be
-    needed to close this loop properly. For now the catalog growth
-    is bounded by run length and not currently a problem.
-
-  - **Pool sizing wrong vs concurrency.** If concurrency exceeds pool
-    size, the late arrivals get "no slot" and exit. We do not currently
-    auto-tune; bump `ANTITHESIS_CLUSTERD_POOL_SIZE` if telemetry shows
-    the "no slot available" signal firing.
+  - **Pool size much smaller than concurrency.** With C concurrent
+    invocations and N pool slots, ~C/N invocations share each cluster
+    in steady state. That's correctness-preserving but increases
+    per-cluster state pressure linearly with the ratio. Bump
+    `ANTITHESIS_CLUSTERD_POOL_SIZE` if a single pool cluster runs hot.
 
 ## v1 limitations (future work)
 
+  - **Single-replica pool clusters.** Each pool cluster has one replica
+    (one clusterd container per cluster), so parallel-workload
+    invocations don't exercise multi-replica compute/storage paths.
+    Multi-replica coverage stays in `antithesis_cluster`. A future
+    revision could pair clusterd containers into 2-replica pool
+    clusters at the cost of doubling the pool footprint per
+    concurrency unit.
+
   - **No in-band allocator inside the framework.** Worker threads
-    cannot grab additional pool members mid-run, so
+    cannot grab additional pool clusters mid-run, so
     `CreateClusterAction` / `CreateClusterReplicaAction` /
     `DropClusterReplicaAction` are skipped when pool-backed. The
-    framework only ever touches the pre-allocated pool members.
+    framework only ever touches the pre-existing pool cluster.
 
-  - **No global GC of cross-invocation catalog leftovers.** See
-    failure modes above. A first-invocation sweep against
-    `mz_clusters WHERE name LIKE 'cluster-%-%'` minus the current
-    seed would close this; deferred until it becomes a problem.
+  - **State accumulation on pool clusters.** Each pool cluster runs
+    through O(invocations) workload lifecycles over a long Antithesis
+    run. Even with seed-scoped DBs being dropped on exit, every pool
+    cluster's clusterd retains compute-side bookkeeping (catalog
+    state for introspection, peek_stash subscriptions, etc.). The
+    framework relies on `drop_collection` to release dataflow state;
+    if that path ever leaks, the pool cluster's memory footprint will
+    grow over many invocations.
 
 ## Tunables
 
 | Variable | Default | Effect |
 |---|---|---|
-| `ANTITHESIS_CLUSTERD_POOL_SIZE` (compose) | 8 | Number of `clusterd-pool-{i}` containers deployed. |
-| `CLUSTERD_POOL_SIZE` (driver) | 8 | Number of slots the driver will attempt to claim. Must match the compose value. |
-| `CLUSTERD_POOL_SLOT_LOCK_DIR` (driver) | `/tmp/clusterd-pool-slots` | Directory holding the per-slot flock files. |
-| `PW_DESIRED_REPLICAS` (driver) | 2 | Replicas to ask for per invocation's cluster. Best-effort: driver claims up to this many slots and runs with whatever it gets (≥1). |
+| `ANTITHESIS_CLUSTERD_POOL_SIZE` (compose + entrypoint) | 8 | Number of clusterd-pool-<i> containers deployed and matching pool_cluster_<i> clusters bootstrapped. |
+| `CLUSTERD_POOL_SIZE` (driver) | 8 | Number of slots the driver chooses among. Mirrored from compose by mzcompose.py's Workload service so the two agree. |
 | `PW_RUNTIME_S` (driver) | 20 | Per-invocation runtime; bound to keep the fault-injection budget granular. |
 | `PW_THREADS` (driver) | 4 | Worker threads inside one invocation. |

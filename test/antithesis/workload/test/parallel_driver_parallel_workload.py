@@ -38,8 +38,6 @@ translate to the Antithesis topology:
 
 from __future__ import annotations
 
-import contextlib
-import fcntl
 import logging
 import os
 import random
@@ -80,7 +78,6 @@ from materialize.parallel_workload.database import (
     MAX_TABLES,
     MAX_VIEWS,
     MAX_WEBHOOK_SOURCES,
-    ClusterdPoolMember,
     Database,
 )
 from materialize.parallel_workload.executor import Executor
@@ -108,37 +105,23 @@ LOG = logging.getLogger("driver.parallel_workload")
 RUNTIME_S = float(os.environ.get("PW_RUNTIME_S", "20"))
 NUM_THREADS = int(os.environ.get("PW_THREADS", "4"))
 
-# Number of clusterd-pool-{i} containers reserved for the parallel-workload
-# driver. Must match the pool actually deployed in
-# test/antithesis/mzcompose.py (ANTITHESIS_CLUSTERD_POOL_SIZE there →
-# CLUSTERD_POOL_SIZE here). Each parallel-workload invocation claims
-# slots via `fcntl.flock` (see `_claim_pool_slots`); the locks are held
-# for the lifetime of the invocation so concurrent driver processes
-# inside the workload container can't pick the same clusterd.
+# Number of long-lived pool_cluster_<i> clusters the workload-entrypoint
+# bootstrapped, one per clusterd-pool-<i> container. Must match
+# `ANTITHESIS_CLUSTERD_POOL_SIZE` in test/antithesis/mzcompose.py (the
+# Workload service mirrors that value into the workload container's env
+# as both ANTITHESIS_CLUSTERD_POOL_SIZE and CLUSTERD_POOL_SIZE so the
+# bootstrap script and driver agree).
+#
+# Each invocation picks a pool slot at random and runs against the
+# corresponding pool_cluster_<slot>. No coordination between concurrent
+# invocations: two invocations may share a pool cluster — every workload
+# object is in a seed-scoped database (`db-pw-<seed>-*`) with seed-scoped
+# roles, so DDL/DML never collides; the only shared state is the
+# permanent pool cluster, which is purposefully shared. Antithesis still
+# faults one container at a time, so the per-container fault domain is
+# preserved; multiple invocations witnessing the same fault is a
+# feature (more independent reproductions per failure).
 CLUSTERD_POOL_SIZE = int(os.environ.get("CLUSTERD_POOL_SIZE", "8"))
-
-# Workers configured per clusterd-pool-{i} process. Must match the
-# `Clusterd(..., workers=...)` argument in test/antithesis/mzcompose.py
-# or the unmanaged CREATE CLUSTER REPLICA's `WORKERS` count will diverge
-# from what clusterd actually runs.
-CLUSTERD_POOL_WORKERS = 4
-
-# Replicas to ask for per invocation's cluster. Best-effort: the driver
-# claims up to this many pool slots and runs whatever it gets (≥1). With
-# DESIRED_REPLICAS=2 and POOL_SIZE=8 we get multi-replica coverage for
-# the parallel-workload cluster (currently only `antithesis_cluster` is
-# multi-replica) when capacity allows, while degrading gracefully to a
-# single-replica cluster under contention.
-DESIRED_REPLICAS = int(os.environ.get("PW_DESIRED_REPLICAS", "2"))
-
-# Filesystem locks let concurrent parallel-workload invocations claim
-# distinct clusterd-pool members without coordinating through the SUT.
-# All invocations exec inside the single `workload` container so a
-# regular flock on a tmpfs path is sufficient (no cross-container
-# coordination required).
-POOL_SLOT_LOCK_DIR = os.environ.get(
-    "CLUSTERD_POOL_SLOT_LOCK_DIR", "/tmp/clusterd-pool-slots"
-)
 
 
 def _alter_system(cur: psycopg.Cursor[Any], stmt: str) -> None:
@@ -328,66 +311,21 @@ def _tolerate_setup_race(fn, *args, **kwargs):
         raise
 
 
-@contextlib.contextmanager
-def _claim_pool_slots(rng: random.Random, desired: int):
-    """Hold exclusive `fcntl.flock`s on up to `desired` pool-slot lockfiles
-    for the duration of the `with` block. Yields the list of claimed slot
-    indices (length 0–`desired`); the caller decides what to do with each
-    population (1 = single-replica fallback, ≥2 = multi-replica cluster,
-    0 = no slots available, exit cleanly).
-
-    Slots are tried in randomized order so allocation is decorrelated
-    from invocation seed / wall clock. Every claimed flock is released
-    when the context exits — normally or via exception — so a crashing
-    driver doesn't strand any slot.
-
-    All parallel-workload driver invocations share the workload
-    container's filesystem, so plain flock on a tmpfs path under
-    `POOL_SLOT_LOCK_DIR` is sufficient serialization (no cross-container
-    coordination required).
-    """
-    try:
-        os.makedirs(POOL_SLOT_LOCK_DIR, exist_ok=True)
-    except OSError as exc:
-        LOG.warning("pool slot lock dir %s unavailable: %s", POOL_SLOT_LOCK_DIR, exc)
-        yield []
-        return
-
-    slots = list(range(CLUSTERD_POOL_SIZE))
-    rng.shuffle(slots)
-    held: list[tuple[int, int]] = []  # (slot, fd)
-    try:
-        for slot in slots:
-            if len(held) >= desired:
-                break
-            path = os.path.join(POOL_SLOT_LOCK_DIR, f"{slot}.lock")
-            fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except OSError:
-                os.close(fd)
-                continue
-            held.append((slot, fd))
-        yield [slot for slot, _ in held]
-    finally:
-        for _, fd in held:
-            try:
-                fcntl.flock(fd, fcntl.LOCK_UN)
-            finally:
-                os.close(fd)
-
-
 def _drop_seed_scoped_objects(seed: str) -> None:
-    """Drop everything this invocation's seed owns: its clusters, roles, and
-    databases. Called from `main()`'s finally so each invocation leaves the
-    catalog clean and frees its pool-slot's clusterd to be claimed by the
-    next driver run (DROP CLUSTER tears down the unmanaged replica → the
-    clusterd's existing controller connection ends → the next CREATE
-    CLUSTER pointed at the same address claims it via fresh reconcile).
+    """Drop everything this invocation's seed owns: its databases and roles.
+
+    Pool clusters are NOT dropped — they're long-lived, bootstrapped by the
+    workload-entrypoint, and shared (one cluster per slot) across many
+    invocations. The DROP DATABASE CASCADE here transitively drops every
+    table / MV / index / source / sink the workload created on the pool
+    cluster during its run, which tears down the corresponding dataflows
+    on the bound clusterd container — so the cluster goes back to an idle
+    baseline before the next invocation claims the same slot.
 
     Errors here are logged and swallowed: leftover objects only cost a bit
-    of catalog footprint until the next invocation's setup sweep picks them
-    up. Don't let a cleanup failure turn into an assertion failure.
+    of catalog footprint until the next invocation with the same seed
+    re-runs (extremely unlikely since seeds are u64-random). Don't let a
+    cleanup failure turn into an assertion failure.
     """
     from pg8000.native import identifier
 
@@ -414,12 +352,6 @@ def _drop_seed_scoped_objects(seed: str) -> None:
                     LOG.debug("cleanup tolerated: %s — %s", sql, exc)
 
             cur.execute(
-                f"SELECT name FROM mz_clusters WHERE name LIKE 'cluster-{seed}-%'".encode()
-            )
-            for row in cur.fetchall():
-                _drop(f"DROP CLUSTER {identifier(row[0])} CASCADE")
-
-            cur.execute(
                 f"SELECT name FROM mz_databases WHERE name LIKE 'db-pw-{seed}-%'".encode()
             )
             for row in cur.fetchall():
@@ -440,11 +372,10 @@ def _create_database_for_antithesis(database: Database, exe: Executor) -> None:
     sql-server, and an external postgres source — none of those are running
     in this compose.
 
-    Catalog sweeps are scoped to objects this invocation owns: clusters
-    matching `cluster-{seed}-%` and roles matching `role-{seed}-%`. The
-    seed-scoped names are produced by `Database(seed_scoped_names=True)`;
-    cleaning anything broader would delete state belonging to other
-    concurrent invocations sharing the same SUT.
+    Catalog sweeps are scoped to objects this invocation owns: roles
+    matching `role-{seed}-%`. Pool clusters are NOT touched — they're
+    long-lived state shared across many invocations (one cluster per
+    pool slot, bootstrapped by the workload-entrypoint).
 
     The shared connections / secret (`kafka_conn`, `csr_conn`, `aws_conn`,
     `minio`) live outside any seed-scoped database and are required by every
@@ -468,12 +399,6 @@ def _create_database_for_antithesis(database: Database, exe: Executor) -> None:
     # `seed` is the random_u64 the driver minted at the top of main(), so
     # it's already safe to splice into SQL literally. `Executor.execute`
     # takes a query string and doesn't support parameter binding.
-    exe.execute(f"SELECT name FROM mz_clusters WHERE name LIKE 'cluster-{seed}-%'")
-    for row in exe.cur.fetchall():
-        _tolerate_setup_race(
-            exe.execute, f"DROP CLUSTER {identifier(row[0])} CASCADE"
-        )
-
     exe.execute(f"SELECT name FROM mz_roles WHERE name LIKE 'role-{seed}-%'")
     for row in exe.cur.fetchall():
         _tolerate_setup_race(exe.execute, f"DROP ROLE {identifier(row[0])}")
@@ -561,69 +486,53 @@ def main() -> int:
 
     _prepare_system(NUM_THREADS)
 
-    # Claim up to DESIRED_REPLICAS pool slots; the cluster runs with as
-    # many replicas as we got (≥1). Locks are held until main() returns;
-    # if no slot is free we tag a sometimes() and exit cleanly.
+    # Pick a pool slot at random. Each slot maps to a long-lived
+    # pool_cluster_<slot> bootstrapped by the workload-entrypoint, with
+    # one replica on the matching clusterd-pool-<slot> container.
     #
-    # Each replica lands on its own clusterd-pool-{slot} container, so
-    # Antithesis can fault one replica's container without taking the
-    # cluster offline — exercises the same multi-replica recovery paths
-    # `antithesis_cluster` covers, but on the workload-driven cluster.
-    with _claim_pool_slots(rng, DESIRED_REPLICAS) as pool_slots:
-        sometimes(
-            len(pool_slots) > 0,
-            "parallel workload: clusterd pool slots claimed",
-            {"pool_size": CLUSTERD_POOL_SIZE, "claimed": len(pool_slots)},
-        )
-        sometimes(
-            len(pool_slots) >= DESIRED_REPLICAS,
-            "parallel workload: full multi-replica pool claim",
-            {"pool_size": CLUSTERD_POOL_SIZE, "desired": DESIRED_REPLICAS},
-        )
-        if not pool_slots:
-            LOG.info(
-                "parallel-workload exiting cleanly: no pool slots available "
-                "(pool_size=%d)",
-                CLUSTERD_POOL_SIZE,
-            )
-            return 0
-        pool_members = [
-            ClusterdPoolMember(
-                host=f"clusterd-pool-{slot}",
-                workers=CLUSTERD_POOL_WORKERS,
-            )
-            for slot in pool_slots
-        ]
-        LOG.info(
-            "parallel-workload claimed %d pool slot(s): %s",
-            len(pool_slots),
-            ", ".join(m.host for m in pool_members),
-        )
-        return _run_invocation(seed, rng, pool_members)
+    # No coordination with other concurrent driver invocations: all
+    # workload state is in a seed-scoped database, so two invocations
+    # sharing a pool cluster don't collide. Antithesis still faults
+    # containers, not invocations, so the per-container fault domain
+    # is preserved; multiple invocations witnessing the same fault give
+    # us more independent reproductions per failure.
+    #
+    # Keeping the cluster identity per slot is what makes clusterd reuse
+    # safe across invocations (reconnects against the same cluster pass
+    # `InstanceConfig::compatible_with`; reconnects against a *different*
+    # cluster trip clusterd's introspection-index mismatch halt).
+    pool_slot = rng.randrange(CLUSTERD_POOL_SIZE)
+    cluster_name = f"pool_cluster_{pool_slot}"
+    LOG.info(
+        "parallel-workload using pool slot %d → cluster %s",
+        pool_slot,
+        cluster_name,
+    )
+    return _run_invocation(seed, rng, cluster_name)
 
 
 def _run_invocation(
     seed: str,
     rng: random.Random,
-    pool_members: list[ClusterdPoolMember],
+    cluster_name: str,
 ) -> int:
-    """The bulk of `main()` once pool slot(s) have been claimed. Split out
-    so the slot locks stay held across this whole call: they are released
-    when the enclosing `with` block in `main()` exits.
+    """The bulk of `main()` once a pool slot has been claimed. Split out
+    so the slot lock stays held across this whole call: it's released when
+    the enclosing `with` block in `main()` exits.
     """
 
     # `Scenario.Kill` widens `Action.errors_to_ignore` to absorb connection
     # drops, which mirrors what Antithesis container-pauses look like at the
     # client. We never instantiate `KillAction` itself.
     #
-    # `seed_scoped_names=True` keeps cluster/role names from colliding when
-    # concurrent invocations share the SUT — see _SETUP_RACE_PATTERNS for
-    # the fallback when they collide anyway.
+    # `seed_scoped_names=True` keeps role names from colliding when
+    # concurrent invocations share the SUT.
     #
-    # `pool_members=pool_members` makes a single unmanaged cluster with one
-    # replica per member; the framework forces managed=False and emits
-    # unmanaged CREATE CLUSTER with explicit STORAGECTL/COMPUTE ADDRESSES
-    # for each replica.
+    # `existing_cluster_name=cluster_name` makes the Database wrap the
+    # pool cluster bootstrapped at compose-up; the framework's
+    # CreateClusterAction / CreateClusterReplicaAction /
+    # DropClusterReplicaAction are disabled for it and Cluster.create()
+    # / Cluster.drop() are no-ops.
     database = Database(
         rng=rng,
         seed=seed,
@@ -639,7 +548,7 @@ def _run_invocation(
         scenario=Scenario.Kill,
         naughty_identifiers=False,
         seed_scoped_names=True,
-        pool_members=pool_members,
+        existing_cluster_name=cluster_name,
     )
 
     end_time = time.time() + RUNTIME_S
