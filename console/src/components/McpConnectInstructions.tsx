@@ -25,7 +25,11 @@ import { currentEnvironmentState } from "~/store/environments";
 import { MaterializeTheme } from "~/theme";
 import { obfuscateSecret } from "~/utils/format";
 
-import { CopyableBox, SecretCopyableBox } from "./copyableComponents";
+import {
+  CopyableBox,
+  SecretCopyableBox,
+  TabbedCodeBlock,
+} from "./copyableComponents";
 import TextLink from "./TextLink";
 
 interface McpConnectInstructionsProps extends BoxProps {
@@ -49,7 +53,6 @@ const McpConnectInstructions = ({
   const [currentEnvironment] = useAtom(currentEnvironmentState);
   const appConfig = useAppConfig();
   const isCloud = appConfig.mode === "cloud";
-  const endpoint = "developer";
 
   const envAddress =
     currentEnvironment?.state === "enabled"
@@ -68,8 +71,8 @@ const McpConnectInstructions = ({
   const user = userStr || "<user>";
   const base64Command = `printf '${user}:<password>' | base64 -w0`;
 
-  const endpointUrl = `${baseUrl}/api/mcp/${endpoint}`;
-  const claudeCodeCliCommand = `claude mcp add --transport http materialize-${endpoint} \\\n  ${endpointUrl} \\\n  --header "Authorization: Basic <mcp-token>"`;
+  const claudeCodeCliCommand = (ep: "agent" | "developer") =>
+    `claude mcp add --transport http "materialize-${ep}" \\\n  "${baseUrl}/api/mcp/${ep}" \\\n  --header "Authorization: Basic <mcp-token>"`;
 
   return (
     <VStack alignItems="stretch" spacing="6" p="6" {...props}>
@@ -161,7 +164,42 @@ const McpConnectInstructions = ({
         <Text fontSize="sm" color={colors.foreground.secondary}>
           Or connect to Claude Code now:
         </Text>
-        <CopyableBox variant="default" wrap contents={claudeCodeCliCommand} />
+        <TabbedCodeBlock
+          tabs={[
+            {
+              title: "Agent",
+              children: (
+                <VStack alignItems="stretch" spacing="3" p="4">
+                  <Text fontSize="xs" color={colors.foreground.secondary}>
+                    Expose real-time data products to AI agents via
+                    Materialize&apos;s built-in MCP endpoint.
+                  </Text>
+                  <CopyableBox
+                    variant="default"
+                    wrap
+                    contents={claudeCodeCliCommand("agent")}
+                  />
+                </VStack>
+              ),
+            },
+            {
+              title: "Developer",
+              children: (
+                <VStack alignItems="stretch" spacing="3" p="4">
+                  <Text fontSize="xs" color={colors.foreground.secondary}>
+                    Query Materialize system catalog tables for troubleshooting
+                    and observability via the built-in MCP developer endpoint.
+                  </Text>
+                  <CopyableBox
+                    variant="default"
+                    wrap
+                    contents={claudeCodeCliCommand("developer")}
+                  />
+                </VStack>
+              ),
+            },
+          ]}
+        />
       </VStack>
     </VStack>
   );
