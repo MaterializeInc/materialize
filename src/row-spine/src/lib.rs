@@ -231,6 +231,13 @@ mod container {
     }
 
     impl<'a> DatumSeq<'a> {
+        /// Borrow a `Row` as a `DatumSeq` so that it can be used to seek into a
+        /// trace whose key/value container is a [`DatumContainer`].
+        #[inline]
+        pub fn from_row(row: &'a Row) -> Self {
+            Self { bytes: row.data() }
+        }
+
         #[inline]
         pub fn copy_into(&self, row: &mut RowPacker) {
             // SAFETY: `self.bytes` is a correctly formatted row.

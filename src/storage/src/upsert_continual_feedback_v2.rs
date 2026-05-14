@@ -69,15 +69,16 @@ use differential_dataflow::difference::{IsZero, Semigroup};
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::agent::TraceAgent;
-use differential_dataflow::trace::implementations::ValSpine;
+use differential_dataflow::operators::arrange::arrangement::arrange_core;
 use differential_dataflow::trace::implementations::chunker::ContainerChunker;
 use differential_dataflow::trace::implementations::merge_batcher::{
     MergeBatcher, container::VecMerger,
 };
 use differential_dataflow::trace::{Batcher, Builder, Cursor, Description, TraceReader};
 use differential_dataflow::{AsCollection, VecCollection};
-use mz_repr::{Diff, GlobalId, Row};
-use mz_storage_types::errors::{DataflowError, EnvelopeError};
+use mz_repr::{Datum, Diff, GlobalId, Row};
+use mz_row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder, RowRowSpine};
+use mz_storage_types::errors::{DataflowError, EnvelopeError, UpsertError};
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
@@ -161,6 +162,67 @@ impl<D, T: Timestamp> Builder for CapturingBuilder<D, T> {
     }
 }
 
+// ── Row encoding for the packed-bytes persist-feedback spine ────────────────
+//
+// When `use_row_row_spine` is set, the persist-feedback arrangement uses a
+// `RowRowSpine`, whose key and value containers store packed `Row` bytes in an
+// lgalloc-backed region. Using that layout requires the operator to traffic in
+// `(Row, Row)` instead of `(UpsertKey, UpsertValue)`. The helpers below define
+// the encoding so that the round-trip is lossless and the encoded bytes sort
+// in the same order as the upstream `UpsertKey`.
+
+/// Encode an [`UpsertKey`] as a single-column `Row` of raw bytes.
+fn upsert_key_to_row(key: &UpsertKey) -> Row {
+    Row::pack_slice(&[Datum::Bytes(key.as_ref())])
+}
+
+/// Encode an [`UpsertValue`] as a `Row` with a leading tag column so both `Ok`
+/// and `Err` payloads round-trip through `Row` byte storage.
+fn upsert_value_to_row(value: &UpsertValue) -> Row {
+    let mut row = Row::default();
+    let mut packer = row.packer();
+    match value {
+        Ok(ok) => {
+            packer.push(Datum::UInt8(0));
+            packer.extend(ok.iter());
+        }
+        Err(err) => {
+            packer.push(Datum::UInt8(1));
+            let bytes = bincode::serialize(err.as_ref())
+                .expect("UpsertError is serializable via bincode");
+            packer.push(Datum::Bytes(&bytes));
+        }
+    }
+    row
+}
+
+/// Decode an [`UpsertValue`] produced by [`upsert_value_to_row`] back from the
+/// `DatumSeq` view returned by a `RowRowSpine` cursor.
+fn datum_seq_to_upsert_value(seq: DatumSeq<'_>) -> UpsertValue {
+    let mut iter = seq;
+    let tag = match iter.next() {
+        Some(Datum::UInt8(tag)) => tag,
+        other => panic!("upsert value missing UInt8 tag, got {:?}", other),
+    };
+    match tag {
+        0 => {
+            let mut row = Row::default();
+            row.packer().extend(iter);
+            Ok(row)
+        }
+        1 => {
+            let bytes = match iter.next() {
+                Some(Datum::Bytes(b)) => b,
+                other => panic!("upsert error tag missing Bytes payload, got {:?}", other),
+            };
+            let err: UpsertError =
+                bincode::deserialize(bytes).expect("UpsertError bincode round-trip");
+            Err(Box::new(err))
+        }
+        tag => panic!("unknown upsert value tag {tag}"),
+    }
+}
+
 /// Transforms a stream of upserts (key-value updates) into a differential
 /// collection.
 ///
@@ -190,6 +252,7 @@ pub fn upsert_inner<'scope, T, FromTime>(
 where
     T: Timestamp + TotalOrder + Sync,
     T: Refines<mz_repr::Timestamp> + TotalOrder + differential_dataflow::lattice::Lattice + Sync,
+    T: columnation::Columnation,
     FromTime: Debug + timely::ExchangeData + Clone + Ord + Sync,
 {
     // ── Arrange persist feedback ────────────────────────────────────────
@@ -224,7 +287,16 @@ where
                 row.as_ref().map_or(0, |r| r.byte_len().try_into().unwrap()) * diff.into_inner(),
             );
         });
-    let persist_arranged = persist_keyed.arrange_by_key();
+    // Map (UpsertKey, UpsertValue) → (Row, Row) so the arrangement can use the
+    // packed-bytes `RowRowSpine` layout. Keys and values land in lgalloc-backed
+    // regions instead of scattered jemalloc allocations, which lets the OS
+    // evict cold pages cleanly under swap pressure.
+    let encoded = persist_keyed.map(|(k, v)| (upsert_key_to_row(&k), upsert_value_to_row(&v)));
+    let persist_arranged = arrange_core::<_, RowRowBatcher<T, Diff>, RowRowBuilder<T, Diff>, RowRowSpine<T, Diff>>(
+        encoded.inner,
+        Pipeline,
+        "Persist feedback",
+    );
     let mut persist_trace = persist_arranged.trace.clone();
 
     // Probe the persist arrangement's stream for frontier tracking.
@@ -529,18 +601,20 @@ struct DrainStats {
 /// eligible for processing (cursor lookup + output); all others are returned
 /// in `ineligible` for re-stashing.
 ///
-/// The sealed chunks are already sorted and consolidated by the MergeBatcher.
+/// The sealed chunks are already sorted and consolidated by the MergeBatcher,
+/// so the trace cursor walks forward through keys in order — seeks amortize.
 fn drain_sealed_input<T, FromTime>(
     sealed: Vec<Vec<(UpsertKey, T, UpsertDiff<FromTime>)>>,
     ineligible: &mut Vec<(UpsertKey, T, UpsertDiff<FromTime>)>,
     output: &mut Vec<(UpsertValue, T, Diff)>,
     persist_upper: &Antichain<T>,
-    trace: &mut TraceAgent<ValSpine<UpsertKey, UpsertValue, T, Diff>>,
+    trace: &mut TraceAgent<RowRowSpine<T, Diff>>,
     worker_id: &usize,
     source_id: &GlobalId,
 ) -> DrainStats
 where
     T: TotalOrder + Lattice + timely::ExchangeData + Timestamp + Clone + Debug + Ord + Sync,
+    T: columnation::Columnation,
     FromTime: timely::ExchangeData + Clone + Ord + Sync,
 {
     // Separate eligible (at persist frontier) from ineligible.
@@ -583,33 +657,35 @@ where
     let mut updates: u64 = 0;
     let mut deletes: u64 = 0;
 
-    // Eligible entries are sorted by (key, time) from the batcher.
-    // The trace cursor moves forward through keys, matching this order.
     let (mut cursor, storage) = trace.cursor();
 
     for (key, ts, upsert_diff) in eligible {
-        // Look up the current value for this key in the persist trace.
-        // For ValSpine with Vector layout, Key<'a> = &'a UpsertKey.
-        cursor.seek_key(&storage, &key);
-        let old_value = if cursor.get_key(&storage) == Some(&key) {
-            let mut result = None;
-            while let Some(val) = cursor.get_val(&storage) {
-                let mut count = Diff::ZERO;
-                cursor.map_times(&storage, |_time, diff| {
-                    count += diff.clone();
-                });
-                if count.is_positive() {
-                    assert!(
-                        count == 1.into(),
-                        "unexpected multiple entries for the same key in persist trace"
-                    );
-                    result = Some(val.clone());
+        // Look up the current value for this key in the persist trace. The
+        // spine stores keys as packed `Row` bytes, so we encode the
+        // `UpsertKey` to a `Row` and borrow it as a `DatumSeq` for the seek.
+        let key_row = upsert_key_to_row(&key);
+        let key_seq = DatumSeq::from_row(&key_row);
+        cursor.seek_key(&storage, key_seq);
+        let old_value = match cursor.get_key(&storage) {
+            Some(found) if found == key_seq => {
+                let mut result = None;
+                while let Some(val) = cursor.get_val(&storage) {
+                    let mut count = Diff::ZERO;
+                    cursor.map_times(&storage, |_time, diff| {
+                        count += diff.clone();
+                    });
+                    if count.is_positive() {
+                        assert!(
+                            count == 1.into(),
+                            "unexpected multiple entries for the same key in persist trace"
+                        );
+                        result = Some(datum_seq_to_upsert_value(val));
+                    }
+                    cursor.step_val(&storage);
                 }
-                cursor.step_val(&storage);
+                result
             }
-            result
-        } else {
-            None
+            _ => None,
         };
 
         if old_value.is_some() {
