@@ -249,6 +249,42 @@ def set_explicit_names(name: str, svc: dict[str, Any]) -> None:
     svc["hostname"] = name
 
 
+def upgrade_started_to_healthy(compose: dict[str, Any]) -> None:
+    """For every `depends_on` entry that uses `condition: service_started`
+    against a dependency that declares a `healthcheck`, upgrade the
+    condition to `service_healthy`.
+
+    Under the Antithesis platform, `service_started` proved unreliable as
+    a readiness gate during initial container startup: docker fires it as
+    soon as the dependency's container *process* starts, before the
+    dependency's DNS entry is reliably resolvable. The first run on the
+    fault-isolated topology saw kafka hit `UnknownHostException: zookeeper`
+    148+ times in a row before its retry loop landed on a successful
+    lookup, with the same cascade downstream (schema-registry ↔ kafka).
+    Gating on the healthcheck (which probes the actual listen port)
+    eliminates that race.
+
+    Dependencies without a healthcheck (e.g. clusterd, which has no
+    readiness signal we currently expose) are left as `service_started`
+    — there's nothing to wait on.
+    """
+    services = compose.get("services", {})
+    has_healthcheck = {
+        name for name, svc in services.items() if "healthcheck" in svc
+    }
+    for svc in services.values():
+        deps = svc.get("depends_on")
+        if not isinstance(deps, dict):
+            continue
+        for dep_name, dep_spec in deps.items():
+            if (
+                isinstance(dep_spec, dict)
+                and dep_spec.get("condition") == "service_started"
+                and dep_name in has_healthcheck
+            ):
+                dep_spec["condition"] = "service_healthy"
+
+
 def register_referenced_named_volumes(compose: dict[str, Any]) -> None:
     """Declare any named volume referenced by a service that isn't already
     declared at the top level. Docker Compose rejects the file otherwise.
@@ -295,6 +331,7 @@ def main() -> None:
         assign_network(svc)
 
     declare_top_level_network(c.compose)
+    upgrade_started_to_healthy(c.compose)
     register_referenced_named_volumes(c.compose)
 
     sys.stdout.write(HEADER)

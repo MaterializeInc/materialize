@@ -141,7 +141,7 @@ services:
     - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
     depends_on:
       zookeeper:
-        condition: service_started
+        condition: service_healthy
     healthcheck:
       test:
       - CMD
@@ -175,7 +175,7 @@ services:
       && exec /etc/confluent/docker/launch
     depends_on:
       kafka:
-        condition: service_started
+        condition: service_healthy
     healthcheck:
       test:
       - CMD
@@ -432,7 +432,7 @@ services:
     hostname: materialized
     depends_on:
       minio:
-        condition: service_started
+        condition: service_healthy
       postgres-metadata:
         condition: service_healthy
     command:
@@ -630,7 +630,7 @@ services:
       kafka:
         condition: service_healthy
       schema-registry:
-        condition: service_started
+        condition: service_healthy
       mysql:
         condition: service_healthy
       mysql-replica:
