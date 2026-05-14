@@ -24,6 +24,22 @@
 //! * Pager backend: `Swap`, `File`.
 //! * Codec: uncompressed, lz4.
 //!
+//! ## Caveat: swap backend numbers are the warm fast path
+//!
+//! The pager's swap backend keeps the body `Vec<u64>` resident and hints
+//! `MADV_COLD` to the kernel. This bench round-trips one column at a time
+//! and never accumulates enough working set to exceed system RAM, so the
+//! kernel never actually evicts. Swap-backend results therefore measure
+//! `pageout = move-Vec-into-handle` and `take = move-Vec-out` plus
+//! bookkeeping — essentially memcpy at the configured size — not the real
+//! cost of a page-in from disk under memory pressure.
+//!
+//! To distinguish the cases, swap-backend results are labelled
+//! `swap-warm` rather than `swap`. A separate `column_pager_pressure`
+//! bench (TODO) will hold many paged handles alive under a constrained
+//! cgroup (`systemd-run --user --scope -p MemoryMax=...`) so the kernel
+//! is forced to evict, and time `take` on a cold handle.
+//!
 //! Run with:
 //!
 //!     cargo bench -p mz-timely-util --bench column_pager
@@ -79,8 +95,12 @@ fn label(prefix: &str, target: usize, backend: Backend, codec: Option<Codec>) ->
         None => "raw",
         Some(Codec::Lz4) => "lz4",
     };
+    // `swap-warm` flags that this measures the in-memory fast path: the
+    // bench never builds enough working set to push the system into actual
+    // swap eviction, so swap-backend numbers reflect pageout/pagein as
+    // memcpy + bookkeeping, not kernel paging cost. See module docs.
     let backend = match backend {
-        Backend::Swap => "swap",
+        Backend::Swap => "swap-warm",
         Backend::File => "file",
     };
     format!("{prefix}/{size}/{backend}/{codec}")
