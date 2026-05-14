@@ -25,7 +25,6 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sinks::{StorageSinkConnection, StorageSinkDesc};
 use mz_timely_util::builder_async::PressOnDropButton;
-use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::Leave;
 use timely::dataflow::{Scope, StreamVec};
 use tracing::warn;
@@ -75,11 +74,7 @@ pub(crate) fn render_sink<'scope>(
         let mut tokens = vec![];
         let sink_render = get_sink_render_for(&sink.connection);
 
-        let (ok_collection, err_collection, persist_tokens) = persist_source::persist_source::<
-            DataflowError,
-            CapacityContainerBuilder<_>,
-            CapacityContainerBuilder<_>,
-        >(
+        let (ok_collection, err_collection, persist_tokens) = persist_source::persist_source(
             scope,
             sink.from,
             Arc::clone(&storage_state.persist_clients),
