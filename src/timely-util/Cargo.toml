@@ -17,6 +17,10 @@ harness = false
 name = "consolidating_column_builder"
 harness = false
 
+[[bench]]
+name = "column_pager"
+harness = false
+
 [dependencies]
 ahash.workspace = true
 bincode.workspace = true
