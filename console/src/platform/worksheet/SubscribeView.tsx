@@ -88,9 +88,29 @@ const SubscribeView = ({
 
   if (error) {
     return (
-      <Flex align="center" justify="center" height="100%" p="4">
-        <Text color="red.500">{error}</Text>
-      </Flex>
+      <Box height="100%">
+        <HStack
+          px="4"
+          py="2"
+          borderBottomWidth="1px"
+          borderColor={colors.border.secondary}
+          justifyContent="space-between"
+        >
+          <Text textStyle="text-ui-med" color={colors.foreground.secondary}>
+            SUBSCRIBE
+          </Text>
+          <IconButton
+            icon={<CloseIcon boxSize="2.5" />}
+            aria-label="Dismiss results"
+            onClick={onDismiss}
+            variant="ghost"
+            size="xs"
+          />
+        </HStack>
+        <Flex align="center" justify="center" height="calc(100% - 40px)" p="4">
+          <Text color="red.500">{error}</Text>
+        </Flex>
+      </Box>
     );
   }
 
