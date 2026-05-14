@@ -20,7 +20,13 @@ CLUSTER="${MZ_ANTITHESIS_CLUSTER:-antithesis_cluster}"
 # Number of long-lived pool clusters to bootstrap, each bound to its own
 # clusterd-pool-{i} container. Must match `ANTITHESIS_CLUSTERD_POOL_SIZE`
 # in mzcompose.py and `CLUSTERD_POOL_SIZE` in the parallel-workload driver.
-CLUSTERD_POOL_SIZE="${ANTITHESIS_CLUSTERD_POOL_SIZE:-8}"
+CLUSTERD_POOL_SIZE="${ANTITHESIS_CLUSTERD_POOL_SIZE:-2}"
+# Timely worker threads per clusterd process — must equal the `workers=`
+# argument every `Clusterd(...)` Service in mzcompose.py passes, because
+# the controller reads worker count from the WORKERS clause we put in
+# CREATE CLUSTER REPLICAS, not from clusterd's runtime config. Plumbed
+# in via the Workload service's environment.
+CLUSTERD_WORKERS="${CLUSTERD_WORKERS:-16}"
 
 # Wait for materialized to be ready.
 echo "Waiting for materialized to become healthy..."
@@ -52,14 +58,14 @@ CREATE CLUSTER ${CLUSTER} REPLICAS (
         STORAGE ADDRESSES ['clusterd1:2103'],
         COMPUTECTL ADDRESSES ['clusterd1:2101'],
         COMPUTE ADDRESSES ['clusterd1:2102'],
-        WORKERS 4
+        WORKERS ${CLUSTERD_WORKERS}
     ),
     replica2 (
         STORAGECTL ADDRESSES ['clusterd2:2100'],
         STORAGE ADDRESSES ['clusterd2:2103'],
         COMPUTECTL ADDRESSES ['clusterd2:2101'],
         COMPUTE ADDRESSES ['clusterd2:2102'],
-        WORKERS 4
+        WORKERS ${CLUSTERD_WORKERS}
     )
 );
 GRANT ALL ON CLUSTER ${CLUSTER} TO ${PGUSER};
@@ -70,12 +76,13 @@ fi
 
 # Bootstrap a long-lived `pool_cluster_{i}` for each clusterd-pool-{i}
 # container. Each pool cluster has exactly one replica wired to its
-# matching pool clusterd. Parallel-workload driver invocations claim a
-# slot (via fcntl.flock on the workload container's filesystem) and run
-# against `pool_cluster_{slot}` for their entire lifetime. The cluster
-# identity is tied to the clusterd identity, so reconnects don't trip
-# clusterd's `instance configuration not compatible` halt; only the
-# seed-scoped database / roles get dropped between invocations.
+# matching pool clusterd. Parallel-workload driver invocations pick a
+# slot at random and run against `pool_cluster_{slot}`; concurrent
+# invocations may share a pool cluster (every workload object is in a
+# seed-scoped database so they don't collide). The cluster identity is
+# tied to the clusterd identity, so reconnects don't trip clusterd's
+# `instance configuration not compatible` halt; only the seed-scoped
+# database / roles get dropped between invocations.
 #
 # Idempotent: skip pool clusters that already exist (the SUT's catalog
 # survives across `docker compose up` if metadata volumes aren't wiped).
@@ -97,7 +104,7 @@ CREATE CLUSTER ${POOL_CLUSTER} REPLICAS (
         STORAGE ADDRESSES ['clusterd-pool-${i}:2103'],
         COMPUTECTL ADDRESSES ['clusterd-pool-${i}:2101'],
         COMPUTE ADDRESSES ['clusterd-pool-${i}:2102'],
-        WORKERS 4
+        WORKERS ${CLUSTERD_WORKERS}
     )
 );
 GRANT ALL ON CLUSTER ${POOL_CLUSTER} TO ${PGUSER};

@@ -54,11 +54,25 @@ from materialize.mzcompose.services.zookeeper import Zookeeper
 # Number of pool clusterd containers reserved for parallel-workload clusters
 # (one container per cluster, giving each its own container-level fault
 # domain). Read from the env so CI/local runs can tune it without editing
-# this file. Default 8 — enough for ~8 concurrent parallel-driver
-# invocations under the v1 "one cluster per invocation, replication
-# factor 1" allocation, see test/antithesis/workload/test/
-# parallel_driver_parallel_workload.py.
-CLUSTERD_POOL_SIZE = int(os.environ.get("ANTITHESIS_CLUSTERD_POOL_SIZE", "8"))
+# this file. Default 2 — the no-lock allocator (rng-picked slot per
+# invocation) tolerates oversubscription, and a smaller pool keeps the
+# topology closer to production replica counts.
+CLUSTERD_POOL_SIZE = int(os.environ.get("ANTITHESIS_CLUSTERD_POOL_SIZE", "2"))
+
+# Timely worker threads per clusterd process. Bumped to 16 to match the
+# per-process worker density of larger production cluster sizes — single-
+# process clusterds at workers=16 cover the same intra-process
+# concurrency surface as a 4-process scale=4,workers=4 production
+# deployment, so we exercise per-shard parallelism, scheduler contention,
+# and the Antithesis thread-pause fault target with realistic depth.
+#
+# This value must stay in lockstep with the `WORKERS N` clause in every
+# CREATE CLUSTER REPLICAS statement that targets these containers
+# (workload-entrypoint.sh reads it from the CLUSTERD_WORKERS env var
+# the Workload service passes through; the parallel-workload Python
+# driver consumes the same env via the framework's pool-cluster
+# wrapper).
+CLUSTERD_WORKERS = 16
 
 
 class Workload(Service):
@@ -94,6 +108,13 @@ class Workload(Service):
                 # slot count.
                 f"ANTITHESIS_CLUSTERD_POOL_SIZE={CLUSTERD_POOL_SIZE}",
                 f"CLUSTERD_POOL_SIZE={CLUSTERD_POOL_SIZE}",
+                # Worker count for the WORKERS clause in every CREATE
+                # CLUSTER REPLICAS that targets a clusterd-pool or
+                # clusterd1/2 container. Must match the `workers=`
+                # argument passed to each `Clusterd(...)` Service above,
+                # because the controller reads it from this clause not
+                # from clusterd's runtime config.
+                f"CLUSTERD_WORKERS={CLUSTERD_WORKERS}",
                 # MySQL primary and replica connection details.
                 "MYSQL_HOST=mysql",
                 "MYSQL_REPLICA_HOST=mysql-replica",
@@ -145,14 +166,16 @@ SERVICES = [
     # Antithesis kill either replica's backing container without taking
     # the workload offline.
     #
-    # `workers=4` per clusterd means each replica runs four timely worker
-    # threads in one process. The extra intra-process parallelism is the
-    # surface area Antithesis's thread-pausing fault targets — with a
-    # single worker, "pause one thread" effectively pauses the whole
-    # process, which the container-pause fault already covers. The matching
-    # `WORKERS 4` in the CREATE CLUSTER REPLICAS statement must stay in
-    # lockstep with this value (it's read by the controller, not by
-    # clusterd).
+    # `workers=CLUSTERD_WORKERS` (16) per clusterd means each replica runs
+    # that many timely worker threads in one process. Sized to cover the
+    # per-process worker density of larger production cluster sizes:
+    # single-process clusterds at workers=16 exercise the same
+    # intra-process concurrency surface as a 4-process scale=4,workers=4
+    # production deployment (per-shard parallelism, scheduler contention,
+    # Antithesis thread-pause fault targets). The matching `WORKERS N`
+    # clause in every CREATE CLUSTER REPLICAS statement must equal this
+    # — workload-entrypoint.sh reads CLUSTERD_WORKERS from the env the
+    # Workload service exports.
     #
     # `scratch_directory=None` matches production: cluster replicas in
     # cloud deployments don't get a scratch disk, so the upsert operator's
@@ -165,31 +188,33 @@ SERVICES = [
     # loops on clusterd1 in an earlier run).
     Clusterd(
         name="clusterd1",
-        workers=4,
+        workers=CLUSTERD_WORKERS,
         scratch_directory=None,
     ),
     Clusterd(
         name="clusterd2",
-        workers=4,
+        workers=CLUSTERD_WORKERS,
         scratch_directory=None,
     ),
     # Pool of identical clusterd containers reserved for the
-    # parallel-workload driver. Each instance is a possible target for
-    # one parallel-workload cluster, giving that cluster its own
-    # container-level fault domain (Antithesis can kill / pause /
-    # partition / throttle a specific pool member without affecting any
-    # other cluster). Same settings as clusterd1/clusterd2: 4 timely
-    # workers per process, no scratch (matches production), restart=no
-    # so Antithesis fault injection isn't fought by docker-compose.
+    # parallel-workload driver. Each instance backs one long-lived
+    # `pool_cluster_<i>` (bootstrapped by workload-entrypoint.sh), giving
+    # that cluster its own container-level fault domain (Antithesis can
+    # kill / pause / partition / throttle a specific pool member without
+    # affecting any other cluster). Same settings as clusterd1/clusterd2:
+    # workers=CLUSTERD_WORKERS, no scratch (matches production),
+    # restart=no so Antithesis fault injection isn't fought by docker-
+    # compose.
     #
-    # Sizing rationale lives in test/antithesis/workload/test/
-    # parallel_driver_parallel_workload.py — the driver maps invocation
-    # seed → pool slot deterministically and assumes the pool is at
-    # least as big as the expected concurrent-invocation count.
+    # Pool sizing rationale lives in test/antithesis/workload/test/
+    # parallel_driver_parallel_workload.py — the driver picks a slot at
+    # random per invocation; with the no-lock allocator, multiple
+    # invocations may share a pool cluster (which is fine because every
+    # workload object lives in a seed-scoped database).
     *[
         Clusterd(
             name=f"clusterd-pool-{i}",
-            workers=4,
+            workers=CLUSTERD_WORKERS,
             scratch_directory=None,
         )
         for i in range(CLUSTERD_POOL_SIZE)

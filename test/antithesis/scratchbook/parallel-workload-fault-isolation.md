@@ -43,12 +43,15 @@ never dropped.
 
 Components, bottom-up:
 
-  - **`Clusterd(name="clusterd-pool-{i}", workers=4, scratch_directory=None)`**
-    in `test/antithesis/mzcompose.py`. Same configuration as
-    `clusterd1`/`clusterd2`: four timely workers per process (so
-    Antithesis thread-pause faults have something distinct to pause),
-    mem_env RocksDB (matches production, no scratch volume to fight over).
-    Pool size from env (`ANTITHESIS_CLUSTERD_POOL_SIZE`, default 8).
+  - **`Clusterd(name="clusterd-pool-{i}", workers=CLUSTERD_WORKERS,
+    scratch_directory=None)`** in `test/antithesis/mzcompose.py`. Same
+    configuration as `clusterd1`/`clusterd2`: 16 timely workers per
+    process (matches the per-process worker density of larger
+    production cluster sizes — single-process clusterds at workers=16
+    cover the same intra-process concurrency surface as a 4-process
+    scale=4,workers=4 production deployment), mem_env RocksDB (matches
+    production, no scratch volume to fight over). Pool size from env
+    (`ANTITHESIS_CLUSTERD_POOL_SIZE`, default 2).
 
   - **Pool-cluster bootstrap** in
     `test/antithesis/workload/workload-entrypoint.sh`. After materialized
@@ -132,10 +135,12 @@ cluster identity reconnecting. That's the path reconcile is designed for.
     problem.
 
   - **Pool size much smaller than concurrency.** With C concurrent
-    invocations and N pool slots, ~C/N invocations share each cluster
-    in steady state. That's correctness-preserving but increases
-    per-cluster state pressure linearly with the ratio. Bump
-    `ANTITHESIS_CLUSTERD_POOL_SIZE` if a single pool cluster runs hot.
+    invocations and N pool slots (default N=2), ~C/N invocations share
+    each cluster in steady state. That's correctness-preserving but
+    increases per-cluster state pressure linearly with the ratio. The
+    pool is deliberately small so each pool cluster behaves more like
+    a busy production cluster; bump `ANTITHESIS_CLUSTERD_POOL_SIZE` if
+    a single pool cluster runs hot enough to mask other signals.
 
 ## v1 limitations (future work)
 
@@ -166,7 +171,8 @@ cluster identity reconnecting. That's the path reconcile is designed for.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `ANTITHESIS_CLUSTERD_POOL_SIZE` (compose + entrypoint) | 8 | Number of clusterd-pool-<i> containers deployed and matching pool_cluster_<i> clusters bootstrapped. |
-| `CLUSTERD_POOL_SIZE` (driver) | 8 | Number of slots the driver chooses among. Mirrored from compose by mzcompose.py's Workload service so the two agree. |
+| `ANTITHESIS_CLUSTERD_POOL_SIZE` (compose + entrypoint) | 2 | Number of clusterd-pool-<i> containers deployed and matching pool_cluster_<i> clusters bootstrapped. |
+| `CLUSTERD_POOL_SIZE` (driver) | 2 | Number of slots the driver chooses among. Mirrored from compose by mzcompose.py's Workload service so the two agree. |
+| `CLUSTERD_WORKERS` (compose + entrypoint) | 16 | Timely worker threads per clusterd process. Must match every CREATE CLUSTER REPLICAS' WORKERS clause and every `Clusterd(workers=...)` Service. |
 | `PW_RUNTIME_S` (driver) | 20 | Per-invocation runtime; bound to keep the fault-injection budget granular. |
 | `PW_THREADS` (driver) | 4 | Worker threads inside one invocation. |

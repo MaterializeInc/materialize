@@ -121,7 +121,7 @@ NUM_THREADS = int(os.environ.get("PW_THREADS", "4"))
 # faults one container at a time, so the per-container fault domain is
 # preserved; multiple invocations witnessing the same fault is a
 # feature (more independent reproductions per failure).
-CLUSTERD_POOL_SIZE = int(os.environ.get("CLUSTERD_POOL_SIZE", "8"))
+CLUSTERD_POOL_SIZE = int(os.environ.get("CLUSTERD_POOL_SIZE", "2"))
 
 
 def _alter_system(cur: psycopg.Cursor[Any], stmt: str) -> None:
