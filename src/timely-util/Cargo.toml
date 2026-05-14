@@ -31,7 +31,8 @@ differential-dataflow.workspace = true
 either.workspace = true
 futures-util.workspace = true
 lgalloc.workspace = true
-mz-ore = { path = "../ore", default-features = false, features = ["async", "process", "tracing", "test", "num-traits", "region", "differential-dataflow", "overflowing"] }
+lz4_flex.workspace = true
+mz-ore = { path = "../ore", default-features = false, features = ["async", "process", "tracing", "test", "num-traits", "region", "differential-dataflow", "overflowing", "pager"] }
 num-traits.workspace = true
 serde.workspace = true
 timely.workspace = true
@@ -48,6 +49,7 @@ allocation-counter = { workspace = true, optional = true }
 criterion.workspace = true
 proptest.workspace = true
 rand.workspace = true
+tempfile.workspace = true
 
 [features]
 default = ["mz-ore/default"]
