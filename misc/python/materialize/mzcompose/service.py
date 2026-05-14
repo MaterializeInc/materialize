@@ -103,6 +103,13 @@ class ServiceConfig(TypedDict, total=False):
     By default, the container's ID is used as the hostname.
     """
 
+    container_name: str
+    """A pinned name for the container.
+
+    Required by Antithesis so log lines and fault attribution can use the
+    service name; otherwise Docker Compose synthesizes a per-project name.
+    """
+
     extra_hosts: list[str]
     """Additional hostname mappings."""
 

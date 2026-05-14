@@ -163,10 +163,19 @@ For additional details on mzcompose, consult doc/developer/mzbuild.md.""",
     )
     shtab.add_argument_to(completion_parser, "shell", parent=parser)
 
-    # shtab can't handle Enum choices (indexes with [0]). Convert to strings.
+    # shtab can't handle an Enum class as `choices` because it tries to index
+    # the choices container with `[0]` to sample a value, and Enum classes
+    # don't support integer subscripting.
+    #
+    # The fix is to expose `choices` as an iterable of Enum *members*, not a
+    # list of names or values. Argparse coerces input via `type=Enum` to a
+    # member, and then performs the choice check via `member in choices`. If
+    # `choices` is a list of strings, that check fails because Enum members
+    # don't compare equal to strings; if it's a list of members, both shtab
+    # and argparse are happy.
     for action in parser._actions:  # noqa: SLF001
         if isinstance(action.choices, type) and issubclass(action.choices, enum.Enum):
-            action.choices = [e.name for e in action.choices]
+            action.choices = list(action.choices)
 
     args = parser.parse_args(argv)
     if args.file:

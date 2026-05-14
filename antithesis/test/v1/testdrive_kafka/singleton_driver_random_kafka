@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Antithesis area template — Kafka source/sink + Schema Registry.
+#
+# Picks one .td from `BASE_KAFKA` and runs it. The corpus covers
+# UPSERT/NONE/DEBEZIUM envelopes, Avro/JSON/Protobuf formats, multi-partition
+# sinks, exactly-once sinks, the Avro resolution matrix, progress and remap
+# behavior, and topic-recreate semantics. High fault-injection ROI: broker
+# restarts, partial network partitions, and CSR connectivity all flow through
+# this template.
+
+from helper_bootstrap import add_materialize_python_to_path
+
+add_materialize_python_to_path()
+
+from materialize.antithesis.sdk import random_choice
+from materialize.antithesis.td_runner import run_file
+from materialize.antithesis.testdrive_corpus import BASE_KAFKA
+
+chosen = random_choice(BASE_KAFKA)
+run_file(
+    f"/opt/materialize/td/testdrive/{chosen}",
+    source=f"antithesis/testdrive_kafka/singleton_driver_random_kafka:{chosen}",
+)
