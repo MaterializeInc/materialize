@@ -22,6 +22,7 @@ use mz_postgres_client::PostgresClientKnobs;
 use mz_postgres_client::metrics::PostgresClientMetrics;
 
 use crate::azure::{AzureBlob, AzureBlobConfig};
+use crate::bogo::{BogoConsensus, BogoConsensusConfig};
 use crate::file::{FileBlob, FileBlobConfig};
 #[cfg(feature = "foundationdb")]
 use crate::foundationdb::{FdbConsensus, FdbConsensusConfig};
@@ -223,6 +224,9 @@ pub enum ConsensusConfig {
     Postgres(PostgresConsensusConfig),
     /// Config for [MemConsensus], only available in testing.
     Mem,
+    /// Config for [BogoConsensus], an in-memory gRPC backend used for
+    /// performance testing.
+    Bogo(BogoConsensusConfig),
     #[cfg(feature = "turmoil")]
     /// Config for [crate::turmoil::TurmoilConsensus].
     Turmoil(crate::turmoil::ConsensusConfig),
@@ -240,6 +244,7 @@ impl ConsensusConfig {
                 Ok(Arc::new(PostgresConsensus::open(config).await?))
             }
             ConsensusConfig::Mem => Ok(Arc::new(MemConsensus::default())),
+            ConsensusConfig::Bogo(config) => Ok(Arc::new(BogoConsensus::open(config).await?)),
             #[cfg(feature = "turmoil")]
             ConsensusConfig::Turmoil(config) => {
                 Ok(Arc::new(crate::turmoil::TurmoilConsensus::open(config)))
@@ -267,6 +272,14 @@ impl ConsensusConfig {
                     warn!("persist unexpectedly using in-mem consensus in a release binary");
                 }
                 Ok(ConsensusConfig::Mem)
+            }
+            "bogo" => {
+                if !cfg!(debug_assertions) {
+                    warn!("persist unexpectedly using bogo consensus in a release binary");
+                }
+                Ok(ConsensusConfig::Bogo(BogoConsensusConfig::new(
+                    url.clone(),
+                )?))
             }
             #[cfg(feature = "turmoil")]
             "turmoil" => {

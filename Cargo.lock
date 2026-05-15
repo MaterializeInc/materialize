@@ -5757,6 +5757,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-bogo-consensus"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "bytes",
+ "clap",
+ "futures",
+ "mz-build-info",
+ "mz-build-tools",
+ "mz-http-util",
+ "mz-ore",
+ "prometheus",
+ "prost",
+ "prost-build",
+ "serde",
+ "socket2 0.6.3",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "mz-build-info"
 version = "0.0.0"
 dependencies = [
@@ -7132,6 +7160,7 @@ dependencies = [
  "itertools 0.14.0",
  "md-5",
  "mz-aws-util",
+ "mz-bogo-consensus",
  "mz-build-tools",
  "mz-dyncfg",
  "mz-foundationdb",
@@ -7158,6 +7187,8 @@ dependencies = [
  "timely",
  "tokio",
  "tokio-postgres",
+ "tokio-stream",
+ "tonic",
  "tracing",
  "turmoil",
  "url",
