@@ -628,7 +628,7 @@ impl Catalog {
             .into_element();
         // Drain transaction.
         let _ = txn.get_and_commit_op_updates();
-        txn.commit(commit_ts).await?;
+        txn.commit(&mut **storage, commit_ts).await?;
         Ok(id)
     }
 

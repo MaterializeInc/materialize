@@ -1350,12 +1350,12 @@ impl UnopenedPersistCatalogState {
         };
 
         if read_only {
-            let (txn_batch, _) = txn.into_parts();
+            let txn_batch = txn.into_parts();
             // The upper here doesn't matter because we are only applying the updates in memory.
             let updates = StateUpdate::from_txn_batch_ts(txn_batch, catalog.upper);
             catalog.apply_updates_and_consolidate(updates)?;
         } else {
-            txn.commit_internal(commit_ts).await?;
+            txn.commit_internal(&mut catalog, commit_ts).await?;
         }
 
         if matches!(catalog.mode, Mode::Writable) {
@@ -1595,7 +1595,7 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
 /// see a frozen snapshot while later mutations through `Arc::make_mut` only
 /// fork the affected nodes.
 #[derive(Debug, Clone)]
-pub(crate) struct DurableCatalogData {
+pub struct DurableCatalogData {
     pub(crate) databases: Arc<imbl::OrdMap<DatabaseKey, DatabaseValue>>,
     pub(crate) schemas: Arc<imbl::OrdMap<SchemaKey, SchemaValue>>,
     pub(crate) roles: Arc<imbl::OrdMap<RoleKey, RoleValue>>,
@@ -1624,7 +1624,7 @@ pub(crate) struct DurableCatalogData {
 }
 
 impl DurableCatalogData {
-    fn new() -> DurableCatalogData {
+    pub(crate) fn new() -> DurableCatalogData {
         DurableCatalogData {
             databases: Arc::new(imbl::OrdMap::new()),
             schemas: Arc::new(imbl::OrdMap::new()),
@@ -2296,7 +2296,9 @@ impl DurableCatalogState for PersistCatalogState {
         self.sync_to_current_upper().await?;
         let data = self.update_applier.data.clone();
         let commit_ts = self.upper.clone();
-        Transaction::new_from_durable_data(self, data, commit_ts)
+        let bootstrap_complete = self.bootstrap_complete;
+        let is_savepoint = matches!(self.mode, Mode::Savepoint);
+        Transaction::new_from_durable_data(bootstrap_complete, is_savepoint, data, commit_ts)
     }
 
     fn transaction_from_snapshot(
@@ -2304,7 +2306,19 @@ impl DurableCatalogState for PersistCatalogState {
         snapshot: Snapshot,
     ) -> Result<Transaction, CatalogError> {
         let commit_ts = self.upper.clone();
-        Transaction::new(self, snapshot, commit_ts)
+        let bootstrap_complete = self.bootstrap_complete;
+        let is_savepoint = matches!(self.mode, Mode::Savepoint);
+        Transaction::new(bootstrap_complete, is_savepoint, snapshot, commit_ts)
+    }
+
+    fn transaction_from_durable_data(
+        &mut self,
+        data: DurableCatalogData,
+    ) -> Result<Transaction, CatalogError> {
+        let commit_ts = self.upper.clone();
+        let bootstrap_complete = self.bootstrap_complete;
+        let is_savepoint = matches!(self.mode, Mode::Savepoint);
+        Transaction::new_from_durable_data(bootstrap_complete, is_savepoint, data, commit_ts)
     }
 
     #[mz_ore::instrument(level = "debug")]

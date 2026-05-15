@@ -27,7 +27,7 @@ use mz_audit_log::{
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::BuiltinLog;
-use mz_catalog::durable::{NetworkPolicy, Snapshot, Transaction};
+use mz_catalog::durable::{DurableCatalogData, NetworkPolicy, Transaction};
 use mz_catalog::expr_cache::LocalExpressions;
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
@@ -488,7 +488,7 @@ impl Catalog {
         // process if this fails, because we have to restart envd due to
         // indeterminate catalog state, which we only reconcile during catalog
         // init.
-        tx.commit(oracle_write_ts)
+        tx.commit(&mut **storage, oracle_write_ts)
             .await
             .unwrap_or_terminate("catalog storage transaction commit must succeed");
 
@@ -514,21 +514,21 @@ impl Catalog {
     /// The durable transaction is intentionally never committed and no storage
     /// controller prepare-state side effects are run.
     ///
-    /// If `prev_snapshot` is `Some`, the transaction is initialized from that
-    /// snapshot (which represents the tx state after the previous dry run),
-    /// ensuring it starts in sync with `base_state`. If `None` (first
-    /// statement), a fresh transaction is loaded from durable storage.
+    /// If `prev_durable_data` is `Some`, the transaction is initialized from
+    /// it (representing the tx state after the previous dry run), ensuring it
+    /// starts in sync with `base_state`. If `None` (first statement), a fresh
+    /// transaction is loaded from durable storage.
     ///
-    /// Returns the new accumulated state and a snapshot of the transaction's
-    /// state for use in subsequent incremental dry runs.
+    /// Returns the new accumulated state and the transaction's current
+    /// durable data for use in subsequent incremental dry runs.
     pub async fn transact_incremental_dry_run(
         &self,
         base_state: &CatalogState,
         ops: Vec<Op>,
         session: Option<&ConnMeta>,
-        prev_snapshot: Option<Snapshot>,
+        prev_durable_data: Option<DurableCatalogData>,
         oracle_write_ts: mz_repr::Timestamp,
-    ) -> Result<(CatalogState, Snapshot), AdapterError> {
+    ) -> Result<(CatalogState, DurableCatalogData), AdapterError> {
         // For DDL transactions, items are not temporary (CREATE TABLE FROM SOURCE, etc.)
         // but we still need to check for collisions.
         let temporary_ids = self.temporary_ids(&ops, BTreeSet::new())?;
@@ -537,12 +537,12 @@ impl Catalog {
         let mut catalog_updates = vec![];
         let mut audit_events = vec![];
         let mut storage = self.storage().await;
-        let mut tx = if let Some(snapshot) = prev_snapshot {
-            // Restore transaction from saved snapshot so it starts in sync
+        let mut tx = if let Some(data) = prev_durable_data {
+            // Restore transaction from saved durable data so it starts in sync
             // with the accumulated CatalogState from previous dry runs.
             storage
-                .transaction_from_snapshot(snapshot)
-                .unwrap_or_terminate("starting catalog transaction from snapshot")
+                .transaction_from_durable_data(data)
+                .unwrap_or_terminate("starting catalog transaction from durable data")
         } else {
             // First statement: fresh transaction from durable storage, which
             // is in sync with the real catalog state.
@@ -568,16 +568,16 @@ impl Catalog {
         )
         .await?;
 
-        // Save the transaction's current state as a snapshot for the next
+        // Save the transaction's current state as durable data for the next
         // incremental dry run.
-        let new_snapshot = tx.current_snapshot();
+        let new_durable_data = tx.current_durable_data();
 
         // Transaction is NOT committed — drop it.
         drop(storage);
 
         // transact_inner returns Some(state) when ops produced changes.
         let state = new_state.unwrap_or_else(|| base_state.clone());
-        Ok((state, new_snapshot))
+        Ok((state, new_durable_data))
     }
 
     /// Extracts optimized expressions from `Op::CreateItem` operations for views
@@ -644,7 +644,7 @@ impl Catalog {
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         parsed_catalog_updates: &mut Vec<ParsedStateUpdate>,
         audit_events: &mut Vec<VersionedEvent>,
-        tx: &mut Transaction<'_>,
+        tx: &mut Transaction,
         state: &CatalogState,
     ) -> Result<Option<CatalogState>, AdapterError> {
         // We come up with new catalog state, builtin state updates, and parsed
@@ -816,7 +816,7 @@ impl Catalog {
         op: Op,
         temporary_ids: &BTreeSet<CatalogItemId>,
         audit_events: &mut Vec<VersionedEvent>,
-        tx: &mut Transaction<'_>,
+        tx: &mut Transaction,
         state: &CatalogState,
         storage_collections_to_create: &mut BTreeSet<GlobalId>,
         storage_collections_to_drop: &mut BTreeSet<GlobalId>,
@@ -2788,7 +2788,7 @@ impl Catalog {
 /// for catalog items. We currently think that there are no use cases that require this assumption,
 /// but no way to know for sure.
 fn tx_replace_item(
-    tx: &mut Transaction<'_>,
+    tx: &mut Transaction,
     state: &CatalogState,
     id: CatalogItemId,
     new_entry: CatalogEntry,
@@ -3225,8 +3225,8 @@ mod tests {
 
             // --- Path A: Incremental (two separate dry-run calls) ---
 
-            // First call: only op_t1, no previous snapshot.
-            let (state_after_t1, snapshot_after_t1) = catalog
+            // First call: only op_t1, no previous durable data.
+            let (state_after_t1, data_after_t1) = catalog
                 .transact_incremental_dry_run(
                     &base_state,
                     vec![op_t1.clone()],
@@ -3255,13 +3255,13 @@ mod tests {
                 "t2 should NOT exist after first dry run"
             );
 
-            // Second call: only op_t2, using state/snapshot from first call.
+            // Second call: only op_t2, using state/durable_data from first call.
             let (state_incremental, _) = catalog
                 .transact_incremental_dry_run(
                     &state_after_t1,
                     vec![op_t2.clone()],
                     None,
-                    Some(snapshot_after_t1),
+                    Some(data_after_t1),
                     oracle_write_ts,
                 )
                 .await

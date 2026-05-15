@@ -228,7 +228,7 @@ impl Coordinator {
                     ops: txn_ops,
                     revision: txn_revision,
                     state: txn_state,
-                    snapshot: txn_snapshot,
+                    durable_data: txn_durable_data,
                     side_effects: _,
                 },
             ..
@@ -256,7 +256,7 @@ impl Coordinator {
         // Clone what we need from the session before taking &mut below.
         let txn_ops_clone = txn_ops.clone();
         let txn_state_clone = txn_state.clone();
-        let prev_snapshot = txn_snapshot.clone();
+        let prev_durable_data = txn_durable_data.clone();
 
         // Validate resource limits with all accumulated + new ops (cheap O(N) counting).
         let mut combined_ops = txn_ops_clone;
@@ -275,13 +275,13 @@ impl Coordinator {
         // initialize the transaction so it starts in sync with the accumulated
         // state. Otherwise (first statement), the fresh durable transaction is
         // already in sync with the real catalog state.
-        let (new_state, new_snapshot) = self
+        let (new_state, new_durable_data) = self
             .catalog()
             .transact_incremental_dry_run(
                 &txn_state_clone,
                 ops.clone(),
                 conn,
-                prev_snapshot,
+                prev_durable_data,
                 oracle_write_ts,
             )
             .await?;
@@ -295,7 +295,7 @@ impl Coordinator {
                 state: new_state,
                 side_effects: vec![Box::new(side_effect)],
                 revision: self.catalog().transient_revision(),
-                snapshot: Some(new_snapshot),
+                durable_data: Some(new_durable_data),
             });
 
         self.metrics

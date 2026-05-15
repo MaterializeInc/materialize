@@ -78,10 +78,12 @@ type Timestamp = u64;
 /// An operation also logically groups multiple catalog updates together.
 #[derive(Derivative)]
 #[derivative(Debug)]
-pub struct Transaction<'a> {
-    #[derivative(Debug = "ignore")]
-    #[derivative(PartialEq = "ignore")]
-    durable_catalog: &'a mut dyn DurableCatalogState,
+pub struct Transaction {
+    /// Captured from the source [`DurableCatalogState`] at construction time so
+    /// the transaction can be moved (e.g. into `TransactionOps::DDL`) without
+    /// holding a borrow on the storage.
+    bootstrap_complete: bool,
+    is_savepoint: bool,
     databases: TableTransaction<DatabaseKey, DatabaseValue>,
     schemas: TableTransaction<SchemaKey, SchemaValue>,
     items: TableTransaction<ItemKey, ItemValue>,
@@ -125,21 +127,23 @@ pub struct Transaction<'a> {
     initial_oid_owner: Arc<imbl::OrdMap<u32, crate::durable::persist::OidOwner>>,
 }
 
-impl<'a> Transaction<'a> {
+impl Transaction {
     pub fn new(
-        durable_catalog: &'a mut dyn DurableCatalogState,
+        bootstrap_complete: bool,
+        is_savepoint: bool,
         snapshot: Snapshot,
         upper: mz_repr::Timestamp,
-    ) -> Result<Transaction<'a>, CatalogError> {
+    ) -> Result<Transaction, CatalogError> {
         let data = snapshot_to_durable_data(snapshot)?;
-        Self::new_from_durable_data(durable_catalog, data, upper)
+        Self::new_from_durable_data(bootstrap_complete, is_savepoint, data, upper)
     }
 
-    pub(crate) fn new_from_durable_data(
-        durable_catalog: &'a mut dyn DurableCatalogState,
+    pub fn new_from_durable_data(
+        bootstrap_complete: bool,
+        is_savepoint: bool,
         data: crate::durable::persist::DurableCatalogData,
         upper: mz_repr::Timestamp,
-    ) -> Result<Transaction<'a>, CatalogError> {
+    ) -> Result<Transaction, CatalogError> {
         let crate::durable::persist::DurableCatalogData {
             databases,
             schemas,
@@ -254,7 +258,8 @@ impl<'a> Transaction<'a> {
         );
 
         Ok(Transaction {
-            durable_catalog,
+            bootstrap_complete,
+            is_savepoint,
             databases,
             schemas,
             items,
@@ -833,7 +838,7 @@ impl<'a> Transaction<'a> {
         amount: u64,
     ) -> Result<Vec<u64>, CatalogError> {
         assert!(
-            key != SYSTEM_ITEM_ALLOC_KEY || !self.durable_catalog.is_bootstrap_complete(),
+            key != SYSTEM_ITEM_ALLOC_KEY || !self.bootstrap_complete,
             "system item IDs cannot be allocated outside of bootstrap"
         );
 
@@ -865,7 +870,7 @@ impl<'a> Transaction<'a> {
         amount: u64,
     ) -> Result<Vec<(CatalogItemId, GlobalId)>, CatalogError> {
         assert!(
-            !self.durable_catalog.is_bootstrap_complete(),
+            !self.bootstrap_complete,
             "we can only allocate system item IDs during bootstrap"
         );
         Ok(self
@@ -1155,6 +1160,56 @@ impl<'a> Transaction<'a> {
     pub fn allocate_oid(&mut self, temporary_oids: &HashSet<u32>) -> Result<u32, CatalogError> {
         self.allocate_oids(1, temporary_oids)
             .map(|oids| oids.into_element())
+    }
+
+    /// Exports the current state of this transaction as a
+    /// [`crate::durable::persist::DurableCatalogData`]. Cheaper than
+    /// [`Self::current_snapshot`] because each table is an
+    /// `Arc<imbl::OrdMap>` (no proto conversion, structural sharing with the
+    /// pre-transaction view when no pending changes exist for a table).
+    pub fn current_durable_data(&self) -> crate::durable::persist::DurableCatalogData {
+        let databases = self.databases.current_data();
+        let schemas = self.schemas.current_data();
+        let roles = self.roles.current_data();
+        let clusters = self.clusters.current_data();
+        let cluster_replicas = self.cluster_replicas.current_data();
+        let network_policies = self.network_policies.current_data();
+        let items = self.items.current_data();
+        let introspection_sources = self.introspection_sources.current_data();
+        let indexes = crate::durable::persist::DurableCatalogIndexes::from_tables(
+            &databases,
+            &schemas,
+            &roles,
+            &clusters,
+            &cluster_replicas,
+            &network_policies,
+            &items,
+            &introspection_sources,
+        );
+        crate::durable::persist::DurableCatalogData {
+            databases,
+            schemas,
+            roles,
+            role_auth: self.role_auth.current_data(),
+            items,
+            comments: self.comments.current_data(),
+            clusters,
+            network_policies,
+            cluster_replicas,
+            introspection_sources,
+            id_allocator: self.id_allocator.current_data(),
+            configs: self.configs.current_data(),
+            settings: self.settings.current_data(),
+            source_references: self.source_references.current_data(),
+            system_object_mappings: self.system_gid_mapping.current_data(),
+            system_configurations: self.system_configurations.current_data(),
+            default_privileges: self.default_privileges.current_data(),
+            system_privileges: self.system_privileges.current_data(),
+            storage_collection_metadata: self.storage_collection_metadata.current_data(),
+            unfinalized_shards: self.unfinalized_shards.current_data(),
+            txn_wal_shard: self.txn_wal_shard.current_data(),
+            indexes,
+        }
     }
 
     /// Exports the current state of this transaction as a [`Snapshot`].
@@ -2460,7 +2515,8 @@ impl<'a> Transaction<'a> {
         }
 
         let Transaction {
-            durable_catalog: _,
+            bootstrap_complete: _,
+            is_savepoint: _,
             databases,
             schemas,
             items,
@@ -2591,7 +2647,7 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn is_savepoint(&self) -> bool {
-        self.durable_catalog.is_savepoint()
+        self.is_savepoint
     }
 
     fn commit_op(&mut self) {
@@ -2606,14 +2662,14 @@ impl<'a> Transaction<'a> {
         self.upper
     }
 
-    pub(crate) fn into_parts(self) -> (TransactionBatch, &'a mut dyn DurableCatalogState) {
+    pub(crate) fn into_parts(self) -> TransactionBatch {
         let audit_log_updates = self
             .audit_log_updates
             .into_iter()
             .map(|(k, diff, _op)| (k.into_proto(), (), diff))
             .collect();
 
-        let txn_batch = TransactionBatch {
+        TransactionBatch {
             databases: self.databases.pending(),
             schemas: self.schemas.pending(),
             items: self.items.pending(),
@@ -2637,8 +2693,7 @@ impl<'a> Transaction<'a> {
             txn_wal_shard: self.txn_wal_shard.pending(),
             audit_log_updates,
             upper: self.upper,
-        };
-        (txn_batch, self.durable_catalog)
+        }
     }
 
     /// Commits the storage transaction to durable storage. Any error returned outside read-only
@@ -2655,9 +2710,10 @@ impl<'a> Transaction<'a> {
     #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn commit_internal(
         self,
+        storage: &mut dyn DurableCatalogState,
         commit_ts: mz_repr::Timestamp,
-    ) -> Result<(&'a mut dyn DurableCatalogState, mz_repr::Timestamp), CatalogError> {
-        let (mut txn_batch, durable_catalog) = self.into_parts();
+    ) -> Result<mz_repr::Timestamp, CatalogError> {
+        let mut txn_batch = self.into_parts();
         let TransactionBatch {
             databases,
             schemas,
@@ -2708,10 +2764,8 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(txn_wal_shard);
         differential_dataflow::consolidation::consolidate_updates(audit_log_updates);
 
-        let upper = durable_catalog
-            .commit_transaction(txn_batch, commit_ts)
-            .await?;
-        Ok((durable_catalog, upper))
+        let upper = storage.commit_transaction(txn_batch, commit_ts).await?;
+        Ok(upper)
     }
 
     /// Commits the storage transaction to durable storage. Any error returned outside read-only
@@ -2731,22 +2785,26 @@ impl<'a> Transaction<'a> {
     /// after committing and only then apply the updates in-memory. While this removes assumptions
     /// about the caller in this method, in practice it results in duplicate work on every commit.
     #[mz_ore::instrument(level = "debug")]
-    pub async fn commit(self, commit_ts: mz_repr::Timestamp) -> Result<(), CatalogError> {
+    pub async fn commit(
+        self,
+        storage: &mut dyn DurableCatalogState,
+        commit_ts: mz_repr::Timestamp,
+    ) -> Result<(), CatalogError> {
         let op_updates = self.get_op_updates();
         assert!(
             op_updates.is_empty(),
             "unconsumed transaction updates: {op_updates:?}"
         );
 
-        let (durable_storage, upper) = self.commit_internal(commit_ts).await?;
+        let upper = self.commit_internal(storage, commit_ts).await?;
         // Drain all the updates from the commit since it is assumed that they were already applied.
-        let updates = durable_storage.sync_updates(upper).await?;
+        let updates = storage.sync_updates(upper).await?;
         // Writable and savepoint catalogs should have consumed all updates before committing a
         // transaction, otherwise the commit was performed with an out of date state.
         // Read-only catalogs can only commit empty transactions, so they don't need to consume all
         // updates before committing.
         soft_assert_no_log!(
-            durable_storage.is_read_only() || updates.iter().all(|update| update.ts == commit_ts),
+            storage.is_read_only() || updates.iter().all(|update| update.ts == commit_ts),
             "unconsumed updates existed before transaction commit: commit_ts={commit_ts:?}, updates:{updates:?}"
         );
         Ok(())
@@ -2758,7 +2816,7 @@ use crate::durable::async_trait;
 use super::objects::{RoleAuthKey, RoleAuthValue};
 
 #[async_trait]
-impl StorageTxn for Transaction<'_> {
+impl StorageTxn for Transaction {
     fn get_collection_metadata(&self) -> BTreeMap<GlobalId, ShardId> {
         self.storage_collection_metadata
             .items()
@@ -3398,6 +3456,27 @@ where
             items.insert(k.into_proto(), v.into_proto());
         });
         items
+    }
+
+    /// Returns the current state of the table as an `Arc<imbl::OrdMap>`,
+    /// folding `pending` into `base`. Reuses the shared `base` if no pending
+    /// updates exist (cheap `Arc::clone`).
+    fn current_data(&self) -> Arc<imbl::OrdMap<K, V>> {
+        if self.pending.is_empty() {
+            return Arc::clone(&self.base);
+        }
+        let mut out: imbl::OrdMap<K, V> = (*self.base).clone();
+        for k in self.pending.keys() {
+            match self.get(k) {
+                Some(v) => {
+                    out.insert(k.clone(), v.clone());
+                }
+                None => {
+                    out.remove(k);
+                }
+            }
+        }
+        Arc::new(out)
     }
 
     /// Returns the items viewable in the current transaction as references. Returns a map
@@ -4375,7 +4454,9 @@ mod tests {
             .insert_user_database(db_name, db_owner, db_privileges.clone(), &HashSet::new())
             .unwrap();
         let commit_ts = txn.upper();
-        txn.commit_internal(commit_ts).await.unwrap();
+        txn.commit_internal(&mut *savepoint_state, commit_ts)
+            .await
+            .unwrap();
         let updates = savepoint_state.sync_to_current_updates().await.unwrap();
         let update = updates.into_element();
 

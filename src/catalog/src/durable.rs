@@ -41,6 +41,7 @@ pub use crate::durable::objects::{
     StorageCollectionMetadata, SystemConfiguration, SystemObjectDescription, SystemObjectMapping,
     UnfinalizedShard,
 };
+pub use crate::durable::persist::DurableCatalogData;
 pub use crate::durable::persist::shard_id;
 use crate::durable::persist::{Timestamp, UnopenedPersistCatalogState};
 pub use crate::durable::transaction::Transaction;
@@ -310,6 +311,15 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         snapshot: Snapshot,
     ) -> Result<Transaction, CatalogError>;
 
+    /// Like [`Self::transaction_from_snapshot`], but takes a [`DurableCatalogData`]
+    /// (the shared, structurally-cloned view of the catalog tables) instead of
+    /// the proto-typed [`Snapshot`]. Avoids the per-statement O(N) proto→Rust
+    /// rebuild that `transaction_from_snapshot` pays.
+    fn transaction_from_durable_data(
+        &mut self,
+        data: DurableCatalogData,
+    ) -> Result<Transaction, CatalogError>;
+
     /// Commits a durable catalog state transaction. The transaction will be committed at
     /// `commit_ts`.
     ///
@@ -345,7 +355,8 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         }
         let mut txn = self.transaction().await?;
         let ids = txn.get_and_increment_id_by(id_type.to_string(), amount)?;
-        txn.commit_internal(commit_ts).await?;
+        let txn_batch = txn.into_parts();
+        self.commit_transaction(txn_batch, commit_ts).await?;
         self.metrics()
             .allocate_id_seconds
             .observe(start.elapsed().as_secs_f64());
