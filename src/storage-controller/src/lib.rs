@@ -3236,6 +3236,7 @@ where
     ///   a managed collection.
     /// - If diff is any value other than `1` or `-1`.
     #[instrument(level = "debug")]
+    #[instrument(level = "debug")]
     fn append_shard_mappings<I>(&self, global_ids: I, diff: Diff)
     where
         I: Iterator<Item = GlobalId>,

@@ -45,3 +45,5 @@ storage:
 
 overrides:
   metrics_generator_processors: [service-graphs, span-metrics]
+  # Local debugging emits more than the default 10k live traces; bump.
+  max_traces_per_user: 200000

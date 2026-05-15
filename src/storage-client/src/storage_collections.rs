@@ -58,7 +58,7 @@ use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::MissedTickBehavior;
-use tracing::{debug, info, trace, warn};
+use tracing::{Instrument, debug, info, info_span, trace, warn};
 
 use crate::client::TimestamplessUpdateBuilder;
 use crate::controller::{
@@ -809,6 +809,7 @@ impl StorageCollectionsImpl {
     ///
     /// This is necessary to ensure that the dependency's since does not advance
     /// beyond its dependents'.
+    #[instrument(level = "debug", fields(id = ?id))]
     fn install_collection_dependency_read_holds_inner(
         &self,
         self_collections: &mut BTreeMap<GlobalId, CollectionState>,
@@ -1179,6 +1180,7 @@ impl StorageCollectionsImpl {
     // This is not an associated function so that we can share it with the task
     // that updates the persist handles and also has a reference to the shared
     // collections state.
+    #[instrument(level = "debug")]
     fn update_read_capabilities_inner(
         cmd_tx: &mpsc::UnboundedSender<BackgroundCmd>,
         collections: &mut BTreeMap<GlobalId, CollectionState>,
@@ -1734,17 +1736,21 @@ impl StorageCollections for StorageCollectionsImpl {
             .collect_vec();
 
         // So that we can open `SinceHandle`s for each collections concurrently.
-        let persist_client = self
-            .persist
-            .open(self.persist_location.clone())
-            .await
-            .unwrap();
+        let persist_client = async {
+            self.persist
+                .open(self.persist_location.clone())
+                .await
+                .unwrap()
+        }
+        .instrument(info_span!("ccfb::open_persist_client"))
+        .await;
         let persist_client = &persist_client;
         // Reborrow the `&mut self` as immutable, as all the concurrent work to
         // be processed in this stream cannot all have exclusive access.
         use futures::stream::{StreamExt, TryStreamExt};
         let this = &*self;
-        let mut to_register: Vec<_> = futures::stream::iter(enriched_with_metadata)
+        let mut to_register: Vec<_> = async {
+        futures::stream::iter(enriched_with_metadata)
             .map(|data: Result<_, StorageError>| {
                 async move {
                     let (id, description, metadata) = data?;
@@ -1828,7 +1834,10 @@ impl StorageCollections for StorageCollectionsImpl {
             // `buffer_unordered` in this method, so we stick the standard
             // advice: only use `try_collect` or `collect`!
             .try_collect()
-            .await?;
+            .await
+        }
+        .instrument(info_span!("ccfb::open_data_handles_concurrent"))
+        .await?;
 
         // Reorder in dependency order.
         #[derive(Ord, PartialOrd, Eq, PartialEq)]
@@ -1849,6 +1858,7 @@ impl StorageCollections for StorageCollectionsImpl {
         // We hold this lock for a very short amount of time, just doing some
         // hashmap inserts and unbounded channel sends.
         let mut self_collections = self.collections.lock().expect("lock poisoned");
+        let _install_span = info_span!("ccfb::install_collection_states").entered();
 
         for (id, description, write_handle, since_handle, metadata) in to_register {
             let write_frontier = write_handle.upper();
@@ -2019,9 +2029,12 @@ impl StorageCollections for StorageCollectionsImpl {
             self.install_collection_dependency_read_holds_inner(&mut *self_collections, id)?;
         }
 
+        drop(_install_span);
         drop(self_collections);
 
+        let _span = info_span!("ccfb::synchronize_finalized_shards").entered();
         self.synchronize_finalized_shards(storage_metadata);
+        drop(_span);
 
         Ok(())
     }
@@ -2256,6 +2269,7 @@ impl StorageCollections for StorageCollectionsImpl {
         }
     }
 
+    #[instrument(level = "debug", fields(n = desired_holds.len()))]
     fn acquire_read_holds(
         &self,
         desired_holds: Vec<GlobalId>,
