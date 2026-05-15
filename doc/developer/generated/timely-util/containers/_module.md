@@ -1,6 +1,6 @@
 ---
 source: src/timely-util/src/containers.rs
-revision: 2571dcdc4b
+revision: be619e53d8
 ---
 
 # timely-util::containers
