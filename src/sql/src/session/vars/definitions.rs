@@ -2167,7 +2167,7 @@ feature_flags!(
     {
         name: enable_create_table_from_source,
         desc: "Whether to allow CREATE TABLE .. FROM SOURCE syntax.",
-        default: false,
+        default: true,
         enable_for_item_parsing: true,
     },
     {
