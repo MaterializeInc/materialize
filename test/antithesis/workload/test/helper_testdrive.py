@@ -58,8 +58,17 @@ _PRESERVE_CLUSTERS = {"antithesis_cluster", "quickstart"}
 # Tables under the data-loss workload's source are subsources — DROP TABLE
 # on them is rejected unless we also drop the source. The reset filters
 # them out by name; they live inside `pg_cdc_source` / `mysql_cdc_source`
-# which is preserved.
-_PRESERVE_TABLES = {"antithesis_pg_cdc", "antithesis_cdc", "antithesis_cdc_myisam"}
+# which is preserved. The `antithesis_txn_*` and `pw_hot_*` bases belong
+# to the SinceViolation drivers; their MVs depend on these tables, so
+# preserving the base keeps the whole driver scaffolding intact across
+# testdrive resets.
+_PRESERVE_TABLES = {
+    "antithesis_pg_cdc",
+    "antithesis_cdc",
+    "antithesis_cdc_myisam",
+    "antithesis_txn_table",
+    "pw_hot_table",
+}
 
 # Pool clusters share a `pool_cluster_*` prefix.
 _PRESERVE_CLUSTER_PREFIX = "pool_cluster_"
