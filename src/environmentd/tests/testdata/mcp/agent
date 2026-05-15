@@ -16,7 +16,7 @@ mcp-agent
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0.0"}}}
 ----
 200 OK
-{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"materialize-mcp-agent","version":"<VERSION>"},"instructions":"You have access to Materialize data products via MCP. Prefer indexed objects first (served from memory), then materialized views (read from persistent storage). Querying plain views, unindexed sources, or tables triggers query-time computation that can consume significant cluster resources, avoid these."}}
+{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"materialize-mcp-agent","version":"<VERSION>"},"instructions":"You have access to Materialize data products via MCP. Prefer indexed objects (served from memory) over materialized views (read from persistent storage). Indexes are cluster-local; if a data product's cluster differs from your session, pass the `cluster` parameter to `read_data_product` so the index is actually used."}}
 
 # =============================================================================
 # Tools List (query tool disabled by default)

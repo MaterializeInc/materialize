@@ -600,9 +600,10 @@ fn endpoint_instructions(endpoint_type: McpEndpointType) -> Option<String> {
     match endpoint_type {
         McpEndpointType::Agent => Some(concat!(
             "You have access to Materialize data products via MCP. ",
-            "Prefer indexed objects first (served from memory), then materialized views ",
-            "(read from persistent storage). Querying plain views, unindexed sources, or tables ",
-            "triggers query-time computation that can consume significant cluster resources, avoid these.",
+            "Prefer indexed objects (served from memory) over materialized views ",
+            "(read from persistent storage). Indexes are cluster-local; if a data product's ",
+            "cluster differs from your session, pass the `cluster` parameter to `read_data_product` ",
+            "so the index is actually used.",
         ).to_string()),
         McpEndpointType::Developer => Some(concat!(
             "You are connected to the Materialize developer MCP server. ",
