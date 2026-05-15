@@ -39,7 +39,7 @@ use rdkafka::util::Timeout;
 use rdkafka::{ClientContext, Statistics, TopicPartitionList};
 use serde::{Deserialize, Serialize};
 use tokio::runtime::Handle;
-use tracing::{Level, debug, error, info, trace, warn};
+use tracing::{Level, debug, info, trace, warn};
 
 use crate::aws;
 
@@ -927,14 +927,14 @@ impl TimeoutConfig {
 
         let transaction_timeout = if transaction_timeout.as_millis() > i32::MAX.try_into().unwrap()
         {
-            error!(
+            warn!(
                 "transaction_timeout ({transaction_timeout:?}) greater than max \
                 of {}, defaulting to the default of {DEFAULT_TRANSACTION_TIMEOUT:?}",
                 i32::MAX
             );
             DEFAULT_TRANSACTION_TIMEOUT
         } else if transaction_timeout.as_millis() < 1000 {
-            error!(
+            warn!(
                 "transaction_timeout ({transaction_timeout:?}) less than max \
                 of 1000ms, defaulting to the default of {DEFAULT_TRANSACTION_TIMEOUT:?}"
             );
@@ -948,7 +948,7 @@ impl TimeoutConfig {
         let progress_record_fetch_timeout =
             progress_record_fetch_timeout.unwrap_or(progress_record_fetch_timeout_derived_default);
         let progress_record_fetch_timeout = if progress_record_fetch_timeout < transaction_timeout {
-            error!(
+            warn!(
                 "progress record fetch ({progress_record_fetch_timeout:?}) less than transaction \
                 timeout ({transaction_timeout:?}), defaulting to transaction timeout {transaction_timeout:?}",
             );
@@ -967,7 +967,7 @@ impl TimeoutConfig {
             std::cmp::min(max_socket_timeout, DEFAULT_SOCKET_TIMEOUT);
         let socket_timeout = socket_timeout.unwrap_or(socket_timeout_derived_default);
         let socket_timeout = if socket_timeout > max_socket_timeout {
-            error!(
+            warn!(
                 "socket_timeout ({socket_timeout:?}) greater than max \
                 of min(30000, transaction.timeout.ms + 100 ({})), \
                 defaulting to the maximum of {max_socket_timeout:?}",
@@ -975,7 +975,7 @@ impl TimeoutConfig {
             );
             max_socket_timeout
         } else if socket_timeout.as_millis() < 10 {
-            error!(
+            warn!(
                 "socket_timeout ({socket_timeout:?}) less than min \
                 of 10ms, defaulting to the default of {socket_timeout_derived_default:?}"
             );
@@ -986,7 +986,7 @@ impl TimeoutConfig {
 
         let socket_connection_setup_timeout =
             if socket_connection_setup_timeout.as_millis() > i32::MAX.try_into().unwrap() {
-                error!(
+                warn!(
                     "socket_connection_setup_timeout ({socket_connection_setup_timeout:?}) \
                     greater than max of {}ms, defaulting to the default \
                     of {DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT:?}",
@@ -994,7 +994,7 @@ impl TimeoutConfig {
                 );
                 DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT
             } else if socket_connection_setup_timeout.as_millis() < 10 {
-                error!(
+                warn!(
                     "socket_connection_setup_timeout ({socket_connection_setup_timeout:?}) \
                     less than max of 10ms, defaulting to the default of \
                 {DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT:?}"
