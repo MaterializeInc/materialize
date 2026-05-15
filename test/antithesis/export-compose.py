@@ -110,9 +110,19 @@ def inline_postgres_setup(svc: dict[str, Any]) -> None:
     Antithesis has no host filesystem, so we can't mount the SQL file.
     Read it from misc/postgres/setup_materialize.sql (one source of truth)
     and bake it into the service entrypoint.
+
+    The inline-setup transform only fires when the service originally
+    requested it (Postgres-ctor `setup_materialize=True`, which appears
+    here as a bind-mounted setup_materialize.sql). Plain postgres-image
+    services — e.g. a vanilla PG used as a CDC upstream — get the
+    common env-fixup (drop LD_PRELOAD, add HOST_AUTH_METHOD=trust) and
+    nothing else.
     """
     if not svc.get("image", "").startswith("postgres:"):
         return
+
+    vols = svc.get("volumes", []) or []
+    has_setup = any(isinstance(v, str) and "setup_materialize.sql" in v for v in vols)
 
     env = svc.setdefault("environment", [])
     # eatmydata isn't installed in the public postgres image.
@@ -120,8 +130,10 @@ def inline_postgres_setup(svc: dict[str, Any]) -> None:
     # Trust auth — Antithesis-internal traffic only.
     env.append("POSTGRES_HOST_AUTH_METHOD=trust")
 
+    if not has_setup:
+        return
+
     # Drop the bind-mounted setup SQL; we'll inline it.
-    vols = svc.get("volumes", [])
     vols[:] = [v for v in vols if "setup_materialize.sql" not in v]
     if not vols:
         svc.pop("volumes", None)
@@ -203,13 +215,30 @@ def strip_mzcompose_keys(svc: dict[str, Any]) -> None:
 ANTITHESIS_NETWORK = "antithesis-net"
 
 
-def assign_network(svc: dict[str, Any]) -> None:
+# Extra docker-network aliases per service. The repository's
+# `test/pg-cdc/*.td` files hard-code `@postgres` as the upstream hostname;
+# the testdrive-runner drivers run those files unmodified by aliasing
+# `postgres` to our `postgres-source` container at the network-DNS layer.
+EXTRA_NETWORK_ALIASES: dict[str, list[str]] = {
+    "postgres-source": ["postgres"],
+}
+
+
+def assign_network(name: str, svc: dict[str, Any]) -> None:
     """Place the service on the single named bridge network so docker-DNS
     is deterministic. Overwrites any pre-existing `networks` entry — some
     upstream Service classes set a vestigial `default: aliases: []` block
     that we don't want carried through.
+
+    Services that need additional names on the same network (see
+    `EXTRA_NETWORK_ALIASES`) use the long-form mapping syntax so we can
+    declare `aliases:` for them. Plain services keep the short list form.
     """
-    svc["networks"] = [ANTITHESIS_NETWORK]
+    aliases = EXTRA_NETWORK_ALIASES.get(name)
+    if aliases:
+        svc["networks"] = {ANTITHESIS_NETWORK: {"aliases": aliases}}
+    else:
+        svc["networks"] = [ANTITHESIS_NETWORK]
 
 
 def declare_top_level_network(compose: dict[str, Any]) -> None:
@@ -269,9 +298,7 @@ def upgrade_started_to_healthy(compose: dict[str, Any]) -> None:
     — there's nothing to wait on.
     """
     services = compose.get("services", {})
-    has_healthcheck = {
-        name for name, svc in services.items() if "healthcheck" in svc
-    }
+    has_healthcheck = {name for name, svc in services.items() if "healthcheck" in svc}
     for svc in services.values():
         deps = svc.get("depends_on")
         if not isinstance(deps, dict):
@@ -328,7 +355,7 @@ def main() -> None:
         strip_incompatible_env(svc)
         strip_mzcompose_keys(svc)
         set_explicit_names(name, svc)
-        assign_network(svc)
+        assign_network(name, svc)
 
     declare_top_level_network(c.compose)
     upgrade_started_to_healthy(c.compose)

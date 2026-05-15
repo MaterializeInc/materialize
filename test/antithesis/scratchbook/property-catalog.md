@@ -466,3 +466,43 @@ commit-order preservation) to the Antithesis environment.
 | **Invariant** | `Always`: a polling assertion in the workload — `SELECT offset_known, offset_committed FROM mz_internal.mz_source_statistics_per_worker WHERE id = ?` — invariant `offset_known >= offset_committed`. Mirror as an `assert_always!` inside the statistics update path in `src/storage/src/statistics.rs`. |
 | **Antithesis Angle** | Clusterd restart resets `offset_known` to broker-reported watermark while `offset_committed` is restored from persist. If the restoration order is wrong, the invariant flips. Direct regression target for commit 3e32df1f69. |
 | **Why It Matters** | The statistics view is consumed by users and by operational tooling to compute lag. A regression in causality makes lag metrics meaningless and is the kind of bug that survives unit tests but fails under adversarial timing. |
+
+## Category 10: Postgres CDC Source
+
+Properties specific to Materialize's Postgres CDC source pipeline, which
+subscribes to an upstream Postgres instance via a logical replication slot.
+Production Postgres CDC is single-instance — there is no equivalent of the
+MySQL primary→replica intermediate hop — so the topology adds a single
+`postgres-source` PG container (logical wal_level, replication-slot
+enabled) to the Antithesis environment.
+
+Motivation: the open `ci-flake` issues that exercise the PG CDC path
+currently have no Antithesis-side property to anchor a reproduction
+against — notably database-issues#9571 (alter-source error mismatch),
+#9931 (dropped-slot-errors), and #10047 (SSH-tunnel + CRDB metadata
+race). This category gives those flakes a home.
+
+### pg-cdc-testdrive-suite-no-spurious-failure — The Repo's PG CDC Test Suite Runs Cleanly Under Antithesis Fault Injection
+
+| | |
+|---|---|
+| **Type** | Safety (no non-transient testdrive failure) + Liveness (suite occasionally runs clean end-to-end) |
+| **Priority** | P1 — every checked-in `test/pg-cdc/*.td` regression test becomes an Antithesis property automatically. Direct regression target for the cluster of open ci-flakes on PG CDC: database-issues#9931 (dropped-slot-errors, currently CI-disabled), #9571 (alter-source.td, currently CI-disabled), #10047, and the broader testdrive-on-PG-CDC family. |
+| **Status** | **Implemented (workload-side, testdrive-runner)** — `test/antithesis/workload/test/singleton_driver_pg_cdc_testdrive.py` enumerates `/opt/testdrive-files/test/pg-cdc/*.td` (bundled into the antithesis-workload image via `pre-image: copy` in mzbuild.yml + `MZFROM testdrive` for the binary), picks one at random per invocation via `helper_random.random_choice`, and runs it via `helper_testdrive.run`. Two transforms happen at runtime: (i) the `$ skip-if / SELECT true` disable header is stripped so CI-disabled tests actually execute, and (ii) Materialize / upstream PG state is reset before and after each run. Singleton — at most one instance executes concurrently. The td files own `public` schema and the `mz_source`/`pgpass`/`pg`/`storage` names exclusively; the data-loss workload lives in `antithesis_pg_cdc.cdc_test` and is preserved by the reset helpers. |
+| **Property** | For every `.td` file in the repository's `test/pg-cdc/` suite (modulo the SSL-fixture exclusion list, which needs a TLS-configured upstream we don't model), running it via testdrive under Antithesis fault injection either succeeds or fails with output matching a recognized transient pattern (connection refused, server (re)initializing, etc.). A non-transient failure means at least one `>`/`!` checkpoint inside the testdrive script disagreed with observed Materialize behavior — the property is violated and the schedule that produced it is what Antithesis surfaces to triage. |
+| **Invariant** | `Always`: `result.succeeded OR result.looks_transient`. The assertion message is constant; the `td_file`, exit code, and stdout/stderr tails travel in the details so triage breaks results down per-file. `Sometimes`: `result.succeeded` — at least once per run, a randomly-selected file runs cleanly end-to-end, proving the safety check is not vacuously satisfied by always-transient demotion. |
+| **Antithesis Angle** | Antithesis explores schedules around the destructive sequences the td files already encode: DROP REPLICATION SLOT mid-ingestion (dropped-slot-errors.td), DROP TABLE racing with snapshot (alter-source.td, alter-table-after-source-{1,2}.td), schema changes that propagate during pause windows (replica-identity.td), transactions split across upstream-side faults (transactions.td, transactions-multi-conn.td), and 50+ more. Layered on top are the orchestrator's fault windows (kill clusterd, pause materialized, partition the upstream PG), so each invocation samples a different intersection of "destructive testdrive checkpoint × adversarial schedule". |
+| **Why It Matters** | The repo's pg-cdc test suite encodes Materialize's documented behavior on the upstream-PG CDC source — it's the closest we have to a contract spec. Under CI alone, several files in it are disabled pending the fixes Antithesis is meant to drive. Under this property, every checked-in test becomes a continuously-exercised property; new tests added to `test/pg-cdc/` are picked up automatically on the next image rebuild without a driver-level edit. |
+
+### pg-source-no-data-loss — Every Row Written to Upstream Postgres Is Eventually Visible
+
+| | |
+|---|---|
+| **Type** | Liveness + Safety |
+| **Priority** | P1 — end-to-end correctness of the PG CDC pipeline; tests a distinct code path from Kafka and MySQL |
+| **Status** | **Implemented (workload-side)** — `test/antithesis/workload/test/parallel_driver_pg_cdc.py` + `first_pg_cdc_setup.py`. Each `parallel_driver_` invocation inserts 20 rows into the upstream PG's `antithesis_pg_cdc.cdc_test`, polls `antithesis_pg_cdc` in Materialize until all rows appear (or a 120 s budget expires). The data-loss workload lives in its own schema (not `public`) so the testdrive-runner drivers (`pg-source-survives-slot-drop`, `pg-alter-source-no-spurious-success`) can own `public` and run concurrently without trampling. `always("pg: CDC source row has correct value after catchup", …)` and `always("pg: CDC source row count matches inserted count after catchup", …)` fire per-row and per-batch after confirmed catchup; `sometimes("pg: CDC source caught up to all upstream inserts within catchup budget", …)` is the liveness anchor. The `first_pg_cdc_setup.py` seeds the upstream PG (schema + table with `REPLICA IDENTITY FULL`, `PUBLICATION antithesis_pub`) and creates the Materialize-side secret/connection/source/table. |
+| **Property** | After inserting a row into the upstream Postgres (via logical replication on a publication), the Materialize CDC source eventually contains that row with the correct value. |
+| **Invariant** | `Always`: after catchup, for every row inserted into `public.cdc_test`, `SELECT value FROM antithesis_pg_cdc WHERE id = ?` returns the expected value. `Sometimes`: catchup completes within the budget at least once per run. |
+| **Antithesis Angle** | Kills/pauses of the upstream PG container (Materialize must resume from the replication slot LSN without dropping rows); network partitions between materialized and the upstream (replication slot is server-side state; partition + recovery exercises the resume path); clusterd restarts during ingestion (PG CDC resume exercises the same `storage-command-replay-idempotent` path as Kafka and MySQL); fault during DDL on the Materialize side (`ALTER SOURCE`-class races that produce wrong error in #9571). |
+| **Why It Matters** | PG CDC is a distinct ingestion code path from Kafka and MySQL, with a different fault model: the replication slot is durable server-side state, so a slot that drifts past the consumer's LSN cannot replay older WAL. Wrong behavior here — dropped rows, wrong values after restart, duplicate rows after resume, source stuck with `replication slot does not exist` — is not caught by the Kafka- or MySQL-source drivers. Direct regression target for the cluster of open PG-source flakes in database-issues. |
+

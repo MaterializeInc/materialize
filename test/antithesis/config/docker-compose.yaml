@@ -260,6 +260,42 @@ services:
     hostname: mysql-replica
     networks:
     - antithesis-net
+  postgres-source:
+    command:
+    - postgres
+    - -c
+    - wal_level=logical
+    - -c
+    - max_wal_senders=100
+    - -c
+    - max_replication_slots=100
+    - -c
+    - max_connections=5000
+    - -c
+    - max_slot_wal_keep_size=64MB
+    ports:
+    - '5432'
+    environment:
+    - POSTGRESDB=postgres
+    - POSTGRES_PASSWORD=postgres
+    - POSTGRES_HOST_AUTH_METHOD=trust
+    healthcheck:
+      test:
+      - CMD
+      - pg_isready
+      - -U
+      - postgres
+      interval: 1s
+      start_period: 30s
+    restart: 'no'
+    platform: linux/amd64
+    image: postgres:17.7
+    container_name: postgres-source
+    hostname: postgres-source
+    networks:
+      antithesis-net:
+        aliases:
+        - postgres
   clusterd1:
     entrypoint:
     - tini
@@ -298,6 +334,7 @@ services:
     stop_grace_period: 120s
     platform: linux/amd64
     image: ${MATERIALIZED_IMAGE}
+    pull_policy: never
     container_name: clusterd1
     hostname: clusterd1
     networks:
@@ -340,6 +377,7 @@ services:
     stop_grace_period: 120s
     platform: linux/amd64
     image: ${MATERIALIZED_IMAGE}
+    pull_policy: never
     container_name: clusterd2
     hostname: clusterd2
     networks:
@@ -382,6 +420,7 @@ services:
     stop_grace_period: 120s
     platform: linux/amd64
     image: ${MATERIALIZED_IMAGE}
+    pull_policy: never
     container_name: clusterd-pool-0
     hostname: clusterd-pool-0
     networks:
@@ -424,6 +463,7 @@ services:
     stop_grace_period: 120s
     platform: linux/amd64
     image: ${MATERIALIZED_IMAGE}
+    pull_policy: never
     container_name: clusterd-pool-1
     hostname: clusterd-pool-1
     networks:
@@ -616,6 +656,7 @@ services:
     stop_grace_period: 120s
     platform: linux/amd64
     image: ${MATERIALIZED_IMAGE}
+    pull_policy: never
     container_name: materialized
     networks:
     - antithesis-net
@@ -699,6 +740,8 @@ services:
         condition: service_healthy
       mysql-replica:
         condition: service_healthy
+      postgres-source:
+        condition: service_healthy
     environment:
     - PGHOST=materialized
     - PGPORT=6875
@@ -714,8 +757,131 @@ services:
     - MYSQL_HOST=mysql
     - MYSQL_REPLICA_HOST=mysql-replica
     - MYSQL_PASSWORD=p@ssw0rd
+    - PG_SOURCE_HOST=postgres-source
+    - PG_SOURCE_PORT=5432
+    - PG_SOURCE_USER=postgres
+    - PG_SOURCE_PASSWORD=postgres
+    - PG_SOURCE_DATABASE=postgres
+    - 'CLUSTER_REPLICA_SIZES={"bootstrap": {"cpu_exclusive": false, "cpu_limit": null,
+      "credits_per_hour": "1", "disabled": false, "disk_limit": null, "is_cc": true,
+      "memory_limit": "4 GiB", "scale": 1, "workers": 1}, "scale=2,workers=4": {"cpu_exclusive":
+      false, "cpu_limit": null, "credits_per_hour": "8", "disabled": false, "disk_limit":
+      null, "is_cc": true, "memory_limit": "4 GiB", "scale": 2, "workers": 4}, "scale=1,workers=1,legacy":
+      {"cpu_exclusive": false, "cpu_limit": null, "credits_per_hour": "1", "disabled":
+      false, "disk_limit": null, "is_cc": false, "memory_limit": "4 GiB", "scale":
+      1, "workers": 1}, "scale=1,workers=2,legacy": {"cpu_exclusive": false, "cpu_limit":
+      null, "credits_per_hour": "2", "disabled": false, "disk_limit": null, "is_cc":
+      false, "memory_limit": "4 GiB", "scale": 1, "workers": 2}, "free": {"cpu_exclusive":
+      false, "cpu_limit": null, "credits_per_hour": "1", "disabled": true, "disk_limit":
+      null, "is_cc": true, "memory_limit": "4 GiB", "scale": 1, "workers": 1}, "scale=1,workers=1":
+      {"cpu_exclusive": false, "cpu_limit": null, "credits_per_hour": "1", "disabled":
+      false, "disk_limit": null, "is_cc": true, "memory_limit": "4 GiB", "scale":
+      1, "workers": 1}, "scale=1,workers=1,mem=4GiB": {"cpu_exclusive": false, "cpu_limit":
+      null, "credits_per_hour": "1", "disabled": false, "disk_limit": null, "is_cc":
+      true, "memory_limit": "4 GiB", "scale": 1, "workers": 1}, "scale=1,workers=1,mem=8GiB":
+      {"cpu_exclusive": false, "cpu_limit": null, "credits_per_hour": "1", "disabled":
+      false, "disk_limit": null, "is_cc": true, "memory_limit": "8 GiB", "scale":
+      1, "workers": 1}, "scale=1,workers=1,mem=16GiB": {"cpu_exclusive": false, "cpu_limit":
+      null, "credits_per_hour": "1", "disabled": false, "disk_limit": null, "is_cc":
+      true, "memory_limit": "16 GiB", "scale": 1, "workers": 1}, "scale=1,workers=1,mem=32GiB":
+      {"cpu_exclusive": false, "cpu_limit": null, "credits_per_hour": "1", "disabled":
+      false, "disk_limit": null, "is_cc": true, "memory_limit": "32 GiB", "scale":
+      1, "workers": 1}, "scale=1,workers=1,mem=1GiB": {"cpu_exclusive": false, "cpu_limit":
+      null, "credits_per_hour": "1", "disabled": false, "disk_limit": null, "is_cc":
+      true, "memory_limit": "1 GiB", "scale": 1, "workers": 1}, "scale=1,workers=2":
+      {"cpu_exclusive": false, "cpu_limit": null, "credits_per_hour": "2", "disabled":
+      false, "disk_limit": null, "is_cc": true, "memory_limit": "4 GiB", "scale":
+      1, "workers": 2}, "scale=1,workers=2,mem=4GiB": {"cpu_exclusive": false, "cpu_limit":
+      null, "credits_per_hour": "2", "disabled": false, "disk_limit": null, "is_cc":
+      true, "memory_limit": "4 GiB", "scale": 1, "workers": 2}, "scale=1,workers=2,mem=8GiB":
+      {"cpu_exclusive": false, "cpu_limit": null, "credits_per_hour": "2", "disabled":
+      false, "disk_limit": null, "is_cc": true, "memory_limit": "8 GiB", "scale":
+      1, "workers": 2}, "scale=1,workers=2,mem=16GiB": {"cpu_exclusive": false, "cpu_limit":
+      null, "credits_per_hour": "2", "disabled": false, "disk_limit": null, "is_cc":
+      true, "memory_limit": "16 GiB", "scale": 1, "workers": 2}, "scale=1,workers=2,mem=32GiB":
+      {"cpu_exclusive": false, "cpu_limit": null, "credits_per_hour": "2", "disabled":
+      false, "disk_limit": null, "is_cc": true, "memory_limit": "32 GiB", "scale":
+      1, "workers": 2}, "scale=2,workers=1": {"cpu_exclusive": false, "cpu_limit":
+      null, "credits_per_hour": "2", "disabled": false, "disk_limit": null, "is_cc":
+      true, "memory_limit": "4 GiB", "scale": 2, "workers": 1}, "scale=2,workers=2":
+      {"cpu_exclusive": false, "cpu_limit": null, "credits_per_hour": "4", "disabled":
+      false, "disk_limit": null, "is_cc": true, "memory_limit": "4 GiB", "scale":
+      2, "workers": 2}, "scale=1,workers=2,mem=2GiB": {"cpu_exclusive": false, "cpu_limit":
+      null, "credits_per_hour": "2", "disabled": false, "disk_limit": null, "is_cc":
+      true, "memory_limit": "2 GiB", "scale": 1, "workers": 2}, "scale=1,workers=4":
+      {"cpu_exclusive": false, "cpu_limit": null, "credits_per_hour": "4", "disabled":
+      false, "disk_limit": null, "is_cc": true, "memory_limit": "4 GiB", "scale":
+      1, "workers": 4}, "scale=1,workers=4,mem=4GiB": {"cpu_exclusive": false, "cpu_limit":
+      null, "credits_per_hour": "4", "disabled": false, "disk_limit": null, "is_cc":
+      true, "memory_limit": "4 GiB", "scale": 1, "workers": 4}, "scale=1,workers=4,mem=8GiB":
+      {"cpu_exclusive": false, "cpu_limit": null, "credits_per_hour": "4", "disabled":
+      false, "disk_limit": null, "is_cc": true, "memory_limit": "8 GiB", "scale":
+      1, "workers": 4}, "scale=1,workers=4,mem=16GiB": {"cpu_exclusive": false, "cpu_limit":
+      null, "credits_per_hour": "4", "disabled": false, "disk_limit": null, "is_cc":
+      true, "memory_limit": "16 GiB", "scale": 1, "workers": 4}, "scale=1,workers=4,mem=32GiB":
+      {"cpu_exclusive": false, "cpu_limit": null, "credits_per_hour": "4", "disabled":
+      false, "disk_limit": null, "is_cc": true, "memory_limit": "32 GiB", "scale":
+      1, "workers": 4}, "scale=4,workers=1": {"cpu_exclusive": false, "cpu_limit":
+      null, "credits_per_hour": "4", "disabled": false, "disk_limit": null, "is_cc":
+      true, "memory_limit": "4 GiB", "scale": 4, "workers": 1}, "scale=4,workers=4":
+      {"cpu_exclusive": false, "cpu_limit": null, "credits_per_hour": "16", "disabled":
+      false, "disk_limit": null, "is_cc": true, "memory_limit": "4 GiB", "scale":
+      4, "workers": 4}, "scale=1,workers=8": {"cpu_exclusive": false, "cpu_limit":
+      null, "credits_per_hour": "8", "disabled": false, "disk_limit": null, "is_cc":
+      true, "memory_limit": "4 GiB", "scale": 1, "workers": 8}, "scale=1,workers=8,mem=4GiB":
+      {"cpu_exclusive": false, "cpu_limit": null, "credits_per_hour": "8", "disabled":
+      false, "disk_limit": null, "is_cc": true, "memory_limit": "4 GiB", "scale":
+      1, "workers": 8}, "scale=1,workers=8,mem=8GiB": {"cpu_exclusive": false, "cpu_limit":
+      null, "credits_per_hour": "8", "disabled": false, "disk_limit": null, "is_cc":
+      true, "memory_limit": "8 GiB", "scale": 1, "workers": 8}, "scale=1,workers=8,mem=16GiB":
+      {"cpu_exclusive": false, "cpu_limit": null, "credits_per_hour": "8", "disabled":
+      false, "disk_limit": null, "is_cc": true, "memory_limit": "16 GiB", "scale":
+      1, "workers": 8}, "scale=1,workers=8,mem=32GiB": {"cpu_exclusive": false, "cpu_limit":
+      null, "credits_per_hour": "8", "disabled": false, "disk_limit": null, "is_cc":
+      true, "memory_limit": "32 GiB", "scale": 1, "workers": 8}, "scale=8,workers=1":
+      {"cpu_exclusive": false, "cpu_limit": null, "credits_per_hour": "8", "disabled":
+      false, "disk_limit": null, "is_cc": true, "memory_limit": "4 GiB", "scale":
+      8, "workers": 1}, "scale=8,workers=8": {"cpu_exclusive": false, "cpu_limit":
+      null, "credits_per_hour": "64", "disabled": false, "disk_limit": null, "is_cc":
+      true, "memory_limit": "4 GiB", "scale": 8, "workers": 8}, "scale=1,workers=16":
+      {"cpu_exclusive": false, "cpu_limit": null, "credits_per_hour": "16", "disabled":
+      false, "disk_limit": null, "is_cc": true, "memory_limit": "4 GiB", "scale":
+      1, "workers": 16}, "scale=1,workers=16,mem=4GiB": {"cpu_exclusive": false, "cpu_limit":
+      null, "credits_per_hour": "16", "disabled": false, "disk_limit": null, "is_cc":
+      true, "memory_limit": "4 GiB", "scale": 1, "workers": 16}, "scale=1,workers=16,mem=8GiB":
+      {"cpu_exclusive": false, "cpu_limit": null, "credits_per_hour": "16", "disabled":
+      false, "disk_limit": null, "is_cc": true, "memory_limit": "8 GiB", "scale":
+      1, "workers": 16}, "scale=1,workers=16,mem=16GiB": {"cpu_exclusive": false,
+      "cpu_limit": null, "credits_per_hour": "16", "disabled": false, "disk_limit":
+      null, "is_cc": true, "memory_limit": "16 GiB", "scale": 1, "workers": 16}, "scale=1,workers=16,mem=32GiB":
+      {"cpu_exclusive": false, "cpu_limit": null, "credits_per_hour": "16", "disabled":
+      false, "disk_limit": null, "is_cc": true, "memory_limit": "32 GiB", "scale":
+      1, "workers": 16}, "scale=16,workers=1": {"cpu_exclusive": false, "cpu_limit":
+      null, "credits_per_hour": "16", "disabled": false, "disk_limit": null, "is_cc":
+      true, "memory_limit": "4 GiB", "scale": 16, "workers": 1}, "scale=16,workers=16":
+      {"cpu_exclusive": false, "cpu_limit": null, "credits_per_hour": "256", "disabled":
+      false, "disk_limit": null, "is_cc": true, "memory_limit": "4 GiB", "scale":
+      16, "workers": 16}, "scale=1,workers=32": {"cpu_exclusive": false, "cpu_limit":
+      null, "credits_per_hour": "32", "disabled": false, "disk_limit": null, "is_cc":
+      true, "memory_limit": "4 GiB", "scale": 1, "workers": 32}, "scale=1,workers=32,mem=4GiB":
+      {"cpu_exclusive": false, "cpu_limit": null, "credits_per_hour": "32", "disabled":
+      false, "disk_limit": null, "is_cc": true, "memory_limit": "4 GiB", "scale":
+      1, "workers": 32}, "scale=1,workers=32,mem=8GiB": {"cpu_exclusive": false, "cpu_limit":
+      null, "credits_per_hour": "32", "disabled": false, "disk_limit": null, "is_cc":
+      true, "memory_limit": "8 GiB", "scale": 1, "workers": 32}, "scale=1,workers=32,mem=16GiB":
+      {"cpu_exclusive": false, "cpu_limit": null, "credits_per_hour": "32", "disabled":
+      false, "disk_limit": null, "is_cc": true, "memory_limit": "16 GiB", "scale":
+      1, "workers": 32}, "scale=1,workers=32,mem=32GiB": {"cpu_exclusive": false,
+      "cpu_limit": null, "credits_per_hour": "32", "disabled": false, "disk_limit":
+      null, "is_cc": true, "memory_limit": "32 GiB", "scale": 1, "workers": 32}, "scale=32,workers=1":
+      {"cpu_exclusive": false, "cpu_limit": null, "credits_per_hour": "32", "disabled":
+      false, "disk_limit": null, "is_cc": true, "memory_limit": "4 GiB", "scale":
+      32, "workers": 1}, "scale=32,workers=32": {"cpu_exclusive": false, "cpu_limit":
+      null, "credits_per_hour": "1024", "disabled": false, "disk_limit": null, "is_cc":
+      true, "memory_limit": "4 GiB", "scale": 32, "workers": 32}}'
     platform: linux/amd64
     image: ${ANTITHESIS_WORKLOAD_IMAGE}
+    pull_policy: never
     container_name: workload
     hostname: workload
     networks:

@@ -16,7 +16,21 @@
 # needs, and stubs/materialize/mzcompose/ for the docker-compose surface we
 # have to mock out.
 
-FROM python:3.12-slim-bookworm
+# Multi-stage source for the testdrive binary used by the testdrive-runner
+# driver (singleton_driver_pg_cdc_testdrive). MZFROM is mzbuild's multi-
+# stage directive — it registers a build-order dependency on the
+# `testdrive` image and substitutes the resolved fingerprint at build
+# time. The final workload image carries the binary plus libduckdb.so (a
+# transitive dep of testdrive's foundationdb + duckdb-sys features), so
+# the workload container can run testdrive without any further service
+# plumbing.
+MZFROM testdrive AS testdrive-src
+
+# Debian 13 (trixie) base ships GLIBC 2.41; testdrive's mzbuild image is
+# built against ubuntu-base (Ubuntu 24.04, GLIBC 2.39) and references
+# GLIBC 2.38 / 2.39 symbols. The previous `python:3.12-slim-bookworm`
+# (Debian 12, GLIBC 2.36) couldn't load the testdrive binary.
+FROM python:3.12-slim-trixie
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
@@ -58,6 +72,24 @@ COPY stubs/materialize/ /opt/antithesis-pkg/materialize/
 COPY materialize/ /opt/antithesis-pkg/materialize/
 ENV PYTHONPATH=/opt/antithesis-pkg
 ENV MZ_ROOT=/opt/antithesis-pkg
+
+# Copy the testdrive binary plus the two shared libs it dynamically
+# links against (testdrive is built with the foundationdb feature which
+# pulls libfdb_c, and duckdb-sys which pulls libduckdb). `ldconfig`
+# after the copy rebuilds the dynamic-linker cache so the loader finds
+# them. Without libfdb_c.so testdrive errors at startup with
+# "cannot open shared object file"; without libduckdb.so it errors
+# inside the duckdb-backed `kafka-create-topic` builtins.
+COPY --from=testdrive-src /usr/local/bin/testdrive /usr/local/bin/testdrive
+COPY --from=testdrive-src /usr/local/lib/libduckdb.so /usr/local/lib/libduckdb.so
+COPY --from=testdrive-src /usr/lib/libfdb_c.so /usr/lib/libfdb_c.so
+RUN ldconfig
+
+# Repo-checked-in testdrive .td files for the testdrive-runner drivers,
+# brought into the build context by the `pre-image: copy` step in
+# mzbuild.yml. The drivers reference these by repo-relative path under
+# /opt/testdrive-files, e.g. /opt/testdrive-files/test/pg-cdc/dropped-slot-errors.td.
+COPY testdrive-files/ /opt/testdrive-files/
 
 # Copy test templates and entrypoint
 COPY test/ /opt/antithesis/test/v1/materialize/

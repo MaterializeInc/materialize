@@ -45,9 +45,11 @@ Usage:
   bin/pyactivate test/antithesis/export-compose.py > config/...     # dump compose YAML
 """
 
+import json
 import os
 from pathlib import Path
 
+from materialize.mzcompose import cluster_replica_size_map
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.service import Service, ServiceConfig
 from materialize.mzcompose.services.clusterd import Clusterd
@@ -55,7 +57,7 @@ from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.mysql import MySql, create_mysql_server_args
-from materialize.mzcompose.services.postgres import PostgresMetadata
+from materialize.mzcompose.services.postgres import Postgres, PostgresMetadata
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.zookeeper import Zookeeper
 
@@ -167,6 +169,7 @@ class Workload(Service):
                 "schema-registry": {"condition": "service_started"},
                 "mysql": {"condition": "service_healthy"},
                 "mysql-replica": {"condition": "service_healthy"},
+                "postgres-source": {"condition": "service_healthy"},
             },
             "environment": [
                 "PGHOST=materialized",
@@ -197,6 +200,26 @@ class Workload(Service):
                 "MYSQL_HOST=mysql",
                 "MYSQL_REPLICA_HOST=mysql-replica",
                 f"MYSQL_PASSWORD={MySql.DEFAULT_ROOT_PASSWORD}",
+                # Postgres CDC upstream connection details. Materialize
+                # talks to this PG directly via a logical replication slot
+                # — production Postgres CDC is single-instance, unlike the
+                # MySQL primary+replica topology above.
+                "PG_SOURCE_HOST=postgres-source",
+                "PG_SOURCE_PORT=5432",
+                "PG_SOURCE_USER=postgres",
+                "PG_SOURCE_PASSWORD=postgres",
+                "PG_SOURCE_DATABASE=postgres",
+                # The testdrive binary inside the workload image reads
+                # this from the env (clap `env=CLUSTER_REPLICA_SIZES`)
+                # and uses it for any `CREATE CLUSTER REPLICAS (... SIZE
+                # '...')` statement in a checked-in `.td` file. Without
+                # it, testdrive aborts at startup with "required argument
+                # missing". The map matches what `materialized` is
+                # actually configured with, so the size names a test
+                # file references (`scale=1,workers=1`, `'1'`, ...) all
+                # resolve.
+                "CLUSTER_REPLICA_SIZES="
+                + json.dumps(cluster_replica_size_map()),
             ],
         }
         super().__init__(name="workload", config=config)
@@ -236,6 +259,32 @@ SERVICES = [
             "--replica_parallel_workers=4",
             "--replica_preserve_commit_order=ON",
         ],
+    ),
+    # Postgres source — single instance with logical replication enabled.
+    # Materialize talks to this PG directly via a replication slot, which
+    # is how PG CDC is deployed in production (unlike MySQL where Mz reads
+    # from a replica). Separate from `postgres-metadata` so Antithesis
+    # faults on the source path don't interfere with consensus storage.
+    #
+    # `wal_level=logical`, `max_wal_senders`, `max_replication_slots` are
+    # set by Postgres' default ctor. `setup_materialize=False` keeps the
+    # init scripts out — the PG-CDC setup driver creates the schema,
+    # publication, and table at runtime.
+    #
+    # `max_slot_wal_keep_size=64MB` bounds how much WAL a stalled
+    # replication slot is allowed to retain. With the default `-1`
+    # (unlimited), `test/pg-cdc/max-slot-wal-keep-size.td` can't trigger
+    # the slot-invalidation error it's checking for — the bulk insert
+    # plus two full-table updates the test does just accumulate quietly,
+    # Materialize catches up cleanly on resume, and the `! SELECT ...
+    # contains:replication slot has been invalidated` assertion fails.
+    # 64MB is small enough that the test's ~6GB of dirty pages overruns
+    # it deterministically, large enough that no realistic non-test
+    # workload trips it.
+    Postgres(
+        name="postgres-source",
+        ports=["5432"],
+        extra_command=["-c", "max_slot_wal_keep_size=64MB"],
     ),
     # Two clusterd processes, one per replica of the unmanaged
     # `antithesis_cluster`. Provisioning both replicas in the same cluster
@@ -328,6 +377,7 @@ def workflow_default(c: Composition) -> None:
         *pool_services,
         "mysql",
         "mysql-replica",
+        "postgres-source",
     )
     c.up("materialized")
     c.up("fault-orchestrator")
