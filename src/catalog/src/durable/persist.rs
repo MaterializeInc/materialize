@@ -22,6 +22,7 @@ use differential_dataflow::lattice::Lattice;
 use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
 use mz_audit_log::VersionedEvent;
+use mz_controller_types::ClusterId;
 use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::now::EpochMillis;
 use mz_ore::{
@@ -38,6 +39,8 @@ use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::Diff;
+use mz_sql::catalog::CatalogItemType;
+use mz_sql::names::{DatabaseId, SchemaId};
 use mz_storage_client::controller::PersistEpoch;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::sources::SourceData;
@@ -1617,6 +1620,7 @@ pub(crate) struct DurableCatalogData {
         Arc<imbl::OrdMap<StorageCollectionMetadataKey, StorageCollectionMetadataValue>>,
     pub(crate) unfinalized_shards: Arc<imbl::OrdMap<UnfinalizedShardKey, ()>>,
     pub(crate) txn_wal_shard: Arc<imbl::OrdMap<(), TxnWalShardValue>>,
+    pub(crate) indexes: DurableCatalogIndexes,
 }
 
 impl DurableCatalogData {
@@ -1643,8 +1647,127 @@ impl DurableCatalogData {
             storage_collection_metadata: Arc::new(imbl::OrdMap::new()),
             unfinalized_shards: Arc::new(imbl::OrdMap::new()),
             txn_wal_shard: Arc::new(imbl::OrdMap::new()),
+            indexes: DurableCatalogIndexes::new(),
         }
     }
+}
+
+/// Name-keyed indexes into [`DurableCatalogData`].
+///
+/// Each index is an `Arc<imbl::OrdMap<...>>` maintained in lock-step with the
+/// table it indexes, on the trace-apply path. Lookups are O(log N); clones are
+/// O(1).
+#[derive(Debug, Clone)]
+pub(crate) struct DurableCatalogIndexes {
+    pub(crate) database_by_name: Arc<imbl::OrdMap<String, DatabaseKey>>,
+    pub(crate) schema_by_parent_name: Arc<imbl::OrdMap<(Option<DatabaseId>, String), SchemaKey>>,
+    pub(crate) role_by_name: Arc<imbl::OrdMap<String, RoleKey>>,
+    pub(crate) cluster_by_name: Arc<imbl::OrdMap<String, ClusterKey>>,
+    pub(crate) replica_by_cluster_and_name:
+        Arc<imbl::OrdMap<(ClusterId, String), ClusterReplicaKey>>,
+    pub(crate) network_policy_by_name: Arc<imbl::OrdMap<String, NetworkPolicyKey>>,
+    /// Items at a `(schema_id, name)` are typically 0 or 1, occasionally 2 due
+    /// to the Type/Func compatibility rule. The value is the small list of
+    /// items at that namespace.
+    pub(crate) item_by_namespace:
+        Arc<imbl::OrdMap<(SchemaId, String), imbl::Vector<(ItemKey, CatalogItemType)>>>,
+    pub(crate) oid_owner: Arc<imbl::OrdMap<u32, OidOwner>>,
+}
+
+impl DurableCatalogIndexes {
+    fn new() -> DurableCatalogIndexes {
+        DurableCatalogIndexes {
+            database_by_name: Arc::new(imbl::OrdMap::new()),
+            schema_by_parent_name: Arc::new(imbl::OrdMap::new()),
+            role_by_name: Arc::new(imbl::OrdMap::new()),
+            cluster_by_name: Arc::new(imbl::OrdMap::new()),
+            replica_by_cluster_and_name: Arc::new(imbl::OrdMap::new()),
+            network_policy_by_name: Arc::new(imbl::OrdMap::new()),
+            item_by_namespace: Arc::new(imbl::OrdMap::new()),
+            oid_owner: Arc::new(imbl::OrdMap::new()),
+        }
+    }
+
+    /// Build indexes by walking the catalog tables once. O(N); used by the
+    /// snapshot path that pays the proto→Rust conversion upfront.
+    pub(crate) fn from_tables(
+        databases: &imbl::OrdMap<DatabaseKey, DatabaseValue>,
+        schemas: &imbl::OrdMap<SchemaKey, SchemaValue>,
+        roles: &imbl::OrdMap<RoleKey, RoleValue>,
+        clusters: &imbl::OrdMap<ClusterKey, ClusterValue>,
+        cluster_replicas: &imbl::OrdMap<ClusterReplicaKey, ClusterReplicaValue>,
+        network_policies: &imbl::OrdMap<NetworkPolicyKey, NetworkPolicyValue>,
+        items: &imbl::OrdMap<ItemKey, ItemValue>,
+        introspection_sources: &imbl::OrdMap<
+            ClusterIntrospectionSourceIndexKey,
+            ClusterIntrospectionSourceIndexValue,
+        >,
+    ) -> DurableCatalogIndexes {
+        let mut database_by_name = imbl::OrdMap::new();
+        let mut schema_by_parent_name = imbl::OrdMap::new();
+        let mut role_by_name = imbl::OrdMap::new();
+        let mut cluster_by_name = imbl::OrdMap::new();
+        let mut replica_by_cluster_and_name = imbl::OrdMap::new();
+        let mut network_policy_by_name = imbl::OrdMap::new();
+        let mut item_by_namespace: imbl::OrdMap<
+            (SchemaId, String),
+            imbl::Vector<(ItemKey, CatalogItemType)>,
+        > = imbl::OrdMap::new();
+        let mut oid_owner = imbl::OrdMap::new();
+
+        for (k, v) in databases.iter() {
+            database_by_name.insert(v.name.clone(), *k);
+            oid_owner.insert(v.oid, OidOwner::Database(*k));
+        }
+        for (k, v) in schemas.iter() {
+            schema_by_parent_name.insert((v.database_id, v.name.clone()), *k);
+            oid_owner.insert(v.oid, OidOwner::Schema(*k));
+        }
+        for (k, v) in roles.iter() {
+            role_by_name.insert(v.name.clone(), k.clone());
+            oid_owner.insert(v.oid, OidOwner::Role(k.clone()));
+        }
+        for (k, v) in clusters.iter() {
+            cluster_by_name.insert(v.name.clone(), k.clone());
+        }
+        for (k, v) in cluster_replicas.iter() {
+            replica_by_cluster_and_name.insert((v.cluster_id, v.name.clone()), k.clone());
+        }
+        for (k, v) in network_policies.iter() {
+            network_policy_by_name.insert(v.name.clone(), k.clone());
+        }
+        for (k, v) in items.iter() {
+            let bucket = item_by_namespace
+                .entry((v.schema_id, v.name.clone()))
+                .or_default();
+            bucket.push_back((k.clone(), v.item_type()));
+            oid_owner.insert(v.oid, OidOwner::Item(k.clone()));
+        }
+        for (k, v) in introspection_sources.iter() {
+            oid_owner.insert(v.oid, OidOwner::IntrospectionSource(k.clone()));
+        }
+
+        DurableCatalogIndexes {
+            database_by_name: Arc::new(database_by_name),
+            schema_by_parent_name: Arc::new(schema_by_parent_name),
+            role_by_name: Arc::new(role_by_name),
+            cluster_by_name: Arc::new(cluster_by_name),
+            replica_by_cluster_and_name: Arc::new(replica_by_cluster_and_name),
+            network_policy_by_name: Arc::new(network_policy_by_name),
+            item_by_namespace: Arc::new(item_by_namespace),
+            oid_owner: Arc::new(oid_owner),
+        }
+    }
+}
+
+/// Identifies which durable table owns a given OID, for the `oid_owner` index.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum OidOwner {
+    Database(DatabaseKey),
+    Schema(SchemaKey),
+    Role(RoleKey),
+    Item(ItemKey),
+    IntrospectionSource(ClusterIntrospectionSourceIndexKey),
 }
 
 /// Apply a `+1`/`-1` diff against an `Arc<imbl::OrdMap<K, V>>` table.
@@ -1671,6 +1794,80 @@ where
             Some(value),
             "retraction does not match existing value"
         );
+    } else {
+        panic!("invalid diff: {diff:?}");
+    }
+}
+
+/// Apply a `+1`/`-1` diff to a name-keyed `Arc<imbl::OrdMap<N, K>>` index.
+fn apply_index<N, K>(map: &mut Arc<imbl::OrdMap<N, K>>, name: N, key: K, diff: Diff)
+where
+    N: Ord + Clone + Debug,
+    K: Clone + Debug + PartialEq,
+{
+    let m = Arc::make_mut(map);
+    if diff == Diff::ONE {
+        let prev = m.insert(name, key);
+        assert_eq!(prev, None, "index entry already present for insert");
+    } else if diff == Diff::MINUS_ONE {
+        let prev = m.remove(&name);
+        assert_eq!(prev, Some(key), "index retraction does not match");
+    } else {
+        panic!("invalid diff: {diff:?}");
+    }
+}
+
+/// Apply a `+1`/`-1` diff to the bucketed `item_by_namespace` index.
+fn apply_item_index(
+    map: &mut Arc<imbl::OrdMap<(SchemaId, String), imbl::Vector<(ItemKey, CatalogItemType)>>>,
+    schema_id: SchemaId,
+    name: String,
+    key: ItemKey,
+    item_type: CatalogItemType,
+    diff: Diff,
+) {
+    let m = Arc::make_mut(map);
+    let bucket_key = (schema_id, name);
+    if diff == Diff::ONE {
+        let mut bucket = m.get(&bucket_key).cloned().unwrap_or_default();
+        debug_assert!(
+            !bucket.iter().any(|(k, _)| k == &key),
+            "item already present in namespace bucket"
+        );
+        bucket.push_back((key, item_type));
+        m.insert(bucket_key, bucket);
+    } else if diff == Diff::MINUS_ONE {
+        let mut bucket = m
+            .get(&bucket_key)
+            .cloned()
+            .expect("retraction with no existing namespace bucket");
+        let before = bucket.len();
+        bucket.retain(|(k, _)| k != &key);
+        debug_assert_eq!(bucket.len() + 1, before, "expected exactly one match");
+        if bucket.is_empty() {
+            m.remove(&bucket_key);
+        } else {
+            m.insert(bucket_key, bucket);
+        }
+    } else {
+        panic!("invalid diff: {diff:?}");
+    }
+}
+
+/// Apply a `+1`/`-1` diff to the `oid_owner` index.
+fn apply_oid_owner(
+    map: &mut Arc<imbl::OrdMap<u32, OidOwner>>,
+    oid: u32,
+    owner: OidOwner,
+    diff: Diff,
+) {
+    let m = Arc::make_mut(map);
+    if diff == Diff::ONE {
+        let prev = m.insert(oid, owner);
+        assert_eq!(prev, None, "oid already owned");
+    } else if diff == Diff::MINUS_ONE {
+        let prev = m.remove(&oid);
+        assert_eq!(prev, Some(owner), "oid owner mismatch on retraction");
     } else {
         panic!("invalid diff: {diff:?}");
     }
@@ -1726,18 +1923,54 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
                     let key: DatabaseKey = RustType::from_proto(key.clone()).expect("invalid key");
                     let value: DatabaseValue =
                         RustType::from_proto(value.clone()).expect("invalid value");
+                    apply_index(
+                        &mut self.data.indexes.database_by_name,
+                        value.name.clone(),
+                        key,
+                        diff,
+                    );
+                    apply_oid_owner(
+                        &mut self.data.indexes.oid_owner,
+                        value.oid,
+                        OidOwner::Database(key),
+                        diff,
+                    );
                     apply_durable(&mut self.data.databases, key, value, diff);
                 }
                 StateUpdateKind::Schema(key, value) => {
                     let key: SchemaKey = RustType::from_proto(key.clone()).expect("invalid key");
                     let value: SchemaValue =
                         RustType::from_proto(value.clone()).expect("invalid value");
+                    apply_index(
+                        &mut self.data.indexes.schema_by_parent_name,
+                        (value.database_id, value.name.clone()),
+                        key,
+                        diff,
+                    );
+                    apply_oid_owner(
+                        &mut self.data.indexes.oid_owner,
+                        value.oid,
+                        OidOwner::Schema(key),
+                        diff,
+                    );
                     apply_durable(&mut self.data.schemas, key, value, diff);
                 }
                 StateUpdateKind::Role(key, value) => {
                     let key: RoleKey = RustType::from_proto(key.clone()).expect("invalid key");
                     let value: RoleValue =
                         RustType::from_proto(value.clone()).expect("invalid value");
+                    apply_index(
+                        &mut self.data.indexes.role_by_name,
+                        value.name.clone(),
+                        key.clone(),
+                        diff,
+                    );
+                    apply_oid_owner(
+                        &mut self.data.indexes.oid_owner,
+                        value.oid,
+                        OidOwner::Role(key.clone()),
+                        diff,
+                    );
                     apply_durable(&mut self.data.roles, key, value, diff);
                 }
                 StateUpdateKind::RoleAuth(key, value) => {
@@ -1750,6 +1983,21 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
                     let key: ItemKey = RustType::from_proto(key.clone()).expect("invalid key");
                     let value: ItemValue =
                         RustType::from_proto(value.clone()).expect("invalid value");
+                    let item_type = value.item_type();
+                    apply_item_index(
+                        &mut self.data.indexes.item_by_namespace,
+                        value.schema_id,
+                        value.name.clone(),
+                        key.clone(),
+                        item_type,
+                        diff,
+                    );
+                    apply_oid_owner(
+                        &mut self.data.indexes.oid_owner,
+                        value.oid,
+                        OidOwner::Item(key.clone()),
+                        diff,
+                    );
                     apply_durable(&mut self.data.items, key, value, diff);
                 }
                 StateUpdateKind::Comment(key, value) => {
@@ -1762,6 +2010,12 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
                     let key: ClusterKey = RustType::from_proto(key.clone()).expect("invalid key");
                     let value: ClusterValue =
                         RustType::from_proto(value.clone()).expect("invalid value");
+                    apply_index(
+                        &mut self.data.indexes.cluster_by_name,
+                        value.name.clone(),
+                        key.clone(),
+                        diff,
+                    );
                     apply_durable(&mut self.data.clusters, key, value, diff);
                 }
                 StateUpdateKind::NetworkPolicy(key, value) => {
@@ -1769,6 +2023,12 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
                         RustType::from_proto(key.clone()).expect("invalid key");
                     let value: NetworkPolicyValue =
                         RustType::from_proto(value.clone()).expect("invalid value");
+                    apply_index(
+                        &mut self.data.indexes.network_policy_by_name,
+                        value.name.clone(),
+                        key.clone(),
+                        diff,
+                    );
                     apply_durable(&mut self.data.network_policies, key, value, diff);
                 }
                 StateUpdateKind::ClusterReplica(key, value) => {
@@ -1776,6 +2036,12 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
                         RustType::from_proto(key.clone()).expect("invalid key");
                     let value: ClusterReplicaValue =
                         RustType::from_proto(value.clone()).expect("invalid value");
+                    apply_index(
+                        &mut self.data.indexes.replica_by_cluster_and_name,
+                        (value.cluster_id, value.name.clone()),
+                        key.clone(),
+                        diff,
+                    );
                     apply_durable(&mut self.data.cluster_replicas, key, value, diff);
                 }
                 StateUpdateKind::IntrospectionSourceIndex(key, value) => {
@@ -1783,6 +2049,12 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
                         RustType::from_proto(key.clone()).expect("invalid key");
                     let value: ClusterIntrospectionSourceIndexValue =
                         RustType::from_proto(value.clone()).expect("invalid value");
+                    apply_oid_owner(
+                        &mut self.data.indexes.oid_owner,
+                        value.oid,
+                        OidOwner::IntrospectionSource(key.clone()),
+                        diff,
+                    );
                     apply_durable(&mut self.data.introspection_sources, key, value, diff);
                 }
                 StateUpdateKind::IdAllocator(key, value) => {

@@ -215,7 +215,7 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
     let items = [
         Item {
             id: CatalogItemId::User(100),
-            oid: 20_000,
+            oid: 30_000,
             global_id: GlobalId::User(100),
             schema_id: SchemaId::User(1),
             name: "foo".to_string(),
@@ -226,7 +226,7 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
         },
         Item {
             id: CatalogItemId::User(200),
-            oid: 20_001,
+            oid: 30_001,
             global_id: GlobalId::User(200),
             schema_id: SchemaId::User(1),
             name: "bar".to_string(),
@@ -509,7 +509,7 @@ async fn test_persist_ddl_detection_with_batch_allocated_ids() {
         let id = first_id + i;
         txn.insert_item(
             CatalogItemId::User(id),
-            20_000 + u32::try_from(i).unwrap(),
+            30_000 + u32::try_from(i).unwrap(),
             GlobalId::User(id),
             SchemaId::User(1),
             &format!("item_{i}"),

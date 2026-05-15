@@ -163,6 +163,7 @@ impl<'a> Transaction<'a> {
             storage_collection_metadata,
             unfinalized_shards,
             txn_wal_shard,
+            indexes,
         } = data;
 
         // Populate the cached set of OIDs from the initial state of the five
@@ -178,26 +179,87 @@ impl<'a> Transaction<'a> {
                 .map(|v: &ClusterIntrospectionSourceIndexValue| v.oid),
         );
 
-        let databases =
-            TableTransaction::new_with_uniqueness_fn(databases, |a: &DatabaseValue, b| {
-                a.name == b.name
-            });
-        let schemas = TableTransaction::new_with_uniqueness_fn(schemas, |a: &SchemaValue, b| {
-            a.database_id == b.database_id && a.name == b.name
-        });
-        let items = TableTransaction::new_with_uniqueness_fn(items, |a: &ItemValue, b| {
-            a.schema_id == b.schema_id && a.name == b.name && {
-                // `item_type` is slow, only compute if needed.
-                let a_type = a.item_type();
-                let b_type = b.item_type();
-                (a_type != CatalogItemType::Type && b_type != CatalogItemType::Type)
-                    || (a_type == CatalogItemType::Type && b_type.conflicts_with_type())
-                    || (b_type == CatalogItemType::Type && a_type.conflicts_with_type())
-            }
-        });
-        let roles =
-            TableTransaction::new_with_uniqueness_fn(roles, |a: &RoleValue, b| a.name == b.name);
+        let database_by_name = Arc::clone(&indexes.database_by_name);
+        let databases = TableTransaction::new_with_uniqueness_and_index(
+            databases,
+            |a: &DatabaseValue, b| a.name == b.name,
+            Box::new(move |v: &DatabaseValue| {
+                database_by_name.get(&v.name).copied().into_iter().collect()
+            }),
+        );
+        let schema_by_parent_name = Arc::clone(&indexes.schema_by_parent_name);
+        let schemas = TableTransaction::new_with_uniqueness_and_index(
+            schemas,
+            |a: &SchemaValue, b| a.database_id == b.database_id && a.name == b.name,
+            Box::new(move |v: &SchemaValue| {
+                schema_by_parent_name
+                    .get(&(v.database_id, v.name.clone()))
+                    .copied()
+                    .into_iter()
+                    .collect()
+            }),
+        );
+        let item_by_namespace = Arc::clone(&indexes.item_by_namespace);
+        let items = TableTransaction::new_with_uniqueness_and_index(
+            items,
+            |a: &ItemValue, b| {
+                a.schema_id == b.schema_id && a.name == b.name && {
+                    // `item_type` is slow, only compute if needed.
+                    let a_type = a.item_type();
+                    let b_type = b.item_type();
+                    (a_type != CatalogItemType::Type && b_type != CatalogItemType::Type)
+                        || (a_type == CatalogItemType::Type && b_type.conflicts_with_type())
+                        || (b_type == CatalogItemType::Type && a_type.conflicts_with_type())
+                }
+            },
+            Box::new(move |v: &ItemValue| {
+                item_by_namespace
+                    .get(&(v.schema_id, v.name.clone()))
+                    .into_iter()
+                    .flat_map(|bucket| bucket.iter().map(|(k, _t)| k.clone()))
+                    .collect()
+            }),
+        );
+        let role_by_name = Arc::clone(&indexes.role_by_name);
+        let roles = TableTransaction::new_with_uniqueness_and_index(
+            roles,
+            |a: &RoleValue, b| a.name == b.name,
+            Box::new(move |v: &RoleValue| role_by_name.get(&v.name).cloned().into_iter().collect()),
+        );
         let introspection_sources = TableTransaction::new(introspection_sources);
+
+        let cluster_by_name = Arc::clone(&indexes.cluster_by_name);
+        let clusters = TableTransaction::new_with_uniqueness_and_index(
+            clusters,
+            |a: &ClusterValue, b| a.name == b.name,
+            Box::new(move |v: &ClusterValue| {
+                cluster_by_name.get(&v.name).cloned().into_iter().collect()
+            }),
+        );
+        let network_policy_by_name = Arc::clone(&indexes.network_policy_by_name);
+        let network_policies = TableTransaction::new_with_uniqueness_and_index(
+            network_policies,
+            |a: &NetworkPolicyValue, b| a.name == b.name,
+            Box::new(move |v: &NetworkPolicyValue| {
+                network_policy_by_name
+                    .get(&v.name)
+                    .cloned()
+                    .into_iter()
+                    .collect()
+            }),
+        );
+        let replica_by_cluster_and_name = Arc::clone(&indexes.replica_by_cluster_and_name);
+        let cluster_replicas = TableTransaction::new_with_uniqueness_and_index(
+            cluster_replicas,
+            |a: &ClusterReplicaValue, b| a.cluster_id == b.cluster_id && a.name == b.name,
+            Box::new(move |v: &ClusterReplicaValue| {
+                replica_by_cluster_and_name
+                    .get(&(v.cluster_id, v.name.clone()))
+                    .cloned()
+                    .into_iter()
+                    .collect()
+            }),
+        );
 
         Ok(Transaction {
             durable_catalog,
@@ -207,17 +269,9 @@ impl<'a> Transaction<'a> {
             comments: TableTransaction::new(comments),
             roles,
             role_auth: TableTransaction::new(role_auth),
-            clusters: TableTransaction::new_with_uniqueness_fn(clusters, |a: &ClusterValue, b| {
-                a.name == b.name
-            }),
-            network_policies: TableTransaction::new_with_uniqueness_fn(
-                network_policies,
-                |a: &NetworkPolicyValue, b| a.name == b.name,
-            ),
-            cluster_replicas: TableTransaction::new_with_uniqueness_fn(
-                cluster_replicas,
-                |a: &ClusterReplicaValue, b| a.cluster_id == b.cluster_id && a.name == b.name,
-            ),
+            clusters,
+            network_policies,
+            cluster_replicas,
             introspection_sources,
             id_allocator: TableTransaction::new(id_allocator),
             configs: TableTransaction::new(configs),
@@ -2969,17 +3023,35 @@ fn snapshot_to_durable_data(
         txn_wal_shard,
     } = snapshot;
 
+    let databases = convert(databases)?;
+    let schemas = convert(schemas)?;
+    let roles = convert(roles)?;
+    let clusters = convert(clusters)?;
+    let cluster_replicas = convert(cluster_replicas)?;
+    let network_policies = convert(network_policies)?;
+    let items = convert(items)?;
+    let introspection_sources = convert(introspection_sources)?;
+    let indexes = crate::durable::persist::DurableCatalogIndexes::from_tables(
+        &databases,
+        &schemas,
+        &roles,
+        &clusters,
+        &cluster_replicas,
+        &network_policies,
+        &items,
+        &introspection_sources,
+    );
     Ok(crate::durable::persist::DurableCatalogData {
-        databases: convert(databases)?,
-        schemas: convert(schemas)?,
-        roles: convert(roles)?,
+        databases,
+        schemas,
+        roles,
         role_auth: convert(role_auth)?,
-        items: convert(items)?,
+        items,
         comments: convert(comments)?,
-        clusters: convert(clusters)?,
-        network_policies: convert(network_policies)?,
-        cluster_replicas: convert(cluster_replicas)?,
-        introspection_sources: convert(introspection_sources)?,
+        clusters,
+        network_policies,
+        cluster_replicas,
+        introspection_sources,
         id_allocator: convert(id_allocator)?,
         configs: convert(configs)?,
         settings: convert(settings)?,
@@ -2991,6 +3063,7 @@ fn snapshot_to_durable_data(
         storage_collection_metadata: convert(storage_collection_metadata)?,
         unfinalized_shards: convert(unfinalized_shards)?,
         txn_wal_shard: convert(txn_wal_shard)?,
+        indexes,
     })
 }
 
@@ -3094,6 +3167,11 @@ struct TableTransaction<K, V> {
     pending: BTreeMap<K, Vec<TransactionUpdate<V>>>,
     #[derivative(Debug = "ignore")]
     uniqueness_violation: Option<fn(a: &V, b: &V) -> bool>,
+    /// Returns the set of keys in `base` whose value would collide with `v`
+    /// under the uniqueness predicate. Implemented via an index, so this is
+    /// O(log N + collisions) instead of O(N).
+    #[derivative(Debug = "ignore")]
+    index_probe: Option<Box<dyn Fn(&V) -> Vec<K> + Send + Sync>>,
 }
 
 impl<K, V> TableTransaction<K, V>
@@ -3107,11 +3185,13 @@ where
             base,
             pending: BTreeMap::new(),
             uniqueness_violation: None,
+            index_probe: None,
         }
     }
 
     /// Like [`Self::new`], but you can also provide `uniqueness_violation`, which is a function
     /// that determines whether there is a uniqueness violation among two values.
+    #[allow(dead_code)]
     fn new_with_uniqueness_fn(
         base: Arc<imbl::OrdMap<K, V>>,
         uniqueness_violation: fn(a: &V, b: &V) -> bool,
@@ -3120,6 +3200,23 @@ where
             base,
             pending: BTreeMap::new(),
             uniqueness_violation: Some(uniqueness_violation),
+            index_probe: None,
+        }
+    }
+
+    /// Like [`Self::new_with_uniqueness_fn`], but additionally supplies an
+    /// index-backed candidate generator for the `base` side of the uniqueness
+    /// check.
+    fn new_with_uniqueness_and_index(
+        base: Arc<imbl::OrdMap<K, V>>,
+        uniqueness_violation: fn(a: &V, b: &V) -> bool,
+        index_probe: Box<dyn Fn(&V) -> Vec<K> + Send + Sync>,
+    ) -> Self {
+        Self {
+            base,
+            pending: BTreeMap::new(),
+            uniqueness_violation: Some(uniqueness_violation),
+            index_probe: Some(index_probe),
         }
     }
 
@@ -3191,7 +3288,8 @@ where
     /// Verifies that no items in `self` violate `self.uniqueness_violation` with `keys`.
     ///
     /// Runtime is O(n * k), where n is the number of items in `self` and k is the number of
-    /// items in `keys`.
+    /// items in `keys`. With an `index_probe`, the `base` side is O((log N + collisions) * k),
+    /// and only `pending` is walked linearly.
     fn verify_keys<'a>(
         &self,
         keys: impl IntoIterator<Item = &'a K>,
@@ -3204,11 +3302,35 @@ where
                 .into_iter()
                 .filter_map(|key| self.get(key).map(|value| (key, value)))
                 .collect();
-            // Compare each value in `entries` to each value in `self` and ensure they are unique.
-            for (ki, vi) in self.items() {
+            if let Some(index_probe) = &self.index_probe {
                 for (kj, vj) in &entries {
-                    if ki != *kj && uniqueness_violation(vi, vj) {
-                        return Err(DurableCatalogError::UniquenessViolation);
+                    for cand in index_probe(vj) {
+                        if &cand == *kj {
+                            continue;
+                        }
+                        if let Some(vi) = self.get(&cand) {
+                            if uniqueness_violation(vi, vj) {
+                                return Err(DurableCatalogError::UniquenessViolation);
+                            }
+                        }
+                    }
+                    for pk in self.pending.keys() {
+                        if pk == *kj {
+                            continue;
+                        }
+                        if let Some(vi) = self.get(pk) {
+                            if uniqueness_violation(vi, vj) {
+                                return Err(DurableCatalogError::UniquenessViolation);
+                            }
+                        }
+                    }
+                }
+            } else {
+                for (ki, vi) in self.items() {
+                    for (kj, vj) in &entries {
+                        if ki != *kj && uniqueness_violation(vi, vj) {
+                            return Err(DurableCatalogError::UniquenessViolation);
+                        }
                     }
                 }
             }
@@ -3332,31 +3454,37 @@ where
     ///
     /// Returns an error if the uniqueness check failed or the key already exists.
     fn insert(&mut self, k: K, v: V, ts: Timestamp) -> Result<(), DurableCatalogError> {
-        // Duplicate-key check: ask whether the key is currently visible (i.e.
-        // present in `initial` and not retracted by a pending update, or
-        // inserted by a pending update). `get` consolidates `initial`+`pending`
-        // for a single key, so this is O(log N + P_k) where P_k is the number
-        // of pending entries for `k` (typically 0).
         if self.get(&k).is_some() {
             return Err(DurableCatalogError::DuplicateKey);
         }
-        // Uniqueness check: the predicate is opaque (`fn(&V, &V) -> bool`), so
-        // we can't generically index it. When no predicate is registered
-        // (which is the case for most tables; see `TableTransaction::new`
-        // call sites), we can skip the full scan entirely. When one *is*
-        // registered, we still have to walk every visible row. Making that
-        // case O(log N) would require a uniqueness-key extractor that
-        // maintains a side `BTreeMap<UniqueKey, K>` mirroring `initial`
-        // and `pending`.
         if let Some(uniqueness_violation) = self.uniqueness_violation {
-            let mut violation = false;
-            self.for_values(|_, for_v| {
-                if uniqueness_violation(for_v, &v) {
-                    violation = true;
+            if let Some(index_probe) = &self.index_probe {
+                // Fast path: probe the index for candidates in `base`, then
+                // walk only `pending`.
+                for cand in index_probe(&v) {
+                    if let Some(for_v) = self.get(&cand) {
+                        if uniqueness_violation(for_v, &v) {
+                            return Err(DurableCatalogError::UniquenessViolation);
+                        }
+                    }
                 }
-            });
-            if violation {
-                return Err(DurableCatalogError::UniquenessViolation);
+                for pk in self.pending.keys() {
+                    if let Some(for_v) = self.get(pk) {
+                        if uniqueness_violation(for_v, &v) {
+                            return Err(DurableCatalogError::UniquenessViolation);
+                        }
+                    }
+                }
+            } else {
+                let mut violation = false;
+                self.for_values(|_, for_v| {
+                    if uniqueness_violation(for_v, &v) {
+                        violation = true;
+                    }
+                });
+                if violation {
+                    return Err(DurableCatalogError::UniquenessViolation);
+                }
             }
         }
         self.pending.entry(k).or_default().push(TransactionUpdate {
@@ -3664,6 +3792,52 @@ mod tests {
         assert!(
             table
                 .insert(4i64.to_le_bytes().to_vec(), "c".to_string(), 0)
+                .is_err()
+        );
+    }
+
+    /// Exercises the `index_probe` fast path: the probe maps the value's
+    /// uniqueness key (the name itself, for this `String -> String` table)
+    /// back to the matching base key.
+    #[mz_ore::test]
+    fn test_table_transaction_index_probe() {
+        fn uniqueness_violation(a: &String, b: &String) -> bool {
+            a == b
+        }
+        let base_map = base(BTreeMap::from([
+            ("k1".to_string(), "alice".to_string()),
+            ("k2".to_string(), "bob".to_string()),
+        ]));
+        // Build an index mapping value -> key, mirroring `database_by_name`.
+        let mut index: imbl::OrdMap<String, String> = imbl::OrdMap::new();
+        for (k, v) in base_map.iter() {
+            index.insert(v.clone(), k.clone());
+        }
+        let index = Arc::new(index);
+        let probe_index = Arc::clone(&index);
+        let mut table = TableTransaction::new_with_uniqueness_and_index(
+            Arc::clone(&base_map),
+            uniqueness_violation,
+            Box::new(move |v: &String| probe_index.get(v).cloned().into_iter().collect()),
+        );
+
+        // Non-conflicting insert succeeds.
+        assert_ok!(table.insert("k3".to_string(), "carol".to_string(), 0));
+        // Conflicting insert is rejected via the index probe (would otherwise
+        // require a full scan to detect).
+        assert!(
+            table
+                .insert("k4".to_string(), "alice".to_string(), 0)
+                .is_err()
+        );
+        // After retracting "alice", inserting the same value succeeds.
+        let _ = table.delete_by_key("k1".to_string(), 1);
+        assert_ok!(table.insert("k4".to_string(), "alice".to_string(), 2));
+        // But inserting "carol" again (now a pending insert) is rejected — the
+        // pending walk must also catch collisions.
+        assert!(
+            table
+                .insert("k5".to_string(), "carol".to_string(), 3)
                 .is_err()
         );
     }
