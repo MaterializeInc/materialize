@@ -79,8 +79,8 @@ The `envd_objects_scalability_tables` and `envd_objects_scalability_mvs`
 scenarios fix the measurement cluster size and vary the number of pre-existing
 catalog objects, measuring `CREATE TABLE` and `SELECT` latency at each size
 point. By default they walk the full size list (`1, 10, 100, 1000, 3000, 5000,
-10000, 20000, 30000, 50000`); the MV scenario shards across pad clusters at
-10000 materialized views per cluster (so 50000 MVs spans 5 single-replica
+10000, 20000, 30000`); the MV scenario shards across pad clusters at
+10000 materialized views per cluster (so 30000 MVs spans 3 single-replica
 clusters). Override the size list with `--envd-objects-scalability-sizes`.
 These runs are long; expect hours for the full size range, especially the MV
 scenario.
