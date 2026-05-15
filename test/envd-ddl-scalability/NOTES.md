@@ -778,3 +778,65 @@ alone; that cost is now the dominant per-object grower.
 
 The remaining handful-of-ms gap to the success target needs a
 follow-on persist/storage workstream, not more catalog-side work.
+
+### 2026-05-15 — bogo-consensus probe (does the residual slope live in CRDB?)
+
+Cherry-picked `819a69a6d1` ("persist: add bogo-consensus, an in-memory
+gRPC Consensus backend") onto this branch as the experiment vehicle.
+The hypothesis was: if the post-design residual ~1.5 μs/object slope
+is dominated by persist's `compare_and_append` round-trip to CRDB,
+swapping the consensus backend for an in-memory gRPC service should
+reduce or eliminate that slope, giving us cleaner signal for the next
+round of catalog-side work.
+
+Setup: `bin/environmentd --optimized` against
+`bogo://127.0.0.1:6882`, CRDB still in the loop for the timestamp
+oracle. Default 4 MiB gRPC message size cap is too small for the
+catalog shard once history accumulates; bumped client and server to
+256 MiB (server: `BogoGrpcServer::new(...).max_decoding_message_size`
+/ `max_encoding_message_size`; client: same on `TonicClient`).
+Without this fix the catalog shard's `scan` retries-with-backoff
+indefinitely once history grows past 4 MiB; the audit completes but
+the latencies are dominated by retry sleeps, not actual work.
+
+Numbers (warm envd, `--padding tables --scale 0,5000 --reps 8`),
+side by side with the optimized CRDB baseline:
+
+| op | CRDB N=0 | CRDB N=5000 | CRDB Δ | bogo N=0 | bogo N=5000 | bogo Δ |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| create_table        | 31.8 | 39.4 | +7.6  | 104.8 | 150.6 | +45.8 |
+| drop_table          | 19.0 | 31.2 | +12.2 |  46.9 |  70.3 | +23.4 |
+| alter_table_add_col | 23.8 | 34.0 | +10.2 |  62.6 | 119.3 | +56.7 |
+| rename_table        | 18.9 | 29.9 | +11.0 |  57.9 |  76.3 | +18.4 |
+
+Per-object slope under bogo (≈3.7-11.3 μs/object) is **higher**, not
+lower, than under CRDB (≈1.5-2.4 μs/object). Absolute latencies are
+also 2-4× worse. Padding the catalog (5000 sequential CREATE TABLEs)
+took 551 s under bogo vs 193 s under CRDB.
+
+That's an informative negative result. Interpretations:
+
+- The residual slope is **not** dominated by CRDB query latency. If
+  it were, replacing CRDB with a local in-process state machine would
+  drop it. It doesn't — it grows.
+- The bogo backend's `Vec<VersionedData>`-per-key model with a single
+  global `Mutex` doesn't beat CRDB for this workload. Each persist
+  scan currently transfers history-shaped state over gRPC + protobuf;
+  the cost grows with shard history, and the global mutex serialises
+  every persist op. CRDB's row-level locking and binary client
+  protocol are tighter at this size.
+- The persist-side residual on CRDB is likely in `Applier::new` /
+  `maybe_init_shard` / `compare_and_append`'s own state-machine
+  bookkeeping (state encoding, version walks, listen plumbing) rather
+  than in the SQL roundtrip itself. That matches the earlier finding
+  in this file that `open_data_handles` dominated MV padding.
+
+What this means for the next round of catalog-side work: there isn't
+a hidden CRDB-latency factor masking a deeper O(n) loop in adapter or
+catalog. The residual ~1.5 μs/object on CRDB really does look like
+persist-internal cost. Further reductions need to come from either
+(a) persist-side scaling work (smaller per-DDL batches, smarter state
+caching), or (b) batching multiple DDL operations into a single
+persist `compare_and_append` — the design's step 5 already does this
+for multi-statement DDL transactions, but single-statement DDL still
+pays once per statement.

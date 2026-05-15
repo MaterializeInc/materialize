@@ -46,8 +46,12 @@ impl BogoConsensusClient {
             // No TLS — bogo is for local perf testing.
             .tcp_nodelay(true);
         let channel = endpoint.connect().await?;
+        // Catalog-shard scans grow with shard history; raise the gRPC message
+        // size cap well above tonic's 4 MiB default to avoid retry storms.
         Ok(Self {
-            inner: TonicClient::new(channel),
+            inner: TonicClient::new(channel)
+                .max_decoding_message_size(256 * 1024 * 1024)
+                .max_encoding_message_size(256 * 1024 * 1024),
         })
     }
 

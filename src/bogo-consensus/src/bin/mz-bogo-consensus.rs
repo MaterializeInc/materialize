@@ -88,7 +88,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     }
 
     let server = BogoConsensusServer::new(Arc::clone(&metrics));
-    let grpc = BogoGrpcServer::new(server);
+    // Catalog-shard scans grow with shard history; raise the gRPC message
+    // size cap well above tonic's 4 MiB default.
+    let grpc = BogoGrpcServer::new(server)
+        .max_decoding_message_size(256 * 1024 * 1024)
+        .max_encoding_message_size(256 * 1024 * 1024);
 
     let listener = TcpListener::bind(args.listen_addr).await?;
     let local_addr = listener.local_addr()?;
