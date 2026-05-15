@@ -741,6 +741,7 @@ pub fn show_columns<'a>(
         Some("position"),
         Some(&["name", "nullable", "type", "comment"]),
     )?;
+    scx.record_sql_impl_ids(&new_resolved_ids);
     Ok(ShowColumnsSelect {
         id: entry.id(),
         show_select,

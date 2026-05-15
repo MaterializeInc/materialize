@@ -351,6 +351,14 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     /// Returns the set of supported AWS PrivateLink availability zone ids.
     fn aws_privatelink_availability_zones(&self) -> Option<BTreeSet<String>>;
 
+    /// Returns true if the session has `restrict_to_user_objects` active.
+    ///
+    /// Defaults to false so that non-session catalog implementations (e.g. those used during
+    /// catalog rehydration) are unaffected.
+    fn restrict_to_user_objects(&self) -> bool {
+        false
+    }
+
     /// Returns system vars
     fn system_vars(&self) -> &SystemVars;
 

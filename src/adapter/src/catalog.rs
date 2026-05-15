@@ -248,6 +248,7 @@ pub struct ConnCatalog<'a> {
     prepared_statements: Option<&'a BTreeMap<String, PreparedStatement>>,
     portals: Option<&'a BTreeMap<String, Portal>>,
     notices_tx: UnboundedSender<AdapterNotice>,
+    restrict_to_user_objects: bool,
 }
 
 impl ConnCatalog<'_> {
@@ -1671,6 +1672,10 @@ impl ExprHumanizer for ConnCatalog<'_> {
 impl SessionCatalog for ConnCatalog<'_> {
     fn active_role_id(&self) -> &RoleId {
         &self.role_id
+    }
+
+    fn restrict_to_user_objects(&self) -> bool {
+        self.restrict_to_user_objects
     }
 
     fn get_prepared_statement_desc(&self, name: &str) -> Option<&StatementDesc> {

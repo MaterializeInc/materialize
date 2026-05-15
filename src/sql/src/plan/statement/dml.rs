@@ -891,12 +891,22 @@ pub fn plan_explain_analyze_object(
         .full_name_str();
     let explainee = plan_explainee(scx, statement.explainee, params)?;
 
-    match explainee {
-        plan::Explainee::Index(_index_id) => (),
-        plan::Explainee::MaterializedView(_item_id) => (),
-        _ => {
-            return Err(sql_err!("EXPLAIN ANALYZE queries for this explainee type",));
+    let check_ownership = |item_id: &CatalogItemId, item_type: &str| -> Result<(), PlanError> {
+        if scx.catalog.restrict_to_user_objects() {
+            let item = scx.catalog.get_item(item_id);
+            if item.owner_id() != *scx.catalog.active_role_id() {
+                let full_name = scx.catalog.resolve_full_name(item.name());
+                return Err(sql_err!("must be owner of {item_type} {full_name}"));
+            }
         }
+        Ok(())
+    };
+    match &explainee {
+        plan::Explainee::Index(item_id) => check_ownership(item_id, "INDEX")?,
+        plan::Explainee::MaterializedView(item_id) => {
+            check_ownership(item_id, "MATERIALIZED VIEW")?
+        }
+        _ => return Err(sql_err!("EXPLAIN ANALYZE queries for this explainee type",)),
     };
 
     // generate SQL query
@@ -1097,7 +1107,8 @@ ORDER BY {order_by}"#
 
         Ok(Plan::Select(SelectPlan::immediate(rows, typ)))
     } else {
-        let (show_select, _resolved_ids) = ShowSelect::new_from_bare_query(scx, query)?;
+        let (show_select, resolved_ids) = ShowSelect::new_from_bare_query(scx, query)?;
+        scx.record_sql_impl_ids(&resolved_ids);
         show_select.plan()
     }
 }
@@ -1469,7 +1480,8 @@ ORDER BY {order_by}"#
 
         Ok(Plan::Select(SelectPlan::immediate(rows, typ)))
     } else {
-        let (show_select, _resolved_ids) = ShowSelect::new_from_bare_query(scx, query)?;
+        let (show_select, resolved_ids) = ShowSelect::new_from_bare_query(scx, query)?;
+        scx.record_sql_impl_ids(&resolved_ids);
         show_select.plan()
     }
 }
