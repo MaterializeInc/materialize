@@ -101,9 +101,13 @@ Procedure (per cluster size in `REPLICA_SCALES`, capped by `--max-scale`):
    `mz_internal.mz_materialization_lag` for max `local_lag` across the test
    objects on `c`.
 3. Declare healthy if all N objects are reporting and max lag is below
-   `CLUSTER_OBJECT_LIMITS_LAG_THRESHOLD_MS` (default 2 s). Move to the next
-   cluster size on the first unhealthy N (the unhealthy point is still
-   recorded so the cliff is visible).
+   `CLUSTER_OBJECT_LIMITS_LAG_THRESHOLD_MS` (default 2 s). Stop walking N on
+   the first unhealthy point (the unhealthy point is still recorded so the
+   cliff is visible).
+4. Bisect the (last_healthy, first_unhealthy) interval
+   `--cluster-object-limits-bisect-steps` times (default 4), adding or
+   dropping objects in place each step. Each bisection probe halves the
+   uncertainty around the cliff. Set to 0 to disable.
 
 The default N-list ramps geometrically up to 1000, then steps in +1000
 increments up to `--cluster-object-limits-max` (default 30000). Override

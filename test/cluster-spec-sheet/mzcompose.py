@@ -202,6 +202,11 @@ CLUSTER_OBJECT_LIMITS_HYDRATION_TIMEOUT_S = 60
 # representative lag.
 CLUSTER_OBJECT_LIMITS_SAMPLES = 5
 CLUSTER_OBJECT_LIMITS_SAMPLE_INTERVAL_S = 2
+# After the coarse N-walk locates the first unhealthy N for a given cluster
+# size, bisect the (last_healthy, first_unhealthy) interval this many times to
+# narrow the cliff. With a coarse +1k step, 4 bisection steps narrow the cliff
+# to ±~60. Set to 0 to disable.
+CLUSTER_OBJECT_LIMITS_BISECT_STEPS = 4
 
 
 def default_cluster_object_limits_sizes(max_n: int) -> list[int]:
@@ -2548,6 +2553,16 @@ class ClusterObjectLimitsScenario(Scenario):
     def add_objects(self, runner: ScenarioRunner, target_n: int) -> None:
         raise NotImplementedError
 
+    def remove_objects(self, runner: ScenarioRunner, target_n: int) -> None:
+        """Drop the test objects above ``target_n`` from cluster ``c``.
+
+        Inverse of ``add_objects``. Needed by the bisection refinement in
+        ``run_scenario_cluster_object_limits``: after walking forward past the
+        cliff, we step back down to probe intermediate N without rebuilding
+        the catalog from scratch.
+        """
+        raise NotImplementedError
+
     def lag_filter(self) -> str:
         """SQL fragment that filters `mz_materialization_lag` to our test
         objects on cluster `c`. Subclass-specific because the cluster_id is
@@ -2629,6 +2644,21 @@ class ClusterObjectLimitsIndexesScenario(ClusterObjectLimitsScenario):
         )
         self._current_n = target_n
 
+    def remove_objects(self, runner: ScenarioRunner, target_n: int) -> None:
+        if target_n >= self._current_n:
+            return
+        # DROP VIEW CASCADE removes the dependent default index too.
+        statements = [
+            f"DROP VIEW IF EXISTS {self.PAD_SCHEMA}.v_{i} CASCADE"
+            for i in range(target_n + 1, self._current_n + 1)
+        ]
+        _bulk_run(
+            runner,
+            statements,
+            f"drop indexed views {target_n + 1}..{self._current_n}",
+        )
+        self._current_n = target_n
+
     def lag_filter(self) -> str:
         return """
         JOIN mz_catalog.mz_indexes idx ON l.object_id = idx.id
@@ -2657,6 +2687,20 @@ class ClusterObjectLimitsMvsScenario(ClusterObjectLimitsScenario):
             runner,
             statements,
             f"create MVs {self._current_n + 1}..{target_n}",
+        )
+        self._current_n = target_n
+
+    def remove_objects(self, runner: ScenarioRunner, target_n: int) -> None:
+        if target_n >= self._current_n:
+            return
+        statements = [
+            f"DROP MATERIALIZED VIEW IF EXISTS {self.PAD_SCHEMA}.mv_{i}"
+            for i in range(target_n + 1, self._current_n + 1)
+        ]
+        _bulk_run(
+            runner,
+            statements,
+            f"drop MVs {target_n + 1}..{self._current_n}",
         )
         self._current_n = target_n
 
@@ -2952,6 +2996,17 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
             "cluster_object_limits scenarios. If omitted, defaults to a "
             "geometric ramp up to 1000 then +1000 increments up to "
             "--cluster-object-limits-max."
+        ),
+    )
+    parser.add_argument(
+        "--cluster-object-limits-bisect-steps",
+        type=int,
+        default=CLUSTER_OBJECT_LIMITS_BISECT_STEPS,
+        help=(
+            "After the coarse N-walk locates the cliff for a given cluster "
+            "size, bisect the (last_healthy, first_unhealthy) interval this "
+            "many times to narrow it. Set to 0 to disable refinement. "
+            f"Default: {CLUSTER_OBJECT_LIMITS_BISECT_STEPS}."
         ),
     )
     parser.add_argument(
@@ -3271,6 +3326,7 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
                         target=target,
                         max_scale=max_scale,
                         sizes=cluster_object_limits_sizes,
+                        bisect_steps=args.cluster_object_limits_bisect_steps,
                     )
                 if scenario == SCENARIO_CLUSTER_OBJECT_LIMITS_MVS:
                     print(
@@ -3283,6 +3339,7 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
                         target=target,
                         max_scale=max_scale,
                         sizes=cluster_object_limits_sizes,
+                        bisect_steps=args.cluster_object_limits_bisect_steps,
                     )
 
         test_failed = True
@@ -3703,6 +3760,7 @@ def run_scenario_cluster_object_limits(
     hydration_timeout_s: int = CLUSTER_OBJECT_LIMITS_HYDRATION_TIMEOUT_S,
     samples: int = CLUSTER_OBJECT_LIMITS_SAMPLES,
     sample_interval_s: float = CLUSTER_OBJECT_LIMITS_SAMPLE_INTERVAL_S,
+    bisect_steps: int = CLUSTER_OBJECT_LIMITS_BISECT_STEPS,
 ) -> None:
     """
     For each cluster size in REPLICA_SCALES (capped by `max_scale`), walk the
@@ -3711,6 +3769,11 @@ def run_scenario_cluster_object_limits(
     size on the first unhealthy data point (the unhealthy sample is still
     recorded so the cliff is visible). Reports max-N-healthy implicitly via
     the rows in the CSV.
+
+    If `bisect_steps > 0` and a cliff was located, bisect the
+    (last_healthy, first_unhealthy) interval that many times, probing each
+    midpoint to narrow the cliff. Each refinement step adds or drops objects
+    in place rather than rebuilding the catalog.
     """
 
     def probe_once(runner: ScenarioRunner) -> tuple[int, int, float]:
@@ -3796,53 +3859,91 @@ def run_scenario_cluster_object_limits(
         # Reset the base table and pad schema for this cluster-size iteration.
         scenario.reset_for_cluster_size(runner)
 
+        def probe_and_record(n: int, refinement: bool = False) -> bool:
+            runner.scale = n
+            max_lag_ms, healthy, reporting, total = hydrate_and_sample(runner, n)
+            # A fully stalled materialization can report `local_lag` as
+            # `now() - <minimum timestamp>`, i.e. the current unix time in
+            # ms (~1.78e12). Cap the recorded value so the cliff doesn't
+            # crush every other data point on the plot. The `healthy`
+            # column carries the underlying truth, and the analysis
+            # labels the plot to make the cap explicit.
+            capped_lag_ms = min(max_lag_ms, CLUSTER_OBJECT_LIMITS_LAG_CAP_MS)
+            print(
+                f"    {'(bisect) ' if refinement else ''}"
+                f"N={n}: max_local_lag_ms={max_lag_ms:.1f} "
+                f"reporting={reporting}/{total} healthy={healthy}"
+            )
+            runner.results_writer.writerow(
+                {
+                    "scenario": scenario.name(),
+                    "scenario_version": scenario.VERSION,
+                    "scale": n,
+                    "mode": "cluster_object_limits",
+                    "category": "freshness",
+                    "test_name": "max_local_lag_ms",
+                    "cluster_size": replica_size,
+                    "envd_cpus": None,
+                    "repetition": 0,
+                    "size_bytes": None,
+                    "time_ms": int(capped_lag_ms),
+                    "qps": None,
+                    "healthy": 1 if healthy else 0,
+                }
+            )
+            return healthy
+
         try:
+            # Coarse pass: walk the N list, stop at the first unhealthy point.
+            last_healthy_n = 0
+            first_unhealthy_n: int | None = None
             for n in sizes:
                 print(
                     f"--- cluster_object_limits {scenario.name()}: "
                     f"size '{replica_size}', building up to N={n}"
                 )
                 scenario.add_objects(runner, n)
-                runner.scale = n
                 print(
                     f"--- cluster_object_limits {scenario.name()}: "
                     f"size '{replica_size}', probing freshness at N={n}"
                 )
-                max_lag_ms, healthy, reporting, total = hydrate_and_sample(runner, n)
-                # A fully stalled materialization can report `local_lag` as
-                # `now() - <minimum timestamp>`, i.e. the current unix time in
-                # ms (~1.78e12). Cap the recorded value so the cliff doesn't
-                # crush every other data point on the plot. The `healthy`
-                # column carries the underlying truth, and the analysis
-                # labels the plot to make the cap explicit.
-                capped_lag_ms = min(max_lag_ms, CLUSTER_OBJECT_LIMITS_LAG_CAP_MS)
-                print(
-                    f"    N={n}: max_local_lag_ms={max_lag_ms:.1f} "
-                    f"reporting={reporting}/{total} healthy={healthy}"
-                )
-                runner.results_writer.writerow(
-                    {
-                        "scenario": scenario.name(),
-                        "scenario_version": scenario.VERSION,
-                        "scale": n,
-                        "mode": "cluster_object_limits",
-                        "category": "freshness",
-                        "test_name": "max_local_lag_ms",
-                        "cluster_size": replica_size,
-                        "envd_cpus": None,
-                        "repetition": 0,
-                        "size_bytes": None,
-                        "time_ms": int(capped_lag_ms),
-                        "qps": None,
-                        "healthy": 1 if healthy else 0,
-                    }
-                )
-                if not healthy:
+                if probe_and_record(n):
+                    last_healthy_n = n
+                else:
+                    first_unhealthy_n = n
                     # Found the cliff for this cluster size; skip larger Ns.
                     print(
-                        f"    N={n}: unhealthy, stopping N-walk for size '{replica_size}'"
+                        f"    N={n}: unhealthy, stopping N-walk for size "
+                        f"'{replica_size}'"
                     )
                     break
+
+            # Refinement pass: bisect (last_healthy, first_unhealthy] to
+            # narrow the cliff. Each step adds or drops objects in place.
+            if first_unhealthy_n is not None and bisect_steps > 0:
+                lo, hi = last_healthy_n, first_unhealthy_n
+                for step in range(bisect_steps):
+                    mid = (lo + hi) // 2
+                    if mid <= lo:
+                        # Interval already minimal (hi - lo <= 1).
+                        break
+                    print(
+                        f"--- cluster_object_limits {scenario.name()}: "
+                        f"size '{replica_size}', bisect step "
+                        f"{step + 1}/{bisect_steps} at N={mid} "
+                        f"(cliff in ({lo}, {hi}])"
+                    )
+                    # Exactly one of these does work; the other is a no-op.
+                    scenario.add_objects(runner, mid)
+                    scenario.remove_objects(runner, mid)
+                    if probe_and_record(mid, refinement=True):
+                        lo = mid
+                    else:
+                        hi = mid
+                print(
+                    f"    bisect done for size '{replica_size}': "
+                    f"cliff in ({lo}, {hi}]"
+                )
         finally:
             # Drop the cluster (cascades to indexes/MVs) and the schema (views)
             # before moving to the next cluster size, to bound catalog growth.
