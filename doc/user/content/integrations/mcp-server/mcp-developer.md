@@ -270,6 +270,16 @@ catalog queries, uses the [`query_system_catalog`
 tool](/integrations/mcp-server/mcp-developer-tools/#query_system_catalog) to run
 those queries, and synthesizes the results.
 
+## Privileges
+
+The privileges required to use the `materialize-developer` MCP server are:
+
+* `USAGE` on system catalog schemas and `SELECT` on system catalog objects.
+  These privileges are granted by default.
+
+* If agents also need access to replica-specific metrics from
+  `mz_introspection`, `USAGE` privileges on the corresponding cluster.
+
 ## Related pages
 
 - [`materialize-developer` MCP Server available
