@@ -5271,7 +5271,7 @@ pub static MZ_MCP_DATA_PRODUCTS: LazyLock<BuiltinView> = LazyLock::new(|| Builti
         ),
         (
             "cluster",
-            "Cluster where the object computes or its index is hosted. The object can be read from any cluster.",
+            "Cluster where the object computes or its index is hosted. Reads from any cluster work, but only reads on this cluster benefit from the index.",
         ),
         (
             "description",
@@ -5326,7 +5326,7 @@ pub static MZ_MCP_DATA_PRODUCT_DETAILS: LazyLock<BuiltinView> = LazyLock::new(||
         ),
         (
             "cluster",
-            "Cluster where the object computes or its index is hosted. The object can be read from any cluster.",
+            "Cluster where the object computes or its index is hosted. Reads from any cluster work, but only reads on this cluster benefit from the index.",
         ),
         (
             "description",
