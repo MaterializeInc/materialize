@@ -1133,6 +1133,7 @@ impl Coordinator {
                                 new_aws_privatelink_connections += 1
                             }
                             ConnectionDetails::Csr(_)
+                            | ConnectionDetails::GlueSchemaRegistry(_)
                             | ConnectionDetails::Ssh { .. }
                             | ConnectionDetails::Aws(_)
                             | ConnectionDetails::IcebergCatalog(_) => {}
@@ -1308,6 +1309,7 @@ impl Coordinator {
                 ConnectionDetails::SqlServer(_) => current_sql_server_connections += 1,
                 ConnectionDetails::Kafka(_) => current_kafka_connections += 1,
                 ConnectionDetails::Csr(_)
+                | ConnectionDetails::GlueSchemaRegistry(_)
                 | ConnectionDetails::Ssh { .. }
                 | ConnectionDetails::Aws(_)
                 | ConnectionDetails::IcebergCatalog(_) => {}

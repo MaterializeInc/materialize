@@ -1935,6 +1935,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_glue_schema_registry,
+        desc: "CREATE CONNECTION ... TO AWS GLUE SCHEMA REGISTRY",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_alter_set_cluster,
         desc: "ALTER ... SET CLUSTER syntax",
         default: false,
