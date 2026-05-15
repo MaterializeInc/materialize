@@ -139,33 +139,6 @@ as needed.
 If any privilege is missing, the data product will not appear in the agent's
 tool list.
 
-### Restricting access to user objects only {#restrict-to-user-objects}
-
-By default, a role can query any object it has been granted `SELECT` on,
-including system catalog views. To prevent an agent role from reading system
-catalog tables (`mz_catalog`, `mz_internal`, `pg_catalog`,
-`information_schema`), a superuser can set the `restrict_to_user_objects` role
-default:
-
-```mzsql
-ALTER ROLE mcp_agent SET restrict_to_user_objects = true;
-```
-
-This setting takes effect on the next connection. Once active:
-
-- Queries referencing system catalog objects are rejected with a permission
-  error.
-- Data product discovery (`get_data_products`, `get_data_product_details`,
-  `read_data_product`) continues to work normally.
-- The restriction cannot be bypassed by the role itself; only a superuser can
-  change or remove it.
-
-To remove the restriction (as superuser):
-
-```mzsql
-ALTER ROLE mcp_agent RESET restrict_to_user_objects;
-```
-
 ## Define and document data products for discovery
 
 The MCP server allows agents to discover and query documented (i.e.,
