@@ -255,6 +255,73 @@ This is the most plausible source of the per-object cost in the
 catalog durable txn spans (`transaction`, `consolidate`, `snapshot`)
 that grow with N regardless of op type.
 
+### 2026-05-15 — views and mvs padding passes
+
+**Views padding** (N=0,500,2000,5000): slope is roughly half of tables-
+padding. Δ@5000 for CREATE TABLE: +8.5 ms (vs +23 ms with tables pad).
+Confirms that **two cost components are stacked**:
+
+1. ~half scales with **storage-collection count** (only paid by ops
+   that create/drop storage collections, i.e. CREATE TABLE / DROP TABLE
+   and friends). Tables have shards; views do not.
+2. ~half scales with **catalog-entry count** of any kind. All ops pay
+   this.
+
+**MVs padding** (N=0,500,2000): blows up super-linearly.
+
+| op | N=0 | N=500 | N=2000 | factor 500→2000 |
+| --- | ---: | ---: | ---: | ---: |
+| create_table | 37 | 146 | **2095** | 14× for 4× N |
+| drop_table | 36 | 99 | 996 | 10× for 4× N |
+| alter_table_add_col | 46 | 138 | 1127 | 8× for 4× N |
+| rename_table | 29 | 119 | 653 | 5.5× for 4× N |
+| create_view | 31 | 105 | 479 | 4.6× for 4× N |
+| create_mv | 40 | 51 | 837 | 16× for 4× N |
+| drop_mv | 31 | 44 | 446 | 10× for 4× N |
+
+4× more N giving 5-16× more latency = **quadratic** somewhere. CSV at
+`/tmp/audit-mvs.csv`.
+
+Trace for `create_table` p50=2.1 s at N=2000 MVs:
+- `storage::create_collections` total: 1.72 s
+  - **self-time: 1.65 s**
+  - Visible child: `PersistTableWriteCmd::Register` 64 ms
+- `coord::catalog_transact_with_side_effects` self: 192 ms
+- `coord::initialize_read_policies`: 13 ms (vs 0.5 ms at N=0)
+
+**1.65 seconds inside `storage::create_collections` is in code not
+covered by any sub-span.** Source reading turned up plausible callers
+inside `storage_collections.create_collections_for_bootstrap`
+(`src/storage-client/src/storage_collections.rs:1686`) but none
+explicitly look quadratic. Most likely candidates:
+
+- `install_collection_dependency_read_holds_inner` →
+  `install_read_capabilities_inner` → `update_read_capabilities_inner`
+  walks `MutableAntichain::update_iter` on collections with many read
+  capabilities. With N MVs holding read holds on a single `pad_base`,
+  pad_base's `read_capabilities` could have N entries → an
+  `update_iter` over it would be O(N).
+- The recursive propagation in `update_read_capabilities_inner`
+  (`:1250`) walks `storage_dependencies` and adds them to `updates`,
+  potentially fanning out across the dependency graph.
+- `acquire_read_holds_inner` could be amplified.
+
+But we need either targeted instrumentation or a CPU profile to be
+sure. Reading further blindly is hitting diminishing returns.
+
+### What we know now
+
+- **Linear O(N) bottleneck** is shared across all DDL ops, around
+  ~4 μs/catalog-entry on this local envd. Sources identified by code:
+  - `Transaction::allocate_oids` (full walk)
+  - `Coordinator::validate_resource_limits` (5 full walks)
+  - `TableTransaction::insert/update` (full walk on every mutation)
+- **Quadratic O(N²) bottleneck** triggered when padding objects
+  share dependencies (e.g. MVs reading from a common base table).
+  Bottleneck lives inside storage controller's `create_collections`
+  path, not yet pinpointed; suspect read-capability propagation
+  through dependency edges.
+
 ## Open questions
 
 - Does the scaling pattern differ across padding axes? If `views` (no
