@@ -14,7 +14,7 @@ rows:
     orchestratord version: v26.24.0
     environmentd version: v26.24.0
     Release date: "2026-05-15"
-    Notes: See [v26.24.0 release notes](/releases/#v26240)
+    Notes: See [v26.24.1 release notes](/releases/#v26241)
   - Materialize Operator: v26.22.0
     orchestratord version: v26.22.0
     environmentd version: v26.22.0
