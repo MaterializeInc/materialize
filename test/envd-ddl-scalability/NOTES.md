@@ -331,6 +331,191 @@ sure. Reading further blindly is hitting diminishing returns.
 - Are CREATE-side and DROP-side regressions caused by the same loops, or
   different ones (dependency walks tend to live on DROP)?
 
+## Design proposals (draft — for the linear O(N) suspects)
+
+These are the three confirmed O(N) hotspots from source reading. None
+of them require the storage-side investigation to be complete. They
+also stack — each contributes part of the ~4 μs/object slope.
+
+### Fix 1 — `Coordinator::user_*().count()` calls
+
+`src/adapter/src/coord/ddl.rs:1056-1500`, `validate_resource_limits`.
+Today every DDL does 5+ full walks of `state.entry_by_id` to count
+items per type.
+
+**Proposal:** add type-bucketed indexes to `CatalogState`, maintained
+in `apply_item_update` (and `drop_item`):
+
+```rust
+// in CatalogState (state.rs)
+items_by_type: imbl::OrdMap<CatalogItemTypeBucket, imbl::OrdSet<CatalogItemId>>,
+```
+
+with buckets `Table`, `Source`, `Sink`, `MaterializedView`, `View`,
+`Index`, `Connection`, `Secret`, `Type`, `Func`, `Log`,
+`ContinualTask`. Add `user_*().count()` overloads that return `.len()`
+on the bucket. Rewrite `validate_resource_limits` to use the counts.
+
+Trade-offs:
+- O(log N) bookkeeping in `insert_entry` / `drop_item` (negligible).
+- ~4-12 ms/DDL saved at N=5000 from `validate_resource_limits` alone.
+- Same buckets are useful for `mz_objects` builtin tables and ad-hoc
+  introspection; can replace some other full walks.
+- Has to stay in sync with `is_user()` filter (different bucket for
+  system vs user, or filter at read time).
+
+### Fix 2 — `Transaction::allocate_oids`
+
+`src/catalog/src/durable/transaction.rs:914-1018`. Every OID alloc
+builds a HashSet of all in-use OIDs by walking all
+databases/schemas/roles/items/introspection_sources.
+
+**Proposal:** what the existing comment already suggests — maintain a
+durable free-list / next-id allocator that tracks taken OIDs
+incrementally. Two options:
+
+a. **Append-only bump + tombstones for reuse.** Today OIDs recycle.
+   If we make the `id_allocator` store the next monotonic OID
+   (`OID_ALLOC_KEY.next_id` already does this) and keep a separate
+   `taken_oids` `BTreeSet<u32>` in memory, allocation is
+   O(log N). On drop we insert into a `freed_oids` set; on alloc we
+   first pop from `freed_oids` before bumping.
+
+b. **Skip OID reuse entirely.** OIDs are u32; at 1k DDLs/s we exhaust
+   in ~50 days, but that's not actually true because we cap to
+   `FIRST_USER_OID..u32::MAX` (a few billion). For practical purposes
+   we could simply never reuse and panic on wrap-around. Simplest
+   possible fix; matches Postgres's behaviour where OID reuse is also
+   rare.
+
+(a) preserves current semantics. (b) is simpler but a semantic
+change worth checking with the team.
+
+### Fix 3 — `TableTransaction::insert/update` full scans
+
+`src/catalog/src/durable/transaction.rs:3190` (insert) and `:3222`
+(update). Both call `for_values` to check for duplicate-key and
+uniqueness-violation against every initial+pending row. For a CREATE
+TABLE with N pre-existing items, every `items.insert(...)` walks N
+items.
+
+**Proposal:** since `for_values` is uniformly walked for these checks:
+
+a. **Key check via `BTreeMap::contains_key`.** Replace the `k == for_k`
+   scan with a `BTreeMap` (or `BTreeSet<K>`) lookup. `pending` is
+   already a `BTreeMap<K, _>`, so we just need to also have access to
+   `initial`'s keyspace — which is also a `BTreeMap<K, V>` (see
+   `current_items_proto`). Both lookups are O(log N).
+
+b. **Uniqueness check** is the harder part: the predicate
+   `uniqueness_violation(for_v, &v)` is opaque, so we can't index it
+   generically. But for most tables, `K` IS the unique key, so the
+   predicate is `false`. We can let callers either:
+     - declare "no uniqueness violations possible" so we skip the loop
+       entirely, OR
+     - register a "uniqueness key extractor" so we keep a side
+       `BTreeMap<UniqueKey, K>` and check via that map.
+
+This change is the most invasive of the three but probably also the
+highest-leverage; it touches every TableTransaction mutation.
+
+### Roll-up
+
+The three fixes combined likely close most of the ~4 μs/object slope
+on linear paths. None changes externally visible semantics; all are
+"replace full-walk with O(log N) lookup using an index maintained in
+the existing apply path." Tests are easy to add: time `CREATE TABLE`
+in a catalog with N=10/100/1000/10000 trivial tables and assert near-
+constant latency.
+
+The quadratic-looking blow-up under MV-shared-dependency padding is
+**not** covered by any of these — see "Storage-side blow-up" below.
+
+### 2026-05-15 — pinpointing the storage-side blow-up
+
+Added scoped tracing spans inside the storage controller's
+`create_collections_for_bootstrap` chain. Trace for CREATE TABLE at
+N=1000 MVs (444 ms p50, vs ~30 ms at N=0):
+
+| span | self-time at N=1000 |
+| --- | ---: |
+| `ccfb::open_data_handles_concurrent` (was unattributed) | 119 ms |
+| `PersistTableWriteCmd::Register` (txn-wal) | 46 ms |
+| catalog persist `compare_and_append` | 23 ms |
+| `ccfb::install_collection_states` (main loop) | ~0 ms |
+| `ccfb::synchronize_finalized_shards` | ~0 ms |
+
+So **the inner main loop and the synchronize call are not the issue**
+even at N=1000 MVs. The cost is dominated by `open_data_handles`.
+Stepping inside `open_data_handles`:
+
+| span | self-time at N=1000 |
+| --- | ---: |
+| `odh::upgrade_version` | 40.8 ms |
+| `odh::open_critical_handle` | 32.6 ms |
+| `odh::fetch_recent_upper` | 7.2 ms |
+| `odh::open_write_handle` | (sub-ms) |
+
+Both `upgrade_version` and `open_critical_handle` invoke persist's
+`StateCache::get` → `Applier::new` → `maybe_init_shard` →
+`fetch_recent_live_diffs` / `try_compare_and_set_current` /
+`fetch_current_state`. These hit CockroachDB's `consensus` table via
+queries like:
+
+```sql
+SELECT sequence_number, data FROM consensus
+WHERE shard = $1 ORDER BY sequence_number DESC LIMIT 1
+```
+
+Per-shard, primary-key access — should be O(log total_rows). But the
+measurement says the cost scales with the number of *existing* shards
+in CRDB. Plausible explanations (not yet verified):
+
+- **CRDB query latency degradation** under N rows is the simplest
+  one — even index-only lookups can slow when the table has lots of
+  rows due to caching effects.
+- **Persist `StateCache` lock contention** — the cache holds a single
+  `Mutex` (`src/persist-client/src/cache.rs:479`) across all shards;
+  if background tasks hold it proportional to N, every new shard's
+  insert waits.
+- **PubSub subscribe path** — `pubsub_sender.subscribe(&shard_id)` is
+  invoked from inside the cache lock; if it has any O(N) accounting,
+  this would multiply per-shard cost.
+- **CRDB `consensus` table bloat from version churn** — every shard
+  state mutation appends a row, and old rows get GC'd. With many
+  shards, churn rate matters.
+
+In every case, this is **persist / CRDB territory**, not adapter /
+catalog. The catalog-side O(N) fixes from the previous section are
+independent and worth landing first.
+
+The catalog persist `compare_and_append` for the catalog shard (23 ms
+at N=1000, vs ~2 ms at N=0) also looks linear in something — likely
+the catalog shard accumulates state per item, so its own consensus
+state grows with N. Compaction settings on the catalog shard would
+affect this.
+
+### Updated proposals
+
+**Storage-side fix (Fix 4 — needs persist team).** The persist
+`make_machine` / `maybe_init_shard` path should not scale with the
+number of existing shards in the same process or in CRDB. Concrete
+investigations to start with:
+
+1. Run the audit harness with `samply record -p $envd_pid` and
+   confirm the CPU flame graph attributes the time to either
+   CRDB-network I/O (then it's a database-side issue) or to in-process
+   Rust code (then it's a persist-cache / pubsub issue).
+2. Time the raw CRDB query `SELECT sequence_number, data FROM
+   consensus WHERE shard = $1 ORDER BY sequence_number DESC LIMIT 1`
+   at varying total row counts. If that's the source, file it with
+   storage/persist and CRDB folks.
+3. Profile under contention: with N MVs, if multiple compute replicas
+   are still chattering with persist, the lock on `StateCache.states`
+   may be more contended than the trace suggests. Re-test with
+   `--meas-cluster-size scale=1,workers=1` and no pad clusters
+   (`tables` padding) at high N to isolate from compute side-effects.
+
 ## Next steps
 
 1. Start the local stack and run the tables-padding pass.

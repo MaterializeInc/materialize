@@ -580,19 +580,24 @@ impl StorageCollectionsImpl {
         } else {
             // We're managing the data for this shard in read-write mode, which would fence out other
             // processes in read-only mode; it's safe to upgrade the metadata version.
-            persist_client
-                .upgrade_version::<SourceData, (), Timestamp, StorageDiff>(
-                    shard,
-                    Diagnostics {
-                        shard_name: id.to_string(),
-                        handle_purpose: format!("controller data for {}", id),
-                    },
-                )
-                .await
-                .expect("invalid persist usage");
+            async {
+                persist_client
+                    .upgrade_version::<SourceData, (), Timestamp, StorageDiff>(
+                        shard,
+                        Diagnostics {
+                            shard_name: id.to_string(),
+                            handle_purpose: format!("controller data for {}", id),
+                        },
+                    )
+                    .await
+                    .expect("invalid persist usage");
+            }
+            .instrument(info_span!("odh::upgrade_version"))
+            .await;
 
             let since_handle = self
                 .open_critical_handle(id, shard, since, persist_client)
+                .instrument(info_span!("odh::open_critical_handle"))
                 .await;
 
             SinceHandleWrapper::Critical(since_handle)
@@ -600,6 +605,7 @@ impl StorageCollectionsImpl {
 
         let mut write_handle = self
             .open_write_handle(id, shard, relation_desc, persist_client)
+            .instrument(info_span!("odh::open_write_handle"))
             .await;
 
         // N.B.
@@ -612,7 +618,11 @@ impl StorageCollectionsImpl {
         //
         // Note that this returns the upper, but also sets it on the handle to
         // be fetched later.
-        write_handle.fetch_recent_upper().await;
+        async {
+            write_handle.fetch_recent_upper().await;
+        }
+        .instrument(info_span!("odh::fetch_recent_upper"))
+        .await;
 
         (write_handle, since_handle)
     }
