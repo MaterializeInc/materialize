@@ -164,6 +164,97 @@ With `opentelemetry_filter=debug` we get the debug-level spans, so the
 per-update applies are visible. That should let us identify which kind
 of update is slow and how its self-time scales with N.
 
+### 2026-05-15 — first profiling pass (tables padding, local envd)
+
+Ran `audit.py --padding tables --scale 0,500,2000,5000 --ops
+create_table,drop_table,alter_table_add_col,rename_table,create_view,
+drop_view --reps 8`. All DDL ops scale linearly with N at remarkably
+similar slopes (3.3-4.7 μs/object), which means **the dominant O(N)
+cost is shared infrastructure, not op-specific**.
+
+p50 latency in ms (local envd, not directly comparable to cluster-
+spec-sheet's cloud numbers, but slope is what matters):
+
+| op | N=0 | N=500 | N=2000 | N=5000 | Δ@5000 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| create_table        | 31 | 33 | 37 | 55 | +23 |
+| drop_table          | 20 | 21 | 30 | 40 | +20 |
+| alter_table_add_col | 23 | 25 | 32 | 41 | +18 |
+| rename_table        | 20 | 21 | 28 | 37 | +17 |
+| create_view         | 18 | 21 | 26 | 38 | +20 |
+| drop_view           | 19 | 22 | 29 | 39 | +19 |
+
+CSV at `/tmp/audit-tables.csv`, summary at
+`/tmp/audit-tables.summary`. Slopes ~4 μs/object across all ops
+means even *no-controller-side-effect* DDLs (rename, alter, view
+create/drop) pay the same per-object price.
+
+### Trace analysis: which spans grow with N
+
+Top self-time growers from N=0 → N=5000:
+
+**For CREATE TABLE** (full +23 ms breakdown):
+| span | N=0 | N=5000 | Δ |
+| --- | ---: | ---: | ---: |
+| `storage::create_collections` | 9.9 | 22.5 | **+12.6** |
+| `snapshot` (catalog durable) | 0.5 | 4.1 | +3.6 |
+| `transaction` (catalog durable) | 0.5 | 2.5 | +2.0 |
+| `consolidate` (catalog durable) | 0.4 | 2.3 | +1.9 |
+| `PersistTableWriteCmd::Append` | 5.6 | 7.5 | +1.9 |
+| `apply_catalog_implications_inner` | (new) | 1.1 | +1.1 |
+| `apply_updates` | 0.5 | 1.2 | +0.7 |
+
+**For ALTER TABLE** (full +18 ms breakdown):
+| span | N=0 | N=5000 | Δ |
+| --- | ---: | ---: | ---: |
+| `snapshot` | (sub-ms) | 3.8 | +3.6 |
+| `transaction` | (sub-ms) | 2.5 | +2.1 |
+| `consolidate` | (sub-ms) | 1.9 | +1.5 |
+| `coord::catalog_transact_with_context::table_updates` | 7.6 | 9.2 | +1.6 |
+| `apply_updates` | 0.7 | 1.2 | +0.5 |
+| `apply_catalog_implications_inner` | (new) | 1.1 | +1.1 |
+| `PersistTableWriteCmd::Append` | 6.6 | 8.3 | +1.7 |
+
+**For RENAME TABLE** (full +17 ms breakdown): same shape as ALTER —
+the growers are catalog durable txn spans (`snapshot`, `transaction`,
+`consolidate`) plus persist append.
+
+### Where the per-object cost lives
+
+Two clusters of O(N) cost dominate:
+
+1. **`storage::create_collections`** — only for CREATE TABLE (and
+   anything else that creates a storage collection). +12 ms / 5000 ≈
+   2.5 μs/object. Suspect: scans existing collections to set up read
+   policies / read holds / metadata. Need to read
+   `src/storage-controller/src/lib.rs::create_collections`.
+
+2. **Catalog durable txn machinery** (`snapshot`, `transaction`,
+   `consolidate`) — present for **every** DDL. +7-8 ms / 5000 ≈
+   1.5 μs/object. These spans live in
+   `src/catalog/src/durable/persist.rs` and
+   `src/catalog/src/durable/transaction.rs`. Combined with
+   `TableTransaction::insert/update` doing `for_values` over all N
+   items (suspect 3 below), this looks like the catalog snapshot read
+   from persist is full-state every time, even when the txn only
+   touches a few rows.
+
+### O(n) suspect 3 — `TableTransaction::insert/update` scans all rows
+
+`src/catalog/src/durable/transaction.rs:3190-3210` — every `.insert(k,
+v, ts)` on a `TableTransaction` calls `self.for_values(|for_k, for_v|
+{ ... })` to check both `k == for_k` and `uniqueness_violation`. That
+walks **every initial row + every pending row** of the table on each
+single insert. For a CREATE TABLE we insert a handful of rows (item,
+maybe extra metadata), and each insert walks all N existing items.
+
+`update` (`:3222`) has the same structure: `for_values_mut` walks all
+items, calling `f(k, v)` on each.
+
+This is the most plausible source of the per-object cost in the
+catalog durable txn spans (`transaction`, `consolidate`, `snapshot`)
+that grow with N regardless of op type.
+
 ## Open questions
 
 - Does the scaling pattern differ across padding axes? If `views` (no
