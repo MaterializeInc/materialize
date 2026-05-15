@@ -21,25 +21,38 @@ BS = "localhost:9092"
 
 def _get_offsets(c: Composition, topic: str) -> tuple[int, int]:
     def _get(time_flag: str) -> int:
-        out = c.exec("kafka", "bash", "-c",
-                      f"kafka-get-offsets --bootstrap-server={BS} --topic={topic} --time={time_flag}",
-                      capture=True).stdout
+        out = c.exec(
+            "kafka",
+            "bash",
+            "-c",
+            f"kafka-get-offsets --bootstrap-server={BS} --topic={topic} --time={time_flag}",
+            capture=True,
+        ).stdout
         return int(out.strip().split(":")[-1])
+
     return _get("-2"), _get("-1")
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.up("zookeeper", "kafka", "schema-registry", "materialized")
 
-    c.exec("kafka", "bash", "-c",
-           f"kafka-topics --bootstrap-server={BS} --create --topic={TOPIC}"
-           " --partitions=1 --replication-factor=1"
-           " --config=cleanup.policy=delete --config=retention.ms=5000"
-           " --config=segment.ms=500 --config=segment.bytes=65536")
+    c.exec(
+        "kafka",
+        "bash",
+        "-c",
+        f"kafka-topics --bootstrap-server={BS} --create --topic={TOPIC}"
+        " --partitions=1 --replication-factor=1"
+        " --config=cleanup.policy=delete --config=retention.ms=5000"
+        " --config=segment.ms=500 --config=segment.bytes=65536",
+    )
 
-    c.exec("kafka", "kafka-console-producer", f"--bootstrap-server={BS}",
-           f"--topic={TOPIC}",
-           stdin="\n".join(f"msg-{i}" for i in range(500)))
+    c.exec(
+        "kafka",
+        "kafka-console-producer",
+        f"--bootstrap-server={BS}",
+        f"--topic={TOPIC}",
+        stdin="\n".join(f"msg-{i}" for i in range(500)),
+    )
 
     for _ in range(90):
         low, high = _get_offsets(c, TOPIC)

@@ -513,6 +513,12 @@ fn render_reader<'scope>(
             data_cap.downgrade(&future_ts);
 
             for (pid, lwm) in &low_watermarks {
+                // If a start offset exists for this partition, then either the user specified it
+                // or we restored it from the resume upper. In either case, if the low watermark is
+                // greater than the start offset, we know for certain that the offset we need to
+                // start at has been compacted away or dropped from retention by Kafka. If there
+                // is no start offset, then we set it to the low watermark and start consuming from
+                // there, assuming the user doesn't care about the messages that have been compacted away.
                 if let Some(start_offset) = start_offsets.get_mut(pid) {
                     tracing::info!(
                         source_id = config.id.to_string(),
