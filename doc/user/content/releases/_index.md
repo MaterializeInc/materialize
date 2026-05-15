@@ -15,6 +15,19 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.24.1
+*Released to Materialize Cloud: on as-needs basis* <br>
+*Released to Materialize Self-Managed: 2026-05-15* <br>
+
+This patch release adds configurable Kafka sink message and batch size
+limits.
+
+### Improvements {#v26.24.1-improvements}
+
+- **Configurable Kafka sink size limits**: The maximum size of individual
+  Kafka sink messages and message batches can now be configured beyond
+  their previous defaults.
+
 ## v26.24.0
 *Released to Materialize Cloud: 2026-05-14* <br>
 *Released to Materialize Self-Managed: 2026-05-15* <br>
