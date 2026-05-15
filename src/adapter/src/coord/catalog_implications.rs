@@ -825,52 +825,56 @@ impl Coordinator {
             .chain(tables_to_drop.iter().map(|(_id, gid)| gid))
             .copied()
             .collect();
-        let compute_gids_to_drop: Vec<_> = indexes_to_drop
+        let compute_gids_to_drop: BTreeSet<_> = indexes_to_drop
             .iter()
             .chain(compute_sinks_to_drop.iter())
             .copied()
             .collect();
+        let clusters_to_drop_set: BTreeSet<_> = clusters_to_drop.iter().copied().collect();
 
         // Gather resources that we have to remove from timeline state and
         // pre-check if any Timelines become empty, when we drop the specified
         // storage and compute resources.
         //
         // Note: We only apply these changes below.
-        let mut timeline_id_bundles = BTreeMap::new();
+        let mut timeline_associations = BTreeMap::new();
 
         for (timeline, TimelineState { read_holds, .. }) in &self.global_timelines {
             let mut id_bundle = CollectionIdBundle::default();
 
-            for storage_id in read_holds.storage_ids() {
-                if storage_gids_to_drop.contains(&storage_id) {
-                    id_bundle.storage_ids.insert(storage_id);
+            // Probe the (small) drop sets against read_holds, which can be O(N).
+            for storage_id in &storage_gids_to_drop {
+                if read_holds.storage_holds.contains_key(storage_id) {
+                    id_bundle.storage_ids.insert(*storage_id);
                 }
             }
-
-            for (instance_id, id) in read_holds.compute_ids() {
-                if compute_gids_to_drop.contains(&(instance_id, id))
-                    || clusters_to_drop.contains(&instance_id)
-                {
+            for (instance_id, gid) in &compute_gids_to_drop {
+                if read_holds.compute_holds.contains_key(&(*instance_id, *gid)) {
                     id_bundle
                         .compute_ids
-                        .entry(instance_id)
+                        .entry(*instance_id)
                         .or_default()
-                        .insert(id);
+                        .insert(*gid);
+                }
+            }
+            // Whole-cluster drops are rare, so the linear scan here is fine.
+            if !clusters_to_drop_set.is_empty() {
+                for (instance_id, gid) in read_holds.compute_ids() {
+                    if clusters_to_drop_set.contains(&instance_id) {
+                        id_bundle
+                            .compute_ids
+                            .entry(instance_id)
+                            .or_default()
+                            .insert(gid);
+                    }
                 }
             }
 
-            timeline_id_bundles.insert(timeline.clone(), id_bundle);
-        }
-
-        let mut timeline_associations = BTreeMap::new();
-        for (timeline, id_bundle) in timeline_id_bundles.into_iter() {
-            let TimelineState { read_holds, .. } = self
-                .global_timelines
-                .get(&timeline)
-                .expect("all timelines have a timestamp oracle");
-
-            let empty = read_holds.id_bundle().difference(&id_bundle).is_empty();
-            timeline_associations.insert(timeline, (empty, id_bundle));
+            let bundle_compute_len: usize =
+                id_bundle.compute_ids.values().map(|ids| ids.len()).sum();
+            let empty = read_holds.storage_holds.len() == id_bundle.storage_ids.len()
+                && read_holds.compute_holds.len() == bundle_compute_len;
+            timeline_associations.insert(timeline.clone(), (empty, id_bundle));
         }
 
         // No error returns are allowed after this point. Enforce this at compile time
@@ -931,7 +935,7 @@ impl Coordinator {
             }
 
             if !compute_gids_to_drop.is_empty() {
-                self.drop_compute_collections(compute_gids_to_drop);
+                self.drop_compute_collections(compute_gids_to_drop.into_iter().collect());
             }
 
             if !vpc_endpoints_to_drop.is_empty() {
