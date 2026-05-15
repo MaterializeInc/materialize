@@ -73,7 +73,7 @@ and bug fixes.
   containing `SELECT DISTINCT` over role-derived catalog views (e.g.,
   anything reading from `mz_roles`, `mz_role_members`, or views that
   internally project role columns). The error is resolved automatically by
-  upgrading to v26.24.0 or newer. RBAC operations simple and queries on
+  upgrading to v26.24.0 or newer. Simple RBAC operations and queries on
   `mz_roles` and `mz_role_members` were not affected.
 
 ### Agent Skills {#v26.24-agent-skills}
