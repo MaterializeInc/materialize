@@ -2830,6 +2830,22 @@ impl StorageTxn for Transaction {
             .collect()
     }
 
+    fn get_collection_shard(&self, id: GlobalId) -> Option<ShardId> {
+        self.storage_collection_metadata
+            .get(&StorageCollectionMetadataKey { id })
+            .map(|StorageCollectionMetadataValue { shard }| *shard)
+    }
+
+    fn collection_metadata_contains_shard(&self, shard: ShardId) -> bool {
+        let mut found = false;
+        self.storage_collection_metadata.for_values(|_, v| {
+            if v.shard == shard {
+                found = true;
+            }
+        });
+        found
+    }
+
     fn insert_collection_metadata(
         &mut self,
         metadata: BTreeMap<GlobalId, ShardId>,

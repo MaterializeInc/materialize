@@ -238,6 +238,12 @@ pub trait StorageTxn {
     /// The value of this map should be treated as opaque.
     fn get_collection_metadata(&self) -> BTreeMap<GlobalId, ShardId>;
 
+    /// Point lookup of the shard backing a single collection. O(log N).
+    fn get_collection_shard(&self, id: GlobalId) -> Option<ShardId>;
+
+    /// Returns whether any collection metadata entry maps to `shard`.
+    fn collection_metadata_contains_shard(&self, shard: ShardId) -> bool;
+
     /// Add new storage metadata for a collection.
     ///
     /// Subsequent calls to [`StorageTxn::get_collection_metadata`] must include

@@ -646,12 +646,12 @@ impl Catalog {
         // `MZ_CATALOG_RAW` builtin source.
         let item_id = self.resolve_builtin_storage_collection(&MZ_CATALOG_RAW);
         let global_id = self.get_entry(&item_id).latest_global_id();
-        match txn.get_collection_metadata().get(&global_id) {
+        match txn.get_collection_shard(global_id) {
             None => {
                 txn.insert_collection_metadata([(global_id, shard_id)].into())
                     .map_err(mz_catalog::durable::DurableCatalogError::from)?;
             }
-            Some(id) => assert_eq!(*id, shard_id),
+            Some(id) => assert_eq!(id, shard_id),
         }
 
         storage_collections

@@ -271,13 +271,12 @@ pub(super) async fn run(
     };
     let build_version = build_info.semver_version();
 
-    let collection_metadata = txn.get_collection_metadata();
     let system_objects = txn
         .get_system_object_mappings()
         .map(|m| {
             let object = m.description;
             let global_id = m.unique_identifier.global_id;
-            let shard_id = collection_metadata.get(&global_id).copied();
+            let shard_id = txn.get_collection_shard(global_id);
             let Some((_, builtin)) = BUILTIN_LOOKUP.get(&object) else {
                 panic!("missing builtin {object:?}");
             };
