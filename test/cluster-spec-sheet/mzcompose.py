@@ -3851,9 +3851,27 @@ def run_scenario_cluster_object_limits(
             target=target,
         )
 
-        # (Re)create the test cluster.
+        # (Re)create the test cluster. Skip the iteration if this cluster
+        # size isn't available on the target — e.g. it isn't in
+        # `mz_cluster_replica_sizes` for this region, or allocating it would
+        # exceed `max_credit_consumption_rate`. Without this guard, on
+        # staging the larger sizes either fail with a noisy traceback or
+        # show up as a confusing "unhealthy at the smallest N" data point
+        # instead of a clear "size unavailable" line. We narrow the catch to
+        # server-side SQL errors and let connection-level OperationalError
+        # propagate (the in-`run_query` retry loop has already given up).
         runner.run_query("DROP CLUSTER IF EXISTS c CASCADE")
-        runner.run_query(f"CREATE CLUSTER c SIZE '{replica_size}'")
+        try:
+            runner.run_query(f"CREATE CLUSTER c SIZE '{replica_size}'")
+        except psycopg.errors.DatabaseError as e:
+            if isinstance(e, OperationalError):
+                raise
+            print(
+                f"^^^ +++ cluster_object_limits {scenario.name()}: cluster "
+                f"size '{replica_size}' unavailable on this target "
+                f"({type(e).__name__}: {str(e).strip()}); skipping."
+            )
+            continue
         runner.run_query("SET cluster = 'c'")
 
         # Reset the base table and pad schema for this cluster-size iteration.
