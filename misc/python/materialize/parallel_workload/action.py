@@ -1496,7 +1496,6 @@ class FlipFlagsAction(Action):
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["enable_eager_delta_joins"] = BOOLEAN_FLAG_VALUES
-        self.flags_with_values["enable_public_metrics_endpoint"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["persist_batch_structured_key_lower_len"] = [
             "0",
             "1",
@@ -1810,9 +1809,6 @@ class FlipFlagsAction(Action):
             "kafka_retry_backoff_max",
             "kafka_reconnect_backoff",
             "kafka_reconnect_backoff_max",
-            "kafka_sink_message_max_bytes",
-            "kafka_sink_batch_size",
-            "kafka_sink_batch_num_messages",
             "pg_source_validate_timeline",
             "sql_server_source_validate_restore_history",
             "oidc_issuer",
@@ -1992,7 +1988,7 @@ class CreateRoleAction(Action):
                 return False
             role_id = exe.db.role_id
             exe.db.role_id += 1
-        role = Role(role_id)
+        role = Role(role_id, name_scope=exe.db.name_scope)
         role.create(exe)
         exe.db.roles.append(role)
         return True
@@ -2031,6 +2027,13 @@ class DropRoleAction(Action):
 
 class CreateClusterAction(Action):
     def run(self, exe: Executor) -> bool:
+        # In existing-cluster mode the Database wraps a pre-existing
+        # (caller-supplied) cluster, typically bootstrapped by the
+        # Antithesis compose, and we have no allocator for additional
+        # clusters tied to other pool members. Skip — the wrapped
+        # cluster is the entire test surface.
+        if exe.db.existing_cluster_name is not None:
+            return False
         with exe.db.lock:
             if len(exe.db.clusters) >= MAX_CLUSTERS:
                 return False
@@ -2042,6 +2045,7 @@ class CreateClusterAction(Action):
             size=self.rng.choice(["1", "2"]),
             replication_factor=self.rng.choice([1, 2]),
             introspection_interval="1s",
+            name_scope=exe.db.name_scope,
         )
         cluster.create(exe)
         exe.db.clusters.append(cluster)
@@ -2175,6 +2179,11 @@ class CreateClusterReplicaAction(Action):
         with exe.db.lock:
             # Keep cluster 0 with 1 replica for sources/sinks
             unmanaged_clusters = [c for c in exe.db.clusters[1:] if not c.managed]
+            # Pre-existing (pool) clusters: the framework didn't create them
+            # and won't mutate them. Skip.
+            unmanaged_clusters = [
+                c for c in unmanaged_clusters if not c.is_pool_backed
+            ]
             if not unmanaged_clusters:
                 return False
             cluster = self.rng.choice(unmanaged_clusters)
@@ -2198,6 +2207,10 @@ class DropClusterReplicaAction(Action):
         with exe.db.lock:
             # Keep cluster 0 with 1 replica for sources/sinks
             unmanaged_clusters = [c for c in exe.db.clusters[1:] if not c.managed]
+            # Pre-existing (pool) clusters: same reasoning as above. Skip.
+            unmanaged_clusters = [
+                c for c in unmanaged_clusters if not c.is_pool_backed
+            ]
             if not unmanaged_clusters:
                 return False
             cluster = self.rng.choice(unmanaged_clusters)
