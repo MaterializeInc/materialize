@@ -16,6 +16,10 @@ aliases:
 {{< callout >}}
 ## What's new!
 
+- [MCP server for agents: give your production AI agents fresh context from
+  Materialize](/releases/#v26241)
+- [MCP server for developers: give coding agents observability into your
+  Materialize environment](/releases/#v26202)
 - [Faster sink performance with up to 50% lower memory
   usage](/releases/#v26220)
 
