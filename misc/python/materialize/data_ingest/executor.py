@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import json
+import os
 import random
 import time
 from textwrap import dedent
@@ -620,8 +621,15 @@ class PgExecutor(Executor):
 
     def create(self, logging_exe: Any | None = None) -> None:
         self.logging_exe = logging_exe
+        # MZ_DATA_INGEST_PG_HOST lets callers reach the upstream postgres
+        # by a non-127.0.0.1 hostname.  mzcompose's default test shape
+        # binds postgres's 5432 to 127.0.0.1 on the host, so direct
+        # localhost access works.  Container-to-container topologies
+        # (Antithesis) need to reach postgres by service name instead,
+        # since bare-port forwarding doesn't traverse the workload
+        # container's loopback.
         self.pg_conn = psycopg.connect(
-            host="127.0.0.1",
+            host=os.environ.get("MZ_DATA_INGEST_PG_HOST", "127.0.0.1"),
             user="postgres",
             password="postgres",
             port=self.ports["postgres"],
