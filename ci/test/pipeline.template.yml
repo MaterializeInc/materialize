@@ -448,6 +448,17 @@ steps:
         agents:
           queue: hetzner-aarch64-4cpu-8gb
 
+      - id: kafka-low-watermark
+        label: Kafka low watermark
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: kafka-low-watermark
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+
   - id: zippy-kafka-sources-short
     label: "Short Zippy"
     depends_on: build-aarch64
