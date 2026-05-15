@@ -555,7 +555,7 @@ schema information.
 | Field         | Type     | Meaning                                                                                  |
 | ------------- | -------- | ---------------------------------------------------------------------------------------- |
 | `object_name` | [`text`] | Fully qualified object name (database.schema.name).                                      |
-| `cluster`     | [`text`] | Cluster where the object computes or its index is hosted. The object can be read from any cluster. |
+| `cluster`     | [`text`] | Cluster where the object computes or its index is hosted. Reads from any cluster work, but only reads on this cluster benefit from the index. |
 | `description` | [`text`] | Index comment if available, otherwise object comment. Used as data product description.   |
 
 ## `mz_mcp_data_product_details`
@@ -567,7 +567,7 @@ with a JSON Schema describing each data product's columns and types.
 | Field         | Type     | Meaning                                                                                  |
 | ------------- | -------- | ---------------------------------------------------------------------------------------- |
 | `object_name` | [`text`] | Fully qualified object name (database.schema.name).                                      |
-| `cluster`     | [`text`] | Cluster where the object computes or its index is hosted. The object can be read from any cluster. |
+| `cluster`     | [`text`] | Cluster where the object computes or its index is hosted. Reads from any cluster work, but only reads on this cluster benefit from the index. |
 | `description` | [`text`] | Index comment if available, otherwise object comment. Used as data product description.   |
 | `schema`      | [`jsonb`]| JSON Schema describing the object's columns and types.                                   |
 
