@@ -99,6 +99,10 @@ agent run arbitrary SQL against data products. To enable it, set the
 configuration](/integrations/mcp-server/mcp-agent-config/#enable_mcp_agent_query_tool)
 system parameter to `true`.
 
+To restrict which objects an agent role can query (e.g., prevent access to
+system catalog views), see [Restricting access to user objects
+only](/integrations/mcp-server/mcp-agent/#restrict-to-user-objects).
+
 {{< warning >}}
 {{% include-headless "/headless/mcp-agent-query-tool-warning" %}}
 {{< /warning >}}

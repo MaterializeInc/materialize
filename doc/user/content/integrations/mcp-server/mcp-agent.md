@@ -557,6 +557,42 @@ configuration](/integrations/mcp-server/mcp-agent-config/#enable_mcp_agent_query
 
 {{< /note >}}
 
+### Restricting access to user objects only {#restrict-to-user-objects}
+
+When the [`query` tool](/integrations/mcp-server/mcp-agent-tools/#query) is
+enabled, a role can, by default, query any object for which it has `SELECT`
+privileges, including system catalog views. To prevent an agent role from reading
+system catalog tables (`mz_catalog`, `mz_internal`, `pg_catalog`,
+`information_schema`), a superuser can set the `restrict_to_user_objects` role
+default:
+
+```mzsql
+ALTER ROLE mcp_agent SET restrict_to_user_objects = true;
+```
+
+In Materialize, role configuration is not inherited—only role privileges are.
+To ensure individual agent roles are also restricted, set
+`restrict_to_user_objects` directly on each agent role:
+
+```mzsql
+ALTER ROLE my_agent SET restrict_to_user_objects = true;
+```
+
+This setting takes effect on the next connection. Once active:
+
+- Queries referencing system catalog objects are rejected with a permission
+  error.
+- Data product discovery (`get_data_products`, `get_data_product_details`,
+  `read_data_product`) continues to work normally.
+- The restriction cannot be bypassed by the role itself; only a superuser can
+  change or remove it.
+
+To remove the restriction (as superuser):
+
+```mzsql
+ALTER ROLE mcp_agent RESET restrict_to_user_objects;
+```
+
 ## Related pages
 
 - [`materialize-agent` MCP Server available
