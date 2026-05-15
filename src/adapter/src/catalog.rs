@@ -88,7 +88,7 @@ use uuid::Uuid;
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::open::{InitializeStateResult, OpenCatalogResult};
-pub use crate::catalog::state::CatalogState;
+pub use crate::catalog::state::{CatalogState, UserConnectionKind};
 pub use crate::catalog::transact::{
     DropObjectInfo, InjectedAuditEvent, Op, ReplicaCreateDropReason, TransactionResult,
 };
@@ -1119,6 +1119,43 @@ impl Catalog {
     pub fn user_secrets(&self) -> impl Iterator<Item = &CatalogEntry> {
         self.entries()
             .filter(|entry| entry.is_secret() && entry.id().is_user())
+    }
+
+    /// Number of user items of the given [`SqlCatalogItemType`]. O(log N) on
+    /// the bucket map, vs. O(N) for the iterator-based `user_*()` methods.
+    pub fn user_item_count(&self, typ: SqlCatalogItemType) -> usize {
+        self.state.user_item_counts.get(&typ).copied().unwrap_or(0)
+    }
+
+    pub fn user_tables_count(&self) -> usize {
+        self.user_item_count(SqlCatalogItemType::Table)
+    }
+
+    pub fn user_sinks_count(&self) -> usize {
+        self.user_item_count(SqlCatalogItemType::Sink)
+    }
+
+    pub fn user_materialized_views_count(&self) -> usize {
+        self.user_item_count(SqlCatalogItemType::MaterializedView)
+    }
+
+    pub fn user_secrets_count(&self) -> usize {
+        self.user_item_count(SqlCatalogItemType::Secret)
+    }
+
+    /// Sum of `user_controllable_persist_shard_count()` across all user
+    /// sources. This is what the `max_sources` limit is computed against.
+    pub fn user_source_shard_count(&self) -> usize {
+        self.state.user_source_shard_count
+    }
+
+    /// Number of user connections of a given sub-kind.
+    pub fn user_connection_count(&self, kind: crate::catalog::state::UserConnectionKind) -> usize {
+        self.state
+            .user_connection_counts
+            .get(&kind)
+            .copied()
+            .unwrap_or(0)
     }
 
     pub fn get_network_policy(&self, network_policy_id: NetworkPolicyId) -> &NetworkPolicy {

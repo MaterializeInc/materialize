@@ -1911,6 +1911,22 @@ impl CatalogState {
             };
         }
 
+        if entry.id.is_user() {
+            *self.user_item_counts.entry(entry.item.typ()).or_insert(0) += 1;
+            if let CatalogItem::Source(source) = &entry.item {
+                let shards: usize = source
+                    .user_controllable_persist_shard_count()
+                    .try_into()
+                    .expect("non-negative shard count");
+                self.user_source_shard_count += shards;
+            }
+            if let CatalogItem::Connection(connection) = &entry.item {
+                let kind =
+                    crate::catalog::state::UserConnectionKind::from_details(&connection.details);
+                *self.user_connection_counts.entry(kind).or_insert(0) += 1;
+            }
+        }
+
         for u in entry.references().items() {
             match self.entry_by_id.get_mut(u) {
                 Some(metadata) => metadata.referenced_by.push(entry.id()),
@@ -2044,6 +2060,44 @@ impl CatalogState {
                         .remove(&id),
                     "catalog out of sync"
                 );
+            }
+        }
+
+        if id.is_user() {
+            let typ = metadata.item().typ();
+            let count = self
+                .user_item_counts
+                .get_mut(&typ)
+                .expect("catalog out of sync: user item count missing");
+            *count = count
+                .checked_sub(1)
+                .expect("catalog out of sync: count underflow");
+            if *count == 0 {
+                self.user_item_counts.remove(&typ);
+            }
+            if let CatalogItem::Source(source) = metadata.item() {
+                let shards: usize = source
+                    .user_controllable_persist_shard_count()
+                    .try_into()
+                    .expect("non-negative shard count");
+                self.user_source_shard_count = self
+                    .user_source_shard_count
+                    .checked_sub(shards)
+                    .expect("catalog out of sync: source shard count underflow");
+            }
+            if let CatalogItem::Connection(connection) = metadata.item() {
+                let kind =
+                    crate::catalog::state::UserConnectionKind::from_details(&connection.details);
+                let count = self
+                    .user_connection_counts
+                    .get_mut(&kind)
+                    .expect("catalog out of sync: user connection count missing");
+                *count = count
+                    .checked_sub(1)
+                    .expect("catalog out of sync: count underflow");
+                if *count == 0 {
+                    self.user_connection_counts.remove(&kind);
+                }
             }
         }
 

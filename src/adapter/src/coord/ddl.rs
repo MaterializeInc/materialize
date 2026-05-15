@@ -50,7 +50,9 @@ use serde_json::json;
 use tracing::{Instrument, Level, event, info_span, warn};
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
-use crate::catalog::{DropObjectInfo, Op, ReplicaCreateDropReason, TransactionResult};
+use crate::catalog::{
+    DropObjectInfo, Op, ReplicaCreateDropReason, TransactionResult, UserConnectionKind,
+};
 use crate::coord::Coordinator;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
@@ -1292,96 +1294,69 @@ impl Coordinator {
             }
         }
 
-        let mut current_aws_privatelink_connections = 0;
-        let mut current_postgres_connections = 0;
-        let mut current_mysql_connections = 0;
-        let mut current_sql_server_connections = 0;
-        let mut current_kafka_connections = 0;
-        for c in self.catalog().user_connections() {
-            let connection = c
-                .connection()
-                .expect("`user_connections()` only returns connection objects");
-
-            match connection.details {
-                ConnectionDetails::AwsPrivatelink(_) => current_aws_privatelink_connections += 1,
-                ConnectionDetails::Postgres(_) => current_postgres_connections += 1,
-                ConnectionDetails::MySql(_) => current_mysql_connections += 1,
-                ConnectionDetails::SqlServer(_) => current_sql_server_connections += 1,
-                ConnectionDetails::Kafka(_) => current_kafka_connections += 1,
-                ConnectionDetails::Csr(_)
-                | ConnectionDetails::Ssh { .. }
-                | ConnectionDetails::Aws(_)
-                | ConnectionDetails::IcebergCatalog(_) => {}
-            }
-        }
         self.validate_resource_limit(
-            current_kafka_connections,
+            self.catalog()
+                .user_connection_count(UserConnectionKind::Kafka),
             new_kafka_connections,
             SystemVars::max_kafka_connections,
             "Kafka Connection",
             MAX_KAFKA_CONNECTIONS.name(),
         )?;
         self.validate_resource_limit(
-            current_postgres_connections,
+            self.catalog()
+                .user_connection_count(UserConnectionKind::Postgres),
             new_postgres_connections,
             SystemVars::max_postgres_connections,
             "PostgreSQL Connection",
             MAX_POSTGRES_CONNECTIONS.name(),
         )?;
         self.validate_resource_limit(
-            current_mysql_connections,
+            self.catalog()
+                .user_connection_count(UserConnectionKind::MySql),
             new_mysql_connections,
             SystemVars::max_mysql_connections,
             "MySQL Connection",
             MAX_MYSQL_CONNECTIONS.name(),
         )?;
         self.validate_resource_limit(
-            current_sql_server_connections,
+            self.catalog()
+                .user_connection_count(UserConnectionKind::SqlServer),
             new_sql_server_connections,
             SystemVars::max_sql_server_connections,
             "SQL Server Connection",
             MAX_SQL_SERVER_CONNECTIONS.name(),
         )?;
         self.validate_resource_limit(
-            current_aws_privatelink_connections,
+            self.catalog()
+                .user_connection_count(UserConnectionKind::AwsPrivatelink),
             new_aws_privatelink_connections,
             SystemVars::max_aws_privatelink_connections,
             "AWS PrivateLink Connection",
             MAX_AWS_PRIVATELINK_CONNECTIONS.name(),
         )?;
         self.validate_resource_limit(
-            self.catalog().user_tables().count(),
+            self.catalog().user_tables_count(),
             new_tables,
             SystemVars::max_tables,
             "table",
             MAX_TABLES.name(),
         )?;
-
-        let current_sources: usize = self
-            .catalog()
-            .user_sources()
-            .filter_map(|source| source.source())
-            .map(|source| source.user_controllable_persist_shard_count())
-            .sum::<i64>()
-            .try_into()
-            .expect("non-negative sum of sources");
-
         self.validate_resource_limit(
-            current_sources,
+            self.catalog().user_source_shard_count(),
             new_sources,
             SystemVars::max_sources,
             "source",
             MAX_SOURCES.name(),
         )?;
         self.validate_resource_limit(
-            self.catalog().user_sinks().count(),
+            self.catalog().user_sinks_count(),
             new_sinks,
             SystemVars::max_sinks,
             "sink",
             MAX_SINKS.name(),
         )?;
         self.validate_resource_limit(
-            self.catalog().user_materialized_views().count(),
+            self.catalog().user_materialized_views_count(),
             new_materialized_views,
             SystemVars::max_materialized_views,
             "materialized view",
@@ -1458,7 +1433,7 @@ impl Coordinator {
             )?;
         }
         self.validate_resource_limit(
-            self.catalog().user_secrets().count(),
+            self.catalog().user_secrets_count(),
             new_secrets,
             SystemVars::max_secrets,
             "secret",

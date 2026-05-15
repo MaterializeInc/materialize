@@ -123,6 +123,15 @@ pub struct CatalogState {
     pub(super) entry_by_id: imbl::OrdMap<CatalogItemId, CatalogEntry>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) entry_by_global_id: imbl::OrdMap<GlobalId, CatalogItemId>,
+    // Bucketed counts derived from `entry_by_id`, maintained by
+    // `insert_entry`/`drop_item`. Used by `validate_resource_limits` to avoid
+    // scanning the full entry map on every DDL.
+    #[serde(skip)]
+    pub(super) user_item_counts: imbl::OrdMap<CatalogItemType, usize>,
+    #[serde(skip)]
+    pub(super) user_source_shard_count: usize,
+    #[serde(skip)]
+    pub(super) user_connection_counts: imbl::OrdMap<UserConnectionKind, usize>,
     pub(super) ambient_schemas_by_name: imbl::OrdMap<String, SchemaId>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) ambient_schemas_by_id: imbl::OrdMap<SchemaId, Schema>,
@@ -178,6 +187,35 @@ pub struct CatalogState {
     // Read-only not derived from the durable catalog.
     #[serde(skip)]
     pub(super) license_key: ValidatedLicenseKey,
+}
+
+/// Sub-classification of user connections that we maintain bucketed counts
+/// for, mirroring the variants of [`mz_sql::plan::ConnectionDetails`] that
+/// `validate_resource_limits` checks. Variants we don't limit (Csr, Ssh, Aws,
+/// IcebergCatalog) are folded into `Other` so the bucket map covers all
+/// connection items.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum UserConnectionKind {
+    Kafka,
+    Postgres,
+    MySql,
+    SqlServer,
+    AwsPrivatelink,
+    Other,
+}
+
+impl UserConnectionKind {
+    pub(super) fn from_details(details: &mz_sql::plan::ConnectionDetails) -> Self {
+        use mz_sql::plan::ConnectionDetails::*;
+        match details {
+            Kafka(_) => UserConnectionKind::Kafka,
+            Postgres(_) => UserConnectionKind::Postgres,
+            MySql(_) => UserConnectionKind::MySql,
+            SqlServer(_) => UserConnectionKind::SqlServer,
+            AwsPrivatelink(_) => UserConnectionKind::AwsPrivatelink,
+            Csr(_) | Ssh { .. } | Aws(_) | IcebergCatalog(_) => UserConnectionKind::Other,
+        }
+    }
 }
 
 /// Keeps track of what expressions are cached or not during startup.
@@ -293,6 +331,9 @@ impl CatalogState {
             database_by_id: Default::default(),
             entry_by_id: Default::default(),
             entry_by_global_id: Default::default(),
+            user_item_counts: Default::default(),
+            user_source_shard_count: 0,
+            user_connection_counts: Default::default(),
             notices_by_dep_id: Default::default(),
             ambient_schemas_by_name: Default::default(),
             ambient_schemas_by_id: Default::default(),
