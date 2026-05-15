@@ -28,6 +28,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import psycopg
 from psycopg import InterfaceError, OperationalError
+from psycopg import sql as psycopg_sql
 
 from materialize import MZ_ROOT, buildkite
 from materialize.mz_version import MzVersion
@@ -2858,7 +2859,9 @@ def log_environment_info(target: "BenchTarget") -> None:
                 print(f"  WARNING: failed to read mz_environment_id(): {e}")
             for param in SYSTEM_PARAMETERS_TO_LOG:
                 try:
-                    cur.execute(f"SHOW {param}")
+                    cur.execute(
+                        psycopg_sql.SQL("SHOW {}").format(psycopg_sql.Identifier(param))
+                    )
                     row = cur.fetchone()
                     val = row[0] if row else "<unknown>"
                     print(f"  {param} = {val}")
