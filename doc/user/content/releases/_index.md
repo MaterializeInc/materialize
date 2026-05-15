@@ -16,31 +16,36 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 {{</ note >}}
 
 ## v26.24.1
-*Released to Materialize Cloud: on as-needs basis* <br>
-*Released to Materialize Self-Managed: 2026-05-15* <br>
-
-This patch release adds configurable Kafka sink message and batch size
-limits.
-
-### Improvements {#v26.24.1-improvements}
-
-- **Configurable Kafka sink size limits**: The maximum size of individual
-  Kafka sink messages and message batches can now be configured beyond
-  their previous defaults.
-
-## v26.24.0
 *Released to Materialize Cloud: 2026-05-14* <br>
 *Released to Materialize Self-Managed: 2026-05-15* <br>
 
-This release includes MySQL source schema evolution support, improvements,
-and bug fixes.
+This release introduces the MCP server for Agents, and bug fixes.
 
-### Features {#v26.24-features}
+### MCP Server for Agents
 
-- **MySQL source schema evolution**: MySQL sources now support certain upstream
-  schema changes (such as adding or removing columns) without requiring source
-  recreation, when the upstream MySQL server has `binlog_row_metadata` set to
-  `FULL`.
+{{< public-preview />}}
+
+Materialize environments now include a built-in Model Context Protocol (MCP)
+[server for agents (`/api/mcp/agent`)](/integrations/mcp-server/mcp-agent/),
+giving your production AI agents fresh context from Materialize. Once connected to this
+endpoint, an agent can discover your data products, understand the underlying ontology, and run queries to fetch fresh data.
+
+Data products are simply [materialized views](/sql/create-materialized-view/)
+or [indexes](/sql/create-index/). Agents authenticate as
+[roles](/sql/create-role/) in Materialize, so
+[RBAC privileges](/manage/access-control/) govern which data products are
+visible. Finally, you can set up a dedicated
+[cluster](/concepts/clusters/) for your agents, so they're isolated from the
+rest of your environment.
+
+The MCP server for agents complements the [MCP server for
+developers](/integrations/mcp-server/mcp-developer/) released in v26.20.2. The
+developer server gives coding agents observability into Materialize so you
+can build faster on top of it; the agent server gives production agents
+governed access to fresh data products.
+
+For more information, refer to:
+- [Integrations: MCP Server for Agents](/integrations/mcp-server/mcp-agent/)
 
 ### Improvements {#v26.24-improvements}
 
@@ -50,6 +55,8 @@ and bug fixes.
 - **`COPY FROM` rejects HTTP redirects**: `COPY FROM` now returns a clear error
   if the target URL responds with an HTTP redirect, preventing unexpected data
   sources and potential security issues.
+- **[Agent skills](/integrations/coding-agent-skills/):**
+  -  **Improved `mcp-developer-analysis` client setup**: The skill now includes a comprehensive playbook for connecting MCP-capable clients (Claude Code, Cursor, VS Code, Zed, Continue, Windsurf, Claude Desktop) to the [MCP server for developers](/integrations/mcp-server/mcp-developer/).
 
 ### Bug Fixes {#v26.24-bug-fixes}
 
@@ -76,13 +83,6 @@ and bug fixes.
   upgrading to v26.24.0 or newer. Simple RBAC operations and queries on
   `mz_roles` and `mz_role_members` were not affected.
 
-### Agent Skills {#v26.24-agent-skills}
-
-- **`mcp-developer-analysis` client setup**: The skill now includes a
-  comprehensive playbook for connecting MCP-capable clients (Claude Code,
-  Cursor, VS Code, Zed, Continue, Windsurf, Claude Desktop) to the Materialize
-  MCP server, with a guided first-time-setup walkthrough and connection triage
-  flow.
 
 ## v26.23.2
 *Released to Materialize Cloud: 2026-05-11* <br>
