@@ -64,12 +64,51 @@ def _truncate_sql(sql: str, max_len: int = 120) -> str:
     return flat if len(flat) <= max_len else flat[: max_len - 3] + "..."
 
 
+# Substring matches for server-side `InternalError` whose root cause is a
+# transient external dependency rather than a workload bug. Materialize
+# surfaces broker/upstream validation failures during DDL (notably
+# `CREATE SOURCE FOR KAFKA`, which does a broker metadata fetch as part
+# of validation) as plain `InternalError`, *not* `OperationalError`, so
+# the default psycopg classification treats them as non-retryable. Under
+# the global fault-orchestrator a broker pause is expected to clear in
+# the next quiet window; we should keep trying.
+#
+# Keep the patterns specific enough that we don't accidentally swallow
+# real schema errors. Anything not matched here still propagates after
+# one attempt.
+_TRANSIENT_INTERNAL_PATTERNS = (
+    # librdkafka error surfaces (CREATE SOURCE / CREATE CONNECTION validation)
+    "BrokerTransportFailure",
+    "Broker transport failure",
+    "Meta data fetch error",
+    "Local: All broker connections are down",
+    "Local: Timed out",
+    # schema-registry HTTP failures during CREATE SOURCE FORMAT AVRO ...
+    "schema registry",
+    "Connection refused",
+    "Connection reset",
+    # DNS partitioned against an upstream hostname
+    "Failed to resolve hostname",
+    "Temporary failure in name resolution",
+    "no route to host",
+    # postgres / mysql source validation reach-the-upstream failures
+    "could not translate host name",
+    "could not connect to server",
+)
+
+
 def _retryable(exc: BaseException) -> bool:
     if isinstance(exc, psycopg.OperationalError):
         return True
     # psycopg wraps server-side admin shutdowns as InterfaceError on next op.
     if isinstance(exc, psycopg.InterfaceError):
         return True
+    # Server-side InternalError caused by a transient external dependency
+    # (broker metadata fetch during CREATE SOURCE validation, schema-
+    # registry unavailable, etc.) — see `_TRANSIENT_INTERNAL_PATTERNS`.
+    if isinstance(exc, psycopg.errors.InternalError):
+        msg = str(exc)
+        return any(pat in msg for pat in _TRANSIENT_INTERNAL_PATTERNS)
     return False
 
 
