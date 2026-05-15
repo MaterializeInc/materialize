@@ -24,7 +24,7 @@ use mz_kafka_util::client::{
     GetPartitionsError, MzClientContext, PartitionId, TunnelingClientContext, get_partitions,
 };
 use mz_ore::assert_none;
-use mz_ore::cast::CastFrom;
+use mz_ore::cast::{CastFrom, ReinterpretCast};
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::iter::IteratorExt;
@@ -137,10 +137,11 @@ struct PartitionCapability {
     data: Capability<KafkaTimestamp>,
 }
 
-/// The high watermark offsets of a Kafka partition.
+/// The high/low watermark offsets of a Kafka partition.
 ///
-/// This is the offset of the latest message in the topic/partition available for consumption + 1.
-type HighWatermark = u64;
+/// This is the offset of either the first available or the latest message in the topic/partition
+///  available for consumption + 1.
+type PartitionWatermark = u64;
 
 /// Processes `resume_uppers` stream updates, committing them upstream and
 /// storing them in the `progress_statistics` to be emitted later.
@@ -319,54 +320,6 @@ fn render_reader<'scope>(
                 group_id_prefix: _, // used above via `connection.group_id`
             } = connection;
 
-            // Start offsets is a map from partition to the next offset to read from.
-            let mut start_offsets: BTreeMap<_, i64> = start_offsets
-                .clone()
-                .into_iter()
-                .filter(|(pid, _offset)| responsible_for_pid(&config, *pid))
-                .map(|(k, v)| (k, v))
-                .collect();
-
-            let mut partition_capabilities = BTreeMap::new();
-            let mut max_pid = None;
-            let resume_upper = Antichain::from_iter(
-                outputs
-                    .iter()
-                    .map(|output| output.resume_upper.clone())
-                    .flatten(),
-            );
-
-            for ts in resume_upper.elements() {
-                if let Some(pid) = ts.interval().singleton() {
-                    let pid = pid.unwrap_exact();
-                    max_pid = std::cmp::max(max_pid, Some(*pid));
-                    if responsible_for_pid(&config, *pid) {
-                        let restored_offset = i64::try_from(ts.timestamp().offset)
-                            .expect("restored kafka offsets must fit into i64");
-                        if let Some(start_offset) = start_offsets.get_mut(pid) {
-                            *start_offset = std::cmp::max(restored_offset, *start_offset);
-                        } else {
-                            start_offsets.insert(*pid, restored_offset);
-                        }
-
-                        let part_ts = Partitioned::new_singleton(
-                            RangeBound::exact(*pid),
-                            ts.timestamp().clone(),
-                        );
-                        let part_cap = PartitionCapability {
-                            data: data_cap.delayed(&part_ts),
-                        };
-                        partition_capabilities.insert(*pid, part_cap);
-                    }
-                }
-            }
-            let lower = max_pid
-                .map(RangeBound::after)
-                .unwrap_or(RangeBound::NegInfinity);
-            let future_ts =
-                Partitioned::new_range(lower, RangeBound::PosInfinity, MzOffset::from(0));
-            data_cap.downgrade(&future_ts);
-
             info!(
                 source_id = config.id.to_string(),
                 worker_id = config.worker_id,
@@ -459,6 +412,171 @@ fn render_reader<'scope>(
                     unreachable!("pending future never returns");
                 }
             };
+
+            // Start offsets is a map from partition to the next offset to read from.
+            let mut start_offsets: BTreeMap<_, i64> = start_offsets
+                .clone()
+                .into_iter()
+                .filter(|(pid, _offset)| responsible_for_pid(&config, *pid))
+                .map(|(k, v)| (k, v))
+                .collect();
+
+            let mut partition_capabilities = BTreeMap::new();
+            let mut max_pid = None;
+            let resume_upper = Antichain::from_iter(
+                outputs
+                    .iter()
+                    .map(|output| output.resume_upper.clone())
+                    .flatten(),
+            );
+
+            tracing::info!(
+                source_id = config.id.to_string(),
+                worker_id = config.worker_id,
+                num_workers = config.worker_count,
+                "Kafka source reader starting rehydration with resume upper: {resume_upper:?} and start offsets: {start_offsets:?}"
+            );
+
+            let low_watermarks = fetch_partition_info(
+                &consumer,
+                topic.as_str(),
+                config
+                        .config
+                        .parameters
+                        .kafka_timeout_config
+                        .fetch_metadata_timeout,
+                false, // fetch the low watermark
+            ).unwrap_or_else(|e| {
+                tracing::warn!(
+                    source_id = config.id.to_string(),
+                    worker_id = config.worker_id,
+                    num_workers = config.worker_count,
+                    "Failed to fetch watermarks for topic {topic}: {e}"
+                );
+                let update = HealthStatusUpdate::halting(
+                    format!(
+                        "Failed to fetch watermarks for topic {topic}: {e}"
+                    ),
+                    None,
+                );
+                health_output.give(
+                    &health_cap,
+                    HealthStatusMessage {
+                        id: None,
+                        namespace: StatusNamespace::Kafka,
+                        update: update.clone(),
+                    },
+                );
+                for (output, update) in outputs.iter().repeat_clone(update) {
+                    health_output.give(
+                        &health_cap,
+                        HealthStatusMessage {
+                            id: Some(output.id),
+                            namespace: StatusNamespace::Kafka,
+                            update,
+                        },
+                    );
+                }
+                BTreeMap::new()
+            });
+
+            for ts in resume_upper.elements() {
+                if let Some(pid) = ts.interval().singleton() {
+                    let pid = pid.unwrap_exact();
+                    max_pid = std::cmp::max(max_pid, Some(*pid));
+
+                    if responsible_for_pid(&config, *pid) {
+                        let restored_offset = i64::try_from(ts.timestamp().offset)
+                            .expect("restored kafka offsets must fit into i64");
+                        if let Some(start_offset) = start_offsets.get_mut(pid) {
+                            *start_offset = std::cmp::max(restored_offset, *start_offset);
+                        } else {
+                            start_offsets.insert(*pid, restored_offset);
+                        }
+
+                        let part_ts = Partitioned::new_singleton(
+                            RangeBound::exact(*pid),
+                            ts.timestamp().clone(),
+                        );
+                        let part_cap = PartitionCapability {
+                            data: data_cap.delayed(&part_ts),
+                        };
+                        partition_capabilities.insert(*pid, part_cap);
+                    }
+                }
+            }
+            let lower = max_pid
+                .map(RangeBound::after)
+                .unwrap_or(RangeBound::NegInfinity);
+            let future_ts =
+                Partitioned::new_range(lower, RangeBound::PosInfinity, MzOffset::from(0));
+            data_cap.downgrade(&future_ts);
+
+            for (pid, lwm) in &low_watermarks {
+                if let Some(start_offset) = start_offsets.get_mut(pid) {
+                    tracing::info!(
+                        source_id = config.id.to_string(),
+                        worker_id = config.worker_id,
+                        num_workers = config.worker_count,
+                        "restored offset {start_offset} for topic {topic} partition {pid} with low watermark {lwm}"
+                    );
+                    if *lwm > ReinterpretCast::reinterpret_cast(*start_offset) {
+                        tracing::error!(
+                            source_id = config.id.to_string(),
+                            worker_id = config.worker_id,
+                            num_workers = config.worker_count,
+                            "start offset and resume upper {start_offset} for topic {topic} \
+                            partition {pid} is behind the low watermark {lwm}. This likely \
+                            means that the offsets have been compacted away by Kafka."
+                        );
+                        let err_str = format!(
+                            "Low watermark {lwm} of kafka topic {topic} partition {pid} \
+                            is past the start offset/resume upper: {start_offset} \
+                            This likely means that the offsets have been compacted away \
+                            by Kafka. Please consider setting a higher start offset or \
+                            adjusting your retention policies to prevent this.",
+                        );
+
+                        let update = HealthStatusUpdate::halting(
+                            err_str.clone(),
+                            None,
+                        );
+                        health_output.give(
+                            &health_cap,
+                            HealthStatusMessage {
+                                id: None,
+                                namespace: StatusNamespace::Kafka,
+                                update: update.clone(),
+                            },
+                        );
+                        let error = Err(
+                            SourceError{
+                                error:SourceErrorDetails::Initialization(err_str.into())
+                            }.into()
+                        );
+                        let time = data_cap.time().clone();
+                        for (output, error) in
+                            outputs.iter().map(|o| o.output_index).repeat_clone(error)
+                        {
+                            let update = ((output, error), time.clone(), Diff::ONE);
+                            let size = update.fuel_size();
+                            data_output
+                                .give_fueled(&data_cap, update, size)
+                                .await;
+                        }
+                        return;
+                    }
+                } else {
+                    tracing::warn!(
+                        source_id = config.id.to_string(),
+                        worker_id = config.worker_id,
+                        num_workers = config.worker_count,
+                        "partition {pid} has a non-zero low watermark {lwm}, but no start offset or \
+                        resume upper was found for this partition. Setting start offset to low watermark"
+                    );
+                    start_offsets.insert(*pid, ReinterpretCast::reinterpret_cast(*lwm));
+                }
+            }
 
             // Note that we wait for this AFTER we downgrade to the source `resume_upper`. This
             // allows downstream operators (namely, the `reclock_operator`) to downgrade to the
@@ -1471,12 +1589,21 @@ fn fetch_partition_info<C: ConsumerContext>(
     consumer: &BaseConsumer<C>,
     topic: &str,
     fetch_timeout: Duration,
-) -> Result<BTreeMap<PartitionId, HighWatermark>, GetPartitionsError> {
+    high_watermark: bool,
+) -> Result<BTreeMap<PartitionId, PartitionWatermark>, GetPartitionsError> {
     let pids = get_partitions(consumer.client(), topic, fetch_timeout)?;
 
     let mut offset_requests = TopicPartitionList::with_capacity(pids.len());
+    let offset_fetch_type = if high_watermark {
+        Offset::End
+    } else {
+        // We want to fetch the beginning offset to be able to detect compaction. If the beginning
+        // offset is greater than 0, we know that compaction is enabled and we can adjust our
+        // watermarking strategy accordingly.
+        Offset::Beginning
+    };
     for pid in pids {
-        offset_requests.add_partition_offset(topic, pid, Offset::End)?;
+        offset_requests.add_partition_offset(topic, pid, offset_fetch_type)?;
     }
 
     let offset_responses = consumer.offsets_for_times(offset_requests, fetch_timeout)?;
@@ -1500,7 +1627,7 @@ fn fetch_partition_info<C: ConsumerContext>(
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 enum MetadataUpdate {
     /// The current IDs and high watermarks of all topic partitions.
-    Partitions(BTreeMap<PartitionId, HighWatermark>),
+    Partitions(BTreeMap<PartitionId, PartitionWatermark>),
     /// A transient error.
     ///
     /// Transient errors stall the source until their cause has been resolved.
@@ -1718,6 +1845,7 @@ fn spawn_metadata_thread<C: ConsumerContext>(
                         .parameters
                         .kafka_timeout_config
                         .fetch_metadata_timeout,
+                    true,
                 );
                 trace!(
                     source_id = config.id.to_string(),
