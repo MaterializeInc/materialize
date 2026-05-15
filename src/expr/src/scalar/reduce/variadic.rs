@@ -1,0 +1,359 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+//! Post-order rewrites for `CallVariadic` nodes.
+
+use std::collections::BTreeSet;
+use std::mem;
+
+use mz_ore::collections::CollectionExt;
+use mz_pgtz::timezone::TimezoneSpec;
+use mz_repr::{Datum, ReprColumnType, ReprScalarType, RowArena, SqlScalarType};
+
+use crate::MirScalarExpr;
+use crate::scalar::func::variadic::{Coalesce, ListCreate, ListIndex};
+use crate::scalar::func::{
+    self, BinaryFunc, UnaryFunc, VariadicFunc, parse_timezone, regexp_replace_parse_flags,
+};
+
+pub(super) fn reduce_call_variadic(
+    e: &mut MirScalarExpr,
+    column_types: &[ReprColumnType],
+    temp_storage: &RowArena,
+) {
+    // Flatten chains of associative variadic calls before any per-`func`
+    // dispatch. `undistribute_and_or` below relies on this having run.
+    e.flatten_associative();
+
+    let MirScalarExpr::CallVariadic { func, exprs } = e else {
+        unreachable!("`flatten_associative` shouldn't change node type");
+    };
+
+    // Coalesce has its own simplification routine that handles null/error
+    // propagation internally — bail out to it.
+    if *func == Coalesce.into() {
+        simplify_coalesce(e, column_types);
+        return;
+    }
+
+    // Generic folds: constant-fold, null-propagate, error-propagate.
+    if exprs.iter().all(|x| x.is_literal()) {
+        *e = MirScalarExpr::literal(e.eval(&[], temp_storage), e.typ(column_types).scalar_type);
+        return;
+    }
+    if func.propagates_nulls() && exprs.iter().any(|x| x.is_literal_null()) {
+        *e = MirScalarExpr::literal_null(e.typ(column_types).scalar_type);
+        return;
+    }
+    if let Some(err) = exprs.iter().find_map(|x| x.as_literal_err()) {
+        *e = MirScalarExpr::literal(Err(err.clone()), e.typ(column_types).scalar_type);
+        return;
+    }
+
+    // Per-function dispatch. Arms are mutually exclusive on discriminant; the
+    // bodies only fire when their literal-argument guards hold.
+    match func {
+        VariadicFunc::RegexpMatch(_)
+            if exprs[1].is_literal() && exprs.get(2).map_or(true, |e| e.is_literal()) =>
+        {
+            let needle = exprs[1].as_literal_str().unwrap();
+            let flags = if exprs.len() == 3 {
+                exprs[2].as_literal_str().unwrap()
+            } else {
+                ""
+            };
+            *e = match func::build_regex(needle, flags) {
+                Ok(regex) => mem::take(exprs)
+                    .into_first()
+                    .call_unary(UnaryFunc::RegexpMatch(func::RegexpMatch(regex))),
+                Err(err) => MirScalarExpr::literal(Err(err), e.typ(column_types).scalar_type),
+            };
+        }
+        VariadicFunc::RegexpReplace(_)
+            if exprs[1].is_literal() && exprs.get(3).map_or(true, |e| e.is_literal()) =>
+        {
+            let pattern = exprs[1].as_literal_str().unwrap();
+            let flags = exprs
+                .get(3)
+                .map_or("", |expr| expr.as_literal_str().unwrap());
+            let (limit, flags) = regexp_replace_parse_flags(flags);
+
+            // The behavior of `regexp_replace` is that if the data is `NULL`,
+            // the function returns `NULL`, independently of whether the
+            // pattern or flags are correct. We need to check for this case
+            // and introduce an if-then-else on the error path to only
+            // surface the error if both the source and replacement inputs
+            // are non-NULL.
+            *e = match func::build_regex(pattern, &flags) {
+                Ok(regex) => {
+                    let mut exprs = mem::take(exprs);
+                    let replacement = exprs.swap_remove(2);
+                    let source = exprs.swap_remove(0);
+                    source.call_binary(
+                        replacement,
+                        BinaryFunc::from(func::RegexpReplace { regex, limit }),
+                    )
+                }
+                Err(err) => {
+                    let mut exprs = mem::take(exprs);
+                    let replacement = exprs.swap_remove(2);
+                    let source = exprs.swap_remove(0);
+                    let scalar_type = e.typ(column_types).scalar_type;
+                    // We need to return `NULL` on `NULL` input, and error
+                    // otherwise.
+                    source
+                        .call_is_null()
+                        .or(replacement.call_is_null())
+                        .if_then_else(
+                            MirScalarExpr::literal_null(scalar_type.clone()),
+                            MirScalarExpr::literal(Err(err), scalar_type),
+                        )
+                }
+            };
+        }
+        VariadicFunc::RegexpSplitToArray(_)
+            if exprs[1].is_literal() && exprs.get(2).map_or(true, |e| e.is_literal()) =>
+        {
+            let needle = exprs[1].as_literal_str().unwrap();
+            let flags = if exprs.len() == 3 {
+                exprs[2].as_literal_str().unwrap()
+            } else {
+                ""
+            };
+            *e = match func::build_regex(needle, flags) {
+                Ok(regex) => {
+                    mem::take(exprs)
+                        .into_first()
+                        .call_unary(UnaryFunc::RegexpSplitToArray(func::RegexpSplitToArray(
+                            regex,
+                        )))
+                }
+                Err(err) => MirScalarExpr::literal(Err(err), e.typ(column_types).scalar_type),
+            };
+        }
+        VariadicFunc::ListIndex(_) if is_list_create_call(&exprs[0]) => {
+            // ListIndex(ListCreate, literal) → eliminate both the ListIndex
+            // and the ListCreate. E.g.: `LIST[f1,f2][2]` → `f2`.
+            let ind_exprs = exprs.split_off(1);
+            let top_list_create = exprs.swap_remove(0);
+            *e = reduce_list_create_list_index_literal(top_list_create, ind_exprs);
+        }
+        VariadicFunc::And(_) | VariadicFunc::Or(_) => {
+            // Relies on `flatten_associative` having run above.
+            e.undistribute_and_or();
+            e.reduce_and_canonicalize_and_or();
+        }
+        VariadicFunc::TimezoneTimeVariadic(_)
+            if exprs[0].is_literal() && exprs[2].is_literal_ok() =>
+        {
+            let tz = exprs[0].as_literal_str().unwrap();
+            *e = match parse_timezone(tz, TimezoneSpec::Posix) {
+                Ok(tz) => MirScalarExpr::CallUnary {
+                    func: UnaryFunc::TimezoneTime(func::TimezoneTime {
+                        tz,
+                        wall_time: exprs[2]
+                            .as_literal()
+                            .unwrap()
+                            .unwrap()
+                            .unwrap_timestamptz()
+                            .naive_utc(),
+                    }),
+                    expr: Box::new(exprs[1].take()),
+                },
+                Err(err) => MirScalarExpr::literal(Err(err), e.typ(column_types).scalar_type),
+            };
+        }
+        _ => {}
+    }
+}
+
+/// Simplifies a `Coalesce`:
+/// 1. If all arguments are null, the result is null.
+/// 2. Drop null arguments (none of them can be the result).
+/// 3. Truncate after the first argument known to be non-null (a literal or a
+///    non-nullable column).
+/// 4. Deduplicate arguments (e.g. `coalesce(#0, #0) → coalesce(#0)`).
+/// 5. Unwrap a single-argument `coalesce`.
+fn simplify_coalesce(e: &mut MirScalarExpr, column_types: &[ReprColumnType]) {
+    let MirScalarExpr::CallVariadic { exprs, .. } = e else {
+        unreachable!()
+    };
+
+    // The all-null check must run before we modify `exprs`, because
+    // `e.typ` requires `exprs.len() > 0`.
+    if exprs.iter().all(|x| x.is_literal_null()) {
+        *e = MirScalarExpr::literal_null(e.typ(column_types).scalar_type);
+        return;
+    }
+
+    exprs.retain(|x| !x.is_literal_null());
+
+    // Drop arguments after the first one that's certain to be non-null. This
+    // intentionally throws away errors that can never happen.
+    if let Some(i) = exprs
+        .iter()
+        .position(|x| x.is_literal() || !x.typ(column_types).nullable)
+    {
+        exprs.truncate(i + 1);
+    }
+
+    let mut seen = BTreeSet::new();
+    exprs.retain(|x| seen.insert(x.clone()));
+
+    if exprs.len() == 1 {
+        *e = exprs[0].take();
+    }
+}
+
+fn is_list_create_call(expr: &MirScalarExpr) -> bool {
+    matches!(
+        expr,
+        MirScalarExpr::CallVariadic {
+            func: VariadicFunc::ListCreate(..),
+            ..
+        }
+    )
+}
+
+fn list_create_type(list_create: &MirScalarExpr) -> ReprScalarType {
+    if let MirScalarExpr::CallVariadic {
+        func: VariadicFunc::ListCreate(ListCreate { elem_type: typ }),
+        ..
+    } = list_create
+    {
+        ReprScalarType::from(typ)
+    } else {
+        unreachable!()
+    }
+}
+
+/// Partial-evaluates a list indexing with a literal directly after a list
+/// creation.
+///
+/// Multi-dimensional lists are handled by a single call to this function,
+/// with multiple elements in `index_exprs` (of which not all need to be
+/// literals), and nested `ListCreate`s in `list_create_to_reduce`.
+///
+/// # Examples
+///
+/// `LIST[f1,f2][2]` → `f2`.
+///
+/// A multi-dimensional list, with only some of the indexes being literals:
+/// `LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][n][2]` →
+/// `LIST[f6, f8] [n]`.
+///
+/// See more examples in list.slt.
+fn reduce_list_create_list_index_literal(
+    mut list_create_to_reduce: MirScalarExpr,
+    mut index_exprs: Vec<MirScalarExpr>,
+) -> MirScalarExpr {
+    // We iterate over the index_exprs and remove literals, but keep
+    // non-literals. When we encounter a non-literal, we need to dig into the
+    // nested ListCreates: `list_create_mut_refs` will contain all the
+    // ListCreates of the current level. If an element of
+    // `list_create_mut_refs` is not actually a ListCreate, then we break out
+    // of the loop. When we remove a literal, we need to partial-evaluate all
+    // ListCreates that are at the current level (except those that
+    // disappeared due to literals at earlier levels), index into them with
+    // the literal, and change each element in `list_create_mut_refs` to the
+    // result. We also record mut refs to all the earlier `element_type`
+    // references that we have seen in ListCreate calls, because when we
+    // process a literal index, we need to remove one layer of list type from
+    // all these earlier ListCreate `element_type`s.
+    let mut list_create_mut_refs = vec![&mut list_create_to_reduce];
+    let mut earlier_list_create_types: Vec<&mut SqlScalarType> = vec![];
+    let mut i = 0;
+    while i < index_exprs.len()
+        && list_create_mut_refs
+            .iter()
+            .all(|lc| is_list_create_call(lc))
+    {
+        if index_exprs[i].is_literal_ok() {
+            let removed_index = index_exprs.remove(i);
+            let index_i64 = match removed_index.as_literal().unwrap().unwrap() {
+                Datum::Int64(sql_index_i64) => sql_index_i64 - 1,
+                _ => unreachable!(), // always an Int64, see plan_index_list
+            };
+            for list_create in &mut list_create_mut_refs {
+                let list_create_args = match list_create {
+                    MirScalarExpr::CallVariadic {
+                        func: VariadicFunc::ListCreate(ListCreate { elem_type: _ }),
+                        exprs,
+                    } => exprs,
+                    _ => unreachable!(), // func cannot be anything else than a ListCreate
+                };
+                // ListIndex gives null on an out-of-bounds index.
+                if index_i64 >= 0 && index_i64 < list_create_args.len().try_into().unwrap() {
+                    let index: usize = index_i64.try_into().unwrap();
+                    **list_create = list_create_args.swap_remove(index);
+                } else {
+                    let typ = list_create_type(list_create);
+                    **list_create = MirScalarExpr::literal_null(typ);
+                }
+            }
+            // Peel one layer off of each of the earlier element types.
+            for t in earlier_list_create_types.iter_mut() {
+                if let SqlScalarType::List {
+                    element_type,
+                    custom_id: _,
+                } = t
+                {
+                    **t = *element_type.clone();
+                    // These are not the same types anymore, so remove
+                    // custom_ids all the way down.
+                    let mut u = &mut **t;
+                    while let SqlScalarType::List {
+                        element_type,
+                        custom_id,
+                    } = u
+                    {
+                        *custom_id = None;
+                        u = &mut **element_type;
+                    }
+                } else {
+                    unreachable!("already matched above");
+                }
+            }
+        } else {
+            // We can't remove this index, so we can't reduce any of the
+            // ListCreates at this level. So we change list_create_mut_refs
+            // to refer to all the arguments of all the ListCreates currently
+            // referenced by list_create_mut_refs.
+            list_create_mut_refs = list_create_mut_refs
+                .into_iter()
+                .flat_map(|list_create| match list_create {
+                    MirScalarExpr::CallVariadic {
+                        func: VariadicFunc::ListCreate(ListCreate { elem_type }),
+                        exprs: list_create_args,
+                    } => {
+                        earlier_list_create_types.push(elem_type);
+                        list_create_args
+                    }
+                    // func cannot be anything else than a ListCreate
+                    _ => unreachable!(),
+                })
+                .collect();
+            i += 1;
+        }
+    }
+    // If all list indexes have been evaluated, return the reduced expression.
+    // Otherwise, rebuild the ListIndex call with the remaining ListCreates
+    // and indexes.
+    if index_exprs.is_empty() {
+        assert_eq!(list_create_mut_refs.len(), 1);
+        list_create_to_reduce
+    } else {
+        MirScalarExpr::call_variadic(
+            ListIndex,
+            std::iter::once(list_create_to_reduce)
+                .chain(index_exprs)
+                .collect(),
+        )
+    }
+}
