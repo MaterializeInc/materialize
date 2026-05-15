@@ -267,7 +267,7 @@ allocation-counter = "0"
 anyhow = "1.0.102"
 array-concat = "0.5.5"
 arrayvec = "0.7.6"
-arrow = { version = "57", default-features = false }
+arrow = { version = "58", default-features = false }
 arrow-ipc = "57"
 askama = { version = "0.12.1", default-features = false, features = ["config", "serde-json"] }
 assert_cmd = "2.2.0"
