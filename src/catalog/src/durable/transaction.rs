@@ -111,6 +111,18 @@ pub struct Transaction<'a> {
     upper: mz_repr::Timestamp,
     /// The ID of the current operation of this transaction.
     op_id: Timestamp,
+    /// The set of OIDs present in the *initial* state of the five OID-bearing
+    /// tables (`databases`, `schemas`, `roles`, `items`,
+    /// `introspection_sources`). Populated once in [`Transaction::new`] and not
+    /// mutated thereafter — pending changes are folded in per-call inside
+    /// [`Transaction::allocate_oids`].
+    ///
+    /// This avoids a full O(N) scan of every OID-bearing table on every OID
+    /// allocation, which used to dominate DDL latency at large catalog sizes.
+    /// It does *not* need to be serialized into [`Transaction::current_snapshot`]
+    /// — restoring a transaction via [`Transaction::new`] rebuilds it from the
+    /// snapshot.
+    initial_oids: BTreeSet<u32>,
 }
 
 impl<'a> Transaction<'a> {
@@ -141,29 +153,50 @@ impl<'a> Transaction<'a> {
         }: Snapshot,
         upper: mz_repr::Timestamp,
     ) -> Result<Transaction<'a>, CatalogError> {
+        let databases =
+            TableTransaction::new_with_uniqueness_fn(databases, |a: &DatabaseValue, b| {
+                a.name == b.name
+            })?;
+        let schemas = TableTransaction::new_with_uniqueness_fn(schemas, |a: &SchemaValue, b| {
+            a.database_id == b.database_id && a.name == b.name
+        })?;
+        let items = TableTransaction::new_with_uniqueness_fn(items, |a: &ItemValue, b| {
+            a.schema_id == b.schema_id && a.name == b.name && {
+                // `item_type` is slow, only compute if needed.
+                let a_type = a.item_type();
+                let b_type = b.item_type();
+                (a_type != CatalogItemType::Type && b_type != CatalogItemType::Type)
+                    || (a_type == CatalogItemType::Type && b_type.conflicts_with_type())
+                    || (b_type == CatalogItemType::Type && a_type.conflicts_with_type())
+            }
+        })?;
+        let roles =
+            TableTransaction::new_with_uniqueness_fn(roles, |a: &RoleValue, b| a.name == b.name)?;
+        let introspection_sources = TableTransaction::new(introspection_sources)?;
+
+        // Populate the cached set of OIDs from the initial state of the five
+        // OID-bearing tables. This is a one-time O(N) cost at transaction
+        // start; subsequent `allocate_oids` calls fold pending changes onto
+        // this set, avoiding repeated full scans of the catalog.
+        let mut initial_oids = BTreeSet::new();
+        initial_oids.extend(databases.initial.values().map(|v| v.oid));
+        initial_oids.extend(schemas.initial.values().map(|v| v.oid));
+        initial_oids.extend(roles.initial.values().map(|v| v.oid));
+        initial_oids.extend(items.initial.values().map(|v| v.oid));
+        initial_oids.extend(
+            introspection_sources
+                .initial
+                .values()
+                .map(|v: &ClusterIntrospectionSourceIndexValue| v.oid),
+        );
+
         Ok(Transaction {
             durable_catalog,
-            databases: TableTransaction::new_with_uniqueness_fn(
-                databases,
-                |a: &DatabaseValue, b| a.name == b.name,
-            )?,
-            schemas: TableTransaction::new_with_uniqueness_fn(schemas, |a: &SchemaValue, b| {
-                a.database_id == b.database_id && a.name == b.name
-            })?,
-            items: TableTransaction::new_with_uniqueness_fn(items, |a: &ItemValue, b| {
-                a.schema_id == b.schema_id && a.name == b.name && {
-                    // `item_type` is slow, only compute if needed.
-                    let a_type = a.item_type();
-                    let b_type = b.item_type();
-                    (a_type != CatalogItemType::Type && b_type != CatalogItemType::Type)
-                        || (a_type == CatalogItemType::Type && b_type.conflicts_with_type())
-                        || (b_type == CatalogItemType::Type && a_type.conflicts_with_type())
-                }
-            })?,
+            databases,
+            schemas,
+            items,
             comments: TableTransaction::new(comments)?,
-            roles: TableTransaction::new_with_uniqueness_fn(roles, |a: &RoleValue, b| {
-                a.name == b.name
-            })?,
+            roles,
             role_auth: TableTransaction::new(role_auth)?,
             clusters: TableTransaction::new_with_uniqueness_fn(clusters, |a: &ClusterValue, b| {
                 a.name == b.name
@@ -176,7 +209,7 @@ impl<'a> Transaction<'a> {
                 cluster_replicas,
                 |a: &ClusterReplicaValue, b| a.cluster_id == b.cluster_id && a.name == b.name,
             )?,
-            introspection_sources: TableTransaction::new(introspection_sources)?,
+            introspection_sources,
             id_allocator: TableTransaction::new(id_allocator)?,
             configs: TableTransaction::new(configs)?,
             settings: TableTransaction::new(settings)?,
@@ -194,6 +227,7 @@ impl<'a> Transaction<'a> {
             audit_log_updates: Vec::new(),
             upper,
             op_id: 0,
+            initial_oids,
         })
     }
 
@@ -941,36 +975,79 @@ impl<'a> Transaction<'a> {
             return Err(CatalogError::Catalog(SqlCatalogError::OidExhaustion));
         }
 
-        // This is potentially slow to do everytime we allocate an OID. A faster approach might be
-        // to have an ID allocator that is updated everytime an OID is allocated or de-allocated.
-        // However, benchmarking shows that this doesn't make a noticeable difference and the other
-        // approach requires making sure that allocator always stays in-sync which can be
-        // error-prone. If DDL starts slowing down, this is a good place to try and optimize.
-        let mut allocated_oids = HashSet::with_capacity(
-            self.databases.len()
-                + self.schemas.len()
-                + self.roles.len()
-                + self.items.len()
-                + self.introspection_sources.len()
-                + temporary_oids.len(),
+        // Compute the set of OIDs currently in use by the five OID-bearing
+        // tables. The initial state is cached in `self.initial_oids` (populated
+        // once in `Transaction::new`); here we only need to fold in pending
+        // changes for this transaction. In the common case there are very few
+        // pending changes per call, so this is effectively O(|pending|) per
+        // allocation, rather than the previous O(|catalog|) full scan.
+        //
+        // For each pending key we compute the *delta* relative to its initial
+        // value: the initial OID (if any) is removed (it might be re-taken in
+        // a moment), and the current effective OID (if the key still exists in
+        // the txn view) is added. The same OID appearing in both adds and
+        // removes nets to "still taken" via `pending_added`.
+        let mut pending_added: BTreeSet<u32> = BTreeSet::new();
+        let mut pending_removed: BTreeSet<u32> = BTreeSet::new();
+        fn collect_pending<K, V>(
+            table: &TableTransaction<K, V>,
+            extract_oid: impl Fn(&V) -> u32,
+            added: &mut BTreeSet<u32>,
+            removed: &mut BTreeSet<u32>,
+        ) where
+            K: Ord + Eq + Clone + Debug,
+            V: Ord + Clone + Debug + UniqueName,
+        {
+            for k in table.pending.keys() {
+                if let Some(initial_v) = table.initial.get(k) {
+                    removed.insert(extract_oid(initial_v));
+                }
+                if let Some(current_v) = table.get(k) {
+                    added.insert(extract_oid(current_v));
+                }
+            }
+        }
+        collect_pending(
+            &self.databases,
+            |v| v.oid,
+            &mut pending_added,
+            &mut pending_removed,
         );
-        self.databases.for_values(|_, value| {
-            allocated_oids.insert(value.oid);
-        });
-        self.schemas.for_values(|_, value| {
-            allocated_oids.insert(value.oid);
-        });
-        self.roles.for_values(|_, value| {
-            allocated_oids.insert(value.oid);
-        });
-        self.items.for_values(|_, value| {
-            allocated_oids.insert(value.oid);
-        });
-        self.introspection_sources.for_values(|_, value| {
-            allocated_oids.insert(value.oid);
-        });
+        collect_pending(
+            &self.schemas,
+            |v| v.oid,
+            &mut pending_added,
+            &mut pending_removed,
+        );
+        collect_pending(
+            &self.roles,
+            |v| v.oid,
+            &mut pending_added,
+            &mut pending_removed,
+        );
+        collect_pending(
+            &self.items,
+            |v| v.oid,
+            &mut pending_added,
+            &mut pending_removed,
+        );
+        collect_pending(
+            &self.introspection_sources,
+            |v| v.oid,
+            &mut pending_added,
+            &mut pending_removed,
+        );
 
-        let is_allocated = |oid| allocated_oids.contains(&oid) || temporary_oids.contains(&oid);
+        let initial_oids = &self.initial_oids;
+        let is_allocated = |oid: u32| -> bool {
+            if temporary_oids.contains(&oid) || pending_added.contains(&oid) {
+                return true;
+            }
+            // The OID is "still in the initial set" if it was there originally
+            // and no pending change removed it. (If pending re-added it under a
+            // different key, `pending_added` already covered that above.)
+            initial_oids.contains(&oid) && !pending_removed.contains(&oid)
+        };
 
         let start_oid: u32 = self
             .id_allocator
@@ -2353,6 +2430,7 @@ impl<'a> Transaction<'a> {
             txn_wal_shard: _,
             upper,
             op_id: _,
+            initial_oids: _,
         } = &self;
 
         let updates = std::iter::empty()
@@ -3162,6 +3240,7 @@ where
     }
 
     /// Returns the number of items viewable in the current transaction.
+    #[allow(dead_code)]
     fn len(&self) -> usize {
         let mut count = 0;
         self.for_values(|_, _| {
