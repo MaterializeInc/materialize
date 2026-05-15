@@ -78,6 +78,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use mz_repr::Diff;
+use mz_repr::adt::regex::Regex;
 
 use crate::durable::objects::state_update::{StateUpdate, StateUpdateKindJson};
 use crate::durable::persist::{Mode, Timestamp, UnopenedPersistCatalogState};
@@ -98,7 +99,8 @@ pub(crate) struct RepairStats {
     /// repaired phantom) that were retracted as part of the repair.
     pub stale_retracted: usize,
     /// Live `+1` Role rows whose stored form didn't match the canonical
-    /// re-serialization of their parsed value, rewritten in place.
+    /// re-serialization of their parsed value (with v80->v81 backfill
+    /// applied where appropriate), rewritten in place.
     pub normalized: usize,
     /// Dangling Role `-1`s that didn't fit the structural signature.
     pub skipped_role: usize,
@@ -124,7 +126,7 @@ pub async fn upgrade(
             repaired = stats.repaired,
             stale_retracted = stats.stale_retracted,
             normalized = stats.normalized,
-            "repairing Role rows left inconsistent by the v80->v81 migration's non-cloud no-op",
+            "repairing Role rows left inconsistent by the v80->v81 migration's non-cloud no-op (and replaying its auto_provision_source backfill)",
         );
     }
     if stats.skipped_role > 0 || stats.skipped_non_role > 0 {
@@ -322,6 +324,7 @@ pub(crate) fn compute_repairs(
     //
     // Dedupe canonical inserts per parsed value so two distinct stale byte
     // forms of the same role collapse to a single `+1` rather than `+2`.
+    let is_cloud = is_cloud_env(snapshot);
     let mut inserted_canonical: BTreeSet<StateUpdateKindJson> = BTreeSet::new();
     for (kind_json, _, diff) in snapshot {
         if *diff != Diff::ONE {
@@ -336,13 +339,14 @@ pub(crate) fn compute_repairs(
         if unrepaired_keys.contains(&role.key) {
             continue;
         }
-        let canonical: StateUpdateKindJson = v83::StateUpdateKind::Role(role.clone()).into();
+        let backfilled = apply_v80_to_v81_backfill(role.clone(), is_cloud);
+        let canonical: StateUpdateKindJson = v83::StateUpdateKind::Role(backfilled).into();
         if &canonical == kind_json {
             continue;
         }
         tracing::info!(
             role_name = %role.value.name,
-            "normalizing pre-v81 Role row to canonical byte form",
+            "normalizing Role row to canonical byte form",
         );
         repairs.push((kind_json.clone(), Diff::MINUS_ONE));
         if inserted_canonical.insert(canonical.clone()) {
@@ -352,6 +356,77 @@ pub(crate) fn compute_repairs(
     }
 
     (repairs, stats)
+}
+
+/// Detects whether the snapshot belongs to a Materialize Cloud environment
+/// using the same heuristic as the original `v80_to_v81` migration:
+///
+/// - The `mz_system` cluster must be a managed cluster with a non-zero
+///   replication factor (self-managed envs run it at 0 to save resources).
+/// - The `enable_password_auth` system parameter must not be `on` (only
+///   self-managed envs enable it).
+///
+/// Returns false on any error path (missing `mz_system`, unmanaged variant,
+/// failed parse), which is the safe default — a false negative means we
+/// leave `auto_provision_source` at `None` for a cloud env's roles, which
+/// is no worse than the v80->v81 bug we're already fixing.
+fn is_cloud_env(snapshot: &[(StateUpdateKindJson, Timestamp, Diff)]) -> bool {
+    let mut has_password_auth = false;
+    let mut mz_system_replication_factor: Option<u32> = None;
+    for (kind_json, _, diff) in snapshot {
+        if *diff != Diff::ONE {
+            continue;
+        }
+        let Ok(kind) = kind_json.try_to_serde::<v83::StateUpdateKind>() else {
+            continue;
+        };
+        match kind {
+            v83::StateUpdateKind::ServerConfiguration(config) => {
+                if config.key.name == "enable_password_auth" && config.value.value == "on" {
+                    has_password_auth = true;
+                }
+            }
+            v83::StateUpdateKind::Cluster(cluster) if cluster.value.name == "mz_system" => {
+                if let v83::ClusterVariant::Managed(v83::ManagedCluster {
+                    replication_factor,
+                    ..
+                }) = cluster.value.config.variant
+                {
+                    mz_system_replication_factor = Some(replication_factor);
+                }
+            }
+            _ => {}
+        }
+    }
+    matches!(mz_system_replication_factor, Some(rf) if rf > 0) && !has_password_auth
+}
+
+/// Email-name heuristic shared with the original `v80_to_v81` migration:
+/// a Role whose name matches `.+@.+\..+` (case-insensitive) is treated as
+/// auto-provisioned via Frontegg. Anything else (e.g., `admin`, `prod_app`)
+/// is left with `auto_provision_source: None`.
+fn auto_provision_source_for_name(name: &str) -> Option<v83::AutoProvisionSource> {
+    let email_like = Regex::new(r".+@.+\..+", true).expect("valid regex");
+    if email_like.is_match(name) {
+        Some(v83::AutoProvisionSource::Frontegg)
+    } else {
+        None
+    }
+}
+
+/// Replays the `v80_to_v81` migration's `auto_provision_source` backfill on
+/// a single Role. Mirrors that migration exactly: only acts on cloud envs,
+/// only fills the field when it's currently `None`, only sets `Frontegg`
+/// for names matching the email heuristic.
+fn apply_v80_to_v81_backfill(mut role: v83::Role, is_cloud: bool) -> v83::Role {
+    if !is_cloud {
+        return role;
+    }
+    if role.value.attributes.auto_provision_source.is_some() {
+        return role;
+    }
+    role.value.attributes.auto_provision_source = auto_provision_source_for_name(&role.value.name);
+    role
 }
 
 /// A `+1` Role row borrowed from the snapshot. Carries both the stored form
@@ -883,5 +958,282 @@ mod tests {
             }
         });
         StateUpdateKindJson::from_serde(&v)
+    }
+
+    /// Build the `mz_system` cluster row used by `is_cloud_env`. A
+    /// replication factor > 0 signals "this is cloud" (self-managed envs
+    /// run it at 0 to save resources).
+    fn mz_system_cluster(replication_factor: u32) -> StateUpdateKindJson {
+        let cluster = v83::Cluster {
+            key: v83::ClusterKey {
+                id: v83::ClusterId::System(1),
+            },
+            value: v83::ClusterValue {
+                name: "mz_system".to_string(),
+                owner_id: v83::RoleId::System(1),
+                privileges: vec![],
+                config: v83::ClusterConfig {
+                    workload_class: None,
+                    variant: v83::ClusterVariant::Managed(v83::ManagedCluster {
+                        size: "1".to_string(),
+                        replication_factor,
+                        availability_zones: vec![],
+                        logging: v83::ReplicaLogging {
+                            log_logging: false,
+                            interval: None,
+                        },
+                        optimizer_feature_overrides: vec![],
+                        schedule: v83::ClusterSchedule::Manual,
+                    }),
+                },
+            },
+        };
+        v83::StateUpdateKind::Cluster(cluster).into()
+    }
+
+    /// Build a `ServerConfiguration` row toggling `enable_password_auth`,
+    /// used by `is_cloud_env` to disambiguate self-managed envs that happen
+    /// to run `mz_system` at replication factor 1.
+    fn server_config(name: &str, value: &str) -> StateUpdateKindJson {
+        let cfg = v83::ServerConfiguration {
+            key: v83::ServerConfigurationKey {
+                name: name.to_string(),
+            },
+            value: v83::ServerConfigurationValue {
+                value: value.to_string(),
+            },
+        };
+        v83::StateUpdateKind::ServerConfiguration(cfg).into()
+    }
+
+    /**
+     * Tests for the replayed v80->v81 `auto_provision_source` backfill.
+     * Mirror the structure of `v80_to_v81::tests`: a cloud env paired with
+     * roles of different name shapes should produce `Frontegg` for the
+     * email-like names and leave the rest as `None`. Self-managed envs
+     * should be a complete no-op for the backfill, even on email names.
+     */
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault` on OS `linux`
+    fn cloud_env_backfills_auto_provision_source_for_email_name() {
+        // A canonical-form Role row (already in v83 byte shape) on a cloud
+        // env whose name is email-like. v80->v81 should have set
+        // auto_provision_source: Frontegg but never did. This migration
+        // retracts the row and re-inserts the backfilled canonical form.
+        let original = stale_role_kind_with_dropped_field(100, "alice@materialize.com", 30100);
+        let backfilled = role_kind(
+            100,
+            "alice@materialize.com",
+            30100,
+            None,
+            None,
+            Some(v83::AutoProvisionSource::Frontegg),
+        );
+
+        let snap = snapshot(vec![
+            (mz_system_cluster(1), Diff::ONE),
+            (server_config("enable_password_auth", "off"), Diff::ONE),
+            (original.clone(), Diff::ONE),
+        ]);
+        let (repairs, stats) = compute_repairs(&snap);
+        assert_eq!(
+            repairs,
+            vec![(original, Diff::MINUS_ONE), (backfilled, Diff::ONE)],
+        );
+        assert_eq!(stats.normalized, 1);
+    }
+
+    // Migrates a user role that is already in the correct byte shape
+    // but is missing its expected auto_provision_source field
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault` on OS `linux`
+    fn cloud_env_migrates_non_stale_user_role() {
+        // Original role is of the correct byte shape, but auto_provision_source is None.
+        let original = role_kind(100, "alice@materialize.com", 30100, None, None, None);
+        // Migrated role is of the correct byte shape, and auto_provision_source is Frontegg.
+        let migrated = role_kind(
+            100,
+            "alice@materialize.com",
+            30100,
+            None,
+            None,
+            Some(v83::AutoProvisionSource::Frontegg),
+        );
+
+        let snap = snapshot(vec![
+            (mz_system_cluster(1), Diff::ONE),
+            (server_config("enable_password_auth", "off"), Diff::ONE),
+            (original.clone(), Diff::ONE),
+        ]);
+        let (repairs, stats) = compute_repairs(&snap);
+        assert_eq!(
+            repairs,
+            vec![(original, Diff::MINUS_ONE), (migrated, Diff::ONE)],
+        );
+        assert_eq!(stats.normalized, 1);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault` on OS `linux`
+    fn cloud_env_non_user_roles() {
+        // Same cloud env, but the role name doesn't look like an email.
+        // v80->v81's heuristic would have left this role with
+        // auto_provision_source: None; we mirror that.
+        let admin = stale_role_kind_with_dropped_field(101, "admin", 30101);
+        let admin_backfilled = role_kind(101, "admin", 30101, None, None, None);
+
+        let snap = snapshot(vec![
+            (mz_system_cluster(1), Diff::ONE),
+            (server_config("enable_password_auth", "off"), Diff::ONE),
+            (admin.clone(), Diff::ONE),
+        ]);
+        let (repairs, stats) = compute_repairs(&snap);
+        assert_eq!(
+            repairs,
+            vec![(admin, Diff::MINUS_ONE), (admin_backfilled, Diff::ONE)],
+        );
+        assert_eq!(stats.normalized, 1);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault` on OS `linux`
+    fn cloud_env_preserves_existing_auto_provision_source_for_user_role() {
+        // Already-set value (Some) must not be overwritten. v80->v81's
+        // backfill is intended only for rows that never got the field
+        // populated
+        let already_migrated_user_role = role_kind(
+            102,
+            "ops@materialize.com",
+            30102,
+            None,
+            None,
+            Some(v83::AutoProvisionSource::Frontegg),
+        );
+
+        let snap = snapshot(vec![
+            (mz_system_cluster(1), Diff::ONE),
+            (server_config("enable_password_auth", "off"), Diff::ONE),
+            (already_migrated_user_role, Diff::ONE),
+        ]);
+        let (repairs, stats) = compute_repairs(&snap);
+        assert!(repairs.is_empty());
+        assert_eq!(stats.normalized, 0);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault` on OS `linux`
+    fn cloud_env_preserves_existing_auto_provision_source_for_non_user_role() {
+        // Already-set value (Some) must not be overwritten. v80->v81's
+        // backfill is intended only for rows that never got the field
+        // populated
+        let already_migrated_non_user_role = role_kind(
+            102,
+            "non_user_role",
+            30102,
+            None,
+            None,
+            // Assume AutoProvisionSource is None
+            None,
+        );
+
+        let snap = snapshot(vec![
+            (mz_system_cluster(1), Diff::ONE),
+            (server_config("enable_password_auth", "off"), Diff::ONE),
+            (already_migrated_non_user_role, Diff::ONE),
+        ]);
+        let (repairs, stats) = compute_repairs(&snap);
+        assert!(repairs.is_empty());
+        assert_eq!(stats.normalized, 0);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault` on OS `linux`
+    fn self_managed_env_skips_backfill_for_email_name() {
+        // Self-managed: `mz_system` replication factor 0 means this is not a
+        // cloud env. v80->v81 deliberately left auto_provision_source alone
+        // for self-managed envs; this migration mirrors that.
+        let original = role_kind(103, "alice@materialize.com", 30103, Some(true), None, None);
+
+        let snap = snapshot(vec![
+            (mz_system_cluster(0), Diff::ONE),
+            (original, Diff::ONE),
+        ]);
+        let (repairs, stats) = compute_repairs(&snap);
+        assert!(repairs.is_empty());
+        assert_eq!(stats.normalized, 0);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault` on OS `linux`
+    fn self_managed_with_replication_factor_one_but_password_auth_skips_backfill() {
+        // A self-managed env that happens to run mz_system at replication
+        // factor 1 is disambiguated from cloud by enable_password_auth=on.
+        let original = role_kind(104, "alice@materialize.com", 30104, Some(true), None, None);
+
+        let snap = snapshot(vec![
+            (mz_system_cluster(1), Diff::ONE),
+            (server_config("enable_password_auth", "on"), Diff::ONE),
+            (original, Diff::ONE),
+        ]);
+        let (repairs, stats) = compute_repairs(&snap);
+        assert!(repairs.is_empty());
+        assert_eq!(stats.normalized, 0);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault` on OS `linux`
+    fn cloud_env_mixed_email_and_non_email_roles() {
+        // The canonical v80_to_v81 mixed-roles scenario, replayed here:
+        // an email-like role gets the backfill, a manually-created role
+        // doesn't. Belt-and-braces that the two paths coexist in one pass.
+        let user = stale_role_kind_with_dropped_field(110, "user@example.com", 30110);
+        let user_backfilled = role_kind(
+            110,
+            "user@example.com",
+            30110,
+            None,
+            None,
+            Some(v83::AutoProvisionSource::Frontegg),
+        );
+        let user_already_migrated = role_kind(
+            111,
+            "steve@example.com",
+            30111,
+            None,
+            None,
+            Some(v83::AutoProvisionSource::Frontegg),
+        );
+
+        let non_user_role = stale_role_kind_with_dropped_field(112, "non_user_role", 30113);
+        let non_user_role_backfilled = role_kind(112, "non_user_role", 30113, None, None, None);
+
+        let non_user_role_already_migrated = role_kind(
+            113,
+            "non_user_role_already_migrated",
+            30114,
+            None,
+            None,
+            None,
+        );
+
+        let snap = snapshot(vec![
+            (mz_system_cluster(1), Diff::ONE),
+            (server_config("enable_password_auth", "off"), Diff::ONE),
+            (user.clone(), Diff::ONE),
+            (user_already_migrated, Diff::ONE),
+            (non_user_role.clone(), Diff::ONE),
+            (non_user_role_already_migrated.clone(), Diff::ONE),
+        ]);
+        let (repairs, stats) = compute_repairs(&snap);
+        assert_eq!(
+            repairs,
+            vec![
+                (user, Diff::MINUS_ONE),
+                (user_backfilled, Diff::ONE),
+                (non_user_role, Diff::MINUS_ONE),
+                (non_user_role_backfilled, Diff::ONE),
+            ],
+        );
+        assert_eq!(stats.normalized, 2);
     }
 }
