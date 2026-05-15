@@ -20,6 +20,17 @@ COPY materialized entrypoint.sh /usr/local/bin/
 USER root
 RUN ln -s /usr/local/bin/materialized /usr/local/bin/environmentd \
   && ln -s /usr/local/bin/materialized /usr/local/bin/clusterd
+
+# Antithesis instrumentation (conditional on --build-arg ANTITHESIS=1)
+ARG ANTITHESIS
+RUN if [ -n "$ANTITHESIS" ]; then \
+      curl -sSL https://antithesis.com/assets/instrumentation/libvoidstar.so \
+        -o /usr/lib/libvoidstar.so \
+      && ldconfig \
+      && mkdir -p /symbols \
+      && ln -s /usr/local/bin/materialized /symbols/materialized; \
+    fi
+
 USER materialize
 
 ENTRYPOINT ["tini", "--", "entrypoint.sh"]
