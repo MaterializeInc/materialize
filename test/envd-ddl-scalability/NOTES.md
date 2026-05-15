@@ -730,3 +730,51 @@ provides via the Arc'd durable state.
 3. Storage point APIs for catalog-side storage metadata reads.
 4. Move durable txn overlay into `TransactionOps::DDL` to kill op
    replay across multi-statement DDL transactions.
+
+### 2026-05-15 — post-design measurements (after steps 1-7)
+
+Steps 1-7 of `doc/developer/design/20260515_ddl_catalog_o_delta.md`
+landed. Re-ran the audit on a warm release envd:
+
+```
+bin/environmentd --release
+python3 test/envd-ddl-scalability/audit.py \
+    --padding tables --scale 0,5000,10000 \
+    --ops create_table,drop_table,alter_table_add_col,rename_table \
+    --reps 8
+```
+
+p50 latency in ms:
+
+| op | N=0 | N=5000 | Δ@5000 | N=10000 | Δ@10000 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| create_table        | 26.3 | 34.0 | +7.7 | 41.1 | +14.8 |
+| drop_table          | 17.2 | 24.8 | +7.6 | 34.4 | +17.2 |
+| alter_table_add_col | 20.7 | 27.1 | +6.4 | 36.6 | +15.9 |
+| rename_table        | 17.1 | 22.8 | +5.7 | 31.3 | +14.2 |
+
+Pre-design baseline (the "post-fix high-N trace ranking" section
+above), reps=8, warm envd:
+
+| op | pre-design Δ@5000 | post-design Δ@5000 | reduction |
+| --- | ---: | ---: | ---: |
+| create_table        | +17.3 | +7.7 | 55% |
+| drop_table          | +24.0 | +7.6 | 68% |
+| alter_table_add_col | +30.7 | +6.4 | 79% |
+| rename_table        | +26.2 | +5.7 | 78% |
+
+Slope dropped from ~3-6 μs/object to ~1.4-1.7 μs/object — a roughly
+half to a quarter of the pre-design rate. The design's success
+criterion #1 was "≤ +5 ms"; we land at +5.7 to +7.7 ms, very close
+but not quite there. Criterion #2 ("invariant under add-only growth")
+is not satisfied either — N=10000 still adds ~7 ms over N=5000.
+
+The residual slope is almost certainly the persist-side cost on the
+catalog shard (`PersistTableWriteCmd::Append` / `compare_and_append`)
+that the design explicitly lists as out-of-scope (§"Out of Scope" →
+"Persist-side scaling of the catalog shard"). The trace in the
+pre-design ranking attributed +2.6 ms / 5000 to those two spans
+alone; that cost is now the dominant per-object grower.
+
+The remaining handful-of-ms gap to the success target needs a
+follow-on persist/storage workstream, not more catalog-side work.
