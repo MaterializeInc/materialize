@@ -4897,13 +4897,11 @@ def workflow_test_cmv_replica_alter_race(c: Composition) -> None:
         def flipper() -> None:
             while time.monotonic() < deadline:
                 for rf in (1, 2):
-                    c.sql(
-                        f"ALTER CLUSTER race_target SET (REPLICATION FACTOR {rf})"
-                    )
+                    c.sql(f"ALTER CLUSTER race_target SET (REPLICATION FACTOR {rf})")
 
-        threads = [
-            PropagatingThread(target=mv_worker, args=(i,)) for i in range(8)
-        ] + [PropagatingThread(target=flipper)]
+        threads = [PropagatingThread(target=mv_worker, args=(i,)) for i in range(8)] + [
+            PropagatingThread(target=flipper)
+        ]
         for t in threads:
             t.start()
         for t in threads:
