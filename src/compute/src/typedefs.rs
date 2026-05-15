@@ -25,8 +25,8 @@ use mz_row_spine::RowValBuilder;
 use crate::render::errors::DataflowErrorSer;
 use crate::typedefs::spines::{ColKeyBatcher, ColKeyBuilder, ColValBatcher, ColValBuilder};
 
-pub use mz_row_spine::{RowRowSpine, RowSpine, RowValBatcher, RowValSpine};
 pub use crate::typedefs::spines::{ColKeySpine, ColValSpine};
+pub use mz_row_spine::{RowRowSpine, RowSpine, RowValBatcher, RowValSpine};
 
 pub(crate) mod spines {
     use std::rc::Rc;

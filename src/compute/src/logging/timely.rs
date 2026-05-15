@@ -41,8 +41,8 @@ use crate::logging::{
     Update,
 };
 use crate::logging::{LogCollection, SharedLoggingState, consolidate_and_pack};
-use mz_row_spine::RowRowBuilder;
 use crate::typedefs::{KeyBatcher, KeyValBatcher, RowRowSpine};
+use mz_row_spine::RowRowBuilder;
 
 /// The return type of [`construct`].
 pub(super) struct Return {

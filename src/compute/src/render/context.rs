@@ -46,10 +46,10 @@ use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange, MzArrangeCore};
 use crate::render::errors::{DataflowErrorSer, ErrorLogger};
 use crate::render::{LinearJoinSpec, MaybeBucketByTime, RenderTimestamp};
-use mz_row_spine::{DatumSeq, RowRowBuilder};
 use crate::typedefs::{
     ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, RowRowAgent, RowRowEnter, RowRowSpine,
 };
+use mz_row_spine::{DatumSeq, RowRowBuilder};
 
 /// Dataflow-local collections and arrangements.
 ///

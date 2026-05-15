@@ -188,8 +188,8 @@ fn upsert_value_to_row(value: &UpsertValue) -> Row {
         }
         Err(err) => {
             packer.push(Datum::UInt8(1));
-            let bytes = bincode::serialize(err.as_ref())
-                .expect("UpsertError is serializable via bincode");
+            let bytes =
+                bincode::serialize(err.as_ref()).expect("UpsertError is serializable via bincode");
             packer.push(Datum::Bytes(&bytes));
         }
     }
@@ -292,11 +292,12 @@ where
     // regions instead of scattered jemalloc allocations, which lets the OS
     // evict cold pages cleanly under swap pressure.
     let encoded = persist_keyed.map(|(k, v)| (upsert_key_to_row(&k), upsert_value_to_row(&v)));
-    let persist_arranged = arrange_core::<_, RowRowBatcher<T, Diff>, RowRowBuilder<T, Diff>, RowRowSpine<T, Diff>>(
-        encoded.inner,
-        Pipeline,
-        "Persist feedback",
-    );
+    let persist_arranged = arrange_core::<
+        _,
+        RowRowBatcher<T, Diff>,
+        RowRowBuilder<T, Diff>,
+        RowRowSpine<T, Diff>,
+    >(encoded.inner, Pipeline, "Persist feedback");
     let mut persist_trace = persist_arranged.trace.clone();
 
     // Probe the persist arrangement's stream for frontier tracking.
