@@ -67,12 +67,12 @@ from materialize.mzcompose.services.zookeeper import Zookeeper
 # topology closer to production replica counts.
 CLUSTERD_POOL_SIZE = int(os.environ.get("ANTITHESIS_CLUSTERD_POOL_SIZE", "2"))
 
-# Timely worker threads per clusterd process. Bumped to 16 to match the
-# per-process worker density of larger production cluster sizes — single-
-# process clusterds at workers=16 cover the same intra-process
-# concurrency surface as a 4-process scale=4,workers=4 production
-# deployment, so we exercise per-shard parallelism, scheduler contention,
-# and the Antithesis thread-pause fault target with realistic depth.
+# Timely worker threads per clusterd process. Reverted from 16 back to 4
+# on suspicion that Antithesis's deterministic hypervisor runs the whole
+# fleet on a single core — 16 work-stealing Timely workers per process
+# on one core would burn most of their wakeups on context-switch
+# overhead and starve dependent steps, which would manifest as
+# workloads never finishing.
 #
 # This value must stay in lockstep with the `WORKERS N` clause in every
 # CREATE CLUSTER REPLICAS statement that targets these containers
@@ -80,7 +80,7 @@ CLUSTERD_POOL_SIZE = int(os.environ.get("ANTITHESIS_CLUSTERD_POOL_SIZE", "2"))
 # the Workload service passes through; the parallel-workload Python
 # driver consumes the same env via the framework's pool-cluster
 # wrapper).
-CLUSTERD_WORKERS = 16
+CLUSTERD_WORKERS = 4
 
 
 class FaultOrchestrator(Service):
@@ -244,16 +244,14 @@ SERVICES = [
     # Antithesis kill either replica's backing container without taking
     # the workload offline.
     #
-    # `workers=CLUSTERD_WORKERS` (16) per clusterd means each replica runs
-    # that many timely worker threads in one process. Sized to cover the
-    # per-process worker density of larger production cluster sizes:
-    # single-process clusterds at workers=16 exercise the same
-    # intra-process concurrency surface as a 4-process scale=4,workers=4
-    # production deployment (per-shard parallelism, scheduler contention,
-    # Antithesis thread-pause fault targets). The matching `WORKERS N`
-    # clause in every CREATE CLUSTER REPLICAS statement must equal this
-    # — workload-entrypoint.sh reads CLUSTERD_WORKERS from the env the
-    # Workload service exports.
+    # `workers=CLUSTERD_WORKERS` (4) per clusterd means each replica runs
+    # four timely worker threads in one process. Was bumped to 16 to
+    # match production single-process density but reverted on suspicion
+    # that Antithesis's single-core hypervisor turns 16-thread work-
+    # stealing into a context-switch storm that starves progress. The
+    # matching `WORKERS N` clause in every CREATE CLUSTER REPLICAS
+    # statement must equal this — workload-entrypoint.sh reads
+    # CLUSTERD_WORKERS from the env the Workload service exports.
     #
     # `scratch_directory=None` matches production: cluster replicas in
     # cloud deployments don't get a scratch disk, so the upsert operator's

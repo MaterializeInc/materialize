@@ -283,10 +283,10 @@ services:
     - CLUSTERD_PERSIST_PUBSUB_URL=http://materialized:6879
     - CLUSTERD_ENVIRONMENT_ID=mzcompose-us-east-1-00000000-0000-0000-0000-000000000000-0
     - CLUSTERD_PROCESS=0
-    - 'CLUSTERD_COMPUTE_TIMELY_CONFIG={"workers": 16, "process": 0, "addresses": ["clusterd1:2102"],
+    - 'CLUSTERD_COMPUTE_TIMELY_CONFIG={"workers": 4, "process": 0, "addresses": ["clusterd1:2102"],
       "arrangement_exert_proportionality": 16, "enable_zero_copy": false, "enable_zero_copy_lgalloc":
       false, "zero_copy_limit": null}'
-    - 'CLUSTERD_STORAGE_TIMELY_CONFIG={"workers": 16, "process": 0, "addresses": ["clusterd1:2103"],
+    - 'CLUSTERD_STORAGE_TIMELY_CONFIG={"workers": 4, "process": 0, "addresses": ["clusterd1:2103"],
       "arrangement_exert_proportionality": 1337, "enable_zero_copy": false, "enable_zero_copy_lgalloc":
       false, "zero_copy_limit": null}'
     volumes:
@@ -325,10 +325,10 @@ services:
     - CLUSTERD_PERSIST_PUBSUB_URL=http://materialized:6879
     - CLUSTERD_ENVIRONMENT_ID=mzcompose-us-east-1-00000000-0000-0000-0000-000000000000-0
     - CLUSTERD_PROCESS=0
-    - 'CLUSTERD_COMPUTE_TIMELY_CONFIG={"workers": 16, "process": 0, "addresses": ["clusterd2:2102"],
+    - 'CLUSTERD_COMPUTE_TIMELY_CONFIG={"workers": 4, "process": 0, "addresses": ["clusterd2:2102"],
       "arrangement_exert_proportionality": 16, "enable_zero_copy": false, "enable_zero_copy_lgalloc":
       false, "zero_copy_limit": null}'
-    - 'CLUSTERD_STORAGE_TIMELY_CONFIG={"workers": 16, "process": 0, "addresses": ["clusterd2:2103"],
+    - 'CLUSTERD_STORAGE_TIMELY_CONFIG={"workers": 4, "process": 0, "addresses": ["clusterd2:2103"],
       "arrangement_exert_proportionality": 1337, "enable_zero_copy": false, "enable_zero_copy_lgalloc":
       false, "zero_copy_limit": null}'
     volumes:
@@ -367,10 +367,10 @@ services:
     - CLUSTERD_PERSIST_PUBSUB_URL=http://materialized:6879
     - CLUSTERD_ENVIRONMENT_ID=mzcompose-us-east-1-00000000-0000-0000-0000-000000000000-0
     - CLUSTERD_PROCESS=0
-    - 'CLUSTERD_COMPUTE_TIMELY_CONFIG={"workers": 16, "process": 0, "addresses": ["clusterd-pool-0:2102"],
+    - 'CLUSTERD_COMPUTE_TIMELY_CONFIG={"workers": 4, "process": 0, "addresses": ["clusterd-pool-0:2102"],
       "arrangement_exert_proportionality": 16, "enable_zero_copy": false, "enable_zero_copy_lgalloc":
       false, "zero_copy_limit": null}'
-    - 'CLUSTERD_STORAGE_TIMELY_CONFIG={"workers": 16, "process": 0, "addresses": ["clusterd-pool-0:2103"],
+    - 'CLUSTERD_STORAGE_TIMELY_CONFIG={"workers": 4, "process": 0, "addresses": ["clusterd-pool-0:2103"],
       "arrangement_exert_proportionality": 1337, "enable_zero_copy": false, "enable_zero_copy_lgalloc":
       false, "zero_copy_limit": null}'
     volumes:
@@ -409,10 +409,10 @@ services:
     - CLUSTERD_PERSIST_PUBSUB_URL=http://materialized:6879
     - CLUSTERD_ENVIRONMENT_ID=mzcompose-us-east-1-00000000-0000-0000-0000-000000000000-0
     - CLUSTERD_PROCESS=0
-    - 'CLUSTERD_COMPUTE_TIMELY_CONFIG={"workers": 16, "process": 0, "addresses": ["clusterd-pool-1:2102"],
+    - 'CLUSTERD_COMPUTE_TIMELY_CONFIG={"workers": 4, "process": 0, "addresses": ["clusterd-pool-1:2102"],
       "arrangement_exert_proportionality": 16, "enable_zero_copy": false, "enable_zero_copy_lgalloc":
       false, "zero_copy_limit": null}'
-    - 'CLUSTERD_STORAGE_TIMELY_CONFIG={"workers": 16, "process": 0, "addresses": ["clusterd-pool-1:2103"],
+    - 'CLUSTERD_STORAGE_TIMELY_CONFIG={"workers": 4, "process": 0, "addresses": ["clusterd-pool-1:2103"],
       "arrangement_exert_proportionality": 1337, "enable_zero_copy": false, "enable_zero_copy_lgalloc":
       false, "zero_copy_limit": null}'
     volumes:
@@ -710,7 +710,7 @@ services:
     - MZ_ANTITHESIS_CLUSTER=antithesis_cluster
     - ANTITHESIS_CLUSTERD_POOL_SIZE=2
     - CLUSTERD_POOL_SIZE=2
-    - CLUSTERD_WORKERS=16
+    - CLUSTERD_WORKERS=4
     - MYSQL_HOST=mysql
     - MYSQL_REPLICA_HOST=mysql-replica
     - MYSQL_PASSWORD=p@ssw0rd
