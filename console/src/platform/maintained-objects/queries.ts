@@ -7,9 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+import { useQuery } from "@tanstack/react-query";
 import React from "react";
 
-import { isSystemId } from "~/api/materialize";
+import { IPostgresInterval, isSystemId } from "~/api/materialize";
 import {
   MAINTAINED_OBJECT_TYPES,
   MaintainedObjectType,
@@ -22,10 +23,12 @@ import {
   buildLagAggregateQuery,
   LagAggregateRow,
 } from "~/api/materialize/maintained-objects/lagAggregate";
+import { fetchSourceStatistics } from "~/api/materialize/source/sourceStatistics";
 import {
   buildSubscribeQuery,
   useSubscribe,
 } from "~/api/materialize/useSubscribe";
+import { sourceQueryKeys } from "~/platform/sources/queries";
 import { useAllObjects } from "~/store/allObjects";
 import { sumPostgresIntervalMs } from "~/util";
 
@@ -50,6 +53,8 @@ export interface MaintainedObjectListItem {
   schemaName: string;
   databaseName: string;
   objectType: MaintainedObjectType;
+  /** Subtype for sources (e.g. `postgres`, `kafka`); null for non-sources. */
+  sourceType: string | null;
   cluster: MaintainedObjectCluster | null;
   /** 0 until the hydration snapshot arrives. */
   hydratedReplicas: number;
@@ -148,6 +153,7 @@ export const useMaintainedObjectsList = ({
         schemaName: obj.schemaName,
         databaseName: obj.databaseName,
         objectType: obj.objectType as MaintainedObjectType,
+        sourceType: obj.sourceType,
         cluster:
           obj.clusterId && obj.clusterName
             ? { id: obj.clusterId, name: obj.clusterName }
@@ -172,3 +178,29 @@ export const useMaintainedObjectsList = ({
     isError: allObjects.isError || lag.isError || hydration.isError,
   };
 };
+
+export interface ObjectSourceStatistics {
+  messagesReceived: number;
+  snapshotRecordsKnown: number;
+  snapshotRecordsStaged: number;
+  rehydrationLatency: IPostgresInterval | null;
+}
+
+export function useObjectSourceStatistics(sourceId: string) {
+  return useQuery({
+    queryKey: sourceQueryKeys.statistics({ sourceId }),
+    queryFn: ({ queryKey, signal }) =>
+      fetchSourceStatistics(queryKey, { sourceId }, { signal }),
+    refetchInterval: 5_000,
+    select: (data): ObjectSourceStatistics | null => {
+      const row = data.rows.at(0);
+      if (!row) return null;
+      return {
+        messagesReceived: Number(row.messagesReceived ?? 0),
+        snapshotRecordsKnown: Number(row.snapshotRecordsKnown ?? 0),
+        snapshotRecordsStaged: Number(row.snapshotRecordsStaged ?? 0),
+        rehydrationLatency: row.rehydrationLatency as IPostgresInterval | null,
+      };
+    },
+  });
+}
