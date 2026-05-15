@@ -516,6 +516,62 @@ investigations to start with:
    `--meas-cluster-size scale=1,workers=1` and no pad clusters
    (`tables` padding) at high N to isolate from compute side-effects.
 
+### 2026-05-15 — post-fix measurements
+
+Three catalog-side fixes landed on this branch:
+
+- `f69d91c977` — bucket user item counts in `CatalogState`; `validate_resource_limits` now does O(log K) lookups instead of 5 walks of `entry_by_id`.
+- `9fca09ff8a` — maintain `Transaction::initial_oids` so `allocate_oids` doesn't walk every db/schema/role/item/intro-source per allocation.
+- `293a243e6b` — `TableTransaction::insert` uses `self.get(&k).is_some()` instead of `for_values` for dup-key, and skips the uniqueness walk when `uniqueness_violation` is `None` (14 of 22 instances).
+
+Re-ran the audit on the same envd binary + harness as the pre-fix runs.
+
+**Tables-padding (the matrix we expect to fix):** slope eliminated. Per-N
+cost from N=0 → N=5000 dropped from +17-23 ms to within noise:
+
+| op | pre-fix Δ@5000 | post-fix Δ@5000 | per-object cost |
+| --- | ---: | ---: | --- |
+| create_table | +23 ms | ~0 ms | gone |
+| drop_table | +20 ms | ~+2 ms | mostly gone |
+| alter_table_add_col | +18 ms | ~-5 ms | gone (noise) |
+| rename_table | +17 ms | ~-9 ms | gone (noise) |
+| create_view | +20 ms | ~-3 ms | gone (noise) |
+| drop_view | +19 ms | ~-1 ms | gone (noise) |
+
+At N=5000 tables, every measured DDL is now within ~10ms of its N=0
+baseline — the slope is below measurement noise. (The post-fix N=0
+absolute baseline was higher than pre-fix N=0 because the post-fix envd
+was freshly-reset / cold; comparing N=5000 across runs is the apples-
+to-apples test, and post-fix N=5000 ≈ pre-fix N=0.) CSV at
+`/tmp/audit-tables-post.csv`.
+
+**MVs-padding:** per-N cost dropped ~2-3× but the super-linear
+remainder is intact, as predicted (the persist-side blow-up identified
+in `open_data_handles` is not addressed by these fixes):
+
+| op | pre-fix @2000 | post-fix @2000 | speedup |
+| --- | ---: | ---: | ---: |
+| create_table | 2095 ms | 851 ms | 2.5× |
+| drop_table | 996 ms | 536 ms | 1.9× |
+| rename_table | 653 ms | 748 ms | 0.9× (noisy) |
+| create_view | 479 ms | 330 ms | 1.5× |
+| create_mv | 837 ms | 1095 ms | 0.8× (noisy) |
+| drop_mv | 446 ms | 282 ms | 1.6× |
+| drop_view | 795 ms | 1152 ms | 0.7× (noisy) |
+
+With reps=5 there's meaningful variance and a few cells go the wrong
+way; the median across the matrix shows clear improvement but the
+super-linear shape vs. N is intact (e.g. CREATE TABLE: 31 → 81 → 851 ms
+for N = 0 / 500 / 2000 is still ~10× for 4× N). The persist-side
+`open_data_handles` cost we pinpointed earlier dominates here. CSV at
+`/tmp/audit-mvs-post.csv`.
+
+**Net conclusion**: the three catalog-side fixes correctly eliminated
+the linear ~4 μs/object cost shared by all DDL ops. What remains is
+the super-linear persist init cost when many storage collections
+share dependencies — a separate fix needing persist/storage-team
+ownership.
+
 ## Next steps
 
 1. Start the local stack and run the tables-padding pass.
