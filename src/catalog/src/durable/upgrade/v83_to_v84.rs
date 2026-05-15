@@ -44,23 +44,38 @@
 //!
 //! # The repair
 //!
-//! For every Role with the structural signature of this bug — a dangling `-1`
-//! plus at least one `+1` whose parsed `RoleValue` equals it, plus at most
-//! one *other* `+1` with a different parsed value — we emit:
+//! Two passes over the snapshot.
+//!
+//! **Pass 1 — cancel already-dangling retractions.** For every Role with the
+//! structural signature of the bug — a dangling `-1` plus at least one `+1`
+//! whose parsed `RoleValue` equals it, plus at most one *other* `+1` with a
+//! different parsed value — we emit:
 //!
 //!   1. `+1` of the dangling row, cancelling the dangling `-1`.
 //!   2. `-1` of every parsed-equal stale `+1`, completing the retraction the
 //!      original DDL intended.
 //!
-//! After commit, each affected `RoleKey` has either one live `+1` or no rows
-//! at all (for the dropped case).
+//! **Pass 2 — normalize untouched stale rows.** Every remaining `+1` Role
+//! row whose stored form differs from what re-serializing its parsed value
+//! through the current proto would produce is retracted and re-inserted in
+//! canonical form. Without this, a Role still in pre-v81 form that hasn't
+//! yet had any DDL run against it would survive the migration unchanged,
+//! and the next `ALTER ROLE`/`DROP ROLE` after v83 would manufacture a
+//! fresh dangling `-1` against bytes that no migration runs against
+//! anymore. After pass 2, every Role row in the shard has the byte form
+//! that future retractions will also produce, so consolidation cancels.
+//!
+//! After commit, each affected `RoleKey` has either one live canonical
+//! `+1` or no rows at all (for the dropped case).
 //!
 //! Anything that doesn't fit the fingerprint — no parsed-equal sibling,
 //! multiple distinct live candidates, non-Role kinds, `|diff| > 1` — is
-//! logged at WARN and left for human review. Better to under-clean and
+//! logged at WARN and left for human review, and pass 2 also leaves every
+//! `+1` for any such key alone (rewriting a subset of an unrepaired key
+//! would just produce a new dangling diff). Better to under-clean and
 //! surface unknown shapes for triage than over-clean and retire live state.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use mz_repr::Diff;
 
@@ -69,8 +84,8 @@ use crate::durable::persist::{Mode, Timestamp, UnopenedPersistCatalogState};
 use crate::durable::upgrade::objects_v83 as v83;
 use crate::durable::{CatalogError, initialize::USER_VERSION_KEY};
 
-const FROM_VERSION: u64 = 82;
-const TO_VERSION: u64 = 83;
+const FROM_VERSION: u64 = 83;
+const TO_VERSION: u64 = 84;
 
 /// Outcome counters for the repair, returned for logging and assertable in
 /// tests.
@@ -82,6 +97,9 @@ pub(crate) struct RepairStats {
     /// Stale `+1` rows (alternate forms of the same parsed Role value as a
     /// repaired phantom) that were retracted as part of the repair.
     pub stale_retracted: usize,
+    /// Live `+1` Role rows whose stored form didn't match the canonical
+    /// re-serialization of their parsed value, rewritten in place.
+    pub normalized: usize,
     /// Dangling Role `-1`s that didn't fit the structural signature.
     pub skipped_role: usize,
     /// Dangling rows for kinds other than `Role`. The known corruption only
@@ -105,6 +123,7 @@ pub async fn upgrade(
         tracing::info!(
             repaired = stats.repaired,
             stale_retracted = stats.stale_retracted,
+            normalized = stats.normalized,
             "repairing Role rows left inconsistent by the v80->v81 migration's non-cloud no-op",
         );
     }
@@ -119,6 +138,11 @@ pub async fn upgrade(
     let mut updates: Vec<(StateUpdateKindJson, Diff)> = repairs;
     updates.push((version_update_kind(FROM_VERSION), Diff::MINUS_ONE));
     updates.push((version_update_kind(TO_VERSION), Diff::ONE));
+
+    // Print the updates for inspection.
+    tracing::info!(
+        "catalog upgrade v{FROM_VERSION}_to_v{TO_VERSION}: about to apply updates: {updates:?}"
+    );
 
     if matches!(unopened_catalog_state.mode, Mode::Writable) {
         commit_ts = unopened_catalog_state
@@ -139,16 +163,22 @@ pub async fn upgrade(
 }
 
 /// Inspect a consolidated snapshot and return the updates needed to converge
-/// every affected Role onto a single live `+1` (or zero rows, for the dropped
-/// case).
+/// every affected Role onto a single canonical-form `+1` (or zero rows, for
+/// the dropped case), and every untouched Role onto canonical form so future
+/// writers' retractions consolidate.
 ///
-/// The returned `Vec` is safe to feed straight into `compare_and_append`. For
-/// each repair site we emit:
+/// The returned `Vec` is safe to feed straight into `compare_and_append`.
 ///
-///   * `+1` of the dangling row (cancels the existing `-1`);
-///   * one `-1` per *stale* `+1` row whose parsed value equals the dangling
-///     row's (completes the retraction the original DDL was supposed to
-///     perform).
+/// Two passes:
+///
+/// 1. For each dangling `-1` Role row matching the v80-form-drift signature,
+///    cancel it (`+1` of the same bytes) and retract every parsed-equal stale
+///    `+1` sibling.
+/// 2. For each remaining `+1` Role row whose stored bytes don't match the
+///    canonical re-serialization of its parsed value, retract it and insert
+///    the canonical form. Skipped for any `RoleKey` whose dangling `-1` we
+///    declined to repair in pass 1 — partial rewriting there would manufacture
+///    a fresh dangling diff against the canonical form.
 ///
 /// Separated from `upgrade` so it can be unit-tested without spinning up a
 /// real catalog handle.
@@ -177,6 +207,13 @@ pub(crate) fn compute_repairs(
 
     let mut repairs = Vec::new();
     let mut stats = RepairStats::default();
+    // `+1` rows pass 1 already retracts: pass 2 must not double-retract them.
+    let mut retracted_in_pass_1: BTreeSet<&StateUpdateKindJson> = BTreeSet::new();
+    // Role keys with an unrepaired dangling diff: pass 2 leaves their `+1`s
+    // alone, since normalizing only some bytes for a key that still has a
+    // dangling `-1` would just shift the consolidation failure onto the new
+    // canonical form.
+    let mut unrepaired_keys: BTreeSet<v83::RoleKey> = BTreeSet::new();
     for (kind_json, _, diff) in snapshot {
         if *diff == Diff::ONE {
             continue;
@@ -203,6 +240,7 @@ pub(crate) fn compute_repairs(
                 "Role row with unexpected diff magnitude; not repaired",
             );
             stats.skipped_role += 1;
+            unrepaired_keys.insert(dangling.key);
             continue;
         }
 
@@ -238,6 +276,7 @@ pub(crate) fn compute_repairs(
                 "dangling Role -1 has no parsed-equal +1 sibling; not the v80-form-drift signature",
             );
             stats.skipped_role += 1;
+            unrepaired_keys.insert(dangling.key);
             continue;
         }
         if ambiguous_live {
@@ -247,6 +286,7 @@ pub(crate) fn compute_repairs(
                 "Role key has multiple distinct live +1 rows; refusing to auto-repair",
             );
             stats.skipped_role += 1;
+            unrepaired_keys.insert(dangling.key);
             continue;
         }
 
@@ -268,9 +308,47 @@ pub(crate) fn compute_repairs(
                 continue;
             }
             repairs.push((s.bytes.clone(), Diff::MINUS_ONE));
+            retracted_in_pass_1.insert(s.bytes);
             stats.stale_retracted += 1;
         }
         stats.repaired += 1;
+    }
+
+    // Pass 2: normalize every remaining live `+1` Role row whose stored bytes
+    // don't equal what re-serializing its parsed value through the current
+    // proto would produce. Any future retraction will use canonical bytes;
+    // unless what's stored matches, the retract+insert pair from that future
+    // write will dangle a fresh `-1`.
+    //
+    // Dedupe canonical inserts per parsed value so two distinct stale byte
+    // forms of the same role collapse to a single `+1` rather than `+2`.
+    let mut inserted_canonical: BTreeSet<StateUpdateKindJson> = BTreeSet::new();
+    for (kind_json, _, diff) in snapshot {
+        if *diff != Diff::ONE {
+            continue;
+        }
+        let Some(role) = try_as_role(kind_json) else {
+            continue;
+        };
+        if retracted_in_pass_1.contains(kind_json) {
+            continue;
+        }
+        if unrepaired_keys.contains(&role.key) {
+            continue;
+        }
+        let canonical: StateUpdateKindJson = v83::StateUpdateKind::Role(role.clone()).into();
+        if &canonical == kind_json {
+            continue;
+        }
+        tracing::info!(
+            role_name = %role.value.name,
+            "normalizing pre-v81 Role row to canonical byte form",
+        );
+        repairs.push((kind_json.clone(), Diff::MINUS_ONE));
+        if inserted_canonical.insert(canonical.clone()) {
+            repairs.push((canonical, Diff::ONE));
+        }
+        stats.normalized += 1;
     }
 
     (repairs, stats)
@@ -642,6 +720,137 @@ mod tests {
         assert_eq!(minus, expected_minus);
         assert_eq!(stats.repaired, 1);
         assert_eq!(stats.stale_retracted, 2);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault` on OS `linux`
+    fn untouched_pre_v81_role_is_normalized() {
+        // A Role row stuck in pre-v81 byte form because no DDL has touched
+        // it since the v80->v81 no-op. No dangling `-1` yet — but the next
+        // ALTER ROLE under the current proto would manufacture one. Pass 2
+        // rewrites the row in canonical form so that doesn't happen.
+        let stale = stale_role_kind_with_dropped_field(50, "carol@materialize.com", 20100);
+        let canonical = role_kind(50, "carol@materialize.com", 20100, None, None, None);
+        assert_ne!(
+            stale, canonical,
+            "test fixture broken: stale and canonical must have distinct stored forms",
+        );
+
+        let snap = snapshot(vec![(stale.clone(), Diff::ONE)]);
+        let (repairs, stats) = compute_repairs(&snap);
+        assert_eq!(
+            repairs,
+            vec![(stale, Diff::MINUS_ONE), (canonical, Diff::ONE)],
+        );
+        assert_eq!(
+            stats,
+            RepairStats {
+                normalized: 1,
+                ..Default::default()
+            },
+        );
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault` on OS `linux`
+    fn canonical_form_role_is_not_normalized() {
+        // Belt-and-braces companion to `healthy_snapshot_is_a_noop`:
+        // explicitly verify that a `+1` whose stored form already matches
+        // its canonical re-serialization triggers no normalize work.
+        let canonical = role_kind(51, "dave@materialize.com", 20101, Some(true), None, None);
+        let snap = snapshot(vec![(canonical, Diff::ONE)]);
+        let (repairs, stats) = compute_repairs(&snap);
+        assert!(repairs.is_empty());
+        assert_eq!(stats.normalized, 0);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault` on OS `linux`
+    fn multiple_stale_byte_forms_no_dangling_collapse_to_one_canonical() {
+        // Pathological: two distinct stale stored forms of the same parsed
+        // Role value, both `+1`, no dangling `-1`. Pass 2 must retract both
+        // but only insert the canonical row once — emitting `(canonical, +1)`
+        // per stale row would leave the shard with `(canonical, +2)`.
+        let stale_a = stale_role_kind_with_dropped_field(60, "ed@materialize.com", 20110);
+        let stale_b = stale_role_kind_with_extra_whitespace(60, "ed@materialize.com", 20110);
+        let canonical = role_kind(60, "ed@materialize.com", 20110, None, None, None);
+        assert_ne!(stale_a, stale_b);
+        assert_ne!(stale_a, canonical);
+        assert_ne!(stale_b, canonical);
+
+        let snap = snapshot(vec![
+            (stale_a.clone(), Diff::ONE),
+            (stale_b.clone(), Diff::ONE),
+        ]);
+        let (repairs, stats) = compute_repairs(&snap);
+
+        let plus: Vec<_> = repairs
+            .iter()
+            .filter(|(_, d)| *d == Diff::ONE)
+            .cloned()
+            .collect();
+        let minus: std::collections::BTreeSet<_> = repairs
+            .iter()
+            .filter(|(_, d)| *d == Diff::MINUS_ONE)
+            .map(|(k, _)| k.clone())
+            .collect();
+        assert_eq!(plus, vec![(canonical, Diff::ONE)]);
+        let expected_minus: std::collections::BTreeSet<_> =
+            [stale_a, stale_b].into_iter().collect();
+        assert_eq!(minus, expected_minus);
+        assert_eq!(stats.normalized, 2);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault` on OS `linux`
+    fn unrepaired_dangling_skips_normalize_for_same_key() {
+        // Pass 1 declines to repair this key (ambiguous live state). Pass 2
+        // must also leave its stale `+1` alone — normalizing only the stale
+        // row would just shift the dangling diff onto the canonical bytes,
+        // turning a known-skip into a new dangling row.
+        let live_a = role_kind(70, "frank", 20120, Some(true), None, None);
+        let live_b = role_kind(70, "frank", 20120, Some(false), Some(true), None);
+        let dangling = role_kind(70, "frank", 20120, None, None, None);
+        let stale = stale_role_kind_with_dropped_field(70, "frank", 20120);
+
+        let snap = snapshot(vec![
+            (stale.clone(), Diff::ONE),
+            (live_a, Diff::ONE),
+            (live_b, Diff::ONE),
+            (dangling, Diff::MINUS_ONE),
+        ]);
+        let (repairs, stats) = compute_repairs(&snap);
+        assert!(repairs.is_empty());
+        assert_eq!(stats.skipped_role, 1);
+        assert_eq!(stats.normalized, 0);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault` on OS `linux`
+    fn normalize_does_not_double_retract_pass_1_stale_rows() {
+        // A repair-fingerprint role: pass 1 already retracts the stale `+1`.
+        // Pass 2 must not retract it a second time, or the row goes to
+        // `-2` and the shard is worse off than before.
+        let live = role_kind(80, "grace@materialize.com", 20130, Some(true), None, None);
+        let dangling = role_kind(80, "grace@materialize.com", 20130, None, None, None);
+        let stale = stale_role_kind_with_dropped_field(80, "grace@materialize.com", 20130);
+
+        let snap = snapshot(vec![
+            (stale.clone(), Diff::ONE),
+            (dangling.clone(), Diff::MINUS_ONE),
+            (live, Diff::ONE),
+        ]);
+        let (repairs, stats) = compute_repairs(&snap);
+
+        // The stale row appears exactly once with diff -1.
+        let stale_retractions = repairs
+            .iter()
+            .filter(|(k, d)| k == &stale && *d == Diff::MINUS_ONE)
+            .count();
+        assert_eq!(stale_retractions, 1);
+        assert_eq!(stats.repaired, 1);
+        assert_eq!(stats.stale_retracted, 1);
+        assert_eq!(stats.normalized, 0);
     }
 
     /// Like `stale_role_kind_with_dropped_field` but a different stored
