@@ -3267,19 +3267,32 @@ where
     ///
     /// Returns an error if the uniqueness check failed or the key already exists.
     fn insert(&mut self, k: K, v: V, ts: Timestamp) -> Result<(), DurableCatalogError> {
-        let mut violation = None;
-        self.for_values(|for_k, for_v| {
-            if &k == for_k {
-                violation = Some(DurableCatalogError::DuplicateKey);
-            }
-            if let Some(uniqueness_violation) = self.uniqueness_violation {
+        // Duplicate-key check: ask whether the key is currently visible (i.e.
+        // present in `initial` and not retracted by a pending update, or
+        // inserted by a pending update). `get` consolidates `initial`+`pending`
+        // for a single key, so this is O(log N + P_k) where P_k is the number
+        // of pending entries for `k` (typically 0).
+        if self.get(&k).is_some() {
+            return Err(DurableCatalogError::DuplicateKey);
+        }
+        // Uniqueness check: the predicate is opaque (`fn(&V, &V) -> bool`), so
+        // we can't generically index it. When no predicate is registered
+        // (which is the case for most tables; see `TableTransaction::new`
+        // call sites), we can skip the full scan entirely. When one *is*
+        // registered, we still have to walk every visible row. Making that
+        // case O(log N) would require a uniqueness-key extractor that
+        // maintains a side `BTreeMap<UniqueKey, K>` mirroring `initial`
+        // and `pending`.
+        if let Some(uniqueness_violation) = self.uniqueness_violation {
+            let mut violation = false;
+            self.for_values(|_, for_v| {
                 if uniqueness_violation(for_v, &v) {
-                    violation = Some(DurableCatalogError::UniquenessViolation);
+                    violation = true;
                 }
+            });
+            if violation {
+                return Err(DurableCatalogError::UniquenessViolation);
             }
-        });
-        if let Some(violation) = violation {
-            return Err(violation);
         }
         self.pending.entry(k).or_default().push(TransactionUpdate {
             value: v,
