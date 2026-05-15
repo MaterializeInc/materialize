@@ -13,10 +13,9 @@
 use std::collections::{BTreeMap, BTreeSet, btree_map};
 use std::time::{Duration, Instant};
 
-use mz_audit_log::VersionedStorageUsage;
-
 use futures::FutureExt;
 use maplit::btreemap;
+use mz_audit_log::VersionedStorageUsage;
 use mz_catalog::memory::objects::ClusterReplicaProcessStatus;
 use mz_controller::ControllerResponse;
 use mz_controller::clusters::{ClusterEvent, ClusterStatus};
@@ -264,14 +263,14 @@ impl Coordinator {
             self.get_local_write_ts().await.timestamp.into()
         };
 
-        // Pack builtin table rows directly and submit via group commit.
-        // The id column in mz_storage_usage_by_shard is unused by any view
-        // or query, so a cheap local counter suffices (no durable allocator
-        // needed). All updates within one collection batch share the same
-        // id so that consumers can identify which rows were collected
-        // together.
+        // All rows in this collection cycle share `batch_id` so
+        // consumers can identify rows that were collected together. The
+        // id is not unique across coordinator restarts (and would wrap
+        // on overflow); that's fine because the `id` column of
+        // `mz_storage_usage_by_shard` is unreferenced by any view or
+        // query — see `storage_usage_next_id` for details.
         let batch_id = self.storage_usage_next_id;
-        self.storage_usage_next_id += 1;
+        self.storage_usage_next_id = self.storage_usage_next_id.wrapping_add(1);
         let updates: Vec<_> = shards_usage
             .by_shard
             .into_iter()
@@ -286,7 +285,6 @@ impl Coordinator {
             })
             .collect();
 
-        // Submit directly via group commit (same path as storage_usage_prune).
         let (table_updates, _) = self.builtin_table_update().execute(updates).await;
 
         let internal_cmd_tx = self.internal_cmd_tx.clone();

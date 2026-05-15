@@ -43,7 +43,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap, merge_mz_acl_i
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, ColumnName, Diff, GlobalId, SqlColumnType, strconv};
+use mz_repr::{CatalogItemId, ColumnName, GlobalId, SqlColumnType, strconv};
 use mz_sql::ast::RawDataType;
 use mz_sql::catalog::{
     AutoProvisionSource, CatalogDatabase, CatalogError as SqlCatalogError,
