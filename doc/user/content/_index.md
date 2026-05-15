@@ -18,10 +18,10 @@ aliases:
 
 - [MCP server for agents: give your production AI agents fresh context from
   Materialize](/releases/#v26241)
-- [MCP server for developers: give coding agents observability into your
-  Materialize environment](/releases/#v26202)
 - [Faster sink performance with up to 50% lower memory
   usage](/releases/#v26220)
+- [MCP server for developers: give coding agents observability into your
+  Materialize environment](/releases/#v26202)
 
 For more information on these and other changes, see the [Release Notes](/releases/).
 
