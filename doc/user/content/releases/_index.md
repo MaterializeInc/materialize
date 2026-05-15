@@ -68,6 +68,13 @@ and bug fixes.
   `10.0.5.7/24` instead of `10.0.5.0/24`).
 - Fixed Console crashing on OIDC-protected routes when the identity provider
   initialization fails, instead of falling through to password-based sign-in.
+- Fixed catalog migration bug from v26.18.0 by which a
+  `Non-positive multiplicity in DistinctBy` error could occur on queries
+  containing `SELECT DISTINCT` over role-derived catalog views (e.g.,
+  anything reading from `mz_roles`, `mz_role_members`, or views that
+  internally project role columns). The error is resolved automatically by
+  upgrading to v26.24.0 or newer. RBAC operations simple and queries on
+  `mz_roles` and `mz_role_members` were not affected.
 
 ### Agent Skills {#v26.24-agent-skills}
 
