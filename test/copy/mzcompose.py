@@ -29,6 +29,7 @@ from materialize.mzcompose.composition import (
     Service,
     WorkflowArgumentParser,
 )
+from materialize.mzcompose.service import Service as DockerService
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc
 from materialize.mzcompose.services.minio import Minio as MinioService
@@ -49,6 +50,25 @@ SERVICES = [
     ),
     Testdrive(),
     Mc(),
+    DockerService(
+        name="redirect-server",
+        config={
+            "image": "python:3.12-slim",
+            "volumes": ["./redirect_server.py:/app/redirect_server.py"],
+            "command": ["python3", "-u", "/app/redirect_server.py"],
+            "ports": [8080],
+            "healthcheck": {
+                "test": [
+                    "CMD",
+                    "python3",
+                    "-c",
+                    "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')",
+                ],
+                "interval": "2s",
+                "start_period": "30s",
+            },
+        },
+    ),
 ]
 
 
@@ -183,7 +203,7 @@ def workflow_ci(c: Composition, _parser: WorkflowArgumentParser) -> None:
     """
     Workflows to run during CI
     """
-    for name in ["auth", "http", "copy-from-csv-header"]:
+    for name in ["auth", "http", "copy-from-csv-header", "copy-from-ssrf-redirect"]:
         with c.test_case(name):
             c.workflow(name)
 
@@ -424,6 +444,39 @@ def workflow_test_github_9627(c: Composition):
         after = int(result[0][0])
 
         assert before < after, f"read frontier is stuck, {before} >= {after}"
+
+
+def workflow_copy_from_ssrf_redirect(c: Composition) -> None:
+    """Regression: COPY FROM must not follow redirects to private IPs."""
+    c.up("materialized", "redirect-server")
+
+    c.sql(
+        "ALTER SYSTEM SET enable_copy_from_remote = true;",
+        port=6877,
+        user="mz_system",
+    )
+    c.sql("CREATE TABLE ssrf_target (a text)")
+
+    copy_succeeded = True
+    try:
+        c.sql(
+            "COPY INTO ssrf_target FROM "
+            "'http://redirect-server:8080/redirect-to-docker-ip' (FORMAT CSV)"
+        )
+    except Exception as e:
+        err = e
+        print(f"--- Err: {e}")
+        copy_succeeded = False
+
+    if copy_succeeded:
+        rows = c.sql_query("SELECT a FROM ssrf_target")
+        assert rows != [
+            ("ssrf_bypass_confirmed",)
+        ], "SSRF: redirect to private IP was followed and data was exfiltrated"
+    else:
+        assert (
+            "302" in str(err) or "redirect" in str(err).lower()
+        ), f"unexpected error: {err}"
 
 
 def workflow_copy_from_csv_header(c: Composition) -> None:

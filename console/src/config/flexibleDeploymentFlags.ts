@@ -12,7 +12,9 @@
  * is too big, we default all flags to true and specify the ones we want
  * to disable.
  */
-export const disabledFlexibleDeploymentFlags: Record<string, boolean> = {};
+export const disabledFlexibleDeploymentFlags: Record<string, boolean> = {
+  "maintained-objects-ui-50": false,
+};
 
 export const flexibleDeploymentFlags = new Proxy(
   {},

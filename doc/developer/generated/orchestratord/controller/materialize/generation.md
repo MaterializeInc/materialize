@@ -1,6 +1,6 @@
 ---
 source: src/orchestratord/src/controller/materialize/generation.rs
-revision: f495cf372e
+revision: e9d99038f9
 ---
 
 # mz-orchestratord::controller::materialize::generation

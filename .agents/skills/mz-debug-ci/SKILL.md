@@ -1,12 +1,11 @@
 ---
 name: mz-debug-ci
 description: >
-  Investigate CI failures on a PR using gh and bk CLI tools. Trigger when the
-  user asks about failing checks, Buildkite failures, or CI issues — including
-  casual phrases like "why is CI red", "build broken", "checks failing", "what
-  went wrong in CI", "nightly broke", "tests failing on this PR", or pastes a
-  Buildkite URL. Also trigger when the user mentions a specific PR number and
-  wants to understand why it's failing.
+  Investigate CI failures on PR via gh + bk CLI. Trigger: failing checks,
+  Buildkite failures, CI issues — "why is CI red", "build broken",
+  "checks failing", "what went wrong in CI", "nightly broke",
+  "tests failing on this PR", or pasted Buildkite URL. Also PR number +
+  why failing.
 argument-hint: <PR number or GitHub PR URL>
 ---
 
@@ -14,7 +13,14 @@ Investigate CI failures for a Materialize PR.
 
 ## Prerequisites
 
-This skill requires both `gh` (GitHub CLI) and `bk` (Buildkite CLI) to be installed and authenticated. Before doing anything else, verify both are available by running `which gh` and `which bk`. If either tool is missing, **stop immediately** and tell the user which tool(s) need to be installed and configured. Do not attempt to use the REST API directly or any other workaround — this workflow only works with these CLI tools.
+This skill requires both `gh` (GitHub CLI) and `bk` (Buildkite CLI) to be installed *and authenticated*. Before doing anything else, verify both:
+
+```bash
+which gh && gh auth status
+which bk && bk auth status
+```
+
+If either tool is missing or unauthenticated, **stop immediately** and tell the user what to fix (`bk configure` or `bk auth login` for Buildkite). Do not attempt to use the REST API directly or any other workaround — this workflow only works with these CLI tools.
 
 Both `gh` and `bk` make network requests that are blocked by the default sandbox. All Bash commands in this workflow must use `dangerouslyDisableSandbox: true`.
 

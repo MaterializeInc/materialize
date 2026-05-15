@@ -908,6 +908,7 @@ pub enum SourceExportStatementDetails {
     MySql {
         table: mz_mysql_util::MySqlTableDesc,
         initial_gtid_set: String,
+        binlog_full_metadata: bool,
     },
     SqlServer {
         table: mz_sql_server_util::desc::SqlServerTableDesc,
@@ -933,11 +934,13 @@ impl RustType<ProtoSourceExportStatementDetails> for SourceExportStatementDetail
             SourceExportStatementDetails::MySql {
                 table,
                 initial_gtid_set,
+                binlog_full_metadata,
             } => ProtoSourceExportStatementDetails {
                 kind: Some(proto_source_export_statement_details::Kind::Mysql(
                     mysql::ProtoMySqlSourceExportStatementDetails {
                         table: Some(table.into_proto()),
                         initial_gtid_set: initial_gtid_set.clone(),
+                        binlog_full_metadata: *binlog_full_metadata,
                     },
                 )),
             },
@@ -985,6 +988,7 @@ impl RustType<ProtoSourceExportStatementDetails> for SourceExportStatementDetail
                     .into_rust_if_some("ProtoMySqlSourceExportStatementDetails::table")?,
 
                 initial_gtid_set: details.initial_gtid_set,
+                binlog_full_metadata: details.binlog_full_metadata,
             },
             Some(Kind::SqlServer(details)) => SourceExportStatementDetails::SqlServer {
                 table: details

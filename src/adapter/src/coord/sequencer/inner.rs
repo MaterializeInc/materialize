@@ -20,7 +20,7 @@ use futures::{Future, StreamExt, future};
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
-use mz_adapter_types::dyncfgs::{ENABLE_MULTI_REPLICA_SOURCES, ENABLE_PASSWORD_AUTH};
+use mz_adapter_types::dyncfgs::ENABLE_PASSWORD_AUTH;
 use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{
     CatalogItem, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
@@ -51,7 +51,7 @@ use mz_sql::ast::{
 use mz_sql::ast::{CreateSubsourceStatement, MySqlConfigOptionName, UnresolvedItemName};
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError,
-    CatalogItem as SqlCatalogItem, CatalogItemType, CatalogRole, CatalogSchema, CatalogTypeDetails,
+    CatalogItem as SqlCatalogItem, CatalogRole, CatalogSchema, CatalogTypeDetails,
     ErrorMessageObjectDescription, ObjectType, RoleAttributesRaw, RoleVars, SessionCatalog,
 };
 use mz_sql::names::{
@@ -64,7 +64,6 @@ use mz_sql::plan::{
 };
 use mz_sql::pure::{PurifiedSourceExport, generate_subsource_statements};
 use mz_storage_types::sinks::StorageSinkDesc;
-use mz_storage_types::sources::GenericSourceConnection;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_sql::plan::{
     AlterConnectionAction, AlterConnectionPlan, CreateSourcePlanBundle, ExplainSinkSchemaPlan,
@@ -90,6 +89,7 @@ use mz_storage_types::AlterCompatible;
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
 use mz_transform::dataflow::DataflowMetainfo;
+use mz_transform::notice::{OptimizerNotice, RawOptimizerNotice};
 use smallvec::SmallVec;
 use timely::progress::Antichain;
 use tokio::sync::{oneshot, watch};
@@ -98,6 +98,7 @@ use tracing::{Instrument, Span, info, warn};
 use crate::catalog::{self, Catalog, ConnCatalog, DropObjectInfo, UpdatePrivilegeVariant};
 use crate::command::{ExecuteResponse, Response};
 use crate::coord::appends::{BuiltinTableAppendNotify, DeferredOp, DeferredPlan, PendingWriteTxn};
+use crate::coord::read_then_write::validate_read_then_write_dependencies;
 use crate::coord::sequencer::emit_optimizer_notices;
 use crate::coord::{
     AlterConnectionValidationReady, AlterMaterializedViewReadyContext, AlterSinkReadyContext,
@@ -298,50 +299,6 @@ impl Coordinator {
         {
             let name = plan.name.clone();
 
-            match plan.source.data_source {
-                plan::DataSourceDesc::Ingestion(ref desc)
-                | plan::DataSourceDesc::OldSyntaxIngestion { ref desc, .. } => {
-                    let cluster_id = plan
-                        .in_cluster
-                        .expect("ingestion plans must specify cluster");
-                    match desc.connection {
-                        GenericSourceConnection::Postgres(_)
-                        | GenericSourceConnection::MySql(_)
-                        | GenericSourceConnection::SqlServer(_)
-                        | GenericSourceConnection::Kafka(_)
-                        | GenericSourceConnection::LoadGenerator(_) => {
-                            if let Some(cluster) = self.catalog().try_get_cluster(cluster_id) {
-                                let enable_multi_replica_sources = ENABLE_MULTI_REPLICA_SOURCES
-                                    .get(self.catalog().system_config().dyncfgs());
-
-                                if !enable_multi_replica_sources && cluster.replica_ids().len() > 1
-                                {
-                                    return Err(AdapterError::Unsupported(
-                                        "sources in clusters with >1 replicas",
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                }
-                plan::DataSourceDesc::Webhook { .. } => {
-                    let cluster_id = plan.in_cluster.expect("webhook plans must specify cluster");
-                    if let Some(cluster) = self.catalog().try_get_cluster(cluster_id) {
-                        let enable_multi_replica_sources = ENABLE_MULTI_REPLICA_SOURCES
-                            .get(self.catalog().system_config().dyncfgs());
-
-                        if !enable_multi_replica_sources {
-                            if cluster.replica_ids().len() > 1 {
-                                return Err(AdapterError::Unsupported(
-                                    "webhook sources in clusters with >1 replicas",
-                                ));
-                            }
-                        }
-                    }
-                }
-                plan::DataSourceDesc::IngestionExport { .. } | plan::DataSourceDesc::Progress => {}
-            }
-
             // Attempt to reduce the `CHECK` expression, we timeout if this takes too long.
             if let mz_sql::plan::DataSourceDesc::Webhook {
                 validate_using: Some(validate),
@@ -406,7 +363,7 @@ impl Coordinator {
         let catalog = self.catalog().for_session(session);
         let resolved_ids = mz_sql::names::visit_dependencies(&catalog, &subsource_stmt);
 
-        let plan = self.plan_statement(
+        let (plan, _sql_impl_ids) = self.plan_statement(
             session,
             Statement::CreateSubsource(subsource_stmt),
             params,
@@ -456,9 +413,7 @@ impl Coordinator {
         let ids = self
             .allocate_user_ids(u64::cast_from(subsource_stmts.len()))
             .await?;
-        for (subsource_stmt, (item_id, global_id)) in
-            subsource_stmts.into_iter().zip_eq(ids.into_iter())
-        {
+        for (subsource_stmt, (item_id, global_id)) in subsource_stmts.into_iter().zip_eq(ids) {
             let s = self.plan_subsource(session, &params, subsource_stmt, item_id, global_id)?;
             subsource_plans.push(s);
         }
@@ -569,8 +524,8 @@ impl Coordinator {
             &params,
             &resolved_ids,
         )? {
-            Plan::CreateSource(plan) => plan,
-            p => unreachable!("s must be CreateSourcePlan but got {:?}", p),
+            (Plan::CreateSource(plan), _sql_impl_ids) => plan,
+            (p, _) => unreachable!("s must be CreateSourcePlan but got {:?}", p),
         };
 
         let (item_id, global_id) = self.allocate_user_id().await?;
@@ -609,7 +564,7 @@ impl Coordinator {
         let ids = self
             .allocate_user_ids(u64::cast_from(subsource_stmts.len()))
             .await?;
-        for (stmt, (item_id, global_id)) in subsource_stmts.into_iter().zip_eq(ids.into_iter()) {
+        for (stmt, (item_id, global_id)) in subsource_stmts.into_iter().zip_eq(ids) {
             let plan = self.plan_subsource(ctx.session(), &params, stmt, item_id, global_id)?;
             create_source_plans.push(plan);
         }
@@ -2359,6 +2314,32 @@ impl Coordinator {
         Ok(Some(r))
     }
 
+    pub(crate) async fn await_real_time_recent_timestamp<F>(
+        catalog: Arc<Catalog>,
+        fut: F,
+    ) -> Result<Timestamp, AdapterError>
+    where
+        F: Future<Output = Result<Timestamp, StorageError>>,
+    {
+        fut.await
+            .map_err(|error| Self::real_time_recent_timestamp_error(&catalog, error))
+    }
+
+    fn real_time_recent_timestamp_error(catalog: &Catalog, error: StorageError) -> AdapterError {
+        let rtr_name = |id: &GlobalId| {
+            catalog
+                .try_get_entry_by_global_id(id)
+                .map(|e| e.name().item.clone())
+                .unwrap_or_else(|| id.to_string())
+        };
+
+        match error {
+            StorageError::RtrTimeout(id) => AdapterError::RtrTimeout(rtr_name(&id)),
+            StorageError::RtrDropFailure(id) => AdapterError::RtrDropFailure(rtr_name(&id)),
+            error => error.into(),
+        }
+    }
+
     /// Checks to see if the session needs a real time recency timestamp and if so returns
     /// a future that will return the timestamp.
     pub(crate) async fn determine_real_time_recent_timestamp_if_needed(
@@ -2704,98 +2685,10 @@ impl Coordinator {
             return;
         }
 
-        // Ensure all objects `selection` depends on are valid for `ReadThenWrite` operations:
-        //
-        // - They do not refer to any objects whose notion of time moves differently than that of
-        // user tables. This limitation is meant to ensure no writes occur between this read and the
-        // subsequent write.
-        // - They do not use mz_now(), whose time produced during read will differ from the write
-        //   timestamp.
-        fn validate_read_dependencies(
-            catalog: &Catalog,
-            id: &CatalogItemId,
-        ) -> Result<(), AdapterError> {
-            use CatalogItemType::*;
-            use mz_catalog::memory::objects;
-            let mut ids_to_check = Vec::new();
-            let valid = match catalog.try_get_entry(id) {
-                Some(entry) => {
-                    if let CatalogItem::View(objects::View {
-                        locally_optimized_expr: optimized_expr,
-                        ..
-                    })
-                    | CatalogItem::MaterializedView(objects::MaterializedView {
-                        locally_optimized_expr: optimized_expr,
-                        ..
-                    }) = entry.item()
-                    {
-                        if optimized_expr.contains_temporal() {
-                            return Err(AdapterError::Unsupported(
-                                "calls to mz_now in write statements",
-                            ));
-                        }
-                    }
-                    match entry.item().typ() {
-                        typ @ (Func | View | MaterializedView) => {
-                            ids_to_check.extend(entry.uses());
-                            let valid_id = id.is_user() || matches!(typ, Func);
-                            valid_id
-                        }
-                        Source | Secret | Connection => false,
-                        // Cannot select from sinks or indexes.
-                        Sink | Index => unreachable!(),
-                        Table => {
-                            if !id.is_user() {
-                                // We can't read from non-user tables
-                                false
-                            } else {
-                                // We can't read from tables that are source-exports
-                                entry.source_export_details().is_none()
-                            }
-                        }
-                        Type => true,
-                    }
-                }
-                None => false,
-            };
-            if !valid {
-                let (object_name, object_type) = match catalog.try_get_entry(id) {
-                    Some(entry) => {
-                        let object_name = catalog.resolve_full_name(entry.name(), None).to_string();
-                        let object_type = match entry.item().typ() {
-                            // We only need the disallowed types here; the allowed types are handled above.
-                            Source => "source",
-                            Secret => "secret",
-                            Connection => "connection",
-                            Table => {
-                                if !id.is_user() {
-                                    "system table"
-                                } else {
-                                    "source-export table"
-                                }
-                            }
-                            View => "system view",
-                            MaterializedView => "system materialized view",
-                            _ => "invalid dependency",
-                        };
-                        (object_name, object_type.to_string())
-                    }
-                    None => (id.to_string(), "unknown".to_string()),
-                };
-                return Err(AdapterError::InvalidTableMutationSelection {
-                    object_name,
-                    object_type,
-                });
-            }
-            for id in ids_to_check {
-                validate_read_dependencies(catalog, &id)?;
-            }
-            Ok(())
-        }
-
+        // Ensure all objects `selection` depends on are valid for `ReadThenWrite` operations.
         for gid in selection.depends_on() {
             let item_id = self.catalog().resolve_item_id(&gid);
-            if let Err(err) = validate_read_dependencies(self.catalog(), &item_id) {
+            if let Err(err) = validate_read_then_write_dependencies(self.catalog(), &item_id) {
                 ctx.retire(Err(err));
                 return;
             }
@@ -2961,6 +2854,9 @@ impl Coordinator {
                                 PeekResponseUnary::Canceled => break Err(AdapterError::Canceled),
                                 PeekResponseUnary::Error(e) => {
                                     break Err(AdapterError::Unstructured(anyhow!(e)));
+                                }
+                                PeekResponseUnary::DependencyDropped(dep) => {
+                                    break Err(dep.to_concurrent_dependency_drop());
                                 }
                             },
                             Ok(None) => break Ok(diffs),
@@ -3644,8 +3540,10 @@ impl Coordinator {
             )
             .map_err(|e| AdapterError::InvalidAlter("CONNECTION", e))?
             {
-                Plan::CreateConnection(plan) => plan,
-                _ => unreachable!("create source plan is only valid response"),
+                (Plan::CreateConnection(plan), _sql_impl_ids) => plan,
+                (p, _) => {
+                    unreachable!("create connection plan is only valid response, got {:?}", p)
+                }
             };
 
             // Parse statement.
@@ -4043,8 +3941,10 @@ impl Coordinator {
                 )
                 .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
                 let plan = match planned {
-                    Plan::CreateSource(plan) => plan,
-                    _ => unreachable!("create source plan is only valid response"),
+                    (Plan::CreateSource(plan), _sql_impl_ids) => plan,
+                    (p, _) => {
+                        unreachable!("create source plan is only valid response, got {:?}", p)
+                    }
                 };
 
                 // Asserting that we've done the right thing with dependencies
@@ -4685,8 +4585,13 @@ impl Coordinator {
             crate::coord::PlanStatement::Statement { stmt, params } => {
                 self.handle_execute_inner(stmt, params, ctx).await;
             }
-            crate::coord::PlanStatement::Plan { plan, resolved_ids } => {
-                self.sequence_plan(ctx, plan, resolved_ids).await;
+            crate::coord::PlanStatement::Plan {
+                plan,
+                resolved_ids,
+                sql_impl_resolved_ids,
+            } => {
+                self.sequence_plan(ctx, plan, resolved_ids, sql_impl_resolved_ids)
+                    .await;
             }
         }
     }
@@ -4865,24 +4770,35 @@ impl Coordinator {
 }
 
 impl Coordinator {
-    /// Process the metainfo from a newly created non-transient dataflow.
-    async fn process_dataflow_metainfo(
+    /// Emit the raw optimizer notices in `notices` to the user's session, if
+    /// any.
+    ///
+    /// This intentionally consumes `RawOptimizerNotice`s (not pre-rendered
+    /// ones) because the user-facing rendering goes through the user's
+    /// session-aware humanizer, which produces e.g. schema-qualified names
+    /// relative to the user's current database/schema.
+    pub(crate) fn emit_raw_optimizer_notices_to_user(
+        &self,
+        ctx: &ExecuteContext,
+        notices: &[RawOptimizerNotice],
+    ) {
+        emit_optimizer_notices(&*self.catalog, ctx.session(), notices);
+    }
+
+    /// Persist already-rendered optimizer notices for a newly created
+    /// non-transient dataflow.
+    ///
+    /// This:
+    /// - packs builtin-table updates for `mz_optimizer_notices` (if enabled),
+    /// - stores the rendered metainfo on the catalog object via
+    ///   `set_dataflow_metainfo`,
+    /// - and returns a future that resolves once the builtin-table append
+    ///   has been observed, or `None` if nothing was appended.
+    async fn persist_dataflow_metainfo(
         &mut self,
-        df_meta: DataflowMetainfo,
+        df_meta: DataflowMetainfo<Arc<OptimizerNotice>>,
         export_id: GlobalId,
-        ctx: Option<&mut ExecuteContext>,
-        notice_ids: Vec<GlobalId>,
     ) -> Option<BuiltinTableAppendNotify> {
-        // Emit raw notices to the user.
-        if let Some(ctx) = ctx {
-            emit_optimizer_notices(&*self.catalog, ctx.session(), &df_meta.optimizer_notices);
-        }
-
-        // Create a metainfo with rendered notices.
-        let df_meta = self
-            .catalog()
-            .render_notices(df_meta, notice_ids, Some(export_id));
-
         // Attend to optimization notice builtin tables and save the metainfo in the catalog's
         // in-memory state.
         if self.catalog().state().system_config().enable_mz_notices()

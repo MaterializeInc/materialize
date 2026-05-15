@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/sequencer/inner.rs
-revision: 9d0a7c3c6f
+revision: 3df8ae2fd8
 ---
 
 # adapter::coord::sequencer::inner
@@ -10,3 +10,4 @@ Houses the per-statement sequencing implementations split into child files for t
 Together they implement the full `sequence_plan` dispatch surface for every SQL plan kind.
 The generic `sequence_staged` driver and the `Staged` / `StagedContext` / `StageResult` traits live in `inner.rs`, providing the common loop that advances multi-stage plans either immediately or by spawning background tasks and re-queuing via the coordinator's message channel.
 `validate_role_attributes` permits the `LOGIN` attribute even when password auth is disabled, restricting the unavailable-feature gate to `SUPERUSER` and `PASSWORD` attributes.
+`await_real_time_recent_timestamp` (public to the crate) and the private `real_time_recent_timestamp_error` helper convert `StorageError::RtrTimeout` and `StorageError::RtrDropFailure` to the dedicated `AdapterError::RtrTimeout` / `AdapterError::RtrDropFailure` variants with humanized collection names; callers in the `peek`, `explain_timestamp`, and `command_handler` modules use these helpers when awaiting real-time recency futures.

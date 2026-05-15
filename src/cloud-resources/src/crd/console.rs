@@ -169,5 +169,9 @@ pub mod v1alpha1 {
                 ("materialize.cloud/app".to_owned(), "console".to_owned()),
             ])
         }
+
+        fn app_name(&self) -> Option<&str> {
+            Some("console")
+        }
     }
 }

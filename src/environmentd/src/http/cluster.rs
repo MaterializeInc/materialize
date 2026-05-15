@@ -40,7 +40,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 /// Configuration for the cluster HTTP proxy.
 pub struct ClusterProxyConfig {
     /// Handle to look up replica HTTP addresses.
-    locator: Arc<ReplicaHttpLocator>,
+    pub(crate) locator: Arc<ReplicaHttpLocator>,
 }
 
 impl ClusterProxyConfig {
@@ -122,11 +122,32 @@ async fn handle_cluster_proxy_inner(
         format!("/{path}")
     };
 
-    let authority = match SocketAddrType::guess(&http_addr) {
+    rewrite_request_for_replica(
+        &mut req,
+        &http_addr,
+        cluster_id,
+        replica_id,
+        process,
+        &path_query,
+    )?;
+
+    proxy_replica_request(&http_addr, req).await
+}
+
+/// Rewrites `req` to target a clusterd HTTP endpoint at `http_addr`.
+pub(crate) fn rewrite_request_for_replica(
+    req: &mut Request<Body>,
+    http_addr: &str,
+    cluster_id: ClusterId,
+    replica_id: ReplicaId,
+    process: usize,
+    path_query: &str,
+) -> Result<(), (StatusCode, String)> {
+    let authority = match SocketAddrType::guess(http_addr) {
         // UDS addresses aren't valid URI authorities, use a placeholder.
         SocketAddrType::Unix => format!("cluster_{cluster_id}_replica_{replica_id}_{process}"),
         SocketAddrType::Turmoil => http_addr.trim_start_matches("turmoil:").to_owned(),
-        SocketAddrType::Inet => http_addr.clone(),
+        SocketAddrType::Inet => http_addr.to_owned(),
     };
     let uri = Uri::try_from(format!("http://{authority}{path_query}")).map_err(|e| {
         (
@@ -156,8 +177,16 @@ async fn handle_cluster_proxy_inner(
     req.headers_mut()
         .insert(http::header::CONNECTION, HeaderValue::from_static("close"));
 
+    Ok(())
+}
+
+pub(crate) async fn proxy_replica_request(
+    http_addr: &str,
+    req: Request<Body>,
+) -> Result<Response, (StatusCode, String)> {
+    let uri = req.uri().clone();
     // Connect to the target with timeout
-    let stream = tokio::time::timeout(CONNECT_TIMEOUT, Stream::connect(http_addr.as_str()))
+    let stream = tokio::time::timeout(CONNECT_TIMEOUT, Stream::connect(http_addr))
         .await
         .map_err(|_| {
             (
@@ -184,9 +213,10 @@ async fn handle_cluster_proxy_inner(
         })?;
 
     // Spawn task to drive the connection
+    let http_addr_owned = http_addr.to_owned();
     mz_ore::task::spawn(|| format!("Proxy to {uri}"), async move {
         if let Err(e) = conn.await {
-            tracing::debug!("Connection to clusterd {http_addr} closed: {e}");
+            tracing::debug!("Connection to clusterd {http_addr_owned} closed: {e}");
         }
     });
 
@@ -196,18 +226,14 @@ async fn handle_cluster_proxy_inner(
         .map_err(|_| {
             (
                 StatusCode::GATEWAY_TIMEOUT,
-                format!(
-                    "Request timeout to clusterd {cluster_id}/{replica_id}/process/{process} after {REQUEST_TIMEOUT:?}"
-                ),
+                format!("Request timeout to clusterd {http_addr} after {REQUEST_TIMEOUT:?}"),
             )
         })?
         .map(|r| r.into_response())
         .map_err(|e| {
             (
                 StatusCode::BAD_GATEWAY,
-                format!(
-                    "Error proxying to clusterd {cluster_id}/{replica_id}/process/{process}: {e}"
-                ),
+                format!("Error proxying to clusterd {http_addr}: {e}"),
             )
         })
 }

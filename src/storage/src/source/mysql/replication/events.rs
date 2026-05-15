@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use maplit::btreemap;
+use mysql_async::binlog::events::OptionalMetaExtractor;
 use mysql_common::binlog::events::{QueryEvent, RowsEventData};
 use mz_mysql_util::{MySqlError, pack_mysql_row};
 use mz_ore::iter::IteratorExt;
@@ -221,7 +222,7 @@ pub(super) async fn handle_query_event(
 /// frontier with which to advance the dataflow's progress.
 pub(super) async fn handle_rows_event(
     event: RowsEventData<'_>,
-    ctx: &ReplContext<'_>,
+    ctx: &mut ReplContext<'_>,
     new_gtid: &GtidPartition,
     event_buffer: &mut Vec<(
         (usize, Result<SourceMessage, DataflowError>),
@@ -262,6 +263,11 @@ pub(super) async fn handle_rows_event(
     // Capability for this event.
     let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
 
+    // We can check here if the binlog has full row metadata by looking at the column name optional
+    // metadata, which is only present if full metadata is enabled.
+    let optional_metadata = OptionalMetaExtractor::new(table_map_event.iter_optional_meta())?;
+    let has_full_metadata = optional_metadata.iter_column_name().next().is_some();
+
     // Iterate over the rows in this RowsEvent. Each row is a pair of 'before_row', 'after_row',
     // to accomodate for updates and deletes (which include a before_row),
     // and updates and inserts (which inclued an after row).
@@ -289,20 +295,37 @@ pub(super) async fn handle_rows_event(
             before_row.map(|r| (r, Diff::MINUS_ONE)),
             after_row.map(|r| (r, Diff::ONE)),
         ];
+        let gtid_str = format!("{new_gtid:?}");
         for (binlog_row, diff) in updates.into_iter().flatten() {
             let row = mysql_async::Row::try_from(binlog_row)?;
             for (output, row_val) in outputs.iter().repeat_clone(row) {
-                let event = match pack_mysql_row(&mut final_row, row_val, &output.desc) {
-                    Ok(row) => Ok(SourceMessage {
-                        key: Row::default(),
-                        value: row,
-                        metadata: Row::default(),
-                    }),
-                    // Produce a DefiniteError in the stream for any rows that fail to decode
-                    Err(err @ MySqlError::ValueDecodeError { .. }) => Err(DataflowError::from(
-                        DefiniteError::ValueDecodeError(err.to_string()),
-                    )),
-                    Err(err) => Err(err)?,
+                let event = if !has_full_metadata && output.binlog_full_metadata {
+                    ctx.errored_outputs.insert(output.output_index);
+                    Err(DataflowError::from(DefiniteError::ValueDecodeError(
+                        format!(
+                            "Table {0} was created with binlog_row_metadata=FULL but binlog_row_metadata has since been set to a different value, meaning we cannot reliably decode the columns",
+                            output.table_name
+                        ),
+                    )))
+                } else {
+                    match pack_mysql_row(
+                        &mut final_row,
+                        row_val,
+                        &output.desc,
+                        Some(&gtid_str),
+                        output.binlog_full_metadata,
+                    ) {
+                        Ok(row) => Ok(SourceMessage {
+                            key: Row::default(),
+                            value: row,
+                            metadata: Row::default(),
+                        }),
+                        // Produce a DefiniteError in the stream for any rows that fail to decode
+                        Err(err @ MySqlError::ValueDecodeError { .. }) => Err(DataflowError::from(
+                            DefiniteError::ValueDecodeError(err.to_string()),
+                        )),
+                        Err(err) => Err(err)?,
+                    }
                 };
 
                 let data = (output.output_index, event);

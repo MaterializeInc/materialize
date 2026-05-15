@@ -127,14 +127,6 @@ class MzCliVersion(TypedVersionBase):
         return "mz-v"
 
 
-class MzLspServerVersion(TypedVersionBase):
-    """Version of Materialize LSP Server"""
-
-    @classmethod
-    def get_prefix(cls) -> str:
-        return "mz-lsp-server-v"
-
-
 class MzDebugVersion(TypedVersionBase):
     """Version of Materialize Debug Tool"""
 

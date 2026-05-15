@@ -482,7 +482,7 @@ contains: unknown catalog item 'foo'
 ! CREATE CONNECTION conn1 TO KAFKA (
     BROKERS (
         MATCHING '*.use1-az1.*' USING AWS PRIVATELINK foo (AVAILABILITY ZONE = 'use1-az1'),
-        MATCHING '*.use1-az4.*' USING AWS PRIVATELINK foo (PORT 9093, AVAILABILITY ZONE = 'use1-az4')
+        MATCHING '*.use1-az2.*' USING AWS PRIVATELINK foo (PORT 9093, AVAILABILITY ZONE = 'use1-az2')
     ),
     SECURITY PROTOCOL PLAINTEXT
   );
@@ -495,7 +495,7 @@ ALTER SYSTEM SET max_aws_privatelink_connections = 5;
 
 > CREATE CONNECTION pl_for_matching TO AWS PRIVATELINK (
     SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
-    AVAILABILITY ZONES ('use1-az1', 'use1-az4')
+    AVAILABILITY ZONES ('use1-az1', 'use1-az2')
   )
 
 # MATCHING requires the feature flag
@@ -525,7 +525,7 @@ contains: BROKERS must contain at least one static broker address
     BROKERS (
         'broker:9092' USING AWS PRIVATELINK pl_for_matching,
         MATCHING '*.use1-az1.*' USING AWS PRIVATELINK pl_for_matching (AVAILABILITY ZONE = 'use1-az1'),
-        MATCHING '*.use1-az4.*' USING AWS PRIVATELINK pl_for_matching (AVAILABILITY ZONE = 'use1-az4')
+        MATCHING '*.use1-az2.*' USING AWS PRIVATELINK pl_for_matching (AVAILABILITY ZONE = 'use1-az2')
     ),
     SECURITY PROTOCOL PLAINTEXT
   ) WITH (VALIDATE = false)
@@ -546,6 +546,6 @@ contains: unknown catalog item 'foo'
 # Error in cloudtest/K8s: creating AWS PrivateLink Connection would violate max_aws_privatelink_connections limit
 ! CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (
     SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
-    AVAILABILITY ZONES ('use1-az1', 'use1-az4')
+    AVAILABILITY ZONES ('use1-az1', 'use1-az2')
   )
 contains: AWS PrivateLink

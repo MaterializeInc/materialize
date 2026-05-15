@@ -64,7 +64,7 @@ COMPLETE 1
 simple conn=mz_support,user=mz_support
 SHOW log_filter;
 ----
-warn
+mz_persist_client::internal::gc=error,mz_adapter::catalog::open=error,mz_persist_client::rpc=error,warn
 COMPLETE 1
 
 # The mz_support user cannot ALTER SYSTEM SET public system vars.

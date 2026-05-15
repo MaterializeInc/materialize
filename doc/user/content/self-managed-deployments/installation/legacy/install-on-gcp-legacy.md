@@ -27,7 +27,7 @@ module](https://github.com/MaterializeInc/terraform-google-materialize) to:
 
 {{< warning >}}
 
-{{< self-managed/terraform-disclaimer >}}
+{{< self-managed/legacy-terraform-disclaimer >}}
 
 {{< self-managed/tutorial-disclaimer >}}
 
@@ -189,7 +189,7 @@ If you want to use `jq` and do not have `jq` installed, install.
 
 {{< warning >}}
 
-{{< self-managed/terraform-disclaimer >}}
+{{< self-managed/legacy-terraform-disclaimer >}}
 
 {{< /warning >}}
 

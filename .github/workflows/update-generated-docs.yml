@@ -17,6 +17,7 @@ on:
 
 jobs:
   update-docs:
+    if: github.repository == 'MaterializeInc/materialize'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:

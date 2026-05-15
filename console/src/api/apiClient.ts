@@ -20,6 +20,7 @@ import {
 } from "~/config/AppConfig";
 import { ContextHolder } from "~/external-library-wrappers/frontegg";
 import { MzOidcUserManager } from "~/external-library-wrappers/oidc";
+import { readAuthErrorDetail } from "~/utils/oidcAuth";
 
 import { logoutAndRedirect } from "./materialize/auth";
 import {
@@ -177,9 +178,11 @@ export class SelfManagedApiClient
 
   #mzApiWithAuthRedirect = async (...req: Parameters<Fetch>) => {
     const response = await globalFetch(...req);
-    // If the user is not authenticated, we redirect to the login page.
     if (response.status === 401) {
-      await logoutAndRedirect({ apiClient: this });
+      // Surface only what the server shares — results in a redirect when
+      // there is a 401 error.
+      const error = await readAuthErrorDetail(response);
+      await logoutAndRedirect({ apiClient: this, error });
     }
     return response;
   };

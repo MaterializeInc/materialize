@@ -30,6 +30,8 @@ uuid = { workspace = true, optional = true, features = ["v4"] }
 [dev-dependencies]
 clap.workspace = true
 mz-aws-util = { path = "../aws-util" }
+mz-ore = { path = "../ore", default-features = false, features = ["test"] }
+serde_json.workspace = true
 tokio.workspace = true
 
 [features]

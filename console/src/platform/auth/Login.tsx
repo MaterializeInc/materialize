@@ -23,9 +23,9 @@ import {
 import { useMutation } from "@tanstack/react-query";
 import React, { useState } from "react";
 import { useForm } from "react-hook-form";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
-import { loginOrThrow } from "~/api/materialize/auth";
+import { LOGIN_ERROR_PARAM, loginOrThrow } from "~/api/materialize/auth";
 import Alert from "~/components/Alert";
 import { LabeledInput } from "~/components/formComponentsV2";
 import { MaterializeLogo } from "~/components/MaterializeLogo";
@@ -155,6 +155,8 @@ const SsoLoginLink = () => {
   const auth = useAuth();
   const [error, setError] = useState<string | null>(null);
 
+  if (!auth) return null;
+
   const handleSsoLogin = () => {
     setError(null);
     auth.signinRedirect().catch((err: unknown) => {
@@ -183,8 +185,11 @@ const SsoLoginLink = () => {
 
 export const Login = () => {
   const appConfig = useAppConfig();
+  const [searchParams] = useSearchParams();
   const isOidc =
     appConfig.mode === "self-managed" && appConfig.authMode === "Oidc";
+
+  const errorMessage = searchParams.get(LOGIN_ERROR_PARAM);
 
   return (
     <AuthLayout>
@@ -193,6 +198,14 @@ export const Login = () => {
           <HStack my={{ base: "8", lg: "0" }} paddingBottom="8">
             <MaterializeLogo height="12" />
           </HStack>
+          {errorMessage && (
+            <Alert
+              variant="error"
+              minWidth="100%"
+              message={errorMessage}
+              mb="4"
+            />
+          )}
           <PasswordLoginForm />
           {isOidc && <SsoLoginLink />}
         </VStack>

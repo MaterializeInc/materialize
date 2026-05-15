@@ -1,6 +1,6 @@
 ---
 source: src/ore/src/retry.rs
-revision: e0d66fa068
+revision: 0839a26fb4
 ---
 
 # mz-ore::retry

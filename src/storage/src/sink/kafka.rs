@@ -115,7 +115,9 @@ use mz_storage_types::StorageDiff;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::dyncfgs::{
-    KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS, SINK_ENSURE_TOPIC_CONFIG, SINK_PROGRESS_SEARCH,
+    KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS, KAFKA_SINK_BATCH_NUM_MESSAGES,
+    KAFKA_SINK_BATCH_SIZE, KAFKA_SINK_MESSAGE_MAX_BYTES, SINK_ENSURE_TOPIC_CONFIG,
+    SINK_PROGRESS_SEARCH,
 };
 use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt, DataflowError};
 use mz_storage_types::sinks::{
@@ -318,6 +320,32 @@ impl TransactionalProducer {
         options.insert("client.id", client_id);
         // We want to be notified regularly with statistics
         options.insert("statistics.interval.ms", "1000".into());
+        // Maximum size of a single produced message, controlled by dyncfg so
+        // operators can raise the limit when messages exceed librdkafka's 1MB
+        // default.
+        options.insert(
+            "message.max.bytes",
+            format!(
+                "{}",
+                KAFKA_SINK_MESSAGE_MAX_BYTES.get(storage_configuration.config_set())
+            ),
+        );
+        // Maximum size (bytes) of a produced MessageSet.
+        options.insert(
+            "batch.size",
+            format!(
+                "{}",
+                KAFKA_SINK_BATCH_SIZE.get(storage_configuration.config_set())
+            ),
+        );
+        // Maximum number of messages batched in one MessageSet.
+        options.insert(
+            "batch.num.messages",
+            format!(
+                "{}",
+                KAFKA_SINK_BATCH_NUM_MESSAGES.get(storage_configuration.config_set())
+            ),
+        );
 
         let ctx = MzClientContext::default();
 
@@ -786,22 +814,20 @@ fn sink_collection<'scope>(
                             producer.begin_transaction().await?;
                         }
 
-                        // N.B. Shrinking the Vec here is important because when starting the Sink
-                        // we might buffer a ton of updates into these collections, e.g. if someone
-                        // deleted the progress topic and the resume upper is 0, and we don't want
-                        // to keep around a massively oversized VEc.
-                        deferred_updates.shrink_to(buffer_min_capacity.get());
                         extra_updates.extend(
                             deferred_updates
                                 .extract_if(.., |(_, time, _)| !progress.less_equal(time)),
                         );
+                        // Shrink after draining items out, so the call actually
+                        // reduces capacity in the oversized-buffer scenario
+                        // (e.g. progress topic was deleted and resume upper is 0).
+                        deferred_updates.shrink_to(buffer_min_capacity.get());
                         extra_updates.sort_unstable_by(|a, b| a.1.cmp(&b.1));
 
-                        // N.B. See the comment above.
-                        extra_updates.shrink_to(buffer_min_capacity.get());
                         for (message, time, diff) in extra_updates.drain(..) {
                             producer.send(&message, time, diff)?;
                         }
+                        extra_updates.shrink_to(buffer_min_capacity.get());
 
                         debug!("{name}: committing transaction for {}", progress.pretty());
                         producer.commit_transaction(progress.clone()).await?;

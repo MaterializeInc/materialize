@@ -499,6 +499,8 @@ pub(crate) fn build_oneshot_ingestion_dataflow(
         .storage_configuration
         .connection_context
         .clone();
+    let enforce_external_addresses = mz_storage_types::dyncfgs::ENFORCE_EXTERNAL_ADDRESSES
+        .get(storage_state.storage_configuration.config_set());
 
     let name = format!("Oneshot ingestion: {ingestion_id}");
     let tokens = timely_worker.dataflow_named(&name, |scope| {
@@ -510,6 +512,7 @@ pub(crate) fn build_oneshot_ingestion_dataflow(
             collection_id,
             collection_meta,
             description,
+            enforce_external_addresses,
             callback,
         )
     });

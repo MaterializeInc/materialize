@@ -1,6 +1,6 @@
 ---
 source: src/http-util/src/lib.rs
-revision: aaed3fa7d3
+revision: 8b77a4950e
 ---
 
 # mz-http-util
@@ -17,7 +17,7 @@ It exports a collection of axum handler functions and a macro for serving static
 * `template_response` — renders an `askama` template into an `axum` `Html` response.
 * `make_handle_static\!` — macro that generates a `handle_static` route handler; serves embedded files in release mode and reads from the filesystem in `dev-web` mode.
 * `handle_liveness_check` — returns `200 OK` for health probes.
-* `handle_prometheus` — encodes Prometheus metrics from a `MetricsRegistry` into the text exposition format.
+* `handle_prometheus` — encodes Prometheus metrics from a `MetricsRegistry` into the Prometheus text or protobuf exposition format, selected by the caller's `Accept` header.
 * `handle_reload_tracing_filter` — accepts a JSON body with a new `EnvFilter` string and reloads the tracing layer via a `TracingHandle`.
 * `handle_tracing` — returns the current tracing level filter as JSON.
 * `origin_is_allowed` — returns `true` if an `Origin` header value matches any entry in an allowed list; supports bare `*` (any origin), exact match, and wildcard subdomain globs (`*.example.com`).

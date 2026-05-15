@@ -116,6 +116,9 @@ impl<'scope> SinkRender<'scope> for CopyToS3OneshotSinkConnection {
         use timely::dataflow::operators::vec::Map;
         let error_stream = error_stream.map(|(err, time, diff)| (err.deserialize(), time, diff));
 
+        let enforce_external_addresses =
+            mz_storage_types::dyncfgs::ENFORCE_EXTERNAL_ADDRESSES.get(&compute_state.worker_config);
+
         let token = mz_storage_operators::s3_oneshot_sink::copy_to(
             input,
             error_stream,
@@ -128,6 +131,7 @@ impl<'scope> SinkRender<'scope> for CopyToS3OneshotSinkConnection {
             params,
             result_callback,
             self.output_batch_count,
+            enforce_external_addresses,
         );
 
         Some(token)

@@ -122,8 +122,8 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
                 axum::Router::new()
                     .route(
                         "/metrics",
-                        axum::routing::get(move || async move {
-                            mz_http_util::handle_prometheus(&metrics_registry).await
+                        axum::routing::get(move |headers: axum::http::HeaderMap| async move {
+                            mz_http_util::handle_prometheus(&metrics_registry, headers).await
                         }),
                     )
                     .into_make_service(),

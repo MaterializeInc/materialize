@@ -28,6 +28,12 @@ def get_ancestor_overrides_for_performance_regressions(
 
     min_ancestor_mz_version_per_commit = dict()
 
+    if scenario_class_name == "Retraction":
+        # PR#36386 (timely-util: switch Column::Align to Vec<u64>) increases clusterd memory
+        min_ancestor_mz_version_per_commit[
+            "2571dcdc4b9a41359b5ee70054bb06423aab7c27"
+        ] = MzVersion.parse_mz("v26.24.0")
+
     if scenario_class_name == "CrossJoin":
         # PR#35328 (compute: move MV sink persist I/O off Timely thread) increases clusterd memory
         min_ancestor_mz_version_per_commit[

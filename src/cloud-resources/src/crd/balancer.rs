@@ -177,5 +177,9 @@ pub mod v1alpha1 {
                 ("materialize.cloud/app".to_owned(), "balancerd".to_owned()),
             ])
         }
+
+        fn app_name(&self) -> Option<&str> {
+            Some("balancerd")
+        }
     }
 }

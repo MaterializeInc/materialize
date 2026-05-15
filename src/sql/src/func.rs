@@ -366,7 +366,11 @@ pub fn sql_impl(
         );
         let qcx = QueryContext::root(&scx, ecx.qcx.lifetime);
 
-        let (mut expr, _) = names::resolve(qcx.scx.catalog, expr.clone())?;
+        let (mut expr, new_ids) = names::resolve(qcx.scx.catalog, expr.clone())?;
+        scx.sql_impl_resolved_ids
+            .lock()
+            .expect("planning is single-threaded")
+            .extend_from(&new_ids);
         // Desugar the expression
         transform_ast::transform(&scx, &mut expr)?;
 
@@ -457,7 +461,11 @@ fn sql_impl_table_func_inner(
         let mut qcx = QueryContext::root(&scx, qcx.lifetime);
 
         let query = query.clone();
-        let (mut query, _) = names::resolve(qcx.scx.catalog, query)?;
+        let (mut query, new_ids) = names::resolve(qcx.scx.catalog, query)?;
+        scx.sql_impl_resolved_ids
+            .lock()
+            .expect("planning is single-threaded")
+            .extend_from(&new_ids);
         transform_ast::transform(&scx, &mut query)?;
 
         query::plan_nested_query(&mut qcx, &query)
@@ -4759,9 +4767,9 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         },
         "seahash" => Scalar {
             params!(String) => UnaryFunc::SeahashString(func::SeahashString)
-                => UInt32, oid::FUNC_SEAHASH_STRING_OID;
+                => UInt64, oid::FUNC_SEAHASH_STRING_OID;
             params!(Bytes) => UnaryFunc::SeahashBytes(func::SeahashBytes)
-                => UInt32, oid::FUNC_SEAHASH_BYTES_OID;
+                => UInt64, oid::FUNC_SEAHASH_BYTES_OID;
         },
         "starts_with" => Scalar {
             params!(String, String) => BinaryFunc::from(func::StartsWith) => Bool, 3696;
@@ -5141,6 +5149,11 @@ pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLo
                     )),
                     custom_id: None,
                 }, oid::FUNC_MZ_ROLE_OID_MEMBERSHIPS;
+        },
+        "mz_session_role_memberships" => Scalar {
+            params!() => UnmaterializableFunc::MzSessionRoleMemberships
+                => SqlScalarType::Array(Box::new(SqlScalarType::String)),
+                oid::FUNC_MZ_SESSION_ROLE_MEMBERSHIPS_OID;
         },
         // There is no regclass equivalent for databases to look up
         // oids, so we have this helper function instead.

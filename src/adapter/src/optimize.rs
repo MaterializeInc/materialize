@@ -275,6 +275,8 @@ pub enum OptimizerError {
         func: UnmaterializableFunc,
         context: &'static str,
     },
+    #[error("access to function {0} is restricted")]
+    RestrictedFunction(UnmaterializableFunc),
     #[error("{0}")]
     UnsupportedTemporalExpression(String),
     /// This is a specific kind of internal error. It's distinct from `Internal`, because we want to
@@ -297,6 +299,11 @@ impl OptimizerError {
             Self::UnmaterializableFunction(UnmaterializableFunc::CurrentTimestamp) => {
                 Some("See: https://materialize.com/docs/sql/functions/now_and_mz_now/".into())
             }
+            Self::RestrictedFunction(_) => Some(
+                "Access to system catalog objects is restricted for this role. \
+                Contact your administrator if you need access."
+                    .into(),
+            ),
             _ => None,
         }
     }

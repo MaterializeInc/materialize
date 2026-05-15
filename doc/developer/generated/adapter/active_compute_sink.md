@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/active_compute_sink.rs
-revision: 2982634c0d
+revision: 61212870d6
 ---
 
 # adapter::active_compute_sink

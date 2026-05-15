@@ -2,12 +2,16 @@
 
 ## Unreleased
 
+## 1.9.8 - 2026-05-12
+
 * Automatically retry the atomic swap transaction in `deploy_promote` when
   it is aborted by a concurrent-DDL conflict (Materialize SQLSTATE 40001).
   Retries are capped by the new `max_retries` argument (default: 3) and
   each retry waits `retry_backoff` seconds (default: 1.0). Errors that are
   not concurrent-DDL conflicts, for example, permission, syntax, or
   missing-object errors, are raised immediately and are not retried.
+
+* Support overriding the `options` PostgreSQL connection parameter
 
 ## 1.9.7 - 2026-03-16
 

@@ -27,6 +27,8 @@ pub struct Metrics {
     pub timestamp_difference_for_strict_serializable_ms: HistogramVec,
     pub commands: IntCounterVec,
     pub storage_usage_collection_time_seconds: Histogram,
+    pub arrangement_sizes_collection_time_seconds: Histogram,
+    pub arrangement_sizes_rows_written: IntCounter,
     pub subscribe_outputs: IntCounterVec,
     pub canceled_peeks: IntCounter,
     pub linearize_message_seconds: HistogramVec,
@@ -104,6 +106,15 @@ impl Metrics {
                 name: "mz_storage_usage_collection_time_seconds",
                 help: "The number of seconds the coord spends collecting usage metrics from storage.",
                 buckets: histogram_seconds_buckets(0.000_128, 8.0)
+            )),
+            arrangement_sizes_collection_time_seconds: registry.register(metric!(
+                name: "mz_arrangement_sizes_collection_time_seconds",
+                help: "Seconds to read mz_object_arrangement_sizes and prepare history-table updates for one snapshot.",
+                buckets: histogram_seconds_buckets(0.000_128, 8.0)
+            )),
+            arrangement_sizes_rows_written: registry.register(metric!(
+                name: "mz_arrangement_sizes_rows_written_total",
+                help: "Total rows appended to mz_object_arrangement_size_history since process start.",
             )),
             subscribe_outputs: registry.register(metric!(
                 name: "mz_subscribe_outputs",

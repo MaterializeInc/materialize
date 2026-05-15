@@ -79,8 +79,6 @@ describe("buildSourceStatisticsQuery", () => {
       await testdrive(
         `
         $ postgres-execute connection=postgres://mz_system:materialize@\${testdrive.materialize-internal-sql-addr}
-        # Enable the feature flag to allow sources on multi-replica clusters
-        ALTER SYSTEM SET enable_multi_replica_sources = true
         ALTER SYSTEM SET default_timestamp_interval = 100
         ALTER SYSTEM SET storage_statistics_collection_interval = 100
         ALTER SYSTEM SET storage_statistics_interval = 200

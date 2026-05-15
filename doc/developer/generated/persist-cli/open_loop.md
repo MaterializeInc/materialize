@@ -1,6 +1,6 @@
 ---
 source: src/persist-cli/src/open_loop.rs
-revision: 82d92a7fad
+revision: 8b77a4950e
 ---
 
 # persistcli::open_loop

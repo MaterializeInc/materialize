@@ -304,18 +304,11 @@ components work together:
 
 To help you get started, Materialize provides Terraform modules.
 
-{{< important >}}
-These modules are intended for evaluation/demonstration purposes and for serving
-as a template when building your own production deployment. The modules should
-not be directly relied upon for production deployments: **future releases of the
-modules will contain breaking changes.** Instead, to use as a starting point for
-your own production deployment, either:
+{{< note >}}
 
-- Fork the repo and pin to a specific version; or
+{{< self-managed/terraform-disclaimer >}}
 
-- Use the code as a reference when developing your own deployment.
-
-{{</ important >}}
+{{< /note >}}
 
 {{< tabs >}}
 {{< tab "Terraform Modules (New!)" >}}

@@ -183,7 +183,13 @@ impl<F: Fn(&ConfigUpdates, &ConfigSet) + Send> SyncedConfigSet<F> {
                 (ConfigVal::F64(_), ld::FlagValue::Number(flag)) => ConfigVal::F64(flag),
                 (ConfigVal::String(_), ld::FlagValue::Str(flag)) => ConfigVal::String(flag),
                 (ConfigVal::Duration(_), ld::FlagValue::Str(flag)) => {
-                    ConfigVal::Duration(humantime::parse_duration(&flag)?)
+                    match humantime::parse_duration(&flag) {
+                        Ok(d) => ConfigVal::Duration(d),
+                        Err(e) => {
+                            tracing::warn!("failed to parse Duration for {}: {}", entry.name(), e);
+                            continue;
+                        }
+                    }
                 }
                 (ConfigVal::Json(_), ld::FlagValue::Json(flag)) => ConfigVal::Json(flag),
 
@@ -197,10 +203,10 @@ impl<F: Fn(&ConfigUpdates, &ConfigSet) + Send> SyncedConfigSet<F> {
                 | (ConfigVal::Json(_), _)
                 | (ConfigVal::OptUsize(_), _)
                 | (ConfigVal::String(_), _)
-                | (ConfigVal::OptString(_), _) => anyhow::bail!(
-                    "LD flag cannot be cast to the ConfigVal for {}",
-                    entry.name()
-                ),
+                | (ConfigVal::OptString(_), _) => {
+                    tracing::warn!("LD flag type mismatch for {}", entry.name());
+                    continue;
+                }
             };
             tracing::debug!(
                 "updating config value {} from {:?} to {:?}",

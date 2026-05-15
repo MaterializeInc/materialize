@@ -12,19 +12,18 @@ menu:
 Materialize provides a set of modular [Terraform
 modules](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main)
 that can be used to deploy all services required for Materialize to run on Google Cloud.
-The module is intended to provide a simple set of examples on how to deploy
-Materialize. It can be used as is or modules can be taken from the example and
-integrated with existing DevOps tooling.
+These modules serve as composable building blocks that you can integrate into
+existing DevOps workflows, either as a full set or individually.
 
 {{% self-managed/materialize-components-sentence %}} The example on this page
 deploys a complete Materialize environment on GCP using the modular Terraform
 setup from this repository.
 
-{{< warning >}}
+{{< note >}}
 
 {{< self-managed/terraform-disclaimer >}}
 
-{{< /warning >}}
+{{< /note >}}
 
 ## What Gets Created
 
@@ -110,20 +109,24 @@ A Google account with permission to:
 
 ## Getting started: Simple example
 
-{{< warning >}}
+{{< note >}}
 
 {{< self-managed/terraform-disclaimer >}}
 
-{{< /warning >}}
+{{< /note >}}
 
 {{< tip >}}
 
-The simple example used in this tutorial enables [Password
+* {{% self-managed/terraform-simple-example-tip %}}
+
+* The simple example used in this tutorial enables [Password
 authentication](https://github.com/MaterializeInc/materialize-terraform-self-managed/blob/main/gcp/examples/simple/main.tf#L332)
 for the Materialize instance. To use a different authentication method, update
 [`authenticator_kind`](https://github.com/MaterializeInc/materialize-terraform-self-managed/blob/main/kubernetes/modules/materialize-instance/README.md#input_authenticator_kind).
 See [Authentication](/security/self-managed/authentication/) for the supported
-authentication mechanisms. s {{< /tip >}}
+authentication mechanisms.
+
+{{< /tip >}}
 
 ### Step 1: Set Up the Environment
 

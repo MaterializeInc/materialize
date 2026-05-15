@@ -1,6 +1,6 @@
 ---
 source: src/transform/src/analysis.rs
-revision: 5f785f23fd
+revision: 3a220d1628
 ---
 
 # mz-transform::analysis

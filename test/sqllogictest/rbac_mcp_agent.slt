@@ -1,0 +1,799 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Test RBAC restrictions for MCP agent roles.
+#
+# This test validates that a minimally-privileged agent role cannot access
+# sensitive system information. The goal is to ensure that customers can
+# safely expose data products to MCP agents without leaking internal
+# system information.
+#
+# Agent role setup (minimal permissions):
+# - USAGE on a specific cluster (agent_serving)
+# - USAGE on a specific schema (agent_objects)
+# - SELECT on specific objects (data products)
+#
+# Expected restrictions:
+# - No access to role information (mz_roles)
+# - No access to connection details (mz_connections)
+# - No access to audit events (mz_audit_events)
+# - No access to secret metadata (mz_secrets)
+# - No access to statement history tables
+# - No access to internal system tables
+
+mode cockroach
+
+reset-server
+
+# Enable RBAC checks
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO true;
+----
+COMPLETE 0
+
+# Create the agent serving infrastructure
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER agent_serving REPLICAS (r1 (SIZE 'scale=1,workers=1'));
+----
+COMPLETE 0
+
+statement ok
+CREATE SCHEMA agent_objects;
+
+statement ok
+CREATE MATERIALIZED VIEW agent_objects.next_arrivals AS SELECT 1 as arrival_id, 'Station A' as station;
+
+statement ok
+CREATE MATERIALIZED VIEW agent_objects.transfer_windows AS SELECT 1 as transfer_id, 'Window 1' as window_name;
+
+# Create the agent role with minimal permissions
+simple conn=mz_system,user=mz_system
+CREATE ROLE agent LOGIN;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON CLUSTER agent_serving TO agent;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER ROLE agent SET cluster = 'agent_serving';
+----
+COMPLETE 0
+
+statement ok
+GRANT USAGE ON SCHEMA agent_objects TO agent;
+
+statement ok
+GRANT SELECT ON agent_objects.next_arrivals TO agent;
+
+statement ok
+GRANT SELECT ON agent_objects.transfer_windows TO agent;
+
+# =============================================================================
+# Test: Agent can access granted data products
+# =============================================================================
+
+simple conn=agent,user=agent
+SELECT * FROM agent_objects.next_arrivals;
+----
+1,Station A
+COMPLETE 1
+
+simple conn=agent,user=agent
+SELECT * FROM agent_objects.transfer_windows;
+----
+1,Window 1
+COMPLETE 1
+
+# =============================================================================
+# Regression test: views using SQL-implemented functions (has_table_privilege,
+# etc.) must not be rejected with "unstable dependencies". The sql_impl
+# resolved IDs are implementation details of the function, not real
+# dependencies of the view.
+# =============================================================================
+
+statement ok
+CREATE VIEW agent_objects.privilege_check AS SELECT has_table_privilege('agent', 'agent_objects.next_arrivals', 'SELECT') AS has_priv;
+
+statement ok
+DROP VIEW agent_objects.privilege_check;
+
+# =============================================================================
+# Test: mz_internal tables that ARE properly blocked by RBAC
+# These tables use MONITOR_SELECT or similar restricted access
+# =============================================================================
+
+simple conn=agent,user=agent
+SELECT 1 FROM mz_internal.mz_prepared_statement_history WHERE 1 = 0
+----
+db error: ERROR: permission denied for SOURCE "mz_internal.mz_prepared_statement_history"
+DETAIL: The 'agent' role needs SELECT privileges on SOURCE "mz_internal.mz_prepared_statement_history"
+
+simple conn=agent,user=agent
+SELECT 1 FROM mz_internal.mz_statement_execution_history WHERE 1 = 0
+----
+db error: ERROR: permission denied for SOURCE "mz_internal.mz_statement_execution_history"
+DETAIL: The 'agent' role needs SELECT privileges on SOURCE "mz_internal.mz_statement_execution_history"
+
+simple conn=agent,user=agent
+SELECT 1 FROM mz_internal.mz_sql_text WHERE 1 = 0
+----
+db error: ERROR: permission denied for SOURCE "mz_internal.mz_sql_text"
+DETAIL: The 'agent' role needs SELECT privileges on SOURCE "mz_internal.mz_sql_text"
+
+simple conn=agent,user=agent
+SELECT 1 FROM mz_internal.mz_recent_activity_log WHERE 1 = 0
+----
+db error: ERROR: permission denied for VIEW "mz_internal.mz_recent_activity_log"
+DETAIL: The 'agent' role needs SELECT privileges on VIEW "mz_internal.mz_recent_activity_log"
+
+# =============================================================================
+# Test: mz_catalog tables that SHOULD be blocked but currently have PUBLIC_SELECT
+# These tests document the current (problematic) behavior.
+# SECURITY ISSUE: These tables expose sensitive information to any authenticated user.
+# =============================================================================
+
+# BUG: mz_roles exposes all role names including system roles
+# This allows an agent to enumerate all users in the system
+simple conn=agent,user=agent
+SELECT count(*) > 0 FROM mz_catalog.mz_roles
+----
+t
+COMPLETE 1
+
+# BUG: mz_connections exposes connection names, types, and create_sql
+# This could leak infrastructure details like Kafka brokers, Postgres hosts, etc.
+simple conn=agent,user=agent
+SELECT count(*) >= 0 FROM mz_catalog.mz_connections
+----
+t
+COMPLETE 1
+
+# BUG: mz_audit_events exposes full DDL history (who created what, when)
+# This could leak sensitive operational information
+simple conn=agent,user=agent
+SELECT count(*) >= 0 FROM mz_catalog.mz_audit_events
+----
+t
+COMPLETE 1
+
+# BUG: mz_secrets exposes secret names and schema information
+# While actual values are not exposed, the names themselves may be sensitive
+simple conn=agent,user=agent
+SELECT count(*) >= 0 FROM mz_catalog.mz_secrets
+----
+t
+COMPLETE 1
+
+# Additional mz_catalog tables with PUBLIC_SELECT that expose system information:
+
+# mz_clusters - exposes all cluster names
+simple conn=agent,user=agent
+SELECT count(*) > 0 FROM mz_catalog.mz_clusters
+----
+t
+COMPLETE 1
+
+# mz_databases - exposes all database names
+simple conn=agent,user=agent
+SELECT count(*) > 0 FROM mz_catalog.mz_databases
+----
+t
+COMPLETE 1
+
+# mz_schemas - exposes all schema names
+simple conn=agent,user=agent
+SELECT count(*) > 0 FROM mz_catalog.mz_schemas
+----
+t
+COMPLETE 1
+
+# mz_sources - exposes all source definitions
+simple conn=agent,user=agent
+SELECT count(*) >= 0 FROM mz_catalog.mz_sources
+----
+t
+COMPLETE 1
+
+# mz_sinks - exposes all sink definitions
+simple conn=agent,user=agent
+SELECT count(*) >= 0 FROM mz_catalog.mz_sinks
+----
+t
+COMPLETE 1
+
+# mz_views - exposes all view definitions including SQL
+simple conn=agent,user=agent
+SELECT count(*) >= 0 FROM mz_catalog.mz_views
+----
+t
+COMPLETE 1
+
+# mz_materialized_views - exposes all materialized view definitions
+simple conn=agent,user=agent
+SELECT count(*) >= 0 FROM mz_catalog.mz_materialized_views
+----
+t
+COMPLETE 1
+
+# mz_tables - exposes all table definitions
+simple conn=agent,user=agent
+SELECT count(*) >= 0 FROM mz_catalog.mz_tables
+----
+t
+COMPLETE 1
+
+# mz_indexes - exposes all index definitions
+simple conn=agent,user=agent
+SELECT count(*) >= 0 FROM mz_catalog.mz_indexes
+----
+t
+COMPLETE 1
+
+# =============================================================================
+# Test: SHOW commands that expose system information
+# =============================================================================
+
+# SHOW ROLES reveals all roles in the system
+simple conn=agent,user=agent
+SELECT count(*) > 0 FROM (SHOW ROLES)
+----
+t
+COMPLETE 1
+
+# SHOW CLUSTERS reveals all clusters
+simple conn=agent,user=agent
+SELECT count(*) > 0 FROM (SHOW CLUSTERS)
+----
+t
+COMPLETE 1
+
+# SHOW DATABASES reveals all databases
+simple conn=agent,user=agent
+SELECT count(*) > 0 FROM (SHOW DATABASES)
+----
+t
+COMPLETE 1
+
+# SHOW SCHEMAS reveals all schemas (though filtered to current database)
+simple conn=agent,user=agent
+SELECT count(*) > 0 FROM (SHOW SCHEMAS)
+----
+t
+COMPLETE 1
+
+# SHOW CONNECTIONS reveals connection information
+simple conn=agent,user=agent
+SELECT count(*) >= 0 FROM (SHOW CONNECTIONS)
+----
+t
+COMPLETE 1
+
+# SHOW SECRETS reveals secret names
+simple conn=agent,user=agent
+SELECT count(*) >= 0 FROM (SHOW SECRETS)
+----
+t
+COMPLETE 1
+
+# =============================================================================
+# Test: Schema access - agent should only see objects in granted schemas
+# =============================================================================
+
+# Agent cannot create objects in schemas they don't have CREATE on
+simple conn=agent,user=agent
+CREATE TABLE agent_objects.unauthorized_table (id int)
+----
+db error: ERROR: permission denied for SCHEMA "materialize.agent_objects"
+DETAIL: The 'agent' role needs CREATE privileges on SCHEMA "materialize.agent_objects"
+
+# Agent cannot access objects in schemas they don't have USAGE on
+statement ok
+CREATE SCHEMA private_schema;
+
+statement ok
+CREATE TABLE private_schema.secret_data (id int);
+
+simple conn=agent,user=agent
+SELECT * FROM private_schema.secret_data
+----
+db error: ERROR: permission denied for SCHEMA "materialize.private_schema"
+DETAIL: The 'agent' role needs USAGE privileges on SCHEMA "materialize.private_schema"
+
+# =============================================================================
+# Test: restrict_to_user_objects via ALTER ROLE SET
+# Superusers can set this as a role default. Users cannot change it via SET.
+# This is the recommended approach for MCP tool queries.
+# =============================================================================
+
+# First verify the agent role can currently access system tables (no restriction yet)
+simple conn=agent,user=agent
+SELECT count(*) > 0 FROM mz_catalog.mz_roles;
+----
+t
+COMPLETE 1
+
+# Superuser sets the restriction as a role default for the agent
+simple conn=mz_system,user=mz_system
+ALTER ROLE agent SET restrict_to_user_objects = true;
+----
+COMPLETE 0
+
+# Agent needs to reconnect for the role default to take effect
+# (In a real scenario, MCP would create new connections with the restriction active)
+
+# For this test, we simulate by verifying the restriction is persisted
+# The next connection as 'agent' will have restrict_to_user_objects = true
+
+# Verify the variable cannot be changed via SET (even to false - security measure)
+simple conn=agent,user=agent
+SET restrict_to_user_objects = false;
+----
+db error: ERROR: parameter "restrict_to_user_objects" cannot be changed
+
+# Verify the variable cannot be changed to true either via SET
+simple conn=agent,user=agent
+SET restrict_to_user_objects = true;
+----
+db error: ERROR: parameter "restrict_to_user_objects" cannot be changed
+
+# Verify agent cannot ALTER ROLE SET restrict_to_user_objects on themselves (requires superuser)
+simple conn=agent,user=agent
+ALTER ROLE agent SET restrict_to_user_objects = false;
+----
+db error: ERROR: permission denied to set restrict_to_user_objects
+DETAIL: You must be a superuser to set restrict_to_user_objects
+
+# Verify agent cannot reset restrict_to_user_objects on themselves either
+simple conn=agent,user=agent
+ALTER ROLE agent RESET restrict_to_user_objects;
+----
+db error: ERROR: permission denied to set restrict_to_user_objects
+DETAIL: You must be a superuser to set restrict_to_user_objects
+
+# Verify that even a role with CREATEROLE system privilege cannot set restrict_to_user_objects.
+# This tests that the RBAC superuser check (rbac.rs) and allow_role_default (vars.rs)
+# stay in sync — CREATEROLE alone is not enough, superuser is required.
+simple conn=mz_system,user=mz_system
+CREATE ROLE role_admin LOGIN;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATEROLE ON SYSTEM TO role_admin;
+----
+COMPLETE 0
+
+simple conn=role_admin,user=role_admin
+ALTER ROLE agent SET restrict_to_user_objects = true;
+----
+db error: ERROR: permission denied to set restrict_to_user_objects
+DETAIL: You must be a superuser to set restrict_to_user_objects
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATEROLE ON SYSTEM FROM role_admin;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP ROLE role_admin;
+----
+COMPLETE 0
+
+# Superuser can reset the role default
+simple conn=mz_system,user=mz_system
+ALTER ROLE agent RESET restrict_to_user_objects;
+----
+COMPLETE 0
+
+# =============================================================================
+# Test: Verify system object access is blocked when restrict_to_user_objects is active
+# =============================================================================
+
+# Set the restriction again
+simple conn=mz_system,user=mz_system
+ALTER ROLE agent SET restrict_to_user_objects = true;
+----
+COMPLETE 0
+
+# Agent reconnects with the restriction active - system tables should be blocked
+# Note: The simple protocol creates a new connection each time
+simple conn=agent_restricted,user=agent
+SELECT count(*) > 0 FROM mz_catalog.mz_roles;
+----
+db error: ERROR: access to system object mz_roles is restricted
+DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
+
+# But user objects should still be accessible
+simple conn=agent_restricted,user=agent
+SELECT * FROM agent_objects.next_arrivals;
+----
+1,Station A
+COMPLETE 1
+
+# MCP data product views are whitelisted — the agent endpoint queries these
+# internally to discover what objects the user has access to.
+
+# mz_mcp_data_products returns the agent's granted objects (not just a count —
+# verifies the full chain through mz_show_my_object_privileges works correctly).
+simple conn=agent_restricted,user=agent
+SELECT object_name FROM mz_internal.mz_mcp_data_products ORDER BY object_name;
+----
+"materialize"."agent_objects"."next_arrivals"
+"materialize"."agent_objects"."transfer_windows"
+COMPLETE 2
+
+simple conn=agent_restricted,user=agent
+SELECT object_name FROM mz_internal.mz_mcp_data_product_details ORDER BY object_name;
+----
+"materialize"."agent_objects"."next_arrivals"
+"materialize"."agent_objects"."transfer_windows"
+COMPLETE 2
+
+# mz_session_role_memberships() is callable in a restricted session (it only
+# exposes the current session's role chain, not the full system graph).
+# Verify it walks the full transitive chain: grant agent membership in a parent
+# role and confirm both appear. Role graphs are DAGs (DDL-enforced), so the
+# visited-name guard in session_role_memberships_inner is a safety net, not
+# expected to fire.
+simple conn=mz_system,user=mz_system
+CREATE ROLE agent_parent;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT agent_parent TO agent;
+----
+COMPLETE 0
+
+simple conn=agent_hierarchy,user=agent
+SELECT 'agent' = ANY(mz_internal.mz_session_role_memberships()) AND 'agent_parent' = ANY(mz_internal.mz_session_role_memberships());
+----
+t
+COMPLETE 1
+
+simple conn=mz_system,user=mz_system
+REVOKE agent_parent FROM agent;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP ROLE agent_parent;
+----
+COMPLETE 0
+
+# mz_role_oid_memberships() is still blocked (exposes full system role graph).
+simple conn=agent_restricted,user=agent
+SELECT mz_internal.mz_role_oid_memberships();
+----
+db error: ERROR: access to system object function mz_role_oid_memberships is restricted
+DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
+
+# =============================================================================
+# Test: Joins and complex queries on user objects work with restriction active
+# =============================================================================
+
+# Join between two user tables should work
+simple conn=agent_restricted,user=agent
+SELECT n.arrival_id, n.station, t.window_name FROM agent_objects.next_arrivals n JOIN agent_objects.transfer_windows t ON n.arrival_id = t.transfer_id;
+----
+1,Station A,Window 1
+COMPLETE 1
+
+# Aggregate functions on user tables should work
+simple conn=agent_restricted,user=agent
+SELECT count(*), max(arrival_id) FROM agent_objects.next_arrivals;
+----
+1,1
+COMPLETE 1
+
+# Subqueries on user tables should work
+simple conn=agent_restricted,user=agent
+SELECT * FROM agent_objects.next_arrivals WHERE arrival_id IN (SELECT transfer_id FROM agent_objects.transfer_windows);
+----
+1,Station A
+COMPLETE 1
+
+# CTEs on user tables should work
+simple conn=agent_restricted,user=agent
+WITH arrivals AS (SELECT * FROM agent_objects.next_arrivals) SELECT count(*) FROM arrivals;
+----
+1
+COMPLETE 1
+
+# =============================================================================
+# Test: Object creation is blocked by RBAC (agent has no CREATE privileges)
+# =============================================================================
+
+# Agent cannot create views (no CREATE privilege on schema)
+simple conn=agent_restricted,user=agent
+CREATE VIEW agent_objects.my_view AS SELECT * FROM agent_objects.next_arrivals;
+----
+db error: ERROR: permission denied for SCHEMA "materialize.agent_objects"
+DETAIL: The 'agent' role needs CREATE privileges on SCHEMA "materialize.agent_objects"
+
+# Agent cannot create materialized views
+simple conn=agent_restricted,user=agent
+CREATE MATERIALIZED VIEW agent_objects.my_mv AS SELECT * FROM agent_objects.next_arrivals;
+----
+db error: ERROR: permission denied for SCHEMA "materialize.agent_objects"
+DETAIL: The 'agent' role needs CREATE privileges on SCHEMA "materialize.agent_objects"
+
+# Agent cannot create tables
+simple conn=agent_restricted,user=agent
+CREATE TABLE agent_objects.my_table (id int);
+----
+db error: ERROR: permission denied for SCHEMA "materialize.agent_objects"
+DETAIL: The 'agent' role needs CREATE privileges on SCHEMA "materialize.agent_objects"
+
+# Agent cannot create indexes
+simple conn=agent_restricted,user=agent
+CREATE INDEX my_idx ON agent_objects.next_arrivals (arrival_id);
+----
+db error: ERROR: must be owner of MATERIALIZED VIEW materialize.agent_objects.next_arrivals
+
+# Agent cannot create schemas
+simple conn=agent_restricted,user=agent
+CREATE SCHEMA agent_new_schema;
+----
+db error: ERROR: permission denied for DATABASE "materialize"
+DETAIL: The 'agent' role needs CREATE privileges on DATABASE "materialize"
+
+# Agent cannot create clusters
+simple conn=agent_restricted,user=agent
+CREATE CLUSTER agent_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'));
+----
+db error: ERROR: permission denied for SYSTEM
+DETAIL: The 'agent' role needs CREATECLUSTER privileges on SYSTEM
+
+# Agent cannot drop objects they don't own
+simple conn=agent_restricted,user=agent
+DROP MATERIALIZED VIEW agent_objects.next_arrivals;
+----
+db error: ERROR: must be owner of MATERIALIZED VIEW materialize.agent_objects.next_arrivals
+
+# =============================================================================
+# Test: Mixed queries (user + system objects) are blocked
+# =============================================================================
+
+# Joining user object with system table should be blocked
+simple conn=agent_restricted,user=agent
+SELECT n.* FROM agent_objects.next_arrivals n JOIN mz_catalog.mz_roles r ON true LIMIT 1;
+----
+db error: ERROR: access to system object mz_roles is restricted
+DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
+
+# Subquery against system table should be blocked
+simple conn=agent_restricted,user=agent
+SELECT * FROM agent_objects.next_arrivals WHERE arrival_id IN (SELECT 1 FROM mz_catalog.mz_clusters);
+----
+db error: ERROR: access to system object mz_clusters is restricted
+DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
+
+# =============================================================================
+# Test: SHOW commands are blocked by restrict_to_user_objects
+# SHOW commands are rewritten to SELECT on mz_internal.mz_show_* views during
+# planning. Their resolved IDs are now propagated via scx.sql_impl_resolved_ids
+# so the restrict check catches them.
+# =============================================================================
+
+simple conn=agent_restricted,user=agent
+SELECT count(*) > 0 FROM (SHOW DATABASES);
+----
+db error: ERROR: access to system object mz_show_databases is restricted
+DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
+
+simple conn=agent_restricted,user=agent
+SELECT count(*) > 0 FROM (SHOW SCHEMAS);
+----
+db error: ERROR: access to system object mz_show_schemas is restricted
+DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
+
+simple conn=agent_restricted,user=agent
+SELECT count(*) > 0 FROM (SHOW TABLES);
+----
+db error: ERROR: access to system object mz_show_tables is restricted
+DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
+
+simple conn=agent_restricted,user=agent
+SELECT count(*) > 0 FROM (SHOW VIEWS);
+----
+db error: ERROR: access to system object mz_show_views is restricted
+DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
+
+simple conn=agent_restricted,user=agent
+SELECT count(*) > 0 FROM (SHOW MATERIALIZED VIEWS);
+----
+db error: ERROR: access to system object mz_show_materialized_views is restricted
+DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
+
+simple conn=agent_restricted,user=agent
+SELECT count(*) > 0 FROM (SHOW INDEXES);
+----
+db error: ERROR: access to system object mz_show_indexes is restricted
+DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
+
+simple conn=agent_restricted,user=agent
+SELECT count(*) > 0 FROM (SHOW CLUSTERS);
+----
+db error: ERROR: access to system object mz_show_clusters is restricted
+DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
+
+# =============================================================================
+# Test: pg_catalog access is blocked when restrict_to_user_objects is active
+# =============================================================================
+
+simple conn=agent_restricted,user=agent
+SELECT count(*) FROM pg_catalog.pg_class;
+----
+db error: ERROR: access to system object pg_class is restricted
+DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
+
+simple conn=agent_restricted,user=agent
+SELECT count(*) FROM pg_catalog.pg_namespace;
+----
+db error: ERROR: access to system object pg_namespace is restricted
+DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
+
+simple conn=agent_restricted,user=agent
+SELECT count(*) FROM pg_catalog.pg_attribute;
+----
+db error: ERROR: access to system object pg_attribute is restricted
+DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
+
+# =============================================================================
+# Test: information_schema access is blocked when restrict_to_user_objects is active
+# =============================================================================
+
+simple conn=agent_restricted,user=agent
+SELECT count(*) FROM information_schema.tables;
+----
+db error: ERROR: access to system object tables is restricted
+DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
+
+simple conn=agent_restricted,user=agent
+SELECT count(*) FROM information_schema.columns;
+----
+db error: ERROR: access to system object columns is restricted
+DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
+
+# =============================================================================
+# Test: DISCARD ALL does not bypass restrict_to_user_objects
+# The role default is preserved because reset() uses the role's default_value
+# =============================================================================
+
+# Agent runs DISCARD ALL, then system tables should still be blocked
+simple conn=agent_discard_test,user=agent
+DISCARD ALL;
+----
+COMPLETE 0
+
+simple conn=agent_discard_test,user=agent
+SELECT count(*) > 0 FROM mz_catalog.mz_roles;
+----
+db error: ERROR: access to system object mz_roles is restricted
+DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
+
+# But user objects still work after DISCARD ALL
+simple conn=agent_discard_test,user=agent
+SELECT * FROM agent_objects.next_arrivals;
+----
+1,Station A
+COMPLETE 1
+
+# =============================================================================
+# Test: SQL-implemented functions that query system tables are blocked
+# (Category A: resolved IDs from sql_impl function bodies are now propagated)
+# =============================================================================
+
+# has_table_privilege internally queries system tables; mz_databases is the first blocked ID encountered
+simple conn=agent_restricted,user=agent
+SELECT has_table_privilege('agent', 'agent_objects.next_arrivals', 'SELECT');
+----
+db error: ERROR: access to system object mz_databases is restricted
+DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
+
+# pg_get_viewdef internally queries mz_catalog.mz_views
+simple conn=agent_restricted,user=agent
+SELECT pg_get_viewdef('next_arrivals');
+----
+db error: ERROR: access to system object mz_views is restricted
+DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
+
+# obj_description queries system tables; pg_class is the first blocked ID encountered
+simple conn=agent_restricted,user=agent
+SELECT obj_description(1, 'pg_class');
+----
+db error: ERROR: access to system object pg_class is restricted
+DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
+
+# =============================================================================
+# Test: Unmaterializable functions that leak system info are blocked
+# (Category B: blocked at evaluation time via is_safe_for_restricted_session)
+# =============================================================================
+
+simple conn=agent_restricted,user=agent
+SELECT mz_version();
+----
+db error: ERROR: access to system object function mz_version is restricted
+DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
+
+simple conn=agent_restricted,user=agent
+SELECT version();
+----
+db error: ERROR: access to system object function version is restricted
+DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
+
+simple conn=agent_restricted,user=agent
+SELECT mz_environment_id();
+----
+db error: ERROR: access to system object function mz_environment_id is restricted
+DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
+
+simple conn=agent_restricted,user=agent
+SELECT mz_is_superuser();
+----
+db error: ERROR: access to system object function mz_is_superuser is restricted
+DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
+
+simple conn=agent_restricted,user=agent
+SELECT pg_backend_pid();
+----
+db error: ERROR: access to system object function pg_backend_pid is restricted
+DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
+
+# =============================================================================
+# Test: Safe functions still work with restrict_to_user_objects active
+# =============================================================================
+
+simple conn=agent_restricted,user=agent
+SELECT current_user;
+----
+agent
+COMPLETE 1
+
+simple conn=agent_restricted,user=agent
+SELECT current_database();
+----
+materialize
+COMPLETE 1
+
+# Reset the role default for cleanup (so other tests aren't affected)
+simple conn=mz_system,user=mz_system
+ALTER ROLE agent RESET restrict_to_user_objects;
+----
+COMPLETE 0
+
+# =============================================================================
+# Cleanup
+# =============================================================================
+
+statement ok
+DROP SCHEMA private_schema CASCADE;
+
+statement ok
+DROP SCHEMA agent_objects CASCADE;
+
+simple conn=mz_system,user=mz_system
+DROP CLUSTER agent_serving CASCADE;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP ROLE agent;
+----
+COMPLETE 0
+
+# Disable RBAC checks
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO false;
+----
+COMPLETE 0

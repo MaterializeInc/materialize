@@ -124,6 +124,7 @@ mod console;
 mod mcp;
 mod memory;
 mod metrics;
+mod metrics_public;
 mod metrics_viz;
 mod probe;
 mod prometheus;
@@ -187,6 +188,9 @@ pub struct WebhookState {
     adapter_client_rx: Delayed<mz_adapter::Client>,
     webhook_cache: WebhookAppenderCache,
 }
+
+#[derive(Clone, Debug)]
+struct HelmChartVersion(Option<String>);
 
 #[derive(Debug)]
 pub struct HttpServer {
@@ -252,6 +256,9 @@ impl HttpServer {
 
         let mut router = Router::new();
         let mut base_router = Router::new();
+        let cluster_proxy_config = Arc::new(cluster::ClusterProxyConfig::new(Arc::clone(
+            &replica_http_locator,
+        )));
         if routes_enabled.base {
             base_router = base_router
                 .route(
@@ -268,7 +275,13 @@ impl HttpServer {
                     "/metrics-viz",
                     routing::get(metrics_viz::handle_metrics_viz),
                 )
-                .route("/static/{*path}", routing::get(root::handle_static));
+                .route("/static/{*path}", routing::get(root::handle_static))
+                .route(
+                    "/metrics/public",
+                    routing::get(metrics_public::handle_public_metrics),
+                )
+                .layer(Extension(metrics_registry.clone()))
+                .layer(Extension(Arc::clone(&cluster_proxy_config)));
 
             let mut ws_router = Router::new()
                 .route("/api/experimental/sql", routing::get(sql::handle_sql_ws))
@@ -278,7 +291,7 @@ impl HttpServer {
                     authenticator_kind,
                     adapter_client_rx: adapter_client_rx.clone(),
                     active_connection_counter: active_connection_counter.clone(),
-                    helm_chart_version,
+                    helm_chart_version: helm_chart_version.clone(),
                     allowed_roles,
                 });
             if let listeners::AuthenticatorKind::None = authenticator_kind {
@@ -395,9 +408,6 @@ impl HttpServer {
                 .layer(Extension(console_config));
 
             // Cluster HTTP proxy routes.
-            let cluster_proxy_config = Arc::new(cluster::ClusterProxyConfig::new(Arc::clone(
-                &replica_http_locator,
-            )));
             base_router = base_router
                 .route("/clusters", routing::get(cluster::handle_clusters))
                 .route(
@@ -408,7 +418,7 @@ impl HttpServer {
                     "/api/cluster/{:cluster_id}/replica/{:replica_id}/process/{:process}/{*path}",
                     routing::any(cluster::handle_cluster_proxy),
                 )
-                .layer(Extension(cluster_proxy_config));
+                .layer(Extension(Arc::clone(&cluster_proxy_config)));
 
             let leader_router = Router::new()
                 .route("/api/leader/status", routing::get(handle_leader_status))
@@ -426,36 +436,36 @@ impl HttpServer {
             let metrics_router = Router::new()
                 .route(
                     "/metrics",
-                    routing::get(move || async move {
-                        mz_http_util::handle_prometheus(&metrics_registry).await
+                    routing::get(move |headers: HeaderMap| async move {
+                        mz_http_util::handle_prometheus(&metrics_registry, headers).await
                     }),
                 )
                 .route(
                     "/metrics/mz_usage",
-                    routing::get(|client: AuthedClient| async move {
+                    routing::get(|client: AuthedClient, headers: HeaderMap| async move {
                         let registry = sql::handle_promsql(client, USAGE_METRIC_QUERIES).await;
-                        mz_http_util::handle_prometheus(&registry).await
+                        mz_http_util::handle_prometheus(&registry, headers).await
                     }),
                 )
                 .route(
                     "/metrics/mz_frontier",
-                    routing::get(|client: AuthedClient| async move {
+                    routing::get(|client: AuthedClient, headers: HeaderMap| async move {
                         let registry = sql::handle_promsql(client, FRONTIER_METRIC_QUERIES).await;
-                        mz_http_util::handle_prometheus(&registry).await
+                        mz_http_util::handle_prometheus(&registry, headers).await
                     }),
                 )
                 .route(
                     "/metrics/mz_compute",
-                    routing::get(|client: AuthedClient| async move {
+                    routing::get(|client: AuthedClient, headers: HeaderMap| async move {
                         let registry = sql::handle_promsql(client, COMPUTE_METRIC_QUERIES).await;
-                        mz_http_util::handle_prometheus(&registry).await
+                        mz_http_util::handle_prometheus(&registry, headers).await
                     }),
                 )
                 .route(
                     "/metrics/mz_storage",
-                    routing::get(|client: AuthedClient| async move {
+                    routing::get(|client: AuthedClient, headers: HeaderMap| async move {
                         let registry = sql::handle_promsql(client, STORAGE_METRIC_QUERIES).await;
-                        mz_http_util::handle_prometheus(&registry).await
+                        mz_http_util::handle_prometheus(&registry, headers).await
                     }),
                 )
                 .route(
@@ -465,7 +475,8 @@ impl HttpServer {
                 .route("/api/readyz", routing::get(probe::handle_ready))
                 .layer(auth_middleware.clone())
                 .layer(Extension(adapter_client_rx.clone()))
-                .layer(Extension(active_connection_counter.clone()));
+                .layer(Extension(active_connection_counter.clone()))
+                .layer(Extension(HelmChartVersion(helm_chart_version.clone())));
             router = router.merge(metrics_router);
         }
 
@@ -515,6 +526,7 @@ impl HttpServer {
                 .layer(auth_middleware.clone())
                 .layer(Extension(adapter_client_rx.clone()))
                 .layer(Extension(active_connection_counter.clone()))
+                .layer(Extension(HelmChartVersion(helm_chart_version.clone())))
                 .layer(Extension(mcp_allowed_origins))
                 .layer(
                     CorsLayer::new()
@@ -529,6 +541,7 @@ impl HttpServer {
             .layer(auth_middleware.clone())
             .layer(Extension(adapter_client_rx.clone()))
             .layer(Extension(active_connection_counter.clone()))
+            .layer(Extension(HelmChartVersion(helm_chart_version)))
             .layer(
                 CorsLayer::new()
                     .allow_credentials(false)
@@ -689,6 +702,7 @@ async fn x_materialize_user_header_auth(
             external_metadata_rx: None,
             authenticated: Authenticated,
             authenticator_kind: mz_auth::AuthenticatorKind::None,
+            groups: None,
         });
     }
     Ok(next.run(req).await)
@@ -708,6 +722,8 @@ pub struct AuthedUser {
     external_metadata_rx: Option<watch::Receiver<ExternalUserMetadata>>,
     authenticated: Authenticated,
     authenticator_kind: mz_auth::AuthenticatorKind,
+    /// Groups from JWT claims for OIDC group-to-role sync.
+    groups: Option<Vec<String>>,
 }
 
 pub struct AuthedClient {
@@ -739,6 +755,7 @@ impl AuthedClient {
                 external_metadata_rx: user.external_metadata_rx,
                 helm_chart_version,
                 authenticator_kind: user.authenticator_kind,
+                groups: user.groups,
             },
             user.authenticated,
         );
@@ -803,7 +820,11 @@ where
             (StatusCode::INTERNAL_SERVER_ERROR, "adapter client missing").into_response()
         })?;
         let active_connection_counter = req.extensions.get::<ConnectionCounter>().unwrap();
-        let helm_chart_version = None;
+        let helm_chart_version = req
+            .extensions
+            .get::<HelmChartVersion>()
+            .map(|h| h.0.clone())
+            .unwrap_or(None);
 
         let options = if params.options.is_empty() {
             // It's possible 'options' simply wasn't provided, we don't want that to
@@ -869,26 +890,33 @@ pub(crate) enum AuthError {
     FailedToUpdateSession,
     #[error("invalid credentials")]
     InvalidCredentials,
+    /// Payload is `OidcError`'s sanitized `Display` (no expected-values leaks).
+    #[error("{0}")]
+    OidcFailed(String),
 }
 
 impl IntoResponse for AuthError {
     fn into_response(self) -> Response {
         warn!("HTTP request failed authentication: {}", self);
         let mut headers = HeaderMap::new();
-        match self {
+        // We omit most detail from the error message we send to the client, to
+        // avoid giving attackers unnecessary information. `OidcFailed` is the
+        // exception — its payload is a sanitized `OidcError::Display` that the
+        // console embeds in the login-page error.
+        let body = match &self {
             AuthError::MissingHttpAuthentication {
                 include_www_authenticate_header,
-            } if include_www_authenticate_header => {
+            } if *include_www_authenticate_header => {
                 headers.insert(
                     http::header::WWW_AUTHENTICATE,
                     HeaderValue::from_static("Basic realm=Materialize"),
                 );
+                "unauthorized".to_string()
             }
-            _ => {}
+            AuthError::OidcFailed(message) => message.clone(),
+            _ => "unauthorized".to_string(),
         };
-        // We omit most detail from the error message we send to the client, to
-        // avoid giving attackers unnecessary information.
-        (StatusCode::UNAUTHORIZED, headers, "unauthorized").into_response()
+        (StatusCode::UNAUTHORIZED, headers, body).into_response()
     }
 }
 
@@ -1226,6 +1254,7 @@ pub(crate) async fn ensure_session_unexpired(
         external_metadata_rx: None,
         authenticated: session_data.authenticated,
         authenticator_kind: session_data.authenticator_kind,
+        groups: None,
     })
 }
 
@@ -1235,14 +1264,14 @@ async fn auth(
     allowed_roles: AllowedRoles,
     include_www_authenticate_header: bool,
 ) -> Result<AuthedUser, AuthError> {
-    let (name, external_metadata_rx, authenticated) = match authenticator {
+    let (name, external_metadata_rx, authenticated, groups) = match authenticator {
         Authenticator::Frontegg(frontegg) => match creds {
             Some(Credentials::Password { username, password }) => {
                 let (auth_session, authenticated) =
                     frontegg.authenticate(&username, password.as_str()).await?;
                 let name = auth_session.user().into();
                 let external_metadata_rx = Some(auth_session.external_metadata_rx());
-                (name, external_metadata_rx, authenticated)
+                (name, external_metadata_rx, authenticated, None)
             }
             Some(Credentials::Token { token }) => {
                 let (claims, authenticated) = frontegg.validate_access_token(&token, None)?;
@@ -1250,7 +1279,7 @@ async fn auth(
                     user_id: claims.user_id,
                     admin: claims.is_admin,
                 });
-                (claims.user, Some(external_metadata_rx), authenticated)
+                (claims.user, Some(external_metadata_rx), authenticated, None)
             }
             None => {
                 return Err(AuthError::MissingHttpAuthentication {
@@ -1264,7 +1293,7 @@ async fn auth(
                     .authenticate(&username, &password)
                     .await
                     .map_err(|_| AuthError::InvalidCredentials)?;
-                (username, None, authenticated)
+                (username, None, authenticated, None)
             }
             _ => {
                 return Err(AuthError::MissingHttpAuthentication {
@@ -1282,13 +1311,13 @@ async fn auth(
         }
         Authenticator::Oidc(oidc) => match creds {
             Some(Credentials::Token { token }) => {
-                // Validate JWT token
                 let (mut claims, authenticated) = oidc
                     .authenticate(&token, None)
                     .await
-                    .map_err(|_| AuthError::InvalidCredentials)?;
+                    .map_err(|e| AuthError::OidcFailed(e.to_string()))?;
                 let name = std::mem::take(&mut claims.user);
-                (name, None, authenticated)
+                let groups = claims.groups.take();
+                (name, None, authenticated, groups)
             }
             _ => {
                 return Err(AuthError::MissingHttpAuthentication {
@@ -1304,7 +1333,7 @@ async fn auth(
                 Some(Credentials::Password { username, .. }) => username,
                 _ => HTTP_DEFAULT_USER.name.to_owned(),
             };
-            (name, None, Authenticated)
+            (name, None, Authenticated, None)
         }
     };
 
@@ -1315,6 +1344,7 @@ async fn auth(
         external_metadata_rx,
         authenticated,
         authenticator_kind: authenticator.kind(),
+        groups,
     })
 }
 

@@ -206,7 +206,7 @@ impl LogVariant {
     ///
     /// This types need to agree with the values that are produced
     /// in `logging::compute::construct` and with the description in
-    /// `catalog/src/builtin.rs`.
+    /// `catalog/src/builtin/mz_introspection.rs`.
     pub fn desc(&self) -> RelationDesc {
         match self {
             LogVariant::Timely(TimelyLog::Operates) => RelationDesc::builder()

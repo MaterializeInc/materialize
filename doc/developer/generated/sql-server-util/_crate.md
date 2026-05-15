@@ -1,6 +1,6 @@
 ---
 source: src/sql-server-util/src/lib.rs
-revision: c2fc5e83f8
+revision: 8552b76c17
 ---
 
 # mz-sql-server-util

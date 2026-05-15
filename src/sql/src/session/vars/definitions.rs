@@ -1270,6 +1270,14 @@ pub static ENABLE_SESSION_RBAC_CHECKS: VarDefinition = VarDefinition::new(
     true,
 );
 
+pub static RESTRICT_TO_USER_OBJECTS: VarDefinition = VarDefinition::new(
+    "restrict_to_user_objects",
+    value!(bool; false),
+    "When enabled, queries are restricted from accessing system catalog objects. \
+        Useful for MCP tool queries that should only access user-created data products.",
+    true,
+);
+
 pub static EMIT_INTROSPECTION_QUERY_NOTICE: VarDefinition = VarDefinition::new(
     "emit_introspection_query_notice",
     value!(bool; true),
@@ -2159,7 +2167,7 @@ feature_flags!(
     {
         name: enable_create_table_from_source,
         desc: "Whether to allow CREATE TABLE .. FROM SOURCE syntax.",
-        default: false,
+        default: true,
         enable_for_item_parsing: true,
     },
     {

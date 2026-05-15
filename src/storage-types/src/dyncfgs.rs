@@ -156,6 +156,38 @@ pub const KAFKA_RECONNECT_BACKOFF_MAX: Config<Duration> = Config::new(
     "Sets reconnect.backoff.max.ms in librdkafka for sources and sinks.",
 );
 
+/// Sets message.max.bytes in librdkafka for Kafka sink producers.
+/// Maximum Kafka protocol request message size. Producer-side, this controls
+/// the maximum size of a single message (including framing) that the client
+/// will allow. Defaults to the librdkafka default of 1,000,000 bytes.
+/// See <https://docs.confluent.io/platform/current/clients/librdkafka/html/md_CONFIGURATION.html>
+pub const KAFKA_SINK_MESSAGE_MAX_BYTES: Config<usize> = Config::new(
+    "kafka_sink_message_max_bytes",
+    1_000_000,
+    "Sets message.max.bytes in librdkafka for Kafka sink producers.",
+);
+
+/// Sets batch.size in librdkafka for Kafka sink producers.
+/// Maximum size (in bytes) of all messages batched in one MessageSet, including
+/// protocol framing overhead. Defaults to the librdkafka default of 1,000,000
+/// bytes.
+/// See <https://docs.confluent.io/platform/current/clients/librdkafka/html/md_CONFIGURATION.html>
+pub const KAFKA_SINK_BATCH_SIZE: Config<usize> = Config::new(
+    "kafka_sink_batch_size",
+    1_000_000,
+    "Sets batch.size in librdkafka for Kafka sink producers.",
+);
+
+/// Sets batch.num.messages in librdkafka for Kafka sink producers.
+/// Maximum number of messages batched in one MessageSet. Defaults to the
+/// librdkafka default of 10,000 messages.
+/// See <https://docs.confluent.io/platform/current/clients/librdkafka/html/md_CONFIGURATION.html>
+pub const KAFKA_SINK_BATCH_NUM_MESSAGES: Config<usize> = Config::new(
+    "kafka_sink_batch_num_messages",
+    10_000,
+    "Sets batch.num.messages in librdkafka for Kafka sink producers.",
+);
+
 // MySQL
 
 /// Replication heartbeat interval requested from the MySQL server.
@@ -338,6 +370,9 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&KAFKA_RETRY_BACKOFF_MAX)
         .add(&KAFKA_RECONNECT_BACKOFF)
         .add(&KAFKA_RECONNECT_BACKOFF_MAX)
+        .add(&KAFKA_SINK_MESSAGE_MAX_BYTES)
+        .add(&KAFKA_SINK_BATCH_SIZE)
+        .add(&KAFKA_SINK_BATCH_NUM_MESSAGES)
         .add(&MYSQL_REPLICATION_HEARTBEAT_INTERVAL)
         .add(&ORE_OVERFLOWING_BEHAVIOR)
         .add(&PG_FETCH_SLOT_RESUME_LSN_INTERVAL)

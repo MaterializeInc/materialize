@@ -1,13 +1,10 @@
 ---
 name: mz-profile
 description: >
-  This skill should be used when the user wants to "profile Materialize",
-  "check memory usage", "analyze binary size", "debug performance", or
-  mentions profiling, samply, heaptrack, flame graphs, memory checking,
-  binary size analysis, slow queries, or high CPU/memory usage in the
-  Materialize repository. Use this skill even if the user just says
-  something is "slow" or "using too much memory" without explicitly
-  mentioning profiling.
+  Trigger: "profile Materialize", "check memory usage", "analyze binary size",
+  "debug performance", or mentions profiling, samply, heaptrack, flame graphs,
+  memory checking, binary size, slow queries, high CPU/memory in Materialize.
+  Also "slow" or "using too much memory" without explicit profile mention.
 ---
 
 # Profiling Materialize

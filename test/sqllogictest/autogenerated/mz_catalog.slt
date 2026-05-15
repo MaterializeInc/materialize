@@ -272,7 +272,7 @@ id  text  Materialize's␠unique␠ID␠for␠the␠relation.
 oid  oid  A␠PostgreSQL-compatible␠OID␠for␠the␠relation.
 schema_id  text  The␠ID␠of␠the␠schema␠to␠which␠the␠relation␠belongs.␠Corresponds␠to␠`mz_schemas.id`.
 name  text  The␠name␠of␠the␠relation.
-type  text  The␠type␠of␠the␠relation:␠either␠`table`,␠`source`,␠`view`,␠or␠`materialized␠view`.
+type  text  The␠type␠of␠the␠relation:␠either␠`table`,␠`source`,␠`view`,␠or␠`materialized-view`.
 owner_id  text  The␠role␠ID␠of␠the␠owner␠of␠the␠relation.␠Corresponds␠to␠`mz_roles.id`.
 cluster_id  text  The␠ID␠of␠the␠cluster␠maintaining␠the␠source,␠materialized␠view,␠index,␠or␠sink.␠Corresponds␠to␠`mz_clusters.id`.␠`NULL`␠for␠other␠object␠types.
 privileges  mz_aclitem[]  The␠privileges␠belonging␠to␠the␠relation.

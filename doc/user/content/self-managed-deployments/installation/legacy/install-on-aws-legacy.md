@@ -26,7 +26,7 @@ module](https://github.com/MaterializeInc/terraform-aws-materialize) to:
 
 {{< warning >}}
 
-{{< self-managed/terraform-disclaimer >}}
+{{< self-managed/legacy-terraform-disclaimer >}}
 
 {{< /warning >}}
 
@@ -66,7 +66,7 @@ documentation](https://helm.sh/docs/intro/install/).
 
 {{< warning >}}
 
-{{< self-managed/terraform-disclaimer >}}
+{{< self-managed/legacy-terraform-disclaimer >}}
 
 {{< self-managed/tutorial-disclaimer >}}
 

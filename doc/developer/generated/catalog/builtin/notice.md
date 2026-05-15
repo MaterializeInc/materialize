@@ -1,6 +1,6 @@
 ---
 source: src/catalog/src/builtin/notice.rs
-revision: db271c31b1
+revision: ea77b8b38b
 ---
 
 # catalog::builtin::notice

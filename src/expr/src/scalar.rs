@@ -625,8 +625,7 @@ impl MirScalarExpr {
             if !expr1.contains_temporal()
                 && **expr2 == MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow)
             {
-                std::mem::swap(expr1, expr2);
-                *func = match func {
+                let new_func = match func {
                     BinaryFunc::Eq(_) => func::Eq.into(),
                     BinaryFunc::Lt(_) => func::Gt.into(),
                     BinaryFunc::Lte(_) => func::Gte.into(),
@@ -636,6 +635,8 @@ impl MirScalarExpr {
                         return Err(format!("Unsupported binary temporal operation: {:?}", x));
                     }
                 };
+                std::mem::swap(expr1, expr2);
+                *func = new_func;
             }
 
             // Error if MLT is referenced in an unsupported position.

@@ -121,8 +121,6 @@ pub enum StorageError {
     /// The controller API was used in some invalid way. This usually indicates
     /// a bug.
     InvalidUsage(String),
-    /// The specified resource was exhausted, and is not currently accepting more requests.
-    ResourceExhausted(&'static str),
     /// The specified component is shutting down.
     ShuttingDown(&'static str),
     /// Collection metadata already exists for ID.
@@ -176,7 +174,6 @@ impl Error for StorageError {
             Self::DataflowError(err) => Some(err),
             Self::InvalidAlter { .. } => None,
             Self::InvalidUsage(_) => None,
-            Self::ResourceExhausted(_) => None,
             Self::ShuttingDown(_) => None,
             Self::CollectionMetadataAlreadyExists(_) => None,
             Self::PersistShardAlreadyInUse(_) => None,
@@ -247,7 +244,6 @@ impl fmt::Display for StorageError {
             Self::DataflowError(_err) => write!(f, "dataflow failed to process request",),
             Self::InvalidAlter(err) => std::fmt::Display::fmt(err, f),
             Self::InvalidUsage(err) => write!(f, "invalid usage: {}", err),
-            Self::ResourceExhausted(rsc) => write!(f, "{rsc} is exhausted"),
             Self::ShuttingDown(cmp) => write!(f, "{cmp} is shutting down"),
             Self::CollectionMetadataAlreadyExists(key) => {
                 write!(f, "storage metadata for '{key}' already exists")
@@ -396,9 +392,9 @@ impl TxnsCodec for TxnsCodecRow {
     fn should_fetch_part(data_id: &ShardId, stats: &PartStats) -> Option<bool> {
         let stats = stats
             .key
-            .col("key")?
+            .col("ok")?
             .try_as_optional_struct()
-            .map_err(|err| error!("unexpected stats type for col 'key': {}", err))
+            .map_err(|err| error!("unexpected stats type for col 'ok': {}", err))
             .ok()?;
         let stats = stats
             .some

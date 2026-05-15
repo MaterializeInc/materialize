@@ -33,6 +33,7 @@ derivative.workspace = true
 either.workspace = true
 futures = { workspace = true, optional = true }
 hibitset = { workspace = true, optional = true }
+ipnet.workspace = true
 itertools.workspace = true
 lgalloc = { workspace = true, optional = true }
 libc = { workspace = true, optional = true }

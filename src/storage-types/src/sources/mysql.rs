@@ -215,6 +215,7 @@ pub struct MySqlSourceExportDetails {
     pub initial_gtid_set: String,
     pub text_columns: Vec<String>,
     pub exclude_columns: Vec<String>,
+    pub binlog_full_metadata: bool,
 }
 
 impl AlterCompatible for MySqlSourceExportDetails {
@@ -230,6 +231,7 @@ impl AlterCompatible for MySqlSourceExportDetails {
             initial_gtid_set: _,
             text_columns: _,
             exclude_columns: _,
+            binlog_full_metadata: _,
         } = self;
         Ok(())
     }

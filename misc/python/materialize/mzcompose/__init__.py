@@ -399,6 +399,12 @@ def get_variable_system_parameters(
             "persist_state_update_lease_timeout", "1s", ["0s", "1s", "10s"]
         ),
         VariableSystemParameter(
+            "arrangement_size_history_collection_interval", "1h", ["1s", "10s", "1h"]
+        ),
+        VariableSystemParameter(
+            "arrangement_size_history_retention_period", "7d", ["1min", "1h", "7d"]
+        ),
+        VariableSystemParameter(
             "persist_validate_part_bounds_on_read", "false", ["true", "false"]
         ),
         VariableSystemParameter(
@@ -644,6 +650,9 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "kafka_retry_backoff_max",
     "kafka_reconnect_backoff",
     "kafka_reconnect_backoff_max",
+    "kafka_sink_message_max_bytes",
+    "kafka_sink_batch_size",
+    "kafka_sink_batch_num_messages",
     "oidc_issuer",
     "oidc_audience",
     "oidc_authentication_claim",
@@ -652,6 +661,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "oidc_group_role_sync_strict",
     "console_oidc_client_id",
     "console_oidc_scopes",
+    "enable_public_metrics_endpoint",
     "enable_mcp_agent",
     "enable_mcp_agent_query_tool",
     "enable_mcp_developer",

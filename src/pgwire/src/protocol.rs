@@ -234,6 +234,7 @@ where
                             external_metadata_rx: Some(auth_session.external_metadata_rx()),
                             helm_chart_version,
                             authenticator_kind,
+                            groups: None,
                         },
                         authenticated,
                     );
@@ -263,6 +264,7 @@ where
             let auth_response = oidc.authenticate(&jwt, Some(&user)).await;
             match auth_response {
                 Ok((mut claims, authenticated)) => {
+                    let groups = claims.groups.take();
                     let session = adapter_client.new_session(
                         SessionConfig {
                             conn_id: conn.conn_id().clone(),
@@ -272,6 +274,7 @@ where
                             external_metadata_rx: None,
                             helm_chart_version,
                             authenticator_kind,
+                            groups,
                         },
                         authenticated,
                     );
@@ -482,6 +485,7 @@ where
                     external_metadata_rx: None,
                     helm_chart_version,
                     authenticator_kind,
+                    groups: None,
                 },
                 authenticated,
             );
@@ -500,6 +504,7 @@ where
                     external_metadata_rx: None,
                     helm_chart_version,
                     authenticator_kind,
+                    groups: None,
                 },
                 Authenticated,
             );
@@ -798,6 +803,7 @@ where
             external_metadata_rx: None,
             helm_chart_version,
             authenticator_kind,
+            groups: None,
         },
         authenticated,
     );
@@ -2421,6 +2427,9 @@ where
                         None => FetchResult::Rows(None),
                         Some(PeekResponseUnary::Rows(rows)) => FetchResult::Rows(Some(rows)),
                         Some(PeekResponseUnary::Error(err)) => FetchResult::Error(err),
+                        Some(PeekResponseUnary::DependencyDropped(dep)) => {
+                            FetchResult::Error(dep.query_terminated_error())
+                        }
                         Some(PeekResponseUnary::Canceled) => FetchResult::Canceled,
                     },
                     notice = notice_fut => {
@@ -2520,7 +2529,12 @@ where
 
         let saw_rows = rows.remaining.saw_rows;
         let no_more_rows = rows.no_more_rows();
+        let metric_recorded = rows.remaining.metric_recorded;
         let recorded_first_row_instant = rows.remaining.recorded_first_row_instant;
+
+        if no_more_rows && !metric_recorded {
+            rows.remaining.metric_recorded = true;
+        }
 
         // Always return rows back, even if it's empty. This prevents an unclosed
         // portal from re-executing after it has been emptied.
@@ -2535,8 +2549,9 @@ where
         let response_message = get_response(max_rows, total_sent_rows, fetch_portal);
         self.send(response_message).await?;
 
-        // Attend to metrics if there are no more rows.
-        if no_more_rows {
+        // Attend to metrics if there are no more rows. Only record once per stream
+        // to avoid polluting the histogram when an exhausted cursor is FETCHed again.
+        if no_more_rows && !metric_recorded {
             let statement_type = if let Some(stmt) = &self
                 .adapter_client
                 .session()
@@ -2645,6 +2660,15 @@ where
                             ErrorResponse::error(SqlState::INTERNAL_ERROR, text.clone());
                         return self
                             .send_error_and_get_state(err)
+                            .await
+                            .map(|state| (state, SendRowsEndedReason::Errored { error: text }));
+                    }
+                    Some(PeekResponseUnary::DependencyDropped(dep)) => {
+                        let err = dep.to_concurrent_dependency_drop();
+                        let text = err.to_string();
+                        let resp = err.into_response(Severity::Error);
+                        return self
+                            .send_error_and_get_state(resp)
                             .await
                             .map(|state| (state, SendRowsEndedReason::Errored { error: text }));
                     }

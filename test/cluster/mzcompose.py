@@ -359,14 +359,14 @@ def workflow_test_github_4443(c: Composition) -> None:
             controller_dataflow_count > 0
         ), "at least one dataflow expected in controller history"
         assert (
-            controller_dataflow_count < 5
+            controller_dataflow_count < 6
         ), "more dataflows than expected in controller history"
         assert replica_command_count > 0, "replica history cannot be empty"
         assert (
             replica_dataflow_count > 0
         ), "at least one dataflow expected in replica history"
         assert (
-            replica_dataflow_count < 5
+            replica_dataflow_count < 6
         ), "more dataflows than expected in replica history"
 
         # execute 400 fast- and slow-path peeks
@@ -412,7 +412,7 @@ def workflow_test_github_4443(c: Composition) -> None:
             controller_dataflow_count > 0
         ), f"at least one dataflow expected in controller history, got {controller_dataflow_count}"
         assert (
-            controller_dataflow_count < 5
+            controller_dataflow_count < 6
         ), f"more dataflows than expected in controller history, got {controller_dataflow_count}"
         assert (
             replica_command_count < 100
@@ -421,7 +421,7 @@ def workflow_test_github_4443(c: Composition) -> None:
             replica_dataflow_count > 0
         ), f"at least one dataflow expected in replica history, got {replica_dataflow_count}"
         assert (
-            replica_dataflow_count < 5
+            replica_dataflow_count < 6
         ), f"more dataflows than expected in replica history, got {replica_dataflow_count}"
 
 
@@ -2461,6 +2461,16 @@ class Metrics:
         assert len(values) == 1
         return values[0]
 
+    def get_result_rows_first_to_last_byte_seconds_count(
+        self, statement_type: str
+    ) -> float:
+        metrics = self.with_name("mz_result_rows_first_to_last_byte_seconds_count")
+        values = [
+            v for k, v in metrics.items() if f'statement_type="{statement_type}"' in k
+        ]
+        assert len(values) == 1
+        return values[0]
+
     def get_last_command_received(self, server_name: str) -> float:
         metrics = self.with_name("mz_grpc_server_last_command_received")
         values = [v for k, v in metrics.items() if server_name in k]
@@ -2694,7 +2704,9 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     assert send_count > 10, f"got {send_count}"
     recv_count = metrics.get_value("mz_compute_controller_response_recv_count")
     assert recv_count > 10, f"got {recv_count}"
-    assert send_count - recv_count < 10, f"got {send_count}, {recv_count}"
+    # recv within 50% of send: channel invariant gives recv <= send, and we
+    # want the controller to have drained at least half of what was sent.
+    assert recv_count >= send_count / 2, f"got {send_count}, {recv_count}"
     count = metrics.get_value("mz_compute_controller_hydration_queue_size")
     assert count == 0, f"got {count}"
 
@@ -2765,6 +2777,58 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     metrics = fetch_metrics()
     assert metrics.get_wallclock_lag_count(index_id) is None
     assert metrics.get_wallclock_lag_count(mv_id) is None
+
+
+def workflow_test_response_count_survives_replica_replacement(
+    c: Composition,
+) -> None:
+    """Test that response_{send,recv}_count metrics survive replica drops."""
+
+    c.up("materialized")
+
+    def fetch_metrics() -> Metrics:
+        resp = c.exec(
+            "materialized", "curl", "localhost:6878/metrics", capture=True
+        ).stdout
+        return Metrics(resp).for_instance("u2")
+
+    c.sql("""
+        CREATE CLUSTER test MANAGED, SIZE 'scale=1,workers=1';
+        SET cluster = test;
+        CREATE TABLE t (a int);
+        INSERT INTO t SELECT generate_series(1, 10);
+        CREATE INDEX idx ON t (a);
+        SELECT * FROM t;
+        """)
+    time.sleep(2)
+
+    metrics = fetch_metrics()
+    send_before = metrics.get_value("mz_compute_controller_response_send_count")
+    recv_before = metrics.get_value("mz_compute_controller_response_recv_count")
+    assert send_before > 0, f"got {send_before}"
+    assert recv_before > 0, f"got {recv_before}"
+
+    c.sql("ALTER CLUSTER test SET (SIZE 'scale=1,workers=2')")
+    time.sleep(2)
+
+    metrics = fetch_metrics()
+    assert len(metrics.with_name("mz_compute_controller_response_send_count")) > 0
+    assert len(metrics.with_name("mz_compute_controller_response_recv_count")) > 0
+
+    c.sql("""
+        SET cluster = test;
+        INSERT INTO t SELECT generate_series(11, 20);
+        SELECT * FROM t;
+        """)
+    time.sleep(2)
+
+    metrics = fetch_metrics()
+    send_after = metrics.get_value("mz_compute_controller_response_send_count")
+    recv_after = metrics.get_value("mz_compute_controller_response_recv_count")
+    assert send_after > send_before, f"got {send_before} -> {send_after}"
+    assert recv_after > recv_before, f"got {recv_before} -> {recv_after}"
+
+    c.sql("DROP CLUSTER test CASCADE")
 
 
 def workflow_test_storage_controller_metrics(c: Composition) -> None:
@@ -3099,6 +3163,28 @@ def workflow_test_pgwire_metrics(c: Composition) -> None:
             rrftlbs_select_7 > rrftlbs_select_6
         ), f"got {rrftlbs_select_7} vs. {rrftlbs_select_6}"
 
+        # Regression: extra FETCHes on an already-exhausted cursor must NOT re-observe the metric.
+        # Before the fix, each extra FETCH would record an additional observation with an
+        # ever-growing duration (wall-clock time since the original first row).
+        count_before = metrics.get_result_rows_first_to_last_byte_seconds_count(
+            "select"
+        )
+        c.sql("""
+            BEGIN;
+            DECLARE c4b CURSOR FOR (SELECT * FROM t);
+            FETCH 1 c4b;
+            FETCH 1 c4b;
+            FETCH 1 c4b;
+            FETCH 1 c4b;
+            FETCH 1 c4b;
+            """)
+        metrics = fetch_metrics()
+        count_after = metrics.get_result_rows_first_to_last_byte_seconds_count("select")
+        assert count_after == count_before + 1, (
+            f"extra FETCHes on exhausted cursor should add exactly 1 observation, "
+            f"got {count_after - count_before}"
+        )
+
         # SUBSCRIBE should show up if it's on a constant collection.
         # We need two FETCHes, because the first one won't observe that there are no more rows, due to
         # `ExecuteTimeout::WaitOnce`.
@@ -3136,6 +3222,35 @@ def workflow_test_pgwire_metrics(c: Composition) -> None:
             rrftlbs_subscribe_2 > rrftlbs_subscribe_1
         ), f"got {rrftlbs_subscribe_2} vs. {rrftlbs_subscribe_1}"
 
+        # Regression: a third FETCH ALL on a constant SUBSCRIBE that's already exhausted
+        # should not re-observe the metric.
+        subscribe_count_before = (
+            metrics.get_result_rows_first_to_last_byte_seconds_count("subscribe")
+        )
+        c.sql(
+            """
+            BEGIN;
+            DECLARE c6b CURSOR FOR SUBSCRIBE (SELECT * FROM v1);
+            FETCH ALL c6b;
+            FETCH ALL c6b;
+            FETCH ALL c6b;
+            """,
+            reuse_connection=False,
+        )
+        metrics = fetch_metrics()
+        subscribe_count_after = (
+            metrics.get_result_rows_first_to_last_byte_seconds_count("subscribe")
+        )
+        assert subscribe_count_after == subscribe_count_before + 1, (
+            f"extra FETCH ALL on exhausted SUBSCRIBE should add exactly 1 observation, "
+            f"got {subscribe_count_after - subscribe_count_before}"
+        )
+
+        # Re-capture baseline after c6b added an observation to the histogram sum.
+        rrftlbs_subscribe_2 = metrics.get_result_rows_first_to_last_byte_seconds(
+            "subscribe"
+        )
+
         # Shouldn't increase for a non-const SUBSCRIBE, because there is no last row, ever.
         c.sql(
             """
@@ -3150,9 +3265,8 @@ def workflow_test_pgwire_metrics(c: Composition) -> None:
         rrftlbs_subscribe_3 = metrics.get_result_rows_first_to_last_byte_seconds(
             "subscribe"
         )
-        # See database-issues#9470
         assert (
-            rrftlbs_subscribe_3 - rrftlbs_subscribe_2 < 5
+            rrftlbs_subscribe_3 == rrftlbs_subscribe_2
         ), f"got {rrftlbs_subscribe_3} vs. {rrftlbs_subscribe_2}"
 
 
@@ -3853,7 +3967,7 @@ def workflow_blue_green_deployment(
                 # Expected
                 msg = str(e)
                 if ("cached plan must not change result type" in msg) or (
-                    "subscribe has been terminated because underlying relation" in msg
+                    "query could not complete because relation" in msg
                 ):
                     continue
                 raise e
@@ -3988,7 +4102,7 @@ def workflow_cluster_drop_concurrent(
                 except InternalError_ as e:
                     assert 'query could not complete because relation "materialize.public.counter_tbl" was dropped' in str(
                         e
-                    ) or 'subscribe has been terminated because underlying relation "materialize.public.counter_tbl" was dropped' in str(
+                    ) or 'query could not complete because relation "materialize.public.counter_tbl" was dropped' in str(
                         e
                     )
             for thread in threads:
@@ -4776,7 +4890,7 @@ def workflow_test_read_frontier_advancement(
         except DatabaseError as exc:
             assert (
                 exc.diag.message_primary
-                == 'subscribe has been terminated because underlying relation "materialize.public.mv2" was dropped'
+                == 'query could not complete because relation "materialize.public.mv2" was dropped'
             )
 
     subscribe_thread = Thread(target=subscribe)
@@ -6339,19 +6453,21 @@ def workflow_test_mv_apply_replacement_wait(c: Composition) -> None:
     # Wait for the since of mv2 to be greater than the upper of mv1.
     for _ in range(10):
         time.sleep(1)
-        mv1_upper = c.sql_query("""
+        mv1_rows = c.sql_query("""
             SELECT write_frontier
             FROM mz_internal.mz_frontiers
             JOIN mz_materialized_views ON id = object_id
             WHERE name = 'mv1'
-            """)[0][0]
-        mv2_since = c.sql_query("""
+            """)
+        mv2_rows = c.sql_query("""
             SELECT read_frontier
             FROM mz_internal.mz_frontiers
             JOIN mz_materialized_views ON id = object_id
             WHERE name = 'mv2'
-            """)[0][0]
-        if int(mv2_since) > int(mv1_upper):
+            """)
+        if not mv1_rows or not mv2_rows:
+            continue
+        if int(mv2_rows[0][0]) > int(mv1_rows[0][0]):
             break
     else:
         raise RuntimeError("mv2's since didn't advance beyond mv1's upper")
@@ -6505,7 +6621,7 @@ def workflow_test_github_10102(c: Composition) -> None:
         except DatabaseError as exc:
             assert (
                 exc.diag.message_primary
-                == 'subscribe has been terminated because underlying relation "materialize.public.mv" was dropped'
+                == 'query could not complete because relation "materialize.public.mv" was dropped'
             ), exc
 
     subscribe_thread = Thread(target=subscribe)

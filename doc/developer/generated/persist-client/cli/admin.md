@@ -1,6 +1,6 @@
 ---
 source: src/persist-client/src/cli/admin.rs
-revision: b95afe8b5c
+revision: 8b77a4950e
 ---
 
 # persist-client::cli::admin

@@ -17,6 +17,7 @@ import { MaterializeTheme } from "~/theme";
 
 import {
   ConsoleImageTag,
+  CurrentUserTag,
   EnvironmentdImageRefTag,
   HelmChartVersionTag,
 } from "./footerTagComponents";
@@ -91,6 +92,7 @@ export const AuthenticatedPageFooter = ({ children, ...props }: StackProps) => {
       <ConsoleImageTag />
       <EnvironmentdImageRefTag />
       <HelmChartVersionTag />
+      <CurrentUserTag />
       {children}
     </PageFooterContainer>
   );

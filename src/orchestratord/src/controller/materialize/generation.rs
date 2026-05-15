@@ -1132,6 +1132,10 @@ fn create_environmentd_statefulset_object(
         mz.environmentd_app_name(),
     );
     pod_template_labels.insert("app".to_owned(), "environmentd".to_string());
+    pod_template_labels.insert(
+        "app.kubernetes.io/name".to_owned(),
+        "environmentd".to_string(),
+    );
     pod_template_labels.extend(
         mz.spec
             .pod_labels

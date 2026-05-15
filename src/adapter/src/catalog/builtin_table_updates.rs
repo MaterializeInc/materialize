@@ -1774,7 +1774,7 @@ impl CatalogState {
         ip: &IpNet,
     ) -> Result<BuiltinTableUpdate<&'static BuiltinTable>, Error> {
         let id = &MZ_EGRESS_IPS;
-        let addr = ip.addr();
+        let addr = ip.network();
         let row = Row::pack_slice(&[
             Datum::String(&addr.to_string()),
             Datum::Int32(ip.prefix_len().into()),

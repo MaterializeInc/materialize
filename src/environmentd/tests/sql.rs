@@ -1266,7 +1266,6 @@ source materialize.public.t1 (u1, storage):
 
 binding constraints:
 lower:
-  (Storage inputs: [u1]): [<TIMESTAMP>]
   (Isolation level: StrictSerializable): [<TIMESTAMP>]\n";
 
     let row = client
@@ -1274,6 +1273,10 @@ lower:
         .unwrap();
     let explain: String = row.get(0);
     let explain = timestamp_re.replace_all(&explain, "<TIMESTAMP>");
+    // The storage inputs constraint appears non-deterministically depending on
+    // whether the storage frontier has advanced before the query runs.
+    let storage_inputs_re = Regex::new(r"  \(Storage inputs: \[.*\]\): \[<TIMESTAMP>\]\n").unwrap();
+    let explain = storage_inputs_re.replace_all(&explain, "");
     assert_eq!(explain, expect, "{explain}\n\n{expect}");
 }
 
@@ -2528,7 +2531,7 @@ fn test_subscribe_on_dropped_source() {
         assert!(
             res.unwrap_db_error()
                 .message()
-                .contains("subscribe has been terminated because underlying relation")
+                .contains("query could not complete because relation")
         );
     }
 
@@ -2582,10 +2585,7 @@ fn test_dont_drop_sinks_twice() {
         .cancel_query(postgres::NoTls)
         .expect("failed to cancel subscribe");
     let err = out.read_to_end(&mut vec![]).unwrap_err();
-    assert!(
-        err.to_string_with_causes()
-            .contains("subscribe has been terminated")
-    );
+    assert!(err.to_string_with_causes().contains("was dropped"));
 
     drop(out);
     client_a.close().expect("failed to drop client");
@@ -3760,7 +3760,7 @@ async fn test_cancel_linearize_read_then_writes() {
     handle.await;
 }
 
-// Test that builtin objects are created in the schemas they advertise in builtin.rs.
+// Test that builtin objects are created in the schemas they advertise in the builtin submodules.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
 async fn test_builtin_schemas() {
@@ -3795,7 +3795,7 @@ async fn test_builtin_schemas() {
         assert_eq!(
             builtin_schema,
             Some(&schema.as_str()),
-            "wrong schema for {name}, builtin.rs has {builtin_schema:?}, database has {schema}"
+            "wrong schema for {name}, builtin submodules have {builtin_schema:?}, database has {schema}"
         );
     }
 }

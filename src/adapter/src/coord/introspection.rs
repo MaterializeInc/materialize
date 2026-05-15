@@ -523,7 +523,8 @@ impl SubscribeSpec {
     fn to_plan(&self, catalog: &dyn SessionCatalog) -> Result<SubscribePlan, anyhow::Error> {
         let parsed = mz_sql::parse::parse(self.sql)?.into_element();
         let (stmt, resolved_ids) = mz_sql::names::resolve(catalog, parsed.ast)?;
-        let plan = mz_sql::plan::plan(None, catalog, stmt, &Params::empty(), &resolved_ids)?;
+        let (plan, _sql_impl_ids) =
+            mz_sql::plan::plan(None, catalog, stmt, &Params::empty(), &resolved_ids)?;
         match plan {
             Plan::Subscribe(plan) => Ok(plan),
             _ => bail!("unexpected plan type: {plan:?}"),
@@ -564,6 +565,50 @@ const SUBSCRIBES: &[SubscribeSpec] = &[
                 bool_and(hydrated) AS hydrated
             FROM mz_introspection.mz_compute_operator_hydration_statuses_per_worker
             GROUP BY export_id, lir_id
+        )",
+    },
+    // Per-object arrangement sizes, one row per `(object_id, replica)`,
+    // populating `mz_object_arrangement_sizes`.
+    //
+    // `mz_arrangement_heap_size_raw` and `mz_arrangement_batcher_size_raw` are
+    // differential logs where each `+1` row represents one byte of heap delta;
+    // after consolidation, `COUNT(*)` is the current arrangement size in bytes.
+    //
+    // The `HAVING` floor drops objects below 10 MiB. Below that threshold the
+    // heap-size collection wiggles by a few bytes per second from ordinary
+    // allocator activity, and emitting exact bytes would push a downstream
+    // update on every wiggle. Quantizing to the nearest 10 MiB keeps the
+    // emitted size stable across in-bucket wiggle.
+    //
+    // `mz_dataflow_addresses.address[1]` is the root of each operator's address
+    // tree, which equals the owning `dataflow_id` — so we can go addresses →
+    // operator → dataflow without joining `mz_dataflow_operator_dataflows`.
+    //
+    // Joining on `ce.dataflow_id` assumes one dataflow exports a single object;
+    // if that stops holding, the same arrangement bytes would be attributed
+    // to multiple `export_id`s and we'd need to revisit the granularity.
+    //
+    // Transient export IDs (`t*`) are ephemeral dataflows (peeks, subscribes,
+    // including this one); we drop them to avoid self-feedback churn.
+    SubscribeSpec {
+        introspection_type: IntrospectionType::ComputeObjectArrangementSizes,
+        sql: "SUBSCRIBE (
+            SELECT
+                ce.export_id AS object_id,
+                ((COUNT(*) + 5242880) / 10485760 * 10485760)::int8 AS size
+            FROM mz_introspection.mz_compute_exports AS ce
+            JOIN (
+                SELECT addrs.address[1] AS dataflow_id, addrs.id AS operator_id
+                FROM mz_introspection.mz_dataflow_addresses addrs
+            ) AS od ON od.dataflow_id = ce.dataflow_id
+            JOIN (
+                SELECT operator_id FROM mz_introspection.mz_arrangement_heap_size_raw
+                UNION ALL
+                SELECT operator_id FROM mz_introspection.mz_arrangement_batcher_size_raw
+            ) AS rs ON rs.operator_id = od.operator_id
+            WHERE ce.export_id NOT LIKE 't%'
+            GROUP BY ce.export_id
+            HAVING COUNT(*) >= 10485760
         )",
     },
 ];

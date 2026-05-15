@@ -1308,7 +1308,7 @@ mod explain {
             if config.subtree_size {
                 for (expr, subtree_size) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<super::SubtreeSize>().into_iter(),
+                    &*derived.results::<super::SubtreeSize>(),
                 ) {
                     let analyses = annotations.entry(expr).or_default();
                     analyses.subtree_size = Some(*subtree_size);
@@ -1317,7 +1317,7 @@ mod explain {
             if config.non_negative {
                 for (expr, non_negative) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<super::NonNegative>().into_iter(),
+                    &*derived.results::<super::NonNegative>(),
                 ) {
                     let analyses = annotations.entry(expr).or_default();
                     analyses.non_negative = Some(*non_negative);
@@ -1325,10 +1325,9 @@ mod explain {
             }
 
             if config.arity {
-                for (expr, arity) in std::iter::zip(
-                    subtree_refs.iter(),
-                    derived.results::<super::Arity>().into_iter(),
-                ) {
+                for (expr, arity) in
+                    std::iter::zip(subtree_refs.iter(), &*derived.results::<super::Arity>())
+                {
                     let analyses = annotations.entry(expr).or_default();
                     analyses.arity = Some(*arity);
                 }
@@ -1337,7 +1336,7 @@ mod explain {
             if config.types {
                 for (expr, types) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<super::ReprRelationType>().into_iter(),
+                    &*derived.results::<super::ReprRelationType>(),
                 ) {
                     let analyses = annotations.entry(expr).or_default();
                     analyses.types = Some(types.clone());
@@ -1347,7 +1346,7 @@ mod explain {
             if config.keys {
                 for (expr, keys) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<super::UniqueKeys>().into_iter(),
+                    &*derived.results::<super::UniqueKeys>(),
                 ) {
                     let analyses = annotations.entry(expr).or_default();
                     analyses.keys = Some(keys.clone());
@@ -1357,7 +1356,7 @@ mod explain {
             if config.cardinality {
                 for (expr, card) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<super::Cardinality>().into_iter(),
+                    &*derived.results::<super::Cardinality>(),
                 ) {
                     let analyses = annotations.entry(expr).or_default();
                     analyses.cardinality = Some(card.to_string());
@@ -1367,7 +1366,7 @@ mod explain {
             if config.column_names || config.humanized_exprs {
                 for (expr, column_names) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<super::ColumnNames>().into_iter(),
+                    &*derived.results::<super::ColumnNames>(),
                 ) {
                     let analyses = annotations.entry(expr).or_default();
                     let value = column_names
@@ -1379,10 +1378,9 @@ mod explain {
             }
 
             if config.equivalences {
-                for (expr, equivs) in std::iter::zip(
-                    subtree_refs.iter(),
-                    derived.results::<Equivalences>().into_iter(),
-                ) {
+                for (expr, equivs) in
+                    std::iter::zip(subtree_refs.iter(), &*derived.results::<Equivalences>())
+                {
                     let analyses = annotations.entry(expr).or_default();
                     analyses.equivalences = Some(match equivs.as_ref() {
                         Some(equivs) => HumanizedEquivalenceClasses {
@@ -1413,6 +1411,7 @@ mod cardinality {
     use mz_repr::GlobalId;
 
     use ordered_float::OrderedFloat;
+    use tracing::{error, warn};
 
     use super::{Analysis, Arity, SubtreeSize, UniqueKeys};
 
@@ -1458,12 +1457,15 @@ mod cardinality {
             match self {
                 CardinalityEstimate::Estimate(OrderedFloat(f)) => {
                     let rounded = f.ceil();
-                    let flattened = usize::cast_from(
-                        u64::try_cast_from(rounded)
-                            .expect("positive and representable cardinality estimate"),
-                    );
 
-                    Some(flattened)
+                    if !rounded.is_normal() || rounded < 0.0 {
+                        warn!(
+                            "ignoring denormalized or negative cardinality estimate {f} rounded to {rounded}"
+                        );
+                    }
+
+                    // if we can't cast, the value is unknown
+                    u64::try_cast_from(rounded).map(usize::cast_from)
                 }
                 CardinalityEstimate::Unknown => None,
             }
@@ -1548,6 +1550,7 @@ mod cardinality {
 
         fn div(self, rhs: f64) -> Self::Output {
             use CardinalityEstimate::*;
+
             if let Estimate(lhs) = self {
                 Estimate(lhs / OrderedFloat(rhs))
             } else {
@@ -1592,6 +1595,11 @@ mod cardinality {
         fn flat_map(&self, tf: &TableFunc, input: CardinalityEstimate) -> CardinalityEstimate {
             match tf {
                 TableFunc::Wrap { types, width } => {
+                    // DBZ is harmless (produces inf, empty estimate), but still a broken invariant
+                    if *width == 0 {
+                        error!("cardinality estimation encountered TableFunc::Wrap with width 0");
+                    }
+
                     input * (f64::cast_lossy(types.len()) / f64::cast_lossy(*width))
                 }
                 _ => {
@@ -1802,8 +1810,10 @@ mod cardinality {
         ) -> CardinalityEstimate {
             // TODO(mgree): if no `group_key` is present, we can do way better
 
-            if let Some(group_size) = expected_group_size {
-                input / f64::cast_lossy(*group_size)
+            if let Some(expected_group_size) = expected_group_size {
+                // if expected group size is 0, treat it as 1 (to avoid DBZ/+inf estimates)
+                let group_size = u64::max(*expected_group_size, 1);
+                input / f64::cast_lossy(group_size)
             } else if group_key.is_empty() {
                 CardinalityEstimate::from(1.0)
             } else {
@@ -1825,8 +1835,10 @@ mod cardinality {
                 .and_then(|l| l.as_literal_int64())
                 .map_or(1, |l| std::cmp::max(0, l));
 
-            if let Some(group_size) = expected_group_size {
-                input * (f64::cast_lossy(k) / f64::cast_lossy(*group_size))
+            if let Some(expected_group_size) = expected_group_size {
+                // if expected group size is 0, treat it as 1 (to avoid DBZ/+inf estimates)
+                let group_size = u64::max(*expected_group_size, 1);
+                input * (f64::cast_lossy(k) / f64::cast_lossy(group_size))
             } else if group_key.is_empty() {
                 CardinalityEstimate::from(f64::cast_lossy(k))
             } else {

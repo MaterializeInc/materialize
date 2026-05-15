@@ -1209,7 +1209,10 @@ SELECT
 FROM
     mz_introspection.mz_mappable_objects AS mo
         LEFT JOIN object_memory_totals AS omt USING(global_id)
-ORDER BY total_memory DESC, total_records DESC, mo.name DESC;
+ORDER BY
+    total_memory DESC NULLS LAST,
+    total_records DESC NULLS LAST,
+    mo.name DESC;
 EOF
 
 query T multiline
@@ -1270,7 +1273,11 @@ FROM
     mz_introspection.mz_mappable_objects AS mo
         LEFT JOIN object_memory_totals AS omt USING(global_id)
         LEFT JOIN object_cpu_totals AS oct USING(global_id)
-ORDER BY total_memory DESC, total_records DESC, total_elapsed DESC, mo.name DESC;
+ORDER BY
+    total_memory DESC NULLS LAST,
+    total_records DESC NULLS LAST,
+    total_elapsed DESC NULLS LAST,
+    mo.name DESC;
 EOF
 
 query T multiline
@@ -1495,13 +1502,13 @@ FROM
         LEFT JOIN object_average_memory AS oam USING(global_id)
 WHERE om.worker_id = oc.worker_id
 ORDER BY
-    max_operator_cpu_ratio DESC,
-    worker_elapsed DESC,
+    max_operator_cpu_ratio DESC NULLS LAST,
+    worker_elapsed DESC NULLS LAST,
     worker_id,
-    max_operator_memory_ratio DESC,
-    max_operator_records_ratio DESC,
-    worker_memory DESC,
-    worker_records DESC,
+    max_operator_memory_ratio DESC NULLS LAST,
+    max_operator_records_ratio DESC NULLS LAST,
+    worker_memory DESC NULLS LAST,
+    worker_records DESC NULLS LAST,
     mo.name DESC;
 EOF
 

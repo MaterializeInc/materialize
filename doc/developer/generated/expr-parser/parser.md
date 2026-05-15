@@ -1,6 +1,6 @@
 ---
 source: src/expr-parser/src/parser.rs
-revision: 4f4538b61a
+revision: 07858c9fd7
 ---
 
 # mz-expr-parser::parser

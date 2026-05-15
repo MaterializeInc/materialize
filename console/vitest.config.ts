@@ -51,6 +51,7 @@ const vitestConfig = defineConfig({
     fakeTimers: {
       toFake: ["Date", "setTimeout", "clearTimeout"],
     },
+    testTimeout: 10_000,
     pool: "forks",
     poolOptions: {
       forks: {

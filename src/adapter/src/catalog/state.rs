@@ -549,6 +549,17 @@ impl CatalogState {
         let object_id = ObjectId::ClusterReplica((cluster_id, replica_id));
         if !seen.contains(&object_id) {
             seen.insert(object_id.clone());
+            // Materialized views that target this replica are implicitly
+            // dropped with it, so cascade to their dependents to avoid leaving
+            // dangling references.
+            let cluster = self.get_cluster(cluster_id);
+            for item_id in cluster.bound_objects() {
+                if let CatalogItem::MaterializedView(mv) = self.get_entry(item_id).item()
+                    && mv.target_replica == Some(replica_id)
+                {
+                    dependents.extend_from_slice(&self.item_dependents(*item_id, seen));
+                }
+            }
             dependents.push(object_id);
         }
         dependents
@@ -999,7 +1010,7 @@ impl CatalogState {
 
             let stmt = mz_sql::parse::parse(create_sql)?.into_element().ast;
             let (stmt, resolved_ids) = mz_sql::names::resolve(&session_catalog, stmt)?;
-            let plan =
+            let (plan, _sql_impl_ids) =
                 mz_sql::plan::plan(pcx, &session_catalog, stmt, &Params::empty(), &resolved_ids)?;
 
             Ok((plan, resolved_ids))
@@ -1015,7 +1026,8 @@ impl CatalogState {
     ) -> Result<(Plan, ResolvedIds), AdapterError> {
         let stmt = mz_sql::parse::parse(create_sql)?.into_element().ast;
         let (stmt, resolved_ids) = mz_sql::names::resolve(catalog, stmt)?;
-        let plan = mz_sql::plan::plan(pcx, catalog, stmt, &Params::empty(), &resolved_ids)?;
+        let (plan, _sql_impl_ids) =
+            mz_sql::plan::plan(pcx, catalog, stmt, &Params::empty(), &resolved_ids)?;
 
         Ok((plan, resolved_ids))
     }

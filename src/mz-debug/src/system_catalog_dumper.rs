@@ -511,12 +511,21 @@ size_heap as (
 ),
 
 -- Resolve replica heap limits from runtime metrics,
--- since heap_limit is only discovered when the replica comes online
+-- since heap_limit is only discovered when the replica comes online.
+-- Prefer rows where heap_limit is known; discard rows without it
+-- rather than substituting usage metrics which are unrelated quantities.
 metrics_heap as (
-    select distinct on (replica_id)
+    select
         replica_id,
-        coalesce(heap_limit, memory_bytes + disk_bytes) as heap_limit
-    from mz_internal.mz_cluster_replica_metrics_history
+        sum(heap_limit) as heap_limit
+    from (
+        select distinct on (replica_id, process_id)
+            replica_id, process_id, heap_limit
+        from mz_internal.mz_cluster_replica_metrics_history
+        where heap_limit is not null
+        order by replica_id, process_id, occurred_at desc
+    ) t
+    group by replica_id
 )
 
 -- Aggregate daily usage, report daily footprint, and compute

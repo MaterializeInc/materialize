@@ -1,6 +1,6 @@
 ---
 source: src/compute-types/src/plan/interpret/api.rs
-revision: b55d3dee25
+revision: fec2af8da2
 ---
 
 # compute-types::plan::interpret::api

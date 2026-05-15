@@ -21,6 +21,7 @@ pub static SYSTEM_USER: LazyLock<User> = LazyLock::new(|| User {
     external_metadata: None,
     internal_metadata: None,
     authenticator_kind: None,
+    groups: None,
 });
 
 pub const SUPPORT_USER_NAME: &str = "mz_support";
@@ -29,6 +30,7 @@ pub static SUPPORT_USER: LazyLock<User> = LazyLock::new(|| User {
     external_metadata: None,
     internal_metadata: None,
     authenticator_kind: None,
+    groups: None,
 });
 
 pub const ANALYTICS_USER_NAME: &str = "mz_analytics";
@@ -37,6 +39,7 @@ pub static ANALYTICS_USER: LazyLock<User> = LazyLock::new(|| User {
     external_metadata: None,
     internal_metadata: None,
     authenticator_kind: None,
+    groups: None,
 });
 
 pub static INTERNAL_USER_NAMES: LazyLock<BTreeSet<String>> = LazyLock::new(|| {
@@ -63,6 +66,7 @@ pub static HTTP_DEFAULT_USER: LazyLock<User> = LazyLock::new(|| User {
     external_metadata: None,
     internal_metadata: None,
     authenticator_kind: None,
+    groups: None,
 });
 
 /// Identifies a user.
@@ -78,6 +82,9 @@ pub struct User {
     /// The authenticator that authenticated this user.
     /// If `None`, the user hasn't been authenticated.
     pub authenticator_kind: Option<AuthenticatorKind>,
+    /// Groups extracted from JWT claims during OIDC authentication.
+    /// None for non-OIDC connections or when the group claim is absent.
+    pub groups: Option<Vec<String>>,
 }
 
 impl From<&User> for mz_pgwire_common::UserMetadata {

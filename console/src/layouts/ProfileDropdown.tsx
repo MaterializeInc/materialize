@@ -17,6 +17,7 @@ import {
   MenuGroup,
   MenuItem,
   MenuList,
+  Spinner,
   Tag,
   Text,
   useBreakpointValue,
@@ -40,12 +41,61 @@ import {
 } from "~/external-library-wrappers/frontegg";
 import { useAuth } from "~/external-library-wrappers/oidc";
 import { AUTH_ROUTES } from "~/fronteggRoutes";
+import { useSelfManagedProfile } from "~/hooks/useSelfManagedProfile";
 import { NAV_HORIZONTAL_SPACING, NAV_HOVER_STYLES } from "~/layouts/constants";
 import docUrls from "~/mz-doc-urls.json";
 import { MaterializeTheme } from "~/theme";
 
-const UserInfoMenuItem = () => {
+const UserInfoHeaderBlock = ({
+  name,
+  email,
+  sqlRole,
+}: {
+  name?: string;
+  email?: string;
+  sqlRole?: string;
+}) => {
   const { colors } = useTheme<MaterializeTheme>();
+  if (!name && !email && !sqlRole) return null;
+  return (
+    <VStack px="3" pt="3" pb="2" align="left" lineHeight="1.3" spacing="0">
+      {name && <Text fontWeight="semibold">{name}</Text>}
+      {email && (
+        <Text mt="1" fontSize="xs" color={colors.foreground.secondary}>
+          {email}
+        </Text>
+      )}
+      {sqlRole && (
+        <Text mt="1" fontSize="xs" color={colors.foreground.secondary}>
+          SQL role: {sqlRole}
+        </Text>
+      )}
+    </VStack>
+  );
+};
+
+const SelfManagedUserInfoMenuItem = () => {
+  const { name, email, sqlRole, isLoading } = useSelfManagedProfile();
+  if (isLoading && !name && !email && !sqlRole) {
+    return (
+      <>
+        <HStack px="3" pt="3" pb="2">
+          <Spinner size="sm" />
+        </HStack>
+        <MenuDivider />
+      </>
+    );
+  }
+  if (!name && !email && !sqlRole) return null;
+  return (
+    <>
+      <UserInfoHeaderBlock name={name} email={email} sqlRole={sqlRole} />
+      <MenuDivider />
+    </>
+  );
+};
+
+const UserInfoMenuItem = () => {
   return (
     <AppConfigSwitch
       cloudConfigElement={({ runtimeConfig }) => {
@@ -53,19 +103,7 @@ const UserInfoMenuItem = () => {
         const { user, auth, authActions } = runtimeConfig;
         return (
           <>
-            <VStack
-              px="3"
-              pt="3"
-              pb="2"
-              align="left"
-              lineHeight="1.3"
-              spacing="0"
-            >
-              <Text fontWeight="semibold">{user?.name}</Text>
-              <Text mt="1" fontSize="xs" color={colors.foreground.secondary}>
-                {user?.email}
-              </Text>
-            </VStack>
+            <UserInfoHeaderBlock name={user?.name} email={user?.email} />
             <MenuDivider />
             <OrganizationMenuGroup
               user={user}
@@ -75,6 +113,10 @@ const UserInfoMenuItem = () => {
             <MenuDivider />
           </>
         );
+      }}
+      selfManagedConfigElement={({ appConfig }) => {
+        if (appConfig.authMode === "None") return null;
+        return <SelfManagedUserInfoMenuItem />;
       }}
     />
   );
@@ -91,6 +133,16 @@ const PricingMenuItem = () => (
     Pricing
   </MenuItem>
 );
+
+const SelfManagedMenuButtonLabel = () => {
+  const { colors } = useTheme<MaterializeTheme>();
+  const { name } = useSelfManagedProfile();
+  return (
+    <Text textStyle="text-ui-med" color={colors.foreground.primary}>
+      {name ?? "Settings"}
+    </Text>
+  );
+};
 
 const OidcSignOutMenuItem = () => {
   const auth = useAuth();
@@ -156,6 +208,11 @@ const DefaultAvatar = () => {
   return <ChakraAvatar size="xs" />;
 };
 
+const SelfManagedAvatar = () => {
+  const { name, picture } = useSelfManagedProfile();
+  return <ChakraAvatar size="xs" src={picture} name={name} />;
+};
+
 const Avatar = () => {
   return (
     <AppConfigSwitch
@@ -172,8 +229,9 @@ const Avatar = () => {
           />
         );
       }}
-      selfManagedConfigElement={() => {
-        return <DefaultAvatar />;
+      selfManagedConfigElement={({ appConfig }) => {
+        if (appConfig.authMode === "None") return <DefaultAvatar />;
+        return <SelfManagedAvatar />;
       }}
     />
   );
@@ -254,14 +312,19 @@ const ProfileDropdown = ({
                     </>
                   );
                 }}
-                selfManagedConfigElement={
-                  <Text
-                    textStyle="text-ui-med"
-                    color={colors.foreground.primary}
-                  >
-                    Settings
-                  </Text>
-                }
+                selfManagedConfigElement={({ appConfig }) => {
+                  if (appConfig.authMode === "None") {
+                    return (
+                      <Text
+                        textStyle="text-ui-med"
+                        color={colors.foreground.primary}
+                      >
+                        Settings
+                      </Text>
+                    );
+                  }
+                  return <SelfManagedMenuButtonLabel />;
+                }}
               />
             </VStack>
           )}

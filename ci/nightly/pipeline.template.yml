@@ -1108,7 +1108,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=PreflightCheckRollback, "--seed=$BUILDKITE_JOB_ID"]
-        skip: "flaky due to database-issues#10095"
+        skip: "flaky due to https://linear.app/materializeinc/issue/DB-85"
 
       - id: checks-0dt-restart-entire-mz-forced-migrations
         label: "Checks 0dt restart of the entire Mz with forced migrations"
@@ -2087,6 +2087,16 @@ steps:
               args: ["--versions-source=docs", "--self-managed-upgrade"]
         agents:
           queue: hetzner-aarch64-4cpu-8gb
+      - id: catalog-migration-incident-1007
+        label: "v80->v81 catalog migration fix (incident-1007)"
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: incident-1007
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+
 
   - group: Cloud
     key: cloudtests
@@ -2115,7 +2125,7 @@ steps:
         agents:
           # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
           # queue: hetzner-aarch64-4cpu-8gb
-          queue: linux-aarch64
+          queue: linux-aarch64-medium
         sanitizer: skip
 
 
@@ -2361,6 +2371,20 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: orchestratord
               run: orchestratord-upgrade
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
+      - id: orchestratord-oidc-auth
+        label: Orchestratord OIDC auth end-to-end
+        artifact_paths: ["mz_debug_*.zip"]
+        depends_on: devel-docker-tags
+        timeout_in_minutes: 60
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              run: oidc-auth
+              args: [--recreate-cluster]
               ci-builder: stable
         agents:
           queue: hetzner-aarch64-16cpu-32gb

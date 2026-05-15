@@ -37,8 +37,8 @@ use futures::future::BoxFuture;
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_catalog::builtin::{
     BUILTIN_LOOKUP, Builtin, Fingerprint, MZ_CATALOG_RAW, MZ_CATALOG_RAW_DESCRIPTION,
-    MZ_STORAGE_USAGE_BY_SHARD, MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION,
-    RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
+    MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_DESCRIPTION, MZ_STORAGE_USAGE_BY_SHARD,
+    MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION, RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
 };
 use mz_catalog::config::BuiltinItemMigrationConfig;
 use mz_catalog::durable::objects::SystemObjectUniqueIdentifier;
@@ -496,6 +496,14 @@ impl Migration {
             assert_ne!(
                 &*MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION, object,
                 "mz_storage_usage_by_shard cannot be migrated or else the table will be truncated"
+            );
+
+            // Same hazard as `mz_storage_usage_by_shard`: the startup pruner
+            // (`Coordinator::prune_arrangement_sizes_history_on_startup`) assumes it is
+            // the only source of retractions, so migration-driven truncation would break it.
+            assert_ne!(
+                &*MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_DESCRIPTION, object,
+                "mz_object_arrangement_size_history cannot be migrated or else the table will be truncated"
             );
 
             // `mz_catalog_raw` cannot be migrated because it contains the durable catalog and it

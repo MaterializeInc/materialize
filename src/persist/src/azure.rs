@@ -59,6 +59,18 @@ impl AzureBlobConfig {
         url: Url,
         knobs: Box<dyn BlobKnobs>,
     ) -> Result<Self, Error> {
+        let transport = TransportOptions::new(Arc::new(
+            reqwest::ClientBuilder::new()
+                .timeout(knobs.operation_attempt_timeout())
+                .read_timeout(knobs.read_timeout())
+                .connect_timeout(knobs.connect_timeout())
+                .build()
+                .expect("valid config for azure HTTP client"),
+        ));
+        let retry = RetryOptions::exponential(
+            ExponentialRetryOptions::default().max_total_elapsed(knobs.operation_timeout()),
+        );
+
         let client = if account == EMULATOR_ACCOUNT {
             info!("Connecting to Azure emulator");
             ClientBuilder::with_location(
@@ -68,23 +80,6 @@ impl AzureBlobConfig {
                 },
                 StorageCredentials::emulator(),
             )
-            .transport({
-                // Azure uses reqwest / hyper internally, but we specify a client explicitly to
-                // plumb through our timeouts.
-                TransportOptions::new(Arc::new(
-                    reqwest::ClientBuilder::new()
-                        .timeout(knobs.operation_attempt_timeout())
-                        .read_timeout(knobs.read_timeout())
-                        .connect_timeout(knobs.connect_timeout())
-                        .build()
-                        .expect("valid config for azure HTTP client"),
-                ))
-            })
-            .retry(RetryOptions::exponential(
-                ExponentialRetryOptions::default().max_total_elapsed(knobs.operation_timeout()),
-            ))
-            .blob_service_client()
-            .container_client(container)
         } else {
             let sas_credentials = match url.query() {
                 Some(query) => Some(StorageCredentials::sas_token(query)),
@@ -101,18 +96,17 @@ impl AzureBlobConfig {
                         create_default_credential().expect("Azure default credentials"),
                     )
                 }
-                None => {
-                    // Fall back to default credential stack to support auth modes like
-                    // workload identity that are injected into the environment
-                    StorageCredentials::token_credential(
-                        create_default_credential().expect("Azure default credentials"),
-                    )
-                }
+                None => StorageCredentials::token_credential(
+                    create_default_credential().expect("Azure default credentials"),
+                ),
             };
 
-            let service_client = BlobServiceClient::new(account, credentials);
-            service_client.container_client(container)
-        };
+            ClientBuilder::new(account, credentials)
+        }
+        .transport(transport)
+        .retry(retry)
+        .blob_service_client()
+        .container_client(container);
 
         // TODO: some auth modes like user-delegated SAS tokens are time-limited
         // and need to be refreshed. This can be done through `service_client.update_credentials`
