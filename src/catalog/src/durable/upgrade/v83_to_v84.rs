@@ -358,21 +358,29 @@ pub(crate) fn compute_repairs(
     (repairs, stats)
 }
 
-/// Detects whether the snapshot belongs to a Materialize Cloud environment
-/// using the same heuristic as the original `v80_to_v81` migration:
+/// Detects whether the snapshot belongs to a Materialize Cloud environment.
+/// Extends the original `v80_to_v81` heuristic to recognize the additional
+/// shape we missed back then:
 ///
-/// - The `mz_system` cluster must be a managed cluster with a non-zero
-///   replication factor (self-managed envs run it at 0 to save resources).
-/// - The `enable_password_auth` system parameter must not be `on` (only
-///   self-managed envs enable it).
+/// - `mz_system` is `Managed` with a non-zero replication factor (the
+///   classic cloud shape; self-managed envs run it at 0 to save resources), OR
+/// - `mz_system` is `Unmanaged` and has at least one `ClusterReplica` row
+///   pointing at it (cloud envs configured outside the managed variant still
+///   have at least one mz_system replica; self-managed sometimes has zero
+///   replicas at all).
 ///
-/// Returns false on any error path (missing `mz_system`, unmanaged variant,
-/// failed parse), which is the safe default — a false negative means we
-/// leave `auto_provision_source` at `None` for a cloud env's roles, which
-/// is no worse than the v80->v81 bug we're already fixing.
+/// In both cases, the `enable_password_auth` system parameter must not be
+/// `on` — only self-managed envs enable it, so that's the deciding tie-breaker
+/// for any env whose mz_system shape would otherwise look cloud-ish.
+///
+/// Returns false on any error path (missing `mz_system`, failed parse), which
+/// is the safe default — a false negative means we leave
+/// `auto_provision_source` at `None` for a cloud env's roles, which is no
+/// worse than the v80->v81 bug we're already fixing.
 fn is_cloud_env(snapshot: &[(StateUpdateKindJson, Timestamp, Diff)]) -> bool {
     let mut has_password_auth = false;
-    let mut mz_system_replication_factor: Option<u32> = None;
+    let mut mz_system: Option<(v83::ClusterId, v83::ClusterVariant)> = None;
+    let mut replica_counts_by_cluster: BTreeMap<v83::ClusterId, usize> = BTreeMap::new();
     for (kind_json, _, diff) in snapshot {
         if *diff != Diff::ONE {
             continue;
@@ -387,18 +395,32 @@ fn is_cloud_env(snapshot: &[(StateUpdateKindJson, Timestamp, Diff)]) -> bool {
                 }
             }
             v83::StateUpdateKind::Cluster(cluster) if cluster.value.name == "mz_system" => {
-                if let v83::ClusterVariant::Managed(v83::ManagedCluster {
-                    replication_factor,
-                    ..
-                }) = cluster.value.config.variant
-                {
-                    mz_system_replication_factor = Some(replication_factor);
-                }
+                mz_system = Some((cluster.key.id, cluster.value.config.variant));
+            }
+            v83::StateUpdateKind::ClusterReplica(replica) => {
+                *replica_counts_by_cluster
+                    .entry(replica.value.cluster_id)
+                    .or_default() += 1;
             }
             _ => {}
         }
     }
-    matches!(mz_system_replication_factor, Some(rf) if rf > 0) && !has_password_auth
+
+    if has_password_auth {
+        return false;
+    }
+    match mz_system {
+        Some((
+            _,
+            v83::ClusterVariant::Managed(v83::ManagedCluster {
+                replication_factor, ..
+            }),
+        )) => replication_factor > 0,
+        Some((id, v83::ClusterVariant::Unmanaged)) => {
+            replica_counts_by_cluster.get(&id).copied().unwrap_or(0) > 0
+        }
+        None => false,
+    }
 }
 
 /// Email-name heuristic shared with the original `v80_to_v81` migration:
@@ -991,6 +1013,52 @@ mod tests {
         v83::StateUpdateKind::Cluster(cluster).into()
     }
 
+    /// Build an unmanaged `mz_system` cluster row. Used by the
+    /// "unmanaged + replicas" branch of `is_cloud_env`.
+    fn mz_system_cluster_unmanaged() -> StateUpdateKindJson {
+        let cluster = v83::Cluster {
+            key: v83::ClusterKey {
+                id: v83::ClusterId::System(1),
+            },
+            value: v83::ClusterValue {
+                name: "mz_system".to_string(),
+                owner_id: v83::RoleId::System(1),
+                privileges: vec![],
+                config: v83::ClusterConfig {
+                    workload_class: None,
+                    variant: v83::ClusterVariant::Unmanaged,
+                },
+            },
+        };
+        v83::StateUpdateKind::Cluster(cluster).into()
+    }
+
+    /// Build a `ClusterReplica` row pointing at the given cluster, used to
+    /// satisfy the "at least one replica" half of the unmanaged cloud check.
+    fn cluster_replica(replica_id: u64, cluster_id: v83::ClusterId) -> StateUpdateKindJson {
+        let replica = v83::ClusterReplica {
+            key: v83::ClusterReplicaKey {
+                id: v83::ReplicaId::User(replica_id),
+            },
+            value: v83::ClusterReplicaValue {
+                cluster_id,
+                name: format!("r{replica_id}"),
+                config: v83::ReplicaConfig {
+                    logging: v83::ReplicaLogging {
+                        log_logging: false,
+                        interval: None,
+                    },
+                    location: v83::ReplicaLocation::Unmanaged(v83::UnmanagedLocation {
+                        storagectl_addrs: vec![],
+                        computectl_addrs: vec![],
+                    }),
+                },
+                owner_id: v83::RoleId::System(1),
+            },
+        };
+        v83::StateUpdateKind::ClusterReplica(replica).into()
+    }
+
     /// Build a `ServerConfiguration` row toggling `enable_password_auth`,
     /// used by `is_cloud_env` to disambiguate self-managed envs that happen
     /// to run `mz_system` at replication factor 1.
@@ -1178,6 +1246,56 @@ mod tests {
         let (repairs, stats) = compute_repairs(&snap);
         assert!(repairs.is_empty());
         assert_eq!(stats.normalized, 0);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault` on OS `linux`
+    fn cloud_env_with_unmanaged_mz_system_and_replicas_backfills() {
+        // `mz_system` is Unmanaged but has at least one replica → still a
+        // cloud env. This is the production shape the original
+        // `v80_to_v81` heuristic missed because it only accepted Managed.
+        let original = stale_role_kind_with_dropped_field(106, "alice@materialize.com", 30106);
+        let backfilled = role_kind(
+            106,
+            "alice@materialize.com",
+            30106,
+            None,
+            None,
+            Some(v83::AutoProvisionSource::Frontegg),
+        );
+
+        let snap = snapshot(vec![
+            (mz_system_cluster_unmanaged(), Diff::ONE),
+            (cluster_replica(900, v83::ClusterId::System(1)), Diff::ONE),
+            (original.clone(), Diff::ONE),
+        ]);
+        let (repairs, stats) = compute_repairs(&snap);
+        assert_eq!(
+            repairs,
+            vec![(original, Diff::MINUS_ONE), (backfilled, Diff::ONE)],
+        );
+        assert_eq!(stats.normalized, 1);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault` on OS `linux`
+    fn unmanaged_mz_system_with_no_replicas_is_self_managed() {
+        // `mz_system` Unmanaged AND zero replicas pointing at it. We assume
+        // this means this is a self-managed env, meaning we don't backfill with
+        // auto_provision_source=Frontegg.
+        let original = stale_role_kind_with_dropped_field(107, "alice@materialize.com", 30107);
+        let backfilled = role_kind(107, "alice@materialize.com", 30107, None, None, None);
+
+        let snap = snapshot(vec![
+            (mz_system_cluster_unmanaged(), Diff::ONE),
+            (original.clone(), Diff::ONE),
+        ]);
+        let (repairs, stats) = compute_repairs(&snap);
+        assert_eq!(
+            repairs,
+            vec![(original, Diff::MINUS_ONE), (backfilled, Diff::ONE)],
+        );
+        assert_eq!(stats.normalized, 1);
     }
 
     #[mz_ore::test]
