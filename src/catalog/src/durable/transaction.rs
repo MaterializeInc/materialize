@@ -112,18 +112,17 @@ pub struct Transaction<'a> {
     upper: mz_repr::Timestamp,
     /// The ID of the current operation of this transaction.
     op_id: Timestamp,
-    /// The set of OIDs present in the *initial* state of the five OID-bearing
-    /// tables (`databases`, `schemas`, `roles`, `items`,
-    /// `introspection_sources`). Populated once in [`Transaction::new`] and not
-    /// mutated thereafter — pending changes are folded in per-call inside
-    /// [`Transaction::allocate_oids`].
+    /// Frozen view of the durable `oid_owner` index at transaction start.
+    /// Captures which OIDs are taken across the five OID-bearing tables
+    /// (`databases`, `schemas`, `roles`, `items`, `introspection_sources`)
+    /// as of the transaction's snapshot.
     ///
-    /// This avoids a full O(N) scan of every OID-bearing table on every OID
-    /// allocation, which used to dominate DDL latency at large catalog sizes.
-    /// It does *not* need to be serialized into [`Transaction::current_snapshot`]
-    /// — restoring a transaction via [`Transaction::new`] rebuilds it from the
-    /// snapshot.
-    initial_oids: BTreeSet<u32>,
+    /// Constructed via `Arc::clone` from the shared
+    /// [`crate::durable::persist::DurableCatalogIndexes::oid_owner`] — O(1),
+    /// no walk. In-flight allocations and removals on top of this view are
+    /// folded in per-call inside [`Transaction::allocate_oids`] via
+    /// `pending_added` / `pending_removed`.
+    initial_oid_owner: Arc<imbl::OrdMap<u32, crate::durable::persist::OidOwner>>,
 }
 
 impl<'a> Transaction<'a> {
@@ -166,18 +165,11 @@ impl<'a> Transaction<'a> {
             indexes,
         } = data;
 
-        // Populate the cached set of OIDs from the initial state of the five
-        // OID-bearing tables.
-        let mut initial_oids = BTreeSet::new();
-        initial_oids.extend(databases.values().map(|v| v.oid));
-        initial_oids.extend(schemas.values().map(|v| v.oid));
-        initial_oids.extend(roles.values().map(|v| v.oid));
-        initial_oids.extend(items.values().map(|v| v.oid));
-        initial_oids.extend(
-            introspection_sources
-                .values()
-                .map(|v: &ClusterIntrospectionSourceIndexValue| v.oid),
-        );
+        // Capture the durable `oid_owner` view as a frozen `Arc`. This is the
+        // moral equivalent of the previous `initial_oids: BTreeSet<u32>` build
+        // — but `Arc::clone` is O(1), and the shared index is maintained
+        // incrementally on the trace-apply path rather than walked here.
+        let initial_oid_owner = Arc::clone(&indexes.oid_owner);
 
         let database_by_name = Arc::clone(&indexes.database_by_name);
         let databases = TableTransaction::new_with_uniqueness_and_index(
@@ -290,7 +282,7 @@ impl<'a> Transaction<'a> {
             audit_log_updates: Vec::new(),
             upper,
             op_id: 0,
-            initial_oids,
+            initial_oid_owner,
         })
     }
 
@@ -1039,10 +1031,11 @@ impl<'a> Transaction<'a> {
         }
 
         // Compute the set of OIDs currently in use by the five OID-bearing
-        // tables. The initial state is cached in `self.initial_oids` (populated
-        // once in `Transaction::new`); here we only need to fold in pending
-        // changes for this transaction. In the common case there are very few
-        // pending changes per call, so this is effectively O(|pending|) per
+        // tables. The initial state is shared via `self.initial_oid_owner`
+        // (an `Arc`-cloned snapshot of the durable `oid_owner` index, frozen
+        // at transaction start). Here we only need to fold in pending changes
+        // for this transaction. In the common case there are very few pending
+        // changes per call, so this is effectively O(|pending| · log N) per
         // allocation, rather than the previous O(|catalog|) full scan.
         //
         // For each pending key we compute the *delta* relative to its initial
@@ -1101,7 +1094,7 @@ impl<'a> Transaction<'a> {
             &mut pending_removed,
         );
 
-        let initial_oids = &self.initial_oids;
+        let initial_oid_owner = &self.initial_oid_owner;
         let is_allocated = |oid: u32| -> bool {
             if temporary_oids.contains(&oid) || pending_added.contains(&oid) {
                 return true;
@@ -1109,7 +1102,7 @@ impl<'a> Transaction<'a> {
             // The OID is "still in the initial set" if it was there originally
             // and no pending change removed it. (If pending re-added it under a
             // different key, `pending_added` already covered that above.)
-            initial_oids.contains(&oid) && !pending_removed.contains(&oid)
+            initial_oid_owner.contains_key(&oid) && !pending_removed.contains(&oid)
         };
 
         let start_oid: u32 = self
@@ -2493,7 +2486,7 @@ impl<'a> Transaction<'a> {
             txn_wal_shard: _,
             upper,
             op_id: _,
-            initial_oids: _,
+            initial_oid_owner: _,
         } = &self;
 
         let updates = std::iter::empty()
