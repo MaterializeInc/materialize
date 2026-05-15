@@ -5636,7 +5636,9 @@ fn test_mcp_agent_with_data_product() {
         "limit 0 should return no rows"
     );
 
-    // read_data_product with limit > MAX_READ_LIMIT (1000) should be clamped, not error.
+    // read_data_product with a large `limit` is not clamped or rejected: the
+    // response is bounded only by the size cap, matching the SQL HTTP layer.
+    // The test data product has 1 row, so LIMIT 9999 just returns that 1 row.
     let (status, body) = mcp_post(
         &agents_url,
         serde_json::json!({
@@ -5652,8 +5654,11 @@ fn test_mcp_agent_with_data_product() {
     assert_eq!(status, StatusCode::OK);
     assert!(
         body["error"].is_null(),
-        "limit above max should be clamped, not rejected"
+        "large limit should succeed; size cap is the only guard"
     );
+    let rows_text = body["result"]["content"][0]["text"].as_str().unwrap();
+    let rows: serde_json::Value = serde_json::from_str(rows_text).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 1);
 
     // SQL injection attempt in data product name: should return DataProductNotFound, not execute.
     let (status, body) = mcp_post(
