@@ -220,6 +220,20 @@ impl Coordinator {
 
     #[mz_ore::instrument(level = "debug")]
     pub async fn storage_usage_fetch(&self) {
+        // In read-only mode (e.g. a standby coordinator during a zero-downtime
+        // deployment) we cannot durably write the per-batch allocator bump or
+        // append to `mz_storage_usage_by_shard`, and we also don't want to do
+        // the slow shard scan on a process that isn't going to record the
+        // results. Skip the whole cycle and reschedule so we resume
+        // automatically once the coordinator transitions out of read-only.
+        if self.controller.read_only() {
+            tracing::info!("skipping storage usage collection in read-only mode");
+            if let Err(e) = self.internal_cmd_tx.send(Message::StorageUsageSchedule) {
+                warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+            }
+            return;
+        }
+
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let client = self.storage_usage_client.clone();
 
@@ -255,22 +269,25 @@ impl Coordinator {
         // increase. This is intentionally the timestamp of when collection
         // finished, not when it started, so that we don't write data with a
         // timestamp in the past.
-        let collection_timestamp: EpochMillis = if self.controller.read_only() {
-            self.peek_local_write_ts().await.into()
-        } else {
-            // Getting a write timestamp bumps the write timestamp in the
-            // oracle, which we're not allowed in read-only mode.
-            self.get_local_write_ts().await.timestamp.into()
+        //
+        // `storage_usage_fetch` skips this path in read-only mode, so we can
+        // unconditionally bump the oracle write ts here.
+        let write_ts = self.get_local_write_ts().await.timestamp;
+        let collection_timestamp: EpochMillis = write_ts.into();
+
+        // All rows in this collection cycle share `batch_id` so consumers can
+        // identify rows that were collected together. We use one durable
+        // allocator bump per cycle (rather than per shard) so the id is
+        // monotonic across coordinator restarts while still keeping the
+        // coord-blocking cost proportional to one round-trip, not N.
+        let batch_id = match self.catalog().allocate_storage_usage_id(write_ts).await {
+            Ok(id) => id,
+            Err(err) => {
+                tracing::warn!("failed to allocate storage usage batch id: {:?}", err);
+                return;
+            }
         };
 
-        // All rows in this collection cycle share `batch_id` so
-        // consumers can identify rows that were collected together. The
-        // id is not unique across coordinator restarts (and would wrap
-        // on overflow); that's fine because the `id` column of
-        // `mz_storage_usage_by_shard` is unreferenced by any view or
-        // query — see `storage_usage_next_id` for details.
-        let batch_id = self.storage_usage_next_id;
-        self.storage_usage_next_id = self.storage_usage_next_id.wrapping_add(1);
         let updates: Vec<_> = shards_usage
             .by_shard
             .into_iter()

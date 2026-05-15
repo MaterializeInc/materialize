@@ -1934,16 +1934,6 @@ pub struct Coordinator {
     storage_usage_client: StorageUsageClient,
     /// The interval at which to collect storage usage information.
     storage_usage_collection_interval: Duration,
-    /// Counter for storage-usage batch ids. Every row produced by a
-    /// single `storage_usage_update` call shares the same id, so
-    /// consumers can identify rows that were collected together.
-    ///
-    /// Ids are *not* unique: this counter is in-memory only (resets to
-    /// 0 on coordinator restart) and would wrap on `u64` overflow.
-    /// That's fine — the `id` column of `mz_storage_usage_by_shard` is
-    /// not referenced by any view or query, so a cheap local counter
-    /// suffices instead of the durable allocator we used previously.
-    storage_usage_next_id: u64,
 
     /// Segment analytics client.
     #[derivative(Debug = "ignore")]
@@ -4729,7 +4719,6 @@ pub fn serve(
                     cloud_resource_controller,
                     storage_usage_client,
                     storage_usage_collection_interval,
-                    storage_usage_next_id: 0,
                     segment_client,
                     metrics,
                     optimizer_metrics,
