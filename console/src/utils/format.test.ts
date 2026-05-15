@@ -9,7 +9,12 @@
 
 import parse from "postgres-interval";
 
-import { formatInterval, formatIntervalShort } from "./format";
+import {
+  formatInterval,
+  formatIntervalShort,
+  fromSeconds,
+  toSeconds,
+} from "./format";
 
 describe("formatIntervalShort", () => {
   it("only returns years if present", () => {
@@ -117,5 +122,29 @@ describe("formatInterval", () => {
   it("formats interval with only seconds and milliseconds", () => {
     const interval = parse("00:00:12.345");
     expect(formatInterval(interval)).toBe("12.345s");
+  });
+});
+
+describe("toSeconds", () => {
+  it("composes amount and unit into seconds", () => {
+    expect(toSeconds(2, "hours")).toBe(7200);
+    expect(toSeconds(5, "minutes")).toBe(300);
+    expect(toSeconds(23, "seconds")).toBe(23);
+  });
+
+  it("rounds fractional inputs", () => {
+    expect(toSeconds(1.5, "minutes")).toBe(90);
+  });
+});
+
+describe("fromSeconds", () => {
+  it("picks the largest unit that divides evenly", () => {
+    expect(fromSeconds(7200)).toEqual({ amount: 2, unit: "hours" });
+    expect(fromSeconds(300)).toEqual({ amount: 5, unit: "minutes" });
+    expect(fromSeconds(23)).toEqual({ amount: 23, unit: "seconds" });
+  });
+
+  it("falls back to seconds when no unit divides evenly", () => {
+    expect(fromSeconds(90)).toEqual({ amount: 90, unit: "seconds" });
   });
 });

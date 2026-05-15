@@ -214,3 +214,32 @@ export function formatDurationForAxis(durationMs: number): string {
     return `${hours.toFixed(1)}h`;
   }
 }
+
+/** Units exposed in human-readable duration controls (filters, inputs). */
+export type DurationUnit = "seconds" | "minutes" | "hours";
+
+// Ordered largest → smallest so `fromSeconds` picks the friendliest unit that
+// still divides the input evenly (3600 → "1 hour", not "60 minutes").
+const SECONDS_PER_UNIT: Record<DurationUnit, number> = {
+  hours: 3600,
+  minutes: 60,
+  seconds: 1,
+};
+
+/** Compose `{ amount, unit }` into a single seconds value. */
+export const toSeconds = (amount: number, unit: DurationUnit): number =>
+  Math.round(amount * SECONDS_PER_UNIT[unit]);
+
+/** Decompose a seconds value into the largest unit that divides it evenly,
+ *  so 300 → 5 minutes, 3600 → 1 hour, 23 → 23 seconds. */
+export const fromSeconds = (
+  totalSeconds: number,
+): { amount: number; unit: DurationUnit } => {
+  for (const unit of Object.keys(SECONDS_PER_UNIT) as DurationUnit[]) {
+    const perUnit = SECONDS_PER_UNIT[unit];
+    if (totalSeconds % perUnit === 0) {
+      return { amount: totalSeconds / perUnit, unit };
+    }
+  }
+  return { amount: totalSeconds, unit: "seconds" };
+};
