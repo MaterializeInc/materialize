@@ -4840,6 +4840,79 @@ def workflow_test_http_race_condition(
         raise RuntimeError(f"Sessions did not clean up after {cleanup_seconds}s")
 
 
+def workflow_test_cmv_replica_alter_race(c: Composition) -> None:
+    """Regression test for SQL-304.
+
+    Concurrently creating a `REPLICA`-targeted materialized view and
+    `ALTER CLUSTER ... SET (REPLICATION FACTOR ...)` used to panic
+    environmentd when the targeted replica was dropped between
+    planning and the catalog transaction.
+    """
+    with c.override(
+        Materialized(
+            propagate_crashes=False,
+            sanity_restart=False,
+            additional_system_parameter_defaults={
+                "enable_replica_targeted_materialized_views": "true",
+            },
+        ),
+    ):
+        c.up("materialized")
+        c.sql(
+            "CREATE CLUSTER race_target "
+            "(SIZE 'scale=1,workers=1', REPLICATION FACTOR 2)"
+        )
+
+        ctes = ", ".join(
+            f"s{i} AS (SELECT generate_series AS x FROM generate_series(1, 50))"
+            for i in range(6)
+        )
+        joins = " ".join(
+            f"JOIN s{i} ON s0.x % {i + 2} = s{i}.x % {i + 2}" for i in range(1, 6)
+        )
+        heavy = (
+            f"WITH {ctes} "
+            f"SELECT s0.x, COUNT(*), "
+            f"SUM(s0.x + s1.x + s2.x + s3.x + s4.x + s5.x) "
+            f"FROM s0 {joins} GROUP BY s0.x"
+        )
+
+        deadline = time.monotonic() + 30
+
+        def mv_worker(idx: int) -> None:
+            i = 0
+            while time.monotonic() < deadline:
+                try:
+                    c.sql(
+                        f"CREATE MATERIALIZED VIEW mv_{idx}_{i} "
+                        f"IN CLUSTER race_target REPLICA r2 AS {heavy}"
+                    )
+                except DatabaseError:
+                    # Concurrent drop of the target replica surfaces as a
+                    # `ChangedPlan` error after the fix. The point of the
+                    # test is that environmentd does not panic.
+                    pass
+                i += 1
+
+        def flipper() -> None:
+            while time.monotonic() < deadline:
+                for rf in (1, 2):
+                    c.sql(
+                        f"ALTER CLUSTER race_target SET (REPLICATION FACTOR {rf})"
+                    )
+
+        threads = [
+            PropagatingThread(target=mv_worker, args=(i,)) for i in range(8)
+        ] + [PropagatingThread(target=flipper)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # If environmentd had panicked, this would raise.
+        c.sql("SELECT 1")
+
+
 def workflow_test_read_frontier_advancement(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
