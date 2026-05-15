@@ -57,7 +57,17 @@ use crate::durable::objects::state_update::{
     IntoStateUpdateKindJson, StateUpdate, StateUpdateKind, StateUpdateKindJson,
     TryIntoStateUpdateKind,
 };
-use crate::durable::objects::{AuditLogKey, FenceToken, Snapshot};
+use crate::durable::objects::{
+    AuditLogKey, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
+    ClusterKey, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, CommentKey, CommentValue,
+    ConfigKey, ConfigValue, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
+    DefaultPrivilegesValue, FenceToken, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
+    ItemKey, ItemValue, NetworkPolicyKey, NetworkPolicyValue, RoleAuthKey, RoleAuthValue, RoleKey,
+    RoleValue, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue,
+    SettingKey, SettingValue, Snapshot, SourceReferencesKey, SourceReferencesValue,
+    StorageCollectionMetadataKey, StorageCollectionMetadataValue, SystemPrivilegesKey,
+    SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
+};
 use crate::durable::transaction::TransactionBatch;
 use crate::durable::upgrade::upgrade;
 use crate::durable::{
@@ -1574,17 +1584,113 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
     }
 }
 
+/// Shared, indexed materialised view of the durable catalog tables.
+///
+/// One `Arc<imbl::OrdMap<K, V>>` per durable-catalog table, maintained
+/// incrementally on the trace-apply path. Cloning is O(1) per field
+/// (`Arc::clone`); structural sharing means transactions holding old `Arc`s
+/// see a frozen snapshot while later mutations through `Arc::make_mut` only
+/// fork the affected nodes.
+#[derive(Debug, Clone)]
+pub(crate) struct DurableCatalogData {
+    pub(crate) databases: Arc<imbl::OrdMap<DatabaseKey, DatabaseValue>>,
+    pub(crate) schemas: Arc<imbl::OrdMap<SchemaKey, SchemaValue>>,
+    pub(crate) roles: Arc<imbl::OrdMap<RoleKey, RoleValue>>,
+    pub(crate) role_auth: Arc<imbl::OrdMap<RoleAuthKey, RoleAuthValue>>,
+    pub(crate) items: Arc<imbl::OrdMap<ItemKey, ItemValue>>,
+    pub(crate) comments: Arc<imbl::OrdMap<CommentKey, CommentValue>>,
+    pub(crate) clusters: Arc<imbl::OrdMap<ClusterKey, ClusterValue>>,
+    pub(crate) network_policies: Arc<imbl::OrdMap<NetworkPolicyKey, NetworkPolicyValue>>,
+    pub(crate) cluster_replicas: Arc<imbl::OrdMap<ClusterReplicaKey, ClusterReplicaValue>>,
+    pub(crate) introspection_sources:
+        Arc<imbl::OrdMap<ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue>>,
+    pub(crate) id_allocator: Arc<imbl::OrdMap<IdAllocKey, IdAllocValue>>,
+    pub(crate) configs: Arc<imbl::OrdMap<ConfigKey, ConfigValue>>,
+    pub(crate) settings: Arc<imbl::OrdMap<SettingKey, SettingValue>>,
+    pub(crate) source_references: Arc<imbl::OrdMap<SourceReferencesKey, SourceReferencesValue>>,
+    pub(crate) system_object_mappings: Arc<imbl::OrdMap<GidMappingKey, GidMappingValue>>,
+    pub(crate) system_configurations:
+        Arc<imbl::OrdMap<ServerConfigurationKey, ServerConfigurationValue>>,
+    pub(crate) default_privileges: Arc<imbl::OrdMap<DefaultPrivilegesKey, DefaultPrivilegesValue>>,
+    pub(crate) system_privileges: Arc<imbl::OrdMap<SystemPrivilegesKey, SystemPrivilegesValue>>,
+    pub(crate) storage_collection_metadata:
+        Arc<imbl::OrdMap<StorageCollectionMetadataKey, StorageCollectionMetadataValue>>,
+    pub(crate) unfinalized_shards: Arc<imbl::OrdMap<UnfinalizedShardKey, ()>>,
+    pub(crate) txn_wal_shard: Arc<imbl::OrdMap<(), TxnWalShardValue>>,
+}
+
+impl DurableCatalogData {
+    fn new() -> DurableCatalogData {
+        DurableCatalogData {
+            databases: Arc::new(imbl::OrdMap::new()),
+            schemas: Arc::new(imbl::OrdMap::new()),
+            roles: Arc::new(imbl::OrdMap::new()),
+            role_auth: Arc::new(imbl::OrdMap::new()),
+            items: Arc::new(imbl::OrdMap::new()),
+            comments: Arc::new(imbl::OrdMap::new()),
+            clusters: Arc::new(imbl::OrdMap::new()),
+            network_policies: Arc::new(imbl::OrdMap::new()),
+            cluster_replicas: Arc::new(imbl::OrdMap::new()),
+            introspection_sources: Arc::new(imbl::OrdMap::new()),
+            id_allocator: Arc::new(imbl::OrdMap::new()),
+            configs: Arc::new(imbl::OrdMap::new()),
+            settings: Arc::new(imbl::OrdMap::new()),
+            source_references: Arc::new(imbl::OrdMap::new()),
+            system_object_mappings: Arc::new(imbl::OrdMap::new()),
+            system_configurations: Arc::new(imbl::OrdMap::new()),
+            default_privileges: Arc::new(imbl::OrdMap::new()),
+            system_privileges: Arc::new(imbl::OrdMap::new()),
+            storage_collection_metadata: Arc::new(imbl::OrdMap::new()),
+            unfinalized_shards: Arc::new(imbl::OrdMap::new()),
+            txn_wal_shard: Arc::new(imbl::OrdMap::new()),
+        }
+    }
+}
+
+/// Apply a `+1`/`-1` diff against an `Arc<imbl::OrdMap<K, V>>` table.
+///
+/// Mirrors the insertion/retraction assertions in `with_snapshot`. Mutates
+/// through `Arc::make_mut`, so transactions holding the old `Arc` keep their
+/// frozen view.
+fn apply_durable<K, V>(map: &mut Arc<imbl::OrdMap<K, V>>, key: K, value: V, diff: Diff)
+where
+    K: Ord + Clone + Debug,
+    V: Clone + Debug + PartialEq,
+{
+    let m = Arc::make_mut(map);
+    if diff == Diff::ONE {
+        let prev = m.insert(key, value);
+        assert_eq!(
+            prev, None,
+            "values must be explicitly retracted before inserting a new value"
+        );
+    } else if diff == Diff::MINUS_ONE {
+        let prev = m.remove(&key);
+        assert_eq!(
+            prev,
+            Some(value),
+            "retraction does not match existing value"
+        );
+    } else {
+        panic!("invalid diff: {diff:?}");
+    }
+}
+
 /// Applies updates for an opened catalog.
 #[derive(Debug)]
 struct CatalogStateInner {
     /// A trace of all catalog updates that can be consumed by some higher layer.
     updates: VecDeque<memory::objects::StateUpdate>,
+    /// Materialised, indexed view of the durable catalog tables. Cheap to
+    /// clone into a transaction (one `Arc::clone` per field).
+    data: DurableCatalogData,
 }
 
 impl CatalogStateInner {
     fn new() -> CatalogStateInner {
         CatalogStateInner {
             updates: VecDeque::new(),
+            data: DurableCatalogData::new(),
         }
     }
 }
@@ -1609,6 +1715,146 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
                 .expect("invalid persisted update: {update:#?}");
             if let Some(update) = update {
                 self.updates.push_back(update);
+            }
+        }
+
+        let diff = update.diff;
+        if diff == Diff::ONE || diff == Diff::MINUS_ONE {
+            match &update.kind {
+                StateUpdateKind::AuditLog(_, ()) | StateUpdateKind::FenceToken(_) => {}
+                StateUpdateKind::Database(key, value) => {
+                    let key: DatabaseKey = RustType::from_proto(key.clone()).expect("invalid key");
+                    let value: DatabaseValue =
+                        RustType::from_proto(value.clone()).expect("invalid value");
+                    apply_durable(&mut self.data.databases, key, value, diff);
+                }
+                StateUpdateKind::Schema(key, value) => {
+                    let key: SchemaKey = RustType::from_proto(key.clone()).expect("invalid key");
+                    let value: SchemaValue =
+                        RustType::from_proto(value.clone()).expect("invalid value");
+                    apply_durable(&mut self.data.schemas, key, value, diff);
+                }
+                StateUpdateKind::Role(key, value) => {
+                    let key: RoleKey = RustType::from_proto(key.clone()).expect("invalid key");
+                    let value: RoleValue =
+                        RustType::from_proto(value.clone()).expect("invalid value");
+                    apply_durable(&mut self.data.roles, key, value, diff);
+                }
+                StateUpdateKind::RoleAuth(key, value) => {
+                    let key: RoleAuthKey = RustType::from_proto(key.clone()).expect("invalid key");
+                    let value: RoleAuthValue =
+                        RustType::from_proto(value.clone()).expect("invalid value");
+                    apply_durable(&mut self.data.role_auth, key, value, diff);
+                }
+                StateUpdateKind::Item(key, value) => {
+                    let key: ItemKey = RustType::from_proto(key.clone()).expect("invalid key");
+                    let value: ItemValue =
+                        RustType::from_proto(value.clone()).expect("invalid value");
+                    apply_durable(&mut self.data.items, key, value, diff);
+                }
+                StateUpdateKind::Comment(key, value) => {
+                    let key: CommentKey = RustType::from_proto(key.clone()).expect("invalid key");
+                    let value: CommentValue =
+                        RustType::from_proto(value.clone()).expect("invalid value");
+                    apply_durable(&mut self.data.comments, key, value, diff);
+                }
+                StateUpdateKind::Cluster(key, value) => {
+                    let key: ClusterKey = RustType::from_proto(key.clone()).expect("invalid key");
+                    let value: ClusterValue =
+                        RustType::from_proto(value.clone()).expect("invalid value");
+                    apply_durable(&mut self.data.clusters, key, value, diff);
+                }
+                StateUpdateKind::NetworkPolicy(key, value) => {
+                    let key: NetworkPolicyKey =
+                        RustType::from_proto(key.clone()).expect("invalid key");
+                    let value: NetworkPolicyValue =
+                        RustType::from_proto(value.clone()).expect("invalid value");
+                    apply_durable(&mut self.data.network_policies, key, value, diff);
+                }
+                StateUpdateKind::ClusterReplica(key, value) => {
+                    let key: ClusterReplicaKey =
+                        RustType::from_proto(key.clone()).expect("invalid key");
+                    let value: ClusterReplicaValue =
+                        RustType::from_proto(value.clone()).expect("invalid value");
+                    apply_durable(&mut self.data.cluster_replicas, key, value, diff);
+                }
+                StateUpdateKind::IntrospectionSourceIndex(key, value) => {
+                    let key: ClusterIntrospectionSourceIndexKey =
+                        RustType::from_proto(key.clone()).expect("invalid key");
+                    let value: ClusterIntrospectionSourceIndexValue =
+                        RustType::from_proto(value.clone()).expect("invalid value");
+                    apply_durable(&mut self.data.introspection_sources, key, value, diff);
+                }
+                StateUpdateKind::IdAllocator(key, value) => {
+                    let key: IdAllocKey = RustType::from_proto(key.clone()).expect("invalid key");
+                    let value: IdAllocValue =
+                        RustType::from_proto(value.clone()).expect("invalid value");
+                    apply_durable(&mut self.data.id_allocator, key, value, diff);
+                }
+                StateUpdateKind::Config(key, value) => {
+                    let key: ConfigKey = RustType::from_proto(key.clone()).expect("invalid key");
+                    let value: ConfigValue =
+                        RustType::from_proto(value.clone()).expect("invalid value");
+                    apply_durable(&mut self.data.configs, key, value, diff);
+                }
+                StateUpdateKind::Setting(key, value) => {
+                    let key: SettingKey = RustType::from_proto(key.clone()).expect("invalid key");
+                    let value: SettingValue =
+                        RustType::from_proto(value.clone()).expect("invalid value");
+                    apply_durable(&mut self.data.settings, key, value, diff);
+                }
+                StateUpdateKind::SourceReferences(key, value) => {
+                    let key: SourceReferencesKey =
+                        RustType::from_proto(key.clone()).expect("invalid key");
+                    let value: SourceReferencesValue =
+                        RustType::from_proto(value.clone()).expect("invalid value");
+                    apply_durable(&mut self.data.source_references, key, value, diff);
+                }
+                StateUpdateKind::SystemObjectMapping(key, value) => {
+                    let key: GidMappingKey =
+                        RustType::from_proto(key.clone()).expect("invalid key");
+                    let value: GidMappingValue =
+                        RustType::from_proto(value.clone()).expect("invalid value");
+                    apply_durable(&mut self.data.system_object_mappings, key, value, diff);
+                }
+                StateUpdateKind::SystemConfiguration(key, value) => {
+                    let key: ServerConfigurationKey =
+                        RustType::from_proto(key.clone()).expect("invalid key");
+                    let value: ServerConfigurationValue =
+                        RustType::from_proto(value.clone()).expect("invalid value");
+                    apply_durable(&mut self.data.system_configurations, key, value, diff);
+                }
+                StateUpdateKind::DefaultPrivilege(key, value) => {
+                    let key: DefaultPrivilegesKey =
+                        RustType::from_proto(key.clone()).expect("invalid key");
+                    let value: DefaultPrivilegesValue =
+                        RustType::from_proto(value.clone()).expect("invalid value");
+                    apply_durable(&mut self.data.default_privileges, key, value, diff);
+                }
+                StateUpdateKind::SystemPrivilege(key, value) => {
+                    let key: SystemPrivilegesKey =
+                        RustType::from_proto(key.clone()).expect("invalid key");
+                    let value: SystemPrivilegesValue =
+                        RustType::from_proto(value.clone()).expect("invalid value");
+                    apply_durable(&mut self.data.system_privileges, key, value, diff);
+                }
+                StateUpdateKind::StorageCollectionMetadata(key, value) => {
+                    let key: StorageCollectionMetadataKey =
+                        RustType::from_proto(key.clone()).expect("invalid key");
+                    let value: StorageCollectionMetadataValue =
+                        RustType::from_proto(value.clone()).expect("invalid value");
+                    apply_durable(&mut self.data.storage_collection_metadata, key, value, diff);
+                }
+                StateUpdateKind::UnfinalizedShard(key, ()) => {
+                    let key: UnfinalizedShardKey =
+                        RustType::from_proto(key.clone()).expect("invalid key");
+                    apply_durable(&mut self.data.unfinalized_shards, key, (), diff);
+                }
+                StateUpdateKind::TxnWalShard((), value) => {
+                    let value: TxnWalShardValue =
+                        RustType::from_proto(value.clone()).expect("invalid value");
+                    apply_durable(&mut self.data.txn_wal_shard, (), value, diff);
+                }
             }
         }
 
@@ -1775,9 +2021,10 @@ impl DurableCatalogState for PersistCatalogState {
     #[mz_ore::instrument(level = "debug")]
     async fn transaction(&mut self) -> Result<Transaction, CatalogError> {
         self.metrics.transactions_started.inc();
-        let snapshot = self.snapshot().await?;
+        self.sync_to_current_upper().await?;
+        let data = self.update_applier.data.clone();
         let commit_ts = self.upper.clone();
-        Transaction::new(self, snapshot, commit_ts)
+        Transaction::new_from_durable_data(self, data, commit_ts)
     }
 
     fn transaction_from_snapshot(
