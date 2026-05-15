@@ -16,12 +16,21 @@
 # spec.
 #
 # Targets:
-#   make build    # regenerate compose YAML, acquire local mzbuild images
-#   make up       # build + bring up the stack
-#   make down     # tear down (preserves volumes)
-#   make smoke    # build + up + smoke test
-#   make test     # smoke test against a running stack
-#   make clean    # tear down + remove volumes
+#   make build         # regenerate compose YAML, acquire local mzbuild images
+#   make up            # build + bring up the stack
+#   make down          # tear down (preserves volumes)
+#   make smoke         # build + up + smoke test
+#   make test          # smoke test against a running stack
+#   make clean         # tear down + remove volumes
+#
+#   make build-local   # build for local dev (no --antithesis flavor)
+#   make up-local      # build-local + bring up the stack
+#
+# The `-local` targets are for validating the workload + drivers without
+# the Antithesis platform. They build the plain (non-antithesis-flavored)
+# images, which (a) don't need libvoidstar.so locally and (b) cover all
+# images including new transitive deps (e.g. testdrive) that CI doesn't
+# yet publish under the antithesis flavor.
 
 SHELL := /usr/bin/env bash
 .SHELLFLAGS := -eu -o pipefail -c
@@ -65,10 +74,65 @@ export-env:
 	@echo "Wrote $(ENV_FILE)"
 
 acquire-images:
+	@# Force `--arch x86_64` to match what `export-env.py` writes into the
+	@# `.env` file. The Antithesis platform itself runs amd64-only — both
+	@# `export-env.py` and `export-compose.py` pin `arch=Arch.X86_64` — so
+	@# the fingerprints baked into the compose YAML are always for x86_64.
+	@# Without this flag, `bin/mzimage acquire` defaults to the host arch
+	@# (aarch64 on Apple Silicon), producing a different fingerprint than
+	@# the one the compose YAML references; the resulting image doesn't
+	@# match the compose's `image:` tag and the local stack fails to pull.
+	@# Also: aarch64 cross-compile of `--antithesis` builds needs an aarch64
+	@# `libvoidstar.so` which isn't published — x86_64 is the only flavor
+	@# Antithesis ships.
 	@for image in $(MZBUILD_IMAGES); do \
-	  echo "--- Acquiring $$image (--antithesis)"; \
-	  cd $(REPO_ROOT) && bin/mzimage acquire "$$image" --antithesis; \
+	  echo "--- Acquiring $$image (--antithesis --arch x86_64)"; \
+	  cd $(REPO_ROOT) && bin/mzimage acquire "$$image" --antithesis --arch x86_64; \
 	done
+
+# ---------------------------------------------------------------------------
+# Local (non-antithesis) targets
+# ---------------------------------------------------------------------------
+#
+# Build and run the same compose topology without the Antithesis flavor.
+# Used for validating the workload + drivers locally before pushing to CI.
+# Plain (non-antithesis) mzbuild images:
+#   * don't need libvoidstar.so installed in the cross-sysroot
+#   * cover all transitive deps (e.g. testdrive), unlike the antithesis
+#     flavor which CI only publishes for materialized + antithesis-workload
+#     + antithesis-config.
+# The fault-orchestrator service is a no-op outside Antithesis (its
+# pause_faults.sh exits cleanly when ANTITHESIS_STOP_FAULTS is unset), so
+# the topology behaves like a regular docker-compose stack.
+
+.PHONY: build-local export-compose-local export-env-local acquire-images-local up-local
+
+build-local: export-compose-local export-env-local acquire-images-local
+
+export-compose-local:
+	cd $(REPO_ROOT) && bin/pyactivate test/antithesis/export-compose.py \
+	    --no-antithesis > $(COMPOSE_FILE)
+	@echo "Wrote $(COMPOSE_FILE) (host arch)"
+
+export-env-local:
+	cd $(REPO_ROOT) && bin/pyactivate test/antithesis/export-env.py \
+	    --no-antithesis > $(ENV_FILE)
+	@echo "Wrote $(ENV_FILE) (non-antithesis)"
+
+acquire-images-local:
+	@# Use the host arch (no `--arch` flag) so the resulting workload image
+	@# runs natively. On Apple Silicon, running the x86_64 testdrive binary
+	@# under Docker's rosetta/qemu emulation segfaults inside the
+	@# foundationdb client init — native aarch64 sidesteps that entirely.
+	@# `export-env.py --no-antithesis` mirrors the same logic and emits
+	@# host-arch fingerprints to the .env file.
+	@for image in $(MZBUILD_IMAGES); do \
+	  echo "--- Acquiring $$image (plain, host arch)"; \
+	  cd $(REPO_ROOT) && bin/mzimage acquire "$$image"; \
+	done
+
+up-local: build-local
+	$(COMPOSE) up -d
 
 # ---------------------------------------------------------------------------
 # Up / Down

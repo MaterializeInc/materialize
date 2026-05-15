@@ -42,6 +42,7 @@ Usage:
         > test/antithesis/config/docker-compose.yaml
 """
 
+import argparse
 import sys
 from pathlib import Path
 from typing import Any
@@ -90,10 +91,25 @@ HEADER = """\
 
 
 def resolve_mzbuild(svc: dict[str, Any]) -> None:
-    """Replace `mzbuild:` with a concrete or templated `image:` ref."""
+    """Replace `mzbuild:` with a concrete or templated `image:` ref.
+
+    For Materialize-built images we also set `pull_policy: never` so the
+    `make up-local` flow doesn't attempt a registry probe at compose
+    startup. The fingerprint tags only exist locally on the dev machine
+    that ran `make build-local` — they're never pushed to GHCR by that
+    flow, so the standard "check remote for newer digest" probe fails
+    with `unauthorized` and aborts the bring-up. Third-party images
+    (PUBLIC_FALLBACKS) genuinely come from upstream registries; for
+    those we leave the default pull policy alone.
+
+    The Antithesis platform itself uses a separate registry (Antithesis's
+    GCP Artifact Registry) that it does have credentials for, so the
+    pull_policy never field doesn't affect a real Antithesis run.
+    """
     name = svc.pop("mzbuild")
     if name in MATERIALIZE_IMAGES:
         svc["image"] = MATERIALIZE_IMAGES[name]
+        svc["pull_policy"] = "never"
     elif name in PUBLIC_FALLBACKS:
         svc["image"] = PUBLIC_FALLBACKS[name]
     else:
@@ -338,16 +354,33 @@ def register_referenced_named_volumes(compose: dict[str, Any]) -> None:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--no-antithesis",
+        action="store_true",
+        help=(
+            "Emit a compose YAML for local-dev (host arch) rather than the "
+            "Antithesis x86_64 platform. Mirrors `export-env.py --no-antithesis` "
+            "— together they let `make build-local` + `make up-local` run "
+            "the stack natively on Apple Silicon (the Antithesis-flavored "
+            "x86_64 testdrive binary segfaults inside Docker's rosetta/qemu "
+            "emulation)."
+        ),
+    )
+    args = parser.parse_args()
+    arch = Arch.host() if args.no_antithesis else Arch.X86_64
+    platform = "linux/amd64" if arch == Arch.X86_64 else "linux/arm64"
+
     # munge_services=False keeps ports bare (e.g., `6875` instead of
     # `127.0.0.1::6875`) — Antithesis is container-to-container, no host
     # binding. We do our own mzbuild→image substitution below and don't
     # need fingerprint resolution since Materialize-built images become
     # `${...}` placeholders.
-    repo = Repository(Path("."), arch=Arch.X86_64, antithesis=True)
+    repo = Repository(Path("."), arch=arch, antithesis=not args.no_antithesis)
     c = Composition(repo, "antithesis", munge_services=False)
 
     for name, svc in c.compose["services"].items():
-        svc["platform"] = "linux/amd64"
+        svc["platform"] = platform
         if "mzbuild" in svc:
             resolve_mzbuild(svc)
         inline_postgres_setup(svc)

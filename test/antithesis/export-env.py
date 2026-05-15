@@ -59,9 +59,27 @@ def main() -> None:
             "default `spec()` (GHCR when MZ_GHCR=1, else Docker Hub)."
         ),
     )
+    parser.add_argument(
+        "--no-antithesis",
+        action="store_true",
+        help=(
+            "Emit non-antithesis-flavored image fingerprints. Used by the "
+            "`make build-local` workflow that brings the compose up without "
+            "the Antithesis platform — the antithesis flavor needs a "
+            "libvoidstar.so we don't have locally, and the antithesis-only "
+            "deps (testdrive in particular) aren't published with the "
+            "antithesis flavor yet. CI sets neither (antithesis stays on)."
+        ),
+    )
     args = parser.parse_args()
 
-    repo = Repository(Path("."), arch=Arch.X86_64, antithesis=True)
+    # Antithesis itself runs amd64-only, so the Antithesis-targeted build
+    # (CI default) is always x86_64. For local-dev `--no-antithesis` we use
+    # the host arch instead so the compose stack runs natively without
+    # rosetta/qemu emulation (which segfaults inside testdrive on Apple
+    # Silicon).
+    arch = Arch.host() if args.no_antithesis else Arch.X86_64
+    repo = Repository(Path("."), arch=arch, antithesis=not args.no_antithesis)
     images = [repo.images[name] for name in ENV_VARS.values()]
     deps = repo.resolve_dependencies(images)
 
