@@ -2345,6 +2345,13 @@ def _bulk_run(runner: ScenarioRunner, statements: list[str], log_label: str) -> 
 
     Statements run one-by-one: this work is dominated by adapter/controller
     serialisation, so per-statement round trips are not the bottleneck.
+
+    Callers must pass idempotent statements (``CREATE … IF NOT EXISTS`` /
+    ``DROP … IF EXISTS``): the underlying ``ConnectionHandler.retryable``
+    reconnects and retries on transient errors (e.g. TLS EOF against staging),
+    and the server may have already committed the original statement before
+    losing the response. Non-idempotent retries then fail with
+    "already exists" / "not found" and abort the run.
     """
     total = len(statements)
     if total == 0:
@@ -2375,7 +2382,7 @@ class EnvdObjectsScalabilityTablesScenario(EnvdObjectsScalabilityScenario):
         if target_n <= self._current_n:
             return
         statements = [
-            f"CREATE TABLE {self.PAD_SCHEMA}.pad_t_{i} (a int, b text)"
+            f"CREATE TABLE IF NOT EXISTS {self.PAD_SCHEMA}.pad_t_{i} (a int, b text)"
             for i in range(self._current_n + 1, target_n + 1)
         ]
         _bulk_run(
@@ -2447,7 +2454,7 @@ class EnvdObjectsScalabilityMvsScenario(EnvdObjectsScalabilityScenario):
             self._ensure_pad_cluster(runner, cluster_idx)
             cluster_end = min(target_n, (cluster_idx + 1) * self.MVS_PER_CLUSTER)
             statements = [
-                f"CREATE MATERIALIZED VIEW {self.PAD_SCHEMA}.pad_mv_{i} "
+                f"CREATE MATERIALIZED VIEW IF NOT EXISTS {self.PAD_SCHEMA}.pad_mv_{i} "
                 f"IN CLUSTER pad_c_{cluster_idx} "
                 f"AS SELECT id, val FROM {self.PAD_SCHEMA}.{self.PAD_BASE} "
                 f"WHERE id < {i}"
@@ -2608,12 +2615,13 @@ class ClusterObjectLimitsIndexesScenario(ClusterObjectLimitsScenario):
         statements: list[str] = []
         for i in range(self._current_n + 1, target_n + 1):
             statements.append(
-                f"CREATE VIEW {self.PAD_SCHEMA}.v_{i} AS "
+                f"CREATE VIEW IF NOT EXISTS {self.PAD_SCHEMA}.v_{i} AS "
                 f"SELECT id, val FROM {self.PAD_SCHEMA}.{self.BASE_TABLE} "
                 f"WHERE id < {i}"
             )
             statements.append(
-                f"CREATE DEFAULT INDEX IN CLUSTER c ON {self.PAD_SCHEMA}.v_{i}"
+                f"CREATE DEFAULT INDEX IF NOT EXISTS "
+                f"IN CLUSTER c ON {self.PAD_SCHEMA}.v_{i}"
             )
         _bulk_run(
             runner,
@@ -2640,7 +2648,7 @@ class ClusterObjectLimitsMvsScenario(ClusterObjectLimitsScenario):
         if target_n <= self._current_n:
             return
         statements = [
-            f"CREATE MATERIALIZED VIEW {self.PAD_SCHEMA}.mv_{i} "
+            f"CREATE MATERIALIZED VIEW IF NOT EXISTS {self.PAD_SCHEMA}.mv_{i} "
             f"IN CLUSTER c "
             f"AS SELECT id, val FROM {self.PAD_SCHEMA}.{self.BASE_TABLE} "
             f"WHERE id < {i}"
