@@ -516,7 +516,7 @@ investigations to start with:
    `--meas-cluster-size scale=1,workers=1` and no pad clusters
    (`tables` padding) at high N to isolate from compute side-effects.
 
-### 2026-05-15 — post-fix measurements
+### 2026-05-15 — post-fix measurements (CORRECTED)
 
 Three catalog-side fixes landed on this branch:
 
@@ -524,26 +524,42 @@ Three catalog-side fixes landed on this branch:
 - `9fca09ff8a` — maintain `Transaction::initial_oids` so `allocate_oids` doesn't walk every db/schema/role/item/intro-source per allocation.
 - `293a243e6b` — `TableTransaction::insert` uses `self.get(&k).is_some()` instead of `for_values` for dup-key, and skips the uniqueness walk when `uniqueness_violation` is `None` (14 of 22 instances).
 
-Re-ran the audit on the same envd binary + harness as the pre-fix runs.
+**First post-fix run was misleading.** The pre-fix tables audit ran on
+an envd that had been up ~30 minutes (warm caches); the first post-fix
+audit ran on a freshly-reset envd with cold caches and showed N=0 at
+~60 ms vs pre-fix N=0 at ~30 ms. That made the post-fix N=5000 number
+(~50 ms) look like a flat line vs N=0, suggesting "slope eliminated."
+It wasn't — the slope just looked flat because N=0 was inflated.
 
-**Tables-padding (the matrix we expect to fix):** slope eliminated. Per-N
-cost from N=0 → N=5000 dropped from +17-23 ms to within noise:
+**Apples-to-apples comparison on a warm envd:** the slope is essentially
+unchanged.
 
-| op | pre-fix Δ@5000 | post-fix Δ@5000 | per-object cost |
-| --- | ---: | ---: | --- |
-| create_table | +23 ms | ~0 ms | gone |
-| drop_table | +20 ms | ~+2 ms | mostly gone |
-| alter_table_add_col | +18 ms | ~-5 ms | gone (noise) |
-| rename_table | +17 ms | ~-9 ms | gone (noise) |
-| create_view | +20 ms | ~-3 ms | gone (noise) |
-| drop_view | +19 ms | ~-1 ms | gone (noise) |
+| op | pre-fix N=0 / N=5000 / Δ | post-fix N=0 / N=5000 / Δ |
+| --- | --- | --- |
+| create_table | 31 / 55 / **+23 ms** | 30 / 51 / **+21 ms** |
+| drop_table | 20 / 40 / +20 ms | 20 / 41 / +21 ms |
+| rename_table | 20 / 37 / +17 ms | 19 / 39 / +19 ms |
 
-At N=5000 tables, every measured DDL is now within ~10ms of its N=0
-baseline — the slope is below measurement noise. (The post-fix N=0
-absolute baseline was higher than pre-fix N=0 because the post-fix envd
-was freshly-reset / cold; comparing N=5000 across runs is the apples-
-to-apples test, and post-fix N=5000 ≈ pre-fix N=0.) CSV at
-`/tmp/audit-tables-post.csv`.
+CSV at `/tmp/audit-tables-warm.csv`. The three catalog-side fixes are
+theoretically correct (they eliminate the named O(N) loops), but their
+combined contribution to the ~4 μs/object slope is **lost in noise** at
+N=5000. Implication: the named loops were not the slope's dominant
+source. There's another O(N) elsewhere in the per-DDL path that the
+audit hadn't pinpointed.
+
+Candidates not yet ruled out:
+- The `snapshot` span (catalog durable txn read) grows linearly with N
+  in the traces — 0.5 → 4 ms across the range. We attributed this to
+  `TableTransaction::insert/update` for_values, but `insert` is now
+  fast. So the per-DDL `snapshot` cost has another source.
+- `compare_and_append` for the catalog shard grows similarly (2 ms →
+  ~5 ms). The catalog shard accumulates a row per item; persist's
+  per-row consensus operation might genuinely scale.
+- `apply_updates` self-time in the in-memory catalog grew mildly
+  (0.5 → 1.2 ms). Some bookkeeping there scales we haven't seen.
+- Things in `apply_catalog_implications_inner` that we didn't dig into.
+
+Need to fetch a fresh post-fix high-N trace and rank growers again.
 
 **MVs-padding:** per-N cost dropped ~2-3× but the super-linear
 remainder is intact, as predicted (the persist-side blow-up identified
