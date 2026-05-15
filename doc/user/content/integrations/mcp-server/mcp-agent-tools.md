@@ -93,11 +93,15 @@ Read rows from a data product.
 
 ### `query`
 
-{{< note >}}
-The `query` tool is **disabled by default** because it lets the agent run
-arbitrary SQL against data products. To enable it, set the
-`enable_mcp_agent_query_tool` system parameter to `true`.
-{{< /note >}}
+The `query` tool is **disabled by default** because it lets the
+agent run arbitrary SQL against data products. To enable it, set the
+[`enable_mcp_agent_query_tool`
+configuration](/integrations/mcp-server/mcp-agent-config/#enable_mcp_agent_query_tool)
+system parameter to `true`.
+
+{{< warning >}}
+{{% include-headless "/headless/mcp-agent-query-tool-warning" %}}
+{{< /warning >}}
 
 Execute a SQL `SELECT` statement against your data products. Useful for
 joining multiple data products together that are hosted on the same cluster.
