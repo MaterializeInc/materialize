@@ -19,30 +19,26 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-05-14* <br>
 *Released to Materialize Self-Managed: 2026-05-15* <br>
 
-This release introduces the MCP server for Agents, and bug fixes.
+This release introduces the built-in MCP server for agents, improvements, and
+bug fixes.
 
 ### MCP Server for Agents
 
 {{< public-preview />}}
 
-Materialize environments now include a built-in Model Context Protocol (MCP)
-[server for agents (`/api/mcp/agent`)](/integrations/mcp-server/mcp-agent/),
-giving your production AI agents fresh context from Materialize. Once connected to this
-endpoint, an agent can discover your data products, understand the underlying ontology, and run queries to fetch fresh data.
+Give your agents fresh context using Materialize. Materialize environments now
+include a built-in Model Context Protocol (MCP) [server for agents
+(`/api/mcp/agent`)](/integrations/mcp-server/mcp-agent/). Once connected, an
+agent can discover your data products, understand the underlying data ontology,
+and run queries to fetch fresh data.
 
-Data products are simply [materialized views](/sql/create-materialized-view/)
-or [indexes](/sql/create-index/). Agents authenticate as
-[roles](/sql/create-role/) in Materialize, so
-[RBAC privileges](/manage/access-control/) govern which data products are
-visible. Finally, you can set up a dedicated
-[cluster](/concepts/clusters/) for your agents, so they're isolated from the
-rest of your environment.
+Agents can discover [materialized views](/sql/create-materialized-view/) or [indexed](/sql/create-index/) views. You can use [comments](/sql/comment-on/) to document the data products, and describe them to agents. Agents authenticate as [roles](/sql/create-role/) in Materialize, so [RBAC privileges](/manage/access-control/) govern which data products are visible. Finally, you can set up a dedicated [cluster](/concepts/clusters/) for your agents, so they're isolated from the rest of your environment.
 
 The MCP server for agents complements the [MCP server for
 developers](/integrations/mcp-server/mcp-developer/) released in v26.20.2. The
-developer server gives coding agents observability into Materialize so you
-can build faster on top of it; the agent server gives production agents
-governed access to fresh data products.
+developer server gives coding agents (like Claude Code) access to Materialize's
+observability so you can build on Materialize faster; the agent server gives
+production agents fresh, governed context from your data products.
 
 For more information, refer to:
 - [Integrations: MCP Server for Agents](/integrations/mcp-server/mcp-agent/)
@@ -55,8 +51,7 @@ For more information, refer to:
 - **`COPY FROM` rejects HTTP redirects**: `COPY FROM` now returns a clear error
   if the target URL responds with an HTTP redirect, preventing unexpected data
   sources and potential security issues.
-- **[Agent skills](/integrations/coding-agent-skills/):**
-  -  **Improved `mcp-developer-analysis` client setup**: The skill now includes a comprehensive playbook for connecting MCP-capable clients (Claude Code, Cursor, VS Code, Zed, Continue, Windsurf, Claude Desktop) to the [MCP server for developers](/integrations/mcp-server/mcp-developer/).
+- **[Agent skills](/integrations/coding-agent-skills/) — improved `mcp-developer-analysis` client setup**: The skill now includes a comprehensive playbook for connecting MCP-capable clients (Claude Code, Cursor, VS Code, Zed, Continue, Windsurf, Claude Desktop) to the [MCP server for developers](/integrations/mcp-server/mcp-developer/).
 
 ### Bug Fixes {#v26.24-bug-fixes}
 
@@ -64,11 +59,12 @@ For more information, refer to:
   username contains special characters like `&` or `#`.
 - Fixed joins incorrectly failing with a type mismatch error when join columns
   differed only in nullability.
-- Fixed fast-path `SELECT` queries returning incorrect results when using
-  `OFFSET`.
+- Fixed fast-path `SELECT` queries returning incorrect results when `OFFSET`
+  was specified.
 - Fixed `string_to_array` returning incorrect results when `null_string` is
   specified and the delimiter is empty.
-- Fixed `INSERT INTO ... SELECT` ignoring the `OFFSET` clause.
+- Fixed `INSERT INTO ... SELECT` silently ignoring the `OFFSET` clause in the
+  source query.
 - Fixed `seahash` function catalog metadata reporting the wrong return type
   (`uint4` instead of `uint8`).
 - Fixed `mz_egress_ips` storing non-canonical CIDR notation (e.g.,
@@ -80,9 +76,8 @@ For more information, refer to:
   containing `SELECT DISTINCT` over role-derived catalog views (e.g.,
   anything reading from `mz_roles`, `mz_role_members`, or views that
   internally project role columns). The error is resolved automatically by
-  upgrading to v26.24.0 or newer. Simple RBAC operations and queries on
+  upgrading to v26.24.1 or newer. Simple RBAC operations and queries on
   `mz_roles` and `mz_role_members` were not affected.
-
 
 ## v26.23.2
 *Released to Materialize Cloud: 2026-05-11* <br>
@@ -201,6 +196,7 @@ improvements, and bug fixes.
 - Fixed Self-Managed Kubernetes deployments where setting both
   `cluster_topology_spread_soft = on` and `cluster_topology_spread_min_domains`
   caused all replica pod creation to fail with an admission error.
+
 ## v26.22.0
 *Released to Materialize Cloud: 2026-04-30* <br>
 *Released to Materialize Self-Managed: 2026-05-01* <br>
@@ -274,7 +270,7 @@ with up to 50% lower memory usage, and bug fixes.
 This release introduces the built-in Developer MCP server, Console
 improvements, and bug fixes.
 
-### Developer MCP server
+### MCP Server for Developers
 
 {{< public-preview />}}
 
