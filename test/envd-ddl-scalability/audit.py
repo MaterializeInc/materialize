@@ -169,9 +169,11 @@ class MvsPadding(PadStrategy):
     def _ensure_cluster(self, conn: psycopg.Connection, idx: int) -> None:
         while self._pad_clusters <= idx:
             k = self._pad_clusters
+            # CREATE CLUSTER has no IF NOT EXISTS form; drop-then-create.
+            run(conn, f"DROP CLUSTER IF EXISTS {PAD_CLUSTER_PREFIX}{k} CASCADE")
             run(
                 conn,
-                f"CREATE CLUSTER IF NOT EXISTS {PAD_CLUSTER_PREFIX}{k} "
+                f"CREATE CLUSTER {PAD_CLUSTER_PREFIX}{k} "
                 f"SIZE '{self.pad_cluster_size}'",
             )
             self._pad_clusters += 1
@@ -215,9 +217,11 @@ class IndexesPadding(PadStrategy):
     def _ensure_cluster(self, conn: psycopg.Connection, idx: int) -> None:
         while self._pad_clusters <= idx:
             k = self._pad_clusters
+            # CREATE CLUSTER has no IF NOT EXISTS form; drop-then-create.
+            run(conn, f"DROP CLUSTER IF EXISTS {PAD_CLUSTER_PREFIX}{k} CASCADE")
             run(
                 conn,
-                f"CREATE CLUSTER IF NOT EXISTS {PAD_CLUSTER_PREFIX}{k} "
+                f"CREATE CLUSTER {PAD_CLUSTER_PREFIX}{k} "
                 f"SIZE '{self.pad_cluster_size}'",
             )
             self._pad_clusters += 1
@@ -424,10 +428,9 @@ def measure_op(
 def setup_measurement_state(conn: psycopg.Connection, meas_cluster_size: str) -> None:
     """Idempotent setup of the schema/cluster used by measured ops."""
     run(conn, f"CREATE SCHEMA IF NOT EXISTS {MEAS_SCHEMA}")
-    run(
-        conn,
-        f"CREATE CLUSTER IF NOT EXISTS {MEAS_CLUSTER} " f"SIZE '{meas_cluster_size}'",
-    )
+    # CREATE CLUSTER doesn't support IF NOT EXISTS in Materialize; drop-then-create.
+    run(conn, f"DROP CLUSTER IF EXISTS {MEAS_CLUSTER} CASCADE")
+    run(conn, f"CREATE CLUSTER {MEAS_CLUSTER} SIZE '{meas_cluster_size}'")
     _ensure_meas_table(conn)
 
 
@@ -522,12 +525,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--reps", type=int, default=10, help="reps per (scale, op)")
     p.add_argument(
         "--pad-cluster-size",
-        default="50cc",
+        default="scale=1,workers=1",
         help="SIZE for pad clusters (mvs / indexes padding)",
     )
     p.add_argument(
         "--meas-cluster-size",
-        default="50cc",
+        default="scale=1,workers=1",
         help="SIZE for the measurement cluster",
     )
     p.add_argument(
