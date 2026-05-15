@@ -582,16 +582,151 @@ for N = 0 / 500 / 2000 is still ~10× for 4× N). The persist-side
 `open_data_handles` cost we pinpointed earlier dominates here. CSV at
 `/tmp/audit-mvs-post.csv`.
 
-**Net conclusion**: the three catalog-side fixes correctly eliminated
-the linear ~4 μs/object cost shared by all DDL ops. What remains is
-the super-linear persist init cost when many storage collections
-share dependencies — a separate fix needing persist/storage-team
-ownership.
+**Net conclusion (corrected above)**: the three catalog-side fixes are
+each individually correct but eliminate a small fraction of the slope.
+The dominant per-DDL O(N) cost is elsewhere — see the trace ranking
+below.
+
+### 2026-05-15 — post-fix high-N trace ranking (where the slope actually lives)
+
+Re-ran the audit on a warm, post-fix envd with `--padding tables
+--scale 0,5000 --ops create_table,drop_table,alter_table_add_col,
+rename_table --reps 8`. CSV at `/tmp/audit-trace-postfix-N5000.csv`.
+Latencies (p50):
+
+| op | N=0 | N=5000 | Δ |
+| --- | ---: | ---: | ---: |
+| create_table | 30.0 | 47.3 | +17.3 ms |
+| drop_table | 18.6 | 42.6 | +24.0 ms |
+| alter_table_add_col | 22.3 | 53.0 | +30.7 ms |
+| rename_table | 17.4 | 43.6 | +26.2 ms |
+
+Span self-times averaged over 4 traces per cell, ranked by N=0→N=5000
+growth. Numbers are self-time at N=5000 (the delta from N=0 is the
+relevant signal but cells without entries at N=0 mean the span had
+sub-threshold self-time). Pulled via
+`test/envd-ddl-scalability/summarize_traces.py`.
+
+**CREATE TABLE** — explains roughly 13 of the +17 ms slope:
+
+| span | N=0 | N=5000 | Δ |
+| --- | ---: | ---: | ---: |
+| `snapshot` (catalog durable) | 509μs | 4.1ms | **+3.6ms** |
+| `group_commit_apply::append_fut` | 5.0ms | 7.6ms | +2.6ms |
+| `PersistTableWriteCmd::Append` | 5.0ms | 7.6ms | +2.6ms |
+| `transaction` (catalog durable) | 426μs | 3.0ms | **+2.6ms** |
+| `consolidate` (catalog durable) | 449μs | 2.1ms | +1.7ms |
+| `apply_catalog_implications_inner` | <0.5ms | 1.2ms | +1.2ms |
+| `apply_updates` | 536μs | 1.4ms | +0.9ms |
+
+**ALTER TABLE** — explains roughly 17 of the +31 ms slope:
+
+| span | N=0 | N=5000 | Δ |
+| --- | ---: | ---: | ---: |
+| `coord::catalog_transact_with_context::table_updates` | 7.3ms | 12.9ms | **+5.6ms** |
+| `group_commit_apply::append_fut` | 6.2ms | 10.9ms | +4.7ms |
+| `snapshot` | 551μs | 4.3ms | **+3.8ms** |
+| `transaction` | 453μs | 3.2ms | **+2.7ms** |
+| `consolidate` | 447μs | 1.9ms | +1.5ms |
+| `apply_catalog_implications_inner` | <0.5ms | 1.3ms | +1.3ms |
+
+**DROP TABLE** and **RENAME TABLE** have the same shape (snapshot,
+transaction, consolidate, append, apply_catalog_implications_inner
+all grow), and don't add new growers.
+
+### Mapping growers to code
+
+1. **`snapshot` + `transaction` + `consolidate` — the structural target.**
+   - `with_snapshot` (`src/catalog/src/durable/persist.rs:766`) walks
+     the consolidated trace and rebuilds a `Snapshot { databases:
+     BTreeMap, schemas: BTreeMap, items: BTreeMap, ... }` from scratch
+     on every transaction. With N=5000 items, that's 5000 inserts into
+     the items BTreeMap alone.
+   - `Transaction::new` (`transaction.rs:128-232`) then walks every
+     row of every snapshot table and calls `TableTransaction::new(...)`
+     for each, which itself does
+     `initial.into_iter().map(RustType::from_proto).collect()` — a
+     full O(N) proto→Rust conversion + BTreeMap construction.
+   - `consolidate` (`persist.rs:706`) re-consolidates the in-memory
+     trace via `differential_dataflow::consolidation::
+     consolidate_updates`. Trace grows with N → consolidation cost
+     grows with N.
+   - **Combined growth**: +7-8 ms / 5000 ≈ 1.5 μs/object. The single
+     biggest source of the per-DDL slope.
+   - The proposed design (Arc'd `DurableCatalogData` + per-txn overlay)
+     eliminates all three: starting a transaction becomes
+     `Arc::clone(&self.data)`, reads probe overlay then base, commits
+     emit only delta keys, no full state materialisation per txn.
+
+2. **`group_commit_apply::append_fut` / `PersistTableWriteCmd::Append`
+   — persist-side, partly out of scope.** Growth here is the catalog
+   shard's consensus append getting bigger as the catalog accumulates
+   rows. Some of this should drop when the durable txn emits only
+   delta keys (because the per-txn batch is smaller), but a meaningful
+   chunk is persist's own state machinery scaling with shard history.
+   Treat as a follow-up; the structural fix above does *some* of the
+   work indirectly.
+
+3. **`coord::catalog_transact_with_context::table_updates` (+5.6 ms
+   for ALTER) — separate hot path.** This is the wrapper span around
+   the catalog transact for table-mutating DDL. Its self-time grew
+   most for ALTER. Worth instrumenting deeper inside before
+   implementation — there may be a smaller, easily-fixed loop hiding
+   in here.
+
+4. **`apply_catalog_implications_inner` (+1.2-1.3 ms across ops).**
+   `src/adapter/src/coord/catalog_implications.rs:182`. Iterates the
+   per-DDL `implications` list (which is delta-sized, so itself O(1)),
+   then has handlers per kind. The growth implies one of the handlers
+   reads catalog-wide state. Should be auditable in a focused pass.
+
+5. **`apply_updates` (+0.9 ms).** Small but real. The in-memory
+   `CatalogState::apply_updates` path; should be O(delta) by design,
+   but something inside scales mildly. Worth auditing in the same
+   pass as item 4 above.
+
+### Revised design priorities (confirmed by trace)
+
+The trace confirms the proposed design's primary target is the right
+one. In priority order:
+
+1. **Shared, indexed durable state + per-txn overlay.** Kills the
+   `snapshot` + `transaction` + `consolidate` triple. Estimated
+   payoff: ~1.5 μs/object → roughly halves the slope at N=5000.
+2. **Indexes for name/OID/namespace lookups.** Eliminates the
+   `for_values` walks; mostly already done via Fix 3 (insert) but
+   `update`/`for_values_mut` and 8 of 22 `insert` callers still walk.
+   Estimated payoff: small at N=5000 (already covered by Fix 3
+   partially) but compounds at higher N.
+3. **Storing the durable txn overlay in `TransactionOps::DDL` and
+   stopping op replay.** Highest-leverage for multi-statement DDL
+   transactions; doesn't show up in our single-statement audit, so
+   not visible in the slope numbers above. Still worth doing.
+4. **Audit `apply_catalog_implications_inner` and `apply_updates`.**
+   Both grow mildly with N; find the loop, fix it. Likely small,
+   focused changes.
+5. **Point APIs for storage metadata.** As designed.
+6. *Out of scope for now:* persist-side `open_data_handles` /
+   `compare_and_append` cost. Real but separate workstream.
+
+`apply_catalog_implications_inner` and `apply_updates` together add
+~+2 ms at N=5000 — small enough to leave for the audit pass per
+item 4 above, but worth fixing for completeness.
+
+The OID-set cache (Fix 2) is correctly noted as *not* moving the
+needle for single-DDL transactions, because building the set on
+every txn start is O(N) regardless of how fast lookups are.
+Single-DDL is the common case. The cache only pays off if it's
+shared incrementally across transactions — which the proposed design
+provides via the Arc'd durable state.
 
 ## Next steps
 
-1. Start the local stack and run the tables-padding pass.
-2. Record results here, then expand to views / mvs / indexes.
-3. Pull traces for the slowest cells; identify dominant spans.
-4. Read the source at those spans; find the O(n) / O(n²) loops.
-5. Draft design proposals; check in with user before any implementation.
+1. Land the structural fix: `DurableCatalogData` (`Arc<imbl::OrdMap>`
+   per table) maintained incrementally in `PersistHandle`, with
+   per-txn overlay reads and delta-only commits.
+2. Audit `apply_catalog_implications_inner` and `apply_updates` for
+   the residual ~+2 ms growth.
+3. Storage point APIs for catalog-side storage metadata reads.
+4. Move durable txn overlay into `TransactionOps::DDL` to kill op
+   replay across multi-statement DDL transactions.
