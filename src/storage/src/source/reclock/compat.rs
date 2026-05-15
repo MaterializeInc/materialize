@@ -15,6 +15,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
+use antithesis_sdk::assert_unreachable;
 use anyhow::Context;
 use differential_dataflow::lattice::Lattice;
 use fail::fail_point;
@@ -33,6 +34,7 @@ use mz_storage_client::util::remap_handle::{RemapHandle, RemapHandleReader};
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sources::{SourceData, SourceTimestamp};
+use serde_json::json;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::Timestamp;
 use timely::progress::frontier::Antichain;
@@ -303,7 +305,13 @@ where
                 *self.shared_write_frontier.borrow_mut() = new_upper;
                 return result;
             }
-            Err(invalid_use) => panic!("compare_and_append failed: {invalid_use}"),
+            Err(invalid_use) => {
+                assert_unreachable!(
+                    "reclock: compare_and_append InvalidUsage",
+                    &json!({"error": invalid_use.to_string()})
+                );
+                panic!("compare_and_append failed: {invalid_use}")
+            }
         }
     }
 

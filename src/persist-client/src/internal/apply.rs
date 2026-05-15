@@ -15,6 +15,9 @@ use std::ops::ControlFlow::{self, Break, Continue};
 use std::sync::Arc;
 use std::time::Instant;
 
+use antithesis_sdk::assert_always_greater_than;
+use serde_json::json;
+
 use crate::cache::{LockingTypedState, StateCache};
 use crate::error::{CodecMismatch, InvalidUsage};
 use crate::internal::gc::GcReq;
@@ -598,6 +601,21 @@ where
             }
         }
 
+        // Antithesis-reportable form of the broader `persist-cas-monotonicity`
+        // catalog property: SeqNo must strictly increase across any committed
+        // state transition. The narrower equality check below (next == seqno)
+        // still panics on violation and stays in place to catch skip/regress
+        // in the same call.
+        assert_always_greater_than!(
+            new_state.seqno().0,
+            expected.0,
+            "persist: state seqno did not strictly increase across CaS apply",
+            &json!({
+                "expected_prev": expected.0,
+                "computed_next": new_state.seqno().0,
+                "cmd": cmd.name,
+            })
+        );
         assert_eq!(
             expected.next(),
             new_state.seqno(),
