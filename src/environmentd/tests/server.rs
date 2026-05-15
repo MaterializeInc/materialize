@@ -5721,6 +5721,172 @@ fn test_mcp_agent_with_data_product() {
     );
 }
 
+/// Verifies that MCP requests update the Prometheus counters and that
+/// tool calls record a histogram observation.
+#[mz_ore::test]
+fn test_mcp_metrics() {
+    let server = test_util::TestHarness::default()
+        .with_mcp_routes(true, false)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .start_blocking();
+
+    let agents_url = format!("http://{}/api/mcp/agent", server.http_local_addr());
+
+    // Exercise three distinct request shapes:
+    //   1. `initialize`: succeeds.
+    //   2. `tools/list`: succeeds.
+    //   3. `tools/call` for `read_data_product` with a nonexistent name:
+    //      the request itself completes with an MCP error
+    //      (`DataProductNotFound`), which both `requests_total` and
+    //      `tool_calls_total` should reflect via the status label.
+
+    let (status, _) = mcp_post(
+        &agents_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {"name": "metrics-test", "version": "0"}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _) = mcp_post(
+        &agents_url,
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+    );
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _) = mcp_post(
+        &agents_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "read_data_product",
+                "arguments": {"name": "nonexistent_product"}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+
+    // Helper: look up a counter value by exact (endpoint, method/tool, status)
+    // label combination. Panics with a helpful message if not found, so test
+    // failures point at the missing label set rather than a generic `None`.
+    fn find_counter(
+        gathered: &[prometheus::proto::MetricFamily],
+        metric_name: &str,
+        labels: &[(&str, &str)],
+    ) -> f64 {
+        let family = gathered
+            .iter()
+            .find(|m| m.name() == metric_name)
+            .unwrap_or_else(|| panic!("metric family {} should be present", metric_name));
+        for metric in family.get_metric() {
+            let matches_all = labels.iter().all(|(name, want)| {
+                metric
+                    .get_label()
+                    .iter()
+                    .any(|l| l.name() == *name && l.value() == *want)
+            });
+            if matches_all {
+                return metric.get_counter().value();
+            }
+        }
+        panic!(
+            "no {} entry matching labels {:?} in {:?}",
+            metric_name,
+            labels,
+            family
+                .get_metric()
+                .iter()
+                .map(|m| m
+                    .get_label()
+                    .iter()
+                    .map(|l| (l.name().to_string(), l.value().to_string()))
+                    .collect::<Vec<_>>())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    let gathered = server.metrics_registry().gather();
+
+    // requests_total: one entry per (endpoint, method, status). The
+    // tools/call request failed at the tool level, so its status label is
+    // the McpRequestError error_type, not "ok".
+    assert_eq!(
+        find_counter(
+            &gathered,
+            "mz_mcp_requests_total",
+            &[
+                ("endpoint_type", "agent"),
+                ("method", "initialize"),
+                ("status", "ok"),
+            ],
+        ),
+        1.0,
+    );
+    assert_eq!(
+        find_counter(
+            &gathered,
+            "mz_mcp_requests_total",
+            &[
+                ("endpoint_type", "agent"),
+                ("method", "tools/list"),
+                ("status", "ok"),
+            ],
+        ),
+        1.0,
+    );
+    assert_eq!(
+        find_counter(
+            &gathered,
+            "mz_mcp_requests_total",
+            &[
+                ("endpoint_type", "agent"),
+                ("method", "tools/call"),
+                ("status", "DataProductNotFound"),
+            ],
+        ),
+        1.0,
+    );
+
+    // tool_calls_total: one entry per (endpoint, tool_name, status).
+    assert_eq!(
+        find_counter(
+            &gathered,
+            "mz_mcp_tool_calls_total",
+            &[
+                ("endpoint_type", "agent"),
+                ("tool_name", "read_data_product"),
+                ("status", "DataProductNotFound"),
+            ],
+        ),
+        1.0,
+    );
+
+    // tool_call_duration_seconds: the single tools/call above should
+    // produce exactly one histogram observation.
+    let duration = gathered
+        .iter()
+        .find(|m| m.name() == "mz_mcp_tool_call_duration_seconds")
+        .expect("mz_mcp_tool_call_duration_seconds should be present");
+    let total_samples: u64 = duration
+        .get_metric()
+        .iter()
+        .map(|m| m.get_histogram().get_sample_count())
+        .sum();
+    assert_eq!(
+        total_samples, 1,
+        "tool_call_duration_seconds should record exactly 1 sample",
+    );
+}
+
 /// Tests runtime toggling of MCP feature flags.
 #[mz_ore::test]
 fn test_mcp_agent_runtime_flag_toggle() {
