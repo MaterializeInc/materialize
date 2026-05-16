@@ -24,6 +24,7 @@ const config = defineConfig({
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
+      testIgnore: ["**/scalability/**"],
     },
     // For some reason, Firefox runs into CORS issues consistently the 3rd time it loads
     // the app:
@@ -35,6 +36,12 @@ const config = defineConfig({
     {
       name: "webkit",
       use: { ...devices["Desktop Safari"] },
+      testIgnore: ["**/scalability/**"],
+    },
+    {
+      name: "scalability",
+      use: { ...devices["Desktop Chrome"] },
+      testMatch: "**/scalability/**/*.spec.ts",
     },
     {
       name: "teardown",
