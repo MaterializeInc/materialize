@@ -56,6 +56,24 @@ pub const TIMELY_ZERO_COPY_LIMIT: Config<Option<usize>> = Config::new(
     "Optional limit of the zero copy allocator in allocations (timely dataflow).",
 );
 
+pub const ENABLE_TIMELY_SPILL: Config<bool> = Config::new(
+    "enable_timely_spill",
+    true,
+    "Enable file-backed spilling for the timely communication merge queue.",
+);
+
+pub const TIMELY_SPILL_THRESHOLD_BYTES: Config<usize> = Config::new(
+    "timely_spill_threshold_bytes",
+    256 << 20,
+    "Per-queue byte threshold above which the timely merge queue spills to disk.",
+);
+
+pub const TIMELY_SPILL_HEAD_RESERVE_BYTES: Config<usize> = Config::new(
+    "timely_spill_head_reserve_bytes",
+    64 << 20,
+    "Bytes kept in memory at the head of the queue / prefetch budget while spilling.",
+);
+
 pub const ARRANGEMENT_EXERT_PROPORTIONALITY: Config<u32> = Config::new(
     "arrangement_exert_proportionality",
     16,
@@ -78,6 +96,9 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_TIMELY_ZERO_COPY)
         .add(&ENABLE_TIMELY_ZERO_COPY_LGALLOC)
         .add(&TIMELY_ZERO_COPY_LIMIT)
+        .add(&ENABLE_TIMELY_SPILL)
+        .add(&TIMELY_SPILL_THRESHOLD_BYTES)
+        .add(&TIMELY_SPILL_HEAD_RESERVE_BYTES)
         .add(&ARRANGEMENT_EXERT_PROPORTIONALITY)
         .add(&ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE)
 }
