@@ -31,6 +31,7 @@ use crate::connections::inline::{
 };
 use crate::connections::{ConnectionContext, KafkaConnection, KafkaTopicOptions};
 use crate::controller::AlterError;
+use crate::wire_format::WireFormat;
 
 pub mod s3_oneshot_sink;
 
@@ -457,7 +458,9 @@ pub enum KafkaSinkFormatType<C: ConnectionAccess = InlinedConnection> {
     Avro {
         schema: String,
         compatibility_level: Option<mz_ccsr::CompatibilityLevel>,
-        csr_connection: C::Csr,
+        /// Wire-format dispatch and the registry to publish to. Sinks
+        /// require a registry
+        wire_format: WireFormat<C>,
     },
     Json,
     Text,
@@ -507,18 +510,16 @@ impl<C: ConnectionAccess> KafkaSinkFormat<C> {
                 KafkaSinkFormatType::Avro {
                     schema,
                     compatibility_level: _,
-                    csr_connection,
+                    wire_format,
                 },
                 KafkaSinkFormatType::Avro {
                     schema: other_schema,
                     compatibility_level: _,
-                    csr_connection: other_csr_connection,
+                    wire_format: other_wire_format,
                 },
             ) => {
                 if schema != other_schema
-                    || csr_connection
-                        .alter_compatible(id, other_csr_connection)
-                        .is_err()
+                    || wire_format.alter_compatible(id, other_wire_format).is_err()
                 {
                     tracing::warn!(
                         "KafkaSinkFormat::Avro incompatible at value_format:\nself:\n{:#?}\n\nother\n{:#?}",
@@ -546,18 +547,16 @@ impl<C: ConnectionAccess> KafkaSinkFormat<C> {
                 Some(KafkaSinkFormatType::Avro {
                     schema,
                     compatibility_level: _,
-                    csr_connection,
+                    wire_format,
                 }),
                 Some(KafkaSinkFormatType::Avro {
                     schema: other_schema,
                     compatibility_level: _,
-                    csr_connection: other_csr_connection,
+                    wire_format: other_wire_format,
                 }),
             ) => {
                 if schema != other_schema
-                    || csr_connection
-                        .alter_compatible(id, other_csr_connection)
-                        .is_err()
+                    || wire_format.alter_compatible(id, other_wire_format).is_err()
                 {
                     tracing::warn!(
                         "KafkaSinkFormat::Avro incompatible at key_format:\nself:\n{:#?}\n\nother\n{:#?}",
@@ -603,11 +602,11 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkFormatType, R>
             KafkaSinkFormatType::Avro {
                 schema,
                 compatibility_level,
-                csr_connection,
+                wire_format,
             } => KafkaSinkFormatType::Avro {
                 schema,
                 compatibility_level,
-                csr_connection: r.resolve_connection(csr_connection).unwrap_csr(),
+                wire_format: wire_format.into_inline_connection(r),
             },
             KafkaSinkFormatType::Json => KafkaSinkFormatType::Json,
             KafkaSinkFormatType::Text => KafkaSinkFormatType::Text,

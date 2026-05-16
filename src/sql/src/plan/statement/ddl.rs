@@ -119,6 +119,7 @@ use mz_storage_types::sources::{
     SourceExportDetails, SourceExportStatementDetails, SqlServerSourceConnection,
     SqlServerSourceExtras, Timeline,
 };
+use mz_storage_types::wire_format::WireFormat;
 use prost::Message;
 
 use crate::ast::display::AstDisplay;
@@ -2372,27 +2373,41 @@ fn get_encoding_inner(
                 }
             };
 
+            // Map the legacy (csr_connection, confluent_wire_format) pair to
+            // the unified `WireFormat`. `(Some, false)` is unreachable in
+            // practice (the planner only sets `confluent_wire_format = false`
+            // on inline schemas, which never carry a CSR connection) but is
+            // rejected explicitly here to keep the invariant local.
+            let wire_format = match (csr_connection.clone(), confluent_wire_format) {
+                (None, false) => WireFormat::None,
+                (None, true) => WireFormat::Confluent { registry: None },
+                (Some(c), true) => WireFormat::Confluent { registry: Some(c) },
+                (Some(_), false) => {
+                    sql_bail!(
+                        "internal error: AVRO source has CSR connection but \
+                         CONFLUENT WIRE FORMAT = false"
+                    )
+                }
+            };
+
             if let Some(key_schema) = key_schema {
                 return Ok(SourceDataEncoding {
                     key: Some(DataEncoding::Avro(AvroEncoding {
                         schema: key_schema,
                         reference_schemas: key_reference_schemas,
-                        csr_connection: csr_connection.clone(),
-                        confluent_wire_format,
+                        wire_format: wire_format.clone(),
                     })),
                     value: DataEncoding::Avro(AvroEncoding {
                         schema: value_schema,
                         reference_schemas: value_reference_schemas,
-                        csr_connection,
-                        confluent_wire_format,
+                        wire_format,
                     }),
                 });
             } else {
                 DataEncoding::Avro(AvroEncoding {
                     schema: value_schema,
                     reference_schemas: value_reference_schemas,
-                    csr_connection,
-                    confluent_wire_format,
+                    wire_format,
                 })
             }
         }
@@ -3898,7 +3913,9 @@ fn kafka_sink_builder(
                 } else {
                     options.value_compatibility_level
                 },
-                csr_connection,
+                wire_format: WireFormat::Confluent {
+                    registry: Some(csr_connection),
+                },
             })
         }
         format => bail_unsupported!(format!("sink format {:?}", format)),
