@@ -21,18 +21,18 @@ from . import deploy_util
 def main() -> None:
     target = f"{Arch.host()}-apple-darwin"
 
-    print("--- Building mz release binary")
+    print("--- Building mzx release binary")
     spawn.runv(
-        ["cargo", "build", "--bin", "mz", "--release"],
+        ["cargo", "build", "--bin", "mzx", "--release"],
         env=dict(os.environ, RUSTUP_TOOLCHAIN=rust_version()),
     )
 
     print(f"--- Uploading {target} binary tarball")
     uploader = tarball_uploader.TarballUploader(
-        package_name="mz",
+        package_name="mzx",
         version=deploy_util.MZ_CLI_VERSION,
     )
-    uploader.deploy_tarball(target, Path("target") / "release" / "mz")
+    uploader.deploy_tarball(target, Path("target") / "release" / "mzx")
 
 
 if __name__ == "__main__":

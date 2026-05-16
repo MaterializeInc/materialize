@@ -16,13 +16,13 @@ import time
 from materialize import buildkite
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.mzx import Mzx
 from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
 
 SERVICES = [
-    Mz(app_password=""),
+    Mzx(app_password=""),
     Materialized(),
     SqlServer(),
     Toxiproxy(),

@@ -25,7 +25,7 @@ from materialize.mzcompose.composition import (
 )
 from materialize.mzcompose.services.localstack import Localstack
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.mzx import Mzx
 from materialize.mzcompose.services.testdrive import Testdrive
 
 ENVIRONMENT_NAME = f"environment-{DEFAULT_ORG_ID}-{DEFAULT_ORDINAL}"
@@ -44,7 +44,7 @@ AWS_ENDPOINT_URL_MZ = "http://localstack:4566"
 
 SERVICES = [
     Localstack(),
-    Mz(app_password=""),
+    Mzx(app_password=""),
     Materialized(
         depends_on=["localstack"],
         environment_extra=[

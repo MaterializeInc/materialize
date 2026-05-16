@@ -36,7 +36,7 @@ def main() -> None:
     ]
 
     print("--- Tagging Docker images")
-    deps = [[repo.resolve_dependencies([repo.images["mz"]])["mz"]] for repo in repos]
+    deps = [[repo.resolve_dependencies([repo.images["mzx"]])["mzx"]] for repo in repos]
 
     mzbuild.publish_multiarch_images(f"v{MZ_CLI_VERSION.str_without_prefix()}", deps)
     if tarball_uploader.is_latest_version(MZ_CLI_VERSION):

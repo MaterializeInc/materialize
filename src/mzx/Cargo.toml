@@ -1,0 +1,61 @@
+[package]
+name = "mzx"
+description = "The Materialize command-line interface (CLI)."
+license = "Apache-2.0"
+version = "0.3.1"
+edition.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+axum.workspace = true
+clap.workspace = true
+csv.workspace = true
+dirs.workspace = true
+indicatif.workspace = true
+termcolor.workspace = true
+maplit.workspace = true
+mz-cloud-api = { path = "../cloud-api" }
+mz-frontegg-client = { path = "../frontegg-client" }
+mz-frontegg-auth = { path = "../frontegg-auth" }
+mz-build-info = { path = "../build-info" }
+mz-ore = { path = "../ore", features = ["async", "cli", "test"] }
+mz-sql-parser = { path = "../sql-parser" }
+open.workspace = true
+openssl-probe.workspace = true
+hyper.workspace = true
+reqwest.workspace = true
+rpassword.workspace = true
+semver.workspace = true
+serde.workspace = true
+serde-aux.workspace = true
+serde_json.workspace = true
+tabled.workspace = true
+time.workspace = true
+tokio.workspace = true
+toml.workspace = true
+toml_edit.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+assert_cmd.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "2.10.0"
+
+[package.metadata.deb]
+name = "materialize-cli"
+maintainer = "Materialize, Inc."
+copyright = "Materialize, Inc. and contributors"
+section = "utility"
+assets = [
+    ["target/release/mzx", "usr/bin/", "755"],
+]
+depends = "postgresql-client, $auto"
+
+[features]
+default = []

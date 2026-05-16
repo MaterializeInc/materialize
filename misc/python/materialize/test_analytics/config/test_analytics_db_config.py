@@ -16,7 +16,7 @@ from materialize.test_analytics.config.mz_db_config import MzDbConfig
 
 
 def create_test_analytics_config(c: Composition) -> MzDbConfig:
-    """This requires the "mz" service in the composition."""
+    """This requires the "mzx" service in the composition."""
     app_password = os.getenv("PRODUCTION_ANALYTICS_APP_PASSWORD")
 
     if app_password is not None:

@@ -35,7 +35,7 @@ from materialize.mzcompose.composition import (
 )
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
-from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.mzx import Mzx
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.redpanda_cloud import RedpandaCloud
 from materialize.ui import UIError
@@ -214,7 +214,7 @@ SERVICES = [
         sanity_restart=False,
     ),
     Testdrive(),  # Overriden below
-    Mz(
+    Mzx(
         region=REGION,
         environment=ENVIRONMENT,
         app_password=APP_PASSWORD or "",
@@ -268,7 +268,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         test_failed = True
         print(f"Enabling region using Mz version {VERSION} ...")
         try:
-            c.run("mz", "region", "enable", "--version", VERSION)
+            c.run("mzx", "region", "enable", "--version", VERSION)
         except UIError:
             # Work around https://github.com/MaterializeInc/database-issues/issues/4989
             pass
@@ -316,7 +316,7 @@ def disable_region(c: Composition) -> None:
     print(f"Shutting down region {REGION} ...")
 
     try:
-        c.run("mz", "region", "disable", "--hard")
+        c.run("mzx", "region", "disable", "--hard")
     except UIError:
         # Can return: status 404 Not Found
         pass

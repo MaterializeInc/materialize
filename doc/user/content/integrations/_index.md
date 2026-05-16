@@ -23,7 +23,6 @@ available:
 
 ## Materialize Tools
 
-- [mz - Materialize CLI](/integrations/cli/)
 - [mz-debug (Debug tool)](/integrations/mz-debug/)
 
 ## SQL clients/client libraries

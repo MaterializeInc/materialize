@@ -31,16 +31,16 @@ def main() -> None:
     print("--- Checking version")
     assert (
         MzCliVersion.parse_without_prefix(
-            repo.rd.cargo_workspace.crates["mz"].version_string
+            repo.rd.cargo_workspace.crates["mzx"].version_string
         )
         == MZ_CLI_VERSION
     )
 
-    print("--- Building mz")
-    deps = repo.resolve_dependencies([repo.images["mz"]])
+    print("--- Building mzx")
+    deps = repo.resolve_dependencies([repo.images["mzx"]])
     deps.ensure()
-    # Extract the mz binary from the Docker image.
-    mz = repo.rd.cargo_target_dir() / "release" / "mz"
+    # Extract the mzx binary from the Docker image.
+    mz = repo.rd.cargo_target_dir() / "release" / "mzx"
     mz.parent.mkdir(parents=True, exist_ok=True)
     with open(mz, "wb") as f:
         spawn.runv(
@@ -50,8 +50,8 @@ def main() -> None:
                 "--rm",
                 "--entrypoint",
                 "cat",
-                deps["mz"].spec(),
-                "/usr/local/bin/mz",
+                deps["mzx"].spec(),
+                "/usr/local/bin/mzx",
             ],
             stdout=f,
         )
@@ -59,13 +59,13 @@ def main() -> None:
 
     print(f"--- Uploading {target} binary tarball")
     uploader = tarball_uploader.TarballUploader(
-        package_name="mz",
+        package_name="mzx",
         version=deploy_util.MZ_CLI_VERSION,
     )
     uploader.deploy_tarball(target, mz)
 
     print("--- Publishing Debian package")
-    filename = f"mz_{MZ_CLI_VERSION.str_without_prefix()}_{repo.rd.arch.go_str()}.deb"
+    filename = f"mzx_{MZ_CLI_VERSION.str_without_prefix()}_{repo.rd.arch.go_str()}.deb"
     print(f"Publishing {filename}")
     spawn.runv(
         [
@@ -76,7 +76,7 @@ def main() -> None:
             MZ_CLI_VERSION.str_without_prefix(),
             '--deb-revision=""',
             "-p",
-            "mz",
+            "mzx",
             "-o",
             filename,
         ],
