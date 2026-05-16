@@ -613,7 +613,13 @@ async fn handle_mcp_method(
 /// These guide the AI agent on how to use the server correctly.
 fn endpoint_instructions(endpoint_type: McpEndpointType) -> Option<String> {
     match endpoint_type {
-        McpEndpointType::Agent => None,
+        McpEndpointType::Agent => Some(concat!(
+            "You have access to Materialize data products via MCP. ",
+            "Prefer indexed objects (served from memory) over unindexed materialized views ",
+            "(read from persistent storage). Indexes are cluster-local; if a data product's ",
+            "cluster differs from your session, pass the `cluster` parameter to `read_data_product` ",
+            "so the index is actually used.",
+        ).to_string()),
         McpEndpointType::Developer => Some(concat!(
             "You are connected to the Materialize developer MCP server. ",
             "You have read-only access to system catalog tables (mz_*, pg_catalog, information_schema) ",
