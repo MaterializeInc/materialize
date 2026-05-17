@@ -13,7 +13,7 @@ The goal is to lock in the boolean truth tables for `AND` and `OR` over the four
 * `Mz/PrimEval.lean`: primitive evaluators on `Datum` and `List Datum` — `evalAnd`, `evalOr`, `evalNot`, `evalIfThen`, `Env`, `Env.get`, `evalAndN`, `evalOrN`, `evalCoalesce`. Split out so the algebraic-law files and the expression-level evaluator can both import them without circular dependencies.
 * `Mz/Eval.lean`: the big-step `eval : Env → Expr → Datum`. List-carrying constructors evaluate each operand and hand the result list to the matching primitive.
 * `Mz/Boolean.lean`: per-cell truth-table proofs for `AND`, `OR`, and `NOT`, plus involutivity of `NOT`.
-* `Mz/MightError.lean`: the conservative `Expr.might_error` static analyzer, the `Env.ErrFree` predicate, and the `might_error_sound` theorem. The list-carrying constructors are currently tainted unconditionally; soundness extends trivially for them and tightens in a future iteration.
+* `Mz/MightError.lean`: the `Expr.might_error` static analyzer, the `Env.ErrFree` predicate, and the `might_error_sound` theorem. `andN` and `orN` recurse into their operand list via the mutually-recursive `Expr.argsMightError`; soundness for those cases extracts a per-operand non-erroring witness through `Expr.argsMightError_of_mem` and recurses. `coalesce` is still tainted unconditionally and soundness for it is vacuous.
 * `Mz/Strict.lean`: strictness predicates (`ErrStrictUnary`, `ErrStrictBinary`, `NullStrictUnary`), positive instances for `evalNot` and the condition slot of `evalIfThen`, closure under composition, and negative results witnessing that `AND` and `OR` are *not* err-strict in either position.
 * `Mz/Coalesce.lean`: laws for `evalCoalesce` — error-rescue, null-beats-err tiebreak, first-error stickiness.
 * `Mz/Laws.lean`: algebraic laws — two-sided identity (`TRUE` for `AND`, `FALSE` for `OR`), idempotence (unconditional), commutativity (conditional on error-freedom of operands), and `Expr`-level reorder safety as a corollary of soundness.
@@ -64,7 +64,7 @@ Reviewers should expect both sides of the change in the same PR.
 
 The roadmap in priority order:
 
-* Tighten `Expr.might_error` for the list-carrying constructors. The current placeholder always taints `andN` / `orN` / `coalesce`, which makes the soundness theorem vacuous for those constructors. Real analysis is a list-induction over operands.
+* Tighten `Expr.might_error` for `.coalesce`. The current placeholder taints unconditionally; a precise analyzer would reason about the rescue rule (one statically-safe operand makes the whole coalesce safe). Requires a list-induction analogous to `Expr.argsMightError_of_mem` plus an `evalCoalesce_not_err` helper.
 * Variadic absorption at the `Expr` level: `FALSE ∈ args → eval env (.andN args) = .bool false` for a closed term. Mirrors `evalAndN_false_absorbs`, lifted through `eval`.
 * Tightening `Expr.might_error`. The skeleton version is purely structural and ignores type / nullability information; bringing it closer to `MirScalarExpr::might_error` is additive.
 * Lift to bag semantics for predicate / projection rewrites.
