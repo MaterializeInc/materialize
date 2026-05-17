@@ -893,7 +893,7 @@ class SelfManagedRandomUpgradePath(Scenario):
                     Manipulate(self, phase=2, mz_service=service_info.service_name),
                 )
 
-            if i >= both_done_at_position and service_info.service_name is None:
+            if i >= both_done_at_position and service_info.version is None:
                 actions.append(
                     Validate(self, mz_service=service_info.service_name),
                 )
