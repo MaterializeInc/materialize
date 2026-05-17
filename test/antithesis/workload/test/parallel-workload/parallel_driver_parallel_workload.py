@@ -104,10 +104,14 @@ os.environ.setdefault("MZ_DATA_INGEST_PG_HOST", "postgres")
 
 LOG = helper_logging.setup_logging("driver.parallel_workload")
 
-# Antithesis Test Composer invokes drivers in tight loops, so this script is
-# intentionally short. The cap exists so a single iteration can't monopolise
-# the fault-injection budget; the goal is repeated short bursts.
-RUNTIME_S = float(os.environ.get("PW_RUNTIME_S", "20"))
+# Per-invocation runtime budget for the worker pool. Sized for substantive
+# coverage per iteration: most of the framework's value (cross-action races,
+# DDL-DML-fetch interleaving, source/sink wiring) only shows up once the
+# seed-scoped database has accumulated objects, which costs ~10-30s of
+# setup-shaped work before the interesting steady state begins. The Test
+# Composer still re-launches the driver freely; Antithesis runs typically
+# fit several invocations per timeline.
+RUNTIME_S = float(os.environ.get("PW_RUNTIME_S", "300"))
 NUM_THREADS = int(os.environ.get("PW_THREADS", "4"))
 
 # Number of long-lived pool_cluster_<i> clusters the workload-entrypoint
@@ -517,6 +521,51 @@ def _spawn_workers(
     return workers, threads
 
 
+# Soft-signal: bounded poll for the server-side view of worker sessions
+# clearing. Upstream's `parallel_workload.run()` does an analogous 30s
+# wait against `mz_internal.mz_sessions` filtered to `connection_id <>
+# pg_backend_pid()`; under Antithesis we filter to the specific worker
+# pids so concurrent parallel-driver invocations don't muddy the signal.
+SESSION_DRAIN_BUDGET_S = 30.0
+SESSION_DRAIN_POLL_S = 1.0
+
+
+def _check_sessions_drained(worker_pids: list[int]) -> bool:
+    """Best-effort: poll `mz_sessions` until none of `worker_pids` remain.
+
+    Returns True if every worker pid has cleared (or `worker_pids` is
+    empty), False on timeout or query failure. Pure signal — never raises.
+    """
+    if not worker_pids:
+        return True
+    deadline = time.monotonic() + SESSION_DRAIN_BUDGET_S
+    while time.monotonic() < deadline:
+        try:
+            with (
+                psycopg.connect(
+                    host=PGHOST,
+                    port=PGPORT,
+                    user=PGUSER,
+                    dbname=PGDATABASE,
+                    autocommit=True,
+                    connect_timeout=CONNECT_TIMEOUT_S,
+                ) as conn,
+                conn.cursor() as cur,
+            ):
+                cur.execute(
+                    "SELECT count(*) FROM mz_internal.mz_sessions "
+                    "WHERE connection_id = ANY(%s)",
+                    (worker_pids,),
+                )
+                row = cur.fetchone()
+                if row is not None and row[0] == 0:
+                    return True
+        except Exception as exc:  # noqa: BLE001
+            LOG.debug("session-drain probe failed: %s", exc)
+        time.sleep(SESSION_DRAIN_POLL_S)
+    return False
+
+
 def main() -> int:
     seed = str(helper_random.random_u64())
     # AntithesisRandom routes every getrandbits/random call through the
@@ -658,11 +707,26 @@ def _run_invocation(
                 for thread in threads:
                     thread.join(timeout=30)
     finally:
+        # Snapshot the pid each worker last held while `workers` is still
+        # in scope and before the cleanup connection muddies the picture.
+        # After Worker.run returns the worker has closed its psycopg
+        # connection, so these pids should disappear from
+        # `mz_internal.mz_sessions` within a few seconds.
+        worker_pids = sorted(
+            {
+                w.exe.pg_pid
+                for w in workers
+                if w.exe is not None and w.exe.pg_pid not in (None, -1)
+            }
+        )
         # Always free this invocation's seed-scoped state, including its
         # pool-slot cluster, so the next driver invocation can claim the
         # slot cleanly. Wrapped in try/except inside the helper; any
         # cleanup failure is logged but never escapes.
         _drop_seed_scoped_objects(seed)
+        # Probe the SUT-side view of the worker sessions after cleanup
+        # has released its own connection. Best-effort; signal only.
+        sessions_drained = _check_sessions_drained(worker_pids)
 
     total_queries = sum(w.num_queries.total() for w in workers)
     total_ignored = sum(
@@ -685,6 +749,33 @@ def _run_invocation(
         total_ignored > 0,
         "parallel workload: expected concurrent-catalog races were observed",
         {"ignored_errors": total_ignored},
+    )
+
+    # Soft-signal liveness: the system mostly runs cleanly. Upstream
+    # `parallel_workload.run()` asserts `failed < 50%` as a hard gate, but
+    # Antithesis fault injection is more aggressive than the bracketed
+    # upstream scenarios, so a hard `always` would tip on real fault windows.
+    # `sometimes(<50%)` is the right shape: if this never fires, the workload
+    # is permanently swamped by errors and the other assertions are vacuous.
+    failed_rate = (total_ignored / total_queries) if total_queries > 0 else 0.0
+    sometimes(
+        total_queries > 0 and failed_rate < 0.5,
+        "parallel workload: < 50% of queries failed (system mostly clean)",
+        {
+            "queries": total_queries,
+            "ignored": total_ignored,
+            "failed_rate": failed_rate,
+        },
+    )
+
+    # Soft-signal liveness: after workers exit, their server-side sessions
+    # eventually clear. Mirrors upstream's post-run session-drain check;
+    # under fault injection this may legitimately fail (paused environmentd
+    # never gets to reap the session), so `sometimes` not `always`.
+    sometimes(
+        sessions_drained,
+        "parallel workload: worker sessions cleared from mz_sessions post-exit",
+        {"worker_pids": worker_pids, "drained": sessions_drained},
     )
 
     # Setup-phase failures whose message matches `_SETUP_*_PATTERNS` are
