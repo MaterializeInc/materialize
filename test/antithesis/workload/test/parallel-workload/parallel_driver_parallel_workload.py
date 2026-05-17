@@ -292,11 +292,31 @@ _SETUP_FAULT_PATTERNS = (
     # Distinct from "Failed to resolve hostname" (which is materialized's
     # own catch-all wording for the same condition).
     "failed to lookup address information",
+    # Python-side wording for the same condition: when the workload
+    # container's own resolver hits an EAI_AGAIN, glibc surfaces it via
+    # socket.gaierror as "[Errno -3] Temporary failure in name resolution".
+    # We see this on psycopg.connect / requests.get against `kafka`,
+    # `postgres-metadata`, etc. while Antithesis has the DNS path
+    # partitioned.
+    "Temporary failure in name resolution",
     # psycopg's wording when the server-side connection drops mid-statement
     # — e.g. Antithesis kills environmentd while CREATE CONNECTION's
     # validation is in flight.  The CREATE may or may not have committed;
     # the IF NOT EXISTS on these statements makes the next call idempotent.
     "the connection is lost",
+    # CREATE CONNECTION TO ICEBERG CATALOG validates by listing namespaces
+    # against polaris, which forces polaris to read its catalog state from
+    # postgres-metadata.  An Antithesis fault on postgres-metadata during
+    # that read terminates polaris's backing connection (`pg_terminate_backend`
+    # under the hood); polaris's JDBC layer surfaces it as a Postgres FATAL
+    # 57P01 wrapped in `failed to list namespaces: DataInvalid` from
+    # materialized's validation path.
+    "terminating connection due to administrator command",
+    # Same path as above, different fault timing: postgres-metadata pauses
+    # long enough that polaris's connection pool (HikariCP-style) exhausts
+    # waiting for a fresh connection and times out.  Same DataInvalid
+    # wrapper from materialized; distinct inner cause.
+    "Acquisition timeout while waiting for new connection",
 )
 
 
