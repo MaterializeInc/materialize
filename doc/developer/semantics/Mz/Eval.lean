@@ -49,6 +49,15 @@ def evalOr : Datum → Datum → Datum
   | _, .null      => .null
   | .bool false, .bool false => .bool false
 
+/-- NOT evaluation table.
+
+`Not` is strict in the SQL sense: it propagates `null` and `err` while
+flipping `true ↔ false`. -/
+def evalNot : Datum → Datum
+  | .bool b => .bool (!b)
+  | .null   => .null
+  | .err e  => .err e
+
 /-- Environment: a positional list of bindings for `Expr.col`. -/
 abbrev Env := List Datum
 
@@ -66,6 +75,7 @@ def eval (env : Env) : Expr → Datum
   | .col i        => Env.get env i
   | .and a b      => evalAnd (eval env a) (eval env b)
   | .or  a b      => evalOr  (eval env a) (eval env b)
+  | .not a        => evalNot (eval env a)
   | .ifThen c t e =>
     match eval env c with
     | .bool true  => eval env t

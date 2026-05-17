@@ -73,4 +73,19 @@ theorem or_err_null (e : EvalError) :
 theorem or_err_err (e₁ e₂ : EvalError) :
     evalOr (.err e₁) (.err e₂) = .err e₁ := rfl
 
+/-! ## NOT -/
+
+theorem not_true  : evalNot (.bool true)  = .bool false := rfl
+theorem not_false : evalNot (.bool false) = .bool true  := rfl
+theorem not_null  : evalNot .null = .null := rfl
+theorem not_err (e : EvalError) : evalNot (.err e) = .err e := rfl
+
+/-- `Not` is involutive on the boolean fragment and a no-op on `null`
+and `err`. The latter mirrors the strict propagation rule. -/
+theorem not_not (d : Datum) : evalNot (evalNot d) = d := by
+  cases d with
+  | bool b => cases b <;> rfl
+  | null   => rfl
+  | err _  => rfl
+
 end Mz
