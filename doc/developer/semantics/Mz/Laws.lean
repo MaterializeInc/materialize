@@ -1,4 +1,5 @@
 import Mz.Eval
+import Mz.MightError
 
 /-!
 # Algebraic laws
@@ -83,5 +84,31 @@ theorem evalOr_comm_of_no_err
     | null    => rfl
     | err _   => exact (h₂ trivial).elim
   | err _ => exact (h₁ trivial).elim
+
+/-! ## Reorder safety on `Expr`
+
+These corollaries lift the conditional commutativity laws above
+through `eval`. They are the precondition an optimizer must check
+before swapping conjuncts: both operands must be statically proved
+error-free by `might_error`, and the surrounding environment must be
+error-free. -/
+
+theorem eval_and_comm_of_no_might_error
+    {a b : Expr} {env : Env}
+    (ha : ¬(a.might_error = true)) (hb : ¬(b.might_error = true))
+    (hEnv : env.ErrFree) :
+    eval env (.and a b) = eval env (.and b a) := by
+  have hae := might_error_sound ha hEnv
+  have hbe := might_error_sound hb hEnv
+  exact evalAnd_comm_of_no_err hae hbe
+
+theorem eval_or_comm_of_no_might_error
+    {a b : Expr} {env : Env}
+    (ha : ¬(a.might_error = true)) (hb : ¬(b.might_error = true))
+    (hEnv : env.ErrFree) :
+    eval env (.or a b) = eval env (.or b a) := by
+  have hae := might_error_sound ha hEnv
+  have hbe := might_error_sound hb hEnv
+  exact evalOr_comm_of_no_err hae hbe
 
 end Mz

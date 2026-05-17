@@ -10,9 +10,10 @@ The goal is to lock in the boolean truth tables for `AND` and `OR` over the four
 
 * `Mz/Datum.lean`: `Datum`, `EvalError`, and the `Datum.IsErr` predicate.
 * `Mz/Expr.lean`: a minimal `Expr` inductive (literals, columns, binary `and`/`or`, `not`, `ifThen`).
-* `Mz/Eval.lean`: `evalAnd`, `evalOr`, `evalNot`, and `eval` matching the runtime in `src/expr/src/scalar/func/variadic.rs`.
+* `Mz/Eval.lean`: `evalAnd`, `evalOr`, `evalNot`, `evalIfThen`, and `eval` matching the runtime in `src/expr/src/scalar/func/variadic.rs`. `Env.get` is defined by primitive recursion to keep inductive proofs simple.
 * `Mz/Boolean.lean`: per-cell truth-table proofs for `AND`, `OR`, and `NOT`, plus involutivity of `NOT`.
-* `Mz/Laws.lean`: algebraic laws — idempotence (unconditional) and commutativity (conditional on error-freedom).
+* `Mz/MightError.lean`: the conservative `Expr.might_error` static analyzer, the `Env.ErrFree` predicate, and the `might_error_sound` theorem that the optimizer needs in order to trust the analyzer's verdict.
+* `Mz/Laws.lean`: algebraic laws — idempotence (unconditional), commutativity (conditional on error-freedom of operands), and `Expr`-level reorder safety as a corollary of soundness.
 
 ## What is not here
 
@@ -58,11 +59,10 @@ Reviewers should expect both sides of the change in the same PR.
 
 The roadmap in priority order:
 
-* `Expr.might_error` predicate plus soundness: `¬might_error e → ∀ env err-free, ¬(eval env e).IsErr`.
-* Reorder-safety conditions on `Expr`: lift `evalAnd_comm_of_no_err` to `eval env (And a b) = eval env (And b a)` when `¬a.might_error ∧ ¬b.might_error`.
-* Strict-propagation theorem: any strict function applied to `err` returns `err`.
-* Coalesce error-rescue law: `coalesce(err, x) = x`.
-* Variadic `And` and `Or` via fold, with equivalence to the binary form.
+* Strict-propagation theorem: any strict function applied to `err` returns `err`. Requires introducing a `Strict` predicate on functions and proving closure under composition.
+* Coalesce error-rescue law: `coalesce(err, x) = x`. Requires an `n`-ary `coalesce` operator on the `Expr` side.
+* Variadic `And` and `Or` via fold, with equivalence to the binary form. The binary truth tables and laws transport to the variadic form by induction on the operand list.
+* Tightening `Expr.might_error`. The skeleton version is purely structural and ignores type / nullability information; bringing it closer to `MirScalarExpr::might_error` is additive.
 * Lift to bag semantics for predicate / projection rewrites.
 
 The diff-semiring extension for global errors is a separate v2 effort.
