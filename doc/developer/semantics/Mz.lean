@@ -4,4 +4,5 @@ import Mz.Eval
 import Mz.Boolean
 import Mz.MightError
 import Mz.Strict
+import Mz.Coalesce
 import Mz.Laws

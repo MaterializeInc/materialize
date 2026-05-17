@@ -1,0 +1,115 @@
+import Mz.Eval
+
+/-!
+# `coalesce` and the error-rescue law
+
+`coalesce(d₁, …, dₙ)` returns the first operand that is neither
+`null` nor `err`, evaluating left to right. The proposed extension
+over PostgreSQL is that `err` is rescuable in the same way `null`
+is: a later non-error operand can substitute for an earlier one,
+whether that earlier one was `null`, `err`, or any combination.
+
+When no concrete value is found, the result follows a `null`-beats-
+`err` rule:
+
+* If any operand was `null`, return `null`.
+* Otherwise, if any operand was `err`, return the first such `err`.
+* Otherwise (the empty list), return `null`.
+
+The "`null` beats `err`" tiebreaker preserves PostgreSQL's familiar
+`coalesce` behavior for the all-`null` case while extending it
+cleanly. It is the dual of the strict-function rule documented in
+`Mz/Strict.lean`: strict functions promote `err` above `null` in the
+result of a per-cell computation; `coalesce` is non-strict and
+demotes `err` below `null`.
+-/
+
+namespace Mz
+
+/-- Tail-recursive state machine for `evalCoalesce`. State carries:
+
+* `seenNull`: whether any preceding operand was `null`. Sticky bit.
+* `firstErr`: the payload of the earliest `err` operand encountered,
+  if any.
+
+Encountering a concrete `.bool b` returns immediately and bypasses
+the state. -/
+private def Coalesce.go (seenNull : Bool) (firstErr : Option EvalError) :
+    List Datum → Datum
+  | []              =>
+    if seenNull then .null
+    else
+      match firstErr with
+      | some e => .err e
+      | none   => .null
+  | .bool b :: _    => .bool b
+  | .null   :: rest => Coalesce.go true firstErr rest
+  | .err e  :: rest =>
+    match firstErr with
+    | some _ => Coalesce.go seenNull firstErr rest
+    | none   => Coalesce.go seenNull (some e) rest
+
+/-- The `coalesce` evaluator. Walks operands left to right and returns
+the first concrete value, with the `null`-beats-`err` tiebreak when no
+concrete value is found. -/
+def evalCoalesce : List Datum → Datum :=
+  Coalesce.go false none
+
+/-! ## Base cases -/
+
+theorem coalesce_nil : evalCoalesce [] = .null := rfl
+
+theorem coalesce_singleton_bool (b : Bool) :
+    evalCoalesce [.bool b] = .bool b := rfl
+
+theorem coalesce_singleton_null :
+    evalCoalesce [.null] = .null := rfl
+
+theorem coalesce_singleton_err (e : EvalError) :
+    evalCoalesce [.err e] = .err e := rfl
+
+/-! ## Error-rescue laws
+
+The defining property of the proposed `coalesce`: a later non-error,
+non-null operand rescues an earlier `err` exactly as it rescues an
+earlier `null`. -/
+
+theorem coalesce_err_rescue_bool (e : EvalError) (b : Bool) :
+    evalCoalesce [.err e, .bool b] = .bool b := rfl
+
+theorem coalesce_null_rescue_bool (b : Bool) :
+    evalCoalesce [.null, .bool b] = .bool b := rfl
+
+/-! ## `null` beats `err` -/
+
+theorem coalesce_null_then_err (e : EvalError) :
+    evalCoalesce [.null, .err e] = .null := rfl
+
+theorem coalesce_err_then_null (e : EvalError) :
+    evalCoalesce [.err e, .null] = .null := rfl
+
+/-! ## First error wins among errors -/
+
+theorem coalesce_first_err_wins (e₁ e₂ : EvalError) :
+    evalCoalesce [.err e₁, .err e₂] = .err e₁ := rfl
+
+/-! ## Three-operand examples
+
+These nail down the interaction between several `err`s, a `null`,
+and a concrete value. They are intentionally stated as concrete
+equations rather than universal laws so that a regression in
+`Coalesce.go` breaks the offending equation in isolation. -/
+
+theorem coalesce_err_err_bool (e₁ e₂ : EvalError) (b : Bool) :
+    evalCoalesce [.err e₁, .err e₂, .bool b] = .bool b := rfl
+
+theorem coalesce_err_err_null (e₁ e₂ : EvalError) :
+    evalCoalesce [.err e₁, .err e₂, .null] = .null := rfl
+
+theorem coalesce_err_null_err (e₁ e₂ : EvalError) :
+    evalCoalesce [.err e₁, .null, .err e₂] = .null := rfl
+
+theorem coalesce_null_err_bool (e : EvalError) (b : Bool) :
+    evalCoalesce [.null, .err e, .bool b] = .bool b := rfl
+
+end Mz
