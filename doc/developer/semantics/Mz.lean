@@ -7,3 +7,4 @@ import Mz.Strict
 import Mz.Coalesce
 import Mz.Laws
 import Mz.Variadic
+import Mz.ExprVariadic

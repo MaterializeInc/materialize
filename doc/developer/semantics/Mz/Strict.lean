@@ -1,4 +1,4 @@
-import Mz.Eval
+import Mz.PrimEval
 
 /-!
 # Strict propagation

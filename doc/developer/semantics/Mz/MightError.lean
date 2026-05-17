@@ -78,7 +78,13 @@ theorem evalIfThen_not_err
 /-- Returns `true` when `e` might evaluate to an `err`. The current
 implementation is purely structural and conservative: any literal
 `err` taints every ancestor. Columns are assumed not to contain errors
-(see `Env.ErrFree`). -/
+(see `Env.ErrFree`).
+
+For the list-carrying constructors (`andN`, `orN`, `coalesce`) the
+skeleton is maximally conservative — they always taint. A future
+refinement would recurse into `args` and (for `coalesce`) reason
+about the rescue rule, but the present version keeps the soundness
+proof trivial for those cases. -/
 def Expr.might_error : Expr → Bool
   | .lit (.err _)   => true
   | .lit _          => false
@@ -87,6 +93,9 @@ def Expr.might_error : Expr → Bool
   | .or  a b        => a.might_error || b.might_error
   | .not a          => a.might_error
   | .ifThen c t e   => c.might_error || t.might_error || e.might_error
+  | .andN _         => true
+  | .orN _          => true
+  | .coalesce _     => true
 
 /-! ## Error-free environments -/
 
@@ -119,58 +128,66 @@ theorem Env.get_not_err {env : Env} (hErr : env.ErrFree) (i : Nat) :
 /-- If `might_error e` is `false` and the environment carries no
 errors, then `eval env e` is not an error.
 
-The proof is structural induction on `e`. For each compound case the
-hypothesis `¬e.might_error = true` decomposes into per-subexpression
-hypotheses via `Bool` distribution. The matching helper lemma
-(`evalAnd_not_err`, etc.) then concludes. -/
-theorem might_error_sound {e : Expr} :
-    ∀ {env : Env},
-      ¬(e.might_error = true) → env.ErrFree → ¬(eval env e).IsErr := by
-  induction e with
-  | lit d =>
-    intro _ hMe _ hRes
-    -- `eval env (lit d) = d`. If `d` were `err`, `might_error (lit d) = true`,
-    -- contradicting `hMe`. The other cases reduce `IsErr d` to `False`.
+The proof is structural recursion on `e`. The `induction` tactic
+cannot be used on `Expr` because it is a nested inductive type (the
+`andN` / `orN` / `coalesce` constructors carry `List Expr`), so the
+proof is written as a recursive `theorem` that pattern-matches the
+constructor and recurses on subexpressions. For each compound case
+the hypothesis `¬e.might_error = true` decomposes into
+per-subexpression hypotheses via `Bool` distribution. The matching
+helper lemma (`evalAnd_not_err`, etc.) then concludes.
+
+The list-carrying constructors are handled vacuously: `might_error`
+returns `true` on them unconditionally, so the soundness premise is
+absurd. A future refinement will tighten `might_error` to inspect
+operands and add real proofs for those cases. -/
+theorem might_error_sound :
+    ∀ (e : Expr) (env : Env),
+      ¬(e.might_error = true) → env.ErrFree → ¬(eval env e).IsErr
+  | .lit d, _, hMe, _ => by
+    intro hRes
+    simp only [eval] at hRes
     cases d with
     | bool _ => cases hRes
     | null   => cases hRes
     | err _  => exact hMe rfl
-  | col i =>
-    intro env _ hEnv
-    -- `eval env (col i) = Env.get env i`, error-freedom of the env carries.
-    show ¬(Env.get env i).IsErr
-    exact Env.get_not_err hEnv i
-  | and a b ih_a ih_b =>
-    intro env hMe hEnv
-    have ha : ¬(a.might_error = true) := by
-      intro h; apply hMe; simp [Expr.might_error, h]
-    have hb : ¬(b.might_error = true) := by
-      intro h; apply hMe; simp [Expr.might_error, h]
-    show ¬(evalAnd (eval env a) (eval env b)).IsErr
-    exact evalAnd_not_err (ih_a ha hEnv) (ih_b hb hEnv)
-  | or a b ih_a ih_b =>
-    intro env hMe hEnv
-    have ha : ¬(a.might_error = true) := by
-      intro h; apply hMe; simp [Expr.might_error, h]
-    have hb : ¬(b.might_error = true) := by
-      intro h; apply hMe; simp [Expr.might_error, h]
-    show ¬(evalOr (eval env a) (eval env b)).IsErr
-    exact evalOr_not_err (ih_a ha hEnv) (ih_b hb hEnv)
-  | not a ih_a =>
-    intro env hMe hEnv
-    have ha : ¬(a.might_error = true) := by
-      intro h; apply hMe; simp [Expr.might_error, h]
-    show ¬(evalNot (eval env a)).IsErr
-    exact evalNot_not_err (ih_a ha hEnv)
-  | ifThen c t e ih_c ih_t ih_e =>
-    intro env hMe hEnv
-    have hc : ¬(c.might_error = true) := by
-      intro h; apply hMe; simp [Expr.might_error, h]
-    have ht : ¬(t.might_error = true) := by
-      intro h; apply hMe; simp [Expr.might_error, h]
-    have he : ¬(e.might_error = true) := by
-      intro h; apply hMe; simp [Expr.might_error, h]
-    show ¬(evalIfThen (eval env c) (eval env t) (eval env e)).IsErr
-    exact evalIfThen_not_err (ih_c hc hEnv) (ih_t ht hEnv) (ih_e he hEnv)
+  | .col i, env, _, hEnv => by
+    intro hRes
+    simp only [eval] at hRes
+    exact Env.get_not_err hEnv i hRes
+  | .and a b, env, hMe, hEnv => by
+    intro hRes
+    simp only [eval] at hRes
+    have ha : ¬(a.might_error = true) := fun h => hMe (by simp [Expr.might_error, h])
+    have hb : ¬(b.might_error = true) := fun h => hMe (by simp [Expr.might_error, h])
+    exact evalAnd_not_err
+      (might_error_sound a env ha hEnv)
+      (might_error_sound b env hb hEnv) hRes
+  | .or a b, env, hMe, hEnv => by
+    intro hRes
+    simp only [eval] at hRes
+    have ha : ¬(a.might_error = true) := fun h => hMe (by simp [Expr.might_error, h])
+    have hb : ¬(b.might_error = true) := fun h => hMe (by simp [Expr.might_error, h])
+    exact evalOr_not_err
+      (might_error_sound a env ha hEnv)
+      (might_error_sound b env hb hEnv) hRes
+  | .not a, env, hMe, hEnv => by
+    intro hRes
+    simp only [eval] at hRes
+    have ha : ¬(a.might_error = true) := fun h => hMe (by simp [Expr.might_error, h])
+    exact evalNot_not_err (might_error_sound a env ha hEnv) hRes
+  | .ifThen c t e, env, hMe, hEnv => by
+    intro hRes
+    simp only [eval] at hRes
+    have hc : ¬(c.might_error = true) := fun h => hMe (by simp [Expr.might_error, h])
+    have ht : ¬(t.might_error = true) := fun h => hMe (by simp [Expr.might_error, h])
+    have he : ¬(e.might_error = true) := fun h => hMe (by simp [Expr.might_error, h])
+    exact evalIfThen_not_err
+      (might_error_sound c env hc hEnv)
+      (might_error_sound t env ht hEnv)
+      (might_error_sound e env he hEnv) hRes
+  | .andN _, _, hMe, _ => by intro _; exact hMe rfl
+  | .orN _, _, hMe, _ => by intro _; exact hMe rfl
+  | .coalesce _, _, hMe, _ => by intro _; exact hMe rfl
 
 end Mz

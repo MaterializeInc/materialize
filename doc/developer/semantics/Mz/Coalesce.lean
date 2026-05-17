@@ -1,4 +1,4 @@
-import Mz.Eval
+import Mz.PrimEval
 
 /-!
 # `coalesce` and the error-rescue law
@@ -8,6 +8,9 @@ import Mz.Eval
 over PostgreSQL is that `err` is rescuable in the same way `null`
 is: a later non-error operand can substitute for an earlier one,
 whether that earlier one was `null`, `err`, or any combination.
+
+The evaluator (`evalCoalesce`) and its state-machine helper live in
+`Mz/PrimEval.lean`. This file collects the laws.
 
 When no concrete value is found, the result follows a `null`-beats-
 `err` rule:
@@ -25,35 +28,6 @@ demotes `err` below `null`.
 -/
 
 namespace Mz
-
-/-- Tail-recursive state machine for `evalCoalesce`. State carries:
-
-* `seenNull`: whether any preceding operand was `null`. Sticky bit.
-* `firstErr`: the payload of the earliest `err` operand encountered,
-  if any.
-
-Encountering a concrete `.bool b` returns immediately and bypasses
-the state. -/
-private def Coalesce.go (seenNull : Bool) (firstErr : Option EvalError) :
-    List Datum → Datum
-  | []              =>
-    if seenNull then .null
-    else
-      match firstErr with
-      | some e => .err e
-      | none   => .null
-  | .bool b :: _    => .bool b
-  | .null   :: rest => Coalesce.go true firstErr rest
-  | .err e  :: rest =>
-    match firstErr with
-    | some _ => Coalesce.go seenNull firstErr rest
-    | none   => Coalesce.go seenNull (some e) rest
-
-/-- The `coalesce` evaluator. Walks operands left to right and returns
-the first concrete value, with the `null`-beats-`err` tiebreak when no
-concrete value is found. -/
-def evalCoalesce : List Datum → Datum :=
-  Coalesce.go false none
 
 /-! ## Base cases -/
 
