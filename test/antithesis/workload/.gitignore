@@ -2,3 +2,4 @@
 # mzbuild.yml — committing them would diverge from the source tree.
 /materialize/
 /testdrive-files/
+/groups.yaml

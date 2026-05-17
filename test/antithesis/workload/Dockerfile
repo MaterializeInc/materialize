@@ -7,14 +7,27 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Antithesis workload client for Materialize.
+# Antithesis workload client for Materialize — per-group flavor.
 #
 # Python-based test driver that connects to materialized via pgwire,
 # produces Kafka messages, and emits Antithesis assertions. The
 # parallel-workload driver reuses the real `materialize.parallel_workload`
 # Python package — see mzbuild.yml for the pre-image copy of the slice it
-# needs, and stubs/materialize/mzcompose/ for the docker-compose surface we
-# have to mock out.
+# needs, and stubs/materialize/mzcompose/ for the docker-compose surface
+# we have to mock out.
+#
+# This Dockerfile is shared by every `antithesis-workload-<group>` image
+# under test/antithesis/workloads/<group>/.  Each per-group image dir
+# symlinks `Dockerfile -> ../../workload/Dockerfile` and passes
+# `--build-arg ANTITHESIS_WORKLOAD_GROUP=<group>` via mzbuild.yml.  The
+# build arg drives a one-shot filter that pre-bakes only that group's
+# `first_/parallel_driver_/singleton_driver_/anytime_` scripts (plus
+# all `helper_*.py`) into `/opt/antithesis/test/v1/materialize/`.  Test
+# Composer scans that directory once at run start and runs whatever it
+# finds — so the filter happens at image-build time, not at container
+# startup.
+
+ARG ANTITHESIS_WORKLOAD_GROUP=combined
 
 # Multi-stage source for the testdrive binary used by the testdrive-runner
 # driver (singleton_driver_pg_cdc_testdrive). MZFROM is mzbuild's multi-
@@ -32,10 +45,25 @@ MZFROM testdrive AS testdrive-src
 # (Debian 12, GLIBC 2.36) couldn't load the testdrive binary.
 FROM python:3.12-slim-trixie
 
+# Re-declare the build arg so it's in scope for RUN steps in this stage.
+# (Args before the first FROM are global; reusing them post-FROM requires
+# this re-declaration.)
+ARG ANTITHESIS_WORKLOAD_GROUP
+ENV ANTITHESIS_WORKLOAD_GROUP=${ANTITHESIS_WORKLOAD_GROUP}
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     postgresql-client \
     && rm -rf /var/lib/apt/lists/*
+
+# `mc` (minio client) — single static binary.  Used by
+# `parallel-workload/first_polaris_setup.py` to provision the
+# iceberg-backing bucket in minio before any CreateIcebergSinkAction
+# runs.  Pinned to a recent release for determinism — upstream's
+# `latest` rotates on push.
+RUN curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/archive/mc.RELEASE.2025-04-16T18-13-26Z \
+      -o /usr/local/bin/mc \
+ && chmod +x /usr/local/bin/mc
 
 # `confluent-kafka[avro]` pulls fastavro, which `data_ingest.executor`
 # imports at module top via `confluent_kafka.schema_registry.avro`.
@@ -48,6 +76,7 @@ RUN pip install --no-cache-dir \
     antithesis==0.2.0 \
     PyMySQL==1.1.1 \
     pg8000==1.31.2 \
+    PyYAML==6.0.2 \
     websocket-client==1.8.0 \
     requests==2.32.3 \
     xxhash==3.5.0 \
@@ -56,9 +85,6 @@ RUN pip install --no-cache-dir \
 # setup-complete script
 COPY setup-complete.sh /usr/local/bin/setup-complete.sh
 RUN chmod +x /usr/local/bin/setup-complete.sh
-
-# Test template directory — populated by antithesis-workload skill later
-RUN mkdir -p /opt/antithesis/test/v1/materialize
 
 # Catalog directory for Python assertion cataloging
 RUN mkdir -p /opt/antithesis/catalog
@@ -91,10 +117,38 @@ RUN ldconfig
 # /opt/testdrive-files, e.g. /opt/testdrive-files/test/pg-cdc/dropped-slot-errors.td.
 COPY testdrive-files/ /opt/testdrive-files/
 
-# Copy test templates and entrypoint
-COPY test/ /opt/antithesis/test/v1/materialize/
+# Workload-group manifest + script selector, used at *build time*
+# below to pick the per-group subset of scripts.  The manifest stays
+# installed in the image so triage / debugging can recover the same
+# enumeration the build used.
+COPY groups.yaml /opt/antithesis-config/groups.yaml
+COPY scripts-for-group.py /usr/local/bin/scripts-for-group
+RUN chmod +x /usr/local/bin/scripts-for-group
+
+# Shared workload helpers (helper_*.py) live in test/helpers/.  Land
+# them in /opt/antithesis-pkg/helpers/ and add to PYTHONPATH so every
+# driver's `import helper_pg`-style import resolves regardless of
+# which template directory under /opt/antithesis/test/v1/ it lives in.
+# Antithesis ignores `helper_`-prefixed files for command discovery
+# anyway, so it doesn't matter where they sit — PYTHONPATH avoids
+# duplicating them into every template's directory.
+COPY test/helpers/ /opt/antithesis-pkg/helpers/
+ENV PYTHONPATH="${PYTHONPATH}:/opt/antithesis-pkg/helpers"
+
+# Stage the full source tree, then bake the per-template runtime
+# directories.  Antithesis Test Composer scans
+# /opt/antithesis/test/v1/<template>/ once at run start and selects
+# exactly one template per execution history; the bake script reads
+# the manifest via `scripts-for-group` and physically copies each
+# entry into the right runtime directory (with the `defaults/`
+# pseudo-template merged into every real template).  See
+# bake-test-templates.sh for the routing details.
+COPY test/ /opt/antithesis-stage/
+COPY bake-test-templates.sh /usr/local/bin/bake-test-templates.sh
+RUN chmod +x /usr/local/bin/bake-test-templates.sh \
+ && /usr/local/bin/bake-test-templates.sh "$ANTITHESIS_WORKLOAD_GROUP"
+
 COPY workload-entrypoint.sh /usr/local/bin/workload-entrypoint.sh
 RUN chmod +x /usr/local/bin/workload-entrypoint.sh
-RUN chmod +x /opt/antithesis/test/v1/materialize/* 2>/dev/null || true
 
 ENTRYPOINT ["/usr/local/bin/workload-entrypoint.sh"]

@@ -9,12 +9,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# check-antithesis-compose.sh — ensure test/antithesis/config/docker-compose.yaml
-# is in sync with test/antithesis/mzcompose.py.
+# check-antithesis-compose.sh — ensure every test/antithesis/configs/<group>/docker-compose.yaml
+# is in sync with test/antithesis/mzcompose.py + test/antithesis/groups.yaml.
 #
-# Image refs in the committed YAML are `${MATERIALIZED_IMAGE}` style
-# placeholders (resolved from `.env` at compose-parse time), so the file is
-# stable across materialized source changes. A plain diff catches any
+# Image refs in the committed YAMLs are `${MATERIALIZED_IMAGE}` style
+# placeholders (resolved from `.env` at compose-parse time), so the files
+# are stable across materialized source changes. A plain diff catches any
 # composition (services/ports/env/deps) drift.
 
 set -euo pipefail
@@ -24,21 +24,34 @@ cd "$(dirname "$0")/../../../.."
 . misc/shlib/shlib.bash
 
 check_antithesis_compose() {
-    local committed=test/antithesis/config/docker-compose.yaml
-    local generated rc=0
-    generated=$(mktemp)
+    local rc=0
 
-    bin/pyactivate test/antithesis/export-compose.py > "$generated"
+    mapfile -t groups < <(bin/pyactivate -c "
+import sys
+sys.path.insert(0, 'test/antithesis')
+from groups import load_manifest
+for name in sorted(load_manifest().groups):
+    print(name)
+")
 
-    if ! diff -u "$committed" "$generated"; then
-        echo
-        echo "$committed is out of sync with test/antithesis/mzcompose.py."
-        echo "Regenerate with:"
-        echo "  bin/pyactivate test/antithesis/export-compose.py > $committed"
-        rc=1
-    fi
+    for group in "${groups[@]}"; do
+        local committed="test/antithesis/configs/$group/docker-compose.yaml"
+        local generated
+        generated=$(mktemp)
 
-    rm -f "$generated"
+        bin/pyactivate test/antithesis/export-compose.py --group="$group" > "$generated"
+
+        if ! diff -u "$committed" "$generated"; then
+            echo
+            echo "$committed is out of sync with test/antithesis/mzcompose.py + groups.yaml."
+            echo "Regenerate with:"
+            echo "  bin/pyactivate test/antithesis/export-compose.py --group=$group > $committed"
+            rc=1
+        fi
+
+        rm -f "$generated"
+    done
+
     return $rc
 }
 

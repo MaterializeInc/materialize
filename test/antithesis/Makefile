@@ -9,25 +9,26 @@
 
 # Local-dev helper for the Materialize Antithesis harness.
 #
-# Antithesis images ship via the standard mzbuild → GHCR flow; CI publishes
-# the same images CI publishes for everything else, fingerprint-tagged with
-# `mzbuild-<fp>`. Locally, we just acquire the mzbuild images, regenerate
-# the compose YAML, and let `docker compose` find them by their canonical
-# spec.
+# The harness emits one docker-compose.yaml per workload group (see
+# `test/antithesis/groups.yaml`).  Use `GROUP=<name>` to pick one;
+# defaults to `combined` (kitchen-sink) for back-compat.  Valid groups:
+# kafka, pg-cdc, mysql-cdc, parallel-workload, combined.
 #
 # Targets:
-#   make build         # regenerate compose YAML, acquire local mzbuild images
-#   make up            # build + bring up the stack
-#   make down          # tear down (preserves volumes)
-#   make smoke         # build + up + smoke test
-#   make test          # smoke test against a running stack
-#   make clean         # tear down + remove volumes
+#   make build GROUP=kafka           # regen this group's compose YAML, acquire images
+#   make up    GROUP=kafka           # build + bring up the stack
+#   make down  GROUP=kafka           # tear down (preserves volumes)
+#   make smoke GROUP=kafka           # build + up + smoke test
+#   make test  GROUP=kafka           # smoke test against a running stack
+#   make clean GROUP=kafka           # tear down + remove volumes
 #
-#   make build-local   # build for local dev (no --antithesis flavor)
-#   make up-local      # build-local + bring up the stack
+#   make build-local GROUP=kafka     # build for local dev (no --antithesis flavor)
+#   make up-local    GROUP=kafka     # build-local + bring up the stack
+#
+#   make build-all                   # build every group sequentially
 #
 # The `-local` targets are for validating the workload + drivers without
-# the Antithesis platform. They build the plain (non-antithesis-flavored)
+# the Antithesis platform.  They build the plain (non-antithesis-flavored)
 # images, which (a) don't need libvoidstar.so locally and (b) cover all
 # images including new transitive deps (e.g. testdrive) that CI doesn't
 # yet publish under the antithesis flavor.
@@ -35,8 +36,10 @@
 SHELL := /usr/bin/env bash
 .SHELLFLAGS := -eu -o pipefail -c
 
-PROJECT   := materialize-antithesis
+GROUP     ?= combined
+PROJECT   := materialize-antithesis-$(GROUP)
 REPO_ROOT := $(realpath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
+ALL_GROUPS := kafka pg-cdc mysql-cdc parallel-workload combined
 
 # Pick podman if available, else docker.
 ifndef RUNTIME
@@ -49,28 +52,32 @@ ifeq ($(RUNTIME),podman)
   export MZ_DEV_CI_BUILDER_RUNTIME := podman
 endif
 
-COMPOSE_FILE := $(REPO_ROOT)/test/antithesis/config/docker-compose.yaml
-ENV_FILE     := $(REPO_ROOT)/test/antithesis/config/.env
+CONFIG_DIR   := $(REPO_ROOT)/test/antithesis/configs/$(GROUP)
+COMPOSE_FILE := $(CONFIG_DIR)/docker-compose.yaml
+ENV_FILE     := $(CONFIG_DIR)/.env
 COMPOSE      := $(RUNTIME) compose -p $(PROJECT) --env-file $(ENV_FILE) -f $(COMPOSE_FILE)
 PSQL         := $(COMPOSE) exec materialized psql -h localhost -p 6875 -U materialize
 
 # mzbuild images we need built locally. Third-party images (postgres, minio,
 # kafka, …) are pulled by `docker compose` from their upstream registries.
-MZBUILD_IMAGES := materialized antithesis-workload
+# Per-group `antithesis-config-<group>` is built by `mzimage acquire`
+# transitively, since it's a no-op FROM-scratch image referencing the
+# materialized + antithesis-workload fingerprints.
+MZBUILD_IMAGES := materialized antithesis-workload-$(GROUP)
 
 # ---------------------------------------------------------------------------
 # Build
 # ---------------------------------------------------------------------------
-.PHONY: build export-compose export-env acquire-images
+.PHONY: build export-compose export-env acquire-images build-all
 
 build: export-compose export-env acquire-images
 
 export-compose:
-	cd $(REPO_ROOT) && bin/pyactivate test/antithesis/export-compose.py > $(COMPOSE_FILE)
+	cd $(REPO_ROOT) && bin/pyactivate test/antithesis/export-compose.py --group=$(GROUP) > $(COMPOSE_FILE)
 	@echo "Wrote $(COMPOSE_FILE)"
 
 export-env:
-	cd $(REPO_ROOT) && bin/pyactivate test/antithesis/export-env.py > $(ENV_FILE)
+	cd $(REPO_ROOT) && bin/pyactivate test/antithesis/export-env.py --group=$(GROUP) > $(ENV_FILE)
 	@echo "Wrote $(ENV_FILE)"
 
 acquire-images:
@@ -90,6 +97,12 @@ acquire-images:
 	  cd $(REPO_ROOT) && bin/mzimage acquire "$$image" --antithesis --arch x86_64; \
 	done
 
+build-all:
+	@for g in $(ALL_GROUPS); do \
+	  echo "==> Building group: $$g"; \
+	  $(MAKE) build GROUP=$$g; \
+	done
+
 # ---------------------------------------------------------------------------
 # Local (non-antithesis) targets
 # ---------------------------------------------------------------------------
@@ -100,7 +113,7 @@ acquire-images:
 #   * don't need libvoidstar.so installed in the cross-sysroot
 #   * cover all transitive deps (e.g. testdrive), unlike the antithesis
 #     flavor which CI only publishes for materialized + antithesis-workload
-#     + antithesis-config.
+#     + antithesis-config-<group>.
 # The fault-orchestrator service is a no-op outside Antithesis (its
 # pause_faults.sh exits cleanly when ANTITHESIS_STOP_FAULTS is unset), so
 # the topology behaves like a regular docker-compose stack.
@@ -111,12 +124,12 @@ build-local: export-compose-local export-env-local acquire-images-local
 
 export-compose-local:
 	cd $(REPO_ROOT) && bin/pyactivate test/antithesis/export-compose.py \
-	    --no-antithesis > $(COMPOSE_FILE)
+	    --group=$(GROUP) --no-antithesis > $(COMPOSE_FILE)
 	@echo "Wrote $(COMPOSE_FILE) (host arch)"
 
 export-env-local:
 	cd $(REPO_ROOT) && bin/pyactivate test/antithesis/export-env.py \
-	    --no-antithesis > $(ENV_FILE)
+	    --group=$(GROUP) --no-antithesis > $(ENV_FILE)
 	@echo "Wrote $(ENV_FILE) (non-antithesis)"
 
 acquire-images-local:
@@ -160,4 +173,4 @@ test:
 	$(PSQL) -c "DROP TABLE smoke_test"
 
 smoke: up test
-	@echo "[smoke] passed"
+	@echo "[smoke ($(GROUP))] passed"
