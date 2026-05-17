@@ -18,10 +18,16 @@ namespace Mz
 
 * `lit d`: literal datum.
 * `col i`: reference to column `i` in the surrounding environment.
-* `and a b`, `or a b`: logical conjunction and disjunction.
+* `and a b`, `or a b`: binary logical conjunction and disjunction.
 * `not a`: logical negation.
 * `ifThen c t e`: PostgreSQL-style `CASE` / `If` — the only
-  user-controllable short-circuit in `MirScalarExpr`. -/
+  user-controllable short-circuit in `MirScalarExpr`.
+* `andN args`, `orN args`: variadic logical conjunction and
+  disjunction. These match `MirScalarExpr::VariadicFunc::{And, Or}`
+  in the runtime; the binary `and` / `or` constructors are kept
+  alongside for proof convenience.
+* `coalesce args`: the error-rescuing variant of `COALESCE` proposed
+  in `doc/developer/design/20260517_error_handling_semantics.md`. -/
 inductive Expr
   | lit (d : Datum)
   | col (i : Nat)
@@ -29,6 +35,9 @@ inductive Expr
   | or (a b : Expr)
   | not (a : Expr)
   | ifThen (c t e : Expr)
+  | andN (args : List Expr)
+  | orN (args : List Expr)
+  | coalesce (args : List Expr)
   deriving Inhabited
 
 end Mz

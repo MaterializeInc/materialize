@@ -129,8 +129,9 @@ theorem eval_and_comm_of_no_might_error
     (ha : ¬(a.might_error = true)) (hb : ¬(b.might_error = true))
     (hEnv : env.ErrFree) :
     eval env (.and a b) = eval env (.and b a) := by
-  have hae := might_error_sound ha hEnv
-  have hbe := might_error_sound hb hEnv
+  have hae := might_error_sound a env ha hEnv
+  have hbe := might_error_sound b env hb hEnv
+  simp only [eval]
   exact evalAnd_comm_of_no_err hae hbe
 
 theorem eval_or_comm_of_no_might_error
@@ -138,8 +139,9 @@ theorem eval_or_comm_of_no_might_error
     (ha : ¬(a.might_error = true)) (hb : ¬(b.might_error = true))
     (hEnv : env.ErrFree) :
     eval env (.or a b) = eval env (.or b a) := by
-  have hae := might_error_sound ha hEnv
-  have hbe := might_error_sound hb hEnv
+  have hae := might_error_sound a env ha hEnv
+  have hbe := might_error_sound b env hb hEnv
+  simp only [eval]
   exact evalOr_comm_of_no_err hae hbe
 
 end Mz

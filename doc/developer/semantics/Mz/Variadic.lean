@@ -1,13 +1,14 @@
-import Mz.Eval
+import Mz.PrimEval
 import Mz.Laws
 
 /-!
 # Variadic `AND` and `OR`
 
 `MirScalarExpr::VariadicFunc::And` and `Or` take an arbitrary number
-of operands. This file defines their semantic counterparts over
-`List Datum` and shows that the binary `evalAnd` / `evalOr` are the
-two-operand specializations of the variadic forms.
+of operands. This file proves laws about the corresponding
+`List Datum → Datum` evaluators (`evalAndN`, `evalOrN`) defined in
+`Mz/PrimEval.lean`, and shows that the binary `evalAnd` / `evalOr`
+are the two-operand specializations of the variadic forms.
 
 The variadic forms are defined by right-fold so the cons recurrence
 holds by `rfl`. With a left-fold the recurrence would require a
@@ -26,22 +27,6 @@ this skeleton are limited to producing `err`s).
 -/
 
 namespace Mz
-
-/-! ## Definitions -/
-
-/-- Right-fold evaluator for variadic `AND`.
-
-The seed value is `TRUE`, the identity for `evalAnd`. The right-fold
-gives `evalAndN (d :: ds) = evalAnd d (evalAndN ds)` by definition,
-which makes inductive proofs trivial. -/
-def evalAndN : List Datum → Datum
-  | []        => .bool true
-  | d :: rest => evalAnd d (evalAndN rest)
-
-/-- Right-fold evaluator for variadic `OR`. Dual of `evalAndN`. -/
-def evalOrN : List Datum → Datum
-  | []        => .bool false
-  | d :: rest => evalOr d (evalOrN rest)
 
 /-! ## Cons recurrence -/
 

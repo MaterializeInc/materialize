@@ -9,14 +9,16 @@ The goal is to lock in the boolean truth tables for `AND` and `OR` over the four
 ## What is here
 
 * `Mz/Datum.lean`: `Datum`, `EvalError`, and the `Datum.IsErr` predicate.
-* `Mz/Expr.lean`: a minimal `Expr` inductive (literals, columns, binary `and`/`or`, `not`, `ifThen`).
-* `Mz/Eval.lean`: `evalAnd`, `evalOr`, `evalNot`, `evalIfThen`, and `eval` matching the runtime in `src/expr/src/scalar/func/variadic.rs`. `Env.get` is defined by primitive recursion to keep inductive proofs simple.
+* `Mz/Expr.lean`: `Expr` inductive — literals, columns, binary `and`/`or`, `not`, `ifThen`, plus the list-carrying constructors `andN`, `orN`, and `coalesce`.
+* `Mz/PrimEval.lean`: primitive evaluators on `Datum` and `List Datum` — `evalAnd`, `evalOr`, `evalNot`, `evalIfThen`, `Env`, `Env.get`, `evalAndN`, `evalOrN`, `evalCoalesce`. Split out so the algebraic-law files and the expression-level evaluator can both import them without circular dependencies.
+* `Mz/Eval.lean`: the big-step `eval : Env → Expr → Datum`. List-carrying constructors evaluate each operand and hand the result list to the matching primitive.
 * `Mz/Boolean.lean`: per-cell truth-table proofs for `AND`, `OR`, and `NOT`, plus involutivity of `NOT`.
-* `Mz/MightError.lean`: the conservative `Expr.might_error` static analyzer, the `Env.ErrFree` predicate, and the `might_error_sound` theorem that the optimizer needs in order to trust the analyzer's verdict.
+* `Mz/MightError.lean`: the conservative `Expr.might_error` static analyzer, the `Env.ErrFree` predicate, and the `might_error_sound` theorem. The list-carrying constructors are currently tainted unconditionally; soundness extends trivially for them and tightens in a future iteration.
 * `Mz/Strict.lean`: strictness predicates (`ErrStrictUnary`, `ErrStrictBinary`, `NullStrictUnary`), positive instances for `evalNot` and the condition slot of `evalIfThen`, closure under composition, and negative results witnessing that `AND` and `OR` are *not* err-strict in either position.
-* `Mz/Coalesce.lean`: the proposed `coalesce` evaluator and the error-rescue laws. A later non-error, non-null operand rescues an earlier `err` exactly as it rescues a `null`. The `null`-beats-`err` tiebreak preserves the all-`null` behavior PostgreSQL users expect.
+* `Mz/Coalesce.lean`: laws for `evalCoalesce` — error-rescue, null-beats-err tiebreak, first-error stickiness.
 * `Mz/Laws.lean`: algebraic laws — two-sided identity (`TRUE` for `AND`, `FALSE` for `OR`), idempotence (unconditional), commutativity (conditional on error-freedom of operands), and `Expr`-level reorder safety as a corollary of soundness.
-* `Mz/Variadic.lean`: variadic `evalAndN` and `evalOrN` over `List Datum` as right-folds, the binary-equivalence theorems that bridge them to `evalAnd`/`evalOr`, and the `FALSE`/`TRUE` absorption theorems that justify short-circuit evaluation.
+* `Mz/Variadic.lean`: laws for `evalAndN` and `evalOrN` over `List Datum` — cons recurrence, nil, singleton, binary equivalence with the binary evaluators, and `FALSE`/`TRUE` absorption.
+* `Mz/ExprVariadic.lean`: `Expr`-level reduction lemmas connecting `eval env (.andN args)` / `.orN` / `.coalesce` to their primitive counterparts, plus identity / singleton / binary-equivalence corollaries lifted through `eval`.
 
 ## What is not here
 
@@ -62,7 +64,8 @@ Reviewers should expect both sides of the change in the same PR.
 
 The roadmap in priority order:
 
-* Wire `evalAndN`, `evalOrN`, and `evalCoalesce` into `Expr` as `.andN`, `.orN`, and `.coalesce` constructors taking `List Expr`. Termination for the eval clause is the shared engineering effort — once one of these lands, the others follow trivially.
+* Tighten `Expr.might_error` for the list-carrying constructors. The current placeholder always taints `andN` / `orN` / `coalesce`, which makes the soundness theorem vacuous for those constructors. Real analysis is a list-induction over operands.
+* Variadic absorption at the `Expr` level: `FALSE ∈ args → eval env (.andN args) = .bool false` for a closed term. Mirrors `evalAndN_false_absorbs`, lifted through `eval`.
 * Tightening `Expr.might_error`. The skeleton version is purely structural and ignores type / nullability information; bringing it closer to `MirScalarExpr::might_error` is additive.
 * Lift to bag semantics for predicate / projection rewrites.
 
