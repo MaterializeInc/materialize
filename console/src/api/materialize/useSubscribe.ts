@@ -34,6 +34,8 @@ export type UseSubscribeOptions<T extends object, R> = {
   closeSocketOnComplete?: boolean;
   clusterName?: string;
   select?: SelectFunction<T, R>;
+  /** See {@link SubscribeManagerOptions.eagerSnapshotFlush}. */
+  eagerSnapshotFlush?: boolean;
 };
 
 export type UseSubscribeReturn<T> = {
@@ -130,6 +132,7 @@ export function useGlobalUpsertSubscribe<T extends object, R = SubscribeRow<T>>(
       },
       closeSocketOnComplete: options?.closeSocketOnComplete,
       select: options.select,
+      eagerSnapshotFlush: options.eagerSnapshotFlush,
     }),
   );
   useAutomaticallyConnectSocket<T, R>({

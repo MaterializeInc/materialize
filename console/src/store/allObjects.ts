@@ -36,6 +36,7 @@ export function useSubscribeToAllObjects() {
     subscribe,
     select: (row) => row.data,
     upsertKey: (row) => row.data.id,
+    eagerSnapshotFlush: true,
   });
 }
 

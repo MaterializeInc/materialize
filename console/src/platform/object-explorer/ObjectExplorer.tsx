@@ -237,7 +237,8 @@ export const ObjectExplorer = () => {
       />
       {isSchemaError || isObjectError ? (
         <Alert variant="error" message="An unexpected error has occurred" />
-      ) : !schemaSnapshotComplete || !objectSnapshotComplete ? (
+      ) : (!schemaSnapshotComplete && schemas.length === 0) ||
+        (!objectSnapshotComplete && objects.length === 0) ? (
         <LoadingContainer />
       ) : (
         <VStack
