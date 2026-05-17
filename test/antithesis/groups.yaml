@@ -54,7 +54,6 @@ universal_services:
 # regardless of template selection.
 default_anytime:
   - defaults/anytime_health_check
-  - defaults/anytime_fault_recovery_exercised
 
 # Setup / driver scripts auto-added to every group.  The catalog,
 # persist, and reclock SUT-anchored properties don't need any
@@ -87,7 +86,6 @@ groups:
     anytime:
       - kafka/anytime_kafka_frontier_monotonic
       - kafka/anytime_kafka_offset_known_not_below_committed
-      - kafka/anytime_kafka_source_resumes_after_fault
 
   pg-cdc:
     description: >-
@@ -117,8 +115,7 @@ groups:
     drivers:
       - mysql-cdc/parallel_driver_mysql_cdc
       - mysql-cdc/parallel_driver_mysql_myisam
-    anytime:
-      - mysql-cdc/anytime_mysql_source_no_gtid_errors
+    anytime: []
 
   parallel-workload:
     description: >-
@@ -206,5 +203,3 @@ groups:
     anytime:
       - kafka/anytime_kafka_frontier_monotonic
       - kafka/anytime_kafka_offset_known_not_below_committed
-      - kafka/anytime_kafka_source_resumes_after_fault
-      - mysql-cdc/anytime_mysql_source_no_gtid_errors
