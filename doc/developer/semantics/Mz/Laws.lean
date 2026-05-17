@@ -30,6 +30,37 @@ introduces a partial-order on errors.
 
 namespace Mz
 
+/-! ## Identity laws
+
+`TRUE` is the two-sided identity for `evalAnd`; `FALSE` is the
+two-sided identity for `evalOr`. The proofs verify each cell of the
+non-identity argument. Identities are the seed values used by the
+variadic fold in `Mz/Variadic.lean`. -/
+
+theorem evalAnd_true_left (d : Datum) : evalAnd (.bool true) d = d := by
+  cases d with
+  | bool b => cases b <;> rfl
+  | null   => rfl
+  | err _  => rfl
+
+theorem evalAnd_true_right (d : Datum) : evalAnd d (.bool true) = d := by
+  cases d with
+  | bool b => cases b <;> rfl
+  | null   => rfl
+  | err _  => rfl
+
+theorem evalOr_false_left (d : Datum) : evalOr (.bool false) d = d := by
+  cases d with
+  | bool b => cases b <;> rfl
+  | null   => rfl
+  | err _  => rfl
+
+theorem evalOr_false_right (d : Datum) : evalOr d (.bool false) = d := by
+  cases d with
+  | bool b => cases b <;> rfl
+  | null   => rfl
+  | err _  => rfl
+
 /-! ## Idempotence -/
 
 theorem evalAnd_idem (d : Datum) : evalAnd d d = d := by

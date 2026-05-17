@@ -6,3 +6,4 @@ import Mz.MightError
 import Mz.Strict
 import Mz.Coalesce
 import Mz.Laws
+import Mz.Variadic

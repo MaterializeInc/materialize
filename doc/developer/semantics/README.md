@@ -15,7 +15,8 @@ The goal is to lock in the boolean truth tables for `AND` and `OR` over the four
 * `Mz/MightError.lean`: the conservative `Expr.might_error` static analyzer, the `Env.ErrFree` predicate, and the `might_error_sound` theorem that the optimizer needs in order to trust the analyzer's verdict.
 * `Mz/Strict.lean`: strictness predicates (`ErrStrictUnary`, `ErrStrictBinary`, `NullStrictUnary`), positive instances for `evalNot` and the condition slot of `evalIfThen`, closure under composition, and negative results witnessing that `AND` and `OR` are *not* err-strict in either position.
 * `Mz/Coalesce.lean`: the proposed `coalesce` evaluator and the error-rescue laws. A later non-error, non-null operand rescues an earlier `err` exactly as it rescues a `null`. The `null`-beats-`err` tiebreak preserves the all-`null` behavior PostgreSQL users expect.
-* `Mz/Laws.lean`: algebraic laws — idempotence (unconditional), commutativity (conditional on error-freedom of operands), and `Expr`-level reorder safety as a corollary of soundness.
+* `Mz/Laws.lean`: algebraic laws — two-sided identity (`TRUE` for `AND`, `FALSE` for `OR`), idempotence (unconditional), commutativity (conditional on error-freedom of operands), and `Expr`-level reorder safety as a corollary of soundness.
+* `Mz/Variadic.lean`: variadic `evalAndN` and `evalOrN` over `List Datum` as right-folds, the binary-equivalence theorems that bridge them to `evalAnd`/`evalOr`, and the `FALSE`/`TRUE` absorption theorems that justify short-circuit evaluation.
 
 ## What is not here
 
@@ -61,8 +62,7 @@ Reviewers should expect both sides of the change in the same PR.
 
 The roadmap in priority order:
 
-* Wire `evalCoalesce` into `Expr` as `.coalesce (args : List Expr)`, with the eval clause and the lifted error-rescue theorems. Defer until the variadic `And`/`Or` ctors land in the same commit (the termination story is shared between them).
-* Variadic `And` and `Or` via fold, with equivalence to the binary form. The binary truth tables and laws transport to the variadic form by induction on the operand list.
+* Wire `evalAndN`, `evalOrN`, and `evalCoalesce` into `Expr` as `.andN`, `.orN`, and `.coalesce` constructors taking `List Expr`. Termination for the eval clause is the shared engineering effort — once one of these lands, the others follow trivially.
 * Tightening `Expr.might_error`. The skeleton version is purely structural and ignores type / nullability information; bringing it closer to `MirScalarExpr::might_error` is additive.
 * Lift to bag semantics for predicate / projection rewrites.
 
