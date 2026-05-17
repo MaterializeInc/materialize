@@ -23,9 +23,13 @@ translate to the Antithesis topology:
 
   * Faults are injected at the container layer by Antithesis itself, so we
     don't spawn `KillAction`/`BackupRestoreAction`/`ZeroDowntimeDeployAction`
-    worker threads. We still tag the database with `Scenario.Kill` so each
-    `Action.errors_to_ignore` includes connection-shaped errors — those are
-    expected here.
+    worker threads (each calls into `composition.kill/up/exec`, which the
+    workload container can't reach). We still tag the database with
+    `Scenario.Kill` so each `Action.errors_to_ignore` includes
+    connection-shaped errors — those are expected here. `CancelAction` is
+    the one scenario worker we do spawn, since `pg_cancel_backend` racing
+    DDL/DML is a SQL-only operation and adds coverage the container-fault
+    path doesn't replicate.
   * `Database.create` unconditionally calls `setup_polaris_for_iceberg(...)`
     and creates `postgres_conn` / `sql_server_conn` against services that
     aren't in the Antithesis compose. We override `create` to skip that
@@ -61,6 +65,8 @@ from antithesis.assertions import always, sometimes
 from materialize.data_ingest.query_error import QueryError
 from materialize.parallel_workload import executor as _pw_executor
 from materialize.parallel_workload.action import (
+    Action,
+    CancelAction,
     ddl_action_list,
     dml_nontrans_action_list,
     fetch_action_list,
@@ -93,6 +99,25 @@ from materialize.parallel_workload.worker_exception import WorkerFailedException
 # names to no-op values so `log()` returns immediately.
 _pw_executor.logging = None
 _pw_executor.lock = threading.Lock()
+
+# Upstream gates `"canceling statement due to user request"` on
+# `Scenario.Cancel`, but our `Database` is tagged `Scenario.Kill` to pick up
+# the connection-shape tolerance set (the two enum tracks are
+# scenario-disjoint upstream). Under Antithesis we spawn a CancelAction
+# worker alongside the regular pool, so the regular workers WILL see the
+# cancel string mid-DDL/DML and must tolerate it. Patch the base class so
+# every subclass's `errors_to_ignore` (which all chain through
+# `super().errors_to_ignore(exe)`) picks it up.
+_orig_errors_to_ignore = Action.errors_to_ignore
+
+
+def _antithesis_errors_to_ignore(self: Action, exe: Executor) -> list[str]:
+    return _orig_errors_to_ignore(self, exe) + [
+        "canceling statement due to user request",
+    ]
+
+
+Action.errors_to_ignore = _antithesis_errors_to_ignore  # type: ignore[method-assign]
 
 # `data_ingest.PgExecutor.create()` defaults to `host="127.0.0.1"` because
 # in a standard mzcompose run postgres' 5432 is bound to the host loopback.
@@ -464,6 +489,30 @@ def _create_database_for_antithesis(database: Database, exe: Executor) -> None:
         _tolerate_setup_race(relation.create, exe)
 
 
+class _AntithesisCancelAction(CancelAction):
+    """`CancelAction` with an empty-pids guard.
+
+    The framework's `CancelAction.run` does `self.rng.choice([...])` over the
+    pids of currently-connected workers, which raises `IndexError` when none
+    have registered yet (`worker.exe is None` or `pg_pid == -1`). Under
+    Antithesis we spawn the cancel worker right after the regular workers
+    so there is a real race window before any regular worker has finished
+    its initial `psycopg.connect`; returning False here lets the worker
+    loop retry on the next iteration instead of dying with an uncaught
+    `IndexError` (Worker.run rethrows non-QueryError exceptions and would
+    abort the cancel thread).
+    """
+
+    def run(self, exe: Executor) -> bool:
+        eligible = [
+            w for w in self.workers if w.exe is not None and w.exe.pg_pid != -1
+        ]
+        if not eligible:
+            time.sleep(0.1)
+            return False
+        return super().run(exe)
+
+
 def _spawn_workers(
     rng: helper_random.AntithesisRandom,
     database: Database,
@@ -519,6 +568,41 @@ def _spawn_workers(
         thread.start()
         threads.append(thread)
     return workers, threads
+
+
+def _spawn_cancel_worker(
+    database: Database,
+    end_time: float,
+    workers: list[Worker],
+) -> tuple[Worker, threading.Thread]:
+    """Build the `Scenario.Cancel` worker thread, which fires
+    `pg_cancel_backend(pid)` against the regular workers' sessions.
+
+    Connects on `mz_system` (privilege requirement for `pg_cancel_backend`
+    against another role's backend) and shares an `AntithesisRandom` of its
+    own so target selection routes through the SDK. The action's `errors_to_ignore`
+    tolerates `"must be a member of"` for the rare case `mz_system` itself
+    is restricted, plus the standard fault-shaped patterns inherited from
+    `Action.errors_to_ignore`.
+    """
+    cancel_rng = helper_random.AntithesisRandom()
+    cancel_action = _AntithesisCancelAction(cancel_rng, None, workers)
+    cancel_worker = Worker(
+        cancel_rng,
+        [cancel_action],
+        [1],
+        end_time,
+        autocommit=False,
+        system=True,
+        composition=None,
+    )
+    cancel_thread = threading.Thread(
+        name="pw-cancel",
+        target=cancel_worker.run,
+        args=(PGHOST, PGPORT_INTERNAL, 6876, PGUSER_INTERNAL, database),
+    )
+    cancel_thread.start()
+    return cancel_worker, cancel_thread
 
 
 # Soft-signal: bounded poll for the server-side view of worker sessions
@@ -682,7 +766,14 @@ def _run_invocation(
 
         if setup_failure is None:
             workers, threads = _spawn_workers(rng, database, end_time, NUM_THREADS)
+            cancel_worker, cancel_thread = _spawn_cancel_worker(
+                database, end_time, workers
+            )
+            workers.append(cancel_worker)
             try:
+                # Dead-thread detection only watches the regular workers —
+                # cancel is auxiliary and its death (e.g. mz_system connect
+                # failure during a fault window) shouldn't abort the run.
                 while time.time() < end_time:
                     dead = [t for t in threads if not t.is_alive()]
                     if dead:
@@ -704,7 +795,7 @@ def _run_invocation(
             finally:
                 for worker in workers:
                     worker.end_time = time.time()
-                for thread in threads:
+                for thread in (*threads, cancel_thread):
                     thread.join(timeout=30)
     finally:
         # Snapshot the pid each worker last held while `workers` is still
