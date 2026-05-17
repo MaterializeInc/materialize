@@ -8,8 +8,10 @@
 # by the Apache License, Version 2.0.
 
 # GENERATED FILE — do not edit. Regenerate via:
-#   bin/pyactivate test/antithesis/export-compose.py > test/antithesis/config/docker-compose.yaml
-# Source of truth: test/antithesis/mzcompose.py.
+#   bin/pyactivate test/antithesis/export-compose.py --group=kafka > \
+#     test/antithesis/configs/kafka/docker-compose.yaml
+# Source of truth: test/antithesis/mzcompose.py + test/antithesis/groups.yaml.
+# Group: kafka
 
 services:
   postgres-metadata:
@@ -23,8 +25,6 @@ services:
     - max_replication_slots=100
     - -c
     - max_connections=5000
-    ports:
-    - '26257'
     environment:
     - POSTGRESDB=postgres
     - POSTGRES_PASSWORD=postgres
@@ -78,9 +78,6 @@ services:
     - -c
     command:
     - mkdir -p /data/persist && minio server /data --console-address :9001
-    ports:
-    - 9000
-    - 9001
     environment:
     - MINIO_STORAGE_CLASS_STANDARD=EC:0
     - MINIO_HEAL_DISABLE=on
@@ -103,8 +100,6 @@ services:
     - antithesis-net
   zookeeper:
     image: confluentinc/cp-zookeeper:7.9.4
-    ports:
-    - 2181
     environment:
     - ZOOKEEPER_CLIENT_PORT=2181
     healthcheck:
@@ -123,8 +118,6 @@ services:
     - antithesis-net
   kafka:
     image: confluentinc/cp-kafka:7.9.4
-    ports:
-    - '9092'
     environment:
     - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
     - KAFKA_CONFLUENT_SUPPORT_METRICS_ENABLE=false
@@ -158,8 +151,6 @@ services:
     - antithesis-net
   schema-registry:
     image: confluentinc/cp-schema-registry:7.9.4
-    ports:
-    - 8081
     networks:
     - antithesis-net
     environment:
@@ -188,124 +179,12 @@ services:
     platform: linux/amd64
     container_name: schema-registry
     hostname: schema-registry
-  mysql:
-    init: true
-    ports:
-    - 3306
-    environment:
-    - MYSQL_ROOT_PASSWORD=p@ssw0rd
-    command:
-    - --secure-file-priv=/var/lib/mysql-files
-    - --log-bin=mysql-bin
-    - --gtid_mode=ON
-    - --enforce_gtid_consistency=ON
-    - --binlog-format=row
-    - --binlog-row-image=full
-    - --binlog-row-metadata=full
-    - --server-id=1
-    - --max-connections=500
-    healthcheck:
-      test:
-      - CMD
-      - mysqladmin
-      - ping
-      - --password=p@ssw0rd
-      - --protocol=TCP
-      interval: 1s
-      start_period: 180s
-    volumes:
-    - mysqldata_primary:/var/lib/mysql
-    - mydata:/var/lib/mysql-files
-    image: mysql:9.5.0
-    platform: linux/amd64
-    container_name: mysql
-    hostname: mysql
-    networks:
-    - antithesis-net
-  mysql-replica:
-    init: true
-    ports:
-    - 3306
-    environment:
-    - MYSQL_ROOT_PASSWORD=p@ssw0rd
-    command:
-    - --secure-file-priv=/var/lib/mysql-files
-    - --log-bin=mysql-bin
-    - --gtid_mode=ON
-    - --enforce_gtid_consistency=ON
-    - --binlog-format=row
-    - --binlog-row-image=full
-    - --binlog-row-metadata=full
-    - --server-id=2
-    - --max-connections=500
-    - --log-slave-updates
-    - --skip-replica-start
-    - --replica_parallel_workers=4
-    - --replica_preserve_commit_order=ON
-    healthcheck:
-      test:
-      - CMD
-      - mysqladmin
-      - ping
-      - --password=p@ssw0rd
-      - --protocol=TCP
-      interval: 1s
-      start_period: 180s
-    volumes:
-    - mysqldata_replica:/var/lib/mysql
-    - mydata:/var/lib/mysql-files
-    image: mysql:9.5.0
-    platform: linux/amd64
-    container_name: mysql-replica
-    hostname: mysql-replica
-    networks:
-    - antithesis-net
-  postgres-source:
-    command:
-    - postgres
-    - -c
-    - wal_level=logical
-    - -c
-    - max_wal_senders=100
-    - -c
-    - max_replication_slots=100
-    - -c
-    - max_connections=5000
-    - -c
-    - max_slot_wal_keep_size=64MB
-    ports:
-    - '5432'
-    environment:
-    - POSTGRESDB=postgres
-    - POSTGRES_PASSWORD=postgres
-    - POSTGRES_HOST_AUTH_METHOD=trust
-    healthcheck:
-      test:
-      - CMD
-      - pg_isready
-      - -U
-      - postgres
-      interval: 1s
-      start_period: 30s
-    restart: 'no'
-    platform: linux/amd64
-    image: postgres:17.7
-    container_name: postgres-source
-    hostname: postgres-source
-    networks:
-      antithesis-net:
-        aliases:
-        - postgres
   clusterd1:
     entrypoint:
     - tini
     - --
     command:
     - clusterd
-    ports:
-    - 2100
-    - 2101
-    - 6878
     environment:
     - CLUSTERD_GRPC_HOST=clusterd1
     - CLUSTERD_USE_CTP=true
@@ -345,10 +224,6 @@ services:
     - --
     command:
     - clusterd
-    ports:
-    - 2100
-    - 2101
-    - 6878
     environment:
     - CLUSTERD_GRPC_HOST=clusterd2
     - CLUSTERD_USE_CTP=true
@@ -382,92 +257,6 @@ services:
     hostname: clusterd2
     networks:
     - antithesis-net
-  clusterd-pool-0:
-    entrypoint:
-    - tini
-    - --
-    command:
-    - clusterd
-    ports:
-    - 2100
-    - 2101
-    - 6878
-    environment:
-    - CLUSTERD_GRPC_HOST=clusterd-pool-0
-    - CLUSTERD_USE_CTP=true
-    - MZ_SOFT_ASSERTIONS=1
-    - CLUSTERD_STORAGE_CONTROLLER_LISTEN_ADDR=0.0.0.0:2100
-    - CLUSTERD_COMPUTE_CONTROLLER_LISTEN_ADDR=0.0.0.0:2101
-    - CLUSTERD_INTERNAL_HTTP_LISTEN_ADDR=0.0.0.0:6878
-    - CLUSTERD_SECRETS_READER=local-file
-    - CLUSTERD_SECRETS_READER_LOCAL_FILE_DIR=/mzdata/secrets
-    - LD_PRELOAD=libeatmydata.so
-    - CLUSTERD_PERSIST_PUBSUB_URL=http://materialized:6879
-    - CLUSTERD_ENVIRONMENT_ID=mzcompose-us-east-1-00000000-0000-0000-0000-000000000000-0
-    - CLUSTERD_PROCESS=0
-    - 'CLUSTERD_COMPUTE_TIMELY_CONFIG={"workers": 4, "process": 0, "addresses": ["clusterd-pool-0:2102"],
-      "arrangement_exert_proportionality": 16, "enable_zero_copy": false, "enable_zero_copy_lgalloc":
-      false, "zero_copy_limit": null}'
-    - 'CLUSTERD_STORAGE_TIMELY_CONFIG={"workers": 4, "process": 0, "addresses": ["clusterd-pool-0:2103"],
-      "arrangement_exert_proportionality": 1337, "enable_zero_copy": false, "enable_zero_copy_lgalloc":
-      false, "zero_copy_limit": null}'
-    volumes:
-    - mzdata:/mzdata
-    - mydata:/var/lib/mysql-files
-    - tmp:/share/tmp
-    - scratch:/scratch
-    restart: 'no'
-    stop_grace_period: 120s
-    platform: linux/amd64
-    image: ${MATERIALIZED_IMAGE}
-    pull_policy: never
-    container_name: clusterd-pool-0
-    hostname: clusterd-pool-0
-    networks:
-    - antithesis-net
-  clusterd-pool-1:
-    entrypoint:
-    - tini
-    - --
-    command:
-    - clusterd
-    ports:
-    - 2100
-    - 2101
-    - 6878
-    environment:
-    - CLUSTERD_GRPC_HOST=clusterd-pool-1
-    - CLUSTERD_USE_CTP=true
-    - MZ_SOFT_ASSERTIONS=1
-    - CLUSTERD_STORAGE_CONTROLLER_LISTEN_ADDR=0.0.0.0:2100
-    - CLUSTERD_COMPUTE_CONTROLLER_LISTEN_ADDR=0.0.0.0:2101
-    - CLUSTERD_INTERNAL_HTTP_LISTEN_ADDR=0.0.0.0:6878
-    - CLUSTERD_SECRETS_READER=local-file
-    - CLUSTERD_SECRETS_READER_LOCAL_FILE_DIR=/mzdata/secrets
-    - LD_PRELOAD=libeatmydata.so
-    - CLUSTERD_PERSIST_PUBSUB_URL=http://materialized:6879
-    - CLUSTERD_ENVIRONMENT_ID=mzcompose-us-east-1-00000000-0000-0000-0000-000000000000-0
-    - CLUSTERD_PROCESS=0
-    - 'CLUSTERD_COMPUTE_TIMELY_CONFIG={"workers": 4, "process": 0, "addresses": ["clusterd-pool-1:2102"],
-      "arrangement_exert_proportionality": 16, "enable_zero_copy": false, "enable_zero_copy_lgalloc":
-      false, "zero_copy_limit": null}'
-    - 'CLUSTERD_STORAGE_TIMELY_CONFIG={"workers": 4, "process": 0, "addresses": ["clusterd-pool-1:2103"],
-      "arrangement_exert_proportionality": 1337, "enable_zero_copy": false, "enable_zero_copy_lgalloc":
-      false, "zero_copy_limit": null}'
-    volumes:
-    - mzdata:/mzdata
-    - mydata:/var/lib/mysql-files
-    - tmp:/share/tmp
-    - scratch:/scratch
-    restart: 'no'
-    stop_grace_period: 120s
-    platform: linux/amd64
-    image: ${MATERIALIZED_IMAGE}
-    pull_policy: never
-    container_name: clusterd-pool-1
-    hostname: clusterd-pool-1
-    networks:
-    - antithesis-net
   materialized:
     hostname: materialized
     depends_on:
@@ -483,14 +272,6 @@ services:
     - --persist-consensus-url=postgres://root@postgres-metadata:26257?options=--search_path=consensus
     - --orchestrator-process-tcp-proxy-listen-addr=0.0.0.0
     - --orchestrator-process-prometheus-service-discovery-directory=/mzdata/prometheus
-    ports:
-    - 6875
-    - 6876
-    - 6877
-    - 6878
-    - 6880
-    - 6881
-    - 26257
     environment:
     - MZ_NO_TELEMETRY=1
     - MZ_NO_BUILTIN_CONSOLE=1
@@ -736,12 +517,6 @@ services:
         condition: service_healthy
       schema-registry:
         condition: service_healthy
-      mysql:
-        condition: service_healthy
-      mysql-replica:
-        condition: service_healthy
-      postgres-source:
-        condition: service_healthy
     environment:
     - PGHOST=materialized
     - PGPORT=6875
@@ -879,6 +654,7 @@ services:
       32, "workers": 1}, "scale=32,workers=32": {"cpu_exclusive": false, "cpu_limit":
       null, "credits_per_hour": "1024", "disabled": false, "disk_limit": null, "is_cc":
       true, "memory_limit": "4 GiB", "scale": 32, "workers": 32}}'
+    - ANTITHESIS_WORKLOAD_GROUP=kafka
     platform: linux/amd64
     image: ${ANTITHESIS_WORKLOAD_IMAGE}
     pull_policy: never
@@ -891,17 +667,6 @@ networks:
     driver: bridge
 volumes:
   mzdata: null
-  pgdata: null
-  mysqldata: null
-  mssqldata: null
-  sourcedata_512Mb:
-    driver_opts:
-      device: tmpfs
-      type: tmpfs
-      o: size=512m
   mydata: null
   tmp: null
-  secrets: null
   scratch: null
-  mysqldata_primary: null
-  mysqldata_replica: null

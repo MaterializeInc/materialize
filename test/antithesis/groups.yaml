@@ -1,0 +1,210 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Antithesis workload-group manifest.
+#
+# Each top-level group entry defines a focused Antithesis topology:
+#
+#   services:  service names from mzcompose.py to include in this group's
+#              docker-compose.yaml. The universal services
+#              (postgres-metadata, minio, materialized, clusterd1,
+#              fault-orchestrator, workload, plus the network) are
+#              added automatically — listing them again here is allowed
+#              but redundant.
+#   setup:     `first_*` scripts run during Antithesis's setup phase.
+#   drivers:   `parallel_driver_*` and `singleton_driver_*` scripts that
+#              run during the test phase.
+#   anytime:   `anytime_*` scripts that run continuously. The two
+#              listed under `default_anytime:` below are added to every
+#              group automatically.
+#
+# Script entries use `<template>/<basename>` paths.  Source files live
+# under `test/antithesis/workload/test/<template>/<basename>.py` and
+# get baked into `/opt/antithesis/test/v1/<template>/` at image build
+# time.  Antithesis treats each `/opt/antithesis/test/v1/<template>/`
+# directory as a single test template — it picks exactly one template
+# per execution history, so commands from different templates never
+# interleave within a single history.  Focused groups (kafka, pg-cdc,
+# …) have exactly one template; the kitchen-sink `combined` group has
+# four (one per focused group).
+#
+# The pseudo-template `defaults/` is not a runtime template directory.
+# Scripts under that prefix are physically copied into every real
+# template directory at image build time, so the catalog/persist
+# drivers in `default_drivers:` get exercised regardless of which
+# template Antithesis selects for a given execution history.
+
+# Services every group gets, regardless of `services:` entries below.
+universal_services:
+  - postgres-metadata
+  - minio
+  - materialized
+  - clusterd1
+  - fault-orchestrator
+  - workload
+
+# Anytime scripts auto-added to every group.  Baked into every
+# template directory at image build time so Antithesis sees them
+# regardless of template selection.
+default_anytime:
+  - defaults/anytime_health_check
+  - defaults/anytime_fault_recovery_exercised
+
+# Setup / driver scripts auto-added to every group.  The catalog,
+# persist, and reclock SUT-anchored properties don't need any
+# upstream sources — they just need a writable Materialize plus the
+# universal antithesis_cluster — so we run them under every group's
+# topology.
+default_drivers:
+  - defaults/singleton_driver_catalog_recovery_consistency
+  - defaults/parallel_driver_strict_serializable_reads
+  - defaults/parallel_driver_mv_reflects_table_updates
+
+groups:
+  kafka:
+    description: >-
+      Kafka source + upsert envelope correctness under broker / clusterd
+      fault injection. Multi-replica antithesis_cluster (clusterd1 +
+      clusterd2) exercises compute-replica-epoch-isolation.
+    services:
+      - zookeeper
+      - kafka
+      - schema-registry
+      - clusterd2
+    setup:
+      - kafka/first_select_upsert_implementation
+    drivers:
+      - kafka/parallel_driver_kafka_none_envelope
+      - kafka/parallel_driver_upsert_latest_value
+      - kafka/parallel_driver_upsert_ancient_key_writable
+      - kafka/singleton_driver_upsert_state_rehydration
+    anytime:
+      - kafka/anytime_kafka_frontier_monotonic
+      - kafka/anytime_kafka_offset_known_not_below_committed
+      - kafka/anytime_kafka_source_resumes_after_fault
+
+  pg-cdc:
+    description: >-
+      Postgres CDC source correctness under upstream PG / clusterd /
+      environmentd fault injection. Multi-replica antithesis_cluster.
+    services:
+      - postgres-source
+      - clusterd2
+    setup:
+      - pg-cdc/first_pg_cdc_setup
+    drivers:
+      - pg-cdc/parallel_driver_pg_cdc
+      - pg-cdc/singleton_driver_pg_cdc_testdrive
+    anytime: []
+
+  mysql-cdc:
+    description: >-
+      MySQL CDC source correctness, including the MyISAM no-data-loss
+      property and GTID monotonicity at the source. Multithreaded
+      replica + multi-replica antithesis_cluster.
+    services:
+      - mysql
+      - mysql-replica
+      - clusterd2
+    setup:
+      - mysql-cdc/first_mysql_replica_setup
+    drivers:
+      - mysql-cdc/parallel_driver_mysql_cdc
+      - mysql-cdc/parallel_driver_mysql_myisam
+    anytime:
+      - mysql-cdc/anytime_mysql_source_no_gtid_errors
+
+  parallel-workload:
+    description: >-
+      Randomized concurrent SQL stress (parallel_workload framework)
+      against a pool of long-lived clusterd processes. Includes the
+      SinceViolation drivers (#11200 / #11224).
+
+      This is the broadest of the focused groups — parallel_workload's
+      DDL action list spans Kafka source/sink, Postgres source,
+      Iceberg sink, and webhook source, so the topology has to mirror
+      most of `combined` for the framework's source-creation actions
+      to land instead of silent-failing under Scenario.Kill.  Of the
+      five focused groups this one benefits the least from the split;
+      its value vs. running on `combined` is mostly the pool clusters
+      and the dedicated SinceViolation drivers.
+
+      Services included:
+        - kafka stack (zookeeper, kafka, schema-registry): active
+          Create/Drop {Kafka,Iceberg}Sink and CreateKafkaSourceAction
+        - postgres-source: active CreatePostgresSourceAction
+        - polaris + polaris-bootstrap: active CreateIcebergSinkAction
+          (without polaris in the topology the action silent-fails on
+          `unknown catalog item polaris_conn` under Scenario.Kill)
+        - mysql / mysql-replica: CreateMySqlSourceAction is currently
+          disabled in the framework (TODO #8237), but the upstream
+          bootstrap path still wires mysql_conn at Database.create
+          and validates the host
+    services:
+      - zookeeper
+      - kafka
+      - schema-registry
+      - postgres-source
+      - mysql
+      - mysql-replica
+      - polaris-bootstrap
+      - polaris
+      - clusterd2
+      - clusterd-pool-0
+      - clusterd-pool-1
+    setup:
+      - parallel-workload/first_setup
+    drivers:
+      - parallel-workload/parallel_driver_parallel_workload
+      - parallel-workload/parallel_driver_explicit_txn_no_since_violation
+      - parallel-workload/parallel_driver_pw_hot_objects
+    anytime: []
+
+  combined:
+    description: >-
+      Kitchen-sink topology: every service + every driver.  Antithesis
+      picks exactly one template per execution history so the driver
+      classes of different focused groups never interleave within a
+      single history, eliminating most of the cross-template
+      namespacing complexity that a single all-in-one template would
+      have to carry.
+    services:
+      - zookeeper
+      - kafka
+      - schema-registry
+      - postgres-source
+      - mysql
+      - mysql-replica
+      - polaris-bootstrap
+      - polaris
+      - clusterd2
+      - clusterd-pool-0
+      - clusterd-pool-1
+    setup:
+      - kafka/first_select_upsert_implementation
+      - pg-cdc/first_pg_cdc_setup
+      - mysql-cdc/first_mysql_replica_setup
+      - parallel-workload/first_setup
+    drivers:
+      - kafka/parallel_driver_kafka_none_envelope
+      - kafka/parallel_driver_upsert_latest_value
+      - kafka/parallel_driver_upsert_ancient_key_writable
+      - kafka/singleton_driver_upsert_state_rehydration
+      - pg-cdc/parallel_driver_pg_cdc
+      - pg-cdc/singleton_driver_pg_cdc_testdrive
+      - mysql-cdc/parallel_driver_mysql_cdc
+      - mysql-cdc/parallel_driver_mysql_myisam
+      - parallel-workload/parallel_driver_parallel_workload
+      - parallel-workload/parallel_driver_explicit_txn_no_since_violation
+      - parallel-workload/parallel_driver_pw_hot_objects
+    anytime:
+      - kafka/anytime_kafka_frontier_monotonic
+      - kafka/anytime_kafka_offset_known_not_below_committed
+      - kafka/anytime_kafka_source_resumes_after_fault
+      - mysql-cdc/anytime_mysql_source_no_gtid_errors

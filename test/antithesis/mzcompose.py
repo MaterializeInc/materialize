@@ -161,7 +161,13 @@ class Workload(Service):
 
     def __init__(self) -> None:
         config: ServiceConfig = {
-            "mzbuild": "antithesis-workload",
+            # `antithesis-workload-combined` is the kitchen-sink build of
+            # the per-group workload images.  Interactive `bin/mzcompose
+            # --find antithesis` flows expect a working mzbuild ref here.
+            # When `export-compose.py` emits a per-group docker-compose
+            # YAML it rewrites this to `antithesis-workload-<group>` for
+            # that group's image; mzcompose runs default to combined.
+            "mzbuild": "antithesis-workload-combined",
             "depends_on": {
                 "materialized": {"condition": "service_healthy"},
                 "clusterd1": {"condition": "service_started"},
@@ -254,8 +260,21 @@ def _polaris() -> Polaris:
     Like `PolarisBootstrap`, the upstream ctor's hardcoded `postgres`
     dependency is rewritten to point at `postgres-source` so docker-
     compose's depends_on graph resolves.
+
+    The `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` extra env mirrors
+    what upstream's `setup_polaris_for_iceberg` does when it
+    `c.override(Polaris(extra_environment=[...]))`: Polaris uses these
+    creds (in addition to whatever's in each catalog's `s3.*` properties)
+    to read/write iceberg metadata in minio.  We use the static
+    `minioadmin` root creds rather than provisioning a per-test minio
+    user, since the Antithesis sandbox is single-tenant by run.
     """
-    svc = Polaris()
+    svc = Polaris(
+        extra_environment=[
+            "AWS_ACCESS_KEY_ID=minioadmin",
+            "AWS_SECRET_ACCESS_KEY=minioadmin",
+        ],
+    )
     svc.config["depends_on"] = {
         "polaris-bootstrap": {"condition": "service_completed_successfully"},
         "postgres-source": {"condition": "service_started"},

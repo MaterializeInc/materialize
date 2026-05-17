@@ -48,16 +48,21 @@ def main() -> None:
         # so they are accessible to other build agents.
         print("--- Acquiring mzbuild images")
         if antithesis:
-            # Antithesis only consumes these three images; everything else in
-            # the repo (balancerd, sqllogictest, testdrive, ...) is wasted CI
-            # time for this pipeline. resolve_dependencies walks depends_on
-            # transitively, so anything materialized actually needs still
-            # comes along. Keep this list in sync with ANTITHESIS_IMAGES in
-            # test/antithesis/push-antithesis.py.
-            antithesis_images = [
-                "materialized",
-                "antithesis-workload",
-                "antithesis-config",
+            # Antithesis only consumes a small set of mzbuild images;
+            # everything else in the repo (balancerd, sqllogictest, ...) is
+            # wasted CI time for this pipeline. `resolve_dependencies` walks
+            # `depends_on` transitively, so anything materialized actually
+            # needs still comes along.  The per-group `antithesis-workload-*`
+            # and `antithesis-config-*` images are discovered by walking
+            # the mzbuild tree under test/antithesis/workloads/ and
+            # test/antithesis/configs/ respectively.  Keep this list in
+            # sync with SHARED_IMAGES + manifest groups in
+            # push-antithesis.py.
+            antithesis_images = ["materialized"] + [
+                name
+                for name in repo.images
+                if name.startswith("antithesis-workload-")
+                or name.startswith("antithesis-config-")
             ]
             deps = repo.resolve_dependencies(
                 repo.images[name] for name in antithesis_images
