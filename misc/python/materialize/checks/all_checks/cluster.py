@@ -177,3 +177,34 @@ class DropCluster(Check):
                 ! SELECT * FROM drop_cluster2_view;
                 contains: unknown catalog item 'drop_cluster2_view'
            """))
+
+
+class CreateClusterRF0(Check):
+    def manipulate(self) -> list[Testdrive]:
+        # This list MUST be of length 2.
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                """
+                $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
+                GRANT CREATECLUSTER ON SYSTEM TO materialize
+
+                > CREATE CLUSTER create_cluster_rf0_1 (SIZE 'scale=2,workers=2', REPLICATION FACTOR 0);
+                """,
+                """
+                $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
+                GRANT CREATECLUSTER ON SYSTEM TO materialize
+
+                > CREATE CLUSTER create_cluster_rf0_2 (SIZE 'scale=2,workers=2', REPLICATION FACTOR 0);
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(dedent("""
+                > SHOW CREATE CLUSTER create_cluster_rf0_1;
+                create_cluster_rf0_1 "CREATE CLUSTER \\"create_cluster_rf0_1\\" (INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 0, SIZE = 'scale=2,workers=2', SCHEDULE = MANUAL)"
+
+                > SHOW CREATE CLUSTER create_cluster_rf0_2;
+                create_cluster_rf0_2 "CREATE CLUSTER \\"create_cluster_rf0_2\\" (INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 0, SIZE = 'scale=2,workers=2', SCHEDULE = MANUAL)"
+           """))
