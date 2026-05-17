@@ -89,6 +89,7 @@ from materialize.parallel_workload.settings import (
     ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS,
     Complexity,
     Scenario,
+    is_fault_shaped,
 )
 from materialize.sqlsmith import known_errors
 
@@ -510,11 +511,15 @@ class SQLsmithAction(Action):
                 # json library used or the interaction with Python reading from
                 # it. Ignore for now
                 return
-        except:
-            if exe.db.scenario not in (
-                Scenario.Kill,
-                Scenario.BackupRestore,
-                Scenario.ZeroDowntimeDeploy,
+        except Exception as exc:
+            if (
+                exe.db.scenario
+                not in (
+                    Scenario.Kill,
+                    Scenario.BackupRestore,
+                    Scenario.ZeroDowntimeDeploy,
+                )
+                or not is_fault_shaped(exc)
             ):
                 raise
         finally:
@@ -2691,10 +2696,11 @@ class CreateKafkaSourceAction(Action):
                 )
                 source.create(exe)
                 exe.db.kafka_sources.append(source)
-            except:
-                if exe.db.scenario not in (
-                    Scenario.Kill,
-                    Scenario.ZeroDowntimeDeploy,
+            except Exception as exc:
+                if (
+                    exe.db.scenario
+                    not in (Scenario.Kill, Scenario.ZeroDowntimeDeploy)
+                    or not is_fault_shaped(exc)
                 ):
                     raise
         return True
@@ -2766,10 +2772,11 @@ class CreateMySqlSourceAction(Action):
                 )
                 source.create(exe)
                 exe.db.mysql_sources.append(source)
-            except:
-                if exe.db.scenario not in (
-                    Scenario.Kill,
-                    Scenario.ZeroDowntimeDeploy,
+            except Exception as exc:
+                if (
+                    exe.db.scenario
+                    not in (Scenario.Kill, Scenario.ZeroDowntimeDeploy)
+                    or not is_fault_shaped(exc)
                 ):
                     raise
         return True
@@ -2841,10 +2848,11 @@ class CreatePostgresSourceAction(Action):
                 )
                 source.create(exe)
                 exe.db.postgres_sources.append(source)
-            except:
-                if exe.db.scenario not in (
-                    Scenario.Kill,
-                    Scenario.ZeroDowntimeDeploy,
+            except Exception as exc:
+                if (
+                    exe.db.scenario
+                    not in (Scenario.Kill, Scenario.ZeroDowntimeDeploy)
+                    or not is_fault_shaped(exc)
                 ):
                     raise
         return True
@@ -2918,10 +2926,11 @@ class CreateSqlServerSourceAction(Action):
                 )
                 source.create(exe)
                 exe.db.sql_server_sources.append(source)
-            except:
-                if exe.db.scenario not in (
-                    Scenario.Kill,
-                    Scenario.ZeroDowntimeDeploy,
+            except Exception as exc:
+                if (
+                    exe.db.scenario
+                    not in (Scenario.Kill, Scenario.ZeroDowntimeDeploy)
+                    or not is_fault_shaped(exc)
                 ):
                     raise
         return True
