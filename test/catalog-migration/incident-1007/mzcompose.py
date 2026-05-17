@@ -76,7 +76,7 @@ SERVICES = [
 ]
 
 
-def _mz(image: str | None) -> Materialized:
+def _mz(image: str | None, default_replication_factor: int = 0) -> Materialized:
     return Materialized(
         name="materialized",
         image=image,
@@ -84,10 +84,11 @@ def _mz(image: str | None) -> Materialized:
         external_metadata_store=True,
         external_blob_store=True,
         sanity_restart=False,
-        # Set the default replication factor since
-        # one of the heuristics of a "non-cloud" environment is that the
-        # replication factor is 0 for mz_system.
-        default_replication_factor=0,
+        # default_replication_factor controls mz_system's replication factor,
+        # which is the primary axis the is_cloud_env heuristic keys off.
+        #   0 -> mz_system Managed with rf=0  -> self-managed
+        #   1 -> mz_system Managed with rf=1+ -> cloud
+        default_replication_factor=default_replication_factor,
         # MZ_SOFT_ASSERTIONS=1 turns
         # soft asserts into panics, killing environmentd mid-upgrade
         # before v82->v83 ever runs. Demote them to log-only so the upgrade
@@ -96,15 +97,25 @@ def _mz(image: str | None) -> Materialized:
     )
 
 
-def _start_at(c: Composition, version: MzVersion | None) -> None:
+def _start_at(
+    c: Composition,
+    version: MzVersion | None,
+    default_replication_factor: int = 0,
+) -> None:
     if version is None:
         image: str | None = None
         label = "current"
     else:
         image = f"{image_registry()}/materialized:{version}"
         label = str(version)
-    print(f"Starting Materialize at {label} ({image})")
-    with c.override(_mz(image=image), fail_on_new_service=False):
+    print(
+        f"Starting Materialize at {label} ({image}, "
+        f"default_replication_factor={default_replication_factor})"
+    )
+    with c.override(
+        _mz(image=image, default_replication_factor=default_replication_factor),
+        fail_on_new_service=False,
+    ):
         c.up("materialized")
 
 
@@ -226,6 +237,82 @@ def workflow_dangling(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.kill("materialized")
     _start_at(c, None)
     # We expect there to not be a negative multiplicity on user3 like there was for the same test on user2.
+    _select_roles(c)
+
+
+def workflow_cloud_managed(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Cloud-flavored variant: mz_system Managed with replication_factor > 0.
+
+    Unlike workflow_dangling, the v80-form drift bug does NOT reproduce on
+    this env: the v80->v81 heuristic correctly returns true on Managed+rf>0,
+    so its backfill actually runs at v26.18 and roles do not sit in v80 byte
+    form long enough to dangling-diff on a subsequent ALTER.
+
+    This workflow validates the success path on cloud:
+      - The full upgrade chain (v26.17 -> v26.18 -> v26.24 -> current) runs
+        to completion without introducing any corruption.
+      - Post-migration ALTERs on cloud do not produce dangling `-1` diffs.
+
+    The Unmanaged-mz_system-with-replicas case (the originally-missed cloud
+    variant in v80->v81) is not reachable via this workflow today; it is
+    covered by the unit test
+    cloud_env_with_unmanaged_mz_system_and_replicas_backfills in
+    src/catalog/src/durable/upgrade/v83_to_v84.rs.
+    """
+    rf = 1  # cloud: Managed mz_system with replication_factor > 0
+    c.up("postgres-metadata", "minio")
+
+    # v26.17.x (catalog 80): create roles in v80 byte form. Mix of email-
+    # pattern names (eligible for Frontegg backfill) and non-email names.
+    _start_at(c, PRE_BUG_VERSION, default_replication_factor=rf)
+    c.testdrive(dedent("""
+            > CREATE ROLE "alice@materialize.com" WITH LOGIN PASSWORD 'pw';
+            > CREATE ROLE "bob@materialize.com" WITH LOGIN PASSWORD 'pw';
+            > CREATE ROLE admin WITH LOGIN PASSWORD 'pw';
+            """))
+    c.kill("materialized")
+
+    # v26.18.0 (catalog 81): v80->v81 sees Managed+rf>0 -> true, backfills
+    # auto_provision_source on email-named roles. No dangling diffs expected.
+    _start_at(
+        c, CATALOG_CORRUPTION_MIGRATION_VERSION, default_replication_factor=rf
+    )
+    _select_roles(c)
+    c.testdrive(dedent("""
+            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            ALTER ROLE "alice@materialize.com" SUPERUSER;
+            """))
+    c.kill("materialized")
+    _start_at(
+        c, CATALOG_CORRUPTION_MIGRATION_VERSION, default_replication_factor=rf
+    )
+    _select_roles(c)
+    c.kill("materialized")
+
+    # v26.24.0 (catalog 83): v82->v83 pass-1 finds nothing to repair (no
+    # dangling negatives on a healthy cloud env).
+    _start_at(
+        c,
+        CATALOG_CORRUPTION_MIGRATION_PARTIALLY_FIXED_VERSION,
+        default_replication_factor=rf,
+    )
+    _select_roles(c)
+    c.kill("materialized")
+
+    # current (catalog 84): v83->v84 normalizes byte shapes to canonical
+    # form and reapplies the email-regex backfill on cloud envs. is_cloud_env
+    # returns true. No corruption expected end-to-end.
+    _start_at(c, None, default_replication_factor=rf)
+    _select_roles(c)
+
+    # Post-migration ALTERs on each role must not introduce dangling diffs.
+    c.testdrive(dedent("""
+            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            ALTER ROLE "bob@materialize.com" SUPERUSER;
+            ALTER ROLE admin SUPERUSER;
+            """))
+    c.kill("materialized")
+    _start_at(c, None, default_replication_factor=rf)
     _select_roles(c)
 
 

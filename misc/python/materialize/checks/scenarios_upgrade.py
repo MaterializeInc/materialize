@@ -379,6 +379,77 @@ class UpgradeV80Migration(Scenario):
         ]
 
 
+class UpgradeV80MigrationCloud(Scenario):
+    """Cloud-flavored variant of UpgradeV80Migration: mz_system Managed with
+    replication_factor > 0, so the v80->v81 heuristic returns true and the
+    backfill runs at v26.18.0.
+
+    The bug does not reproduce on this scenario (rf>0 takes the correct
+    branch in the original heuristic); this scenario instead validates that
+    the upgrade chain completes cleanly on a cloud env and that Check classes
+    relying on Role catalog state survive intact.
+
+    The Unmanaged-mz_system-with-replicas case (the originally-missed cloud
+    variant) is not reachable via this scenario today; it is covered by the
+    unit test cloud_env_with_unmanaged_mz_system_and_replicas_backfills in
+    src/catalog/src/durable/upgrade/v83_to_v84.rs.
+    """
+
+    def __init__(
+        self,
+        checks: list[type[Check]],
+        executor: Executor,
+        features: Features,
+        seed: str | None = None,
+    ):
+        super().__init__(checks, executor, features, seed)
+
+    def base_version(self) -> MzVersion:
+        return MzVersion.parse_mz("v26.17.1")
+
+    def actions(self) -> list[Action]:
+        print(
+            "Upgrade path: v26.17.1 (cloud) -> initialize -> v26.18.0 (cloud) -> manipulate#1 -> restart -> manipulate#2 -> current -> restart -> validate"
+        )
+        return [
+            StartMz(
+                self,
+                tag=self.base_version(),
+                soft_assertions=False,
+                builtin_system_cluster_replication_factor=1,
+            ),
+            Initialize(self),
+            KillMz(capture_logs=True),
+            StartMz(
+                self,
+                tag=MzVersion.parse_mz("v26.18.0"),
+                soft_assertions=False,
+                builtin_system_cluster_replication_factor=1,
+            ),
+            Manipulate(self, phase=1),
+            KillMz(capture_logs=True),
+            StartMz(
+                self,
+                tag=MzVersion.parse_mz("v26.18.0"),
+                soft_assertions=False,
+                builtin_system_cluster_replication_factor=1,
+            ),
+            Manipulate(self, phase=2),
+            KillMz(capture_logs=True),
+            StartMz(
+                self,
+                tag=None,
+                soft_assertions=False,
+            ),
+            KillMz(),
+            StartMz(
+                self,
+                tag=None,
+            ),
+            Validate(self),
+        ]
+
+
 #
 # We are limited with respect to the different orders in which stuff can be upgraded:
 # - some sequences of events are invalid

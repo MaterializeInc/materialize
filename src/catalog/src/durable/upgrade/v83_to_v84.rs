@@ -74,6 +74,21 @@
 //! `+1` for any such key alone (rewriting a subset of an unrepaired key
 //! would just produce a new dangling diff). Better to under-clean and
 //! surface unknown shapes for triage than over-clean and retire live state.
+//!
+//! # Integration tests
+//!
+//! End-to-end behavior is exercised in:
+//!
+//!   * `test/catalog-migration/incident-1007/mzcompose.py` — self-managed
+//!     paths (`workflow_dangling`, `workflow_stale_rows`) and the cloud
+//!     Managed-with-replication-factor path (`workflow_cloud_managed`).
+//!   * `misc/python/materialize/checks/scenarios_upgrade.py` —
+//!     `UpgradeV80Migration` (self-managed) and `UpgradeV80MigrationCloud`
+//!     (cloud), each fanning out across every platform-checks `Check`.
+//!
+//! The Unmanaged-`mz_system`-with-replicas branch of `is_cloud_env` is
+//! exercised only at the unit-test level
+//! (`cloud_env_with_unmanaged_mz_system_and_replicas_backfills`).
 
 use std::collections::{BTreeMap, BTreeSet};
 
