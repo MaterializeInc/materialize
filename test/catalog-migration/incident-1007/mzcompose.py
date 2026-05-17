@@ -36,11 +36,13 @@ current, the repair fires and the same query succeeds.
 
 from textwrap import dedent
 
+from materialize import buildkite
 from materialize.docker import image_registry
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import PostgresMetadata
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.ui import UIError
@@ -70,6 +72,7 @@ SERVICES = [
         external_blob_store=True,
         no_reset=True,
     ),
+    Mz(app_password=""),
 ]
 
 
@@ -87,7 +90,7 @@ def _mz(image: str | None) -> Materialized:
         default_replication_factor=0,
         # MZ_SOFT_ASSERTIONS=1 turns
         # soft asserts into panics, killing environmentd mid-upgrade
-        # before v82->v83 ever runs. Demote them to log-only so the upgrade
+        # before v83->v84 ever runs. Demote them to log-only so the upgrade
         # chain can complete and the repair can do its work.
         soft_assertions=False,
     )
@@ -131,6 +134,20 @@ def _ensure_select_roles_fails(c: Composition) -> None:
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    def process(name: str) -> None:
+        if name == "default":
+            return
+        with c.test_case(name):
+            c.workflow(name)
+            c.down()
+
+    workflows = buildkite.shard_list(
+        list(c.workflows.keys()), lambda workflow: workflow
+    )
+    c.test_parts(workflows, process)
+
+
+def workflow_dangling(c: Composition, parser: WorkflowArgumentParser) -> None:
     """v26.17 -> v26.18 (expect failure) -> v26.24 (expect success on user1, but failure on user2 and user3) -> current (expect repair)."""
     c.up("postgres-metadata", "minio")
 
@@ -210,3 +227,43 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     _start_at(c, None)
     # We expect there to not be a negative multiplicity on user3 like there was for the same test on user2.
     _select_roles(c)
+
+
+def workflow_stale_rows(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """v26.17 -> current (only cause negative diff here) -> current."""
+    c.up("postgres-metadata", "minio")
+
+    _start_at(c, PRE_BUG_VERSION)
+    c.testdrive(dedent("""
+            > CREATE ROLE user1 WITH LOGIN PASSWORD 'password';
+            """))
+    c.kill("materialized")
+
+    _start_at(c, None)
+    c.testdrive(dedent("""
+            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            ALTER ROLE user1 SUPERUSER;
+            """))
+
+    c.kill("materialized")
+    _start_at(c, None)
+    _select_roles(c)
+
+    c.testdrive(dedent("""
+            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            DROP ROLE user1;
+            """))
+    c.testdrive(dedent("""
+            > SELECT EXISTS (SELECT 1 FROM mz_roles WHERE name = 'user1');
+            false
+            """))
+    _select_roles(c)
+
+    c.kill("materialized")
+    _start_at(c, None)
+    _select_roles(c)
+
+    c.testdrive(dedent("""
+            > SELECT EXISTS (SELECT 1 FROM mz_roles WHERE name = 'user1');
+            false
+            """))
