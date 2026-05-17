@@ -115,6 +115,7 @@ class StartMz(MzcomposeAction):
             restart=self.restart,
             force_migrations=self.force_migrations,
             publish=self.publish,
+            default_replication_factor=2,
             support_external_clusterd=True,
             builtin_system_cluster_replication_factor=self.builtin_system_cluster_replication_factor,
             builtin_probe_cluster_replication_factor=self.builtin_probe_cluster_replication_factor,
