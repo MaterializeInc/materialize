@@ -19,6 +19,7 @@ namespace Mz
 * `lit d`: literal datum.
 * `col i`: reference to column `i` in the surrounding environment.
 * `and a b`, `or a b`: logical conjunction and disjunction.
+* `not a`: logical negation.
 * `ifThen c t e`: PostgreSQL-style `CASE` / `If` — the only
   user-controllable short-circuit in `MirScalarExpr`. -/
 inductive Expr
@@ -26,6 +27,7 @@ inductive Expr
   | col (i : Nat)
   | and (a b : Expr)
   | or (a b : Expr)
+  | not (a : Expr)
   | ifThen (c t e : Expr)
   deriving Inhabited
 

@@ -37,4 +37,18 @@ inductive Datum
   | err (e : EvalError)
   deriving Inhabited
 
+/-- Propositional predicate "this datum is an error".
+
+Stated as `Prop` rather than `Bool` so it composes with `Not` and is
+usable as a hypothesis in proofs without first lifting through
+`= true`. The recursor over `Datum` collapses each branch to either
+`True` or `False`, so `decide` (and `simp`) handles `IsErr` cleanly. -/
+def Datum.IsErr : Datum → Prop
+  | .err _ => True
+  | _      => False
+
+instance : DecidablePred Datum.IsErr := by
+  intro d
+  cases d <;> unfold Datum.IsErr <;> infer_instance
+
 end Mz

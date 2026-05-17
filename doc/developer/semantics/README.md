@@ -8,10 +8,11 @@ The goal is to lock in the boolean truth tables for `AND` and `OR` over the four
 
 ## What is here
 
-* `Mz/Datum.lean`: `Datum` and `EvalError` types.
-* `Mz/Expr.lean`: a minimal `Expr` inductive (literals, columns, binary `and`/`or`, `ifThen`).
-* `Mz/Eval.lean`: `evalAnd`, `evalOr`, and `eval` matching the runtime in `src/expr/src/scalar/func/variadic.rs`.
-* `Mz/Boolean.lean`: per-cell truth-table proofs.
+* `Mz/Datum.lean`: `Datum`, `EvalError`, and the `Datum.IsErr` predicate.
+* `Mz/Expr.lean`: a minimal `Expr` inductive (literals, columns, binary `and`/`or`, `not`, `ifThen`).
+* `Mz/Eval.lean`: `evalAnd`, `evalOr`, `evalNot`, and `eval` matching the runtime in `src/expr/src/scalar/func/variadic.rs`.
+* `Mz/Boolean.lean`: per-cell truth-table proofs for `AND`, `OR`, and `NOT`, plus involutivity of `NOT`.
+* `Mz/Laws.lean`: algebraic laws — idempotence (unconditional) and commutativity (conditional on error-freedom).
 
 ## What is not here
 
@@ -57,9 +58,10 @@ Reviewers should expect both sides of the change in the same PR.
 
 The roadmap in priority order:
 
-* Strict-propagation theorem: `f` strict implies `f(.., err, ..) = err`.
+* `Expr.might_error` predicate plus soundness: `¬might_error e → ∀ env err-free, ¬(eval env e).IsErr`.
+* Reorder-safety conditions on `Expr`: lift `evalAnd_comm_of_no_err` to `eval env (And a b) = eval env (And b a)` when `¬a.might_error ∧ ¬b.might_error`.
+* Strict-propagation theorem: any strict function applied to `err` returns `err`.
 * Coalesce error-rescue law: `coalesce(err, x) = x`.
-* Reorder-safety conditions: `(¬might_error a ∧ ¬might_error b) → eval (And [a, b]) = eval (And [b, a])`.
 * Variadic `And` and `Or` via fold, with equivalence to the binary form.
 * Lift to bag semantics for predicate / projection rewrites.
 
