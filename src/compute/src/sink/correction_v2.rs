@@ -144,10 +144,7 @@ use crate::sink::correction::{ChannelLogging, SizeMetrics};
 /// region per chunk, and the variable-length payload (e.g. `Row` bytes) lives in the same
 /// allocation as the rest of the chunk.
 pub trait Data:
-    differential_dataflow::Data
-    + Columnar<Container: Send + Sync + Clone>
-    + Send
-    + Sync
+    differential_dataflow::Data + Columnar<Container: Send + Sync + Clone> + Send + Sync
 {
 }
 impl<D> Data for D where
