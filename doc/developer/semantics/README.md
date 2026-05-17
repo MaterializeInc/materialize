@@ -13,6 +13,7 @@ The goal is to lock in the boolean truth tables for `AND` and `OR` over the four
 * `Mz/Eval.lean`: `evalAnd`, `evalOr`, `evalNot`, `evalIfThen`, and `eval` matching the runtime in `src/expr/src/scalar/func/variadic.rs`. `Env.get` is defined by primitive recursion to keep inductive proofs simple.
 * `Mz/Boolean.lean`: per-cell truth-table proofs for `AND`, `OR`, and `NOT`, plus involutivity of `NOT`.
 * `Mz/MightError.lean`: the conservative `Expr.might_error` static analyzer, the `Env.ErrFree` predicate, and the `might_error_sound` theorem that the optimizer needs in order to trust the analyzer's verdict.
+* `Mz/Strict.lean`: strictness predicates (`ErrStrictUnary`, `ErrStrictBinary`, `NullStrictUnary`), positive instances for `evalNot` and the condition slot of `evalIfThen`, closure under composition, and negative results witnessing that `AND` and `OR` are *not* err-strict in either position.
 * `Mz/Laws.lean`: algebraic laws — idempotence (unconditional), commutativity (conditional on error-freedom of operands), and `Expr`-level reorder safety as a corollary of soundness.
 
 ## What is not here
@@ -59,8 +60,7 @@ Reviewers should expect both sides of the change in the same PR.
 
 The roadmap in priority order:
 
-* Strict-propagation theorem: any strict function applied to `err` returns `err`. Requires introducing a `Strict` predicate on functions and proving closure under composition.
-* Coalesce error-rescue law: `coalesce(err, x) = x`. Requires an `n`-ary `coalesce` operator on the `Expr` side.
+* Coalesce error-rescue law: `coalesce(err, x) = x`. Requires an `n`-ary `coalesce` operator on the `Expr` side, plus the corresponding fold-based evaluator.
 * Variadic `And` and `Or` via fold, with equivalence to the binary form. The binary truth tables and laws transport to the variadic form by induction on the operand list.
 * Tightening `Expr.might_error`. The skeleton version is purely structural and ignores type / nullability information; bringing it closer to `MirScalarExpr::might_error` is additive.
 * Lift to bag semantics for predicate / projection rewrites.
