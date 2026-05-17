@@ -193,6 +193,19 @@ steps:
         coverage: skip
         sanitizer: skip
 
+      - id: lean-semantics
+        label: ":lean: Lean semantics"
+        command: ci/test/lean-semantics.sh
+        inputs:
+          - doc/developer/semantics
+          - ci/test/lean-semantics.sh
+        depends_on: []
+        timeout_in_minutes: 15
+        agents:
+          queue: hetzner-x86-64-4cpu-8gb
+        coverage: skip
+        sanitizer: skip
+
       - id: lint-macos
         label: ":rust: macOS Clippy"
         # Running on a manually installed macOS agent, so make sure we don't go out of disk
