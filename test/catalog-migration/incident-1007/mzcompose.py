@@ -240,9 +240,7 @@ def workflow_dangling(c: Composition, parser: WorkflowArgumentParser) -> None:
     _select_roles(c)
 
 
-def workflow_cloud_unmanaged(
-    c: Composition, parser: WorkflowArgumentParser
-) -> None:
+def workflow_cloud_unmanaged(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Cloud variant with mz_system Unmanaged + replicas — the originally-
     missed cloud case in v80->v81's heuristic.
 
@@ -364,18 +362,14 @@ def workflow_cloud_managed(c: Composition, parser: WorkflowArgumentParser) -> No
 
     # v26.18.0 (catalog 81): v80->v81 sees Managed+rf>0 -> true, backfills
     # auto_provision_source on email-named roles. No dangling diffs expected.
-    _start_at(
-        c, CATALOG_CORRUPTION_MIGRATION_VERSION, default_replication_factor=rf
-    )
+    _start_at(c, CATALOG_CORRUPTION_MIGRATION_VERSION, default_replication_factor=rf)
     _select_roles(c)
     c.testdrive(dedent("""
             $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
             ALTER ROLE "alice@materialize.com" SUPERUSER;
             """))
     c.kill("materialized")
-    _start_at(
-        c, CATALOG_CORRUPTION_MIGRATION_VERSION, default_replication_factor=rf
-    )
+    _start_at(c, CATALOG_CORRUPTION_MIGRATION_VERSION, default_replication_factor=rf)
     _select_roles(c)
     c.kill("materialized")
 
