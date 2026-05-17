@@ -38,18 +38,6 @@ The driver also records one `sometimes` anchor confirming that at least
 two assertion-bearing cycles ran (without this, the safety check could be
 vacuously satisfied by a single early settle).
 
-A previous version of this driver also recorded a "clusterd observed
-non-online" `sometimes` anchor via a once-per-cycle SELECT of
-`mz_internal.mz_cluster_replica_statuses`. That assertion was
-structurally unable to fire here: when faults are paused (either by
-the old per-driver `ANTITHESIS_STOP_FAULTS` calls or by the new global
-fault-orchestrator's quiet window) killed containers are restored
-before the probe runs, and the introspection view itself lags clusterd
-death by the orchestrator-process 5-second poll. The "did we see a
-replica go offline" signal lives in `anytime_fault_recovery_exercised.py`
-instead, which polls continuously and is unaffected by quiet windows,
-so it has the right shape to observe the offline window.
-
 Distinct prefix per timeline keeps multiple parallel timelines independent.
 """
 
