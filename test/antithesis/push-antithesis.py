@@ -17,6 +17,12 @@ to private visibility — Antithesis hits a 4001 (image-not-reachable) when
 trying to pull them. Pushing to a GCP Artifact Registry whose IAM grants
 Antithesis read access avoids the visibility dance entirely.
 
+We push one `antithesis-config-<group>` image per workload group in the
+manifest, plus the shared `materialized` and `antithesis-workload`
+images. Antithesis runs one job per group, each pointed at its own
+config image; the materialized + workload images are shared across all
+of them.
+
 This script presumes `ci.test.build` has already run (so the source images
 exist locally) and that `docker login` against the target registry has
 already happened (build-antithesis.sh handles that via
@@ -28,19 +34,19 @@ Usage:
 """
 
 import argparse
+import sys
 from pathlib import Path
 
 from materialize import spawn, ui
 from materialize.mzbuild import Repository
 from materialize.xcompile import Arch
 
-# Images Antithesis needs to be able to pull:
-#   - antithesis-config holds the docker-compose.yaml + .env Antithesis runs.
-#   - materialized + antithesis-workload are referenced by that compose.
-# Keep this list in sync with the `antithesis_images` branch in
-# ci/test/build.py — that's where CI_ANTITHESIS scopes the mzbuild walk so
-# the nightly doesn't waste time building images Antithesis never consumes.
-ANTITHESIS_IMAGES = ["materialized", "antithesis-workload", "antithesis-config"]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from groups import load_manifest  # noqa: E402
+
+# `materialized` is shared across every group; both workload and config
+# images are per-group and discovered from the manifest at runtime.
+SHARED_IMAGES = ["materialized"]
 
 
 def main() -> None:
@@ -52,6 +58,13 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    manifest = load_manifest()
+    workload_images = [
+        f"antithesis-workload-{name}" for name in sorted(manifest.groups)
+    ]
+    config_images = [f"antithesis-config-{name}" for name in sorted(manifest.groups)]
+    images = SHARED_IMAGES + workload_images + config_images
+
     # Match the Repository configuration used by ci.test.build so that
     # `deps[name].spec()` returns the same local tag that build actually
     # produced (materialize/<name>:mzbuild-<fp>, not the GHCR-prefixed one).
@@ -61,14 +74,14 @@ def main() -> None:
         antithesis=True,
         image_registry="materialize",
     )
-    deps = repo.resolve_dependencies([repo.images[name] for name in ANTITHESIS_IMAGES])
+    deps = repo.resolve_dependencies([repo.images[name] for name in images])
 
     # Ensure each image is actually present locally before retag — ci.test.build's
     # `ensure()` path may short-circuit to "already pushed" without leaving a
     # local copy if the fingerprint was already in the cache.
     deps.acquire()
 
-    for name in ANTITHESIS_IMAGES:
+    for name in images:
         resolved = deps[name]
         source = resolved.spec()
         target = f"{args.registry}/{name}:mzbuild-{resolved.fingerprint()}"
