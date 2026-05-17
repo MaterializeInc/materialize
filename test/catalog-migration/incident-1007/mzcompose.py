@@ -240,6 +240,96 @@ def workflow_dangling(c: Composition, parser: WorkflowArgumentParser) -> None:
     _select_roles(c)
 
 
+def workflow_cloud_unmanaged(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Cloud variant with mz_system Unmanaged + replicas — the originally-
+    missed cloud case in v80->v81's heuristic.
+
+    Setup: start at v26.17.1 with mz_system Managed + rf=1, then ALTER
+    CLUSTER mz_system SET (MANAGED = false). The cluster becomes Unmanaged
+    but retains its existing replica. The bug reproduces (the v80->v81
+    heuristic returns false on Unmanaged regardless of replica count),
+    leaving roles in v80 byte form. Subsequent ALTER triggers a dangling
+    `-1`. v83->v84's fixed `is_cloud_env` (which also accepts
+    Unmanaged + replicas) takes the cloud branch and applies the email-
+    regex backfill alongside the byte-shape repair.
+
+    Limitations:
+      - Assumes `ALTER CLUSTER mz_system SET (MANAGED = false)` is supported
+        at v26.17.1. If it isn't, this workflow would need a
+        `Materialized` service flag to start environmentd with mz_system
+        Unmanaged at bootstrap. Open question pending verification.
+      - The replica persists across the ALTER (SQL semantics: switching to
+        Unmanaged hands replica management to the user but does not auto-
+        drop the existing managed replica). If the replica gets dropped on
+        ALTER, we would need to CREATE CLUSTER REPLICA explicitly with
+        unorchestrated addresses, which would require a separate clusterd
+        process in this composition.
+    """
+    rf = 1  # start as Managed+rf=1 so we have a replica to inherit
+    c.up("postgres-metadata", "minio")
+
+    # v26.17.x (catalog 80): start Managed, then switch mz_system to
+    # Unmanaged while preserving its replica.
+    _start_at(c, PRE_BUG_VERSION, default_replication_factor=rf)
+    c.testdrive(dedent("""
+            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            ALTER CLUSTER mz_system SET (MANAGED = false);
+            """))
+    # Restart at v26.17 to confirm the unmanaged state survives a restart,
+    # then create roles in the resulting v80-form snapshot.
+    c.kill("materialized")
+    _start_at(c, PRE_BUG_VERSION, default_replication_factor=rf)
+    c.testdrive(dedent("""
+            > CREATE ROLE "alice@materialize.com" WITH LOGIN PASSWORD 'pw';
+            > CREATE ROLE admin WITH LOGIN PASSWORD 'pw';
+            """))
+    c.kill("materialized")
+
+    # v26.18.0 (catalog 81): v80->v81 sees Unmanaged mz_system -> heuristic
+    # returns false (the originally-missed case) -> no backfill. Role rows
+    # stay in v80 byte form.
+    _start_at(c, CATALOG_CORRUPTION_MIGRATION_VERSION, default_replication_factor=rf)
+    # Trigger a dangling -1 via ALTER on a v80-form row.
+    c.testdrive(dedent("""
+            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            ALTER ROLE "alice@materialize.com" SUPERUSER;
+            """))
+    c.kill("materialized")
+    _start_at(c, CATALOG_CORRUPTION_MIGRATION_VERSION, default_replication_factor=rf)
+    print(
+        "Expecting catalog corruption from Unmanaged mz_system path to "
+        "surface as a query failure..."
+    )
+    _ensure_select_roles_fails(c)
+    c.kill("materialized")
+
+    # v26.24.0 (catalog 83): pass-1 of v82->v83 repairs the dangling -1 on
+    # alice. admin is still in v80 byte form (no ALTER yet).
+    _start_at(
+        c,
+        CATALOG_CORRUPTION_MIGRATION_PARTIALLY_FIXED_VERSION,
+        default_replication_factor=rf,
+    )
+    _select_roles(c)
+    c.kill("materialized")
+
+    # current (catalog 84): v83->v84 pass-2 normalizes admin's byte shape
+    # and (because is_cloud_env sees Unmanaged + replicas -> true) applies
+    # the email-regex backfill where appropriate. No new dangling diffs.
+    _start_at(c, None, default_replication_factor=rf)
+    _select_roles(c)
+
+    c.testdrive(dedent("""
+            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            ALTER ROLE admin SUPERUSER;
+            """))
+    c.kill("materialized")
+    _start_at(c, None, default_replication_factor=rf)
+    _select_roles(c)
+
+
 def workflow_cloud_managed(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Cloud-flavored variant: mz_system Managed with replication_factor > 0.
 
