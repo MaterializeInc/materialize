@@ -15,25 +15,21 @@ of the PG CDC source code path grows automatically as new `.td` files
 land in `test/pg-cdc/` — no driver-level edit needed.
 
 Each invocation:
-  1. Resets Materialize user state (drops all user-visible objects not
-     owned by the data-loss workload) and the upstream PG's `public`
-     schema. Defends against state leftover from a previous run that
-     crashed mid-script or from a still-running `parallel_driver_pg_cdc`.
-  2. Picks one `.td` file at random from the bundled set, excluding
+  1. Picks one `.td` file at random from the bundled set, excluding
      files known to be incompatible with our topology (SSL fixtures).
-  3. Runs the file via `helper_testdrive.run` — which strips the
+  2. Runs the file via `helper_testdrive.run` — which strips the
      `$ skip-if / SELECT true` disable header so the test actually
      executes, then invokes the bundled testdrive binary.
-  4. Asserts on the result.
-  5. Cleans up Materialize state again and re-creates the data-loss
-     workload's source/connection/secret/table so `parallel_driver_pg_cdc`
-     finds them on its next invocation.
+  3. Asserts on the result.
 
 This is a `singleton_driver_` because almost every `.td` file under
 `test/pg-cdc/` assumes exclusive ownership of `public` schema, the
 `mz_source` publication on the upstream, and the `pgpass`/`pg`/`mz_source`
-names on the materialize side. Two concurrent runs would trample each
-other; the singleton harness primitive enforces serial execution.
+names on the materialize side. The singleton harness primitive runs at
+most once per timeline (per Antithesis docs), so there is no second
+testdrive run on the same timeline to collide with — `parallel_driver_pg_cdc`
+stays inside the `antithesis_pg_*` namespace and does not overlap with
+the names td scripts use.
 
 Property name: `pg-cdc-testdrive-suite-no-spurious-failure`. The
 assertion message is constant; the `td_file` lives in the assertion
@@ -46,7 +42,6 @@ import os
 import sys
 
 import helper_logging
-import helper_pg_source
 import helper_random
 import helper_testdrive
 
@@ -137,30 +132,7 @@ def main() -> int:
         len(_EXCLUDE_FILES),
     )
 
-    # Pre-run reset. Defends against residue from a prior crash. Also
-    # frees up `public` on the upstream and standard names like
-    # `pgpass`/`mz_source` on materialize so the td file's unprotected
-    # CREATEs land cleanly.
-    helper_testdrive.reset_materialize_user_state()
-    helper_testdrive.reset_upstream_state()
-
-    try:
-        result = helper_testdrive.run(td_file)
-    finally:
-        # Post-run reset regardless of outcome — even on failure we want
-        # the SUT in a known-clean state for the next driver.
-        helper_testdrive.reset_materialize_user_state()
-        helper_testdrive.reset_upstream_state()
-        # Restore the data-loss workload's PG CDC pipeline. The reset
-        # above didn't touch our antithesis_pg_* objects, but the
-        # upstream schema reset wiped `antithesis_pg_cdc` if the td file
-        # somehow touched it (none should — they all live in `public`).
-        # Re-running ensure_pg_cdc_source is idempotent; this is
-        # defense in depth.
-        try:
-            helper_pg_source.ensure_pg_cdc_source()
-        except Exception as exc:  # noqa: BLE001
-            LOG.warning("post-run ensure_pg_cdc_source failed: %s", exc)
+    result = helper_testdrive.run(td_file)
 
     # Safety: under Antithesis fault injection, a testdrive run on any
     # pg-cdc test file must either succeed or fail with a recognized
