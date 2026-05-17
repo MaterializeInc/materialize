@@ -4033,10 +4033,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@stripe/stripe-js@npm:^7.1.0":
-  version: 7.1.0
-  resolution: "@stripe/stripe-js@npm:7.1.0"
-  checksum: 10c0/2d89465455e5127299c6b6cfe2c5cd315aca784bb5434b4c0c93bd3d40e5a5bca20ef48e220f677244e2bbf80d2e7df1f5d6c75b59b2933a31c8639fdf4e1a53
+"@stripe/stripe-js@npm:^9.5.0":
+  version: 9.5.0
+  resolution: "@stripe/stripe-js@npm:9.5.0"
+  checksum: 10c0/b37fe330bbea0b328f8822d439229760e40df893606fcaffa2c161cebd7cb85caf610f4a2518e0af23d70a60f0d9d78fec7162e9dced35f129644c64e72f6100
   languageName: node
   linkType: hard
 
@@ -10959,7 +10959,7 @@ __metadata:
     "@sentry/react": "npm:^10.45.0"
     "@sentry/vite-plugin": "npm:^5.1.1"
     "@stripe/react-stripe-js": "npm:^5.6.1"
-    "@stripe/stripe-js": "npm:^7.1.0"
+    "@stripe/stripe-js": "npm:^9.5.0"
     "@svgr/babel-plugin-transform-svg-component": "npm:^8.0.0"
     "@tanstack/eslint-plugin-query": "npm:^5.95.0"
     "@tanstack/react-query": "npm:^5.95.0"
