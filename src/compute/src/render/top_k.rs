@@ -44,10 +44,10 @@ use crate::render::Pairer;
 use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::errors::MaybeValidatingRow;
-use crate::row_spine::{
+use crate::typedefs::{KeyBatcher, MzTimestamp, RowRowSpine, RowSpine};
+use mz_row_spine::{
     DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBuilder, RowValSpine,
 };
-use crate::typedefs::{KeyBatcher, MzTimestamp, RowRowSpine, RowSpine};
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
 impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {

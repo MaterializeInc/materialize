@@ -368,6 +368,7 @@ pub(crate) fn upsert_v2<'scope, T, FromTime>(
 where
     T: Timestamp + TotalOrder + Sync,
     T: Refines<mz_repr::Timestamp> + TotalOrder + differential_dataflow::lattice::Lattice + Sync,
+    T: columnation::Columnation,
     FromTime: Timestamp + Clone + Sync,
 {
     let upsert_metrics = source_config.metrics.get_upsert_metrics(

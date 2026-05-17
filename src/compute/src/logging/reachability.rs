@@ -29,8 +29,8 @@ use timely::dataflow::operators::generic::operator::empty;
 use crate::extensions::arrange::MzArrangeCore;
 use crate::logging::initialize::ReachabilityEvent;
 use crate::logging::{EventQueue, LogCollection, LogVariant, TimelyLog, consolidate_and_pack};
-use crate::row_spine::RowRowBuilder;
 use crate::typedefs::RowRowSpine;
+use mz_row_spine::RowRowBuilder;
 
 /// The return type of [`construct`].
 pub(super) struct Return {

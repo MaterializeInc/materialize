@@ -7,6 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Packed-bytes differential dataflow spine [`Layout`]s for `Row`-valued
+//! arrangements.
+//!
+//! The spines defined here store `Row` keys and values as concatenated bytes
+//! in a single contiguous backing region (via `mz_ore::region::Region`, which
+//! uses lgalloc when available), instead of as separately-allocated heap
+//! objects. This gives cursor lookups block locality and lets the OS evict
+//! cold pages cleanly under memory pressure.
+//!
+//! [`Layout`]: differential_dataflow::trace::implementations::Layout
+
 pub use self::container::DatumContainer;
 pub use self::container::DatumSeq;
 pub use self::offset_opt::OffsetOptimized;
@@ -23,15 +34,24 @@ mod spines {
     use columnation::Columnation;
     use differential_dataflow::trace::implementations::Layout;
     use differential_dataflow::trace::implementations::Update;
+    use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
     use differential_dataflow::trace::implementations::ord_neu::{OrdKeyBatch, OrdKeyBuilder};
     use differential_dataflow::trace::implementations::ord_neu::{OrdValBatch, OrdValBuilder};
     use differential_dataflow::trace::implementations::spine_fueled::Spine;
     use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
     use mz_repr::Row;
-    use mz_timely_util::columnation::ColumnationStack;
+    use mz_timely_util::columnation::{ColInternalMerger, ColumnationChunker, ColumnationStack};
 
-    use crate::row_spine::{DatumContainer, OffsetOptimized};
-    use crate::typedefs::{KeyBatcher, KeyValBatcher};
+    use crate::{DatumContainer, OffsetOptimized};
+
+    /// Batcher matching `mz_compute::typedefs::KeyValBatcher`, redeclared
+    /// locally so this crate does not need to depend on `mz_compute`.
+    type KeyValBatcher<K, V, T, D> = MergeBatcher<
+        Vec<((K, V), T, D)>,
+        ColumnationChunker<((K, V), T, D)>,
+        ColInternalMerger<(K, V), T, D>,
+    >;
+    type KeyBatcher<K, T, D> = KeyValBatcher<K, (), T, D>;
 
     pub type RowRowSpine<T, R> = Spine<Rc<OrdValBatch<RowRowLayout<((Row, Row), T, R)>>>>;
     pub type RowRowBatcher<T, R> = KeyValBatcher<Row, Row, T, R>;
@@ -211,6 +231,13 @@ mod container {
     }
 
     impl<'a> DatumSeq<'a> {
+        /// Borrow a `Row` as a `DatumSeq` so that it can be used to seek into a
+        /// trace whose key/value container is a [`DatumContainer`].
+        #[inline]
+        pub fn from_row(row: &'a Row) -> Self {
+            Self { bytes: row.data() }
+        }
+
         #[inline]
         pub fn copy_into(&self, row: &mut RowPacker) {
             // SAFETY: `self.bytes` is a correctly formatted row.
@@ -291,7 +318,7 @@ mod container {
 
     #[cfg(test)]
     mod tests {
-        use crate::row_spine::DatumContainer;
+        use crate::DatumContainer;
         use differential_dataflow::trace::implementations::BatchContainer;
         use mz_repr::adt::date::Date;
         use mz_repr::adt::interval::Interval;
@@ -492,7 +519,7 @@ mod bytes_container {
     ///
     /// The backing storage for this batch will not be resized.
     pub struct BytesBatch {
-        offsets: crate::row_spine::OffsetOptimized,
+        offsets: crate::OffsetOptimized,
         storage: Region<u8>,
         len: usize,
     }
@@ -524,7 +551,7 @@ mod bytes_container {
 
         fn with_capacities(item_cap: usize, byte_cap: usize) -> Self {
             // TODO: be wary of `byte_cap` greater than 2^32.
-            let mut offsets = crate::row_spine::OffsetOptimized::with_capacity(item_cap + 1);
+            let mut offsets = crate::OffsetOptimized::with_capacity(item_cap + 1);
             offsets.push_into(0);
             Self {
                 offsets,
@@ -694,7 +721,7 @@ mod offset_opt {
 
     impl OffsetOptimized {
         pub fn heap_size(&self, callback: impl FnMut(usize, usize)) {
-            crate::row_spine::offset_list_size(&self.spilled, callback);
+            crate::offset_list_size(&self.spilled, callback);
         }
     }
 }
