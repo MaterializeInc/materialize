@@ -27,6 +27,7 @@ The goal is to lock in the boolean truth tables for `AND` and `OR` over the four
 * `Mz/Aggregate.lean`: aggregate reductions over `List Datum`. `aggCountNonNull` for `COUNT(expr)`. `aggStrict` for `SUM`/`MIN`/`MAX`-style aggregates that propagate `err` (first one in scan order wins) and skip `NULL`s. `aggTry` for the proposed `try_sum`/`try_min`/`try_max` variants that swallow `err` into `NULL` instead of propagating, defined as a post-pass on `aggStrict`. Theorems: `aggStrict_err` (any `err` input → `err` output), `aggStrict_no_err` (no-err inputs + no-err reducer → no-err output), `aggTry_no_err` (the non-strict variant never errors), and `aggTry_eq_aggStrict_of_no_err` (strict and non-strict agree on error-free inputs).
 * `Mz/Consolidate.lean`: per-key diff summation over `List (DiffWithError α)`. The headline `sumAll_eq_error_of_mem` proves that an `error` diff anywhere in the list absorbs the consolidated sum to `error`, which is the property a differential dataflow `compact` operator cites when propagating global errors through consolidation. Companion `sumAll_val_of_all_val` says an all-`val` list sums to `val` of some base value.
 * `Mz/Triple.lean`: `TimedRecord = (row, time, diff)` triple stream tying `DiffWithError` to differential dataflow's record format. Defines `consolidateAll` and `consolidateAt t`; lifts `Consolidate`'s absorption to per-time and stream-wide statements. Per-`(row, time)` bucketing is a follow-up — needs `DecidableEq` on `Row`.
+* `Mz/Join.lean`: relational joins on `UnifiedStream`. `cross` is the cartesian product; `join pred l r` filters the product through a join predicate. Errors propagate through the carrier — an `err` record on either side contributes one `err` to the output for every record on the other side, matching the diff-semiring's `error * diff = error`. Theorems cover the empty cases.
 
 ## What is not here
 
@@ -76,7 +77,9 @@ The roadmap in priority order:
 * `BagStream.filter` commutativity. Data field commutes by `filterRel_comm`; the error field requires a notion of multiset equality on `List EvalError` since list-order differs across permutations.
 * Tie `DiffWithError` to a concrete dataflow operator: model a `(Row, Time, DiffWithError ℤ)` triple stream and prove that an `error` diff at time `t` propagates to every downstream consolidation.
 * Joins on `BagStream` with explicit error propagation.
-* `GROUP BY` semantics: partition rows by key, run `aggStrict` per group. `Datum.err` keys form their own group (per the spec's grouping rule).
+* `GROUP BY` semantics: partition rows by key, run `aggStrict` per group. `Datum.err` keys form their own group (per the spec's grouping rule). Requires `DecidableEq Row`.
+* Join cardinality theorem: `(cross l r).length = l.length * r.length`. Skipped in the current skeleton; the proof needs `List.length_flatMap` + Nat arithmetic.
+* Sketch a proof of `cross_assoc` modulo row concatenation associativity.
 * Tightening `Expr.might_error`. The skeleton version is purely structural and ignores type / nullability information; bringing it closer to `MirScalarExpr::might_error` is additive.
 * Lift to bag semantics for predicate / projection rewrites.
 
