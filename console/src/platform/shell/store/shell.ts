@@ -24,10 +24,12 @@ import { clearListItemHeights } from "../heightByListItem";
 import { createHistoryId, HistoryId } from "../historyId";
 import { WebSocketFsmState } from "../machines/webSocketFsm";
 import { PlanInsights } from "../plan-insights/PlanInsightsNotice";
+import { TUTORIAL_IDS, TutorialId } from "./tutorialIds";
 
 export type { HistoryId } from "../historyId";
 
 export const SHELL_SIDEBAR_VISIBLE = "mz-shell-sidebar-visible";
+export const SHELL_ACTIVE_TUTORIAL = "mz-shell-active-tutorial";
 
 export type SessionParameters = Partial<{
   cluster: string;
@@ -37,6 +39,7 @@ export type SessionParameters = Partial<{
 
 type ShellState = {
   tutorialVisible: boolean;
+  activeTutorial: TutorialId;
   crtEnabled: boolean;
   webSocketState: WebSocketFsmState["value"] | null;
   sessionParameters: SessionParameters;
@@ -50,6 +53,7 @@ type ShellState = {
 
 const initialShellState = {
   tutorialVisible: getStoredSidebarVisibility(),
+  activeTutorial: getStoredActiveTutorial(),
   crtEnabled: false,
   webSocketState: null,
   sessionParameters: {},
@@ -184,6 +188,22 @@ function getStoredSidebarVisibility(): boolean {
 export function setStoredSidebarVisibility(visible: boolean) {
   if (storageAvailable("localStorage")) {
     window.localStorage.setItem(SHELL_SIDEBAR_VISIBLE, JSON.stringify(visible));
+  }
+}
+
+function getStoredActiveTutorial(): TutorialId {
+  if (storageAvailable("localStorage")) {
+    const stored = window.localStorage.getItem(SHELL_ACTIVE_TUTORIAL);
+    if (stored && (TUTORIAL_IDS as readonly string[]).includes(stored)) {
+      return stored as TutorialId;
+    }
+  }
+  return "quickstart";
+}
+
+export function setStoredActiveTutorial(tutorial: TutorialId) {
+  if (storageAvailable("localStorage")) {
+    window.localStorage.setItem(SHELL_ACTIVE_TUTORIAL, tutorial);
   }
 }
 /**
