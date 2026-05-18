@@ -1957,3 +1957,116 @@ or driver-side.
    service for perf work needs to itself be O(1) in the dimension
    being scaled. `update_state_metrics` looked innocent but actively
    distorted every comparison since the bogo work started.
+
+## 2026-05-18 — CRDB-backed sanity check at N=5k/10k/15k
+
+### tl;dr
+
+Re-ran the bench against CRDB consensus (same machine, same envd
+binary, just `--persist-consensus-url=postgres://…/consensus`) at
+three scale points. The **Materialize-side slope reproduces on
+CRDB**: ~+15 ms/+5k tables on create p50, basically the same shape
+we see on post-fix bogo. CRDB adds a modest extra ~2-5 ms/+5k on top
+because its catalog CAS RPC mean grows mildly with state size
+(1.88 → 2.11 → 3.80 ms across 5k → 10k → 15k); bogo's was flat.
+
+So the post-fix bogo conclusion holds: the dominant slope is in
+adapter/catalog code, not persist. Switching backends doesn't move
+that slope.
+
+### Bench setup
+
+- `start_envd_crdb.sh` — same as the bogo flavour but with
+  `--persist-consensus-url=postgres://root@localhost:26257/materialize?options=--search_path=consensus`.
+- `bench.py` + `analyze.py` take a `BENCH_MODE` env var that
+  suffixes `metrics_<mode>/` and `results_<mode>/`. Bogo data lives
+  in `metrics_bogo/` / `results_bogo/`; CRDB data in
+  `metrics_crdb/` / `results_crdb/`.
+- 100 reps × CREATE+DROP at each scale point. Padding is
+  incremental (5k → 10k → 15k = 15k total CREATE TABLEs).
+- Resource ceiling held throughout: envd RSS topped at 2.9 GiB at
+  N=15k; CRDB container stayed under 1 GiB. No memory pressure.
+
+### Headline: create_table p50 by backend
+
+| N       | bogo p50 | CRDB p50 | Δ (CRDB-bogo) |
+|---------|---------:|---------:|--------------:|
+| 5 000   |    26.86 |    54.82 |        +27.96 |
+| 10 000  |    41.17 |    72.24 |        +31.07 |
+| 15 000  |      —   |    87.47 |          —    |
+
+**Slope per +5k tables:**
+
+- bogo: +14.31 ms (5k → 10k)
+- CRDB: +17.42 ms (5k → 10k), +15.23 ms (10k → 15k)
+
+The Materialize-side slope (the part bogo is also paying) is ~14
+ms/+5k. CRDB adds ~2-3 ms on top of that.
+
+CRDB sits ~28 ms above bogo at every scale — that's a flat
+"CRDB tax" from the actual consensus RPCs being ~2 ms each instead
+of <0.5 ms. ~5.6 catalog CAS + 6.6 txns CAS = 12 RPCs/DDL × (2 ms -
+0.3 ms) ≈ +20 ms; close enough to the +28 we observe.
+
+### CAS per-call means: bogo stays flat, CRDB drifts
+
+`mz_persist_external_op_latency_by_shard_kind` mean for `consensus_cas`:
+
+|        | bogo 5k | bogo 10k | CRDB 5k | CRDB 10k | CRDB 15k |
+|--------|--------:|---------:|--------:|---------:|---------:|
+| catalog|  0.27   |  0.29    |  1.88   |  2.11    |  3.80    |
+| txns   |  0.42   |  0.27    |  2.02   |  2.68    |  2.27    |
+| user_data| 0.93  |  0.92    |  8.28   | 33.24    | 79.57    |
+
+- bogo: catalog/txns CAS mean is flat across scales. This was the
+  whole point of the `update_state_metrics` fix.
+- CRDB catalog: grows ~2× from 5k to 15k. Counts are unchanged
+  (5.6 per DDL), so this is per-RPC slowdown — CRDB is doing more
+  work per CAS as the consensus table grows. Plausibly index
+  size, query plan, or just SQL parsing/round-trip overhead under
+  load.
+- CRDB user_data: the big numbers are dominated by background
+  compaction load (count 49 → 124 per DDL); ignore for the
+  create-path discussion.
+
+### catalog_transact_seconds tracks create p50
+
+CRDB `catalog_transact_with_ddl_transaction` mean:
+
+| N       | mean (ms) | slope per +5k |
+|---------|----------:|--------------:|
+| 5 000   |     53.38 |       —       |
+| 10 000  |     70.15 |     +16.77    |
+| 15 000  |     89.67 |     +19.52    |
+
+So roughly the entire create_p50 slope is inside `catalog_transact`
+on CRDB too — same conclusion as bogo.
+
+### Padding throughput tells the same story
+
+CREATE TABLE rate during the pad phase, end of each segment:
+
+- N=5k:  19.1 tbl/s
+- N=10k: 15.6 tbl/s
+- N=15k: 11.9 tbl/s
+
+Roughly 1/p50: a 5k-table-rich envd is doing ~52 ms/CREATE during
+padding vs ~85 ms at 15k. Same slope.
+
+### Takeaways
+
+1. **The Materialize-side scaling slope is real and backend-
+   independent.** Going from bogo to CRDB doesn't make it go away;
+   CRDB just shifts the absolute floor up and adds a mild extra
+   per-CAS cost.
+2. **CRDB has its own mild CAS-mean slope** (catalog 1.88 → 3.80 ms
+   across 5k → 15k). Probably worth a follow-up to confirm whether
+   that's the consensus table index growth or SQL-side, but it's a
+   secondary effect at these scales.
+3. **The bogo work was the right setup.** Now that its in-mutex
+   metric update is fixed, bogo CAS mean is flat across the range,
+   so anything bogo still shows as slope is genuinely Materialize-
+   side. The CRDB run confirms that the bogo slope reproduces on a
+   real backend.
+4. **15k is well within budget on this machine** — envd hit 2.9
+   GiB RSS, CRDB stayed under 1 GiB. We can keep going if needed.
