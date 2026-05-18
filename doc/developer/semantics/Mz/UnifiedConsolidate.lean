@@ -199,6 +199,93 @@ theorem UnifiedStream.consolidate_length_le (us : UnifiedStream) :
     show (consolidateInto uc d (UnifiedStream.consolidate tl)).length ≤ tl.length + 1
     exact Nat.le_trans hStep hIh
 
+/-! ## Strict cardinality
+
+When a carrier already appears in the consolidated list,
+inserting it again does not grow the list — the existing bucket
+absorbs the new diff. The headline `consolidate_strict_length_dup`
+shows two adjacent records sharing a carrier compress to one in
+the output. -/
+
+/-- After `consolidateInto`, the carrier `uc` is in the result.
+Either the input already had it (the bucket update preserves
+membership) or the input did not (a fresh bucket is appended). -/
+private theorem mem_after_consolidateInto
+    (uc : UnifiedRow) (d : DiffWithError Int) (us : UnifiedStream) :
+    ∃ d', (uc, d') ∈ consolidateInto uc d us := by
+  induction us with
+  | nil => exact ⟨d, List.mem_singleton.mpr rfl⟩
+  | cons hd tl ih =>
+    obtain ⟨uc', d'⟩ := hd
+    by_cases hEq : uc = uc'
+    · subst hEq
+      refine ⟨d + d', ?_⟩
+      show (uc, d + d') ∈
+        (if uc = uc then (uc, d + d') :: tl
+          else (uc, d') :: consolidateInto uc d tl)
+      rw [if_pos rfl]
+      exact List.mem_cons_self
+    · obtain ⟨d'', hMem⟩ := ih
+      refine ⟨d'', ?_⟩
+      show (uc, d'') ∈
+        (if uc = uc' then (uc', d + d') :: tl
+          else (uc', d') :: consolidateInto uc d tl)
+      rw [if_neg hEq]
+      exact List.mem_cons_of_mem _ hMem
+
+/-- When `uc` already appears in `us`, `consolidateInto uc d us`
+does not change the length — the bucket update is in place. -/
+private theorem consolidateInto_length_eq_of_mem
+    (uc : UnifiedRow) (d : DiffWithError Int) (us : UnifiedStream)
+    (h : ∃ d', (uc, d') ∈ us) :
+    (consolidateInto uc d us).length = us.length := by
+  induction us with
+  | nil => obtain ⟨_, hMem⟩ := h; exact absurd hMem List.not_mem_nil
+  | cons hd tl ih =>
+    obtain ⟨uc', d'⟩ := hd
+    by_cases hEq : uc = uc'
+    · subst hEq
+      show (if uc = uc then (uc, d + d') :: tl
+              else (uc, d') :: consolidateInto uc d tl).length
+          = ((uc, d') :: tl).length
+      rw [if_pos rfl]
+      rfl
+    · have hMemTl : ∃ d', (uc, d') ∈ tl := by
+        obtain ⟨d'', hMem⟩ := h
+        rcases List.mem_cons.mp hMem with hHead | hTail
+        · exact absurd ((Prod.mk.injEq _ _ _ _).mp hHead).1 hEq
+        · exact ⟨d'', hTail⟩
+      show (if uc = uc' then (uc', d + d') :: tl
+              else (uc', d') :: consolidateInto uc d tl).length
+          = ((uc', d') :: tl).length
+      rw [if_neg hEq]
+      show (consolidateInto uc d tl).length + 1 = tl.length + 1
+      rw [ih hMemTl]
+
+/-- Two adjacent records sharing a carrier collapse to one in the
+consolidated output. The output length is at most `rest.length + 1`,
+strictly less than the input's `rest.length + 2`. -/
+theorem UnifiedStream.consolidate_strict_length_dup
+    (uc : UnifiedRow) (d d' : DiffWithError Int) (rest : UnifiedStream) :
+    (UnifiedStream.consolidate ((uc, d) :: (uc, d') :: rest)).length
+      ≤ rest.length + 1 := by
+  -- consolidate ((uc, d) :: (uc, d') :: rest)
+  --   = consolidateInto uc d (consolidate ((uc, d') :: rest))
+  --   = consolidateInto uc d (consolidateInto uc d' (consolidate rest))
+  -- The inner consolidateInto produces a list containing uc;
+  -- the outer therefore preserves length.
+  show (consolidateInto uc d (UnifiedStream.consolidate ((uc, d') :: rest))).length
+        ≤ rest.length + 1
+  have hMem : ∃ d'', (uc, d'') ∈ UnifiedStream.consolidate ((uc, d') :: rest) := by
+    show ∃ d'', (uc, d'') ∈ consolidateInto uc d' (UnifiedStream.consolidate rest)
+    exact mem_after_consolidateInto uc d' _
+  rw [consolidateInto_length_eq_of_mem uc d _ hMem]
+  -- Now bound (consolidate ((uc, d') :: rest)).length ≤ ((uc, d') :: rest).length
+  --                                                    = rest.length + 1.
+  have := UnifiedStream.consolidate_length_le ((uc, d') :: rest)
+  show (UnifiedStream.consolidate ((uc, d') :: rest)).length ≤ rest.length + 1
+  exact this
+
 /-! ## No-error preservation
 
 If every input diff is a `.val`, every output diff is a `.val`.
