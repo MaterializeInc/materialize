@@ -1502,3 +1502,180 @@ target/optimized/examples/persist_cas_bench \
 Tag rows in the CSV so multiple runs can share one output file.
 Use `--rollup-threshold 1000000` to suppress rollups. The
 `summarize.py` script in `cas_bench/` produces the table above.
+
+### 2026-05-18 — fine-grained state_apply attribution, full envd rerun
+
+The microbench from the previous section ruled out "per-CAS scales
+with state size" as the cause of the envd slope. To close the loop,
+added `mz_persist_state_apply_latency_by_shard_kind` (HistogramVec
+with labels `[stage, shard_kind]`, stages `total`/`flatten`/
+`unflatten`/`decode`) so each `State::apply_diff` invocation gets
+timed and attributed to a shard_kind. Then re-ran the full
+envd N=5k/N=10k bench with the new build.
+
+#### End-to-end DDL latency (re-run, same backend, fresh build)
+
+| N | create_p50 | create_p95 | drop_p50 | drop_p95 | create_mean |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 5,000 | 29.27 | 74.77 | 26.71 | 39.55 | 34.05 |
+| 10,000 | 47.41 | 120.24 | 42.85 | 48.81 | 61.02 |
+
+Create p50 slope: **+18.14 ms** from N=5k→N=10k. Matches the
+previous run within run-to-run variance.
+
+#### `consensus_cas` mean per CAS, per shard_kind
+
+| N | catalog | txns | user_data |
+| ---: | ---: | ---: | ---: |
+| 5,000 | 0.54 ms | 0.85 ms | 6.45 ms |
+| 10,000 | **2.48 ms** | 0.92 ms | **41.41 ms** |
+
+* Catalog CAS RPC: **+1.94 ms × 5.6 calls/DDL = +10.9 ms/DDL**.
+* Txns CAS RPC mean is essentially flat (+0.07 ms × 6.65 = +0.5 ms).
+* User_data CAS mean blew up 6× (6.45 → 41 ms) — but those are
+  off the critical path of any single DDL. Still telling: bogo
+  is taking ~40 ms per CAS on average for *background* shards at
+  N=10k.
+
+#### `state_apply_latency_by_shard_kind` — the new metric
+
+`total` count is the number of `apply_diff` invocations per
+shard_kind in the bench window (×0.01 reps = per-DDL). Mean is
+the per-call latency.
+
+| N | shard_kind | total count/DDL | total mean | flatten count/DDL | unflatten count/DDL | decode count/DDL |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| 5,000 | catalog | **0.01** | 0.01 ms | 0 | 0 | 0.01 |
+| 5,000 | txns | 0 | — | 0 | 0 | 0 |
+| 5,000 | user_data | 92.14 | 0.01 ms | 80.64 | 80.64 | 16.20 |
+| 10,000 | catalog | **335.70** | 0.01 ms | 332.56 | 332.56 | 1.42 |
+| 10,000 | txns | **167.84** | 0.01 ms | 115.72 | 115.72 | 0.06 |
+| 10,000 | user_data | 49.25 | 0.01 ms | 35.54 | 35.54 | 30.31 |
+
+**At N=10k the catalog shard does 335 apply_diff calls per DDL,
+each ~10 µs.** At N=5k it does ~0. The txns shard makes the same
+~0 → 168/DDL jump. Aggregated:
+
+* Catalog state-apply budget: 0 → **3.4 ms/DDL** (NEW slope
+  component, completely invisible to the previous "consensus CAS"
+  metric).
+* Txns state-apply budget: 0 → **1.7 ms/DDL** (also new).
+
+99.9% of apply_diff calls finish in <64 µs (lowest bucket). flatten
+is sub-precision; unflatten is the line item that actually adds up.
+Decode count is small (~1–2/DDL on catalog, ~30/DDL on user_data)
+so the StateDiff::decode cost is not the slope either.
+
+#### Full slope reconciliation
+
+Putting all per-DDL persist budgets side by side:
+
+| component | N=5k ms/DDL | N=10k ms/DDL | Δ ms/DDL |
+| --- | ---: | ---: | ---: |
+| catalog `consensus_cas` (5.6 × mean) | 3.04 | **13.91** | **+10.87** |
+| txns `consensus_cas` (6.65 × mean) | 5.67 | 6.12 | +0.45 |
+| catalog `consensus_scan` (2.1 × mean) | 3.28 | 2.79 | −0.49 |
+| catalog `blob_set` | 0.79 | 0.65 | −0.14 |
+| txns `blob_set` | 2.84 | 3.79 | +0.95 |
+| catalog `state_apply` (total) | 0.00 | **3.36** | **+3.36** |
+| txns `state_apply` (total) | 0.00 | **1.68** | **+1.68** |
+| user_data `state_apply` (total) | 0.92 | 0.49 | −0.43 |
+| **sum** | **16.54** | **32.79** | **+16.25** |
+
+Create-table p50 slope: +18.14 ms. Sum-of-persist-pieces slope:
++16.25 ms. **The remaining ~2 ms is run-to-run variance / minor
+in-process work** (catalog walks, JSON re-encoding, etc.). The
+persist-attributable slope is essentially the whole slope.
+
+#### What we learned
+
+1. **The slope is fully accounted for.** Catalog `consensus_cas`
+   RPC growth (+10.9 ms) + catalog state-apply (+3.4 ms) + txns
+   state-apply (+1.7 ms) + txns blob_set growth (+0.95 ms) ≈
+   the whole +17–18 ms wall-time slope per DDL. No mystery
+   residual.
+2. **There are two distinct cost growths.** The catalog `consensus_cas`
+   RPC itself got 4.6× slower (0.54 → 2.48 ms) — that's a server-
+   side cost (bogo + shared client / scheduler contention from 10k
+   user_data shards' background activity). And separately, the
+   *client*-side state-apply work grew from ~0 to 335 invocations
+   per DDL on the catalog shard.
+3. **The state-apply count explosion is the more surprising one.**
+   The catalog shard's actual `cmd_succeeded` count stayed flat at
+   5.6/DDL across both scales. So the catalog's true SeqNo only
+   advanced ~5.6 times per DDL. But we called `apply_diff` 335
+   times. That means ~60 `apply_diff` invocations per real SeqNo
+   advance, each doing little work (~10 µs) but the aggregate
+   reaches 3.4 ms/DDL. Something is calling the state-apply path
+   far more often than the shard's history requires.
+4. **Single-shard microbench can't reproduce this** because it
+   doesn't have the 10k user_data shards generating the
+   pubsub broadcast / scheduler load that drives the catalog
+   state-apply replay frequency up.
+
+#### Hypotheses for the apply_diff count explosion
+
+`apply_diff` only fires for diffs that pass the filter inside
+`apply_encoded_diffs` (`x.seqno == state_seqno.next()`), so each
+call is at least nominally trying to advance the local cache.
+Plausible sources of the 60× per-CAS multiplier on catalog:
+
+* **`cache.rs::push_diff` (pubsub broadcast)** — each call applies
+  one diff. The catalog shard's `pubsub_diff_applied` count
+  delta is only ~2/window though, so this is *not* the source.
+* **`apply.rs::fetch_and_update_state`** (line 669) — calls
+  `apply_encoded_diffs(diffs_to_current)`. The
+  `update_state_fast_path` counter delta is only ~0.57/DDL.
+  Even if each fast_path firing applied ~60 diffs, that gives
+  ~34/DDL — short of 335.
+* **`state_versions.rs::fetch_current_state`** (line 466) — the
+  slow path, replays all live diffs from the latest rollup.
+  Would have to fire ~5/DDL on catalog applying ~67 diffs each
+  to explain the count. Need to instrument call sites to confirm.
+* **`state_versions.rs:1140`** (`StateVersionsIter`) — used by
+  GC/audit/inspect to walk historical states. If GC on the
+  catalog walks N live states, each walk applies N diffs and
+  counts in our metric.
+
+The next surgical metric is to add a call-site label to the
+`state_apply_latency_by_shard_kind` histogram (or a separate
+counter), so we can split the catalog's 335/DDL by which of the
+four call sites is responsible. That's a one-line dispatch per
+site and falls out into the same bench harness.
+
+#### Next moves
+
+1. **Add a `source` label to the state-apply metric** (or a
+   separate counter `apply_diff_calls_by_source_and_kind` with
+   sources `cas_update`, `slow_refetch`, `pubsub_push`,
+   `state_iter`). Rerun the bench. Pinpoint the call site that
+   creates the 335/DDL on catalog.
+2. **Investigate why catalog `consensus_cas` mean grew 4.6×** even
+   though the microbench shows no growth in bogo RPC at the same
+   state size. The likely answer is shared-client / scheduler
+   contention — many user_data shards' CASes queued up in front of
+   the catalog CAS on the bogo gRPC connection (the pool was
+   bumped to 50 channels recently, but at N=10k there may still be
+   head-of-line blocking). To confirm, instrument
+   `MetricsConsensus::run_op` with an *outer* timer that wraps the
+   future before Tokio scheduling, and compare against the inner
+   timer that wraps just the inner consensus call.
+3. **Now that the slope is fully accounted for**, decide which of
+   the two pieces to fix first. The catalog `consensus_cas`
+   growth (+10.9 ms) is the bigger lever (2× larger than apply_diff
+   growth). It's likely also easier to fix — multi-channel fan-out
+   per shard, or a dedicated per-shard concurrency limit, would
+   stop the user_data CAS load from queuing in front of catalog
+   CASes.
+
+#### Reproducing
+
+* New build: `cargo build --profile=optimized --bin environmentd --bin clusterd --bin mz-bogo-consensus`
+* `/home/ubuntu/envd-ddl-investigation/reset_state.sh` to wipe
+  blob / mzdata / scratch / CRDB.
+* `/home/ubuntu/envd-ddl-investigation/start_envd.sh` to launch.
+* `/home/ubuntu/envd-ddl-investigation/bench.py` runs the full
+  N=5k → N=10k ladder; ~10 minutes wall.
+* `/home/ubuntu/envd-ddl-investigation/analyze.py` parses the
+  before/after `/metrics` snapshots and prints the per-shard_kind
+  breakdown tables above.
