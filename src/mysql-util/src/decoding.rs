@@ -613,6 +613,19 @@ mod tests {
         assert_eq!(s, "1970-01-01 00:00:00");
     }
 
+    /// Out-of-range epochs must error rather than silently producing
+    /// a zero-timestamp — they aren't the MySQL zero-date marker, just
+    /// garbage chrono can't represent.
+    #[mz_ore::test]
+    fn timestamp_value_int_out_of_range_errors() {
+        let col = timestamp_text_col(0);
+        let err = pack_one(Value::Int(i64::MAX), &col).unwrap_err();
+        assert!(
+            err.to_string().contains("invalid timestamp value"),
+            "unexpected error message: {err}"
+        );
+    }
+
     /// Regression: Value::Bytes carrying a unix-epoch string is the
     /// wire variant that triggered the production failure
     ///   received unexpected value for timestamp type: Bytes("17436613..")
@@ -635,6 +648,17 @@ mod tests {
         assert_eq!(s, "1970-01-01 00:00:00");
     }
 
+    /// Fractional form of the TIMESTAMP2 binlog encoding —
+    /// "<sec>.<usec>" wrapped in Value::Bytes (binlog/value.rs:151-153).
+    /// Hits the `s.contains('.')` branch and the precision-aware
+    /// reformat.
+    #[mz_ore::test]
+    fn timestamp_value_bytes_epoch_fractional() {
+        let col = timestamp_text_col(6);
+        let s = pack_one(Value::Bytes(b"1743661234.123456".to_vec()), &col).unwrap();
+        assert_eq!(s, "2025-04-03 06:20:34.123456");
+    }
+
     /// Bytes that aren't valid UTF-8 should produce a meaningful error,
     /// not a panic.
     #[mz_ore::test]
@@ -647,6 +671,22 @@ mod tests {
             msg.contains("invalid timestamp value"),
             "unexpected error message: {msg}"
         );
+    }
+
+    /// Bytes that are valid UTF-8 but not parseable as a unix epoch
+    /// should produce the same structured error as invalid UTF-8 —
+    /// covers the chrono parse failure path that
+    /// `timestamp_value_bytes_invalid_utf8_errors` doesn't reach.
+    #[mz_ore::test]
+    fn timestamp_value_bytes_unparseable_errors() {
+        let col = timestamp_text_col(0);
+        for payload in [&b""[..], &b"not-an-epoch"[..], &b"2024-04-03 10:15:13"[..]] {
+            let err = pack_one(Value::Bytes(payload.to_vec()), &col).unwrap_err();
+            assert!(
+                err.to_string().contains("invalid timestamp value"),
+                "payload {payload:?}: unexpected error message: {err}"
+            );
+        }
     }
 
     /// Variants that have no defined mapping for a TIMESTAMP column
