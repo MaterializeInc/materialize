@@ -43,11 +43,12 @@ pub(super) fn reduce_if(e: &mut MirScalarExpr, column_types: &[ReprColumnType]) 
         && then.typ(column_types).scalar_type == ReprScalarType::Bool
         && els.typ(column_types).scalar_type == ReprScalarType::Bool
     {
-        // Rewrite `IF cond THEN <bool-lit> ELSE <bool-lit>` using AND/OR/IS NULL
-        // so a NULL `cond` is not propagated to the result.
         match (then.as_literal(), els.as_literal()) {
+            // Note: NULLs from the condition should not be propagated to the result
+            // of the expression.
             (Some(Ok(Datum::True)), _) => {
-                // ((cond IS NOT NULL) AND cond) OR els.
+                // Rewritten as ((<cond> IS NOT NULL) AND (<cond>)) OR (<els>)
+                // NULL <cond> results in: (FALSE AND NULL) OR (<els>) => (<els>)
                 *e = cond
                     .clone()
                     .call_is_null()
@@ -56,7 +57,8 @@ pub(super) fn reduce_if(e: &mut MirScalarExpr, column_types: &[ReprColumnType]) 
                     .or(els.take());
             }
             (Some(Ok(Datum::False)), _) => {
-                // ((NOT cond) OR (cond IS NULL)) AND els.
+                // Rewritten as ((NOT <cond>) OR (<cond> IS NULL)) AND (<els>)
+                // NULL <cond> results in: (NULL OR TRUE) AND (<els>) => TRUE AND (<els>) => (<els>)
                 *e = cond
                     .clone()
                     .not()
@@ -64,7 +66,8 @@ pub(super) fn reduce_if(e: &mut MirScalarExpr, column_types: &[ReprColumnType]) 
                     .and(els.take());
             }
             (_, Some(Ok(Datum::True))) => {
-                // (NOT cond) OR (cond IS NULL) OR then.
+                // Rewritten as (NOT <cond>) OR (<cond> IS NULL) OR (<then>)
+                // NULL <cond> results in: NULL OR TRUE OR (<then>) => TRUE
                 *e = cond
                     .clone()
                     .not()
@@ -72,7 +75,8 @@ pub(super) fn reduce_if(e: &mut MirScalarExpr, column_types: &[ReprColumnType]) 
                     .or(then.take());
             }
             (_, Some(Ok(Datum::False))) => {
-                // (cond IS NOT NULL) AND cond AND then.
+                // Rewritten as (<cond> IS NOT NULL) AND (<cond>) AND (<then>)
+                // NULL <cond> results in: FALSE AND NULL AND (<then>) => FALSE
                 *e = cond
                     .clone()
                     .call_is_null()
@@ -85,12 +89,17 @@ pub(super) fn reduce_if(e: &mut MirScalarExpr, column_types: &[ReprColumnType]) 
         return;
     }
 
-    // Lift a common operator out of the two `If` branches. For example,
-    // `IF cond THEN x = y ELSE x = z` becomes `x = IF cond THEN y ELSE z`.
+    // Equivalent expression structure would allow us to push the `If` into the expression.
+    // For example, `IF <cond> THEN x = y ELSE x = z` becomes `x = IF <cond> THEN y ELSE z`.
     //
-    // We must ensure that the two `If` branches have unionable types,
-    // otherwise the lifted `If` could not be typed. See
-    // https://github.com/MaterializeInc/database-issues/issues/9182.
+    // We have to also make sure that the expressions that will end up in
+    // the two `If` branches have unionable types. Otherwise, the `If` could
+    // not be typed by `typ`. An example where this could cause an issue is
+    // when pulling out `cast_jsonbable_to_jsonb`, which accepts a wide
+    // range of input types. (In theory, we could still do the optimization
+    // in this case by inserting appropriate casts, but this corner case is
+    // not worth the complication for now.)
+    // See https://github.com/MaterializeInc/database-issues/issues/9182
     match (&mut **then, &mut **els) {
         (
             MirScalarExpr::CallUnary { func: f1, expr: e1 },

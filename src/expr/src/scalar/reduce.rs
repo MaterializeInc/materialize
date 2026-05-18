@@ -33,6 +33,7 @@ mod variadic;
 pub fn reduce(expr: &mut MirScalarExpr, column_types: &[ReprColumnType]) {
     let temp_storage = &RowArena::new();
 
+    // Simplifications run in a loop until `expr` no longer changes.
     let mut old = MirScalarExpr::column(0);
     while old != *expr {
         old = expr.clone();
@@ -65,6 +66,7 @@ fn reduce_pre(e: &mut MirScalarExpr, column_types: &[ReprColumnType]) {
                 }
             }
             UnaryFunc::Not(_) => match &mut **expr {
+                // Push down not expressions
                 // Two negates cancel each other out.
                 MirScalarExpr::CallUnary {
                     expr: inner_expr,
@@ -99,6 +101,7 @@ fn reduce_pre(e: &mut MirScalarExpr, column_types: &[ReprColumnType]) {
 /// Post-order rewrites, applied after children have been reduced.
 fn reduce_post(e: &mut MirScalarExpr, column_types: &[ReprColumnType], temp_storage: &RowArena) {
     match e {
+        // Evaluate and pull up constants
         MirScalarExpr::Column(_, _)
         | MirScalarExpr::Literal(_, _)
         | MirScalarExpr::CallUnmaterializable(_) => {}

@@ -84,12 +84,11 @@ pub(super) fn reduce_call_variadic(
                 .map_or("", |expr| expr.as_literal_str().unwrap());
             let (limit, flags) = regexp_replace_parse_flags(flags);
 
-            // The behavior of `regexp_replace` is that if the data is `NULL`,
-            // the function returns `NULL`, independently of whether the
-            // pattern or flags are correct. We need to check for this case
-            // and introduce an if-then-else on the error path to only
-            // surface the error if both the source and replacement inputs
-            // are non-NULL.
+            // The behavior of `regexp_replace` is that if the data is `NULL`, the
+            // function returns `NULL`, independently of whether the pattern or
+            // flags are correct. We need to check for this case and introduce an
+            // if-then-else on the error path to only surface the error if both
+            // the source and replacement inputs are non-NULL.
             *e = match func::build_regex(pattern, &flags) {
                 Ok(regex) => {
                     let mut exprs = mem::take(exprs);
@@ -105,8 +104,7 @@ pub(super) fn reduce_call_variadic(
                     let replacement = exprs.swap_remove(2);
                     let source = exprs.swap_remove(0);
                     let scalar_type = e.typ(column_types).scalar_type;
-                    // We need to return `NULL` on `NULL` input, and error
-                    // otherwise.
+                    // We need to return `NULL` on `NULL` input, and error otherwise.
                     source
                         .call_is_null()
                         .or(replacement.call_is_null())
@@ -138,14 +136,14 @@ pub(super) fn reduce_call_variadic(
             };
         }
         VariadicFunc::ListIndex(_) if is_list_create_call(&exprs[0]) => {
-            // ListIndex(ListCreate, literal) → eliminate both the ListIndex
-            // and the ListCreate. E.g.: `LIST[f1,f2][2]` → `f2`.
+            // We are looking for ListIndex(ListCreate, literal), and eliminate
+            // both the ListIndex and the ListCreate. E.g.: `LIST[f1,f2][2]` --> `f2`
             let ind_exprs = exprs.split_off(1);
             let top_list_create = exprs.swap_remove(0);
             *e = reduce_list_create_list_index_literal(top_list_create, ind_exprs);
         }
         VariadicFunc::And(_) | VariadicFunc::Or(_) => {
-            // Relies on `flatten_associative` having run above.
+            // Note: It's important that we have called `flatten_associative` above.
             e.undistribute_and_or();
             e.reduce_and_canonicalize_and_or();
         }
@@ -185,17 +183,21 @@ fn simplify_coalesce(e: &mut MirScalarExpr, column_types: &[ReprColumnType]) {
         unreachable!()
     };
 
-    // The all-null check must run before we modify `exprs`, because
-    // `e.typ` requires `exprs.len() > 0`.
+    // If all inputs are null, output is null. This check must
+    // be done before `exprs.retain...` because `e.typ` requires
+    // > 0 `exprs` remain.
     if exprs.iter().all(|x| x.is_literal_null()) {
         *e = MirScalarExpr::literal_null(e.typ(column_types).scalar_type);
         return;
     }
 
+    // Remove any null values if not all values are null.
     exprs.retain(|x| !x.is_literal_null());
 
-    // Drop arguments after the first one that's certain to be non-null. This
-    // intentionally throws away errors that can never happen.
+    // Find the first argument that is a literal or non-nullable
+    // column. All arguments after it get ignored, so throw them
+    // away. This intentionally throws away errors that can
+    // never happen.
     if let Some(i) = exprs
         .iter()
         .position(|x| x.is_literal() || !x.typ(column_types).nullable)
@@ -203,10 +205,12 @@ fn simplify_coalesce(e: &mut MirScalarExpr, column_types: &[ReprColumnType]) {
         exprs.truncate(i + 1);
     }
 
+    // Deduplicate arguments in cases like `coalesce(#0, #0)`.
     let mut seen = BTreeSet::new();
     exprs.retain(|x| seen.insert(x.clone()));
 
     if exprs.len() == 1 {
+        // Only one argument, so the coalesce is a no-op.
         *e = exprs[0].take();
     }
 }
@@ -233,39 +237,35 @@ fn list_create_type(list_create: &MirScalarExpr) -> ReprScalarType {
     }
 }
 
-/// Partial-evaluates a list indexing with a literal directly after a list
-/// creation.
+/// Partial-evaluates a list indexing with a literal directly after a list creation.
 ///
-/// Multi-dimensional lists are handled by a single call to this function,
-/// with multiple elements in `index_exprs` (of which not all need to be
-/// literals), and nested `ListCreate`s in `list_create_to_reduce`.
+/// Multi-dimensional lists are handled by a single call to this function, with multiple
+/// elements in index_exprs (of which not all need to be literals), and nested ListCreates
+/// in list_create_to_reduce.
 ///
 /// # Examples
 ///
-/// `LIST[f1,f2][2]` → `f2`.
+/// `LIST[f1,f2][2]` --> `f2`.
 ///
 /// A multi-dimensional list, with only some of the indexes being literals:
-/// `LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][n][2]` →
-/// `LIST[f6, f8] [n]`.
+/// `LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][n][2]` --> `LIST[f6, f8] [n]`
 ///
 /// See more examples in list.slt.
 fn reduce_list_create_list_index_literal(
     mut list_create_to_reduce: MirScalarExpr,
     mut index_exprs: Vec<MirScalarExpr>,
 ) -> MirScalarExpr {
-    // We iterate over the index_exprs and remove literals, but keep
-    // non-literals. When we encounter a non-literal, we need to dig into the
-    // nested ListCreates: `list_create_mut_refs` will contain all the
-    // ListCreates of the current level. If an element of
-    // `list_create_mut_refs` is not actually a ListCreate, then we break out
-    // of the loop. When we remove a literal, we need to partial-evaluate all
-    // ListCreates that are at the current level (except those that
-    // disappeared due to literals at earlier levels), index into them with
-    // the literal, and change each element in `list_create_mut_refs` to the
-    // result. We also record mut refs to all the earlier `element_type`
-    // references that we have seen in ListCreate calls, because when we
-    // process a literal index, we need to remove one layer of list type from
-    // all these earlier ListCreate `element_type`s.
+    // We iterate over the index_exprs and remove literals, but keep non-literals.
+    // When we encounter a non-literal, we need to dig into the nested ListCreates:
+    // `list_create_mut_refs` will contain all the ListCreates of the current level. If an
+    // element of `list_create_mut_refs` is not actually a ListCreate, then we break out of
+    // the loop. When we remove a literal, we need to partial-evaluate all ListCreates
+    // that are at the current level (except those that disappeared due to
+    // literals at earlier levels), index into them with the literal, and change each
+    // element in `list_create_mut_refs` to the result.
+    // We also record mut refs to all the earlier `element_type` references that we have
+    // seen in ListCreate calls, because when we process a literal index, we need to remove
+    // one layer of list type from all these earlier ListCreate `element_type`s.
     let mut list_create_mut_refs = vec![&mut list_create_to_reduce];
     let mut earlier_list_create_types: Vec<&mut SqlScalarType> = vec![];
     let mut i = 0;
@@ -275,11 +275,14 @@ fn reduce_list_create_list_index_literal(
             .all(|lc| is_list_create_call(lc))
     {
         if index_exprs[i].is_literal_ok() {
+            // We can remove this index.
             let removed_index = index_exprs.remove(i);
             let index_i64 = match removed_index.as_literal().unwrap().unwrap() {
                 Datum::Int64(sql_index_i64) => sql_index_i64 - 1,
                 _ => unreachable!(), // always an Int64, see plan_index_list
             };
+            // For each list_create referenced by list_create_mut_refs, substitute it by its
+            // `index`th argument (or null).
             for list_create in &mut list_create_mut_refs {
                 let list_create_args = match list_create {
                     MirScalarExpr::CallVariadic {
@@ -288,7 +291,7 @@ fn reduce_list_create_list_index_literal(
                     } => exprs,
                     _ => unreachable!(), // func cannot be anything else than a ListCreate
                 };
-                // ListIndex gives null on an out-of-bounds index.
+                // ListIndex gives null on an out-of-bounds index
                 if index_i64 >= 0 && index_i64 < list_create_args.len().try_into().unwrap() {
                     let index: usize = index_i64.try_into().unwrap();
                     **list_create = list_create_args.swap_remove(index);
@@ -305,8 +308,8 @@ fn reduce_list_create_list_index_literal(
                 } = t
                 {
                     **t = *element_type.clone();
-                    // These are not the same types anymore, so remove
-                    // custom_ids all the way down.
+                    // These are not the same types anymore, so remove custom_ids all the
+                    // way down.
                     let mut u = &mut **t;
                     while let SqlScalarType::List {
                         element_type,
@@ -317,14 +320,13 @@ fn reduce_list_create_list_index_literal(
                         u = &mut **element_type;
                     }
                 } else {
-                    unreachable!("already matched above");
+                    unreachable!("already matched below");
                 }
             }
         } else {
-            // We can't remove this index, so we can't reduce any of the
-            // ListCreates at this level. So we change list_create_mut_refs
-            // to refer to all the arguments of all the ListCreates currently
-            // referenced by list_create_mut_refs.
+            // We can't remove this index, so we can't reduce any of the ListCreates at this
+            // level. So we change list_create_mut_refs to refer to all the arguments of all
+            // the ListCreates currently referenced by list_create_mut_refs.
             list_create_mut_refs = list_create_mut_refs
                 .into_iter()
                 .flat_map(|list_create| match list_create {
@@ -343,8 +345,7 @@ fn reduce_list_create_list_index_literal(
         }
     }
     // If all list indexes have been evaluated, return the reduced expression.
-    // Otherwise, rebuild the ListIndex call with the remaining ListCreates
-    // and indexes.
+    // Otherwise, rebuild the ListIndex call with the remaining ListCreates and indexes.
     if index_exprs.is_empty() {
         assert_eq!(list_create_mut_refs.len(), 1);
         list_create_to_reduce

@@ -56,9 +56,11 @@ pub(super) fn reduce_call_binary(
     // argument is present; otherwise the call falls through unchanged.
     match func {
         BinaryFunc::IsLikeMatchCaseInsensitive(_) if expr2.is_literal() => {
+            // We can at least precompile the regex.
             precompile_is_like(e, column_types, true);
         }
         BinaryFunc::IsLikeMatchCaseSensitive(_) if expr2.is_literal() => {
+            // We can at least precompile the regex.
             precompile_is_like(e, column_types, false);
         }
         BinaryFunc::IsRegexpMatchCaseSensitive(_) | BinaryFunc::IsRegexpMatchCaseInsensitive(_) => {
@@ -130,10 +132,9 @@ pub(super) fn reduce_call_binary(
             })
         }
         BinaryFunc::TimezoneTimestampBinary(_) if expr1.is_literal() => {
-            // If the timezone argument is a literal, and we're applying the
-            // function on many rows, we want to parse it once and embed it
-            // into the UnaryFunc enum. The memory footprint of Timezone is
-            // small (8 bytes).
+            // If the timezone argument is a literal, and we're applying the function on many rows at the same
+            // time we really don't want to parse it again and again, so we parse it once and embed it into the
+            // UnaryFunc enum. The memory footprint of Timezone is small (8 bytes).
             precompile_timezone(e, column_types, |tz| {
                 UnaryFunc::TimezoneTimestamp(func::TimezoneTimestamp(tz))
             });
@@ -201,6 +202,14 @@ fn reduce_call_binary_eq_record(e: &mut MirScalarExpr) {
                 exprs: rec_create_args,
             },
         ) => {
+            // Literal([c1, c2]) = record_create(e1, e2)
+            //  -->
+            // c1 = e1 AND c2 = e2
+            //
+            // (Records are represented as lists.)
+            //
+            // `MapFilterProject::literal_constraints` relies on this transform,
+            // because `(e1,e2) IN ((1,2))` is desugared using `record_create`.
             if let Datum::List(datum_list) = lit_row.unpack_first() {
                 *e = MirScalarExpr::call_variadic(
                     And,
@@ -227,9 +236,17 @@ fn reduce_call_binary_eq_record(e: &mut MirScalarExpr) {
                 exprs: rec_create_args2,
             },
         ) => {
+            // record_create(a1, a2, ...) = record_create(b1, b2, ...)
+            //  -->
+            // a1 = b1 AND a2 = b2 AND ...
+            //
+            // This is similar to the previous reduction, but this one kicks in also
+            // when only some (or none) of the record fields are literals. This
+            // enables the discovery of literal constraints for those fields.
+            //
             // Note that there is a similar decomposition in
-            // `mz_sql::plan::transform_ast::Desugarer`, but that is earlier in
-            // the pipeline than the compilation of IN lists to `record_create`.
+            // `mz_sql::plan::transform_ast::Desugarer`, but that is earlier in the
+            // pipeline than the compilation of IN lists to `record_create`.
             *e = MirScalarExpr::call_variadic(
                 And,
                 rec_create_args1
