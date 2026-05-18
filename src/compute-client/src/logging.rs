@@ -363,7 +363,7 @@ impl LogVariant {
                 .with_column("lir_id", SqlScalarType::UInt64.nullable(false))
                 .with_column("worker_id", SqlScalarType::UInt64.nullable(false))
                 .with_column("hydrated", SqlScalarType::Bool.nullable(false))
-                .with_key(vec![0, 1])
+                .with_key(vec![0, 1, 2])
                 .finish(),
 
             LogVariant::Compute(ComputeLog::LirMapping) => RelationDesc::builder()
