@@ -180,6 +180,92 @@ theorem eval_append_left_of_bounded_argsMap :
         eval_append_left_of_bounded_argsMap l r rest h.2]
 end
 
+/-! ## Bound monotonicity
+
+A predicate whose column references are bounded by `n` is also
+bounded by any `m ≥ n`. Used to lift a tight per-relation bound
+(e.g. `pred is bounded by table-A-width`) to a coarser join-env
+bound (`bounded by combined-env-width`). -/
+
+mutual
+theorem Expr.colReferencesBoundedBy_mono :
+    ∀ {n m : Nat} (e : Expr),
+      e.colReferencesBoundedBy n = true → n ≤ m →
+      e.colReferencesBoundedBy m = true
+  | _, _, .lit _,            _, _ => rfl
+  | n, m, .col i,            h, hLe => by
+    have h_lt : i < n := of_decide_eq_true h
+    show decide (i < m) = true
+    exact decide_eq_true (Nat.lt_of_lt_of_le h_lt hLe)
+  | _, _, .and a b,          h, hLe => by
+    simp only [Expr.colReferencesBoundedBy, Bool.and_eq_true] at h ⊢
+    exact ⟨Expr.colReferencesBoundedBy_mono a h.1 hLe,
+           Expr.colReferencesBoundedBy_mono b h.2 hLe⟩
+  | _, _, .or a b,           h, hLe => by
+    simp only [Expr.colReferencesBoundedBy, Bool.and_eq_true] at h ⊢
+    exact ⟨Expr.colReferencesBoundedBy_mono a h.1 hLe,
+           Expr.colReferencesBoundedBy_mono b h.2 hLe⟩
+  | _, _, .not a,            h, hLe => Expr.colReferencesBoundedBy_mono a h hLe
+  | _, _, .ifThen c t e,     h, hLe => by
+    simp only [Expr.colReferencesBoundedBy, Bool.and_eq_true] at h ⊢
+    exact ⟨⟨Expr.colReferencesBoundedBy_mono c h.1.1 hLe,
+            Expr.colReferencesBoundedBy_mono t h.1.2 hLe⟩,
+           Expr.colReferencesBoundedBy_mono e h.2 hLe⟩
+  | _, _, .andN args,        h, hLe => by
+    simp only [Expr.colReferencesBoundedBy] at h ⊢
+    exact Expr.argsColRefBoundedBy_mono args h hLe
+  | _, _, .orN args,         h, hLe => by
+    simp only [Expr.colReferencesBoundedBy] at h ⊢
+    exact Expr.argsColRefBoundedBy_mono args h hLe
+  | _, _, .coalesce args,    h, hLe => by
+    simp only [Expr.colReferencesBoundedBy] at h ⊢
+    exact Expr.argsColRefBoundedBy_mono args h hLe
+  | _, _, .plus a b,         h, hLe => by
+    simp only [Expr.colReferencesBoundedBy, Bool.and_eq_true] at h ⊢
+    exact ⟨Expr.colReferencesBoundedBy_mono a h.1 hLe,
+           Expr.colReferencesBoundedBy_mono b h.2 hLe⟩
+  | _, _, .minus a b,        h, hLe => by
+    simp only [Expr.colReferencesBoundedBy, Bool.and_eq_true] at h ⊢
+    exact ⟨Expr.colReferencesBoundedBy_mono a h.1 hLe,
+           Expr.colReferencesBoundedBy_mono b h.2 hLe⟩
+  | _, _, .times a b,        h, hLe => by
+    simp only [Expr.colReferencesBoundedBy, Bool.and_eq_true] at h ⊢
+    exact ⟨Expr.colReferencesBoundedBy_mono a h.1 hLe,
+           Expr.colReferencesBoundedBy_mono b h.2 hLe⟩
+  | _, _, .divide a b,       h, hLe => by
+    simp only [Expr.colReferencesBoundedBy, Bool.and_eq_true] at h ⊢
+    exact ⟨Expr.colReferencesBoundedBy_mono a h.1 hLe,
+           Expr.colReferencesBoundedBy_mono b h.2 hLe⟩
+  | _, _, .eq a b,           h, hLe => by
+    simp only [Expr.colReferencesBoundedBy, Bool.and_eq_true] at h ⊢
+    exact ⟨Expr.colReferencesBoundedBy_mono a h.1 hLe,
+           Expr.colReferencesBoundedBy_mono b h.2 hLe⟩
+  | _, _, .lt a b,           h, hLe => by
+    simp only [Expr.colReferencesBoundedBy, Bool.and_eq_true] at h ⊢
+    exact ⟨Expr.colReferencesBoundedBy_mono a h.1 hLe,
+           Expr.colReferencesBoundedBy_mono b h.2 hLe⟩
+
+theorem Expr.argsColRefBoundedBy_mono :
+    ∀ {n m : Nat} (args : List Expr),
+      Expr.argsColRefBoundedBy n args = true → n ≤ m →
+      Expr.argsColRefBoundedBy m args = true
+  | _, _, [],         _, _ => rfl
+  | _, _, e :: rest,  h, hLe => by
+    simp only [Expr.argsColRefBoundedBy, Bool.and_eq_true] at h ⊢
+    exact ⟨Expr.colReferencesBoundedBy_mono e h.1 hLe,
+           Expr.argsColRefBoundedBy_mono rest h.2 hLe⟩
+end
+
+/-- Convenience: when the predicate's bound `n` is at most the
+prefix length, `eval (l ++ r) e = eval l e`. Removes the need for
+the predicate to know `l.length` exactly. -/
+theorem eval_append_left_of_bounded_at
+    (l r : Env) (n : Nat) (e : Expr)
+    (hP : e.colReferencesBoundedBy n = true) (hLe : n ≤ l.length) :
+    eval (l ++ r) e = eval l e :=
+  eval_append_left_of_bounded l r e
+    (Expr.colReferencesBoundedBy_mono e hP hLe)
+
 /-! ## Column shifting
 
 `Expr.colShift k e` adds `k` to every `col i` reference in `e`,
