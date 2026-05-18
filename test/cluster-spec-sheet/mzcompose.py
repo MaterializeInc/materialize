@@ -4153,13 +4153,30 @@ def extract_cluster_size(s: str) -> float:
     raise ValueError(f"Invalid cluster size format: {s}")
 
 
-def analyze_cluster_results_file(file: str) -> None:
-    print(f"--- Analyzing cluster results file {file} ...")
+def _open_results_for_plotting(
+    file: str, label: str
+) -> tuple[pd.DataFrame, str] | None:
+    """Header + empty-check + plot dir setup shared by every analyzer.
 
+    Returns ``(df, plot_dir)`` or ``None`` if the file is empty / nothing
+    further to plot.
+    """
+    print(f"--- Analyzing {label} results file {file} ...")
     df = pd.read_csv(file)
     if df.empty:
         print(f"^^^ +++ File {file} is empty, skipping")
+        return None
+    base_name = os.path.basename(file).split(".")[0]
+    plot_dir = os.path.join("test", "cluster-spec-sheet", "plots", base_name)
+    os.makedirs(plot_dir, exist_ok=True)
+    return df, plot_dir
+
+
+def analyze_cluster_results_file(file: str) -> None:
+    loaded = _open_results_for_plotting(file, "cluster")
+    if loaded is None:
         return
+    df, plot_dir = loaded
 
     # Cluster replica size as credits/hour
     df["credits_per_h"] = df["cluster_size"].map(extract_cluster_size)
@@ -4179,10 +4196,6 @@ def analyze_cluster_results_file(file: str) -> None:
     )
     # Cost in centi-credits: ccredit/s * s
     df["credit_time"] = df["ccredit_per_s"] * df["time_ms"] / 1000.0
-
-    base_name = os.path.basename(file).split(".")[0]
-    plot_dir = os.path.join("test", "cluster-spec-sheet", "plots", base_name)
-    os.makedirs(plot_dir, exist_ok=True)
 
     df_all = df
     # Plot the results
@@ -4224,15 +4237,10 @@ def analyze_cluster_results_file(file: str) -> None:
 
 
 def analyze_envd_results_file(file: str) -> None:
-    print(f"--- Analyzing envd results file {file} ...")
-    df = pd.read_csv(file)
-    if df.empty:
-        print(f"^^^ +++ File {file} is empty, skipping")
+    loaded = _open_results_for_plotting(file, "envd")
+    if loaded is None:
         return
-
-    base_name = os.path.basename(file).split(".")[0]
-    plot_dir = os.path.join("test", "cluster-spec-sheet", "plots", base_name)
-    os.makedirs(plot_dir, exist_ok=True)
+    df, plot_dir = loaded
 
     # TODO: this might be need to be modified if we have more than one repetitions in an envd results file.
     for (benchmark, category, mode), sub in df.groupby(
@@ -4263,15 +4271,10 @@ def analyze_envd_objects_scalability_results_file(file: str) -> None:
     cap — 30k by default via `--envd-objects-scalability-sizes`). The
     accompanying normalized plot is produced by the shared `plot()` helper.
     """
-    print(f"--- Analyzing envd_objects_scalability results file {file} ...")
-    df = pd.read_csv(file)
-    if df.empty:
-        print(f"^^^ +++ File {file} is empty, skipping")
+    loaded = _open_results_for_plotting(file, "envd_objects_scalability")
+    if loaded is None:
         return
-
-    base_name = os.path.basename(file).split(".")[0]
-    plot_dir = os.path.join("test", "cluster-spec-sheet", "plots", base_name)
-    os.makedirs(plot_dir, exist_ok=True)
+    df, plot_dir = loaded
 
     for (benchmark, category, mode), sub in df.groupby(
         ["scenario", "category", "mode"]
@@ -4302,15 +4305,10 @@ def analyze_cluster_object_limits_results_file(file: str) -> None:
       - Max local lag (ms) vs N, with one series per cluster size — shows the
         cliff where freshness collapses.
     """
-    print(f"--- Analyzing cluster_object_limits results file {file} ...")
-    df = pd.read_csv(file)
-    if df.empty:
-        print(f"^^^ +++ File {file} is empty, skipping")
+    loaded = _open_results_for_plotting(file, "cluster_object_limits")
+    if loaded is None:
         return
-
-    base_name = os.path.basename(file).split(".")[0]
-    plot_dir = os.path.join("test", "cluster-spec-sheet", "plots", base_name)
-    os.makedirs(plot_dir, exist_ok=True)
+    df, plot_dir = loaded
 
     for benchmark, sub in df.groupby("scenario"):
         title_base = str(benchmark).replace("_", " ")
