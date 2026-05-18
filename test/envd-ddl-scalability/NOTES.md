@@ -2333,3 +2333,120 @@ collection bookkeeping).
    non-trivial. Mostly tx_commit and transact_inner growth from
    prior iterations — not on the critical path of "where does
    the headline slope live," but a real number.
+
+
+## 2026-05-18 — Group-commit fix lands: `coord_builtin_table_execute` is now flat
+
+`coord: remove O(n) table advancement loop from group_commit`
+(5d2d138108) removed the per-DDL `for table in catalog.entries().filter(is_table)`
+loop in `group_commit()` that iterated every catalog entry to push an
+empty append. With this gone, `group_commit()` no longer touches the
+catalog when there are no user writes, so its cost is roughly fixed
+per call instead of growing with `len(tables)`.
+
+Re-ran fresh-from-scratch bench at N=5k/10k/15k (`BENCH_MODE=phase4`)
+against the same bogo backend, same envd build profile, same
+SETTLE_S=5, REPS=100.
+
+### Headline (CREATE TABLE create_p50, ms)
+
+| N      | phase3 (pre-fix) | phase4 (post-fix) | Δ      |
+|--------|-----------------:|------------------:|-------:|
+| 5 000  | 35.80            | 30.21             | −5.59  |
+| 10 000 | 46.02            | 36.48             | −9.54  |
+| 15 000 | 62.23            | 47.94             | −14.29 |
+
+Slope per +5k:
+* phase3: +10.22 / +16.21 ms
+* phase4: +6.27  / +11.46 ms (−38% / −29% slope reduction)
+
+### `coord_builtin_table_execute` — the loop's old home
+
+Mean per-call (ms):
+
+| N      | phase3 | phase4 | Δ      |
+|--------|-------:|-------:|-------:|
+| 5 000  |  8.26  |  3.80  | −4.46  |
+| 10 000 | 12.40  |  3.91  | −8.49  |
+| 15 000 | 16.85  |  4.59  | −12.26 |
+
+Slope per +5k inside the timer:
+* phase3: +4.14 / +4.45 ms
+* phase4: +0.11 / +0.68 ms (essentially flat — fix confirmed)
+
+The remaining ~0.7 ms of slope at 10→15k is plausibly drift in
+`get_local_write_ts`, the catalog upper advance CAS, and append
+construction inside the leaner `group_commit`. Not worth chasing
+on its own.
+
+### Full phase4 split — mean per single DDL (ms; CREATE+DROP averaged)
+
+| phase                          | 5k    | 10k   | 15k   | Δ 5→10 | Δ 10→15 |
+|--------------------------------|------:|------:|------:|-------:|--------:|
+| coord_inner_total              | 13.32 | 16.95 | 23.88 |  +3.63 |   +6.93 |
+|  ↳ coord_pre_transact          |  3.03 |  3.13 |  3.67 |  +0.10 |   +0.54 |
+|  ↳ coord_arc_make_mut          |  0.00 |  0.00 |  0.00 |    0   |    0    |
+|  ↳ transact_inner              |  2.24 |  3.97 |  6.65 |  +1.73 |   +2.68 |
+|     ↳ op_loop                  |  1.13 |  1.81 |  2.66 |  +0.68 |   +0.85 |
+|     ↳ final_apply_updates      |  0.60 |  0.93 |  1.36 |  +0.33 |   +0.43 |
+|     ↳ prepare_state            |  0.02 |  0.28 |  1.11 |  +0.26 |   +0.83 |
+|     ↳ post_prepare_apply_updates|  0.20|  0.39 |  0.63 |  +0.19 |   +0.24 |
+|  ↳ tx_commit                   |  2.55 |  3.90 |  5.37 |  +1.35 |   +1.47 |
+|  ↳ assign_state                |  0.43 |  0.83 |  1.28 |  +0.40 |   +0.45 |
+|  ↳ coord_post_transact         |  3.80 |  3.91 |  4.59 |  +0.11 |   +0.68 |
+|     ↳ coord_builtin_table_exec |  3.80 |  3.91 |  4.59 |  +0.11 |   +0.68 |
+|     ↳ coord_finalize           |  0.00 |  0.00 |  0.00 |    0   |    0    |
+| apply_catalog_implications     | 10.80 | 10.06 | 11.59 |  −0.74 |   +1.53 |
+| append_table_duration          |  5.08 |  4.90 |  5.30 |  −0.18 |   +0.40 |
+| `catalog_transact_with_ddl`    | 31.87 | 34.52 | 45.12 |  +2.65 |  +10.60 |
+
+(`apply_catalog_implications` and `append_table_duration` are per-call;
+both are histograms; both fire twice per rep — once for CREATE, once
+for DROP — but the mean above is the per-call mean.)
+
+### Where the slope now lives
+
+`coord_inner_total` accounts for +6.93 ms of the +11.46 ms create_p50
+slope (10→15). Its dominant children:
+
+* **`transact_inner`: +2.68 ms** — split across `op_loop` (+0.85),
+  `prepare_state` (+0.83, hockey-stick), `final_apply_updates` (+0.43),
+  `post_prepare_apply_updates` (+0.24). Mostly downstream of "catalog
+  state grew, so per-op apply_updates does more work."
+* **`tx_commit`: +1.47 ms** — durable catalog commit. Catalog persist
+  shard CAS itself stays flat (~0.3 ms x 5.6 calls/DDL ≈ 1.7 ms), so
+  the slope is in state-apply / GC downstream of consensus, which we
+  already attributed in phase3 via the `apply_diff` `source` label.
+* **`assign_state`: +0.45 ms** — just `self.state = new_state`.
+
+`coord_pre_transact` drifted from flat (+0.10) at small N to +0.54
+at 10→15. That's the op pre-walk + `validate_resource_limits` + the
+`get_local_write_ts` await. Probably contention growing slightly with
+shard count.
+
+Outside `coord_inner_total`, the remaining headline slope (~+4.5 ms)
+has to come from the post-inner concurrent-join layer:
+
+* CREATE uses `catalog_transact_with_side_effects` (sequential
+  `apply_catalog_implications` then await `table_updates_notify`).
+* DROP uses `catalog_transact_with_context` (concurrent join).
+
+For CREATE, `catalog_transact_with_ddl_transaction` measures
+**+10.60 ms** at 10→15. After subtracting `coord_inner_total` per
+call (which is the CREATE-only number, somewhere around 33 ms — we
+only have the CREATE+DROP-averaged 23.88) and the apply_implications
+per call (+1.53), the residue is small. The slope is fully
+attributable to the named phases.
+
+### Where to go next
+
+The fix successfully removed the biggest slope contributor.
+What remains is fairly evenly spread across `transact_inner`,
+`tx_commit`, and `apply_catalog_implications`. The single biggest
+*absolute* per-DDL cost is now `apply_catalog_implications` at
+~11.6 ms — even though its slope is small, that's ~25% of a single
+CREATE TABLE at N=15k. A sub-phase split of `apply_catalog_implications`
+would tell us whether the cost is in the implication-batching loop,
+the controller calls (`create_table_collections`,
+`initialize_storage_collections`), or the inner match arms. That's
+the next investigation.
