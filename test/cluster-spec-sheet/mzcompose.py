@@ -197,14 +197,14 @@ CLUSTER_OBJECT_LIMITS_LAG_THRESHOLD_MS = 2_000
 # `healthy` column preserves the underlying truth, and the analysis labels
 # the plot to make the cap explicit. Set to 10x the threshold.
 CLUSTER_OBJECT_LIMITS_LAG_CAP_MS = 10 * CLUSTER_OBJECT_LIMITS_LAG_THRESHOLD_MS
-# How long to wait, after a batch of objects has been created, for the
-# materializations to hydrate / for lag to fall below threshold before we
-# declare "unhealthy". Generous because larger replicas (1600cc/3200cc on
-# staging) can take significantly longer than small ones to start serving
-# frontiers after a fresh CREATE CLUSTER + bulk DDL; with a tighter
-# timeout the first probe falsely declares the cluster broken and bisect
-# can never escape because lag keeps accumulating from there.
-CLUSTER_OBJECT_LIMITS_HYDRATION_TIMEOUT_S = 300
+# How long to wait, after a batch of objects has been created, for all N
+# materializations to report ``hydrated=true`` in `mz_hydration_statuses`
+# before we declare "unhealthy". This is a definitive per-object signal
+# (dataflow has finished initial snapshotting) and not an indirect lag
+# threshold, so it converges quickly even on big replicas — an overloaded
+# cluster trips the steady-state lag check below instead of timing out
+# here.
+CLUSTER_OBJECT_LIMITS_HYDRATION_TIMEOUT_S = 60
 # Steady-state sampling window after hydration: take this many samples spaced
 # CLUSTER_OBJECT_LIMITS_SAMPLE_INTERVAL_S apart and use the max as the
 # representative lag.
@@ -2606,6 +2606,10 @@ class ClusterObjectLimitsKind:
     # cluster name, filtered to cluster `c`. Differs because cluster_id is
     # carried on mz_indexes vs mz_materialized_views.
     lag_filter: str
+    # Sibling of `lag_filter` for mz_hydration_statuses (aliased `hs`). Used
+    # to count how many of our test objects on `c` are hydrated before we
+    # start sampling freshness.
+    hydration_filter: str
 
 
 CLUSTER_OBJECT_LIMITS_INDEXES_KIND = ClusterObjectLimitsKind(
@@ -2624,6 +2628,11 @@ CLUSTER_OBJECT_LIMITS_INDEXES_KIND = ClusterObjectLimitsKind(
     JOIN mz_catalog.mz_clusters c ON idx.cluster_id = c.id
     WHERE c.name = 'c'
     """,
+    hydration_filter="""
+    JOIN mz_catalog.mz_indexes idx ON hs.object_id = idx.id
+    JOIN mz_catalog.mz_clusters c ON idx.cluster_id = c.id
+    WHERE c.name = 'c'
+    """,
 )
 
 CLUSTER_OBJECT_LIMITS_MVS_KIND = ClusterObjectLimitsKind(
@@ -2636,6 +2645,11 @@ CLUSTER_OBJECT_LIMITS_MVS_KIND = ClusterObjectLimitsKind(
     label="MVs",
     lag_filter="""
     JOIN mz_catalog.mz_materialized_views mv ON l.object_id = mv.id
+    JOIN mz_catalog.mz_clusters c ON mv.cluster_id = c.id
+    WHERE c.name = 'c'
+    """,
+    hydration_filter="""
+    JOIN mz_catalog.mz_materialized_views mv ON hs.object_id = mv.id
     JOIN mz_catalog.mz_clusters c ON mv.cluster_id = c.id
     WHERE c.name = 'c'
     """,
@@ -2774,6 +2788,30 @@ class ClusterObjectLimitsScenario(Scenario):
         assert rows is not None and len(rows) == 1
         total, reporting, max_lag_ms = rows[0]
         return int(total), int(reporting), float(max_lag_ms)
+
+    def probe_hydrated(self, runner: ScenarioRunner) -> tuple[int, int]:
+        """Return (total, hydrated) for our test objects on cluster ``c``.
+
+        Reads `mz_internal.mz_hydration_statuses`. ``hydrated=true`` once the
+        dataflow has finished initial snapshotting. Decoupling this from
+        `local_lag` lets the freshness loop wait for the cluster to be
+        *running* first, then judge whether it can keep up — instead of
+        conflating "still starting" with "overloaded" and burning the full
+        hydration timeout on every overloaded probe.
+        """
+        rows = runner.run_query(
+            f"""
+            SELECT
+                count(*),
+                count(*) FILTER (WHERE hs.hydrated)
+            FROM mz_internal.mz_hydration_statuses hs
+            {self._kind.hydration_filter}
+            """,
+            fetch=True,
+        )
+        assert rows is not None and len(rows) == 1
+        total, hydrated = rows[0]
+        return int(total), int(hydrated)
 
     def teardown(self, runner: ScenarioRunner) -> None:
         _best_effort_drop(
@@ -3785,44 +3823,55 @@ def run_scenario_cluster_object_limits(
         runner: ScenarioRunner, target_n: int
     ) -> tuple[float, bool, int, int]:
         """
-        Wait for all N materializations to be reporting & under threshold,
-        then take `samples` samples and return their max as the
-        representative lag.
+        Two-phase probe: wait for all N materializations to hydrate, then
+        take steady-state lag samples.
 
-        Returns (max_lag_ms, healthy, reporting, total). `healthy=False` if we
-        time out waiting for hydration / steady-state, or if any sample
-        exceeds the threshold.
+        Phase 1 polls `mz_internal.mz_hydration_statuses` until every test
+        object on `c` reports ``hydrated=true``. If that doesn't happen
+        within ``hydration_timeout_s`` the cluster is wedged (replica never
+        finished initial snapshotting) and we return unhealthy.
 
-        Runs the probes on the catalog-server cluster so they don't load `c`.
-        Set once around the whole polling window rather than per probe;
-        restored on exit so the caller's `cluster='c'` invariant is preserved.
+        Phase 2 takes ``samples`` lag samples spaced by
+        ``sample_interval_s`` and returns their max. Unhealthy iff any
+        sample exceeds the threshold or any reporting count falls short.
+
+        Splitting the two phases keeps unhealthy probes fast: an overloaded
+        cluster typically still hydrates quickly, then trips the lag
+        threshold in Phase 2 within `samples * sample_interval_s`. The
+        previous combined predicate (`reporting == N AND lag < threshold`)
+        burned the full hydration_timeout on every unhealthy probe.
+
+        Returns (max_lag_ms, healthy, reporting, total). Runs the probes on
+        the catalog-server cluster so they don't load `c`; set once around
+        the whole polling window rather than per probe, restored on exit so
+        the caller's `cluster='c'` invariant is preserved.
         """
         runner.run_query(f"SET cluster = '{scenario.PROBE_CLUSTER}'")
         try:
+            # Phase 1: wait for all N objects to be hydrated.
             deadline = time.time() + hydration_timeout_s
-            last_reporting = 0
             last_total = 0
-            last_max_lag = float("inf")
+            last_hydrated = 0
             while time.time() < deadline:
-                total, reporting, max_lag_ms = scenario.probe_lag_ms(runner)
-                last_total, last_reporting, last_max_lag = (
-                    total,
-                    reporting,
-                    max_lag_ms,
-                )
-                # All objects must be reporting AND under threshold to count
-                # as hydrated. NULL lag => the materialization has not
-                # produced its first frontier report yet.
-                if reporting == target_n and max_lag_ms < lag_threshold_ms:
+                total, hydrated = scenario.probe_hydrated(runner)
+                last_total, last_hydrated = total, hydrated
+                if hydrated >= target_n:
                     break
-                time.sleep(min(1.0, sample_interval_s))
+                time.sleep(1.0)
             else:
-                # Did not converge within the hydration window.
-                return last_max_lag, False, last_reporting, last_total
+                # Hydration didn't complete. Probe lag once for diagnostics
+                # so the CSV still carries a meaningful value.
+                _, reporting, max_lag_ms = scenario.probe_lag_ms(runner)
+                print(
+                    f"    hydration timeout: {last_hydrated}/{target_n} "
+                    f"hydrated after {hydration_timeout_s}s"
+                )
+                return max_lag_ms, False, reporting, last_total
 
-            # Steady-state sampling: take a few samples and use the max.
-            max_lag_over_samples = last_max_lag
-            worst_reporting = last_reporting
+            # Phase 2: steady-state lag sampling.
+            max_lag_over_samples = 0.0
+            worst_reporting = target_n
+            last_total = 0
             for _ in range(samples):
                 time.sleep(sample_interval_s)
                 total, reporting, max_lag_ms = scenario.probe_lag_ms(runner)
