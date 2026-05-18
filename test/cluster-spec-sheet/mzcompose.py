@@ -23,7 +23,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
 from textwrap import dedent
-from typing import Any, TextIO
+from typing import Any, Literal, TextIO
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -113,54 +113,8 @@ SCENARIO_ENVD_OBJECTS_SCALABILITY_MVS = "envd_objects_scalability_mvs"
 SCENARIO_CLUSTER_OBJECT_LIMITS_INDEXES = "cluster_object_limits_indexes"
 SCENARIO_CLUSTER_OBJECT_LIMITS_MVS = "cluster_object_limits_mvs"
 
-SCENARIOS_CLUSTERD = [
-    SCENARIO_AUCTION_STRONG,
-    SCENARIO_AUCTION_WEAK,
-    SCENARIO_TPCH_MV_STRONG,
-    SCENARIO_TPCH_QUERIES_STRONG,
-    SCENARIO_TPCH_QUERIES_WEAK,
-    SCENARIO_TPCH_STRONG,
-    SCENARIO_SOURCE_INGESTION_STRONG,
-]
-SCENARIOS_CLUSTERD_COMPUTE = [
-    SCENARIO_AUCTION_STRONG,
-    SCENARIO_AUCTION_WEAK,
-    SCENARIO_TPCH_MV_STRONG,
-    SCENARIO_TPCH_QUERIES_STRONG,
-    SCENARIO_TPCH_QUERIES_WEAK,
-    SCENARIO_TPCH_STRONG,
-]
-SCENARIOS_SOURCE_INGESTION = [
-    SCENARIO_SOURCE_INGESTION_STRONG,
-]
-SCENARIOS_ENVD_QPS_SCALABILITY = [
-    SCENARIO_QPS_ENVD_STRONG_SCALING,
-    SCENARIO_COPY_FROM_STDIN_ENVD_STRONG_SCALING,
-]
-SCENARIOS_ENVD_OBJECTS_SCALABILITY = [
-    SCENARIO_ENVD_OBJECTS_SCALABILITY_TABLES,
-    SCENARIO_ENVD_OBJECTS_SCALABILITY_MVS,
-]
-SCENARIOS_CLUSTER_OBJECT_LIMITS = [
-    SCENARIO_CLUSTER_OBJECT_LIMITS_INDEXES,
-    SCENARIO_CLUSTER_OBJECT_LIMITS_MVS,
-]
-ALL_SCENARIOS = (
-    SCENARIOS_CLUSTERD
-    + SCENARIOS_ENVD_QPS_SCALABILITY
-    + SCENARIOS_ENVD_OBJECTS_SCALABILITY
-    + SCENARIOS_CLUSTER_OBJECT_LIMITS
-)
-
-SCENARIO_GROUPS = {
-    "cluster": SCENARIOS_CLUSTERD,
-    "cluster_compute": SCENARIOS_CLUSTERD_COMPUTE,
-    "source_ingestion": SCENARIOS_SOURCE_INGESTION,
-    "envd_qps_scalability": SCENARIOS_ENVD_QPS_SCALABILITY,
-    "envd_objects_scalability": SCENARIOS_ENVD_OBJECTS_SCALABILITY,
-    "cluster_object_limits": SCENARIOS_CLUSTER_OBJECT_LIMITS,
-    "all": ALL_SCENARIOS,
-}
+# Scenario groupings (`SCENARIO_GROUPS`, `SCENARIOS_BY_NAME`) are derived
+# from the `SCENARIOS` registry further down — see `ScenarioSpec`.
 
 REPLICA_SCALES = [1, 2, 4, 8, 16, 32]
 
@@ -3114,7 +3068,7 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
     parser.add_argument(
         "scenarios",
         nargs="*",
-        choices=ALL_SCENARIOS + list(SCENARIO_GROUPS.keys()),
+        choices=list(SCENARIOS_BY_NAME) + list(SCENARIO_GROUPS),
         help="Scenarios to run, supports individual scenario names as well as 'all', 'cluster', 'envd_qps_scalability', 'envd_objects_scalability', 'cluster_object_limits'.",
     )
 
@@ -3124,18 +3078,19 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
     for s in args.scenarios or ["all"]:
         if s in SCENARIO_GROUPS:
             scenarios.update(SCENARIO_GROUPS[s])
-        else:
+        elif s in SCENARIOS_BY_NAME:
             scenarios.add(s)
-
-    unknown = scenarios - set(ALL_SCENARIOS)
-    if unknown:
-        raise ValueError(f"Unknown scenarios: {unknown}")
+        else:
+            raise ValueError(f"Unknown scenario: {s}")
     print(f"--- Running scenarios: {', '.join(scenarios)}")
 
     # cluster_object_limits scenarios push the cluster to its idle-object
     # limit; we only run them on staging or local Docker to avoid burning
     # production resources or hitting production-only catalog limits.
-    cluster_object_limits_requested = scenarios & set(SCENARIOS_CLUSTER_OBJECT_LIMITS)
+    cluster_limit_scenarios = {
+        s.name for s in SCENARIOS if s.family == "cluster_limits"
+    }
+    cluster_object_limits_requested = scenarios & cluster_limit_scenarios
     if cluster_object_limits_requested and args.target == "cloud-production":
         raise UIError(
             "cluster_object_limits scenarios cannot run against "
@@ -3143,12 +3098,6 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
             "--target=docker. Requested scenarios: "
             f"{', '.join(sorted(cluster_object_limits_requested))}."
         )
-
-    cluster_object_limits_sizes = (
-        args.cluster_object_limits_sizes
-        if args.cluster_object_limits_sizes is not None
-        else default_cluster_object_limits_sizes(args.cluster_object_limits_max)
-    )
 
     if args.target == "cloud-production":
         target: BenchTarget = CloudTarget(
@@ -3179,9 +3128,10 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
         raise ValueError(f"Unknown target: {args.target}")
 
     with composition.override(mz):
-        max_scale = args.max_scale
-        if target.max_scale() is not None:
-            max_scale = min(max_scale, target.max_scale())
+        target_max = target.max_scale()
+        max_scale = (
+            args.max_scale if target_max is None else min(args.max_scale, target_max)
+        )
 
         if args.cleanup:
             target.cleanup()
@@ -3190,48 +3140,29 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
 
         log_environment_info(target)
 
-        # Derive result files (cluster, envd-focused, envd_objects_scalability,
-        # cluster_object_limits) from the provided --record path.
+        ctx = RunContext(
+            args=args,
+            target=target,
+            max_scale=max_scale,
+            cluster_object_limits_sizes=(
+                args.cluster_object_limits_sizes
+                if args.cluster_object_limits_sizes is not None
+                else default_cluster_object_limits_sizes(args.cluster_object_limits_max)
+            ),
+        )
+
+        # Open one CSV per result-stream kind, keyed by `ResultStreamSpec.key`.
         base_name = os.path.splitext(args.record)[0]
-        cluster_path = f"{base_name}.cluster.csv"
-        envd_path = f"{base_name}.envd.csv"
-        envd_objects_scalability_path = f"{base_name}.envd_objects_scalability.csv"
-        cluster_object_limits_path = f"{base_name}.cluster_object_limits.csv"
+        streams: dict[str, OpenStream] = {
+            spec.key: _open_stream(spec, base_name) for spec in RESULT_STREAMS
+        }
 
-        cluster_file = open(cluster_path, "w", newline="")
-        envd_file = open(envd_path, "w", newline="")
-        envd_objects_scalability_file = open(
-            envd_objects_scalability_path, "w", newline=""
-        )
-        cluster_object_limits_file = open(cluster_object_limits_path, "w", newline="")
-
-        # Cluster-focused schema, used by traditional cluster scenarios as
-        # well as the new envd_objects_scalability and cluster_object_limits
-        # scenarios (the latter extends with `healthy`).
-        cluster_writer = _make_csv_writer(cluster_file, CLUSTER_FIELDNAMES)
-
-        # Envd-focused (QPS) schema, used by envd_qps_scalability.
-        envd_writer = _make_csv_writer(envd_file, ENVD_FIELDNAMES)
-
-        # envd_objects_scalability reuses the cluster-focused schema:
-        # `scale` carries the catalog object count (N), `cluster_size` is the
-        # fixed measurement cluster, `time_ms` is the latency.
-        envd_objects_scalability_writer = _make_csv_writer(
-            envd_objects_scalability_file, CLUSTER_FIELDNAMES
-        )
-
-        # cluster_object_limits: per-(cluster_size, N) freshness sample.
-        # `scale` carries N, `time_ms` carries the max local lag, `healthy`
-        # is an extra boolean column (1/0).
-        cluster_object_limits_writer = _make_csv_writer(
-            cluster_object_limits_file, CLUSTER_FIELDNAMES + ["healthy"]
-        )
-
-        def process(scenario: str) -> None:
-            with composition.test_case(scenario):
+        def process(scenario_name: str) -> None:
+            with composition.test_case(scenario_name):
                 conn = ConnectionHandler(target.new_connection)
 
-                # This cluster is just for misc setup queries.
+                # Misc setup cluster for any ad-hoc queries the scenario runs
+                # before its own cluster `c` exists.
                 size = (
                     "50cc" if isinstance(target, CloudTarget) else "scale=1,workers=1"
                 )
@@ -3239,156 +3170,9 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
                     cur.execute("DROP CLUSTER IF EXISTS quickstart;")
                     cur.execute(f"CREATE CLUSTER quickstart SIZE '{size}';".encode())
 
-                if scenario == SCENARIO_TPCH_STRONG:
-                    print("--- SCENARIO: Running TPC-H Index strong scaling")
-                    run_scenario_strong(
-                        scenario=TpchScenario(
-                            args.scale_tpch, target.replica_size_for_scale(1)
-                        ),
-                        results_writer=cluster_writer,
-                        connection=conn,
-                        target=target,
-                        max_scale=max_scale,
-                    )
-                if scenario == SCENARIO_TPCH_MV_STRONG:
-                    print(
-                        "--- SCENARIO: Running TPC-H Materialized view strong scaling"
-                    )
-                    run_scenario_strong(
-                        scenario=TpchScenarioMV(
-                            args.scale_tpch, target.replica_size_for_scale(1)
-                        ),
-                        results_writer=cluster_writer,
-                        connection=conn,
-                        target=target,
-                        max_scale=max_scale,
-                    )
-                if scenario == SCENARIO_TPCH_QUERIES_STRONG:
-                    print("--- SCENARIO: Running TPC-H Queries strong scaling")
-                    run_scenario_strong(
-                        scenario=TpchScenarioQueriesIndexedInputs(
-                            args.scale_tpch_queries, target.replica_size_for_scale(1)
-                        ),
-                        results_writer=cluster_writer,
-                        connection=conn,
-                        target=target,
-                        max_scale=max_scale,
-                    )
-                if scenario == SCENARIO_TPCH_QUERIES_WEAK:
-                    print("--- SCENARIO: Running TPC-H Queries weak scaling")
-                    run_scenario_weak(
-                        scenario=TpchScenarioQueriesIndexedInputs(
-                            args.scale_tpch_queries, None
-                        ),
-                        results_writer=cluster_writer,
-                        connection=conn,
-                        target=target,
-                        max_scale=max_scale,
-                    )
-                if scenario == SCENARIO_AUCTION_STRONG:
-                    print("--- SCENARIO: Running Auction strong scaling")
-                    run_scenario_strong(
-                        scenario=AuctionScenario(
-                            args.scale_auction, target.replica_size_for_scale(1)
-                        ),
-                        results_writer=cluster_writer,
-                        connection=conn,
-                        target=target,
-                        max_scale=max_scale,
-                    )
-                if scenario == SCENARIO_AUCTION_WEAK:
-                    print("--- SCENARIO: Running Auction weak scaling")
-                    run_scenario_weak(
-                        scenario=AuctionScenario(args.scale_auction, None),
-                        results_writer=cluster_writer,
-                        connection=conn,
-                        target=target,
-                        max_scale=max_scale,
-                    )
-                if scenario == SCENARIO_SOURCE_INGESTION_STRONG:
-                    print("--- SCENARIO: Running Source ingestion scaling")
-                    run_scenario_strong(
-                        scenario=SourceIngestionScenario(
-                            args.scale_auction, target.replica_size_for_scale(1)
-                        ),
-                        results_writer=cluster_writer,
-                        connection=conn,
-                        target=target,
-                        max_scale=max_scale,
-                    )
-                if scenario == SCENARIO_QPS_ENVD_STRONG_SCALING:
-                    print("--- SCENARIO: Running QPS envd strong scaling")
-                    run_scenario_envd_strong_scaling(
-                        scenario=QpsEnvdStrongScalingScenario(
-                            1, target.replica_size_for_scale(1)
-                        ),
-                        results_writer=envd_writer,
-                        connection=conn,
-                        target=target,
-                        max_scale=max_scale,
-                    )
-                if scenario == SCENARIO_COPY_FROM_STDIN_ENVD_STRONG_SCALING:
-                    print("--- SCENARIO: Running COPY FROM STDIN envd strong scaling")
-                    run_scenario_envd_strong_scaling(
-                        scenario=CopyFromStdinEnvdStrongScalingScenario(
-                            1, target.replica_size_for_scale(1)
-                        ),
-                        results_writer=envd_writer,
-                        connection=conn,
-                        target=target,
-                        max_scale=max_scale,
-                    )
-                if scenario == SCENARIO_ENVD_OBJECTS_SCALABILITY_TABLES:
-                    print("--- SCENARIO: Running envd scalability (tables)")
-                    run_scenario_envd_objects_scalability(
-                        scenario=EnvdObjectsScalabilityTablesScenario(
-                            target.replica_size_for_scale(1)
-                        ),
-                        results_writer=envd_objects_scalability_writer,
-                        connection=conn,
-                        target=target,
-                        sizes=args.envd_objects_scalability_sizes,
-                    )
-                if scenario == SCENARIO_ENVD_OBJECTS_SCALABILITY_MVS:
-                    print("--- SCENARIO: Running envd scalability (materialized views)")
-                    run_scenario_envd_objects_scalability(
-                        scenario=EnvdObjectsScalabilityMvsScenario(
-                            target.replica_size_for_scale(1),
-                            pad_replica_size=target.replica_size_for_scale(2),
-                        ),
-                        results_writer=envd_objects_scalability_writer,
-                        connection=conn,
-                        target=target,
-                        sizes=args.envd_objects_scalability_sizes,
-                    )
-                if scenario == SCENARIO_CLUSTER_OBJECT_LIMITS_INDEXES:
-                    print("--- SCENARIO: Running cluster object limits (indexes)")
-                    run_scenario_cluster_object_limits(
-                        scenario=ClusterObjectLimitsScenario(
-                            CLUSTER_OBJECT_LIMITS_INDEXES_KIND
-                        ),
-                        results_writer=cluster_object_limits_writer,
-                        connection=conn,
-                        target=target,
-                        max_scale=max_scale,
-                        sizes=cluster_object_limits_sizes,
-                        bisect_steps=args.cluster_object_limits_bisect_steps,
-                    )
-                if scenario == SCENARIO_CLUSTER_OBJECT_LIMITS_MVS:
-                    print(
-                        "--- SCENARIO: Running cluster object limits (materialized views)"
-                    )
-                    run_scenario_cluster_object_limits(
-                        scenario=ClusterObjectLimitsScenario(
-                            CLUSTER_OBJECT_LIMITS_MVS_KIND
-                        ),
-                        results_writer=cluster_object_limits_writer,
-                        connection=conn,
-                        target=target,
-                        max_scale=max_scale,
-                        sizes=cluster_object_limits_sizes,
-                        bisect_steps=args.cluster_object_limits_bisect_steps,
-                    )
+                spec = SCENARIOS_BY_NAME[scenario_name]
+                writer = streams[FAMILY_TO_STREAM[spec.family]].writer
+                run_spec(spec, ctx, conn, writer)
 
         test_failed = True
         try:
@@ -3396,52 +3180,27 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
             composition.test_parts(scenarios_list, process)
             test_failed = False
         finally:
-            cluster_file.close()
-            envd_file.close()
-            envd_objects_scalability_file.close()
-            cluster_object_limits_file.close()
-            # Clean up
+            for stream in streams.values():
+                stream.file.close()
             if args.cleanup:
                 target.cleanup()
 
-        upload_cluster_results_to_test_analytics(
-            composition, cluster_path, not test_failed
-        )
-        upload_environmentd_results_to_test_analytics(
-            composition, envd_path, not test_failed
-        )
-        # The envd_objects_scalability rows share the cluster_spec_sheet_result schema
-        # (mode='envd_objects_scalability' distinguishes them).
-        upload_cluster_results_to_test_analytics(
-            composition, envd_objects_scalability_path, not test_failed
-        )
-        # The cluster_object_limits rows reuse the cluster_spec_sheet_result
-        # schema as well. The extra `healthy` column is dropped on upload
-        # (extrasaction="ignore" on the CSV writer); to recover it, consult
-        # the artifact CSV directly.
-        upload_cluster_results_to_test_analytics(
-            composition, cluster_object_limits_path, not test_failed
-        )
+        # Upload, archive, and analyze each result stream uniformly. The
+        # cluster_object_limits stream's extra `healthy` column is silently
+        # dropped on upload (CSV writer uses extrasaction="ignore"); to
+        # recover it, consult the artifact CSV directly.
+        for stream in streams.values():
+            stream.spec.upload(composition, stream.path, not test_failed)
 
         assert not test_failed
 
         if buildkite.is_in_buildkite():
-            # Upload all CSVs as artifacts
-            buildkite.upload_artifact(cluster_path, cwd=MZ_ROOT, quiet=True)
-            buildkite.upload_artifact(envd_path, cwd=MZ_ROOT, quiet=True)
-            buildkite.upload_artifact(
-                envd_objects_scalability_path, cwd=MZ_ROOT, quiet=True
-            )
-            buildkite.upload_artifact(
-                cluster_object_limits_path, cwd=MZ_ROOT, quiet=True
-            )
+            for stream in streams.values():
+                buildkite.upload_artifact(stream.path, cwd=MZ_ROOT, quiet=True)
 
         if args.analyze:
-            # Analyze each file separately (each has its own schema/x-axis)
-            analyze_cluster_results_file(cluster_path)
-            analyze_envd_results_file(envd_path)
-            analyze_envd_objects_scalability_results_file(envd_objects_scalability_path)
-            analyze_cluster_object_limits_results_file(cluster_object_limits_path)
+            for stream in streams.values():
+                stream.spec.analyze(stream.path)
 
 
 class BenchTarget:
@@ -4053,6 +3812,200 @@ def run_scenario_weak(
         scenario.run(runner)
 
 
+# Scenario families. Each family corresponds to one `run_scenario_*` driver
+# and writes to exactly one result stream (see `FAMILY_TO_STREAM`).
+Family = Literal["strong", "weak", "envd_qps", "envd_objects", "cluster_limits"]
+
+FAMILY_TO_STREAM: dict[Family, str] = {
+    "strong": "cluster",
+    "weak": "cluster",
+    "envd_qps": "envd",
+    "envd_objects": "envd_objects",
+    "cluster_limits": "cluster_object_limits",
+}
+
+
+@dataclass(frozen=True)
+class ScenarioSpec:
+    """Registry entry for a single scenario.
+
+    `factory` builds the `Scenario` instance from CLI args + target;
+    `family` selects which `run_scenario_*` driver to use and (via
+    `FAMILY_TO_STREAM`) which result stream to write to. `groups` lists the
+    `--scenarios` group names this scenario belongs to.
+    """
+
+    name: str
+    log_label: str
+    family: Family
+    factory: Callable[[argparse.Namespace, BenchTarget], Scenario]
+    groups: tuple[str, ...] = ()
+
+
+SCENARIOS: list[ScenarioSpec] = [
+    ScenarioSpec(
+        SCENARIO_TPCH_STRONG,
+        "TPC-H Index strong scaling",
+        "strong",
+        lambda a, t: TpchScenario(a.scale_tpch, t.replica_size_for_scale(1)),
+        groups=("cluster", "cluster_compute"),
+    ),
+    ScenarioSpec(
+        SCENARIO_TPCH_MV_STRONG,
+        "TPC-H Materialized view strong scaling",
+        "strong",
+        lambda a, t: TpchScenarioMV(a.scale_tpch, t.replica_size_for_scale(1)),
+        groups=("cluster", "cluster_compute"),
+    ),
+    ScenarioSpec(
+        SCENARIO_TPCH_QUERIES_STRONG,
+        "TPC-H Queries strong scaling",
+        "strong",
+        lambda a, t: TpchScenarioQueriesIndexedInputs(
+            a.scale_tpch_queries, t.replica_size_for_scale(1)
+        ),
+        groups=("cluster", "cluster_compute"),
+    ),
+    ScenarioSpec(
+        SCENARIO_TPCH_QUERIES_WEAK,
+        "TPC-H Queries weak scaling",
+        "weak",
+        lambda a, t: TpchScenarioQueriesIndexedInputs(a.scale_tpch_queries, None),
+        groups=("cluster", "cluster_compute"),
+    ),
+    ScenarioSpec(
+        SCENARIO_AUCTION_STRONG,
+        "Auction strong scaling",
+        "strong",
+        lambda a, t: AuctionScenario(a.scale_auction, t.replica_size_for_scale(1)),
+        groups=("cluster", "cluster_compute"),
+    ),
+    ScenarioSpec(
+        SCENARIO_AUCTION_WEAK,
+        "Auction weak scaling",
+        "weak",
+        lambda a, t: AuctionScenario(a.scale_auction, None),
+        groups=("cluster", "cluster_compute"),
+    ),
+    ScenarioSpec(
+        SCENARIO_SOURCE_INGESTION_STRONG,
+        "Source ingestion scaling",
+        "strong",
+        lambda a, t: SourceIngestionScenario(
+            a.scale_auction, t.replica_size_for_scale(1)
+        ),
+        groups=("cluster", "source_ingestion"),
+    ),
+    ScenarioSpec(
+        SCENARIO_QPS_ENVD_STRONG_SCALING,
+        "QPS envd strong scaling",
+        "envd_qps",
+        lambda a, t: QpsEnvdStrongScalingScenario(1, t.replica_size_for_scale(1)),
+        groups=("envd_qps_scalability",),
+    ),
+    ScenarioSpec(
+        SCENARIO_COPY_FROM_STDIN_ENVD_STRONG_SCALING,
+        "COPY FROM STDIN envd strong scaling",
+        "envd_qps",
+        lambda a, t: CopyFromStdinEnvdStrongScalingScenario(
+            1, t.replica_size_for_scale(1)
+        ),
+        groups=("envd_qps_scalability",),
+    ),
+    ScenarioSpec(
+        SCENARIO_ENVD_OBJECTS_SCALABILITY_TABLES,
+        "envd scalability (tables)",
+        "envd_objects",
+        lambda a, t: EnvdObjectsScalabilityTablesScenario(t.replica_size_for_scale(1)),
+        groups=("envd_objects_scalability",),
+    ),
+    ScenarioSpec(
+        SCENARIO_ENVD_OBJECTS_SCALABILITY_MVS,
+        "envd scalability (materialized views)",
+        "envd_objects",
+        lambda a, t: EnvdObjectsScalabilityMvsScenario(
+            t.replica_size_for_scale(1),
+            pad_replica_size=t.replica_size_for_scale(2),
+        ),
+        groups=("envd_objects_scalability",),
+    ),
+    ScenarioSpec(
+        SCENARIO_CLUSTER_OBJECT_LIMITS_INDEXES,
+        "cluster object limits (indexes)",
+        "cluster_limits",
+        lambda a, t: ClusterObjectLimitsScenario(CLUSTER_OBJECT_LIMITS_INDEXES_KIND),
+        groups=("cluster_object_limits",),
+    ),
+    ScenarioSpec(
+        SCENARIO_CLUSTER_OBJECT_LIMITS_MVS,
+        "cluster object limits (materialized views)",
+        "cluster_limits",
+        lambda a, t: ClusterObjectLimitsScenario(CLUSTER_OBJECT_LIMITS_MVS_KIND),
+        groups=("cluster_object_limits",),
+    ),
+]
+
+SCENARIOS_BY_NAME: dict[str, ScenarioSpec] = {s.name: s for s in SCENARIOS}
+
+# `SCENARIO_GROUPS` is the inverse of `ScenarioSpec.groups`, plus an "all"
+# group covering every scenario. Used to expand `--scenarios <group>`.
+SCENARIO_GROUPS: dict[str, list[str]] = {"all": [s.name for s in SCENARIOS]}
+for _spec in SCENARIOS:
+    for _g in _spec.groups:
+        SCENARIO_GROUPS.setdefault(_g, []).append(_spec.name)
+del _spec, _g
+
+
+@dataclass
+class RunContext:
+    """Per-workflow state needed by every `run_scenario_*` driver."""
+
+    args: argparse.Namespace
+    target: BenchTarget
+    max_scale: int
+    cluster_object_limits_sizes: list[int]
+
+
+def run_spec(
+    spec: ScenarioSpec,
+    ctx: RunContext,
+    conn: ConnectionHandler,
+    writer: csv.DictWriter,
+) -> None:
+    """Build the scenario from `spec` and dispatch to its family driver."""
+    scenario = spec.factory(ctx.args, ctx.target)
+    print(f"--- SCENARIO: Running {spec.log_label}")
+    match spec.family:
+        case "strong":
+            run_scenario_strong(scenario, writer, conn, ctx.target, ctx.max_scale)
+        case "weak":
+            run_scenario_weak(scenario, writer, conn, ctx.target, ctx.max_scale)
+        case "envd_qps":
+            run_scenario_envd_strong_scaling(
+                scenario, writer, conn, ctx.target, ctx.max_scale
+            )
+        case "envd_objects":
+            assert isinstance(scenario, EnvdObjectsScalabilityScenario)
+            run_scenario_envd_objects_scalability(
+                scenario,
+                writer,
+                conn,
+                ctx.target,
+                sizes=ctx.args.envd_objects_scalability_sizes,
+            )
+        case "cluster_limits":
+            assert isinstance(scenario, ClusterObjectLimitsScenario)
+            run_scenario_cluster_object_limits(
+                scenario,
+                writer,
+                conn,
+                ctx.target,
+                ctx.max_scale,
+                sizes=ctx.cluster_object_limits_sizes,
+                bisect_steps=ctx.args.cluster_object_limits_bisect_steps,
+            )
+
+
 def _plot_files(
     parser: WorkflowArgumentParser,
     default: str | list[str],
@@ -4410,17 +4363,6 @@ def analyze_cluster_object_limits_results_file(file: str) -> None:
         )
 
 
-# Maps a result-file CSV suffix to the analyzer that understands its schema.
-# Order matters: longer suffixes first so e.g. `.cluster_object_limits.csv`
-# isn't shadowed by a naive `.cluster.csv` match.
-SUFFIX_ANALYZERS: list[tuple[str, Callable[[str], None]]] = [
-    (".cluster_object_limits.csv", analyze_cluster_object_limits_results_file),
-    (".envd_objects_scalability.csv", analyze_envd_objects_scalability_results_file),
-    (".cluster.csv", analyze_cluster_results_file),
-    (".envd.csv", analyze_envd_results_file),
-]
-
-
 def save_plot(plot_dir: str, data_frame: pd.DataFrame, title: str, slug: str):
     all_files = []
 
@@ -4594,3 +4536,73 @@ def upload_environmentd_results_to_test_analytics(
     except Exception as e:
         # An error during an upload must never cause the build to fail
         test_analytics.on_upload_failed(e)
+
+
+@dataclass(frozen=True)
+class ResultStreamSpec:
+    """A result-file kind: suffix, CSV schema, analyzer, and uploader."""
+
+    key: str
+    suffix: str
+    fieldnames: list[str]
+    analyze: Callable[[str], None]
+    upload: Callable[[Composition, str, bool], None]
+
+
+# Order matters for suffix dispatch: longer suffixes first so
+# `.cluster_object_limits.csv` isn't shadowed by `.cluster.csv`.
+RESULT_STREAMS: list[ResultStreamSpec] = [
+    ResultStreamSpec(
+        "cluster_object_limits",
+        ".cluster_object_limits.csv",
+        CLUSTER_FIELDNAMES + ["healthy"],
+        analyze_cluster_object_limits_results_file,
+        upload_cluster_results_to_test_analytics,
+    ),
+    ResultStreamSpec(
+        "envd_objects",
+        ".envd_objects_scalability.csv",
+        CLUSTER_FIELDNAMES,
+        analyze_envd_objects_scalability_results_file,
+        upload_cluster_results_to_test_analytics,
+    ),
+    ResultStreamSpec(
+        "cluster",
+        ".cluster.csv",
+        CLUSTER_FIELDNAMES,
+        analyze_cluster_results_file,
+        upload_cluster_results_to_test_analytics,
+    ),
+    ResultStreamSpec(
+        "envd",
+        ".envd.csv",
+        ENVD_FIELDNAMES,
+        analyze_envd_results_file,
+        upload_environmentd_results_to_test_analytics,
+    ),
+]
+
+RESULT_STREAMS_BY_KEY: dict[str, ResultStreamSpec] = {s.key: s for s in RESULT_STREAMS}
+
+# Back-compat alias for `_plot_files` / `workflow_plot`, which dispatch by
+# filename suffix.
+SUFFIX_ANALYZERS: list[tuple[str, Callable[[str], None]]] = [
+    (s.suffix, s.analyze) for s in RESULT_STREAMS
+]
+
+
+@dataclass
+class OpenStream:
+    """An opened CSV result file together with its writer and spec."""
+
+    spec: ResultStreamSpec
+    path: str
+    file: TextIO
+    writer: csv.DictWriter
+
+
+def _open_stream(spec: ResultStreamSpec, base_name: str) -> OpenStream:
+    path = f"{base_name}{spec.suffix}"
+    file = open(path, "w", newline="")
+    writer = _make_csv_writer(file, spec.fieldnames)
+    return OpenStream(spec, path, file, writer)
