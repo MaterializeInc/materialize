@@ -20,10 +20,10 @@ import re
 import shlex
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from textwrap import dedent
-from typing import Any, Literal, TextIO
+from typing import Any, TextIO
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -2400,6 +2400,112 @@ def _best_effort_drop(runner: ScenarioRunner, stmt: str, label: str) -> None:
         print(f"WARNING: failed to drop {label}: {e}")
 
 
+def _extend_incremental(
+    runner: ScenarioRunner,
+    *,
+    current_n: int,
+    target_n: int,
+    templates_for: Callable[[int], Iterable[str]],
+    label: str,
+) -> int:
+    """Idempotently create objects ``i ∈ (current_n, target_n]`` and return the
+    new ``current_n``.
+
+    Statements from ``templates_for`` must be idempotent
+    (``CREATE ... IF NOT EXISTS``) so retries in ``_bulk_run`` are safe. Used
+    by every scenario that builds a catalog of N objects incrementally
+    (envd_objects_scalability_*, cluster_object_limits_*).
+    """
+    if target_n <= current_n:
+        return current_n
+    stmts = [s for i in range(current_n + 1, target_n + 1) for s in templates_for(i)]
+    _bulk_run(runner, stmts, f"create {label} {current_n + 1}..{target_n}")
+    return target_n
+
+
+def _shrink_incremental(
+    runner: ScenarioRunner,
+    *,
+    current_n: int,
+    target_n: int,
+    drop_for: Callable[[int], str],
+    label: str,
+) -> int:
+    """Drop objects ``i ∈ (target_n, current_n]`` and return the new
+    ``current_n``. Inverse of ``_extend_incremental``."""
+    if target_n >= current_n:
+        return current_n
+    stmts = [drop_for(i) for i in range(target_n + 1, current_n + 1)]
+    _bulk_run(runner, stmts, f"drop {label} {target_n + 1}..{current_n}")
+    return target_n
+
+
+@dataclass(frozen=True)
+class ScalePoint:
+    """A single point in a scenario's sweep.
+
+    Each field is meaningful only for sweeps that vary it; the rest are
+    ``None``. The scenario interprets its fields in ``apply()`` to set up
+    the world (recreate the cluster, reconfigure envd, add objects). The
+    driver doesn't look at any field except ``label``.
+    """
+
+    label: str
+    cluster_size: str | None = None
+    replica_scale: int | None = None
+    envd_cpus: int | None = None
+    n: int | None = None
+
+
+class Scenario(ABC):
+    """A benchmark scenario: a sweep over scale points plus per-point
+    measurement.
+
+    Concrete subclasses fall into two shapes:
+      - Sweep wrappers (`StrongScalingSweep`, `WeakScalingSweep`,
+        `EnvdCpuSweep`, `EnvdObjectsSweep`) wrap an inner workload
+        (`ClusterScalingScenario` / `EnvdObjectsScalabilityScenario`) and
+        delegate per-point measurement to it.
+      - `ClusterObjectLimitsScenario` implements the protocol directly
+        because its measurement is an adaptive inner walk over N with
+        bisection.
+
+    Lifecycle driven by `run_scenario`:
+      1. `prepare(runner)` once.
+      2. For each `point` in `scale_points(target, max_scale)`:
+         a. `apply(runner, point) -> bool`. False = skip this point.
+         b. `measure(runner, point)`.
+         c. `cleanup_point(runner, point)` in a finally.
+      3. `teardown(runner)` once.
+    """
+
+    VERSION: str = "1.0.0"
+
+    @abstractmethod
+    def name(self) -> str: ...
+    @abstractmethod
+    def mode(self) -> str: ...
+    @abstractmethod
+    def stream_key(self) -> str: ...
+    @abstractmethod
+    def scale_points(
+        self, target: "BenchTarget", max_scale: int
+    ) -> Iterable[ScalePoint]: ...
+    @abstractmethod
+    def apply(self, runner: ScenarioRunner, point: ScalePoint) -> bool: ...
+    @abstractmethod
+    def measure(self, runner: ScenarioRunner, point: ScalePoint) -> None: ...
+
+    def prepare(self, runner: ScenarioRunner) -> None:
+        pass
+
+    def cleanup_point(self, runner: ScenarioRunner, point: ScalePoint) -> None:
+        pass
+
+    def teardown(self, runner: ScenarioRunner) -> None:
+        pass
+
+
 class EnvdObjectsScalabilityTablesScenario(EnvdObjectsScalabilityScenario):
     """N empty tables in the catalog. No controller load; pure catalog/adapter."""
 
@@ -2407,18 +2513,15 @@ class EnvdObjectsScalabilityTablesScenario(EnvdObjectsScalabilityScenario):
         return SCENARIO_ENVD_OBJECTS_SCALABILITY_TABLES
 
     def add_objects(self, runner: ScenarioRunner, target_n: int) -> None:
-        if target_n <= self._current_n:
-            return
-        statements = [
-            f"CREATE TABLE IF NOT EXISTS {self.PAD_SCHEMA}.pad_t_{i} (a int, b text)"
-            for i in range(self._current_n + 1, target_n + 1)
-        ]
-        _bulk_run(
+        self._current_n = _extend_incremental(
             runner,
-            statements,
-            f"create tables {self._current_n + 1}..{target_n}",
+            current_n=self._current_n,
+            target_n=target_n,
+            templates_for=lambda i: (
+                f"CREATE TABLE IF NOT EXISTS {self.PAD_SCHEMA}.pad_t_{i} (a int, b text)",
+            ),
+            label="tables",
         )
-        self._current_n = target_n
 
 
 class EnvdObjectsScalabilityMvsScenario(EnvdObjectsScalabilityScenario):
@@ -2473,29 +2576,25 @@ class EnvdObjectsScalabilityMvsScenario(EnvdObjectsScalabilityScenario):
             self._pad_clusters_created += 1
 
     def add_objects(self, runner: ScenarioRunner, target_n: int) -> None:
-        if target_n <= self._current_n:
-            return
-
-        next_i = self._current_n + 1
-        while next_i <= target_n:
-            cluster_idx = (next_i - 1) // self.MVS_PER_CLUSTER
+        # Build one shard at a time: each shard lives on its own pad cluster
+        # (created lazily before the shard's CREATE batch), bounded by
+        # MVS_PER_CLUSTER MVs per cluster.
+        while self._current_n < target_n:
+            cluster_idx = self._current_n // self.MVS_PER_CLUSTER
             self._ensure_pad_cluster(runner, cluster_idx)
-            cluster_end = min(target_n, (cluster_idx + 1) * self.MVS_PER_CLUSTER)
-            statements = [
-                f"CREATE MATERIALIZED VIEW IF NOT EXISTS {self.PAD_SCHEMA}.pad_mv_{i} "
-                f"IN CLUSTER pad_c_{cluster_idx} "
-                f"AS SELECT id, val FROM {self.PAD_SCHEMA}.{self.BASE_TABLE} "
-                f"WHERE id < {i}"
-                for i in range(next_i, cluster_end + 1)
-            ]
-            _bulk_run(
+            shard_end = min(target_n, (cluster_idx + 1) * self.MVS_PER_CLUSTER)
+            self._current_n = _extend_incremental(
                 runner,
-                statements,
-                f"create MVs {next_i}..{cluster_end} on pad_c_{cluster_idx}",
+                current_n=self._current_n,
+                target_n=shard_end,
+                templates_for=lambda i, c=cluster_idx: (
+                    f"CREATE MATERIALIZED VIEW IF NOT EXISTS {self.PAD_SCHEMA}.pad_mv_{i} "
+                    f"IN CLUSTER pad_c_{c} "
+                    f"AS SELECT id, val FROM {self.PAD_SCHEMA}.{self.BASE_TABLE} "
+                    f"WHERE id < {i}",
+                ),
+                label=f"MVs on pad_c_{cluster_idx}",
             )
-            next_i = cluster_end + 1
-
-        self._current_n = target_n
 
     def teardown(self, runner: ScenarioRunner) -> None:
         # Drop the schema first so MVs (catalog entries) are removed; then
@@ -2578,7 +2677,7 @@ CLUSTER_OBJECT_LIMITS_MVS_KIND = ClusterObjectLimitsKind(
 )
 
 
-class ClusterObjectLimitsScenario:
+class ClusterObjectLimitsScenario(Scenario):
     """
     Scenario for cluster_object_limits. Finds the maximum number of idle
     materializations (indexes or materialized views, picked via ``kind``)
@@ -2592,14 +2691,13 @@ class ClusterObjectLimitsScenario:
       - N structurally-distinct materializations on the measurement cluster
         ``c``, all derived from ``base_t``. The exact materialization type
         (indexed view vs MV) and the lag-query join are carried by ``kind``.
-      - Per cluster-size iteration we drop+recreate ``c`` and ``PAD_SCHEMA``,
-        then walk an N-list, adding the delta of objects at each step and
-        probing freshness via ``mz_internal.mz_materialization_lag``. On the
-        first unhealthy probe we stop the walk and bisect the
-        (last_healthy, first_unhealthy] interval to narrow the cliff.
+      - The outer sweep is the cluster size: ``apply`` drops+recreates ``c``
+        and ``PAD_SCHEMA`` for each size. ``measure`` walks an N-list,
+        adding the delta of objects at each step and probing freshness via
+        ``mz_internal.mz_materialization_lag``. On the first unhealthy probe
+        we stop the walk and bisect the (last_healthy, first_unhealthy]
+        interval to narrow the cliff.
     """
-
-    VERSION: str = "1.0.0"
 
     PAD_SCHEMA: str = "pad_schema"
     BASE_TABLE: str = "base_t"
@@ -2607,21 +2705,61 @@ class ClusterObjectLimitsScenario:
     # cluster, so the probe does not add load to `c`.
     PROBE_CLUSTER: str = "mz_catalog_server"
 
-    def __init__(self, kind: ClusterObjectLimitsKind) -> None:
+    def __init__(
+        self,
+        kind: ClusterObjectLimitsKind,
+        sizes: list[int],
+        bisect_steps: int = CLUSTER_OBJECT_LIMITS_BISECT_STEPS,
+    ) -> None:
         self._kind = kind
+        self._sizes = sizes
+        self._bisect_steps = bisect_steps
         self._current_n = 0
+
+    # ----- Scenario protocol -----
 
     def name(self) -> str:
         return self._kind.scenario_name
 
-    def reset_for_cluster_size(self, runner: ScenarioRunner) -> None:
-        """Drop+recreate the pad schema and the one-row base table.
+    def mode(self) -> str:
+        return "cluster_object_limits"
 
-        Called once per cluster-size iteration (after recreating cluster ``c``)
-        so each cluster-size run starts from a clean slate. The cluster drop
-        cascades to remove on-cluster objects (indexes/MVs); dropping the
-        schema removes the off-cluster views.
-        """
+    def stream_key(self) -> str:
+        return "cluster_object_limits"
+
+    def scale_points(
+        self, target: "BenchTarget", max_scale: int
+    ) -> Iterable[ScalePoint]:
+        for replica_scale in REPLICA_SCALES:
+            if replica_scale > max_scale:
+                break
+            size = target.replica_size_for_scale(replica_scale)
+            yield ScalePoint(
+                label=f"replica_size={size}",
+                cluster_size=size,
+                replica_scale=replica_scale,
+            )
+
+    def apply(self, runner: ScenarioRunner, point: ScalePoint) -> bool:
+        assert point.cluster_size is not None
+        # (Re)create the test cluster. Skip the iteration if this cluster
+        # size isn't available on the target — e.g. it isn't in
+        # `mz_cluster_replica_sizes` for this region, or allocating it would
+        # exceed `max_credit_consumption_rate`. Without this guard, on
+        # staging the larger sizes either fail with a noisy traceback or
+        # show up as a confusing "unhealthy at the smallest N" data point
+        # instead of a clear "size unavailable" line.
+        if not _recreate_cluster_c(
+            runner,
+            point.cluster_size,
+            skip_if_unavailable_label=f"cluster_object_limits {self.name()}",
+        ):
+            return False
+        runner.replica_size = point.cluster_size
+        # Reset the pad schema and base table for this cluster-size iteration:
+        # each cluster-size run starts from a clean slate. The cluster drop
+        # cascades to remove on-cluster objects (indexes/MVs); dropping the
+        # schema removes the off-cluster views.
         runner.run_query(f"DROP SCHEMA IF EXISTS {self.PAD_SCHEMA} CASCADE")
         runner.run_query(f"CREATE SCHEMA {self.PAD_SCHEMA}")
         runner.run_query(
@@ -2631,42 +2769,51 @@ class ClusterObjectLimitsScenario:
             f"INSERT INTO {self.PAD_SCHEMA}.{self.BASE_TABLE} VALUES (1, 'x')"
         )
         self._current_n = 0
+        return True
+
+    def measure(self, runner: ScenarioRunner, point: ScalePoint) -> None:
+        assert point.cluster_size is not None
+        self._walk_and_bisect(runner, point.cluster_size)
+
+    def cleanup_point(self, runner: ScenarioRunner, point: ScalePoint) -> None:
+        # Drop the schema (off-cluster views) and the cluster (on-cluster
+        # objects cascade) before moving to the next cluster size, to bound
+        # catalog growth across iterations.
+        _best_effort_drop(
+            runner,
+            f"DROP SCHEMA IF EXISTS {self.PAD_SCHEMA} CASCADE",
+            self.PAD_SCHEMA,
+        )
+        _best_effort_drop(runner, "DROP CLUSTER IF EXISTS c CASCADE", "cluster c")
 
     def add_objects(self, runner: ScenarioRunner, target_n: int) -> None:
-        if target_n <= self._current_n:
-            return
-        statements = [
-            template.format(schema=self.PAD_SCHEMA, base=self.BASE_TABLE, i=i)
-            for i in range(self._current_n + 1, target_n + 1)
-            for template in self._kind.create_templates
-        ]
-        _bulk_run(
+        self._current_n = _extend_incremental(
             runner,
-            statements,
-            f"create {self._kind.label} {self._current_n + 1}..{target_n}",
+            current_n=self._current_n,
+            target_n=target_n,
+            templates_for=lambda i: tuple(
+                t.format(schema=self.PAD_SCHEMA, base=self.BASE_TABLE, i=i)
+                for t in self._kind.create_templates
+            ),
+            label=self._kind.label,
         )
-        self._current_n = target_n
 
     def remove_objects(self, runner: ScenarioRunner, target_n: int) -> None:
         """Drop the test objects above ``target_n`` from cluster ``c``.
 
-        Inverse of ``add_objects``. Needed by the bisection refinement in
-        ``run_scenario_cluster_object_limits``: after walking forward past the
-        cliff, we step back down to probe intermediate N without rebuilding
-        the catalog from scratch.
+        Inverse of ``add_objects``. Needed by the bisection refinement: after
+        walking forward past the cliff, we step back down to probe
+        intermediate N without rebuilding the catalog from scratch.
         """
-        if target_n >= self._current_n:
-            return
-        statements = [
-            self._kind.drop_template.format(schema=self.PAD_SCHEMA, i=i)
-            for i in range(target_n + 1, self._current_n + 1)
-        ]
-        _bulk_run(
+        self._current_n = _shrink_incremental(
             runner,
-            statements,
-            f"drop {self._kind.label} {target_n + 1}..{self._current_n}",
+            current_n=self._current_n,
+            target_n=target_n,
+            drop_for=lambda i: self._kind.drop_template.format(
+                schema=self.PAD_SCHEMA, i=i
+            ),
+            label=self._kind.label,
         )
-        self._current_n = target_n
 
     def probe_lag_ms(self, runner: ScenarioRunner) -> tuple[int, int, float]:
         """Return (total, reporting, max_local_lag_ms) for our test objects.
@@ -2712,14 +2859,6 @@ class ClusterObjectLimitsScenario:
         assert rows is not None and len(rows) == 1
         total, hydrated = rows[0]
         return int(total), int(hydrated)
-
-    def teardown(self, runner: ScenarioRunner) -> None:
-        _best_effort_drop(
-            runner,
-            f"DROP SCHEMA IF EXISTS {self.PAD_SCHEMA} CASCADE",
-            self.PAD_SCHEMA,
-        )
-        _best_effort_drop(runner, "DROP CLUSTER IF EXISTS c CASCADE", "cluster c")
 
     def _hydrate_and_sample(
         self,
@@ -2833,28 +2972,13 @@ class ClusterObjectLimitsScenario:
         )
         return healthy
 
-    def run_for_cluster_size(
-        self,
-        runner: ScenarioRunner,
-        sizes: list[int],
-        replica_size: str,
-        lag_threshold_ms: int = CLUSTER_OBJECT_LIMITS_LAG_THRESHOLD_MS,
-        hydration_timeout_s: int = CLUSTER_OBJECT_LIMITS_HYDRATION_TIMEOUT_S,
-        first_probe_hydration_timeout_s: int = CLUSTER_OBJECT_LIMITS_FIRST_PROBE_HYDRATION_TIMEOUT_S,
-        samples: int = CLUSTER_OBJECT_LIMITS_SAMPLES,
-        sample_interval_s: float = CLUSTER_OBJECT_LIMITS_SAMPLE_INTERVAL_S,
-        bisect_steps: int = CLUSTER_OBJECT_LIMITS_BISECT_STEPS,
-    ) -> None:
+    def _walk_and_bisect(self, runner: ScenarioRunner, replica_size: str) -> None:
         """Walk the N-list and bisect the cliff for one cluster size.
 
         Stops walking on the first unhealthy point (still recorded so the
-        cliff is visible). If `bisect_steps > 0` and a cliff was found,
-        bisect (last_healthy, first_unhealthy] that many times, adding or
-        dropping objects in place.
-
-        The caller is responsible for (re)creating cluster `c` at
-        `replica_size` and calling `reset_for_cluster_size` before this
-        method, and `teardown` after.
+        cliff is visible). If `self._bisect_steps > 0` and a cliff was
+        found, bisect (last_healthy, first_unhealthy] that many times,
+        adding or dropping objects in place.
         """
 
         def probe(
@@ -2864,11 +2988,11 @@ class ClusterObjectLimitsScenario:
                 runner,
                 n,
                 replica_size,
-                lag_threshold_ms,
-                hydration_timeout_s,
-                first_probe_hydration_timeout_s,
-                samples,
-                sample_interval_s,
+                CLUSTER_OBJECT_LIMITS_LAG_THRESHOLD_MS,
+                CLUSTER_OBJECT_LIMITS_HYDRATION_TIMEOUT_S,
+                CLUSTER_OBJECT_LIMITS_FIRST_PROBE_HYDRATION_TIMEOUT_S,
+                CLUSTER_OBJECT_LIMITS_SAMPLES,
+                CLUSTER_OBJECT_LIMITS_SAMPLE_INTERVAL_S,
                 first_probe=first_probe,
                 refinement=refinement,
             )
@@ -2876,7 +3000,7 @@ class ClusterObjectLimitsScenario:
         # Coarse pass: walk the N list, stop at the first unhealthy point.
         last_healthy_n = 0
         first_unhealthy_n: int | None = None
-        for i, n in enumerate(sizes):
+        for i, n in enumerate(self._sizes):
             print(
                 f"--- cluster_object_limits {self.name()}: "
                 f"size '{replica_size}', building up to N={n}"
@@ -2901,9 +3025,9 @@ class ClusterObjectLimitsScenario:
 
         # Refinement pass: bisect (last_healthy, first_unhealthy] to narrow
         # the cliff. Each step adds or drops objects in place.
-        if first_unhealthy_n is not None and bisect_steps > 0:
+        if first_unhealthy_n is not None and self._bisect_steps > 0:
             lo, hi = last_healthy_n, first_unhealthy_n
-            for step in range(bisect_steps):
+            for step in range(self._bisect_steps):
                 mid = (lo + hi) // 2
                 if mid <= lo:
                     # Interval already minimal (hi - lo <= 1).
@@ -2911,7 +3035,7 @@ class ClusterObjectLimitsScenario:
                 print(
                     f"--- cluster_object_limits {self.name()}: "
                     f"size '{replica_size}', bisect step "
-                    f"{step + 1}/{bisect_steps} at N={mid} "
+                    f"{step + 1}/{self._bisect_steps} at N={mid} "
                     f"(cliff in ({lo}, {hi}])"
                 )
                 # Exactly one of these does work; the other is a no-op.
@@ -2924,6 +3048,250 @@ class ClusterObjectLimitsScenario:
             print(
                 f"    bisect done for size '{replica_size}': " f"cliff in ({lo}, {hi}]"
             )
+
+
+class _StopSweep(Exception):
+    """Raised from `Scenario.apply()` to skip the current point AND every
+    subsequent point. Use `apply` returning False for skip-this-only."""
+
+
+class _ClusterSizeSweepBase(Scenario):
+    """Common ``scale_points`` for sweeps over `REPLICA_SCALES` cluster sizes."""
+
+    def scale_points(
+        self, target: "BenchTarget", max_scale: int
+    ) -> Iterable[ScalePoint]:
+        for replica_scale in REPLICA_SCALES:
+            if replica_scale > max_scale:
+                break
+            size = target.replica_size_for_scale(replica_scale)
+            yield ScalePoint(
+                label=f"replica_size={size}",
+                cluster_size=size,
+                replica_scale=replica_scale,
+            )
+
+
+class StrongScalingSweep(_ClusterSizeSweepBase):
+    """Sweep cluster size with fixed dataset. Wraps a `ClusterScalingScenario`
+    workload: setup runs once in ``prepare``, the cluster is recreated for
+    each size in ``apply``, and ``measure`` defers to ``workload.run``."""
+
+    def __init__(self, name: str, workload: ClusterScalingScenario) -> None:
+        self._name = name
+        self._workload = workload
+
+    def name(self) -> str:
+        return self._name
+
+    def mode(self) -> str:
+        return "strong"
+
+    def stream_key(self) -> str:
+        return "cluster"
+
+    def prepare(self, runner: ScenarioRunner) -> None:
+        runner.scale = self._workload.scale
+        for q in self._workload.drop():
+            runner.run_query(q)
+        _prepare_probe_table(runner)
+        for q in self._workload.setup():
+            runner.run_query(q)
+        for n in self._workload.materialize_views():
+            runner.run_query(f"SELECT COUNT(*) > 0 FROM {n};")
+
+    def apply(self, runner: ScenarioRunner, point: ScalePoint) -> bool:
+        assert point.cluster_size is not None
+        _recreate_cluster_c(runner, point.cluster_size, smoke_test=True)
+        runner.replica_size = point.cluster_size
+        return True
+
+    def measure(self, runner: ScenarioRunner, point: ScalePoint) -> None:
+        self._workload.run(runner)
+
+
+class WeakScalingSweep(_ClusterSizeSweepBase):
+    """Sweep cluster size AND dataset size in lockstep. The workload's setup
+    is rerun at each point with ``scale = initial_scale * replica_scale``."""
+
+    def __init__(self, name: str, workload: ClusterScalingScenario) -> None:
+        self._name = name
+        self._workload = workload
+        self._initial_scale = workload.scale
+
+    def name(self) -> str:
+        return self._name
+
+    def mode(self) -> str:
+        return "weak"
+
+    def stream_key(self) -> str:
+        return "cluster"
+
+    def prepare(self, runner: ScenarioRunner) -> None:
+        with runner.connection as cur:
+            cur.execute("DROP TABLE IF EXISTS t CASCADE;")
+            cur.execute("CREATE TABLE t (a int);")
+            cur.execute("INSERT INTO t VALUES (1);")
+
+    def apply(self, runner: ScenarioRunner, point: ScalePoint) -> bool:
+        assert point.cluster_size is not None and point.replica_scale is not None
+        self._workload.replica_size = point.cluster_size
+        self._workload.scale = self._initial_scale * point.replica_scale
+        runner.scale = self._workload.scale
+        for q in self._workload.drop():
+            runner.run_query(q)
+        for q in self._workload.setup():
+            runner.run_query(q)
+        for n in self._workload.materialize_views():
+            runner.run_query(f"SELECT COUNT(*) > 0 FROM {n};")
+        print(f"--- Loading complete; creating cluster with size {point.cluster_size}")
+        _recreate_cluster_c(runner, point.cluster_size, smoke_test=True)
+        runner.replica_size = point.cluster_size
+        return True
+
+    def measure(self, runner: ScenarioRunner, point: ScalePoint) -> None:
+        self._workload.run(runner)
+
+
+class EnvdCpuSweep(Scenario):
+    """Sweep environmentd's CPU allocation at a fixed compute cluster size.
+    Wraps a `ClusterScalingScenario` workload. On Cloud, we reset envd's
+    CPU allocation to the default in ``teardown`` regardless of outcome to
+    avoid accidentally burning credits."""
+
+    # (So far, I haven't seen a difference between 16 and 32 in manual
+    # testing in cloud. When we start seeing a difference, consider
+    # extending to 64.)
+    ENVD_CPU_SCALES: list[int] = [1, 2, 4, 8, 16, 32]
+
+    def __init__(self, name: str, workload: ClusterScalingScenario) -> None:
+        self._name = name
+        self._workload = workload
+        self._fixed_replica_size: str | None = None
+
+    def name(self) -> str:
+        return self._name
+
+    def mode(self) -> str:
+        # Matches the historical "strong" mode tag for these scenarios
+        # (envd_qps_strong_scaling, copy_from_stdin_envd_strong_scaling).
+        return "strong"
+
+    def stream_key(self) -> str:
+        return "envd"
+
+    def scale_points(
+        self, target: "BenchTarget", max_scale: int
+    ) -> Iterable[ScalePoint]:
+        for cpus in self.ENVD_CPU_SCALES:
+            if cpus > max_scale:
+                break
+            yield ScalePoint(label=f"envd_cpus={cpus}", envd_cpus=cpus)
+
+    def prepare(self, runner: ScenarioRunner) -> None:
+        runner.scale = self._workload.scale
+        _prepare_probe_table(runner)
+        for q in self._workload.setup():
+            runner.run_query(q)
+        for n in self._workload.materialize_views():
+            runner.run_query(f"SELECT COUNT(*) > 0 FROM {n};")
+        self._fixed_replica_size = runner.target.replica_size_for_scale(1)
+
+    def apply(self, runner: ScenarioRunner, point: ScalePoint) -> bool:
+        assert point.envd_cpus is not None
+        assert self._fixed_replica_size is not None
+        try:
+            reconfigure_envd_cpus(runner.target, point.envd_cpus, runner)
+        except UIError as e:
+            print(
+                f"WARNING: Failed to reconfigure to {point.envd_cpus} CPUs, "
+                f"skipping remaining scale points: {e}"
+            )
+            raise _StopSweep(str(e)) from e
+        fixed_size = self._fixed_replica_size
+
+        def recreate() -> None:
+            _recreate_cluster_c(runner, fixed_size, smoke_test=True)
+
+        runner.connection.retryable(recreate)
+        # Record envd CPU cores for this step. (We intentionally do not set
+        # replica_size, because that would be fixed in this scenario, so
+        # there is no meaningful analysis to be done on that.)
+        runner.envd_cpus = point.envd_cpus
+        return True
+
+    def measure(self, runner: ScenarioRunner, point: ScalePoint) -> None:
+        self._workload.run(runner)
+
+    def teardown(self, runner: ScenarioRunner) -> None:
+        if isinstance(runner.target, CloudTarget):
+            print("--- Resetting Cloud environmentd CPUs to the default")
+            target = runner.target
+            version_args = (
+                ["--version", target.version] if target.version is not None else []
+            )
+            target.composition.run(
+                "mz",
+                "region",
+                "enable",
+                "--environmentd-cpu-allocation",
+                "2",
+                *version_args,
+                rm=True,
+            )
+
+
+class EnvdObjectsSweep(Scenario):
+    """Sweep catalog object count (N) at a fixed compute cluster size.
+    Wraps an `EnvdObjectsScalabilityScenario` workload: catalog is built
+    incrementally, so transitioning to the next size adds only the delta."""
+
+    def __init__(
+        self,
+        name: str,
+        workload: EnvdObjectsScalabilityScenario,
+        sizes: list[int],
+    ) -> None:
+        self._name = name
+        self._workload = workload
+        self._sizes = sizes
+
+    def name(self) -> str:
+        return self._name
+
+    def mode(self) -> str:
+        return "envd_objects_scalability"
+
+    def stream_key(self) -> str:
+        return "envd_objects"
+
+    def scale_points(
+        self, target: "BenchTarget", max_scale: int
+    ) -> Iterable[ScalePoint]:
+        for n in self._sizes:
+            yield ScalePoint(label=f"N={n}", n=n)
+
+    def prepare(self, runner: ScenarioRunner) -> None:
+        # (Re)create the fixed-size measurement cluster and a tiny one-row
+        # table used by the simple-peek measurement.
+        measurement_size = runner.target.replica_size_for_scale(1)
+        runner.replica_size = measurement_size
+        _recreate_cluster_c(runner, measurement_size)
+        _prepare_probe_table(runner)
+        self._workload.init(runner)
+
+    def apply(self, runner: ScenarioRunner, point: ScalePoint) -> bool:
+        assert point.n is not None
+        self._workload.add_objects(runner, point.n)
+        runner.scale = point.n
+        return True
+
+    def measure(self, runner: ScenarioRunner, point: ScalePoint) -> None:
+        self._workload.run(runner)
+
+    def teardown(self, runner: ScenarioRunner) -> None:
+        self._workload.teardown(runner)
 
 
 # TODO: We should factor out the below
@@ -3245,10 +3613,9 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
     # cluster_object_limits scenarios push the cluster to its idle-object
     # limit; we only run them on staging or local Docker to avoid burning
     # production resources or hitting production-only catalog limits.
-    cluster_limit_scenarios = {
-        s.name for s in SCENARIOS if s.family == "cluster_limits"
-    }
-    cluster_object_limits_requested = scenarios & cluster_limit_scenarios
+    cluster_object_limits_requested = scenarios & set(
+        SCENARIO_GROUPS.get("cluster_object_limits", [])
+    )
     if cluster_object_limits_requested and args.target == "cloud-production":
         raise UIError(
             "cluster_object_limits scenarios cannot run against "
@@ -3298,16 +3665,12 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
 
         log_environment_info(target)
 
-        ctx = RunContext(
-            args=args,
-            target=target,
-            max_scale=max_scale,
-            cluster_object_limits_sizes=(
-                args.cluster_object_limits_sizes
-                if args.cluster_object_limits_sizes is not None
-                else default_cluster_object_limits_sizes(args.cluster_object_limits_max)
-            ),
-        )
+        # Resolve the cluster_object_limits N-list once so each scenario
+        # factory can read `args.cluster_object_limits_sizes` directly.
+        if args.cluster_object_limits_sizes is None:
+            args.cluster_object_limits_sizes = default_cluster_object_limits_sizes(
+                args.cluster_object_limits_max
+            )
 
         # Open one CSV per result-stream kind, keyed by `ResultStreamSpec.key`.
         base_name = os.path.splitext(args.record)[0]
@@ -3329,8 +3692,10 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
                     cur.execute(f"CREATE CLUSTER quickstart SIZE '{size}';".encode())
 
                 spec = SCENARIOS_BY_NAME[scenario_name]
-                writer = streams[FAMILY_TO_STREAM[spec.family]].writer
-                run_spec(spec, ctx, conn, writer)
+                scenario = spec.factory(args, target)
+                writer = streams[scenario.stream_key()].writer
+                print(f"--- SCENARIO: Running {spec.log_label}")
+                run_scenario(scenario, writer, conn, target, max_scale)
 
         test_failed = True
         try:
@@ -3513,339 +3878,61 @@ class DockerTarget(BenchTarget):
         return 16
 
 
-def run_scenario_strong(
-    scenario: ClusterScalingScenario,
+def run_scenario(
+    scenario: Scenario,
     results_writer: csv.DictWriter,
     connection: ConnectionHandler,
     target: BenchTarget,
     max_scale: int,
 ) -> None:
-    """
-    Run a strong scaling scenario, where we increase the cluster size
-    and keep the data size constant.
-    """
+    """Run a `Scenario` end-to-end: prepare, sweep, teardown.
 
+    The scenario decides what to sweep (cluster size, envd CPUs, object
+    count) and how to measure each point; this driver just threads the
+    lifecycle calls. ``apply`` returning False skips a single point;
+    raising `_StopSweep` short-circuits the rest of the sweep.
+    """
     runner = ScenarioRunner(
         scenario.name(),
         scenario.VERSION,
-        scenario.scale,
-        "strong",
+        0,
+        scenario.mode(),
         connection,
         results_writer,
         replica_size=None,
         target=target,
     )
-
-    for query in scenario.drop():
-        runner.run_query(query)
-
-    _prepare_probe_table(runner)
-
-    for query in scenario.setup():
-        runner.run_query(query)
-
-    for name in scenario.materialize_views():
-        runner.run_query(f"SELECT COUNT(*) > 0 FROM {name};")
-
-    for replica_scale in REPLICA_SCALES:
-        if replica_scale > max_scale:
-            break
-        replica_size = target.replica_size_for_scale(replica_scale)
-        print(
-            f"--- Running strong scenario {scenario.name()} with replica size {replica_size}"
-        )
-        _recreate_cluster_c(runner, replica_size, smoke_test=True)
-
-        runner.replica_size = replica_size
-
-        scenario.run(runner)
-
-
-def run_scenario_envd_strong_scaling(
-    scenario: ClusterScalingScenario,
-    results_writer: csv.DictWriter,
-    connection: ConnectionHandler,
-    target: BenchTarget,
-    max_scale: int,
-) -> None:
-    """
-    Run envd-focused scaling scenarios, where we keep the compute cluster size
-    fixed and scale the CPU resources available to environmentd instead.
-
-    For the Docker target, we change the CPU limit of the local `materialized`
-    container (which runs environmentd) before each scale point.
-    For the Cloud target, we reconfigure environmentd using `mz region enable`
-    with the `--environmentd-cpu-allocation` flag.
-    """
-
-    runner = ScenarioRunner(
-        scenario.name(),
-        scenario.VERSION,
-        scenario.scale,
-        "strong",
-        connection,
-        results_writer,
-        replica_size=None,
-        target=target,
-    )
-
-    # Prepare a tiny table for cluster availability checks.
-    _prepare_probe_table(runner)
-
-    # Scenario-specific setup.
-    for query in scenario.setup():
-        runner.run_query(query)
-
-    for name in scenario.materialize_views():
-        runner.run_query(f"SELECT COUNT(*) > 0 FROM {name};")
-
-    fixed_replica_size = target.replica_size_for_scale(1)
-
+    scenario.prepare(runner)
     try:
-        # (So far, I haven't seen a difference between 16 and 32 in manual testing in cloud. When we start seeing a
-        # difference, consider extending to 64.)
-        for envd_cpus in [1, 2, 4, 8, 16, 32]:
-            if envd_cpus > max_scale:
-                break
-
-            print(
-                f"--- Running envd-scaling scenario {scenario.name()} with envd_cpus={envd_cpus}; compute size fixed at {fixed_replica_size}"
-            )
-
+        for point in scenario.scale_points(target, max_scale):
+            print(f"--- {scenario.name()} ({scenario.mode()}): {point.label}")
             try:
-                reconfigure_envd_cpus(target, envd_cpus, runner)
-            except UIError as e:
-                print(
-                    f"WARNING: Failed to reconfigure to {envd_cpus} CPUs, skipping remaining scale points: {e}"
-                )
+                proceed = scenario.apply(runner, point)
+            except _StopSweep as e:
+                print(f"    stopping sweep early: {e}")
                 break
-
-            # (Re)create a fixed-size compute cluster.
-            def recreate_cluster() -> None:
-                _recreate_cluster_c(runner, fixed_replica_size, smoke_test=True)
-
-            runner.connection.retryable(recreate_cluster)
-
-            # Record envd CPU cores for this step. (We intentionally do not set replica_size, because that would be fixed
-            # in this scenario, so there is no meaningful analysis to be done on that.)
-            runner.envd_cpus = envd_cpus
-
-            scenario.run(runner)
-    finally:
-        if isinstance(target, CloudTarget):
-            # We reset the cloud envd's core count in any case, to avoid accidentally burning a lot of money.
-            print("--- Resetting Cloud environmentd CPUs to the default")
-            version_args = (
-                ["--version", target.version] if target.version is not None else []
-            )
-            target.composition.run(
-                "mz",
-                "region",
-                "enable",
-                "--environmentd-cpu-allocation",
-                "2",
-                *version_args,
-                rm=True,
-            )
-
-
-def run_scenario_envd_objects_scalability(
-    scenario: EnvdObjectsScalabilityScenario,
-    results_writer: csv.DictWriter,
-    connection: ConnectionHandler,
-    target: BenchTarget,
-    sizes: list[int],
-) -> None:
-    """
-    Run an envd-objects-scalability scenario, where the cluster size is fixed and the
-    number of catalog objects (`scale`) varies across the points in `sizes`.
-
-    Builds the catalog incrementally so transitioning from N=k to the next
-    size point only adds (next - k) objects.
-    """
-    measurement_size = target.replica_size_for_scale(1)
-
-    runner = ScenarioRunner(
-        scenario.name(),
-        scenario.VERSION,
-        0,  # filled in per N below
-        "envd_objects_scalability",
-        connection,
-        results_writer,
-        replica_size=measurement_size,
-        target=target,
-    )
-
-    # (Re)create the fixed-size measurement cluster and a tiny one-row table
-    # used by the simple-peek measurement.
-    _recreate_cluster_c(runner, measurement_size)
-    _prepare_probe_table(runner)
-
-    scenario.init(runner)
-
-    try:
-        for n in sizes:
-            print(
-                f"--- envd_objects_scalability {scenario.name()}: building catalog up to N={n}"
-            )
-            scenario.add_objects(runner, n)
-            runner.scale = n
-            print(f"--- envd_objects_scalability {scenario.name()}: measuring at N={n}")
-            scenario.run(runner)
+            if not proceed:
+                continue
+            try:
+                scenario.measure(runner, point)
+            finally:
+                scenario.cleanup_point(runner, point)
     finally:
         scenario.teardown(runner)
-
-
-def run_scenario_cluster_object_limits(
-    scenario: ClusterObjectLimitsScenario,
-    results_writer: csv.DictWriter,
-    connection: ConnectionHandler,
-    target: BenchTarget,
-    max_scale: int,
-    sizes: list[int],
-    bisect_steps: int = CLUSTER_OBJECT_LIMITS_BISECT_STEPS,
-) -> None:
-    """
-    For each cluster size in REPLICA_SCALES (capped by `max_scale`),
-    (re)create cluster `c` at that size and call
-    `scenario.run_for_cluster_size` to walk/bisect the N-list. The per-size
-    walk-and-bisect logic, including the freshness probe and CSV recording,
-    lives on the scenario itself.
-    """
-    cluster_scales = [s for s in REPLICA_SCALES if s <= max_scale]
-
-    for replica_scale in cluster_scales:
-        replica_size = target.replica_size_for_scale(replica_scale)
-        print(
-            f"--- cluster_object_limits {scenario.name()}: cluster size '{replica_size}'"
-        )
-
-        runner = ScenarioRunner(
-            scenario.name(),
-            scenario.VERSION,
-            0,  # filled in per N below
-            "cluster_object_limits",
-            connection,
-            results_writer,
-            replica_size=replica_size,
-            target=target,
-        )
-
-        # (Re)create the test cluster. Skip the iteration if this cluster
-        # size isn't available on the target — e.g. it isn't in
-        # `mz_cluster_replica_sizes` for this region, or allocating it would
-        # exceed `max_credit_consumption_rate`. Without this guard, on
-        # staging the larger sizes either fail with a noisy traceback or
-        # show up as a confusing "unhealthy at the smallest N" data point
-        # instead of a clear "size unavailable" line.
-        if not _recreate_cluster_c(
-            runner,
-            replica_size,
-            skip_if_unavailable_label=f"cluster_object_limits {scenario.name()}",
-        ):
-            continue
-
-        # Reset the base table and pad schema for this cluster-size iteration.
-        scenario.reset_for_cluster_size(runner)
-
-        try:
-            scenario.run_for_cluster_size(
-                runner, sizes, replica_size, bisect_steps=bisect_steps
-            )
-        finally:
-            # Drop the cluster (cascades to indexes/MVs) and the schema (views)
-            # before moving to the next cluster size, to bound catalog growth.
-            scenario.teardown(runner)
-
-
-def run_scenario_weak(
-    scenario: ClusterScalingScenario,
-    results_writer: csv.DictWriter,
-    connection: ConnectionHandler,
-    target: BenchTarget,
-    max_scale: int,
-) -> None:
-    """
-    Run a weak scaling scenario, where we increase both the cluster size
-    and the data size.
-    """
-
-    with connection as cur:
-        cur.execute("DROP TABLE IF EXISTS t CASCADE;")
-        cur.execute("CREATE TABLE t (a int);")
-        cur.execute("INSERT INTO t VALUES (1);")
-
-    initial_scale = scenario.scale
-
-    for replica_scale in REPLICA_SCALES:
-        if replica_scale > max_scale:
-            break
-        replica_size = target.replica_size_for_scale(replica_scale)
-        print(
-            f"--- Running weak scenario {scenario.name()} with replica size {replica_size}"
-        )
-        scenario.replica_size = replica_size
-        scenario.scale = initial_scale * replica_scale
-        runner = ScenarioRunner(
-            scenario.name(),
-            scenario.VERSION,
-            scenario.scale,
-            "weak",
-            connection,
-            results_writer,
-            replica_size,
-            target=target,
-        )
-        for query in scenario.drop():
-            runner.run_query(query)
-
-        for query in scenario.setup():
-            runner.run_query(query)
-
-        for name in scenario.materialize_views():
-            runner.run_query(f"SELECT COUNT(*) > 0 FROM {name};")
-
-        # Create a cluster with the specified size
-        print(f"--- Loading complete; creating cluster with size {replica_size}")
-        _recreate_cluster_c(runner, replica_size, smoke_test=True)
-
-        scenario.run(runner)
-
-
-# Scenario families. Each family corresponds to one `run_scenario_*` driver
-# and writes to exactly one result stream (see `FAMILY_TO_STREAM`).
-Family = Literal["strong", "weak", "envd_qps", "envd_objects", "cluster_limits"]
-
-FAMILY_TO_STREAM: dict[Family, str] = {
-    "strong": "cluster",
-    "weak": "cluster",
-    "envd_qps": "envd",
-    "envd_objects": "envd_objects",
-    "cluster_limits": "cluster_object_limits",
-}
-
-
-AnyScenario = (
-    ClusterScalingScenario
-    | EnvdObjectsScalabilityScenario
-    | ClusterObjectLimitsScenario
-)
 
 
 @dataclass(frozen=True)
 class ScenarioSpec:
     """Registry entry for a single scenario.
 
-    `factory` builds the scenario instance from CLI args + target; `family`
-    selects which `run_scenario_*` driver to use and (via `FAMILY_TO_STREAM`)
-    which result stream to write to. `groups` lists the `--scenarios` group
-    names this scenario belongs to.
+    ``factory`` builds the `Scenario` instance from CLI args + target.
+    ``groups`` lists the ``--scenarios`` group names this scenario belongs to.
+    The Scenario itself decides its result stream via ``stream_key()``.
     """
 
     name: str
     log_label: str
-    family: Family
-    factory: Callable[[argparse.Namespace, BenchTarget], AnyScenario]
+    factory: Callable[[argparse.Namespace, BenchTarget], Scenario]
     groups: tuple[str, ...] = ()
 
 
@@ -3853,100 +3940,126 @@ SCENARIOS: list[ScenarioSpec] = [
     ScenarioSpec(
         SCENARIO_TPCH_STRONG,
         "TPC-H Index strong scaling",
-        "strong",
-        lambda a, t: TpchScenario(a.scale_tpch, t.replica_size_for_scale(1)),
+        lambda a, t: StrongScalingSweep(
+            SCENARIO_TPCH_STRONG,
+            TpchScenario(a.scale_tpch, t.replica_size_for_scale(1)),
+        ),
         groups=("cluster", "cluster_compute"),
     ),
     ScenarioSpec(
         SCENARIO_TPCH_MV_STRONG,
         "TPC-H Materialized view strong scaling",
-        "strong",
-        lambda a, t: TpchScenarioMV(a.scale_tpch, t.replica_size_for_scale(1)),
+        lambda a, t: StrongScalingSweep(
+            SCENARIO_TPCH_MV_STRONG,
+            TpchScenarioMV(a.scale_tpch, t.replica_size_for_scale(1)),
+        ),
         groups=("cluster", "cluster_compute"),
     ),
     ScenarioSpec(
         SCENARIO_TPCH_QUERIES_STRONG,
         "TPC-H Queries strong scaling",
-        "strong",
-        lambda a, t: TpchScenarioQueriesIndexedInputs(
-            a.scale_tpch_queries, t.replica_size_for_scale(1)
+        lambda a, t: StrongScalingSweep(
+            SCENARIO_TPCH_QUERIES_STRONG,
+            TpchScenarioQueriesIndexedInputs(
+                a.scale_tpch_queries, t.replica_size_for_scale(1)
+            ),
         ),
         groups=("cluster", "cluster_compute"),
     ),
     ScenarioSpec(
         SCENARIO_TPCH_QUERIES_WEAK,
         "TPC-H Queries weak scaling",
-        "weak",
-        lambda a, t: TpchScenarioQueriesIndexedInputs(a.scale_tpch_queries, None),
+        lambda a, t: WeakScalingSweep(
+            SCENARIO_TPCH_QUERIES_WEAK,
+            TpchScenarioQueriesIndexedInputs(a.scale_tpch_queries, None),
+        ),
         groups=("cluster", "cluster_compute"),
     ),
     ScenarioSpec(
         SCENARIO_AUCTION_STRONG,
         "Auction strong scaling",
-        "strong",
-        lambda a, t: AuctionScenario(a.scale_auction, t.replica_size_for_scale(1)),
+        lambda a, t: StrongScalingSweep(
+            SCENARIO_AUCTION_STRONG,
+            AuctionScenario(a.scale_auction, t.replica_size_for_scale(1)),
+        ),
         groups=("cluster", "cluster_compute"),
     ),
     ScenarioSpec(
         SCENARIO_AUCTION_WEAK,
         "Auction weak scaling",
-        "weak",
-        lambda a, t: AuctionScenario(a.scale_auction, None),
+        lambda a, t: WeakScalingSweep(
+            SCENARIO_AUCTION_WEAK,
+            AuctionScenario(a.scale_auction, None),
+        ),
         groups=("cluster", "cluster_compute"),
     ),
     ScenarioSpec(
         SCENARIO_SOURCE_INGESTION_STRONG,
         "Source ingestion scaling",
-        "strong",
-        lambda a, t: SourceIngestionScenario(
-            a.scale_auction, t.replica_size_for_scale(1)
+        lambda a, t: StrongScalingSweep(
+            SCENARIO_SOURCE_INGESTION_STRONG,
+            SourceIngestionScenario(a.scale_auction, t.replica_size_for_scale(1)),
         ),
         groups=("cluster", "source_ingestion"),
     ),
     ScenarioSpec(
         SCENARIO_QPS_ENVD_STRONG_SCALING,
         "QPS envd strong scaling",
-        "envd_qps",
-        lambda a, t: QpsEnvdStrongScalingScenario(1, t.replica_size_for_scale(1)),
+        lambda a, t: EnvdCpuSweep(
+            SCENARIO_QPS_ENVD_STRONG_SCALING,
+            QpsEnvdStrongScalingScenario(1, t.replica_size_for_scale(1)),
+        ),
         groups=("envd_qps_scalability",),
     ),
     ScenarioSpec(
         SCENARIO_COPY_FROM_STDIN_ENVD_STRONG_SCALING,
         "COPY FROM STDIN envd strong scaling",
-        "envd_qps",
-        lambda a, t: CopyFromStdinEnvdStrongScalingScenario(
-            1, t.replica_size_for_scale(1)
+        lambda a, t: EnvdCpuSweep(
+            SCENARIO_COPY_FROM_STDIN_ENVD_STRONG_SCALING,
+            CopyFromStdinEnvdStrongScalingScenario(1, t.replica_size_for_scale(1)),
         ),
         groups=("envd_qps_scalability",),
     ),
     ScenarioSpec(
         SCENARIO_ENVD_OBJECTS_SCALABILITY_TABLES,
         "envd scalability (tables)",
-        "envd_objects",
-        lambda a, t: EnvdObjectsScalabilityTablesScenario(),
+        lambda a, t: EnvdObjectsSweep(
+            SCENARIO_ENVD_OBJECTS_SCALABILITY_TABLES,
+            EnvdObjectsScalabilityTablesScenario(),
+            sizes=a.envd_objects_scalability_sizes,
+        ),
         groups=("envd_objects_scalability",),
     ),
     ScenarioSpec(
         SCENARIO_ENVD_OBJECTS_SCALABILITY_MVS,
         "envd scalability (materialized views)",
-        "envd_objects",
-        lambda a, t: EnvdObjectsScalabilityMvsScenario(
-            pad_replica_size=t.replica_size_for_scale(2),
+        lambda a, t: EnvdObjectsSweep(
+            SCENARIO_ENVD_OBJECTS_SCALABILITY_MVS,
+            EnvdObjectsScalabilityMvsScenario(
+                pad_replica_size=t.replica_size_for_scale(2),
+            ),
+            sizes=a.envd_objects_scalability_sizes,
         ),
         groups=("envd_objects_scalability",),
     ),
     ScenarioSpec(
         SCENARIO_CLUSTER_OBJECT_LIMITS_INDEXES,
         "cluster object limits (indexes)",
-        "cluster_limits",
-        lambda a, t: ClusterObjectLimitsScenario(CLUSTER_OBJECT_LIMITS_INDEXES_KIND),
+        lambda a, t: ClusterObjectLimitsScenario(
+            CLUSTER_OBJECT_LIMITS_INDEXES_KIND,
+            sizes=a.cluster_object_limits_sizes,
+            bisect_steps=a.cluster_object_limits_bisect_steps,
+        ),
         groups=("cluster_object_limits",),
     ),
     ScenarioSpec(
         SCENARIO_CLUSTER_OBJECT_LIMITS_MVS,
         "cluster object limits (materialized views)",
-        "cluster_limits",
-        lambda a, t: ClusterObjectLimitsScenario(CLUSTER_OBJECT_LIMITS_MVS_KIND),
+        lambda a, t: ClusterObjectLimitsScenario(
+            CLUSTER_OBJECT_LIMITS_MVS_KIND,
+            sizes=a.cluster_object_limits_sizes,
+            bisect_steps=a.cluster_object_limits_bisect_steps,
+        ),
         groups=("cluster_object_limits",),
     ),
 ]
@@ -3962,84 +4075,23 @@ for _spec in SCENARIOS:
 del _spec, _g
 
 
-@dataclass
-class RunContext:
-    """Per-workflow state needed by every `run_scenario_*` driver."""
+def workflow_plot(composition: Composition, parser: WorkflowArgumentParser) -> None:
+    """Analyze the results of the workflow.
 
-    args: argparse.Namespace
-    target: BenchTarget
-    max_scale: int
-    cluster_object_limits_sizes: list[int]
-
-
-def run_spec(
-    spec: ScenarioSpec,
-    ctx: RunContext,
-    conn: ConnectionHandler,
-    writer: csv.DictWriter,
-) -> None:
-    """Build the scenario from `spec` and dispatch to its family driver."""
-    scenario = spec.factory(ctx.args, ctx.target)
-    print(f"--- SCENARIO: Running {spec.log_label}")
-    match spec.family:
-        case "strong":
-            assert isinstance(scenario, ClusterScalingScenario)
-            run_scenario_strong(scenario, writer, conn, ctx.target, ctx.max_scale)
-        case "weak":
-            assert isinstance(scenario, ClusterScalingScenario)
-            run_scenario_weak(scenario, writer, conn, ctx.target, ctx.max_scale)
-        case "envd_qps":
-            assert isinstance(scenario, ClusterScalingScenario)
-            run_scenario_envd_strong_scaling(
-                scenario, writer, conn, ctx.target, ctx.max_scale
-            )
-        case "envd_objects":
-            assert isinstance(scenario, EnvdObjectsScalabilityScenario)
-            run_scenario_envd_objects_scalability(
-                scenario,
-                writer,
-                conn,
-                ctx.target,
-                sizes=ctx.args.envd_objects_scalability_sizes,
-            )
-        case "cluster_limits":
-            assert isinstance(scenario, ClusterObjectLimitsScenario)
-            run_scenario_cluster_object_limits(
-                scenario,
-                writer,
-                conn,
-                ctx.target,
-                ctx.max_scale,
-                sizes=ctx.cluster_object_limits_sizes,
-                bisect_steps=ctx.args.cluster_object_limits_bisect_steps,
-            )
-
-
-def _plot_files(
-    parser: WorkflowArgumentParser,
-    default: str | list[str],
-    help_text: str,
-    analyzer: Callable[[str], None] | None,
-) -> None:
-    """Body shared by every ``workflow_plot*`` function.
-
-    Parses a ``files`` glob pattern arg, then either calls a single
-    ``analyzer`` on each match (per-kind workflows) or dispatches by suffix
-    via ``SUFFIX_ANALYZERS`` (the multi-kind ``workflow_plot``).
+    Dispatches each result file to the right analyzer by filename suffix
+    (`SUFFIX_ANALYZERS`). To plot only one kind, pass an explicit glob:
+    ``workflow_plot 'results_*.cluster.csv'``.
     """
     parser.add_argument(
         "files",
         nargs="*",
-        default=default,
+        default=[f"results_*{suffix}" for suffix, _ in SUFFIX_ANALYZERS],
         type=str,
-        help=help_text,
+        help="Glob pattern(s) of result files to plot.",
     )
     args = parser.parse_args()
     for file in itertools.chain(*map(glob.iglob, args.files)):
         file_str = str(file)
-        if analyzer is not None:
-            analyzer(file_str)
-            continue
         base_name = os.path.basename(file_str)
         for suffix, fn in SUFFIX_ANALYZERS:
             if base_name.endswith(suffix):
@@ -4047,70 +4099,10 @@ def _plot_files(
                 break
         else:
             raise UIError(
-                f"Error: Filename '{file_str}' doesn't indicate whether it's a "
-                "cluster, envd, envd_objects_scalability, or "
-                "cluster_object_limits results file. Please use the explicit "
-                "`plot-envd`, `plot-cluster`, `plot-envd-objects-scalability`, "
-                "or `plot-cluster-object-limits` targets for such files."
+                f"Error: Filename '{file_str}' doesn't indicate which "
+                "result-stream kind it belongs to. Expected one of these "
+                f"suffixes: {', '.join(s for s, _ in SUFFIX_ANALYZERS)}."
             )
-
-
-def workflow_plot_cluster(
-    composition: Composition, parser: WorkflowArgumentParser
-) -> None:
-    """Analyze cluster-focused results."""
-    _plot_files(
-        parser,
-        "results_*.cluster.csv",
-        "Glob pattern of cluster result files to plot.",
-        analyze_cluster_results_file,
-    )
-
-
-def workflow_plot_envd(
-    composition: Composition, parser: WorkflowArgumentParser
-) -> None:
-    """Analyze environmentd-focused results."""
-    _plot_files(
-        parser,
-        "results_*.envd.csv",
-        "Glob pattern of envd result files to plot.",
-        analyze_envd_results_file,
-    )
-
-
-def workflow_plot_envd_objects_scalability(
-    composition: Composition, parser: WorkflowArgumentParser
-) -> None:
-    """Analyze envd-objects-scalability results (latency vs catalog object count)."""
-    _plot_files(
-        parser,
-        "results_*.envd_objects_scalability.csv",
-        "Glob pattern of envd_objects_scalability result files to plot.",
-        analyze_envd_objects_scalability_results_file,
-    )
-
-
-def workflow_plot_cluster_object_limits(
-    composition: Composition, parser: WorkflowArgumentParser
-) -> None:
-    """Analyze cluster_object_limits results (freshness lag vs N per cluster size)."""
-    _plot_files(
-        parser,
-        "results_*.cluster_object_limits.csv",
-        "Glob pattern of cluster_object_limits result files to plot.",
-        analyze_cluster_object_limits_results_file,
-    )
-
-
-def workflow_plot(composition: Composition, parser: WorkflowArgumentParser) -> None:
-    """Analyze the results of the workflow."""
-    _plot_files(
-        parser,
-        [f"results_*{suffix}" for suffix, _ in SUFFIX_ANALYZERS],
-        "Glob pattern of result files to plot.",
-        analyzer=None,
-    )
 
 
 def extract_cluster_size(s: str) -> float:
