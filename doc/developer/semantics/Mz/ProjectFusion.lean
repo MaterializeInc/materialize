@@ -147,4 +147,105 @@ theorem UnifiedStream.project_project_fuse
         rw [hStep1, hStep2, hFused,
             rowProjectRecords_substList es es' (DiffWithError.val n) r]
 
+/-! ## Filter ∘ project pushdown
+
+Lifts `filterRel_pushdown_project` to `UnifiedStream` under the
+same safety hypothesis (`projsAllSafe`) the fusion theorem uses.
+Filtering after projecting equals substituting through the
+projection and filtering before projecting. -/
+
+/-- Per-`.row` helper: filter applied to a single projected row
+record equals project applied to a filter-substituted singleton.
+Under safety, both sides reduce through the `.row` arm and
+`eval_subst` bridges the predicates. -/
+private theorem filter_project_pushdown_row
+    (p : Expr) (es : List Expr) (n : Int) (r : Row)
+    (hSafe : rowAllSafe es r = true) :
+    UnifiedStream.filter p
+        (UnifiedStream.project es [(UnifiedRow.row r, DiffWithError.val n)])
+      = UnifiedStream.project es
+          (UnifiedStream.filter (p.subst es)
+            [(UnifiedRow.row r, DiffWithError.val n)]) := by
+  have hStep1 : UnifiedStream.project es [(UnifiedRow.row r, DiffWithError.val n)]
+              = [(UnifiedRow.row (es.map (eval r)), DiffWithError.val n)] := by
+    show rowProjectRecords es (DiffWithError.val n) r ++ [] = _
+    unfold rowProjectRecords
+    rw [if_pos hSafe, List.append_nil]
+  have hFilterSubstSingleton :
+      UnifiedStream.filter (p.subst es) [(UnifiedRow.row r, DiffWithError.val n)]
+        = (match eval r (p.subst es) with
+            | .bool true => [(UnifiedRow.row r, DiffWithError.val n)]
+            | .err ev    => [(UnifiedRow.err ev, DiffWithError.val n)]
+            | _          => []) := by
+    show (match eval r (p.subst es) with
+            | .bool true => [(UnifiedRow.row r, DiffWithError.val n)]
+            | .err ev    => [(UnifiedRow.err ev, DiffWithError.val n)]
+            | _          => []) ++ [] = _
+    rw [List.append_nil]
+  have hFilterProjSingleton :
+      UnifiedStream.filter p
+          [(UnifiedRow.row (es.map (eval r)), DiffWithError.val n)]
+        = (match eval (es.map (eval r)) p with
+            | .bool true =>
+                [(UnifiedRow.row (es.map (eval r)), DiffWithError.val n)]
+            | .err ev    => [(UnifiedRow.err ev, DiffWithError.val n)]
+            | _          => []) := by
+    show (match eval (es.map (eval r)) p with
+            | .bool true =>
+                [(UnifiedRow.row (es.map (eval r)), DiffWithError.val n)]
+            | .err ev    => [(UnifiedRow.err ev, DiffWithError.val n)]
+            | _          => []) ++ [] = _
+    rw [List.append_nil]
+  have hEvalSubst : eval r (p.subst es) = eval (es.map (eval r)) p :=
+    eval_subst r es p
+  rw [hStep1, hFilterProjSingleton, hFilterSubstSingleton, hEvalSubst]
+  -- Both sides branch on the same `eval (es.map (eval r)) p` value.
+  cases eval (es.map (eval r)) p with
+  | bool b =>
+    cases b with
+    | true =>
+      -- LHS: [(.row (es.map (eval r)), .val n)].
+      -- RHS: project es [(.row r, .val n)] = same.
+      rw [hStep1]
+    | false => rfl
+  | err ev =>
+    -- LHS: [(.err ev, .val n)].
+    -- RHS: project es [(.err ev, .val n)] = [(.err ev, .val n)].
+    rfl
+  | int _ => rfl
+  | null => rfl
+
+/-- Filter pushes through project: `filter p ∘ project es =
+project es ∘ filter (p.subst es)`, under `projsAllSafe es us`.
+Models the data-side relational pushdown rewrite at the
+`UnifiedStream` level. Mirrors `BagStream.project_filter_pushdown_data`
+without the data-only restriction (errs flow through both
+pipelines symmetrically under the safety hypothesis). -/
+theorem UnifiedStream.filter_project_pushdown
+    (p : Expr) (es : List Expr) (us : UnifiedStream)
+    (hSafe : UnifiedStream.projsAllSafe es us) :
+    UnifiedStream.filter p (UnifiedStream.project es us)
+      = UnifiedStream.project es (UnifiedStream.filter (p.subst es) us) := by
+  induction us with
+  | nil => rfl
+  | cons hd tl ih =>
+    obtain ⟨uc, d⟩ := hd
+    have hTl : UnifiedStream.projsAllSafe es tl := hSafe.tail
+    have hConsAsApp : ((uc, d) :: tl : UnifiedStream) = [(uc, d)] ++ tl := rfl
+    rw [hConsAsApp, UnifiedStream.project_append,
+        UnifiedStream.filter_append, UnifiedStream.filter_append,
+        UnifiedStream.project_append, ih hTl]
+    congr 1
+    cases d with
+    | error =>
+      cases uc with
+      | row r => rfl
+      | err _ => rfl
+    | val n =>
+      cases uc with
+      | err _ => rfl
+      | row r =>
+        have hHd : rowAllSafe es r = true := hSafe.head r rfl
+        exact filter_project_pushdown_row p es n r hHd
+
 end Mz
