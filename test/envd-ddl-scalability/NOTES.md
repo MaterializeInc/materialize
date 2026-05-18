@@ -2642,3 +2642,191 @@ The biggest remaining levers, in order of opportunity:
    in `create_collections_for_bootstrap` per-collection might be
    where the slope lives (read holds touch shared `BTreeMap`s sized
    to N).
+
+## 2026-05-18 — `create_collections_for_bootstrap` phase split: it's flat, slope moved
+
+Phase 6 attributed the +2.59 ms / +5k slope inside CREATE TABLE to
+`controller.storage.create_collections`. Phase 7 splits that call into
+two layers of sub-phases:
+
+```
+StorageController::create_collections_for_bootstrap
+ ├─ storage_collections_call ─→ StorageCollections::create_collections_for_bootstrap
+ │   ├─ validate_and_enrich
+ │   ├─ open_persist_client       (cached)
+ │   ├─ open_data_handles_concurrent  ← stream of (SinceHandle + WriteHandle) opens
+ │   ├─ sort
+ │   ├─ install_collection_states  (under collections mutex)
+ │   └─ synchronize_finalized_shards
+ ├─ open_persist_client            (cached, distinct from the inner one)
+ ├─ open_data_handles_concurrent   ← stream of WriteHandle opens only
+ ├─ register_loop                  (per-collection, acquire_read_holds, insert into self.collections)
+ ├─ init_source_statistics
+ ├─ table_register                 (persist_table_worker.register → txns.register CaS)
+ ├─ append_shard_mappings
+ └─ run_to_execute                 (no-op for tables)
+```
+
+Two new HistogramVecs registered (commit `1c2f6ac975`):
+ - `mz_storage_collections_create_collections_phase_seconds{phase}`
+ - `mz_storage_controller_create_collections_phase_seconds{phase}`
+
+### Phase 7 data: storage.create_collections is flat, ~9 ms/CREATE
+
+Per CREATE TABLE at N=5k / 10k / 15k:
+
+**storage_collections layer:**
+
+| phase                          | 5k   | 10k  | 15k  | slope (+5k→10k / 10k→15k) |
+|--------------------------------|-----:|-----:|-----:|---------------------------:|
+| `open_data_handles_concurrent` | 6.29 | 5.02 | 5.32 |   −1.27 / +0.30 (flat)     |
+| `install_collection_states`    | 0.19 | 0.53 | 1.54 |   +0.34 / +1.01 (slope)    |
+| `open_persist_client`          | 0.02 | 0.02 | 0.02 |   flat                     |
+| sort, validate, synchronize    | <0.01 each                                       |
+
+**storage_controller layer:**
+
+| phase                          | 5k   | 10k  | 15k  | slope                      |
+|--------------------------------|-----:|-----:|-----:|---------------------------:|
+| `storage_collections_call`     | 6.52 | 5.59 | 6.90 |   −0.93 / +1.31 (variance) |
+| `open_data_handles_concurrent` | 1.19 | 1.19 | 0.77 |   flat                     |
+| `table_register`               | 1.88 | 2.24 | 1.55 |   variance                 |
+| `register_loop`                | 0.03 | 0.03 | 0.03 |   flat                     |
+| `append_shard_mappings`        | 0.01 | 0.01 | 0.01 |   flat                     |
+| `run_to_execute`               | 0.00 | 0.00 | 0.00 |   no-op for tables         |
+
+**Total `storage.create_collections` per CREATE:**
+ - N=5k:  6.52 + 1.19 + 1.88 = 9.59 ms
+ - N=10k: 5.59 + 1.19 + 2.24 = 9.02 ms
+ - N=15k: 6.90 + 0.77 + 1.55 = 9.22 ms
+
+It's flat. The phase 6 +2.59 ms / +5k figure was likely run-to-run
+variance on a single N=15k data point — the underlying CaaS work
+inside the storage layer doesn't grow with shard count.
+
+### `install_collection_states` is the only slope inside storage_collections
+
+`install_collection_states` did grow (0.19 → 0.53 → 1.54 ms,
++0.67 ms / +5k by N=15k). That's a small but real slope. It's the
+post-stream loop that:
+ 1. Takes the `self.collections` mutex.
+ 2. For each collection: determines dependencies, builds CollectionState,
+    inserts into the BTreeMap, calls `register_handles` (which does an
+    unbounded channel send to the background task), and calls
+    `install_collection_dependency_read_holds_inner`.
+
+For tables there are no dependencies, so this is essentially:
+`BTreeMap::insert + register_handles + channel send`. The 1.5 ms
+suggests either the BTreeMap is hot enough to be slow at N=15k, or
+there's contention on the mutex with background tasks. Probably not
+worth fixing unless we hit a Coordinator with much higher N.
+
+### `create_collections_for_bootstrap` is no longer the story
+
+The phase 5 finding that `inner_controller_setup` was the slope owner
+of `apply_catalog_implications` was correct **at that snapshot**, but
+phase 7 shows it's also flat now:
+
+`apply_catalog_implications` phase split (CREATE only, ms/call):
+
+| phase                                   | 5k   | 10k  | 15k  | slope |
+|-----------------------------------------|-----:|-----:|-----:|------:|
+| `inner_total`                           |11.44 |11.56 |11.82 | flat  |
+| `inner_controller_setup`                | 9.43 | 9.44 | 9.72 | flat  |
+| `create_table_storage_create_collections`| 9.68 | 9.11 | 9.31 | flat  |
+| `create_table_write_ts`                 | 3.83 | 3.98 | 3.99 | flat  |
+| `create_table_apply_local_write`        | 3.31 | 3.49 | 3.55 | flat  |
+| `create_table_advance_upper`            | 0.60 | 0.59 | 0.58 | flat  |
+| `inner_finalize`                        | 1.97 | 2.08 | 2.06 | flat  |
+
+### Where the slope actually lives: Catalog::transact
+
+The `mz_catalog_transact_phase_seconds` split at N=5k/10k/15k
+(per-call mean, ms; ×2 for per-DDL since CREATE+DROP both go
+through this):
+
+| phase                       | 5k   | 10k  | 15k  | slope at 10→15 |
+|-----------------------------|-----:|-----:|-----:|---------------:|
+| `coord_inner_total`         |15.12 |18.82 |24.30 | **+5.48**      |
+| ↳ `transact_inner`          | 2.39 | 3.91 | 6.43 | **+2.52**      |
+| ↳ `tx_commit`               | 2.92 | 4.03 | 5.54 | **+1.51**      |
+| ↳ `op_loop`                 | 1.19 | 1.81 | 2.64 | **+0.83**      |
+| ↳ `coord_pre_transact`      | 3.53 | 3.81 | 3.90 | flat           |
+| ↳ `coord_post_transact`     | 4.49 | 4.72 | 4.88 | flat           |
+| ↳ `coord_builtin_table_execute`| 4.48 | 4.71 | 4.88 | flat        |
+| ↳ `final_apply_updates`     | 0.64 | 0.97 | 1.40 | +0.43          |
+| ↳ `assign_state`            | 0.44 | 0.83 | 1.25 | +0.42          |
+| ↳ `post_prepare_apply_updates`| 0.21| 0.40 | 0.62 | +0.22          |
+| ↳ `prepare_state`           | 0.04 | 0.17 | 0.87 | +0.70          |
+
+Per-call slope is +5.48 ms / +5k inside `coord_inner_total`. Doubled
+(CREATE + DROP): **+10.96 ms / +5k**. That matches the observed
+create_p50 slope (33 → 39 → 48 ms = +6.27 / +9.11).
+
+### CREATE TABLE end-to-end picture at N=15k (phase 7)
+
+create_p50 = 48.93 ms (was 48.55 in phase 6 — same).
+
+| component (per CREATE)                    | ms     |
+|-------------------------------------------|-------:|
+| `coord_inner_total`                       | 24.30  |
+|  ↳ `transact_inner`                       |  6.43  |
+|  ↳ `tx_commit`                            |  5.54  |
+|  ↳ `op_loop`                              |  2.64  |
+|  ↳ apply_updates phases (final + post_prepare + assign + prepare) | ~4.1 |
+|  ↳ coord_pre/post_transact                | ~7.8   |
+| `apply_catalog_implications` (CREATE)     | 11.82  |
+|  ↳ `inner_controller_setup`               |  9.72  |
+|     ↳ `create_table_storage_create_collections` | 9.31 |
+|        ↳ open_data_handles_concurrent     |  5.32  |
+|        ↳ install_collection_states        |  1.54  |
+|        ↳ controller open_handles + table_register + others | ~2.4 |
+|     ↳ `create_table_write_ts`             |  3.99  |
+|     ↳ `create_table_apply_local_write`    |  3.55  |
+| append_table_duration_seconds (concurrent)| ~5     |
+
+### What this means
+
+1. **`create_collections_for_bootstrap` is no longer the slope owner.**
+   It's flat at ~9 ms per CREATE across 5k–15k. No fix is needed at
+   this layer; the per-CREATE storage work simply doesn't scale with
+   the number of already-registered shards.
+2. **The slope has moved to `Catalog::transact`.** Specifically:
+   - `transact_inner` (+2.5 ms / +5k)
+   - `tx_commit` (+1.5 ms / +5k)
+   - `op_loop` (+0.8 ms / +5k)
+   - `apply_updates` family (final + post_prepare + assign + prepare
+     totalling ~+1.8 ms / +5k)
+3. **CREATE and DROP both go through this path**, so the per-DDL
+   slope from Catalog::transact alone is ~+11 ms / +5k, which fully
+   accounts for the observed create_p50/drop_p50 slope.
+
+### Where to go next
+
+The next investigation iteration belongs **inside Catalog::transact**:
+
+1. **`transact_inner` outer** (+2.5 ms / +5k) — its inner phases are
+   already split by `op_loop`, `final_apply_updates`, `prepare_state`,
+   `post_prepare_apply_updates`. Sum of those at N=15k is ~5.5 ms,
+   but `transact_inner` measures 6.43 ms — there's an unaccounted
+   ~1 ms in `Self::transact_inner` (cow-cloning state, the initial
+   `extract_expressions_from_ops`, the storage_collections fields,
+   etc).
+2. **`tx_commit`** (+1.5 ms / +5k) — this is the catalog durable
+   commit. The catalog state grows with N, so the persist state-apply
+   on the catalog shard grows too. The phase 5 finding ("335 apply_diff
+   per DDL on the catalog shard") is still very much alive here.
+   Worth instrumenting which sub-step inside `tx_commit` carries the
+   slope: persist CaS, state-apply, or the subsequent `apply_updates`
+   round.
+3. **`apply_updates` (collectively +1.8 ms / +5k)** — runs over the
+   updates list, which for a CREATE TABLE has a small constant number
+   of items. The slope must be inside `apply_update` for one of those
+   StateUpdateKinds (Item, Storage, Cluster, etc.) — likely from
+   `generate_builtin_table_update` consulting per-N state, or from a
+   per-N lookup inside `apply_role_update`/`apply_item_update`/etc.
+
+Of these, `tx_commit` is the highest-confidence O(N)-eliminator: it's
+a persist-shard apply, which we already know grows because the diff
+log grows. Compaction of the catalog shard should bound this — but
+only if compaction is keeping up.
