@@ -541,4 +541,52 @@ theorem UnifiedStream.negate_unionAll (a b : UnifiedStream) :
   show (a ++ b).map _ = a.map _ ++ b.map _
   exact List.map_append
 
+/-- Negating one side of a cross product is the same as negating
+the cross product. The diff-semiring law `(-a) * b = -(a * b)`
+carries the proof through `combineCarrier` (carrier is unchanged
+by negation) and the diff arithmetic. -/
+theorem UnifiedStream.cross_negate_left (l r : UnifiedStream) :
+    UnifiedStream.cross (UnifiedStream.negate l) r
+      = UnifiedStream.negate (UnifiedStream.cross l r) := by
+  induction l with
+  | nil => rfl
+  | cons hd tl ih =>
+    obtain ⟨uc, d⟩ := hd
+    -- LHS: cross ((uc, -d) :: negate tl) r
+    -- RHS: negate (r.map (fun rd => (combineCarrier uc rd.1, d * rd.2)) ++ cross tl r)
+    show UnifiedStream.cross ((uc, -d) :: UnifiedStream.negate tl) r
+        = UnifiedStream.negate
+            ((r.map (fun rd => (combineCarrier uc rd.1, d * rd.2)))
+              ++ UnifiedStream.cross tl r)
+    -- LHS reduces to (r.map (fun rd => (combineCarrier uc rd.1, (-d) * rd.2)))
+    --   ++ cross (negate tl) r
+    show (r.map (fun rd => (combineCarrier uc rd.1, (-d) * rd.2)))
+            ++ UnifiedStream.cross (UnifiedStream.negate tl) r
+        = UnifiedStream.negate
+            ((r.map (fun rd => (combineCarrier uc rd.1, d * rd.2)))
+              ++ UnifiedStream.cross tl r)
+    -- RHS: negate distributes over ++.
+    rw [show UnifiedStream.negate
+            ((r.map (fun rd => (combineCarrier uc rd.1, d * rd.2)))
+              ++ UnifiedStream.cross tl r)
+          = UnifiedStream.negate
+              (r.map (fun rd => (combineCarrier uc rd.1, d * rd.2)))
+            ++ UnifiedStream.negate (UnifiedStream.cross tl r)
+        from UnifiedStream.negate_unionAll _ _]
+    rw [← ih]
+    -- Reduce to per-r-record equality. The two r.map terms must agree.
+    congr 1
+    -- negate (r.map (fun rd => (combineCarrier uc rd.1, d * rd.2)))
+    -- = r.map (fun rd => (combineCarrier uc rd.1, -(d * rd.2)))
+    -- = r.map (fun rd => (combineCarrier uc rd.1, (-d) * rd.2))
+    show r.map (fun rd => (combineCarrier uc rd.1, (-d) * rd.2))
+        = (r.map (fun rd => (combineCarrier uc rd.1, d * rd.2))).map
+            (fun ud => (ud.1, -ud.2))
+    rw [List.map_map]
+    apply List.map_congr_left
+    intro rd _
+    show (combineCarrier uc rd.1, (-d) * rd.2)
+        = (combineCarrier uc rd.1, -(d * rd.2))
+    rw [DiffWithError.neg_mul_int]
+
 end Mz
