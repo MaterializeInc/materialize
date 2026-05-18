@@ -946,6 +946,10 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     lowered_inputs.push(self.lower_mir_expr(input)?);
                 }
                 let any_future = lowered_inputs.iter().any(|l| l.has_future_updates);
+                let input_has_future_updates: Vec<bool> = lowered_inputs
+                    .iter()
+                    .map(|l| l.has_future_updates)
+                    .collect();
                 let plans = lowered_inputs
                     .into_iter()
                     .map(
@@ -976,6 +980,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     plan: PlanNode::Union {
                         inputs: plans,
                         consolidate_output: false,
+                        input_has_future_updates,
                     }
                     .as_plan(lir_id),
                     keys: AvailableCollections::new_raw(),

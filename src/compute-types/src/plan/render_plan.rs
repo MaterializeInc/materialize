@@ -256,6 +256,11 @@ pub enum Expr {
         inputs: Vec<LirId>,
         /// Whether to consolidate the output, e.g., cancel negated records.
         consolidate_output: bool,
+        /// Per-input flag, aligned with `inputs`: whether the input may carry updates at
+        /// timestamps far ahead of the input frontier. Consulted by the renderer when
+        /// `consolidate_output` is set, to decide whether to apply temporal bucketing on
+        /// that input before consolidation.
+        input_has_future_updates: Vec<bool>,
     },
     /// The `input` plan, but with additional arrangements.
     ///
@@ -482,10 +487,12 @@ impl TryFrom<Plan> for LetFreePlan {
                 PlanNode::Union {
                     inputs,
                     consolidate_output,
+                    input_has_future_updates,
                 } => {
                     let expr = Union {
                         inputs: inputs.iter().map(|i| i.lir_id).collect(),
                         consolidate_output,
+                        input_has_future_updates,
                     };
                     insert_node(lir_id, parent, expr, nesting);
 
@@ -965,6 +972,7 @@ impl<'a> std::fmt::Display for RenderPlanExprHumanizer<'a> {
             Union {
                 inputs: _,
                 consolidate_output,
+                input_has_future_updates: _,
             } => {
                 if *consolidate_output {
                     write!(f, "Consolidating ")?;

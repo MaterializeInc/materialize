@@ -1289,32 +1289,43 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
             Union {
                 inputs,
                 consolidate_output,
+                input_has_future_updates,
             } => {
+                // Only consider per-input bucketing when we're about to consolidate; without
+                // a downstream consolidate, future-stamped updates pass through unmerged
+                // anyway, so bucketing buys nothing.
+                let bucketing_enabled = consolidate_output
+                    && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(&self.config_set);
+                let summary: Option<mz_repr::Timestamp> = bucketing_enabled.then(|| {
+                    TEMPORAL_BUCKETING_SUMMARY
+                        .get(&self.config_set)
+                        .try_into()
+                        .expect("must fit")
+                });
+                // The lowering populates `input_has_future_updates` in lockstep with `inputs`.
+                // Guard the access with `get` so a malformed plan degrades to "don't bucket"
+                // rather than panicking.
                 let mut oks = Vec::new();
                 let mut errs = Vec::new();
-                for input in inputs.into_iter() {
+                for (idx, input) in inputs.into_iter().enumerate() {
                     let (os, es) =
                         expect_input(input).as_specific_collection(None, &self.config_set);
+                    let os = if bucketing_enabled
+                        && input_has_future_updates.get(idx).copied().unwrap_or(false)
+                    {
+                        T::maybe_apply_temporal_bucketing(
+                            os.inner,
+                            self.as_of_frontier.clone(),
+                            summary.expect("set when bucketing_enabled"),
+                        )
+                    } else {
+                        os
+                    };
                     oks.push(os);
                     errs.push(es);
                 }
                 let mut oks = differential_dataflow::collection::concatenate(self.scope, oks);
                 if consolidate_output {
-                    // Bucket future-dated updates before the consolidate, so that the
-                    // `KeyBatcher` does not accumulate updates whose timestamps are far ahead
-                    // of the input frontier. `MaybeBucketByTime` is a no-op for partially
-                    // ordered timestamps (e.g. inside iterative scopes).
-                    if ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(&self.config_set) {
-                        let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
-                            .get(&self.config_set)
-                            .try_into()
-                            .expect("must fit");
-                        oks = T::maybe_apply_temporal_bucketing(
-                            oks.inner,
-                            self.as_of_frontier.clone(),
-                            summary,
-                        );
-                    }
                     oks = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
                         oks,
                         "UnionConsolidation",
