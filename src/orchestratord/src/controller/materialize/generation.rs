@@ -785,6 +785,9 @@ fn create_environmentd_statefulset_object(
             scheduler_name
         ));
     }
+    if let Some(az_label) = &config.orchestrator_kubernetes_az_label {
+        args.push(format!("--orchestrator-kubernetes-az-label={}", az_label));
+    }
     if mz.meets_minimum_version(&V154_DEV0) {
         args.extend(
             mz.spec

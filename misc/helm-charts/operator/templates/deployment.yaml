@@ -237,6 +237,11 @@ spec:
         {{- if .Values.schedulerName }}
         - "--scheduler-name={{ .Values.schedulerName }}"
         {{- end }}
+        {{- if .Values.availabilityZoneLabel }}
+        - "--orchestrator-kubernetes-az-label={{ .Values.availabilityZoneLabel }}"
+        {{- else if eq .Values.operator.cloudProvider.type "aws" }}
+        - "--orchestrator-kubernetes-az-label=topology.k8s.aws/zone-id"
+        {{- end }}
 
         {{- if .Values.operator.additionalMaterializeCRDColumns }}
         - >
