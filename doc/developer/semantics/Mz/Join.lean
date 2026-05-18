@@ -307,6 +307,81 @@ private theorem List.map_congr_local {α β : Type}
         h hd List.mem_cons_self,
         ih (fun x hMem => h x (List.mem_cons_of_mem _ hMem))]
 
+/-- `cross` preserves `.val` diffs: when every input record on
+both sides has a `.val` diff, every output record has a `.val`
+diff. Diff multiplication of `.val * .val = .val (· * ·)`
+stays in the ordinary `Int` slice of the diff-semiring. -/
+theorem UnifiedStream.cross_no_error
+    (l r : UnifiedStream)
+    (hL : ∀ ld ∈ l, ∃ n : Int, ld.2 = DiffWithError.val n)
+    (hR : ∀ rd ∈ r, ∃ m : Int, rd.2 = DiffWithError.val m) :
+    ∀ od ∈ UnifiedStream.cross l r, ∃ k : Int, od.2 = DiffWithError.val k := by
+  intro od hMem
+  show ∃ k : Int, od.2 = DiffWithError.val k
+  obtain ⟨ld, hLMem, hMid⟩ := List.mem_flatMap.mp hMem
+  obtain ⟨rd, hRMem, hEq⟩ := List.mem_map.mp hMid
+  obtain ⟨n, hN⟩ := hL ld hLMem
+  obtain ⟨m, hM⟩ := hR rd hRMem
+  refine ⟨n * m, ?_⟩
+  rw [← hEq]
+  show ld.2 * rd.2 = DiffWithError.val (n * m)
+  rw [hN, hM]
+  rfl
+
+/-- `filter` preserves `.val` diffs: survivors and rerouted err
+rows inherit the input diff unchanged. The diff is never modified
+by the filter — only the carrier changes when the predicate
+returns `.err`. -/
+theorem UnifiedStream.filter_no_error
+    (pred : Expr) (us : UnifiedStream)
+    (h : ∀ ud ∈ us, ∃ n : Int, ud.2 = DiffWithError.val n) :
+    ∀ od ∈ UnifiedStream.filter pred us, ∃ n : Int, od.2 = DiffWithError.val n := by
+  intro od hMem
+  unfold UnifiedStream.filter at hMem
+  obtain ⟨ud, hUMem, hMid⟩ := List.mem_flatMap.mp hMem
+  obtain ⟨n, hN⟩ := h ud hUMem
+  -- ud = (uc, .val n); the produced records all carry diff `.val n` (or the
+  -- input record itself when the `.error` short-circuit fires — but that
+  -- case is vacuous here since `ud.2 = .val n` by hypothesis).
+  refine ⟨n, ?_⟩
+  obtain ⟨uc, d⟩ := ud
+  simp only at hN
+  subst hN
+  -- now ud = (uc, .val n); filter produces records whose snd is .val n
+  cases uc with
+  | row r =>
+    show od.2 = DiffWithError.val n
+    cases h_eval : eval r pred with
+    | bool b =>
+      cases b with
+      | true =>
+        have hOd : od = (UnifiedRow.row r, DiffWithError.val n) := by
+          have := hMid
+          simp [h_eval] at this
+          exact this
+        rw [hOd]
+      | false =>
+        exfalso
+        have := hMid
+        simp [h_eval] at this
+    | null =>
+      exfalso
+      have := hMid
+      simp [h_eval] at this
+    | err e =>
+      have hOd : od = (UnifiedRow.err e, DiffWithError.val n) := by
+        have := hMid
+        simp [h_eval] at this
+        exact this
+      rw [hOd]
+  | err e =>
+    show od.2 = DiffWithError.val n
+    have hOd : od = (UnifiedRow.err e, DiffWithError.val n) := by
+      have := hMid
+      simp at this
+      exact this
+    rw [hOd]
+
 /-- Cross is associative on the unified stream. The proof rewrites
 both sides into a common triple-fold via the list-monad equations
 and closes the leaves with `cross_step_assoc`. -/
