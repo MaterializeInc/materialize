@@ -121,6 +121,18 @@ the output. -/
 def UnifiedStream.union (l r : UnifiedStream) : UnifiedStream :=
   UnifiedStream.consolidate (UnifiedStream.unionAll l r)
 
+theorem UnifiedStream.union_nil_left (r : UnifiedStream) :
+    UnifiedStream.union [] r = UnifiedStream.consolidate r := by
+  show UnifiedStream.consolidate (UnifiedStream.unionAll [] r)
+      = UnifiedStream.consolidate r
+  rw [UnifiedStream.unionAll_nil_left]
+
+theorem UnifiedStream.union_nil_right (l : UnifiedStream) :
+    UnifiedStream.union l [] = UnifiedStream.consolidate l := by
+  show UnifiedStream.consolidate (UnifiedStream.unionAll l [])
+      = UnifiedStream.consolidate l
+  rw [UnifiedStream.unionAll_nil_right]
+
 theorem UnifiedStream.union_length_le (l r : UnifiedStream) :
     (UnifiedStream.union l r).length ≤ l.length + r.length := by
   show (UnifiedStream.consolidate (UnifiedStream.unionAll l r)).length
@@ -224,6 +236,19 @@ zero in a follow-up normalize step. -/
 def UnifiedStream.exceptAll (l r : UnifiedStream) : UnifiedStream :=
   UnifiedStream.consolidate
     (UnifiedStream.unionAll l (UnifiedStream.negate r))
+
+-- `exceptAll_nil_left` is proven later, after `negate_consolidate`.
+
+/-- Empty right input: `exceptAll l [] = consolidate l`. The
+negation of the empty stream is empty, and `unionAll l [] = l`. -/
+theorem UnifiedStream.exceptAll_nil_right (l : UnifiedStream) :
+    UnifiedStream.exceptAll l [] = UnifiedStream.consolidate l := by
+  show UnifiedStream.consolidate
+        (UnifiedStream.unionAll l (UnifiedStream.negate []))
+      = UnifiedStream.consolidate l
+  show UnifiedStream.consolidate (UnifiedStream.unionAll l [])
+      = UnifiedStream.consolidate l
+  rw [UnifiedStream.unionAll_nil_right]
 
 theorem UnifiedStream.exceptAll_length_le (l r : UnifiedStream) :
     (UnifiedStream.exceptAll l r).length ≤ l.length + r.length := by
@@ -393,6 +418,16 @@ theorem UnifiedStream.bagExceptAll_only_positive
       (∃ n : Int, x.2 = DiffWithError.val n ∧ 0 < n)
       ∨ x.2 = DiffWithError.error :=
   UnifiedStream.clampPositive_only_positive _
+
+/-- `bagExceptAll l [] = clampPositive (consolidate l)`. Trivial
+composition of `exceptAll_nil_right` and `bagExceptAll`'s
+definition. -/
+theorem UnifiedStream.bagExceptAll_nil_right (l : UnifiedStream) :
+    UnifiedStream.bagExceptAll l []
+      = UnifiedStream.clampPositive (UnifiedStream.consolidate l) := by
+  show UnifiedStream.clampPositive (UnifiedStream.exceptAll l [])
+      = UnifiedStream.clampPositive (UnifiedStream.consolidate l)
+  rw [UnifiedStream.exceptAll_nil_right]
 
 /-- All-`.val` inputs yield all-`.val` outputs through
 `bagExceptAll`. -/
@@ -760,5 +795,16 @@ theorem UnifiedStream.cross_negate_left (l r : UnifiedStream) :
     show (combineCarrier uc rd.1, (-d) * rd.2)
         = (combineCarrier uc rd.1, -(d * rd.2))
     rw [DiffWithError.neg_mul_int]
+
+/-- Empty left input: `exceptAll [] r = negate (consolidate r)`.
+Reduces via `unionAll_nil_left` and `negate_consolidate`. -/
+theorem UnifiedStream.exceptAll_nil_left (r : UnifiedStream) :
+    UnifiedStream.exceptAll [] r
+      = UnifiedStream.negate (UnifiedStream.consolidate r) := by
+  show UnifiedStream.consolidate
+        (UnifiedStream.unionAll [] (UnifiedStream.negate r))
+      = UnifiedStream.negate (UnifiedStream.consolidate r)
+  rw [UnifiedStream.unionAll_nil_left]
+  exact (UnifiedStream.negate_consolidate r).symm
 
 end Mz
