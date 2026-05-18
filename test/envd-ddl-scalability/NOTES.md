@@ -1825,3 +1825,135 @@ apples-to-apples to. The reproducible story is:
    with command rate, or whether something throttles it.
 3. **Source attribution is solved.** No follow-up metric needed
    for this question.
+
+## 2026-05-18 — bogo's `update_state_metrics` was eating all the CAS slope
+
+### tl;dr
+
+The "catalog `consensus_cas` RPC mean grows 2-3× at N=10k" slope was a
+bench artifact, not a Materialize issue. The bogo-consensus server's
+`update_state_metrics` was iterating every shard's `Vec.len()` inside
+the mutex on every CAS to recompute `versions_total`. At 10k shards
+that's a ~100 µs O(N) hold on the lock that serializes every operation.
+Removing the per-call iteration (incremental counters instead) makes
+catalog CAS mean go FLAT across N=5k → N=10k.
+
+### Step 1: split outer (`MetricsConsensus::run_op`) from inner (gRPC wire)
+
+Added `mz_persist_consensus_wire_seconds_by_shard_kind`, recorded
+inside `BogoConsensus` around `self.client.compare_and_set(...)`. Same
+axes (op + shard_kind) and buckets as the existing
+`external_op_latency_by_shard_kind`, so subtraction is meaningful.
+
+**Run before any other fix, N=5k → N=10k:**
+
+| layer | N=5k mean ms | N=10k mean ms | mean Δ ms |
+| --- | ---: | ---: | ---: |
+| catalog external_op (post-spawn, around run_op) | 0.77 | 1.79 | +1.02 |
+| catalog wire (inside BogoConsensus around gRPC) | 0.77 | 1.79 | +1.02 |
+| user_data external_op | 7.26 | 35.10 | +27.84 |
+| user_data wire | 6.68 | 34.95 | +28.27 |
+
+**Outer === inner** to within sampling noise. The post-spawn wrapper
+(`run_op` counter incs + the bogo adapter's status_to_external map) is
+free. **The CAS slope is in the gRPC call itself.** This rules out
+spawn-side overhead and any wrapping overhead inside MetricsConsensus.
+
+### Step 2: scrape the bogo server's `rpc_seconds` and notice it grows
+
+Enabled `--metrics-listen-addr` on the bogo binary and added a scrape
+in `bench.py`. Server-side `mz_bogo_consensus_rpc_seconds` for
+`compare_and_set` (aggregated across all shard kinds — the server
+doesn't have a shard_kind classifier):
+
+| N | server compare_and_set mean ms | client wire user_data mean ms |
+| --- | ---: | ---: |
+| 5k | 0.60 | 6.68 |
+| 10k | 2.15 | 34.95 |
+
+Server mean grew 3.6×. The bogo server holds a single
+`std::sync::Mutex` around its `BTreeMap` for every op. Suspicious.
+
+### Step 3: read the server and find the smoking gun
+
+`src/bogo-consensus/src/server.rs::update_state_metrics`, called from
+every `compare_and_set` (both Committed and ExpectationMismatch paths)
+and every `truncate`:
+
+```rust
+fn update_state_metrics(&self, store: &BTreeMap<String, Vec<VersionedData>>) {
+    let shards = i64::try_from(store.len()).unwrap_or(i64::MAX);
+    let versions: i64 = store.values()
+        .map(|v| i64::try_from(v.len()).unwrap_or(i64::MAX))
+        .sum();
+    self.metrics.shards_total.set(shards);
+    self.metrics.versions_total.set(versions);
+}
+```
+
+That `store.values().map(...).sum()` is **O(num_shards) under the
+mutex on every CAS**. At N=10k with ~100 concurrent CAS in flight from
+the 10k user_data shards' background work, the mutex queue depth
+grows. Catalog CAS waits behind it.
+
+### Step 4: replace with incremental counters and rerun
+
+Fix: `bump_state_gauges(shards_delta, versions_delta)` called *after*
+dropping the mutex. CAS that creates a new key bumps `shards` by 1;
+every successful CAS bumps `versions` by 1; truncate decrements
+`versions` by the count it removed. Constant time per call, no
+iteration.
+
+**Same bench, fixed bogo:**
+
+| | N=5k mean | N=10k mean | mean Δ |
+| --- | ---: | ---: | ---: |
+| catalog wire mean ms | 0.27 | 0.29 | +0.02 |
+| txns wire mean ms | 0.42 | 0.27 | -0.15 |
+| user_data wire mean ms | 0.93 | 0.92 | -0.01 |
+| server `compare_and_set` mean ms | 0.00 | 0.01 | +0.01 |
+| create_p50 ms | 26.86 | 41.17 | +14.31 |
+
+Catalog and user_data CAS means are now **flat** across the scale
+jump. The previous +28 ms/call user_data slope was 100% the bogo
+metric-update O(N) artifact. The catalog +1 ms/call slope was the same
+artifact contending on the shared mutex.
+
+### What remains of the create_p50 slope (+14.31 ms/DDL)
+
+With CAS basically free, the per-DDL slope decomposes to:
+
+- catalog state_apply (this run GC walked 20k catalog diffs): +2.02 ms
+- catalog `consensus_scan`: +0.82 ms (mean 0.45 → 0.84 ms × 2.08/DDL)
+- catalog blob_set: +0.06 ms
+- catalog `consensus_cas`: +0.12 ms
+- txns `consensus_cas`: -1.0 ms (decreased)
+- **Sum of measured CAS+blob+scan+apply slope: ~+2 ms/DDL**
+- `catalog_transact_seconds` slope: +9.87 ms/DDL
+- create_p50 slope: +14.31 ms/DDL
+
+So `catalog_transact_seconds` itself has a +9.87 ms slope but only ~+2 ms
+of that comes from persist external ops we instrument. The other +8 ms
+is inside the catalog transact path between persist calls
+(catalog state munging, builtin migration checks, etc.). That's the
+next layer to investigate if we want to keep peeling.
+
+The +4.4 ms gap between catalog_transact slope (+9.87) and create_p50
+slope (+14.31) is outside catalog_transact — in adapter coordination
+or driver-side.
+
+### Takeaways
+
+1. **The "catalog consensus_cas grows with N" headline was a bogo
+   artifact, not a Materialize finding.** Bogo's per-CAS work was O(N)
+   in the number of shards because of an in-mutex metric update.
+2. **Wire == outer.** No measurable overhead inside
+   MetricsConsensus's `run_op` wrapper or the bogo adapter — the
+   slope was always in the actual gRPC call.
+3. **With the fix, bogo is a much better CRDB proxy.** Per-call mean
+   stays flat from N=5k to N=10k for all shard kinds. The remaining
+   DDL-level slope is in adapter/catalog code paths, not persist.
+4. **Bench correctness lesson:** anything that proxies a production
+   service for perf work needs to itself be O(1) in the dimension
+   being scaled. `update_state_metrics` looked innocent but actively
+   distorted every comparison since the bogo work started.
