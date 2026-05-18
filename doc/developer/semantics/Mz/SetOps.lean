@@ -699,42 +699,18 @@ private theorem negate_consolidateInto
     obtain ⟨uc', d'⟩ := hd
     by_cases hEq : uc = uc'
     · subst hEq
-      -- consolidateInto uc d ((uc, d') :: tl) = (uc, d + d') :: tl
-      have hLhs : consolidateInto uc d ((uc, d') :: tl) = (uc, d + d') :: tl := by
-        show (if uc = uc then (uc, d + d') :: tl
-                else (uc, d') :: consolidateInto uc d tl)
-            = (uc, d + d') :: tl
-        rw [if_pos rfl]
-      have hRhs : consolidateInto uc (-d) ((uc, -d') :: UnifiedStream.negate tl)
-                = (uc, -d + -d') :: UnifiedStream.negate tl := by
-        show (if uc = uc then (uc, -d + -d') :: UnifiedStream.negate tl
-                else (uc, -d') :: consolidateInto uc (-d) (UnifiedStream.negate tl))
-            = (uc, -d + -d') :: UnifiedStream.negate tl
-        rw [if_pos rfl]
-      rw [hLhs]
+      rw [consolidateInto_match]
       show UnifiedStream.negate ((uc, d + d') :: tl)
           = consolidateInto uc (-d) (UnifiedStream.negate ((uc, d') :: tl))
       show ((uc, -(d + d')) :: UnifiedStream.negate tl)
           = consolidateInto uc (-d) ((uc, -d') :: UnifiedStream.negate tl)
-      rw [hRhs, DiffWithError.neg_add_int]
-    · have hLhs : consolidateInto uc d ((uc', d') :: tl)
-                = (uc', d') :: consolidateInto uc d tl := by
-        show (if uc = uc' then (uc', d + d') :: tl
-                else (uc', d') :: consolidateInto uc d tl)
-            = (uc', d') :: consolidateInto uc d tl
-        rw [if_neg hEq]
-      have hRhs : consolidateInto uc (-d) ((uc', -d') :: UnifiedStream.negate tl)
-                = (uc', -d') :: consolidateInto uc (-d) (UnifiedStream.negate tl) := by
-        show (if uc = uc' then (uc', -d + -d') :: UnifiedStream.negate tl
-                else (uc', -d') :: consolidateInto uc (-d) (UnifiedStream.negate tl))
-            = (uc', -d') :: consolidateInto uc (-d) (UnifiedStream.negate tl)
-        rw [if_neg hEq]
-      rw [hLhs]
+      rw [consolidateInto_match, DiffWithError.neg_add_int]
+    · rw [consolidateInto_skip _ _ _ _ _ hEq]
       show UnifiedStream.negate ((uc', d') :: consolidateInto uc d tl)
           = consolidateInto uc (-d) (UnifiedStream.negate ((uc', d') :: tl))
       show ((uc', -d') :: UnifiedStream.negate (consolidateInto uc d tl))
           = consolidateInto uc (-d) ((uc', -d') :: UnifiedStream.negate tl)
-      rw [hRhs, ih]
+      rw [consolidateInto_skip _ _ _ _ _ hEq, ih]
 
 /-- `negate` commutes with `consolidate`: consolidating then
 negating equals negating then consolidating. Negation is additive,
