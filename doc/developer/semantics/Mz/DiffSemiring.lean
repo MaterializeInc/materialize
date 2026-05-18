@@ -51,8 +51,17 @@ def mul [Mul α] : DiffWithError α → DiffWithError α → DiffWithError α
   | _, .error      => .error
   | .val x, .val y => .val (x * y)
 
+/-- Lifted negation. `error` absorbs (negation cannot remove
+the "collection invalid" marker); `val x` negates pointwise via
+the underlying `α`'s `Neg`. Required for bag-difference flavors
+of set operations (`EXCEPT ALL`): `L - R = L + (-R)` on diffs. -/
+def neg [Neg α] : DiffWithError α → DiffWithError α
+  | .error => .error
+  | .val x => .val (-x)
+
 instance [Add α] : Add (DiffWithError α) := ⟨add⟩
 instance [Mul α] : Mul (DiffWithError α) := ⟨mul⟩
+instance [Neg α] : Neg (DiffWithError α) := ⟨neg⟩
 
 /-- Lifted zero (identity for `+`). -/
 instance [Zero α] : Zero (DiffWithError α) := ⟨.val 0⟩
@@ -214,6 +223,34 @@ theorem mul_comm [Mul α] (h_comm : ∀ x y : α, x * y = y * x)
     | val _ => rfl
     | error => rfl
 
+/-! ## Negation laws
+
+`error` absorbs negation, and double-negation is the identity on
+`val` (when the base has the same property). -/
+
+theorem neg_error [Neg α] :
+    -(error : DiffWithError α) = error := rfl
+
+theorem neg_val [Neg α] (x : α) :
+    -(val x : DiffWithError α) = val (-x) := rfl
+
+theorem neg_neg_val [Neg α] (h : ∀ x : α, - -x = x) (a : DiffWithError α) :
+    - -a = a := by
+  cases a with
+  | val x => show (val (- -x) : DiffWithError α) = val x; rw [h]
+  | error => rfl
+
+/-- Right-inverse on `val`: when the base has `x + -x = 0`,
+`val x + -val x = 0` in the lifted semiring. `error` does not have
+an inverse — the absorber is unrecoverable, which is exactly the
+spec property: a collection-scoped error cannot be "subtracted
+away". -/
+theorem val_add_neg_val [Add α] [Neg α] [Zero α]
+    (h : ∀ x : α, x + -x = 0) (x : α) :
+    (val x : DiffWithError α) + -val x = 0 := by
+  show (val (x + -x) : DiffWithError α) = val 0
+  rw [h]
+
 /-! ## Int specializations
 
 The diff-aware operators in `Mz/UnifiedStream.lean` and
@@ -239,6 +276,13 @@ theorem mul_comm_int (a b : DiffWithError Int) : a * b = b * a :=
 theorem mul_add_int (a b c : DiffWithError Int) :
     a * (b + c) = a * b + a * c :=
   mul_add Int.mul_add a b c
+
+theorem neg_neg_int (a : DiffWithError Int) : - -a = a :=
+  neg_neg_val (fun x => Int.neg_neg x) a
+
+theorem val_add_neg_val_int (x : Int) :
+    (val x : DiffWithError Int) + -val x = 0 :=
+  val_add_neg_val (fun x => by omega) x
 
 end DiffWithError
 
