@@ -19,7 +19,8 @@ The goal is to lock in the boolean truth tables for `AND` and `OR` over the four
 * `Mz/Laws.lean`: algebraic laws — two-sided identity (`TRUE` for `AND`, `FALSE` for `OR`), idempotence (unconditional), commutativity (conditional on error-freedom of operands), and `Expr`-level reorder safety as a corollary of soundness.
 * `Mz/Variadic.lean`: laws for `evalAndN` and `evalOrN` over `List Datum` — cons recurrence, nil, singleton, binary equivalence with the binary evaluators, and `FALSE`/`TRUE` absorption.
 * `Mz/ExprVariadic.lean`: `Expr`-level reduction lemmas connecting `eval env (.andN args)` / `.orN` / `.coalesce` to their primitive counterparts, identity / singleton / binary-equivalence corollaries lifted through `eval`, and variadic-absorption theorems — a single operand evaluating to `FALSE` (resp. `TRUE`) makes the whole `andN` (resp. `orN`) evaluate to `FALSE` (resp. `TRUE`).
-* `Mz/Bag.lean`: bag semantics on `List Row`. Defines `filterRel` and `project`, with filter idempotence, filter commutativity, projection length-preservation, and the empty-projection equation. The skeleton silently drops `err` rows from `filterRel` output; a real implementation routes them to the error collection.
+* `Mz/Bag.lean`: bag semantics on `List Row`. Defines `filterRel` and `project`, with filter idempotence, filter commutativity, projection length-preservation, and the empty-projection equation. Plain `filterRel` silently drops `err` rows; `Mz/ErrStream.lean` adds the explicit data/error stream pair.
+* `Mz/ErrStream.lean`: the dataflow-style `BagStream = (data, errors)` pair. `BagStream.filter` routes erroring rows into the error collection instead of dropping them, with idempotence proved at both the data and the error level.
 
 ## What is not here
 
@@ -65,7 +66,8 @@ Reviewers should expect both sides of the change in the same PR.
 
 The roadmap in priority order:
 
-* Route `err` rows from `filterRel` to a separate error collection rather than silently dropping. Model the dataflow's data/error stream pair explicitly.
+* `BagStream.project` analogous to `BagStream.filter`: each scalar in the projection list can produce its own error rows; aggregate them into the error collection.
+* `BagStream.filter` commutativity. Data field commutes by `filterRel_comm`; the error field requires a notion of multiset equality on `List EvalError` since list-order differs across permutations.
 * Predicate pushdown across projection: `filterRel p (project es rel) = project es (filterRel (p[es]) rel)` under suitable substitution conditions.
 * Diff-semiring extension for global errors (v2).
 * Tightening `Expr.might_error`. The skeleton version is purely structural and ignores type / nullability information; bringing it closer to `MirScalarExpr::might_error` is additive.
