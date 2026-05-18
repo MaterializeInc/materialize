@@ -22,10 +22,14 @@ use aws_sigv4::http_request::{SignableBody, SignableRequest, SigningSettings, si
 use aws_sigv4::sign::v4;
 // Aliased to avoid colliding with `mz_ccsr::tls::Identity`.
 use aws_smithy_runtime_api::client::identity::Identity as AwsIdentity;
+use base64::Engine;
 use http::{HeaderName, HeaderValue};
 use iceberg::Catalog;
 use iceberg::CatalogBuilder;
-use iceberg::io::{S3_ACCESS_KEY_ID, S3_DISABLE_EC2_METADATA, S3_REGION, S3_SECRET_ACCESS_KEY};
+use iceberg::io::{
+    GCS_CREDENTIALS_JSON, GCS_DISABLE_CONFIG_LOAD, GCS_DISABLE_VM_METADATA, GCS_USER_PROJECT,
+    S3_ACCESS_KEY_ID, S3_DISABLE_EC2_METADATA, S3_REGION, S3_SECRET_ACCESS_KEY,
+};
 use iceberg_catalog_rest::{
     REST_CATALOG_PROP_URI, REST_CATALOG_PROP_WAREHOUSE, RequestAuthenticator, RestCatalogBuilder,
 };
@@ -70,6 +74,7 @@ use crate::configuration::StorageConfiguration;
 use crate::connections::aws::{
     AwsAuth, AwsConnection, AwsConnectionReference, AwsConnectionValidationError,
 };
+use crate::connections::gcp::{GcpConnectionReference, GcpTokenProvider};
 use crate::connections::string_or_secret::StringOrSecret;
 use crate::controller::AlterError;
 use crate::dyncfgs::{
@@ -466,6 +471,13 @@ impl Connection<InlinedConnection> {
         }
     }
 
+    pub fn unwrap_gcp(self) -> <InlinedConnection as ConnectionAccess>::Gcp {
+        match self {
+            Self::Gcp(conn) => conn,
+            o => unreachable!("{o:?} is not a GCP connection"),
+        }
+    }
+
     pub fn unwrap_ssh(self) -> <InlinedConnection as ConnectionAccess>::Ssh {
         match self {
             Self::Ssh(conn) => conn,
@@ -554,12 +566,22 @@ impl<C: ConnectionAccess> AlterCompatible for Connection<C> {
     }
 }
 
+/// Auth mechanism for Iceberg REST catalogs.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub struct RestIcebergCatalog {
-    /// For REST catalogs, the oauth2 credential in a `CLIENT_ID:CLIENT_SECRET` format
-    pub credential: StringOrSecret,
-    /// The oauth2 scope for REST catalogs
-    pub scope: Option<String>,
+pub enum IcebergCatalogAuth<C: ConnectionAccess = InlinedConnection> {
+    /// Use Iceberg catalog REST API's standard OAuth flow.
+    OAuth {
+        /// client_id:client_secret
+        credential: StringOrSecret,
+        /// OAuth2 scope
+        scope: Option<String>,
+    },
+    Gcp(GcpConnectionReference<C>),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct RestIcebergCatalog<C: ConnectionAccess = InlinedConnection> {
+    pub auth: IcebergCatalogAuth<C>,
     /// The warehouse for REST catalogs
     pub warehouse: Option<String>,
 }
@@ -570,6 +592,30 @@ pub struct S3TablesRestIcebergCatalog<C: ConnectionAccess = InlinedConnection> {
     pub aws_connection: AwsConnectionReference<C>,
     /// The warehouse for s3tables
     pub warehouse: String,
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<IcebergCatalogAuth, R>
+    for IcebergCatalogAuth<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> IcebergCatalogAuth {
+        match self {
+            IcebergCatalogAuth::Gcp(x) => IcebergCatalogAuth::Gcp(x.into_inline_connection(&r)),
+            IcebergCatalogAuth::OAuth { credential, scope } => {
+                IcebergCatalogAuth::OAuth { credential, scope }
+            }
+        }
+    }
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<RestIcebergCatalog, R>
+    for RestIcebergCatalog<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> RestIcebergCatalog {
+        RestIcebergCatalog {
+            auth: self.auth.into_inline_connection(&r),
+            warehouse: self.warehouse,
+        }
+    }
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<S3TablesRestIcebergCatalog, R>
@@ -591,7 +637,7 @@ pub enum IcebergCatalogType {
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum IcebergCatalogImpl<C: ConnectionAccess = InlinedConnection> {
-    Rest(RestIcebergCatalog),
+    Rest(RestIcebergCatalog<C>),
     S3TablesRest(S3TablesRestIcebergCatalog<C>),
 }
 
@@ -600,7 +646,9 @@ impl<R: ConnectionResolver> IntoInlineConnection<IcebergCatalogImpl, R>
 {
     fn into_inline_connection(self, r: R) -> IcebergCatalogImpl {
         match self {
-            IcebergCatalogImpl::Rest(rest) => IcebergCatalogImpl::Rest(rest),
+            IcebergCatalogImpl::Rest(rest) => {
+                IcebergCatalogImpl::Rest(rest.into_inline_connection(r))
+            }
             IcebergCatalogImpl::S3TablesRest(s3tables) => {
                 IcebergCatalogImpl::S3TablesRest(s3tables.into_inline_connection(r))
             }
@@ -797,29 +845,71 @@ impl IcebergCatalogConnection<InlinedConnection> {
             props.insert(REST_CATALOG_PROP_WAREHOUSE.to_string(), warehouse.clone());
         }
 
-        let credential = rest
-            .credential
-            .get_string(
-                in_task,
-                &storage_configuration.connection_context.secrets_reader,
-            )
-            .await
-            .map_err(|e| anyhow!("failed to read Iceberg catalog credential: {e}"))?;
-        props.insert(REST_CATALOG_PROP_CREDENTIAL.to_string(), credential);
+        // Catalog auth is configured through a combination of `props` and `.with_authenticator(...)`,
+        // which happen at different stages of the [`RestCatalogBuilder`] -> [`RestCatalog`]
+        // construction pipeline.
+        let (storage_factory, custom_authenticator) = match &rest.auth {
+            IcebergCatalogAuth::OAuth { credential, scope } => {
+                let credential = credential
+                    .get_string(
+                        in_task,
+                        &storage_configuration.connection_context.secrets_reader,
+                    )
+                    .await
+                    .map_err(|e| anyhow!("failed to read Iceberg catalog credential: {e}"))?;
+                props.insert(REST_CATALOG_PROP_CREDENTIAL.to_string(), credential);
 
-        if let Some(scope) = &rest.scope {
-            props.insert(REST_CATALOG_PROP_SCOPE.to_string(), scope.clone());
+                if let Some(scope) = scope {
+                    props.insert(REST_CATALOG_PROP_SCOPE.to_string(), scope.clone());
+                }
+                (
+                    OpenDalStorageFactory::S3 {
+                        configured_scheme: "s3".to_string(),
+                        // When used with MinIO, Polaris returns a config with:
+                        //   s3.access-key-id, s3.secret-access-key, s3.endpoint, ...
+                        // `iceberg-rust` forwards these props to `opendal`.
+                        // N.B. This is not confirmed to work with other catalog & storage implementations.
+                        customized_credential_load: None,
+                    },
+                    None,
+                )
+            }
+            IcebergCatalogAuth::Gcp(gcp_connection_reference) => {
+                let (creds_json, service_account) = gcp_connection_reference
+                    .connection
+                    .read_credentials(storage_configuration)
+                    .await
+                    .map_err(|e| anyhow!("failed to parse GCP service account JSON: {e}"))?;
+
+                props.insert(
+                    GCS_CREDENTIALS_JSON.to_owned(),
+                    base64::engine::general_purpose::STANDARD.encode(creds_json),
+                );
+                props.insert(GCS_DISABLE_VM_METADATA.to_owned(), "true".to_owned());
+                props.insert(GCS_DISABLE_CONFIG_LOAD.to_owned(), "true".to_owned());
+                if let Some(project_id) = service_account.project_id() {
+                    props.insert(GCS_USER_PROJECT.to_owned(), project_id.to_owned());
+                    props.insert(
+                        "header.x-goog-user-project".to_owned(),
+                        project_id.to_owned(),
+                    );
+                }
+
+                (
+                    OpenDalStorageFactory::Gcs,
+                    Some(iceberg_catalog_rest::BearerTokenAuthenticator::new(
+                        Arc::new(GcpTokenProvider { service_account }),
+                    )),
+                )
+            }
+        };
+
+        let mut catalog =
+            RestCatalogBuilder::default().with_storage_factory(Arc::new(storage_factory));
+        if let Some(auth) = custom_authenticator {
+            catalog = catalog.with_authenticator(Arc::new(auth));
         }
-
-        let catalog = RestCatalogBuilder::default()
-            .with_storage_factory(Arc::new(OpenDalStorageFactory::S3 {
-                configured_scheme: "s3".to_string(),
-                // Polaris returns a config with:
-                //   s3.access-key-id, s3.secret-access-key, s3.endpoint, ...
-                // `iceberg-rust` forwards these props to `opendal`.
-                // N.B. This is not confirmed to work with other catalog & storage implementations.
-                customized_credential_load: None,
-            }))
+        let catalog = catalog
             .load("IcebergCatalog", props.into_iter().collect())
             .await
             .map_err(|e| anyhow!("failed to create Iceberg catalog: {e}"))?;

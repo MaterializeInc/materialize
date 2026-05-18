@@ -2787,6 +2787,7 @@ impl<'a> Parser<'a> {
                 CREDENTIAL,
                 DATABASE,
                 ENDPOINT,
+                GCP,
                 HOST,
                 PASSWORD,
                 PORT,
@@ -2840,6 +2841,10 @@ impl<'a> Parser<'a> {
                 CREDENTIAL => ConnectionOptionName::Credential,
                 DATABASE => ConnectionOptionName::Database,
                 ENDPOINT => ConnectionOptionName::Endpoint,
+                GCP => {
+                    self.expect_keyword(CONNECTION)?;
+                    ConnectionOptionName::GcpConnection
+                }
                 HOST => ConnectionOptionName::Host,
                 PASSWORD => ConnectionOptionName::Password,
                 PORT => ConnectionOptionName::Port,
@@ -2920,6 +2925,7 @@ impl<'a> Parser<'a> {
             ConnectionOptionName::Brokers => Some(WithOptionValue::Sequence(
                 self.parse_list_value(Parser::parse_kafka_broker_or_matching_rule)?,
             )),
+            ConnectionOptionName::GcpConnection => Some(self.parse_object_option_value()?),
             ConnectionOptionName::SshTunnel => Some(self.parse_object_option_value()?),
             _ => self.parse_optional_option_value()?,
         };
