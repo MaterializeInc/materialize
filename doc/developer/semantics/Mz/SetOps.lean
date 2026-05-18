@@ -206,6 +206,176 @@ theorem UnifiedStream.negate_negate (us : UnifiedStream) :
           = (uc, d) :: tl
     rw [ih, DiffWithError.neg_neg_int]
 
+/-- `negate` commutes with `filter`. Both orderings agree on
+every record shape; filter's row arm depends on `eval r pred`,
+which is independent of the diff sign, so the diff-flip slides
+through. -/
+theorem UnifiedStream.negate_filter (pred : Expr) (us : UnifiedStream) :
+    UnifiedStream.negate (UnifiedStream.filter pred us)
+      = UnifiedStream.filter pred (UnifiedStream.negate us) := by
+  induction us with
+  | nil => rfl
+  | cons hd tl ih =>
+    obtain ⟨uc, d⟩ := hd
+    have hCons : ((uc, d) :: tl : UnifiedStream) = [(uc, d)] ++ tl := rfl
+    rw [hCons, UnifiedStream.filter_append, UnifiedStream.negate_append,
+        ih, UnifiedStream.negate_append, UnifiedStream.filter_append]
+    congr 1
+    -- Per-record: negate (filter [(uc, d)]) = filter pred (negate [(uc, d)]).
+    -- Strategy: compute both filter results (original and post-negate),
+    -- compute negate of the original record, and equate via neg_{val,error}.
+    cases d with
+    | error =>
+      have hF : UnifiedStream.filter pred
+                  [(uc, (DiffWithError.error : DiffWithError Int))]
+              = [(uc, (DiffWithError.error : DiffWithError Int))] := by
+        cases uc <;> rfl
+      have hN : UnifiedStream.negate
+                  [(uc, (DiffWithError.error : DiffWithError Int))]
+              = [(uc, (DiffWithError.error : DiffWithError Int))] := by
+        show [(uc, -(DiffWithError.error : DiffWithError Int))] = _
+        rw [DiffWithError.neg_error]
+      rw [hF, hN, hF]
+    | val n =>
+      cases uc with
+      | err e =>
+        have hF : UnifiedStream.filter pred
+                    [(UnifiedRow.err e, DiffWithError.val n)]
+                = [(UnifiedRow.err e, DiffWithError.val n)] := rfl
+        have hFn : UnifiedStream.filter pred
+                    [(UnifiedRow.err e, DiffWithError.val (-n))]
+                = [(UnifiedRow.err e, DiffWithError.val (-n))] := rfl
+        have hN : UnifiedStream.negate [(UnifiedRow.err e, DiffWithError.val n)]
+                = [(UnifiedRow.err e, DiffWithError.val (-n))] := by
+          show [(UnifiedRow.err e, -(DiffWithError.val n : DiffWithError Int))]
+              = [(UnifiedRow.err e, DiffWithError.val (-n))]
+          rw [DiffWithError.neg_val]
+        rw [hF, hN, hFn]
+      | row r =>
+        cases hEval : eval r pred with
+        | bool b =>
+          cases b with
+          | true =>
+            have hF : UnifiedStream.filter pred
+                        [(UnifiedRow.row r, DiffWithError.val n)]
+                    = [(UnifiedRow.row r, DiffWithError.val n)] := by
+              show (match eval r pred with
+                      | .bool true => [(UnifiedRow.row r, DiffWithError.val n)]
+                      | .err e     => [(UnifiedRow.err e, DiffWithError.val n)]
+                      | _          => []) ++ [] = _
+              rw [hEval]; rfl
+            have hFn : UnifiedStream.filter pred
+                        [(UnifiedRow.row r, DiffWithError.val (-n))]
+                    = [(UnifiedRow.row r, DiffWithError.val (-n))] := by
+              show (match eval r pred with
+                      | .bool true => [(UnifiedRow.row r, DiffWithError.val (-n))]
+                      | .err e     => [(UnifiedRow.err e, DiffWithError.val (-n))]
+                      | _          => []) ++ [] = _
+              rw [hEval]; rfl
+            have hN : UnifiedStream.negate
+                        [(UnifiedRow.row r, DiffWithError.val n)]
+                    = [(UnifiedRow.row r, DiffWithError.val (-n))] := by
+              show [(UnifiedRow.row r, -(DiffWithError.val n : DiffWithError Int))]
+                  = [(UnifiedRow.row r, DiffWithError.val (-n))]
+              rw [DiffWithError.neg_val]
+            rw [hF, hN, hFn]
+          | false =>
+            have hF : UnifiedStream.filter pred
+                        [(UnifiedRow.row r, DiffWithError.val n)] = [] := by
+              show (match eval r pred with
+                      | .bool true => [(UnifiedRow.row r, DiffWithError.val n)]
+                      | .err e     => [(UnifiedRow.err e, DiffWithError.val n)]
+                      | _          => []) ++ [] = _
+              rw [hEval]; rfl
+            have hFn : UnifiedStream.filter pred
+                        [(UnifiedRow.row r, DiffWithError.val (-n))] = [] := by
+              show (match eval r pred with
+                      | .bool true => [(UnifiedRow.row r, DiffWithError.val (-n))]
+                      | .err e     => [(UnifiedRow.err e, DiffWithError.val (-n))]
+                      | _          => []) ++ [] = _
+              rw [hEval]; rfl
+            have hN : UnifiedStream.negate
+                        [(UnifiedRow.row r, DiffWithError.val n)]
+                    = [(UnifiedRow.row r, DiffWithError.val (-n))] := by
+              show [(UnifiedRow.row r, -(DiffWithError.val n : DiffWithError Int))]
+                  = [(UnifiedRow.row r, DiffWithError.val (-n))]
+              rw [DiffWithError.neg_val]
+            rw [hF, hN, hFn]; rfl
+        | int _ =>
+          have hF : UnifiedStream.filter pred
+                      [(UnifiedRow.row r, DiffWithError.val n)] = [] := by
+            show (match eval r pred with
+                    | .bool true => [(UnifiedRow.row r, DiffWithError.val n)]
+                    | .err e     => [(UnifiedRow.err e, DiffWithError.val n)]
+                    | _          => []) ++ [] = _
+            rw [hEval]; rfl
+          have hFn : UnifiedStream.filter pred
+                      [(UnifiedRow.row r, DiffWithError.val (-n))] = [] := by
+            show (match eval r pred with
+                    | .bool true => [(UnifiedRow.row r, DiffWithError.val (-n))]
+                    | .err e     => [(UnifiedRow.err e, DiffWithError.val (-n))]
+                    | _          => []) ++ [] = _
+            rw [hEval]; rfl
+          have hN : UnifiedStream.negate
+                      [(UnifiedRow.row r, DiffWithError.val n)]
+                  = [(UnifiedRow.row r, DiffWithError.val (-n))] := by
+            show [(UnifiedRow.row r, -(DiffWithError.val n : DiffWithError Int))]
+                = [(UnifiedRow.row r, DiffWithError.val (-n))]
+            rw [DiffWithError.neg_val]
+          rw [hF, hN, hFn]; rfl
+        | null =>
+          have hF : UnifiedStream.filter pred
+                      [(UnifiedRow.row r, DiffWithError.val n)] = [] := by
+            show (match eval r pred with
+                    | .bool true => [(UnifiedRow.row r, DiffWithError.val n)]
+                    | .err e     => [(UnifiedRow.err e, DiffWithError.val n)]
+                    | _          => []) ++ [] = _
+            rw [hEval]; rfl
+          have hFn : UnifiedStream.filter pred
+                      [(UnifiedRow.row r, DiffWithError.val (-n))] = [] := by
+            show (match eval r pred with
+                    | .bool true => [(UnifiedRow.row r, DiffWithError.val (-n))]
+                    | .err e     => [(UnifiedRow.err e, DiffWithError.val (-n))]
+                    | _          => []) ++ [] = _
+            rw [hEval]; rfl
+          have hN : UnifiedStream.negate
+                      [(UnifiedRow.row r, DiffWithError.val n)]
+                  = [(UnifiedRow.row r, DiffWithError.val (-n))] := by
+            show [(UnifiedRow.row r, -(DiffWithError.val n : DiffWithError Int))]
+                = [(UnifiedRow.row r, DiffWithError.val (-n))]
+            rw [DiffWithError.neg_val]
+          rw [hF, hN, hFn]; rfl
+        | err e_pred =>
+          have hF : UnifiedStream.filter pred
+                      [(UnifiedRow.row r, DiffWithError.val n)]
+                  = [(UnifiedRow.err e_pred, DiffWithError.val n)] := by
+            show (match eval r pred with
+                    | .bool true => [(UnifiedRow.row r, DiffWithError.val n)]
+                    | .err e     => [(UnifiedRow.err e, DiffWithError.val n)]
+                    | _          => []) ++ [] = _
+            rw [hEval]; rfl
+          have hFn : UnifiedStream.filter pred
+                      [(UnifiedRow.row r, DiffWithError.val (-n))]
+                  = [(UnifiedRow.err e_pred, DiffWithError.val (-n))] := by
+            show (match eval r pred with
+                    | .bool true => [(UnifiedRow.row r, DiffWithError.val (-n))]
+                    | .err e     => [(UnifiedRow.err e, DiffWithError.val (-n))]
+                    | _          => []) ++ [] = _
+            rw [hEval]; rfl
+          have hN : UnifiedStream.negate
+                      [(UnifiedRow.row r, DiffWithError.val n)]
+                  = [(UnifiedRow.row r, DiffWithError.val (-n))] := by
+            show [(UnifiedRow.row r, -(DiffWithError.val n : DiffWithError Int))]
+                = [(UnifiedRow.row r, DiffWithError.val (-n))]
+            rw [DiffWithError.neg_val]
+          have hNE : UnifiedStream.negate
+                      [(UnifiedRow.err e_pred, DiffWithError.val n)]
+                  = [(UnifiedRow.err e_pred, DiffWithError.val (-n))] := by
+            show [(UnifiedRow.err e_pred, -(DiffWithError.val n : DiffWithError Int))]
+                = [(UnifiedRow.err e_pred, DiffWithError.val (-n))]
+            rw [DiffWithError.neg_val]
+          rw [hF, hN, hFn, hNE]
+
 /-- `.error` diffs survive negation; the carrier is preserved. -/
 theorem UnifiedStream.negate_preserves_error_diff
     (us : UnifiedStream) (uc : UnifiedRow)
