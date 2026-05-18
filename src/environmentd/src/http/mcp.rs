@@ -48,6 +48,7 @@ use thiserror::Error;
 use tracing::{debug, warn};
 
 use crate::http::AuthedClient;
+use crate::http::mcp_metrics::{McpMetrics, ToolCallGuard};
 use crate::http::sql::{SqlRequest, SqlResponse, SqlResult, execute_request};
 
 // To add a new tool: add entry to tools/list, add handler function, add dispatch case.
@@ -363,12 +364,20 @@ enum McpEndpointType {
     Developer,
 }
 
+impl McpEndpointType {
+    /// Static label for metrics. Avoids per-request allocation that would
+    /// come from going through `Display`.
+    fn as_label(self) -> &'static str {
+        match self {
+            McpEndpointType::Agent => "agent",
+            McpEndpointType::Developer => "developer",
+        }
+    }
+}
+
 impl std::fmt::Display for McpEndpointType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            McpEndpointType::Agent => write!(f, "agent"),
-            McpEndpointType::Developer => write!(f, "developer"),
-        }
+        f.write_str(self.as_label())
     }
 }
 
@@ -382,13 +391,14 @@ pub async fn handle_mcp_method_not_allowed() -> impl IntoResponse {
 pub async fn handle_mcp_agent(
     headers: HeaderMap,
     Extension(allowed_origins): Extension<Arc<Vec<HeaderValue>>>,
+    Extension(metrics): Extension<McpMetrics>,
     client: AuthedClient,
     Json(body): Json<McpRequest>,
 ) -> axum::response::Response {
     if let Some(resp) = validate_origin(&headers, &allowed_origins) {
         return resp;
     }
-    handle_mcp_request(client, body, McpEndpointType::Agent)
+    handle_mcp_request(client, body, McpEndpointType::Agent, metrics)
         .await
         .into_response()
 }
@@ -397,13 +407,14 @@ pub async fn handle_mcp_agent(
 pub async fn handle_mcp_developer(
     headers: HeaderMap,
     Extension(allowed_origins): Extension<Arc<Vec<HeaderValue>>>,
+    Extension(metrics): Extension<McpMetrics>,
     client: AuthedClient,
     Json(body): Json<McpRequest>,
 ) -> axum::response::Response {
     if let Some(resp) = validate_origin(&headers, &allowed_origins) {
         return resp;
     }
-    handle_mcp_request(client, body, McpEndpointType::Developer)
+    handle_mcp_request(client, body, McpEndpointType::Developer, metrics)
         .await
         .into_response()
 }
@@ -435,7 +446,17 @@ async fn handle_mcp_request(
     mut client: AuthedClient,
     request: McpRequest,
     endpoint_type: McpEndpointType,
+    metrics: McpMetrics,
 ) -> impl IntoResponse {
+    let endpoint_label = endpoint_type.as_label();
+    let method_label = request.method.to_string();
+    let record_request = |status: &str| {
+        metrics
+            .requests
+            .with_label_values(&[endpoint_label, &method_label, status])
+            .inc();
+    };
+
     // Check the per-endpoint feature flag via a catalog snapshot, similar to frontend_peek.rs.
     let catalog = client.client.catalog_snapshot("mcp").await;
     let dyncfgs = catalog.system_config().dyncfgs();
@@ -445,6 +466,7 @@ async fn handle_mcp_request(
     };
     if !enabled {
         debug!(endpoint = %endpoint_type, "MCP endpoint disabled by feature flag");
+        record_request("endpoint_disabled");
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
 
@@ -479,12 +501,17 @@ async fn handle_mcp_request(
     // Handle notifications (no response needed)
     if is_notification {
         debug!(method = %request.method, "Received notification (no response will be sent)");
+        record_request("ok");
         return StatusCode::OK.into_response();
     }
 
     let request_id = request.id.clone().unwrap_or(serde_json::Value::Null);
 
     // Spawn task for fault isolation, with a timeout safety net.
+    // `abort_on_drop` propagates the timeout to the task itself; without
+    // it the task orphans and the SQL query keeps running in the
+    // background after the client gives up.
+    let metrics_inner = metrics.clone();
     let result = tokio::time::timeout(
         MCP_REQUEST_TIMEOUT,
         mz_ore::task::spawn(|| "mcp_request", async move {
@@ -494,13 +521,15 @@ async fn handle_mcp_request(
                 endpoint_type,
                 query_tool_enabled,
                 max_response_size,
+                metrics_inner,
             )
             .await
-        }),
+        })
+        .abort_on_drop(),
     )
     .await;
 
-    let response = match result {
+    let (response, status_label): (McpResponse, &'static str) = match result {
         Ok(inner) => inner,
         Err(_elapsed) => {
             warn!(
@@ -508,7 +537,7 @@ async fn handle_mcp_request(
                 timeout = ?MCP_REQUEST_TIMEOUT,
                 "MCP request timed out",
             );
-            McpResponse {
+            let response = McpResponse {
                 jsonrpc: JSONRPC_VERSION.to_string(),
                 id: request_id,
                 result: None,
@@ -519,10 +548,12 @@ async fn handle_mcp_request(
                     ))
                     .into(),
                 ),
-            }
+            };
+            (response, "timeout")
         }
     };
 
+    record_request(status_label);
     (StatusCode::OK, Json(response)).into_response()
 }
 
@@ -532,7 +563,8 @@ async fn handle_mcp_request_inner(
     endpoint_type: McpEndpointType,
     query_tool_enabled: bool,
     max_response_size: usize,
-) -> McpResponse {
+    metrics: McpMetrics,
+) -> (McpResponse, &'static str) {
     // Extract request ID (guaranteed to be Some since notifications are filtered earlier)
     let request_id = request.id.clone().unwrap_or(serde_json::Value::Null);
 
@@ -542,10 +574,16 @@ async fn handle_mcp_request_inner(
         endpoint_type,
         query_tool_enabled,
         max_response_size,
+        &metrics,
     )
     .await;
 
-    match result {
+    let status_label = match &result {
+        Ok(_) => "ok",
+        Err(e) => e.error_type(),
+    };
+
+    let response = match result {
         Ok(result_value) => McpResponse {
             jsonrpc: JSONRPC_VERSION.to_string(),
             id: request_id,
@@ -567,7 +605,9 @@ async fn handle_mcp_request_inner(
                 error: Some(e.into()),
             }
         }
-    }
+    };
+
+    (response, status_label)
 }
 
 async fn handle_mcp_method(
@@ -576,6 +616,7 @@ async fn handle_mcp_method(
     endpoint_type: McpEndpointType,
     query_tool_enabled: bool,
     max_response_size: usize,
+    metrics: &McpMetrics,
 ) -> Result<McpResult, McpRequestError> {
     // Validate JSON-RPC version
     if request.jsonrpc != JSONRPC_VERSION {
@@ -600,6 +641,7 @@ async fn handle_mcp_method(
                 endpoint_type,
                 query_tool_enabled,
                 max_response_size,
+                metrics,
             )
             .await
         }
@@ -771,8 +813,12 @@ async fn handle_tools_call(
     endpoint_type: McpEndpointType,
     query_tool_enabled: bool,
     max_response_size: usize,
+    metrics: &McpMetrics,
 ) -> Result<McpResult, McpRequestError> {
-    match (endpoint_type, params) {
+    // Drop-recording so metrics survive task cancellation.
+    let mut guard = ToolCallGuard::new(metrics, endpoint_type.as_label(), params.to_string());
+
+    let result = match (endpoint_type, params) {
         (McpEndpointType::Agent, ToolsCallParams::GetDataProducts(_)) => {
             get_data_products(client, max_response_size).await
         }
@@ -805,7 +851,14 @@ async fn handle_tools_call(
             "{} is not available on {} endpoint",
             tool, endpoint
         ))),
-    }
+    };
+
+    guard.set_status(match &result {
+        Ok(_) => "ok",
+        Err(e) => e.error_type(),
+    });
+
+    result
 }
 
 /// Execute SQL via `execute_request` from sql.rs.

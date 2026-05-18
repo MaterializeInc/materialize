@@ -122,6 +122,7 @@ mod catalog;
 mod cluster;
 mod console;
 mod mcp;
+pub mod mcp_metrics;
 mod memory;
 mod metrics;
 mod metrics_public;
@@ -159,6 +160,7 @@ pub struct HttpConfig {
     pub concurrent_webhook_req: Arc<tokio::sync::Semaphore>,
     pub metrics: Metrics,
     pub metrics_registry: MetricsRegistry,
+    pub mcp_metrics: mcp_metrics::McpMetrics,
     pub allowed_roles: AllowedRoles,
     pub internal_route_config: Arc<InternalRouteConfig>,
     pub routes_enabled: HttpRoutesEnabled,
@@ -214,6 +216,7 @@ impl HttpServer {
             concurrent_webhook_req,
             metrics,
             metrics_registry,
+            mcp_metrics,
             allowed_roles,
             internal_route_config,
             routes_enabled,
@@ -433,11 +436,16 @@ impl HttpServer {
         }
 
         if routes_enabled.metrics {
+            // Clone into the closure so the outer `metrics_registry` binding
+            // stays available for other route blocks below (e.g. MCP metric
+            // registration).
+            let metrics_registry_for_handler = metrics_registry.clone();
             let metrics_router = Router::new()
                 .route(
                     "/metrics",
                     routing::get(move |headers: HeaderMap| async move {
-                        mz_http_util::handle_prometheus(&metrics_registry, headers).await
+                        mz_http_util::handle_prometheus(&metrics_registry_for_handler, headers)
+                            .await
                     }),
                 )
                 .route(
@@ -528,6 +536,7 @@ impl HttpServer {
                 .layer(Extension(active_connection_counter.clone()))
                 .layer(Extension(HelmChartVersion(helm_chart_version.clone())))
                 .layer(Extension(mcp_allowed_origins))
+                .layer(Extension(mcp_metrics))
                 .layer(
                     CorsLayer::new()
                         .allow_methods(Method::POST)
