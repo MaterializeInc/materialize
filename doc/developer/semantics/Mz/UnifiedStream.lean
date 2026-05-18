@@ -95,25 +95,25 @@ private theorem filterMap_pickRow_rowMap (rs : List Row) :
     (rs.map UnifiedRow.row).filterMap pickRow = rs := by
   induction rs with
   | nil => rfl
-  | cons hd tl ih => simp [List.map, List.filterMap, pickRow, ih]
+  | cons hd tl ih => simp [List.map, pickRow, ih]
 
 private theorem filterMap_pickRow_errMap (es : List EvalError) :
     (es.map UnifiedRow.err).filterMap pickRow = ([] : Relation) := by
   induction es with
   | nil => rfl
-  | cons _ tl ih => simp [List.map, List.filterMap, pickRow, ih]
+  | cons _ tl ih => simp [List.map, pickRow, ih]
 
 private theorem filterMap_pickErr_rowMap (rs : List Row) :
     (rs.map UnifiedRow.row).filterMap pickErr = ([] : List EvalError) := by
   induction rs with
   | nil => rfl
-  | cons _ tl ih => simp [List.map, List.filterMap, pickErr, ih]
+  | cons _ tl ih => simp [List.map, pickErr, ih]
 
 private theorem filterMap_pickErr_errMap (es : List EvalError) :
     (es.map UnifiedRow.err).filterMap pickErr = es := by
   induction es with
   | nil => rfl
-  | cons hd tl ih => simp [List.map, List.filterMap, pickErr, ih]
+  | cons hd tl ih => simp [List.map, pickErr, ih]
 
 /-! ## Round-trip lemmas -/
 
@@ -125,7 +125,7 @@ theorem UnifiedStream.split_data_ofBag (s : BagStream) :
     simp only [List.map_nil, List.nil_append]
     exact filterMap_pickRow_errMap s.errors
   | cons hd tl ih =>
-    simp [List.map, List.filterMap_cons, pickRow, ih]
+    simp [List.map, pickRow, ih]
 
 theorem UnifiedStream.split_errors_ofBag (s : BagStream) :
     (UnifiedStream.split (UnifiedStream.ofBag s)).errors = s.errors := by
@@ -135,7 +135,7 @@ theorem UnifiedStream.split_errors_ofBag (s : BagStream) :
     simp only [List.map_nil, List.nil_append]
     exact filterMap_pickErr_errMap s.errors
   | cons _ tl ih =>
-    simp [List.map, List.filterMap_cons, pickErr, ih]
+    simp [List.map, pickErr, ih]
 
 /-- Full round trip on the structure level. -/
 theorem UnifiedStream.split_ofBag (s : BagStream) :
