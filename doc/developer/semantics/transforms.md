@@ -349,6 +349,7 @@ Status legend:
 | `fusion/filter.rs` (filter ∘ filter) | `UnifiedStream.filter_filter_fuse` in `Mz/FilterFusion.lean`. Holds under per-row err-freedom (`predNoRowErr`). Excludes the `err`-on-left + `evalAnd` ordering corner. |
 | `threshold_elision.rs` | `UnifiedStream.clampPositive_id_of_positive` in `Mz/SetOps.lean`. `clampPositive` is identity when every record's diff is `.error` or a strictly-positive `.val`. |
 | `fusion/map.rs` (project ∘ project) | `UnifiedStream.project_project_fuse` in `Mz/ProjectFusion.lean`. Holds under `projsAllSafe` (`es` is safe on every data row). Bridges via `eval_subst`. |
+| `demand.rs` | `filter_replaceAtRow_of_unused` (any input) + `project_replaceAtRow_eq_of_unused` (under `IsPureData`) in `Mz/Demand.lean`. Lifts `eval_replaceAt_of_unused` to the stream level. |
 
 ### Algebraic rewrites — modelable (worth shipping)
 
@@ -358,7 +359,6 @@ Status legend:
 | `redundant_join.rs` (distinct + join) | Express `distinct` + `cross` commutation when right side is already key-unique. Requires `intersectAll`-style lookup invariants we already have. |
 | `semijoin_idempotence.rs` (partial) | A semijoin is `cross` + project + distinct. Idempotence via `distinct_idem` (provable; we have `clampToOne_idem`). |
 | `non_null_requirements.rs` (model the strict-null laws) | We already have `evalAnd` / `evalOr` / arithmetic err-/null-strictness. State as `NullPropagatingBinary` / `ErrPropagatingBinary` instances; some exist in `Mz/Strict.lean`. Lift to `UnifiedStream.filter` to characterize when predicates drop vs promote. |
-| `demand.rs` (column-projection analysis) | We have `colReferencesBoundedBy`, `colReferencesUnused`, `eval_replaceAt_of_unused` in `Mz/ColRefs.lean`. Add a `UnifiedStream`-level theorem: replacing unused columns in every row leaves the operator output equal. |
 | `canonicalize_mfp.rs` | Establish a canonical form `Project ∘ Filter ∘ Map` and prove every MFP-like composition has a unique canonical equivalent. Needs Map (`UnifiedStream.project` is the analog of MapFilterProject's Project part; we don't have an MFP wrapper). |
 | `equivalence_propagation.rs` (use sites only) | The *use* of equivalence is `if a = b then replace a with b`. With a proved `evalEq` characterization we can show `filter (a = b) us` preserves a row iff substituting `b` for `a` in the rest of the predicate gives the same evaluation. Substitution machinery is in `Expr.subst`. |
 
@@ -396,8 +396,8 @@ If a single pass should be modeled next, the highest-value candidates by API con
 
 1. **`semijoin_idempotence.rs`** — distinct + cross + project commutation; uses `clampToOne_idem` already in `Mz/SetOps.lean`.
 2. **`non_null_requirements.rs`** — lift `Strict.lean` propagation classes to `UnifiedStream.filter` to characterize drop vs promote.
-3. **`demand.rs`** — uses `colReferencesUnused` + `eval_replaceAt_of_unused`; lift to a `UnifiedStream`-level replacement-invariance theorem.
-4. **`redundant_join.rs`** — distinct + cross commutation when right side is key-unique; uses existing intersect/lookup invariants.
+3. **`redundant_join.rs`** — distinct + cross commutation when right side is key-unique; uses existing intersect/lookup invariants.
+4. **`canonicalize_mfp.rs`** — canonical `project ∘ filter ∘ map` form. Builds on the three fusion theorems already shipped (filter, map, predicate pushdown).
 
 Beyond those, the cluster `{Reduce + reduce_elision + reduce_reduction + reduction_pushdown}` is the largest dependency gap.
 A `UnifiedStream.reduce` operator would unlock four passes plus the GroupBy semantics already partially in `Mz/GroupBy.lean`.
