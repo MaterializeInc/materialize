@@ -51,6 +51,50 @@ private def insertIntoDistinct (k : Datum) (row : Row) :
     if Datum.groupKeyEq k k' then (k', row :: rows) :: rest
     else (k', rows) :: insertIntoDistinct k row rest
 
+/-! ### `insertInto` reduction lemmas
+
+Named per-shape reductions so proofs cite a single lemma instead of
+opening the `if`-then-else by hand. -/
+
+private theorem insertInto_match
+    (k : Datum) (row : Row) (rows : Relation)
+    (tl : List (Datum × Relation)) :
+    insertInto k row ((k, rows) :: tl) = (k, row :: rows) :: tl := by
+  show (if k = k then (k, row :: rows) :: tl
+          else (k, rows) :: insertInto k row tl)
+      = (k, row :: rows) :: tl
+  rw [if_pos rfl]
+
+private theorem insertInto_skip
+    (k k' : Datum) (row : Row) (rows : Relation)
+    (tl : List (Datum × Relation)) (h : k ≠ k') :
+    insertInto k row ((k', rows) :: tl)
+      = (k', rows) :: insertInto k row tl := by
+  show (if k = k' then (k', row :: rows) :: tl
+          else (k', rows) :: insertInto k row tl)
+      = (k', rows) :: insertInto k row tl
+  rw [if_neg h]
+
+private theorem insertIntoDistinct_match
+    (k k' : Datum) (row : Row) (rows : Relation)
+    (tl : List (Datum × Relation)) (h : Datum.groupKeyEq k k' = true) :
+    insertIntoDistinct k row ((k', rows) :: tl)
+      = (k', row :: rows) :: tl := by
+  show (if Datum.groupKeyEq k k' then (k', row :: rows) :: tl
+          else (k', rows) :: insertIntoDistinct k row tl)
+      = (k', row :: rows) :: tl
+  rw [if_pos h]
+
+private theorem insertIntoDistinct_skip
+    (k k' : Datum) (row : Row) (rows : Relation)
+    (tl : List (Datum × Relation)) (h : Datum.groupKeyEq k k' = false) :
+    insertIntoDistinct k row ((k', rows) :: tl)
+      = (k', rows) :: insertIntoDistinct k row tl := by
+  show (if Datum.groupKeyEq k k' then (k', row :: rows) :: tl
+          else (k', rows) :: insertIntoDistinct k row tl)
+      = (k', rows) :: insertIntoDistinct k row tl
+  rw [if_neg (by simp [h])]
+
 /-- `GROUP BY keyExpr`: partition `rel` by the value of `keyExpr`
 on each row. Output is a list of `(key, rows)` pairs, one per
 distinct key, in encounter order. -/
@@ -197,20 +241,14 @@ private theorem insertIntoDistinct_eq_insertInto
       fun g hMem => hGroups g (List.mem_cons_of_mem _ hMem)
     have hKey := Datum.groupKeyEq_eq_decide_of_no_err hK hK'
     by_cases hEq : k = k'
-    · show (if Datum.groupKeyEq k k' then (k', row :: rows) :: tl
-              else (k', rows) :: insertIntoDistinct k row tl)
-          = (if k = k' then (k', row :: rows) :: tl
-              else (k', rows) :: insertInto k row tl)
-      have hKeyTrue : Datum.groupKeyEq k k' = true := by
-        rw [hKey]; exact decide_eq_true hEq
-      rw [if_pos hKeyTrue, if_pos hEq]
-    · show (if Datum.groupKeyEq k k' then (k', row :: rows) :: tl
-              else (k', rows) :: insertIntoDistinct k row tl)
-          = (if k = k' then (k', row :: rows) :: tl
-              else (k', rows) :: insertInto k row tl)
-      have hKeyFalse : Datum.groupKeyEq k k' = false := by
+    · subst hEq
+      have hKeyTrue : Datum.groupKeyEq k k = true := by
+        rw [hKey]; exact decide_eq_true rfl
+      rw [insertIntoDistinct_match _ _ _ _ _ hKeyTrue, insertInto_match]
+    · have hKeyFalse : Datum.groupKeyEq k k' = false := by
         rw [hKey]; exact decide_eq_false hEq
-      rw [if_neg (by simp [hKeyFalse]), if_neg hEq, ih hTl]
+      rw [insertIntoDistinct_skip _ _ _ _ _ hKeyFalse,
+          insertInto_skip _ _ _ _ _ hEq, ih hTl]
 
 /-- `insertInto` propagates the "no err keys" invariant from its
 input bucket list to its output: if the inserted key is non-err
@@ -235,23 +273,12 @@ private theorem insertInto_preserves_non_err_keys
     intro g hMem
     show ¬ g.1.IsErr
     by_cases hEq : k = k'
-    · have hOut : insertInto k row ((k', rows) :: tl)
-                = (k', row :: rows) :: tl := by
-        show (if k = k' then (k', row :: rows) :: tl
-                else (k', rows) :: insertInto k row tl)
-            = (k', row :: rows) :: tl
-        rw [if_pos hEq]
-      rw [hOut] at hMem
+    · subst hEq
+      rw [insertInto_match] at hMem
       rcases List.mem_cons.mp hMem with hHead | hTail
       · subst hHead; exact hK'
       · exact hTl g hTail
-    · have hOut : insertInto k row ((k', rows) :: tl)
-                = (k', rows) :: insertInto k row tl := by
-        show (if k = k' then (k', row :: rows) :: tl
-                else (k', rows) :: insertInto k row tl)
-            = (k', rows) :: insertInto k row tl
-        rw [if_neg hEq]
-      rw [hOut] at hMem
+    · rw [insertInto_skip _ _ _ _ _ hEq] at hMem
       rcases List.mem_cons.mp hMem with hHead | hTail
       · subst hHead; exact hK'
       · exact ih hTl g hTail
@@ -323,18 +350,12 @@ private theorem totalRows_insertInto
     obtain ⟨k', rows⟩ := head
     by_cases hEq : k = k'
     · subst hEq
-      show totalRows (if k = k then (k, row :: rows) :: tl
-                       else (k, rows) :: insertInto k row tl)
-          = totalRows ((k, rows) :: tl) + 1
-      rw [if_pos rfl]
+      rw [insertInto_match]
       show (row :: rows).length + totalRows tl
           = rows.length + totalRows tl + 1
       simp [List.length_cons]
       omega
-    · show totalRows (if k = k' then (k', row :: rows) :: tl
-                       else (k', rows) :: insertInto k row tl)
-          = totalRows ((k', rows) :: tl) + 1
-      rw [if_neg hEq]
+    · rw [insertInto_skip _ _ _ _ _ hEq]
       show rows.length + totalRows (insertInto k row tl)
           = rows.length + totalRows tl + 1
       rw [ih]
@@ -350,20 +371,16 @@ private theorem totalRows_insertIntoDistinct
   | cons head tl ih =>
     obtain ⟨k', rows⟩ := head
     by_cases hEq : Datum.groupKeyEq k k' = true
-    · show totalRows (if Datum.groupKeyEq k k'
-                       then (k', row :: rows) :: tl
-                       else (k', rows) :: insertIntoDistinct k row tl)
-          = totalRows ((k', rows) :: tl) + 1
-      rw [if_pos hEq]
+    · rw [insertIntoDistinct_match _ _ _ _ _ hEq]
       show (row :: rows).length + totalRows tl
           = rows.length + totalRows tl + 1
       simp [List.length_cons]
       omega
-    · show totalRows (if Datum.groupKeyEq k k'
-                       then (k', row :: rows) :: tl
-                       else (k', rows) :: insertIntoDistinct k row tl)
-          = totalRows ((k', rows) :: tl) + 1
-      rw [if_neg hEq]
+    · have hFalse : Datum.groupKeyEq k k' = false := by
+        cases h : Datum.groupKeyEq k k' with
+        | true => exact absurd h hEq
+        | false => rfl
+      rw [insertIntoDistinct_skip _ _ _ _ _ hFalse]
       show rows.length + totalRows (insertIntoDistinct k row tl)
           = rows.length + totalRows tl + 1
       rw [ih]
