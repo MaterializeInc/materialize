@@ -24,7 +24,7 @@ use mz_kafka_util::client::{
     GetPartitionsError, MzClientContext, PartitionId, TunnelingClientContext, get_partitions,
 };
 use mz_ore::assert_none;
-use mz_ore::cast::{CastFrom, ReinterpretCast};
+use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::iter::IteratorExt;
@@ -414,11 +414,11 @@ fn render_reader<'scope>(
             };
 
             // Start offsets is a map from partition to the next offset to read from.
-            let mut start_offsets: BTreeMap<_, i64> = start_offsets
+            let mut start_offsets: BTreeMap<_, u64> = start_offsets
                 .clone()
                 .into_iter()
                 .filter(|(pid, _offset)| responsible_for_pid(&config, *pid))
-                .map(|(k, v)| (k, v))
+                .map(|(pid, offset)| (pid, u64::try_from(offset).expect("start offsets must be non-negative and fit into u64")))
                 .collect();
 
             let mut partition_capabilities = BTreeMap::new();
@@ -445,7 +445,7 @@ fn render_reader<'scope>(
                         .parameters
                         .kafka_timeout_config
                         .fetch_metadata_timeout,
-                false, // fetch the low watermark
+                Offset::Beginning, // fetch the low watermark
             ).unwrap_or_else(|e| {
                 tracing::warn!(
                     source_id = config.id.to_string(),
@@ -477,6 +477,22 @@ fn render_reader<'scope>(
                         },
                     );
                 }
+                if let GetPartitionsError::TopicDoesNotExist = e {
+                    // If the topic doesn't exist, that is a definite error
+                    let error = Err(
+                        SourceError{
+                            error:SourceErrorDetails::Initialization(e.to_string().into())
+                        }.into()
+                    );
+                    let time = data_cap.time().clone();
+                    for (output, error) in
+                        outputs.iter().map(|o| o.output_index).repeat_clone(error)
+                    {
+                        let update = ((output, error), time.clone(), Diff::ONE);
+                        data_output
+                            .give(&data_cap, update);
+                    }
+                }
                 BTreeMap::new()
             });
 
@@ -486,8 +502,7 @@ fn render_reader<'scope>(
                     max_pid = std::cmp::max(max_pid, Some(*pid));
 
                     if responsible_for_pid(&config, *pid) {
-                        let restored_offset = i64::try_from(ts.timestamp().offset)
-                            .expect("restored kafka offsets must fit into i64");
+                        let restored_offset = ts.timestamp().offset;
                         if let Some(start_offset) = start_offsets.get_mut(pid) {
                             *start_offset = std::cmp::max(restored_offset, *start_offset);
                         } else {
@@ -526,7 +541,7 @@ fn render_reader<'scope>(
                         num_workers = config.worker_count,
                         "restored offset {start_offset} for topic {topic} partition {pid} with low watermark {lwm}"
                     );
-                    if *lwm > ReinterpretCast::reinterpret_cast(*start_offset) {
+                    if lwm > start_offset {
                         tracing::error!(
                             source_id = config.id.to_string(),
                             worker_id = config.worker_id,
@@ -580,7 +595,7 @@ fn render_reader<'scope>(
                         "partition {pid} has a non-zero low watermark {lwm}, but no start offset or \
                         resume upper was found for this partition. Setting start offset to low watermark"
                     );
-                    start_offsets.insert(*pid, ReinterpretCast::reinterpret_cast(*lwm));
+                    start_offsets.insert(*pid, *lwm);
                 }
             }
 
@@ -597,6 +612,7 @@ fn render_reader<'scope>(
 
             let partition_ids = start_offsets.keys().copied().collect();
             let offset_commit_metrics = config.metrics.get_offset_commit_metrics(config.id);
+            let start_offsets = start_offsets.iter().map(|(pid, offset)| (*pid, i64::try_from(*offset).expect("start offsets must fit into i64"))).collect();
 
             let mut reader = KafkaSourceReader {
                 topic_name: topic.clone(),
@@ -1595,21 +1611,13 @@ fn fetch_partition_info<C: ConsumerContext>(
     consumer: &BaseConsumer<C>,
     topic: &str,
     fetch_timeout: Duration,
-    high_watermark: bool,
+    offset_requested: Offset,
 ) -> Result<BTreeMap<PartitionId, PartitionWatermark>, GetPartitionsError> {
     let pids = get_partitions(consumer.client(), topic, fetch_timeout)?;
 
     let mut offset_requests = TopicPartitionList::with_capacity(pids.len());
-    let offset_fetch_type = if high_watermark {
-        Offset::End
-    } else {
-        // We want to fetch the beginning offset to be able to detect compaction. If the beginning
-        // offset is greater than 0, we know that compaction is enabled and we can adjust our
-        // watermarking strategy accordingly.
-        Offset::Beginning
-    };
     for pid in pids {
-        offset_requests.add_partition_offset(topic, pid, offset_fetch_type)?;
+        offset_requests.add_partition_offset(topic, pid, offset_requested)?;
     }
 
     let offset_responses = consumer.offsets_for_times(offset_requests, fetch_timeout)?;
@@ -1851,7 +1859,7 @@ fn spawn_metadata_thread<C: ConsumerContext>(
                         .parameters
                         .kafka_timeout_config
                         .fetch_metadata_timeout,
-                    true,
+                    Offset::End,
                 );
                 trace!(
                     source_id = config.id.to_string(),
