@@ -222,9 +222,6 @@ fn default_read_limit() -> u32 {
     500
 }
 
-/// Maximum number of rows that can be returned by read_data_product.
-const MAX_READ_LIMIT: u32 = 1000;
-
 #[derive(Debug, Deserialize)]
 struct QueryParams {
     cluster: String,
@@ -733,7 +730,7 @@ async fn handle_tools_list(
                 ToolDefinition {
                     name: "read_data_product".to_string(),
                     title: Some("Read Data Product".to_string()),
-                    description: format!("Read rows from a specific data product. Returns up to `limit` rows (default 500, max 1000). The data product must exist in the catalog (use get_data_products() to discover available products). Use this to retrieve actual data from a known data product. {size_hint}"),
+                    description: format!("Read rows from a specific data product. Returns up to `limit` rows (default 500). The data product must exist in the catalog (use get_data_products() to discover available products). Use this to retrieve actual data from a known data product. {size_hint}"),
                     input_schema: json!({
                         "type": "object",
                         "properties": {
@@ -743,7 +740,7 @@ async fn handle_tools_list(
                             },
                             "limit": {
                                 "type": "integer",
-                                "description": "Maximum number of rows to return (default 500, max 1000)",
+                                "description": "Maximum number of rows to return (default 500)",
                                 "default": 500
                             },
                             "cluster": {
@@ -1017,17 +1014,19 @@ async fn read_data_product(
         return Err(McpRequestError::DataProductNotFound(name.to_string()));
     }
 
-    let clamped_limit = limit.min(MAX_READ_LIMIT);
-
+    // No row cap is applied here: the response is bounded by the size cap
+    // enforced in format_rows_response (MCP_MAX_RESPONSE_SIZE), and by
+    // max_result_size at the adapter layer. Mirrors the SQL HTTP endpoint,
+    // which also leans on a size cap rather than a row cap.
     let read_query = match cluster_override {
         Some(cluster) => format!(
             "BEGIN READ ONLY; SET CLUSTER = {}; SELECT * FROM {} LIMIT {}\n; COMMIT;",
             escaped_string_literal(cluster),
             safe_name,
-            clamped_limit,
+            limit,
         ),
         // Single statement — skip explicit transaction for better performance.
-        None => format!("SELECT * FROM {} LIMIT {}", safe_name, clamped_limit),
+        None => format!("SELECT * FROM {} LIMIT {}", safe_name, limit),
     };
 
     let rows = execute_sql(client, &read_query).await?;
