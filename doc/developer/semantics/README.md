@@ -20,7 +20,10 @@ The goal is to lock in the boolean truth tables for `AND` and `OR` over the four
 * `Mz/Variadic.lean`: laws for `evalAndN` and `evalOrN` over `List Datum` — cons recurrence, nil, singleton, binary equivalence with the binary evaluators, and `FALSE`/`TRUE` absorption.
 * `Mz/ExprVariadic.lean`: `Expr`-level reduction lemmas connecting `eval env (.andN args)` / `.orN` / `.coalesce` to their primitive counterparts, identity / singleton / binary-equivalence corollaries lifted through `eval`, and variadic-absorption theorems — a single operand evaluating to `FALSE` (resp. `TRUE`) makes the whole `andN` (resp. `orN`) evaluate to `FALSE` (resp. `TRUE`).
 * `Mz/Bag.lean`: bag semantics on `List Row`. Defines `filterRel` and `project`, with filter idempotence, filter commutativity, projection length-preservation, and the empty-projection equation. Plain `filterRel` silently drops `err` rows; `Mz/ErrStream.lean` adds the explicit data/error stream pair.
-* `Mz/ErrStream.lean`: the dataflow-style `BagStream = (data, errors)` pair. `BagStream.filter` routes erroring rows into the error collection instead of dropping them, with idempotence proved at both the data and the error level.
+* `Mz/ErrStream.lean`: the dataflow-style `BagStream = (data, errors)` pair.
+  `BagStream.filter` routes erroring rows into the error collection instead of dropping them, with idempotence proved at both the data and the error level.
+  `BagStream.project` projects each row through a list of scalars; a row stays in the data collection only when every scalar succeeds, otherwise its err payloads (one per erroring scalar) are appended to the error collection.
+  `rowErrs_nil_of_all_safe` and `projectErrs_eq_nil_of_all_safe` show that when no projection errs, `BagStream.project` does not extend the error collection.
 * `Mz/Pushdown.lean`: substitution (`Expr.subst`) plus the headline `eval_subst` theorem (substituting then evaluating against the original row equals evaluating against the projected row), and the relational predicate-pushdown rewrite `filterRel p (project es rel) = project es (filterRel (p.subst es) rel)`.
 * `Mz/DiffSemiring.lean`: `DiffWithError α` — the diff-field type extension that encodes global (collection-scoped) errors as an absorbing element. Provides `+`, `*`, `0`, `1` instances over an arbitrary base diff and proves the absorption / commutativity / associativity / distributivity laws that downstream operators must respect.
 * `Mz/UnifiedStream.lean`: unified single-collection alternative to `BagStream`. `UnifiedRow` is `row ⊕ err`, so errors flow through the same carrier as data rows. `ofBag` / `split` conversions, with the round-trip theorem `split (ofBag s) = s`. The unified form matches the spec's diff-semiring target; the split `BagStream` is a runtime concession the conversion reconciles.
@@ -78,8 +81,8 @@ Reviewers should expect both sides of the change in the same PR.
 
 The roadmap in priority order:
 
-* `BagStream.project` analogous to `BagStream.filter`: each scalar in the projection list can produce its own error rows; aggregate them into the error collection.
 * `BagStream.filter` commutativity. Data field commutes by `filterRel_comm`; the error field requires a notion of multiset equality on `List EvalError` since list-order differs across permutations.
+* `BagStream.project` / `BagStream.filter` commutativity (when the predicate references only un-projected columns). Same multiset-equality caveat on the error collection.
 * Tie `DiffWithError` to a concrete dataflow operator: model a `(Row, Time, DiffWithError ℤ)` triple stream and prove that an `error` diff at time `t` propagates to every downstream consolidation.
 * Joins on `BagStream` with explicit error propagation.
 * Cardinality theorem for `groupBy`: sum of group sizes equals `rel.length`. Requires `List.foldr_length` + Nat arithmetic. (`groupByErrDistinct` already proves the all-err special case via `groupByErrDistinct_length_of_all_err`.)

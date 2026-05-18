@@ -17,9 +17,11 @@ error-aware filter.
 input propagate to the output; new errors from the operator are
 appended.
 
-The skeleton models only `filter`. Adding `project` follows the same
-pattern: each expression in the projection list contributes its own
-error rows.
+The skeleton models `filter` and `project`. Each follows the same
+pattern: erroring rows leave the data collection and contribute
+their payload(s) to the error collection. `project` differs from
+`filter` in that a single row can produce multiple errors — one
+for every projected scalar that evaluates to `.err`.
 -/
 
 namespace Mz
@@ -113,5 +115,126 @@ theorem BagStream.filter_idem (pred : Expr) (s : BagStream) :
     BagStream.filter pred (BagStream.filter pred s) =
       BagStream.filter pred s := by
   simp [BagStream.filter, filterRel_idem, errorRows_filterRel]
+
+/-! ## Project -/
+
+/-- Boolean check: every projected scalar succeeds on this row
+(none returns `.err`). Used to decide whether the row stays in the
+data collection or is replaced by its error rows. -/
+@[inline] def rowAllSafe (es : List Expr) (row : Row) : Bool :=
+  es.all (fun e =>
+    match eval row e with
+    | .err _ => false
+    | _      => true)
+
+/-- Collect every `err` payload produced by evaluating each
+expression in `es` against `row`. A single row can produce
+zero, one, or many entries — one per erroring scalar. -/
+def rowErrs (es : List Expr) (row : Row) : List EvalError :=
+  es.filterMap fun e =>
+    match eval row e with
+    | .err err => some err
+    | _        => none
+
+/-- Aggregate `rowErrs` across the relation. Outer order matches
+row order; inner order matches the expression order within each
+row. -/
+def projectErrs (es : List Expr) (rel : Relation) : List EvalError :=
+  rel.flatMap (rowErrs es)
+
+/-- Error-aware projection. A row stays in the data collection only
+when every projected scalar succeeds on it; otherwise the row's err
+payloads are appended to the error collection and the row is
+dropped from the data side. -/
+def BagStream.project (es : List Expr) (s : BagStream) : BagStream :=
+  { data   := (s.data.filter (rowAllSafe es)).map (fun row => es.map (eval row))
+  , errors := s.errors ++ projectErrs es s.data }
+
+/-! ### Per-field reduction lemmas -/
+
+theorem BagStream.project_data (es : List Expr) (s : BagStream) :
+    (BagStream.project es s).data =
+      (s.data.filter (rowAllSafe es)).map (fun row => es.map (eval row)) := rfl
+
+theorem BagStream.project_errors (es : List Expr) (s : BagStream) :
+    (BagStream.project es s).errors =
+      s.errors ++ projectErrs es s.data := rfl
+
+/-! ### Trivial cases -/
+
+theorem rowErrs_nil_es (row : Row) :
+    rowErrs [] row = [] := rfl
+
+theorem projectErrs_nil_rel (es : List Expr) :
+    projectErrs es [] = [] := rfl
+
+/-- An empty projection list keeps every row (no scalar can err)
+and produces width-zero rows. -/
+theorem BagStream.project_nil_es (s : BagStream) :
+    BagStream.project [] s = { data := s.data.map (fun _ => []), errors := s.errors } := by
+  apply BagStream.ext
+  · show (s.data.filter (rowAllSafe [])).map (fun row => ([] : List Expr).map (eval row))
+        = s.data.map (fun _ => [])
+    have hAll : ∀ row, rowAllSafe [] row = true := fun _ => rfl
+    rw [List.filter_eq_self.mpr (by intro row _; exact hAll row)]
+    rfl
+  · show s.errors ++ projectErrs [] s.data = s.errors
+    have : projectErrs [] s.data = [] := by
+      unfold projectErrs
+      induction s.data with
+      | nil => rfl
+      | cons _ tl ih => simp [List.flatMap_cons, rowErrs_nil_es, ih]
+    rw [this, List.append_nil]
+
+/-- Projecting an empty stream is empty in data and preserves the
+input errors. -/
+theorem BagStream.project_empty_data (es : List Expr) (errs : List EvalError) :
+    BagStream.project es { data := [], errors := errs }
+      = { data := [], errors := errs } := by
+  apply BagStream.ext
+  · rfl
+  · show errs ++ projectErrs es [] = errs
+    rw [projectErrs_nil_rel, List.append_nil]
+
+/-! ### Safe-row laws
+
+When every projected scalar succeeds on every row, projection
+behaves like the plain `Bag.project`: no errors are emitted and
+no rows are dropped from the data collection. -/
+
+theorem rowErrs_nil_of_all_safe (es : List Expr) (row : Row)
+    (h : rowAllSafe es row = true) :
+    rowErrs es row = [] := by
+  induction es with
+  | nil => rfl
+  | cons hd tl ih =>
+    have hUnfold : rowAllSafe (hd :: tl) row = true := h
+    unfold rowAllSafe at hUnfold
+    rw [List.all_cons, Bool.and_eq_true] at hUnfold
+    obtain ⟨hHead, hTl⟩ := hUnfold
+    have hSafeTl : rowAllSafe tl row = true := hTl
+    have ihResult : rowErrs tl row = [] := ih hSafeTl
+    show ((hd :: tl).filterMap fun e =>
+            match eval row e with | .err err => some err | _ => none) = []
+    rw [List.filterMap_cons]
+    cases h_eval : eval row hd with
+    | bool _ => exact ihResult
+    | null   => exact ihResult
+    | err e  =>
+      rw [h_eval] at hHead
+      cases hHead
+
+theorem projectErrs_eq_nil_of_all_safe
+    (es : List Expr) (rel : Relation)
+    (h : ∀ row ∈ rel, rowAllSafe es row = true) :
+    projectErrs es rel = [] := by
+  unfold projectErrs
+  induction rel with
+  | nil => rfl
+  | cons hd tl ih =>
+    have hHead : rowAllSafe es hd = true := h hd List.mem_cons_self
+    have hTl : ∀ row ∈ tl, rowAllSafe es row = true :=
+      fun row hMem => h row (List.mem_cons_of_mem _ hMem)
+    simp [List.flatMap_cons, rowErrs_nil_of_all_safe es hd hHead, ih hTl]
 
 end Mz
