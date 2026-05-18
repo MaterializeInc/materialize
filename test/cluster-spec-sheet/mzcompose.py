@@ -67,10 +67,13 @@ STAGING_APP_PASSWORD = os.getenv("NIGHTLY_CANARY_APP_PASSWORD")
 MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = {
     "memory_limiter_interval": "0s",
     "max_credit_consumption_rate": "1024",
-    # Lifted for the envd_objects_scalability scenarios, which can build up to 100k
-    # tables or materialized views in a single schema, plus 10 pad clusters
-    # (10000 MVs/cluster). Other scenarios are unaffected by these higher
-    # ceilings. Cloud targets need the same limits configured server-side.
+    # Lifted for the envd_objects_scalability scenarios, which build up to N
+    # tables or materialized views in a single schema (default cap 30k via
+    # `--envd-objects-scalability-sizes`), plus pad clusters at 10000
+    # MVs/cluster. The ceilings here are sized with headroom over the default
+    # cap so a higher `--envd-objects-scalability-sizes` doesn't hit a server
+    # limit. Other scenarios are unaffected. Cloud targets need the same
+    # limits configured server-side.
     "max_tables": "200000",
     "max_materialized_views": "200000",
     "max_objects_per_schema": "200000",
@@ -4269,7 +4272,8 @@ def analyze_envd_objects_scalability_results_file(file: str) -> None:
     """Plot adapter/envd latency vs catalog object count (N).
 
     Each (scenario, category) pair yields one plot, with `scale` (=N) as the
-    x-axis (categorical bar chart, since the values span 1..100k). The
+    x-axis (categorical bar chart, since the values span 1 to the configured
+    cap — 30k by default via `--envd-objects-scalability-sizes`). The
     accompanying normalized plot is produced by the shared `plot()` helper.
     """
     print(f"--- Analyzing envd_objects_scalability results file {file} ...")
