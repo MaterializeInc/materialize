@@ -1320,3 +1320,144 @@ unresponsive" was that, plus zero swap). Mitigations applied:
 * Bench checkpoints results after each scale; if envd crashes
   mid-padding, the previous scale's data is preserved on disk
   (`results/timings_N{N}.csv`, `metrics/{before,after}_N{N}.prom`).
+
+### 2026-05-18 — persist-only CAS microbench (single-shard ladder)
+
+Built and ran the persist-only CAS microbench described in the
+previous section's "Next moves" #1. Binary:
+`src/persist-client/examples/persist_cas_bench.rs`. Driver scripts +
+collected data live under `/home/ubuntu/envd-ddl-investigation/cas_bench/`.
+
+Each ladder rung opens a *fresh* shard, pre-fills it with `size`
+catalog-shaped `compare_and_append`s (one small batch of one row per
+iteration), then takes 200 timed `compare_and_append`s at that state
+size. Ran the same ladder against:
+
+* `mem` consensus + `mem` blob — control, no I/O.
+* `bogo://` consensus + `file://` blob — the same backend our envd
+  end-to-end study used.
+* `postgres://` (CockroachDB v24.2) + `file://` blob — the real
+  production-shape consensus.
+
+Each backend was run twice: once with the production rollup cadence
+(`persist_rollup_threshold = 128`) and once with rollups effectively
+suppressed (`persist_rollup_threshold = 1_000_000`) so persist state
+genuinely accumulates between rungs.
+
+#### Per-CAS latency (p50 ms, after pre-fill)
+
+| backend | rollup | N=0 | N=1k | N=2.5k | N=5k | N=10k | N=20k |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| mem + mem | default | 0.08 | 0.08 | 0.09 | 0.08 | 0.11 | 0.11 |
+| bogo + file | default | 0.63 | 0.59 | 0.63 | 0.59 | 0.61 | 0.66 |
+| bogo + file | none | 0.59 | 0.57 | 0.58 | 0.62 | 0.59 | — |
+| crdb + file | default | 1.10 | 1.10 | 1.06 | 1.09 | 1.24 | 1.39 |
+| crdb + file | none | 1.06 | 1.05 | 1.01 | 1.24 | 1.47 | — |
+
+(Full samples in `cas_bench/results.csv`; per-tag table in
+`cas_bench/summary.md`.)
+
+#### What we learned
+
+**The single-shard CAS slope is essentially zero — under all three
+backends, including with rollups disabled.** Per-CAS p50 grows by at
+most ~0.4 ms (CRDB, 0→10k, no rollups) and is *flat* on bogo and mem.
+
+For comparison, the envd end-to-end study at the same scale showed
+the `catalog`-shard's `consensus_cas` *mean* growing from 0.53 ms
+(N=5k) to 1.85 ms (N=10k) — a +1.3 ms slope per CAS. **This
+microbench does not reproduce that slope.** Whatever is making
+catalog-shard CASes slow in envd is *not* "the consensus row /
+state blob is bigger because we have more SeqNos." It survives
+even when state accumulates without rollups.
+
+Specifically:
+
+* **Bogo flat → cost is not in the consensus implementation.** Even
+  with rollups disabled, bogo's per-CAS latency does not respond to
+  shard state size. If the slope were in the consensus row's
+  storage / row-count path, bogo would have shown some movement at
+  10k–20k.
+* **CRDB shows a tiny ~0.4 ms slope without rollups** which is the
+  expected cost of more rows accumulating in the `consensus` table
+  for a single shard (the `INSERT ... WHERE (SELECT ... ORDER BY
+  sequence_number DESC LIMIT 1)` plan has to skip more
+  PK-suffix-suffix rows as truncation falls behind). That's still
+  far short of the envd slope.
+* **Mem + mem at 0.08 ms** confirms the persist-client overhead
+  itself is tiny — the rest is real I/O against the chosen backend.
+
+So the +13 ms catalog+txns slope we saw end-to-end is **not** simply
+the cost of doing a CAS against a shard whose history is N seqnos
+long. It comes from something the microbench is *not* exercising.
+
+#### Hypotheses for what the microbench is missing
+
+The microbench opens **one** shard and writes to it sustained.
+envd at N=10k has:
+
+* ~10,000 user_data shards, all opened in the same `PersistClient`,
+  all doing their own background work (GC, snapshot reads, rollup
+  writes, compaction posting CAS) concurrently with the catalog
+  CAS we're trying to measure.
+* A `txns` shard whose state grows linearly with table count (every
+  table is registered there), getting CASed on every DDL.
+* A shared `StateCache` keyed by ShardId; lookup / update cost
+  could grow with shard count.
+* A shared `IsolatedRuntime` and a shared gRPC connection pool to
+  the consensus server — contention on either could throttle
+  catalog CAS specifically.
+* A shared `Metrics` (with our new `external_op_latency_by_kind`)
+  whose histograms see traffic from every shard.
+
+Any of these could be what makes a *catalog* CAS in envd at N=10k
+take 1.85 ms when the same CAS in isolation takes 0.6 ms. The
+microbench data rules out "row/state blob size" as the cause; what
+remains is shared-resource contention or shared-cache work that
+scales with shard count.
+
+#### Next moves (updated)
+
+1. **Multi-shard contention variant.** Extend `persist_cas_bench`
+   (or add a sibling) with a `--num-bg-shards N` flag: open N
+   background shards on the same `PersistClient` and have each one
+   trickle in writes (or just hold open handles to grow the state
+   cache), then measure the foreground catalog-shaped shard's CAS
+   latency. Same ladder against bogo + CRDB. If this reproduces
+   the slope, the bottleneck is shared per-client state (StateCache
+   contention, gRPC channel sharing, GC/compaction scheduling).
+2. **Run the microbench *while envd is busy*.** Connect a fresh
+   `persist_cas_bench` process to the same bogo + same blob dir as
+   a running, populated envd and measure foreground CAS. This is
+   the closest possible reproduction without splitting the slope
+   into "client work" vs "server work."
+3. **Inspect persist's internal counters in the envd metrics
+   dump** for catalog-shard signals the histogram doesn't see:
+   `mz_persist_state_apply_spine_slow_path_count`,
+   `mz_persist_shard_seqnos_since_last_rollup`,
+   `mz_persist_cmd_cas_mismatch_count` — these would tell us
+   whether catalog CAS in envd is bottlenecked on state-apply CPU
+   or on retries, not on the consensus RPC.
+4. **The original next-step from above remains valid** but is now
+   second priority: profiling the bare CAS path won't help if the
+   per-CAS slope only shows up under multi-shard load.
+
+#### Reproducing this section
+
+```
+# Build (cheap, no LTO):
+cargo build -p mz-persist-client --example persist_cas_bench --profile=optimized
+
+# Run a ladder against one backend:
+target/optimized/examples/persist_cas_bench \
+    --consensus bogo://127.0.0.1:6882 \
+    --blob file:///home/ubuntu/envd-ddl-investigation/cas_bench/bogo \
+    --sizes 0,500,1000,2500,5000,10000,20000 \
+    --measurements 200 \
+    --out /home/ubuntu/envd-ddl-investigation/cas_bench/results.csv \
+    --tag bogo-file-default-rollup
+```
+
+Tag rows in the CSV so multiple runs can share one output file.
+Use `--rollup-threshold 1000000` to suppress rollups. The
+`summarize.py` script in `cas_bench/` produces the table above.
