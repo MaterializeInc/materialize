@@ -1047,6 +1047,43 @@ theorem UnifiedStream.cross_negate_left (l r : UnifiedStream) :
         = (combineCarrier uc rd.1, -(d * rd.2))
     rw [DiffWithError.neg_mul_int]
 
+/-- Symmetric law: negating the right input of a cross product
+equals negating the cross output. Uses `a * (-b) = -(a * b)`
+(`DiffWithError.mul_neg_int`). -/
+theorem UnifiedStream.cross_negate_right (l r : UnifiedStream) :
+    UnifiedStream.cross l (UnifiedStream.negate r)
+      = UnifiedStream.negate (UnifiedStream.cross l r) := by
+  induction l with
+  | nil => rfl
+  | cons hd tl ih =>
+    obtain ⟨uc, d⟩ := hd
+    have hL : UnifiedStream.cross ((uc, d) :: tl) (UnifiedStream.negate r)
+            = (UnifiedStream.negate r).map
+                (fun rd => (combineCarrier uc rd.1, d * rd.2))
+              ++ UnifiedStream.cross tl (UnifiedStream.negate r) := by
+      show ((uc, d) :: tl).flatMap _ = _
+      simp only [List.flatMap_cons]
+      rfl
+    have hR : UnifiedStream.cross ((uc, d) :: tl) r
+            = r.map (fun rd => (combineCarrier uc rd.1, d * rd.2))
+              ++ UnifiedStream.cross tl r := by
+      show ((uc, d) :: tl).flatMap _ = _
+      simp only [List.flatMap_cons]
+      rfl
+    rw [hL, hR, UnifiedStream.negate_append, ih]
+    congr 1
+    show (UnifiedStream.negate r).map
+            (fun rd => (combineCarrier uc rd.1, d * rd.2))
+        = UnifiedStream.negate
+            (r.map (fun rd => (combineCarrier uc rd.1, d * rd.2)))
+    unfold UnifiedStream.negate
+    rw [List.map_map, List.map_map]
+    apply List.map_congr_left
+    intro rd _
+    show (combineCarrier uc rd.1, d * -rd.2)
+        = (combineCarrier uc rd.1, -(d * rd.2))
+    rw [DiffWithError.mul_neg_int]
+
 /-- Empty left input: `exceptAll [] r = negate (consolidate r)`.
 Reduces via `unionAll_nil_left` and `negate_consolidate`. -/
 theorem UnifiedStream.exceptAll_nil_left (r : UnifiedStream) :
