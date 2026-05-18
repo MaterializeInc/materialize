@@ -881,10 +881,57 @@ theorem UnifiedStream.intersectAll_preserves_error_diff_left
   rw [hLookup]
   rfl
 
--- A right-side counterpart `intersectAll_preserves_error_diff_right`
--- needs `lookup` to find the `.error` *specifically* when the
--- carrier has `.error` in `consolidate r`. That requires
--- consolidate-key-uniqueness as a lemma. Deferred.
+/-- When the list has no duplicate carriers, `lookup` returns the
+exact diff associated with the membership witness. -/
+theorem UnifiedStream.lookup_eq_of_mem_noDup
+    {uc : UnifiedRow} {d : DiffWithError Int} {us : UnifiedStream}
+    (h_mem : (uc, d) ∈ us) (h_noDup : UnifiedStream.NoDupCarriers us) :
+    UnifiedStream.lookup uc us = some d := by
+  induction us with
+  | nil => exact absurd h_mem List.not_mem_nil
+  | cons hd tl ih =>
+    obtain ⟨uc', d'⟩ := hd
+    obtain ⟨hHead, hTl⟩ := List.pairwise_cons.mp h_noDup
+    rcases List.mem_cons.mp h_mem with hEq | hTail
+    · have hUc : uc = uc' := (Prod.mk.injEq _ _ _ _).mp hEq |>.1
+      have hD  : d = d' := (Prod.mk.injEq _ _ _ _).mp hEq |>.2
+      subst hUc; subst hD
+      show (if uc = uc then some d else UnifiedStream.lookup uc tl) = some d
+      rw [if_pos rfl]
+    · have hNe : uc ≠ uc' := (hHead (uc, d) hTail).symm
+      show (if uc = uc' then some d' else UnifiedStream.lookup uc tl) = some d
+      rw [if_neg hNe]
+      exact ih hTail hTl
+
+/-- Symmetric: `.error` diff in the right input survives, provided
+the same carrier also appears (with any diff) in the left. The
+right-min-absorbing property carries the proof, using the no-dup
+property of `consolidate r` to extract the exact `.error` diff. -/
+theorem UnifiedStream.intersectAll_preserves_error_diff_right
+    (l r : UnifiedStream) (uc : UnifiedRow)
+    (hL : ∃ d, (uc, d) ∈ UnifiedStream.consolidate l)
+    (hR : (uc, (DiffWithError.error : DiffWithError Int))
+            ∈ UnifiedStream.consolidate r) :
+    (uc, (DiffWithError.error : DiffWithError Int))
+      ∈ UnifiedStream.intersectAll l r := by
+  obtain ⟨dL, hLMem⟩ := hL
+  have h_lookup_err :
+      UnifiedStream.lookup uc (UnifiedStream.consolidate r)
+        = some DiffWithError.error :=
+    UnifiedStream.lookup_eq_of_mem_noDup hR
+      (UnifiedStream.consolidate_noDup r)
+  show (uc, DiffWithError.error)
+    ∈ (UnifiedStream.consolidate l).filterMap _
+  rw [List.mem_filterMap]
+  refine ⟨(uc, dL), hLMem, ?_⟩
+  show (match UnifiedStream.lookup uc (UnifiedStream.consolidate r) with
+        | none    => none
+        | some d' => some (uc, DiffWithError.min dL d'))
+      = some (uc, DiffWithError.error)
+  rw [h_lookup_err]
+  show some (uc, DiffWithError.min dL DiffWithError.error)
+      = some (uc, DiffWithError.error)
+  rw [DiffWithError.error_min_right]
 
 /-- `bagExceptAll [] r = clampPositive (negate (consolidate r))`.
 With an all-`.val` `r`, the negation makes every diff non-positive,

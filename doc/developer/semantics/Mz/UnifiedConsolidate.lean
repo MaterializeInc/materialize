@@ -283,6 +283,147 @@ theorem UnifiedStream.consolidate_strict_length_dup
   show (UnifiedStream.consolidate ((uc, d') :: rest)).length ≤ rest.length + 1
   exact this
 
+/-! ## Carrier uniqueness
+
+`consolidate` collapses duplicate carriers into single buckets, so
+its output has each carrier at most once. Formalized as
+`NoDupCarriers`: a `Pairwise` predicate stating that any two
+records have distinct first components.
+
+`lookup_eq_of_mem_noDup` then connects uniqueness to `lookup`:
+when carriers are unique, `lookup uc us` returns the exact diff
+of `(uc, d) ∈ us` (not some other entry's diff). -/
+
+/-- Each carrier appears at most once in the list. -/
+def UnifiedStream.NoDupCarriers (us : UnifiedStream) : Prop :=
+  us.Pairwise (fun a b => a.1 ≠ b.1)
+
+theorem UnifiedStream.NoDupCarriers.nil :
+    UnifiedStream.NoDupCarriers [] := List.Pairwise.nil
+
+/-- The carriers appearing in `consolidateInto uc d us` are
+contained in `{uc} ∪ carriers(us)`. Used by
+`consolidateInto_preserves_noDup` to argue the new head's
+distinctness from the recursive tail. -/
+private theorem mem_consolidateInto_carrier
+    (uc : UnifiedRow) (d : DiffWithError Int) (us : UnifiedStream)
+    (x : UnifiedRow × DiffWithError Int)
+    (h : x ∈ consolidateInto uc d us) :
+    x.1 = uc ∨ ∃ d'', (x.1, d'') ∈ us := by
+  obtain ⟨xu, xd⟩ := x
+  induction us with
+  | nil =>
+    have hEq : (xu, xd) = (uc, d) := List.mem_singleton.mp h
+    have hUc : xu = uc := (Prod.mk.injEq _ _ _ _).mp hEq |>.1
+    exact Or.inl hUc
+  | cons hd tl ih =>
+    obtain ⟨uc', d'⟩ := hd
+    by_cases hEq : uc = uc'
+    · subst hEq
+      rw [consolidateInto_match] at h
+      rcases List.mem_cons.mp h with hHead | hTail
+      · refine Or.inr ⟨d', ?_⟩
+        have : xu = uc := (Prod.mk.injEq _ _ _ _).mp hHead |>.1
+        rw [this]
+        exact List.mem_cons_self
+      · exact Or.inr ⟨xd, List.mem_cons_of_mem _ hTail⟩
+    · rw [consolidateInto_skip _ _ _ _ _ hEq] at h
+      rcases List.mem_cons.mp h with hHead | hTail
+      · refine Or.inr ⟨d', ?_⟩
+        have : xu = uc' := (Prod.mk.injEq _ _ _ _).mp hHead |>.1
+        rw [this]
+        exact List.mem_cons_self
+      · rcases ih hTail with hIs_uc | ⟨d'', hMem⟩
+        · exact Or.inl hIs_uc
+        · exact Or.inr ⟨d'', List.mem_cons_of_mem _ hMem⟩
+
+/-- Inserting a record into a list whose carriers are all unique
+preserves uniqueness. If the inserted carrier matches an existing
+one, the bucket update keeps the list shape; otherwise the new
+carrier joins fresh, distinct from every existing one. -/
+private theorem consolidateInto_preserves_noDup
+    (uc : UnifiedRow) (d : DiffWithError Int) (us : UnifiedStream)
+    (h_noDup : UnifiedStream.NoDupCarriers us)
+    (h_fresh : ∀ d'', (uc, d'') ∉ us) :
+    UnifiedStream.NoDupCarriers (consolidateInto uc d us) := by
+  -- The fresh-key precondition simplifies the proof: every
+  -- insertion either matches (preserving the list) or extends.
+  -- We do not need the fresh precondition for the match case,
+  -- but stating it together keeps the inductive shape simple.
+  induction us with
+  | nil =>
+    show List.Pairwise _ [(uc, d)]
+    exact List.Pairwise.cons (fun _ hMem => absurd hMem List.not_mem_nil) List.Pairwise.nil
+  | cons hd tl ih =>
+    obtain ⟨uc', d'⟩ := hd
+    obtain ⟨hHead, hTl⟩ := List.pairwise_cons.mp h_noDup
+    -- The fresh precondition `∀ d'', (uc, d'') ∉ (uc', d') :: tl`
+    -- gives `uc ≠ uc'`.
+    have hUcNe : uc ≠ uc' := by
+      intro hEq
+      exact h_fresh d' (by rw [hEq]; exact List.mem_cons_self)
+    have hFreshTl : ∀ d'', (uc, d'') ∉ tl :=
+      fun d'' hMem => h_fresh d'' (List.mem_cons_of_mem _ hMem)
+    rw [consolidateInto_skip _ _ _ _ _ hUcNe]
+    -- New head's distinctness: uc' ≠ x.1 for all x in
+    -- consolidateInto uc d tl.
+    have hHead' : ∀ x ∈ consolidateInto uc d tl, uc' ≠ x.1 := by
+      intro x hMem
+      rcases mem_consolidateInto_carrier uc d tl x hMem with hUc | ⟨d'', hMem'⟩
+      · exact hUc ▸ fun h => hUcNe h.symm
+      · exact hHead (x.1, d'') hMem'
+    exact List.Pairwise.cons hHead' (ih hTl hFreshTl)
+
+/-- Same as above but without the fresh-key precondition: the
+match branch handles the not-fresh case (the existing bucket
+gets updated, list shape preserved). -/
+private theorem consolidateInto_preserves_noDup_general
+    (uc : UnifiedRow) (d : DiffWithError Int) (us : UnifiedStream)
+    (h_noDup : UnifiedStream.NoDupCarriers us) :
+    UnifiedStream.NoDupCarriers (consolidateInto uc d us) := by
+  by_cases h_exists : ∃ d'', (uc, d'') ∈ us
+  · -- uc already in us; existential ⊆ matching bucket on some level.
+    -- Induction on us to find it.
+    induction us with
+    | nil => obtain ⟨_, hMem⟩ := h_exists; exact absurd hMem List.not_mem_nil
+    | cons hd tl ih =>
+      obtain ⟨uc', d'⟩ := hd
+      obtain ⟨hHead, hTl⟩ := List.pairwise_cons.mp h_noDup
+      by_cases hEq : uc = uc'
+      · subst hEq
+        rw [consolidateInto_match]
+        exact List.Pairwise.cons hHead hTl
+      · rw [consolidateInto_skip _ _ _ _ _ hEq]
+        have hExistsTl : ∃ d'', (uc, d'') ∈ tl := by
+          obtain ⟨d'', hMem⟩ := h_exists
+          refine ⟨d'', ?_⟩
+          rcases List.mem_cons.mp hMem with hH | hT
+          · exact absurd ((Prod.mk.injEq _ _ _ _).mp hH).1 hEq
+          · exact hT
+        have hHead' : ∀ x ∈ consolidateInto uc d tl, uc' ≠ x.1 := by
+          intro x hMem_x
+          rcases mem_consolidateInto_carrier uc d tl x hMem_x with hUc | ⟨d''', hMem_x'⟩
+          · exact hUc ▸ fun h => hEq h.symm
+          · exact hHead (x.1, d''') hMem_x'
+        exact List.Pairwise.cons hHead' (ih hTl hExistsTl)
+  · -- uc is fresh; use the fresh-precondition variant.
+    have h_fresh : ∀ d'', (uc, d'') ∉ us := by
+      intro d'' hMem
+      exact h_exists ⟨d'', hMem⟩
+    exact consolidateInto_preserves_noDup uc d us h_noDup h_fresh
+
+/-- The headline: `consolidate` always produces a list with unique
+carriers. -/
+theorem UnifiedStream.consolidate_noDup (us : UnifiedStream) :
+    UnifiedStream.NoDupCarriers (UnifiedStream.consolidate us) := by
+  induction us with
+  | nil => exact UnifiedStream.NoDupCarriers.nil
+  | cons hd tl ih =>
+    obtain ⟨uc, d⟩ := hd
+    show UnifiedStream.NoDupCarriers
+      (consolidateInto uc d (UnifiedStream.consolidate tl))
+    exact consolidateInto_preserves_noDup_general uc d _ ih
+
 /-! ## No-error preservation
 
 If every input diff is a `.val`, every output diff is a `.val`.
