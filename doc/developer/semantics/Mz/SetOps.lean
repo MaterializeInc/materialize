@@ -1,6 +1,7 @@
 import Mz.UnifiedStream
 import Mz.UnifiedConsolidate
 import Mz.DiffSemiring
+import Mz.Join
 
 /-!
 # Set operations on `UnifiedStream`
@@ -498,5 +499,46 @@ theorem UnifiedStream.distinct_only_one_or_error (us : UnifiedStream) :
     ∀ x ∈ UnifiedStream.distinct us,
       x.2 = DiffWithError.val 1 ∨ x.2 = DiffWithError.error :=
   UnifiedStream.clampToOne_only_one_or_error _
+
+/-! ## Distributivity over `unionAll`
+
+`unionAll` is concatenation, so any operator built as a `flatMap`
+(`filter`, `cross`-on-left, `project`) distributes over it via the
+generic `List.flatMap_append` law. The distributivity laws below
+let the optimizer rearrange a pipeline whose tail is a `UNION ALL`
+into per-branch pipelines that can be planned independently. -/
+
+theorem UnifiedStream.filter_unionAll (p : Expr) (a b : UnifiedStream) :
+    UnifiedStream.filter p (UnifiedStream.unionAll a b)
+      = UnifiedStream.unionAll
+          (UnifiedStream.filter p a)
+          (UnifiedStream.filter p b) := by
+  show (a ++ b).flatMap _ = a.flatMap _ ++ b.flatMap _
+  exact List.flatMap_append
+
+theorem UnifiedStream.cross_unionAll_left (a b r : UnifiedStream) :
+    UnifiedStream.cross (UnifiedStream.unionAll a b) r
+      = UnifiedStream.unionAll
+          (UnifiedStream.cross a r)
+          (UnifiedStream.cross b r) := by
+  show (a ++ b).flatMap _ = a.flatMap _ ++ b.flatMap _
+  exact List.flatMap_append
+
+theorem UnifiedStream.project_unionAll (es : List Expr) (a b : UnifiedStream) :
+    UnifiedStream.project es (UnifiedStream.unionAll a b)
+      = UnifiedStream.unionAll
+          (UnifiedStream.project es a)
+          (UnifiedStream.project es b) := by
+  show (a ++ b).flatMap _ = a.flatMap _ ++ b.flatMap _
+  exact List.flatMap_append
+
+/-- `negate` distributes over `unionAll` via `List.map_append`. -/
+theorem UnifiedStream.negate_unionAll (a b : UnifiedStream) :
+    UnifiedStream.negate (UnifiedStream.unionAll a b)
+      = UnifiedStream.unionAll
+          (UnifiedStream.negate a)
+          (UnifiedStream.negate b) := by
+  show (a ++ b).map _ = a.map _ ++ b.map _
+  exact List.map_append
 
 end Mz
