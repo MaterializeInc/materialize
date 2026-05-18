@@ -147,4 +147,99 @@ theorem groupByErrDistinct_length_of_all_err
     rw [heq, insertIntoDistinct_err, List.length_append, ihApp]
     simp [List.length_cons]
 
+/-! ## Cardinality
+
+The sum of group sizes equals the input relation's length: no row
+is lost, no row is duplicated. Holds for both `groupBy` (which may
+merge err keys) and `groupByErrDistinct` (which never does).
+
+The proofs use an explicit `totalRows` function as the metric,
+which avoids syntactic mismatches between `Prod.snd ∘ List.length`
+spellings that throw off `omega`. -/
+
+/-- Sum of `rows.length` over every group. -/
+def totalRows : List (Datum × Relation) → Nat
+  | []              => 0
+  | (_, rs) :: rest => rs.length + totalRows rest
+
+/-- `insertInto` adds exactly one row to the total across all
+groups. The new row either joins an existing group or creates a
+fresh singleton group — either way, the group-size sum grows by
+one. -/
+private theorem totalRows_insertInto
+    (k : Datum) (row : Row) (groups : List (Datum × Relation)) :
+    totalRows (insertInto k row groups) = totalRows groups + 1 := by
+  induction groups with
+  | nil => rfl
+  | cons head tl ih =>
+    obtain ⟨k', rows⟩ := head
+    by_cases hEq : k = k'
+    · subst hEq
+      show totalRows (if k = k then (k, row :: rows) :: tl
+                       else (k, rows) :: insertInto k row tl)
+          = totalRows ((k, rows) :: tl) + 1
+      rw [if_pos rfl]
+      show (row :: rows).length + totalRows tl
+          = rows.length + totalRows tl + 1
+      simp [List.length_cons]
+      omega
+    · show totalRows (if k = k' then (k', row :: rows) :: tl
+                       else (k', rows) :: insertInto k row tl)
+          = totalRows ((k', rows) :: tl) + 1
+      rw [if_neg hEq]
+      show rows.length + totalRows (insertInto k row tl)
+          = rows.length + totalRows tl + 1
+      rw [ih]
+      omega
+
+/-- Analogue for the err-distinct insert: same row-count
+bookkeeping, different match predicate. -/
+private theorem totalRows_insertIntoDistinct
+    (k : Datum) (row : Row) (groups : List (Datum × Relation)) :
+    totalRows (insertIntoDistinct k row groups) = totalRows groups + 1 := by
+  induction groups with
+  | nil => rfl
+  | cons head tl ih =>
+    obtain ⟨k', rows⟩ := head
+    by_cases hEq : Datum.groupKeyEq k k' = true
+    · show totalRows (if Datum.groupKeyEq k k'
+                       then (k', row :: rows) :: tl
+                       else (k', rows) :: insertIntoDistinct k row tl)
+          = totalRows ((k', rows) :: tl) + 1
+      rw [if_pos hEq]
+      show (row :: rows).length + totalRows tl
+          = rows.length + totalRows tl + 1
+      simp [List.length_cons]
+      omega
+    · show totalRows (if Datum.groupKeyEq k k'
+                       then (k', row :: rows) :: tl
+                       else (k', rows) :: insertIntoDistinct k row tl)
+          = totalRows ((k', rows) :: tl) + 1
+      rw [if_neg hEq]
+      show rows.length + totalRows (insertIntoDistinct k row tl)
+          = rows.length + totalRows tl + 1
+      rw [ih]
+      omega
+
+/-- Cardinality theorem: every row in the input appears in exactly
+one group's row list. -/
+theorem totalRows_groupBy (keyExpr : Expr) (rel : Relation) :
+    totalRows (groupBy keyExpr rel) = rel.length := by
+  induction rel with
+  | nil => rfl
+  | cons head tl ih =>
+    show totalRows (insertInto (eval head keyExpr) head
+            (groupBy keyExpr tl)) = (head :: tl).length
+    rw [totalRows_insertInto, ih, List.length_cons]
+
+/-- Cardinality theorem for the err-distinct variant. -/
+theorem totalRows_groupByErrDistinct (keyExpr : Expr) (rel : Relation) :
+    totalRows (groupByErrDistinct keyExpr rel) = rel.length := by
+  induction rel with
+  | nil => rfl
+  | cons head tl ih =>
+    show totalRows (insertIntoDistinct (eval head keyExpr) head
+            (groupByErrDistinct keyExpr tl)) = (head :: tl).length
+    rw [totalRows_insertIntoDistinct, ih, List.length_cons]
+
 end Mz

@@ -34,7 +34,8 @@ The goal is to lock in the boolean truth tables for `AND` and `OR` over the four
 * `Mz/GroupBy.lean`: two grouping primitives.
   `groupBy keyExpr rel` partitions a relation by evaluated key using Lean's derived `DecidableEq Datum` — two `Datum.err e` keys with the same payload collapse into one group.
   `groupByErrDistinct keyExpr rel` uses the spec-faithful `Datum.groupKeyEq`, which returns `false` whenever either side is `.err`, so every err key produces its own singleton group.
-  Theorem `insertIntoDistinct_err` proves the err-key insertion always appends a fresh group; `groupByErrDistinct_length_of_all_err` derives the cardinality consequence — every err-keyed row contributes one output group.
+  Theorem `insertIntoDistinct_err` proves the err-key insertion always appends a fresh group; `groupByErrDistinct_length_of_all_err` derives the consequence — every err-keyed row contributes one output group.
+  Headline cardinality `totalRows_groupBy` (and its err-distinct variant `totalRows_groupByErrDistinct`) state that the sum of group sizes equals the input relation's length — no row is lost or duplicated by partitioning.
   Companion `aggregateBy` / `aggregateByErrDistinct` run `aggStrict` per group, modeling `SELECT keyExpr, AGG(valExpr) ... GROUP BY keyExpr`.
 
 ## What is not here
@@ -85,7 +86,6 @@ The roadmap in priority order:
 * `BagStream.project` / `BagStream.filter` commutativity (when the predicate references only un-projected columns). Same multiset-equality caveat on the error collection.
 * Tie `DiffWithError` to a concrete dataflow operator: model a `(Row, Time, DiffWithError ℤ)` triple stream and prove that an `error` diff at time `t` propagates to every downstream consolidation.
 * Joins on `BagStream` with explicit error propagation.
-* Cardinality theorem for `groupBy`: sum of group sizes equals `rel.length`. Requires `List.foldr_length` + Nat arithmetic. (`groupByErrDistinct` already proves the all-err special case via `groupByErrDistinct_length_of_all_err`.)
 * Agreement theorem `groupByErrDistinct = groupBy` whenever no key evaluates to `.err`. Requires an invariant on the accumulator (no existing key is an err) propagated through the foldr.
 * Sketch a proof of `cross_assoc` modulo row concatenation associativity. Left-wins error rule is consistent in both nestings; the residual obligation is `(la ++ lb) ++ lc = la ++ (lb ++ lc)` lifted into the row carrier.
 * Tightening `Expr.might_error`. The skeleton version is purely structural and ignores type / nullability information; bringing it closer to `MirScalarExpr::might_error` is additive.
