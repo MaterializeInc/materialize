@@ -27,6 +27,12 @@ bench = false
 name = "benches"
 harness = false
 
+# Persist-only CAS slope microbenchmark. Used by the envd-ddl-scalability
+# investigation under test/envd-ddl-scalability/.
+[[example]]
+name = "persist_cas_bench"
+path = "examples/persist_cas_bench.rs"
+
 [dependencies]
 anyhow.workspace = true
 arrayvec.workspace = true
