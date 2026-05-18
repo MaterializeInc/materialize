@@ -1312,4 +1312,149 @@ theorem UnifiedStream.unionAll_errorDiffCarriers (a b : UnifiedStream) :
       = UnifiedStream.errorDiffCarriers a ++ UnifiedStream.errorDiffCarriers b :=
   UnifiedStream.errorDiffCarriers_append a b
 
+/-! ## `filter` and error scopes
+
+`filter` is the canonical site of *cell-to-row promotion*: a
+`.row r` record whose predicate evaluates to `.err e` becomes a
+`.err e` carrier in the output. Filter therefore *grows* the
+row-scoped error set in general; it does not shrink it
+(row-scoped errors pass through, and collection-scoped errors
+pass through unconditionally).
+
+`filter_errorDiffCarriers` is an equality: filter preserves the
+collection-scoped error set exactly. The first arm matches
+`.error` diffs and outputs them unchanged; every other arm
+produces `.val`-diff outputs only. So the `.error` carriers are
+neither added nor removed.
+
+`filter_errCarriers_mono` is the monotone direction for the
+row-scoped error set: every row-err present in input is present
+in output. The reverse inclusion fails because cell-to-row
+promotion can add fresh errors. -/
+
+private theorem filter_singleton_errorDiffCarriers
+    (pred : Expr) (uc : UnifiedRow) (d : DiffWithError Int) :
+    UnifiedStream.errorDiffCarriers (UnifiedStream.filter pred [(uc, d)])
+      = UnifiedStream.errorDiffCarriers [(uc, d)] := by
+  cases d with
+  | error =>
+    -- Filter passes `.error`-diff records unchanged.
+    cases uc <;> rfl
+  | val n =>
+    cases uc with
+    | err _ => rfl
+    | row r =>
+      -- Filter's `.row r, .val n` arm produces zero or one `.val`-diff records,
+      -- depending on `eval r pred`. Case-split on the eval, then reduce filter
+      -- with the resulting equation to compute the concrete singleton output.
+      cases hEval : eval r pred with
+      | bool b =>
+        cases b with
+        | true =>
+          have hF : UnifiedStream.filter pred
+                      [(UnifiedRow.row r, DiffWithError.val n)]
+                  = [(UnifiedRow.row r, DiffWithError.val n)] := by
+            show (match eval r pred with
+                    | .bool true => [(UnifiedRow.row r, DiffWithError.val n)]
+                    | .err e     => [(UnifiedRow.err e, DiffWithError.val n)]
+                    | _          => []) ++ [] = _
+            rw [hEval]; rfl
+          rw [hF]
+        | false =>
+          have hF : UnifiedStream.filter pred
+                      [(UnifiedRow.row r, DiffWithError.val n)] = [] := by
+            show (match eval r pred with
+                    | .bool true => [(UnifiedRow.row r, DiffWithError.val n)]
+                    | .err e     => [(UnifiedRow.err e, DiffWithError.val n)]
+                    | _          => []) ++ [] = _
+            rw [hEval]; rfl
+          rw [hF]; rfl
+      | int _  =>
+        have hF : UnifiedStream.filter pred
+                    [(UnifiedRow.row r, DiffWithError.val n)] = [] := by
+          show (match eval r pred with
+                  | .bool true => [(UnifiedRow.row r, DiffWithError.val n)]
+                  | .err e     => [(UnifiedRow.err e, DiffWithError.val n)]
+                  | _          => []) ++ [] = _
+          rw [hEval]; rfl
+        rw [hF]; rfl
+      | null   =>
+        have hF : UnifiedStream.filter pred
+                    [(UnifiedRow.row r, DiffWithError.val n)] = [] := by
+          show (match eval r pred with
+                  | .bool true => [(UnifiedRow.row r, DiffWithError.val n)]
+                  | .err e     => [(UnifiedRow.err e, DiffWithError.val n)]
+                  | _          => []) ++ [] = _
+          rw [hEval]; rfl
+        rw [hF]; rfl
+      | err e_pred =>
+        have hF : UnifiedStream.filter pred
+                    [(UnifiedRow.row r, DiffWithError.val n)]
+                = [(UnifiedRow.err e_pred, DiffWithError.val n)] := by
+          show (match eval r pred with
+                  | .bool true => [(UnifiedRow.row r, DiffWithError.val n)]
+                  | .err e     => [(UnifiedRow.err e, DiffWithError.val n)]
+                  | _          => []) ++ [] = _
+          rw [hEval]; rfl
+        rw [hF]; rfl
+
+theorem UnifiedStream.filter_errorDiffCarriers
+    (pred : Expr) (us : UnifiedStream) :
+    UnifiedStream.errorDiffCarriers (UnifiedStream.filter pred us)
+      = UnifiedStream.errorDiffCarriers us := by
+  induction us with
+  | nil => rfl
+  | cons hd tl ih =>
+    obtain ⟨uc, d⟩ := hd
+    have hCons : ((uc, d) :: tl : UnifiedStream) = [(uc, d)] ++ tl := rfl
+    rw [hCons, UnifiedStream.filter_append,
+        UnifiedStream.errorDiffCarriers_append,
+        UnifiedStream.errorDiffCarriers_append, ih,
+        filter_singleton_errorDiffCarriers pred uc d]
+
+private theorem filter_singleton_errCarriers_mono
+    (pred : Expr) (uc : UnifiedRow) (d : DiffWithError Int) (e : EvalError)
+    (h : e ∈ UnifiedStream.errCarriers [(uc, d)]) :
+    e ∈ UnifiedStream.errCarriers (UnifiedStream.filter pred [(uc, d)]) := by
+  cases uc with
+  | row r =>
+    -- `errCarriers [(.row r, d)] = []`, so `h` is vacuous.
+    have hEmpty : UnifiedStream.errCarriers [(UnifiedRow.row r, d)] = [] := rfl
+    rw [hEmpty] at h
+    exact absurd h List.not_mem_nil
+  | err e0 =>
+    -- `errCarriers [(.err e0, d)] = [e0]`, so `e = e0`.
+    have hSingle : UnifiedStream.errCarriers [(UnifiedRow.err e0, d)] = [e0] := rfl
+    rw [hSingle] at h
+    have hEq : e = e0 := List.mem_singleton.mp h
+    subst hEq
+    cases d with
+    | error =>
+      -- filter passes `(.err e, .error)` through.
+      have : UnifiedStream.filter pred [(UnifiedRow.err e, DiffWithError.error)]
+              = [(UnifiedRow.err e, DiffWithError.error)] := rfl
+      rw [this]
+      exact List.mem_singleton.mpr rfl
+    | val n =>
+      have : UnifiedStream.filter pred [(UnifiedRow.err e, DiffWithError.val n)]
+              = [(UnifiedRow.err e, DiffWithError.val n)] := rfl
+      rw [this]
+      exact List.mem_singleton.mpr rfl
+
+theorem UnifiedStream.filter_errCarriers_mono
+    (pred : Expr) (us : UnifiedStream) (e : EvalError)
+    (h : e ∈ UnifiedStream.errCarriers us) :
+    e ∈ UnifiedStream.errCarriers (UnifiedStream.filter pred us) := by
+  induction us with
+  | nil => exact absurd h List.not_mem_nil
+  | cons hd tl ih =>
+    obtain ⟨uc, d⟩ := hd
+    have hCons : ((uc, d) :: tl : UnifiedStream) = [(uc, d)] ++ tl := rfl
+    rw [hCons, UnifiedStream.errCarriers_append] at h
+    rw [hCons, UnifiedStream.filter_append, UnifiedStream.errCarriers_append]
+    rcases List.mem_append.mp h with hHead | hTail
+    · exact List.mem_append.mpr
+        (Or.inl (filter_singleton_errCarriers_mono pred uc d e hHead))
+    · exact List.mem_append.mpr (Or.inr (ih hTail))
+
 end Mz
