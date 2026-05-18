@@ -1080,8 +1080,18 @@ impl Coordinator {
         table_collections_to_create: BTreeMap<GlobalId, CollectionDescription>,
         execution_timestamps_to_set: BTreeSet<StatementLoggingId>,
     ) -> Result<(), AdapterError> {
+        let phase_metric = self
+            .metrics
+            .apply_catalog_implications_phase_seconds
+            .clone();
+
         // If we have tables, determine the initial validity for the table.
-        let write_ts = self.get_local_write_ts().await;
+        let write_ts = {
+            let _t = phase_metric
+                .with_label_values(&["create_table_write_ts"])
+                .start_timer();
+            self.get_local_write_ts().await
+        };
         let register_ts = write_ts.timestamp;
 
         // After acquiring `register_ts` but before using it, we need to
@@ -1093,10 +1103,15 @@ impl Coordinator {
         // is readable at the oracle read ts after we bump it to the
         // `register_ts` below. Both of these needs are served by calling
         // `advance_upper`.
-        self.catalog
-            .advance_upper(write_ts.advance_to)
-            .await
-            .unwrap_or_terminate("unable to advance catalog upper");
+        {
+            let _t = phase_metric
+                .with_label_values(&["create_table_advance_upper"])
+                .start_timer();
+            self.catalog
+                .advance_upper(write_ts.advance_to)
+                .await
+                .unwrap_or_terminate("unable to advance catalog upper");
+        }
 
         for id in execution_timestamps_to_set {
             self.set_statement_execution_timestamp(id, register_ts);
@@ -1104,17 +1119,27 @@ impl Coordinator {
 
         let storage_metadata = self.catalog.state().storage_metadata();
 
-        self.controller
-            .storage
-            .create_collections(
-                storage_metadata,
-                Some(register_ts),
-                table_collections_to_create.into_iter().collect_vec(),
-            )
-            .await
-            .unwrap_or_terminate("cannot fail to create collections");
+        {
+            let _t = phase_metric
+                .with_label_values(&["create_table_storage_create_collections"])
+                .start_timer();
+            self.controller
+                .storage
+                .create_collections(
+                    storage_metadata,
+                    Some(register_ts),
+                    table_collections_to_create.into_iter().collect_vec(),
+                )
+                .await
+                .unwrap_or_terminate("cannot fail to create collections");
+        }
 
-        self.apply_local_write(register_ts).await;
+        {
+            let _t = phase_metric
+                .with_label_values(&["create_table_apply_local_write"])
+                .start_timer();
+            self.apply_local_write(register_ts).await;
+        }
 
         Ok(())
     }
