@@ -2,7 +2,6 @@
 title: Agent endpoint configuration
 description: "Configuration for /api/mcp/agent endpoint."
 make_table_row_headers_searchable: true
-draft: true
 menu:
   main:
     parent: "mcp-server-agent"
@@ -17,11 +16,12 @@ The following configurations are available for the `/api/mcp/agent` endpoint:
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `enable_mcp_agent` | `true` | Enable or disable the `/api/mcp/agent` endpoint. When disabled, requests return `HTTP 503 (Service Unavailable)`.|
+| `enable_mcp_agent_query_tool` <a name="enable_mcp_agent_query_tool"></a> | `false` | Enable or disable the [`query` tool](/integrations/mcp-server/mcp-agent-tools/#query), which allows for queries with joins. {{< include-headless "/headless/mcp-agent-query-tool-warning" >}}|
 | `mcp_max_response_size` | `1000000` | Maximum response size in bytes. Queries exceeding this limit return an error. |
 
-## Example: Enable endpoint
+## Disabling the endpoint
 
-To enable the `/api/mcp/agent` endpoint:
+The `materialize-agent` endpoint is enabled by default. To disable it:
 
 {{< tabs >}}
 
@@ -42,7 +42,7 @@ Set the parameter in your
 
 ```yaml
 system_parameters:
-  enable_mcp_agent: "true"
+  enable_mcp_agent: "false"
 ```
 
 **Option 2: Terraform**
@@ -51,7 +51,7 @@ Set the parameter via the [Materialize Terraform module](https://github.com/Mate
 
 ```hcl
 system_parameters = {
-  enable_mcp_agent = "true"
+  enable_mcp_agent = "false"
 }
 ```
 
@@ -60,7 +60,7 @@ system_parameters = {
 Connect as `mz_system` and run:
 
 ```mzsql
-ALTER SYSTEM SET enable_mcp_agent = true;
+ALTER SYSTEM SET enable_mcp_agent = false;
 ```
 
 {{< note >}}
