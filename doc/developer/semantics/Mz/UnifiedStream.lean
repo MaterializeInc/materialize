@@ -456,6 +456,105 @@ theorem UnifiedStream.mem_errorDiffCarriers (us : UnifiedStream) (uc : UnifiedRo
           rw [this]; exact List.mem_cons_self
         · exact List.mem_cons_of_mem _ (ih.mpr hTail)
 
+/-! ## Error-scope escalation
+
+`escalateRowErrs` promotes every row-scoped error to a
+collection-scoped error: each `(.err e, _)` record has its diff
+overwritten to `.error`. The `.row r` records are untouched.
+
+This is the canonical operator for the "row err means the whole
+collection is broken at this point" semantics. The companion
+`escalateRowErrs_idem` says re-escalating is a no-op. -/
+
+def UnifiedStream.escalateRowErrs (us : UnifiedStream) : UnifiedStream :=
+  us.map fun ud => match ud.1 with
+    | .err e => (UnifiedRow.err e, DiffWithError.error)
+    | .row _ => ud
+
+theorem UnifiedStream.escalateRowErrs_nil :
+    UnifiedStream.escalateRowErrs [] = [] := rfl
+
+theorem UnifiedStream.escalateRowErrs_length (us : UnifiedStream) :
+    (UnifiedStream.escalateRowErrs us).length = us.length :=
+  List.length_map _
+
+theorem UnifiedStream.escalateRowErrs_idem (us : UnifiedStream) :
+    UnifiedStream.escalateRowErrs (UnifiedStream.escalateRowErrs us)
+      = UnifiedStream.escalateRowErrs us := by
+  induction us with
+  | nil => rfl
+  | cons hd tl ih =>
+    obtain ⟨uc, d⟩ := hd
+    cases uc with
+    | row r =>
+      show ((UnifiedRow.row r, d) ::
+              (tl.map (fun ud => match ud.1 with
+                | .err e => (UnifiedRow.err e, DiffWithError.error)
+                | .row _ => ud))).map _
+          = (UnifiedRow.row r, d) :: _
+      simp only [List.map_cons]
+      show (UnifiedRow.row r, d) ::
+              (tl.map (fun ud => match ud.1 with
+                | .err e => (UnifiedRow.err e, DiffWithError.error)
+                | .row _ => ud)).map _
+          = (UnifiedRow.row r, d) :: _
+      exact congrArg (fun t => (UnifiedRow.row r, d) :: t) ih
+    | err e =>
+      show ((UnifiedRow.err e, DiffWithError.error) ::
+              (tl.map (fun ud => match ud.1 with
+                | .err e => (UnifiedRow.err e, DiffWithError.error)
+                | .row _ => ud))).map _
+          = (UnifiedRow.err e, DiffWithError.error) :: _
+      simp only [List.map_cons]
+      exact congrArg (fun t => (UnifiedRow.err e, DiffWithError.error) :: t) ih
+
+/-- After escalation, every row-err in the input is also a
+collection-err carrier in the output. The row-err set is
+preserved (escalation does not delete carriers, only overwrites
+their diff). -/
+theorem UnifiedStream.escalateRowErrs_errCarriers (us : UnifiedStream) :
+    UnifiedStream.errCarriers (UnifiedStream.escalateRowErrs us)
+      = UnifiedStream.errCarriers us := by
+  induction us with
+  | nil => rfl
+  | cons hd tl ih =>
+    obtain ⟨uc, d⟩ := hd
+    cases uc with
+    | row r =>
+      show UnifiedStream.errCarriers ((UnifiedRow.row r, d)
+                :: UnifiedStream.escalateRowErrs tl)
+          = UnifiedStream.errCarriers ((UnifiedRow.row r, d) :: tl)
+      show (UnifiedStream.escalateRowErrs tl).filterMap _ = tl.filterMap _
+      exact ih
+    | err e =>
+      show UnifiedStream.errCarriers
+            ((UnifiedRow.err e, DiffWithError.error)
+                :: UnifiedStream.escalateRowErrs tl)
+          = UnifiedStream.errCarriers ((UnifiedRow.err e, d) :: tl)
+      show e :: (UnifiedStream.escalateRowErrs tl).filterMap _
+          = e :: tl.filterMap _
+      exact congrArg _ ih
+
+/-- After escalation, every row-err carrier from input appears in
+the output's collection-err set: the escalation is observable on
+`errorDiffCarriers`. -/
+theorem UnifiedStream.escalateRowErrs_errCarriers_in_errorDiff
+    (us : UnifiedStream) (e : EvalError)
+    (h : e ∈ UnifiedStream.errCarriers us) :
+    UnifiedRow.err e
+      ∈ UnifiedStream.errorDiffCarriers (UnifiedStream.escalateRowErrs us) := by
+  obtain ⟨d, hMem⟩ := (UnifiedStream.mem_errCarriers us e).mp h
+  -- Build the membership witness in escalateRowErrs us.
+  have hMemMap : (UnifiedRow.err e, (DiffWithError.error : DiffWithError Int))
+                  ∈ UnifiedStream.escalateRowErrs us := by
+    show (UnifiedRow.err e, DiffWithError.error)
+          ∈ us.map (fun ud => match ud.1 with
+            | .err e => (UnifiedRow.err e, DiffWithError.error)
+            | .row _ => ud)
+    refine List.mem_map.mpr ⟨(UnifiedRow.err e, d), hMem, ?_⟩
+    rfl
+  exact (UnifiedStream.mem_errorDiffCarriers _ _).mpr hMemMap
+
 /-! ## Helper lemmas for filterMap over the packed concatenation -/
 
 private theorem filterMap_pickRow_rowMap (rs : List Row) :
