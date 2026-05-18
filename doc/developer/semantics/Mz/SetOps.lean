@@ -1506,4 +1506,26 @@ theorem UnifiedStream.consolidate_errorDiffCarriers_iff
   · intro h; exact UnifiedStream.consolidate_error_inv us uc h
   · intro h; exact UnifiedStream.consolidate_preserves_error us uc h
 
+/-! ## Join and error scopes
+
+`join pred l r = filter pred (cross l r)`. Error-scope behavior
+composes from `filter` and `cross` theorems above:
+
+* Collection-err set equals that of `cross l r` (filter preserves
+  the `.error` diff set exactly).
+* Row-err set grows monotonically over `cross l r` via `filter`'s
+  cell-to-row promotion. -/
+
+theorem UnifiedStream.join_errorDiffCarriers
+    (pred : Expr) (l r : UnifiedStream) :
+    UnifiedStream.errorDiffCarriers (UnifiedStream.join pred l r)
+      = UnifiedStream.errorDiffCarriers (UnifiedStream.cross l r) :=
+  UnifiedStream.filter_errorDiffCarriers pred (UnifiedStream.cross l r)
+
+theorem UnifiedStream.join_errCarriers_mono
+    (pred : Expr) (l r : UnifiedStream) (e : EvalError)
+    (h : e ∈ UnifiedStream.errCarriers (UnifiedStream.cross l r)) :
+    e ∈ UnifiedStream.errCarriers (UnifiedStream.join pred l r) :=
+  UnifiedStream.filter_errCarriers_mono pred (UnifiedStream.cross l r) e h
+
 end Mz
