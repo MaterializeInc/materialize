@@ -101,4 +101,65 @@ theorem TimedUnifiedStream.consolidateAtTimeFlat_error_inv
   · exact of_decide_eq_true hRFilter.2
   · rw [hRD]; exact hD
 
+/-! ## Round-trip iff forms
+
+Combine forward absorption with reverse inversion. The flat
+consolidations exactly characterize the presence of an `.error`
+diff in the stream (per-time slice for the time-aware version). -/
+
+theorem TimedUnifiedStream.consolidateAll_eq_error_iff
+    (s : TimedUnifiedStream) :
+    TimedUnifiedStream.consolidateAll s = DiffWithError.error
+      ↔ ∃ r ∈ s, r.2.2 = (DiffWithError.error : DiffWithError Int) := by
+  constructor
+  · exact TimedUnifiedStream.consolidateAll_error_inv
+  · intro ⟨r, hMem, hErr⟩
+    exact TimedUnifiedStream.consolidateAll_eq_error_of_mem r hMem hErr
+
+theorem TimedUnifiedStream.consolidateAtTimeFlat_eq_error_iff
+    (s : TimedUnifiedStream) (t : Nat) :
+    TimedUnifiedStream.consolidateAtTimeFlat t s = DiffWithError.error
+      ↔ ∃ r ∈ s, r.2.1 = t
+                ∧ r.2.2 = (DiffWithError.error : DiffWithError Int) := by
+  constructor
+  · exact TimedUnifiedStream.consolidateAtTimeFlat_error_inv t
+  · intro ⟨r, hMem, hT, hErr⟩
+    exact TimedUnifiedStream.consolidateAtTimeFlat_eq_error_of_mem t r hMem hT hErr
+
+/-! ## Bridge to `errorDiffCarriers`
+
+`consolidateAll` is `.error` iff the stream's collection-err set
+is non-empty. Direct via `mem` ↔ `∃ r, r.2.2 = .error`. -/
+
+theorem TimedUnifiedStream.consolidateAll_eq_error_iff_errorDiffCarriers
+    (s : TimedUnifiedStream) :
+    TimedUnifiedStream.consolidateAll s = DiffWithError.error
+      ↔ TimedUnifiedStream.errorDiffCarriers s ≠ [] := by
+  rw [TimedUnifiedStream.consolidateAll_eq_error_iff]
+  constructor
+  · intro ⟨r, hMem, hErr⟩ hNil
+    obtain ⟨uc, t, d⟩ := r
+    have hD : d = DiffWithError.error := hErr
+    subst hD
+    have hUcMem : uc ∈ TimedUnifiedStream.errorDiffCarriers s :=
+      List.mem_filterMap.mpr
+        ⟨(uc, t, (DiffWithError.error : DiffWithError Int)), hMem, rfl⟩
+    rw [hNil] at hUcMem
+    exact absurd hUcMem List.not_mem_nil
+  · intro hNonEmpty
+    match h : TimedUnifiedStream.errorDiffCarriers s with
+    | [] => exact absurd h hNonEmpty
+    | uc :: _ =>
+      have hMemList : uc ∈ TimedUnifiedStream.errorDiffCarriers s := by
+        rw [h]; exact List.mem_cons_self
+      have hFM : uc ∈ s.filterMap (fun r => match r.2.2 with
+                                              | .error => some r.1
+                                              | _      => none) := hMemList
+      obtain ⟨r0, hRMem, hRF⟩ := List.mem_filterMap.mp hFM
+      obtain ⟨uc0, t0, d0⟩ := r0
+      cases d0 with
+      | val n => cases hRF
+      | error =>
+        refine ⟨(uc0, t0, DiffWithError.error), hRMem, rfl⟩
+
 end Mz
