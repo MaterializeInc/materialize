@@ -410,6 +410,9 @@ pub struct StorageCollectionsImpl {
     /// For sending updates about read holds to our internal task.
     holds_tx: mpsc::UnboundedSender<(GlobalId, ChangeBatch<Timestamp>)>,
 
+    /// Per-phase histograms for `create_collections_for_bootstrap`.
+    create_collections_phase_seconds: prometheus::HistogramVec,
+
     /// Handles to tasks we own, making sure they're dropped when we are.
     _background_task: Arc<AbortOnDropHandle<()>>,
     _finalize_shards_task: Arc<AbortOnDropHandle<()>>,
@@ -522,6 +525,8 @@ impl StorageCollectionsImpl {
                 background_task.run().await
             });
 
+        let create_collections_phase_seconds = metrics.create_collections_phase_seconds.clone();
+
         let finalize_shards_task = mz_ore::task::spawn(
             || "storage_collections::finalize_shards_task",
             finalize_shards_task(FinalizeShardsTaskConfig {
@@ -549,6 +554,7 @@ impl StorageCollectionsImpl {
             persist: persist_clients,
             cmd_tx,
             holds_tx,
+            create_collections_phase_seconds,
             _background_task: Arc::new(background_task.abort_on_drop()),
             _finalize_shards_task: Arc::new(finalize_shards_task.abort_on_drop()),
         }
@@ -1702,6 +1708,11 @@ impl StorageCollections for StorageCollectionsImpl {
         mut collections: Vec<(GlobalId, CollectionDescription)>,
         migrated_storage_collections: &BTreeSet<GlobalId>,
     ) -> Result<(), StorageError> {
+        let phase_metric = self.create_collections_phase_seconds.clone();
+        let _validate_timer = phase_metric
+            .with_label_values(&["validate_and_enrich"])
+            .start_timer();
+
         let is_in_txns = |id, metadata: &CollectionMetadata| {
             metadata.txns_shard.is_some()
                 && !(self.read_only && migrated_storage_collections.contains(&id))
@@ -1745,6 +1756,10 @@ impl StorageCollections for StorageCollectionsImpl {
             })
             .collect_vec();
 
+        drop(_validate_timer);
+        let _open_client_timer = phase_metric
+            .with_label_values(&["open_persist_client"])
+            .start_timer();
         // So that we can open `SinceHandle`s for each collections concurrently.
         let persist_client = async {
             self.persist
@@ -1755,99 +1770,108 @@ impl StorageCollections for StorageCollectionsImpl {
         .instrument(info_span!("ccfb::open_persist_client"))
         .await;
         let persist_client = &persist_client;
+        drop(_open_client_timer);
+        let _open_handles_timer = phase_metric
+            .with_label_values(&["open_data_handles_concurrent"])
+            .start_timer();
         // Reborrow the `&mut self` as immutable, as all the concurrent work to
         // be processed in this stream cannot all have exclusive access.
         use futures::stream::{StreamExt, TryStreamExt};
         let this = &*self;
         let mut to_register: Vec<_> = async {
-        futures::stream::iter(enriched_with_metadata)
-            .map(|data: Result<_, StorageError>| {
-                async move {
-                    let (id, description, metadata) = data?;
+            futures::stream::iter(enriched_with_metadata)
+                .map(|data: Result<_, StorageError>| {
+                    async move {
+                        let (id, description, metadata) = data?;
 
-                    // should be replaced with real introspection
-                    // (https://github.com/MaterializeInc/database-issues/issues/4078)
-                    // but for now, it's helpful to have this mapping written down
-                    // somewhere
-                    debug!("mapping GlobalId={} to shard ({})", id, metadata.data_shard);
+                        // should be replaced with real introspection
+                        // (https://github.com/MaterializeInc/database-issues/issues/4078)
+                        // but for now, it's helpful to have this mapping written down
+                        // somewhere
+                        debug!("mapping GlobalId={} to shard ({})", id, metadata.data_shard);
 
-                    // If this collection has a primary, the primary is responsible for downgrading
-                    // the critical since and it would be an error if we did so here while opening
-                    // the since handle.
-                    let since = if description.primary.is_some() {
-                        None
-                    } else {
-                        description.since.as_ref()
-                    };
+                        // If this collection has a primary, the primary is responsible for downgrading
+                        // the critical since and it would be an error if we did so here while opening
+                        // the since handle.
+                        let since = if description.primary.is_some() {
+                            None
+                        } else {
+                            description.since.as_ref()
+                        };
 
-                    let (write, mut since_handle) = this
-                        .open_data_handles(
-                            &id,
-                            metadata.data_shard,
-                            since,
-                            metadata.relation_desc.clone(),
-                            persist_client,
-                        )
-                        .await;
+                        let (write, mut since_handle) = this
+                            .open_data_handles(
+                                &id,
+                                metadata.data_shard,
+                                since,
+                                metadata.relation_desc.clone(),
+                                persist_client,
+                            )
+                            .await;
 
-                    // Present tables as springing into existence at the register_ts
-                    // by advancing the since. Otherwise, we could end up in a
-                    // situation where a table with a long compaction window appears
-                    // to exist before the environment (and this the table) existed.
-                    //
-                    // We could potentially also do the same thing for other
-                    // sources, in particular storage's internal sources and perhaps
-                    // others, but leave them for now.
-                    match description.data_source {
-                        DataSource::Introspection(_)
-                        | DataSource::IngestionExport { .. }
-                        | DataSource::Webhook
-                        | DataSource::Ingestion(_)
-                        | DataSource::Progress
-                        | DataSource::Other => {}
-                        DataSource::Sink { .. } => {}
-                        DataSource::Table => {
-                            let register_ts = register_ts.expect(
+                        // Present tables as springing into existence at the register_ts
+                        // by advancing the since. Otherwise, we could end up in a
+                        // situation where a table with a long compaction window appears
+                        // to exist before the environment (and this the table) existed.
+                        //
+                        // We could potentially also do the same thing for other
+                        // sources, in particular storage's internal sources and perhaps
+                        // others, but leave them for now.
+                        match description.data_source {
+                            DataSource::Introspection(_)
+                            | DataSource::IngestionExport { .. }
+                            | DataSource::Webhook
+                            | DataSource::Ingestion(_)
+                            | DataSource::Progress
+                            | DataSource::Other => {}
+                            DataSource::Sink { .. } => {}
+                            DataSource::Table => {
+                                let register_ts = register_ts.expect(
                                 "caller should have provided a register_ts when creating a table",
                             );
-                            if since_handle.since().elements() == &[Timestamp::MIN]
-                                && !migrated_storage_collections.contains(&id)
-                            {
-                                debug!("advancing {} to initial since of {:?}", id, register_ts);
-                                let token = since_handle.opaque();
-                                let _ = since_handle
-                                    .compare_and_downgrade_since(
-                                        &token,
-                                        (&token, &Antichain::from_elem(register_ts)),
-                                    )
-                                    .await;
+                                if since_handle.since().elements() == &[Timestamp::MIN]
+                                    && !migrated_storage_collections.contains(&id)
+                                {
+                                    debug!(
+                                        "advancing {} to initial since of {:?}",
+                                        id, register_ts
+                                    );
+                                    let token = since_handle.opaque();
+                                    let _ = since_handle
+                                        .compare_and_downgrade_since(
+                                            &token,
+                                            (&token, &Antichain::from_elem(register_ts)),
+                                        )
+                                        .await;
+                                }
                             }
                         }
-                    }
 
-                    Ok::<_, StorageError>((id, description, write, since_handle, metadata))
-                }
-            })
-            // Poll each future for each collection concurrently, maximum of 50 at a time.
-            .buffer_unordered(50)
-            // HERE BE DRAGONS:
-            //
-            // There are at least 2 subtleties in using `FuturesUnordered`
-            // (which `buffer_unordered` uses underneath:
-            // - One is captured here
-            //   <https://github.com/rust-lang/futures-rs/issues/2387>
-            // - And the other is deadlocking if processing an OUTPUT of a
-            //   `FuturesUnordered` stream attempts to obtain an async mutex that
-            //   is also obtained in the futures being polled.
-            //
-            // Both of these could potentially be issues in all usages of
-            // `buffer_unordered` in this method, so we stick the standard
-            // advice: only use `try_collect` or `collect`!
-            .try_collect()
-            .await
+                        Ok::<_, StorageError>((id, description, write, since_handle, metadata))
+                    }
+                })
+                // Poll each future for each collection concurrently, maximum of 50 at a time.
+                .buffer_unordered(50)
+                // HERE BE DRAGONS:
+                //
+                // There are at least 2 subtleties in using `FuturesUnordered`
+                // (which `buffer_unordered` uses underneath:
+                // - One is captured here
+                //   <https://github.com/rust-lang/futures-rs/issues/2387>
+                // - And the other is deadlocking if processing an OUTPUT of a
+                //   `FuturesUnordered` stream attempts to obtain an async mutex that
+                //   is also obtained in the futures being polled.
+                //
+                // Both of these could potentially be issues in all usages of
+                // `buffer_unordered` in this method, so we stick the standard
+                // advice: only use `try_collect` or `collect`!
+                .try_collect()
+                .await
         }
         .instrument(info_span!("ccfb::open_data_handles_concurrent"))
         .await?;
+        drop(_open_handles_timer);
+        let _sort_timer = phase_metric.with_label_values(&["sort"]).start_timer();
 
         // Reorder in dependency order.
         #[derive(Ord, PartialOrd, Eq, PartialEq)]
@@ -1864,6 +1888,10 @@ impl StorageCollections for StorageCollectionsImpl {
             DataSource::Sink { .. } => DependencyOrder::Sink(*id),
             _ => DependencyOrder::Collection(*id),
         });
+        drop(_sort_timer);
+        let _install_timer = phase_metric
+            .with_label_values(&["install_collection_states"])
+            .start_timer();
 
         // We hold this lock for a very short amount of time, just doing some
         // hashmap inserts and unbounded channel sends.
@@ -2041,6 +2069,10 @@ impl StorageCollections for StorageCollectionsImpl {
 
         drop(_install_span);
         drop(self_collections);
+        drop(_install_timer);
+        let _finalize_timer = phase_metric
+            .with_label_values(&["synchronize_finalized_shards"])
+            .start_timer();
 
         let _span = info_span!("ccfb::synchronize_finalized_shards").entered();
         self.synchronize_finalized_shards(storage_metadata);
@@ -2358,6 +2390,7 @@ impl StorageCollections for StorageCollectionsImpl {
             persist: _,
             cmd_tx: _,
             holds_tx: _,
+            create_collections_phase_seconds: _,
             _background_task: _,
             _finalize_shards_task: _,
         } = self;

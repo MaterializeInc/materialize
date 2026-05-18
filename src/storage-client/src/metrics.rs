@@ -20,9 +20,11 @@ use mz_ore::metrics::{
     CounterVec, DeleteOnDropCounter, DeleteOnDropGauge, IntCounterVec, MetricsRegistry,
     UIntGaugeVec,
 };
+use mz_ore::stats::histogram_seconds_buckets;
 use mz_repr::GlobalId;
 use mz_service::transport;
 use mz_storage_types::instances::StorageInstanceId;
+use prometheus::HistogramVec;
 use prometheus::core::{AtomicF64, AtomicU64};
 
 use crate::client::{StorageCommand, StorageResponse};
@@ -46,6 +48,9 @@ pub struct StorageControllerMetrics {
     connected_replica_count: UIntGaugeVec,
     replica_connects_total: IntCounterVec,
     replica_connect_wait_time_seconds_total: CounterVec,
+
+    /// Per-phase timing for `StorageController::create_collections_for_bootstrap`.
+    pub create_collections_phase_seconds: HistogramVec,
 
     /// Metrics shared with the compute controller.
     shared: ControllerMetrics,
@@ -98,6 +103,13 @@ impl StorageControllerMetrics {
                 name: "mz_storage_controller_replica_connect_wait_time_seconds_total",
                 help: "The total time the storage controller spent waiting for replica (re-)connection.",
                 var_labels: ["instance_id", "replica_id"],
+            )),
+            create_collections_phase_seconds: metrics_registry.register(metric!(
+                name: "mz_storage_controller_create_collections_phase_seconds",
+                help: "The time spent in each phase of a single \
+                       StorageController::create_collections_for_bootstrap call.",
+                var_labels: ["phase"],
+                buckets: histogram_seconds_buckets(0.0001, 32.0),
             )),
 
             shared,

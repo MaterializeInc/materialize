@@ -14,8 +14,9 @@ use std::sync::{Mutex, MutexGuard};
 use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::{MetricsRegistry, UIntGauge};
+use mz_ore::stats::histogram_seconds_buckets;
 use mz_persist_types::ShardId;
-use prometheus::Counter;
+use prometheus::{Counter, HistogramVec};
 
 #[derive(Debug)]
 pub struct StorageCollectionsMetrics {
@@ -24,6 +25,7 @@ pub struct StorageCollectionsMetrics {
     pub finalization_started: Counter,
     pub finalization_succeeded: Counter,
     pub finalization_failed: Counter,
+    pub create_collections_phase_seconds: HistogramVec,
 }
 
 impl StorageCollectionsMetrics {
@@ -48,6 +50,13 @@ impl StorageCollectionsMetrics {
             finalization_failed: registry.register(metric!(
                 name: "mz_shard_finalization_op_failed",
                 help: "count of shard finalization operations that failed",
+            )),
+            create_collections_phase_seconds: registry.register(metric!(
+                name: "mz_storage_collections_create_collections_phase_seconds",
+                help: "The time spent in each phase of a single \
+                       StorageCollections::create_collections_for_bootstrap call.",
+                var_labels: ["phase"],
+                buckets: histogram_seconds_buckets(0.0001, 32.0),
             )),
         }
     }
