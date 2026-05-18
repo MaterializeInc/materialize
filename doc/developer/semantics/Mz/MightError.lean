@@ -166,7 +166,10 @@ def Expr.might_error : Expr → Bool
     if a.isLitBoolTrue || b.isLitBoolTrue then false
     else a.might_error || b.might_error
   | .not a                => a.might_error
-  | .ifThen c t e         => c.might_error || t.might_error || e.might_error
+  | .ifThen c t e         =>
+    if c.isLitBoolTrue  then t.might_error
+    else if c.isLitBoolFalse then e.might_error
+    else c.might_error || t.might_error || e.might_error
   | .andN args            => Expr.argsMightError args
   | .orN  args            => Expr.argsMightError args
   | .coalesce []          => false
@@ -463,13 +466,75 @@ theorem might_error_sound :
   | .ifThen c t e, env, hMe, hEnv => by
     intro hRes
     simp only [eval] at hRes
-    have hc : ¬(c.might_error = true) := fun h => hMe (by simp [Expr.might_error, h])
-    have ht : ¬(t.might_error = true) := fun h => hMe (by simp [Expr.might_error, h])
-    have he : ¬(e.might_error = true) := fun h => hMe (by simp [Expr.might_error, h])
-    exact evalIfThen_not_err
-      (might_error_sound c env hc hEnv)
-      (might_error_sound t env ht hEnv)
-      (might_error_sound e env he hEnv) hRes
+    cases hCT : c.isLitBoolTrue with
+    | true =>
+      -- c = .lit (.bool true): evalIfThen .bool true dt de = dt
+      have hEq : c = .lit (.bool true) := by
+        cases c with
+        | lit d =>
+          cases d with
+          | bool b' => cases b' with
+                        | true  => rfl
+                        | false => simp [Expr.isLitBoolTrue] at hCT
+          | _ => simp [Expr.isLitBoolTrue] at hCT
+        | _ => simp [Expr.isLitBoolTrue] at hCT
+      rw [hEq] at hRes
+      simp only [eval] at hRes
+      -- hRes : (evalIfThen .bool true (eval env t) (eval env e)).IsErr
+      -- evalIfThen .bool true dt _ = dt by definition
+      have h_reduce : evalIfThen (.bool true) (eval env t) (eval env e) = eval env t := rfl
+      rw [h_reduce] at hRes
+      have ht : ¬(t.might_error = true) := fun h => hMe (by
+        rw [hEq]
+        show (if (Expr.lit (.bool true)).isLitBoolTrue then t.might_error
+                else if (Expr.lit (.bool true)).isLitBoolFalse then e.might_error
+                else (Expr.lit (.bool true)).might_error || t.might_error || e.might_error)
+            = true
+        simp [Expr.isLitBoolTrue, h])
+      exact might_error_sound t env ht hEnv hRes
+    | false =>
+      cases hCF : c.isLitBoolFalse with
+      | true =>
+        have hEq : c = .lit (.bool false) := by
+          cases c with
+          | lit d =>
+            cases d with
+            | bool b' => cases b' with
+                          | false => rfl
+                          | true  => simp [Expr.isLitBoolFalse] at hCF
+            | _ => simp [Expr.isLitBoolFalse] at hCF
+          | _ => simp [Expr.isLitBoolFalse] at hCF
+        rw [hEq] at hRes
+        simp only [eval] at hRes
+        have h_reduce : evalIfThen (.bool false) (eval env t) (eval env e) = eval env e := rfl
+        rw [h_reduce] at hRes
+        have he : ¬(e.might_error = true) := fun h => hMe (by
+          rw [hEq]
+          show (if (Expr.lit (.bool false)).isLitBoolTrue then t.might_error
+                  else if (Expr.lit (.bool false)).isLitBoolFalse then e.might_error
+                  else (Expr.lit (.bool false)).might_error || t.might_error || e.might_error)
+              = true
+          simp [Expr.isLitBoolTrue, Expr.isLitBoolFalse, h])
+        exact might_error_sound e env he hEnv hRes
+      | false =>
+        -- Non-short-circuit branch
+        have hMeReduce :
+            Expr.might_error (.ifThen c t e)
+              = (c.might_error || t.might_error || e.might_error) := by
+          show (if c.isLitBoolTrue  then t.might_error
+                  else if c.isLitBoolFalse then e.might_error
+                  else c.might_error || t.might_error || e.might_error)
+              = (c.might_error || t.might_error || e.might_error)
+          rw [hCT, hCF]
+          rfl
+        rw [hMeReduce] at hMe
+        have hc : ¬(c.might_error = true) := fun h => hMe (by simp [h])
+        have ht : ¬(t.might_error = true) := fun h => hMe (by simp [h])
+        have he : ¬(e.might_error = true) := fun h => hMe (by simp [h])
+        exact evalIfThen_not_err
+          (might_error_sound c env hc hEnv)
+          (might_error_sound t env ht hEnv)
+          (might_error_sound e env he hEnv) hRes
   | .andN args, env, hMe, hEnv => by
     intro hRes
     simp only [eval] at hRes
