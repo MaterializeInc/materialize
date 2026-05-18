@@ -24,7 +24,7 @@ The goal is to lock in the boolean truth tables for `AND` and `OR` over the four
 * `Mz/Pushdown.lean`: substitution (`Expr.subst`) plus the headline `eval_subst` theorem (substituting then evaluating against the original row equals evaluating against the projected row), and the relational predicate-pushdown rewrite `filterRel p (project es rel) = project es (filterRel (p.subst es) rel)`.
 * `Mz/DiffSemiring.lean`: `DiffWithError α` — the diff-field type extension that encodes global (collection-scoped) errors as an absorbing element. Provides `+`, `*`, `0`, `1` instances over an arbitrary base diff and proves the absorption / commutativity / associativity / distributivity laws that downstream operators must respect.
 * `Mz/UnifiedStream.lean`: unified single-collection alternative to `BagStream`. `UnifiedRow` is `row ⊕ err`, so errors flow through the same carrier as data rows. `ofBag` / `split` conversions, with the round-trip theorem `split (ofBag s) = s`. The unified form matches the spec's diff-semiring target; the split `BagStream` is a runtime concession the conversion reconciles.
-* `Mz/Aggregate.lean`: aggregate reductions over `List Datum`. `aggCountNonNull` for `COUNT(expr)`. `aggStrict` for `SUM`/`MIN`/`MAX`-style aggregates that propagate `err` (first one in scan order wins) and skip `NULL`s. Two theorems: `aggStrict_err` (any `err` input → `err` output) and `aggStrict_no_err` (no-err inputs and a no-err-preserving reducer → no-err output).
+* `Mz/Aggregate.lean`: aggregate reductions over `List Datum`. `aggCountNonNull` for `COUNT(expr)`. `aggStrict` for `SUM`/`MIN`/`MAX`-style aggregates that propagate `err` (first one in scan order wins) and skip `NULL`s. `aggTry` for the proposed `try_sum`/`try_min`/`try_max` variants that swallow `err` into `NULL` instead of propagating, defined as a post-pass on `aggStrict`. Theorems: `aggStrict_err` (any `err` input → `err` output), `aggStrict_no_err` (no-err inputs + no-err reducer → no-err output), `aggTry_no_err` (the non-strict variant never errors), and `aggTry_eq_aggStrict_of_no_err` (strict and non-strict agree on error-free inputs).
 
 ## What is not here
 
@@ -74,7 +74,6 @@ The roadmap in priority order:
 * `BagStream.filter` commutativity. Data field commutes by `filterRel_comm`; the error field requires a notion of multiset equality on `List EvalError` since list-order differs across permutations.
 * Tie `DiffWithError` to a concrete dataflow operator: model a `(Row, Time, DiffWithError ℤ)` triple stream and prove that an `error` diff at time `t` propagates to every downstream consolidation.
 * Joins on `BagStream` with explicit error propagation.
-* `try_*` non-strict aggregate variants: swallow `err` into `NULL` instead of propagating. Coalesce-style law rather than strict.
 * `GROUP BY` semantics: partition rows by key, run `aggStrict` per group. `Datum.err` keys form their own group (per the spec's grouping rule).
 * Tightening `Expr.might_error`. The skeleton version is purely structural and ignores type / nullability information; bringing it closer to `MirScalarExpr::might_error` is additive.
 * Lift to bag semantics for predicate / projection rewrites.
