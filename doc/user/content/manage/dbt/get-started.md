@@ -586,6 +586,52 @@ You can specify the retention period using common time units like:
 - `'1d'` for one day
 - `'1w'` for one week
 
+##### Using partition by
+
+{{< tip >}}
+For guidance and best practices on how to use `PARTITION BY` in Materialize,
+see [Partitioning and filter pushdown](/transform-data/patterns/partition-by/).
+{{</ tip >}}
+
+To control the internal storage order that Materialize uses for a
+materialized view, use the `partition_by` configuration. This declares the
+columns that Materialize should sort by when writing the underlying data into
+storage, so that rows with similar values are stored together. The main
+user-visible benefit is enabling [filter pushdown](/transform-data/patterns/partition-by/#filter-pushdown)
+for queries with selective filters on the partition columns.
+
+**Filename:** models/materialized_view_partitioned.sql
+```mzsql
+{{ config(
+    materialized='materialized_view',
+    partition_by=['col_a']
+) }}
+
+SELECT
+    col_a,
+    col_b,
+    col_c
+FROM {{ ref('view_a') }}
+```
+
+The model above will be compiled to the following SQL statement:
+
+```mzsql
+CREATE MATERIALIZED VIEW database.schema.materialized_view_partitioned
+WITH (PARTITION BY (col_a))
+AS
+SELECT
+    col_a,
+    col_b,
+    col_c
+FROM database.schema.view_a;
+```
+
+The listed columns must be a **prefix** of the relation's columns, and only
+columns with order-preserving types are supported. See the
+[`PARTITION BY` requirements](/transform-data/patterns/partition-by/#requirements)
+for the full list.
+
 ### Sinks
 
 In Materialize, a [sink](/sql/create-sink) describes an **external** system you
