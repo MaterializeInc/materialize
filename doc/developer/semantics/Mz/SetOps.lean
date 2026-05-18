@@ -372,4 +372,131 @@ theorem UnifiedStream.bagExceptAll_only_positive
       ∨ x.2 = DiffWithError.error :=
   UnifiedStream.clampPositive_only_positive _
 
+/-! ## `DISTINCT`
+
+Set semantics: collapse multiplicities so each carrier appears at
+most once with `.val 1` (or `.error` if a collection-scoped error
+existed for that carrier). `clampToOne` is the post-consolidation
+pass — `.val n` with `n > 0` becomes `.val 1`, non-positive `.val`
+is dropped, `.error` survives. `distinct = clampToOne ∘ consolidate`. -/
+
+/-- Map positive multiplicities to one and drop non-positive
+ones. `.error` survives. The recursive form is preferred over a
+filter+map composition because it makes the per-output diff shape
+visible to the structural-induction proofs below. -/
+def UnifiedStream.clampToOne : UnifiedStream → UnifiedStream
+  | []                    => []
+  | (uc, .error) :: rest  => (uc, .error) :: UnifiedStream.clampToOne rest
+  | (uc, .val n) :: rest  =>
+    if 0 < n then (uc, .val 1) :: UnifiedStream.clampToOne rest
+    else UnifiedStream.clampToOne rest
+
+theorem UnifiedStream.clampToOne_nil :
+    UnifiedStream.clampToOne [] = [] := rfl
+
+theorem UnifiedStream.clampToOne_length_le (us : UnifiedStream) :
+    (UnifiedStream.clampToOne us).length ≤ us.length := by
+  induction us with
+  | nil => exact Nat.le.refl
+  | cons hd tl ih =>
+    obtain ⟨uc, d⟩ := hd
+    cases d with
+    | error =>
+      simp only [UnifiedStream.clampToOne, List.length_cons]
+      omega
+    | val n =>
+      simp only [UnifiedStream.clampToOne, List.length_cons]
+      split
+      · simp only [List.length_cons]; omega
+      · omega
+
+theorem UnifiedStream.clampToOne_preserves_error_diff
+    (us : UnifiedStream) (uc : UnifiedRow)
+    (h : (uc, (DiffWithError.error : DiffWithError Int)) ∈ us) :
+    (uc, (DiffWithError.error : DiffWithError Int))
+      ∈ UnifiedStream.clampToOne us := by
+  induction us with
+  | nil => exact absurd h List.not_mem_nil
+  | cons hd tl ih =>
+    obtain ⟨uc₀, d₀⟩ := hd
+    rcases List.mem_cons.mp h with hEq | hTail
+    · have hUc : uc = uc₀ := (Prod.mk.injEq _ _ _ _).mp hEq |>.1
+      have hD : (DiffWithError.error : DiffWithError Int) = d₀ :=
+        (Prod.mk.injEq _ _ _ _).mp hEq |>.2
+      subst hUc; subst hD
+      show (uc, DiffWithError.error)
+          ∈ ((uc, DiffWithError.error) :: UnifiedStream.clampToOne tl)
+      exact List.mem_cons_self
+    · cases d₀ with
+      | error =>
+        show (uc, DiffWithError.error)
+            ∈ ((uc₀, DiffWithError.error) :: UnifiedStream.clampToOne tl)
+        exact List.mem_cons_of_mem _ (ih hTail)
+      | val n =>
+        show (uc, DiffWithError.error)
+            ∈ (if 0 < n
+                then (uc₀, DiffWithError.val 1) :: UnifiedStream.clampToOne tl
+                else UnifiedStream.clampToOne tl)
+        split
+        · exact List.mem_cons_of_mem _ (ih hTail)
+        · exact ih hTail
+
+/-- Every `.val` record in the output of `clampToOne` has
+multiplicity exactly one. `.error` records pass through unchanged. -/
+theorem UnifiedStream.clampToOne_only_one_or_error
+    (us : UnifiedStream) :
+    ∀ x ∈ UnifiedStream.clampToOne us,
+      x.2 = DiffWithError.val 1 ∨ x.2 = DiffWithError.error := by
+  induction us with
+  | nil => intro x hMem; exact absurd hMem List.not_mem_nil
+  | cons hd tl ih =>
+    obtain ⟨uc, d⟩ := hd
+    cases d with
+    | error =>
+      intro x hMem
+      have hMem' : x ∈ (uc, (DiffWithError.error : DiffWithError Int))
+                    :: UnifiedStream.clampToOne tl := hMem
+      rcases List.mem_cons.mp hMem' with hHead | hTail
+      · exact Or.inr (by rw [hHead])
+      · exact ih x hTail
+    | val n =>
+      intro x hMem
+      have hMem' : x ∈ (if 0 < n
+                        then ((uc, DiffWithError.val 1)
+                              :: UnifiedStream.clampToOne tl)
+                        else UnifiedStream.clampToOne tl) := hMem
+      split at hMem'
+      · rcases List.mem_cons.mp hMem' with hHead | hTail
+        · exact Or.inl (by rw [hHead])
+        · exact ih x hTail
+      · exact ih x hMem'
+
+/-! ### `distinct`
+
+Pipeline: consolidate, then `clampToOne`. Each carrier appears at
+most once in the output, with `.val 1` if it had positive net
+multiplicity, or `.error` if a collection-scoped error existed. -/
+
+def UnifiedStream.distinct (us : UnifiedStream) : UnifiedStream :=
+  UnifiedStream.clampToOne (UnifiedStream.consolidate us)
+
+theorem UnifiedStream.distinct_length_le (us : UnifiedStream) :
+    (UnifiedStream.distinct us).length ≤ us.length :=
+  Nat.le_trans
+    (UnifiedStream.clampToOne_length_le _)
+    (UnifiedStream.consolidate_length_le us)
+
+theorem UnifiedStream.distinct_preserves_error_diff
+    (us : UnifiedStream) (uc : UnifiedRow)
+    (h : (uc, (DiffWithError.error : DiffWithError Int)) ∈ us) :
+    (uc, (DiffWithError.error : DiffWithError Int))
+      ∈ UnifiedStream.distinct us :=
+  UnifiedStream.clampToOne_preserves_error_diff _ uc
+    (UnifiedStream.consolidate_preserves_error _ uc h)
+
+theorem UnifiedStream.distinct_only_one_or_error (us : UnifiedStream) :
+    ∀ x ∈ UnifiedStream.distinct us,
+      x.2 = DiffWithError.val 1 ∨ x.2 = DiffWithError.error :=
+  UnifiedStream.clampToOne_only_one_or_error _
+
 end Mz
