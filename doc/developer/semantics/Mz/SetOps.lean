@@ -822,6 +822,44 @@ theorem UnifiedStream.clampToOne_idem (us : UnifiedStream) :
         rw [ih]
       · exact ih
 
+/-- `clampToOne` is the identity on streams where every record's
+diff is already `.val 1` or `.error`. Companion to
+`clampPositive_id_of_positive`: the threshold-elision-flavored
+result for the set-semantics post-pass. -/
+theorem UnifiedStream.clampToOne_id_of_one
+    (us : UnifiedStream)
+    (h : ∀ ud ∈ us, ud.2 = DiffWithError.error
+                  ∨ ud.2 = DiffWithError.val 1) :
+    UnifiedStream.clampToOne us = us := by
+  induction us with
+  | nil => rfl
+  | cons hd tl ih =>
+    obtain ⟨uc, d⟩ := hd
+    have hHd := h (uc, d) List.mem_cons_self
+    have hTl : ∀ ud ∈ tl, ud.2 = DiffWithError.error
+                        ∨ ud.2 = DiffWithError.val 1 :=
+      fun ud hMem => h ud (List.mem_cons_of_mem _ hMem)
+    cases d with
+    | error =>
+      show (uc, DiffWithError.error) :: UnifiedStream.clampToOne tl
+            = (uc, DiffWithError.error) :: tl
+      rw [ih hTl]
+    | val n =>
+      rcases hHd with hErr | hOne
+      · -- `.val n = .error` is impossible.
+        exact absurd hErr (by intro hEq; cases hEq)
+      · -- `.val n = .val 1`, so `n = 1`.
+        have hN : n = 1 := by
+          have := hOne
+          cases this
+          rfl
+        subst hN
+        show (if 0 < (1 : Int)
+                then (uc, DiffWithError.val 1) :: UnifiedStream.clampToOne tl
+                else UnifiedStream.clampToOne tl)
+              = (uc, DiffWithError.val 1) :: tl
+        rw [if_pos (by decide : (0 : Int) < 1), ih hTl]
+
 /-- All-`.val` inputs yield all-`.val` outputs through `clampToOne`:
 no `.error` is introduced (records with non-positive `.val` are
 dropped, positive `.val` become `.val 1`). -/
