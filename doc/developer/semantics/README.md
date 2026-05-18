@@ -8,9 +8,9 @@ The goal is to lock in the boolean truth tables for `AND` and `OR` over the four
 
 ## What is here
 
-* `Mz/Datum.lean`: `Datum`, `EvalError`, and the `Datum.IsErr` predicate.
-* `Mz/Expr.lean`: `Expr` inductive — literals, columns, binary `and`/`or`, `not`, `ifThen`, plus the list-carrying constructors `andN`, `orN`, and `coalesce`.
-* `Mz/PrimEval.lean`: primitive evaluators on `Datum` and `List Datum` — `evalAnd`, `evalOr`, `evalNot`, `evalIfThen`, `Env`, `Env.get`, `evalAndN`, `evalOrN`, `evalCoalesce`. Split out so the algebraic-law files and the expression-level evaluator can both import them without circular dependencies.
+* `Mz/Datum.lean`: `Datum` (`.bool`, `.int`, `.null`, `.err`), `EvalError` (`.placeholder`, `.divisionByZero`), and the `Datum.IsErr` predicate.
+* `Mz/Expr.lean`: `Expr` inductive — literals, columns, binary `and`/`or`, `not`, `ifThen`, the list-carrying constructors `andN`, `orN`, `coalesce`, and the binary integer arithmetic constructors `plus`, `minus`, `times`, `divide`.
+* `Mz/PrimEval.lean`: primitive evaluators on `Datum` and `List Datum` — `evalAnd`, `evalOr`, `evalNot`, `evalIfThen`, `Env`, `Env.get`, `evalAndN`, `evalOrN`, `evalCoalesce`, plus the integer arithmetic primitives `evalPlus`, `evalMinus`, `evalTimes`, `evalDivide`. Split out so the algebraic-law files and the expression-level evaluator can both import them without circular dependencies. Division strict on `.err` and `.null`; a `.int n / .int 0` divisor produces `.err .divisionByZero` — the canonical cell-scoped error.
 * `Mz/Eval.lean`: the big-step `eval : Env → Expr → Datum`. List-carrying constructors evaluate each operand and hand the result list to the matching primitive.
 * `Mz/Boolean.lean`: per-cell truth-table proofs for `AND`, `OR`, and `NOT`, plus involutivity of `NOT`.
 * `Mz/MightError.lean`: the `Expr.might_error` static analyzer, the `Env.ErrFree` predicate, and the `might_error_sound` theorem. Binary `AND` / `OR` short-circuit on literal-`.bool false` / literal-`.bool true` operands via `Expr.isLitBoolFalse` / `Expr.isLitBoolTrue`: either position being the absorbing literal makes the analyzer return `false` regardless of the other operand. The same short-circuit fires on variadic `andN` / `orN` when any operand is the absorbing literal. `IfThen` likewise short-circuits when the condition is a literal `.bool` — only the picked branch's analyzer result is consulted, so a known-erring branch on the discarded side cannot taint the result. `andN` and `orN` recurse via `Expr.argsMightError` ("any operand might error"); `coalesce` recurses via `Expr.argsAllMightError` ("every operand might error"), special-casing the empty list as safe. Soundness for `coalesce` extracts a statically-safe operand through `Expr.exists_safe_of_not_argsAllMightError` and applies `evalCoalesce_not_err_of_some_safe`, which in turn rests on `Coalesce.go_not_err` — the state-machine lemma that "once one safe operand is in the remaining list, the walk cannot return an error". Companion value-level helpers `evalAnd_{left,right}_false` / `evalOr_{left,right}_true` discharge the short-circuit branches of soundness.
@@ -102,7 +102,6 @@ The diff-semiring extension is in scope: `UnifiedStream` records carry `(Unified
 
 ### Material expansions
 
-* Numeric arithmetic. Extend `Datum` with `.int (n : Int)`, add `Expr.plus` / `.minus` / `.times` / `.divide`, and a `divide-by-zero` `EvalError` variant. Tightens the err-handling story since divide-by-zero is the canonical `EvalError`.
 * Set operations (`UNION ALL`, `INTERSECT ALL`, `EXCEPT ALL`) on `UnifiedStream`. Composing with `consolidate` derives the set-semantics (`UNION` / `INTERSECT` / `EXCEPT`) variants.
 * `distinct` operator on `UnifiedStream`: collapse multiplicity via `consolidate` + sign normalization.
 * Cross-link the spec doc (`../design/20260517_error_handling_semantics.md`) to specific theorem names via `[Mz/...:thm]` cross-references.

@@ -38,6 +38,10 @@ inductive Expr
   | andN (args : List Expr)
   | orN (args : List Expr)
   | coalesce (args : List Expr)
+  | plus   (a b : Expr)
+  | minus  (a b : Expr)
+  | times  (a b : Expr)
+  | divide (a b : Expr)
   deriving Inhabited
 
 end Mz

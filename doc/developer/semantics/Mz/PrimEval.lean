@@ -76,6 +76,51 @@ def evalIfThen : Datum → Datum → Datum → Datum
   | .err e,      _,  _  => .err e
   | _,           _,  _  => .null
 
+/-! ## Numeric arithmetic
+
+Binary integer arithmetic. Strict on `.err` and `.null`. Non-
+numeric operands route to `.null` for totality. Division by zero
+returns `.err .divisionByZero` — the canonical cell-scoped error
+the design doc cites. -/
+
+/-- Integer addition. Strict on `.err` (propagates) and `.null`
+(propagates). Type-mismatched operands route to `.null`. -/
+def evalPlus : Datum → Datum → Datum
+  | .err e, _      => .err e
+  | _, .err e      => .err e
+  | .null, _       => .null
+  | _, .null       => .null
+  | .int n, .int m => .int (n + m)
+  | _, _           => .null
+
+/-- Integer subtraction. Same propagation rules as `evalPlus`. -/
+def evalMinus : Datum → Datum → Datum
+  | .err e, _      => .err e
+  | _, .err e      => .err e
+  | .null, _       => .null
+  | _, .null       => .null
+  | .int n, .int m => .int (n - m)
+  | _, _           => .null
+
+/-- Integer multiplication. Same propagation rules. -/
+def evalTimes : Datum → Datum → Datum
+  | .err e, _      => .err e
+  | _, .err e      => .err e
+  | .null, _       => .null
+  | _, .null       => .null
+  | .int n, .int m => .int (n * m)
+  | _, _           => .null
+
+/-- Integer division. Strict on `.err` and `.null`. A right
+operand of `.int 0` produces `.err .divisionByZero`. -/
+def evalDivide : Datum → Datum → Datum
+  | .err e, _      => .err e
+  | _, .err e      => .err e
+  | .null, _       => .null
+  | _, .null       => .null
+  | .int n, .int m => if m = 0 then .err .divisionByZero else .int (n / m)
+  | _, _           => .null
+
 /-! ## Environment -/
 
 /-- Environment: a positional list of bindings for `Expr.col`. -/

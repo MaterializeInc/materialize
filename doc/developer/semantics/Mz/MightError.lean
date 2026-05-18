@@ -79,6 +79,98 @@ theorem evalNot_not_err
   | null   => intro h; cases h
   | err _  => exact (h trivial).elim
 
+theorem evalPlus_not_err
+    {d₁ d₂ : Datum} (h₁ : ¬d₁.IsErr) (h₂ : ¬d₂.IsErr) :
+    ¬(evalPlus d₁ d₂).IsErr := by
+  cases d₁ with
+  | bool _ =>
+    cases d₂ with
+    | bool _ => intro h; cases h
+    | int  _ => intro h; cases h
+    | null   => intro h; cases h
+    | err _  => exact (h₂ trivial).elim
+  | int _ =>
+    cases d₂ with
+    | bool _ => intro h; cases h
+    | int  _ => intro h; cases h
+    | null   => intro h; cases h
+    | err _  => exact (h₂ trivial).elim
+  | null =>
+    cases d₂ with
+    | bool _ => intro h; cases h
+    | int  _ => intro h; cases h
+    | null   => intro h; cases h
+    | err _  => exact (h₂ trivial).elim
+  | err _ => exact (h₁ trivial).elim
+
+theorem evalMinus_not_err
+    {d₁ d₂ : Datum} (h₁ : ¬d₁.IsErr) (h₂ : ¬d₂.IsErr) :
+    ¬(evalMinus d₁ d₂).IsErr := by
+  cases d₁ with
+  | bool _ =>
+    cases d₂ with
+    | bool _ => intro h; cases h
+    | int  _ => intro h; cases h
+    | null   => intro h; cases h
+    | err _  => exact (h₂ trivial).elim
+  | int _ =>
+    cases d₂ with
+    | bool _ => intro h; cases h
+    | int  _ => intro h; cases h
+    | null   => intro h; cases h
+    | err _  => exact (h₂ trivial).elim
+  | null =>
+    cases d₂ with
+    | bool _ => intro h; cases h
+    | int  _ => intro h; cases h
+    | null   => intro h; cases h
+    | err _  => exact (h₂ trivial).elim
+  | err _ => exact (h₁ trivial).elim
+
+theorem evalTimes_not_err
+    {d₁ d₂ : Datum} (h₁ : ¬d₁.IsErr) (h₂ : ¬d₂.IsErr) :
+    ¬(evalTimes d₁ d₂).IsErr := by
+  cases d₁ with
+  | bool _ =>
+    cases d₂ with
+    | bool _ => intro h; cases h
+    | int  _ => intro h; cases h
+    | null   => intro h; cases h
+    | err _  => exact (h₂ trivial).elim
+  | int _ =>
+    cases d₂ with
+    | bool _ => intro h; cases h
+    | int  _ => intro h; cases h
+    | null   => intro h; cases h
+    | err _  => exact (h₂ trivial).elim
+  | null =>
+    cases d₂ with
+    | bool _ => intro h; cases h
+    | int  _ => intro h; cases h
+    | null   => intro h; cases h
+    | err _  => exact (h₂ trivial).elim
+  | err _ => exact (h₁ trivial).elim
+
+/-- Division is the canonical erring operation: a right operand
+of `.int 0` produces `.err .divisionByZero` even when both
+operands are otherwise error-free. So the analyzer's universal
+"divide might err" verdict is exactly right; soundness on
+`.divide` proceeds via the absurd-premise path. -/
+theorem evalDivide_not_err_of_nonzero
+    {n m : Int} (hm : m ≠ 0) :
+    ¬(evalDivide (.int n) (.int m)).IsErr := by
+  show ¬(if m = 0 then Datum.err EvalError.divisionByZero
+          else Datum.int (n / m)).IsErr
+  rw [if_neg hm]
+  intro h; cases h
+
+theorem evalDivide_zero (n : Int) :
+    evalDivide (.int n) (.int 0) = .err .divisionByZero := by
+  show (if (0 : Int) = 0 then Datum.err EvalError.divisionByZero
+          else Datum.int (n / 0))
+      = Datum.err .divisionByZero
+  rw [if_pos rfl]
+
 theorem evalIfThen_not_err
     {dc dt de : Datum}
     (hc : ¬dc.IsErr) (ht : ¬dt.IsErr) (he : ¬de.IsErr) :
@@ -266,6 +358,10 @@ def Expr.might_error : Expr → Bool
     else Expr.argsMightError args
   | .coalesce []          => false
   | .coalesce (a :: rest) => a.might_error && Expr.argsAllMightError rest
+  | .plus   a b           => a.might_error || b.might_error
+  | .minus  a b           => a.might_error || b.might_error
+  | .times  a b           => a.might_error || b.might_error
+  | .divide _ _           => true
 
 /-- Bool fold of `might_error` over a list of operands ("does any
 operand might-error"), declared mutually with `might_error` so
@@ -721,5 +817,35 @@ theorem might_error_sound :
         (ds := (a :: rest).map (eval env))
         ?_ hRes'
       exact ⟨eval env e, List.mem_map.mpr ⟨e, e_mem, rfl⟩, he⟩
+  | .plus a b, env, hMe, hEnv => by
+    intro hRes
+    simp only [eval] at hRes
+    have ha : ¬(a.might_error = true) := fun h => hMe (by simp [Expr.might_error, h])
+    have hb : ¬(b.might_error = true) := fun h => hMe (by simp [Expr.might_error, h])
+    exact evalPlus_not_err
+      (might_error_sound a env ha hEnv)
+      (might_error_sound b env hb hEnv) hRes
+  | .minus a b, env, hMe, hEnv => by
+    intro hRes
+    simp only [eval] at hRes
+    have ha : ¬(a.might_error = true) := fun h => hMe (by simp [Expr.might_error, h])
+    have hb : ¬(b.might_error = true) := fun h => hMe (by simp [Expr.might_error, h])
+    exact evalMinus_not_err
+      (might_error_sound a env ha hEnv)
+      (might_error_sound b env hb hEnv) hRes
+  | .times a b, env, hMe, hEnv => by
+    intro hRes
+    simp only [eval] at hRes
+    have ha : ¬(a.might_error = true) := fun h => hMe (by simp [Expr.might_error, h])
+    have hb : ¬(b.might_error = true) := fun h => hMe (by simp [Expr.might_error, h])
+    exact evalTimes_not_err
+      (might_error_sound a env ha hEnv)
+      (might_error_sound b env hb hEnv) hRes
+  | .divide a b, env, hMe, _ => by
+    -- `.divide _ _` is always tagged `might_error = true`, so the premise
+    -- `¬might_error = true` is absurd. A future tightening will detect
+    -- literal-nonzero divisors and lift this case to a real proof.
+    intro _
+    exact hMe rfl
 
 end Mz
