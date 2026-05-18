@@ -45,6 +45,8 @@ The goal is to lock in the boolean truth tables for `AND` and `OR` over the four
   `exceptAll l r = consolidate (unionAll l (negate r))` realizes the signed-diff `EXCEPT ALL` (output diffs may be negative, encoding "this carrier has `n` fewer copies in the result than in the input"). Theorems: `exceptAll_length_le` (≤ sum of input lengths), `exceptAll_preserves_error_diff_left`/`exceptAll_preserves_error_diff_right` (errors from either side survive — negation absorbs at `.error`), `exceptAll_no_error`.
   `clampPositive` drops records with `.val n` where `n ≤ 0`, keeping `.error` records and records with `.val n > 0`. Theorems: `clampPositive_length_le`, `clampPositive_preserves_error_diff`, `clampPositive_only_positive` (every output `.val` is strictly positive).
   `bagExceptAll = clampPositive ∘ exceptAll` realizes the bag-semantics `EXCEPT ALL` — the signed-diff result is post-processed to drop non-positive multiplicities, producing `max(L - R, 0)` per carrier. Theorems lift the signed flavor: `bagExceptAll_length_le`, `bagExceptAll_preserves_error_diff_left`/`_right`, `bagExceptAll_only_positive`.
+  `clampToOne` collapses surviving multiplicities to one: `.val n > 0` becomes `.val 1`, non-positive `.val` is dropped, `.error` survives. Defined by structural recursion on the list. Theorems: `clampToOne_length_le`, `clampToOne_preserves_error_diff`, `clampToOne_only_one_or_error` (every output diff is `.val 1` or `.error`).
+  `distinct = clampToOne ∘ consolidate` realizes SQL `DISTINCT`: each distinct carrier appears at most once with multiplicity one (or `.error` if a collection-scoped error existed). Theorems: `distinct_length_le`, `distinct_preserves_error_diff`, `distinct_only_one_or_error`.
   `INTERSECT ALL` requires a per-carrier `min` combinator not yet exposed by `DiffWithError`. Deferred.
 * `Mz/GroupBy.lean`: two grouping primitives.
   `groupBy keyExpr rel` partitions a relation by evaluated key using Lean's derived `DecidableEq Datum` — two `Datum.err e` keys with the same payload collapse into one group.
@@ -112,5 +114,5 @@ The diff-semiring extension is in scope: `UnifiedStream` records carry `(Unified
 ### Material expansions
 
 * `INTERSECT ALL` on `UnifiedStream`: requires a per-carrier `min` combinator over `DiffWithError Int`. The combinator is not derivable from `+`, `*`, `-` alone — landing it requires either a new diff primitive or a bucketing operator that materializes per-carrier multiplicities from both inputs.
-* `distinct` operator on `UnifiedStream`: collapse multiplicity via `consolidate` + map-positive-to-one. With `clampPositive` already in scope, `distinct` is the natural follow-up: replace each surviving `.val n > 0` with `.val 1`.
+* `distinct` is in scope; remaining: stronger correctness theorems (idempotence `distinct ∘ distinct = distinct`, agreement with the carrier-set view, no-error preservation on `.val` inputs).
 * Cross-link the spec doc (`../design/20260517_error_handling_semantics.md`) to specific theorem names via `[Mz/...:thm]` cross-references.
