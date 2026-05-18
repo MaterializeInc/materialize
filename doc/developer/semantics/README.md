@@ -19,6 +19,7 @@ The goal is to lock in the boolean truth tables for `AND` and `OR` over the four
 * `Mz/Laws.lean`: algebraic laws — two-sided identity (`TRUE` for `AND`, `FALSE` for `OR`), idempotence (unconditional), commutativity (conditional on error-freedom of operands), and `Expr`-level reorder safety as a corollary of soundness.
 * `Mz/Variadic.lean`: laws for `evalAndN` and `evalOrN` over `List Datum` — cons recurrence, nil, singleton, binary equivalence with the binary evaluators, and `FALSE`/`TRUE` absorption.
 * `Mz/ExprVariadic.lean`: `Expr`-level reduction lemmas connecting `eval env (.andN args)` / `.orN` / `.coalesce` to their primitive counterparts, identity / singleton / binary-equivalence corollaries lifted through `eval`, and variadic-absorption theorems — a single operand evaluating to `FALSE` (resp. `TRUE`) makes the whole `andN` (resp. `orN`) evaluate to `FALSE` (resp. `TRUE`).
+* `Mz/Bag.lean`: bag semantics on `List Row`. Defines `filterRel` and `project`, with filter idempotence, filter commutativity, projection length-preservation, and the empty-projection equation. The skeleton silently drops `err` rows from `filterRel` output; a real implementation routes them to the error collection.
 
 ## What is not here
 
@@ -64,7 +65,8 @@ Reviewers should expect both sides of the change in the same PR.
 
 The roadmap in priority order:
 
-* Lift to bag semantics: predicate / projection rewrites over `List Row`.
+* Route `err` rows from `filterRel` to a separate error collection rather than silently dropping. Model the dataflow's data/error stream pair explicitly.
+* Predicate pushdown across projection: `filterRel p (project es rel) = project es (filterRel (p[es]) rel)` under suitable substitution conditions.
 * Diff-semiring extension for global errors (v2).
 * Tightening `Expr.might_error`. The skeleton version is purely structural and ignores type / nullability information; bringing it closer to `MirScalarExpr::might_error` is additive.
 * Lift to bag semantics for predicate / projection rewrites.
