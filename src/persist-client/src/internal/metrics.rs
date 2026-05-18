@@ -132,6 +132,14 @@ pub struct Metrics {
     /// per-DDL `apply_diff` count growth on the catalog/txns shards to the
     /// specific code path that is calling state apply.
     pub state_apply_calls_by_source_kind: IntCounterVec,
+    /// Per-Consensus-op inner wire latency, broken down by shard_kind. Recorded
+    /// inside `BogoConsensus` around the bogo gRPC client call only, so we can
+    /// split `external_op_latency_by_kind` (post-spawn through `run_op`) from
+    /// the time spent at the actual wire. `external - wire` ≈ overhead inside
+    /// `MetricsConsensus::run_op` + the bogo adapter; `wire` itself ≈ tonic
+    /// client send + server processing + return. Only populated when the
+    /// active consensus backend is `bogo://`.
+    pub consensus_wire_seconds_by_kind: HistogramVec,
     /// Registry mapping a persist key prefix (the ShardId in stringified form)
     /// to a coarse `shard_kind` label. Populated when shards are opened by
     /// `Applier::new` via [Metrics::register_shard_kind] and read on the hot
@@ -184,6 +192,13 @@ impl Metrics {
             help: "count of State::apply_diff invocations, broken down by call-site source and shard_kind",
             var_labels: ["source", "shard_kind"],
         ));
+        let consensus_wire_seconds_by_kind = registry.register(metric!(
+            name: "mz_persist_consensus_wire_seconds_by_shard_kind",
+            help: "wall time of the inner bogo-consensus gRPC call (client-side), broken down by op and shard_kind",
+            var_labels: ["op", "shard_kind"],
+            // Same buckets as external_op_latency_by_kind so they line up.
+            buckets: histogram_seconds_buckets(0.000_500, 32.0),
+        ));
         Metrics {
             blob: vecs.blob_metrics(),
             consensus: vecs.consensus_metrics(),
@@ -215,6 +230,7 @@ impl Metrics {
             external_op_latency_by_kind,
             state_apply_latency_by_kind,
             state_apply_calls_by_source_kind,
+            consensus_wire_seconds_by_kind,
             shard_kinds: Arc::new(Mutex::new(HashMap::new())),
             _vecs: vecs,
             _uptime: uptime,
@@ -255,7 +271,7 @@ impl Metrics {
     /// ops; we extract just the shard-id prefix and consult [Self::shard_kinds].
     /// Returns `"unknown"` if the shard has not been registered yet (e.g. for
     /// pre-registration init writes).
-    fn shard_kind_for_key(&self, key: &str) -> &'static str {
+    pub(crate) fn shard_kind_for_key(&self, key: &str) -> &'static str {
         let prefix = match key.split_once('/') {
             Some((p, _)) => p,
             None => key,

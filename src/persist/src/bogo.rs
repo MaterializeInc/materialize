@@ -16,6 +16,7 @@
 //! loop during performance measurements.
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use async_stream::try_stream;
@@ -31,11 +32,29 @@ use crate::location::{
     VersionedData,
 };
 
+/// Optional client-side wire-timing hook. Called once per `Consensus` op with
+/// `(rpc_name, key, wall_time_at_bogo_client_call)`. The intent is to split
+/// the existing `mz_persist_external_op_latency_by_shard_kind` (which spans
+/// `run_op` in `MetricsConsensus`) from the time inside the bogo gRPC client
+/// itself, so we can attribute slope to wire vs. wrapper overhead.
+pub type BogoWireTimer = Arc<dyn Fn(&'static str, &str, Duration) + Send + Sync>;
+
 /// Configuration for opening a [`BogoConsensus`].
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct BogoConsensusConfig {
     /// The `bogo://` URL of the server.
     pub url: SensitiveUrl,
+    /// Optional hook invoked with the wall time of each inner gRPC call.
+    pub wire_timer: Option<BogoWireTimer>,
+}
+
+impl std::fmt::Debug for BogoConsensusConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BogoConsensusConfig")
+            .field("url", &self.url)
+            .field("wire_timer", &self.wire_timer.as_ref().map(|_| "<fn>"))
+            .finish()
+    }
 }
 
 impl BogoConsensusConfig {
@@ -54,14 +73,27 @@ impl BogoConsensusConfig {
                 url
             )));
         }
-        Ok(Self { url })
+        Ok(Self {
+            url,
+            wire_timer: None,
+        })
     }
 }
 
 /// A [`Consensus`] backed by a remote `mz-bogo-consensus` server.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct BogoConsensus {
     client: Arc<BogoConsensusClient>,
+    wire_timer: Option<BogoWireTimer>,
+}
+
+impl std::fmt::Debug for BogoConsensus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BogoConsensus")
+            .field("client", &self.client)
+            .field("wire_timer", &self.wire_timer.as_ref().map(|_| "<fn>"))
+            .finish()
+    }
 }
 
 impl BogoConsensus {
@@ -83,7 +115,14 @@ impl BogoConsensus {
             .map_err(|e| ExternalError::from(anyhow!("connecting to bogo-consensus: {e:#}")))?;
         Ok(Self {
             client: Arc::new(client),
+            wire_timer: cfg.wire_timer,
         })
+    }
+
+    fn observe_wire(&self, rpc: &'static str, key: &str, start: Instant) {
+        if let Some(timer) = &self.wire_timer {
+            timer(rpc, key, start.elapsed());
+        }
     }
 }
 
@@ -138,11 +177,10 @@ impl Consensus for BogoConsensus {
     }
 
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
-        let data = self
-            .client
-            .head(key)
-            .await
-            .map_err(|s| status_to_external("head", s))?;
+        let wire_start = Instant::now();
+        let data = self.client.head(key).await;
+        self.observe_wire("consensus_head", key, wire_start);
+        let data = data.map_err(|s| status_to_external("head", s))?;
         Ok(data.map(from_proto))
     }
 
@@ -157,11 +195,10 @@ impl Consensus for BogoConsensus {
                 new.seqno
             )));
         }
-        let result = self
-            .client
-            .compare_and_set(key, to_proto(new))
-            .await
-            .map_err(|s| status_to_external("compare_and_set", s))?;
+        let wire_start = Instant::now();
+        let result = self.client.compare_and_set(key, to_proto(new)).await;
+        self.observe_wire("consensus_cas", key, wire_start);
+        let result = result.map_err(|s| status_to_external("compare_and_set", s))?;
         Ok(match result {
             ProtoCaSResult::Committed => CaSResult::Committed,
             ProtoCaSResult::ExpectationMismatch => CaSResult::ExpectationMismatch,
@@ -181,20 +218,18 @@ impl Consensus for BogoConsensus {
     ) -> Result<Vec<VersionedData>, ExternalError> {
         let scan_all_u64 = u64::try_from(SCAN_ALL).unwrap_or(u64::MAX);
         let limit_u64 = u64::try_from(limit).unwrap_or(scan_all_u64);
-        let data = self
-            .client
-            .scan(key, from.0, limit_u64)
-            .await
-            .map_err(|s| status_to_external("scan", s))?;
+        let wire_start = Instant::now();
+        let data = self.client.scan(key, from.0, limit_u64).await;
+        self.observe_wire("consensus_scan", key, wire_start);
+        let data = data.map_err(|s| status_to_external("scan", s))?;
         Ok(data.into_iter().map(from_proto).collect())
     }
 
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<Option<usize>, ExternalError> {
-        let deleted = self
-            .client
-            .truncate(key, seqno.0)
-            .await
-            .map_err(|s| status_to_external("truncate", s))?;
+        let wire_start = Instant::now();
+        let deleted = self.client.truncate(key, seqno.0).await;
+        self.observe_wire("consensus_truncate", key, wire_start);
+        let deleted = deleted.map_err(|s| status_to_external("truncate", s))?;
         Ok(deleted.map(|d| usize::try_from(d).unwrap_or(usize::MAX)))
     }
 }

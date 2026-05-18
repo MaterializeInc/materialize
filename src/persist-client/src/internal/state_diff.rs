@@ -321,7 +321,7 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
         use crate::internal::state::ProtoStateDiff;
 
         let mut roundtrip_state = from_state.clone(from_state.hostname.clone());
-        roundtrip_state.apply_diff(metrics, diff.clone())?;
+        roundtrip_state.apply_diff(metrics, "roundtrip_check", diff.clone())?;
 
         if &roundtrip_state != to_state {
             // The weird spacing in this format string is so they all line up

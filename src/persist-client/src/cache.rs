@@ -203,12 +203,26 @@ impl PersistClientCache {
             Entry::Vacant(x) => {
                 // Intentionally hold the lock, so we don't double connect under
                 // concurrency.
-                let consensus = ConsensusConfig::try_from(
+                let mut consensus = ConsensusConfig::try_from(
                     x.key(),
                     Box::new(self.cfg.clone()),
                     self.metrics.postgres_consensus.clone(),
                     Arc::clone(&self.cfg().configs),
                 )?;
+                // For bogo-consensus, attach a wire-timer hook that lets us
+                // split `external_op_latency_by_kind` (around `run_op` in
+                // `MetricsConsensus`) from the inner gRPC client wall time.
+                // No-op for other backends.
+                if let ConsensusConfig::Bogo(ref mut bogo_cfg) = consensus {
+                    let metrics = Arc::clone(&self.metrics);
+                    bogo_cfg.wire_timer = Some(Arc::new(move |rpc, key, elapsed| {
+                        let kind = metrics.shard_kind_for_key(key);
+                        metrics
+                            .consensus_wire_seconds_by_kind
+                            .with_label_values(&[rpc, kind])
+                            .observe(elapsed.as_secs_f64());
+                    }));
+                }
                 let consensus =
                     retry_external(&self.metrics.retries.external.consensus_open, || {
                         consensus.clone().open()
