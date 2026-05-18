@@ -87,13 +87,23 @@ Reviewers should expect both sides of the change in the same PR.
 
 ## Next steps
 
-The roadmap in priority order:
+The diff-semiring extension is in scope: `UnifiedStream` records carry `(UnifiedRow × DiffWithError Int)` and `filter`, `cross`, `join`, `consolidate`, `consolidateAtTime` preserve / multiply / absorb the diff per the semiring laws.
 
-* Full `BagStream.filter` commutativity (no preconditions). The error field requires a notion of multiset equality on `List EvalError` since list-order differs across permutations, and even multiset equality fails when both predicates err on the same row — `(p err, q err)` rows record only one error in either ordering, but different ones depending on which filter runs first.
-* Errors-side `BagStream.project` / `BagStream.filter` pushdown (the two orderings collect predicate errors from different row sets; even multiset equality on `List EvalError` fails when projection's `rowAllSafe` filter changes the predicate's input).
-* Tie `DiffWithError` to a concrete dataflow operator: model a `(Row, Time, DiffWithError ℤ)` triple stream and prove that an `error` diff at time `t` propagates to every downstream consolidation.
-* Joins on `BagStream` with explicit error propagation.
-* Further tightening of `Expr.might_error`. Short-circuit detection is in place for binary `AND` / `OR` against literal absorbers; ground-truth lookups (literal arithmetic, known-null operands, type guards) are the natural next refinements and remain additive against the current soundness proof.
-* Lift to bag semantics for predicate / projection rewrites.
+### Blocked
 
-The diff-semiring extension is now in scope: `UnifiedStream` records carry a `DiffWithError Int` and operators preserve / multiply / absorb it as appropriate.
+* Full `BagStream.filter` commutativity (no preconditions). The error field requires a notion of multiset equality on `List EvalError`, and even multiset equality fails when both predicates err on the same row — `(p err, q err)` rows record different err payloads depending on filter order. The data side is closed by `filter_comm_data`; the precondition variant by `filter_comm_no_err`.
+* Errors-side `BagStream.project` / `BagStream.filter` pushdown. The two orderings collect predicate errors from different row sets; even multiset equality fails when `rowAllSafe` filtering removes rows the predicate would have visited. The data side is closed by `project_filter_pushdown_data`.
+
+### Additive refinements
+
+* Tightening `Expr.might_error` further. Short-circuit detection covers binary / variadic `AND` / `OR` and `IfThen` against literal absorbers. Remaining: ground-truth lookups (literal arithmetic, known-null operands, type-driven), all additive against the current soundness proof.
+* `UnifiedStream.project` analogous to `BagStream.project` but diff-aware. Each scalar can contribute its own erroring records via row-scoped err carriers; collection-scoped `.error` diffs propagate.
+* Strict cardinality bound for `UnifiedConsolidate`: when a carrier appears `k > 1` times in the input, the output is `k - 1` shorter than the input.
+* Drop / replace `Mz/Triple.lean` once `Mz/TimedConsolidate.lean` covers every consolidation the spec doc needs.
+
+### Material expansions
+
+* Numeric arithmetic. Extend `Datum` with `.int (n : Int)`, add `Expr.plus` / `.minus` / `.times` / `.divide`, and a `divide-by-zero` `EvalError` variant. Tightens the err-handling story since divide-by-zero is the canonical `EvalError`.
+* Set operations (`UNION ALL`, `INTERSECT ALL`, `EXCEPT ALL`) on `UnifiedStream`. Composing with `consolidate` derives the set-semantics (`UNION` / `INTERSECT` / `EXCEPT`) variants.
+* `distinct` operator on `UnifiedStream`: collapse multiplicity via `consolidate` + sign normalization.
+* Cross-link the spec doc (`../design/20260517_error_handling_semantics.md`) to specific theorem names via `[Mz/...:thm]` cross-references.
