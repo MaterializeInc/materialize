@@ -190,9 +190,6 @@ const collapseOverflowOverrides: SystemStyleInterpolation = {
 };
 
 const devtoolOverrides: SystemStyleInterpolation = {
-  ".jotai-devtools-trigger-button": {
-    position: "initial !important",
-  },
   // React query devtools button
   ".tsqd-open-btn-container": {
     height: "64px",
