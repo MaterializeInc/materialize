@@ -1528,4 +1528,65 @@ theorem UnifiedStream.join_errCarriers_mono
     e ∈ UnifiedStream.errCarriers (UnifiedStream.join pred l r) :=
   UnifiedStream.filter_errCarriers_mono pred (UnifiedStream.cross l r) e h
 
+/-! ## `union` and error scopes
+
+`union := consolidate ∘ unionAll`. Compose
+`unionAll_errCarriers` (concat) with `consolidate_errCarriers_iff`
+(set-preserving). The result: the row-err set of `union L R` is
+the disjoint union of `L`'s and `R`'s row-err sets (as a set;
+multiplicity collapses via consolidate).
+
+Same shape for collection-err. -/
+
+theorem UnifiedStream.union_errCarriers_iff
+    (l r : UnifiedStream) (e : EvalError) :
+    e ∈ UnifiedStream.errCarriers (UnifiedStream.union l r)
+      ↔ e ∈ UnifiedStream.errCarriers l ∨ e ∈ UnifiedStream.errCarriers r := by
+  show e ∈ UnifiedStream.errCarriers
+            (UnifiedStream.consolidate (UnifiedStream.unionAll l r)) ↔ _
+  rw [UnifiedStream.consolidate_errCarriers_iff,
+      UnifiedStream.unionAll_errCarriers, List.mem_append]
+
+theorem UnifiedStream.union_errorDiffCarriers_iff
+    (l r : UnifiedStream) (uc : UnifiedRow) :
+    uc ∈ UnifiedStream.errorDiffCarriers (UnifiedStream.union l r)
+      ↔ uc ∈ UnifiedStream.errorDiffCarriers l
+        ∨ uc ∈ UnifiedStream.errorDiffCarriers r := by
+  show uc ∈ UnifiedStream.errorDiffCarriers
+              (UnifiedStream.consolidate (UnifiedStream.unionAll l r)) ↔ _
+  rw [UnifiedStream.consolidate_errorDiffCarriers_iff,
+      UnifiedStream.unionAll_errorDiffCarriers, List.mem_append]
+
+/-! ## `exceptAll` and error scopes
+
+`exceptAll L R := consolidate (unionAll L (negate R))`. The
+right side flows through `negate`, which preserves both error
+scopes (proven above). The composition with `consolidate`
+preserves both scopes as sets. So `exceptAll`'s row-err set is
+the disjoint union of `L`'s and `R`'s, and same for
+collection-err. -/
+
+theorem UnifiedStream.exceptAll_errCarriers_iff
+    (l r : UnifiedStream) (e : EvalError) :
+    e ∈ UnifiedStream.errCarriers (UnifiedStream.exceptAll l r)
+      ↔ e ∈ UnifiedStream.errCarriers l ∨ e ∈ UnifiedStream.errCarriers r := by
+  show e ∈ UnifiedStream.errCarriers
+            (UnifiedStream.consolidate
+              (UnifiedStream.unionAll l (UnifiedStream.negate r))) ↔ _
+  rw [UnifiedStream.consolidate_errCarriers_iff,
+      UnifiedStream.unionAll_errCarriers,
+      UnifiedStream.negate_errCarriers, List.mem_append]
+
+theorem UnifiedStream.exceptAll_errorDiffCarriers_iff
+    (l r : UnifiedStream) (uc : UnifiedRow) :
+    uc ∈ UnifiedStream.errorDiffCarriers (UnifiedStream.exceptAll l r)
+      ↔ uc ∈ UnifiedStream.errorDiffCarriers l
+        ∨ uc ∈ UnifiedStream.errorDiffCarriers r := by
+  show uc ∈ UnifiedStream.errorDiffCarriers
+              (UnifiedStream.consolidate
+                (UnifiedStream.unionAll l (UnifiedStream.negate r))) ↔ _
+  rw [UnifiedStream.consolidate_errorDiffCarriers_iff,
+      UnifiedStream.unionAll_errorDiffCarriers,
+      UnifiedStream.negate_errorDiffCarriers, List.mem_append]
+
 end Mz
