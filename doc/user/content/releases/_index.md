@@ -95,7 +95,7 @@ For more information, refer to:
   containing `SELECT DISTINCT` over role-derived catalog views (e.g.,
   anything reading from `mz_roles`, `mz_role_members`, or views that
   internally project role columns). The error is resolved automatically by
-  upgrading to v26.24.2 or newer. 
+  upgrading to v26.24.2 or newer.
 
 ## v26.23.2
 *Released to Materialize Cloud: 2026-05-11* <br>
