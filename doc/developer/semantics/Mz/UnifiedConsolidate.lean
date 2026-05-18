@@ -151,4 +151,130 @@ theorem UnifiedStream.consolidate_preserves_error
         ∈ consolidateInto uc₀ d₀ (UnifiedStream.consolidate tl)
       exact consolidateInto_preserves_error_mem uc₀ d₀ _ uc (ih hTail)
 
+/-! ## Cardinality
+
+Consolidation is non-expanding. Every input record either lands
+in an existing bucket (no length change) or starts a new one
+(length grows by one), so the output length is at most the input
+length. The strict inequality holds when at least one carrier
+appears more than once, which the skeleton does not state
+separately. -/
+
+/-- `consolidateInto` adds at most one record to the bucket list:
+either it appends a fresh bucket (length + 1) or it lands inside
+an existing bucket (length unchanged). -/
+private theorem consolidateInto_length_le_succ
+    (uc : UnifiedRow) (d : DiffWithError Int) (us : UnifiedStream) :
+    (consolidateInto uc d us).length ≤ us.length + 1 := by
+  induction us with
+  | nil => exact Nat.le.refl
+  | cons hd tl ih =>
+    obtain ⟨uc', d'⟩ := hd
+    by_cases hEq : uc = uc'
+    · show (if uc = uc' then (uc', d + d') :: tl
+              else (uc', d') :: consolidateInto uc d tl).length
+          ≤ (((uc', d') :: tl).length) + 1
+      rw [if_pos hEq]
+      simp [List.length_cons]
+    · show (if uc = uc' then (uc', d + d') :: tl
+              else (uc', d') :: consolidateInto uc d tl).length
+          ≤ (((uc', d') :: tl).length) + 1
+      rw [if_neg hEq]
+      show (consolidateInto uc d tl).length + 1 ≤ tl.length + 1 + 1
+      omega
+
+/-- Output of `consolidate` has length at most the input length. -/
+theorem UnifiedStream.consolidate_length_le (us : UnifiedStream) :
+    (UnifiedStream.consolidate us).length ≤ us.length := by
+  induction us with
+  | nil => exact Nat.le.refl
+  | cons hd tl ih =>
+    obtain ⟨uc, d⟩ := hd
+    show (consolidateInto uc d (UnifiedStream.consolidate tl)).length
+        ≤ ((uc, d) :: tl).length
+    have hStep := consolidateInto_length_le_succ uc d (UnifiedStream.consolidate tl)
+    have hIh : (UnifiedStream.consolidate tl).length + 1 ≤ tl.length + 1 :=
+      Nat.add_le_add_right ih 1
+    show (consolidateInto uc d (UnifiedStream.consolidate tl)).length ≤ tl.length + 1
+    exact Nat.le_trans hStep hIh
+
+/-! ## No-error preservation
+
+If every input diff is a `.val`, every output diff is a `.val`.
+The semiring's `.val + .val = .val (· + ·)` keeps absorption from
+firing. -/
+
+/-- Inserting a `.val` diff into a list whose every record has
+`.val` diff yields a list whose every record has `.val` diff. -/
+private theorem consolidateInto_no_error
+    (uc : UnifiedRow) (n : Int) (us : UnifiedStream)
+    (h : ∀ r ∈ us, ∃ m : Int, r.2 = DiffWithError.val m) :
+    ∀ r ∈ consolidateInto uc (DiffWithError.val n) us,
+      ∃ m : Int, r.2 = DiffWithError.val m := by
+  induction us with
+  | nil =>
+    intro r hMem
+    have : r = (uc, DiffWithError.val n) := List.mem_singleton.mp hMem
+    exact ⟨n, by rw [this]⟩
+  | cons hd tl ih =>
+    obtain ⟨uc', d'⟩ := hd
+    have hHd : ∃ m : Int, d' = DiffWithError.val m := by
+      have := h (uc', d') (List.mem_cons_self)
+      exact this
+    have hTl : ∀ r ∈ tl, ∃ m : Int, r.2 = DiffWithError.val m :=
+      fun r hMem => h r (List.mem_cons_of_mem _ hMem)
+    obtain ⟨m, hM⟩ := hHd
+    intro r hMem
+    by_cases hEq : uc = uc'
+    · have hOut : consolidateInto uc (DiffWithError.val n) ((uc', d') :: tl)
+                = (uc', DiffWithError.val n + d') :: tl := by
+        show (if uc = uc' then (uc', DiffWithError.val n + d') :: tl
+                else (uc', d') :: consolidateInto uc (DiffWithError.val n) tl)
+            = (uc', DiffWithError.val n + d') :: tl
+        rw [if_pos hEq]
+      rw [hOut] at hMem
+      rcases List.mem_cons.mp hMem with hHead | hTail'
+      · subst hHead
+        rw [hM]
+        show ∃ m' : Int, DiffWithError.val n + DiffWithError.val m
+                       = DiffWithError.val m'
+        exact ⟨n + m, rfl⟩
+      · exact hTl r hTail'
+    · have hOut : consolidateInto uc (DiffWithError.val n) ((uc', d') :: tl)
+                = (uc', d') :: consolidateInto uc (DiffWithError.val n) tl := by
+        show (if uc = uc' then (uc', DiffWithError.val n + d') :: tl
+                else (uc', d') :: consolidateInto uc (DiffWithError.val n) tl)
+            = (uc', d') :: consolidateInto uc (DiffWithError.val n) tl
+        rw [if_neg hEq]
+      rw [hOut] at hMem
+      rcases List.mem_cons.mp hMem with hHead | hTail'
+      · subst hHead
+        exact ⟨m, hM⟩
+      · exact ih hTl r hTail'
+
+/-- Headline no-error: if every input diff is `.val`, every
+output diff is `.val`. The consolidated total stays in the
+ordinary `Int` slice of the diff-semiring. -/
+theorem UnifiedStream.consolidate_no_error
+    (us : UnifiedStream)
+    (h : ∀ r ∈ us, ∃ n : Int, r.2 = DiffWithError.val n) :
+    ∀ r ∈ UnifiedStream.consolidate us,
+      ∃ n : Int, r.2 = DiffWithError.val n := by
+  induction us with
+  | nil => intro r hMem; exact absurd hMem (List.not_mem_nil)
+  | cons hd tl ih =>
+    obtain ⟨uc, d⟩ := hd
+    have hHd : ∃ n : Int, d = DiffWithError.val n :=
+      h (uc, d) List.mem_cons_self
+    have hTl : ∀ r ∈ tl, ∃ n : Int, r.2 = DiffWithError.val n :=
+      fun r hMem => h r (List.mem_cons_of_mem _ hMem)
+    obtain ⟨n, hN⟩ := hHd
+    have hConsTl : ∀ r ∈ UnifiedStream.consolidate tl,
+                     ∃ n : Int, r.2 = DiffWithError.val n :=
+      ih hTl
+    intro r hMem
+    have : r ∈ consolidateInto uc d (UnifiedStream.consolidate tl) := hMem
+    rw [hN] at this
+    exact consolidateInto_no_error uc n _ hConsTl r this
+
 end Mz
