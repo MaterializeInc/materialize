@@ -171,6 +171,22 @@ theorem evalDivide_zero (n : Int) :
       = Datum.err .divisionByZero
   rw [if_pos rfl]
 
+/-- Generalization: any non-erring dividend divided by a literal
+nonzero int does not err. The dividend can be any `Datum`; only
+the divisor is constrained. -/
+theorem evalDivide_lit_nonzero
+    {d : Datum} {n : Int} (h : ¬d.IsErr) (hn : n ≠ 0) :
+    ¬(evalDivide d (.int n)).IsErr := by
+  cases d with
+  | bool _ => intro hRes; cases hRes
+  | int  m =>
+    show ¬(if n = 0 then Datum.err EvalError.divisionByZero
+            else Datum.int (m / n)).IsErr
+    rw [if_neg hn]
+    intro hRes; cases hRes
+  | null   => intro hRes; cases hRes
+  | err _  => exact (h trivial).elim
+
 theorem evalIfThen_not_err
     {dc dt de : Datum}
     (hc : ¬dc.IsErr) (ht : ¬dt.IsErr) (he : ¬de.IsErr) :
@@ -334,6 +350,29 @@ theorem Expr.eq_of_isLitBoolTrue {e : Expr}
     | _ => simp [Expr.isLitBoolTrue] at h
   | _ => simp [Expr.isLitBoolTrue] at h
 
+/-- Head matcher for "expression is a statically-safe divisor":
+literal `.int n` with `n ≠ 0`. Used by `might_error` to detect
+divide expressions whose divisor cannot trigger divide-by-zero. -/
+@[simp] def Expr.divisorIsSafe : Expr → Bool
+  | .lit (.int 0) => false
+  | .lit (.int _) => true
+  | _             => false
+
+/-- Characterization: `divisorIsSafe e = true` iff `e` is a
+literal `.int n` with `n ≠ 0`. -/
+theorem Expr.lit_nonzero_int_of_divisorIsSafe {e : Expr}
+    (h : e.divisorIsSafe = true) :
+    ∃ n : Int, e = .lit (.int n) ∧ n ≠ 0 := by
+  cases e with
+  | lit d =>
+    cases d with
+    | int n  =>
+      by_cases hZ : n = 0
+      · subst hZ; simp [Expr.divisorIsSafe] at h
+      · exact ⟨n, rfl, hZ⟩
+    | _ => simp [Expr.divisorIsSafe] at h
+  | _ => simp [Expr.divisorIsSafe] at h
+
 mutual
 def Expr.might_error : Expr → Bool
   | .lit (.err _)         => true
@@ -361,7 +400,9 @@ def Expr.might_error : Expr → Bool
   | .plus   a b           => a.might_error || b.might_error
   | .minus  a b           => a.might_error || b.might_error
   | .times  a b           => a.might_error || b.might_error
-  | .divide _ _           => true
+  | .divide a b           =>
+    if b.divisorIsSafe then a.might_error
+    else true
 
 /-- Bool fold of `might_error` over a list of operands ("does any
 operand might-error"), declared mutually with `might_error` so
@@ -841,11 +882,28 @@ theorem might_error_sound :
     exact evalTimes_not_err
       (might_error_sound a env ha hEnv)
       (might_error_sound b env hb hEnv) hRes
-  | .divide a b, env, hMe, _ => by
-    -- `.divide _ _` is always tagged `might_error = true`, so the premise
-    -- `¬might_error = true` is absurd. A future tightening will detect
-    -- literal-nonzero divisors and lift this case to a real proof.
-    intro _
-    exact hMe rfl
+  | .divide a b, env, hMe, hEnv => by
+    intro hRes
+    simp only [eval] at hRes
+    cases hSafe : b.divisorIsSafe with
+    | true =>
+      -- b is a literal nonzero int: evalDivide _ (.int n) errs only on div0
+      obtain ⟨n, hEqB, hNZ⟩ := Expr.lit_nonzero_int_of_divisorIsSafe hSafe
+      have hMeReduce :
+          Expr.might_error (.divide a b) = a.might_error := by
+        show (if b.divisorIsSafe = true then a.might_error else true)
+            = a.might_error
+        rw [hSafe]; rfl
+      rw [hMeReduce] at hMe
+      have hAe := might_error_sound a env hMe hEnv
+      rw [hEqB] at hRes
+      simp only [eval] at hRes
+      exact evalDivide_lit_nonzero hAe hNZ hRes
+    | false =>
+      -- conservative branch: might_error returns `true`, premise absurd
+      have hMeTrue : Expr.might_error (.divide a b) = true := by
+        show (if b.divisorIsSafe = true then a.might_error else true) = true
+        rw [hSafe]; rfl
+      exact hMe hMeTrue
 
 end Mz
