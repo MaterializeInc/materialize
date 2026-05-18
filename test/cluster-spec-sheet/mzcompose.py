@@ -4139,23 +4139,28 @@ def workflow_plot(composition: Composition, parser: WorkflowArgumentParser) -> N
             )
 
 
+def extract_cluster_size(s: str) -> float:
+    """Parse a `cluster_size` label (e.g. ``"100cc"``, ``"1600cc"``,
+    ``"1C"``, ``"scale=1,workers=2"``) into a numeric credits/hour value
+    suitable for ordering and as a continuous x-axis.
+    """
+    match = re.search(r"(\d+)(?:(cc)|(C))", s)
+    if match:
+        if match.group(2):  # 'cc' match
+            return float(match.group(1)) / 100.0
+        elif match.group(3):  # 'C' matches
+            return float(match.group(1))
+    match = re.search(r"(?:scale=)(\d+)(?:,workers=)(\d+)", s)
+    if match:
+        # We don't have credits in docker, so approximate it
+        # 100cc == 2 workers
+        if match.group(1) and match.group(2):
+            return float(match.group(1)) * float(match.group(2)) / 2
+    raise ValueError(f"Invalid cluster size format: {s}")
+
+
 def analyze_cluster_results_file(file: str) -> None:
     print(f"--- Analyzing cluster results file {file} ...")
-
-    def extract_cluster_size(s: str) -> float:
-        match = re.search(r"(\d+)(?:(cc)|(C))", s)
-        if match:
-            if match.group(2):  # 'cc' match
-                return float(match.group(1)) / 100.0
-            elif match.group(3):  # 'C' matches
-                return float(match.group(1))
-        match = re.search(r"(?:scale=)(\d+)(?:,workers=)(\d+)", s)
-        if match:
-            # We don't have credits in docker, so approximate it
-            # 100cc == 2 workers
-            if match.group(1) and match.group(2):
-                return float(match.group(1)) * float(match.group(2)) / 2
-        raise ValueError(f"Invalid cluster size format: {s}")
 
     df = pd.read_csv(file)
     if df.empty:
@@ -4324,7 +4329,10 @@ def analyze_cluster_object_limits_results_file(file: str) -> None:
                 "skipping max-N plot"
             )
         else:
-            max_n = healthy.groupby("cluster_size")["scale"].max().sort_index()
+            max_n = healthy.groupby("cluster_size")["scale"].max()
+            # Order by numeric cluster size (credits/h) so e.g. 1600cc sits
+            # between 800cc and 3200cc rather than between 100cc and 200cc.
+            max_n = max_n.reindex(sorted(max_n.index, key=extract_cluster_size))
             df_max_n = max_n.to_frame(name="max_healthy_N")
             ax = df_max_n.plot(
                 kind="bar",
@@ -4356,6 +4364,9 @@ def analyze_cluster_object_limits_results_file(file: str) -> None:
         filtered = pivot.dropna(axis=1, how="all")
         if filtered.empty:
             continue
+        # Order the per-cluster-size series by numeric cluster size so the
+        # legend reads small→large rather than alphanumerically.
+        filtered = filtered[sorted(filtered.columns, key=extract_cluster_size)]
         ax = filtered.plot(
             kind="line",
             marker="o",
