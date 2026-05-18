@@ -319,6 +319,17 @@ theorem UnifiedStream.clampPositive_idem (us : UnifiedStream) :
   funext ud
   exact Bool.and_self _
 
+/-- `clampPositive` is filter-based, so no-error preservation is
+trivial: surviving records keep their original diffs. -/
+theorem UnifiedStream.clampPositive_no_error
+    (us : UnifiedStream)
+    (h : ∀ x ∈ us, ∃ n : Int, x.2 = DiffWithError.val n) :
+    ∀ x ∈ UnifiedStream.clampPositive us,
+      ∃ n : Int, x.2 = DiffWithError.val n := by
+  intro x hMem
+  unfold UnifiedStream.clampPositive at hMem
+  exact h x (List.mem_filter.mp hMem).1
+
 /-- The output of `clampPositive` never contains a `.val n` with
 `n ≤ 0`. Equivalently, every surviving `.val` diff is strictly
 positive. -/
@@ -382,6 +393,17 @@ theorem UnifiedStream.bagExceptAll_only_positive
       (∃ n : Int, x.2 = DiffWithError.val n ∧ 0 < n)
       ∨ x.2 = DiffWithError.error :=
   UnifiedStream.clampPositive_only_positive _
+
+/-- All-`.val` inputs yield all-`.val` outputs through
+`bagExceptAll`. -/
+theorem UnifiedStream.bagExceptAll_no_error
+    (l r : UnifiedStream)
+    (hL : ∀ x ∈ l, ∃ n : Int, x.2 = DiffWithError.val n)
+    (hR : ∀ x ∈ r, ∃ n : Int, x.2 = DiffWithError.val n) :
+    ∀ x ∈ UnifiedStream.bagExceptAll l r,
+      ∃ n : Int, x.2 = DiffWithError.val n :=
+  UnifiedStream.clampPositive_no_error _
+    (UnifiedStream.exceptAll_no_error l r hL hR)
 
 /-! ## `DISTINCT`
 
@@ -481,6 +503,36 @@ theorem UnifiedStream.clampToOne_idem (us : UnifiedStream) :
         rw [ih]
       · exact ih
 
+/-- All-`.val` inputs yield all-`.val` outputs through `clampToOne`:
+no `.error` is introduced (records with non-positive `.val` are
+dropped, positive `.val` become `.val 1`). -/
+theorem UnifiedStream.clampToOne_no_error
+    (us : UnifiedStream)
+    (h : ∀ x ∈ us, ∃ n : Int, x.2 = DiffWithError.val n) :
+    ∀ x ∈ UnifiedStream.clampToOne us,
+      ∃ n : Int, x.2 = DiffWithError.val n := by
+  induction us with
+  | nil => intro x hMem; exact absurd hMem List.not_mem_nil
+  | cons hd tl ih =>
+    obtain ⟨uc, d⟩ := hd
+    have hHd : ∃ n : Int, d = DiffWithError.val n :=
+      h (uc, d) List.mem_cons_self
+    have hTl : ∀ x ∈ tl, ∃ n : Int, x.2 = DiffWithError.val n :=
+      fun x hMem => h x (List.mem_cons_of_mem _ hMem)
+    obtain ⟨n, hN⟩ := hHd
+    cases d with
+    | error => exact absurd hN (by intro hEq; cases hEq)
+    | val m =>
+      intro x hMem
+      have hMem' : x ∈ (if 0 < m
+                        then (uc, DiffWithError.val 1) :: UnifiedStream.clampToOne tl
+                        else UnifiedStream.clampToOne tl) := hMem
+      split at hMem'
+      · rcases List.mem_cons.mp hMem' with hHead | hTail
+        · exact ⟨1, by rw [hHead]⟩
+        · exact ih hTl x hTail
+      · exact ih hTl x hMem'
+
 /-- Every `.val` record in the output of `clampToOne` has
 multiplicity exactly one. `.error` records pass through unchanged. -/
 theorem UnifiedStream.clampToOne_only_one_or_error
@@ -538,6 +590,17 @@ theorem UnifiedStream.distinct_only_one_or_error (us : UnifiedStream) :
     ∀ x ∈ UnifiedStream.distinct us,
       x.2 = DiffWithError.val 1 ∨ x.2 = DiffWithError.error :=
   UnifiedStream.clampToOne_only_one_or_error _
+
+/-- All-`.val` inputs yield all-`.val` outputs through `distinct`.
+Combined with `distinct_only_one_or_error`, the surviving diffs are
+all `.val 1`. -/
+theorem UnifiedStream.distinct_no_error
+    (us : UnifiedStream)
+    (h : ∀ x ∈ us, ∃ n : Int, x.2 = DiffWithError.val n) :
+    ∀ x ∈ UnifiedStream.distinct us,
+      ∃ n : Int, x.2 = DiffWithError.val n :=
+  UnifiedStream.clampToOne_no_error _
+    (UnifiedStream.consolidate_no_error _ h)
 
 /-! ## Distributivity over `unionAll`
 
