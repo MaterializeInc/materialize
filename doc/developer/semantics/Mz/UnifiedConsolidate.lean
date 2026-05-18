@@ -46,6 +46,36 @@ def UnifiedStream.consolidate : UnifiedStream → UnifiedStream
   | (uc, d) :: rest =>
     consolidateInto uc d (UnifiedStream.consolidate rest)
 
+/-! ### `consolidateInto` reduction lemmas
+
+Named per-shape reductions so proofs cite a single lemma instead
+of unfolding the `if`-then-else by hand. -/
+
+theorem consolidateInto_nil (uc : UnifiedRow) (d : DiffWithError Int) :
+    consolidateInto uc d [] = [(uc, d)] := rfl
+
+/-- Inserting `(uc, d)` at the head of a list whose head matches
+`uc` folds into the head bucket. -/
+theorem consolidateInto_match
+    (uc : UnifiedRow) (d d' : DiffWithError Int) (tl : UnifiedStream) :
+    consolidateInto uc d ((uc, d') :: tl) = (uc, d + d') :: tl := by
+  show (if uc = uc then (uc, d + d') :: tl
+          else (uc, d') :: consolidateInto uc d tl)
+      = (uc, d + d') :: tl
+  rw [if_pos rfl]
+
+/-- Inserting `(uc, d)` at the head of a list whose head does not
+match `uc` skips the head and recurses on the tail. -/
+theorem consolidateInto_skip
+    (uc uc' : UnifiedRow) (d d' : DiffWithError Int) (tl : UnifiedStream)
+    (h : uc ≠ uc') :
+    consolidateInto uc d ((uc', d') :: tl)
+      = (uc', d') :: consolidateInto uc d tl := by
+  show (if uc = uc' then (uc', d + d') :: tl
+          else (uc', d') :: consolidateInto uc d tl)
+      = (uc', d') :: consolidateInto uc d tl
+  rw [if_neg h]
+
 /-! ## Trivial cases -/
 
 theorem UnifiedStream.consolidate_nil :
@@ -70,16 +100,10 @@ private theorem consolidateInto_error_diff
     obtain ⟨uc', d'⟩ := hd
     by_cases hEq : uc = uc'
     · subst hEq
-      show (uc, DiffWithError.error)
-        ∈ (if uc = uc then (uc, DiffWithError.error + d') :: tl
-            else (uc, d') :: consolidateInto uc DiffWithError.error tl)
-      rw [if_pos rfl]
+      rw [consolidateInto_match]
       rw [DiffWithError.error_add_left]
       exact List.mem_cons_self
-    · show (uc, DiffWithError.error)
-        ∈ (if uc = uc' then (uc', DiffWithError.error + d') :: tl
-            else (uc', d') :: consolidateInto uc DiffWithError.error tl)
-      rw [if_neg hEq]
+    · rw [consolidateInto_skip _ _ _ _ _ hEq]
       exact List.mem_cons_of_mem _ ih
 
 /-- Inserting any record into a consolidated stream that already
@@ -105,27 +129,17 @@ private theorem consolidateInto_preserves_error_mem
       subst hUc
       subst hD
       by_cases hEq' : uc' = uc
-      · show (uc, DiffWithError.error)
-          ∈ (if uc' = uc then (uc, d' + DiffWithError.error) :: tl
-              else (uc, DiffWithError.error) :: consolidateInto uc' d' tl)
-        rw [if_pos hEq']
+      · subst hEq'
+        rw [consolidateInto_match]
         rw [DiffWithError.error_add_right]
         exact List.mem_cons_self
-      · show (uc, DiffWithError.error)
-          ∈ (if uc' = uc then (uc, d' + DiffWithError.error) :: tl
-              else (uc, DiffWithError.error) :: consolidateInto uc' d' tl)
-        rw [if_neg hEq']
+      · rw [consolidateInto_skip _ _ _ _ _ hEq']
         exact List.mem_cons_self
     · by_cases hEq' : uc' = uc₀
-      · show (uc, DiffWithError.error)
-          ∈ (if uc' = uc₀ then (uc₀, d' + d₀) :: tl
-              else (uc₀, d₀) :: consolidateInto uc' d' tl)
-        rw [if_pos hEq']
+      · subst hEq'
+        rw [consolidateInto_match]
         exact List.mem_cons_of_mem _ hTail
-      · show (uc, DiffWithError.error)
-          ∈ (if uc' = uc₀ then (uc₀, d' + d₀) :: tl
-              else (uc₀, d₀) :: consolidateInto uc' d' tl)
-        rw [if_neg hEq']
+      · rw [consolidateInto_skip _ _ _ _ _ hEq']
         exact List.mem_cons_of_mem _ (ih hTail)
 
 /-- Headline absorption: an `.error` diff anywhere in the input
@@ -172,15 +186,10 @@ private theorem consolidateInto_length_le_succ
   | cons hd tl ih =>
     obtain ⟨uc', d'⟩ := hd
     by_cases hEq : uc = uc'
-    · show (if uc = uc' then (uc', d + d') :: tl
-              else (uc', d') :: consolidateInto uc d tl).length
-          ≤ (((uc', d') :: tl).length) + 1
-      rw [if_pos hEq]
+    · subst hEq
+      rw [consolidateInto_match]
       simp [List.length_cons]
-    · show (if uc = uc' then (uc', d + d') :: tl
-              else (uc', d') :: consolidateInto uc d tl).length
-          ≤ (((uc', d') :: tl).length) + 1
-      rw [if_neg hEq]
+    · rw [consolidateInto_skip _ _ _ _ _ hEq]
       show (consolidateInto uc d tl).length + 1 ≤ tl.length + 1 + 1
       omega
 
@@ -220,17 +229,11 @@ private theorem mem_after_consolidateInto
     by_cases hEq : uc = uc'
     · subst hEq
       refine ⟨d + d', ?_⟩
-      show (uc, d + d') ∈
-        (if uc = uc then (uc, d + d') :: tl
-          else (uc, d') :: consolidateInto uc d tl)
-      rw [if_pos rfl]
+      rw [consolidateInto_match]
       exact List.mem_cons_self
     · obtain ⟨d'', hMem⟩ := ih
       refine ⟨d'', ?_⟩
-      show (uc, d'') ∈
-        (if uc = uc' then (uc', d + d') :: tl
-          else (uc', d') :: consolidateInto uc d tl)
-      rw [if_neg hEq]
+      rw [consolidateInto_skip _ _ _ _ _ hEq]
       exact List.mem_cons_of_mem _ hMem
 
 /-- When `uc` already appears in `us`, `consolidateInto uc d us`
@@ -245,20 +248,14 @@ private theorem consolidateInto_length_eq_of_mem
     obtain ⟨uc', d'⟩ := hd
     by_cases hEq : uc = uc'
     · subst hEq
-      show (if uc = uc then (uc, d + d') :: tl
-              else (uc, d') :: consolidateInto uc d tl).length
-          = ((uc, d') :: tl).length
-      rw [if_pos rfl]
+      rw [consolidateInto_match]
       rfl
     · have hMemTl : ∃ d', (uc, d') ∈ tl := by
         obtain ⟨d'', hMem⟩ := h
         rcases List.mem_cons.mp hMem with hHead | hTail
         · exact absurd ((Prod.mk.injEq _ _ _ _).mp hHead).1 hEq
         · exact ⟨d'', hTail⟩
-      show (if uc = uc' then (uc', d + d') :: tl
-              else (uc', d') :: consolidateInto uc d tl).length
-          = ((uc', d') :: tl).length
-      rw [if_neg hEq]
+      rw [consolidateInto_skip _ _ _ _ _ hEq]
       show (consolidateInto uc d tl).length + 1 = tl.length + 1
       rw [ih hMemTl]
 
@@ -314,13 +311,8 @@ private theorem consolidateInto_no_error
     obtain ⟨m, hM⟩ := hHd
     intro r hMem
     by_cases hEq : uc = uc'
-    · have hOut : consolidateInto uc (DiffWithError.val n) ((uc', d') :: tl)
-                = (uc', DiffWithError.val n + d') :: tl := by
-        show (if uc = uc' then (uc', DiffWithError.val n + d') :: tl
-                else (uc', d') :: consolidateInto uc (DiffWithError.val n) tl)
-            = (uc', DiffWithError.val n + d') :: tl
-        rw [if_pos hEq]
-      rw [hOut] at hMem
+    · subst hEq
+      rw [consolidateInto_match] at hMem
       rcases List.mem_cons.mp hMem with hHead | hTail'
       · subst hHead
         rw [hM]
@@ -328,13 +320,7 @@ private theorem consolidateInto_no_error
                        = DiffWithError.val m'
         exact ⟨n + m, rfl⟩
       · exact hTl r hTail'
-    · have hOut : consolidateInto uc (DiffWithError.val n) ((uc', d') :: tl)
-                = (uc', d') :: consolidateInto uc (DiffWithError.val n) tl := by
-        show (if uc = uc' then (uc', DiffWithError.val n + d') :: tl
-                else (uc', d') :: consolidateInto uc (DiffWithError.val n) tl)
-            = (uc', d') :: consolidateInto uc (DiffWithError.val n) tl
-        rw [if_neg hEq]
-      rw [hOut] at hMem
+    · rw [consolidateInto_skip _ _ _ _ _ hEq] at hMem
       rcases List.mem_cons.mp hMem with hHead | hTail'
       · subst hHead
         exact ⟨m, hM⟩
