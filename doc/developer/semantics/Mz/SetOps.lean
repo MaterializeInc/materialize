@@ -1016,6 +1016,58 @@ theorem UnifiedStream.intersectAll_no_error
     rw [hNL, hNR']
     rfl
 
+/-! ## Bag-semantics `INTERSECT ALL`
+
+`bagIntersectAll = clampPositive ∘ intersectAll`. The signed-diff
+output of `intersectAll` may have non-positive `.val` diffs when
+either side's consolidated count is non-positive; the clamp drops
+those, producing the bag-semantics result. -/
+
+def UnifiedStream.bagIntersectAll (l r : UnifiedStream) : UnifiedStream :=
+  UnifiedStream.clampPositive (UnifiedStream.intersectAll l r)
+
+theorem UnifiedStream.bagIntersectAll_length_le (l r : UnifiedStream) :
+    (UnifiedStream.bagIntersectAll l r).length ≤ l.length :=
+  Nat.le_trans
+    (UnifiedStream.clampPositive_length_le _)
+    (UnifiedStream.intersectAll_length_le l r)
+
+theorem UnifiedStream.bagIntersectAll_preserves_error_diff_left
+    (l r : UnifiedStream) (uc : UnifiedRow)
+    (hL : (uc, (DiffWithError.error : DiffWithError Int))
+            ∈ UnifiedStream.consolidate l)
+    (hR : ∃ d, (uc, d) ∈ UnifiedStream.consolidate r) :
+    (uc, (DiffWithError.error : DiffWithError Int))
+      ∈ UnifiedStream.bagIntersectAll l r :=
+  UnifiedStream.clampPositive_preserves_error_diff _ uc
+    (UnifiedStream.intersectAll_preserves_error_diff_left l r uc hL hR)
+
+theorem UnifiedStream.bagIntersectAll_preserves_error_diff_right
+    (l r : UnifiedStream) (uc : UnifiedRow)
+    (hL : ∃ d, (uc, d) ∈ UnifiedStream.consolidate l)
+    (hR : (uc, (DiffWithError.error : DiffWithError Int))
+            ∈ UnifiedStream.consolidate r) :
+    (uc, (DiffWithError.error : DiffWithError Int))
+      ∈ UnifiedStream.bagIntersectAll l r :=
+  UnifiedStream.clampPositive_preserves_error_diff _ uc
+    (UnifiedStream.intersectAll_preserves_error_diff_right l r uc hL hR)
+
+theorem UnifiedStream.bagIntersectAll_no_error
+    (l r : UnifiedStream)
+    (hL : ∀ x ∈ l, ∃ n : Int, x.2 = DiffWithError.val n)
+    (hR : ∀ x ∈ r, ∃ n : Int, x.2 = DiffWithError.val n) :
+    ∀ x ∈ UnifiedStream.bagIntersectAll l r,
+      ∃ n : Int, x.2 = DiffWithError.val n :=
+  UnifiedStream.clampPositive_no_error _
+    (UnifiedStream.intersectAll_no_error l r hL hR)
+
+theorem UnifiedStream.bagIntersectAll_only_positive
+    (l r : UnifiedStream) :
+    ∀ x ∈ UnifiedStream.bagIntersectAll l r,
+      (∃ n : Int, x.2 = DiffWithError.val n ∧ 0 < n)
+      ∨ x.2 = DiffWithError.error :=
+  UnifiedStream.clampPositive_only_positive _
+
 /-- `bagExceptAll [] r = clampPositive (negate (consolidate r))`.
 With an all-`.val` `r`, the negation makes every diff non-positive,
 which `clampPositive` then drops, yielding the spec-correct empty
