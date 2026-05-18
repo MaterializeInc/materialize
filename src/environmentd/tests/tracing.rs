@@ -16,6 +16,7 @@ use tracing_capture::SharedStorage;
 // Test that expected spans are generated for various queries.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)] // allow(test-attribute)
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 async fn test_expected_spans() {
     let storage = SharedStorage::default();
     // Sets of expected span names and SQL statements that should produce that span.
@@ -88,6 +89,7 @@ async fn test_expected_spans() {
 // of the most common code paths. This is not guaranteed to exhaustively test all of our tracing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)] // allow(test-attribute)
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 async fn test_secrets() {
     let storage = SharedStorage::default();
 

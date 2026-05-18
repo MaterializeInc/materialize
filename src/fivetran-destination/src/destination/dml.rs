@@ -14,9 +14,7 @@ use std::time::{Duration, SystemTime};
 
 use async_compression::tokio::bufread::{GzipDecoder, ZstdDecoder};
 use futures::{StreamExt, TryStreamExt};
-use itertools::Itertools;
-use mz_sql_parser::ast::{Ident, UnresolvedItemName};
-use postgres_protocol::escape;
+use mz_postgres_util::{Sql, execute, query_one, sql};
 use prost::bytes::{BufMut, BytesMut};
 use sha2::{Digest, Sha256};
 use tokio::fs::File;
@@ -50,19 +48,21 @@ pub async fn handle_truncate_table(request: TruncateRequest) -> Result<(), OpErr
 
     let (_dbname, client) = config::connect(request.configuration).await?;
 
-    let exists_stmt = r#"
-        SELECT EXISTS(
-            SELECT 1 FROM mz_tables t
-            LEFT JOIN mz_schemas s
-            ON t.schema_id = s.id
-            WHERE s.name = $1 AND t.name = $2
-        )"#
-    .to_string();
-    let exists: bool = client
-        .query_one(&exists_stmt, &[&request.schema_name, &request.table_name])
-        .await
-        .map(|row| row.get(0))
-        .context("checking existence")?;
+    let exists: bool = query_one(
+        &client,
+        sql!(
+            r#"SELECT EXISTS(
+                SELECT 1 FROM mz_tables t
+                LEFT JOIN mz_schemas s
+                ON t.schema_id = s.id
+                WHERE s.name = $1 AND t.name = $2
+            )"#
+        ),
+        &[&request.schema_name, &request.table_name],
+    )
+    .await
+    .map(|row| row.get(0))
+    .context("checking existence")?;
 
     // Truncates can happen at any point in time, even if the table hasn't been created yet. We
     // want to no-op in this case.
@@ -70,23 +70,22 @@ pub async fn handle_truncate_table(request: TruncateRequest) -> Result<(), OpErr
         return Ok(());
     }
 
-    let sql = match request.soft {
-        None => format!(
+    let query = match request.soft {
+        None => sql!(
             "DELETE FROM {}.{} WHERE {} < $1",
-            escape::escape_identifier(&request.schema_name),
-            escape::escape_identifier(&request.table_name),
-            escape::escape_identifier(&request.synced_column),
+            Sql::ident(&request.schema_name),
+            Sql::ident(&request.table_name),
+            Sql::ident(&request.synced_column),
         ),
-        Some(soft) => format!(
+        Some(soft) => sql!(
             "UPDATE {}.{} SET {} = true WHERE {} < $1",
-            escape::escape_identifier(&request.schema_name),
-            escape::escape_identifier(&request.table_name),
-            escape::escape_identifier(&soft.deleted_column),
-            escape::escape_identifier(&request.synced_column),
+            Sql::ident(&request.schema_name),
+            Sql::ident(&request.table_name),
+            Sql::ident(&soft.deleted_column),
+            Sql::ident(&request.synced_column),
         ),
     };
-    client
-        .execute(&sql, &[&delete_before])
+    execute(&client, query, &[&delete_before])
         .await
         .context("truncating")?;
 
@@ -248,35 +247,36 @@ async fn replace_files(
         return Ok(());
     }
 
-    let qualified_table_name = format!(
-        "{}.{}",
-        escape::escape_identifier(schema),
-        escape::escape_identifier(&table.name)
-    );
+    let qualified_table_name = sql!("{}.{}", Sql::ident(schema), Sql::ident(&table.name));
 
     // First delete all of the matching rows.
-    let matching_cols = columns.iter().filter(|col| col.is_primary);
-    let delete_stmt = format!(
-        r#"
-        DELETE FROM {qualified_table_name}
-        WHERE ({cols}) IN (
-            SELECT {cols}
-            FROM {qualified_temp_table_name}
-        )"#,
-        cols = matching_cols.map(|col| &col.escaped_name).join(","),
+    let matching_cols = Sql::join(
+        columns
+            .iter()
+            .filter(|col| col.is_primary)
+            .map(|col| col.ident.clone()),
+        ",",
     );
-    let rows_changed = client.execute(&delete_stmt, &[]).await?;
+    let delete_stmt = sql!(
+        "DELETE FROM {} WHERE ({}) IN (SELECT {} FROM {})",
+        qualified_table_name.clone(),
+        matching_cols.clone(),
+        matching_cols,
+        qualified_temp_table_name.clone(),
+    );
+    let rows_changed = execute(client, delete_stmt, &[]).await?;
     tracing::info!(rows_changed, "deleted rows from {qualified_table_name}");
 
     // Then re-insert rows.
-    let insert_stmt = format!(
-        r#"
-        INSERT INTO {qualified_table_name} ({cols})
-        SELECT {cols} FROM {qualified_temp_table_name}
-        "#,
-        cols = columns.iter().map(|col| &col.escaped_name).join(","),
+    let all_cols = Sql::join(columns.iter().map(|col| col.ident.clone()), ",");
+    let insert_stmt = sql!(
+        "INSERT INTO {} ({}) SELECT {} FROM {}",
+        qualified_table_name.clone(),
+        all_cols.clone(),
+        all_cols,
+        qualified_temp_table_name.clone(),
     );
-    let rows_changed = client.execute(&insert_stmt, &[]).await?;
+    let rows_changed = execute(client, insert_stmt, &[]).await?;
     tracing::info!(rows_changed, "inserted rows to {qualified_table_name}");
 
     // Clear out our scratch table.
@@ -297,37 +297,37 @@ async fn update_files(
 ) -> Result<(), OpError> {
     // TODO(benesch): this is hideously inefficient.
 
-    let mut assignments = vec![];
-    let mut filters = vec![];
+    let mut assignments: Vec<Sql> = vec![];
+    let mut filters: Vec<Sql> = vec![];
 
     for (i, column) in table.columns.iter().enumerate() {
+        let name = Sql::ident(&column.name);
+        let param = Sql::param(i + 1);
         if column.primary_key {
-            filters.push(format!(
-                "{} = ${}",
-                escape::escape_identifier(&column.name),
-                i + 1
-            ));
+            filters.push(sql!("{} = {}", name, param));
         } else {
-            assignments.push(format!(
-                "{name} = CASE ${p}::text WHEN {unmodified_string} THEN {name} ELSE ${p}::{ty} END",
-                name = escape::escape_identifier(&column.name),
-                p = i + 1,
-                unmodified_string = escape::escape_literal(&file_config.unmodified_string),
-                ty = utils::to_materialize_type(column.r#type())?,
+            assignments.push(sql!(
+                "{} = CASE {}::text WHEN {} THEN {} ELSE {}::{} END",
+                name.clone(),
+                param.clone(),
+                Sql::literal(&file_config.unmodified_string),
+                name,
+                param,
+                Sql::new(utils::to_materialize_type(column.r#type())?),
             ));
         }
     }
 
-    let update_stmt = format!(
+    let update_stmt = sql!(
         "UPDATE {}.{} SET {} WHERE {}",
-        escape::escape_identifier(schema),
-        escape::escape_identifier(&table.name),
-        assignments.join(","),
-        filters.join(" AND "),
+        Sql::ident(schema),
+        Sql::ident(&table.name),
+        Sql::join(assignments, ","),
+        Sql::join(filters, " AND "),
     );
 
     let update_stmt = client
-        .prepare(&update_stmt)
+        .prepare(update_stmt.as_str())
         .await
         .context("preparing update statement")?;
 
@@ -406,33 +406,34 @@ async fn delete_files(
     // HACKY: We want to update the "_fivetran_synced" column for all of the rows we marked as
     // deleted, but don't have a way to read from the temp table that would allow this in an
     // `UPDATE` statement.
-    let synced_time_stmt = format!(
-        "SELECT MAX({synced_col}) FROM {qualified_temp_table_name}",
-        synced_col = escape::escape_identifier(FIVETRAN_SYSTEM_COLUMN_SYNCED)
+    let synced_time_stmt = sql!(
+        "SELECT MAX({}) FROM {}",
+        Sql::ident(FIVETRAN_SYSTEM_COLUMN_SYNCED),
+        qualified_temp_table_name.clone(),
     );
-    let synced_time: SystemTime = client
-        .query_one(&synced_time_stmt, &[])
+    let synced_time_row = query_one(client, synced_time_stmt, &[])
         .await
-        .and_then(|row| row.try_get(0))
         .context("get MAX _fivetran_synced")?;
+    let synced_time: SystemTime = synced_time_row.try_get(0)?;
 
-    let qualified_table_name =
-        UnresolvedItemName::qualified(&[Ident::new(schema)?, Ident::new(&table.name)?]);
-    let matching_cols = columns.iter().filter(|col| col.is_primary);
-    let merge_stmt = format!(
-        r#"
-        UPDATE {qualified_table_name}
-        SET {deleted_col} = true, {synced_col} = $1
-        WHERE ({cols}) IN (
-            SELECT {cols}
-            FROM {qualified_temp_table_name}
-        )"#,
-        deleted_col = escape::escape_identifier(FIVETRAN_SYSTEM_COLUMN_DELETE),
-        synced_col = escape::escape_identifier(FIVETRAN_SYSTEM_COLUMN_SYNCED),
-        cols = matching_cols.map(|col| &col.escaped_name).join(","),
+    let qualified_table_name = sql!("{}.{}", Sql::ident(schema), Sql::ident(&table.name));
+    let matching_cols = Sql::join(
+        columns
+            .iter()
+            .filter(|col| col.is_primary)
+            .map(|col| col.ident.clone()),
+        ",",
     );
-    let total_count = client
-        .execute(&merge_stmt, &[&synced_time])
+    let merge_stmt = sql!(
+        "UPDATE {} SET {} = true, {} = $1 WHERE ({}) IN (SELECT {} FROM {})",
+        qualified_table_name.clone(),
+        Sql::ident(FIVETRAN_SYSTEM_COLUMN_DELETE),
+        Sql::ident(FIVETRAN_SYSTEM_COLUMN_SYNCED),
+        matching_cols.clone(),
+        matching_cols,
+        qualified_temp_table_name.clone(),
+    );
+    let total_count = execute(client, merge_stmt, &[&synced_time])
         .await
         .context("update deletes")?;
     tracing::info!(?total_count, "altered rows in {qualified_table_name}");
@@ -446,19 +447,20 @@ async fn delete_files(
 #[must_use = "Need to clear the scratch table once you're done using it."]
 struct ScratchTableGuard<'a> {
     client: &'a tokio_postgres::Client,
-    qualified_name: UnresolvedItemName,
+    qualified_name: Sql,
 }
 
 impl<'a> ScratchTableGuard<'a> {
     /// Deletes all the rows from the associated scratch table.
     async fn clear(self) -> Result<(), OpError> {
-        let clear_table_stmt = format!("DELETE FROM {}", self.qualified_name);
-        let rows_cleared = self
-            .client
-            .execute(&clear_table_stmt, &[])
-            .await
-            .map_err(OpErrorKind::TemporaryResource)
-            .context("scratch table guard")?;
+        let rows_cleared = execute(
+            self.client,
+            sql!("DELETE FROM {}", self.qualified_name.clone()),
+            &[],
+        )
+        .await
+        .map_err(OpErrorKind::from)
+        .context("scratch table guard")?;
         tracing::info!(?rows_cleared, table_name = %self.qualified_name, "guard cleared table");
 
         Ok(())
@@ -472,22 +474,20 @@ async fn get_scratch_table<'a>(
     schema: &str,
     table: &Table,
     client: &'a tokio_postgres::Client,
-) -> Result<
-    (
-        UnresolvedItemName,
-        Vec<ColumnMetadata>,
-        ScratchTableGuard<'a>,
-    ),
-    OpError,
-> {
+) -> Result<(Sql, Vec<ColumnMetadata>, ScratchTableGuard<'a>), OpError> {
     static SCRATCH_TABLE_SCHEMA: &str = "_mz_fivetran_scratch";
 
-    let create_schema_stmt = format!("CREATE SCHEMA IF NOT EXISTS {SCRATCH_TABLE_SCHEMA}");
-    client
-        .execute(&create_schema_stmt, &[])
-        .await
-        .map_err(OpErrorKind::TemporaryResource)
-        .context("creating scratch schema")?;
+    execute(
+        client,
+        sql!(
+            "CREATE SCHEMA IF NOT EXISTS {}",
+            Sql::ident(SCRATCH_TABLE_SCHEMA)
+        ),
+        &[],
+    )
+    .await
+    .map_err(OpErrorKind::from)
+    .context("creating scratch schema")?;
 
     // To make sure the table name is unique, and under the Materialize identifier limits, we name
     // the scratch table with a hash.
@@ -495,10 +495,11 @@ async fn get_scratch_table<'a>(
     hasher.update(&format!("{database}.{schema}.{}", table.name));
     let scratch_table_name = format!("{:x}", hasher.finalize());
 
-    let qualified_scratch_table_name = UnresolvedItemName::qualified(&[
-        Ident::new(SCRATCH_TABLE_SCHEMA).context("scratch schema")?,
-        Ident::new(&scratch_table_name).context("scratch table_name")?,
-    ]);
+    let qualified_scratch_table_name = sql!(
+        "{}.{}",
+        Sql::ident(SCRATCH_TABLE_SCHEMA),
+        Sql::ident(&scratch_table_name)
+    );
 
     let columns = table
         .columns
@@ -507,28 +508,37 @@ async fn get_scratch_table<'a>(
         .collect::<Result<Vec<_>, OpError>>()?;
 
     let create_scratch_table = || async {
-        let defs = columns.iter().map(|col| col.to_column_def()).join(",");
-        let create_table_stmt = format!("CREATE TABLE {qualified_scratch_table_name} ({defs})");
-        client
-            .execute(&create_table_stmt, &[])
-            .await
-            .map_err(OpErrorKind::TemporaryResource)
-            .context("creating scratch table")?;
+        let defs = Sql::join(columns.iter().map(|col| col.to_column_def()), ",");
+        execute(
+            client,
+            sql!(
+                "CREATE TABLE {} ({})",
+                qualified_scratch_table_name.clone(),
+                defs
+            ),
+            &[],
+        )
+        .await
+        .map_err(OpErrorKind::from)
+        .context("creating scratch table")?;
 
         // Leave a COMMENT on the scratch table for debug-ability.
         let comment = format!(
             "Fivetran scratch table for {database}.{schema}.{}",
             table.name
         );
-        let comment_stmt = format!(
-            "COMMENT ON TABLE {qualified_scratch_table_name} IS {comment}",
-            comment = escape::escape_literal(&comment)
-        );
-        client
-            .execute(&comment_stmt, &[])
-            .await
-            .map_err(OpErrorKind::TemporaryResource)
-            .context("comment scratch table")?;
+        execute(
+            client,
+            sql!(
+                "COMMENT ON TABLE {} IS {}",
+                qualified_scratch_table_name.clone(),
+                Sql::literal(&comment)
+            ),
+            &[],
+        )
+        .await
+        .map_err(OpErrorKind::from)
+        .context("comment scratch table")?;
 
         Ok::<_, OpError>(())
     };
@@ -573,12 +583,14 @@ async fn get_scratch_table<'a>(
                     "recreate scratch table",
                 );
 
-                let drop_table_stmt = format!("DROP TABLE {qualified_scratch_table_name}");
-                client
-                    .execute(&drop_table_stmt, &[])
-                    .await
-                    .map_err(OpErrorKind::TemporaryResource)
-                    .context("dropping scratch table")?;
+                execute(
+                    client,
+                    sql!("DROP TABLE {}", qualified_scratch_table_name.clone()),
+                    &[],
+                )
+                .await
+                .map_err(OpErrorKind::from)
+                .context("dropping scratch table")?;
 
                 create_scratch_table().await.context("recreate table")?;
             } else {
@@ -589,25 +601,32 @@ async fn get_scratch_table<'a>(
                     "clear and reuse scratch table",
                 );
 
-                let clear_table_stmt = format!("DELETE FROM {qualified_scratch_table_name}");
-                let rows_cleared = client
-                    .execute(&clear_table_stmt, &[])
-                    .await
-                    .map_err(OpErrorKind::TemporaryResource)
-                    .context("clearing scratch table")?;
+                let rows_cleared = execute(
+                    client,
+                    sql!("DELETE FROM {}", qualified_scratch_table_name.clone()),
+                    &[],
+                )
+                .await
+                .map_err(OpErrorKind::from)
+                .context("clearing scratch table")?;
                 tracing::info!(?rows_cleared, %qualified_scratch_table_name, "cleared table");
             }
         }
     }
 
     // Verify that our table is empty.
-    let count_stmt = format!("SELECT COUNT(*) FROM {qualified_scratch_table_name}");
-    let rows: i64 = client
-        .query_one(&count_stmt, &[])
-        .await
-        .map(|row| row.get(0))
-        .map_err(OpErrorKind::TemporaryResource)
-        .context("validate scratch table")?;
+    let rows: i64 = query_one(
+        client,
+        sql!(
+            "SELECT COUNT(*) FROM {}",
+            qualified_scratch_table_name.clone()
+        ),
+        &[],
+    )
+    .await
+    .map(|row| row.get(0))
+    .map_err(OpErrorKind::from)
+    .context("validate scratch table")?;
     if rows != 0 {
         return Err(OpErrorKind::InvariantViolated(format!(
             "scratch table had non-zero number of rows: {rows}"
@@ -632,7 +651,7 @@ async fn copy_files(
     files: &[String],
     client: &tokio_postgres::Client,
     table: &Table,
-    temporary_table: &UnresolvedItemName,
+    temporary_table: &Sql,
 ) -> Result<u64, OpError> {
     let mut total_row_count = 0;
 
@@ -641,11 +660,12 @@ async fn copy_files(
         tracing::info!(?path, "starting copy");
 
         // Create a Sink which we can stream the CSV files into.
-        let copy_in_stmt = format!(
-            "COPY {temporary_table} FROM STDIN WITH (FORMAT CSV, HEADER false, NULL {null_value})",
-            null_value = escape::escape_literal(&file_config.null_string),
+        let copy_in_stmt = sql!(
+            "COPY {} FROM STDIN WITH (FORMAT CSV, HEADER false, NULL {})",
+            temporary_table.clone(),
+            Sql::literal(&file_config.null_string),
         );
-        let sink = client.copy_in(&copy_in_stmt).await?;
+        let sink = client.copy_in(copy_in_stmt.as_str()).await?;
         let mut sink = std::pin::pin!(sink);
 
         {

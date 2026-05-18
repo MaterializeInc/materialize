@@ -108,6 +108,7 @@ impl MockHttpServer {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[allow(clippy::disallowed_methods)]
 async fn test_no_block() {
     // We manually time out the test because it's better than relying on CI to time out, because
     // an actual failure (as opposed to a CI timeout) causes `services.log` to be uploaded.
@@ -210,6 +211,7 @@ async fn test_no_block() {
 /// Test that dropping a connection while a source is undergoing purification
 /// does not crash the server.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[allow(clippy::disallowed_methods)]
 async fn test_drop_connection_race() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -310,6 +312,7 @@ async fn test_drop_connection_race() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_time() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -359,6 +362,7 @@ fn test_time() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_subscribe_consolidation() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client_writes = server.connect(postgres::NoTls).unwrap();
@@ -388,6 +392,7 @@ fn test_subscribe_consolidation() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_subscribe_negative_diffs() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client_writes = server.connect(postgres::NoTls).unwrap();
@@ -439,6 +444,7 @@ fn test_subscribe_negative_diffs() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[allow(clippy::disallowed_methods)]
 async fn test_empty_subscribe_notice() {
     let server = test_util::TestHarness::default()
         .with_now(NOW_ZERO.clone())
@@ -482,6 +488,7 @@ async fn test_empty_subscribe_notice() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[allow(clippy::disallowed_methods)]
 async fn test_empty_subscribe_error() {
     let server = test_util::TestHarness::default()
         .with_now(NOW_ZERO.clone())
@@ -503,6 +510,7 @@ async fn test_empty_subscribe_error() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_subscribe_basic() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -673,6 +681,7 @@ upper:
 /// batches and we won't yet insert a second row, we know that if we've seen a
 /// data row we will also see one progressed message.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_subscribe_progress() {
     let server = test_util::TestHarness::default().start_blocking();
 
@@ -790,6 +799,7 @@ fn test_subscribe_progress() {
 // Verifies that subscribing to non-nullable columns with progress information
 // turns them into nullable columns. See database-issues#1946.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_subscribe_progress_non_nullable_columns() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client_writes = server.connect(postgres::NoTls).unwrap();
@@ -840,6 +850,7 @@ fn test_subscribe_progress_non_nullable_columns() {
 /// Verifies that we get continuous progress messages, regardless of if we
 /// receive data or not.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_subcribe_continuous_progress() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client_writes = server.connect(postgres::NoTls).unwrap();
@@ -924,6 +935,7 @@ fn test_subcribe_continuous_progress() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_subscribe_fetch_timeout() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -1020,6 +1032,7 @@ fn test_subscribe_fetch_timeout() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_subscribe_fetch_wait() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -1082,6 +1095,7 @@ fn test_subscribe_fetch_wait() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_subscribe_empty_upper_frontier() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -1102,6 +1116,7 @@ fn test_subscribe_empty_upper_frontier() {
 // Tests that a client that launches a non-terminating SUBSCRIBE and disconnects
 // does not keep the server alive forever.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+#[allow(clippy::disallowed_methods)]
 async fn test_subscribe_shutdown() {
     let server = test_util::TestHarness::default().start().await;
 
@@ -1130,6 +1145,7 @@ async fn test_subscribe_shutdown() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_subscribe_table_rw_timestamps() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client_interactive = server.connect(postgres::NoTls).unwrap();
@@ -1214,6 +1230,7 @@ fn test_subscribe_table_rw_timestamps() {
 // Tests that temporary views created by one connection cannot be viewed
 // by another connection.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_temporary_views() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client_a = server.connect(postgres::NoTls).unwrap();
@@ -1244,6 +1261,7 @@ fn test_temporary_views() {
 
 // Test EXPLAIN TIMESTAMP with tables.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_explain_timestamp_table() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -1282,6 +1300,7 @@ lower:
 
 // Test `EXPLAIN TIMESTAMP AS JSON`
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_explain_timestamp_json() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -1304,6 +1323,7 @@ fn test_explain_timestamp_json() {
 //
 // GitHub issue # 18950
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_transactional_explain_timestamps() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -1427,6 +1447,7 @@ fn test_transactional_explain_timestamps() {
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/5600
 #[ignore] // TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/8491 is fixed
+#[allow(clippy::disallowed_methods)]
 async fn test_utilization_hold() {
     const THIRTY_DAYS_MS: u64 = 30 * 24 * 60 * 60 * 1000;
     // `mz_catalog_server` tests indexes, `quickstart` tests tables.
@@ -1563,6 +1584,7 @@ async fn test_utilization_hold() {
 // of cancelled (sends a pgwire cancel request on a new connection).
 #[ignore] // TODO(necaris): Re-enable this as soon as possible
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+#[allow(clippy::disallowed_methods)]
 async fn test_github_12546() {
     let server = test_util::TestHarness::default()
         .with_propagate_crashes(false)
@@ -1614,6 +1636,7 @@ async fn test_github_12546() {
 
 /// Regression test for database-issues#3721.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_github_3721() {
     let server = test_util::TestHarness::default().start_blocking();
 
@@ -1671,6 +1694,7 @@ fn test_github_3721() {
 
 #[mz_ore::test]
 // Tests github issue database-issues#3761
+#[allow(clippy::disallowed_methods)]
 fn test_subscribe_outlive_cluster() {
     let server = test_util::TestHarness::default().start_blocking();
 
@@ -1705,6 +1729,7 @@ fn test_subscribe_outlive_cluster() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_read_then_write_serializability() {
     let server = test_util::TestHarness::default().start_blocking();
 
@@ -1755,6 +1780,7 @@ fn test_read_then_write_serializability() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[allow(clippy::disallowed_methods)]
 async fn test_timestamp_recovery() {
     let now = Arc::new(Mutex::new(1));
     let now_fn = {
@@ -1800,6 +1826,7 @@ async fn test_strong_session_serializability() {
     test_session_linearizability("strong session serializable").await;
 }
 
+#[allow(clippy::disallowed_methods)]
 async fn test_session_linearizability(isolation_level: &str) {
     // Set the timestamp to zero for deterministic initial timestamps.
     let now = Arc::new(Mutex::new(0));
@@ -1942,6 +1969,7 @@ fn test_internal_users() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_internal_users_cluster() {
     let server = test_util::TestHarness::default().start_blocking();
 
@@ -1963,6 +1991,7 @@ fn test_internal_users_cluster() {
 // Tests that you can have simultaneous connections on the internal and external ports without
 // crashing
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_internal_ports() {
     let server = test_util::TestHarness::default().start_blocking();
 
@@ -2020,6 +2049,7 @@ fn test_internal_ports() {
 // doesn't allow you to specify a connection and expect a failure which is
 // needed for this test.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_alter_system_invalid_param() {
     let server = test_util::TestHarness::default().start_blocking();
 
@@ -2049,6 +2079,7 @@ fn test_alter_system_invalid_param() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_concurrent_writes() {
     let server = test_util::TestHarness::default().start_blocking();
 
@@ -2106,6 +2137,7 @@ fn test_concurrent_writes() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_load_generator() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -2152,6 +2184,7 @@ fn test_load_generator() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_support_user_permissions() {
     let server = test_util::TestHarness::default().start_blocking();
 
@@ -2195,6 +2228,7 @@ fn test_support_user_permissions() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_idle_in_transaction_session_timeout() {
     #[track_caller]
     fn assert_db_error(error: tokio_postgres::Error, message: &str) {
@@ -2258,6 +2292,7 @@ fn test_idle_in_transaction_session_timeout() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_peek_on_dropped_cluster() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -2315,6 +2350,7 @@ fn test_peek_on_dropped_cluster() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_emit_timestamp_notice() {
     let server = test_util::TestHarness::default().start_blocking();
 
@@ -2385,6 +2421,7 @@ fn test_emit_timestamp_notice() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_isolation_level_notice() {
     let server = test_util::TestHarness::default().start_blocking();
 
@@ -2420,6 +2457,7 @@ fn test_isolation_level_notice() {
 }
 
 #[test] // allow(test-attribute)
+#[allow(clippy::disallowed_methods)]
 fn test_emit_tracing_notice() {
     let server = test_util::TestHarness::default()
         .with_enable_tracing(true)
@@ -2459,6 +2497,7 @@ fn test_emit_tracing_notice() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_subscribe_on_dropped_source() {
     fn test_subscribe_on_dropped_source_inner(
         server: &TestServerWithRuntime,
@@ -2552,6 +2591,7 @@ fn test_subscribe_on_dropped_source() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_dont_drop_sinks_twice() {
     let server = test_util::TestHarness::default().start_blocking();
 
@@ -2594,6 +2634,7 @@ fn test_dont_drop_sinks_twice() {
 // This can almost be tested with SLT using the simple directive, but
 // we have no way to disconnect sessions using SLT.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_mz_sessions() {
     let server = test_util::TestHarness::default().start_blocking();
 
@@ -2728,6 +2769,7 @@ fn test_mz_sessions() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_auto_run_on_introspection_feature_enabled() {
     // unsafe_mode enables the feature as a whole
     let server = test_util::TestHarness::default()
@@ -2822,6 +2864,7 @@ fn test_auto_run_on_introspection_feature_enabled() {
 const INTROSPECTION_NOTICE: &str = "results from querying these objects depend on the current values of the `cluster` and `cluster_replica` session variables";
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_auto_run_on_introspection_feature_disabled() {
     // unsafe_mode enables the feature as a whole
     let server = test_util::TestHarness::default()
@@ -2898,6 +2941,7 @@ fn test_auto_run_on_introspection_feature_disabled() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_auto_run_on_introspection_per_replica_relations() {
     // unsafe_mode enables the feature as a whole
     let server = test_util::TestHarness::default()
@@ -2977,6 +3021,7 @@ fn test_auto_run_on_introspection_per_replica_relations() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_pg_cancel_backend() {
     mz_ore::test::init_logging();
     let server = test_util::TestHarness::default().start_blocking();
@@ -3100,6 +3145,7 @@ fn test_pg_cancel_backend() {
 
 // Test params in interesting places.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_params() {
     mz_ore::test::init_logging();
     let server = test_util::TestHarness::default().start_blocking();
@@ -3154,6 +3200,7 @@ fn test_params() {
 
 // Test pg_cancel_backend after the authenticated role is dropped.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_pg_cancel_dropped_role() {
     let server = test_util::TestHarness::default().start_blocking();
     let dropped_role = "r1";
@@ -3204,6 +3251,7 @@ fn test_pg_cancel_dropped_role() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_peek_on_dropped_indexed_view() {
     let server = test_util::TestHarness::default().start_blocking();
 
@@ -3286,6 +3334,7 @@ fn test_peek_on_dropped_indexed_view() {
 /// Test AS OF in EXPLAIN. This output will only differ from the non-ASOF versions with RETAIN
 /// HISTORY, where the object and its indexes have differing compaction policies.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[allow(clippy::disallowed_methods)]
 async fn test_explain_as_of() {
     // TODO: This would be better in testdrive, but we'd need to support negative intervals in AS
     // OF first.
@@ -3323,6 +3372,7 @@ async fn test_explain_as_of() {
 // Test that RETAIN HISTORY results in the since and upper being separated by the specified amount.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[ignore] // TODO: Reenable when database-issues#7450 is fixed
+#[allow(clippy::disallowed_methods)]
 async fn test_retain_history() {
     let server = test_util::TestHarness::default().start().await;
     let client = server.connect().await.unwrap();
@@ -3458,6 +3508,7 @@ async fn test_retain_history() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[allow(clippy::disallowed_methods)]
 async fn test_temporal_static_queries() {
     let server = test_util::TestHarness::default().start().await;
     let client = server.connect().await.unwrap();
@@ -3558,6 +3609,7 @@ async fn test_temporal_static_queries() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 async fn test_constant_materialized_view() {
     let server = test_util::TestHarness::default().start().await;
     let client = server.connect().await.unwrap();
@@ -3594,6 +3646,7 @@ async fn test_constant_materialized_view() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 async fn test_explain_timestamp_blocking() {
     let server = test_util::TestHarness::default().start().await;
     server
@@ -3651,6 +3704,7 @@ async fn test_explain_timestamp_on_const_with_temporal() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 async fn test_cancel_linearize_reads() {
     let server = test_util::TestHarness::default().start().await;
     server
@@ -3698,6 +3752,7 @@ async fn test_cancel_linearize_reads() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 async fn test_cancel_linearize_read_then_writes() {
     let server = test_util::TestHarness::default().start().await;
     server
@@ -3763,6 +3818,7 @@ async fn test_cancel_linearize_read_then_writes() {
 // Test that builtin objects are created in the schemas they advertise in the builtin submodules.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 async fn test_builtin_schemas() {
     let server = test_util::TestHarness::default().start().await;
     let client = server.connect().await.unwrap();
@@ -3805,6 +3861,7 @@ async fn test_builtin_schemas() {
 // others to fail.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 async fn test_serialized_ddl_serial() {
     let server = test_util::TestHarness::default().start().await;
     let mut handles = Vec::new();
@@ -3843,6 +3900,7 @@ async fn test_serialized_ddl_serial() {
 // Test that serial DDLs are cancellable.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 async fn test_serialized_ddl_cancel() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()

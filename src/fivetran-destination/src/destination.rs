@@ -7,11 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::borrow::Cow;
-
 use futures::Future;
 use mz_ore::retry::{Retry, RetryResult};
-use postgres_protocol::escape;
+use mz_postgres_util::{Sql, sql};
 use tonic::{Request, Response, Status};
 
 use crate::error::{Context, OpError, OpErrorKind};
@@ -249,24 +247,22 @@ fn to_grpc<T>(response: Result<T, OpError>) -> Result<Response<T>, Status> {
 /// Metadata about a column that is relevant to operations peformed by the destination.
 #[derive(Debug)]
 struct ColumnMetadata {
-    /// Name of the column in the destination table, with necessary characters escaped.
-    escaped_name: String,
+    /// Name of the column in the destination table, escaped as an identifier.
+    ident: Sql,
     /// Type of the column in the destination table.
-    ty: Cow<'static, str>,
+    ty: Sql,
     /// Is this column a primary key.
     is_primary: bool,
 }
 
 impl ColumnMetadata {
-    /// Returns a [`String`] that is suitable for use when creating a table.
-    fn to_column_def(&self) -> String {
-        let mut def = format!("{} {}", self.escaped_name, self.ty);
-
+    /// Returns SQL suitable for use in a `CREATE TABLE` column definition.
+    fn to_column_def(&self) -> Sql {
         if self.is_primary {
-            def.push_str(" NOT NULL");
+            sql!("{} {} NOT NULL", self.ident.clone(), self.ty.clone())
+        } else {
+            sql!("{} {}", self.ident.clone(), self.ty.clone())
         }
-
-        def
     }
 }
 
@@ -274,28 +270,27 @@ impl TryFrom<&crate::fivetran_sdk::Column> for ColumnMetadata {
     type Error = OpError;
 
     fn try_from(value: &crate::fivetran_sdk::Column) -> Result<Self, Self::Error> {
-        let escaped_name = escape::escape_identifier(&value.name);
-
-        let mut ty: Cow<'static, str> = utils::to_materialize_type(value.r#type())?.into();
+        let ident = Sql::ident(&value.name);
+        let base_ty = Sql::new(utils::to_materialize_type(value.r#type())?);
         let params = value.params.as_ref().and_then(|p| p.params.as_ref());
 
-        match (value.r#type(), params) {
+        let ty = match (value.r#type(), params) {
             (DataType::Decimal, Some(Params::Decimal(DecimalParams { precision, scale }))) => {
-                ty.to_mut().push_str(&format!("({}, {})", precision, scale));
+                sql!("{}({}, {})", base_ty, *precision, *scale)
             }
             (other, Some(Params::Decimal(DecimalParams { .. }))) => {
                 let msg = format!("found decimal params for {other:?} data type!");
                 return Err(OpError::new(OpErrorKind::InvariantViolated(msg)));
             }
             // TODO(parkmycar): Also handle the string datatype params here.
-            _ => (),
+            _ => base_ty,
         };
 
         let is_primary =
             value.primary_key || value.name.to_lowercase() == FIVETRAN_SYSTEM_COLUMN_ID;
 
         Ok(ColumnMetadata {
-            escaped_name,
+            ident,
             ty,
             is_primary,
         })
