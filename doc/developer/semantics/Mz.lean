@@ -11,6 +11,7 @@ import Mz.ExprVariadic
 import Mz.Bag
 import Mz.ErrStream
 import Mz.Pushdown
+import Mz.ColRefs
 import Mz.DiffSemiring
 import Mz.UnifiedStream
 import Mz.UnifiedConsolidate
