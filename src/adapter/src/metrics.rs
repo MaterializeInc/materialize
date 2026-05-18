@@ -55,6 +55,7 @@ pub struct Metrics {
     pub catalog_transact_seconds: HistogramVec,
     pub catalog_transact_phase_seconds: HistogramVec,
     pub apply_catalog_implications_seconds: Histogram,
+    pub apply_catalog_implications_phase_seconds: HistogramVec,
     pub group_commit_catalog_upper_seconds: Histogram,
 }
 
@@ -255,6 +256,13 @@ impl Metrics {
                 name: "mz_apply_catalog_implications_seconds",
                 help: "The time it takes to apply catalog implications.",
                 buckets: histogram_seconds_buckets(0.001, 32.0),
+            )),
+            apply_catalog_implications_phase_seconds: registry.register(metric!(
+                name: "mz_apply_catalog_implications_phase_seconds",
+                help: "The time spent in each phase of a single \
+                       apply_catalog_implications call.",
+                var_labels: ["phase"],
+                buckets: histogram_seconds_buckets(0.0001, 32.0),
             )),
             group_commit_catalog_upper_seconds: registry.register(metric!(
                 name: "mz_group_commit_catalog_upper_seconds",

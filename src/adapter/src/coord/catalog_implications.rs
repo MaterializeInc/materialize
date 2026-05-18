@@ -87,6 +87,13 @@ impl Coordinator {
         catalog_updates: Vec<ParsedStateUpdate>,
     ) -> Result<(), AdapterError> {
         let start = Instant::now();
+        let phase_metric = self
+            .metrics
+            .apply_catalog_implications_phase_seconds
+            .clone();
+        let _absorb_timer = phase_metric
+            .with_label_values(&["absorb_updates"])
+            .start_timer();
 
         let mut catalog_implications: BTreeMap<CatalogItemId, CatalogImplication> = BTreeMap::new();
         let mut cluster_commands: BTreeMap<ClusterId, CatalogImplication> = BTreeMap::new();
@@ -162,6 +169,11 @@ impl Coordinator {
             }
         }
 
+        drop(_absorb_timer);
+
+        let _inner_timer = phase_metric
+            .with_label_values(&["inner_total"])
+            .start_timer();
         self.apply_catalog_implications_inner(
             ctx,
             catalog_implications.into_iter().collect_vec(),
@@ -170,6 +182,7 @@ impl Coordinator {
             introspection_source_indexes,
         )
         .await?;
+        drop(_inner_timer);
 
         self.metrics
             .apply_catalog_implications_seconds
@@ -187,6 +200,10 @@ impl Coordinator {
         cluster_replica_commands: Vec<((ClusterId, ReplicaId), CatalogImplication)>,
         mut introspection_source_indexes: BTreeMap<ClusterId, BTreeMap<LogVariant, GlobalId>>,
     ) -> Result<(), AdapterError> {
+        let phase_metric = self
+            .metrics
+            .apply_catalog_implications_phase_seconds
+            .clone();
         let mut tables_to_drop = BTreeSet::new();
         let mut sources_to_drop = vec![];
         let mut replication_slots_to_drop: Vec<(PostgresConnection, String)> = vec![];
@@ -235,6 +252,9 @@ impl Coordinator {
         // just a log message. Over the next couple of PRs all of these will go
         // away.
 
+        let _item_loop_timer = phase_metric
+            .with_label_values(&["inner_item_loop"])
+            .start_timer();
         for (catalog_id, implication) in implications {
             tracing::trace!(?implication, "have to apply catalog implication");
 
@@ -550,7 +570,11 @@ impl Coordinator {
                 }
             }
         }
+        drop(_item_loop_timer);
 
+        let _cluster_loop_timer = phase_metric
+            .with_label_values(&["inner_cluster_loops"])
+            .start_timer();
         for (cluster_id, command) in cluster_commands {
             tracing::trace!(?command, "have cluster command to apply!");
 
@@ -670,7 +694,11 @@ impl Coordinator {
                 }
             }
         }
+        drop(_cluster_loop_timer);
 
+        let _controller_setup_timer = phase_metric
+            .with_label_values(&["inner_controller_setup"])
+            .start_timer();
         if !source_collections_to_create.is_empty() {
             self.create_source_collections(source_collections_to_create)
                 .await?;
@@ -740,7 +768,11 @@ impl Coordinator {
                 .await
                 .unwrap_or_terminate("cannot fail to alter ingestion source desc");
         }
+        drop(_controller_setup_timer);
 
+        let _dep_scan_timer = phase_metric
+            .with_label_values(&["inner_dependency_scan"])
+            .start_timer();
         // Apply source drop overwrites.
         sources_to_drop.retain(|(_, gid)| !source_gids_to_keep.contains(gid));
 
@@ -876,7 +908,11 @@ impl Coordinator {
                 && read_holds.compute_holds.len() == bundle_compute_len;
             timeline_associations.insert(timeline.clone(), (empty, id_bundle));
         }
+        drop(_dep_scan_timer);
 
+        let _finalize_timer = phase_metric
+            .with_label_values(&["inner_finalize"])
+            .start_timer();
         // No error returns are allowed after this point. Enforce this at compile time
         // by using this odd structure so we don't accidentally add a stray `?`.
         let _: () = async {
