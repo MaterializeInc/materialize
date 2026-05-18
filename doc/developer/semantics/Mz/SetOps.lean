@@ -1966,4 +1966,104 @@ theorem UnifiedStream.bagExceptAll_errCarriers_of_mem
     UnifiedStream.clampPositive_errCarriers_of_mem _ e h
   exact (UnifiedStream.exceptAll_errCarriers_iff l r e).mp h1
 
+/-! ## `intersectAll` error scopes
+
+`intersectAll` emits a record only for carriers present on BOTH
+sides (after consolidation). Both error scopes are bounded by the
+intersection of inputs. Forward direction fails — having an err
+on both sides does not guarantee output preservation when the
+combine rule depends on diff arithmetic.
+
+Reverse: every err in `intersectAll`'s output came from both `l`
+*and* `r`. -/
+
+theorem UnifiedStream.intersectAll_errCarriers_of_mem
+    (l r : UnifiedStream) (e : EvalError)
+    (h : e ∈ UnifiedStream.errCarriers (UnifiedStream.intersectAll l r)) :
+    e ∈ UnifiedStream.errCarriers l ∧ e ∈ UnifiedStream.errCarriers r := by
+  rw [UnifiedStream.mem_errCarriers] at h
+  obtain ⟨d, hMem⟩ := h
+  have hFM : (UnifiedRow.err e, d)
+              ∈ (UnifiedStream.consolidate l).filterMap (fun ud =>
+                  match UnifiedStream.lookup ud.1
+                          (UnifiedStream.consolidate r) with
+                  | none    => none
+                  | some d' => some (ud.1, DiffWithError.min ud.2 d')) := hMem
+  obtain ⟨ud0, hUd0Mem, hF⟩ := List.mem_filterMap.mp hFM
+  obtain ⟨uc0, d0⟩ := ud0
+  -- Restate hF with projections reduced.
+  have hF' : (match UnifiedStream.lookup uc0 (UnifiedStream.consolidate r) with
+                | none    => (none : Option (UnifiedRow × DiffWithError Int))
+                | some d' => some (uc0, DiffWithError.min d0 d'))
+             = some (UnifiedRow.err e, d) := hF
+  cases hLookup : UnifiedStream.lookup uc0 (UnifiedStream.consolidate r) with
+  | none =>
+    rw [hLookup] at hF'
+    cases hF'
+  | some d' =>
+    rw [hLookup] at hF'
+    have hPair : (uc0, DiffWithError.min d0 d') = (UnifiedRow.err e, d) := by
+      injection hF'
+    have hUc0 : uc0 = UnifiedRow.err e := (Prod.mk.injEq _ _ _ _).mp hPair |>.1
+    subst hUc0
+    have hInL : ∃ d', (UnifiedRow.err e, d') ∈ l :=
+      UnifiedStream.mem_of_mem_consolidate l (UnifiedRow.err e)
+        ⟨d0, hUd0Mem⟩
+    have hLookupMem : (UnifiedRow.err e, d')
+                        ∈ UnifiedStream.consolidate r :=
+      UnifiedStream.mem_of_lookup_eq_some hLookup
+    have hInR : ∃ d'', (UnifiedRow.err e, d'') ∈ r :=
+      UnifiedStream.mem_of_mem_consolidate r (UnifiedRow.err e)
+        ⟨d', hLookupMem⟩
+    exact ⟨(UnifiedStream.mem_errCarriers l e).mpr hInL,
+           (UnifiedStream.mem_errCarriers r e).mpr hInR⟩
+
+/-- Same shape for collection-err: an output `.error`-diff carrier
+must appear (with any diff) in both inputs. The `.error` itself
+arises from the `min` combinator absorbing on either side. -/
+theorem UnifiedStream.intersectAll_errorDiffCarriers_of_mem
+    (l r : UnifiedStream) (uc : UnifiedRow)
+    (h : uc ∈ UnifiedStream.errorDiffCarriers (UnifiedStream.intersectAll l r)) :
+    (∃ d, (uc, d) ∈ l) ∧ (∃ d, (uc, d) ∈ r) := by
+  rw [UnifiedStream.mem_errorDiffCarriers] at h
+  have hFM : (uc, (DiffWithError.error : DiffWithError Int))
+              ∈ (UnifiedStream.consolidate l).filterMap (fun ud =>
+                  match UnifiedStream.lookup ud.1
+                          (UnifiedStream.consolidate r) with
+                  | none    => none
+                  | some d' => some (ud.1, DiffWithError.min ud.2 d')) := h
+  obtain ⟨ud0, hUd0Mem, hF⟩ := List.mem_filterMap.mp hFM
+  obtain ⟨uc0, d0⟩ := ud0
+  have hF' : (match UnifiedStream.lookup uc0 (UnifiedStream.consolidate r) with
+                | none    => (none : Option (UnifiedRow × DiffWithError Int))
+                | some d' => some (uc0, DiffWithError.min d0 d'))
+             = some (uc, DiffWithError.error) := hF
+  cases hLookup : UnifiedStream.lookup uc0 (UnifiedStream.consolidate r) with
+  | none =>
+    rw [hLookup] at hF'
+    cases hF'
+  | some d' =>
+    rw [hLookup] at hF'
+    have hPair : (uc0, DiffWithError.min d0 d') = (uc, DiffWithError.error) := by
+      injection hF'
+    have hUc0 : uc0 = uc := (Prod.mk.injEq _ _ _ _).mp hPair |>.1
+    rw [hUc0] at hUd0Mem hLookup
+    have hInL : ∃ d'', (uc, d'') ∈ l :=
+      UnifiedStream.mem_of_mem_consolidate l uc ⟨d0, hUd0Mem⟩
+    have hLookupMem : (uc, d') ∈ UnifiedStream.consolidate r :=
+      UnifiedStream.mem_of_lookup_eq_some hLookup
+    have hInR : ∃ d'', (uc, d'') ∈ r :=
+      UnifiedStream.mem_of_mem_consolidate r uc ⟨d', hLookupMem⟩
+    exact ⟨hInL, hInR⟩
+
+/-- `bagIntersectAll = clampPositive ∘ intersectAll`. Row-err
+reverse direction lifts from `intersectAll`. -/
+theorem UnifiedStream.bagIntersectAll_errCarriers_of_mem
+    (l r : UnifiedStream) (e : EvalError)
+    (h : e ∈ UnifiedStream.errCarriers (UnifiedStream.bagIntersectAll l r)) :
+    e ∈ UnifiedStream.errCarriers l ∧ e ∈ UnifiedStream.errCarriers r := by
+  have h1 : e ∈ UnifiedStream.errCarriers (UnifiedStream.intersectAll l r) :=
+    UnifiedStream.clampPositive_errCarriers_of_mem _ e h
+  exact UnifiedStream.intersectAll_errCarriers_of_mem l r e h1
+
 end Mz
