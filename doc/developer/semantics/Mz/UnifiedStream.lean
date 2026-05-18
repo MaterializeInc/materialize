@@ -144,8 +144,10 @@ holds both, distinguished by the carrier tag. -/
 
 /-- Project a single `.row` record through `es`, returning the
 list of unified records the row contributes. Diff is preserved on
-every produced record (rows-share-diff, errs-share-diff). -/
-private def rowProjectRecords (es : List Expr) (d : DiffWithError Int) (r : Row) :
+every produced record (rows-share-diff, errs-share-diff). Exposed
+(not `private`) so cross-file commute theorems like
+`project_negate` in `Mz/SetOps.lean` can reason about it directly. -/
+def rowProjectRecords (es : List Expr) (d : DiffWithError Int) (r : Row) :
     UnifiedStream :=
   if rowAllSafe es r then
     [(UnifiedRow.row (es.map (eval r)), d)]
