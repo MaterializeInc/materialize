@@ -308,6 +308,75 @@ impl ComputeState {
             std::sync::atomic::Ordering::Relaxed,
         );
 
+        // Install / replace the column-paged batcher's process-global pager.
+        // Reads on every config apply so changing the dyncfg at runtime takes
+        // effect on the next merge-batcher chunk. All compute workers in
+        // this process share one pager; per-worker budget bookkeeping lives
+        // inside `TieredPolicy`'s own thread-local accounting (see policy.rs).
+        if ENABLE_COLUMN_PAGED_BATCHER.get(config) {
+            use mz_ore::pager::{self, Backend};
+            use mz_timely_util::column_pager::policy::TieredPolicy;
+            use mz_timely_util::column_pager::{ColumnPager, set_global_pager};
+            use std::sync::Arc;
+
+            // Budget derivation: fraction × announced memory limit, split
+            // 1/8 per-worker (clamped 16-64 MiB) and 7/8 shared (clamped
+            // 128 MiB - 1 GiB). Clamps cushion against fraction misconfigs:
+            // floors prevent per-chunk pageout in the no-pressure case;
+            // ceilings prevent the batcher from hoarding RAM the spine
+            // could use on big-memory replicas. Falls back to a 4 GiB
+            // assumption if no limit was announced (e.g. dev environments).
+            const MIB: usize = 1024 * 1024;
+            const DEFAULT_MEM_LIMIT: usize = 4 * 1024 * MIB;
+            let mem_limit = crate::memory_limiter::get_memory_limit()
+                .unwrap_or(DEFAULT_MEM_LIMIT);
+            let fraction = COLUMN_PAGED_BATCHER_BUDGET_FRACTION.get(config).max(0.0);
+            let total = ((mem_limit as f64) * fraction) as usize;
+            let per_worker = (total / 8).clamp(16 * MIB, 64 * MIB);
+            let shared = total.saturating_sub(per_worker).clamp(128 * MIB, 1024 * MIB);
+
+            let backend_str = COLUMN_PAGED_BATCHER_BACKEND.get(config);
+            let backend = match backend_str.as_str() {
+                "file" => {
+                    if let Some(path) = &self.context.scratch_directory {
+                        // `set_scratch_dir` is process-wide and idempotent
+                        // (per-process subdir under the given root), so calling
+                        // it from every worker on every config apply is safe.
+                        pager::set_scratch_dir(path.clone());
+                        Backend::File
+                    } else {
+                        warn!(
+                            "column-paged batcher requested file backend but \
+                             scratch-directory is unset; falling back to swap"
+                        );
+                        Backend::Swap
+                    }
+                }
+                "swap" => Backend::Swap,
+                other => {
+                    warn!(
+                        backend = %other,
+                        "unknown column_paged_batcher_backend; using swap"
+                    );
+                    Backend::Swap
+                }
+            };
+            info!(
+                ?backend,
+                fraction,
+                mem_limit,
+                per_worker_bytes = per_worker,
+                shared_bytes = shared,
+                "column-paged batcher: installing tiered pager",
+            );
+            let policy = Arc::new(TieredPolicy::new(per_worker, shared, backend, None));
+            set_global_pager(ColumnPager::new(policy));
+        } else {
+            use mz_timely_util::column_pager::{ColumnPager, set_global_pager};
+            info!("column-paged batcher: disabled, installing no-op pager");
+            set_global_pager(ColumnPager::disabled());
+        }
+
         // Remember the maintenance interval locally to avoid reading it from the config set on
         // every server iteration.
         self.server_maintenance_interval = COMPUTE_SERVER_MAINTENANCE_INTERVAL.get(config);

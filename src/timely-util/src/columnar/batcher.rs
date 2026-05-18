@@ -314,9 +314,9 @@ impl<D, T, R> Default for ColumnMerger<D, T, R> {
 /// so the merger can call them without going through any wrapper indirection.
 impl<D, T, R> Column<(D, T, R)>
 where
-    D: Columnar + Default,
+    D: Columnar,
     for<'a> columnar::Ref<'a, D>: Copy + Ord,
-    T: Columnar + Default + Clone + PartialOrder,
+    T: Columnar + Clone + PartialOrder,
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
     R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
     for<'a> <(D, T, R) as Columnar>::Container: columnar::Push<&'a (D, T, R)>,
@@ -572,7 +572,6 @@ where
         let self_view = self.borrow();
         let len = self_view.len();
 
-        let mut owned_t = T::default();
         // Yield to the framework when either output buffer reaches the
         // ship threshold, so it can ship a full chunk and hand back a
         // fresh one. Required by the merger's extract contract: the
@@ -585,7 +584,13 @@ where
             && !crate::columnar::at_serialized_capacity(&ship_c.borrow())
         {
             let (_, time, _) = self_view.get(*position);
-            T::copy_from(&mut owned_t, time);
+            // `into_owned` rather than `default() + copy_from(time)` so we
+            // don't require `T: Default` on the impl bound — render
+            // timestamps don't have it. For variable-length `T` we
+            // allocate fresh per record instead of reusing a slot; for the
+            // primitive-shaped timestamps this path typically sees, the
+            // difference is unmeasurable.
+            let owned_t = T::into_owned(time);
             if upper.less_equal(&owned_t) {
                 // `insert_with` only clones when the time isn't already
                 // present in the antichain.
