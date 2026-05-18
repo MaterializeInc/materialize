@@ -41,5 +41,7 @@ def eval (env : Env) : Expr → Datum
   | .minus  a b   => evalMinus  (eval env a) (eval env b)
   | .times  a b   => evalTimes  (eval env a) (eval env b)
   | .divide a b   => evalDivide (eval env a) (eval env b)
+  | .eq     a b   => evalEq     (eval env a) (eval env b)
+  | .lt     a b   => evalLt     (eval env a) (eval env b)
 
 end Mz
