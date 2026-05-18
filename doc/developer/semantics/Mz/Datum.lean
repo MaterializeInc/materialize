@@ -35,7 +35,7 @@ inductive Datum
   | bool (b : Bool)
   | null
   | err (e : EvalError)
-  deriving Inhabited
+  deriving DecidableEq, Inhabited
 
 /-- Propositional predicate "this datum is an error".
 
