@@ -14,3 +14,4 @@ import Mz.Pushdown
 import Mz.DiffSemiring
 import Mz.UnifiedStream
 import Mz.Aggregate
+import Mz.Consolidate
