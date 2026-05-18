@@ -101,6 +101,7 @@ where
         diagnostics: Diagnostics,
     ) -> Result<Self, Box<CodecMismatch>> {
         let shard_metrics = metrics.shards.shard(&shard_id, &diagnostics.shard_name);
+        metrics.register_shard_kind(shard_id, &diagnostics.shard_name);
         let state = shared_states
             .get::<K, V, T, D, _, _>(
                 shard_id,
