@@ -21,5 +21,6 @@ import Mz.Consolidate
 import Mz.Triple
 import Mz.Join
 import Mz.JoinPushdown
+import Mz.FilterFusion
 import Mz.GroupBy
 import Mz.SetOps
