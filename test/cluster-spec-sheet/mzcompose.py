@@ -3770,17 +3770,6 @@ def run_scenario_cluster_object_limits(
     in place rather than rebuilding the catalog.
     """
 
-    def probe_once(runner: ScenarioRunner) -> tuple[int, int, float]:
-        """Run the probe on the catalog-server cluster so it doesn't load `c`."""
-        # Run the probe via the connection's autocommit cursor on the probe
-        # cluster. Wrapping in a transaction-local SET would also work but
-        # autocommit means we'd leak the SET; restore at the end.
-        runner.run_query(f"SET cluster = '{scenario.PROBE_CLUSTER}'")
-        try:
-            return scenario.probe_lag_ms(runner)
-        finally:
-            runner.run_query("SET cluster = 'c'")
-
     def hydrate_and_sample(
         runner: ScenarioRunner, target_n: int
     ) -> tuple[float, bool, int, int]:
@@ -3792,37 +3781,49 @@ def run_scenario_cluster_object_limits(
         Returns (max_lag_ms, healthy, reporting, total). `healthy=False` if we
         time out waiting for hydration / steady-state, or if any sample
         exceeds the threshold.
-        """
-        deadline = time.time() + hydration_timeout_s
-        last_reporting = 0
-        last_total = 0
-        last_max_lag = float("inf")
-        while time.time() < deadline:
-            total, reporting, max_lag_ms = probe_once(runner)
-            last_total, last_reporting, last_max_lag = total, reporting, max_lag_ms
-            # All objects must be reporting AND under threshold to count as
-            # hydrated. NULL lag => the materialization has not produced its
-            # first frontier report yet.
-            if reporting == target_n and max_lag_ms < lag_threshold_ms:
-                break
-            time.sleep(min(1.0, sample_interval_s))
-        else:
-            # Did not converge within the hydration window.
-            return last_max_lag, False, last_reporting, last_total
 
-        # Steady-state sampling: take a few samples and use the max.
-        max_lag_over_samples = last_max_lag
-        worst_reporting = last_reporting
-        for _ in range(samples):
-            time.sleep(sample_interval_s)
-            total, reporting, max_lag_ms = probe_once(runner)
-            last_total = total
-            worst_reporting = min(worst_reporting, reporting)
-            max_lag_over_samples = max(max_lag_over_samples, max_lag_ms)
-        healthy = (
-            worst_reporting == target_n and max_lag_over_samples < lag_threshold_ms
-        )
-        return max_lag_over_samples, healthy, worst_reporting, last_total
+        Runs the probes on the catalog-server cluster so they don't load `c`.
+        Set once around the whole polling window rather than per probe;
+        restored on exit so the caller's `cluster='c'` invariant is preserved.
+        """
+        runner.run_query(f"SET cluster = '{scenario.PROBE_CLUSTER}'")
+        try:
+            deadline = time.time() + hydration_timeout_s
+            last_reporting = 0
+            last_total = 0
+            last_max_lag = float("inf")
+            while time.time() < deadline:
+                total, reporting, max_lag_ms = scenario.probe_lag_ms(runner)
+                last_total, last_reporting, last_max_lag = (
+                    total,
+                    reporting,
+                    max_lag_ms,
+                )
+                # All objects must be reporting AND under threshold to count
+                # as hydrated. NULL lag => the materialization has not
+                # produced its first frontier report yet.
+                if reporting == target_n and max_lag_ms < lag_threshold_ms:
+                    break
+                time.sleep(min(1.0, sample_interval_s))
+            else:
+                # Did not converge within the hydration window.
+                return last_max_lag, False, last_reporting, last_total
+
+            # Steady-state sampling: take a few samples and use the max.
+            max_lag_over_samples = last_max_lag
+            worst_reporting = last_reporting
+            for _ in range(samples):
+                time.sleep(sample_interval_s)
+                total, reporting, max_lag_ms = scenario.probe_lag_ms(runner)
+                last_total = total
+                worst_reporting = min(worst_reporting, reporting)
+                max_lag_over_samples = max(max_lag_over_samples, max_lag_ms)
+            healthy = (
+                worst_reporting == target_n and max_lag_over_samples < lag_threshold_ms
+            )
+            return max_lag_over_samples, healthy, worst_reporting, last_total
+        finally:
+            runner.run_query("SET cluster = 'c'")
 
     # Snapshot of cluster sizes to iterate over.
     cluster_scales = [s for s in REPLICA_SCALES if s <= max_scale]
