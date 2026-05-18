@@ -1,50 +1,55 @@
 import Mz.Eval
 import Mz.Bag
 import Mz.ErrStream
+import Mz.DiffSemiring
 
 /-!
-# Unified data / error stream
+# Unified data / error / diff stream
 
 `BagStream` (`Mz/ErrStream.lean`) carries a `(data, errors)` pair —
 two collections, threaded through every operator. That split
 mirrors Materialize's current runtime but is a *pragmatic* choice
 rather than a semantic one. The spec target is a single unified
-stream where data rows and errors flow through the same carrier.
+stream where data rows, row-scoped errors, and collection-scoped
+("global") errors all flow through one carrier.
 
-This file gives the unified model and the conversion to / from the
-split form.
+This file gives that unified model. The carrier pairs a
+`UnifiedRow` (data row or row-scoped error) with a
+`DiffWithError Int` (the differential-dataflow multiplicity,
+augmented with an absorbing `error` marker that encodes
+collection-scoped errors).
 
 ## Encoding
 
-`UnifiedRow` is a sum type: either an honest `row` or a bare `err`
-without a row. The absence of a row in the `err` variant preserves
-the current property that errors carry no row context (the runtime
-`DataflowError` is the same way). A future refinement could attach
-optional row provenance.
+`UnifiedRow` is a sum type — either an honest `row` or a bare `err`
+without a row. The diff component is from `DiffWithError Int`:
+* `.val n` — ordinary differential dataflow multiplicity (positive
+  for inserts, negative for retractions, zero for cancellation);
+* `.error` — collection-scoped error marker that absorbs through
+  addition and multiplication.
 
-`UnifiedStream := List UnifiedRow`. Operators consume and produce
-`UnifiedStream`s; errors propagate through the carrier
-automatically.
-
-## Diff-aware view
-
-The encoding here uses a plain list. The next refinement attaches a
-`DiffWithError ℤ` to each record (see `Mz/DiffSemiring.lean`) so the
-absorbing `error` diff captures collection-scoped global errors
-alongside row-scoped errors. The conversion lemmas below transport
-to that refinement when it lands.
+`UnifiedStream := List (UnifiedRow × DiffWithError Int)`. Operators
+consume and produce `UnifiedStream`s. Row-scoped errors propagate
+through the carrier; collection-scoped errors propagate through
+diff multiplication / addition.
 
 ## Semantic differences with the split form
 
 `UnifiedStream.ofBag` concatenates data rows first and errors
-second, fixing an order. Operators that process records left-to-
-right will see data before errors. The split form makes no such
-commitment between data and errors. Equivalence between unified
-and split is therefore exact on the round trip (`split (ofBag s) =
-s`) but only up to multiset equality on the cross-direction
-`(filter ∘ ofBag) ≈ (ofBag ∘ filter)`. The skeleton states the
-round trip; the cross-equivalence is left for a future iteration
-that introduces multiset machinery on `List EvalError`.
+second, fixing an order, and assigns every record a diff of
+`.val 1`. The split form makes no commitment between data and
+errors. Equivalence between unified and split is therefore exact
+on the round trip (`split (ofBag s) = s`) but only up to multiset
+equality on the cross-direction `(filter ∘ ofBag) ≈ (ofBag ∘ filter)`.
+The skeleton states the round trip; the cross-equivalence is left
+for a future iteration that introduces multiset machinery on
+`List EvalError`.
+
+`split` discards the diff component, mapping every carrier record
+to one bag row regardless of multiplicity. This is lossy for diffs
+other than `.val 1` (duplicate rows, retractions, or
+collection-scoped errors). The round trip still goes through
+because `ofBag` only ever produces `.val 1` diffs.
 -/
 
 namespace Mz
@@ -54,63 +59,77 @@ inductive UnifiedRow where
   | err (e : EvalError)
   deriving Inhabited
 
-abbrev UnifiedStream := List UnifiedRow
+/-- A unified-stream record pairs a row-or-error carrier with a
+differential-dataflow diff augmented by the absorbing `error`
+element. -/
+abbrev UnifiedStream := List (UnifiedRow × DiffWithError Int)
 
-/-- Pick the row payload of a `UnifiedRow`, or `none` for errors. -/
-@[inline] private def pickRow : UnifiedRow → Option Row
-  | .row r => some r
-  | .err _ => none
+/-- Pick the row payload of a unified record, or `none` for
+errors. Diff component is discarded. -/
+@[inline] private def pickRow : UnifiedRow × DiffWithError Int → Option Row
+  | (.row r, _) => some r
+  | (.err _, _) => none
 
-/-- Pick the error payload of a `UnifiedRow`, or `none` for rows. -/
-@[inline] private def pickErr : UnifiedRow → Option EvalError
-  | .row _ => none
-  | .err e => some e
+/-- Pick the row-scoped error payload of a unified record, or
+`none` for data rows. Diff component is discarded. -/
+@[inline] private def pickErr : UnifiedRow × DiffWithError Int → Option EvalError
+  | (.row _, _) => none
+  | (.err e, _) => some e
 
-/-- Pack a `BagStream` into a single unified stream: data rows
-first, error payloads second. -/
+/-- Pack a `BagStream` into a unified stream: data rows first,
+error payloads second, each with diff `.val 1`. -/
 def UnifiedStream.ofBag (s : BagStream) : UnifiedStream :=
-  s.data.map UnifiedRow.row ++ s.errors.map UnifiedRow.err
+  s.data.map (fun r => (UnifiedRow.row r, (1 : DiffWithError Int)))
+  ++ s.errors.map (fun e => (UnifiedRow.err e, (1 : DiffWithError Int)))
 
-/-- Split a unified stream back into the `(data, errors)` pair. -/
+/-- Split a unified stream back into the `(data, errors)` pair.
+Diff multiplicities and `.error` diffs are dropped. -/
 def UnifiedStream.split (us : UnifiedStream) : BagStream :=
   { data   := us.filterMap pickRow
   , errors := us.filterMap pickErr }
 
 /-- Filter on the unified stream. Predicate is evaluated on every
-real `row`; survivors stay, erroring rows become `err` records,
-non-true / non-error results are dropped. Existing `err` records
-pass through unchanged. -/
+real `row`; survivors stay with their original diff; rows whose
+predicate errs become `err` records (diff unchanged — multiplicity
+is preserved through the error route); non-true / non-error
+results are dropped. Existing `err` records pass through unchanged.
+Collection-scoped errors encoded in the diff are preserved on
+survivors. -/
 def UnifiedStream.filter (pred : Expr) (us : UnifiedStream) : UnifiedStream :=
-  us.flatMap fun u => match u with
-    | .row r =>
+  us.flatMap fun ud => match ud with
+    | (.row r, d) =>
       match eval r pred with
-      | .bool true => [.row r]
-      | .err e     => [.err e]
+      | .bool true => [(.row r, d)]
+      | .err e     => [(.err e, d)]
       | _          => []
-    | .err e => [.err e]
+    | (.err e, d) => [(.err e, d)]
 
 /-! ## Helper lemmas for filterMap over the packed concatenation -/
 
 private theorem filterMap_pickRow_rowMap (rs : List Row) :
-    (rs.map UnifiedRow.row).filterMap pickRow = rs := by
+    (rs.map (fun r => (UnifiedRow.row r, (1 : DiffWithError Int)))).filterMap pickRow
+      = rs := by
   induction rs with
   | nil => rfl
   | cons hd tl ih => simp [List.map, pickRow, ih]
 
 private theorem filterMap_pickRow_errMap (es : List EvalError) :
-    (es.map UnifiedRow.err).filterMap pickRow = ([] : Relation) := by
+    (es.map (fun e => (UnifiedRow.err e, (1 : DiffWithError Int)))).filterMap pickRow
+      = ([] : Relation) := by
   induction es with
   | nil => rfl
   | cons _ tl ih => simp [List.map, pickRow, ih]
 
 private theorem filterMap_pickErr_rowMap (rs : List Row) :
-    (rs.map UnifiedRow.row).filterMap pickErr = ([] : List EvalError) := by
+    (rs.map (fun r => (UnifiedRow.row r, (1 : DiffWithError Int)))).filterMap pickErr
+      = ([] : List EvalError) := by
   induction rs with
   | nil => rfl
   | cons _ tl ih => simp [List.map, pickErr, ih]
 
 private theorem filterMap_pickErr_errMap (es : List EvalError) :
-    (es.map UnifiedRow.err).filterMap pickErr = es := by
+    (es.map (fun e => (UnifiedRow.err e, (1 : DiffWithError Int)))).filterMap pickErr
+      = es := by
   induction es with
   | nil => rfl
   | cons hd tl ih => simp [List.map, pickErr, ih]
@@ -119,7 +138,9 @@ private theorem filterMap_pickErr_errMap (es : List EvalError) :
 
 theorem UnifiedStream.split_data_ofBag (s : BagStream) :
     (UnifiedStream.split (UnifiedStream.ofBag s)).data = s.data := by
-  show (s.data.map UnifiedRow.row ++ s.errors.map UnifiedRow.err).filterMap pickRow = s.data
+  show ((s.data.map (fun r => (UnifiedRow.row r, (1 : DiffWithError Int))))
+        ++ (s.errors.map (fun e => (UnifiedRow.err e, (1 : DiffWithError Int))))
+       ).filterMap pickRow = s.data
   induction s.data with
   | nil =>
     simp only [List.map_nil, List.nil_append]
@@ -129,7 +150,9 @@ theorem UnifiedStream.split_data_ofBag (s : BagStream) :
 
 theorem UnifiedStream.split_errors_ofBag (s : BagStream) :
     (UnifiedStream.split (UnifiedStream.ofBag s)).errors = s.errors := by
-  show (s.data.map UnifiedRow.row ++ s.errors.map UnifiedRow.err).filterMap pickErr = s.errors
+  show ((s.data.map (fun r => (UnifiedRow.row r, (1 : DiffWithError Int))))
+        ++ (s.errors.map (fun e => (UnifiedRow.err e, (1 : DiffWithError Int))))
+       ).filterMap pickErr = s.errors
   induction s.data with
   | nil =>
     simp only [List.map_nil, List.nil_append]
