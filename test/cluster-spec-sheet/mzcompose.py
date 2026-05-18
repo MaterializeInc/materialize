@@ -68,13 +68,9 @@ STAGING_APP_PASSWORD = os.getenv("NIGHTLY_CANARY_APP_PASSWORD")
 MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = {
     "memory_limiter_interval": "0s",
     "max_credit_consumption_rate": "1024",
-    # Lifted for the envd_objects_scalability scenarios, which build up to N
-    # tables or materialized views in a single schema (default cap 30k via
-    # `--envd-objects-scalability-sizes`), plus pad clusters at 10000
-    # MVs/cluster. The ceilings here are sized with headroom over the default
-    # cap so a higher `--envd-objects-scalability-sizes` doesn't hit a server
-    # limit. Other scenarios are unaffected. Cloud targets need the same
-    # limits configured server-side.
+    # Headroom over the 30k default cap from `--envd-objects-scalability-sizes`,
+    # plus the MVs-per-cluster sharding on pad clusters. Cloud targets need
+    # matching limits configured server-side.
     "max_tables": "200000",
     "max_materialized_views": "200000",
     "max_objects_per_schema": "200000",
@@ -2313,9 +2309,8 @@ class EnvdObjectsScalabilityScenario(Scenario):
     def materialize_views(self) -> list[str]:
         return []
 
-    # The framework-level `setup()` / `drop()` are unused here; everything
-    # specific to envd_objects_scalability happens in `init()` / `add_objects()` /
-    # `teardown()`, which are driven by `run_scenario_envd_objects_scalability`.
+    # Framework-level `setup()` / `drop()` are unused; lifecycle is driven
+    # by `run_scenario_envd_objects_scalability` via init/add_objects/teardown.
     def setup(self) -> list[str]:
         return []
 
@@ -2323,7 +2318,6 @@ class EnvdObjectsScalabilityScenario(Scenario):
         return []
 
     def init(self, runner: ScenarioRunner) -> None:
-        # Wipe any leftover pad schema from a previous run.
         runner.run_query(f"DROP SCHEMA IF EXISTS {self.PAD_SCHEMA} CASCADE")
         runner.run_query(f"CREATE SCHEMA {self.PAD_SCHEMA}")
 
@@ -2331,7 +2325,6 @@ class EnvdObjectsScalabilityScenario(Scenario):
         raise NotImplementedError
 
     def teardown(self, runner: ScenarioRunner) -> None:
-        # Best-effort cleanup; if it fails, the next run's init() will retry.
         _best_effort_drop(
             runner,
             f"DROP SCHEMA IF EXISTS {self.PAD_SCHEMA} CASCADE",
@@ -2362,17 +2355,11 @@ class EnvdObjectsScalabilityScenario(Scenario):
 
 
 def _bulk_run(runner: ScenarioRunner, statements: list[str], log_label: str) -> None:
-    """Execute a list of DDL statements with quiet progress logging.
+    """Execute a list of DDL statements one-by-one with progress logging.
 
-    Statements run one-by-one: this work is dominated by adapter/controller
-    serialisation, so per-statement round trips are not the bottleneck.
-
-    Callers must pass idempotent statements (``CREATE … IF NOT EXISTS`` /
-    ``DROP … IF EXISTS``): the underlying ``ConnectionHandler.retryable``
-    reconnects and retries on transient errors (e.g. TLS EOF against staging),
-    and the server may have already committed the original statement before
-    losing the response. Non-idempotent retries then fail with
-    "already exists" / "not found" and abort the run.
+    Callers must pass idempotent statements: ``ConnectionHandler.retryable``
+    may resend a statement that the server already committed before losing
+    the response (e.g. TLS EOF against staging).
     """
     total = len(statements)
     if total == 0:
@@ -2703,8 +2690,8 @@ class ClusterObjectLimitsScenario(Scenario):
     def name(self) -> str:
         return self._kind.scenario_name
 
-    # The framework-level `setup()` / `drop()` are unused here; lifecycle is
-    # driven by `run_scenario_cluster_object_limits`.
+    # Framework-level `setup()` / `drop()` are unused; lifecycle is driven
+    # by `run_scenario_cluster_object_limits`.
     def setup(self) -> list[str]:
         return []
 
@@ -2771,13 +2758,8 @@ class ClusterObjectLimitsScenario(Scenario):
     def probe_lag_ms(self, runner: ScenarioRunner) -> tuple[int, int, float]:
         """Return (total, reporting, max_local_lag_ms) for our test objects.
 
-        - `total` is the number of test objects on cluster `c` we expect to
-          see (sanity check against `_current_n`).
-        - `reporting` is the subset that has a non-NULL `local_lag`.
-        - `max_local_lag_ms` is the max over reporting objects; 0 if none yet.
-
-        NULL lag means the object has not yet hydrated / reported. We treat
-        unreported objects as "not healthy" via the caller.
+        `reporting` is the subset with non-NULL `local_lag`; the caller
+        treats unreported objects as not healthy.
         """
         rows = runner.run_query(
             f"""
@@ -2800,12 +2782,9 @@ class ClusterObjectLimitsScenario(Scenario):
     def probe_hydrated(self, runner: ScenarioRunner) -> tuple[int, int]:
         """Return (total, hydrated) for our test objects on cluster ``c``.
 
-        Reads `mz_internal.mz_hydration_statuses`. ``hydrated=true`` once the
-        dataflow has finished initial snapshotting. Decoupling this from
-        `local_lag` lets the freshness loop wait for the cluster to be
-        *running* first, then judge whether it can keep up — instead of
-        conflating "still starting" with "overloaded" and burning the full
-        hydration timeout on every overloaded probe.
+        Decoupled from `local_lag` so the freshness loop can wait for the
+        cluster to be *running* first, then judge whether it can keep up —
+        without burning the full hydration timeout on every overloaded probe.
         """
         rows = runner.run_query(
             f"""
@@ -3832,30 +3811,17 @@ def run_scenario_cluster_object_limits(
         runner: ScenarioRunner, target_n: int, timeout_s: int
     ) -> tuple[float, bool, int, int]:
         """
-        Two-phase probe: wait for all N materializations to hydrate, then
-        take steady-state lag samples.
-
-        Phase 1 polls `mz_internal.mz_hydration_statuses` until every test
-        object on `c` reports ``hydrated=true``. If that doesn't happen
-        within ``timeout_s`` the cluster is wedged (replica never finished
-        initial snapshotting) and we return unhealthy. ``timeout_s`` is
-        passed in per-call so the first probe after `CREATE CLUSTER` can
-        use a more generous budget than steady-state probes.
-
-        Phase 2 takes ``samples`` lag samples spaced by
-        ``sample_interval_s`` and returns their max. Unhealthy iff any
-        sample exceeds the threshold or any reporting count falls short.
+        Two-phase probe: wait for hydration, then take steady-state lag
+        samples. Returns (max_lag_ms, healthy, reporting, total).
 
         Splitting the two phases keeps unhealthy probes fast: an overloaded
         cluster typically still hydrates quickly, then trips the lag
         threshold in Phase 2 within `samples * sample_interval_s`. The
-        previous combined predicate (`reporting == N AND lag < threshold`)
-        burned the full hydration_timeout on every unhealthy probe.
+        previous combined predicate burned the full hydration_timeout on
+        every unhealthy probe.
 
-        Returns (max_lag_ms, healthy, reporting, total). Runs the probes on
-        the catalog-server cluster so they don't load `c`; set once around
-        the whole polling window rather than per probe, restored on exit so
-        the caller's `cluster='c'` invariant is preserved.
+        Probes run on the catalog-server cluster so they don't load `c`;
+        the SET is lifted out of the per-probe loop and restored on exit.
         """
         runner.run_query(f"SET cluster = '{scenario.PROBE_CLUSTER}'")
         try:
@@ -3896,10 +3862,8 @@ def run_scenario_cluster_object_limits(
         finally:
             runner.run_query("SET cluster = 'c'")
 
-    # Snapshot of cluster sizes to iterate over.
     cluster_scales = [s for s in REPLICA_SCALES if s <= max_scale]
 
-    # Outer loop: cluster size.
     for replica_scale in cluster_scales:
         replica_size = target.replica_size_for_scale(replica_scale)
         print(
