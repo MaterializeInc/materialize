@@ -147,6 +147,146 @@ theorem groupByErrDistinct_length_of_all_err
     rw [heq, insertIntoDistinct_err, List.length_append, ihApp]
     simp [List.length_cons]
 
+/-! ## Agreement between `groupBy` and `groupByErrDistinct`
+
+When no row's key evaluates to `.err`, the two grouping primitives
+produce the same result: `Datum.groupKeyEq` reduces to ordinary
+equality on non-err keys, and the accumulators thread through the
+foldr identically. -/
+
+/-- On non-err inputs, `Datum.groupKeyEq` agrees with `decide` of
+ordinary equality. -/
+private theorem Datum.groupKeyEq_eq_decide_of_no_err
+    {a b : Datum} (hA : ¬ a.IsErr) (hB : ¬ b.IsErr) :
+    Datum.groupKeyEq a b = decide (a = b) := by
+  cases a with
+  | err _ => exact absurd (show Datum.IsErr (Datum.err _) from trivial) hA
+  | bool _ =>
+    cases b with
+    | err _ => exact absurd (show Datum.IsErr (Datum.err _) from trivial) hB
+    | bool _ => rfl
+    | null   => rfl
+  | null =>
+    cases b with
+    | err _ => exact absurd (show Datum.IsErr (Datum.err _) from trivial) hB
+    | bool _ => rfl
+    | null   => rfl
+
+/-- Inserting the same non-err key into a group list whose keys
+are all non-err yields the same result whether we use the
+err-distinct or the merge-on-equal variant. -/
+private theorem insertIntoDistinct_eq_insertInto
+    {k : Datum} {row : Row} {groups : List (Datum × Relation)}
+    (hK : ¬ k.IsErr)
+    (hGroups : ∀ g ∈ groups, ¬ g.1.IsErr) :
+    insertIntoDistinct k row groups = insertInto k row groups := by
+  induction groups with
+  | nil => rfl
+  | cons head tl ih =>
+    obtain ⟨k', rows⟩ := head
+    have hK' : ¬ k'.IsErr := hGroups (k', rows) List.mem_cons_self
+    have hTl : ∀ g ∈ tl, ¬ g.1.IsErr :=
+      fun g hMem => hGroups g (List.mem_cons_of_mem _ hMem)
+    have hKey := Datum.groupKeyEq_eq_decide_of_no_err hK hK'
+    by_cases hEq : k = k'
+    · show (if Datum.groupKeyEq k k' then (k', row :: rows) :: tl
+              else (k', rows) :: insertIntoDistinct k row tl)
+          = (if k = k' then (k', row :: rows) :: tl
+              else (k', rows) :: insertInto k row tl)
+      have hKeyTrue : Datum.groupKeyEq k k' = true := by
+        rw [hKey]; exact decide_eq_true hEq
+      rw [if_pos hKeyTrue, if_pos hEq]
+    · show (if Datum.groupKeyEq k k' then (k', row :: rows) :: tl
+              else (k', rows) :: insertIntoDistinct k row tl)
+          = (if k = k' then (k', row :: rows) :: tl
+              else (k', rows) :: insertInto k row tl)
+      have hKeyFalse : Datum.groupKeyEq k k' = false := by
+        rw [hKey]; exact decide_eq_false hEq
+      rw [if_neg (by simp [hKeyFalse]), if_neg hEq, ih hTl]
+
+/-- `insertInto` propagates the "no err keys" invariant from its
+input bucket list to its output: if the inserted key is non-err
+and every existing bucket has a non-err key, every bucket in the
+output has a non-err key. -/
+private theorem insertInto_preserves_non_err_keys
+    {k : Datum} {row : Row} {groups : List (Datum × Relation)}
+    (hK : ¬ k.IsErr)
+    (hGroups : ∀ g ∈ groups, ¬ g.1.IsErr) :
+    ∀ g ∈ insertInto k row groups, ¬ g.1.IsErr := by
+  induction groups with
+  | nil =>
+    intro g hMem
+    have : g = (k, [row]) := List.mem_singleton.mp hMem
+    rw [this]
+    exact hK
+  | cons head tl ih =>
+    obtain ⟨k', rows⟩ := head
+    have hK' : ¬ k'.IsErr := hGroups (k', rows) List.mem_cons_self
+    have hTl : ∀ g ∈ tl, ¬ g.1.IsErr :=
+      fun g hMem => hGroups g (List.mem_cons_of_mem _ hMem)
+    intro g hMem
+    show ¬ g.1.IsErr
+    by_cases hEq : k = k'
+    · have hOut : insertInto k row ((k', rows) :: tl)
+                = (k', row :: rows) :: tl := by
+        show (if k = k' then (k', row :: rows) :: tl
+                else (k', rows) :: insertInto k row tl)
+            = (k', row :: rows) :: tl
+        rw [if_pos hEq]
+      rw [hOut] at hMem
+      rcases List.mem_cons.mp hMem with hHead | hTail
+      · subst hHead; exact hK'
+      · exact hTl g hTail
+    · have hOut : insertInto k row ((k', rows) :: tl)
+                = (k', rows) :: insertInto k row tl := by
+        show (if k = k' then (k', row :: rows) :: tl
+                else (k', rows) :: insertInto k row tl)
+            = (k', rows) :: insertInto k row tl
+        rw [if_neg hEq]
+      rw [hOut] at hMem
+      rcases List.mem_cons.mp hMem with hHead | hTail
+      · subst hHead; exact hK'
+      · exact ih hTl g hTail
+
+/-- Invariant: when every row's key evaluates to a non-err
+`Datum`, every bucket in the `groupBy` output also has a non-err
+key. -/
+private theorem groupBy_keys_non_err
+    {keyExpr : Expr} {rel : Relation}
+    (h : ∀ row ∈ rel, ¬ (eval row keyExpr).IsErr) :
+    ∀ g ∈ groupBy keyExpr rel, ¬ g.1.IsErr := by
+  induction rel with
+  | nil => intro g hMem; exact absurd hMem (List.not_mem_nil)
+  | cons head tl ih =>
+    have hHd : ¬ (eval head keyExpr).IsErr := h head List.mem_cons_self
+    have hTl : ∀ row ∈ tl, ¬ (eval row keyExpr).IsErr :=
+      fun row hMem => h row (List.mem_cons_of_mem _ hMem)
+    have ihGroups := ih hTl
+    show ∀ g ∈ insertInto (eval head keyExpr) head (groupBy keyExpr tl),
+            ¬ g.1.IsErr
+    exact insertInto_preserves_non_err_keys hHd ihGroups
+
+/-- Agreement theorem: when every row's key evaluates to a
+non-err `Datum`, the err-distinct grouping is exactly the
+merge-on-equal grouping. -/
+theorem groupByErrDistinct_eq_groupBy_of_no_err
+    (keyExpr : Expr) (rel : Relation)
+    (h : ∀ row ∈ rel, ¬ (eval row keyExpr).IsErr) :
+    groupByErrDistinct keyExpr rel = groupBy keyExpr rel := by
+  induction rel with
+  | nil => rfl
+  | cons head tl ih =>
+    have hHd : ¬ (eval head keyExpr).IsErr := h head List.mem_cons_self
+    have hTl : ∀ row ∈ tl, ¬ (eval row keyExpr).IsErr :=
+      fun row hMem => h row (List.mem_cons_of_mem _ hMem)
+    have ihEq : groupByErrDistinct keyExpr tl = groupBy keyExpr tl := ih hTl
+    have hAllNonErr : ∀ g ∈ groupBy keyExpr tl, ¬ g.1.IsErr :=
+      groupBy_keys_non_err hTl
+    show insertIntoDistinct (eval head keyExpr) head (groupByErrDistinct keyExpr tl)
+        = insertInto (eval head keyExpr) head (groupBy keyExpr tl)
+    rw [ihEq]
+    exact insertIntoDistinct_eq_insertInto hHd hAllNonErr
+
 /-! ## Cardinality
 
 The sum of group sizes equals the input relation's length: no row
