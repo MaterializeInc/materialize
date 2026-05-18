@@ -423,4 +423,127 @@ theorem UnifiedStream.filter_cross_pushdown_left
         | err e_pred =>
           exact filter_map_row_val_err pred la n r e_pred hBound' hEval hRPure
 
+/-! ## Right-side pushdown
+
+Mirror of `filter_cross_pushdown_left`. Predicate references only
+right-input columns — encoded as `pred = pred'.colShift M`, where
+every left row has width exactly `M`. Left input is pure data (no
+row-errs, no `.error` diffs), the symmetric counterpart to
+`IsPureData r` on the left version.
+
+Width is `= M` rather than `≥ N`: `eval_append_right_shift`
+strips the prefix only when the shift amount matches the left
+row's length. The left version's monotone slack does not apply
+here. -/
+
+/-- Per-record helper for right pushdown. With a pure-data left
+record `(.row la, .val n)` of width `M`, filtering the cross
+output against `pred'.colShift M` commutes with crossing against
+the right input filtered by `pred'`. Each `r` record's
+contribution lines up under `eval_append_right_shift`. -/
+private theorem filter_map_pure_data_right
+    (pred' : Expr) (M : Nat) (la : Row) (n : Int) (r : UnifiedStream)
+    (hLen : la.length = M) :
+    UnifiedStream.filter (pred'.colShift M)
+        (r.map fun rd => (combineCarrier (UnifiedRow.row la) rd.1,
+                           DiffWithError.val n * rd.2))
+      = (UnifiedStream.filter pred' r).map
+          fun rd => (combineCarrier (UnifiedRow.row la) rd.1,
+                      DiffWithError.val n * rd.2) := by
+  induction r with
+  | nil => rfl
+  | cons hd tl ih =>
+    obtain ⟨ru, rd⟩ := hd
+    have hMapCons :
+        ((ru, rd) :: tl).map (fun rd' => (combineCarrier (UnifiedRow.row la) rd'.1,
+                                            DiffWithError.val n * rd'.2))
+          = [(combineCarrier (UnifiedRow.row la) ru, DiffWithError.val n * rd)]
+              ++ tl.map (fun rd' => (combineCarrier (UnifiedRow.row la) rd'.1,
+                                       DiffWithError.val n * rd'.2)) := rfl
+    rw [hMapCons, UnifiedStream.filter_append, ih]
+    have hFilterCons :
+        UnifiedStream.filter pred' ((ru, rd) :: tl)
+          = UnifiedStream.filter pred' [(ru, rd)]
+              ++ UnifiedStream.filter pred' tl := by
+      have : ((ru, rd) :: tl : UnifiedStream) = [(ru, rd)] ++ tl := rfl
+      rw [this, UnifiedStream.filter_append]
+    rw [hFilterCons, List.map_append]
+    congr 1
+    cases rd with
+    | error =>
+      -- Both heads reduce to [(combineCarrier (.row la) ru, .error)].
+      rfl
+    | val m =>
+      cases ru with
+      | err e' =>
+        -- combineCarrier (.row la) (.err e') = .err e'; both heads
+        -- reduce via err-carrier arm to [(.err e', .val (n*m))].
+        rfl
+      | row rb =>
+        have hEvalShift : eval (la ++ rb) (pred'.colShift M) = eval rb pred' := by
+          rw [← hLen]
+          exact eval_append_right_shift la rb pred'
+        -- combineCarrier (.row la) (.row rb) = .row (la ++ rb).
+        -- val n * val m = val (n*m). Both sides land in the .row arm
+        -- of filter; bridge by hEvalShift.
+        show (match eval (la ++ rb) (pred'.colShift M) with
+                | .bool true => [(UnifiedRow.row (la ++ rb), DiffWithError.val (n * m))]
+                | .err e     => [(UnifiedRow.err e, DiffWithError.val (n * m))]
+                | _          => []) ++ []
+              = ((match eval rb pred' with
+                    | .bool true => [(UnifiedRow.row rb, DiffWithError.val m)]
+                    | .err e     => [(UnifiedRow.err e, DiffWithError.val m)]
+                    | _          => []) ++ []).map
+                  (fun rd' => (combineCarrier (UnifiedRow.row la) rd'.1,
+                                DiffWithError.val n * rd'.2))
+        rw [hEvalShift]
+        cases eval rb pred' with
+        | bool b =>
+          cases b with
+          | true => rfl
+          | false => rfl
+        | err _ => rfl
+        | int _ => rfl
+        | null => rfl
+
+/-- Filter pushdown for cross products, right-side version. When
+the join predicate references only right-input columns (encoded as
+`pred = pred'.colShift M`, with every left row width exactly `M`),
+and the left input is pure data, filtering the cross product
+equals crossing the left input with the filtered right.
+
+The left-pure hypothesis is the symmetric counterpart of the
+right-pure requirement in `filter_cross_pushdown_left`: row-scoped
+errors or `.error` diffs on the un-filtered side would interact
+with the filter's promotion rules and break the commute. -/
+theorem UnifiedStream.filter_cross_pushdown_right
+    (pred' : Expr) (M : Nat) (l r : UnifiedStream)
+    (hLPure : UnifiedStream.IsPureData l)
+    (hLWidth : ∀ ud ∈ l, ∀ la, ud.1 = UnifiedRow.row la → la.length = M) :
+    UnifiedStream.filter (pred'.colShift M) (UnifiedStream.cross l r)
+      = UnifiedStream.cross l (UnifiedStream.filter pred' r) := by
+  induction l with
+  | nil => rfl
+  | cons hd tl ih =>
+    obtain ⟨uc, d⟩ := hd
+    have hTlPure : UnifiedStream.IsPureData tl := hLPure.tail
+    have hTlWidth : ∀ ud ∈ tl, ∀ la, ud.1 = UnifiedRow.row la → la.length = M :=
+      fun ud hMem la hUc => hLWidth ud (List.mem_cons_of_mem _ hMem) la hUc
+    obtain ⟨⟨rb_uc, hUc⟩, ⟨n, hD⟩⟩ := hLPure.head
+    have hHdLen : rb_uc.length = M := hLWidth (uc, d) List.mem_cons_self rb_uc hUc
+    subst hUc; subst hD
+    rw [UnifiedStream.cross_cons_left, UnifiedStream.filter_append,
+        ih hTlPure hTlWidth]
+    have hCrossRConsLeft :
+        UnifiedStream.cross ((UnifiedRow.row rb_uc, DiffWithError.val n) :: tl)
+              (UnifiedStream.filter pred' r)
+          = (UnifiedStream.filter pred' r).map
+              (fun rd => (combineCarrier (UnifiedRow.row rb_uc) rd.1,
+                           DiffWithError.val n * rd.2))
+              ++ UnifiedStream.cross tl (UnifiedStream.filter pred' r) := by
+      rw [UnifiedStream.cross_cons_left]
+    rw [hCrossRConsLeft]
+    congr 1
+    exact filter_map_pure_data_right pred' M rb_uc n r hHdLen
+
 end Mz
