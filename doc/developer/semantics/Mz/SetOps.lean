@@ -618,6 +618,27 @@ theorem UnifiedStream.clampPositive_no_error
   unfold UnifiedStream.clampPositive at hMem
   exact h x (List.mem_filter.mp hMem).1
 
+/-- Threshold elision: `clampPositive` is the identity on streams
+where every `.val` diff is already strictly positive (`.error`
+diffs pass through `clampPositive` unconditionally, so they need
+no hypothesis). Models the Rust optimizer's `threshold_elision.rs`
+pass: drop the `clampPositive` post-pass when the input is already
+sign-normalized. -/
+theorem UnifiedStream.clampPositive_id_of_positive
+    (us : UnifiedStream)
+    (h : ∀ ud ∈ us, ud.2 = DiffWithError.error
+                  ∨ ∃ n : Int, ud.2 = DiffWithError.val n ∧ 0 < n) :
+    UnifiedStream.clampPositive us = us := by
+  unfold UnifiedStream.clampPositive
+  apply List.filter_eq_self.mpr
+  intro ud hMem
+  show isPositiveDiff ud.2 = true
+  rcases h ud hMem with hErr | ⟨n, hN, hPos⟩
+  · rw [hErr]; rfl
+  · rw [hN]
+    show decide (0 < n) = true
+    exact decide_eq_true hPos
+
 /-- The output of `clampPositive` never contains a `.val n` with
 `n ≤ 0`. Equivalently, every surviving `.val` diff is strictly
 positive. -/
