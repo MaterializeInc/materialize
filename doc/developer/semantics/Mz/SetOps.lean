@@ -1004,11 +1004,78 @@ theorem UnifiedStream.clampPositive_noDup (us : UnifiedStream)
   unfold UnifiedStream.clampPositive
   exact List.Pairwise.sublist List.filter_sublist h
 
--- `filter_noDup` and `clampToOne_noDup` need a membership
--- characterization for the head step (filter may convert `.row` to
--- `.err` for the same record, and clampToOne may drop or transform).
--- The carrier of the converted record is bounded, so NoDup holds, but
--- the rigorous proof requires per-shape analysis. Deferred.
+-- `filter_noDup` is *false* in general: two distinct `.row r1` /
+-- `.row r2` records with `r1 ≠ r2` may both pred-err with the same
+-- payload `e`, producing two output records carrying the same
+-- `.err e`. The collapse violates NoDup. Filter is therefore not a
+-- NoDup-preserving operator; downstream proofs that need NoDup on
+-- filter output must rely on additional structure (e.g., that the
+-- predicate never errs, or that consolidate is applied after).
+
+/-- Carriers of `clampToOne` output are a subset of input carriers
+(via the first component). Used by `clampToOne_noDup`. -/
+private theorem mem_clampToOne_carrier (us : UnifiedStream)
+    (x : UnifiedRow × DiffWithError Int) (h : x ∈ UnifiedStream.clampToOne us) :
+    ∃ orig ∈ us, x.1 = orig.1 := by
+  induction us with
+  | nil => exact absurd h List.not_mem_nil
+  | cons hd tl ih =>
+    obtain ⟨uc, d⟩ := hd
+    cases d with
+    | error =>
+      -- clampToOne ((uc, .error) :: tl) = (uc, .error) :: clampToOne tl
+      have h' : x ∈ (uc, (DiffWithError.error : DiffWithError Int))
+                    :: UnifiedStream.clampToOne tl := h
+      rcases List.mem_cons.mp h' with hHead | hTail
+      · refine ⟨(uc, DiffWithError.error), List.mem_cons_self, ?_⟩
+        rw [hHead]
+      · obtain ⟨orig, hOrigMem, hCarr⟩ := ih hTail
+        exact ⟨orig, List.mem_cons_of_mem _ hOrigMem, hCarr⟩
+    | val n =>
+      have h' : x ∈ (if 0 < n
+                      then (uc, DiffWithError.val 1) :: UnifiedStream.clampToOne tl
+                      else UnifiedStream.clampToOne tl) := h
+      split at h'
+      · rcases List.mem_cons.mp h' with hHead | hTail
+        · refine ⟨(uc, DiffWithError.val n), List.mem_cons_self, ?_⟩
+          rw [hHead]
+        · obtain ⟨orig, hOrigMem, hCarr⟩ := ih hTail
+          exact ⟨orig, List.mem_cons_of_mem _ hOrigMem, hCarr⟩
+      · obtain ⟨orig, hOrigMem, hCarr⟩ := ih h'
+        exact ⟨orig, List.mem_cons_of_mem _ hOrigMem, hCarr⟩
+
+/-- `clampToOne` preserves NoDup: each output record corresponds to
+exactly one input record (or none), with carrier unchanged. -/
+theorem UnifiedStream.clampToOne_noDup (us : UnifiedStream)
+    (h : UnifiedStream.NoDupCarriers us) :
+    UnifiedStream.NoDupCarriers (UnifiedStream.clampToOne us) := by
+  induction us with
+  | nil => exact UnifiedStream.NoDupCarriers.nil
+  | cons hd tl ih =>
+    obtain ⟨hHead, hTl⟩ := List.pairwise_cons.mp h
+    obtain ⟨uc, d⟩ := hd
+    cases d with
+    | error =>
+      show List.Pairwise _ ((uc, DiffWithError.error)
+                            :: UnifiedStream.clampToOne tl)
+      apply List.Pairwise.cons
+      · intro y hY
+        obtain ⟨orig, hOrigMem, hCarr⟩ := mem_clampToOne_carrier tl y hY
+        rw [hCarr] at *
+        exact hHead orig hOrigMem
+      · exact ih hTl
+    | val n =>
+      show List.Pairwise _ (if 0 < n
+                            then (uc, DiffWithError.val 1) :: UnifiedStream.clampToOne tl
+                            else UnifiedStream.clampToOne tl)
+      split
+      · apply List.Pairwise.cons
+        · intro y hY
+          obtain ⟨orig, hOrigMem, hCarr⟩ := mem_clampToOne_carrier tl y hY
+          rw [hCarr] at *
+          exact hHead orig hOrigMem
+        · exact ih hTl
+      · exact ih hTl
 
 /-- All-`.val` inputs yield all-`.val` outputs through
 `intersectAll`. Each output diff is `.val (Min.min n m)` for some
