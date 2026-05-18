@@ -195,8 +195,12 @@ CLUSTER_OBJECT_LIMITS_LAG_THRESHOLD_MS = 2_000
 CLUSTER_OBJECT_LIMITS_LAG_CAP_MS = 10 * CLUSTER_OBJECT_LIMITS_LAG_THRESHOLD_MS
 # How long to wait, after a batch of objects has been created, for the
 # materializations to hydrate / for lag to fall below threshold before we
-# declare "unhealthy".
-CLUSTER_OBJECT_LIMITS_HYDRATION_TIMEOUT_S = 60
+# declare "unhealthy". Generous because larger replicas (1600cc/3200cc on
+# staging) can take significantly longer than small ones to start serving
+# frontiers after a fresh CREATE CLUSTER + bulk DDL; with a tighter
+# timeout the first probe falsely declares the cluster broken and bisect
+# can never escape because lag keeps accumulating from there.
+CLUSTER_OBJECT_LIMITS_HYDRATION_TIMEOUT_S = 300
 # Steady-state sampling window after hydration: take this many samples spaced
 # CLUSTER_OBJECT_LIMITS_SAMPLE_INTERVAL_S apart and use the max as the
 # representative lag.
