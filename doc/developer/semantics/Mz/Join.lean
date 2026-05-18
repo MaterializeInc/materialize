@@ -62,6 +62,25 @@ theorem UnifiedStream.cross_nil_right (l : UnifiedStream) :
   | nil => rfl
   | cons _ tl _ih => simp [UnifiedStream.cross, List.map_nil, List.flatMap_cons]
 
+/-! ### Reduction lemmas on the left input
+
+Named per-list-shape reductions so downstream proofs cite these
+instead of unfolding `flatMap` inline. -/
+
+theorem UnifiedStream.cross_append_left (a b r : UnifiedStream) :
+    UnifiedStream.cross (a ++ b) r
+      = UnifiedStream.cross a r ++ UnifiedStream.cross b r := by
+  show (a ++ b).flatMap _ = a.flatMap _ ++ b.flatMap _
+  exact List.flatMap_append
+
+theorem UnifiedStream.cross_cons_left
+    (hd : UnifiedRow × DiffWithError Int) (tl r : UnifiedStream) :
+    UnifiedStream.cross (hd :: tl) r
+      = (r.map (fun rd => (combineCarrier hd.1 rd.1, hd.2 * rd.2)))
+          ++ UnifiedStream.cross tl r := by
+  show (hd :: tl).flatMap _ = _ ++ tl.flatMap _
+  simp [List.flatMap_cons]
+
 /-! ## Cardinality -/
 
 /-- Cross product cardinality. `cross l r` produces exactly one
