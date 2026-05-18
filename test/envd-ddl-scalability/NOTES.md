@@ -1273,6 +1273,21 @@ singleton shards' own histories.
    sibling of `persist-client/examples/`. Same trick applied
    separately to the txns-shard write pattern (`mz_txn_wal`)
    isolates that slope too.
+
+   **Important: run the microbench against BOTH consensus backends**
+   — real CRDB (`postgres://...?options=--search_path=consensus`)
+   and bogo-consensus (`bogo://127.0.0.1:6882`). The split tells us
+   *where* the per-CAS cost lives:
+   * If bogo flattens the slope but CRDB doesn't, the cost is below
+     persist — in the consensus impl's per-row / per-state-blob
+     handling as the shard's row in `consensus` table grows.
+   * If both show the same slope, the cost is *above* the consensus
+     trait — in persist's `Applier` / state-apply / diff-fetch /
+     rollup-cadence path, and we'd fix it in persist itself.
+   The prior end-to-end runs already use bogo, so we know bogo
+   shrinks total DDL latency. The microbench is the cleanest way
+   to factor whether bogo *changes the slope shape* or just lowers
+   the floor.
 2. **Once the microbench reproduces the slope**: profile / trace
    the slow CAS to see where time goes inside persist state apply
    — spine slow-path, rollup write cadence, decode cost, encoded
