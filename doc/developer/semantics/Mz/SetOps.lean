@@ -1759,4 +1759,211 @@ theorem UnifiedStream.exceptAll_errorDiffCarriers_iff
       UnifiedStream.unionAll_errorDiffCarriers,
       UnifiedStream.negate_errorDiffCarriers, List.mem_append]
 
+/-! ## `clampPositive` and error scopes
+
+`clampPositive` keeps `.error` records and `.val n` records with
+`0 < n`; drops everything else.
+
+* Collection-err set: preserved exactly. `.error`-diff records
+  always pass through (`isPositiveDiff .error = true`).
+* Row-err set: not preserved — a `(.err e, .val 0)` or
+  `(.err e, .val (-n))` record is dropped, so the row-err set
+  may shrink. Only the reverse direction (output ⊆ input) holds. -/
+
+theorem UnifiedStream.clampPositive_errorDiffCarriers_iff
+    (us : UnifiedStream) (uc : UnifiedRow) :
+    uc ∈ UnifiedStream.errorDiffCarriers (UnifiedStream.clampPositive us)
+      ↔ uc ∈ UnifiedStream.errorDiffCarriers us := by
+  rw [UnifiedStream.mem_errorDiffCarriers,
+      UnifiedStream.mem_errorDiffCarriers]
+  constructor
+  · intro h
+    -- (uc, .error) ∈ clampPositive us = List.filter _ us ⇒ (uc, .error) ∈ us.
+    exact (List.mem_filter.mp h).1
+  · intro h
+    exact UnifiedStream.clampPositive_preserves_error_diff us uc h
+
+/-- Reverse direction for row-err: every err in the clamped
+output was in the input. The forward direction fails because
+clampPositive can drop `(.err e, .val 0)` records. -/
+theorem UnifiedStream.clampPositive_errCarriers_of_mem
+    (us : UnifiedStream) (e : EvalError)
+    (h : e ∈ UnifiedStream.errCarriers (UnifiedStream.clampPositive us)) :
+    e ∈ UnifiedStream.errCarriers us := by
+  rw [UnifiedStream.mem_errCarriers] at h
+  rw [UnifiedStream.mem_errCarriers]
+  obtain ⟨d, hMem⟩ := h
+  exact ⟨d, (List.mem_filter.mp hMem).1⟩
+
+/-! ## `clampToOne` and error scopes
+
+`clampToOne` collapses positive `.val n > 0` to `.val 1`, drops
+non-positive `.val`, and preserves `.error`. Same error-scope
+behavior as `clampPositive`. -/
+
+private theorem clampToOne_preserves_record_carrier
+    (us : UnifiedStream) (rec : UnifiedRow × DiffWithError Int)
+    (h : rec ∈ UnifiedStream.clampToOne us) :
+    ∃ d, (rec.1, d) ∈ us := by
+  induction us with
+  | nil => exact absurd h List.not_mem_nil
+  | cons hd tl ih =>
+    obtain ⟨uc', d'⟩ := hd
+    cases d' with
+    | error =>
+      -- clampToOne ((uc', .error) :: tl) = (uc', .error) :: clampToOne tl.
+      have hEq : UnifiedStream.clampToOne ((uc', DiffWithError.error) :: tl)
+              = (uc', DiffWithError.error) :: UnifiedStream.clampToOne tl := rfl
+      rw [hEq] at h
+      rcases List.mem_cons.mp h with hHead | hTail
+      · subst hHead
+        exact ⟨DiffWithError.error, List.mem_cons_self⟩
+      · obtain ⟨d, hMem⟩ := ih hTail
+        exact ⟨d, List.mem_cons_of_mem _ hMem⟩
+    | val n =>
+      by_cases hPos : 0 < n
+      · have hEq : UnifiedStream.clampToOne ((uc', DiffWithError.val n) :: tl)
+                = (uc', DiffWithError.val 1)
+                    :: UnifiedStream.clampToOne tl := by
+          show (if 0 < n then (uc', DiffWithError.val 1)
+                          :: UnifiedStream.clampToOne tl
+                else UnifiedStream.clampToOne tl)
+              = _
+          rw [if_pos hPos]
+        rw [hEq] at h
+        rcases List.mem_cons.mp h with hHead | hTail
+        · -- rec = (uc', .val 1); carrier uc' is in input head.
+          have hUc : rec.1 = uc' := by rw [hHead]
+          rw [hUc]
+          exact ⟨DiffWithError.val n, List.mem_cons_self⟩
+        · obtain ⟨d, hMem⟩ := ih hTail
+          exact ⟨d, List.mem_cons_of_mem _ hMem⟩
+      · have hEq : UnifiedStream.clampToOne ((uc', DiffWithError.val n) :: tl)
+                = UnifiedStream.clampToOne tl := by
+          show (if 0 < n then (uc', DiffWithError.val 1)
+                          :: UnifiedStream.clampToOne tl
+                else UnifiedStream.clampToOne tl)
+              = _
+          rw [if_neg hPos]
+        rw [hEq] at h
+        obtain ⟨d, hMem⟩ := ih h
+        exact ⟨d, List.mem_cons_of_mem _ hMem⟩
+
+theorem UnifiedStream.clampToOne_errCarriers_of_mem
+    (us : UnifiedStream) (e : EvalError)
+    (h : e ∈ UnifiedStream.errCarriers (UnifiedStream.clampToOne us)) :
+    e ∈ UnifiedStream.errCarriers us := by
+  rw [UnifiedStream.mem_errCarriers] at h
+  rw [UnifiedStream.mem_errCarriers]
+  obtain ⟨d, hMem⟩ := h
+  exact clampToOne_preserves_record_carrier us (UnifiedRow.err e, d) hMem
+
+/-- Reverse direction of clampToOne / `.error`-diff carriers:
+a `(uc, .error)` in the clamped output came from a `(uc, .error)`
+in the input. The `.val n` arms of clampToOne never emit `.error`,
+so the `.error` output had to come from an `.error` input. -/
+private theorem clampToOne_error_inv
+    (us : UnifiedStream) (uc : UnifiedRow)
+    (h : (uc, (DiffWithError.error : DiffWithError Int))
+            ∈ UnifiedStream.clampToOne us) :
+    (uc, (DiffWithError.error : DiffWithError Int)) ∈ us := by
+  induction us with
+  | nil => exact absurd h List.not_mem_nil
+  | cons hd tl ih =>
+    obtain ⟨uc', d'⟩ := hd
+    cases d' with
+    | error =>
+      have hEq : UnifiedStream.clampToOne ((uc', DiffWithError.error) :: tl)
+              = (uc', DiffWithError.error)
+                  :: UnifiedStream.clampToOne tl := rfl
+      rw [hEq] at h
+      rcases List.mem_cons.mp h with hHead | hTail
+      · have huc : uc = uc' := (Prod.mk.injEq _ _ _ _).mp hHead |>.1
+        subst huc
+        exact List.mem_cons_self
+      · exact List.mem_cons_of_mem _ (ih hTail)
+    | val n =>
+      by_cases hPos : 0 < n
+      · have hEq : UnifiedStream.clampToOne ((uc', DiffWithError.val n) :: tl)
+                = (uc', DiffWithError.val 1)
+                    :: UnifiedStream.clampToOne tl := by
+          show (if 0 < n then (uc', DiffWithError.val 1)
+                          :: UnifiedStream.clampToOne tl
+                else UnifiedStream.clampToOne tl) = _
+          rw [if_pos hPos]
+        rw [hEq] at h
+        rcases List.mem_cons.mp h with hHead | hTail
+        · -- (uc, .error) = (uc', .val 1) impossible.
+          have hDiff : (DiffWithError.error : DiffWithError Int)
+                     = DiffWithError.val 1 :=
+            (Prod.mk.injEq _ _ _ _).mp hHead |>.2
+          cases hDiff
+        · exact List.mem_cons_of_mem _ (ih hTail)
+      · have hEq : UnifiedStream.clampToOne ((uc', DiffWithError.val n) :: tl)
+                = UnifiedStream.clampToOne tl := by
+          show (if 0 < n then (uc', DiffWithError.val 1)
+                          :: UnifiedStream.clampToOne tl
+                else UnifiedStream.clampToOne tl) = _
+          rw [if_neg hPos]
+        rw [hEq] at h
+        exact List.mem_cons_of_mem _ (ih h)
+
+/-- `clampToOne` preserves collection-err carriers. The
+`(uc, .error)` records always survive the clamp (the `.error`
+branch of clampToOne's recursion). Forward via the existing
+`clampToOne_preserves_error_diff`; reverse via `clampToOne_error_inv`. -/
+theorem UnifiedStream.clampToOne_errorDiffCarriers_iff
+    (us : UnifiedStream) (uc : UnifiedRow) :
+    uc ∈ UnifiedStream.errorDiffCarriers (UnifiedStream.clampToOne us)
+      ↔ uc ∈ UnifiedStream.errorDiffCarriers us := by
+  rw [UnifiedStream.mem_errorDiffCarriers,
+      UnifiedStream.mem_errorDiffCarriers]
+  exact ⟨clampToOne_error_inv us uc,
+         UnifiedStream.clampToOne_preserves_error_diff us uc⟩
+
+/-! ## `distinct`, `bagExceptAll`, `bagIntersectAll`: composed theorems
+
+`distinct = clampToOne ∘ consolidate`, `bagExceptAll = clampPositive ∘ exceptAll`,
+`bagIntersectAll = clampPositive ∘ intersectAll`. Error-scope behavior
+composes from the parts. The collection-err set is preserved exactly
+(both parts preserve iff). The row-err set can only shrink. -/
+
+theorem UnifiedStream.distinct_errorDiffCarriers_iff
+    (us : UnifiedStream) (uc : UnifiedRow) :
+    uc ∈ UnifiedStream.errorDiffCarriers (UnifiedStream.distinct us)
+      ↔ uc ∈ UnifiedStream.errorDiffCarriers us := by
+  show uc ∈ UnifiedStream.errorDiffCarriers
+              (UnifiedStream.clampToOne (UnifiedStream.consolidate us)) ↔ _
+  rw [UnifiedStream.clampToOne_errorDiffCarriers_iff,
+      UnifiedStream.consolidate_errorDiffCarriers_iff]
+
+theorem UnifiedStream.distinct_errCarriers_of_mem
+    (us : UnifiedStream) (e : EvalError)
+    (h : e ∈ UnifiedStream.errCarriers (UnifiedStream.distinct us)) :
+    e ∈ UnifiedStream.errCarriers us := by
+  -- distinct us = clampToOne (consolidate us).
+  -- clampToOne_errCarriers_of_mem → in consolidate us.
+  -- consolidate_errCarriers_iff → in us.
+  have h1 : e ∈ UnifiedStream.errCarriers (UnifiedStream.consolidate us) :=
+    UnifiedStream.clampToOne_errCarriers_of_mem _ e h
+  exact (UnifiedStream.consolidate_errCarriers_iff us e).mp h1
+
+theorem UnifiedStream.bagExceptAll_errorDiffCarriers_iff
+    (l r : UnifiedStream) (uc : UnifiedRow) :
+    uc ∈ UnifiedStream.errorDiffCarriers (UnifiedStream.bagExceptAll l r)
+      ↔ uc ∈ UnifiedStream.errorDiffCarriers l
+        ∨ uc ∈ UnifiedStream.errorDiffCarriers r := by
+  show uc ∈ UnifiedStream.errorDiffCarriers
+              (UnifiedStream.clampPositive (UnifiedStream.exceptAll l r)) ↔ _
+  rw [UnifiedStream.clampPositive_errorDiffCarriers_iff,
+      UnifiedStream.exceptAll_errorDiffCarriers_iff]
+
+theorem UnifiedStream.bagExceptAll_errCarriers_of_mem
+    (l r : UnifiedStream) (e : EvalError)
+    (h : e ∈ UnifiedStream.errCarriers (UnifiedStream.bagExceptAll l r)) :
+    e ∈ UnifiedStream.errCarriers l ∨ e ∈ UnifiedStream.errCarriers r := by
+  have h1 : e ∈ UnifiedStream.errCarriers (UnifiedStream.exceptAll l r) :=
+    UnifiedStream.clampPositive_errCarriers_of_mem _ e h
+  exact (UnifiedStream.exceptAll_errCarriers_iff l r e).mp h1
+
 end Mz
