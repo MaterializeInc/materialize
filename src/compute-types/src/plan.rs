@@ -121,12 +121,13 @@ impl AvailableCollections {
     Serialize
 )]
 pub enum ArrangementStrategy {
-    /// Form arrangements directly from the input collection.
+    /// Form arrangements directly from the input collection. For `Union`, feed the input
+    /// straight into the concatenation without inserting temporal bucketing.
     Direct,
-    /// Insert temporal bucketing in front of the arrangement, to delay future-stamped
-    /// updates (e.g., from `mz_now()` MFPs) until their bucket boundary releases them.
-    /// Honoured only when `ENABLE_COMPUTE_TEMPORAL_BUCKETING` is set; otherwise behaves like
-    /// `Direct`.
+    /// Insert temporal bucketing in front of the arrangement (for `ArrangeBy`) or the
+    /// downstream consolidate (for `Union`), to delay future-stamped updates (e.g., from
+    /// `mz_now()` MFPs) until their bucket boundary releases them. Honoured only when
+    /// `ENABLE_COMPUTE_TEMPORAL_BUCKETING` is set; otherwise behaves like `Direct`.
     TemporalBucketing,
 }
 
@@ -350,11 +351,10 @@ pub enum PlanNode {
         inputs: Vec<Plan>,
         /// Whether to consolidate the output, e.g., cancel negated records.
         consolidate_output: bool,
-        /// Per-input flag, aligned with `inputs`: whether the input may carry updates at
-        /// timestamps far ahead of the input frontier (e.g., from a temporal MFP). Consulted
-        /// by the renderer when `consolidate_output` is set, to decide whether to apply
-        /// temporal bucketing on that input before consolidation.
-        input_has_future_updates: Vec<bool>,
+        /// Per-input rendering strategy, aligned with `inputs`. Consulted by the renderer
+        /// when `consolidate_output` is set, to decide whether to insert temporal bucketing
+        /// on that input before the downstream consolidation. Ignored otherwise.
+        input_strategies: Vec<ArrangementStrategy>,
     },
     /// The `input` plan, but with additional arrangements.
     ///
@@ -654,7 +654,7 @@ impl Plan {
                     PlanNode::Union {
                         inputs,
                         consolidate_output,
-                        input_has_future_updates: _,
+                        input_strategies: _,
                     } => {
                         if inputs
                             .iter()
@@ -780,7 +780,7 @@ impl CollectionPlan for PlanNode {
             | PlanNode::Union {
                 inputs,
                 consolidate_output: _,
-                input_has_future_updates: _,
+                input_strategies: _,
             } => {
                 for input in inputs {
                     input.depends_on_into(out);

@@ -469,7 +469,7 @@ impl Plan {
             Union {
                 inputs,
                 consolidate_output,
-                input_has_future_updates: _,
+                input_strategies: _,
             } => {
                 write!(f, "{}→", ctx.indent)?;
                 if *consolidate_output {
@@ -877,7 +877,7 @@ impl Plan {
             Union {
                 inputs,
                 consolidate_output,
-                input_has_future_updates: _,
+                input_strategies: _,
             } => {
                 if *consolidate_output {
                     writeln!(

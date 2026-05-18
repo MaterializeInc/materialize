@@ -125,7 +125,7 @@ use mz_compute_types::dyncfgs::{
     ENABLE_COMPUTE_TEMPORAL_BUCKETING, SUBSCRIBE_SNAPSHOT_OPTIMIZATION,
     TEMPORAL_BUCKETING_SUMMARY,
 };
-use mz_compute_types::plan::LirId;
+use mz_compute_types::plan::{ArrangementStrategy, LirId};
 use mz_compute_types::plan::render_plan::{
     self, BindStage, LetBind, LetFreePlan, RecBind, RenderPlan,
 };
@@ -1289,29 +1289,32 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
             Union {
                 inputs,
                 consolidate_output,
-                input_has_future_updates,
+                input_strategies,
             } => {
-                // Only consider per-input bucketing when we're about to consolidate; without
-                // a downstream consolidate, future-stamped updates pass through unmerged
-                // anyway, so bucketing buys nothing.
-                let bucketing_enabled = consolidate_output
-                    && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(&self.config_set);
+                // `input_strategies` is only consulted when we're about to consolidate;
+                // without a downstream consolidate, bucketing buys nothing.
+                let bucketing_enabled =
+                    consolidate_output && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(&self.config_set);
                 let summary: Option<mz_repr::Timestamp> = bucketing_enabled.then(|| {
                     TEMPORAL_BUCKETING_SUMMARY
                         .get(&self.config_set)
                         .try_into()
                         .expect("must fit")
                 });
-                // The lowering populates `input_has_future_updates` in lockstep with `inputs`.
-                // Guard the access with `get` so a malformed plan degrades to "don't bucket"
-                // rather than panicking.
+                // The lowering populates `input_strategies` in lockstep with `inputs`. Guard
+                // the access with `get` so a malformed plan degrades to `Direct` rather than
+                // panicking.
                 let mut oks = Vec::new();
                 let mut errs = Vec::new();
                 for (idx, input) in inputs.into_iter().enumerate() {
                     let (os, es) =
                         expect_input(input).as_specific_collection(None, &self.config_set);
+                    let strategy = input_strategies
+                        .get(idx)
+                        .copied()
+                        .unwrap_or(ArrangementStrategy::Direct);
                     let os = if bucketing_enabled
-                        && input_has_future_updates.get(idx).copied().unwrap_or(false)
+                        && matches!(strategy, ArrangementStrategy::TemporalBucketing)
                     {
                         T::maybe_apply_temporal_bucketing(
                             os.inner,

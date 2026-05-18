@@ -430,7 +430,7 @@ where
                 Union {
                     inputs,
                     consolidate_output,
-                    input_has_future_updates: _,
+                    input_strategies: _,
                 } => {
                     // Descend recursively into all children.
                     let inputs = inputs
@@ -732,7 +732,7 @@ where
                 Union {
                     inputs,
                     consolidate_output,
-                    input_has_future_updates: _,
+                    input_strategies: _,
                 } => {
                     // Descend recursively into all children.
                     let inputs: Vec<_> = inputs
