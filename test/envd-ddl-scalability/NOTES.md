@@ -2213,3 +2213,123 @@ Add a second phase histogram around the **outside** layer:
 That should split the +6-10 ms/+5k outside slope into named pieces.
 Also worth a peek at `prepare_state` in `storage_controller` to
 explain the 15k hockey-stick.
+
+## 2026-05-18 — Wrapper-layer phase split: `builtin_table_update().execute` is the slope owner
+
+tl;dr: outside-transact slope is almost entirely
+`builtin_table_update().execute()`. At N=15k it's 16.85 ms/DDL —
+nearly half the total DDL latency — and it grows ~4.3 ms per +5k
+tables. `Arc::make_mut(catalog)` and the `finalize` block are
+essentially free; both are ruled out.
+
+### What we added
+
+Six new `mz_catalog_transact_phase_seconds{phase=...}` labels for
+`Coordinator::catalog_transact_inner` (the wrapper layer):
+
+* `coord_inner_total` — entire method (cross-check super-timer).
+* `coord_pre_transact` — entry → just before `catalog.transact()`
+  (op pre-walk, validate_resource_limits, get_local_write_ts,
+  Arc::make_mut).
+* `coord_arc_make_mut` — wraps just `Arc::make_mut(catalog)` to
+  isolate the Catalog-clone-if-shared cost.
+* `coord_post_transact` — just after `catalog.transact()` →
+  method return (cluster_replica_statuses, builtin_table_execute,
+  finalize, audit).
+* `coord_builtin_table_execute` — wraps just
+  `self.builtin_table_update().execute(builtin_table_updates).await`.
+* `coord_finalize` — the bool-gated finalize block (config updates,
+  webhook restarts, advance_timelines refresh).
+
+### Headline timings (bogo backend, fresh-from-scratch)
+
+`mz_catalog_transact_seconds{method="catalog_transact_with_ddl_transaction"}`:
+
+| N       | mean (ms) | slope/+5k |
+|---------|----------:|----------:|
+| 5 000   |     36.45 |       —   |
+| 10 000  |     44.72 |   +8.27   |
+| 15 000  |     58.92 |  +14.20   |
+
+create p50: 35.85 → 46.07 → 62.25 (tracks the same slope).
+
+### Phase split — mean per single DDL
+
+| phase                          | 5k    | 10k   | 15k   | Δ 5→10 | Δ 10→15 |
+|--------------------------------|------:|------:|------:|-------:|--------:|
+| coord_inner_total              | 17.32 | 25.11 | 34.06 |  +7.79 |   +8.95 |
+|  ↳ coord_pre_transact          |  3.24 |  3.23 |  3.51 |  -0.01 |   +0.28 |
+|  ↳ coord_arc_make_mut          |  0.00 |  0.00 |  0.00 |    0   |    0    |
+|  ↳ Catalog::transact (sum)*    |  4.97 |  8.02 | 11.93 |  +3.05 |   +3.91 |
+|  ↳ coord_post_transact         |  8.27 | 12.41 | 16.86 |  +4.14 |   +4.45 |
+|     ↳ coord_builtin_table_exec |  8.26 | 12.40 | 16.85 |  +4.14 |   +4.45 |
+|     ↳ coord_finalize           |  0.00 |  0.00 |  0.00 |    0   |    0    |
+| apply_catalog_implications     | 11.39 | 11.16 | 13.51 |  -0.23 |   +2.35 |
+| `catalog_transact_with_ddl`    | 36.45 | 44.72 | 58.92 |  +8.27 |  +14.20 |
+
+(*) Catalog::transact = transact_inner + tx_commit + assign_state
+(plus a small per-stage gap), per the previous phase split.
+
+### What this tells us
+
+1. **`builtin_table_update().execute()` is the single biggest
+   slope component on the outside layer.** It contributes +4.14
+   and +4.45 ms per +5k tables — essentially *half* of the entire
+   per-DDL slope on its own. At N=15k it's 16.85 ms, ~29% of the
+   58.92 ms total per-DDL latency.
+2. **`Arc::make_mut(catalog)` is essentially zero** at all scales.
+   The Catalog Arc is uniquely held while we're inside
+   `catalog_transact_inner`, so the make_mut hot path doesn't
+   trigger a clone. Original hypothesis ruled out.
+3. **`coord_pre_transact` is flat** (~3.2 ms regardless of N).
+   The op pre-walk + resource-limit validation + write-ts grab
+   don't scale with N. Good — we can ignore these.
+4. **`coord_finalize` is ≈ 0** for plain CREATE/DROP TABLE.
+   The bool-gated config/tracing/etc. updates only fire for
+   system-config ops. Not a suspect.
+5. **`apply_catalog_implications` is mostly flat** — 11.4, 11.2,
+   13.5 ms across scales. It's *big* (≈ 1/4 of the per-DDL total)
+   but doesn't carry the slope.
+
+So the slope budget at 10k→15k splits roughly:
+* `coord_builtin_table_execute`: +4.45 ms
+* `Catalog::transact` (tx_commit + transact_inner + assign_state): +3.91 ms
+* `apply_catalog_implications`: +2.35 ms
+* everything else (`coord_pre_transact` drift, gap): +3.49 ms
+
+`coord_inner_total` minus its named children leaves a ~0.84 ms
+(5k) → 1.45 ms (10k) → 1.76 ms (15k) gap — that's
+cluster_replica_statuses updates + segment audit + setup overhead.
+Cheap per-DDL but not flat. Probably not worth chasing yet.
+
+### Inside `builtin_table_update().execute()`
+
+Reading `src/adapter/src/coord/appends.rs::execute`, the call is:
+
+```rust
+self.coord.pending_writes.push(PendingWriteTxn::System { updates, ... });
+let write_ts = self.coord.group_commit(None).await;
+self.coord.advance_timelines_interval.reset();
+```
+
+So the time is **`Coordinator::group_commit(None).await`**. That's
+where pending_writes get flushed to persist as table appends. The
+size of `builtin_table_updates` per DDL is small (one or two rows
+per builtin system table touched), so the growth has to be inside
+`group_commit` itself — likely from iterating something that
+scales with the number of tables (table advancement, upper bumps,
+collection bookkeeping).
+
+### Where we'd go next
+
+1. **Instrument inside `group_commit`** — split the upper-advancement,
+   table-append, and bookkeeping phases. We've already got a metric
+   `mz_group_commit_table_advancement_seconds`; pair it with one
+   for the per-DDL append cost.
+2. **Look at `prepare_state` 15k hockey-stick** (0.04 → 0.19 →
+   1.41 ms from the previous run). That's storage_controller side,
+   not coord.
+3. **Catalog::transact internal slope** (+3-4 ms/+5k) is still
+   non-trivial. Mostly tx_commit and transact_inner growth from
+   prior iterations — not on the critical path of "where does
+   the headline slope live," but a real number.
