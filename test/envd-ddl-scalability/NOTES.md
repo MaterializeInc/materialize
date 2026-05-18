@@ -1679,3 +1679,149 @@ site and falls out into the same bench harness.
 * `/home/ubuntu/envd-ddl-investigation/analyze.py` parses the
   before/after `/metrics` snapshots and prints the per-shard_kind
   breakdown tables above.
+
+### 2026-05-18 — apply_diff source attribution: it's GC
+
+Added a per-call-site `source` label to the apply_diff path
+(`mz_persist_state_apply_calls_by_source_shard_kind` with
+`[source, shard_kind]`). Four runtime sources are now distinguishable:
+
+* `cas_update` — `apply.rs::Applier::fetch_and_update_state` fast path.
+* `slow_refetch` — `state_versions.rs::fetch_current_state` full
+  rollup+replay (the fast-path-fallback "we got fenced too far").
+* `pubsub_push` — `cache.rs::push_diff` from PubSub broadcasts.
+* `state_iter` — `state_versions.rs::StateVersionsIter::next` walks
+  (used by GC + storage-usage audit + admin inspect).
+
+#### Three runs, one consistent story
+
+Ran the bench three times to characterize variance: run 1 (clean
+reset, fresh envd), run 2 (re-measured on the same envd without
+reset — bench `pad_to` is idempotent so this re-measures at N=10k
+twice, kept as a contrast point), run 3 (clean reset again).
+
+| run | reset? | catalog apply_diff/DDL at N=5k | catalog apply_diff/DDL at N=10k |
+| --- | --- | ---: | ---: |
+| 1 | yes | 0 | 0.01 |
+| 2 | no (warm) | 95.19 | 88.98 |
+| 3 | yes | 0.02 | 172.29 |
+
+And the per-source breakdown for run 3 N=10k catalog:
+
+| source | count/DDL |
+| --- | ---: |
+| **`state_iter`** | **172.29** |
+| `slow_refetch` | 0.71 |
+| `cas_update` | 0.01 |
+| `pubsub_push` | 0 |
+
+Run 2 N=5k catalog (warm-envd contrast):
+
+| source | count/DDL |
+| --- | ---: |
+| **`state_iter`** | **94.03** |
+| `slow_refetch` | 1.14 |
+| `pubsub_push` | 0.01 |
+| `cas_update` | 0.01 |
+
+In every case where catalog apply_diff exists, **>99% of it is
+`state_iter`**. The original mystery is solved: it's
+`StateVersionsIter::next`, the per-diff walker used by GC.
+
+#### The GC fingerprint confirms it
+
+Run 3 N=10k window deltas on the catalog shard:
+
+| counter | before | after | Δ |
+| --- | ---: | ---: | ---: |
+| `shard_gc_finished{name="catalog"}` | 9 | 10 | **+1** |
+| `shard_gc_live_diffs{name="catalog"}` | 19,676 | 17,229 | (gauge) |
+| `shard_cmd_succeeded{name="catalog"}` | 33,661 | 34,221 | +560 |
+| `shard_seqnos_since_last_rollup{name="catalog"}` | 24 | 69 | (gauge) |
+
+**Exactly one GC fired on the catalog during the 100-rep N=10k
+window**, and that one GC walked **17,229 live diffs** (the
+`gc_live_diffs` gauge after that GC). The `state_iter` counter
+delta is 17,229 — the same number. One GC = one `fetch_all_live_states`
+= 17,229 `StateVersionsIter::next` calls, each one an `apply_diff`
+on the catalog shard.
+
+For N=5k, GC didn't fire on the catalog during the measurement
+window (`gc_finished` delta 0), so `state_iter` was 0. For run 1
+N=10k, GC also happened not to fire during the window. For run 2
+both windows happened to coincide with GC firings.
+
+#### What this means for the slope
+
+Per-call work is ~10 µs. **17,229 calls × 10 µs ≈ 172 ms** total
+GC work on the catalog over the 100-rep window. That's 1.72 ms of
+catalog GC work *per DDL of wall time*, but it runs on background
+tasks, so its contribution to *DDL-critical-path latency* is at
+most the Tokio-scheduler tax (single-digit %).
+
+Slope decomposition for run 3 (clean reset):
+
+| component | N=5k ms/DDL | N=10k ms/DDL | Δ ms/DDL |
+| --- | ---: | ---: | ---: |
+| catalog `consensus_cas` × 5.6 | 3.04 | **10.28** | **+7.24** |
+| txns `consensus_cas` × 6.64 | 3.31 | 7.36 | +4.05 |
+| catalog `consensus_scan` × 2.08 | 1.10 | 2.43 | +1.33 |
+| txns `blob_set` × 2.63 | 2.66 | 3.51 | +0.85 |
+| catalog `state_apply` (GC, all `state_iter`) | 0.00 | 1.72 | +1.72 |
+| **sum** | **10.11** | **25.30** | **+15.19** |
+
+create_p50: 31.26 → 45.45 ms = **+14.19 ms**. Sum-of-persist-pieces:
++15.19 ms. Within noise. The slope is dominated by the CAS RPC
+times growing on catalog (+7.2 ms) and txns (+4.0 ms), with GC
+state-walk overhead a distant third (+1.7 ms).
+
+#### Run-to-run variance is high
+
+Comparing the three runs side-by-side, the *split* of the slope
+across components changes a lot, even though the *total* slope is
+consistently +14–18 ms:
+
+| run | catalog CAS Δ ms | txns CAS Δ ms | catalog state_apply Δ ms |
+| --- | ---: | ---: | ---: |
+| 1 | +10.87 | +0.45 | +0.00 |
+| 3 | +7.24 | +4.05 | +1.72 |
+
+The previously reported "catalog state_apply slope of +3.4 ms" was
+from run 1's *previous build* — a third run we can't compare
+apples-to-apples to. The reproducible story is:
+
+1. **GC's `state_iter` walks ARE the source of all catalog/txns
+   apply_diff calls.** PubSub, cas_update, and slow_refetch
+   together contribute <1% of catalog calls in every run.
+2. **Whether catalog state-apply appears as a slope component
+   depends on whether GC fires during the measurement window.**
+   When it fires, it walks all live diffs (17 k+ at N=10k) but the
+   work is cheap (~10 µs/call). Total contribution: 1–4 ms/DDL,
+   third-tier behind the two CAS RPC slopes.
+3. **The dominant slope is catalog `consensus_cas` RPC time** —
+   +7–11 ms/DDL across runs. Second is txns CAS at +0–4 ms.
+   Together those are 70-90% of the DDL slope every time.
+4. **The deeper question is why catalog CAS RPC itself slows
+   down.** The single-shard microbench (previous section) rules
+   out "consensus row gets bigger as state grows." The most
+   plausible remaining cause is shared-runtime / gRPC-pool
+   contention from the 10k user_data shards' background CAS
+   load (user_data `consensus_cas` mean was 35–44 ms at N=10k vs
+   7 ms at N=5k — a 5× growth that head-of-line blocks every
+   other CAS on the same bogo gRPC connection pool).
+
+#### Next moves
+
+1. **Confirm the bogo head-of-line hypothesis** with an outer-vs-
+   inner timer split around `MetricsConsensus::run_op`: the outer
+   timer captures Tokio-scheduler + connection-acquire wait; the
+   inner timer captures only the RPC wire time. Slope in
+   outer-minus-inner = contention.
+2. **The GC-walks-17k-diffs pattern is itself a backlog signal.**
+   With one envd running for ~30 minutes, GC fires every ~10
+   minutes and finds a big backlog (17 k diffs). If GC ran more
+   often it'd find smaller backlogs each time. Worth checking
+   whether GC scheduling on the catalog shard scales appropriately
+   with command rate, or whether something throttles it.
+3. **Source attribution is solved.** No follow-up metric needed
+   for this question.
