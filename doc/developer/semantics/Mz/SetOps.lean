@@ -271,4 +271,105 @@ theorem UnifiedStream.exceptAll_no_error
     (UnifiedStream.unionAll_no_error l _ hL
       (UnifiedStream.negate_no_error r hR))
 
+/-! ## Sign normalization
+
+`clampPositive` drops records whose diff has consolidated to a
+non-positive `.val` (zero or negative multiplicity); `.error`
+records survive unconditionally — the absorbing marker cannot be
+filtered away without violating the diff semiring. This is the
+post-pass that turns the signed-diff `exceptAll` into the
+bag-semantics `EXCEPT ALL`. -/
+
+@[inline] private def isPositiveDiff : DiffWithError Int → Bool
+  | .error => true
+  | .val n => decide (0 < n)
+
+/-- Drop records whose diff is `.val 0` or `.val n` with `n < 0`.
+`.error` records pass through. The dot-notation here resolves to
+`List.filter`; `UnifiedStream.filter` is the predicate-driven
+operator in `Mz/UnifiedStream.lean`, which is a different
+operation. -/
+def UnifiedStream.clampPositive (us : UnifiedStream) : UnifiedStream :=
+  List.filter (fun ud => isPositiveDiff ud.2) us
+
+theorem UnifiedStream.clampPositive_length_le (us : UnifiedStream) :
+    (UnifiedStream.clampPositive us).length ≤ us.length := by
+  unfold UnifiedStream.clampPositive
+  exact List.length_filter_le _ _
+
+theorem UnifiedStream.clampPositive_preserves_error_diff
+    (us : UnifiedStream) (uc : UnifiedRow)
+    (h : (uc, (DiffWithError.error : DiffWithError Int)) ∈ us) :
+    (uc, (DiffWithError.error : DiffWithError Int))
+      ∈ UnifiedStream.clampPositive us := by
+  unfold UnifiedStream.clampPositive
+  rw [List.mem_filter]
+  refine ⟨h, ?_⟩
+  show isPositiveDiff DiffWithError.error = true
+  rfl
+
+/-- The output of `clampPositive` never contains a `.val n` with
+`n ≤ 0`. Equivalently, every surviving `.val` diff is strictly
+positive. -/
+theorem UnifiedStream.clampPositive_only_positive
+    (us : UnifiedStream) :
+    ∀ x ∈ UnifiedStream.clampPositive us,
+      (∃ n : Int, x.2 = DiffWithError.val n ∧ 0 < n)
+      ∨ x.2 = DiffWithError.error := by
+  intro x hMem
+  unfold UnifiedStream.clampPositive at hMem
+  have hAnd := List.mem_filter.mp hMem
+  have hKeep : isPositiveDiff x.2 = true := hAnd.2
+  match hD : x.2 with
+  | .error => exact Or.inr rfl
+  | .val n =>
+    refine Or.inl ⟨n, rfl, ?_⟩
+    rw [hD] at hKeep
+    show 0 < n
+    have hDec : decide (0 < n) = true := hKeep
+    exact of_decide_eq_true hDec
+
+/-! ## Bag-semantics `EXCEPT ALL`
+
+`bagExceptAll = clampPositive ∘ exceptAll`. The signed-diff result
+of `exceptAll` is post-processed to drop non-positive
+multiplicities, producing the bag-semantics output: a carrier with
+output multiplicity `max(L - R, 0)`. `.error` diffs survive the
+clamp (collection-scoped errors cannot be sign-normalized away). -/
+
+def UnifiedStream.bagExceptAll (l r : UnifiedStream) : UnifiedStream :=
+  UnifiedStream.clampPositive (UnifiedStream.exceptAll l r)
+
+theorem UnifiedStream.bagExceptAll_length_le (l r : UnifiedStream) :
+    (UnifiedStream.bagExceptAll l r).length ≤ l.length + r.length :=
+  Nat.le_trans
+    (UnifiedStream.clampPositive_length_le _)
+    (UnifiedStream.exceptAll_length_le l r)
+
+theorem UnifiedStream.bagExceptAll_preserves_error_diff_left
+    (l r : UnifiedStream) (uc : UnifiedRow)
+    (h : (uc, (DiffWithError.error : DiffWithError Int)) ∈ l) :
+    (uc, (DiffWithError.error : DiffWithError Int))
+      ∈ UnifiedStream.bagExceptAll l r :=
+  UnifiedStream.clampPositive_preserves_error_diff _ uc
+    (UnifiedStream.exceptAll_preserves_error_diff_left l r uc h)
+
+theorem UnifiedStream.bagExceptAll_preserves_error_diff_right
+    (l r : UnifiedStream) (uc : UnifiedRow)
+    (h : (uc, (DiffWithError.error : DiffWithError Int)) ∈ r) :
+    (uc, (DiffWithError.error : DiffWithError Int))
+      ∈ UnifiedStream.bagExceptAll l r :=
+  UnifiedStream.clampPositive_preserves_error_diff _ uc
+    (UnifiedStream.exceptAll_preserves_error_diff_right l r uc h)
+
+/-- Every `.val` record in the bag-semantics output has strictly
+positive multiplicity (zero / negative records are sign-normalized
+away). -/
+theorem UnifiedStream.bagExceptAll_only_positive
+    (l r : UnifiedStream) :
+    ∀ x ∈ UnifiedStream.bagExceptAll l r,
+      (∃ n : Int, x.2 = DiffWithError.val n ∧ 0 < n)
+      ∨ x.2 = DiffWithError.error :=
+  UnifiedStream.clampPositive_only_positive _
+
 end Mz
