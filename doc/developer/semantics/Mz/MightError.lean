@@ -97,6 +97,43 @@ theorem evalOr_right_true (d : Datum) : evalOr d (.bool true) = .bool true := by
   | null   => rfl
   | err _  => rfl
 
+/-- Variadic `AND` absorbs to `.bool false` as soon as any operand
+is `.bool false`. Stated inline to keep `MightError.lean`
+self-contained (the same fact reappears in `Mz/Variadic.lean`
+under the name `evalAndN_false_absorbs`, but importing that
+module creates a cycle with `Mz/Laws.lean`). -/
+private theorem evalAndN_false_mem_eq
+    {ds : List Datum} (h : .bool false ∈ ds) :
+    evalAndN ds = .bool false := by
+  induction ds with
+  | nil => exact absurd h List.not_mem_nil
+  | cons hd tl ih =>
+    rcases List.mem_cons.mp h with hHead | hTail
+    · subst hHead
+      show evalAnd (.bool false) (evalAndN tl) = .bool false
+      rfl
+    · have hTl := ih hTail
+      show evalAnd hd (evalAndN tl) = .bool false
+      rw [hTl]
+      exact evalAnd_right_false hd
+
+/-- Dual: variadic `OR` absorbs to `.bool true` as soon as any
+operand is `.bool true`. -/
+private theorem evalOrN_true_mem_eq
+    {ds : List Datum} (h : .bool true ∈ ds) :
+    evalOrN ds = .bool true := by
+  induction ds with
+  | nil => exact absurd h List.not_mem_nil
+  | cons hd tl ih =>
+    rcases List.mem_cons.mp h with hHead | hTail
+    · subst hHead
+      show evalOr (.bool true) (evalOrN tl) = .bool true
+      rfl
+    · have hTl := ih hTail
+      show evalOr hd (evalOrN tl) = .bool true
+      rw [hTl]
+      exact evalOr_right_true hd
+
 /-- List-level analogue of `evalAnd_not_err`: if every operand is
 error-free, the variadic AND is error-free. -/
 theorem evalAndN_not_err :
@@ -144,7 +181,8 @@ structural-recursion checker satisfied without an explicit
 termination measure. -/
 /-- Top-of-expression literal-false detector. Non-recursive on
 `Expr`; matches only the head constructor. Used by `might_error`
-to identify the `false`-absorber position of binary `AND`. -/
+to identify the `false`-absorber position of binary / variadic
+`AND` and the `false` branch of `IfThen`. -/
 @[simp] def Expr.isLitBoolFalse : Expr → Bool
   | .lit (.bool false) => true
   | _                  => false
@@ -153,6 +191,31 @@ to identify the `false`-absorber position of binary `AND`. -/
 @[simp] def Expr.isLitBoolTrue : Expr → Bool
   | .lit (.bool true) => true
   | _                 => false
+
+/-- `isLitBoolFalse e = true` exactly characterizes
+`e = .lit (.bool false)`. -/
+theorem Expr.eq_of_isLitBoolFalse {e : Expr}
+    (h : e.isLitBoolFalse = true) : e = .lit (.bool false) := by
+  cases e with
+  | lit d =>
+    cases d with
+    | bool b => cases b with
+                  | false => rfl
+                  | true  => simp [Expr.isLitBoolFalse] at h
+    | _ => simp [Expr.isLitBoolFalse] at h
+  | _ => simp [Expr.isLitBoolFalse] at h
+
+/-- Dual characterization. -/
+theorem Expr.eq_of_isLitBoolTrue {e : Expr}
+    (h : e.isLitBoolTrue = true) : e = .lit (.bool true) := by
+  cases e with
+  | lit d =>
+    cases d with
+    | bool b => cases b with
+                  | true  => rfl
+                  | false => simp [Expr.isLitBoolTrue] at h
+    | _ => simp [Expr.isLitBoolTrue] at h
+  | _ => simp [Expr.isLitBoolTrue] at h
 
 mutual
 def Expr.might_error : Expr → Bool
@@ -170,8 +233,12 @@ def Expr.might_error : Expr → Bool
     if c.isLitBoolTrue  then t.might_error
     else if c.isLitBoolFalse then e.might_error
     else c.might_error || t.might_error || e.might_error
-  | .andN args            => Expr.argsMightError args
-  | .orN  args            => Expr.argsMightError args
+  | .andN args            =>
+    if args.any (·.isLitBoolFalse) then false
+    else Expr.argsMightError args
+  | .orN  args            =>
+    if args.any (·.isLitBoolTrue)  then false
+    else Expr.argsMightError args
   | .coalesce []          => false
   | .coalesce (a :: rest) => a.might_error && Expr.argsAllMightError rest
 
@@ -537,24 +604,65 @@ theorem might_error_sound :
           (might_error_sound e env he hEnv) hRes
   | .andN args, env, hMe, hEnv => by
     intro hRes
-    simp only [eval] at hRes
-    apply evalAndN_not_err (ds := args.map (eval env)) ?_ hRes
-    intro d hd_mem
-    obtain ⟨e, e_mem, h_eq⟩ := List.mem_map.mp hd_mem
-    subst h_eq
-    have he : ¬(e.might_error = true) := fun h => hMe
-      (Expr.argsMightError_of_mem e_mem h)
-    exact might_error_sound e env he hEnv
+    cases hAny : args.any (·.isLitBoolFalse) with
+    | true =>
+      -- Some operand is `.lit (.bool false)`. evalAndN absorbs to `.bool false`.
+      obtain ⟨e, he_mem, he_lit⟩ := List.any_eq_true.mp hAny
+      have hEq : e = .lit (.bool false) := Expr.eq_of_isLitBoolFalse he_lit
+      rw [hEq] at he_mem
+      have hEvalLit : eval env (.lit (.bool false)) = .bool false := by
+        simp only [eval]
+      have hMapMem : (Datum.bool false) ∈ args.map (eval env) :=
+        List.mem_map.mpr ⟨.lit (.bool false), he_mem, hEvalLit⟩
+      simp only [eval] at hRes
+      rw [evalAndN_false_mem_eq hMapMem] at hRes
+      cases hRes
+    | false =>
+      have hMeReduce :
+          Expr.might_error (.andN args) = Expr.argsMightError args := by
+        show (if args.any (·.isLitBoolFalse) then false
+                else Expr.argsMightError args)
+            = Expr.argsMightError args
+        rw [hAny]; rfl
+      rw [hMeReduce] at hMe
+      simp only [eval] at hRes
+      apply evalAndN_not_err (ds := args.map (eval env)) ?_ hRes
+      intro d hd_mem
+      obtain ⟨e, e_mem, h_eq⟩ := List.mem_map.mp hd_mem
+      subst h_eq
+      have he : ¬(e.might_error = true) := fun h => hMe
+        (Expr.argsMightError_of_mem e_mem h)
+      exact might_error_sound e env he hEnv
   | .orN args, env, hMe, hEnv => by
     intro hRes
-    simp only [eval] at hRes
-    apply evalOrN_not_err (ds := args.map (eval env)) ?_ hRes
-    intro d hd_mem
-    obtain ⟨e, e_mem, h_eq⟩ := List.mem_map.mp hd_mem
-    subst h_eq
-    have he : ¬(e.might_error = true) := fun h => hMe
-      (Expr.argsMightError_of_mem e_mem h)
-    exact might_error_sound e env he hEnv
+    cases hAny : args.any (·.isLitBoolTrue) with
+    | true =>
+      obtain ⟨e, he_mem, he_lit⟩ := List.any_eq_true.mp hAny
+      have hEq : e = .lit (.bool true) := Expr.eq_of_isLitBoolTrue he_lit
+      rw [hEq] at he_mem
+      have hEvalLit : eval env (.lit (.bool true)) = .bool true := by
+        simp only [eval]
+      have hMapMem : (Datum.bool true) ∈ args.map (eval env) :=
+        List.mem_map.mpr ⟨.lit (.bool true), he_mem, hEvalLit⟩
+      simp only [eval] at hRes
+      rw [evalOrN_true_mem_eq hMapMem] at hRes
+      cases hRes
+    | false =>
+      have hMeReduce :
+          Expr.might_error (.orN args) = Expr.argsMightError args := by
+        show (if args.any (·.isLitBoolTrue) then false
+                else Expr.argsMightError args)
+            = Expr.argsMightError args
+        rw [hAny]; rfl
+      rw [hMeReduce] at hMe
+      simp only [eval] at hRes
+      apply evalOrN_not_err (ds := args.map (eval env)) ?_ hRes
+      intro d hd_mem
+      obtain ⟨e, e_mem, h_eq⟩ := List.mem_map.mp hd_mem
+      subst h_eq
+      have he : ¬(e.might_error = true) := fun h => hMe
+        (Expr.argsMightError_of_mem e_mem h)
+      exact might_error_sound e env he hEnv
   | .coalesce args, env, hMe, hEnv => by
     intro hRes
     simp only [eval] at hRes
