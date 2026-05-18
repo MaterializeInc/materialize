@@ -138,6 +138,22 @@ export const ObjectExplorer = () => {
     snapshotComplete: objectSnapshotComplete,
     isError: isObjectError,
   } = useAllObjects();
+  // eslint-disable-next-line no-console
+  console.log(
+    "[object-explorer] render gating:",
+    "schemaSnapshotComplete=",
+    schemaSnapshotComplete,
+    "objectSnapshotComplete=",
+    objectSnapshotComplete,
+    "isSchemaError=",
+    isSchemaError,
+    "isObjectError=",
+    isObjectError,
+    "schemas.length=",
+    schemas.length,
+    "objects.length=",
+    objects.length,
+  );
   const location = useLocation();
   const { colors } = useTheme<MaterializeTheme>();
   const params = useParams<ObjectExplorerParams>();

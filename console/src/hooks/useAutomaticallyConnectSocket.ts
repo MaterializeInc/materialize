@@ -56,9 +56,14 @@ export const useAutomaticallyConnectSocket = <T extends object, R>({
   const reconnectionState = useAtomValue(reconnectionStateAtom);
   const managerRef = useRef<WebsocketConnectionManager | null>(null);
   const getSessionVariablesRef = useLatestRef(getSessionVariables);
+  const debugLabel = subscribe?.debugLabel;
 
   // Manager lifecycle - create on mount/target change, destroy on cleanup
   React.useEffect(() => {
+    if (debugLabel) {
+      // eslint-disable-next-line no-console
+      console.log(`[uacs:${debugLabel}] effect-mgr: creating WebsocketConnectionManager`);
+    }
     managerRef.current = new WebsocketConnectionManager(
       target,
       store,
@@ -69,20 +74,63 @@ export const useAutomaticallyConnectSocket = <T extends object, R>({
     );
 
     return () => {
+      if (debugLabel) {
+        // eslint-disable-next-line no-console
+        console.log(`[uacs:${debugLabel}] effect-mgr: destroying WebsocketConnectionManager`);
+      }
       managerRef.current?.destroy();
       managerRef.current = null;
     };
-  }, [target, store, getSessionVariablesRef]);
+  }, [target, store, getSessionVariablesRef, debugLabel]);
 
   // Handle request changes for subscribe queries
   const currentEnvironment = useAtomValue(currentEnvironmentState);
   const previousRequest = usePrevious(request);
 
   React.useEffect(() => {
-    if (!subscribe || !request) return;
-    if (previousRequest === request) return;
-    if (currentEnvironment?.state !== "enabled") return;
+    if (!subscribe || !request) {
+      if (debugLabel) {
+        // eslint-disable-next-line no-console
+        console.log(
+          `[uacs:${debugLabel}] effect-req: skip (subscribe=${!!subscribe} request=${!!request})`,
+        );
+      }
+      return;
+    }
+    if (previousRequest === request) {
+      if (debugLabel) {
+        // eslint-disable-next-line no-console
+        console.log(`[uacs:${debugLabel}] effect-req: skip (request unchanged)`);
+      }
+      return;
+    }
+    // On first mount previousRequest is undefined; the manager's constructor
+    // already initiates a connect using the request captured at construction
+    // time. Re-connecting here would race with that and tear the still-
+    // CONNECTING socket down.
+    if (previousRequest === undefined) {
+      if (debugLabel) {
+        // eslint-disable-next-line no-console
+        console.log(
+          `[uacs:${debugLabel}] effect-req: skip (first mount; manager handles initial connect)`,
+        );
+      }
+      return;
+    }
+    if (currentEnvironment?.state !== "enabled") {
+      if (debugLabel) {
+        // eslint-disable-next-line no-console
+        console.log(
+          `[uacs:${debugLabel}] effect-req: skip (env state=${currentEnvironment?.state})`,
+        );
+      }
+      return;
+    }
 
+    if (debugLabel) {
+      // eslint-disable-next-line no-console
+      console.log(`[uacs:${debugLabel}] effect-req: calling subscribe.connect()`);
+    }
     subscribe.connect(
       request,
       currentEnvironment.httpAddress,
@@ -94,6 +142,7 @@ export const useAutomaticallyConnectSocket = <T extends object, R>({
     previousRequest,
     currentEnvironment,
     getSessionVariablesRef,
+    debugLabel,
   ]);
 
   return { reconnectionState };

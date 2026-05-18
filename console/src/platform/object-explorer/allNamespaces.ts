@@ -48,6 +48,7 @@ export function useSubscribeToAllNamespaces() {
         databaseId: row.data.databaseId,
         schemaId: row.data.schemaId,
       }),
+    debugLabel: "object-explorer:allNamespaces",
   });
 }
 

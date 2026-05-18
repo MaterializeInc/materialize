@@ -40,6 +40,26 @@ import {
 } from "~/api/materialize/object-explorer/schemaDetails";
 import { fetchIsOwner, IsOwnerParameters } from "~/api/materialize/objects";
 
+/** Diagnostic helper: logs the resolved value of a fetch and rethrows on error. */
+const logObjectExplorerResponse = async <T>(
+  label: string,
+  params: unknown,
+  promise: Promise<T>,
+): Promise<T> => {
+  // eslint-disable-next-line no-console
+  console.log(`[object-explorer:${label}] request`, params);
+  try {
+    const result = await promise;
+    // eslint-disable-next-line no-console
+    console.log(`[object-explorer:${label}] response`, result);
+    return result;
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.log(`[object-explorer:${label}] error`, err);
+    throw err;
+  }
+};
+
 export const objectExplorerQueryKeys = {
   all: () => buildRegionQueryKey("object-explorer"),
   columns: (params: ObjectExplorerColumnsParameters) =>
@@ -85,11 +105,15 @@ export const useDatabaseDetails = (params: DatabaseDetailsParameters) => {
     queryFn: async ({ queryKey, signal }) => {
       const [, parameters] = queryKey;
 
-      const result = await fetchDatabaseDetails({
-        queryKey,
+      const result = await logObjectExplorerResponse(
+        "databaseDetails",
         parameters,
-        requestOptions: { signal },
-      });
+        fetchDatabaseDetails({
+          queryKey,
+          parameters,
+          requestOptions: { signal },
+        }),
+      );
       assertExactlyOneRow(result.rows.length, { skipQueryRetry: true });
       return result;
     },
@@ -103,11 +127,15 @@ export const useSchemaDetails = (params: SchemaDetailsParameters) => {
     queryFn: async ({ queryKey, signal }) => {
       const [, parameters] = queryKey;
 
-      const result = await fetchSchemaDetails({
-        queryKey,
+      const result = await logObjectExplorerResponse(
+        "schemaDetails",
         parameters,
-        requestOptions: { signal },
-      });
+        fetchSchemaDetails({
+          queryKey,
+          parameters,
+          requestOptions: { signal },
+        }),
+      );
       assertExactlyOneRow(result.rows.length, { skipQueryRetry: true });
       return result;
     },
@@ -121,11 +149,15 @@ export const useObjectDetails = (params: ObjectExplorerDetailsParameters) => {
     queryFn: async ({ queryKey, signal }) => {
       const [, parameters] = queryKey;
 
-      const result = await fetchObjectDetails({
-        queryKey,
+      const result = await logObjectExplorerResponse(
+        "objectDetails",
         parameters,
-        requestOptions: { signal },
-      });
+        fetchObjectDetails({
+          queryKey,
+          parameters,
+          requestOptions: { signal },
+        }),
+      );
       assertExactlyOneRow(result.rows.length, { skipQueryRetry: true });
       return result;
     },
@@ -139,11 +171,15 @@ export const useObjectColumns = (params: ObjectExplorerColumnsParameters) => {
     queryFn: async ({ queryKey, signal }) => {
       const [, parameters] = queryKey;
 
-      return fetchObjectColumns({
-        queryKey,
+      return logObjectExplorerResponse(
+        "objectColumns",
         parameters,
-        requestOptions: { signal },
-      });
+        fetchObjectColumns({
+          queryKey,
+          parameters,
+          requestOptions: { signal },
+        }),
+      );
     },
   });
 };
@@ -154,11 +190,15 @@ export const useObjectIndexes = (params: ObjectIndexesParameters) => {
     queryFn: async ({ queryKey, signal }) => {
       const [, parameters] = queryKey;
 
-      return fetchObjectIndexes({
-        queryKey,
+      return logObjectExplorerResponse(
+        "objectIndexes",
         parameters,
-        requestOptions: { signal },
-      });
+        fetchObjectIndexes({
+          queryKey,
+          parameters,
+          requestOptions: { signal },
+        }),
+      );
     },
   });
 };
@@ -169,11 +209,15 @@ export const useIsOwner = (params: IsOwnerParameters) => {
     queryFn: async ({ queryKey, signal }) => {
       const [, parameters] = queryKey;
 
-      const result = await fetchIsOwner({
-        queryKey,
+      const result = await logObjectExplorerResponse(
+        "isOwner",
         parameters,
-        requestOptions: { signal },
-      });
+        fetchIsOwner({
+          queryKey,
+          parameters,
+          requestOptions: { signal },
+        }),
+      );
       assertExactlyOneRow(result.rows.length, { skipQueryRetry: true });
       return result.rows[0].isOwner;
     },
@@ -188,11 +232,15 @@ export const useConnectionDependencies = (
     queryFn: async ({ queryKey, signal }) => {
       const [, parameters] = queryKey;
 
-      return fetchConnectionDependencies({
-        queryKey,
+      return logObjectExplorerResponse(
+        "connectionDependencies",
         parameters,
-        requestOptions: { signal },
-      });
+        fetchConnectionDependencies({
+          queryKey,
+          parameters,
+          requestOptions: { signal },
+        }),
+      );
     },
     select: (data) => data.rows,
   });

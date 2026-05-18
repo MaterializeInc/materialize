@@ -39,6 +39,8 @@ export class MaterializeWebsocket implements Connectable {
   onMessage: MessageCallback | undefined;
   onClose: CloseCallback | undefined;
   onOpen: OpenCallback | undefined;
+  /** Optional diagnostic label for console logging. */
+  debugLabel: string | undefined;
 
   constructor(options: {
     httpAddress: string;
@@ -47,6 +49,7 @@ export class MaterializeWebsocket implements Connectable {
     onMessage?: MessageCallback;
     onClose?: CloseCallback;
     onOpen?: OpenCallback;
+    debugLabel?: string;
   }) {
     this.httpAddress = options.httpAddress;
     this.sessionVariables = options.sessionVariables ?? {};
@@ -54,12 +57,20 @@ export class MaterializeWebsocket implements Connectable {
     this.onMessage = options.onMessage;
     this.onClose = options.onClose;
     this.onOpen = options.onOpen;
+    this.debugLabel = options.debugLabel;
   }
 
   connect(httpAddress?: string, sessionVariables?: SessionVariables) {
     this.httpAddress = httpAddress ?? this.httpAddress;
     this.sessionVariables = sessionVariables ?? this.sessionVariables;
+    const priorState = this.socket?.readyState;
     this.disconnect();
+    if (this.debugLabel) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[ws:${this.debugLabel}] connect (priorReadyState=${priorState}) -> ${this.httpAddress}`,
+      );
+    }
     this.socket = new WebSocket(
       `${apiClient.mzWebsocketUrlScheme}://${this.httpAddress}/api/experimental/sql`,
     );
@@ -70,6 +81,12 @@ export class MaterializeWebsocket implements Connectable {
   }
 
   disconnect() {
+    if (this.debugLabel && this.socket) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[ws:${this.debugLabel}] disconnect (readyState=${this.socket.readyState})`,
+      );
+    }
     this.setState({
       readyForQuery: false,
       error: undefined,
@@ -159,6 +176,10 @@ export class MaterializeWebsocket implements Connectable {
   }
 
   private handleOpen = (event: Event) => {
+    if (this.debugLabel) {
+      // eslint-disable-next-line no-console
+      console.log(`[ws:${this.debugLabel}] open`);
+    }
     this.onOpen?.(event);
     // Notify open listeners (used by WebsocketConnectionManager to update state)
     for (const callback of this.openListeners) {
@@ -187,6 +208,10 @@ export class MaterializeWebsocket implements Connectable {
   };
 
   private handleError = () => {
+    if (this.debugLabel) {
+      // eslint-disable-next-line no-console
+      console.log(`[ws:${this.debugLabel}] error event (readyState=${this.socket?.readyState})`);
+    }
     this.setState({
       error: "Socket error",
     });
@@ -196,6 +221,12 @@ export class MaterializeWebsocket implements Connectable {
   };
 
   private handleClose = (event: CloseEvent) => {
+    if (this.debugLabel) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[ws:${this.debugLabel}] close code=${event.code} wasClean=${event.wasClean} reason=${event.reason || "(none)"}`,
+      );
+    }
     this.setState({
       readyForQuery: false,
       error: "Connection closed unexpectedly",
