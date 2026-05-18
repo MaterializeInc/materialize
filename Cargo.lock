@@ -7334,6 +7334,7 @@ dependencies = [
  "enum-kinds",
  "futures",
  "itertools 0.14.0",
+ "jsonwebtoken",
  "mz-adapter",
  "mz-adapter-types",
  "mz-auth",
