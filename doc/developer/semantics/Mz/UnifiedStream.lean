@@ -107,6 +107,191 @@ def UnifiedStream.filter (pred : Expr) (us : UnifiedStream) : UnifiedStream :=
       | .err e     => [(.err e, d)]
       | _          => []
 
+/-! ## Project
+
+Diff-aware projection. Each non-error record splits on its carrier:
+
+* `.error` diff: pass through unchanged (the absorbing marker
+  cannot be transformed away).
+* `.err e` carrier with `.val` diff: pass through unchanged (the
+  row-scoped err already represents a failed row; projection has
+  nothing to evaluate).
+* `.row r` carrier with `.val n` diff: evaluate `es` on `r`. If
+  every scalar succeeds, emit `(.row (es.map ...), .val n)`. If any
+  scalar errs, emit one `(.err e, .val n)` per erroring scalar —
+  multiplicity is preserved per err, mirroring `BagStream.project`'s
+  `projectErrs` but lifted into the carrier.
+
+The split between `.row` and `.err` is the unified analogue of
+`BagStream.project`'s `(data, errors)` split: the same record kind
+holds both, distinguished by the carrier tag. -/
+
+/-- Project a single `.row` record through `es`, returning the
+list of unified records the row contributes. Diff is preserved on
+every produced record (rows-share-diff, errs-share-diff). -/
+private def rowProjectRecords (es : List Expr) (d : DiffWithError Int) (r : Row) :
+    UnifiedStream :=
+  if rowAllSafe es r then
+    [(UnifiedRow.row (es.map (eval r)), d)]
+  else
+    (rowErrs es r).map (fun e => (UnifiedRow.err e, d))
+
+/-- Diff-aware projection. -/
+def UnifiedStream.project (es : List Expr) (us : UnifiedStream) : UnifiedStream :=
+  us.flatMap fun ud => match ud with
+    | (_,      .error) => [ud]
+    | (.err e, d)      => [(.err e, d)]
+    | (.row r, d)      => rowProjectRecords es d r
+
+/-! ### Trivial cases -/
+
+theorem UnifiedStream.project_nil_stream (es : List Expr) :
+    UnifiedStream.project es [] = [] := rfl
+
+/-- The empty projection list cannot error on any row, so every
+record passes through with the row collapsed to width zero. -/
+theorem UnifiedStream.project_nil_es (us : UnifiedStream) :
+    UnifiedStream.project [] us =
+      us.map (fun ud => match ud with
+        | (_,      .error) => ud
+        | (.err e, d)      => (.err e, d)
+        | (.row _, d)      => (.row [], d)) := by
+  induction us with
+  | nil => rfl
+  | cons hd tl ih =>
+    obtain ⟨uc, d⟩ := hd
+    cases d with
+    | error =>
+      show ([(uc, DiffWithError.error)] : UnifiedStream)
+              ++ UnifiedStream.project [] tl
+          = (uc, DiffWithError.error)
+              :: tl.map (fun ud => match ud with
+                | (_,      .error) => ud
+                | (.err e, d)      => (.err e, d)
+                | (.row _, d)      => (.row [], d))
+      simp [ih]
+    | val n =>
+      cases uc with
+      | row r =>
+        show rowProjectRecords [] (DiffWithError.val n) r
+              ++ UnifiedStream.project [] tl
+            = (UnifiedRow.row [], DiffWithError.val n)
+              :: tl.map (fun ud => match ud with
+                | (_,      .error) => ud
+                | (.err e, d)      => (.err e, d)
+                | (.row _, d)      => (.row [], d))
+        have hSafe : rowAllSafe [] r = true := rfl
+        show (if rowAllSafe [] r then
+                  [(UnifiedRow.row (([] : List Expr).map (eval r)),
+                    DiffWithError.val n)]
+                else
+                  (rowErrs [] r).map (fun e =>
+                    (UnifiedRow.err e, DiffWithError.val n)))
+              ++ UnifiedStream.project [] tl
+            = (UnifiedRow.row [], DiffWithError.val n)
+              :: tl.map (fun ud => match ud with
+                | (_,      .error) => ud
+                | (.err e, d)      => (.err e, d)
+                | (.row _, d)      => (.row [], d))
+        rw [if_pos hSafe]
+        simp [ih]
+      | err e =>
+        show ([(UnifiedRow.err e, DiffWithError.val n)] : UnifiedStream)
+              ++ UnifiedStream.project [] tl
+            = (UnifiedRow.err e, DiffWithError.val n)
+              :: tl.map (fun ud => match ud with
+                | (_,      .error) => ud
+                | (.err e, d)      => (.err e, d)
+                | (.row _, d)      => (.row [], d))
+        simp [ih]
+
+/-! ### `.error` absorption
+
+A record carrying the absorbing `.error` diff passes through
+projection unchanged. Combined with no-error preservation below,
+this means `.error` remains the only source of absorbing diffs. -/
+
+theorem UnifiedStream.project_preserves_error_diff
+    (es : List Expr) (us : UnifiedStream) (uc : UnifiedRow)
+    (h : (uc, (DiffWithError.error : DiffWithError Int)) ∈ us) :
+    (uc, (DiffWithError.error : DiffWithError Int))
+      ∈ UnifiedStream.project es us := by
+  induction us with
+  | nil => exact absurd h List.not_mem_nil
+  | cons hd tl ih =>
+    obtain ⟨uc₀, d₀⟩ := hd
+    rcases List.mem_cons.mp h with hEq | hTail
+    · have hUc : uc = uc₀ := (Prod.mk.injEq _ _ _ _).mp hEq |>.1
+      have hD : (DiffWithError.error : DiffWithError Int) = d₀ :=
+        (Prod.mk.injEq _ _ _ _).mp hEq |>.2
+      subst hUc; subst hD
+      show (uc, DiffWithError.error)
+          ∈ (([(uc, DiffWithError.error)] : UnifiedStream)
+              ++ UnifiedStream.project es tl)
+      exact List.mem_append.mpr (Or.inl List.mem_cons_self)
+    · have ihResult := ih hTail
+      -- The head splits into a list (possibly empty for row + non-safe);
+      -- in every shape, `mem_append.mpr (Or.inr ihResult)` discharges the goal.
+      show (uc, DiffWithError.error)
+          ∈ ((match (uc₀, d₀) with
+                | (_,      .error) => [(uc₀, d₀)]
+                | (.err e, d)      => [(.err e, d)]
+                | (.row r, d)      => rowProjectRecords es d r)
+              ++ UnifiedStream.project es tl)
+      exact List.mem_append.mpr (Or.inr ihResult)
+
+/-! ### No-error preservation
+
+If every input diff is `.val`, every output diff is `.val`. The
+row-projection helper only emits records whose diff is the input
+record's diff, so no `.error` is introduced. -/
+
+private theorem rowProjectRecords_no_error
+    (es : List Expr) (n : Int) (r : Row) :
+    ∀ rec ∈ rowProjectRecords es (DiffWithError.val n) r,
+      ∃ m : Int, rec.2 = DiffWithError.val m := by
+  intro rec hMem
+  unfold rowProjectRecords at hMem
+  split at hMem
+  · -- branch: all safe; the singleton has diff `.val n`.
+    have : rec = (UnifiedRow.row (es.map (eval r)), DiffWithError.val n) :=
+      List.mem_singleton.mp hMem
+    exact ⟨n, by rw [this]⟩
+  · -- branch: some err; every produced record has diff `.val n`.
+    obtain ⟨e, _, hRec⟩ := List.mem_map.mp hMem
+    exact ⟨n, by rw [← hRec]⟩
+
+theorem UnifiedStream.project_no_error
+    (es : List Expr) (us : UnifiedStream)
+    (h : ∀ r ∈ us, ∃ n : Int, r.2 = DiffWithError.val n) :
+    ∀ r ∈ UnifiedStream.project es us,
+      ∃ n : Int, r.2 = DiffWithError.val n := by
+  induction us with
+  | nil => intro r hMem; exact absurd hMem List.not_mem_nil
+  | cons hd tl ih =>
+    obtain ⟨uc, d⟩ := hd
+    have hHd : ∃ n : Int, d = DiffWithError.val n := h (uc, d) List.mem_cons_self
+    have hTl : ∀ r ∈ tl, ∃ n : Int, r.2 = DiffWithError.val n :=
+      fun r hMem => h r (List.mem_cons_of_mem _ hMem)
+    obtain ⟨n, hN⟩ := hHd
+    subst hN
+    intro rec hMem
+    cases uc with
+    | row r =>
+      have hMem' : rec ∈ rowProjectRecords es (DiffWithError.val n) r
+                       ++ UnifiedStream.project es tl := hMem
+      rcases List.mem_append.mp hMem' with hHead | hTail
+      · exact rowProjectRecords_no_error es n r rec hHead
+      · exact ih hTl rec hTail
+    | err e =>
+      have hMem' : rec ∈ ([(UnifiedRow.err e, DiffWithError.val n)] : UnifiedStream)
+                       ++ UnifiedStream.project es tl := hMem
+      rcases List.mem_append.mp hMem' with hHead | hTail
+      · have : rec = (UnifiedRow.err e, DiffWithError.val n) :=
+          List.mem_singleton.mp hHead
+        exact ⟨n, by rw [this]⟩
+      · exact ih hTl rec hTail
+
 /-! ## Helper lemmas for filterMap over the packed concatenation -/
 
 private theorem filterMap_pickRow_rowMap (rs : List Row) :
