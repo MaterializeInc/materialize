@@ -324,6 +324,85 @@ Static analyses used by pushdown.
 | `eval_append_right_shift` | shifted eval on right | `Mz/ColRefs.lean` |
 | `colShift` monoid laws | various | `Mz/ColRefs.lean` |
 
+## Materialize optimizer passes → Lean coverage
+
+The Rust optimizer in `src/transform/` has 66 passes (41 algebraic rewrites, 13 analyses, 11 stateful planning steps, 1 framework).
+This section maps each pass to its status in the Lean spec.
+
+Status legend:
+
+* **Modeled** — equivalent theorem (or strong proxy) shipped here.
+* **Modelable** — current `UnifiedStream` / `DiffWithError` infra is enough; just write the theorem.
+* **Infra gap** — needs a new operator (`Reduce`, `TopK`, `FlatMap`, …) or a new analysis (equivalence classes, monotonicity, column lattice).
+* **Out of scope** — physical planning, syntactic plumbing, or user-facing metadata; no place in a denotational spec.
+
+### Algebraic rewrites — modeled
+
+| Rust pass | Lean correspondent |
+| --- | --- |
+| `predicate_pushdown.rs` | `filter_cross_pushdown_left` (left-only; right-side pending; bound and pure-data hypotheses) |
+| `compound/union.rs` (UnionNegateFusion) | `negate_unionAll` + `unionAll_assoc` |
+| `fusion/union.rs` (Union fusion) | `unionAll_assoc` + nil identities |
+| `fusion/negate.rs` (Negate fusion) | `negate_negate` (involution) |
+| `fusion/join.rs` (Join fusion / associativity) | `cross_assoc` |
+| `union_cancel.rs` (partial) | `consolidate (unionAll a (negate a))` reduces to `.val 0` records via diff arithmetic; no theorem yet, but ingredients in place |
+
+### Algebraic rewrites — modelable (worth shipping)
+
+| Rust pass | Lean approach |
+| --- | --- |
+| `fusion/filter.rs` (filter ∘ filter) | `filter p ∘ filter q = filter (p ∧ q)`. Holds under `evalAnd` if we exclude the `err`-on-left + `false`-on-right corner. State with err-free / null-free hypothesis, or use a stratified `andErrStrict` variant. |
+| `fusion/map.rs` (map fusion) | `project es ∘ project es' = project (es' ∘ es)`. Uses `Expr.subst` and `eval_subst` (already exist in `Mz/Pushdown.lean`); needs a `UnifiedStream`-level statement. |
+| `fusion/project.rs` / `movement/projection_lifting.rs` / `projection_pushdown.rs` | We have `project_unionAll`. Add `project_filter` (commutes when no scalar errors collide with predicate), `project_cross_pushdown` (push project through cross when columns split cleanly). |
+| `predicate_pushdown.rs` (right side) | `filter_cross_pushdown_right` mirror — needs uniform left-row-width hypothesis (so `colShift` arithmetic is well-defined) plus left pure-data. |
+| `threshold_elision.rs` | `clampPositive` is a no-op when every diff is already `.val n > 0`. Lemma: `clampPositive us = us` under `∀ rec ∈ us, ∃ n > 0, rec.2 = .val n`. |
+| `redundant_join.rs` (distinct + join) | Express `distinct` + `cross` commutation when right side is already key-unique. Requires `intersectAll`-style lookup invariants we already have. |
+| `semijoin_idempotence.rs` (partial) | A semijoin is `cross` + project + distinct. Idempotence via `distinct_idem` (provable; we have `clampToOne_idem`). |
+| `non_null_requirements.rs` (model the strict-null laws) | We already have `evalAnd` / `evalOr` / arithmetic err-/null-strictness. State as `NullPropagatingBinary` / `ErrPropagatingBinary` instances; some exist in `Mz/Strict.lean`. Lift to `UnifiedStream.filter` to characterize when predicates drop vs promote. |
+| `demand.rs` (column-projection analysis) | We have `colReferencesBoundedBy`, `colReferencesUnused`, `eval_replaceAt_of_unused` in `Mz/ColRefs.lean`. Add a `UnifiedStream`-level theorem: replacing unused columns in every row leaves the operator output equal. |
+| `canonicalize_mfp.rs` | Establish a canonical form `Project ∘ Filter ∘ Map` and prove every MFP-like composition has a unique canonical equivalent. Needs Map (`UnifiedStream.project` is the analog of MapFilterProject's Project part; we don't have an MFP wrapper). |
+| `equivalence_propagation.rs` (use sites only) | The *use* of equivalence is `if a = b then replace a with b`. With a proved `evalEq` characterization we can show `filter (a = b) us` preserves a row iff substituting `b` for `a` in the rest of the predicate gives the same evaluation. Substitution machinery is in `Expr.subst`. |
+
+### Algebraic rewrites — infra gap
+
+These need a new operator or analysis before they can be expressed.
+
+| Rust pass | Missing infra |
+| --- | --- |
+| `fold_constants.rs` | Constant collections at the `UnifiedStream` level. Could be a singleton `.row r, .val 1` literal stream. Would unlock evaluating constant subqueries during proof. |
+| `fusion/reduce.rs`, `reduce_reduction.rs`, `reduce_elision.rs`, `reduction_pushdown.rs` | `Reduce` operator on `UnifiedStream`. Aggregate is at `Mz/Aggregate.lean` but only on `List Datum`; lift to `UnifiedStream` with group-by interface. |
+| `fusion/top_k.rs`, `canonicalization/topk_elision.rs` | `TopK` operator (sort + limit-offset) on `UnifiedStream`. Needs an ordering on rows. |
+| `canonicalization/flat_map_elimination.rs` | `FlatMap` (table-valued function) operator. The constant-arg elimination piece reduces to existing `cross` with a literal stream. |
+| `literal_constraints.rs` | `IndexedFilter` operator (semi-join with constant collection). |
+| `literal_lifting.rs` | Map-with-literal-columns recognition. Modelable once `project` distinguishes literal vs computed columns. |
+| `column_knowledge.rs` | Per-column lattice (`{literal, nullable, type}`) + propagation. Would be a separate analysis file. |
+| `equivalence_propagation.rs` (full pass) | Equivalence-class lattice. |
+| `monotonic.rs` (top-level) and `analysis/monotonic.rs` | Logical monotonicity analysis: streams that never retract. Requires a `NoRetraction` predicate on `UnifiedStream` (`∀ rec, ∃ n ≥ 0, rec.2 = .val n` modulo `.error`). |
+| `case_literal.rs`, `coalesce_case.rs` | Scalar `Expr` rewrites; we model `Expr` semantics but no rewrite-rule infrastructure. Easy to add as `eval`-equivalence theorems but currently unused. |
+
+### Out of scope (intentional)
+
+| Rust pass | Reason |
+| --- | --- |
+| `join_implementation.rs`, `will_distinct.rs`, `dataflow.rs`, `ordering.rs`, `normalize_lets.rs`, `normalize_ops.rs` | Physical planning, downstream-info-driven, or syntactic canonicalization. The denotational spec is invariant under these. |
+| `cse/anf.rs`, `cse/relation_cse.rs` | Common-subexpression / ANF transformations are pure syntactic. The spec treats `MirRelationExpr` modulo CSE by definition. |
+| `collect_notices.rs`, `notice/*.rs` | User-facing diagnostics; not part of the semantics. |
+| `typecheck.rs` | Type preservation across passes. Our spec is intrinsically typed (Lean's type system), so this property holds by construction. |
+| `analysis.rs` | Analysis framework (trait infrastructure). Lean uses theorems directly; no analogue. |
+| `canonicalization/projection_extraction.rs` | Identifies projections hiding inside `Map` / `Reduce`. Syntactic, no semantic content. |
+
+### Priority recommendations
+
+If a single pass should be modeled next, the highest-value candidates by API consumption density:
+
+1. **`filter_cross_pushdown_right`** — completes pushdown bilaterally; mirror of left-side proof.
+2. **`fusion/filter.rs` (filter ∘ filter)** — direct equational rewrite, frequently quoted by the optimizer.
+3. **`fusion/map.rs` (project ∘ project)** — uses existing `Expr.subst` machinery; would also document substitution at the relation level.
+4. **`threshold_elision.rs`** — small theorem (`clampPositive` is identity on positive-only streams); good warm-up before introducing `Reduce`.
+
+Beyond those, the cluster `{Reduce + reduce_elision + reduce_reduction + reduction_pushdown}` is the largest dependency gap.
+A `UnifiedStream.reduce` operator would unlock four passes plus the GroupBy semantics already partially in `Mz/GroupBy.lean`.
+
 ## Notes
 
 * `⊎` denotes `UnifiedStream.unionAll` (defined as `++` on the carrier).
