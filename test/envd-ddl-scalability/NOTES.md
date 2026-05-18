@@ -840,3 +840,90 @@ caching), or (b) batching multiple DDL operations into a single
 persist `compare_and_append` — the design's step 5 already does this
 for multi-statement DDL transactions, but single-statement DDL still
 pays once per statement.
+
+### 2026-05-18 — why was bogo slower? HTTP/2 flow control on small RPCs
+
+The earlier conclusion ("the global mutex serialises every persist op")
+was wrong. A focused microbench against `BogoConsensus` vs `MemConsensus`
+(see `src/persist/src/bogo.rs::bogo_consensus_microbench`) showed three
+things:
+
+1. **The Mutex was never the bottleneck.** Concurrent CAS on 64 shards
+   hits 30-50k ops/s on bogo — far short of single-mutex contention
+   limits; the in-memory work under the lock is ~1 μs/op, leaving the
+   lock idle.
+2. **Per-op gRPC overhead is the floor.** On loopback, the smallest
+   bogo RPC (head with no data) takes ~100 μs round-trip. That alone
+   is ~3× a typical CRDB consensus call latency under load, before
+   any payload is in scope.
+3. **`tonic` defaults Nagle and HTTP/2 flow control windows to the
+   spec minimum (65 KiB).** Per-call CAS latency on the bench rises
+   linearly with payload size at ~130 ns/byte (≈ 7 MB/s effective
+   throughput) — because every request whose payload spans the
+   connection's send window stalls waiting for the server's
+   WINDOW_UPDATE round-trip. The catalog shard's appends grow well
+   past 64 KiB once history accumulates.
+
+The fix: bump `initial_stream_window_size` to 8 MiB and
+`initial_connection_window_size` to 16 MiB on both client and server,
+and enable `tcp_nodelay(true)` on the server. With those, 16 KiB CAS
+drops from 2204 μs/op to 241 μs/op (9×), and concurrent throughput at
+concurrency=16 rises from 21 K ops/s to 50 K ops/s. Landed in
+`4fe0d584e2` ("bogo-consensus: raise HTTP/2 flow control windows; add
+microbench").
+
+### 2026-05-18 — post-window-fix DDL audit
+
+Re-ran the audit on a warm release envd, exact same shape as the
+pre-window-fix bogo numbers above. Side-by-side, including the
+optimized CRDB baseline so we can see how much of the gap the window
+fix closed:
+
+| op | CRDB Δ | bogo pre-fix Δ | bogo post-fix Δ | slope reduction |
+| --- | ---: | ---: | ---: | ---: |
+| create_table        |  +7.6 | +45.8 | +18.3 | 60% |
+| drop_table          | +12.2 | +23.4 |  +7.1 | 70% |
+| alter_table_add_col | +10.2 | +56.7 | (noisy) | — |
+| rename_table        | +11.0 | +18.4 | (noisy) | — |
+
+`alter` and `rename` got too noisy at reps=8 to interpret (a few
+single-rep stalls dominate the p50/p95). `create_table` and
+`drop_table` are the cleanest signal and show ~60-70% of the bogo
+slope coming out — bogo now within ~2× of CRDB's slope, where before
+it was 3-6×.
+
+Absolute N=0 latency improved too — bogo `create_table` N=0: 104.8 →
+54.3 ms — but bogo's baseline is still 1.5-2× CRDB's at N=0. Looking
+at envd's persist-client metric for `consensus_cas` under bogo (199 K
+calls over the audit run): **p50 ≈ 500 μs, p95 ≈ 64 ms, max 256 ms**,
+mean 10.2 ms. Compare to CRDB on the same envd build: p50 ≈ 1.8 ms,
+p95 ≈ 4 ms, max ~32 ms, mean 1.8 ms. So bogo's p50 is actually
+*better* than CRDB's, but a fat 5-10% tail at 32-64+ ms drives up the
+mean and dominates DDL latency.
+
+The bogo server itself is fast across the same period (server-side
+mean ~1 μs per CAS, no spikes above 64 μs). So the tail lives in
+the gRPC client path / network / persist's `Tasked` task-hop, not
+in bogo. Most plausible culprit: HTTP/2 head-of-line blocking on the
+single shared connection — a multi-MB scan response stalls the TCP
+receive buffer and all sibling streams (small CAS responses) wait
+behind it. Server-side metrics show the scan/CAS bytes total roughly
+matches the mean op latency × count gap, consistent with HoL.
+
+### Next moves for bogo perf (if we want to keep pushing)
+
+1. **Multiple parallel gRPC channels** in `BogoConsensus`, round-robin
+   per-RPC. Removes HoL blocking between large scans and small CAS
+   requests. Probably the single biggest remaining win.
+2. **Stream scans** instead of returning a `Vec<VersionedData>`.
+   Server pushes entries incrementally; client assembles. Reduces
+   peak buffer occupancy and protobuf-encode cost.
+3. **Move bogo metrics off the hot path.** The
+   `update_state_metrics` walk runs under the global lock on every
+   CAS/truncate, and four `with_label_values(&[...])` lookups
+   happen per RPC; small but adds up at high RPS.
+4. **UDS instead of loopback TCP.** Drops kernel TCP overhead;
+   tonic supports it via `tower::service_fn`.
+
+None of these change semantics; all are isolated to
+`mz-bogo-consensus` + the `mz_persist::bogo` adapter.
