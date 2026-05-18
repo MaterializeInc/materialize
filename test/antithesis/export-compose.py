@@ -80,7 +80,13 @@ MATERIALIZE_IMAGES = {
     "antithesis-workload-pg-cdc": "${ANTITHESIS_WORKLOAD_IMAGE}",
     "antithesis-workload-mysql-cdc": "${ANTITHESIS_WORKLOAD_IMAGE}",
     "antithesis-workload-parallel-workload": "${ANTITHESIS_WORKLOAD_IMAGE}",
+    "antithesis-workload-upsert-stress": "${ANTITHESIS_WORKLOAD_IMAGE}",
     "antithesis-workload-combined": "${ANTITHESIS_WORKLOAD_IMAGE}",
+    # Standalone hammer image — only referenced by the `upsert-stress`
+    # group's compose, but the placeholder is always emitted in `.env`
+    # (an unused var costs nothing) so adding a hammer service to
+    # another group later is a one-line change.
+    "antithesis-upsert-hammer": "${ANTITHESIS_UPSERT_HAMMER_IMAGE}",
 }
 
 # Public-image fallbacks for mzbuild images whose Materialize-specific

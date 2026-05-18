@@ -87,6 +87,54 @@ groups:
       - kafka/anytime_kafka_frontier_monotonic
       - kafka/anytime_kafka_offset_known_not_below_committed
 
+  upsert-stress:
+    description: >-
+      Focused stress test for INC-936 ("invalid upsert state" panic).
+      The load generator is intentionally NOT a Test Composer driver —
+      Antithesis's engagement-team plan called for "a simple script
+      that writes to / deletes a limited population of keys forever
+      forever, and containerize that," so the produce loop runs in
+      dedicated `upsert-hammer-{i}` containers outside the workload
+      service. Multiple replicas race on a shared ~100-key space
+      against a multi-partition upsert-envelope source — sized so each
+      timely worker sees meaningful consolidation traffic while still
+      piling concurrent retract+insert events on the same per-(key,
+      ts) windows where the bug manifests.
+
+      Reuses kafka/first_select_upsert_implementation so each timeline
+      picks v1 or v2 of the upsert continual-feedback operator from
+      Antithesis SDK entropy; both arms surface as separate `sometimes`
+      signals. Multi-replica antithesis_cluster (clusterd1 + clusterd2)
+      exposes the replica-specific-panic shape observed in Slack (one
+      replica panics while the other stays healthy).
+
+      Uses the `kafka` runtime template so the kafka anytime safety
+      drivers (frontier monotonicity, `offset_known >= offset_committed`)
+      run continuously against the stress source — they may surface
+      diagnostic signal in the lead-up to the panic itself, which
+      Antithesis catches via the built-in process-termination property.
+
+      The hammer container count is set by `UPSERT_HAMMER_REPLICAS` in
+      mzcompose.py (default 4). If you raise it, list the new
+      `upsert-hammer-{i}` names below — export-compose validates that
+      every referenced service exists in mzcompose's output.
+    services:
+      - zookeeper
+      - kafka
+      - schema-registry
+      - clusterd2
+      - upsert-hammer-0
+      - upsert-hammer-1
+      - upsert-hammer-2
+      - upsert-hammer-3
+    setup:
+      - kafka/first_select_upsert_implementation
+      - kafka/first_upsert_stress_setup
+    drivers: []
+    anytime:
+      - kafka/anytime_kafka_frontier_monotonic
+      - kafka/anytime_kafka_offset_known_not_below_committed
+
   pg-cdc:
     description: >-
       Postgres CDC source correctness under upstream PG / clusterd /

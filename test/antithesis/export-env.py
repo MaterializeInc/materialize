@@ -89,10 +89,15 @@ def main() -> None:
     load_manifest().group(args.group)
 
     # Mapping of `.env` variable name → mzbuild image name.  Keep in
-    # sync with MATERIALIZE_IMAGES in export-compose.py.
+    # sync with MATERIALIZE_IMAGES in export-compose.py.  The hammer
+    # image is shared across groups (the source doesn't vary by
+    # group); we still emit the placeholder unconditionally so the
+    # generated .env is the same shape everywhere — the variable is
+    # unused by groups whose compose doesn't reference it.
     env_vars = {
         "MATERIALIZED_IMAGE": "materialized",
         "ANTITHESIS_WORKLOAD_IMAGE": f"antithesis-workload-{args.group}",
+        "ANTITHESIS_UPSERT_HAMMER_IMAGE": "antithesis-upsert-hammer",
     }
 
     # Antithesis itself runs amd64-only, so the Antithesis-targeted build

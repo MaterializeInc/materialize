@@ -903,6 +903,14 @@ services:
       null, "credits_per_hour": "1024", "disabled": false, "disk_limit": null, "is_cc":
       true, "memory_limit": "4 GiB", "scale": 32, "workers": 32}}'
     - ANTITHESIS_WORKLOAD_GROUP=parallel-workload
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - test -f /tmp/workload-ready
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 60s
     platform: linux/amd64
     image: ${ANTITHESIS_WORKLOAD_IMAGE}
     pull_policy: never
