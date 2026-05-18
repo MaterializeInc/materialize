@@ -2417,7 +2417,7 @@ class EnvdObjectsScalabilityMvsScenario(EnvdObjectsScalabilityScenario):
     """
 
     MVS_PER_CLUSTER: int = ENVD_OBJECTS_SCALABILITY_MVS_PER_CLUSTER
-    PAD_BASE: str = "pad_base"
+    BASE_TABLE: str = "base_t"
 
     def __init__(self, replica_size: str | None, pad_replica_size: str) -> None:
         super().__init__(replica_size)
@@ -2439,10 +2439,10 @@ class EnvdObjectsScalabilityMvsScenario(EnvdObjectsScalabilityScenario):
 
         super().init(runner)
         runner.run_query(
-            f"CREATE TABLE {self.PAD_SCHEMA}.{self.PAD_BASE} (id int, val text)"
+            f"CREATE TABLE {self.PAD_SCHEMA}.{self.BASE_TABLE} (id int, val text)"
         )
         runner.run_query(
-            f"INSERT INTO {self.PAD_SCHEMA}.{self.PAD_BASE} VALUES (1, 'x')"
+            f"INSERT INTO {self.PAD_SCHEMA}.{self.BASE_TABLE} VALUES (1, 'x')"
         )
 
     def _ensure_pad_cluster(self, runner: ScenarioRunner, cluster_idx: int) -> None:
@@ -2467,7 +2467,7 @@ class EnvdObjectsScalabilityMvsScenario(EnvdObjectsScalabilityScenario):
             statements = [
                 f"CREATE MATERIALIZED VIEW IF NOT EXISTS {self.PAD_SCHEMA}.pad_mv_{i} "
                 f"IN CLUSTER pad_c_{cluster_idx} "
-                f"AS SELECT id, val FROM {self.PAD_SCHEMA}.{self.PAD_BASE} "
+                f"AS SELECT id, val FROM {self.PAD_SCHEMA}.{self.BASE_TABLE} "
                 f"WHERE id < {i}"
                 for i in range(next_i, cluster_end + 1)
             ]
