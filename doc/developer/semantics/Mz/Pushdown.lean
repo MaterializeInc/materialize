@@ -45,6 +45,10 @@ def Expr.subst (es : List Expr) : Expr → Expr
   | .andN args        => .andN (Expr.substArgs es args)
   | .orN  args        => .orN  (Expr.substArgs es args)
   | .coalesce args    => .coalesce (Expr.substArgs es args)
+  | .plus   a b       => .plus   (a.subst es) (b.subst es)
+  | .minus  a b       => .minus  (a.subst es) (b.subst es)
+  | .times  a b       => .times  (a.subst es) (b.subst es)
+  | .divide a b       => .divide (a.subst es) (b.subst es)
 
 /-- Pointwise application of `subst` to a list of operands. -/
 def Expr.substArgs (es : List Expr) : List Expr → List Expr
@@ -139,6 +143,18 @@ theorem eval_subst :
     apply List.map_congr_left
     intro e _
     exact eval_subst env es e
+  | env, es, .plus a b => by
+    simp only [Expr.subst, eval]
+    rw [eval_subst env es a, eval_subst env es b]
+  | env, es, .minus a b => by
+    simp only [Expr.subst, eval]
+    rw [eval_subst env es a, eval_subst env es b]
+  | env, es, .times a b => by
+    simp only [Expr.subst, eval]
+    rw [eval_subst env es a, eval_subst env es b]
+  | env, es, .divide a b => by
+    simp only [Expr.subst, eval]
+    rw [eval_subst env es a, eval_subst env es b]
 
 /-! ## Predicate pushdown -/
 

@@ -37,5 +37,9 @@ def eval (env : Env) : Expr → Datum
   | .andN args     => evalAndN     (args.map (eval env))
   | .orN args      => evalOrN      (args.map (eval env))
   | .coalesce args => evalCoalesce (args.map (eval env))
+  | .plus   a b   => evalPlus   (eval env a) (eval env b)
+  | .minus  a b   => evalMinus  (eval env a) (eval env b)
+  | .times  a b   => evalTimes  (eval env a) (eval env b)
+  | .divide a b   => evalDivide (eval env a) (eval env b)
 
 end Mz
