@@ -355,7 +355,7 @@ Status legend:
 
 | Rust pass | Lean approach |
 | --- | --- |
-| `fusion/project.rs` / `movement/projection_lifting.rs` / `projection_pushdown.rs` | We have `project_unionAll`. Add `project_filter` (commutes when no scalar errors collide with predicate), `project_cross_pushdown` (push project through cross when columns split cleanly). |
+| `fusion/project.rs` / `movement/projection_lifting.rs` / `projection_pushdown.rs` | Have `project_unionAll` + `filter_project_pushdown` (in `Mz/ProjectFusion.lean`). Still need `project_cross_pushdown` (push project through cross when columns split cleanly). |
 | `redundant_join.rs` (distinct + join) | Express `distinct` + `cross` commutation when right side is already key-unique. Requires `intersectAll`-style lookup invariants we already have. |
 | `semijoin_idempotence.rs` (partial) | A semijoin is `cross` + project + distinct. Idempotence via `distinct_idem` (provable; we have `clampToOne_idem`). |
 | `non_null_requirements.rs` (model the strict-null laws) | We already have `evalAnd` / `evalOr` / arithmetic err-/null-strictness. State as `NullPropagatingBinary` / `ErrPropagatingBinary` instances; some exist in `Mz/Strict.lean`. Lift to `UnifiedStream.filter` to characterize when predicates drop vs promote. |
