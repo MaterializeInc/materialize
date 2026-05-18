@@ -13,6 +13,7 @@ import Mz.ErrStream
 import Mz.Pushdown
 import Mz.DiffSemiring
 import Mz.UnifiedStream
+import Mz.UnifiedConsolidate
 import Mz.Aggregate
 import Mz.Consolidate
 import Mz.Triple
