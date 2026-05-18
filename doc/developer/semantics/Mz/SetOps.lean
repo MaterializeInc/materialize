@@ -1246,4 +1246,70 @@ theorem UnifiedStream.bagIntersectAll_noDup (l r : UnifiedStream) :
     UnifiedStream.NoDupCarriers (UnifiedStream.bagIntersectAll l r) :=
   UnifiedStream.clampPositive_noDup _ (UnifiedStream.intersectAll_noDup l r)
 
+/-! ## Error-scope invariance
+
+Negation preserves both the row-scoped err set (`errCarriers`)
+and the collection-scoped err set (`errorDiffCarriers`):
+negation flips diffs but `.error` absorbs, and carriers are
+unchanged by definition. Negation cannot escalate or rescue
+either error scope. -/
+
+theorem UnifiedStream.negate_errCarriers (us : UnifiedStream) :
+    UnifiedStream.errCarriers (UnifiedStream.negate us)
+      = UnifiedStream.errCarriers us := by
+  induction us with
+  | nil => rfl
+  | cons hd tl ih =>
+    obtain ⟨uc, d⟩ := hd
+    cases uc with
+    | row r =>
+      show List.filterMap _ ((UnifiedRow.row r, -d) :: UnifiedStream.negate tl)
+          = List.filterMap _ ((UnifiedRow.row r, d) :: tl)
+      simp only [List.filterMap_cons]
+      exact ih
+    | err e =>
+      show List.filterMap _ ((UnifiedRow.err e, -d) :: UnifiedStream.negate tl)
+          = List.filterMap _ ((UnifiedRow.err e, d) :: tl)
+      simp only [List.filterMap_cons]
+      show e :: UnifiedStream.errCarriers (UnifiedStream.negate tl)
+          = e :: UnifiedStream.errCarriers tl
+      rw [ih]
+
+theorem UnifiedStream.negate_errorDiffCarriers (us : UnifiedStream) :
+    UnifiedStream.errorDiffCarriers (UnifiedStream.negate us)
+      = UnifiedStream.errorDiffCarriers us := by
+  induction us with
+  | nil => rfl
+  | cons hd tl ih =>
+    obtain ⟨uc, d⟩ := hd
+    cases d with
+    | val n =>
+      show List.filterMap _ ((uc, -DiffWithError.val n)
+                              :: UnifiedStream.negate tl)
+          = List.filterMap _ ((uc, DiffWithError.val n) :: tl)
+      simp only [List.filterMap_cons]
+      exact ih
+    | error =>
+      show List.filterMap _ ((uc, -(DiffWithError.error : DiffWithError Int))
+                              :: UnifiedStream.negate tl)
+          = List.filterMap _ ((uc, (DiffWithError.error : DiffWithError Int))
+                              :: tl)
+      simp only [List.filterMap_cons]
+      show uc :: UnifiedStream.errorDiffCarriers (UnifiedStream.negate tl)
+          = uc :: UnifiedStream.errorDiffCarriers tl
+      rw [ih]
+
+/-- `unionAll` concatenates both error-scope sets. The row-err set
+of `unionAll a b` is `errCarriers a ++ errCarriers b`; same for
+the collection-err set. Each scope is tracked independently. -/
+theorem UnifiedStream.unionAll_errCarriers (a b : UnifiedStream) :
+    UnifiedStream.errCarriers (UnifiedStream.unionAll a b)
+      = UnifiedStream.errCarriers a ++ UnifiedStream.errCarriers b :=
+  UnifiedStream.errCarriers_append a b
+
+theorem UnifiedStream.unionAll_errorDiffCarriers (a b : UnifiedStream) :
+    UnifiedStream.errorDiffCarriers (UnifiedStream.unionAll a b)
+      = UnifiedStream.errorDiffCarriers a ++ UnifiedStream.errorDiffCarriers b :=
+  UnifiedStream.errorDiffCarriers_append a b
+
 end Mz
