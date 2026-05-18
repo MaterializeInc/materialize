@@ -59,6 +59,15 @@ def neg [Neg α] : DiffWithError α → DiffWithError α
   | .error => .error
   | .val x => .val (-x)
 
+/-- Per-pair minimum. `error` absorbs (a collection-scoped error
+in either input forces an error output); on `val`s, the underlying
+type's `min` is taken. Required for bag-intersection: the bag-min
+combinator at the diff level. -/
+def min [Min α] : DiffWithError α → DiffWithError α → DiffWithError α
+  | .error, _      => .error
+  | _, .error      => .error
+  | .val x, .val y => .val (Min.min x y)
+
 instance [Add α] : Add (DiffWithError α) := ⟨add⟩
 instance [Mul α] : Mul (DiffWithError α) := ⟨mul⟩
 instance [Neg α] : Neg (DiffWithError α) := ⟨neg⟩
@@ -91,6 +100,18 @@ theorem error_mul_right [Mul α] (x : DiffWithError α) :
   cases x with
   | val _ => rfl
   | error => rfl
+
+theorem error_min_left [Min α] (y : DiffWithError α) :
+    DiffWithError.min (error : DiffWithError α) y = error := rfl
+
+theorem error_min_right [Min α] (x : DiffWithError α) :
+    DiffWithError.min x (error : DiffWithError α) = error := by
+  cases x with
+  | val _ => rfl
+  | error => rfl
+
+theorem min_val_val [Min α] (x y : α) :
+    DiffWithError.min (val x : DiffWithError α) (val y) = val (Min.min x y) := rfl
 
 /-! ## Commutativity / associativity of `+` (when the base has them) -/
 
