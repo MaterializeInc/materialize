@@ -2419,6 +2419,52 @@ def _make_csv_writer(file: TextIO, fieldnames: list[str]) -> csv.DictWriter:
     return writer
 
 
+def _recreate_cluster_c(
+    runner: ScenarioRunner,
+    replica_size: str,
+    smoke_test: bool = False,
+    skip_if_unavailable_label: str | None = None,
+) -> bool:
+    """Drop+recreate cluster ``c`` at the given size and SET cluster='c'.
+
+    Returns ``True`` if the cluster is now ready, ``False`` only when
+    ``skip_if_unavailable_label`` is set and ``CREATE CLUSTER`` failed with a
+    server-side error indicating the size isn't available (e.g. missing from
+    ``mz_cluster_replica_sizes``, or allocating it would exceed
+    ``max_credit_consumption_rate``). ``OperationalError`` always propagates
+    so connection-level failures aren't swallowed.
+
+    ``smoke_test=True`` issues ``SELECT * FROM t`` after the SET, surfacing
+    cluster-startup failures immediately (relies on `_prepare_probe_table`
+    having already created ``t``).
+    """
+    runner.run_query("DROP CLUSTER IF EXISTS c CASCADE")
+    try:
+        runner.run_query(f"CREATE CLUSTER c SIZE '{replica_size}'")
+    except psycopg.errors.DatabaseError as e:
+        if skip_if_unavailable_label is None or isinstance(e, OperationalError):
+            raise
+        print(
+            f"^^^ +++ {skip_if_unavailable_label}: cluster size "
+            f"'{replica_size}' unavailable on this target "
+            f"({type(e).__name__}: {str(e).strip()}); skipping."
+        )
+        return False
+    runner.run_query("SET cluster = 'c'")
+    if smoke_test:
+        runner.run_query("SELECT * FROM t")
+    return True
+
+
+def _prepare_probe_table(runner: ScenarioRunner) -> None:
+    """(Re)create the tiny one-row table ``t`` used as a probe / smoke-test
+    target by the strong / envd_strong_scaling / envd_objects_scalability
+    runners."""
+    runner.run_query("DROP TABLE IF EXISTS t CASCADE")
+    runner.run_query("CREATE TABLE t (a int)")
+    runner.run_query("INSERT INTO t VALUES (1)")
+
+
 def _best_effort_drop(runner: ScenarioRunner, stmt: str, label: str) -> None:
     """Run a DROP statement, swallowing any error as a WARNING.
 
@@ -3568,9 +3614,7 @@ def run_scenario_strong(
     for query in scenario.drop():
         runner.run_query(query)
 
-    runner.run_query("DROP TABLE IF EXISTS t CASCADE;")
-    runner.run_query("CREATE TABLE t (a int);")
-    runner.run_query("INSERT INTO t VALUES (1);")
+    _prepare_probe_table(runner)
 
     for query in scenario.setup():
         runner.run_query(query)
@@ -3585,11 +3629,7 @@ def run_scenario_strong(
         print(
             f"--- Running strong scenario {scenario.name()} with replica size {replica_size}"
         )
-        # Create a cluster with the specified size
-        runner.run_query("DROP CLUSTER IF EXISTS c CASCADE")
-        runner.run_query(f"CREATE CLUSTER c SIZE '{replica_size}'")
-        runner.run_query("SET cluster = 'c';")
-        runner.run_query("SELECT * FROM t;")
+        _recreate_cluster_c(runner, replica_size, smoke_test=True)
 
         runner.replica_size = replica_size
 
@@ -3625,12 +3665,7 @@ def run_scenario_envd_strong_scaling(
     )
 
     # Prepare a tiny table for cluster availability checks.
-    for query in [
-        "DROP TABLE IF EXISTS t CASCADE;",
-        "CREATE TABLE t (a int);",
-        "INSERT INTO t VALUES (1);",
-    ]:
-        runner.run_query(query)
+    _prepare_probe_table(runner)
 
     # Scenario-specific setup.
     for query in scenario.setup():
@@ -3662,10 +3697,7 @@ def run_scenario_envd_strong_scaling(
 
             # (Re)create a fixed-size compute cluster.
             def recreate_cluster() -> None:
-                runner.run_query("DROP CLUSTER IF EXISTS c CASCADE")
-                runner.run_query(f"CREATE CLUSTER c SIZE '{fixed_replica_size}'")
-                runner.run_query("SET cluster = 'c';")
-                runner.run_query("SELECT * FROM t;")
+                _recreate_cluster_c(runner, fixed_replica_size, smoke_test=True)
 
             runner.connection.retryable(recreate_cluster)
 
@@ -3721,12 +3753,8 @@ def run_scenario_envd_objects_scalability(
 
     # (Re)create the fixed-size measurement cluster and a tiny one-row table
     # used by the simple-peek measurement.
-    runner.run_query("DROP CLUSTER IF EXISTS c CASCADE")
-    runner.run_query(f"CREATE CLUSTER c SIZE '{measurement_size}'")
-    runner.run_query("SET cluster = 'c'")
-    runner.run_query("DROP TABLE IF EXISTS t CASCADE")
-    runner.run_query("CREATE TABLE t (a int)")
-    runner.run_query("INSERT INTO t VALUES (1)")
+    _recreate_cluster_c(runner, measurement_size)
+    _prepare_probe_table(runner)
 
     scenario.init(runner)
 
@@ -3852,22 +3880,13 @@ def run_scenario_cluster_object_limits(
         # exceed `max_credit_consumption_rate`. Without this guard, on
         # staging the larger sizes either fail with a noisy traceback or
         # show up as a confusing "unhealthy at the smallest N" data point
-        # instead of a clear "size unavailable" line. We narrow the catch to
-        # server-side SQL errors and let connection-level OperationalError
-        # propagate (the in-`run_query` retry loop has already given up).
-        runner.run_query("DROP CLUSTER IF EXISTS c CASCADE")
-        try:
-            runner.run_query(f"CREATE CLUSTER c SIZE '{replica_size}'")
-        except psycopg.errors.DatabaseError as e:
-            if isinstance(e, OperationalError):
-                raise
-            print(
-                f"^^^ +++ cluster_object_limits {scenario.name()}: cluster "
-                f"size '{replica_size}' unavailable on this target "
-                f"({type(e).__name__}: {str(e).strip()}); skipping."
-            )
+        # instead of a clear "size unavailable" line.
+        if not _recreate_cluster_c(
+            runner,
+            replica_size,
+            skip_if_unavailable_label=f"cluster_object_limits {scenario.name()}",
+        ):
             continue
-        runner.run_query("SET cluster = 'c'")
 
         # Reset the base table and pad schema for this cluster-size iteration.
         scenario.reset_for_cluster_size(runner)
@@ -4012,10 +4031,7 @@ def run_scenario_weak(
 
         # Create a cluster with the specified size
         print(f"--- Loading complete; creating cluster with size {replica_size}")
-        runner.run_query("DROP CLUSTER IF EXISTS c CASCADE")
-        runner.run_query(f"CREATE CLUSTER c SIZE '{replica_size}'")
-        runner.run_query("SET cluster = 'c';")
-        runner.run_query("SELECT * FROM t;")
+        _recreate_cluster_c(runner, replica_size, smoke_test=True)
 
         scenario.run(runner)
 
