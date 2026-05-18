@@ -160,7 +160,15 @@ export class CloudAppConfig implements IBaseAppConfig {
   stackSwitcherEnabled =
     !this.isImpersonating && this.#consoleEnvironment !== "production";
 
-  stripePromise = getStripePromise(this.#consoleEnvironment);
+  // Lazy so the Stripe.js script only loads when the billing route reads
+  // this property; never fetched on cold load for other routes.
+  #stripePromise?: ReturnType<typeof getStripePromise>;
+  get stripePromise() {
+    if (!this.#stripePromise) {
+      this.#stripePromise = getStripePromise(this.#consoleEnvironment);
+    }
+    return this.#stripePromise;
+  }
 
   // Whether query retries are enabled. False for test environments.
   // TODO (password-auth): Remove the possibility of defaultStack being "test". Should be able to figure
