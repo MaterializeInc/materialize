@@ -531,6 +531,94 @@ theorem eval_replaceAt_of_unused_argsMap :
         eval_replaceAt_of_unused_argsMap env n v rest h.2]
 end
 
+/-! ## Bridge between bounded and unused analyzers
+
+If a predicate's column references are bounded by `n`, then any
+column index `i ≥ n` is unused. Used by the optimizer to derive
+column-pruning consequences from a tight bound: a predicate that
+only reads the first `n` columns leaves the rest unused. -/
+
+mutual
+theorem Expr.colReferencesUnused_of_bounded :
+    ∀ {n i : Nat} (e : Expr),
+      e.colReferencesBoundedBy n = true → n ≤ i →
+      e.colReferencesUnused i = true
+  | _, _, .lit _,            _, _ => rfl
+  | n, i, .col j,            h, hLe => by
+    have h_lt : j < n := of_decide_eq_true h
+    show decide (j ≠ i) = true
+    have : j ≠ i := fun hEq => Nat.not_lt_of_le hLe (hEq ▸ h_lt)
+    exact decide_eq_true this
+  | _, _, .and a b,          h, hLe => by
+    simp only [Expr.colReferencesBoundedBy, Expr.colReferencesUnused,
+               Bool.and_eq_true] at h ⊢
+    exact ⟨Expr.colReferencesUnused_of_bounded a h.1 hLe,
+           Expr.colReferencesUnused_of_bounded b h.2 hLe⟩
+  | _, _, .or a b,           h, hLe => by
+    simp only [Expr.colReferencesBoundedBy, Expr.colReferencesUnused,
+               Bool.and_eq_true] at h ⊢
+    exact ⟨Expr.colReferencesUnused_of_bounded a h.1 hLe,
+           Expr.colReferencesUnused_of_bounded b h.2 hLe⟩
+  | _, _, .not a,            h, hLe =>
+    Expr.colReferencesUnused_of_bounded a h hLe
+  | _, _, .ifThen c t e,     h, hLe => by
+    simp only [Expr.colReferencesBoundedBy, Expr.colReferencesUnused,
+               Bool.and_eq_true] at h ⊢
+    exact ⟨⟨Expr.colReferencesUnused_of_bounded c h.1.1 hLe,
+            Expr.colReferencesUnused_of_bounded t h.1.2 hLe⟩,
+           Expr.colReferencesUnused_of_bounded e h.2 hLe⟩
+  | _, _, .andN args,        h, hLe => by
+    simp only [Expr.colReferencesBoundedBy, Expr.colReferencesUnused] at h ⊢
+    exact Expr.argsColRefUnused_of_bounded args h hLe
+  | _, _, .orN args,         h, hLe => by
+    simp only [Expr.colReferencesBoundedBy, Expr.colReferencesUnused] at h ⊢
+    exact Expr.argsColRefUnused_of_bounded args h hLe
+  | _, _, .coalesce args,    h, hLe => by
+    simp only [Expr.colReferencesBoundedBy, Expr.colReferencesUnused] at h ⊢
+    exact Expr.argsColRefUnused_of_bounded args h hLe
+  | _, _, .plus a b,         h, hLe => by
+    simp only [Expr.colReferencesBoundedBy, Expr.colReferencesUnused,
+               Bool.and_eq_true] at h ⊢
+    exact ⟨Expr.colReferencesUnused_of_bounded a h.1 hLe,
+           Expr.colReferencesUnused_of_bounded b h.2 hLe⟩
+  | _, _, .minus a b,        h, hLe => by
+    simp only [Expr.colReferencesBoundedBy, Expr.colReferencesUnused,
+               Bool.and_eq_true] at h ⊢
+    exact ⟨Expr.colReferencesUnused_of_bounded a h.1 hLe,
+           Expr.colReferencesUnused_of_bounded b h.2 hLe⟩
+  | _, _, .times a b,        h, hLe => by
+    simp only [Expr.colReferencesBoundedBy, Expr.colReferencesUnused,
+               Bool.and_eq_true] at h ⊢
+    exact ⟨Expr.colReferencesUnused_of_bounded a h.1 hLe,
+           Expr.colReferencesUnused_of_bounded b h.2 hLe⟩
+  | _, _, .divide a b,       h, hLe => by
+    simp only [Expr.colReferencesBoundedBy, Expr.colReferencesUnused,
+               Bool.and_eq_true] at h ⊢
+    exact ⟨Expr.colReferencesUnused_of_bounded a h.1 hLe,
+           Expr.colReferencesUnused_of_bounded b h.2 hLe⟩
+  | _, _, .eq a b,           h, hLe => by
+    simp only [Expr.colReferencesBoundedBy, Expr.colReferencesUnused,
+               Bool.and_eq_true] at h ⊢
+    exact ⟨Expr.colReferencesUnused_of_bounded a h.1 hLe,
+           Expr.colReferencesUnused_of_bounded b h.2 hLe⟩
+  | _, _, .lt a b,           h, hLe => by
+    simp only [Expr.colReferencesBoundedBy, Expr.colReferencesUnused,
+               Bool.and_eq_true] at h ⊢
+    exact ⟨Expr.colReferencesUnused_of_bounded a h.1 hLe,
+           Expr.colReferencesUnused_of_bounded b h.2 hLe⟩
+
+theorem Expr.argsColRefUnused_of_bounded :
+    ∀ {n i : Nat} (args : List Expr),
+      Expr.argsColRefBoundedBy n args = true → n ≤ i →
+      Expr.argsColRefUnused i args = true
+  | _, _, [],         _, _ => rfl
+  | _, _, e :: rest,  h, hLe => by
+    simp only [Expr.argsColRefBoundedBy, Expr.argsColRefUnused,
+               Bool.and_eq_true] at h ⊢
+    exact ⟨Expr.colReferencesUnused_of_bounded e h.1 hLe,
+           Expr.argsColRefUnused_of_bounded rest h.2 hLe⟩
+end
+
 /-! ## Shift composition laws
 
 `colShift` is the identity at `k = 0` and composes additively:
