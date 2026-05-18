@@ -112,6 +112,7 @@ theorem UnifiedStream.filter_length_le (pred : Expr) (us : UnifiedStream) :
                 | _          => []).length ≤ 1
           cases h_eval : eval r pred with
           | bool b => cases b <;> simp [List.length_cons, List.length_nil]
+          | int  _ => simp [List.length_nil]
           | null   => simp [List.length_nil]
           | err _  => simp [List.length_cons]
         | err _ =>
@@ -364,6 +365,10 @@ theorem UnifiedStream.filter_no_error
         exfalso
         have := hMid
         simp [h_eval] at this
+    | int _ =>
+      exfalso
+      have := hMid
+      simp [h_eval] at this
     | null =>
       exfalso
       have := hMid

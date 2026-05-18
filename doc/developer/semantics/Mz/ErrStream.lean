@@ -78,6 +78,7 @@ theorem rows_in_filterRel_eval_to_true (pred : Expr) (rel : Relation) :
   | bool b => cases b
               · rw [h_eval] at h_pred; cases h_pred
               · rfl
+  | int _  => rw [h_eval] at h_pred; cases h_pred
   | null   => rw [h_eval] at h_pred; cases h_pred
   | err _  => rw [h_eval] at h_pred; cases h_pred
 
@@ -152,6 +153,7 @@ theorem errorRows_eq_nil_of_no_err
           | _      => errorRows pred tl) = []
     cases h_eval : eval hd pred with
     | bool _ => exact ih hTl
+    | int _  => exact ih hTl
     | null   => exact ih hTl
     | err _  =>
       rw [h_eval] at hHd
@@ -294,6 +296,7 @@ theorem rowErrs_nil_of_all_safe (es : List Expr) (row : Row)
     rw [List.filterMap_cons]
     cases h_eval : eval row hd with
     | bool _ => exact ihResult
+    | int _  => exact ihResult
     | null   => exact ihResult
     | err e  =>
       rw [h_eval] at hHead

@@ -92,6 +92,7 @@ theorem eval_coalesce_singleton (env : Env) (a : Expr) :
   -- Case analysis on the underlying datum.
   cases h : eval env a with
   | bool b => rw [show evalCoalesce [Datum.bool b] = Datum.bool b from rfl]
+  | int  n => rw [show evalCoalesce [Datum.int n] = Datum.int n from rfl]
   | null   => rw [show evalCoalesce [Datum.null] = Datum.null from rfl]
   | err e  => rw [show evalCoalesce [Datum.err e] = Datum.err e from rfl]
 

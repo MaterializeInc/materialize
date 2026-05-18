@@ -25,13 +25,23 @@ theorem evalAnd_not_err
   cases d₁ with
   | bool b₁ =>
     cases d₂ with
-    | bool b₂ => cases b₁ <;> cases b₂ <;> decide
-    | null    => cases b₁ <;> decide
+    | bool b₂ => cases b₁ <;> cases b₂ <;> (intro h; cases h)
+    | int  _  => cases b₁ <;> (intro h; cases h)
+    | null    => cases b₁ <;> (intro h; cases h)
+    | err _   => exact (h₂ trivial).elim
+  | int n =>
+    cases d₂ with
+    | bool b₂ => cases b₂ <;> (intro h; cases h)
+    | int  m  =>
+      show ¬(if n = m then Datum.int n else Datum.null).IsErr
+      split <;> (intro h; cases h)
+    | null    => intro h; cases h
     | err _   => exact (h₂ trivial).elim
   | null =>
     cases d₂ with
-    | bool b₂ => cases b₂ <;> decide
-    | null    => decide
+    | bool b₂ => cases b₂ <;> (intro h; cases h)
+    | int  _  => intro h; cases h
+    | null    => intro h; cases h
     | err _   => exact (h₂ trivial).elim
   | err _ => exact (h₁ trivial).elim
 
@@ -41,21 +51,32 @@ theorem evalOr_not_err
   cases d₁ with
   | bool b₁ =>
     cases d₂ with
-    | bool b₂ => cases b₁ <;> cases b₂ <;> decide
-    | null    => cases b₁ <;> decide
+    | bool b₂ => cases b₁ <;> cases b₂ <;> (intro h; cases h)
+    | int  _  => cases b₁ <;> (intro h; cases h)
+    | null    => cases b₁ <;> (intro h; cases h)
+    | err _   => exact (h₂ trivial).elim
+  | int n =>
+    cases d₂ with
+    | bool b₂ => cases b₂ <;> (intro h; cases h)
+    | int  m  =>
+      show ¬(if n = m then Datum.int n else Datum.null).IsErr
+      split <;> (intro h; cases h)
+    | null    => intro h; cases h
     | err _   => exact (h₂ trivial).elim
   | null =>
     cases d₂ with
-    | bool b₂ => cases b₂ <;> decide
-    | null    => decide
+    | bool b₂ => cases b₂ <;> (intro h; cases h)
+    | int  _  => intro h; cases h
+    | null    => intro h; cases h
     | err _   => exact (h₂ trivial).elim
   | err _ => exact (h₁ trivial).elim
 
 theorem evalNot_not_err
     {d : Datum} (h : ¬d.IsErr) : ¬(evalNot d).IsErr := by
   cases d with
-  | bool b => cases b <;> decide
-  | null   => decide
+  | bool b => cases b <;> (intro h; cases h)
+  | int  _ => intro h; cases h
+  | null   => intro h; cases h
   | err _  => exact (h trivial).elim
 
 theorem evalIfThen_not_err
@@ -69,8 +90,10 @@ theorem evalIfThen_not_err
       simp only [evalIfThen]; exact he
     · -- true branch: evalIfThen reduces to `dt`
       simp only [evalIfThen]; exact ht
+  | int _ =>
+    simp only [evalIfThen]; intro h; cases h
   | null =>
-    simp only [evalIfThen]; decide
+    simp only [evalIfThen]; intro h; cases h
   | err _ => exact (hc trivial).elim
 
 /-! ### Short-circuit absorbers
@@ -86,6 +109,7 @@ theorem evalAnd_left_false (d : Datum) : evalAnd (.bool false) d = .bool false :
 theorem evalAnd_right_false (d : Datum) : evalAnd d (.bool false) = .bool false := by
   cases d with
   | bool b => cases b <;> rfl
+  | int  _ => rfl
   | null   => rfl
   | err _  => rfl
 
@@ -94,6 +118,7 @@ theorem evalOr_left_true (d : Datum) : evalOr (.bool true) d = .bool true := rfl
 theorem evalOr_right_true (d : Datum) : evalOr d (.bool true) = .bool true := by
   cases d with
   | bool b => cases b <;> rfl
+  | int  _ => rfl
   | null   => rfl
   | err _  => rfl
 
@@ -337,6 +362,12 @@ theorem Coalesce.go_not_err :
     show False
     simp only [Coalesce.go] at hRes
     cases hRes
+  | _,     _,  .int n :: _,  _ => by
+    intro hRes
+    -- Coalesce.go _ _ (.int n :: _) = .int n
+    show False
+    simp only [Coalesce.go] at hRes
+    cases hRes
   | _,     firstErr, .null :: rest, _ => by
     -- Recurse with seenNull=true.
     show ¬(Coalesce.go true firstErr rest).IsErr
@@ -422,6 +453,7 @@ theorem might_error_sound :
     simp only [eval] at hRes
     cases d with
     | bool _ => cases hRes
+    | int  _ => cases hRes
     | null   => cases hRes
     | err _  =>
       apply hMe

@@ -77,6 +77,7 @@ private theorem evalAnd_false_right_any (d : Datum) :
     evalAnd d (.bool false) = .bool false := by
   cases d with
   | bool b => cases b <;> rfl
+  | int  _ => rfl
   | null   => rfl
   | err _  => rfl
 
@@ -84,6 +85,7 @@ private theorem evalOr_true_right_any (d : Datum) :
     evalOr d (.bool true) = .bool true := by
   cases d with
   | bool b => cases b <;> rfl
+  | int  _ => rfl
   | null   => rfl
   | err _  => rfl
 
