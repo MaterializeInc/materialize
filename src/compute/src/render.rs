@@ -122,7 +122,8 @@ use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
 use mz_compute_types::dyncfgs::{
     COMPUTE_APPLY_COLUMN_DEMANDS, COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK,
     COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES, ENABLE_COMPUTE_LOGICAL_BACKPRESSURE,
-    SUBSCRIBE_SNAPSHOT_OPTIMIZATION,
+    ENABLE_COMPUTE_TEMPORAL_BUCKETING, SUBSCRIBE_SNAPSHOT_OPTIMIZATION,
+    TEMPORAL_BUCKETING_SUMMARY,
 };
 use mz_compute_types::plan::LirId;
 use mz_compute_types::plan::render_plan::{
@@ -1299,6 +1300,21 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                 }
                 let mut oks = differential_dataflow::collection::concatenate(self.scope, oks);
                 if consolidate_output {
+                    // Bucket future-dated updates before the consolidate, so that the
+                    // `KeyBatcher` does not accumulate updates whose timestamps are far ahead
+                    // of the input frontier. `MaybeBucketByTime` is a no-op for partially
+                    // ordered timestamps (e.g. inside iterative scopes).
+                    if ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(&self.config_set) {
+                        let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
+                            .get(&self.config_set)
+                            .try_into()
+                            .expect("must fit");
+                        oks = T::maybe_apply_temporal_bucketing(
+                            oks.inner,
+                            self.as_of_frontier.clone(),
+                            summary,
+                        );
+                    }
                     oks = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
                         oks,
                         "UnionConsolidation",
