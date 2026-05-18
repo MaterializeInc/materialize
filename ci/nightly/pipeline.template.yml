@@ -65,6 +65,29 @@ steps:
         branches: "main"
         skip: "currently broken"
 
+      - id: build-x86_64-antithesis
+        label: ":rust: Build x86_64 (Antithesis)"
+        # Regenerate the antithesis compose YAML before building so the
+        # `antithesis-config` image's fingerprint captures the same
+        # materialized fingerprint we're about to publish — otherwise
+        # Antithesis would try to pull a stale `materialized:mzbuild-…`
+        # whenever the committed YAML lagged behind source changes.
+        command: bin/ci-builder run stable ci/test/build-antithesis.sh
+        inputs:
+          - "*"
+        depends_on: []
+        timeout_in_minutes: 90
+        agents:
+          queue: l-builder-linux-x86_64
+        env:
+          CI_ANTITHESIS: "1"
+        # Antithesis-flavored images get distinct mzbuild fingerprints, so
+        # they coexist with regular GHCR tags. The build is x86_64-only —
+        # Antithesis runs amd64 sandboxes.
+        sanitizer: skip
+        coverage: skip
+        antithesis: skip
+
       - id: build-rust-latest-beta
         label: "Build with Latest Rust Beta"
         command: bin/ci-builder run stable ci/test/rust-beta-build.sh
