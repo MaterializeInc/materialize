@@ -927,3 +927,28 @@ matches the mean op latency × count gap, consistent with HoL.
 
 None of these change semantics; all are isolated to
 `mz-bogo-consensus` + the `mz_persist::bogo` adapter.
+
+### 2026-05-18 — multi-channel client (item 1 above) landed
+
+`15f741cf73` ("bogo-consensus: fan out client RPCs across multiple
+gRPC channels") opens 8 independent tonic `Channel`s in the
+`BogoConsensusClient` and round-robins RPCs across them.
+
+Microbench delta (`bogo_consensus_microbench`, same machine,
+release):
+
+|                          | single channel | 8 channels |
+| ---:                     | ---:           | ---:       |
+| serial CAS, 16 KiB       | 240 μs         | 146 μs     |
+| concurrent CAS, conc=64  | 32 K/s         | 67 K/s     |
+
+Single-op serial latency on the smallest payloads is flat — the
+loopback round-trip floor (~90 μs) doesn't depend on connection
+count.
+
+End-to-end audit validation against envd was not completed in this
+session (rebuild on the local box outran the wall clock); the
+microbench shows the change cleanly reduces concurrent-CAS
+serialisation, which is where the tail in envd was coming from.
+Re-running the audit against the multi-channel build is the obvious
+next step on resume.
