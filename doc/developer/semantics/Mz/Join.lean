@@ -91,33 +91,40 @@ theorem UnifiedStream.filter_length_le (pred : Expr) (us : UnifiedStream) :
   | cons hd tl ih =>
     rw [List.flatMap_cons, List.length_append, List.length_cons]
     have hHd : (match hd with
-                | (UnifiedRow.row r, d) =>
+                | (_,                 DiffWithError.error) => [hd]
+                | (UnifiedRow.err e,  d)                   => [(UnifiedRow.err e, d)]
+                | (UnifiedRow.row r,  d)                   =>
                   match eval r pred with
                   | .bool true => [(UnifiedRow.row r, d)]
                   | .err e     => [(UnifiedRow.err e, d)]
-                  | _          => []
-                | (UnifiedRow.err e, d) => [(UnifiedRow.err e, d)]).length ≤ 1 := by
+                  | _          => []).length ≤ 1 := by
       obtain ⟨u, d⟩ := hd
-      cases u with
-      | row r =>
-        show (match eval r pred with
-              | .bool true => [(UnifiedRow.row r, d)]
-              | .err e     => [(UnifiedRow.err e, d)]
-              | _          => []).length ≤ 1
-        cases h_eval : eval r pred with
-        | bool b => cases b <;> simp [List.length_cons, List.length_nil]
-        | null   => simp [List.length_nil]
-        | err _  => simp [List.length_cons]
-      | err _ =>
-        show ([(UnifiedRow.err _, d)] : UnifiedStream).length ≤ 1
+      cases d with
+      | error =>
+        show ([(u, DiffWithError.error)] : UnifiedStream).length ≤ 1
         simp [List.length_cons]
+      | val n =>
+        cases u with
+        | row r =>
+          show (match eval r pred with
+                | .bool true => [(UnifiedRow.row r, DiffWithError.val n)]
+                | .err e     => [(UnifiedRow.err e, DiffWithError.val n)]
+                | _          => []).length ≤ 1
+          cases h_eval : eval r pred with
+          | bool b => cases b <;> simp [List.length_cons, List.length_nil]
+          | null   => simp [List.length_nil]
+          | err _  => simp [List.length_cons]
+        | err _ =>
+          show ([(UnifiedRow.err _, DiffWithError.val n)] : UnifiedStream).length ≤ 1
+          simp [List.length_cons]
     calc (match hd with
-          | (UnifiedRow.row r, d) =>
+          | (_,                 DiffWithError.error) => [hd]
+          | (UnifiedRow.err e,  d)                   => [(UnifiedRow.err e, d)]
+          | (UnifiedRow.row r,  d)                   =>
             match eval r pred with
             | .bool true => [(UnifiedRow.row r, d)]
             | .err e     => [(UnifiedRow.err e, d)]
-            | _          => []
-          | (UnifiedRow.err e, d) => [(UnifiedRow.err e, d)]).length
+            | _          => []).length
         + (tl.flatMap _).length
         ≤ 1 + tl.length := Nat.add_le_add hHd ih
       _ = tl.length + 1 := Nat.add_comm _ _
@@ -149,5 +156,46 @@ theorem UnifiedStream.cross_diff_error_left
   refine List.mem_map.mpr ⟨(rc, rd), h_mem, ?_⟩
   show (combineCarrier lc rc, DiffWithError.error * rd) = (combineCarrier lc rc, DiffWithError.error)
   rw [DiffWithError.error_mul_left]
+
+/-- Symmetric statement for a `.error` diff on the right side. -/
+theorem UnifiedStream.cross_diff_error_right
+    (l : UnifiedStream) (lc : UnifiedRow) (ld : DiffWithError Int) (rc : UnifiedRow)
+    (h_mem : (lc, ld) ∈ l) :
+    ∃ uc, (uc, (DiffWithError.error : DiffWithError Int))
+            ∈ UnifiedStream.cross l [(rc, DiffWithError.error)] := by
+  refine ⟨combineCarrier lc rc, ?_⟩
+  show (combineCarrier lc rc, DiffWithError.error)
+      ∈ (l.flatMap fun ld' =>
+           [(rc, DiffWithError.error)].map fun rd' =>
+             (combineCarrier ld'.1 rd'.1, ld'.2 * rd'.2))
+  refine List.mem_flatMap.mpr ⟨(lc, ld), h_mem, ?_⟩
+  show (combineCarrier lc rc, DiffWithError.error)
+      ∈ [(combineCarrier lc rc, ld * DiffWithError.error)]
+  rw [DiffWithError.error_mul_right]
+  exact List.mem_singleton.mpr rfl
+
+/-- Absorption under `filter`: a record carrying a `.error` diff
+is preserved by `UnifiedStream.filter`, regardless of the
+predicate. The absorbing diff marker cannot be filtered away. -/
+theorem UnifiedStream.filter_preserves_error_diff
+    (pred : Expr) (us : UnifiedStream) (uc : UnifiedRow)
+    (h_mem : (uc, (DiffWithError.error : DiffWithError Int)) ∈ us) :
+    (uc, (DiffWithError.error : DiffWithError Int))
+      ∈ UnifiedStream.filter pred us := by
+  induction us with
+  | nil => exact absurd h_mem (List.not_mem_nil)
+  | cons hd tl ih =>
+    rcases List.mem_cons.mp h_mem with hEq | hTail
+    · subst hEq
+      show (uc, DiffWithError.error)
+        ∈ UnifiedStream.filter pred ((uc, DiffWithError.error) :: tl)
+      unfold UnifiedStream.filter
+      rw [List.flatMap_cons]
+      show (uc, DiffWithError.error)
+        ∈ [(uc, DiffWithError.error)] ++ _
+      exact List.mem_append.mpr (.inl (List.mem_singleton.mpr rfl))
+    · unfold UnifiedStream.filter
+      rw [List.flatMap_cons]
+      exact List.mem_append.mpr (.inr (ih hTail))
 
 end Mz
