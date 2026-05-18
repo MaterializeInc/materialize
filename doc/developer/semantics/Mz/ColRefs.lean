@@ -371,6 +371,166 @@ theorem eval_append_right_shift_argsMap :
         eval_append_right_shift_argsMap l r rest]
 end
 
+/-! ## Column-unused analyzer
+
+`Expr.colReferencesUnused n e` returns `true` when `e` never reads
+column `n`. The eval-invariance theorem uses this to justify
+column-pruning rewrites: a projection that drops an unused column
+does not change downstream eval results. -/
+
+mutual
+def Expr.colReferencesUnused (n : Nat) : Expr → Bool
+  | .lit _            => true
+  | .col i            => decide (i ≠ n)
+  | .and a b          => a.colReferencesUnused n && b.colReferencesUnused n
+  | .or  a b          => a.colReferencesUnused n && b.colReferencesUnused n
+  | .not a            => a.colReferencesUnused n
+  | .ifThen c t e     =>
+    c.colReferencesUnused n &&
+    t.colReferencesUnused n &&
+    e.colReferencesUnused n
+  | .andN args        => Expr.argsColRefUnused n args
+  | .orN  args        => Expr.argsColRefUnused n args
+  | .coalesce args    => Expr.argsColRefUnused n args
+  | .plus   a b       => a.colReferencesUnused n && b.colReferencesUnused n
+  | .minus  a b       => a.colReferencesUnused n && b.colReferencesUnused n
+  | .times  a b       => a.colReferencesUnused n && b.colReferencesUnused n
+  | .divide a b       => a.colReferencesUnused n && b.colReferencesUnused n
+  | .eq     a b       => a.colReferencesUnused n && b.colReferencesUnused n
+  | .lt     a b       => a.colReferencesUnused n && b.colReferencesUnused n
+
+def Expr.argsColRefUnused (n : Nat) : List Expr → Bool
+  | []        => true
+  | e :: rest => e.colReferencesUnused n && Expr.argsColRefUnused n rest
+end
+
+/-! ## Env replacement at position
+
+`Env.replaceAt env n v` swaps the value at index `n` for `v`,
+leaving other positions intact. Out-of-bounds indices leave the
+environment unchanged (consistent with `Env.get`'s null fallback). -/
+
+def Env.replaceAt : Env → Nat → Datum → Env
+  | [],          _,     _ => []
+  | _ :: tl,     0,     v => v :: tl
+  | hd :: tl,    n + 1, v => hd :: Env.replaceAt tl n v
+
+/-- Reading position `n` from `replaceAt env n v` yields `v` when
+in bounds. -/
+theorem Env.get_replaceAt_eq :
+    ∀ (env : Env) (n : Nat) (v : Datum), n < env.length →
+      Env.get (Env.replaceAt env n v) n = v
+  | [],         _,     _, h => absurd h (Nat.not_lt_zero _)
+  | _ :: _,     0,     _, _ => rfl
+  | _ :: tl,    n + 1, v, h => by
+    show Env.get (Env.replaceAt tl n v) n = v
+    exact Env.get_replaceAt_eq tl n v (Nat.lt_of_succ_lt_succ h)
+
+/-- Reading any other position is unchanged. -/
+theorem Env.get_replaceAt_ne :
+    ∀ (env : Env) (n i : Nat) (v : Datum), i ≠ n →
+      Env.get (Env.replaceAt env n v) i = Env.get env i
+  | [],         _,     _, _, _ => rfl
+  | _ :: _,     0,     0, _, h => absurd rfl h
+  | hd :: _,    0,     i + 1, _, _ => by
+    show Env.get (hd :: _) (i + 1) = Env.get (hd :: _) (i + 1)
+    rfl
+  | _ :: _,     n + 1, 0, _, _ => rfl
+  | _ :: tl,    n + 1, i + 1, v, h => by
+    show Env.get (Env.replaceAt tl n v) i = Env.get tl i
+    exact Env.get_replaceAt_ne tl n i v (fun hEq => h (by rw [hEq]))
+
+/-! ## Eval invariance under replacement
+
+If column `n` is unused in `e`, replacing the value at position `n`
+does not change `eval`. Mutual structural recursion on `Expr`. -/
+
+mutual
+theorem eval_replaceAt_of_unused :
+    ∀ (env : Env) (n : Nat) (v : Datum) (e : Expr),
+      e.colReferencesUnused n = true →
+      eval (Env.replaceAt env n v) e = eval env e
+  | _, _, _, .lit _,        _ => by simp [eval]
+  | env, n, v, .col i,      h => by
+    have h_ne : i ≠ n := of_decide_eq_true h
+    simp only [eval]
+    exact Env.get_replaceAt_ne env n i v h_ne
+  | env, n, v, .and a b,    h => by
+    simp only [Expr.colReferencesUnused, Bool.and_eq_true] at h
+    simp only [eval]
+    rw [eval_replaceAt_of_unused env n v a h.1,
+        eval_replaceAt_of_unused env n v b h.2]
+  | env, n, v, .or a b,     h => by
+    simp only [Expr.colReferencesUnused, Bool.and_eq_true] at h
+    simp only [eval]
+    rw [eval_replaceAt_of_unused env n v a h.1,
+        eval_replaceAt_of_unused env n v b h.2]
+  | env, n, v, .not a,      h => by
+    simp only [Expr.colReferencesUnused] at h
+    simp only [eval]
+    rw [eval_replaceAt_of_unused env n v a h]
+  | env, n, v, .ifThen c t e, h => by
+    simp only [Expr.colReferencesUnused, Bool.and_eq_true] at h
+    simp only [eval]
+    rw [eval_replaceAt_of_unused env n v c h.1.1,
+        eval_replaceAt_of_unused env n v t h.1.2,
+        eval_replaceAt_of_unused env n v e h.2]
+  | env, n, v, .andN args,  h => by
+    simp only [Expr.colReferencesUnused] at h
+    simp only [eval]
+    rw [eval_replaceAt_of_unused_argsMap env n v args h]
+  | env, n, v, .orN args,   h => by
+    simp only [Expr.colReferencesUnused] at h
+    simp only [eval]
+    rw [eval_replaceAt_of_unused_argsMap env n v args h]
+  | env, n, v, .coalesce args, h => by
+    simp only [Expr.colReferencesUnused] at h
+    simp only [eval]
+    rw [eval_replaceAt_of_unused_argsMap env n v args h]
+  | env, n, v, .plus a b,   h => by
+    simp only [Expr.colReferencesUnused, Bool.and_eq_true] at h
+    simp only [eval]
+    rw [eval_replaceAt_of_unused env n v a h.1,
+        eval_replaceAt_of_unused env n v b h.2]
+  | env, n, v, .minus a b,  h => by
+    simp only [Expr.colReferencesUnused, Bool.and_eq_true] at h
+    simp only [eval]
+    rw [eval_replaceAt_of_unused env n v a h.1,
+        eval_replaceAt_of_unused env n v b h.2]
+  | env, n, v, .times a b,  h => by
+    simp only [Expr.colReferencesUnused, Bool.and_eq_true] at h
+    simp only [eval]
+    rw [eval_replaceAt_of_unused env n v a h.1,
+        eval_replaceAt_of_unused env n v b h.2]
+  | env, n, v, .divide a b, h => by
+    simp only [Expr.colReferencesUnused, Bool.and_eq_true] at h
+    simp only [eval]
+    rw [eval_replaceAt_of_unused env n v a h.1,
+        eval_replaceAt_of_unused env n v b h.2]
+  | env, n, v, .eq a b,     h => by
+    simp only [Expr.colReferencesUnused, Bool.and_eq_true] at h
+    simp only [eval]
+    rw [eval_replaceAt_of_unused env n v a h.1,
+        eval_replaceAt_of_unused env n v b h.2]
+  | env, n, v, .lt a b,     h => by
+    simp only [Expr.colReferencesUnused, Bool.and_eq_true] at h
+    simp only [eval]
+    rw [eval_replaceAt_of_unused env n v a h.1,
+        eval_replaceAt_of_unused env n v b h.2]
+
+theorem eval_replaceAt_of_unused_argsMap :
+    ∀ (env : Env) (n : Nat) (v : Datum) (args : List Expr),
+      Expr.argsColRefUnused n args = true →
+      args.map (eval (Env.replaceAt env n v)) = args.map (eval env)
+  | _, _, _, [],         _ => rfl
+  | env, n, v, e :: rest, h => by
+    simp only [Expr.argsColRefUnused, Bool.and_eq_true] at h
+    show eval (Env.replaceAt env n v) e :: rest.map (eval (Env.replaceAt env n v))
+        = eval env e :: rest.map (eval env)
+    rw [eval_replaceAt_of_unused env n v e h.1,
+        eval_replaceAt_of_unused_argsMap env n v rest h.2]
+end
+
 /-! ## Shift composition laws
 
 `colShift` is the identity at `k = 0` and composes additively:
