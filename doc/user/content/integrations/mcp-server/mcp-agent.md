@@ -2,7 +2,6 @@
 title: MCP Server for Agents
 description: "Query data products via Materialize's built-in materialize-agent MCP Server."
 make_table_row_headers_searchable: true
-draft: true
 menu:
   main:
     parent: "mcp-server"
