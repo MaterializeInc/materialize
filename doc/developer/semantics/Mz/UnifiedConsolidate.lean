@@ -639,4 +639,35 @@ theorem UnifiedStream.consolidate_error_inv
       exact List.mem_cons_self
     · exact List.mem_cons_of_mem _ (ih hMem)
 
+/-! ## Error-scope characterizations under `consolidate`
+
+Set-level invariance of row-err and collection-err extractors
+under consolidation. Combines carrier-preservation
+(`mem_consolidate_of_mem`, `mem_of_mem_consolidate`) and error
+inversion (`consolidate_preserves_error`, `consolidate_error_inv`).
+
+These iffs are placed here (not in `Mz/SetOps.lean`) because
+`Mz/TimedConsolidate.lean` cites them and the import chain forbids
+SetOps as an upstream dependency. -/
+
+theorem UnifiedStream.consolidate_errCarriers_iff
+    (us : UnifiedStream) (e : EvalError) :
+    e ∈ UnifiedStream.errCarriers (UnifiedStream.consolidate us)
+      ↔ e ∈ UnifiedStream.errCarriers us := by
+  rw [UnifiedStream.mem_errCarriers, UnifiedStream.mem_errCarriers]
+  constructor
+  · intro h
+    exact UnifiedStream.mem_of_mem_consolidate us (UnifiedRow.err e) h
+  · intro ⟨d, hMem⟩
+    exact UnifiedStream.mem_consolidate_of_mem us (UnifiedRow.err e) d hMem
+
+theorem UnifiedStream.consolidate_errorDiffCarriers_iff
+    (us : UnifiedStream) (uc : UnifiedRow) :
+    uc ∈ UnifiedStream.errorDiffCarriers (UnifiedStream.consolidate us)
+      ↔ uc ∈ UnifiedStream.errorDiffCarriers us := by
+  rw [UnifiedStream.mem_errorDiffCarriers,
+      UnifiedStream.mem_errorDiffCarriers]
+  exact ⟨UnifiedStream.consolidate_error_inv us uc,
+         UnifiedStream.consolidate_preserves_error us uc⟩
+
 end Mz

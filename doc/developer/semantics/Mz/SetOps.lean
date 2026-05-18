@@ -1640,17 +1640,6 @@ every input carrier survives. Backward direction is from
 `mem_of_mem_consolidate`. For `.error`-diff carriers, the forward
 direction is `consolidate_preserves_error`. -/
 
-theorem UnifiedStream.consolidate_errCarriers_iff
-    (us : UnifiedStream) (e : EvalError) :
-    e ∈ UnifiedStream.errCarriers (UnifiedStream.consolidate us)
-      ↔ e ∈ UnifiedStream.errCarriers us := by
-  rw [UnifiedStream.mem_errCarriers, UnifiedStream.mem_errCarriers]
-  constructor
-  · intro h
-    exact UnifiedStream.mem_of_mem_consolidate us (UnifiedRow.err e) h
-  · intro ⟨d, hMem⟩
-    exact UnifiedStream.mem_consolidate_of_mem us (UnifiedRow.err e) d hMem
-
 /-- Forward direction for collection-scoped errors: every input
 `.error`-diff carrier shows up in the consolidated output. Direct
 consequence of `consolidate_preserves_error`. -/
@@ -1662,19 +1651,10 @@ theorem UnifiedStream.consolidate_errorDiffCarriers_mono
   rw [UnifiedStream.mem_errorDiffCarriers]
   exact UnifiedStream.consolidate_preserves_error us uc h
 
-/-- Full equivalence: the collection-err set of the consolidated
-stream equals the input's. Combines `consolidate_preserves_error`
-(forward) with `consolidate_error_inv` (reverse — no spurious
-`.error` emerges from `.val + .val`). -/
-theorem UnifiedStream.consolidate_errorDiffCarriers_iff
-    (us : UnifiedStream) (uc : UnifiedRow) :
-    uc ∈ UnifiedStream.errorDiffCarriers (UnifiedStream.consolidate us)
-      ↔ uc ∈ UnifiedStream.errorDiffCarriers us := by
-  rw [UnifiedStream.mem_errorDiffCarriers,
-      UnifiedStream.mem_errorDiffCarriers]
-  constructor
-  · intro h; exact UnifiedStream.consolidate_error_inv us uc h
-  · intro h; exact UnifiedStream.consolidate_preserves_error us uc h
+-- `consolidate_errCarriers_iff` and `consolidate_errorDiffCarriers_iff`
+-- now live in `Mz/UnifiedConsolidate.lean` so `Mz/TimedConsolidate.lean`
+-- can cite them. SetOps imports UnifiedConsolidate, so downstream
+-- theorems here still see them.
 
 /-! ## Join and error scopes
 
