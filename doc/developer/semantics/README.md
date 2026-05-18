@@ -28,7 +28,11 @@ The goal is to lock in the boolean truth tables for `AND` and `OR` over the four
 * `Mz/Consolidate.lean`: per-key diff summation over `List (DiffWithError α)`. The headline `sumAll_eq_error_of_mem` proves that an `error` diff anywhere in the list absorbs the consolidated sum to `error`, which is the property a differential dataflow `compact` operator cites when propagating global errors through consolidation. Companion `sumAll_val_of_all_val` says an all-`val` list sums to `val` of some base value.
 * `Mz/Triple.lean`: `TimedRecord = (row, time, diff)` triple stream tying `DiffWithError` to differential dataflow's record format. Defines `consolidateAll` and `consolidateAt t`; lifts `Consolidate`'s absorption to per-time and stream-wide statements. Per-`(row, time)` bucketing is a follow-up — needs `DecidableEq` on `Row`.
 * `Mz/Join.lean`: relational joins on `UnifiedStream`. `cross` is the cartesian product; `join pred l r` filters the product through a join predicate. Errors propagate through the carrier — an `err` record on either side contributes one `err` to the output for every record on the other side, matching the diff-semiring's `error * diff = error`. Theorems cover the empty cases.
-* `Mz/GroupBy.lean`: `groupBy keyExpr rel` partitions a relation by an evaluated key, using `DecidableEq Datum`. `aggregateBy keyExpr valExpr f rel` runs `aggStrict` per group, modeling `SELECT keyExpr, AGG(valExpr) ... GROUP BY keyExpr`. Spec divergence on `err` keys (the spec says every err is its own group) is documented inline.
+* `Mz/GroupBy.lean`: two grouping primitives.
+  `groupBy keyExpr rel` partitions a relation by evaluated key using Lean's derived `DecidableEq Datum` — two `Datum.err e` keys with the same payload collapse into one group.
+  `groupByErrDistinct keyExpr rel` uses the spec-faithful `Datum.groupKeyEq`, which returns `false` whenever either side is `.err`, so every err key produces its own singleton group.
+  Theorem `insertIntoDistinct_err` proves the err-key insertion always appends a fresh group; `groupByErrDistinct_length_of_all_err` derives the cardinality consequence — every err-keyed row contributes one output group.
+  Companion `aggregateBy` / `aggregateByErrDistinct` run `aggStrict` per group, modeling `SELECT keyExpr, AGG(valExpr) ... GROUP BY keyExpr`.
 
 ## What is not here
 
@@ -78,8 +82,8 @@ The roadmap in priority order:
 * `BagStream.filter` commutativity. Data field commutes by `filterRel_comm`; the error field requires a notion of multiset equality on `List EvalError` since list-order differs across permutations.
 * Tie `DiffWithError` to a concrete dataflow operator: model a `(Row, Time, DiffWithError ℤ)` triple stream and prove that an `error` diff at time `t` propagates to every downstream consolidation.
 * Joins on `BagStream` with explicit error propagation.
-* Spec-faithful err-distinct keying for `groupBy`: every `Datum.err` key must form its own bucket, even when two errs have the same payload. Requires either a custom `Datum.groupKeyEq` or wrapping err keys in a fresh-tag type.
-* Cardinality theorem for `groupBy`: sum of group sizes equals `rel.length`. Requires `List.foldr_length` + Nat arithmetic.
+* Cardinality theorem for `groupBy`: sum of group sizes equals `rel.length`. Requires `List.foldr_length` + Nat arithmetic. (`groupByErrDistinct` already proves the all-err special case via `groupByErrDistinct_length_of_all_err`.)
+* Agreement theorem `groupByErrDistinct = groupBy` whenever no key evaluates to `.err`. Requires an invariant on the accumulator (no existing key is an err) propagated through the foldr.
 * Join cardinality theorem: `(cross l r).length = l.length * r.length`. Skipped in the current skeleton; the proof needs `List.length_flatMap` + Nat arithmetic.
 * Sketch a proof of `cross_assoc` modulo row concatenation associativity.
 * Tightening `Expr.might_error`. The skeleton version is purely structural and ignores type / nullability information; bringing it closer to `MirScalarExpr::might_error` is additive.
