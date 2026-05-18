@@ -788,6 +788,49 @@ theorem UnifiedStream.exceptAll_nil_left (r : UnifiedStream) :
   rw [UnifiedStream.unionAll_nil_left]
   exact (UnifiedStream.negate_consolidate r).symm
 
+/-! ## `INTERSECT ALL`
+
+Bag intersection on the diff-aware stream. Implementation:
+consolidate both inputs, then for each carrier in the left,
+look it up in the right. Output: `(carrier, min(L, R))` when
+the carrier is present in both, otherwise omit. The min
+combinator `DiffWithError.min` carries `.error` absorption: a
+collection-scoped error in either input gives an `.error` output
+for that carrier (provided the carrier exists in both). -/
+
+/-- Lookup the diff for `uc` in a consolidated stream. Returns
+`none` when the carrier is absent. The skeleton's consolidate
+keeps each carrier at most once, so the first match is the only
+match. -/
+def UnifiedStream.lookup (uc : UnifiedRow) :
+    UnifiedStream → Option (DiffWithError Int)
+  | []                    => none
+  | (uc', d) :: rest      => if uc = uc' then some d
+                              else UnifiedStream.lookup uc rest
+
+theorem UnifiedStream.lookup_nil (uc : UnifiedRow) :
+    UnifiedStream.lookup uc [] = none := rfl
+
+/-- `INTERSECT ALL` on `UnifiedStream`. Consolidates both sides,
+then per left-carrier emits `(uc, min(L_diff, R_diff))` if the
+carrier exists in the right's consolidate; otherwise drops it. -/
+def UnifiedStream.intersectAll (l r : UnifiedStream) : UnifiedStream :=
+  let rCons := UnifiedStream.consolidate r
+  (UnifiedStream.consolidate l).filterMap fun ud =>
+    match UnifiedStream.lookup ud.1 rCons with
+    | none    => none
+    | some d' => some (ud.1, DiffWithError.min ud.2 d')
+
+/-- Length bound: at most the consolidated length of `l`. -/
+theorem UnifiedStream.intersectAll_length_le (l r : UnifiedStream) :
+    (UnifiedStream.intersectAll l r).length ≤ l.length := by
+  have h1 : (UnifiedStream.intersectAll l r).length
+              ≤ (UnifiedStream.consolidate l).length := by
+    show ((UnifiedStream.consolidate l).filterMap _).length
+          ≤ (UnifiedStream.consolidate l).length
+    exact List.length_filterMap_le _ _
+  exact Nat.le_trans h1 (UnifiedStream.consolidate_length_le l)
+
 /-- `bagExceptAll [] r = clampPositive (negate (consolidate r))`.
 With an all-`.val` `r`, the negation makes every diff non-positive,
 which `clampPositive` then drops, yielding the spec-correct empty
