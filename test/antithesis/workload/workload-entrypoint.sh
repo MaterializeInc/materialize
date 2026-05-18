@@ -133,6 +133,15 @@ esac
 # Emit setup_complete — Antithesis begins test commands after this.
 /usr/local/bin/setup-complete.sh
 
+# Sentinel file the workload healthcheck looks at, so other services
+# can gate their start on this entrypoint finishing the cluster +
+# setup_complete handshake.  Currently consumed by the upsert-stress
+# group's upsert-hammer-{i} containers, which would otherwise race
+# the first_* setup drivers and start producing into Kafka before
+# the source exists.
+touch /tmp/workload-ready
+echo "Workload ready sentinel created at /tmp/workload-ready."
+
 # Sleep forever — Test Composer runs the test commands, not this entrypoint.
 echo "Setup complete. Sleeping while Test Composer runs commands."
 exec sleep infinity
