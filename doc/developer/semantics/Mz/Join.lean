@@ -56,4 +56,79 @@ theorem UnifiedStream.cross_nil_right (l : UnifiedStream) :
   | nil => rfl
   | cons _ tl _ih => simp [UnifiedStream.cross, List.map_nil, List.flatMap_cons]
 
+/-! ## Cardinality -/
+
+/-- Cross product cardinality. `cross l r` produces exactly one
+output per `(l, r)` pair, regardless of which side carries an
+error — every err in `l` or `r` contributes one err record per
+element of the other side, matching the diff-semiring's
+`error * d = error`. -/
+theorem UnifiedStream.cross_length (l r : UnifiedStream) :
+    (UnifiedStream.cross l r).length = l.length * r.length := by
+  induction l with
+  | nil => simp [UnifiedStream.cross]
+  | cons hd tl ih =>
+    show (UnifiedStream.cross (hd :: tl) r).length = (tl.length + 1) * r.length
+    rw [Nat.succ_mul]
+    show (((hd :: tl) : UnifiedStream).flatMap fun lu => r.map fun ru =>
+            match lu, ru with
+            | .row la, .row rb => UnifiedRow.row (la ++ rb)
+            | .err e,  _       => UnifiedRow.err e
+            | _,       .err e  => UnifiedRow.err e).length
+        = tl.length * r.length + r.length
+    rw [List.flatMap_cons, List.length_append, List.length_map]
+    show r.length + (UnifiedStream.cross tl r).length = tl.length * r.length + r.length
+    rw [ih]
+    exact Nat.add_comm _ _
+
+/-- Filter on `UnifiedStream` is non-expanding: every input record
+produces zero or one output record, so the output length is at
+most the input length. -/
+theorem UnifiedStream.filter_length_le (pred : Expr) (us : UnifiedStream) :
+    (UnifiedStream.filter pred us).length ≤ us.length := by
+  unfold UnifiedStream.filter
+  induction us with
+  | nil => exact Nat.le.refl
+  | cons hd tl ih =>
+    rw [List.flatMap_cons, List.length_append, List.length_cons]
+    have hHd : (match hd with
+                | UnifiedRow.row r =>
+                  match eval r pred with
+                  | .bool true => [UnifiedRow.row r]
+                  | .err e     => [UnifiedRow.err e]
+                  | _          => []
+                | UnifiedRow.err e => [UnifiedRow.err e]).length ≤ 1 := by
+      cases hd with
+      | row r =>
+        show (match eval r pred with
+              | .bool true => [UnifiedRow.row r]
+              | .err e     => [UnifiedRow.err e]
+              | _          => []).length ≤ 1
+        cases h_eval : eval r pred with
+        | bool b => cases b <;> simp [List.length_cons, List.length_nil]
+        | null   => simp [List.length_nil]
+        | err _  => simp [List.length_cons]
+      | err _ =>
+        show ([UnifiedRow.err _] : UnifiedStream).length ≤ 1
+        simp [List.length_cons]
+    calc (match hd with
+          | UnifiedRow.row r =>
+            match eval r pred with
+            | .bool true => [UnifiedRow.row r]
+            | .err e     => [UnifiedRow.err e]
+            | _          => []
+          | UnifiedRow.err e => [UnifiedRow.err e]).length
+        + (tl.flatMap _).length
+        ≤ 1 + tl.length := Nat.add_le_add hHd ih
+      _ = tl.length + 1 := Nat.add_comm _ _
+
+/-- Join length is bounded by cross length: the predicate filter
+can only remove rows. -/
+theorem UnifiedStream.join_length_le (pred : Expr) (l r : UnifiedStream) :
+    (UnifiedStream.join pred l r).length ≤ l.length * r.length := by
+  show (UnifiedStream.filter pred (UnifiedStream.cross l r)).length
+      ≤ l.length * r.length
+  rw [← UnifiedStream.cross_length l r]
+  exact UnifiedStream.filter_length_le pred _
+
 end Mz
