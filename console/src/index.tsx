@@ -18,7 +18,6 @@ import "~/font/inter.css";
 import "@fontsource/roboto-mono";
 // Initializes Sentry error reporting and tracing
 import "~/sentry";
-import "jotai-devtools/styles.css";
 
 import React from "react";
 import { createRoot } from "react-dom/client";
