@@ -123,4 +123,46 @@ theorem aggStrict_no_err
       · exact hb
       · intro h_eq; cases h_eq
 
+/-! ## Non-strict (`try_*`) variants
+
+The proposed `try_sum`, `try_min`, etc. swallow `err` into `NULL`
+instead of propagating. Defined here as a post-pass coalesce on
+`aggStrict`'s output: an `err` result becomes `.null`; anything
+else is unchanged. The skeleton's `evalCoalesce` exhibits the same
+"`null` beats `err`" tiebreak, so an equivalent reading is
+
+    aggTry f xs = evalCoalesce [aggStrict f xs, .null]
+
+The defining property is `aggTry_no_err`: the result is never an
+`err`. The companion `aggTry_eq_aggStrict_of_no_err` says the
+non-strict variant agrees with the strict one whenever the strict
+one would not have erred — so an optimizer that has proved the
+inputs error-free can swap `aggTry` for `aggStrict`. -/
+
+def aggTry (f : Datum → Datum → Datum) (xs : List Datum) : Datum :=
+  match aggStrict f xs with
+  | Datum.err _ => Datum.null
+  | r           => r
+
+theorem aggTry_no_err (f : Datum → Datum → Datum) (xs : List Datum) :
+    ¬(aggTry f xs).IsErr := by
+  show ¬(match aggStrict f xs with
+         | Datum.err _ => Datum.null
+         | r           => r).IsErr
+  cases aggStrict f xs <;> intro h <;> cases h
+
+theorem aggTry_eq_aggStrict_of_no_err
+    (f : Datum → Datum → Datum)
+    (f_safe : ∀ x y, ¬x.IsErr → ¬y.IsErr → ¬(f x y).IsErr)
+    {xs : List Datum} (h : ∀ d ∈ xs, ¬d.IsErr) :
+    aggTry f xs = aggStrict f xs := by
+  have h_safe : ¬(aggStrict f xs).IsErr := aggStrict_no_err f f_safe h
+  show (match aggStrict f xs with
+        | Datum.err _ => Datum.null
+        | r           => r) = aggStrict f xs
+  cases h_eval : aggStrict f xs with
+  | err _  => exact absurd (h_eval ▸ h_safe) (fun h' => h' trivial)
+  | null   => rfl
+  | bool _ => rfl
+
 end Mz
