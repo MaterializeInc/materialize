@@ -199,6 +199,47 @@ theorem mul_assoc [Mul α]
       | val _ => rfl
       | error => rfl
 
+/-- Commutativity of `*` (when the base has it). -/
+theorem mul_comm [Mul α] (h_comm : ∀ x y : α, x * y = y * x)
+    (a b : DiffWithError α) : a * b = b * a := by
+  cases a with
+  | val x =>
+    cases b with
+    | val y =>
+      show (val (x * y) : DiffWithError α) = val (y * x)
+      rw [h_comm]
+    | error => rfl
+  | error =>
+    cases b with
+    | val _ => rfl
+    | error => rfl
+
+/-! ## Int specializations
+
+The diff-aware operators in `Mz/UnifiedStream.lean` and
+`Mz/Join.lean` instantiate the base type at `Int`. The following
+specializations discharge the `h_*` hypotheses once at the type
+level so downstream code can cite the named laws without
+re-supplying base proofs every time. -/
+
+theorem add_comm_int (a b : DiffWithError Int) : a + b = b + a :=
+  add_comm Int.add_comm a b
+
+theorem add_assoc_int (a b c : DiffWithError Int) :
+    (a + b) + c = a + (b + c) :=
+  add_assoc Int.add_assoc a b c
+
+theorem mul_assoc_int (a b c : DiffWithError Int) :
+    (a * b) * c = a * (b * c) :=
+  mul_assoc Int.mul_assoc a b c
+
+theorem mul_comm_int (a b : DiffWithError Int) : a * b = b * a :=
+  mul_comm Int.mul_comm a b
+
+theorem mul_add_int (a b c : DiffWithError Int) :
+    a * (b + c) = a * b + a * c :=
+  mul_add Int.mul_add a b c
+
 end DiffWithError
 
 end Mz
