@@ -27,8 +27,9 @@ namespace Mz
 
 /-- Insert `(uc, d)` into a consolidated stream. If a record with
 the same carrier already exists, add `d` to its diff. Otherwise
-append a new record at the end of the list. -/
-private def consolidateInto (uc : UnifiedRow) (d : DiffWithError Int) :
+append a new record at the end of the list. Exposed (not
+`private`) so downstream files can state laws about it. -/
+def consolidateInto (uc : UnifiedRow) (d : DiffWithError Int) :
     UnifiedStream → UnifiedStream
   | []                  => [(uc, d)]
   | (uc', d') :: rest =>

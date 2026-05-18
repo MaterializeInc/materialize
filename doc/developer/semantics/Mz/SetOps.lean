@@ -541,6 +541,76 @@ theorem UnifiedStream.negate_unionAll (a b : UnifiedStream) :
   show (a ++ b).map _ = a.map _ ++ b.map _
   exact List.map_append
 
+/-- `negate` commutes with `consolidateInto`: inserting a negated
+diff into a negated bucket list gives the same result as inserting
+the positive diff and negating the whole list. -/
+private theorem negate_consolidateInto
+    (uc : UnifiedRow) (d : DiffWithError Int) (xs : UnifiedStream) :
+    UnifiedStream.negate (consolidateInto uc d xs)
+      = consolidateInto uc (-d) (UnifiedStream.negate xs) := by
+  induction xs with
+  | nil =>
+    show UnifiedStream.negate [(uc, d)]
+        = [(uc, -d)]
+    rfl
+  | cons hd tl ih =>
+    obtain ⟨uc', d'⟩ := hd
+    by_cases hEq : uc = uc'
+    · subst hEq
+      -- consolidateInto uc d ((uc, d') :: tl) = (uc, d + d') :: tl
+      have hLhs : consolidateInto uc d ((uc, d') :: tl) = (uc, d + d') :: tl := by
+        show (if uc = uc then (uc, d + d') :: tl
+                else (uc, d') :: consolidateInto uc d tl)
+            = (uc, d + d') :: tl
+        rw [if_pos rfl]
+      have hRhs : consolidateInto uc (-d) ((uc, -d') :: UnifiedStream.negate tl)
+                = (uc, -d + -d') :: UnifiedStream.negate tl := by
+        show (if uc = uc then (uc, -d + -d') :: UnifiedStream.negate tl
+                else (uc, -d') :: consolidateInto uc (-d) (UnifiedStream.negate tl))
+            = (uc, -d + -d') :: UnifiedStream.negate tl
+        rw [if_pos rfl]
+      rw [hLhs]
+      show UnifiedStream.negate ((uc, d + d') :: tl)
+          = consolidateInto uc (-d) (UnifiedStream.negate ((uc, d') :: tl))
+      show ((uc, -(d + d')) :: UnifiedStream.negate tl)
+          = consolidateInto uc (-d) ((uc, -d') :: UnifiedStream.negate tl)
+      rw [hRhs, DiffWithError.neg_add_int]
+    · have hLhs : consolidateInto uc d ((uc', d') :: tl)
+                = (uc', d') :: consolidateInto uc d tl := by
+        show (if uc = uc' then (uc', d + d') :: tl
+                else (uc', d') :: consolidateInto uc d tl)
+            = (uc', d') :: consolidateInto uc d tl
+        rw [if_neg hEq]
+      have hRhs : consolidateInto uc (-d) ((uc', -d') :: UnifiedStream.negate tl)
+                = (uc', -d') :: consolidateInto uc (-d) (UnifiedStream.negate tl) := by
+        show (if uc = uc' then (uc', -d + -d') :: UnifiedStream.negate tl
+                else (uc', -d') :: consolidateInto uc (-d) (UnifiedStream.negate tl))
+            = (uc', -d') :: consolidateInto uc (-d) (UnifiedStream.negate tl)
+        rw [if_neg hEq]
+      rw [hLhs]
+      show UnifiedStream.negate ((uc', d') :: consolidateInto uc d tl)
+          = consolidateInto uc (-d) (UnifiedStream.negate ((uc', d') :: tl))
+      show ((uc', -d') :: UnifiedStream.negate (consolidateInto uc d tl))
+          = consolidateInto uc (-d) ((uc', -d') :: UnifiedStream.negate tl)
+      rw [hRhs, ih]
+
+/-- `negate` commutes with `consolidate`: consolidating then
+negating equals negating then consolidating. Negation is additive,
+so it slides through the per-bucket sums. -/
+theorem UnifiedStream.negate_consolidate (us : UnifiedStream) :
+    UnifiedStream.negate (UnifiedStream.consolidate us)
+      = UnifiedStream.consolidate (UnifiedStream.negate us) := by
+  induction us with
+  | nil => rfl
+  | cons hd tl ih =>
+    obtain ⟨uc, d⟩ := hd
+    show UnifiedStream.negate (consolidateInto uc d (UnifiedStream.consolidate tl))
+        = UnifiedStream.consolidate ((uc, -d) :: UnifiedStream.negate tl)
+    rw [negate_consolidateInto]
+    show consolidateInto uc (-d) (UnifiedStream.negate (UnifiedStream.consolidate tl))
+        = consolidateInto uc (-d) (UnifiedStream.consolidate (UnifiedStream.negate tl))
+    rw [ih]
+
 /-- Negating one side of a cross product is the same as negating
 the cross product. The diff-semiring law `(-a) * b = -(a * b)`
 carries the proof through `combineCarrier` (carrier is unchanged
