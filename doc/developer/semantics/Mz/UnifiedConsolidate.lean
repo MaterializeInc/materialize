@@ -569,4 +569,74 @@ theorem UnifiedStream.mem_of_mem_consolidate
       obtain ⟨d''', hMemTl⟩ := ih ⟨d'', hMem'⟩
       exact ⟨d''', List.mem_cons_of_mem _ hMemTl⟩
 
+/-! ## Error-diff inversion
+
+Reverse direction of `consolidate_preserves_error`: a `.error`
+diff in the consolidated output must have come from a `.error`
+diff in the input at the same carrier. Builds on the DiffSemiring
+inversion `add_eq_error_left_or_right`. -/
+
+private theorem consolidateInto_error_inv
+    (uc uc' : UnifiedRow) (d' : DiffWithError Int) (us : UnifiedStream)
+    (h : (uc, (DiffWithError.error : DiffWithError Int))
+            ∈ consolidateInto uc' d' us) :
+    (uc = uc' ∧ d' = DiffWithError.error)
+      ∨ (uc, (DiffWithError.error : DiffWithError Int)) ∈ us := by
+  induction us with
+  | nil =>
+    -- consolidateInto uc' d' [] = [(uc', d')]; so (uc, .error) = (uc', d').
+    have hEq : (uc, (DiffWithError.error : DiffWithError Int)) = (uc', d') :=
+      List.mem_singleton.mp h
+    have hUc : uc = uc' := (Prod.mk.injEq _ _ _ _).mp hEq |>.1
+    have hD  : (DiffWithError.error : DiffWithError Int) = d' :=
+      (Prod.mk.injEq _ _ _ _).mp hEq |>.2
+    exact Or.inl ⟨hUc, hD.symm⟩
+  | cons hd tl ih =>
+    obtain ⟨uc'', d''⟩ := hd
+    by_cases hEq : uc' = uc''
+    · subst hEq
+      rw [consolidateInto_match] at h
+      rcases List.mem_cons.mp h with hHead | hTail
+      · -- (uc, .error) = (uc', d' + d''); two summand sources.
+        have hUc : uc = uc' := (Prod.mk.injEq _ _ _ _).mp hHead |>.1
+        have hD : (DiffWithError.error : DiffWithError Int) = d' + d'' :=
+          (Prod.mk.injEq _ _ _ _).mp hHead |>.2
+        subst hUc
+        rcases DiffWithError.add_eq_error_left_or_right d' d'' hD.symm with hD' | hD''
+        · exact Or.inl ⟨rfl, hD'⟩
+        · subst hD''
+          exact Or.inr List.mem_cons_self
+      · exact Or.inr (List.mem_cons_of_mem _ hTail)
+    · rw [consolidateInto_skip _ _ _ _ _ hEq] at h
+      rcases List.mem_cons.mp h with hHead | hTail
+      · -- (uc, .error) = (uc'', d''); preserved from input head.
+        have hUc : uc = uc'' := (Prod.mk.injEq _ _ _ _).mp hHead |>.1
+        have hD : (DiffWithError.error : DiffWithError Int) = d'' :=
+          (Prod.mk.injEq _ _ _ _).mp hHead |>.2
+        subst hUc; subst hD
+        exact Or.inr List.mem_cons_self
+      · rcases ih hTail with ⟨hUc, hD⟩ | hMem
+        · exact Or.inl ⟨hUc, hD⟩
+        · exact Or.inr (List.mem_cons_of_mem _ hMem)
+
+/-- Every collection-err carrier in the consolidated output
+corresponds to a collection-err carrier in the input at the
+same carrier. The strict converse of
+`consolidate_preserves_error`. -/
+theorem UnifiedStream.consolidate_error_inv
+    (us : UnifiedStream) (uc : UnifiedRow)
+    (h : (uc, (DiffWithError.error : DiffWithError Int))
+            ∈ UnifiedStream.consolidate us) :
+    (uc, (DiffWithError.error : DiffWithError Int)) ∈ us := by
+  induction us with
+  | nil => exact absurd h List.not_mem_nil
+  | cons hd tl ih =>
+    obtain ⟨uc', d'⟩ := hd
+    have hInto : (uc, (DiffWithError.error : DiffWithError Int))
+                  ∈ consolidateInto uc' d' (UnifiedStream.consolidate tl) := h
+    rcases consolidateInto_error_inv uc uc' d' _ hInto with ⟨hUc, hD⟩ | hMem
+    · subst hUc; subst hD
+      exact List.mem_cons_self
+    · exact List.mem_cons_of_mem _ (ih hMem)
+
 end Mz
