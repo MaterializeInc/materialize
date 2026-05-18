@@ -11,6 +11,7 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::Arc;
+use std::time::Instant;
 
 use bytes::{Bytes, BytesMut};
 use differential_dataflow::lattice::Lattice;
@@ -358,17 +359,23 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
         diffs: I,
     ) {
         let mut state_seqno = self.seqno;
+        let shard_kind = metrics.shard_kind_for(&self.shard_id);
         let diffs = diffs.into_iter().filter_map(move |x| {
             if x.seqno != state_seqno.next() {
                 // No-op.
                 return None;
             }
             let data = x.data.clone();
+            let decode_start = Instant::now();
             let diff = metrics
                 .codecs
                 .state_diff
                 // Note: `x.data` is a `Bytes`, so cloning just increments a ref count
                 .decode(|| StateDiff::decode(&cfg.build_version, x.data.clone()));
+            metrics
+                .state_apply_latency_by_kind
+                .with_label_values(&["decode", shard_kind])
+                .observe(decode_start.elapsed().as_secs_f64());
             assert_eq!(diff.seqno_from, state_seqno);
             state_seqno = diff.seqno_to;
             Some((diff, data))
@@ -411,6 +418,22 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
         &mut self,
         metrics: &Metrics,
         diff: StateDiff<T>,
+    ) -> Result<(), String> {
+        let apply_start = Instant::now();
+        let shard_kind = metrics.shard_kind_for(&self.shard_id);
+        let res = self.apply_diff_inner(metrics, diff, shard_kind);
+        metrics
+            .state_apply_latency_by_kind
+            .with_label_values(&["total", shard_kind])
+            .observe(apply_start.elapsed().as_secs_f64());
+        res
+    }
+
+    fn apply_diff_inner(
+        &mut self,
+        metrics: &Metrics,
+        diff: StateDiff<T>,
+        shard_kind: &'static str,
     ) -> Result<(), String> {
         // Deconstruct diff so we get a compile failure if new fields are added.
         let StateDiff {
@@ -491,7 +514,12 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
 
         let mut flat = if trace.roundtrip_structure {
             metrics.state.apply_spine_flattened.inc();
+            let flatten_start = Instant::now();
             let mut flat = trace.flatten();
+            metrics
+                .state_apply_latency_by_kind
+                .with_label_values(&["flatten", shard_kind])
+                .observe(flatten_start.elapsed().as_secs_f64());
             apply_diffs_single("since", diff_since, &mut flat.since)?;
             apply_diffs_map(
                 "legacy_batches",
@@ -529,7 +557,15 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
         };
 
         if !structure_unchanged {
-            let flat = flat.get_or_insert_with(|| trace.flatten());
+            let flat = flat.get_or_insert_with(|| {
+                let flatten_start = Instant::now();
+                let f = trace.flatten();
+                metrics
+                    .state_apply_latency_by_kind
+                    .with_label_values(&["flatten", shard_kind])
+                    .observe(flatten_start.elapsed().as_secs_f64());
+                f
+            });
             apply_diffs_map(
                 "hollow_batches",
                 diff_hollow_batches,
@@ -540,7 +576,12 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
         }
 
         if let Some(flat) = flat {
+            let unflatten_start = Instant::now();
             *trace = Trace::unflatten(flat)?;
+            metrics
+                .state_apply_latency_by_kind
+                .with_label_values(&["unflatten", shard_kind])
+                .observe(unflatten_start.elapsed().as_secs_f64());
         }
 
         // There's various sanity checks that this method could run (e.g. since,

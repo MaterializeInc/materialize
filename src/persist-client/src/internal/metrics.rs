@@ -116,6 +116,13 @@ pub struct Metrics {
     /// Per-op latency histogram broken down by shard_kind, so we can
     /// disentangle catalog / txns / user-shard contributions to total CAS time.
     pub external_op_latency_by_kind: HistogramVec,
+    /// Sub-stage latency histogram for `State::apply_diff` and friends, broken
+    /// down by `[stage, shard_kind]`. `stage` is one of `total`, `flatten`,
+    /// `unflatten`, `decode`. Use this to localize where per-CAS state-apply
+    /// time goes for a given shard kind. The histogram count for `stage="total"`
+    /// also doubles as a "number of `apply_diff` invocations" counter per
+    /// shard_kind, which is what reveals the per-DDL state-apply work growth.
+    pub state_apply_latency_by_kind: HistogramVec,
     /// Registry mapping a persist key prefix (the ShardId in stringified form)
     /// to a coarse `shard_kind` label. Populated when shards are opened by
     /// `Applier::new` via [Metrics::register_shard_kind] and read on the hot
@@ -156,6 +163,13 @@ impl Metrics {
             var_labels: ["op", "shard_kind"],
             buckets: histogram_seconds_buckets(0.000_500, 32.0),
         ));
+        let state_apply_latency_by_kind = registry.register(metric!(
+            name: "mz_persist_state_apply_latency_by_shard_kind",
+            help: "latency of State::apply_diff sub-stages (total/flatten/unflatten/decode), broken down by shard_kind",
+            var_labels: ["stage", "shard_kind"],
+            // Apply work is mostly sub-millisecond per-call; keep the low end fine.
+            buckets: histogram_seconds_buckets(0.000_050, 32.0),
+        ));
         Metrics {
             blob: vecs.blob_metrics(),
             consensus: vecs.consensus_metrics(),
@@ -185,6 +199,7 @@ impl Metrics {
             s3_blob,
             postgres_consensus: PostgresClientMetrics::new(registry, "mz_persist"),
             external_op_latency_by_kind,
+            state_apply_latency_by_kind,
             shard_kinds: Arc::new(Mutex::new(HashMap::new())),
             _vecs: vecs,
             _uptime: uptime,
@@ -232,6 +247,15 @@ impl Metrics {
         };
         let map = self.shard_kinds.lock().expect("mutex poisoned");
         map.get(prefix).copied().unwrap_or("unknown")
+    }
+
+    /// Look up the `shard_kind` for a [ShardId]. Returns `"unknown"` if the
+    /// shard has not been registered yet via [Self::register_shard_kind].
+    /// Used by in-persist hot paths (state apply) to attribute work to the
+    /// shard kind without going through the consensus-key prefix logic.
+    pub(crate) fn shard_kind_for(&self, shard_id: &ShardId) -> &'static str {
+        let map = self.shard_kinds.lock().expect("mutex poisoned");
+        map.get(&shard_id.to_string()).copied().unwrap_or("unknown")
     }
 
     /// Returns the current lifetime write amplification reflected in these
