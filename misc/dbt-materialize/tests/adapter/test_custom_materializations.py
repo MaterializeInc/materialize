@@ -88,6 +88,22 @@ class TestCustomMaterializations:
 
         check_relations_equal(project.adapter, ["actual_indexes", "expected_indexes"])
 
+        # Verify that the partition_by configuration is rendered correctly on
+        # its own.
+        partition_by_model = ".".join(
+            [
+                project.adapter.config.credentials.database,
+                project.adapter.config.credentials.schema,
+                "test_materialized_view_partition_by",
+            ]
+        )
+        partition_by_ddl = run_sql_with_adapter(
+            project.adapter,
+            f"SHOW CREATE MATERIALIZED VIEW {partition_by_model}",
+            fetch="one",
+        )
+        assert "PARTITION BY = (a)" in partition_by_ddl[1]
+
         # Verify that multiple WITH options are merged into a single WITH clause.
         multiple_with_options_model = ".".join(
             [

@@ -351,6 +351,27 @@ models:
         data_type: string
 """
 
+partition_by_with_constraints_schema_yml = """
+version: 2
+models:
+  - name: test_partition_by_with_constraints_ddl
+    config:
+      contract:
+        enforced: true
+      partition_by: ['a']
+    columns:
+      - name: a
+        data_type: string
+        constraints:
+          - type: not_null
+      - name: b
+        data_type: string
+        constraints:
+          - type: not_null
+      - name: c
+        data_type: string
+"""
+
 contract_invalid_cluster_schema_yml = """
 version: 2
 models:

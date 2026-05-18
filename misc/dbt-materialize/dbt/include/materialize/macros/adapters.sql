@@ -43,7 +43,7 @@
   {%- endif -%}
 
   {# Partition by #}
-  {%- set partition_by = config.get('partition_by') -%}
+  {%- set partition_by = adapter.parse_partition_by(config.get('partition_by')) -%}
   {%- if partition_by -%}
     {%- do with_options.append('partition by (' ~ (partition_by | join(', ')) ~ ')') -%}
   {%- endif -%}
