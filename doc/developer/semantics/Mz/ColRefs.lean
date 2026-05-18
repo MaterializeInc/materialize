@@ -371,4 +371,136 @@ theorem eval_append_right_shift_argsMap :
         eval_append_right_shift_argsMap l r rest]
 end
 
+/-! ## Shift composition laws
+
+`colShift` is the identity at `k = 0` and composes additively:
+shifting by `k` then by `m` equals shifting by `k + m`. Useful for
+nested joins where each join adds its own offset to the predicate's
+column references. -/
+
+mutual
+theorem Expr.colShift_zero : ∀ (e : Expr), e.colShift 0 = e
+  | .lit _            => rfl
+  | .col i            => by show Expr.col (0 + i) = .col i; rw [Nat.zero_add]
+  | .and a b          => by
+    show Expr.and (a.colShift 0) (b.colShift 0) = .and a b
+    rw [Expr.colShift_zero a, Expr.colShift_zero b]
+  | .or a b           => by
+    show Expr.or (a.colShift 0) (b.colShift 0) = .or a b
+    rw [Expr.colShift_zero a, Expr.colShift_zero b]
+  | .not a            => by
+    show Expr.not (a.colShift 0) = .not a
+    rw [Expr.colShift_zero a]
+  | .ifThen c t e     => by
+    show Expr.ifThen (c.colShift 0) (t.colShift 0) (e.colShift 0)
+        = .ifThen c t e
+    rw [Expr.colShift_zero c, Expr.colShift_zero t, Expr.colShift_zero e]
+  | .andN args        => by
+    show Expr.andN (Expr.argsColShift 0 args) = .andN args
+    rw [Expr.argsColShift_zero args]
+  | .orN args         => by
+    show Expr.orN (Expr.argsColShift 0 args) = .orN args
+    rw [Expr.argsColShift_zero args]
+  | .coalesce args    => by
+    show Expr.coalesce (Expr.argsColShift 0 args) = .coalesce args
+    rw [Expr.argsColShift_zero args]
+  | .plus a b         => by
+    show Expr.plus (a.colShift 0) (b.colShift 0) = .plus a b
+    rw [Expr.colShift_zero a, Expr.colShift_zero b]
+  | .minus a b        => by
+    show Expr.minus (a.colShift 0) (b.colShift 0) = .minus a b
+    rw [Expr.colShift_zero a, Expr.colShift_zero b]
+  | .times a b        => by
+    show Expr.times (a.colShift 0) (b.colShift 0) = .times a b
+    rw [Expr.colShift_zero a, Expr.colShift_zero b]
+  | .divide a b       => by
+    show Expr.divide (a.colShift 0) (b.colShift 0) = .divide a b
+    rw [Expr.colShift_zero a, Expr.colShift_zero b]
+  | .eq a b           => by
+    show Expr.eq (a.colShift 0) (b.colShift 0) = .eq a b
+    rw [Expr.colShift_zero a, Expr.colShift_zero b]
+  | .lt a b           => by
+    show Expr.lt (a.colShift 0) (b.colShift 0) = .lt a b
+    rw [Expr.colShift_zero a, Expr.colShift_zero b]
+
+theorem Expr.argsColShift_zero : ∀ (args : List Expr),
+    Expr.argsColShift 0 args = args
+  | []        => rfl
+  | e :: rest => by
+    show e.colShift 0 :: Expr.argsColShift 0 rest = e :: rest
+    rw [Expr.colShift_zero e, Expr.argsColShift_zero rest]
+end
+
+mutual
+theorem Expr.colShift_add :
+    ∀ (k m : Nat) (e : Expr), (e.colShift k).colShift m = e.colShift (k + m)
+  | _, _, .lit _            => rfl
+  | k, m, .col i            => by
+    show Expr.col (m + (k + i)) = Expr.col (k + m + i)
+    congr 1; omega
+  | k, m, .and a b          => by
+    show Expr.and ((a.colShift k).colShift m) ((b.colShift k).colShift m)
+        = .and (a.colShift (k + m)) (b.colShift (k + m))
+    rw [Expr.colShift_add k m a, Expr.colShift_add k m b]
+  | k, m, .or a b           => by
+    show Expr.or ((a.colShift k).colShift m) ((b.colShift k).colShift m)
+        = .or (a.colShift (k + m)) (b.colShift (k + m))
+    rw [Expr.colShift_add k m a, Expr.colShift_add k m b]
+  | k, m, .not a            => by
+    show Expr.not ((a.colShift k).colShift m) = .not (a.colShift (k + m))
+    rw [Expr.colShift_add k m a]
+  | k, m, .ifThen c t e     => by
+    show Expr.ifThen ((c.colShift k).colShift m) ((t.colShift k).colShift m)
+            ((e.colShift k).colShift m)
+        = .ifThen (c.colShift (k + m)) (t.colShift (k + m)) (e.colShift (k + m))
+    rw [Expr.colShift_add k m c, Expr.colShift_add k m t,
+        Expr.colShift_add k m e]
+  | k, m, .andN args        => by
+    show Expr.andN (Expr.argsColShift m (Expr.argsColShift k args))
+        = .andN (Expr.argsColShift (k + m) args)
+    rw [Expr.argsColShift_add k m args]
+  | k, m, .orN args         => by
+    show Expr.orN (Expr.argsColShift m (Expr.argsColShift k args))
+        = .orN (Expr.argsColShift (k + m) args)
+    rw [Expr.argsColShift_add k m args]
+  | k, m, .coalesce args    => by
+    show Expr.coalesce (Expr.argsColShift m (Expr.argsColShift k args))
+        = .coalesce (Expr.argsColShift (k + m) args)
+    rw [Expr.argsColShift_add k m args]
+  | k, m, .plus a b         => by
+    show Expr.plus ((a.colShift k).colShift m) ((b.colShift k).colShift m)
+        = .plus (a.colShift (k + m)) (b.colShift (k + m))
+    rw [Expr.colShift_add k m a, Expr.colShift_add k m b]
+  | k, m, .minus a b        => by
+    show Expr.minus ((a.colShift k).colShift m) ((b.colShift k).colShift m)
+        = .minus (a.colShift (k + m)) (b.colShift (k + m))
+    rw [Expr.colShift_add k m a, Expr.colShift_add k m b]
+  | k, m, .times a b        => by
+    show Expr.times ((a.colShift k).colShift m) ((b.colShift k).colShift m)
+        = .times (a.colShift (k + m)) (b.colShift (k + m))
+    rw [Expr.colShift_add k m a, Expr.colShift_add k m b]
+  | k, m, .divide a b       => by
+    show Expr.divide ((a.colShift k).colShift m) ((b.colShift k).colShift m)
+        = .divide (a.colShift (k + m)) (b.colShift (k + m))
+    rw [Expr.colShift_add k m a, Expr.colShift_add k m b]
+  | k, m, .eq a b           => by
+    show Expr.eq ((a.colShift k).colShift m) ((b.colShift k).colShift m)
+        = .eq (a.colShift (k + m)) (b.colShift (k + m))
+    rw [Expr.colShift_add k m a, Expr.colShift_add k m b]
+  | k, m, .lt a b           => by
+    show Expr.lt ((a.colShift k).colShift m) ((b.colShift k).colShift m)
+        = .lt (a.colShift (k + m)) (b.colShift (k + m))
+    rw [Expr.colShift_add k m a, Expr.colShift_add k m b]
+
+theorem Expr.argsColShift_add :
+    ∀ (k m : Nat) (args : List Expr),
+      Expr.argsColShift m (Expr.argsColShift k args)
+        = Expr.argsColShift (k + m) args
+  | _, _, []         => rfl
+  | k, m, e :: rest  => by
+    show (e.colShift k).colShift m :: Expr.argsColShift m (Expr.argsColShift k rest)
+        = e.colShift (k + m) :: Expr.argsColShift (k + m) rest
+    rw [Expr.colShift_add k m e, Expr.argsColShift_add k m rest]
+end
+
 end Mz
