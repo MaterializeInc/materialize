@@ -634,6 +634,21 @@ theorem UnifiedStream.distinct_only_one_or_error (us : UnifiedStream) :
       x.2 = DiffWithError.val 1 ∨ x.2 = DiffWithError.error :=
   UnifiedStream.clampToOne_only_one_or_error _
 
+/-- `clampPositive` is a no-op on the output of `clampToOne`:
+every surviving record has `.val 1` (which is positive) or
+`.error`, both of which `clampPositive` keeps. -/
+theorem UnifiedStream.clampPositive_clampToOne (us : UnifiedStream) :
+    UnifiedStream.clampPositive (UnifiedStream.clampToOne us)
+      = UnifiedStream.clampToOne us := by
+  unfold UnifiedStream.clampPositive
+  apply List.filter_eq_self.mpr
+  intro x hMem
+  rcases UnifiedStream.clampToOne_only_one_or_error us x hMem with h | h
+  · show isPositiveDiff x.2 = true
+    rw [h]; rfl
+  · show isPositiveDiff x.2 = true
+    rw [h]; rfl
+
 /-- All-`.val` inputs yield all-`.val` outputs through `distinct`.
 Combined with `distinct_only_one_or_error`, the surviving diffs are
 all `.val 1`. -/
