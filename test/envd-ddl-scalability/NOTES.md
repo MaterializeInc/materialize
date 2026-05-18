@@ -946,9 +946,39 @@ Single-op serial latency on the smallest payloads is flat — the
 loopback round-trip floor (~90 μs) doesn't depend on connection
 count.
 
-End-to-end audit validation against envd was not completed in this
-session (rebuild on the local box outran the wall clock); the
-microbench shows the change cleanly reduces concurrent-CAS
-serialisation, which is where the tail in envd was coming from.
-Re-running the audit against the multi-channel build is the obvious
-next step on resume.
+### 2026-05-18 — DDL audit, multi-channel bogo (this is the headline)
+
+After both fixes (HTTP/2 windows + 8-way channel fan-out), bogo is
+**faster than CRDB across the board**, both N=0 and N=5000.
+
+p50 latency in ms (warm envd, `--padding tables --reps 8`):
+
+| op | CRDB N=0 | bogo+mc N=0 | CRDB N=5000 | bogo+mc N=5000 |
+| --- | ---: | ---: | ---: | ---: |
+| create_table        | 24.6 | **14.8** | 39.4 | **24.0** |
+| drop_table          | 15.1 | **11.0** | 31.2 | **21.9** |
+| alter_table_add_col | 17.8 | **13.7** | 34.0 | **22.1** |
+| rename_table        | 13.7 | **10.5** | 29.9 | **20.1** |
+
+Bogo wins every cell. The win at N=0 is 20-40%; the win at N=5000 is
+about the same in absolute terms (~8-15 ms), so the deltas hold even
+as the catalog grows. The 5000-table pad itself took 184 s under bogo
+(was 551 s pre-fix, 193 s under CRDB).
+
+Why this works despite the consensus_cas mean from envd's persist
+client *not* having dropped (still ~11 ms): with multiple connections,
+the slow ops in the long tail no longer block sibling RPCs on the
+same connection. The p50 CAS is still sub-millisecond; the tail still
+exists but it now runs concurrently with the rest of the DDL work
+instead of serially gating it. Eliminating the head-of-line blocking
+is the real fix even though the mean per-op number looks unchanged.
+
+### Done
+
+The original probe asked whether the residual post-design slope was
+CRDB-bound. The first answer (pre-fix bogo: it's not, bogo is even
+slower) was misleading because bogo itself was broken on the gRPC
+client path. With bogo actually fast, the probe re-runs and confirms
+the underlying signal: bogo cleanly beats CRDB on every op and every
+scale point measured. The next round of catalog-side work can use
+bogo as a clean low-floor reference.
