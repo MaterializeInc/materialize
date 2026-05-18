@@ -1,78 +1,73 @@
-import Mz.Bag
+import Mz.UnifiedStream
+import Mz.TimedConsolidate
 import Mz.DiffSemiring
 import Mz.Consolidate
 
 /-!
-# Timed records — `(Row, Time, Diff)` triple stream
+# Collection-wide diff sum on the timed unified stream
 
-A first sketch of differential dataflow's record format: a stream
-of `(row, time, diff)` triples, where the diff lives in
-`DiffWithError α`. The skeleton uses `Nat` for time and parametrizes
-over the base diff type.
+Differential dataflow records arrive as `(row, time, diff)` triples.
+The carrier here is `TimedUnifiedRecord` from
+`Mz/TimedConsolidate.lean`, which pairs a `UnifiedRow` (data row
+or row-scoped err) with a `Nat` time and a `DiffWithError Int`
+diff. Row-scoped errors flow through the carrier; collection-
+scoped errors flow through the diff via the absorbing `.error`
+marker.
 
-The operations modeled are consolidation by time (sum diffs across
-all rows at a given time) and consolidation across the whole stream
-(sum every diff). Both reduce to `DiffWithError.sumAll`, so the
-absorption laws from `Mz/Consolidate.lean` transport directly: if
-any record in the consolidated range carries an `error` diff, the
-consolidated total is `error`.
+This file gives two consolidation views that *do not* bucket by
+row:
 
-Per-`(row, time)` bucketing is the next refinement and requires
-`DecidableEq` on `Row`; the present file does the simpler "sum
-everything in the time slice" version, which is the per-time
-collection-global diff.
+* `consolidateAll`: sum every diff in the stream, ignoring row
+  and time. The collection-wide diff.
+* `consolidateAt t`: sum every diff at time `t`, ignoring row.
+  The per-time collection diff.
+
+Both reduce to `DiffWithError.sumAll`, so the absorption laws
+from `Mz/Consolidate.lean` transport directly: an `.error` diff
+anywhere in the consolidated range forces the consolidated total
+to `.error`.
+
+For per-`(row, time)` bucketing — where the output is itself a
+`UnifiedStream`, one record per surviving carrier with the
+bucket's summed diff — use `TimedUnifiedStream.consolidateAtTime`
+in `Mz/TimedConsolidate.lean`. The two views are complementary:
+this file collapses time slices to a single diff value; the
+TimedConsolidate view collapses each `(row, time)` bucket
+separately.
 -/
 
 namespace Mz
 
-/-- A timed record: row, time, and a diff value possibly carrying
-the absorbing `error` marker. -/
-structure TimedRecord (α : Type) where
-  row  : Row
-  time : Nat
-  diff : DiffWithError α
-  deriving Inhabited
+/-- Sum every diff in the stream, ignoring row and time. -/
+def TimedUnifiedStream.consolidateAll (s : TimedUnifiedStream) : DiffWithError Int :=
+  DiffWithError.sumAll (s.map (·.2.2))
 
-/-- A stream of timed records. Order does not matter; the operations
-below are insensitive to order whenever the base `Add` on `α` is
-commutative. -/
-abbrev TimedStream (α : Type) := List (TimedRecord α)
-
-/-- Sum every diff in the stream, ignoring row and time. The
-collection-wide diff. -/
-def TimedStream.consolidateAll [Zero α] [Add α] (s : TimedStream α) :
-    DiffWithError α :=
-  DiffWithError.sumAll (s.map (·.diff))
-
-/-- Sum every diff at a given time, ignoring row. The per-time
-collection diff. -/
-def TimedStream.consolidateAt [Zero α] [Add α] (t : Nat) (s : TimedStream α) :
-    DiffWithError α :=
-  DiffWithError.sumAll ((s.filter (·.time = t)).map (·.diff))
+/-- Sum every diff at a given time, ignoring row. -/
+def TimedUnifiedStream.consolidateAtTimeFlat
+    (t : Nat) (s : TimedUnifiedStream) : DiffWithError Int :=
+  DiffWithError.sumAll ((s.filter (·.2.1 = t)).map (·.2.2))
 
 /-! ## Absorption -/
 
-/-- If any record carries an `error` diff, the all-stream consolidation
-is `error`. -/
-theorem TimedStream.consolidateAll_eq_error_of_mem [Zero α] [Add α]
-    {s : TimedStream α} (r : TimedRecord α)
-    (h_mem : r ∈ s) (h_err : r.diff = DiffWithError.error) :
-    TimedStream.consolidateAll s = DiffWithError.error := by
-  unfold TimedStream.consolidateAll
+/-- An `.error` diff anywhere in the stream forces the
+collection-wide consolidation to `.error`. -/
+theorem TimedUnifiedStream.consolidateAll_eq_error_of_mem
+    {s : TimedUnifiedStream} (r : TimedUnifiedRecord)
+    (h_mem : r ∈ s) (h_err : r.2.2 = (DiffWithError.error : DiffWithError Int)) :
+    TimedUnifiedStream.consolidateAll s = DiffWithError.error := by
+  unfold TimedUnifiedStream.consolidateAll
   apply DiffWithError.sumAll_eq_error_of_mem
-  -- Need: error ∈ s.map (·.diff). Since r ∈ s and r.diff = error, by List.mem_map.
   refine List.mem_map.mpr ⟨r, h_mem, ?_⟩
   exact h_err
 
-/-- Same statement restricted to a single time slice: an `error`
-record at time `t` forces the per-time consolidation at `t` to
-`error`. -/
-theorem TimedStream.consolidateAt_eq_error_of_mem [Zero α] [Add α]
-    {s : TimedStream α} (t : Nat) (r : TimedRecord α)
-    (h_mem : r ∈ s) (h_time : r.time = t)
-    (h_err : r.diff = DiffWithError.error) :
-    TimedStream.consolidateAt t s = DiffWithError.error := by
-  unfold TimedStream.consolidateAt
+/-- Restricted to a time slice: an `.error` record at time `t`
+forces the per-time flat consolidation at `t` to `.error`. -/
+theorem TimedUnifiedStream.consolidateAtTimeFlat_eq_error_of_mem
+    {s : TimedUnifiedStream} (t : Nat) (r : TimedUnifiedRecord)
+    (h_mem : r ∈ s) (h_time : r.2.1 = t)
+    (h_err : r.2.2 = (DiffWithError.error : DiffWithError Int)) :
+    TimedUnifiedStream.consolidateAtTimeFlat t s = DiffWithError.error := by
+  unfold TimedUnifiedStream.consolidateAtTimeFlat
   apply DiffWithError.sumAll_eq_error_of_mem
   refine List.mem_map.mpr ⟨r, ?_, h_err⟩
   exact List.mem_filter.mpr ⟨h_mem, by simp [h_time]⟩
