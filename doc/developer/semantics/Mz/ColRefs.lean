@@ -69,6 +69,23 @@ theorem Env.get_append_left :
     show Env.get (tl ++ r) n = Env.get tl n
     exact Env.get_append_left tl r n (Nat.lt_of_succ_lt_succ h)
 
+/-- Reading a column index `l.length + i` from `l ++ r` yields
+the i-th value of `r`. The right-side analogue of
+`Env.get_append_left`. -/
+theorem Env.get_append_right :
+    ∀ (l r : Env) (i : Nat),
+      Env.get (l ++ r) (l.length + i) = Env.get r i
+  | [],      _, _ => by
+    show Env.get (([] : Env) ++ _) (0 + _) = _
+    rw [List.nil_append, Nat.zero_add]
+  | hd :: tl, r, i => by
+    show Env.get ((hd :: tl) ++ r) (tl.length + 1 + i) = Env.get r i
+    show Env.get (hd :: (tl ++ r)) (tl.length + 1 + i) = Env.get r i
+    have h_rewrite : tl.length + 1 + i = (tl.length + i) + 1 := by omega
+    rw [h_rewrite]
+    show Env.get (tl ++ r) (tl.length + i) = Env.get r i
+    exact Env.get_append_right tl r i
+
 /-! ## Eval agreement under bound
 
 If a predicate's column references are all bounded by `l.length`,
@@ -161,6 +178,111 @@ theorem eval_append_left_of_bounded_argsMap :
         = eval l e :: rest.map (eval l)
     rw [eval_append_left_of_bounded l r e h.1,
         eval_append_left_of_bounded_argsMap l r rest h.2]
+end
+
+/-! ## Column shifting
+
+`Expr.colShift k e` adds `k` to every `col i` reference in `e`,
+leaving other constructors structurally intact. Used to align a
+predicate originally written against a right-side schema with the
+joined env `l ++ r`: in the combined env, the right side starts at
+index `l.length`, so shifting the predicate by `l.length` makes
+its references land in the right half.
+
+The headline `eval_append_right_shift` states agreement: evaluating
+the shifted expression against `l ++ r` equals evaluating the
+original against `r`. -/
+
+mutual
+def Expr.colShift (k : Nat) : Expr → Expr
+  | .lit d            => .lit d
+  | .col i            => .col (k + i)
+  | .and a b          => .and (a.colShift k) (b.colShift k)
+  | .or  a b          => .or  (a.colShift k) (b.colShift k)
+  | .not a            => .not (a.colShift k)
+  | .ifThen c t e     => .ifThen (c.colShift k) (t.colShift k) (e.colShift k)
+  | .andN args        => .andN (Expr.argsColShift k args)
+  | .orN  args        => .orN  (Expr.argsColShift k args)
+  | .coalesce args    => .coalesce (Expr.argsColShift k args)
+  | .plus   a b       => .plus   (a.colShift k) (b.colShift k)
+  | .minus  a b       => .minus  (a.colShift k) (b.colShift k)
+  | .times  a b       => .times  (a.colShift k) (b.colShift k)
+  | .divide a b       => .divide (a.colShift k) (b.colShift k)
+  | .eq     a b       => .eq     (a.colShift k) (b.colShift k)
+  | .lt     a b       => .lt     (a.colShift k) (b.colShift k)
+
+def Expr.argsColShift (k : Nat) : List Expr → List Expr
+  | []        => []
+  | e :: rest => e.colShift k :: Expr.argsColShift k rest
+end
+
+/-! ## Eval agreement under right-side shift
+
+Evaluating the shifted expression against `l ++ r` agrees with
+evaluating the original against `r`. The shift compensates for
+the `l.length` offset in the combined env. -/
+
+mutual
+theorem eval_append_right_shift :
+    ∀ (l r : Env) (e : Expr),
+      eval (l ++ r) (e.colShift l.length) = eval r e
+  | _, _, .lit _         => by simp [eval, Expr.colShift]
+  | l, r, .col i         => by
+    show eval (l ++ r) (.col (l.length + i)) = eval r (.col i)
+    simp only [eval]
+    exact Env.get_append_right l r i
+  | l, r, .and a b       => by
+    simp only [Expr.colShift, eval]
+    rw [eval_append_right_shift l r a, eval_append_right_shift l r b]
+  | l, r, .or a b        => by
+    simp only [Expr.colShift, eval]
+    rw [eval_append_right_shift l r a, eval_append_right_shift l r b]
+  | l, r, .not a         => by
+    simp only [Expr.colShift, eval]
+    rw [eval_append_right_shift l r a]
+  | l, r, .ifThen c t e  => by
+    simp only [Expr.colShift, eval]
+    rw [eval_append_right_shift l r c, eval_append_right_shift l r t,
+        eval_append_right_shift l r e]
+  | l, r, .andN args     => by
+    simp only [Expr.colShift, eval]
+    rw [eval_append_right_shift_argsMap l r args]
+  | l, r, .orN args      => by
+    simp only [Expr.colShift, eval]
+    rw [eval_append_right_shift_argsMap l r args]
+  | l, r, .coalesce args => by
+    simp only [Expr.colShift, eval]
+    rw [eval_append_right_shift_argsMap l r args]
+  | l, r, .plus a b      => by
+    simp only [Expr.colShift, eval]
+    rw [eval_append_right_shift l r a, eval_append_right_shift l r b]
+  | l, r, .minus a b     => by
+    simp only [Expr.colShift, eval]
+    rw [eval_append_right_shift l r a, eval_append_right_shift l r b]
+  | l, r, .times a b     => by
+    simp only [Expr.colShift, eval]
+    rw [eval_append_right_shift l r a, eval_append_right_shift l r b]
+  | l, r, .divide a b    => by
+    simp only [Expr.colShift, eval]
+    rw [eval_append_right_shift l r a, eval_append_right_shift l r b]
+  | l, r, .eq a b        => by
+    simp only [Expr.colShift, eval]
+    rw [eval_append_right_shift l r a, eval_append_right_shift l r b]
+  | l, r, .lt a b        => by
+    simp only [Expr.colShift, eval]
+    rw [eval_append_right_shift l r a, eval_append_right_shift l r b]
+
+theorem eval_append_right_shift_argsMap :
+    ∀ (l r : Env) (args : List Expr),
+      (Expr.argsColShift l.length args).map (eval (l ++ r))
+        = args.map (eval r)
+  | _, _, [] => rfl
+  | l, r, e :: rest => by
+    show eval (l ++ r) (e.colShift l.length)
+            :: (Expr.argsColShift l.length rest).map (eval (l ++ r))
+        = eval r e :: rest.map (eval r)
+    rw [eval_append_right_shift l r e,
+        eval_append_right_shift_argsMap l r rest]
 end
 
 end Mz
