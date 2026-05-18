@@ -116,6 +116,80 @@ theorem BagStream.filter_idem (pred : Expr) (s : BagStream) :
       BagStream.filter pred s := by
   simp [BagStream.filter, filterRel_idem, errorRows_filterRel]
 
+/-! ## Filter commutativity
+
+The data side of `BagStream.filter` commutes unconditionally via
+`filterRel_comm`. The error side does not commute as a list
+equality — the two orderings collect errors in different
+positions and, when both predicates error on the same row, only
+one ordering records the second error.
+
+Full structural commutativity therefore requires a no-error
+precondition: when neither predicate errs on the input data,
+both errorRows collections are empty, the appended errors reduce
+to the input `errors` field, and the streams agree. -/
+
+theorem BagStream.filter_comm_data (p q : Expr) (s : BagStream) :
+    (BagStream.filter p (BagStream.filter q s)).data
+      = (BagStream.filter q (BagStream.filter p s)).data := by
+  simp [BagStream.filter, filterRel_comm]
+
+/-- `errorRows` of a relation on which the predicate never errors
+is empty. -/
+theorem errorRows_eq_nil_of_no_err
+    (pred : Expr) (rel : Relation)
+    (h : ∀ row ∈ rel, ¬(eval row pred).IsErr) :
+    errorRows pred rel = [] := by
+  induction rel with
+  | nil => rfl
+  | cons hd tl ih =>
+    have hHd : ¬(eval hd pred).IsErr := h hd List.mem_cons_self
+    have hTl : ∀ row ∈ tl, ¬(eval row pred).IsErr :=
+      fun row hMem => h row (List.mem_cons_of_mem _ hMem)
+    show (match eval hd pred with
+          | .err e => e :: errorRows pred tl
+          | _      => errorRows pred tl) = []
+    cases h_eval : eval hd pred with
+    | bool _ => exact ih hTl
+    | null   => exact ih hTl
+    | err _  =>
+      rw [h_eval] at hHd
+      exact absurd (show True by trivial) hHd
+
+/-- Full commutativity of `BagStream.filter` under a no-error
+precondition: when neither predicate errs on any row of the input
+data, the two filter orderings produce the same stream. -/
+theorem BagStream.filter_comm_no_err
+    (p q : Expr) (s : BagStream)
+    (hP : ∀ row ∈ s.data, ¬(eval row p).IsErr)
+    (hQ : ∀ row ∈ s.data, ¬(eval row q).IsErr) :
+    BagStream.filter p (BagStream.filter q s)
+      = BagStream.filter q (BagStream.filter p s) := by
+  apply BagStream.ext
+  · exact BagStream.filter_comm_data p q s
+  · show s.errors ++ errorRows q s.data ++ errorRows p (filterRel q s.data)
+        = s.errors ++ errorRows p s.data ++ errorRows q (filterRel p s.data)
+    have hQEmpty : errorRows q s.data = [] :=
+      errorRows_eq_nil_of_no_err q s.data hQ
+    have hPEmpty : errorRows p s.data = [] :=
+      errorRows_eq_nil_of_no_err p s.data hP
+    -- A row surviving `filterRel q s.data` is a row in `s.data` with q true,
+    -- so the no-err precondition still applies; `errorRows p (filterRel q ...)`
+    -- is therefore also empty.
+    have hPOnQ : ∀ row ∈ filterRel q s.data, ¬(eval row p).IsErr := by
+      intro row hMem
+      unfold filterRel at hMem
+      exact hP row (List.mem_filter.mp hMem).1
+    have hQOnP : ∀ row ∈ filterRel p s.data, ¬(eval row q).IsErr := by
+      intro row hMem
+      unfold filterRel at hMem
+      exact hQ row (List.mem_filter.mp hMem).1
+    have hPFiltered : errorRows p (filterRel q s.data) = [] :=
+      errorRows_eq_nil_of_no_err p (filterRel q s.data) hPOnQ
+    have hQFiltered : errorRows q (filterRel p s.data) = [] :=
+      errorRows_eq_nil_of_no_err q (filterRel p s.data) hQOnP
+    rw [hQEmpty, hPEmpty, hPFiltered, hQFiltered]
+
 /-! ## Project -/
 
 /-- Boolean check: every projected scalar succeeds on this row
