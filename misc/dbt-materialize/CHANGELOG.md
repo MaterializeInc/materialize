@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.9.9 - 2026-05-18
+
 * Add support for the `partition_by` configuration in materialized views,
   which declares the internal storage order Materialize uses to sort the
   underlying data into parts, enabling [filter pushdown](https://materialize.com/docs/transform-data/patterns/partition-by/#filter-pushdown)
