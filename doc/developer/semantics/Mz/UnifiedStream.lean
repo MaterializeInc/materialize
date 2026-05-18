@@ -88,21 +88,24 @@ def UnifiedStream.split (us : UnifiedStream) : BagStream :=
   { data   := us.filterMap pickRow
   , errors := us.filterMap pickErr }
 
-/-- Filter on the unified stream. Predicate is evaluated on every
-real `row`; survivors stay with their original diff; rows whose
-predicate errs become `err` records (diff unchanged — multiplicity
-is preserved through the error route); non-true / non-error
-results are dropped. Existing `err` records pass through unchanged.
-Collection-scoped errors encoded in the diff are preserved on
-survivors. -/
+/-- Filter on the unified stream. Records carrying a collection-
+scoped `.error` diff pass through unconditionally — the absorbing
+diff marker cannot be filtered away without violating the
+semiring laws. For other diffs, the predicate is evaluated on
+every real `row`: survivors stay with their original diff, rows
+whose predicate errs become `err` records (diff unchanged —
+multiplicity is preserved through the error route), non-true /
+non-error results are dropped. Existing row-scoped `err` records
+pass through unchanged. -/
 def UnifiedStream.filter (pred : Expr) (us : UnifiedStream) : UnifiedStream :=
   us.flatMap fun ud => match ud with
-    | (.row r, d) =>
+    | (_,      .error)        => [ud]
+    | (.err e, d)             => [(.err e, d)]
+    | (.row r, d)             =>
       match eval r pred with
       | .bool true => [(.row r, d)]
       | .err e     => [(.err e, d)]
       | _          => []
-    | (.err e, d) => [(.err e, d)]
 
 /-! ## Helper lemmas for filterMap over the packed concatenation -/
 
