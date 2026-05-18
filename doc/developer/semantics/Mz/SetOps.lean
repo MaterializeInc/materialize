@@ -1181,4 +1181,69 @@ theorem UnifiedStream.bagExceptAll_nil_left (r : UnifiedStream) :
           (UnifiedStream.negate (UnifiedStream.consolidate r))
   rw [UnifiedStream.exceptAll_nil_left]
 
+/-! ## NoDup closure on derived set operators
+
+`union`, `exceptAll`, `intersectAll`, `distinct`, and their
+bag-clamped variants all produce NoDupCarriers output. Each
+factors through `consolidate` (or `clampToOne` on a consolidated
+list), which gives the closure for free. -/
+
+theorem UnifiedStream.union_noDup (l r : UnifiedStream) :
+    UnifiedStream.NoDupCarriers (UnifiedStream.union l r) :=
+  UnifiedStream.consolidate_noDup _
+
+theorem UnifiedStream.exceptAll_noDup (l r : UnifiedStream) :
+    UnifiedStream.NoDupCarriers (UnifiedStream.exceptAll l r) :=
+  UnifiedStream.consolidate_noDup _
+
+theorem UnifiedStream.bagExceptAll_noDup (l r : UnifiedStream) :
+    UnifiedStream.NoDupCarriers (UnifiedStream.bagExceptAll l r) :=
+  UnifiedStream.clampPositive_noDup _ (UnifiedStream.exceptAll_noDup l r)
+
+theorem UnifiedStream.distinct_noDup (us : UnifiedStream) :
+    UnifiedStream.NoDupCarriers (UnifiedStream.distinct us) :=
+  UnifiedStream.clampToOne_noDup _ (UnifiedStream.consolidate_noDup us)
+
+/-- `intersectAll`'s output is a filterMap of a NoDupCarriers list
+whose mapping preserves the first component. The filterMap
+therefore also has NoDupCarriers. -/
+private theorem filterMap_carrier_noDup
+    {f : UnifiedRow × DiffWithError Int → Option (UnifiedRow × DiffWithError Int)}
+    (h_f : ∀ ud out, f ud = some out → out.1 = ud.1)
+    {us : UnifiedStream} (h : UnifiedStream.NoDupCarriers us) :
+    UnifiedStream.NoDupCarriers (us.filterMap f) := by
+  induction us with
+  | nil => exact UnifiedStream.NoDupCarriers.nil
+  | cons hd tl ih =>
+    obtain ⟨hHead, hTl⟩ := List.pairwise_cons.mp h
+    rw [List.filterMap_cons]
+    cases h_eq : f hd with
+    | none => exact ih hTl
+    | some out =>
+      have hCarr : out.1 = hd.1 := h_f hd out h_eq
+      apply List.Pairwise.cons
+      · intro y hY
+        obtain ⟨origTl, hOrigMem, hY_eq⟩ := List.mem_filterMap.mp hY
+        have hYCarr : y.1 = origTl.1 := h_f origTl y hY_eq
+        rw [hYCarr, hCarr]
+        exact hHead origTl hOrigMem
+      · exact ih hTl
+
+theorem UnifiedStream.intersectAll_noDup (l r : UnifiedStream) :
+    UnifiedStream.NoDupCarriers (UnifiedStream.intersectAll l r) := by
+  apply filterMap_carrier_noDup ?_ (UnifiedStream.consolidate_noDup l)
+  intro ud out hSome
+  cases h_lookup : UnifiedStream.lookup ud.1 (UnifiedStream.consolidate r) with
+  | none =>
+    rw [h_lookup] at hSome
+    cases hSome
+  | some d' =>
+    rw [h_lookup] at hSome
+    injection hSome with hPair
+    rw [← hPair]
+
+theorem UnifiedStream.bagIntersectAll_noDup (l r : UnifiedStream) :
+    UnifiedStream.NoDupCarriers (UnifiedStream.bagIntersectAll l r) :=
+  UnifiedStream.clampPositive_noDup _ (UnifiedStream.intersectAll_noDup l r)
+
 end Mz
