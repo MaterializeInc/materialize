@@ -456,6 +456,117 @@ theorem UnifiedStream.mem_errorDiffCarriers (us : UnifiedStream) (uc : UnifiedRo
           rw [this]; exact List.mem_cons_self
         · exact List.mem_cons_of_mem _ (ih.mpr hTail)
 
+/-! ## `project` and error scopes
+
+`project` mirrors `filter` on error-scope behavior:
+
+* Collection-err set is preserved exactly. The `(_, .error)` arm
+  passes the absorbing diff through; every other arm produces
+  `.val`-diff output only (`rowProjectRecords` preserves the
+  input diff verbatim onto each emitted record).
+* Row-err set is monotone (grows). The `(.row r, .val n)` arm
+  may emit zero or more `.err e` records when scalar evaluation
+  fails — the cell-to-row promotion site. -/
+
+private theorem errorDiffCarriers_eq_nil_of_all_val
+    (us : UnifiedStream)
+    (h : ∀ rec ∈ us, ∃ n : Int, rec.2 = DiffWithError.val n) :
+    UnifiedStream.errorDiffCarriers us = [] := by
+  induction us with
+  | nil => rfl
+  | cons hd tl ih =>
+    obtain ⟨n, hN⟩ := h hd List.mem_cons_self
+    obtain ⟨uc, d⟩ := hd
+    have hD : d = DiffWithError.val n := hN
+    subst hD
+    have hRed : UnifiedStream.errorDiffCarriers
+                  ((uc, DiffWithError.val n) :: tl)
+              = UnifiedStream.errorDiffCarriers tl := rfl
+    rw [hRed]
+    exact ih (fun rec hMem => h rec (List.mem_cons_of_mem _ hMem))
+
+private theorem project_singleton_errorDiffCarriers
+    (es : List Expr) (uc : UnifiedRow) (d : DiffWithError Int) :
+    UnifiedStream.errorDiffCarriers (UnifiedStream.project es [(uc, d)])
+      = UnifiedStream.errorDiffCarriers [(uc, d)] := by
+  cases d with
+  | error =>
+    -- First arm: project passes (uc, .error) through.
+    cases uc <;> rfl
+  | val n =>
+    cases uc with
+    | err _ => rfl
+    | row r =>
+      have hP : UnifiedStream.project es
+                  [(UnifiedRow.row r, DiffWithError.val n)]
+              = rowProjectRecords es (DiffWithError.val n) r := by
+        show List.flatMap _ _ = _
+        simp only [List.flatMap_cons, List.flatMap_nil, List.append_nil]
+      rw [hP]
+      have hRhs : UnifiedStream.errorDiffCarriers
+                    [(UnifiedRow.row r, DiffWithError.val n)] = [] := rfl
+      rw [hRhs]
+      exact errorDiffCarriers_eq_nil_of_all_val _
+        (rowProjectRecords_no_error es n r)
+
+theorem UnifiedStream.project_errorDiffCarriers
+    (es : List Expr) (us : UnifiedStream) :
+    UnifiedStream.errorDiffCarriers (UnifiedStream.project es us)
+      = UnifiedStream.errorDiffCarriers us := by
+  induction us with
+  | nil => rfl
+  | cons hd tl ih =>
+    obtain ⟨uc, d⟩ := hd
+    have hCons : ((uc, d) :: tl : UnifiedStream) = [(uc, d)] ++ tl := rfl
+    rw [hCons, UnifiedStream.project_append,
+        UnifiedStream.errorDiffCarriers_append,
+        UnifiedStream.errorDiffCarriers_append, ih,
+        project_singleton_errorDiffCarriers es uc d]
+
+private theorem project_singleton_errCarriers_mono
+    (es : List Expr) (uc : UnifiedRow) (d : DiffWithError Int) (e : EvalError)
+    (h : e ∈ UnifiedStream.errCarriers [(uc, d)]) :
+    e ∈ UnifiedStream.errCarriers (UnifiedStream.project es [(uc, d)]) := by
+  cases uc with
+  | row r =>
+    have hEmpty : UnifiedStream.errCarriers [(UnifiedRow.row r, d)] = [] := rfl
+    rw [hEmpty] at h
+    exact absurd h List.not_mem_nil
+  | err e0 =>
+    have hSingle : UnifiedStream.errCarriers [(UnifiedRow.err e0, d)] = [e0] := rfl
+    rw [hSingle] at h
+    have hEq : e = e0 := List.mem_singleton.mp h
+    subst hEq
+    cases d with
+    | error =>
+      have hP : UnifiedStream.project es
+                  [(UnifiedRow.err e, DiffWithError.error)]
+              = [(UnifiedRow.err e, DiffWithError.error)] := rfl
+      rw [hP]
+      exact List.mem_singleton.mpr rfl
+    | val n =>
+      have hP : UnifiedStream.project es
+                  [(UnifiedRow.err e, DiffWithError.val n)]
+              = [(UnifiedRow.err e, DiffWithError.val n)] := rfl
+      rw [hP]
+      exact List.mem_singleton.mpr rfl
+
+theorem UnifiedStream.project_errCarriers_mono
+    (es : List Expr) (us : UnifiedStream) (e : EvalError)
+    (h : e ∈ UnifiedStream.errCarriers us) :
+    e ∈ UnifiedStream.errCarriers (UnifiedStream.project es us) := by
+  induction us with
+  | nil => exact absurd h List.not_mem_nil
+  | cons hd tl ih =>
+    obtain ⟨uc, d⟩ := hd
+    have hCons : ((uc, d) :: tl : UnifiedStream) = [(uc, d)] ++ tl := rfl
+    rw [hCons, UnifiedStream.errCarriers_append] at h
+    rw [hCons, UnifiedStream.project_append, UnifiedStream.errCarriers_append]
+    rcases List.mem_append.mp h with hHead | hTail
+    · exact List.mem_append.mpr
+        (Or.inl (project_singleton_errCarriers_mono es uc d e hHead))
+    · exact List.mem_append.mpr (Or.inr (ih hTail))
+
 /-! ## Error-scope escalation
 
 `escalateRowErrs` promotes every row-scoped error to a
