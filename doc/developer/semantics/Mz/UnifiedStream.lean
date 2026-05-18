@@ -57,7 +57,7 @@ namespace Mz
 inductive UnifiedRow where
   | row (r : Row)
   | err (e : EvalError)
-  deriving Inhabited
+  deriving DecidableEq, Inhabited
 
 /-- A unified-stream record pairs a row-or-error carrier with a
 differential-dataflow diff augmented by the absorbing `error`
