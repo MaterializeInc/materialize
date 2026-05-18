@@ -356,6 +356,7 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
         &mut self,
         cfg: &PersistConfig,
         metrics: &Metrics,
+        source: &'static str,
         diffs: I,
     ) {
         let mut state_seqno = self.seqno;
@@ -380,7 +381,7 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
             state_seqno = diff.seqno_to;
             Some((diff, data))
         });
-        self.apply_diffs(metrics, diffs);
+        self.apply_diffs(metrics, source, diffs);
     }
 }
 
@@ -388,13 +389,14 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
     pub fn apply_diffs<I: IntoIterator<Item = (StateDiff<T>, Bytes)>>(
         &mut self,
         metrics: &Metrics,
+        source: &'static str,
         diffs: I,
     ) {
         for (diff, data) in diffs {
             // TODO: This could special-case batch apply for diffs where it's
             // more efficient (in particular, spine batches that hit the slow
             // path).
-            match self.apply_diff(metrics, diff) {
+            match self.apply_diff(metrics, source, diff) {
                 Ok(()) => {}
                 Err(err) => {
                     // Having the full diff in the error message is critical for debugging any
@@ -417,10 +419,15 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
     pub(super) fn apply_diff(
         &mut self,
         metrics: &Metrics,
+        source: &'static str,
         diff: StateDiff<T>,
     ) -> Result<(), String> {
         let apply_start = Instant::now();
         let shard_kind = metrics.shard_kind_for(&self.shard_id);
+        metrics
+            .state_apply_calls_by_source_kind
+            .with_label_values(&[source, shard_kind])
+            .inc();
         let res = self.apply_diff_inner(metrics, diff, shard_kind);
         metrics
             .state_apply_latency_by_kind

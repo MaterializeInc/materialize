@@ -123,6 +123,15 @@ pub struct Metrics {
     /// also doubles as a "number of `apply_diff` invocations" counter per
     /// shard_kind, which is what reveals the per-DDL state-apply work growth.
     pub state_apply_latency_by_kind: HistogramVec,
+    /// Per-`apply_diff` invocation counter, broken down by `[source, shard_kind]`.
+    /// `source` is one of `cas_update` (apply.rs `fetch_and_update_state` fast
+    /// path), `slow_refetch` (`state_versions.rs::fetch_current_state` full
+    /// replay from rollup), `pubsub_push` (`cache.rs::push_diff` from PubSub
+    /// broadcast), or `state_iter` (historical walk via
+    /// `state_versions.rs::StateVersionsIter::next`). Used to attribute the
+    /// per-DDL `apply_diff` count growth on the catalog/txns shards to the
+    /// specific code path that is calling state apply.
+    pub state_apply_calls_by_source_kind: IntCounterVec,
     /// Registry mapping a persist key prefix (the ShardId in stringified form)
     /// to a coarse `shard_kind` label. Populated when shards are opened by
     /// `Applier::new` via [Metrics::register_shard_kind] and read on the hot
@@ -170,6 +179,11 @@ impl Metrics {
             // Apply work is mostly sub-millisecond per-call; keep the low end fine.
             buckets: histogram_seconds_buckets(0.000_050, 32.0),
         ));
+        let state_apply_calls_by_source_kind = registry.register(metric!(
+            name: "mz_persist_state_apply_calls_by_source_shard_kind",
+            help: "count of State::apply_diff invocations, broken down by call-site source and shard_kind",
+            var_labels: ["source", "shard_kind"],
+        ));
         Metrics {
             blob: vecs.blob_metrics(),
             consensus: vecs.consensus_metrics(),
@@ -200,6 +214,7 @@ impl Metrics {
             postgres_consensus: PostgresClientMetrics::new(registry, "mz_persist"),
             external_op_latency_by_kind,
             state_apply_latency_by_kind,
+            state_apply_calls_by_source_kind,
             shard_kinds: Arc::new(Mutex::new(HashMap::new())),
             _vecs: vecs,
             _uptime: uptime,

@@ -382,7 +382,12 @@ where
     fn push_diff(&self, diff: VersionedData) {
         self.write_lock(&self.metrics.locks.applier_write, |state| {
             let seqno_before = state.seqno;
-            state.apply_encoded_diffs(&self.cfg, &self.metrics, std::iter::once(&diff));
+            state.apply_encoded_diffs(
+                &self.cfg,
+                &self.metrics,
+                "pubsub_push",
+                std::iter::once(&diff),
+            );
             let seqno_after = state.seqno;
             assert!(seqno_after >= seqno_before);
 
