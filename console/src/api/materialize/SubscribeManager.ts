@@ -63,6 +63,13 @@ export interface SubscribeManagerOptions<
   flushInterval?: number;
   upsert?: UpsertSubscribeOptions<T>;
   select?: SelectFunction<T, R>;
+  /**
+   * When true, snapshot rows are pushed into `data` as they arrive instead of
+   * being held until the snapshot's closing progress message. Per-timestamp
+   * consolidation still applies once the snapshot completes. Use for subscribes
+   * where the UI benefits from showing rows incrementally during initial load.
+   */
+  eagerSnapshotFlush?: boolean;
 }
 
 export type SelectFunction<T extends object, R> = (row: SubscribeRow<T>) => R;
@@ -89,6 +96,7 @@ export class SubscribeManager<T extends object, R> implements Connectable {
   private listeners = new Set<() => void>();
   private columns: ColumnMetadata[] = [];
   private closeSocketOnComplete: boolean = false;
+  private eagerSnapshotFlush: boolean = false;
   private querySent: boolean = false;
   private currentTimestamp: number | undefined;
   /** Holds completed timestamp messages, waiting for the flush interval */
@@ -118,6 +126,7 @@ export class SubscribeManager<T extends object, R> implements Connectable {
     });
     this.upsert = options.upsert;
     this.closeSocketOnComplete = options.closeSocketOnComplete ?? false;
+    this.eagerSnapshotFlush = options.eagerSnapshotFlush ?? false;
     this.sqlRequest = options.request;
     this.flushInterval = options.flushInterval ?? this.flushInterval;
     this.select = options.select;
@@ -279,6 +288,26 @@ export class SubscribeManager<T extends object, R> implements Connectable {
     if (!this.querySent) return;
 
     const meta = extractSubscribeMetadata(payload, this.columns);
+    const row = mapRowToObject<T>(payload, this.columns, [
+      "mz_timestamp",
+      "mz_state",
+      "mz_progressed",
+    ]);
+
+    // During the initial snapshot, skip per-timestamp buffering so rows
+    // render as they arrive. Snapshot rows are conflict-free upserts.
+    if (this.eagerSnapshotFlush && !this.currentState.snapshotComplete) {
+      if (meta.mzProgressed) {
+        // First progress closes the snapshot phase.
+        this.flushSocketBuffer();
+        this.setState({ snapshotComplete: true });
+      } else {
+        this.closedTimestampBuffer.push({ ...meta, data: row });
+      }
+      this.currentTimestamp = meta.mzTimestamp;
+      return;
+    }
+
     if (this.currentTimestamp && meta.mzTimestamp > this.currentTimestamp) {
       // this timestamp is complete, flush it
       const updates = this.currentTimestampBuffer.get(this.currentTimestamp);
@@ -303,11 +332,6 @@ export class SubscribeManager<T extends object, R> implements Connectable {
     }
     // Track the new currently open timestamp.
     this.currentTimestamp = meta.mzTimestamp;
-    const row = mapRowToObject<T>(payload, this.columns, [
-      "mz_timestamp",
-      "mz_state",
-      "mz_progressed",
-    ]);
     const updates = this.currentTimestampBuffer.get(meta.mzTimestamp) ?? [];
     updates.push({
       ...meta,
