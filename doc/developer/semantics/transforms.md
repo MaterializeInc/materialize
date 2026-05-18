@@ -348,12 +348,12 @@ Status legend:
 | `union_cancel.rs` (partial) | `consolidate (unionAll a (negate a))` reduces to `.val 0` records via diff arithmetic; no theorem yet, but ingredients in place |
 | `fusion/filter.rs` (filter ∘ filter) | `UnifiedStream.filter_filter_fuse` in `Mz/FilterFusion.lean`. Holds under per-row err-freedom (`predNoRowErr`). Excludes the `err`-on-left + `evalAnd` ordering corner. |
 | `threshold_elision.rs` | `UnifiedStream.clampPositive_id_of_positive` in `Mz/SetOps.lean`. `clampPositive` is identity when every record's diff is `.error` or a strictly-positive `.val`. |
+| `fusion/map.rs` (project ∘ project) | `UnifiedStream.project_project_fuse` in `Mz/ProjectFusion.lean`. Holds under `projsAllSafe` (`es` is safe on every data row). Bridges via `eval_subst`. |
 
 ### Algebraic rewrites — modelable (worth shipping)
 
 | Rust pass | Lean approach |
 | --- | --- |
-| `fusion/map.rs` (map fusion) | `project es ∘ project es' = project (es' ∘ es)`. Uses `Expr.subst` and `eval_subst` (already exist in `Mz/Pushdown.lean`); needs a `UnifiedStream`-level statement. |
 | `fusion/project.rs` / `movement/projection_lifting.rs` / `projection_pushdown.rs` | We have `project_unionAll`. Add `project_filter` (commutes when no scalar errors collide with predicate), `project_cross_pushdown` (push project through cross when columns split cleanly). |
 | `redundant_join.rs` (distinct + join) | Express `distinct` + `cross` commutation when right side is already key-unique. Requires `intersectAll`-style lookup invariants we already have. |
 | `semijoin_idempotence.rs` (partial) | A semijoin is `cross` + project + distinct. Idempotence via `distinct_idem` (provable; we have `clampToOne_idem`). |
@@ -394,10 +394,10 @@ These need a new operator or analysis before they can be expressed.
 
 If a single pass should be modeled next, the highest-value candidates by API consumption density:
 
-1. **`fusion/map.rs` (project ∘ project)** — uses existing `Expr.subst` machinery; would also document substitution at the relation level.
-2. **`semijoin_idempotence.rs`** — distinct + cross + project commutation; uses `clampToOne_idem` already in `Mz/SetOps.lean`.
-3. **`non_null_requirements.rs`** — lift `Strict.lean` propagation classes to `UnifiedStream.filter` to characterize drop vs promote.
-4. **`demand.rs`** — uses `colReferencesUnused` + `eval_replaceAt_of_unused`; lift to a `UnifiedStream`-level replacement-invariance theorem.
+1. **`semijoin_idempotence.rs`** — distinct + cross + project commutation; uses `clampToOne_idem` already in `Mz/SetOps.lean`.
+2. **`non_null_requirements.rs`** — lift `Strict.lean` propagation classes to `UnifiedStream.filter` to characterize drop vs promote.
+3. **`demand.rs`** — uses `colReferencesUnused` + `eval_replaceAt_of_unused`; lift to a `UnifiedStream`-level replacement-invariance theorem.
+4. **`redundant_join.rs`** — distinct + cross commutation when right side is key-unique; uses existing intersect/lookup invariants.
 
 Beyond those, the cluster `{Reduce + reduce_elision + reduce_reduction + reduction_pushdown}` is the largest dependency gap.
 A `UnifiedStream.reduce` operator would unlock four passes plus the GroupBy semantics already partially in `Mz/GroupBy.lean`.
