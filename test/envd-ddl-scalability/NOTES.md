@@ -1391,6 +1391,47 @@ So the +13 ms catalog+txns slope we saw end-to-end is **not** simply
 the cost of doing a CAS against a shard whose history is N seqnos
 long. It comes from something the microbench is *not* exercising.
 
+#### Smoking gun in the existing metrics dump
+
+Going back to the envd `/metrics` snapshots from the previous run
+and pulling counters the histogram doesn't expose, there's a clear
+super-linear signal:
+
+| | N=5k window | N=10k window |
+| --- | ---: | ---: |
+| `state_apply_spine_flattened` Δ (per 100 reps) | 1,719 | 9,753 |
+| per-DDL spine flattens | **17.2** | **97.5** |
+| `cmd_cas_mismatch_count` (compare_and_append) | 2 (lifetime) | 2 (lifetime) |
+| `shard_seqnos_since_last_rollup{name="catalog"}` | 121 | 30→72 (oscillating, normal) |
+
+Spine flattens per DDL grew **5.7×** as N doubled (17 → 97). Each
+flatten is "rebuild the trace's spine from scratch" work that
+happens during state apply — CPU on the persist-client side, *not*
+the consensus RPC. `state_apply_spine_fast_path` stayed at 0
+throughout — every state apply is going through the flattened
+(slow-ish) path.
+
+The retries counter (`cmd_cas_mismatch_count`) stayed at 2 across
+both windows, so the slope is not from cas retries. The rollup
+cadence on the catalog shard is normal (~120 seqnos between
+rollups). What's blowing up is state-apply work *around* the CAS,
+not the CAS itself.
+
+This reconciles the microbench result. The single-shard microbench
+opens one shard, drives one shard's spine — flatten cost per CAS
+is tiny because there's only one batch shape per timestamp. envd
+has 10k user_data shards' worth of batches threading through the
+*same* `Applier::apply_unbatched_cmd` code path on every state
+apply, and the per-flatten cost grows with whatever is shared
+(shared state cache, shared trace structures, allocator pressure,
+or simply scheduling latency). That's why the slope shows up in
+the `consensus_cas` *wall-time histogram* even though it isn't
+"the CAS RPC got slower" — `MetricsConsensus` wraps the RPC future
+with `metrics.consensus.compare_and_set.run_op(...)`, which times
+the *whole future* including the time spent waiting on Tokio's
+scheduler. Under shared-runtime pressure, that wait time *is* the
+slope.
+
 #### Hypotheses for what the microbench is missing
 
 The microbench opens **one** shard and writes to it sustained.
