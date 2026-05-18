@@ -97,7 +97,7 @@ def evalOrN : List Datum → Datum
 `err` payload while walking operands. The first concrete value
 (`.bool _`) short-circuits the walk. -/
 
-private def Coalesce.go (seenNull : Bool) (firstErr : Option EvalError) :
+def Coalesce.go (seenNull : Bool) (firstErr : Option EvalError) :
     List Datum → Datum
   | []              =>
     if seenNull then .null
