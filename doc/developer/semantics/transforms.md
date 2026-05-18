@@ -346,12 +346,12 @@ Status legend:
 | `fusion/negate.rs` (Negate fusion) | `negate_negate` (involution) |
 | `fusion/join.rs` (Join fusion / associativity) | `cross_assoc` |
 | `union_cancel.rs` (partial) | `consolidate (unionAll a (negate a))` reduces to `.val 0` records via diff arithmetic; no theorem yet, but ingredients in place |
+| `fusion/filter.rs` (filter ∘ filter) | `UnifiedStream.filter_filter_fuse` in `Mz/FilterFusion.lean`. Holds under per-row err-freedom (`predNoRowErr`). Excludes the `err`-on-left + `evalAnd` ordering corner. |
 
 ### Algebraic rewrites — modelable (worth shipping)
 
 | Rust pass | Lean approach |
 | --- | --- |
-| `fusion/filter.rs` (filter ∘ filter) | `filter p ∘ filter q = filter (p ∧ q)`. Holds under `evalAnd` if we exclude the `err`-on-left + `false`-on-right corner. State with err-free / null-free hypothesis, or use a stratified `andErrStrict` variant. |
 | `fusion/map.rs` (map fusion) | `project es ∘ project es' = project (es' ∘ es)`. Uses `Expr.subst` and `eval_subst` (already exist in `Mz/Pushdown.lean`); needs a `UnifiedStream`-level statement. |
 | `fusion/project.rs` / `movement/projection_lifting.rs` / `projection_pushdown.rs` | We have `project_unionAll`. Add `project_filter` (commutes when no scalar errors collide with predicate), `project_cross_pushdown` (push project through cross when columns split cleanly). |
 | `threshold_elision.rs` | `clampPositive` is a no-op when every diff is already `.val n > 0`. Lemma: `clampPositive us = us` under `∀ rec ∈ us, ∃ n > 0, rec.2 = .val n`. |
@@ -394,10 +394,10 @@ These need a new operator or analysis before they can be expressed.
 
 If a single pass should be modeled next, the highest-value candidates by API consumption density:
 
-1. **`fusion/filter.rs` (filter ∘ filter)** — direct equational rewrite, frequently quoted by the optimizer.
-2. **`fusion/map.rs` (project ∘ project)** — uses existing `Expr.subst` machinery; would also document substitution at the relation level.
-3. **`threshold_elision.rs`** — small theorem (`clampPositive` is identity on positive-only streams); good warm-up before introducing `Reduce`.
-4. **`semijoin_idempotence.rs`** — distinct + cross + project commutation; uses `clampToOne_idem` already in `Mz/SetOps.lean`.
+1. **`fusion/map.rs` (project ∘ project)** — uses existing `Expr.subst` machinery; would also document substitution at the relation level.
+2. **`threshold_elision.rs`** — small theorem (`clampPositive` is identity on positive-only streams); good warm-up before introducing `Reduce`.
+3. **`semijoin_idempotence.rs`** — distinct + cross + project commutation; uses `clampToOne_idem` already in `Mz/SetOps.lean`.
+4. **`non_null_requirements.rs`** — lift `Strict.lean` propagation classes to `UnifiedStream.filter` to characterize drop vs promote.
 
 Beyond those, the cluster `{Reduce + reduce_elision + reduce_reduction + reduction_pushdown}` is the largest dependency gap.
 A `UnifiedStream.reduce` operator would unlock four passes plus the GroupBy semantics already partially in `Mz/GroupBy.lean`.
