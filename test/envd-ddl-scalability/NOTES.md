@@ -1247,26 +1247,47 @@ per-op as those shards' states grow**:
   wall-time growth. That accounts for almost all the slope.
 
 This points at persist state-apply / rollup cost on the **catalog
-shard specifically**, plus a smaller contribution from the txns
-shard. Neither has anything to do with the user_data shards' state
-or how many of them exist; both are about the *size* of two
-specific singleton shards' own histories.
+shard**, with a parallel — and not actually surprising — slope on
+the **txns shard**: every table is registered in the txns shard,
+so its state size grows linearly with N. catalog and txns are thus
+the same shape (singleton-shard state growing with table count),
+not two distinct mysteries.
+
+Neither has anything to do with the user_data shards' state or how
+many of them exist; both are about the *size* of two specific
+singleton shards' own histories.
 
 #### Next moves
 
-1. **Aggressive rollups + truncation on the catalog shard.** If the
-   catalog shard's diff-history (between rollups) is what makes each
-   CAS more expensive, more frequent rollups should flatten the
-   slope. Check `mz_persist_state_apply_spine_slow_path` /
-   `mz_persist_shard_seqnos_since_last_rollup` for the catalog
-   shard at N=10k.
-2. **Investigate the txns shard slope.** That one is more
-   surprising — the txns shard mediates writeable-table tx state
-   and shouldn't intrinsically grow with N. Verify that its
-   state size is in fact growing.
-3. **De-prioritize**: the user_data CAS volume is a non-issue for
-   DDL latency. It will matter for *total CPU* but not for the
-   wall-time slope we've been chasing.
+1. **Persist-only microbenchmark.** Build a tiny harness *outside*
+   the envd/catalog stack that opens a single persist shard, writes
+   into it in a pattern that mimics what the catalog actually does
+   per DDL (small diff, occasional rollup, similar key/value
+   shapes), grows the shard's state to a target SeqNo / state-byte
+   size, then measures `compare_and_set` latency at that size. Run
+   the ladder cheaply at multiple sizes. Once that reproduces the
+   per-CAS slope outside envd, we can profile / trace / mutate it
+   in isolation — no clusterd, no CRDB-TS-oracle, no measurement
+   noise from 10k user_data shards doing background work. Likely
+   lives in `src/persist-client/src/bin/persist_cas_bench.rs` or a
+   sibling of `persist-client/examples/`. Same trick applied
+   separately to the txns-shard write pattern (`mz_txn_wal`)
+   isolates that slope too.
+2. **Once the microbench reproduces the slope**: profile / trace
+   the slow CAS to see where time goes inside persist state apply
+   — spine slow-path, rollup write cadence, decode cost, encoded
+   diff size. The flame-graph from inside envd is too contaminated
+   by everything else to read cleanly; the microbench output
+   should be much sharper.
+3. **Once we know *what* is slow**, fix it — likely some
+   combination of more aggressive rollups on the catalog and txns
+   shards (`mz_persist_state_apply_spine_slow_path` /
+   `mz_persist_shard_seqnos_since_last_rollup` are the relevant
+   counters to watch), or a cheaper apply path for the specific
+   diff pattern the catalog produces.
+4. **De-prioritize**: user_data CAS volume is a non-issue for DDL
+   latency. It matters for *total CPU* but not for the wall-time
+   slope we've been chasing.
 
 #### Reproducing
 
