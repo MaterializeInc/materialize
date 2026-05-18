@@ -977,6 +977,39 @@ theorem UnifiedStream.intersectAll_preserves_error_diff_right
       = some (uc, DiffWithError.error)
   rw [DiffWithError.error_min_right]
 
+/-! ## NoDupCarriers closure laws
+
+Operators that preserve carriers (or filter them) preserve
+`NoDupCarriers`. The closure lets the optimizer compose set-op
+pipelines without re-deriving uniqueness at each step. -/
+
+theorem UnifiedStream.negate_noDup (us : UnifiedStream)
+    (h : UnifiedStream.NoDupCarriers us) :
+    UnifiedStream.NoDupCarriers (UnifiedStream.negate us) := by
+  induction us with
+  | nil => exact UnifiedStream.NoDupCarriers.nil
+  | cons hd tl ih =>
+    obtain ⟨hHead, hTl⟩ := List.pairwise_cons.mp h
+    show List.Pairwise _ ((hd.1, -hd.2) :: UnifiedStream.negate tl)
+    apply List.Pairwise.cons
+    · intro y hY
+      obtain ⟨orig, hOrigMem, hY_eq⟩ := List.mem_map.mp hY
+      rw [← hY_eq]
+      exact hHead orig hOrigMem
+    · exact ih hTl
+
+theorem UnifiedStream.clampPositive_noDup (us : UnifiedStream)
+    (h : UnifiedStream.NoDupCarriers us) :
+    UnifiedStream.NoDupCarriers (UnifiedStream.clampPositive us) := by
+  unfold UnifiedStream.clampPositive
+  exact List.Pairwise.sublist List.filter_sublist h
+
+-- `filter_noDup` and `clampToOne_noDup` need a membership
+-- characterization for the head step (filter may convert `.row` to
+-- `.err` for the same record, and clampToOne may drop or transform).
+-- The carrier of the converted record is bounded, so NoDup holds, but
+-- the rigorous proof requires per-shape analysis. Deferred.
+
 /-- All-`.val` inputs yield all-`.val` outputs through
 `intersectAll`. Each output diff is `.val (Min.min n m)` for some
 `n` from the left and `m` from the right. -/
