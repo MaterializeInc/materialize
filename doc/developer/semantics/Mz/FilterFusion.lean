@@ -165,4 +165,57 @@ theorem UnifiedStream.filter_filter_fuse
           hP.head r rfl
         exact filter_fusion_row q p r n hQr hPr
 
+/-! ## Idempotence (no hypothesis required)
+
+The general fusion theorem needs err-freedom because `evalAnd`'s
+clause ordering can disagree with filter's err-promotion when the
+two predicates differ. For the special case `q = p`, the two
+pipelines bottom out at the same `eval r p` value, so the err
+case lines up and no err-freedom hypothesis is needed. -/
+
+/-- Filter is idempotent: applying the same predicate twice equals
+applying it once. Holds unconditionally — unlike `filter_filter_fuse`,
+no err-freedom hypothesis is needed when both filters share a
+predicate. -/
+theorem UnifiedStream.filter_idem (pred : Expr) (us : UnifiedStream) :
+    UnifiedStream.filter pred (UnifiedStream.filter pred us)
+      = UnifiedStream.filter pred us := by
+  induction us with
+  | nil => rfl
+  | cons hd tl ih =>
+    obtain ⟨uc, d⟩ := hd
+    have hConsAsApp : ((uc, d) :: tl : UnifiedStream) = [(uc, d)] ++ tl := rfl
+    rw [hConsAsApp, UnifiedStream.filter_append,
+        UnifiedStream.filter_append, ih]
+    congr 1
+    cases d with
+    | error =>
+      -- `(uc, .error)` survives once via first arm; second pass
+      -- sees the same pair and keeps it again.
+      rfl
+    | val n =>
+      cases uc with
+      | err e =>
+        -- `(.err e, .val n)` survives once via err-arm; second pass
+        -- still sees an err carrier and keeps it.
+        rfl
+      | row r =>
+        rw [filter_row_singleton pred r n]
+        cases hEval : eval r pred with
+        | bool b =>
+          cases b with
+          | true =>
+            -- First filter keeps `(.row r, .val n)`; second filter
+            -- evaluates pred again on the same row.
+            rw [filter_row_singleton pred r n, hEval]
+          | false =>
+            -- First filter drops; second filter on `[]` is `[]`.
+            rfl
+        | err e =>
+          -- First filter promotes to `(.err e, .val n)`; second
+          -- filter keeps via err-arm.
+          rfl
+        | int _ => rfl
+        | null => rfl
+
 end Mz
