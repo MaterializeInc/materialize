@@ -22,6 +22,7 @@ The goal is to lock in the boolean truth tables for `AND` and `OR` over the four
 * `Mz/Bag.lean`: bag semantics on `List Row`. Defines `filterRel` and `project`, with filter idempotence, filter commutativity, projection length-preservation, and the empty-projection equation. Plain `filterRel` silently drops `err` rows; `Mz/ErrStream.lean` adds the explicit data/error stream pair.
 * `Mz/ErrStream.lean`: the dataflow-style `BagStream = (data, errors)` pair. `BagStream.filter` routes erroring rows into the error collection instead of dropping them, with idempotence proved at both the data and the error level.
 * `Mz/Pushdown.lean`: substitution (`Expr.subst`) plus the headline `eval_subst` theorem (substituting then evaluating against the original row equals evaluating against the projected row), and the relational predicate-pushdown rewrite `filterRel p (project es rel) = project es (filterRel (p.subst es) rel)`.
+* `Mz/DiffSemiring.lean`: `DiffWithError α` — the diff-field type extension that encodes global (collection-scoped) errors as an absorbing element. Provides `+`, `*`, `0`, `1` instances over an arbitrary base diff and proves the absorption / commutativity / associativity / distributivity laws that downstream operators must respect.
 
 ## What is not here
 
@@ -69,7 +70,9 @@ The roadmap in priority order:
 
 * `BagStream.project` analogous to `BagStream.filter`: each scalar in the projection list can produce its own error rows; aggregate them into the error collection.
 * `BagStream.filter` commutativity. Data field commutes by `filterRel_comm`; the error field requires a notion of multiset equality on `List EvalError` since list-order differs across permutations.
-* Diff-semiring extension for global errors (v2).
+* Tie `DiffWithError` to a concrete dataflow operator: model a `(Row, Time, DiffWithError ℤ)` triple stream and prove that an `error` diff at time `t` propagates to every downstream consolidation.
+* Joins on `BagStream` with explicit error propagation.
+* Aggregates: variadic reductions (`SUM`, `MIN`, etc.) with strict-on-err semantics and `try_*` non-strict variants.
 * Tightening `Expr.might_error`. The skeleton version is purely structural and ignores type / nullability information; bringing it closer to `MirScalarExpr::might_error` is additive.
 * Lift to bag semantics for predicate / projection rewrites.
 
