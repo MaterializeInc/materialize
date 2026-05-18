@@ -19,6 +19,7 @@ import {
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 import React, { Suspense, useRef, useState } from "react";
 
+import { useAppConfig } from "~/config/useAppConfig";
 import { useDrag } from "~/hooks/useDrag";
 import { getStore } from "~/jotai";
 import { DEVTOOL_BUTTONS_Z_INDEX } from "~/layouts/zIndex";
@@ -57,6 +58,7 @@ const getStoredPosition = (): { x: number; y: number } => {
 };
 
 export const DevtoolsContainer = () => {
+  const appConfig = useAppConfig();
   const { colors } = useTheme<MaterializeTheme>();
   const [isExpanded, setIsExpanded] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -84,6 +86,12 @@ export const DevtoolsContainer = () => {
       });
     },
   });
+
+  // Hide entirely on the production cloud stack; the floating button is a
+  // developer affordance and should not be visible to end users.
+  if (appConfig.mode === "cloud" && appConfig.currentStack === "production") {
+    return null;
+  }
 
   return (
     <>
