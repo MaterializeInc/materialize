@@ -18,7 +18,7 @@ The goal is to lock in the boolean truth tables for `AND` and `OR` over the four
 * `Mz/Coalesce.lean`: laws for `evalCoalesce` — error-rescue, null-beats-err tiebreak, first-error stickiness.
 * `Mz/Laws.lean`: algebraic laws — two-sided identity (`TRUE` for `AND`, `FALSE` for `OR`), idempotence (unconditional), commutativity (conditional on error-freedom of operands), and `Expr`-level reorder safety as a corollary of soundness.
 * `Mz/Variadic.lean`: laws for `evalAndN` and `evalOrN` over `List Datum` — cons recurrence, nil, singleton, binary equivalence with the binary evaluators, and `FALSE`/`TRUE` absorption.
-* `Mz/ExprVariadic.lean`: `Expr`-level reduction lemmas connecting `eval env (.andN args)` / `.orN` / `.coalesce` to their primitive counterparts, plus identity / singleton / binary-equivalence corollaries lifted through `eval`.
+* `Mz/ExprVariadic.lean`: `Expr`-level reduction lemmas connecting `eval env (.andN args)` / `.orN` / `.coalesce` to their primitive counterparts, identity / singleton / binary-equivalence corollaries lifted through `eval`, and variadic-absorption theorems — a single operand evaluating to `FALSE` (resp. `TRUE`) makes the whole `andN` (resp. `orN`) evaluate to `FALSE` (resp. `TRUE`).
 
 ## What is not here
 
@@ -64,7 +64,8 @@ Reviewers should expect both sides of the change in the same PR.
 
 The roadmap in priority order:
 
-* Variadic absorption at the `Expr` level: `FALSE ∈ args → eval env (.andN args) = .bool false` for a closed term. Mirrors `evalAndN_false_absorbs`, lifted through `eval`.
+* Lift to bag semantics: predicate / projection rewrites over `List Row`.
+* Diff-semiring extension for global errors (v2).
 * Tightening `Expr.might_error`. The skeleton version is purely structural and ignores type / nullability information; bringing it closer to `MirScalarExpr::might_error` is additive.
 * Lift to bag semantics for predicate / projection rewrites.
 

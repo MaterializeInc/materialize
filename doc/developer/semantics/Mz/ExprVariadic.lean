@@ -95,4 +95,46 @@ theorem eval_coalesce_singleton (env : Env) (a : Expr) :
   | null   => rw [show evalCoalesce [Datum.null] = Datum.null from rfl]
   | err e  => rw [show evalCoalesce [Datum.err e] = Datum.err e from rfl]
 
+/-! ## Variadic absorption at the `Expr` level
+
+A single operand that evaluates to `FALSE` (resp. `TRUE`) makes the
+whole variadic `AND` (resp. `OR`) evaluate to `FALSE` (resp. `TRUE`),
+regardless of the other operands — including those that produce
+`err`. These theorems transport `evalAndN_false_absorbs` /
+`evalOrN_true_absorbs` (in `Mz/Variadic.lean`) through `eval`, and
+are what an optimizer cites when folding `e₁ AND … AND falseᵢ AND …`
+to `false`. The `lit` corollary specializes the semantic premise to
+the syntactic case where one of the operands is the literal `.bool
+false` / `.bool true`. -/
+
+theorem eval_andN_false_absorbs {env : Env} {args : List Expr}
+    (h : ∃ e ∈ args, eval env e = .bool false) :
+    eval env (.andN args) = .bool false := by
+  rw [eval_andN]
+  apply evalAndN_false_absorbs (ds := args.map (eval env))
+  obtain ⟨e, he_mem, he_eq⟩ := h
+  exact List.mem_map.mpr ⟨e, he_mem, he_eq⟩
+
+theorem eval_orN_true_absorbs {env : Env} {args : List Expr}
+    (h : ∃ e ∈ args, eval env e = .bool true) :
+    eval env (.orN args) = .bool true := by
+  rw [eval_orN]
+  apply evalOrN_true_absorbs (ds := args.map (eval env))
+  obtain ⟨e, he_mem, he_eq⟩ := h
+  exact List.mem_map.mpr ⟨e, he_mem, he_eq⟩
+
+theorem eval_andN_lit_false_absorbs {env : Env} {args : List Expr}
+    (h : Expr.lit (.bool false) ∈ args) :
+    eval env (.andN args) = .bool false := by
+  apply eval_andN_false_absorbs
+  refine ⟨Expr.lit (.bool false), h, ?_⟩
+  simp only [eval]
+
+theorem eval_orN_lit_true_absorbs {env : Env} {args : List Expr}
+    (h : Expr.lit (.bool true) ∈ args) :
+    eval env (.orN args) = .bool true := by
+  apply eval_orN_true_absorbs
+  refine ⟨Expr.lit (.bool true), h, ?_⟩
+  simp only [eval]
+
 end Mz
