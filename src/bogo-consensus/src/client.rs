@@ -14,6 +14,7 @@
 //! conversion out of this crate avoids a dependency cycle with `mz-persist`.
 
 use std::pin::Pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use futures::Stream;
 use futures::stream::TryStreamExt;
@@ -27,12 +28,27 @@ use crate::proto::{
 
 pub use crate::proto::CaSResult;
 
+/// Default fan-out of independent gRPC connections from a single
+/// [`BogoConsensusClient`] to the server. We open this many TCP
+/// connections and round-robin RPCs across them so a multi-MB scan
+/// response on one connection does not head-of-line-block the small
+/// CAS responses queued on others.
+///
+/// Empirically (envd DDL audit, `persist_external_op_latency` for
+/// `consensus_cas`): with `1` channel ≈ 5-10% of CAS calls land in
+/// the 32-64 ms bucket and dominate the mean; bumping to a small
+/// pool clears that tail without measurable overhead at idle.
+const DEFAULT_CHANNELS: usize = 8;
+
 /// A handle to a bogo-consensus server.
 ///
-/// Cheap to clone — internally just clones a tonic [`Channel`].
+/// Internally holds a fixed pool of independent gRPC channels (TCP
+/// connections) and round-robins each RPC across them. Cloning is
+/// cheap — every field is `Arc`-like under the hood.
 #[derive(Debug, Clone)]
 pub struct BogoConsensusClient {
-    inner: TonicClient<Channel>,
+    channels: std::sync::Arc<Vec<TonicClient<Channel>>>,
+    next: std::sync::Arc<AtomicUsize>,
 }
 
 impl BogoConsensusClient {
@@ -42,6 +58,17 @@ impl BogoConsensusClient {
     /// The persist `bogo://` URL scheme is translated to `http://` before
     /// being passed here.
     pub async fn connect(url: String) -> Result<Self, anyhow::Error> {
+        Self::connect_with_channels(url, DEFAULT_CHANNELS).await
+    }
+
+    /// Like [`connect`](Self::connect) but with an explicit number of
+    /// underlying gRPC connections. Exposed mostly so the conformance test
+    /// can run with `channels = 1` and exercise the single-connection path.
+    pub async fn connect_with_channels(
+        url: String,
+        channels: usize,
+    ) -> Result<Self, anyhow::Error> {
+        let channels = channels.max(1);
         let endpoint = Endpoint::from_shared(url)?
             // No TLS — bogo is for local perf testing.
             .tcp_nodelay(true)
@@ -53,20 +80,34 @@ impl BogoConsensusClient {
             // amortises that across many requests.
             .initial_stream_window_size(8 * 1024 * 1024)
             .initial_connection_window_size(16 * 1024 * 1024);
-        let channel = endpoint.connect().await?;
-        // Catalog-shard scans grow with shard history; raise the gRPC message
-        // size cap well above tonic's 4 MiB default to avoid retry storms.
-        Ok(Self {
-            inner: TonicClient::new(channel)
+        let mut conns = Vec::with_capacity(channels);
+        for _ in 0..channels {
+            let channel = endpoint.clone().connect().await?;
+            // Catalog-shard scans grow with shard history; raise the gRPC
+            // message size cap well above tonic's 4 MiB default to avoid
+            // retry storms.
+            let client = TonicClient::new(channel)
                 .max_decoding_message_size(256 * 1024 * 1024)
-                .max_encoding_message_size(256 * 1024 * 1024),
+                .max_encoding_message_size(256 * 1024 * 1024);
+            conns.push(client);
+        }
+        Ok(Self {
+            channels: std::sync::Arc::new(conns),
+            next: std::sync::Arc::new(AtomicUsize::new(0)),
         })
+    }
+
+    /// Picks the next connection in round-robin order and returns an owned
+    /// clone of its tonic client. Cloning the `TonicClient` just clones the
+    /// underlying `Channel`'s `Arc`, so this is cheap.
+    fn pick(&self) -> TonicClient<Channel> {
+        let i = self.next.fetch_add(1, Ordering::Relaxed) % self.channels.len();
+        self.channels[i].clone()
     }
 
     pub async fn head(&self, key: &str) -> Result<Option<VersionedData>, Status> {
         let resp = self
-            .inner
-            .clone()
+            .pick()
             .head(HeadRequest {
                 key: key.to_owned(),
             })
@@ -81,8 +122,7 @@ impl BogoConsensusClient {
         new: VersionedData,
     ) -> Result<CaSResult, Status> {
         let resp = self
-            .inner
-            .clone()
+            .pick()
             .compare_and_set(CompareAndSetRequest {
                 key: key.to_owned(),
                 new: Some(new),
@@ -100,8 +140,7 @@ impl BogoConsensusClient {
         limit: u64,
     ) -> Result<Vec<VersionedData>, Status> {
         let resp = self
-            .inner
-            .clone()
+            .pick()
             .scan(ScanRequest {
                 key: key.to_owned(),
                 from,
@@ -114,8 +153,7 @@ impl BogoConsensusClient {
 
     pub async fn truncate(&self, key: &str, seqno: u64) -> Result<Option<u64>, Status> {
         let resp = self
-            .inner
-            .clone()
+            .pick()
             .truncate(TruncateRequest {
                 key: key.to_owned(),
                 seqno,
@@ -129,8 +167,7 @@ impl BogoConsensusClient {
         &self,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<String, Status>> + Send>>, Status> {
         let stream = self
-            .inner
-            .clone()
+            .pick()
             .list_keys(ListKeysRequest {})
             .await?
             .into_inner();
