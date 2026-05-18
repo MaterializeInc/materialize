@@ -492,4 +492,81 @@ theorem UnifiedStream.consolidate_no_error
     rw [hN] at this
     exact consolidateInto_no_error uc n _ hConsTl r this
 
+/-! ## Carrier preservation
+
+`consolidate` does not lose carriers: every record that appears
+in the input has a counterpart in the output with the same
+carrier (the diff may have been folded into a bucket with other
+records sharing the carrier). -/
+
+private theorem consolidateInto_preserves_mem
+    (uc uc' : UnifiedRow) (d d' : DiffWithError Int) (us : UnifiedStream)
+    (h : (uc, d) ∈ us) :
+    ∃ d'', (uc, d'') ∈ consolidateInto uc' d' us := by
+  induction us with
+  | nil => exact absurd h List.not_mem_nil
+  | cons hd tl ih =>
+    obtain ⟨uc'', d''⟩ := hd
+    by_cases hEq : uc' = uc''
+    · subst hEq
+      rw [consolidateInto_match]
+      rcases List.mem_cons.mp h with hHead | hTail
+      · -- (uc, d) = (uc', d''); head of output is (uc', d' + d'').
+        have hCarrier : uc = uc' := (Prod.mk.injEq _ _ _ _).mp hHead |>.1
+        subst hCarrier
+        exact ⟨d' + d'', List.mem_cons_self⟩
+      · -- (uc, d) in tl; tail of output is tl.
+        exact ⟨d, List.mem_cons_of_mem _ hTail⟩
+    · rw [consolidateInto_skip _ _ _ _ _ hEq]
+      rcases List.mem_cons.mp h with hHead | hTail
+      · -- (uc, d) is the head record (uc'', d''); preserved verbatim.
+        have hCarrier : uc = uc'' := (Prod.mk.injEq _ _ _ _).mp hHead |>.1
+        have hD : d = d'' := (Prod.mk.injEq _ _ _ _).mp hHead |>.2
+        subst hCarrier; subst hD
+        exact ⟨d, List.mem_cons_self⟩
+      · obtain ⟨d''', hMem⟩ := ih hTail
+        exact ⟨d''', List.mem_cons_of_mem _ hMem⟩
+
+/-- Every input carrier survives consolidation: an input record
+with carrier `uc` has some output record with the same carrier
+(diff possibly folded with siblings sharing the carrier). -/
+theorem UnifiedStream.mem_consolidate_of_mem
+    (us : UnifiedStream) (uc : UnifiedRow) (d : DiffWithError Int)
+    (h : (uc, d) ∈ us) :
+    ∃ d', (uc, d') ∈ UnifiedStream.consolidate us := by
+  induction us with
+  | nil => exact absurd h List.not_mem_nil
+  | cons hd tl ih =>
+    obtain ⟨uc', d'⟩ := hd
+    rcases List.mem_cons.mp h with hHead | hTail
+    · -- Head record's carrier matches; insert finds or appends bucket.
+      have hCarrier : uc = uc' := (Prod.mk.injEq _ _ _ _).mp hHead |>.1
+      subst hCarrier
+      show ∃ d'', (uc, d'') ∈ consolidateInto uc d' (UnifiedStream.consolidate tl)
+      exact mem_after_consolidateInto uc d' _
+    · -- Tail contains the record; ih + carrier preservation through insert.
+      obtain ⟨d'', hMem⟩ := ih hTail
+      exact consolidateInto_preserves_mem uc uc' d'' d' _ hMem
+
+/-- Reverse direction: every output carrier came from an input
+carrier. The output is "no bigger" than the input on carriers. -/
+theorem UnifiedStream.mem_of_mem_consolidate
+    (us : UnifiedStream) (uc : UnifiedRow) :
+    (∃ d, (uc, d) ∈ UnifiedStream.consolidate us)
+      → ∃ d', (uc, d') ∈ us := by
+  induction us with
+  | nil => intro ⟨_, h⟩; exact absurd h List.not_mem_nil
+  | cons hd tl ih =>
+    intro ⟨d, h⟩
+    obtain ⟨uc', d'⟩ := hd
+    have hInto : (uc, d) ∈ consolidateInto uc' d' (UnifiedStream.consolidate tl) := h
+    rcases mem_consolidateInto_carrier uc' d' _ (uc, d) hInto with hUc | ⟨d'', hMem⟩
+    · -- carrier = uc'; head of input.
+      subst hUc
+      exact ⟨d', List.mem_cons_self⟩
+    · -- carrier in consolidate tl; apply ih.
+      have hMem' : (uc, d'') ∈ UnifiedStream.consolidate tl := hMem
+      obtain ⟨d''', hMemTl⟩ := ih ⟨d'', hMem'⟩
+      exact ⟨d''', List.mem_cons_of_mem _ hMemTl⟩
+
 end Mz
