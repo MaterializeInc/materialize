@@ -9,26 +9,14 @@
 
 # This is a separate mzimage so that we don't have to re-install the apt things
 # every time we get a CI builder with a cold cache.
-MZFROM console AS console
 
-MZFROM ubuntu-base
+MZFROM materialized-common-base
 
-ARG CI_SANITIZER=none
+USER root
 
-RUN groupadd --system --gid=999 materialize \
-    && useradd --system --gid=999 --uid=999 --create-home materialize \
-    && apt-get update \
+RUN apt-get update \
     && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install --no-install-recommends \
-        ca-certificates \
-        curl \
-        gettext-base \
-        nginx \
         postgresql-16 \
-        openssh-client \
-        tini \
-    && if [ "$CI_SANITIZER" != "none" ]; then \
-        TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install --no-install-recommends llvm; \
-       fi \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean \
     && rm -rf /var/lib/postgresql \
@@ -50,24 +38,9 @@ RUN groupadd --system --gid=999 materialize \
     # Remove unused extension SQL files (keep only plpgsql which is needed for initdb) \
     && find /usr/share/postgresql/16/extension -type f \
         ! -name 'plpgsql*' -delete \
-    # Remove nginx docs and unnecessary files \
-    && rm -rf /usr/share/doc/nginx* \
-    && rm -rf /usr/share/nginx/modules-available \
-    && mkdir -p /mzdata /scratch /var/run/postgresql /var/lib/nginx /var/log/nginx \
-    && touch /run/nginx.pid \
-    && chown -R materialize /mzdata /scratch /var/run/postgresql /var/lib/nginx /var/log/nginx /run/nginx.pid
+    && mkdir -p /var/run/postgresql \
+    && chown -R materialize /var/run/postgresql
 
 COPY postgresql.conf pg_hba.conf /etc/postgresql/
-
-COPY --from=console /usr/share/nginx/html /usr/share/nginx/html
-COPY console_nginx.template /etc/nginx/templates/default.conf.template
-
-# Configure the console to listen on port 6874 and proxy API requests through to
-# the Materialize instance that will be started and listening for requests on
-# port 6876.
-RUN MZ_ENDPOINT=http://localhost:6876 \
-    MZ_NGINX_LISTENER_CONFIG="listen 6874;" \
-    envsubst '${MZ_ENDPOINT} ${MZ_NGINX_LISTENER_CONFIG}' < /etc/nginx/templates/default.conf.template > /etc/nginx/sites-enabled/default \
-    && rm /etc/nginx/templates/default.conf.template
 
 USER materialize

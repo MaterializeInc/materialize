@@ -461,6 +461,18 @@ publish: true
     VERSION: '1.0'
   ```
 
+* `publish-as` (str) overrides the Docker Hub repository name used at publish
+  time. The image is still referenced by `name` everywhere else (mzbuild
+  graph, `MZFROM`, the fingerprint-tagged build); only the final Docker Hub
+  push uses `publish-as`. Use this when multiple variants of an image should
+  share a single Docker Hub repository (e.g., a FoundationDB variant of
+  `materialized` published into `materialize/materialized` rather than its own
+  repository). Combine with `tag-suffix` to keep the tags from colliding.
+
+* `tag-suffix` (str) appends a suffix to the published tag (e.g., `-fdb`
+  turns the `v0.27.0` tag into `v0.27.0-fdb` on Docker Hub). Typically used
+  together with `publish-as` to disambiguate variants sharing a repository.
+
 [buildarg]: https://docs.docker.com/engine/reference/commandline/build/#set-build-time-variables---build-arg
 
 #### Build artifacts
