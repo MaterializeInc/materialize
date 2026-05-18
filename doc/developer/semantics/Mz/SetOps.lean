@@ -309,6 +309,16 @@ theorem UnifiedStream.clampPositive_preserves_error_diff
   show isPositiveDiff DiffWithError.error = true
   rfl
 
+/-- `clampPositive` is idempotent. Filter twice = filter once. -/
+theorem UnifiedStream.clampPositive_idem (us : UnifiedStream) :
+    UnifiedStream.clampPositive (UnifiedStream.clampPositive us)
+      = UnifiedStream.clampPositive us := by
+  unfold UnifiedStream.clampPositive
+  rw [List.filter_filter]
+  congr 1
+  funext ud
+  exact Bool.and_self _
+
 /-- The output of `clampPositive` never contains a `.val n` with
 `n ≤ 0`. Equivalently, every surviving `.val` diff is strictly
 positive. -/
@@ -441,6 +451,35 @@ theorem UnifiedStream.clampToOne_preserves_error_diff
         split
         · exact List.mem_cons_of_mem _ (ih hTail)
         · exact ih hTail
+
+/-- `clampToOne` is idempotent. After one pass every `.val` is
+`.val 1` and every other diff is `.error`; the second pass
+preserves both. -/
+theorem UnifiedStream.clampToOne_idem (us : UnifiedStream) :
+    UnifiedStream.clampToOne (UnifiedStream.clampToOne us)
+      = UnifiedStream.clampToOne us := by
+  induction us with
+  | nil => rfl
+  | cons hd tl ih =>
+    obtain ⟨uc, d⟩ := hd
+    cases d with
+    | error =>
+      show UnifiedStream.clampToOne
+              ((uc, DiffWithError.error) :: UnifiedStream.clampToOne tl)
+          = (uc, DiffWithError.error) :: UnifiedStream.clampToOne tl
+      simp only [UnifiedStream.clampToOne]
+      rw [ih]
+    | val n =>
+      simp only [UnifiedStream.clampToOne]
+      split
+      · rename_i hPos
+        show UnifiedStream.clampToOne
+                ((uc, DiffWithError.val 1) :: UnifiedStream.clampToOne tl)
+            = (uc, DiffWithError.val 1) :: UnifiedStream.clampToOne tl
+        simp only [UnifiedStream.clampToOne]
+        rw [if_pos (by decide : (0 : Int) < 1)]
+        rw [ih]
+      · exact ih
 
 /-- Every `.val` record in the output of `clampToOne` has
 multiplicity exactly one. `.error` records pass through unchanged. -/
