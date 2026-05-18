@@ -27,8 +27,10 @@ would lift to this with a column-substitution layer.
 
 namespace Mz
 
-/-- Combine two unified carriers, with left winning on err conflict. -/
-@[inline] private def combineCarrier : UnifiedRow → UnifiedRow → UnifiedRow
+/-- Combine two unified carriers, with left winning on err conflict.
+Exposed (not `private`) so the join-pushdown theorems in
+`Mz/JoinPushdown.lean` can refer to it directly. -/
+@[inline] def combineCarrier : UnifiedRow → UnifiedRow → UnifiedRow
   | .row la, .row rb => .row (la ++ rb)
   | .err e,  _       => .err e
   | _,       .err e  => .err e
