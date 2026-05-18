@@ -835,6 +835,7 @@ pub enum FrontendStatementLoggingEvent {
     SetCluster {
         id: StatementLoggingId,
         cluster_id: ClusterId,
+        cluster_name: String,
     },
     /// Set the execution timestamp for a statement
     SetTimestamp {

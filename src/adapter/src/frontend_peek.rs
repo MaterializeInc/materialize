@@ -481,7 +481,7 @@ impl PeekClient {
 
         // Log cluster selection
         if let Some(logging_id) = &statement_logging_id {
-            self.log_set_cluster(*logging_id, target_cluster_id);
+            self.log_set_cluster(*logging_id, target_cluster_id, target_cluster_name.clone());
         }
 
         coord::catalog_serving::check_cluster_restrictions(

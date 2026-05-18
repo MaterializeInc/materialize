@@ -170,10 +170,12 @@ impl Coordinator {
                 Err(_) => (None, None),
             };
 
-            if let (Some(cluster_id), Some(statement_id)) =
-                (target_cluster_id, ctx.extra().contents())
-            {
-                self.set_statement_execution_cluster(statement_id, cluster_id);
+            if let (Some(cluster_id), Some(cluster_name), Some(statement_id)) = (
+                target_cluster_id,
+                target_cluster_name.clone(),
+                ctx.extra().contents(),
+            ) {
+                self.set_statement_execution_cluster(statement_id, cluster_id, cluster_name);
             }
 
             let session_catalog = self.catalog.for_session(ctx.session());
