@@ -47,6 +47,33 @@ def errorRows (pred : Expr) (rel : Relation) : List EvalError :=
     | .err e => e :: acc
     | _      => acc) []
 
+/-! ### `errorRows` reduction lemmas
+
+Named per-shape reductions so downstream proofs cite a single
+lemma instead of unfolding the `foldr`-match inline. -/
+
+theorem errorRows_nil (pred : Expr) : errorRows pred [] = [] := rfl
+
+theorem errorRows_cons_err (pred : Expr) (row : Row) (e : EvalError)
+    (tl : Relation) (h : eval row pred = .err e) :
+    errorRows pred (row :: tl) = e :: errorRows pred tl := by
+  show (match eval row pred with
+        | .err e => e :: errorRows pred tl
+        | _      => errorRows pred tl) = e :: errorRows pred tl
+  rw [h]
+
+theorem errorRows_cons_non_err (pred : Expr) (row : Row) (tl : Relation)
+    (h : ¬(eval row pred).IsErr) :
+    errorRows pred (row :: tl) = errorRows pred tl := by
+  show (match eval row pred with
+        | .err e => e :: errorRows pred tl
+        | _      => errorRows pred tl) = errorRows pred tl
+  cases hEval : eval row pred with
+  | bool _ => rfl
+  | int  _ => rfl
+  | null   => rfl
+  | err  _ => rw [hEval] at h; exact absurd trivial h
+
 /-- Error-aware filter. Rows whose predicate evaluates to `.bool
 true` stay in the data collection; rows whose predicate evaluates
 to `.err` contribute their payload to the error collection;
@@ -93,10 +120,7 @@ theorem errorRows_eq_nil_of_all_true (pred : Expr) (rel : Relation)
     have hd_eval : eval hd pred = .bool true := h hd (List.Mem.head tl)
     have htl : ∀ row ∈ tl, eval row pred = .bool true :=
       fun row h_mem => h row (List.Mem.tail hd h_mem)
-    show (match eval hd pred with
-          | .err e => e :: errorRows pred tl
-          | _      => errorRows pred tl) = []
-    rw [hd_eval]
+    rw [errorRows_cons_non_err _ _ _ (by rw [hd_eval]; intro hRes; cases hRes)]
     exact ih htl
 
 /-- `errorRows` of a filtered relation is empty: the survivors all
@@ -148,16 +172,8 @@ theorem errorRows_eq_nil_of_no_err
     have hHd : ¬(eval hd pred).IsErr := h hd List.mem_cons_self
     have hTl : ∀ row ∈ tl, ¬(eval row pred).IsErr :=
       fun row hMem => h row (List.mem_cons_of_mem _ hMem)
-    show (match eval hd pred with
-          | .err e => e :: errorRows pred tl
-          | _      => errorRows pred tl) = []
-    cases h_eval : eval hd pred with
-    | bool _ => exact ih hTl
-    | int _  => exact ih hTl
-    | null   => exact ih hTl
-    | err _  =>
-      rw [h_eval] at hHd
-      exact absurd (show True by trivial) hHd
+    rw [errorRows_cons_non_err _ _ _ hHd]
+    exact ih hTl
 
 /-- Full commutativity of `BagStream.filter` under a no-error
 precondition: when neither predicate errs on any row of the input
