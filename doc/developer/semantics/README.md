@@ -22,6 +22,7 @@ The goal is to lock in the boolean truth tables for `AND` and `OR` over the four
 * `Mz/Bag.lean`: bag semantics on `List Row`. Defines `filterRel` and `project`, with filter idempotence, filter commutativity, projection length-preservation, and the empty-projection equation. Plain `filterRel` silently drops `err` rows; `Mz/ErrStream.lean` adds the explicit data/error stream pair.
 * `Mz/ErrStream.lean`: the dataflow-style `BagStream = (data, errors)` pair.
   `BagStream.filter` routes erroring rows into the error collection instead of dropping them, with idempotence proved at both the data and the error level.
+  `BagStream.filter_comm_data` proves the data-side commutativity unconditionally; `BagStream.filter_comm_no_err` strengthens to full stream equality when neither predicate errors on the input data.
   `BagStream.project` projects each row through a list of scalars; a row stays in the data collection only when every scalar succeeds, otherwise its err payloads (one per erroring scalar) are appended to the error collection.
   `rowErrs_nil_of_all_safe` and `projectErrs_eq_nil_of_all_safe` show that when no projection errs, `BagStream.project` does not extend the error collection.
 * `Mz/Pushdown.lean`: substitution (`Expr.subst`) plus the headline `eval_subst` theorem (substituting then evaluating against the original row equals evaluating against the projected row), and the relational predicate-pushdown rewrite `filterRel p (project es rel) = project es (filterRel (p.subst es) rel)`.
@@ -87,7 +88,7 @@ Reviewers should expect both sides of the change in the same PR.
 
 The roadmap in priority order:
 
-* `BagStream.filter` commutativity. Data field commutes by `filterRel_comm`; the error field requires a notion of multiset equality on `List EvalError` since list-order differs across permutations.
+* Full `BagStream.filter` commutativity (no preconditions). The error field requires a notion of multiset equality on `List EvalError` since list-order differs across permutations, and even multiset equality fails when both predicates err on the same row — `(p err, q err)` rows record only one error in either ordering, but different ones depending on which filter runs first.
 * `BagStream.project` / `BagStream.filter` commutativity (when the predicate references only un-projected columns). Same multiset-equality caveat on the error collection.
 * Tie `DiffWithError` to a concrete dataflow operator: model a `(Row, Time, DiffWithError ℤ)` triple stream and prove that an `error` diff at time `t` propagates to every downstream consolidation.
 * Joins on `BagStream` with explicit error propagation.
