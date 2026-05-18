@@ -23,6 +23,7 @@ The goal is to lock in the boolean truth tables for `AND` and `OR` over the four
 * `Mz/ErrStream.lean`: the dataflow-style `BagStream = (data, errors)` pair. `BagStream.filter` routes erroring rows into the error collection instead of dropping them, with idempotence proved at both the data and the error level.
 * `Mz/Pushdown.lean`: substitution (`Expr.subst`) plus the headline `eval_subst` theorem (substituting then evaluating against the original row equals evaluating against the projected row), and the relational predicate-pushdown rewrite `filterRel p (project es rel) = project es (filterRel (p.subst es) rel)`.
 * `Mz/DiffSemiring.lean`: `DiffWithError α` — the diff-field type extension that encodes global (collection-scoped) errors as an absorbing element. Provides `+`, `*`, `0`, `1` instances over an arbitrary base diff and proves the absorption / commutativity / associativity / distributivity laws that downstream operators must respect.
+* `Mz/UnifiedStream.lean`: unified single-collection alternative to `BagStream`. `UnifiedRow` is `row ⊕ err`, so errors flow through the same carrier as data rows. `ofBag` / `split` conversions, with the round-trip theorem `split (ofBag s) = s`. The unified form matches the spec's diff-semiring target; the split `BagStream` is a runtime concession the conversion reconciles.
 
 ## What is not here
 

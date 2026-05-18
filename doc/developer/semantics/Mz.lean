@@ -12,3 +12,4 @@ import Mz.Bag
 import Mz.ErrStream
 import Mz.Pushdown
 import Mz.DiffSemiring
+import Mz.UnifiedStream
