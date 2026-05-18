@@ -129,7 +129,9 @@ use std::fmt;
 use std::rc::Rc;
 
 use columnar::bytes::indexed;
-use columnar::{Borrow, Clear, Columnar, FromBytes, Index, Len, Push};
+use columnar::{
+    Borrow, BorrowedOf, Clear, Columnar, ContainerOf, FromBytes, Index, Len, Push, Ref,
+};
 use mz_ore::cast::CastLossy;
 use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
 use mz_repr::{Diff, Timestamp};
@@ -142,26 +144,23 @@ use crate::sink::correction::{ChannelLogging, SizeMetrics};
 ///
 /// `D` is constrained to be `Columnar`, so that updates can be stored in a single columnar
 /// region per chunk, and the variable-length payload (e.g. `Row` bytes) lives in the same
-/// allocation as the rest of the chunk.
+/// allocation as the rest of the chunk. The `Ref`-level `Eq + Ord` bounds let the merge/heap
+/// code compare updates directly through the columnar borrow, avoiding `into_owned` clones
+/// on the hot path.
 pub trait Data:
-    differential_dataflow::Data + Columnar<Container: Send + Sync + Clone> + Send + Sync
+    differential_dataflow::Data
+    + Columnar<Container: Send + Sync + Clone + for<'a> columnar::Borrow<Ref<'a>: Eq + Ord>>
+    + Send
+    + Sync
 {
 }
 impl<D> Data for D where
-    D: differential_dataflow::Data + Columnar<Container: Send + Sync + Clone> + Send + Sync
+    D: differential_dataflow::Data
+        + Columnar<Container: Send + Sync + Clone + for<'a> columnar::Borrow<Ref<'a>: Eq + Ord>>
+        + Send
+        + Sync
 {
 }
-
-/// Shorthand for the columnar container that stores `(D, Timestamp, Diff)` triples.
-type TripleContainer<D> = <(D, Timestamp, Diff) as Columnar>::Container;
-/// Shorthand for a borrowed view of [`TripleContainer`].
-type TripleBorrowed<'a, D> = <TripleContainer<D> as Borrow>::Borrowed<'a>;
-/// Shorthand for a single-update reference produced when reading from a chunk.
-///
-/// Equivalent to `(D::Ref<'_>, Timestamp, Diff)` — `Timestamp` and `Diff` are returned by
-/// value because their columnar `Ref` types are owned, while `D` is returned by `Ref` so
-/// variable-length payloads don't need to be cloned out of the columnar storage.
-type UpdateRef<'a, D> = <TripleBorrowed<'a, D> as Index>::Ref;
 
 /// Storage for a chunk's worth of updates.
 ///
@@ -172,7 +171,7 @@ type UpdateRef<'a, D> = <TripleBorrowed<'a, D> as Index>::Ref;
 enum ChunkData<D: Data> {
     /// Typed, mutable columnar container (each column is a `Vec`-like). Used while a chunk is
     /// still being filled by a [`ChunkBuilder`].
-    Typed(TripleContainer<D>),
+    Typed(ContainerOf<(D, Timestamp, Diff)>),
     /// Finished chunk encoded into a single aligned `Vec<u64>` allocation. Produced by
     /// [`ChunkBuilder`] once enough data has accumulated to reach a ~2 MiB serialized boundary.
     Align(Vec<u64>),
@@ -187,10 +186,12 @@ impl<D: Data> Default for ChunkData<D> {
 impl<D: Data> ChunkData<D> {
     /// Return a borrowed view of the contained columnar data.
     #[inline]
-    fn borrow(&self) -> TripleBorrowed<'_, D> {
+    fn borrow(&self) -> BorrowedOf<'_, (D, Timestamp, Diff)> {
         match self {
-            Self::Typed(c) => c.borrow(),
-            Self::Align(a) => <TripleBorrowed<'_, D>>::from_bytes(&mut indexed::decode(a)),
+            Self::Typed(c) => columnar::Borrow::borrow(c),
+            Self::Align(a) => {
+                <BorrowedOf<'_, (D, Timestamp, Diff)>>::from_bytes(&mut indexed::decode(a))
+            }
         }
     }
 
@@ -203,7 +204,7 @@ impl<D: Data> ChunkData<D> {
     /// Return the size of the chunk, for use in metrics.
     fn length_in_bytes(&self) -> usize {
         match self {
-            Self::Typed(c) => indexed::length_in_bytes(&c.borrow()),
+            Self::Typed(c) => indexed::length_in_bytes(&columnar::Borrow::borrow(c)),
             Self::Align(a) => 8 * a.len(),
         }
     }
@@ -592,7 +593,7 @@ impl<D: Data> CorrectionV2<D> {
                     let (d1, t1, r1) = c1.get();
                     let (d2, t2, r2) = c2.get();
 
-                    match cmp_keys::<D>(t1, d1, t2, d2) {
+                    match (t1, d1).cmp(&(t2, d2)) {
                         Ordering::Less => {
                             merged.push_ref((d1, t1, r1));
                             rest1 = c1.step();
@@ -704,22 +705,20 @@ impl<D: Data> Chain<D> {
     /// Return whether the chain can accept the given update.
     ///
     /// A chain can accept an update if pushing it at the end upholds the (time, data)-order.
-    fn can_accept(&self, update: UpdateRef<'_, D>) -> bool {
+    fn can_accept<'a>(&'a self, update: Ref<'a, (D, Timestamp, Diff)>) -> bool {
         self.last().is_none_or(|(dc, tc, _)| {
             let (d, t, _) = update;
-            // Compare on (time, owned-data) by lifting both sides through `D::into_owned`.
-            // This is only used in debug assertions, so the clone cost is acceptable.
-            (tc, D::into_owned(dc)) < (t, D::into_owned(d))
+            (tc, dc) < (t, d)
         })
     }
 
     /// Return the first update in the chain, if any.
-    fn first(&self) -> Option<UpdateRef<'_, D>> {
+    fn first(&self) -> Option<Ref<'_, (D, Timestamp, Diff)>> {
         self.chunks.first().map(|c| c.first())
     }
 
     /// Return the last update in the chain, if any.
-    fn last(&self) -> Option<UpdateRef<'_, D>> {
+    fn last(&self) -> Option<Ref<'_, (D, Timestamp, Diff)>> {
         self.chunks.last().map(|c| c.last())
     }
 
@@ -769,7 +768,7 @@ impl<D: Data> Default for ChainBuilder<D> {
 
 impl<D: Data> ChainBuilder<D> {
     /// Push a reference-form update into the builder.
-    fn push_ref(&mut self, update: UpdateRef<'_, D>) {
+    fn push_ref(&mut self, update: Ref<'_, (D, Timestamp, Diff)>) {
         self.builder.push(update);
         self.drain();
         self.chain.update_count += 1;
@@ -893,7 +892,7 @@ impl<D: Data> Cursor<D> {
     }
 
     /// Get a reference to the current update.
-    fn get(&self) -> UpdateRef<'_, D> {
+    fn get(&self) -> Ref<'_, (D, Timestamp, Diff)> {
         let chunk = self.get_chunk();
         let (d, t, r) = chunk.index(self.chunk_offset);
         let t = self.overwrite_ts.unwrap_or(t);
@@ -1132,17 +1131,17 @@ impl<D: Data> Chunk<D> {
     /// # Panics
     ///
     /// Panics if the given index is not populated.
-    fn index(&self, idx: usize) -> UpdateRef<'_, D> {
+    fn index(&self, idx: usize) -> Ref<'_, (D, Timestamp, Diff)> {
         self.data.borrow().get(idx)
     }
 
     /// Return the first update in the chunk.
-    fn first(&self) -> UpdateRef<'_, D> {
+    fn first(&self) -> Ref<'_, (D, Timestamp, Diff)> {
         self.index(0)
     }
 
     /// Return the last update in the chunk.
-    fn last(&self) -> UpdateRef<'_, D> {
+    fn last(&self) -> Ref<'_, (D, Timestamp, Diff)> {
         self.index(self.len() - 1)
     }
 
@@ -1187,7 +1186,7 @@ impl<D: Data> Chunk<D> {
 /// chunks produced here are sized comparably to chunks shipped via the merge batcher.
 struct ChunkBuilder<D: Data> {
     /// In-progress chunk.
-    current: TripleContainer<D>,
+    current: ContainerOf<(D, Timestamp, Diff)>,
     /// Already-minted chunks ready to be consumed.
     pending: VecDeque<ChunkData<D>>,
 }
@@ -1211,7 +1210,7 @@ impl<D: Data> ChunkBuilder<D> {
     #[inline]
     fn push<T>(&mut self, item: T)
     where
-        TripleContainer<D>: Push<T>,
+        ContainerOf<(D, Timestamp, Diff)>: Push<T>,
     {
         self.current.push(item);
         self.maybe_mint();
@@ -1459,19 +1458,22 @@ impl<D: Data> MergeHeap<D> {
     /// equal to the given values.
     ///
     /// Returns both the cursor and the diff corresponding to `data` and `time`.
-    fn pop_equal(
-        &mut self,
-        data: <<D as Columnar>::Container as columnar::Borrow>::Ref<'_>,
-        time: Timestamp,
-    ) -> Option<(Cursor<D>, Diff)> {
-        let MergeCursor(cursor) = self.0.peek()?;
-        let (d, t, r) = cursor.get();
-        if t == time && D::into_owned(d) == D::into_owned(data) {
-            let cursor = self.pop().expect("checked above");
-            Some((cursor, r))
-        } else {
-            None
-        }
+    fn pop_equal(&mut self, data: Ref<'_, D>, time: Timestamp) -> Option<(Cursor<D>, Diff)> {
+        // We need to release the immutable borrow from `peek` before calling `self.pop` below,
+        // and we need to compare a `Ref` taken from the heap's top cursor with `data` — two
+        // values whose lifetimes don't unify. `into_owned` resolves both: it ends the borrow
+        // (the resulting owned value is independent of the cursor) and produces a value that
+        // can be compared with `D::into_owned(data)` directly.
+        let r = {
+            let MergeCursor(cursor) = self.0.peek()?;
+            let (d, t, r) = cursor.get();
+            if t != time || D::into_owned(d) != D::into_owned(data) {
+                return None;
+            }
+            r
+        };
+        let cursor = self.pop().expect("checked above");
+        Some((cursor, r))
     }
 
     /// Push a cursor onto the heap.
@@ -1503,23 +1505,6 @@ impl<D: Data> Ord for MergeCursor<D> {
     fn cmp(&self, other: &Self) -> Ordering {
         let (d1, t1, _) = self.0.get();
         let (d2, t2, _) = other.0.get();
-        cmp_keys::<D>(t1, d1, t2, d2).reverse()
-    }
-}
-
-/// Compare two `(Timestamp, D::Ref)` keys by `(time, data)`.
-///
-/// Data is compared via `D::into_owned` so that the operation works for any columnar `D`. This
-/// can be expensive for variable-length `D` (e.g. `Row`); merge-heavy code paths that fire this
-/// often should be revisited once a `Ref`-level comparison trait is available.
-fn cmp_keys<D: Data>(
-    t1: Timestamp,
-    d1: <<D as Columnar>::Container as columnar::Borrow>::Ref<'_>,
-    t2: Timestamp,
-    d2: <<D as Columnar>::Container as columnar::Borrow>::Ref<'_>,
-) -> Ordering {
-    match t1.cmp(&t2) {
-        Ordering::Equal => D::into_owned(d1).cmp(&D::into_owned(d2)),
-        other => other,
+        (t1, d1).cmp(&(t2, d2)).reverse()
     }
 }
