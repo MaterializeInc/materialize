@@ -77,6 +77,14 @@ pub trait ConnectionAccess: Clone + Debug + Eq + PartialEq + Serialize + 'static
         + Serialize
         + for<'a> Deserialize<'a>
         + AlterCompatible;
+    type Gcp: Clone
+        + Debug
+        + Eq
+        + PartialEq
+        + Hash
+        + Serialize
+        + for<'a> Deserialize<'a>
+        + AlterCompatible;
     type Ssh: Clone
         + Debug
         + Eq
@@ -137,6 +145,7 @@ impl ConnectionAccess for ReferencedConnection {
     type Kafka = CatalogItemId;
     type Pg = CatalogItemId;
     type Aws = CatalogItemId;
+    type Gcp = CatalogItemId;
     type Ssh = CatalogItemId;
     type Csr = CatalogItemId;
     type GlueSchemaRegistry = CatalogItemId;
@@ -153,6 +162,7 @@ impl ConnectionAccess for InlinedConnection {
     type Kafka = super::KafkaConnection;
     type Pg = super::PostgresConnection;
     type Aws = super::aws::AwsConnection;
+    type Gcp = super::gcp::GcpConnection;
     type Ssh = super::SshConnection;
     type Csr = super::CsrConnection;
     type GlueSchemaRegistry = super::GlueSchemaRegistryConnection;
