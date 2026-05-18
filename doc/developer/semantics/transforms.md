@@ -346,7 +346,7 @@ Status legend:
 | `fusion/negate.rs` (Negate fusion) | `negate_negate` (involution) |
 | `fusion/join.rs` (Join fusion / associativity) | `cross_assoc` |
 | `union_cancel.rs` (partial) | `consolidate (unionAll a (negate a))` reduces to `.val 0` records via diff arithmetic; no theorem yet, but ingredients in place |
-| `fusion/filter.rs` (filter ∘ filter) | `UnifiedStream.filter_filter_fuse` in `Mz/FilterFusion.lean`. Holds under per-row err-freedom (`predNoRowErr`). Excludes the `err`-on-left + `evalAnd` ordering corner. |
+| `fusion/filter.rs` (filter ∘ filter) | `UnifiedStream.filter_filter_fuse` in `Mz/FilterFusion.lean` plus `filter_idem` (unconditional) and `filter_comm` (under err-freedom). |
 | `threshold_elision.rs` | `UnifiedStream.clampPositive_id_of_positive` in `Mz/SetOps.lean`. `clampPositive` is identity when every record's diff is `.error` or a strictly-positive `.val`. |
 | `fusion/map.rs` (project ∘ project) | `UnifiedStream.project_project_fuse` in `Mz/ProjectFusion.lean`. Holds under `projsAllSafe` (`es` is safe on every data row). Bridges via `eval_subst`. |
 | `demand.rs` | `filter_replaceAtRow_of_unused` (any input) + `project_replaceAtRow_eq_of_unused` (under `IsPureData`) in `Mz/Demand.lean`. Lifts `eval_replaceAt_of_unused` to the stream level. |
