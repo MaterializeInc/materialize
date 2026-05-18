@@ -1,5 +1,6 @@
 import Mz.UnifiedStream
 import Mz.ColRefs
+import Mz.JoinPushdown
 
 /-!
 # Demand: unused-column invariance
@@ -96,5 +97,101 @@ theorem UnifiedStream.filter_replaceAtRow_of_unused
         | err _ => rfl
         | int _ => rfl
         | null => rfl
+
+/-! ## Project invariance under unused-column replacement -/
+
+/-- Every expression in `es` has column `n` unused. -/
+def Expr.argsColRefUnusedList (n : Nat) (es : List Expr) : Prop :=
+  ∀ e ∈ es, e.colReferencesUnused n = true
+
+private theorem rowAllSafe_replaceAt_of_unused
+    (es : List Expr) (n : Nat) (v : Datum) (r : Row)
+    (h : Expr.argsColRefUnusedList n es) :
+    rowAllSafe es (Env.replaceAt r n v) = rowAllSafe es r := by
+  induction es with
+  | nil => rfl
+  | cons hd tl ih =>
+    have hHd : hd.colReferencesUnused n = true := h hd List.mem_cons_self
+    have hTl : Expr.argsColRefUnusedList n tl :=
+      fun e hMem => h e (List.mem_cons_of_mem _ hMem)
+    have hEval : eval (Env.replaceAt r n v) hd = eval r hd :=
+      eval_replaceAt_of_unused r n v hd hHd
+    unfold rowAllSafe at ih ⊢
+    rw [List.all_cons, List.all_cons, hEval, ih hTl]
+
+private theorem rowErrs_replaceAt_of_unused
+    (es : List Expr) (n : Nat) (v : Datum) (r : Row)
+    (h : Expr.argsColRefUnusedList n es) :
+    rowErrs es (Env.replaceAt r n v) = rowErrs es r := by
+  induction es with
+  | nil => rfl
+  | cons hd tl ih =>
+    have hHd : hd.colReferencesUnused n = true := h hd List.mem_cons_self
+    have hTl : Expr.argsColRefUnusedList n tl :=
+      fun e hMem => h e (List.mem_cons_of_mem _ hMem)
+    have hEval : eval (Env.replaceAt r n v) hd = eval r hd :=
+      eval_replaceAt_of_unused r n v hd hHd
+    unfold rowErrs at ih ⊢
+    rw [List.filterMap_cons, List.filterMap_cons, hEval, ih hTl]
+
+private theorem evalMap_replaceAt_of_unused
+    (es : List Expr) (n : Nat) (v : Datum) (r : Row)
+    (h : Expr.argsColRefUnusedList n es) :
+    es.map (eval (Env.replaceAt r n v)) = es.map (eval r) := by
+  induction es with
+  | nil => rfl
+  | cons hd tl ih =>
+    have hHd : hd.colReferencesUnused n = true := h hd List.mem_cons_self
+    have hTl : Expr.argsColRefUnusedList n tl :=
+      fun e hMem => h e (List.mem_cons_of_mem _ hMem)
+    have hEval : eval (Env.replaceAt r n v) hd = eval r hd :=
+      eval_replaceAt_of_unused r n v hd hHd
+    show eval (Env.replaceAt r n v) hd :: tl.map _
+        = eval r hd :: tl.map _
+    rw [hEval, ih hTl]
+
+/-- Project is invariant under input replacement of an unused
+column, when the input is pure data (no `.err` carriers, no
+`.error` diffs). The hypothesis rules out the err / error
+passthrough that *would* preserve the replaced carrier on the
+output and break the simpler invariance form.
+
+This is the project-side counterpart of
+`filter_replaceAtRow_of_unused`. The reason the filter version
+admits replacement on both sides (no purity needed) and this one
+doesn't: filter preserves the row content of surviving records,
+so column `n` of the output equals column `n` of the input;
+project rewrites the row content via `es.map (eval r)`, so column
+`n` of the output is unrelated to column `n` of the input. -/
+theorem UnifiedStream.project_replaceAtRow_eq_of_unused
+    (es : List Expr) (n : Nat) (v : Datum) (us : UnifiedStream)
+    (hPure : UnifiedStream.IsPureData us)
+    (h : Expr.argsColRefUnusedList n es) :
+    UnifiedStream.project es (UnifiedStream.replaceAtRow n v us)
+      = UnifiedStream.project es us := by
+  induction us with
+  | nil => rfl
+  | cons hd tl ih =>
+    obtain ⟨uc, d⟩ := hd
+    have hTlPure : UnifiedStream.IsPureData tl := hPure.tail
+    obtain ⟨⟨r, hUc⟩, ⟨n', hD⟩⟩ := hPure.head
+    subst hUc; subst hD
+    have hConsAsApp : ((UnifiedRow.row r, DiffWithError.val n') :: tl : UnifiedStream)
+                    = [(UnifiedRow.row r, DiffWithError.val n')] ++ tl := rfl
+    rw [hConsAsApp, UnifiedStream.replaceAtRow_append,
+        UnifiedStream.project_append, UnifiedStream.project_append,
+        ih hTlPure]
+    congr 1
+    -- LHS: project es [(.row (Env.replaceAt r n v), .val n')].
+    -- RHS: project es [(.row r, .val n')]. Bottoms out at
+    -- `rowProjectRecords es (.val n') (...)`. The two agree under
+    -- the unused-column hypothesis.
+    show rowProjectRecords es (DiffWithError.val n') (Env.replaceAt r n v) ++ []
+          = rowProjectRecords es (DiffWithError.val n') r ++ []
+    rw [List.append_nil, List.append_nil]
+    unfold rowProjectRecords
+    rw [rowAllSafe_replaceAt_of_unused es n v r h,
+        rowErrs_replaceAt_of_unused es n v r h,
+        evalMap_replaceAt_of_unused es n v r h]
 
 end Mz
