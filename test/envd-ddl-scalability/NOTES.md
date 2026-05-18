@@ -2070,3 +2070,146 @@ padding vs ~85 ms at 15k. Same slope.
    real backend.
 4. **15k is well within budget on this machine** — envd hit 2.9
    GiB RSS, CRDB stayed under 1 GiB. We can keep going if needed.
+
+## 2026-05-18 — Splitting `catalog_transact` into phases
+
+tl;dr: the `catalog_transact_with_ddl_transaction` slope is **mostly
+outside** `Catalog::transact`. The inside-transact slope is real but
+modest (~3-5 ms/+5k). The outside-transact slope is ~6-10 ms/+5k and
+lives somewhere in `Coordinator::catalog_transact_inner` — the
+wrapper that does `Arc::make_mut(catalog)`, calls
+`catalog.transact`, then ships builtin-table updates and runs the
+finalize block.
+
+### What we added
+
+A new histogram, `mz_catalog_transact_phase_seconds{phase=...}`,
+that times each phase inside `Catalog::transact`:
+
+* `transact_inner` — total time inside the inner method (a
+  cross-check / super-timer for the four phases below).
+* `op_loop` — the for-each-op loop body (`transact_op` + per-op
+  `preliminary_state.apply_updates`).
+* `final_apply_updates` — the combined `apply_updates` call on the
+  final state, after the op loop.
+* `prepare_state` — `storage_collections.prepare_state(...)`
+  (storage controller side).
+* `post_prepare_apply_updates` — the second final `apply_updates`
+  after `prepare_state`, draining any new tx updates that emerged.
+* `tx_commit` — `tx.commit(&mut **storage, oracle_write_ts)`
+  (the persist CAS path).
+* `assign_state` — `self.state = new_state` (drops old `CatalogState`).
+
+Wired through `Catalog` as `Option<HistogramVec>`, set once from
+`Coordinator` startup. `transact_incremental_dry_run` doesn't get
+the metric — DDL-txn dry runs are a different code path and
+polluting the measurement bucket would muddy the bench.
+
+### Headline timings (bogo backend, fresh-from-scratch)
+
+`mz_catalog_transact_seconds{method="catalog_transact_with_ddl_transaction"}`
+mean (ms, per DDL = one CREATE *or* one DROP, 200 obs/scale):
+
+| N       | mean (ms) | slope per +5k |
+|---------|----------:|--------------:|
+| 5 000   |     33.80 |       —       |
+| 10 000  |     42.81 |     +9.01     |
+| 15 000  |     57.81 |    +15.00     |
+
+Create p50 (CREATE side only) tracks: 34.31, 43.91, 60.37.
+
+### Phase split — mean per single DDL
+
+`mz_catalog_transact_phase_seconds`, mean over 200 observations/scale:
+
+| phase                       | 5k ms | 10k ms | 15k ms | Δ 5→10 | Δ 10→15 |
+|-----------------------------|------:|-------:|-------:|-------:|--------:|
+| transact_inner (total)      |  2.04 |   3.14 |   5.79 |  +1.10 |   +2.64 |
+|  ↳ op_loop                  |  1.07 |   1.53 |   2.19 |  +0.46 |   +0.66 |
+|  ↳ final_apply_updates      |  0.51 |   0.72 |   1.04 |  +0.21 |   +0.32 |
+|  ↳ prepare_state            |  0.04 |   0.19 |   1.41 |  +0.15 |   +1.22 |
+|  ↳ post_prepare_apply_upd.  |  0.17 |   0.29 |   0.45 |  +0.12 |   +0.16 |
+| tx_commit                   |  2.47 |   3.79 |   5.51 |  +1.32 |   +1.72 |
+| assign_state                |  0.34 |   0.62 |   0.99 |  +0.28 |   +0.37 |
+| **inside-transact sum**     |  4.85 |   7.55 |  12.29 |  +2.70 |   +4.74 |
+| outside-transact remainder  | 28.95 |  35.26 |  45.52 |  +6.31 |  +10.26 |
+| `catalog_transact_with_ddl` | 33.80 |  42.81 |  57.81 |  +9.01 |  +15.00 |
+
+(Children of `transact_inner` sum to ~80-90% of the parent; the gap
+is small per-phase Cow setup, lock acquisition, mode match — not
+worth its own metric.)
+
+### Takeaways
+
+1. **The dominant slope is outside `Catalog::transact`.** Of the
+   +9 ms/+5k jump from N=5k→10k, only +2.7 ms is in the timed
+   phases; +6.3 ms is in the Coordinator wrapper layer. At
+   10k→15k it gets worse: +4.74 inside, +10.26 outside. The
+   "+8 ms unattributed" that motivated this iteration is the
+   *outside* component, not something hidden inside `transact_inner`.
+2. **`tx_commit` is the biggest inside-transact slope component**
+   (~half of the inside-transact rise). The catalog CAS RPC mean
+   is flat (we fixed bogo's update_state_metrics earlier), so
+   tx_commit's growth has to be in serialization, batching, or
+   the txns/user_data CAS work that runs synchronously inside
+   `tx.commit`.
+3. **`prepare_state` has a hockey-stick at 15k** — 0.04 → 0.19 →
+   1.41 ms. The storage_controller's `prepare_state` does
+   per-collection bookkeeping; at 15k user collections, something
+   in there is starting to bite. Worth a dedicated look.
+4. **`op_loop` and `final_apply_updates` grow modestly** — both
+   accumulate cost from in-memory state-diff application. This
+   matches our earlier finding that catalog state-apply does
+   ~335 invocations per DDL.
+5. **`assign_state` grows linearly** — 0.34 → 0.62 → 0.99 ms.
+   This is dropping the old `CatalogState`; the cost is proportional
+   to state size. Cheap per-DDL but not zero.
+
+### Wrapper-layer suspects (outside `Catalog::transact`)
+
+`Coordinator::catalog_transact_inner` does, in order:
+
+* Pre-walk ops to classify them (cheap).
+* `validate_resource_limits(&ops, ...)` — O(ops).
+* `Arc::make_mut(catalog)` — **if any other holder of the catalog
+  Arc exists, this clones the entire `Catalog` (≈ full
+  `CatalogState` clone).** Highly suspect — would scale linearly
+  with N. Catalog Arcs are held by every active session for catalog
+  snapshots, so under any concurrent activity this can fire.
+* `catalog.transact(...)` — the part we now have phase metrics for.
+* `cluster_replica_statuses` updates (no per-table loop, cheap).
+* `builtin_table_update().execute(builtin_table_updates)` — writes
+  rows into mz_objects, mz_tables, etc. Scales with the number of
+  builtin tables touched by the DDL, which grows with N via the
+  derived/dependent rows.
+* The finalize block (configs, replanning) — only fires for
+  system-config ops, not bare CREATE/DROP TABLE.
+* Segment audit-log dispatch (no-op in this bench).
+
+Then the outer wrappers `catalog_transact_with_side_effects` /
+`catalog_transact_with_ddl_transaction` add
+`apply_catalog_implications` (controller side effects) and the
+side-effects-fut join.
+
+The biggest two on-paper suspects are:
+* `Arc::make_mut(catalog)` cloning the catalog on every DDL. Need
+  to confirm there's a second Arc holder during a typical CREATE
+  TABLE.
+* `builtin_table_update().execute(...)` writing per-object rows;
+  the table row count grows ~linearly with N.
+
+### Where we'd go next
+
+Add a second phase histogram around the **outside** layer:
+
+* `coord_pre_transact` — from method entry to `catalog.transact()`.
+* `coord_arc_make_mut` — wrap just the `Arc::make_mut(catalog)` call.
+* `coord_post_transact` — from `catalog.transact()` end through
+  builtin-table execute.
+* `coord_finalize` — finalize block.
+* `coord_apply_implications` — outer wrapper's
+  `apply_catalog_implications` call.
+
+That should split the +6-10 ms/+5k outside slope into named pieces.
+Also worth a peek at `prepare_state` in `storage_controller` to
+explain the 15k hockey-stick.
