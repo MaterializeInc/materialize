@@ -507,9 +507,10 @@ async fn handle_mcp_request(
 
     let request_id = request.id.clone().unwrap_or(serde_json::Value::Null);
 
-    // Spawn task for fault isolation, with a timeout safety net. The inner
-    // function returns the response paired with a status label so that
-    // requests_total is recorded with the actual outcome.
+    // Spawn task for fault isolation, with a timeout safety net.
+    // `abort_on_drop` propagates the timeout to the task itself; without
+    // it the task orphans and the SQL query keeps running in the
+    // background after the client gives up.
     let metrics_inner = metrics.clone();
     let result = tokio::time::timeout(
         MCP_REQUEST_TIMEOUT,
@@ -523,7 +524,8 @@ async fn handle_mcp_request(
                 metrics_inner,
             )
             .await
-        }),
+        })
+        .abort_on_drop(),
     )
     .await;
 
@@ -813,10 +815,7 @@ async fn handle_tools_call(
     max_response_size: usize,
     metrics: &McpMetrics,
 ) -> Result<McpResult, McpRequestError> {
-    // The guard records `tool_calls_total` and observes
-    // `tool_call_duration_seconds` on drop, so the metrics are recorded
-    // even if the future is cancelled (e.g. by the outer
-    // `tokio::time::timeout`) before the match below returns.
+    // Drop-recording so metrics survive task cancellation.
     let mut guard = ToolCallGuard::new(metrics, endpoint_type.as_label(), params.to_string());
 
     let result = match (endpoint_type, params) {
