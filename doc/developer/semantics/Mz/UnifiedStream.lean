@@ -362,6 +362,100 @@ theorem UnifiedStream.errorDiffCarriers_append (a b : UnifiedStream) :
   show (a ++ b).filterMap _ = a.filterMap _ ++ b.filterMap _
   exact List.filterMap_append
 
+/-! ### Membership characterizations
+
+Bridge the extractor membership predicates to the underlying
+record-membership predicates. These let downstream proofs reason
+about error scopes via the carrier and diff projections of
+individual records without unfolding the `filterMap`. -/
+
+theorem UnifiedStream.mem_errCarriers (us : UnifiedStream) (e : EvalError) :
+    e ∈ UnifiedStream.errCarriers us
+      ↔ ∃ d, (UnifiedRow.err e, d) ∈ us := by
+  induction us with
+  | nil =>
+    constructor
+    · intro h; exact absurd h List.not_mem_nil
+    · intro ⟨_, h⟩; exact absurd h List.not_mem_nil
+  | cons hd tl ih =>
+    obtain ⟨uc, d⟩ := hd
+    cases uc with
+    | row r =>
+      -- Head contributes nothing to errCarriers; reduce to tail.
+      have hRed : UnifiedStream.errCarriers ((UnifiedRow.row r, d) :: tl)
+                = UnifiedStream.errCarriers tl := rfl
+      rw [hRed]
+      constructor
+      · intro h; obtain ⟨d', hMem⟩ := ih.mp h
+        exact ⟨d', List.mem_cons_of_mem _ hMem⟩
+      · intro ⟨d', hMem⟩
+        rcases List.mem_cons.mp hMem with hHead | hTail
+        · -- hHead : (UnifiedRow.err e, d') = (UnifiedRow.row r, d). Impossible.
+          have hCarrier : UnifiedRow.err e = UnifiedRow.row r :=
+            (Prod.mk.injEq _ _ _ _).mp hHead |>.1
+          exact UnifiedRow.noConfusion hCarrier
+        · exact ih.mpr ⟨d', hTail⟩
+    | err e0 =>
+      -- Head contributes `e0` to errCarriers.
+      have hRed : UnifiedStream.errCarriers ((UnifiedRow.err e0, d) :: tl)
+                = e0 :: UnifiedStream.errCarriers tl := rfl
+      rw [hRed]
+      constructor
+      · intro h
+        rcases List.mem_cons.mp h with hHead | hTail
+        · subst hHead; exact ⟨d, List.mem_cons_self⟩
+        · obtain ⟨d', hMem⟩ := ih.mp hTail
+          exact ⟨d', List.mem_cons_of_mem _ hMem⟩
+      · intro ⟨d', hMem⟩
+        rcases List.mem_cons.mp hMem with hHead | hTail
+        · have hErr : UnifiedRow.err e = UnifiedRow.err e0 :=
+            (Prod.mk.injEq _ _ _ _).mp hHead |>.1
+          have : e = e0 := UnifiedRow.err.inj hErr
+          rw [this]; exact List.mem_cons_self
+        · exact List.mem_cons_of_mem _ (ih.mpr ⟨d', hTail⟩)
+
+theorem UnifiedStream.mem_errorDiffCarriers (us : UnifiedStream) (uc : UnifiedRow) :
+    uc ∈ UnifiedStream.errorDiffCarriers us
+      ↔ (uc, (DiffWithError.error : DiffWithError Int)) ∈ us := by
+  induction us with
+  | nil =>
+    constructor
+    · intro h; exact absurd h List.not_mem_nil
+    · intro h; exact absurd h List.not_mem_nil
+  | cons hd tl ih =>
+    obtain ⟨uc0, d⟩ := hd
+    cases d with
+    | val n =>
+      -- `.val n` head contributes nothing.
+      have hRed : UnifiedStream.errorDiffCarriers ((uc0, DiffWithError.val n) :: tl)
+                = UnifiedStream.errorDiffCarriers tl := rfl
+      rw [hRed]
+      constructor
+      · intro h; exact List.mem_cons_of_mem _ (ih.mp h)
+      · intro h
+        rcases List.mem_cons.mp h with hHead | hTail
+        · -- (uc, .error) = (uc0, .val n) impossible (diff mismatch).
+          have hDiff : (DiffWithError.error : DiffWithError Int)
+                     = DiffWithError.val n :=
+            (Prod.mk.injEq _ _ _ _).mp hHead |>.2
+          cases hDiff
+        · exact ih.mpr hTail
+    | error =>
+      -- `.error` head contributes `uc0`.
+      have hRed : UnifiedStream.errorDiffCarriers ((uc0, DiffWithError.error) :: tl)
+                = uc0 :: UnifiedStream.errorDiffCarriers tl := rfl
+      rw [hRed]
+      constructor
+      · intro h
+        rcases List.mem_cons.mp h with hHead | hTail
+        · subst hHead; exact List.mem_cons_self
+        · exact List.mem_cons_of_mem _ (ih.mp hTail)
+      · intro h
+        rcases List.mem_cons.mp h with hHead | hTail
+        · have : uc = uc0 := (Prod.mk.injEq _ _ _ _).mp hHead |>.1
+          rw [this]; exact List.mem_cons_self
+        · exact List.mem_cons_of_mem _ (ih.mpr hTail)
+
 /-! ## Helper lemmas for filterMap over the packed concatenation -/
 
 private theorem filterMap_pickRow_rowMap (rs : List Row) :

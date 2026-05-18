@@ -1457,4 +1457,39 @@ theorem UnifiedStream.filter_errCarriers_mono
         (Or.inl (filter_singleton_errCarriers_mono pred uc d e hHead))
     · exact List.mem_append.mpr (Or.inr (ih hTail))
 
+/-! ## `consolidate` and error scopes
+
+`consolidate` buckets records by carrier and sums diffs. As a
+list, this can shrink (multiple `.err e` carriers fold to one)
+and the row-err set may have multiplicity collapsed. But the
+*set* of row-err payloads and the *set* of `.error`-diff carriers
+is preserved.
+
+Forward direction for row-err is from `mem_consolidate_of_mem`:
+every input carrier survives. Backward direction is from
+`mem_of_mem_consolidate`. For `.error`-diff carriers, the forward
+direction is `consolidate_preserves_error`. -/
+
+theorem UnifiedStream.consolidate_errCarriers_iff
+    (us : UnifiedStream) (e : EvalError) :
+    e ∈ UnifiedStream.errCarriers (UnifiedStream.consolidate us)
+      ↔ e ∈ UnifiedStream.errCarriers us := by
+  rw [UnifiedStream.mem_errCarriers, UnifiedStream.mem_errCarriers]
+  constructor
+  · intro h
+    exact UnifiedStream.mem_of_mem_consolidate us (UnifiedRow.err e) h
+  · intro ⟨d, hMem⟩
+    exact UnifiedStream.mem_consolidate_of_mem us (UnifiedRow.err e) d hMem
+
+/-- Forward direction for collection-scoped errors: every input
+`.error`-diff carrier shows up in the consolidated output. Direct
+consequence of `consolidate_preserves_error`. -/
+theorem UnifiedStream.consolidate_errorDiffCarriers_mono
+    (us : UnifiedStream) (uc : UnifiedRow)
+    (h : uc ∈ UnifiedStream.errorDiffCarriers us) :
+    uc ∈ UnifiedStream.errorDiffCarriers (UnifiedStream.consolidate us) := by
+  rw [UnifiedStream.mem_errorDiffCarriers] at h
+  rw [UnifiedStream.mem_errorDiffCarriers]
+  exact UnifiedStream.consolidate_preserves_error us uc h
+
 end Mz
