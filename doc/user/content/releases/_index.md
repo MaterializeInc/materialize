@@ -18,18 +18,25 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 ## v26.24.2
 *Released to Materialize Self-Managed: 2026-05-18* <br>
 
-This patch release extends the v26.24.1 catalog migration repair to cover
+This patch release extends the v26.24.0 catalog migration repair to cover
 additional edge cases.
 
 ### Bug Fixes {#v26.24.2-bug-fixes}
 
-- Extended the v26.24.1 catalog migration repair to also clear residual
+- Extended the v26.24.0 catalog migration repair to also clear residual
   negative multiplicities and normalize Role rows still stored in the
   pre-v81 byte form.
 
 ## v26.24.1
+*Released to Materialize Cloud: 2026-05-14 on as-needs basis* <br>
+
+This patch release adds configurable Kafka sink message and batch size limits.
+
+### Improvements {#v26.24.1-improvements}
+Configurable Kafka sink size limits: The maximum size of individual Kafka sink messages and message batches can now be configured beyond their previous defaults.
+
+## v26.24.0
 *Released to Materialize Cloud: 2026-05-14* <br>
-*Released to Materialize Self-Managed: 2026-05-15* <br>
 
 This release introduces the built-in MCP server for agents, improvements, and
 bug fixes.
