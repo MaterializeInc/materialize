@@ -315,6 +315,17 @@ impl Coordinator {
         conn_id: Option<&ConnectionId>,
         ops: Vec<catalog::Op>,
     ) -> Result<(BuiltinTableAppendNotify, Vec<ParsedStateUpdate>), AdapterError> {
+        let _coord_inner_timer = self
+            .metrics
+            .catalog_transact_phase_seconds
+            .with_label_values(&["coord_inner_total"])
+            .start_timer();
+        let _coord_pre_transact_timer = self
+            .metrics
+            .catalog_transact_phase_seconds
+            .with_label_values(&["coord_pre_transact"])
+            .start_timer();
+
         if self.controller.read_only() {
             return Err(AdapterError::ReadOnly);
         }
@@ -467,6 +478,9 @@ impl Coordinator {
         // regress or pause for 10s.
         let oracle_write_ts = self.get_local_write_ts().await.timestamp;
 
+        // Cloned out so we can keep using it after the split-borrow below.
+        let phase_metric = self.metrics.catalog_transact_phase_seconds.clone();
+
         let Coordinator {
             catalog,
             active_conns,
@@ -474,8 +488,14 @@ impl Coordinator {
             cluster_replica_statuses,
             ..
         } = self;
-        let catalog = Arc::make_mut(catalog);
+        let catalog = {
+            let _t = phase_metric
+                .with_label_values(&["coord_arc_make_mut"])
+                .start_timer();
+            Arc::make_mut(catalog)
+        };
         let conn = conn_id.map(|id| active_conns.get(id).expect("connection must exist"));
+        drop(_coord_pre_transact_timer);
 
         let TransactionResult {
             builtin_table_updates,
@@ -489,6 +509,10 @@ impl Coordinator {
                 ops,
             )
             .await?;
+
+        let _coord_post_transact_timer = phase_metric
+            .with_label_values(&["coord_post_transact"])
+            .start_timer();
 
         for (cluster_id, replica_id) in &cluster_replicas_to_drop {
             cluster_replica_statuses.remove_cluster_replica_statuses(cluster_id, replica_id);
@@ -515,10 +539,18 @@ impl Coordinator {
 
         // Append our builtin table updates, then return the notify so we can run other tasks in
         // parallel.
-        let (builtin_update_notify, _) = self
-            .builtin_table_update()
-            .execute(builtin_table_updates)
-            .await;
+        let (builtin_update_notify, _) = {
+            let _t = phase_metric
+                .with_label_values(&["coord_builtin_table_execute"])
+                .start_timer();
+            self.builtin_table_update()
+                .execute(builtin_table_updates)
+                .await
+        };
+
+        let _coord_finalize_timer = phase_metric
+            .with_label_values(&["coord_finalize"])
+            .start_timer();
 
         // No error returns are allowed after this point. Enforce this at compile time
         // by using this odd structure so we don't accidentally add a stray `?`.
