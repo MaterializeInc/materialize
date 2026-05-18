@@ -376,6 +376,91 @@ theorem UnifiedStream.negate_filter (pred : Expr) (us : UnifiedStream) :
             rw [DiffWithError.neg_val]
           rw [hF, hN, hFn, hNE]
 
+/-- `negate` commutes through `rowProjectRecords`: flipping the
+diff before or after the per-row project gives the same result.
+`rowProjectRecords` only places the input diff `d` on every
+emitted record, so swapping `d` for `-d` slides through. -/
+private theorem negate_rowProjectRecords
+    (es : List Expr) (d : DiffWithError Int) (r : Row) :
+    UnifiedStream.negate (rowProjectRecords es d r)
+      = rowProjectRecords es (-d) r := by
+  unfold rowProjectRecords
+  by_cases h : rowAllSafe es r
+  · rw [if_pos h, if_pos h]
+    show ([(UnifiedRow.row (es.map (eval r)), -d)] : UnifiedStream) = _
+    rfl
+  · rw [if_neg h, if_neg h]
+    show ((rowErrs es r).map (fun e => (UnifiedRow.err e, d))).map
+            (fun ud => (ud.1, -ud.2))
+        = (rowErrs es r).map (fun e => (UnifiedRow.err e, -d))
+    rw [List.map_map]
+    rfl
+
+/-- `negate` commutes with `project`. Per record, project's row
+arm produces `rowProjectRecords es d r` which preserves the input
+diff; negation flips the diff uniformly on every output record. -/
+theorem UnifiedStream.negate_project (es : List Expr) (us : UnifiedStream) :
+    UnifiedStream.negate (UnifiedStream.project es us)
+      = UnifiedStream.project es (UnifiedStream.negate us) := by
+  induction us with
+  | nil => rfl
+  | cons hd tl ih =>
+    obtain ⟨uc, d⟩ := hd
+    have hCons : ((uc, d) :: tl : UnifiedStream) = [(uc, d)] ++ tl := rfl
+    rw [hCons, UnifiedStream.project_append, UnifiedStream.negate_append,
+        ih, UnifiedStream.negate_append, UnifiedStream.project_append]
+    congr 1
+    cases d with
+    | error =>
+      have hP : UnifiedStream.project es
+                  [(uc, (DiffWithError.error : DiffWithError Int))]
+              = [(uc, (DiffWithError.error : DiffWithError Int))] := by
+        cases uc <;> rfl
+      have hN : UnifiedStream.negate
+                  [(uc, (DiffWithError.error : DiffWithError Int))]
+              = [(uc, (DiffWithError.error : DiffWithError Int))] := by
+        show [(uc, -(DiffWithError.error : DiffWithError Int))] = _
+        rw [DiffWithError.neg_error]
+      rw [hP, hN, hP]
+    | val n =>
+      cases uc with
+      | err e =>
+        have hP : UnifiedStream.project es
+                    [(UnifiedRow.err e, DiffWithError.val n)]
+                = [(UnifiedRow.err e, DiffWithError.val n)] := rfl
+        have hPn : UnifiedStream.project es
+                    [(UnifiedRow.err e, DiffWithError.val (-n))]
+                = [(UnifiedRow.err e, DiffWithError.val (-n))] := rfl
+        have hN : UnifiedStream.negate
+                    [(UnifiedRow.err e, DiffWithError.val n)]
+                = [(UnifiedRow.err e, DiffWithError.val (-n))] := by
+          show [(UnifiedRow.err e, -(DiffWithError.val n : DiffWithError Int))]
+              = [(UnifiedRow.err e, DiffWithError.val (-n))]
+          rw [DiffWithError.neg_val]
+        rw [hP, hN, hPn]
+      | row r =>
+        have hP : UnifiedStream.project es
+                    [(UnifiedRow.row r, DiffWithError.val n)]
+                = rowProjectRecords es (DiffWithError.val n) r := by
+          show List.flatMap _ _ = _
+          simp only [List.flatMap_cons, List.flatMap_nil, List.append_nil]
+        have hPn : UnifiedStream.project es
+                    [(UnifiedRow.row r, DiffWithError.val (-n))]
+                = rowProjectRecords es (DiffWithError.val (-n)) r := by
+          show List.flatMap _ _ = _
+          simp only [List.flatMap_cons, List.flatMap_nil, List.append_nil]
+        have hN : UnifiedStream.negate
+                    [(UnifiedRow.row r, DiffWithError.val n)]
+                = [(UnifiedRow.row r, DiffWithError.val (-n))] := by
+          show [(UnifiedRow.row r, -(DiffWithError.val n : DiffWithError Int))]
+              = [(UnifiedRow.row r, DiffWithError.val (-n))]
+          rw [DiffWithError.neg_val]
+        rw [hP, hN, hPn, negate_rowProjectRecords]
+        -- After rewrites: rowProjectRecords es -(.val n) r = rowProjectRecords es (.val -n) r.
+        show rowProjectRecords es (-(DiffWithError.val n : DiffWithError Int)) r
+            = rowProjectRecords es (DiffWithError.val (-n)) r
+        rw [DiffWithError.neg_val]
+
 /-- `.error` diffs survive negation; the carrier is preserved. -/
 theorem UnifiedStream.negate_preserves_error_diff
     (us : UnifiedStream) (uc : UnifiedRow)
