@@ -107,6 +107,20 @@ def UnifiedStream.filter (pred : Expr) (us : UnifiedStream) : UnifiedStream :=
       | .err e     => [(.err e, d)]
       | _          => []
 
+/-! ### Reduction lemmas
+
+Named per-list-shape reductions for `filter`. Downstream proofs
+cite these instead of unfolding `flatMap` inline. -/
+
+theorem UnifiedStream.filter_nil (pred : Expr) :
+    UnifiedStream.filter pred [] = [] := rfl
+
+theorem UnifiedStream.filter_append (pred : Expr) (a b : UnifiedStream) :
+    UnifiedStream.filter pred (a ++ b)
+      = UnifiedStream.filter pred a ++ UnifiedStream.filter pred b := by
+  show (a ++ b).flatMap _ = a.flatMap _ ++ b.flatMap _
+  exact List.flatMap_append
+
 /-! ## Project
 
 Diff-aware projection. Each non-error record splits on its carrier:

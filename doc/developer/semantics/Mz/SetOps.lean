@@ -649,17 +649,15 @@ theorem UnifiedStream.filter_unionAll (p : Expr) (a b : UnifiedStream) :
     UnifiedStream.filter p (UnifiedStream.unionAll a b)
       = UnifiedStream.unionAll
           (UnifiedStream.filter p a)
-          (UnifiedStream.filter p b) := by
-  show (a ++ b).flatMap _ = a.flatMap _ ++ b.flatMap _
-  exact List.flatMap_append
+          (UnifiedStream.filter p b) :=
+  UnifiedStream.filter_append p a b
 
 theorem UnifiedStream.cross_unionAll_left (a b r : UnifiedStream) :
     UnifiedStream.cross (UnifiedStream.unionAll a b) r
       = UnifiedStream.unionAll
           (UnifiedStream.cross a r)
-          (UnifiedStream.cross b r) := by
-  show (a ++ b).flatMap _ = a.flatMap _ ++ b.flatMap _
-  exact List.flatMap_append
+          (UnifiedStream.cross b r) :=
+  UnifiedStream.cross_append_left a b r
 
 theorem UnifiedStream.project_unionAll (es : List Expr) (a b : UnifiedStream) :
     UnifiedStream.project es (UnifiedStream.unionAll a b)
