@@ -896,6 +896,35 @@ theorem UnifiedStream.intersectAll_preserves_error_diff_left
   rw [hLookup]
   rfl
 
+/-- Converse direction: a successful `lookup` witnesses
+membership. The returned diff is paired with the queried carrier
+in the input list. -/
+theorem UnifiedStream.mem_of_lookup_eq_some
+    {uc : UnifiedRow} {d : DiffWithError Int} {us : UnifiedStream}
+    (h : UnifiedStream.lookup uc us = some d) :
+    (uc, d) ∈ us := by
+  induction us with
+  | nil => exact absurd h (by simp [UnifiedStream.lookup])
+  | cons hd tl ih =>
+    obtain ⟨uc', d'⟩ := hd
+    show (uc, d) ∈ (uc', d') :: tl
+    by_cases hEq : uc = uc'
+    · subst hEq
+      have hRed : UnifiedStream.lookup uc ((uc, d') :: tl) = some d' := by
+        show (if uc = uc then some d' else UnifiedStream.lookup uc tl) = some d'
+        rw [if_pos rfl]
+      rw [hRed] at h
+      have hEq' : d' = d := by injection h
+      rw [← hEq']
+      exact List.mem_cons_self
+    · have hRed : UnifiedStream.lookup uc ((uc', d') :: tl)
+                = UnifiedStream.lookup uc tl := by
+        show (if uc = uc' then some d' else UnifiedStream.lookup uc tl)
+            = UnifiedStream.lookup uc tl
+        rw [if_neg hEq]
+      rw [hRed] at h
+      exact List.mem_cons_of_mem _ (ih h)
+
 /-- When the list has no duplicate carriers, `lookup` returns the
 exact diff associated with the membership witness. -/
 theorem UnifiedStream.lookup_eq_of_mem_noDup
@@ -947,6 +976,45 @@ theorem UnifiedStream.intersectAll_preserves_error_diff_right
   show some (uc, DiffWithError.min dL DiffWithError.error)
       = some (uc, DiffWithError.error)
   rw [DiffWithError.error_min_right]
+
+/-- All-`.val` inputs yield all-`.val` outputs through
+`intersectAll`. Each output diff is `.val (Min.min n m)` for some
+`n` from the left and `m` from the right. -/
+theorem UnifiedStream.intersectAll_no_error
+    (l r : UnifiedStream)
+    (hL : ∀ x ∈ l, ∃ n : Int, x.2 = DiffWithError.val n)
+    (hR : ∀ x ∈ r, ∃ n : Int, x.2 = DiffWithError.val n) :
+    ∀ x ∈ UnifiedStream.intersectAll l r,
+      ∃ n : Int, x.2 = DiffWithError.val n := by
+  intro x hMem
+  obtain ⟨ud, hUdMem, hMatch⟩ :=
+    List.mem_filterMap.mp (show x ∈ (UnifiedStream.consolidate l).filterMap _ from hMem)
+  -- ud ∈ consolidate l → ud.2 = .val nL.
+  obtain ⟨nL, hNL⟩ :=
+    UnifiedStream.consolidate_no_error l hL ud hUdMem
+  -- The match in hMatch must resolve to `some` for hMatch to be `some x`.
+  cases h_lookup : UnifiedStream.lookup ud.1 (UnifiedStream.consolidate r) with
+  | none =>
+    rw [h_lookup] at hMatch
+    cases hMatch
+  | some d' =>
+    rw [h_lookup] at hMatch
+    -- hMatch : some (ud.1, min ud.2 d') = some x
+    have hxEq : x = (ud.1, DiffWithError.min ud.2 d') := by
+      injection hMatch with hPair
+      exact hPair.symm
+    -- d' ∈ consolidate r → d' = .val nR.
+    have hMemR : (ud.1, d') ∈ UnifiedStream.consolidate r :=
+      UnifiedStream.mem_of_lookup_eq_some h_lookup
+    obtain ⟨nR, hNR⟩ :=
+      UnifiedStream.consolidate_no_error r hR (ud.1, d') hMemR
+    have hNR' : d' = DiffWithError.val nR := hNR
+    -- min (.val nL) (.val nR) = .val (Min.min nL nR).
+    refine ⟨Min.min nL nR, ?_⟩
+    rw [hxEq]
+    show DiffWithError.min ud.2 d' = DiffWithError.val (Min.min nL nR)
+    rw [hNL, hNR']
+    rfl
 
 /-- `bagExceptAll [] r = clampPositive (negate (consolidate r))`.
 With an all-`.val` `r`, the negation makes every diff non-positive,
