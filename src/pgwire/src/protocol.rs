@@ -173,17 +173,8 @@ where
 
     let user = params.remove("user").unwrap_or_else(String::new);
     let options = parse_options(params.get("options").unwrap_or(&String::new()));
-
-    // If oidc_auth_enabled exists as an option, return its value and filter it from
-    // the remaining options.
-    let (oidc_auth_enabled, options) = extract_oidc_auth_enabled_from_options(options);
-    let authenticator = get_authenticator(
-        authenticator_kind,
-        frontegg,
-        oidc,
-        adapter_client.clone(),
-        oidc_auth_enabled,
-    );
+    let authenticator =
+        get_authenticator(authenticator_kind, frontegg, oidc, adapter_client.clone());
     // TODO move this somewhere it can be shared with HTTP
     let is_internal_user = INTERNAL_USER_NAMES.contains(&user);
     // this is a superset of internal users
@@ -253,46 +244,76 @@ where
             }
         }
         Authenticator::Oidc(oidc) => {
-            // OIDC authentication: JWT sent as password in cleartext flow
-            let jwt = match request_cleartext_password(conn).await {
+            // OIDC listener: accepts either a JWT (uses OIDC authentication) or a
+            // plain SQL password (uses SQL password authentication).
+            let password = match request_cleartext_password(conn).await {
                 Ok(password) => password,
                 Err(PasswordRequestError::IoError(e)) => return Err(e),
                 Err(PasswordRequestError::InvalidPasswordError(e)) => {
                     return conn.send(e).await;
                 }
             };
-            let auth_response = oidc.authenticate(&jwt, Some(&user)).await;
-            match auth_response {
-                Ok((mut claims, authenticated)) => {
-                    let groups = claims.groups.take();
-                    let session = adapter_client.new_session(
-                        SessionConfig {
-                            conn_id: conn.conn_id().clone(),
-                            uuid: conn_uuid,
-                            user: std::mem::take(&mut claims.user),
-                            client_ip: conn.peer_addr().clone(),
-                            external_metadata_rx: None,
-                            helm_chart_version,
-                            authenticator_kind,
-                            groups,
-                        },
-                        authenticated,
-                    );
-                    // No invalidation of the auth session once authenticated,
-                    // so auth session lasts indefinitely.
-                    (session, pending().right_future())
+            if is_jwt(&password) {
+                let auth_response = oidc.authenticate(&password, Some(&user)).await;
+                match auth_response {
+                    Ok((mut claims, authenticated)) => {
+                        let groups = claims.groups.take();
+                        let session = adapter_client.new_session(
+                            SessionConfig {
+                                conn_id: conn.conn_id().clone(),
+                                uuid: conn_uuid,
+                                user: std::mem::take(&mut claims.user),
+                                client_ip: conn.peer_addr().clone(),
+                                external_metadata_rx: None,
+                                helm_chart_version,
+                                authenticator_kind,
+                                groups,
+                            },
+                            authenticated,
+                        );
+                        // No invalidation of the auth session once authenticated,
+                        // so auth session lasts indefinitely.
+                        (session, pending().right_future())
+                    }
+                    Err(err) => {
+                        warn!(?err, "pgwire connection failed authentication");
+                        return conn.send(err.into_response()).await;
+                    }
                 }
-                Err(err) => {
-                    warn!(?err, "pgwire connection failed authentication");
-                    return conn.send(err.into_response()).await;
-                }
+            } else {
+                let session = match authenticate_with_password(
+                    conn,
+                    &adapter_client,
+                    user,
+                    Password(password),
+                    conn_uuid,
+                    helm_chart_version,
+                    authenticator_kind,
+                )
+                .await
+                {
+                    Ok(session) => session,
+                    Err(PasswordRequestError::IoError(e)) => return Err(e),
+                    Err(PasswordRequestError::InvalidPasswordError(e)) => {
+                        return conn.send(e).await;
+                    }
+                };
+                (session, pending().right_future())
             }
         }
         Authenticator::Password(adapter_client) => {
+            let password = match request_cleartext_password(conn).await {
+                Ok(password) => password,
+                Err(PasswordRequestError::IoError(e)) => return Err(e),
+                Err(PasswordRequestError::InvalidPasswordError(e)) => {
+                    return conn.send(e).await;
+                }
+            };
             let session = match authenticate_with_password(
                 conn,
                 &adapter_client,
                 user,
+                Password(password),
                 conn_uuid,
                 helm_chart_version,
                 authenticator_kind,
@@ -618,29 +639,10 @@ where
     }
 }
 
-/// Gets `oidc_auth_enabled` from options if it exists.
-/// Returns options with oidc_auth_enabled extracted
-/// and the oidc_auth_enabled value.
-fn extract_oidc_auth_enabled_from_options(
-    options: Result<Vec<(String, String)>, ()>,
-) -> (bool, Result<Vec<(String, String)>, ()>) {
-    let options = match options {
-        Ok(opts) => opts,
-        Err(_) => return (false, options),
-    };
-
-    let mut new_options = Vec::new();
-    let mut oidc_auth_enabled = false;
-
-    for (k, v) in options {
-        if k == "oidc_auth_enabled" {
-            oidc_auth_enabled = v.parse::<bool>().unwrap_or(false);
-        } else {
-            new_options.push((k, v));
-        }
-    }
-
-    (oidc_auth_enabled, Ok(new_options))
+/// Decides if a given password is a JWT by checking
+/// if we can decode its header.
+fn is_jwt(password: &str) -> bool {
+    jsonwebtoken::decode_header(password).is_ok()
 }
 
 /// Returns (name, value) session settings pairs from an options value.
@@ -769,9 +771,10 @@ where
 /// Helper for password-based authentication using AdapterClient
 /// and returns an authenticated session.
 async fn authenticate_with_password<A>(
-    conn: &mut FramedConn<A>,
+    conn: &FramedConn<A>,
     adapter_client: &mz_adapter::Client,
     user: String,
+    password: Password,
     conn_uuid: Uuid,
     helm_chart_version: Option<String>,
     authenticator_kind: mz_auth::AuthenticatorKind,
@@ -779,11 +782,6 @@ async fn authenticate_with_password<A>(
 where
     A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
 {
-    let password = match request_cleartext_password(conn).await {
-        Ok(password) => Password(password),
-        Err(e) => return Err(e),
-    };
-
     let authenticated = match adapter_client.authenticate(&user, &password).await {
         Ok(authenticated) => authenticated,
         Err(err) => {
@@ -3199,9 +3197,6 @@ fn get_authenticator(
     frontegg: Option<FronteggAuthenticator>,
     oidc: GenericOidcAuthenticator,
     adapter_client: mz_adapter::Client,
-    // If oidc_auth_enabled exists as an option in the pgwire connection's
-    // `option` parameter
-    oidc_auth_option_enabled: bool,
 ) -> Authenticator {
     match authenticator_kind {
         listeners::AuthenticatorKind::Frontegg => Authenticator::Frontegg(frontegg.expect(
@@ -3209,15 +3204,10 @@ fn get_authenticator(
         )),
         listeners::AuthenticatorKind::Password => Authenticator::Password(adapter_client),
         listeners::AuthenticatorKind::Sasl => Authenticator::Sasl(adapter_client),
-        listeners::AuthenticatorKind::Oidc => {
-            if oidc_auth_option_enabled {
-                Authenticator::Oidc(oidc)
-            } else {
-                // Fallback to password authentication if oidc auth is not enabled
-                // through options.
-                Authenticator::Password(adapter_client)
-            }
-        }
+        // The OIDC arm in `run()` requests the cleartext password locally and
+        // dispatches to JWT validation or to `complete_password_authentication`
+        // based on the password's shape (`is_jwt`).
+        listeners::AuthenticatorKind::Oidc => Authenticator::Oidc(oidc),
         listeners::AuthenticatorKind::None => Authenticator::None,
     }
 }
@@ -3588,6 +3578,23 @@ mod test {
         for test in tests {
             let got = split_options(test.input);
             assert_eq!(got, test.expect, "input: {}", test.input);
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_is_jwt() {
+        // A real JWT header decodes successfully.
+        assert!(is_jwt("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signature"));
+        // Not JWTs: plain strings, wrong segment count, non-JSON headers.
+        for s in [
+            "",
+            "secure_password",
+            "p4ss.w0rd",
+            "aaa.bbb.ccc",
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0",
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig.extra",
+        ] {
+            assert!(!is_jwt(s), "is_jwt({s:?})");
         }
     }
 }
