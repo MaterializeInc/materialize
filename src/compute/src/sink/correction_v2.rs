@@ -1438,6 +1438,22 @@ fn consolidate<D: Data>(updates: &mut Vec<(D, Timestamp, Diff)>) {
     updates.truncate(offset);
 }
 
+/// Compare two columnar refs that have unrelated input lifetimes.
+///
+/// `<D::Container as Borrow>::Ref<'a>` is an associated-type projection through a trait, so
+/// the compiler treats it as invariant in `'a` and won't auto-shorten the inputs by variance.
+/// We instead explicitly reborrow both to a fresh, local lifetime `'x` via
+/// [`Columnar::reborrow`] before letting the inner `==` pick up the `for<'a> Ref<'a>: Eq`
+/// bound on [`Data`].
+#[inline]
+fn refs_eq<D: Data>(a: Ref<'_, D>, b: Ref<'_, D>) -> bool {
+    #[inline]
+    fn eq<'x, D: Data>(a: Ref<'x, D>, b: Ref<'x, D>) -> bool {
+        a == b
+    }
+    eq::<D>(D::reborrow(a), D::reborrow(b))
+}
+
 /// A binary heap specialized for merging [`Cursor`]s.
 struct MergeHeap<D: Data>(BinaryHeap<MergeCursor<D>>);
 
@@ -1459,15 +1475,10 @@ impl<D: Data> MergeHeap<D> {
     ///
     /// Returns both the cursor and the diff corresponding to `data` and `time`.
     fn pop_equal(&mut self, data: Ref<'_, D>, time: Timestamp) -> Option<(Cursor<D>, Diff)> {
-        // We need to release the immutable borrow from `peek` before calling `self.pop` below,
-        // and we need to compare a `Ref` taken from the heap's top cursor with `data` — two
-        // values whose lifetimes don't unify. `into_owned` resolves both: it ends the borrow
-        // (the resulting owned value is independent of the cursor) and produces a value that
-        // can be compared with `D::into_owned(data)` directly.
         let r = {
             let MergeCursor(cursor) = self.0.peek()?;
             let (d, t, r) = cursor.get();
-            if t != time || D::into_owned(d) != D::into_owned(data) {
+            if t != time || !refs_eq::<D>(d, data) {
                 return None;
             }
             r
