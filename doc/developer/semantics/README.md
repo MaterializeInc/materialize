@@ -40,6 +40,7 @@ The goal is to lock in the boolean truth tables for `AND` and `OR` over the four
   `groupByErrDistinct keyExpr rel` uses the spec-faithful `Datum.groupKeyEq`, which returns `false` whenever either side is `.err`, so every err key produces its own singleton group.
   Theorem `insertIntoDistinct_err` proves the err-key insertion always appends a fresh group; `groupByErrDistinct_length_of_all_err` derives the consequence — every err-keyed row contributes one output group.
   Headline cardinality `totalRows_groupBy` (and its err-distinct variant `totalRows_groupByErrDistinct`) state that the sum of group sizes equals the input relation's length — no row is lost or duplicated by partitioning.
+  Agreement theorem `groupByErrDistinct_eq_groupBy_of_no_err` proves the two variants coincide when no row's key evaluates to `.err`. Supporting invariants `insertInto_preserves_non_err_keys` and `groupBy_keys_non_err` thread the "no err keys in the accumulator" property through the foldr.
   Companion `aggregateBy` / `aggregateByErrDistinct` run `aggStrict` per group, modeling `SELECT keyExpr, AGG(valExpr) ... GROUP BY keyExpr`.
 
 ## What is not here
@@ -89,7 +90,6 @@ The roadmap in priority order:
 * `BagStream.project` / `BagStream.filter` commutativity (when the predicate references only un-projected columns). Same multiset-equality caveat on the error collection.
 * Tie `DiffWithError` to a concrete dataflow operator: model a `(Row, Time, DiffWithError ℤ)` triple stream and prove that an `error` diff at time `t` propagates to every downstream consolidation.
 * Joins on `BagStream` with explicit error propagation.
-* Agreement theorem `groupByErrDistinct = groupBy` whenever no key evaluates to `.err`. Requires an invariant on the accumulator (no existing key is an err) propagated through the foldr.
 * Sketch a proof of `cross_assoc` modulo row concatenation associativity. Left-wins error rule is consistent in both nestings; the residual obligation is `(la ++ lb) ++ lc = la ++ (lb ++ lc)` lifted into the row carrier.
 * Tightening `Expr.might_error`. The skeleton version is purely structural and ignores type / nullability information; bringing it closer to `MirScalarExpr::might_error` is additive.
 * Lift to bag semantics for predicate / projection rewrites.
