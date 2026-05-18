@@ -43,6 +43,91 @@ def TimedUnifiedStream.consolidateAtTime (t : Nat) (s : TimedUnifiedStream) :
     UnifiedStream :=
   UnifiedStream.consolidate (TimedUnifiedStream.atTime t s)
 
+/-! ## Frontier advance
+
+Differential dataflow's `advance` operator: records with time
+strictly before frontier `f` are "advanced" to `f` (their time
+is updated to `f`), making the past immutable. Records at or past
+`f` are left untouched.
+
+The skeleton models frontiers as a single `Nat`. The real
+framework uses antichains of times for partial-order timestamps;
+the scalar form is sufficient to state the algebraic laws. -/
+
+/-- Advance every record's time to at least `f`. Records originally
+at time `< f` move to `f`; records already at `≥ f` stay. -/
+def TimedUnifiedStream.advanceFrontier (f : Nat) (s : TimedUnifiedStream) :
+    TimedUnifiedStream :=
+  s.map fun r => (r.1, Nat.max r.2.1 f, r.2.2)
+
+theorem TimedUnifiedStream.advanceFrontier_nil (f : Nat) :
+    TimedUnifiedStream.advanceFrontier f [] = [] := rfl
+
+theorem TimedUnifiedStream.advanceFrontier_length
+    (f : Nat) (s : TimedUnifiedStream) :
+    (TimedUnifiedStream.advanceFrontier f s).length = s.length :=
+  List.length_map _
+
+/-- Advancing by `0` is the identity (no times below the frontier). -/
+theorem TimedUnifiedStream.advanceFrontier_zero (s : TimedUnifiedStream) :
+    TimedUnifiedStream.advanceFrontier 0 s = s := by
+  induction s with
+  | nil => rfl
+  | cons hd tl ih =>
+    obtain ⟨uc, t, d⟩ := hd
+    show (uc, Nat.max t 0, d) :: TimedUnifiedStream.advanceFrontier 0 tl
+        = (uc, t, d) :: tl
+    have hMax : Nat.max t 0 = t := Nat.max_eq_left (Nat.zero_le t)
+    rw [hMax, ih]
+
+/-- Idempotence: advancing twice by the same frontier equals
+advancing once. After the first pass, every record has time `≥ f`,
+so the second `Nat.max _ f` is a no-op. -/
+theorem TimedUnifiedStream.advanceFrontier_idem
+    (f : Nat) (s : TimedUnifiedStream) :
+    TimedUnifiedStream.advanceFrontier f
+        (TimedUnifiedStream.advanceFrontier f s)
+      = TimedUnifiedStream.advanceFrontier f s := by
+  induction s with
+  | nil => rfl
+  | cons hd tl ih =>
+    obtain ⟨uc, t, d⟩ := hd
+    show (uc, Nat.max (Nat.max t f) f, d)
+            :: TimedUnifiedStream.advanceFrontier f
+                (TimedUnifiedStream.advanceFrontier f tl)
+        = (uc, Nat.max t f, d) :: TimedUnifiedStream.advanceFrontier f tl
+    have h_max : Nat.max (Nat.max t f) f = Nat.max t f := by
+      cases Nat.le_total t f with
+      | inl h_le =>
+        have h1 : Nat.max t f = f := Nat.max_eq_right h_le
+        have h2 : Nat.max f f = f := Nat.max_eq_left (Nat.le_refl _)
+        rw [h1, h2]
+      | inr h_ge =>
+        have h1 : Nat.max t f = t := Nat.max_eq_left h_ge
+        rw [h1]; exact h1
+    rw [h_max, ih]
+
+/-- Monotone composition: advancing by `f` then `g` equals
+advancing by `Nat.max f g`. The max is associative and
+commutative on `Nat`, so the final frontier dominates. -/
+theorem TimedUnifiedStream.advanceFrontier_advanceFrontier
+    (f g : Nat) (s : TimedUnifiedStream) :
+    TimedUnifiedStream.advanceFrontier g
+        (TimedUnifiedStream.advanceFrontier f s)
+      = TimedUnifiedStream.advanceFrontier (Nat.max f g) s := by
+  induction s with
+  | nil => rfl
+  | cons hd tl ih =>
+    obtain ⟨uc, t, d⟩ := hd
+    show (uc, Nat.max (Nat.max t f) g, d)
+            :: TimedUnifiedStream.advanceFrontier g
+                (TimedUnifiedStream.advanceFrontier f tl)
+        = (uc, Nat.max t (Nat.max f g), d)
+            :: TimedUnifiedStream.advanceFrontier (Nat.max f g) tl
+    have hAssoc : Nat.max (Nat.max t f) g = Nat.max t (Nat.max f g) :=
+      Nat.max_assoc t f g
+    rw [hAssoc, ih]
+
 /-! ## Trivial cases -/
 
 theorem TimedUnifiedStream.atTime_nil (t : Nat) :
