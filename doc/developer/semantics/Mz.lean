@@ -9,3 +9,4 @@ import Mz.Laws
 import Mz.Variadic
 import Mz.ExprVariadic
 import Mz.Bag
+import Mz.ErrStream
