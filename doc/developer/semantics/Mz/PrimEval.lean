@@ -121,6 +121,41 @@ def evalDivide : Datum → Datum → Datum
   | .int n, .int m => if m = 0 then .err .divisionByZero else .int (n / m)
   | _, _           => .null
 
+/-! ## Comparison
+
+Binary comparison primitives. Strict on `.err` (propagates the
+left-most err) and `.null` (propagates `.null`). Mixed-type
+operands route to `.null` — the skeleton does not model SQL
+implicit casts. Booleans compare by SQL's `false < true` ordering;
+integers compare by `Int`'s built-in `<` / `=`.
+
+The output is always a `.bool`, `.null`, or `.err` — never a
+numeric or string. This keeps comparisons compatible with the
+boolean fragment as a `WHERE` predicate. -/
+
+/-- Equality test. `.bool x = .bool y` and `.int n = .int m` use
+the decidable equality of the base types; mixed types yield
+`.null`. -/
+def evalEq : Datum → Datum → Datum
+  | .err e, _          => .err e
+  | _, .err e          => .err e
+  | .null, _           => .null
+  | _, .null           => .null
+  | .bool x, .bool y   => .bool (decide (x = y))
+  | .int  n, .int  m   => .bool (decide (n = m))
+  | _, _               => .null
+
+/-- Strict less-than. Booleans compare with `false < true`;
+integers compare with `Int`'s `<`. Mixed types yield `.null`. -/
+def evalLt : Datum → Datum → Datum
+  | .err e, _          => .err e
+  | _, .err e          => .err e
+  | .null, _           => .null
+  | _, .null           => .null
+  | .bool x, .bool y   => .bool (decide (x < y))
+  | .int  n, .int  m   => .bool (decide (n < m))
+  | _, _               => .null
+
 /-! ## Environment -/
 
 /-- Environment: a positional list of bindings for `Expr.col`. -/

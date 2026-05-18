@@ -42,6 +42,8 @@ inductive Expr
   | minus  (a b : Expr)
   | times  (a b : Expr)
   | divide (a b : Expr)
+  | eq     (a b : Expr)
+  | lt     (a b : Expr)
   deriving Inhabited
 
 end Mz

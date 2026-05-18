@@ -49,6 +49,8 @@ def Expr.subst (es : List Expr) : Expr → Expr
   | .minus  a b       => .minus  (a.subst es) (b.subst es)
   | .times  a b       => .times  (a.subst es) (b.subst es)
   | .divide a b       => .divide (a.subst es) (b.subst es)
+  | .eq     a b       => .eq     (a.subst es) (b.subst es)
+  | .lt     a b       => .lt     (a.subst es) (b.subst es)
 
 /-- Pointwise application of `subst` to a list of operands. -/
 def Expr.substArgs (es : List Expr) : List Expr → List Expr
@@ -153,6 +155,12 @@ theorem eval_subst :
     simp only [Expr.subst, eval]
     rw [eval_subst env es a, eval_subst env es b]
   | env, es, .divide a b => by
+    simp only [Expr.subst, eval]
+    rw [eval_subst env es a, eval_subst env es b]
+  | env, es, .eq a b => by
+    simp only [Expr.subst, eval]
+    rw [eval_subst env es a, eval_subst env es b]
+  | env, es, .lt a b => by
     simp only [Expr.subst, eval]
     rw [eval_subst env es a, eval_subst env es b]
 

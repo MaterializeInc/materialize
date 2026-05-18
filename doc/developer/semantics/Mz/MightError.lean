@@ -151,6 +151,54 @@ theorem evalTimes_not_err
     | err _  => exact (h₂ trivial).elim
   | err _ => exact (h₁ trivial).elim
 
+theorem evalEq_not_err
+    {d₁ d₂ : Datum} (h₁ : ¬d₁.IsErr) (h₂ : ¬d₂.IsErr) :
+    ¬(evalEq d₁ d₂).IsErr := by
+  cases d₁ with
+  | bool _ =>
+    cases d₂ with
+    | bool _ => intro h; cases h
+    | int  _ => intro h; cases h
+    | null   => intro h; cases h
+    | err _  => exact (h₂ trivial).elim
+  | int _ =>
+    cases d₂ with
+    | bool _ => intro h; cases h
+    | int  _ => intro h; cases h
+    | null   => intro h; cases h
+    | err _  => exact (h₂ trivial).elim
+  | null =>
+    cases d₂ with
+    | bool _ => intro h; cases h
+    | int  _ => intro h; cases h
+    | null   => intro h; cases h
+    | err _  => exact (h₂ trivial).elim
+  | err _ => exact (h₁ trivial).elim
+
+theorem evalLt_not_err
+    {d₁ d₂ : Datum} (h₁ : ¬d₁.IsErr) (h₂ : ¬d₂.IsErr) :
+    ¬(evalLt d₁ d₂).IsErr := by
+  cases d₁ with
+  | bool _ =>
+    cases d₂ with
+    | bool _ => intro h; cases h
+    | int  _ => intro h; cases h
+    | null   => intro h; cases h
+    | err _  => exact (h₂ trivial).elim
+  | int _ =>
+    cases d₂ with
+    | bool _ => intro h; cases h
+    | int  _ => intro h; cases h
+    | null   => intro h; cases h
+    | err _  => exact (h₂ trivial).elim
+  | null =>
+    cases d₂ with
+    | bool _ => intro h; cases h
+    | int  _ => intro h; cases h
+    | null   => intro h; cases h
+    | err _  => exact (h₂ trivial).elim
+  | err _ => exact (h₁ trivial).elim
+
 /-- Division is the canonical erring operation: a right operand
 of `.int 0` produces `.err .divisionByZero` even when both
 operands are otherwise error-free. So the analyzer's universal
@@ -403,6 +451,8 @@ def Expr.might_error : Expr → Bool
   | .divide a b           =>
     if b.divisorIsSafe then a.might_error
     else true
+  | .eq     a b           => a.might_error || b.might_error
+  | .lt     a b           => a.might_error || b.might_error
 
 /-- Bool fold of `might_error` over a list of operands ("does any
 operand might-error"), declared mutually with `might_error` so
@@ -905,5 +955,21 @@ theorem might_error_sound :
         show (if b.divisorIsSafe = true then a.might_error else true) = true
         rw [hSafe]; rfl
       exact hMe hMeTrue
+  | .eq a b, env, hMe, hEnv => by
+    intro hRes
+    simp only [eval] at hRes
+    have ha : ¬(a.might_error = true) := fun h => hMe (by simp [Expr.might_error, h])
+    have hb : ¬(b.might_error = true) := fun h => hMe (by simp [Expr.might_error, h])
+    exact evalEq_not_err
+      (might_error_sound a env ha hEnv)
+      (might_error_sound b env hb hEnv) hRes
+  | .lt a b, env, hMe, hEnv => by
+    intro hRes
+    simp only [eval] at hRes
+    have ha : ¬(a.might_error = true) := fun h => hMe (by simp [Expr.might_error, h])
+    have hb : ¬(b.might_error = true) := fun h => hMe (by simp [Expr.might_error, h])
+    exact evalLt_not_err
+      (might_error_sound a env ha hEnv)
+      (might_error_sound b env hb hEnv) hRes
 
 end Mz

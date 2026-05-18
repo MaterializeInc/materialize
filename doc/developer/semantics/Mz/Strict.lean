@@ -221,6 +221,70 @@ theorem evalDivide_nullPropagating : NullPropagatingBinary evalDivide where
     | null   => rfl
     | err  e => exact absurd (by simp [Datum.IsErr] : (Datum.err e).IsErr) h
 
+/-! ## Comparison instances
+
+`evalEq` and `evalLt` mirror the arithmetic operators in their
+propagation behavior: err-strict in both positions, null-strict in
+both positions (when the other side is not err). The output is
+always `.bool`, `.null`, or `.err`, so the operators chain cleanly
+into the boolean-logic fragment. -/
+
+theorem evalEq_errPropagating : ErrPropagatingBinary evalEq where
+  left := by
+    intro d₁ d₂ h
+    match d₁, h with
+    | .err e, _ =>
+      show (evalEq (.err e) d₂).IsErr
+      simp [evalEq, Datum.IsErr]
+  right := by
+    intro d₁ d₂ h
+    match d₂, h with
+    | .err e, _ => cases d₁ <;> simp [evalEq, Datum.IsErr]
+
+theorem evalEq_nullPropagating : NullPropagatingBinary evalEq where
+  left := by
+    intro d h
+    cases d with
+    | bool b => rfl
+    | int  n => rfl
+    | null   => rfl
+    | err  e => exact absurd (by simp [Datum.IsErr] : (Datum.err e).IsErr) h
+  right := by
+    intro d h
+    cases d with
+    | bool b => rfl
+    | int  n => rfl
+    | null   => rfl
+    | err  e => exact absurd (by simp [Datum.IsErr] : (Datum.err e).IsErr) h
+
+theorem evalLt_errPropagating : ErrPropagatingBinary evalLt where
+  left := by
+    intro d₁ d₂ h
+    match d₁, h with
+    | .err e, _ =>
+      show (evalLt (.err e) d₂).IsErr
+      simp [evalLt, Datum.IsErr]
+  right := by
+    intro d₁ d₂ h
+    match d₂, h with
+    | .err e, _ => cases d₁ <;> simp [evalLt, Datum.IsErr]
+
+theorem evalLt_nullPropagating : NullPropagatingBinary evalLt where
+  left := by
+    intro d h
+    cases d with
+    | bool b => rfl
+    | int  n => rfl
+    | null   => rfl
+    | err  e => exact absurd (by simp [Datum.IsErr] : (Datum.err e).IsErr) h
+  right := by
+    intro d h
+    cases d with
+    | bool b => rfl
+    | int  n => rfl
+    | null   => rfl
+    | err  e => exact absurd (by simp [Datum.IsErr] : (Datum.err e).IsErr) h
+
 /-! ## Negative results
 
 `AND` and `OR` are not err-strict in either position. The short
