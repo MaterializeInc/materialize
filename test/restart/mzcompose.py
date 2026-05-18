@@ -38,7 +38,16 @@ testdrive_no_reset = Testdrive(name="testdrive_no_reset", no_reset=True)
 
 SERVICES = [
     Zookeeper(),
-    Kafka(auto_create_topics=True),
+    Kafka(
+        auto_create_topics=True,
+        advertised_listeners=[
+            "PLAINTEXT://kafka:9092",
+            "PLAINTEXT2://kafka:9093",
+        ],
+        environment_extra=[
+            "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,PLAINTEXT2:PLAINTEXT",
+        ],
+    ),
     SchemaRegistry(),
     Mz(app_password=""),
     Materialized(),
@@ -679,8 +688,8 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
         c.testdrive(
             service="testdrive_no_reset",
             input=dedent("""
-                > ALTER CONNECTION kafka_conn SET (BROKER 'dne') WITH (VALIDATE = false);
-                > ALTER CONNECTION kafka_conn SET (BROKER '${testdrive.kafka-addr}') WITH (VALIDATE = true);
+                > ALTER CONNECTION kafka_conn SET (BROKER = 'kafka:9093') WITH (VALIDATE = false);
+                > ALTER CONNECTION kafka_conn SET (BROKER = 'kafka:9092') WITH (VALIDATE = true);
                 """),
         )
 
