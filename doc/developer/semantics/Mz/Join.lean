@@ -244,7 +244,7 @@ private theorem cross_step_assoc
       = (combineCarrier ad.1 (combineCarrier bd.1 cd.1), ad.2 * (bd.2 * cd.2)) := by
   congr 1
   · exact combineCarrier_assoc ad.1 bd.1 cd.1
-  · exact DiffWithError.mul_assoc Int.mul_assoc ad.2 bd.2 cd.2
+  · exact DiffWithError.mul_assoc_int ad.2 bd.2 cd.2
 
 /-- Local lemma: associativity of `flatMap`. Lean core has the
 building blocks (`flatMap_cons`, `flatMap_append`) but not the
