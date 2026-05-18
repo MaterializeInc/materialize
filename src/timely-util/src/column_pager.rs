@@ -35,7 +35,7 @@
 pub mod policy;
 
 use std::io::{self, Read};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, RwLock};
 
 use columnar::Columnar;
 use lz4_flex::frame::{FrameDecoder, FrameEncoder};
@@ -215,6 +215,104 @@ impl ColumnPager {
         Self { policy }
     }
 
+    /// Constructs a pager that never pages out: every [`page`] returns a
+    /// [`PagedColumn::Resident`] whose ticket discards release events. Useful
+    /// as a default when callers want a placeholder pager before injecting a
+    /// real policy.
+    ///
+    /// [`page`]: ColumnPager::page
+    pub fn disabled() -> Self {
+        Self::new(Arc::new(AlwaysResidentPolicy))
+    }
+}
+
+/// Policy that keeps every column resident and discards events. Backs
+/// [`ColumnPager::disabled`].
+struct AlwaysResidentPolicy;
+
+impl PagingPolicy for AlwaysResidentPolicy {
+    fn decide(&self, _hint: PageHint) -> PageDecision {
+        PageDecision::Skip
+    }
+    fn record(&self, _event: PageEvent) {}
+}
+
+// ---------------------------------------------------------------------------
+// Process-global pager
+// ---------------------------------------------------------------------------
+//
+// Following the pager design doc's spirit (`doc/developer/design/20260504_pager.md`):
+// "the cluster runs on swap or file, not both at once; a global atomic
+// encodes that operational reality directly. A per-pager design would
+// either duplicate the global flag at the struct level or invite confusion
+// about which configuration wins."
+//
+// The lower-level `mz_ore::pager` already uses a global atomic for backend
+// selection. This module's policy/budget layer mirrors that shape: one
+// `ColumnPager` per process, swapped atomically when the controller changes
+// the configuration. Merge batchers clone the `Arc` inside on use; live
+// reinstalls take effect on the next call without per-thread coordination.
+
+/// Process-global active pager. Defaults to [`ColumnPager::disabled`]
+/// until worker init calls [`set_global_pager`].
+static GLOBAL_PAGER: LazyLock<RwLock<ColumnPager>> =
+    LazyLock::new(|| RwLock::new(ColumnPager::disabled()));
+
+/// Install `pager` as the process-wide active pager. Subsequent
+/// [`global_pager`] calls return a clone of this value across all threads.
+///
+/// Worker init calls this on every config apply; each clusterd worker
+/// thread in the same process sees the same `worker_config`, so the
+/// repeated installs are idempotent (same `Arc`-equivalent state). Any
+/// [`PagedColumn`]s already in flight keep their own `Arc<dyn
+/// PagingPolicy>` clone, so a reinstall doesn't invalidate handles.
+pub fn set_global_pager(pager: ColumnPager) {
+    *GLOBAL_PAGER.write().expect("global pager poisoned") = pager;
+}
+
+/// Process-wide decision counters. Diagnostic only — log a summary every
+/// `DECISION_LOG_INTERVAL` Page decisions so we can tell whether the
+/// pager is actually engaging without per-call log spam.
+static SKIP_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static PAGE_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static SKIP_BYTES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static PAGE_BYTES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+const DECISION_LOG_INTERVAL: usize = 1024;
+
+fn record_decision(paged: bool, bytes: usize) {
+    use std::sync::atomic::Ordering;
+    if paged {
+        let n = PAGE_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+        PAGE_BYTES.fetch_add(bytes, Ordering::Relaxed);
+        if n.is_multiple_of(DECISION_LOG_INTERVAL) {
+            let s = SKIP_COUNT.load(Ordering::Relaxed);
+            let sb = SKIP_BYTES.load(Ordering::Relaxed);
+            let pb = PAGE_BYTES.load(Ordering::Relaxed);
+            tracing::info!(
+                skip_calls = s,
+                skip_bytes = sb,
+                page_calls = n,
+                page_bytes = pb,
+                "column-pager: decision rate"
+            );
+        }
+    } else {
+        SKIP_COUNT.fetch_add(1, Ordering::Relaxed);
+        SKIP_BYTES.fetch_add(bytes, Ordering::Relaxed);
+    }
+}
+
+/// Returns the current global pager. Cheap: clones the inner `Arc<dyn
+/// PagingPolicy>`.
+pub fn global_pager() -> ColumnPager {
+    GLOBAL_PAGER
+        .read()
+        .expect("global pager poisoned")
+        .clone()
+}
+
+impl ColumnPager {
+
     /// Drains `col` into a [`PagedColumn`]. After return `col` is left as a
     /// fresh `Column::default()` (typed, empty), ready to be refilled by the
     /// caller on the next loop iteration.
@@ -236,13 +334,17 @@ impl ColumnPager {
 
         let (backend, codec) = match self.policy.decide(hint) {
             PageDecision::Skip => {
+                record_decision(false, len_bytes);
                 let ticket = ResidentTicket {
                     bytes: len_bytes,
                     policy: Arc::clone(&self.policy),
                 };
                 return PagedColumn::Resident(std::mem::take(col), ticket);
             }
-            PageDecision::Page { backend, codec } => (backend, codec),
+            PageDecision::Page { backend, codec } => {
+                record_decision(true, len_bytes);
+                (backend, codec)
+            }
         };
         let meta = Meta { len_bytes };
 

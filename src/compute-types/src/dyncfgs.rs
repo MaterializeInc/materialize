@@ -23,6 +23,51 @@ pub const ENABLE_HALF_JOIN2: Config<bool> = Config::new(
     "Whether compute should use `half_join2` rather than DD's `half_join` to render delta joins.",
 );
 
+/// Install the column-pageable merge batcher on each compute worker, so
+/// arrangements that route through it can spill chunks under memory
+/// pressure rather than holding them all resident. Disabled by default;
+/// the budget/backend knobs below tune the behavior when enabled.
+pub const ENABLE_COLUMN_PAGED_BATCHER: Config<bool> = Config::new(
+    "enable_column_paged_batcher",
+    false,
+    "Install the column-paged merge batcher on each compute worker so it can spill under memory \
+     pressure.",
+);
+
+/// Total resident-byte budget the column-paged batcher's
+/// [`TieredPolicy`](mz_timely_util::column_pager::policy::TieredPolicy)
+/// is allowed to hold across all workers in this process, expressed as
+/// a fraction of the replica's announced memory limit. Workers split
+/// this between a per-worker local pool and a process-wide shared pool;
+/// values beyond either pool spill to the configured backend.
+///
+/// `0.05` (5%) is a reasonable starting point: large enough that the
+/// per-call ColumnBuilder ship-threshold (~2 MiB) fits multiple chunks
+/// per worker, small enough that the merge-batcher's transient state
+/// doesn't crowd out the spine. Set lower to spill more aggressively
+/// under pressure; set `0.0` to spill on every chunk (sanity check only).
+/// Ignored when `enable_column_paged_batcher` is `false`.
+pub const COLUMN_PAGED_BATCHER_BUDGET_FRACTION: Config<f64> = Config::new(
+    "column_paged_batcher_budget_fraction",
+    0.05,
+    "Fraction of replica memory the column-paged batcher's tiered policy may hold resident \
+     before spilling to the backend. Total budget = mem_limit * fraction; split 1/8 per-worker \
+     local (clamped 16-64 MiB) and 7/8 shared (clamped 128 MiB - 1 GiB).",
+);
+
+/// Backend to which the column-paged batcher spills chunks once both the
+/// per-worker and shared budgets are exhausted. `"swap"` keeps the bytes
+/// in process memory (the OS swap subsystem may page them out under
+/// pressure); `"file"` writes them to compute's scratch directory under
+/// our control. The file backend requires `--scratch-directory` to be
+/// configured on clusterd; if absent, the worker falls back to swap and
+/// logs a warning. Ignored when `enable_column_paged_batcher` is `false`.
+pub const COLUMN_PAGED_BATCHER_BACKEND: Config<&str> = Config::new(
+    "column_paged_batcher_backend",
+    "swap",
+    "Backend for column-paged batcher spills: \"swap\" or \"file\".",
+);
+
 /// Whether rendering should use `mz_join_core` rather than DD's `JoinCore::join_core`.
 pub const ENABLE_MZ_JOIN_CORE: Config<bool> = Config::new(
     "enable_mz_join_core",
@@ -424,4 +469,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COMPUTE_PROMETHEUS_INTROSPECTION_SCRAPE_INTERVAL)
         .add(&SUBSCRIBE_SNAPSHOT_OPTIMIZATION)
         .add(&MV_SINK_ADVANCE_PERSIST_FRONTIERS)
+        .add(&ENABLE_COLUMN_PAGED_BATCHER)
+        .add(&COLUMN_PAGED_BATCHER_BUDGET_FRACTION)
+        .add(&COLUMN_PAGED_BATCHER_BACKEND)
 }
