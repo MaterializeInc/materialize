@@ -2323,10 +2323,11 @@ class EnvdObjectsScalabilityScenario(Scenario):
 
     def teardown(self, runner: ScenarioRunner) -> None:
         # Best-effort cleanup; if it fails, the next run's init() will retry.
-        try:
-            runner.run_query(f"DROP SCHEMA IF EXISTS {self.PAD_SCHEMA} CASCADE")
-        except Exception as e:
-            print(f"WARNING: failed to drop {self.PAD_SCHEMA}: {e}")
+        _best_effort_drop(
+            runner,
+            f"DROP SCHEMA IF EXISTS {self.PAD_SCHEMA} CASCADE",
+            self.PAD_SCHEMA,
+        )
 
     def run(self, runner: ScenarioRunner) -> None:
         # Measure DDL (CREATE TABLE) latency. Each repetition creates a fresh
@@ -2381,6 +2382,18 @@ def _bulk_run(runner: ScenarioRunner, statements: list[str], log_label: str) -> 
             elapsed = time.time() - start
             rate = i / elapsed if elapsed > 0 else 0
             print(f"  {log_label}: {i}/{total} ({rate:.1f}/s)")
+
+
+def _best_effort_drop(runner: ScenarioRunner, stmt: str, label: str) -> None:
+    """Run a DROP statement, swallowing any error as a WARNING.
+
+    Used in teardown paths where a previous failure may have left only
+    partial state and we want subsequent cleanup statements to still run.
+    """
+    try:
+        runner.run_query(stmt)
+    except Exception as e:
+        print(f"WARNING: failed to drop {label}: {e}")
 
 
 class EnvdObjectsScalabilityTablesScenario(EnvdObjectsScalabilityScenario):
@@ -2485,10 +2498,9 @@ class EnvdObjectsScalabilityMvsScenario(EnvdObjectsScalabilityScenario):
         # drop the now-quiescent pad clusters.
         super().teardown(runner)
         for k in range(self._pad_clusters_created):
-            try:
-                runner.run_query(f"DROP CLUSTER IF EXISTS pad_c_{k} CASCADE")
-            except Exception as e:
-                print(f"WARNING: failed to drop pad_c_{k}: {e}")
+            _best_effort_drop(
+                runner, f"DROP CLUSTER IF EXISTS pad_c_{k} CASCADE", f"pad_c_{k}"
+            )
         self._pad_clusters_created = 0
 
 
@@ -2606,14 +2618,12 @@ class ClusterObjectLimitsScenario(Scenario):
         return int(total), int(reporting), float(max_lag_ms)
 
     def teardown(self, runner: ScenarioRunner) -> None:
-        try:
-            runner.run_query(f"DROP SCHEMA IF EXISTS {self.PAD_SCHEMA} CASCADE")
-        except Exception as e:
-            print(f"WARNING: failed to drop {self.PAD_SCHEMA}: {e}")
-        try:
-            runner.run_query("DROP CLUSTER IF EXISTS c CASCADE")
-        except Exception as e:
-            print(f"WARNING: failed to drop cluster c: {e}")
+        _best_effort_drop(
+            runner,
+            f"DROP SCHEMA IF EXISTS {self.PAD_SCHEMA} CASCADE",
+            self.PAD_SCHEMA,
+        )
+        _best_effort_drop(runner, "DROP CLUSTER IF EXISTS c CASCADE", "cluster c")
 
     def run(self, runner: ScenarioRunner) -> None:
         # The freshness probe is driven externally by
