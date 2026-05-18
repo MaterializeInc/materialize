@@ -982,3 +982,305 @@ client path. With bogo actually fast, the probe re-runs and confirms
 the underlying signal: bogo cleanly beats CRDB on every op and every
 scale point measured. The next round of catalog-side work can use
 bogo as a clean low-floor reference.
+
+### 2026-05-18 — slope study at N=5000 / 10000 / 15000 (bogo + file blob)
+
+Used a small `bench_profile.py` driver (one-shot, lived under `/tmp`,
+not checked in): pads the catalog incrementally with empty tables,
+snapshots prometheus + envd RSS, then runs 100 reps of
+`CREATE TABLE m_tmp (a int)` + `DROP TABLE m_tmp` while samply is
+attached to envd. Blob backend `file://`; consensus backend
+multi-channel bogo on loopback; timestamp oracle still CRDB.
+`ALTER SYSTEM SET max_tables = 30000` and
+`enable_alter_table_add_column = true` set up-front.
+
+Headline per-rep latencies (warm envd, 100 reps each):
+
+| N      | create p50 | create p95 | create mean | drop p50 | drop p95 | envd RSS |
+| ---:   | ---:       | ---:       | ---:        | ---:     | ---:     | ---:     |
+|   5000 |   25.9 ms  |   69.9 ms  |   34.3 ms   |  23.3 ms |  32.8 ms | 1618 MB  |
+|  10000 |   37.4 ms  |   84.6 ms  |   45.0 ms   |  32.6 ms |  78.3 ms | 2511 MB  |
+|  15000 |   52.7 ms  |  125.7 ms  |   67.6 ms   |  45.0 ms | 105.3 ms | 3208 MB  |
+
+Slope: `create_table` p50 adds ≈13 ms per +5000 user tables; p95
+grows faster (≈+28 ms per +5000), tail is widening. RSS grows ~700–900
+MB per +5000 = ~160 KB per pad table held in memory.
+
+#### envd-internal metric deltas during the 100 reps
+
+(differences between `/metrics` scrapes taken immediately before and
+after each measurement window)
+
+| metric                                                                          |   N=5000  |   N=10000 |   N=15000 |
+| ---                                                                             |    ---:   |     ---:  |     ---:  |
+| `catalog_transact_seconds{method="catalog_transact_with_ddl_transaction"}` mean |  31.95 ms |  41.37 ms |  60.44 ms |
+| `catalog_transact_seconds{method="catalog_transact_with_side_effects"}` mean    |  31.95 ms |  41.36 ms |  60.44 ms |
+| `consensus_cas` count over 100 DDL reps                                         |    5 744  |    8 450  |   12 100  |
+| `consensus_cas` mean (across *all* shards in process)                           |   4.83 ms |  17.41 ms |  46.53 ms |
+| `blob_set` count over 100 DDL reps                                              |      702  |      761  |      766  |
+| `blob_set` mean                                                                 |   1.29 ms |   1.39 ms |   1.32 ms |
+| `mz_catalog_syncs` count                                                        |      630  |      630  |      630  |
+| `mz_catalog_transactions_started` count                                         |      210  |      210  |      210  |
+| `mz_catalog_transaction_commit_latency_seconds` ∑                               |   0.513 s |   0.838 s |   1.200 s |
+| `mz_catalog_sync_latency_seconds` ∑                                             |   0.481 s |   0.823 s |   1.234 s |
+| `audit_log` collection entries (live)                                           |   15 472  |   20 682  |   25 892  |
+| `storage_collection_metadata` entries                                           |    5 089  |   10 089  |   15 089  |
+| `item` entries                                                                  |    5 001  |   10 001  |   15 001  |
+
+`with_ddl_transaction` and `with_side_effects` track exactly together
+because for a single-statement CREATE the outer just delegates to the
+inner — no explicit DDL transaction.
+
+The numbers that **do not** scale with N are encouraging:
+
+* `blob_set` count and mean are flat (≈7 puts/DDL, ≈1.3 ms each).
+  Local file blob with `fsync` is not the slope.
+* Counter deltas for `mz_catalog_syncs`, `mz_catalog_transactions_started`,
+  `mz_catalog_transaction_commits`, and
+  `mz_persist_state_fetch_recent_live_diffs_fast_path` are constant
+  across scale (6.3 syncs/DDL, 2.1 commits/DDL, ≈1.4 fast-path live-diff
+  fetches/DDL). The *number* of catalog operations per DDL is stable.
+
+The numbers that **do** scale with N (the smoking gun):
+
+* `consensus_cas` count per DDL: 57 → 85 → 121. Linear in N
+  (≈ +27 CAS per +5000 user tables).
+* `consensus_cas` mean: 4.83 → 17.41 → 46.53 ms. **Super-linear** —
+  ratios are 3.6× then 2.7× while N only doubles then 1.5×'s. The mean
+  is bagging in tail samples whose individual latency grows worse than
+  linearly.
+* `catalog_transact_with_ddl_transaction` mean: 31.95 → 41.37 → 60.44 ms.
+  Linear-ish (~9–19 ms per +5000), tracking the wall-clock slope.
+* `mz_catalog_transaction_commit_latency_seconds` rises ~2× from N=5k
+  to N=15k, but commit is only ~5–12 ms of the 32–60 ms DDL — it's not
+  the dominant slope inside `catalog_transact`.
+
+Important caveat: `consensus_cas` is **per-RPC across all shards in
+the process**, not just the catalog shard. The headline 4.83 → 46.53
+mean is dominated by *more*, *slower* CAS on the user-table shards —
+each user table is a persist shard, with its own writer doing periodic
+maintenance, and at N=15000 we have 3× more shards doing it. The
+catalog-shard CAS that DDL actually waits on is just one entry in
+that histogram. We'd need per-shard / per-kind labels on
+`consensus_cas` to isolate it cleanly.
+
+#### Flame-graph picture at N=5000 (samply attached during the 100-rep window)
+
+Coarse self-CPU breakdown across all envd threads (custom
+`app_frames.py` that buckets each sample by the deepest matching app
+area on the stack root→leaf):
+
+| area                                            | self %  |
+| ---:                                            | ---:    |
+| tokio\_fs (fsync / open / rename on blob)       | 64.07%  |
+| tokio\_runtime (scheduler / park-unpark)        | 18.35%  |
+| mz\_persist\_client                              |  8.25%  |
+| tonic\_grpc                                      |  3.83%  |
+| libc\_misc                                       |  2.63%  |
+| mz\_storage\_controller                          |  0.83%  |
+| mz\_compute\_client                              |  0.80%  |
+| mz\_adapter::coord                               |  0.42%  |
+| alloc                                            |  0.37%  |
+| mz\_adapter::catalog::transact / mz\_catalog     |  0.22%  |
+| planner / optimizer                              |  ~0%    |
+
+Two surprises in this:
+
+1. **Almost no on-CPU work is in adapter / catalog code paths**
+   (`adapter_coord` 0.42%, `catalog_transact` 0.22%, planner 0%). The
+   DDL critical path is mostly *waiting*, not computing — coordinator
+   work serializes on awaits for persist / controller responses, so
+   the CPU profile doesn't tell us much about wall-time.
+2. **Two thirds of the process's CPU during the audit is in
+   `tokio::fs::*` blocking-pool tasks** doing `fsync`, `__open64`, and
+   `rename` against the local-file blob backend. That's a property of
+   the `file://` blob URL used here; with `s3://` the CPU mix would
+   shift, but the wall-time critical path through `blob_set` (1.3 ms
+   per put, flat in N) would be similar.
+
+#### So what scales? Best current hypotheses
+
+1. **Catalog shard's persist state grows linearly with the number of
+   catalog updates.** Each CREATE / DROP TABLE writes one diff. The
+   single catalog shard accumulates history; every CAS apply has to
+   walk that history when reconstructing state on a sync. State
+   compaction / rollups eventually truncate it, but in the audit
+   window we're racing ahead of compaction.
+2. **`apply_catalog_implications` and the in-memory catalog state
+   updates** still have some O(N)-per-DDL walks beyond the read-holds
+   path that was already fixed in `11be652bf3` (timeline read holds
+   made O(delta)). On-CPU under those frames is currently ~0.6%
+   combined, so the per-DDL CPU is small — but a 1 ms walk over
+   15 000 entries does match the observed slope.
+3. **Audit-log writes are appended into a persist shard whose state
+   grows linearly with N.** Every DDL appends a row to `audit_log`.
+   The shard's batch list / spine grows. Even though `blob_set` and
+   `consensus_cas` *counts* per DDL are stable, the per-op cost on
+   the `audit_log` shard rises with its history depth.
+4. **Per-shard background traffic.** Each user table is a persist
+   shard; each shard does writer heartbeats / rollups / live-diff
+   fetches in the background. With more shards the *total* CAS rate
+   in the process is higher, and these background CAS sit in the
+   same histogram as the DDL ones, inflating the mean we see.
+
+(1) and (3) are state-machine cost on specific shards; (2) is
+in-memory catalog walk cost on the coordinator; (4) is observation
+bias on the histogram, not real DDL latency, but it's still real
+work the process is doing.
+
+#### Next moves, in order
+
+1. **Add `shard_kind` labels to `mz_persist_external_op_latency`** —
+   break out the catalog shard, the `audit_log` shard, and "user
+   collections" separately. That tells us within minutes which kind
+   of shard is contributing the slope and which is observation bias.
+2. **If catalog shard is the offender**: look at state apply cost in
+   the persist client — does the catalog shard hit
+   `state_apply_spine_slow_path` more as it grows? Check rollup
+   write cadence on the catalog shard at large state sizes.
+3. **If audit-log shard is the offender**: aggressive truncation /
+   compaction of the `audit_log` shard. Old audit entries are read
+   rarely; we don't need to keep the full history hot.
+4. **Independently**, hunt remaining O(N) walks per DDL inside
+   `catalog_transact_inner` / `apply_catalog_implications`. The
+   recent read-holds fix removed one; given on-CPU under those frames
+   is 0.6%, any remaining walks should be cheap CPU-wise but still
+   show up in wall time.
+
+#### Reproducing the run
+
+`/tmp/bench_profile.py` was intentionally not checked in — it's a
+thin psycopg driver that does the padding / measurement loop and
+shells out to `samply`. Sketch:
+
+* Spin up bogo on `:6882` and a `--persist-consensus-url=bogo://…`
+  envd against `file:///…/blob`.
+* On the mz_system port: `ALTER SYSTEM SET max_tables = 30000;
+  ALTER SYSTEM SET enable_alter_table_add_column = true;`.
+* For each scale point in `[5000, 10000, 15000]`: incrementally pad
+  via `CREATE TABLE IF NOT EXISTS audit_pad.pad_t_<i>`; snapshot
+  `/metrics` and `/proc/<envd>/status` VmRSS; start
+  `samply record -p <envd> -s -o /tmp/profile_N<n>.json.gz`; run 100
+  reps of `CREATE TABLE audit_meas.m_tmp (a int)` /
+  `DROP TABLE audit_meas.m_tmp` while timing each statement;
+  `SIGINT` samply; snapshot `/metrics` again.
+* Analyze with `samply load <profile.json.gz>` for the flame graph,
+  and diff the before/after metrics scrapes for histogram deltas.
+
+Note that on this host `perf_event_paranoid` had to be lowered to 1
+and `perf_event_mlock_kb` raised to 128 MiB before samply could
+attach.
+
+### 2026-05-18 — shard-attributed slope study (bogo + file blob)
+
+The previous slope study showed `consensus_cas` count and mean both
+growing with N, but the single histogram couldn't tell us *which
+shards* the slope came from. This run adds an investigation-only
+metric `mz_persist_external_op_latency_by_shard_kind` (HistogramVec,
+labels `[op, shard_kind]`) and a small in-process registry mapping
+`ShardId -> shard_kind` populated at `Applier::new` time. The
+shard_kind classifier is closed-set:
+
+| shard_name (from `Diagnostics`) | shard_kind |
+| --- | --- |
+| `catalog` | `catalog` |
+| `txns` | `txns` |
+| `builtin_migration` | `builtin_migration` |
+| `expression_cache` | `expression_cache` |
+| `storage-usage` / `storage_usage` | `storage_usage` |
+| anything else | `user_data` |
+| (pre-registration ops) | `unknown` |
+
+No samply this time: the new label is enough to attribute the slope
+without flame-graph overhead. Ladder cut to N=5000 / 10000 (15000
+dropped) — the per-shard `file://` blob backend filled the host
+disk on the longer run.
+
+#### Latency per rep (ms)
+
+| N | create_p50 | create_p95 | drop_p50 | drop_p95 |
+| ---: | ---: | ---: | ---: | ---: |
+| 5,000 | 29.8 | 73.9 | 28.2 | 35.9 |
+| 10,000 | 46.5 | 113.0 | 41.9 | 91.5 |
+
+#### `consensus_cas` by shard_kind, per-DDL
+
+`count/DDL` = total CAS delta during the 100-rep window ÷ 100.
+`mean ms` = total CAS time delta ÷ count, so it reflects only ops
+that happened during the burst (not lifetime). Numbers are from one
+clean run; the absolute mean values shift between runs but the
+*shape* is stable.
+
+| op | kind | N=5k count/DDL | N=5k mean ms | N=10k count/DDL | N=10k mean ms |
+| --- | --- | ---: | ---: | ---: | ---: |
+| consensus_cas | catalog   |  5.58 |  0.53 |  5.58 |  1.85 |
+| consensus_cas | txns      |  6.63 |  0.44 |  6.64 |  1.30 |
+| consensus_cas | user_data | 43.21 |  6.76 | 69.83 | 38.72 |
+| blob_set      | catalog   |  0.57 |  0.99 |  0.56 |  1.39 |
+| blob_set      | txns      |  2.62 |  0.96 |  2.63 |  1.18 |
+| blob_set      | user_data |  3.77 |  1.11 |  3.86 |  1.06 |
+
+For comparison, the previous (unsharded) numbers from the same
+ladder had `consensus_cas count` growing from 57 → 85 per DDL with
+mean 4.83 → 17.41 ms. With the label, we can now see *that growth
+is almost entirely `user_data`*: those CAS are background work on
+the pre-existing user_data shards (compaction, GC, rollup writes),
+not synchronous per-DDL work.
+
+#### What we learned
+
+The slope is NOT in user_data shard work. That work is mostly
+asynchronous background activity on the 5,000-10,000 pre-existing
+shards — high count but doesn't gate DDL completion.
+
+The slope IS in **catalog and txns shard CAS getting more expensive
+per-op as those shards' states grow**:
+
+* catalog CAS count/DDL is flat at 5.58 across both scales —
+  per-DDL DDL doesn't generate more catalog CAS as N grows.
+* catalog CAS mean **grows 3.5× from N=5k to N=10k** (0.53 → 1.85 ms).
+* txns CAS count is similarly flat at ~6.6, mean grows 3×
+  (0.44 → 1.30 ms).
+* The synchronous catalog+txns CAS budget per DDL therefore grew
+  from 2.96+2.92 = 5.9 ms at N=5k to 10.3+8.6 = 18.9 ms at N=10k,
+  i.e. **+13 ms of synchronous CAS work** out of +16.8 ms total
+  wall-time growth. That accounts for almost all the slope.
+
+This points at persist state-apply / rollup cost on the **catalog
+shard specifically**, plus a smaller contribution from the txns
+shard. Neither has anything to do with the user_data shards' state
+or how many of them exist; both are about the *size* of two
+specific singleton shards' own histories.
+
+#### Next moves
+
+1. **Aggressive rollups + truncation on the catalog shard.** If the
+   catalog shard's diff-history (between rollups) is what makes each
+   CAS more expensive, more frequent rollups should flatten the
+   slope. Check `mz_persist_state_apply_spine_slow_path` /
+   `mz_persist_shard_seqnos_since_last_rollup` for the catalog
+   shard at N=10k.
+2. **Investigate the txns shard slope.** That one is more
+   surprising — the txns shard mediates writeable-table tx state
+   and shouldn't intrinsically grow with N. Verify that its
+   state size is in fact growing.
+3. **De-prioritize**: the user_data CAS volume is a non-issue for
+   DDL latency. It will matter for *total CPU* but not for the
+   wall-time slope we've been chasing.
+
+#### Reproducing
+
+Scripts live in `/home/ubuntu/envd-ddl-investigation/` (driver
+`bench.py`, analyzer `analyze.py`, launchers `start_envd.sh` /
+`reset_state.sh`, cluster-replica JSON). Build with
+`cargo build --profile=optimized` — full `--release` triggers an
+LTO link that OOMs this 23 GiB VM (the earlier "VM went
+unresponsive" was that, plus zero swap). Mitigations applied:
+
+* Added 8 GiB swapfile (`/swapfile`, swappiness=60).
+* Cap CRDB container memory: `docker run --memory=2g`.
+* Deleted `target/debug` and `target/release` before re-running
+  (the `file://` blob backend needs disk room too).
+* Bench checkpoints results after each scale; if envd crashes
+  mid-padding, the previous scale's data is preserved on disk
+  (`results/timings_N{N}.csv`, `metrics/{before,after}_N{N}.prom`).
