@@ -121,6 +121,8 @@ theorem UnifiedStream.filter_append (pred : Expr) (a b : UnifiedStream) :
   show (a ++ b).flatMap _ = a.flatMap _ ++ b.flatMap _
   exact List.flatMap_append
 
+-- `project_append` is stated after `project`'s definition below.
+
 /-! ## Project
 
 Diff-aware projection. Each non-error record splits on its carrier:
@@ -161,6 +163,12 @@ def UnifiedStream.project (es : List Expr) (us : UnifiedStream) : UnifiedStream 
 
 theorem UnifiedStream.project_nil_stream (es : List Expr) :
     UnifiedStream.project es [] = [] := rfl
+
+theorem UnifiedStream.project_append (es : List Expr) (a b : UnifiedStream) :
+    UnifiedStream.project es (a ++ b)
+      = UnifiedStream.project es a ++ UnifiedStream.project es b := by
+  show (a ++ b).flatMap _ = a.flatMap _ ++ b.flatMap _
+  exact List.flatMap_append
 
 /-- The empty projection list cannot error on any row, so every
 record passes through with the row collapsed to width zero. -/

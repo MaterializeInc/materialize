@@ -186,6 +186,14 @@ theorem UnifiedStream.negate_length (us : UnifiedStream) :
     (UnifiedStream.negate us).length = us.length :=
   List.length_map _
 
+/-- `negate` distributes over `++`. The dedicated map-append
+reduction so downstream proofs cite a single lemma. -/
+theorem UnifiedStream.negate_append (a b : UnifiedStream) :
+    UnifiedStream.negate (a ++ b)
+      = UnifiedStream.negate a ++ UnifiedStream.negate b := by
+  show (a ++ b).map _ = a.map _ ++ b.map _
+  exact List.map_append
+
 /-- Double negation is the identity (lifted from `Int.neg_neg`
 through `DiffWithError.neg_neg_int`). -/
 theorem UnifiedStream.negate_negate (us : UnifiedStream) :
@@ -663,18 +671,17 @@ theorem UnifiedStream.project_unionAll (es : List Expr) (a b : UnifiedStream) :
     UnifiedStream.project es (UnifiedStream.unionAll a b)
       = UnifiedStream.unionAll
           (UnifiedStream.project es a)
-          (UnifiedStream.project es b) := by
-  show (a ++ b).flatMap _ = a.flatMap _ ++ b.flatMap _
-  exact List.flatMap_append
+          (UnifiedStream.project es b) :=
+  UnifiedStream.project_append es a b
 
-/-- `negate` distributes over `unionAll` via `List.map_append`. -/
+/-- `negate` distributes over `unionAll`. Direct citation of
+`negate_append`. -/
 theorem UnifiedStream.negate_unionAll (a b : UnifiedStream) :
     UnifiedStream.negate (UnifiedStream.unionAll a b)
       = UnifiedStream.unionAll
           (UnifiedStream.negate a)
-          (UnifiedStream.negate b) := by
-  show (a ++ b).map _ = a.map _ ++ b.map _
-  exact List.map_append
+          (UnifiedStream.negate b) :=
+  UnifiedStream.negate_append a b
 
 /-- `negate` commutes with `consolidateInto`: inserting a negated
 diff into a negated bucket list gives the same result as inserting
