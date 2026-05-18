@@ -4036,118 +4036,102 @@ def run_scenario_weak(
         scenario.run(runner)
 
 
+def _plot_files(
+    parser: WorkflowArgumentParser,
+    default: str | list[str],
+    help_text: str,
+    analyzer: Callable[[str], None] | None,
+) -> None:
+    """Body shared by every ``workflow_plot*`` function.
+
+    Parses a ``files`` glob pattern arg, then either calls a single
+    ``analyzer`` on each match (per-kind workflows) or dispatches by suffix
+    via ``SUFFIX_ANALYZERS`` (the multi-kind ``workflow_plot``).
+    """
+    parser.add_argument(
+        "files",
+        nargs="*",
+        default=default,
+        type=str,
+        help=help_text,
+    )
+    args = parser.parse_args()
+    for file in itertools.chain(*map(glob.iglob, args.files)):
+        file_str = str(file)
+        if analyzer is not None:
+            analyzer(file_str)
+            continue
+        base_name = os.path.basename(file_str)
+        for suffix, fn in SUFFIX_ANALYZERS:
+            if base_name.endswith(suffix):
+                fn(file_str)
+                break
+        else:
+            raise UIError(
+                f"Error: Filename '{file_str}' doesn't indicate whether it's a "
+                "cluster, envd, envd_objects_scalability, or "
+                "cluster_object_limits results file. Please use the explicit "
+                "`plot-envd`, `plot-cluster`, `plot-envd-objects-scalability`, "
+                "or `plot-cluster-object-limits` targets for such files."
+            )
+
+
 def workflow_plot_cluster(
     composition: Composition, parser: WorkflowArgumentParser
 ) -> None:
     """Analyze cluster-focused results."""
-
-    parser.add_argument(
-        "files",
-        nargs="*",
-        default="results_*.cluster.csv",
-        type=str,
-        help="Glob pattern of cluster result files to plot.",
+    _plot_files(
+        parser,
+        "results_*.cluster.csv",
+        "Glob pattern of cluster result files to plot.",
+        analyze_cluster_results_file,
     )
-
-    args = parser.parse_args()
-
-    for file in itertools.chain(*map(glob.iglob, args.files)):
-        analyze_cluster_results_file(str(file))
 
 
 def workflow_plot_envd(
     composition: Composition, parser: WorkflowArgumentParser
 ) -> None:
     """Analyze environmentd-focused results."""
-
-    parser.add_argument(
-        "files",
-        nargs="*",
-        default="results_*.envd.csv",
-        type=str,
-        help="Glob pattern of envd result files to plot.",
+    _plot_files(
+        parser,
+        "results_*.envd.csv",
+        "Glob pattern of envd result files to plot.",
+        analyze_envd_results_file,
     )
-
-    args = parser.parse_args()
-
-    for file in itertools.chain(*map(glob.iglob, args.files)):
-        analyze_envd_results_file(str(file))
 
 
 def workflow_plot_envd_objects_scalability(
     composition: Composition, parser: WorkflowArgumentParser
 ) -> None:
     """Analyze envd-objects-scalability results (latency vs catalog object count)."""
-
-    parser.add_argument(
-        "files",
-        nargs="*",
-        default="results_*.envd_objects_scalability.csv",
-        type=str,
-        help="Glob pattern of envd_objects_scalability result files to plot.",
+    _plot_files(
+        parser,
+        "results_*.envd_objects_scalability.csv",
+        "Glob pattern of envd_objects_scalability result files to plot.",
+        analyze_envd_objects_scalability_results_file,
     )
-
-    args = parser.parse_args()
-
-    for file in itertools.chain(*map(glob.iglob, args.files)):
-        analyze_envd_objects_scalability_results_file(str(file))
 
 
 def workflow_plot_cluster_object_limits(
     composition: Composition, parser: WorkflowArgumentParser
 ) -> None:
     """Analyze cluster_object_limits results (freshness lag vs N per cluster size)."""
-
-    parser.add_argument(
-        "files",
-        nargs="*",
-        default="results_*.cluster_object_limits.csv",
-        type=str,
-        help="Glob pattern of cluster_object_limits result files to plot.",
+    _plot_files(
+        parser,
+        "results_*.cluster_object_limits.csv",
+        "Glob pattern of cluster_object_limits result files to plot.",
+        analyze_cluster_object_limits_results_file,
     )
-
-    args = parser.parse_args()
-
-    for file in itertools.chain(*map(glob.iglob, args.files)):
-        analyze_cluster_object_limits_results_file(str(file))
 
 
 def workflow_plot(composition: Composition, parser: WorkflowArgumentParser) -> None:
     """Analyze the results of the workflow."""
-
-    parser.add_argument(
-        "files",
-        nargs="*",
-        default=[
-            "results_*.cluster.csv",
-            "results_*.envd.csv",
-            "results_*.envd_objects_scalability.csv",
-            "results_*.cluster_object_limits.csv",
-        ],
-        type=str,
-        help="Glob pattern of result files to plot.",
+    _plot_files(
+        parser,
+        [f"results_*{suffix}" for suffix, _ in SUFFIX_ANALYZERS],
+        "Glob pattern of result files to plot.",
+        analyzer=None,
     )
-
-    args = parser.parse_args()
-
-    for file in itertools.chain(*map(glob.iglob, args.files)):
-        file_str = str(file)
-        base_name = os.path.basename(file_str)
-        # Order matters: `.cluster_object_limits.csv` and `.envd_objects_scalability.csv`
-        # both happen to end in something that would also match `.cluster` or
-        # `.envd` if matched naively, so check the longer suffixes first.
-        if base_name.endswith(".cluster_object_limits.csv"):
-            analyze_cluster_object_limits_results_file(file_str)
-        elif base_name.endswith(".envd_objects_scalability.csv"):
-            analyze_envd_objects_scalability_results_file(file_str)
-        elif base_name.endswith(".cluster.csv"):
-            analyze_cluster_results_file(file_str)
-        elif base_name.endswith(".envd.csv"):
-            analyze_envd_results_file(file_str)
-        else:
-            raise UIError(
-                f"Error: Filename '{file_str}' doesn't indicate whether it's a cluster, envd, envd_objects_scalability, or cluster_object_limits results file. Please use the explicit `plot-envd`, `plot-cluster`, `plot-envd-objects-scalability`, or `plot-cluster-object-limits` targets for such files."
-            )
 
 
 def extract_cluster_size(s: str) -> float:
@@ -4407,6 +4391,17 @@ def analyze_cluster_object_limits_results_file(file: str) -> None:
             f"{title_base} lag vs N",
             f"{slug_base}_lag_vs_n",
         )
+
+
+# Maps a result-file CSV suffix to the analyzer that understands its schema.
+# Order matters: longer suffixes first so e.g. `.cluster_object_limits.csv`
+# isn't shadowed by a naive `.cluster.csv` match.
+SUFFIX_ANALYZERS: list[tuple[str, Callable[[str], None]]] = [
+    (".cluster_object_limits.csv", analyze_cluster_object_limits_results_file),
+    (".envd_objects_scalability.csv", analyze_envd_objects_scalability_results_file),
+    (".cluster.csv", analyze_cluster_results_file),
+    (".envd.csv", analyze_envd_results_file),
+]
 
 
 def save_plot(plot_dir: str, data_frame: pd.DataFrame, title: str, slug: str):
