@@ -314,6 +314,54 @@ theorem UnifiedStream.project_no_error
         exact ⟨n, by rw [this]⟩
       · exact ih hTl rec hTail
 
+/-! ## Error-scope extractors
+
+The skeleton distinguishes three error scopes:
+
+* **Cell-scoped** (`Datum.err e`): a single cell-value invalid.
+  Propagates through scalar evaluators.
+* **Row-scoped** (`UnifiedRow.err e`): a whole record carries an
+  error instead of a row. Captured in the carrier.
+* **Collection-scoped** (`.error` diff in `DiffWithError`): the
+  collection itself is invalid at this time/state. Captured in
+  the diff.
+
+`errCarriers` and `errorDiffCarriers` project a `UnifiedStream`
+to the two record-level error sets, giving the spec a vocabulary
+for "how many row-errs and collection-errs in this stream". -/
+
+/-- The list of row-scoped error payloads carried by this stream.
+Order matches the input. -/
+def UnifiedStream.errCarriers (us : UnifiedStream) : List EvalError :=
+  us.filterMap fun ud => match ud.1 with
+    | .err e => some e
+    | _      => none
+
+/-- The list of carriers whose diff is collection-scoped `.error`.
+Order matches the input. -/
+def UnifiedStream.errorDiffCarriers (us : UnifiedStream) : List UnifiedRow :=
+  us.filterMap fun ud => match ud.2 with
+    | .error => some ud.1
+    | _      => none
+
+theorem UnifiedStream.errCarriers_nil :
+    UnifiedStream.errCarriers [] = [] := rfl
+
+theorem UnifiedStream.errorDiffCarriers_nil :
+    UnifiedStream.errorDiffCarriers [] = [] := rfl
+
+theorem UnifiedStream.errCarriers_append (a b : UnifiedStream) :
+    UnifiedStream.errCarriers (a ++ b)
+      = UnifiedStream.errCarriers a ++ UnifiedStream.errCarriers b := by
+  show (a ++ b).filterMap _ = a.filterMap _ ++ b.filterMap _
+  exact List.filterMap_append
+
+theorem UnifiedStream.errorDiffCarriers_append (a b : UnifiedStream) :
+    UnifiedStream.errorDiffCarriers (a ++ b)
+      = UnifiedStream.errorDiffCarriers a ++ UnifiedStream.errorDiffCarriers b := by
+  show (a ++ b).filterMap _ = a.filterMap _ ++ b.filterMap _
+  exact List.filterMap_append
+
 /-! ## Helper lemmas for filterMap over the packed concatenation -/
 
 private theorem filterMap_pickRow_rowMap (rs : List Row) :
