@@ -251,6 +251,40 @@ theorem val_add_neg_val [Add α] [Neg α] [Zero α]
   show (val (x + -x) : DiffWithError α) = val 0
   rw [h]
 
+/-- Negation distributes over multiplication on the left, lifted
+from the base. Used by `Mz/SetOps.lean` to reason about negating
+one side of a cross product. -/
+theorem neg_mul [Mul α] [Neg α]
+    (h : ∀ x y : α, (-x) * y = -(x * y))
+    (a b : DiffWithError α) : (-a) * b = -(a * b) := by
+  cases a with
+  | val x =>
+    cases b with
+    | val y =>
+      show (val ((-x) * y) : DiffWithError α) = val (-(x * y))
+      rw [h]
+    | error => rfl
+  | error =>
+    cases b with
+    | val _ => rfl
+    | error => rfl
+
+/-- Negation distributes over multiplication on the right. -/
+theorem mul_neg [Mul α] [Neg α]
+    (h : ∀ x y : α, x * (-y) = -(x * y))
+    (a b : DiffWithError α) : a * (-b) = -(a * b) := by
+  cases a with
+  | val x =>
+    cases b with
+    | val y =>
+      show (val (x * (-y)) : DiffWithError α) = val (-(x * y))
+      rw [h]
+    | error => rfl
+  | error =>
+    cases b with
+    | val _ => rfl
+    | error => rfl
+
 /-! ## Int specializations
 
 The diff-aware operators in `Mz/UnifiedStream.lean` and
@@ -283,6 +317,12 @@ theorem neg_neg_int (a : DiffWithError Int) : - -a = a :=
 theorem val_add_neg_val_int (x : Int) :
     (val x : DiffWithError Int) + -val x = 0 :=
   val_add_neg_val (fun x => by omega) x
+
+theorem neg_mul_int (a b : DiffWithError Int) : (-a) * b = -(a * b) :=
+  neg_mul (fun x y => Int.neg_mul x y) a b
+
+theorem mul_neg_int (a b : DiffWithError Int) : a * (-b) = -(a * b) :=
+  mul_neg (fun x y => Int.mul_neg x y) a b
 
 end DiffWithError
 
