@@ -27,6 +27,7 @@ theorem and_false_left (d : Datum) : evalAnd (.bool false) d = .bool false := by
 theorem and_false_right (d : Datum) : evalAnd d (.bool false) = .bool false := by
   cases d with
   | bool b => cases b <;> rfl
+  | int _  => rfl
   | null   => rfl
   | err _  => rfl
 
@@ -54,6 +55,7 @@ theorem or_true_left (d : Datum) : evalOr (.bool true) d = .bool true := by
 theorem or_true_right (d : Datum) : evalOr d (.bool true) = .bool true := by
   cases d with
   | bool b => cases b <;> rfl
+  | int _  => rfl
   | null   => rfl
   | err _  => rfl
 
@@ -85,6 +87,7 @@ and `err`. The latter mirrors the strict propagation rule. -/
 theorem not_not (d : Datum) : evalNot (evalNot d) = d := by
   cases d with
   | bool b => cases b <;> rfl
+  | int _  => rfl
   | null   => rfl
   | err _  => rfl
 

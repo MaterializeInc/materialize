@@ -25,32 +25,47 @@ namespace Mz
 /-! ## Binary and ternary boolean evaluators -/
 
 /-- AND evaluation table. Pattern order encodes the absorption
-hierarchy `FALSE > ERROR > NULL > TRUE`. -/
+hierarchy `FALSE > ERROR > NULL > TRUE`. Non-boolean operands
+(`.int _`) are preserved when paired with the identity element
+`.bool true` (or another `.int`), so the algebraic laws
+`evalAnd_true_left/right` and `evalAnd_idem` hold universally.
+SQL would reject `.int` in `AND` at type-check time; the
+skeleton's semantics is a coherent total extension. -/
 def evalAnd : Datum → Datum → Datum
-  | .bool false, _ => .bool false
-  | _, .bool false => .bool false
-  | .err e, _      => .err e
-  | _, .err e      => .err e
-  | .null, _       => .null
-  | _, .null       => .null
+  | .bool false, _         => .bool false
+  | _, .bool false         => .bool false
+  | .err e, _              => .err e
+  | _, .err e              => .err e
+  | .null, _               => .null
+  | _, .null               => .null
   | .bool true, .bool true => .bool true
+  | .bool true, .int n     => .int n
+  | .int n, .bool true     => .int n
+  | .int n, .int m         => if n = m then .int n else .null
 
 /-- OR evaluation table. Mirror of `evalAnd` with `TRUE` as the
-dominant absorber: `TRUE > ERROR > NULL > FALSE`. -/
+dominant absorber: `TRUE > ERROR > NULL > FALSE`. Identity on
+`.int` operands paired with the identity element `.bool false`. -/
 def evalOr : Datum → Datum → Datum
-  | .bool true, _ => .bool true
-  | _, .bool true => .bool true
-  | .err e, _     => .err e
-  | _, .err e     => .err e
-  | .null, _      => .null
-  | _, .null      => .null
+  | .bool true, _            => .bool true
+  | _, .bool true            => .bool true
+  | .err e, _                => .err e
+  | _, .err e                => .err e
+  | .null, _                 => .null
+  | _, .null                 => .null
   | .bool false, .bool false => .bool false
+  | .bool false, .int n      => .int n
+  | .int n, .bool false      => .int n
+  | .int n, .int m           => if n = m then .int n else .null
 
-/-- NOT evaluation table. Strict on `null` and `err`. -/
+/-- NOT evaluation table. Strict on `null` and `err`. Numeric
+operands pass through unchanged so that `evalNot` stays
+involutive on `.int` even though SQL would type-reject it. -/
 def evalNot : Datum → Datum
   | .bool b => .bool (!b)
   | .null   => .null
   | .err e  => .err e
+  | .int n  => .int n
 
 /-- `IfThen` evaluation table. Modeled strictly; see `Mz/Eval.lean`
 for the discussion of lazy vs strict in a total skeleton. -/
@@ -59,6 +74,7 @@ def evalIfThen : Datum → Datum → Datum → Datum
   | .bool false, _,  de => de
   | .null,       _,  _  => .null
   | .err e,      _,  _  => .err e
+  | _,           _,  _  => .null
 
 /-! ## Environment -/
 
@@ -106,6 +122,7 @@ def Coalesce.go (seenNull : Bool) (firstErr : Option EvalError) :
       | some e => .err e
       | none   => .null
   | .bool b :: _    => .bool b
+  | .int n  :: _    => .int n
   | .null   :: rest => Coalesce.go true firstErr rest
   | .err e  :: rest =>
     match firstErr with

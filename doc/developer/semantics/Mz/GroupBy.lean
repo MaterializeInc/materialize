@@ -165,11 +165,19 @@ private theorem Datum.groupKeyEq_eq_decide_of_no_err
     cases b with
     | err _ => exact absurd (show Datum.IsErr (Datum.err _) from trivial) hB
     | bool _ => rfl
+    | int  _ => rfl
+    | null   => rfl
+  | int _ =>
+    cases b with
+    | err _ => exact absurd (show Datum.IsErr (Datum.err _) from trivial) hB
+    | bool _ => rfl
+    | int  _ => rfl
     | null   => rfl
   | null =>
     cases b with
     | err _ => exact absurd (show Datum.IsErr (Datum.err _) from trivial) hB
     | bool _ => rfl
+    | int  _ => rfl
     | null   => rfl
 
 /-- Inserting the same non-err key into a group list whose keys

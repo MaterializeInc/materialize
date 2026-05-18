@@ -15,26 +15,25 @@ The Rust counterpart lives in `src/repr/src/row.rs` (`Datum`) and
 
 namespace Mz
 
-/-- Opaque payload for cell-scoped errors.
-
-The skeleton does not enumerate the variants of the Rust
-`EvalError`. A single placeholder constructor keeps the type
-inhabited so that proofs that need a concrete value can supply one,
-without committing to a wire format. Later refinements will replace
-this with the real variant set. -/
+/-- Cell-scoped errors raised by `Datum`-level operations. The
+skeleton's variants are intentionally small; production
+`EvalError` (in `src/expr/src/scalar.rs`) has many more. -/
 inductive EvalError
   | placeholder
+  | divisionByZero
   deriving DecidableEq, Inhabited
 
 /-- A modeled scalar value.
 
-`bool b` is a boolean literal; `null` is the SQL `NULL` value; `err e`
-is the proposed cell-scoped error variant whose payload is the
-`EvalError` raised at the cell. -/
+`bool b` is a boolean literal; `int n` is an integer literal
+(skeleton models `Int`, not the full SQL numeric tower); `null`
+is the SQL `NULL` value; `err e` is the cell-scoped error
+variant whose payload is the `EvalError` raised at the cell. -/
 inductive Datum
   | bool (b : Bool)
+  | int  (n : Int)
   | null
-  | err (e : EvalError)
+  | err  (e : EvalError)
   deriving DecidableEq, Inhabited
 
 /-- Propositional predicate "this datum is an error".

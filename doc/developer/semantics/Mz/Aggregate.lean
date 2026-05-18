@@ -27,6 +27,7 @@ namespace Mz
 def aggCountNonNull : List Datum → Nat
   | []              => 0
   | .bool _ :: rest => 1 + aggCountNonNull rest
+  | .int  _ :: rest => 1 + aggCountNonNull rest
   | .null   :: rest => aggCountNonNull rest
   | .err _  :: rest => aggCountNonNull rest
 
@@ -39,6 +40,11 @@ def aggStrict (f : Datum → Datum → Datum) : List Datum → Datum
   | .err e   :: _       => .err e
   | .null    :: rest    => aggStrict f rest
   | x@(.bool _) :: rest =>
+    match aggStrict f rest with
+    | .err e => .err e
+    | .null  => x
+    | r      => f x r
+  | x@(.int _) :: rest =>
     match aggStrict f rest with
     | .err e => .err e
     | .null  => x
@@ -81,6 +87,24 @@ theorem aggStrict_err :
         rw [h_eval]; trivial
       | null   => rw [h_eval] at h_rest; exact h_rest.elim
       | bool _ => rw [h_eval] at h_rest; exact h_rest.elim
+      | int _  => rw [h_eval] at h_rest; exact h_rest.elim
+  | Datum.int n :: rest, f, h => by
+    obtain ⟨d, hmem, hsafe⟩ := h
+    cases hmem with
+    | head _    => exact hsafe.elim
+    | tail _ h' =>
+      have h_rest : (aggStrict f rest).IsErr :=
+        aggStrict_err f ⟨d, h', hsafe⟩
+      cases h_eval : aggStrict f rest with
+      | err e' =>
+        show (match aggStrict f rest with
+              | Datum.err e => Datum.err e
+              | Datum.null  => Datum.int n
+              | r           => f (Datum.int n) r).IsErr
+        rw [h_eval]; trivial
+      | null   => rw [h_eval] at h_rest; exact h_rest.elim
+      | bool _ => rw [h_eval] at h_rest; exact h_rest.elim
+      | int _  => rw [h_eval] at h_rest; exact h_rest.elim
 
 /-- Dual: if no input is an `err`, the aggregate result is not an
 `err`. The reducer `f` is assumed to preserve "no-err": applied to
@@ -118,6 +142,48 @@ theorem aggStrict_no_err
              | Datum.err e => Datum.err e
              | Datum.null  => Datum.bool b
              | r           => f (Datum.bool b) r).IsErr
+      rw [h_eval]
+      apply f_safe
+      · exact hb
+      · intro h_eq; cases h_eq
+    | int _ =>
+      show ¬(match aggStrict f rest with
+             | Datum.err e => Datum.err e
+             | Datum.null  => Datum.bool b
+             | r           => f (Datum.bool b) r).IsErr
+      rw [h_eval]
+      apply f_safe
+      · exact hb
+      · intro h_eq; cases h_eq
+  | Datum.int n :: rest, h => by
+    have h_rest : ¬(aggStrict f rest).IsErr := by
+      apply aggStrict_no_err f f_safe
+      intro d hmem; exact h d (List.Mem.tail _ hmem)
+    have hb : ¬(Datum.int n).IsErr := h _ (List.Mem.head _)
+    cases h_eval : aggStrict f rest with
+    | err e =>
+      rw [h_eval] at h_rest
+      exact absurd trivial h_rest
+    | null   =>
+      show ¬(match aggStrict f rest with
+             | Datum.err e => Datum.err e
+             | Datum.null  => Datum.int n
+             | r           => f (Datum.int n) r).IsErr
+      rw [h_eval]; exact hb
+    | bool _ =>
+      show ¬(match aggStrict f rest with
+             | Datum.err e => Datum.err e
+             | Datum.null  => Datum.int n
+             | r           => f (Datum.int n) r).IsErr
+      rw [h_eval]
+      apply f_safe
+      · exact hb
+      · intro h_eq; cases h_eq
+    | int _ =>
+      show ¬(match aggStrict f rest with
+             | Datum.err e => Datum.err e
+             | Datum.null  => Datum.int n
+             | r           => f (Datum.int n) r).IsErr
       rw [h_eval]
       apply f_safe
       · exact hb
@@ -164,5 +230,6 @@ theorem aggTry_eq_aggStrict_of_no_err
   | err _  => exact absurd (h_eval ▸ h_safe) (fun h' => h' trivial)
   | null   => rfl
   | bool _ => rfl
+  | int _  => rfl
 
 end Mz

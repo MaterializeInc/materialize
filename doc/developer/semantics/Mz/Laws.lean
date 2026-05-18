@@ -40,24 +40,28 @@ variadic fold in `Mz/Variadic.lean`. -/
 theorem evalAnd_true_left (d : Datum) : evalAnd (.bool true) d = d := by
   cases d with
   | bool b => cases b <;> rfl
+  | int  _ => rfl
   | null   => rfl
   | err _  => rfl
 
 theorem evalAnd_true_right (d : Datum) : evalAnd d (.bool true) = d := by
   cases d with
   | bool b => cases b <;> rfl
+  | int  _ => rfl
   | null   => rfl
   | err _  => rfl
 
 theorem evalOr_false_left (d : Datum) : evalOr (.bool false) d = d := by
   cases d with
   | bool b => cases b <;> rfl
+  | int  _ => rfl
   | null   => rfl
   | err _  => rfl
 
 theorem evalOr_false_right (d : Datum) : evalOr d (.bool false) = d := by
   cases d with
   | bool b => cases b <;> rfl
+  | int  _ => rfl
   | null   => rfl
   | err _  => rfl
 
@@ -66,12 +70,16 @@ theorem evalOr_false_right (d : Datum) : evalOr d (.bool false) = d := by
 theorem evalAnd_idem (d : Datum) : evalAnd d d = d := by
   cases d with
   | bool b => cases b <;> rfl
+  | int  n => show (if n = n then Datum.int n else Datum.null) = .int n
+              rw [if_pos rfl]
   | null   => rfl
   | err _  => rfl
 
 theorem evalOr_idem (d : Datum) : evalOr d d = d := by
   cases d with
   | bool b => cases b <;> rfl
+  | int  n => show (if n = n then Datum.int n else Datum.null) = .int n
+              rw [if_pos rfl]
   | null   => rfl
   | err _  => rfl
 
@@ -91,11 +99,25 @@ theorem evalAnd_comm_of_no_err
   | bool b₁ =>
     cases d₂ with
     | bool b₂ => cases b₁ <;> cases b₂ <;> rfl
+    | int  _  => cases b₁ <;> rfl
     | null    => cases b₁ <;> rfl
+    | err _   => exact (h₂ trivial).elim
+  | int n =>
+    cases d₂ with
+    | bool b₂ => cases b₂ <;> rfl
+    | int  m  =>
+      by_cases h : n = m
+      · subst h; rfl
+      · have h' : ¬m = n := fun h_eq => h h_eq.symm
+        show (if n = m then Datum.int n else Datum.null)
+            = (if m = n then Datum.int m else Datum.null)
+        rw [if_neg h, if_neg h']
+    | null    => rfl
     | err _   => exact (h₂ trivial).elim
   | null =>
     cases d₂ with
     | bool b₂ => cases b₂ <;> rfl
+    | int  _  => rfl
     | null    => rfl
     | err _   => exact (h₂ trivial).elim
   | err _ => exact (h₁ trivial).elim
@@ -107,11 +129,25 @@ theorem evalOr_comm_of_no_err
   | bool b₁ =>
     cases d₂ with
     | bool b₂ => cases b₁ <;> cases b₂ <;> rfl
+    | int  _  => cases b₁ <;> rfl
     | null    => cases b₁ <;> rfl
+    | err _   => exact (h₂ trivial).elim
+  | int n =>
+    cases d₂ with
+    | bool b₂ => cases b₂ <;> rfl
+    | int  m  =>
+      by_cases h : n = m
+      · subst h; rfl
+      · have h' : ¬m = n := fun h_eq => h h_eq.symm
+        show (if n = m then Datum.int n else Datum.null)
+            = (if m = n then Datum.int m else Datum.null)
+        rw [if_neg h, if_neg h']
+    | null    => rfl
     | err _   => exact (h₂ trivial).elim
   | null =>
     cases d₂ with
     | bool b₂ => cases b₂ <;> rfl
+    | int  _  => rfl
     | null    => rfl
     | err _   => exact (h₂ trivial).elim
   | err _ => exact (h₁ trivial).elim
