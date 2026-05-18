@@ -205,6 +205,14 @@ CLUSTER_OBJECT_LIMITS_LAG_CAP_MS = 10 * CLUSTER_OBJECT_LIMITS_LAG_THRESHOLD_MS
 # cluster trips the steady-state lag check below instead of timing out
 # here.
 CLUSTER_OBJECT_LIMITS_HYDRATION_TIMEOUT_S = 60
+# Longer timeout applied only to the very first probe after each
+# ``CREATE CLUSTER c``. Big replicas (1600cc/3200cc multi-process on
+# staging) need more time to come up and start serving introspection than
+# small ones, and a too-tight first-probe budget produces false "cluster
+# only handles ~100 objects" cliffs that disappear on every subsequent
+# bisect step. After the first probe the replica is warm and the regular
+# timeout is plenty.
+CLUSTER_OBJECT_LIMITS_FIRST_PROBE_HYDRATION_TIMEOUT_S = 180
 # Steady-state sampling window after hydration: take this many samples spaced
 # CLUSTER_OBJECT_LIMITS_SAMPLE_INTERVAL_S apart and use the max as the
 # representative lag.
@@ -3801,6 +3809,7 @@ def run_scenario_cluster_object_limits(
     sizes: list[int],
     lag_threshold_ms: int = CLUSTER_OBJECT_LIMITS_LAG_THRESHOLD_MS,
     hydration_timeout_s: int = CLUSTER_OBJECT_LIMITS_HYDRATION_TIMEOUT_S,
+    first_probe_hydration_timeout_s: int = CLUSTER_OBJECT_LIMITS_FIRST_PROBE_HYDRATION_TIMEOUT_S,
     samples: int = CLUSTER_OBJECT_LIMITS_SAMPLES,
     sample_interval_s: float = CLUSTER_OBJECT_LIMITS_SAMPLE_INTERVAL_S,
     bisect_steps: int = CLUSTER_OBJECT_LIMITS_BISECT_STEPS,
@@ -3820,7 +3829,7 @@ def run_scenario_cluster_object_limits(
     """
 
     def hydrate_and_sample(
-        runner: ScenarioRunner, target_n: int
+        runner: ScenarioRunner, target_n: int, timeout_s: int
     ) -> tuple[float, bool, int, int]:
         """
         Two-phase probe: wait for all N materializations to hydrate, then
@@ -3828,8 +3837,10 @@ def run_scenario_cluster_object_limits(
 
         Phase 1 polls `mz_internal.mz_hydration_statuses` until every test
         object on `c` reports ``hydrated=true``. If that doesn't happen
-        within ``hydration_timeout_s`` the cluster is wedged (replica never
-        finished initial snapshotting) and we return unhealthy.
+        within ``timeout_s`` the cluster is wedged (replica never finished
+        initial snapshotting) and we return unhealthy. ``timeout_s`` is
+        passed in per-call so the first probe after `CREATE CLUSTER` can
+        use a more generous budget than steady-state probes.
 
         Phase 2 takes ``samples`` lag samples spaced by
         ``sample_interval_s`` and returns their max. Unhealthy iff any
@@ -3849,7 +3860,7 @@ def run_scenario_cluster_object_limits(
         runner.run_query(f"SET cluster = '{scenario.PROBE_CLUSTER}'")
         try:
             # Phase 1: wait for all N objects to be hydrated.
-            deadline = time.time() + hydration_timeout_s
+            deadline = time.time() + timeout_s
             last_total = 0
             last_hydrated = 0
             while time.time() < deadline:
@@ -3864,7 +3875,7 @@ def run_scenario_cluster_object_limits(
                 _, reporting, max_lag_ms = scenario.probe_lag_ms(runner)
                 print(
                     f"    hydration timeout: {last_hydrated}/{target_n} "
-                    f"hydrated after {hydration_timeout_s}s"
+                    f"hydrated after {timeout_s}s"
                 )
                 return max_lag_ms, False, reporting, last_total
 
@@ -3923,9 +3934,16 @@ def run_scenario_cluster_object_limits(
         # Reset the base table and pad schema for this cluster-size iteration.
         scenario.reset_for_cluster_size(runner)
 
-        def probe_and_record(n: int, refinement: bool = False) -> bool:
+        def probe_and_record(
+            n: int, refinement: bool = False, first_probe: bool = False
+        ) -> bool:
             runner.scale = n
-            max_lag_ms, healthy, reporting, total = hydrate_and_sample(runner, n)
+            timeout_s = (
+                first_probe_hydration_timeout_s if first_probe else hydration_timeout_s
+            )
+            max_lag_ms, healthy, reporting, total = hydrate_and_sample(
+                runner, n, timeout_s
+            )
             # A fully stalled materialization can report `local_lag` as
             # `now() - <minimum timestamp>`, i.e. the current unix time in
             # ms (~1.78e12). Cap the recorded value so the cliff doesn't
@@ -3961,7 +3979,7 @@ def run_scenario_cluster_object_limits(
             # Coarse pass: walk the N list, stop at the first unhealthy point.
             last_healthy_n = 0
             first_unhealthy_n: int | None = None
-            for n in sizes:
+            for i, n in enumerate(sizes):
                 print(
                     f"--- cluster_object_limits {scenario.name()}: "
                     f"size '{replica_size}', building up to N={n}"
@@ -3971,7 +3989,10 @@ def run_scenario_cluster_object_limits(
                     f"--- cluster_object_limits {scenario.name()}: "
                     f"size '{replica_size}', probing freshness at N={n}"
                 )
-                if probe_and_record(n):
+                # Only the very first probe after `_recreate_cluster_c` gets
+                # the generous cold-start budget; by the time we walk to
+                # larger N or bisect, the replica is warm.
+                if probe_and_record(n, first_probe=(i == 0)):
                     last_healthy_n = n
                 else:
                     first_unhealthy_n = n
