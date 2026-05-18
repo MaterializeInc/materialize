@@ -1179,7 +1179,7 @@ impl<D: Data> Chunk<D> {
 
 /// Builder that produces a stream of fixed-size [`Chunk`]s.
 ///
-/// Updates are pushed into an in-progress [`TripleContainer`]; once its serialized size is
+/// Updates are pushed into an in-progress columnar container; once its serialized size is
 /// within 10 % of the next 2 MiB boundary, the contents are encoded into a single aligned
 /// `Vec<u64>` (a [`ChunkData::Align`]) and the in-progress container is cleared for reuse.
 /// The 10 %/2 MiB heuristic matches `mz_timely_util::columnar::builder::ColumnBuilder`, so
