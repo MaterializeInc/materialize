@@ -497,7 +497,17 @@ class ScenarioRunner:
         return None
 
 
-class Scenario(ABC):
+class ClusterScalingScenario(ABC):
+    """Base for scenarios driven by the strong/weak/envd_qps families.
+
+    These scenarios share a four-step lifecycle: `drop()` cleans up state from
+    a prior run, `setup()` creates load-generator clusters / sources / tables,
+    `materialize_views()` lists persist objects to hydrate, and `run()`
+    performs the measurements. The drivers (`run_scenario_strong`,
+    `run_scenario_weak`, `run_scenario_envd_strong_scaling`) wrap this with a
+    cluster-size loop.
+    """
+
     # Bump this version in the individual test if it changes in a way that
     # makes comparing results between versions useless.
     VERSION: str = "1.0.0"
@@ -510,28 +520,20 @@ class Scenario(ABC):
     def name(self) -> str: ...
 
     @abstractmethod
-    def setup(self) -> list[str]:
-        """
-        Prepare the scenario by setting up resources like clusters, sources, and
-        load generators.
-        """
-        ...
+    def setup(self) -> list[str]: ...
 
-    @abstractmethod
-    def drop(self) -> list[str]: ...
+    def drop(self) -> list[str]:
+        return []
 
-    @abstractmethod
     def materialize_views(self) -> list[str]:
-        """
-        Returns names of the persist objects that setup initializes.
-        """
-        ...
+        """Returns names of the persist objects that setup initializes."""
+        return []
 
     @abstractmethod
     def run(self, runner: ScenarioRunner) -> None: ...
 
 
-class TpchScenario(Scenario):
+class TpchScenario(ClusterScalingScenario):
 
     def name(self) -> str:
         return "tpch"
@@ -607,7 +609,7 @@ class TpchScenario(Scenario):
         )
 
 
-class TpchScenarioMV(Scenario):
+class TpchScenarioMV(ClusterScalingScenario):
 
     def name(self) -> str:
         return "tpch_mv"
@@ -701,7 +703,7 @@ class TpchScenarioMV(Scenario):
         )
 
 
-class TpchScenarioQueriesIndexedInputs(Scenario):
+class TpchScenarioQueriesIndexedInputs(ClusterScalingScenario):
 
     def name(self) -> str:
         return "tpch_queries_indexed_inputs"
@@ -1525,7 +1527,7 @@ class TpchScenarioQueriesIndexedInputs(Scenario):
             )
 
 
-class AuctionScenario(Scenario):
+class AuctionScenario(ClusterScalingScenario):
     def name(self) -> str:
         return "auction"
 
@@ -1943,18 +1945,12 @@ class AuctionScenario(Scenario):
         )
 
 
-class QpsEnvdStrongScalingScenario(Scenario):
+class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
 
     def name(self) -> str:
         return SCENARIO_QPS_ENVD_STRONG_SCALING
 
-    def materialize_views(self) -> list[str]:
-        return []
-
     def setup(self) -> list[str]:
-        return []
-
-    def drop(self) -> list[str]:
         return []
 
     def run(self, runner: ScenarioRunner) -> None:
@@ -2009,7 +2005,7 @@ class QpsEnvdStrongScalingScenario(Scenario):
         # We'll also want to measure latency, including tail latency.
 
 
-class CopyFromStdinEnvdStrongScalingScenario(Scenario):
+class CopyFromStdinEnvdStrongScalingScenario(ClusterScalingScenario):
     """Measure COPY FROM STDIN throughput as envd CPU count scales.
 
     Uses psycopg's COPY protocol to send pre-generated tab-delimited data,
@@ -2027,13 +2023,7 @@ class CopyFromStdinEnvdStrongScalingScenario(Scenario):
     def name(self) -> str:
         return SCENARIO_COPY_FROM_STDIN_ENVD_STRONG_SCALING
 
-    def materialize_views(self) -> list[str]:
-        return []
-
     def setup(self) -> list[str]:
-        return []
-
-    def drop(self) -> list[str]:
         return []
 
     # Avoid Python from going OoM
@@ -2084,15 +2074,9 @@ class CopyFromStdinEnvdStrongScalingScenario(Scenario):
             runner.connection.retryable(inner)
 
 
-class SourceIngestionScenario(Scenario):
+class SourceIngestionScenario(ClusterScalingScenario):
     def name(self) -> str:
         return "source_ingestion"
-
-    def materialize_views(self) -> list[str]:
-        return []
-
-    def drop(self) -> list[str]:
-        return []
 
     def setup(self) -> list[str]:
         # External setup was done once:
@@ -2238,14 +2222,15 @@ class SourceIngestionScenario(Scenario):
         )
 
 
-class EnvdObjectsScalabilityScenario(Scenario):
+class EnvdObjectsScalabilityScenario(ABC):
     """
-    Base class for envd_objects_scalability scenarios. These vary the number of catalog
-    objects and measure adapter/envd latency for a DDL and a simple peek.
+    Base class for envd_objects_scalability scenarios. These vary the number
+    of catalog objects and measure adapter/envd latency for a DDL and a
+    simple peek.
 
     The scale point (number of catalog objects, N) is driven externally by
-    `run_scenario_envd_objects_scalability`. The same `runner` is reused across all N,
-    with `runner.scale` updated per step so that result rows carry N.
+    `run_scenario_envd_objects_scalability` via init/add_objects/teardown;
+    `runner.scale` is updated per step so that result rows carry N.
     """
 
     VERSION: str = "1.0.0"
@@ -2253,30 +2238,18 @@ class EnvdObjectsScalabilityScenario(Scenario):
 
     PAD_SCHEMA: str = "pad_schema"
 
-    def __init__(self, replica_size: str | None) -> None:
-        super().__init__(scale=0, replica_size=replica_size)
+    def __init__(self) -> None:
         self._current_n = 0
 
-    def name(self) -> str:
-        raise NotImplementedError
-
-    def materialize_views(self) -> list[str]:
-        return []
-
-    # Framework-level `setup()` / `drop()` are unused; lifecycle is driven
-    # by `run_scenario_envd_objects_scalability` via init/add_objects/teardown.
-    def setup(self) -> list[str]:
-        return []
-
-    def drop(self) -> list[str]:
-        return []
+    @abstractmethod
+    def name(self) -> str: ...
 
     def init(self, runner: ScenarioRunner) -> None:
         runner.run_query(f"DROP SCHEMA IF EXISTS {self.PAD_SCHEMA} CASCADE")
         runner.run_query(f"CREATE SCHEMA {self.PAD_SCHEMA}")
 
-    def add_objects(self, runner: ScenarioRunner, target_n: int) -> None:
-        raise NotImplementedError
+    @abstractmethod
+    def add_objects(self, runner: ScenarioRunner, target_n: int) -> None: ...
 
     def teardown(self, runner: ScenarioRunner) -> None:
         _best_effort_drop(
@@ -2463,8 +2436,8 @@ class EnvdObjectsScalabilityMvsScenario(EnvdObjectsScalabilityScenario):
     MVS_PER_CLUSTER: int = ENVD_OBJECTS_SCALABILITY_MVS_PER_CLUSTER
     BASE_TABLE: str = "base_t"
 
-    def __init__(self, replica_size: str | None, pad_replica_size: str) -> None:
-        super().__init__(replica_size)
+    def __init__(self, pad_replica_size: str) -> None:
+        super().__init__()
         self._pad_replica_size = pad_replica_size
         self._pad_clusters_created = 0
 
@@ -2605,7 +2578,7 @@ CLUSTER_OBJECT_LIMITS_MVS_KIND = ClusterObjectLimitsKind(
 )
 
 
-class ClusterObjectLimitsScenario(Scenario):
+class ClusterObjectLimitsScenario:
     """
     Scenario for cluster_object_limits. Finds the maximum number of idle
     materializations (indexes or materialized views, picked via ``kind``)
@@ -2619,11 +2592,11 @@ class ClusterObjectLimitsScenario(Scenario):
       - N structurally-distinct materializations on the measurement cluster
         ``c``, all derived from ``base_t``. The exact materialization type
         (indexed view vs MV) and the lag-query join are carried by ``kind``.
-      - Per cluster-size iteration we drop+recreate ``c`` and ``PAD_SCHEMA``
-        and then walk an N-list, adding the delta of objects at each step and
-        probing freshness via ``mz_internal.mz_materialization_lag``.
-
-    Driven by ``run_scenario_cluster_object_limits``.
+      - Per cluster-size iteration we drop+recreate ``c`` and ``PAD_SCHEMA``,
+        then walk an N-list, adding the delta of objects at each step and
+        probing freshness via ``mz_internal.mz_materialization_lag``. On the
+        first unhealthy probe we stop the walk and bisect the
+        (last_healthy, first_unhealthy] interval to narrow the cliff.
     """
 
     VERSION: str = "1.0.0"
@@ -2634,26 +2607,12 @@ class ClusterObjectLimitsScenario(Scenario):
     # cluster, so the probe does not add load to `c`.
     PROBE_CLUSTER: str = "mz_catalog_server"
 
-    def __init__(
-        self, kind: ClusterObjectLimitsKind, replica_size: str | None = None
-    ) -> None:
-        super().__init__(scale=0, replica_size=replica_size)
+    def __init__(self, kind: ClusterObjectLimitsKind) -> None:
         self._kind = kind
         self._current_n = 0
 
     def name(self) -> str:
         return self._kind.scenario_name
-
-    # Framework-level `setup()` / `drop()` are unused; lifecycle is driven
-    # by `run_scenario_cluster_object_limits`.
-    def setup(self) -> list[str]:
-        return []
-
-    def drop(self) -> list[str]:
-        return []
-
-    def materialize_views(self) -> list[str]:
-        return []
 
     def reset_for_cluster_size(self, runner: ScenarioRunner) -> None:
         """Drop+recreate the pad schema and the one-row base table.
@@ -2762,10 +2721,209 @@ class ClusterObjectLimitsScenario(Scenario):
         )
         _best_effort_drop(runner, "DROP CLUSTER IF EXISTS c CASCADE", "cluster c")
 
-    def run(self, runner: ScenarioRunner) -> None:
-        # The freshness probe is driven externally by
-        # `run_scenario_cluster_object_limits`; nothing else to measure here.
-        return
+    def _hydrate_and_sample(
+        self,
+        runner: ScenarioRunner,
+        target_n: int,
+        timeout_s: int,
+        samples: int,
+        sample_interval_s: float,
+        lag_threshold_ms: int,
+    ) -> tuple[float, bool, int, int]:
+        """
+        Two-phase probe: wait for hydration, then take steady-state lag
+        samples. Returns (max_lag_ms, healthy, reporting, total).
+
+        Splitting the two phases keeps unhealthy probes fast: an overloaded
+        cluster typically still hydrates quickly, then trips the lag
+        threshold in Phase 2 within `samples * sample_interval_s`. A
+        combined predicate would burn the full hydration_timeout on every
+        unhealthy probe.
+
+        Probes run on the catalog-server cluster so they don't load `c`;
+        the SET is lifted out of the per-probe loop and restored on exit.
+        """
+        runner.run_query(f"SET cluster = '{self.PROBE_CLUSTER}'")
+        try:
+            # Phase 1: wait for all N objects to be hydrated.
+            deadline = time.time() + timeout_s
+            last_total = 0
+            last_hydrated = 0
+            while time.time() < deadline:
+                total, hydrated = self.probe_hydrated(runner)
+                last_total, last_hydrated = total, hydrated
+                if hydrated >= target_n:
+                    break
+                time.sleep(1.0)
+            else:
+                # Hydration didn't complete. Probe lag once for diagnostics
+                # so the CSV still carries a meaningful value.
+                _, reporting, max_lag_ms = self.probe_lag_ms(runner)
+                print(
+                    f"    hydration timeout: {last_hydrated}/{target_n} "
+                    f"hydrated after {timeout_s}s"
+                )
+                return max_lag_ms, False, reporting, last_total
+
+            # Phase 2: steady-state lag sampling.
+            max_lag_over_samples = 0.0
+            worst_reporting = target_n
+            last_total = 0
+            for _ in range(samples):
+                time.sleep(sample_interval_s)
+                total, reporting, max_lag_ms = self.probe_lag_ms(runner)
+                last_total = total
+                worst_reporting = min(worst_reporting, reporting)
+                max_lag_over_samples = max(max_lag_over_samples, max_lag_ms)
+            healthy = (
+                worst_reporting == target_n and max_lag_over_samples < lag_threshold_ms
+            )
+            return max_lag_over_samples, healthy, worst_reporting, last_total
+        finally:
+            runner.run_query("SET cluster = 'c'")
+
+    def _probe_and_record(
+        self,
+        runner: ScenarioRunner,
+        n: int,
+        replica_size: str,
+        lag_threshold_ms: int,
+        hydration_timeout_s: int,
+        first_probe_hydration_timeout_s: int,
+        samples: int,
+        sample_interval_s: float,
+        first_probe: bool = False,
+        refinement: bool = False,
+    ) -> bool:
+        runner.scale = n
+        timeout_s = (
+            first_probe_hydration_timeout_s if first_probe else hydration_timeout_s
+        )
+        max_lag_ms, healthy, reporting, total = self._hydrate_and_sample(
+            runner, n, timeout_s, samples, sample_interval_s, lag_threshold_ms
+        )
+        # A fully stalled materialization can report `local_lag` as
+        # `now() - <minimum timestamp>`, i.e. the current unix time in ms
+        # (~1.78e12). Cap the recorded value so the cliff doesn't crush
+        # every other data point on the plot. The `healthy` column carries
+        # the underlying truth, and the analysis labels the plot to make
+        # the cap explicit.
+        capped_lag_ms = min(max_lag_ms, CLUSTER_OBJECT_LIMITS_LAG_CAP_MS)
+        print(
+            f"    {'(bisect) ' if refinement else ''}"
+            f"N={n}: max_local_lag_ms={max_lag_ms:.1f} "
+            f"reporting={reporting}/{total} healthy={healthy}"
+        )
+        runner.results_writer.writerow(
+            {
+                "scenario": self.name(),
+                "scenario_version": self.VERSION,
+                "scale": n,
+                "mode": "cluster_object_limits",
+                "category": "freshness",
+                "test_name": "max_local_lag_ms",
+                "cluster_size": replica_size,
+                "envd_cpus": None,
+                "repetition": 0,
+                "size_bytes": None,
+                "time_ms": int(capped_lag_ms),
+                "qps": None,
+                "healthy": 1 if healthy else 0,
+            }
+        )
+        return healthy
+
+    def run_for_cluster_size(
+        self,
+        runner: ScenarioRunner,
+        sizes: list[int],
+        replica_size: str,
+        lag_threshold_ms: int = CLUSTER_OBJECT_LIMITS_LAG_THRESHOLD_MS,
+        hydration_timeout_s: int = CLUSTER_OBJECT_LIMITS_HYDRATION_TIMEOUT_S,
+        first_probe_hydration_timeout_s: int = CLUSTER_OBJECT_LIMITS_FIRST_PROBE_HYDRATION_TIMEOUT_S,
+        samples: int = CLUSTER_OBJECT_LIMITS_SAMPLES,
+        sample_interval_s: float = CLUSTER_OBJECT_LIMITS_SAMPLE_INTERVAL_S,
+        bisect_steps: int = CLUSTER_OBJECT_LIMITS_BISECT_STEPS,
+    ) -> None:
+        """Walk the N-list and bisect the cliff for one cluster size.
+
+        Stops walking on the first unhealthy point (still recorded so the
+        cliff is visible). If `bisect_steps > 0` and a cliff was found,
+        bisect (last_healthy, first_unhealthy] that many times, adding or
+        dropping objects in place.
+
+        The caller is responsible for (re)creating cluster `c` at
+        `replica_size` and calling `reset_for_cluster_size` before this
+        method, and `teardown` after.
+        """
+
+        def probe(
+            n: int, *, first_probe: bool = False, refinement: bool = False
+        ) -> bool:
+            return self._probe_and_record(
+                runner,
+                n,
+                replica_size,
+                lag_threshold_ms,
+                hydration_timeout_s,
+                first_probe_hydration_timeout_s,
+                samples,
+                sample_interval_s,
+                first_probe=first_probe,
+                refinement=refinement,
+            )
+
+        # Coarse pass: walk the N list, stop at the first unhealthy point.
+        last_healthy_n = 0
+        first_unhealthy_n: int | None = None
+        for i, n in enumerate(sizes):
+            print(
+                f"--- cluster_object_limits {self.name()}: "
+                f"size '{replica_size}', building up to N={n}"
+            )
+            self.add_objects(runner, n)
+            print(
+                f"--- cluster_object_limits {self.name()}: "
+                f"size '{replica_size}', probing freshness at N={n}"
+            )
+            # Only the very first probe after `_recreate_cluster_c` gets
+            # the generous cold-start budget; by the time we walk to
+            # larger N or bisect, the replica is warm.
+            if probe(n, first_probe=(i == 0)):
+                last_healthy_n = n
+            else:
+                first_unhealthy_n = n
+                print(
+                    f"    N={n}: unhealthy, stopping N-walk for size "
+                    f"'{replica_size}'"
+                )
+                break
+
+        # Refinement pass: bisect (last_healthy, first_unhealthy] to narrow
+        # the cliff. Each step adds or drops objects in place.
+        if first_unhealthy_n is not None and bisect_steps > 0:
+            lo, hi = last_healthy_n, first_unhealthy_n
+            for step in range(bisect_steps):
+                mid = (lo + hi) // 2
+                if mid <= lo:
+                    # Interval already minimal (hi - lo <= 1).
+                    break
+                print(
+                    f"--- cluster_object_limits {self.name()}: "
+                    f"size '{replica_size}', bisect step "
+                    f"{step + 1}/{bisect_steps} at N={mid} "
+                    f"(cliff in ({lo}, {hi}])"
+                )
+                # Exactly one of these does work; the other is a no-op.
+                self.add_objects(runner, mid)
+                self.remove_objects(runner, mid)
+                if probe(mid, refinement=True):
+                    lo = mid
+                else:
+                    hi = mid
+            print(
+                f"    bisect done for size '{replica_size}': " f"cliff in ({lo}, {hi}]"
+            )
 
 
 # TODO: We should factor out the below
@@ -3356,7 +3514,7 @@ class DockerTarget(BenchTarget):
 
 
 def run_scenario_strong(
-    scenario: Scenario,
+    scenario: ClusterScalingScenario,
     results_writer: csv.DictWriter,
     connection: ConnectionHandler,
     target: BenchTarget,
@@ -3404,7 +3562,7 @@ def run_scenario_strong(
 
 
 def run_scenario_envd_strong_scaling(
-    scenario: Scenario,
+    scenario: ClusterScalingScenario,
     results_writer: csv.DictWriter,
     connection: ConnectionHandler,
     target: BenchTarget,
@@ -3545,82 +3703,15 @@ def run_scenario_cluster_object_limits(
     target: BenchTarget,
     max_scale: int,
     sizes: list[int],
-    lag_threshold_ms: int = CLUSTER_OBJECT_LIMITS_LAG_THRESHOLD_MS,
-    hydration_timeout_s: int = CLUSTER_OBJECT_LIMITS_HYDRATION_TIMEOUT_S,
-    first_probe_hydration_timeout_s: int = CLUSTER_OBJECT_LIMITS_FIRST_PROBE_HYDRATION_TIMEOUT_S,
-    samples: int = CLUSTER_OBJECT_LIMITS_SAMPLES,
-    sample_interval_s: float = CLUSTER_OBJECT_LIMITS_SAMPLE_INTERVAL_S,
     bisect_steps: int = CLUSTER_OBJECT_LIMITS_BISECT_STEPS,
 ) -> None:
     """
-    For each cluster size in REPLICA_SCALES (capped by `max_scale`), walk the
-    N-list `sizes`, adding objects incrementally and probing freshness via
-    `mz_internal.mz_materialization_lag`. Stops walking N for a given cluster
-    size on the first unhealthy data point (the unhealthy sample is still
-    recorded so the cliff is visible). Reports max-N-healthy implicitly via
-    the rows in the CSV.
-
-    If `bisect_steps > 0` and a cliff was located, bisect the
-    (last_healthy, first_unhealthy) interval that many times, probing each
-    midpoint to narrow the cliff. Each refinement step adds or drops objects
-    in place rather than rebuilding the catalog.
+    For each cluster size in REPLICA_SCALES (capped by `max_scale`),
+    (re)create cluster `c` at that size and call
+    `scenario.run_for_cluster_size` to walk/bisect the N-list. The per-size
+    walk-and-bisect logic, including the freshness probe and CSV recording,
+    lives on the scenario itself.
     """
-
-    def hydrate_and_sample(
-        runner: ScenarioRunner, target_n: int, timeout_s: int
-    ) -> tuple[float, bool, int, int]:
-        """
-        Two-phase probe: wait for hydration, then take steady-state lag
-        samples. Returns (max_lag_ms, healthy, reporting, total).
-
-        Splitting the two phases keeps unhealthy probes fast: an overloaded
-        cluster typically still hydrates quickly, then trips the lag
-        threshold in Phase 2 within `samples * sample_interval_s`. The
-        previous combined predicate burned the full hydration_timeout on
-        every unhealthy probe.
-
-        Probes run on the catalog-server cluster so they don't load `c`;
-        the SET is lifted out of the per-probe loop and restored on exit.
-        """
-        runner.run_query(f"SET cluster = '{scenario.PROBE_CLUSTER}'")
-        try:
-            # Phase 1: wait for all N objects to be hydrated.
-            deadline = time.time() + timeout_s
-            last_total = 0
-            last_hydrated = 0
-            while time.time() < deadline:
-                total, hydrated = scenario.probe_hydrated(runner)
-                last_total, last_hydrated = total, hydrated
-                if hydrated >= target_n:
-                    break
-                time.sleep(1.0)
-            else:
-                # Hydration didn't complete. Probe lag once for diagnostics
-                # so the CSV still carries a meaningful value.
-                _, reporting, max_lag_ms = scenario.probe_lag_ms(runner)
-                print(
-                    f"    hydration timeout: {last_hydrated}/{target_n} "
-                    f"hydrated after {timeout_s}s"
-                )
-                return max_lag_ms, False, reporting, last_total
-
-            # Phase 2: steady-state lag sampling.
-            max_lag_over_samples = 0.0
-            worst_reporting = target_n
-            last_total = 0
-            for _ in range(samples):
-                time.sleep(sample_interval_s)
-                total, reporting, max_lag_ms = scenario.probe_lag_ms(runner)
-                last_total = total
-                worst_reporting = min(worst_reporting, reporting)
-                max_lag_over_samples = max(max_lag_over_samples, max_lag_ms)
-            healthy = (
-                worst_reporting == target_n and max_lag_over_samples < lag_threshold_ms
-            )
-            return max_lag_over_samples, healthy, worst_reporting, last_total
-        finally:
-            runner.run_query("SET cluster = 'c'")
-
     cluster_scales = [s for s in REPLICA_SCALES if s <= max_scale]
 
     for replica_scale in cluster_scales:
@@ -3657,101 +3748,10 @@ def run_scenario_cluster_object_limits(
         # Reset the base table and pad schema for this cluster-size iteration.
         scenario.reset_for_cluster_size(runner)
 
-        def probe_and_record(
-            n: int, refinement: bool = False, first_probe: bool = False
-        ) -> bool:
-            runner.scale = n
-            timeout_s = (
-                first_probe_hydration_timeout_s if first_probe else hydration_timeout_s
-            )
-            max_lag_ms, healthy, reporting, total = hydrate_and_sample(
-                runner, n, timeout_s
-            )
-            # A fully stalled materialization can report `local_lag` as
-            # `now() - <minimum timestamp>`, i.e. the current unix time in
-            # ms (~1.78e12). Cap the recorded value so the cliff doesn't
-            # crush every other data point on the plot. The `healthy`
-            # column carries the underlying truth, and the analysis
-            # labels the plot to make the cap explicit.
-            capped_lag_ms = min(max_lag_ms, CLUSTER_OBJECT_LIMITS_LAG_CAP_MS)
-            print(
-                f"    {'(bisect) ' if refinement else ''}"
-                f"N={n}: max_local_lag_ms={max_lag_ms:.1f} "
-                f"reporting={reporting}/{total} healthy={healthy}"
-            )
-            runner.results_writer.writerow(
-                {
-                    "scenario": scenario.name(),
-                    "scenario_version": scenario.VERSION,
-                    "scale": n,
-                    "mode": "cluster_object_limits",
-                    "category": "freshness",
-                    "test_name": "max_local_lag_ms",
-                    "cluster_size": replica_size,
-                    "envd_cpus": None,
-                    "repetition": 0,
-                    "size_bytes": None,
-                    "time_ms": int(capped_lag_ms),
-                    "qps": None,
-                    "healthy": 1 if healthy else 0,
-                }
-            )
-            return healthy
-
         try:
-            # Coarse pass: walk the N list, stop at the first unhealthy point.
-            last_healthy_n = 0
-            first_unhealthy_n: int | None = None
-            for i, n in enumerate(sizes):
-                print(
-                    f"--- cluster_object_limits {scenario.name()}: "
-                    f"size '{replica_size}', building up to N={n}"
-                )
-                scenario.add_objects(runner, n)
-                print(
-                    f"--- cluster_object_limits {scenario.name()}: "
-                    f"size '{replica_size}', probing freshness at N={n}"
-                )
-                # Only the very first probe after `_recreate_cluster_c` gets
-                # the generous cold-start budget; by the time we walk to
-                # larger N or bisect, the replica is warm.
-                if probe_and_record(n, first_probe=(i == 0)):
-                    last_healthy_n = n
-                else:
-                    first_unhealthy_n = n
-                    # Found the cliff for this cluster size; skip larger Ns.
-                    print(
-                        f"    N={n}: unhealthy, stopping N-walk for size "
-                        f"'{replica_size}'"
-                    )
-                    break
-
-            # Refinement pass: bisect (last_healthy, first_unhealthy] to
-            # narrow the cliff. Each step adds or drops objects in place.
-            if first_unhealthy_n is not None and bisect_steps > 0:
-                lo, hi = last_healthy_n, first_unhealthy_n
-                for step in range(bisect_steps):
-                    mid = (lo + hi) // 2
-                    if mid <= lo:
-                        # Interval already minimal (hi - lo <= 1).
-                        break
-                    print(
-                        f"--- cluster_object_limits {scenario.name()}: "
-                        f"size '{replica_size}', bisect step "
-                        f"{step + 1}/{bisect_steps} at N={mid} "
-                        f"(cliff in ({lo}, {hi}])"
-                    )
-                    # Exactly one of these does work; the other is a no-op.
-                    scenario.add_objects(runner, mid)
-                    scenario.remove_objects(runner, mid)
-                    if probe_and_record(mid, refinement=True):
-                        lo = mid
-                    else:
-                        hi = mid
-                print(
-                    f"    bisect done for size '{replica_size}': "
-                    f"cliff in ({lo}, {hi}]"
-                )
+            scenario.run_for_cluster_size(
+                runner, sizes, replica_size, bisect_steps=bisect_steps
+            )
         finally:
             # Drop the cluster (cascades to indexes/MVs) and the schema (views)
             # before moving to the next cluster size, to bound catalog growth.
@@ -3759,7 +3759,7 @@ def run_scenario_cluster_object_limits(
 
 
 def run_scenario_weak(
-    scenario: Scenario,
+    scenario: ClusterScalingScenario,
     results_writer: csv.DictWriter,
     connection: ConnectionHandler,
     target: BenchTarget,
@@ -3825,20 +3825,27 @@ FAMILY_TO_STREAM: dict[Family, str] = {
 }
 
 
+AnyScenario = (
+    ClusterScalingScenario
+    | EnvdObjectsScalabilityScenario
+    | ClusterObjectLimitsScenario
+)
+
+
 @dataclass(frozen=True)
 class ScenarioSpec:
     """Registry entry for a single scenario.
 
-    `factory` builds the `Scenario` instance from CLI args + target;
-    `family` selects which `run_scenario_*` driver to use and (via
-    `FAMILY_TO_STREAM`) which result stream to write to. `groups` lists the
-    `--scenarios` group names this scenario belongs to.
+    `factory` builds the scenario instance from CLI args + target; `family`
+    selects which `run_scenario_*` driver to use and (via `FAMILY_TO_STREAM`)
+    which result stream to write to. `groups` lists the `--scenarios` group
+    names this scenario belongs to.
     """
 
     name: str
     log_label: str
     family: Family
-    factory: Callable[[argparse.Namespace, BenchTarget], Scenario]
+    factory: Callable[[argparse.Namespace, BenchTarget], AnyScenario]
     groups: tuple[str, ...] = ()
 
 
@@ -3916,7 +3923,7 @@ SCENARIOS: list[ScenarioSpec] = [
         SCENARIO_ENVD_OBJECTS_SCALABILITY_TABLES,
         "envd scalability (tables)",
         "envd_objects",
-        lambda a, t: EnvdObjectsScalabilityTablesScenario(t.replica_size_for_scale(1)),
+        lambda a, t: EnvdObjectsScalabilityTablesScenario(),
         groups=("envd_objects_scalability",),
     ),
     ScenarioSpec(
@@ -3924,7 +3931,6 @@ SCENARIOS: list[ScenarioSpec] = [
         "envd scalability (materialized views)",
         "envd_objects",
         lambda a, t: EnvdObjectsScalabilityMvsScenario(
-            t.replica_size_for_scale(1),
             pad_replica_size=t.replica_size_for_scale(2),
         ),
         groups=("envd_objects_scalability",),
@@ -3977,10 +3983,13 @@ def run_spec(
     print(f"--- SCENARIO: Running {spec.log_label}")
     match spec.family:
         case "strong":
+            assert isinstance(scenario, ClusterScalingScenario)
             run_scenario_strong(scenario, writer, conn, ctx.target, ctx.max_scale)
         case "weak":
+            assert isinstance(scenario, ClusterScalingScenario)
             run_scenario_weak(scenario, writer, conn, ctx.target, ctx.max_scale)
         case "envd_qps":
+            assert isinstance(scenario, ClusterScalingScenario)
             run_scenario_envd_strong_scaling(
                 scenario, writer, conn, ctx.target, ctx.max_scale
             )
