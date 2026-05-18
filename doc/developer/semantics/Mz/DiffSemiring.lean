@@ -170,6 +170,35 @@ theorem mul_add [Mul α] [Add α]
       | val _ => rfl
       | error => rfl
 
+/-! ## Associativity of `*` (when the base has it) -/
+
+theorem mul_assoc [Mul α]
+    (h_assoc : ∀ x y z : α, (x * y) * z = x * (y * z))
+    (a b c : DiffWithError α) : (a * b) * c = a * (b * c) := by
+  cases a with
+  | val x =>
+    cases b with
+    | val y =>
+      cases c with
+      | val z =>
+        show (val ((x * y) * z) : DiffWithError α) = val (x * (y * z))
+        rw [h_assoc]
+      | error => rfl
+    | error =>
+      cases c with
+      | val _ => rfl
+      | error => rfl
+  | error =>
+    cases b with
+    | val _ =>
+      cases c with
+      | val _ => rfl
+      | error => rfl
+    | error =>
+      cases c with
+      | val _ => rfl
+      | error => rfl
+
 end DiffWithError
 
 end Mz
