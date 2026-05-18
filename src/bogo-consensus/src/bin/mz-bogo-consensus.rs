@@ -100,6 +100,13 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let incoming = TcpListenerStream::new(listener);
 
     Server::builder()
+        // Loopback bench: every gRPC call is small but frequent. Defaults
+        // would Nagle the response trailers and stall on HTTP/2 flow-control
+        // window updates. See `BogoConsensusClient::connect` for the matching
+        // client-side knobs and the rationale.
+        .tcp_nodelay(true)
+        .initial_stream_window_size(8 * 1024 * 1024)
+        .initial_connection_window_size(16 * 1024 * 1024)
         .add_service(grpc)
         .serve_with_incoming_shutdown(incoming, shutdown_signal())
         .await?;

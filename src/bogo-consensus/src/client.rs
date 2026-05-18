@@ -44,7 +44,15 @@ impl BogoConsensusClient {
     pub async fn connect(url: String) -> Result<Self, anyhow::Error> {
         let endpoint = Endpoint::from_shared(url)?
             // No TLS — bogo is for local perf testing.
-            .tcp_nodelay(true);
+            .tcp_nodelay(true)
+            // Bump HTTP/2 flow control windows well above tonic's 65 KiB
+            // default. With the default, per-call CAS latency on a loopback
+            // bench rises linearly with payload size (~130 ns/byte, ≈ 7 MB/s
+            // throughput) because every other request stalls waiting for the
+            // server's WINDOW_UPDATE round-trip. Bumping the windows up
+            // amortises that across many requests.
+            .initial_stream_window_size(8 * 1024 * 1024)
+            .initial_connection_window_size(16 * 1024 * 1024);
         let channel = endpoint.connect().await?;
         // Catalog-shard scans grow with shard history; raise the gRPC message
         // size cap well above tonic's 4 MiB default to avoid retry storms.
