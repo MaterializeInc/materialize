@@ -114,20 +114,33 @@ is concrete), which requires tracking which operands are statically
 follow-up. -/
 mutual
 def Expr.might_error : Expr → Bool
-  | .lit (.err _)   => true
-  | .lit _          => false
-  | .col _          => false
-  | .and a b        => a.might_error || b.might_error
-  | .or  a b        => a.might_error || b.might_error
-  | .not a          => a.might_error
-  | .ifThen c t e   => c.might_error || t.might_error || e.might_error
-  | .andN args      => Expr.argsMightError args
-  | .orN  args      => Expr.argsMightError args
-  | .coalesce _     => true
+  | .lit (.err _)        => true
+  | .lit _               => false
+  | .col _               => false
+  | .and a b             => a.might_error || b.might_error
+  | .or  a b             => a.might_error || b.might_error
+  | .not a               => a.might_error
+  | .ifThen c t e        => c.might_error || t.might_error || e.might_error
+  | .andN args           => Expr.argsMightError args
+  | .orN  args           => Expr.argsMightError args
+  | .coalesce []         => false
+  | .coalesce (a :: rest) => a.might_error && Expr.argsAllMightError rest
 
+/-- Bool fold of `might_error` over a list of operands ("does any
+operand might-error"), declared mutually with `might_error` so
+structural recursion accepts both sides. -/
 def Expr.argsMightError : List Expr → Bool
   | []        => false
   | e :: rest => e.might_error || Expr.argsMightError rest
+
+/-- Companion fold for `coalesce`: "do all operands might-error".
+The empty-list base case is `true` so that the cons case
+`a.might_error && argsAllMightError rest` gives the right answer
+for any non-empty list. The pattern match in `Expr.might_error`'s
+`.coalesce` arms handles the empty case separately. -/
+def Expr.argsAllMightError : List Expr → Bool
+  | []        => true
+  | e :: rest => e.might_error && Expr.argsAllMightError rest
 end
 
 /-- Membership-driven introduction for `argsMightError`. If some
@@ -146,6 +159,100 @@ theorem Expr.argsMightError_of_mem
     cases h_mem with
     | head _    => simp [h_err]
     | tail _ h' => simp [ih h']
+
+/-- If `argsAllMightError args` is not `true`, there is at least one
+operand whose `might_error` is not `true`. This is the
+"some safe operand exists" extraction used by the `coalesce` case of
+soundness. -/
+theorem Expr.exists_safe_of_not_argsAllMightError
+    {args : List Expr} (h : ¬(Expr.argsAllMightError args = true)) :
+    ∃ e ∈ args, ¬(e.might_error = true) := by
+  induction args with
+  | nil =>
+    -- argsAllMightError [] = true, contradicts h
+    exact (h rfl).elim
+  | cons hd tl ih =>
+    -- argsAllMightError (hd :: tl) = hd.might_error && argsAllMightError tl
+    by_cases hd_me : hd.might_error = true
+    · -- hd is not safe; the safe one must be in tl.
+      have htl : ¬(Expr.argsAllMightError tl = true) := by
+        intro h_tl
+        apply h
+        show (hd.might_error && Expr.argsAllMightError tl) = true
+        simp [hd_me, h_tl]
+      obtain ⟨e, e_mem, he⟩ := ih htl
+      exact ⟨e, List.Mem.tail hd e_mem, he⟩
+    · -- hd is the safe operand.
+      exact ⟨hd, List.Mem.head tl, hd_me⟩
+
+/-! ## Coalesce safety
+
+Once `Coalesce.go` is invoked with `seenNull = true`, the result is
+never an error: the empty-list base returns `.null`, and every cons
+case either short-circuits to a `.bool b`, recurses with
+`seenNull = true` unchanged, or updates `firstErr` without ever
+flipping `seenNull` back to `false`.
+
+The combined lemma `Coalesce.go_not_err` strengthens that
+observation: if the starting state has either `seenNull = true` or
+at least one not-err element in the remaining list, the result is
+not an error. -/
+
+theorem Coalesce.go_not_err :
+    ∀ (seenNull : Bool) (firstErr : Option EvalError) (ds : List Datum),
+      seenNull = true ∨ (∃ d ∈ ds, ¬d.IsErr) →
+      ¬(Coalesce.go seenNull firstErr ds).IsErr
+  | true,  _,  [],          _ => by
+    intro hRes
+    -- Coalesce.go true _ [] = .null
+    show False
+    simp only [Coalesce.go, if_true] at hRes
+    cases hRes
+  | false, _,  [],          h => by
+    -- Empty + seenNull=false: only the disjunct ∃ d ∈ [] survives, which is False.
+    cases h with
+    | inl h_true => cases h_true
+    | inr h_ex =>
+      obtain ⟨_, hmem, _⟩ := h_ex
+      cases hmem
+  | _,     _,  .bool b :: _,  _ => by
+    intro hRes
+    -- Coalesce.go _ _ (.bool b :: _) = .bool b
+    show False
+    simp only [Coalesce.go] at hRes
+    cases hRes
+  | _,     firstErr, .null :: rest, _ => by
+    -- Recurse with seenNull=true.
+    show ¬(Coalesce.go true firstErr rest).IsErr
+    exact Coalesce.go_not_err true firstErr rest (Or.inl rfl)
+  | seenNull, firstErr, .err e :: rest, h => by
+    -- Push the witness from (.err e :: rest) into rest, since .err e cannot be the witness.
+    have h_rest : seenNull = true ∨ ∃ d ∈ rest, ¬d.IsErr := by
+      cases h with
+      | inl h_true => exact Or.inl h_true
+      | inr h_ex =>
+        obtain ⟨d, hmem, hsafe⟩ := h_ex
+        cases hmem with
+        | head _      => exact (hsafe trivial).elim
+        | tail _ h_tl => exact Or.inr ⟨d, h_tl, hsafe⟩
+    -- Two cases on firstErr; the recursion shape is the same modulo argument.
+    cases firstErr with
+    | some firstErr' =>
+      show ¬(Coalesce.go seenNull (some firstErr') rest).IsErr
+      exact Coalesce.go_not_err seenNull (some firstErr') rest h_rest
+    | none =>
+      show ¬(Coalesce.go seenNull (some e) rest).IsErr
+      exact Coalesce.go_not_err seenNull (some e) rest h_rest
+
+/-- The headline lemma: an `evalCoalesce` call cannot return an
+error when at least one operand evaluates to something that is not
+an error. The `null`-beats-`err` tiebreak inside `Coalesce.go` does
+the work. -/
+theorem evalCoalesce_not_err_of_some_safe
+    {ds : List Datum} (h : ∃ d ∈ ds, ¬d.IsErr) :
+    ¬(evalCoalesce ds).IsErr := by
+  show ¬(Coalesce.go false none ds).IsErr
+  exact Coalesce.go_not_err false none ds (Or.inr h)
 
 /-! ## Error-free environments -/
 
@@ -258,9 +365,31 @@ theorem might_error_sound :
     have he : ¬(e.might_error = true) := fun h => hMe
       (Expr.argsMightError_of_mem e_mem h)
     exact might_error_sound e env he hEnv
-  | .coalesce _, _, hMe, _ => by
-    intro _
-    apply hMe
-    simp only [Expr.might_error]
+  | .coalesce args, env, hMe, hEnv => by
+    intro hRes
+    simp only [eval] at hRes
+    -- Empty list: `evalCoalesce [] = .null`, immediately not an error.
+    match args, hMe, hRes with
+    | [], _, hRes' =>
+      simp [evalCoalesce, Coalesce.go] at hRes'
+      cases hRes'
+    | a :: rest, hMe', hRes' =>
+      -- Non-empty case. `might_error (.coalesce (a :: rest))` reduces to
+      -- `a.might_error && argsAllMightError rest`, which is exactly
+      -- `argsAllMightError (a :: rest)`. Negate and extract a safe operand.
+      have hAll : ¬(Expr.argsAllMightError (a :: rest) = true) := by
+        intro hAll
+        apply hMe'
+        show (a.might_error && Expr.argsAllMightError rest) = true
+        -- `argsAllMightError (a :: rest)` reduces by definition to the
+        -- conjunction we need.
+        exact hAll
+      obtain ⟨e, e_mem, he_safe⟩ :=
+        Expr.exists_safe_of_not_argsAllMightError hAll
+      have he : ¬(eval env e).IsErr := might_error_sound e env he_safe hEnv
+      apply evalCoalesce_not_err_of_some_safe
+        (ds := (a :: rest).map (eval env))
+        ?_ hRes'
+      exact ⟨eval env e, List.mem_map.mpr ⟨e, e_mem, rfl⟩, he⟩
 
 end Mz
