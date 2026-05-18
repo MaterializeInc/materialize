@@ -73,6 +73,30 @@ theorem evalIfThen_not_err
     simp only [evalIfThen]; decide
   | err _ => exact (hc trivial).elim
 
+/-! ### Short-circuit absorbers
+
+`AND` absorbs to `.bool false` whenever either operand is
+`.bool false`, regardless of what the other operand is. Likewise
+`OR` absorbs to `.bool true` on either side. These are the
+algebraic facts behind the value-level tightening of
+`Expr.might_error`. -/
+
+theorem evalAnd_left_false (d : Datum) : evalAnd (.bool false) d = .bool false := rfl
+
+theorem evalAnd_right_false (d : Datum) : evalAnd d (.bool false) = .bool false := by
+  cases d with
+  | bool b => cases b <;> rfl
+  | null   => rfl
+  | err _  => rfl
+
+theorem evalOr_left_true (d : Datum) : evalOr (.bool true) d = .bool true := rfl
+
+theorem evalOr_right_true (d : Datum) : evalOr d (.bool true) = .bool true := by
+  cases d with
+  | bool b => cases b <;> rfl
+  | null   => rfl
+  | err _  => rfl
+
 /-- List-level analogue of `evalAnd_not_err`: if every operand is
 error-free, the variadic AND is error-free. -/
 theorem evalAndN_not_err :
@@ -97,33 +121,55 @@ theorem evalOrN_not_err :
 /-! ## Static analyzer
 
 Returns `true` when `e` might evaluate to an `err`. The current
-implementation is purely structural and conservative: any literal
-`err` taints every ancestor. Columns are assumed not to contain errors
-(see `Env.ErrFree`).
+implementation is structural with two pieces of value-level
+tightening on binary `AND` and `OR`:
 
-For `andN` and `orN`, the analyzer recurses into the operand list via
-`Expr.argsMightError` and returns `true` if any operand might error.
-The mutual recursion across `Expr.might_error` and
-`Expr.argsMightError` keeps Lean's structural-recursion checker
-satisfied without an explicit termination measure.
+* `.and (.lit (.bool false)) _` and `.and _ (.lit (.bool false))`
+  return `false`. The four-valued AND table has `false` as the
+  dominant absorber (`false AND error = false` from either side),
+  so a literal-false operand statically rules out an error.
+* `.or (.lit (.bool true)) _` and `.or _ (.lit (.bool true))`
+  return `false` for the dual reason.
 
-`coalesce` is still tainted unconditionally. A precise analyzer
-would reason about the rescue rule (`coalesce(err, x) = x` when `x`
-is concrete), which requires tracking which operands are statically
-*safe* rather than merely *not erroring*. Tightening it is a separate
-follow-up. -/
+Any literal `err` taints every ancestor. Columns are assumed not
+to contain errors (see `Env.ErrFree`).
+
+For `andN` and `orN`, the analyzer recurses into the operand list
+via `Expr.argsMightError`. For `coalesce`, the analyzer fires only
+when *every* operand might error.
+
+The mutual recursion across `Expr.might_error`,
+`Expr.argsMightError`, and `Expr.argsAllMightError` keeps Lean's
+structural-recursion checker satisfied without an explicit
+termination measure. -/
+/-- Top-of-expression literal-false detector. Non-recursive on
+`Expr`; matches only the head constructor. Used by `might_error`
+to identify the `false`-absorber position of binary `AND`. -/
+@[simp] def Expr.isLitBoolFalse : Expr → Bool
+  | .lit (.bool false) => true
+  | _                  => false
+
+/-- Dual: top-of-expression literal-true detector. -/
+@[simp] def Expr.isLitBoolTrue : Expr → Bool
+  | .lit (.bool true) => true
+  | _                 => false
+
 mutual
 def Expr.might_error : Expr → Bool
-  | .lit (.err _)        => true
-  | .lit _               => false
-  | .col _               => false
-  | .and a b             => a.might_error || b.might_error
-  | .or  a b             => a.might_error || b.might_error
-  | .not a               => a.might_error
-  | .ifThen c t e        => c.might_error || t.might_error || e.might_error
-  | .andN args           => Expr.argsMightError args
-  | .orN  args           => Expr.argsMightError args
-  | .coalesce []         => false
+  | .lit (.err _)         => true
+  | .lit _                => false
+  | .col _                => false
+  | .and a b              =>
+    if a.isLitBoolFalse || b.isLitBoolFalse then false
+    else a.might_error || b.might_error
+  | .or  a b              =>
+    if a.isLitBoolTrue || b.isLitBoolTrue then false
+    else a.might_error || b.might_error
+  | .not a                => a.might_error
+  | .ifThen c t e         => c.might_error || t.might_error || e.might_error
+  | .andN args            => Expr.argsMightError args
+  | .orN  args            => Expr.argsMightError args
+  | .coalesce []          => false
   | .coalesce (a :: rest) => a.might_error && Expr.argsAllMightError rest
 
 /-- Bool fold of `might_error` over a list of operands ("does any
@@ -317,19 +363,98 @@ theorem might_error_sound :
   | .and a b, env, hMe, hEnv => by
     intro hRes
     simp only [eval] at hRes
-    have ha : ¬(a.might_error = true) := fun h => hMe (by simp [Expr.might_error, h])
-    have hb : ¬(b.might_error = true) := fun h => hMe (by simp [Expr.might_error, h])
-    exact evalAnd_not_err
-      (might_error_sound a env ha hEnv)
-      (might_error_sound b env hb hEnv) hRes
+    cases hA : a.isLitBoolFalse with
+    | true =>
+      -- a = .lit (.bool false): evalAnd .bool false _ = .bool false
+      have hEq : a = .lit (.bool false) := by
+        cases a with
+        | lit d =>
+          cases d with
+          | bool b' => cases b' with
+                        | false => rfl
+                        | true  => simp [Expr.isLitBoolFalse] at hA
+          | _ => simp [Expr.isLitBoolFalse] at hA
+        | _ => simp [Expr.isLitBoolFalse] at hA
+      rw [hEq] at hRes
+      simp only [eval, evalAnd_left_false] at hRes
+      cases hRes
+    | false =>
+      cases hB : b.isLitBoolFalse with
+      | true =>
+        -- b = .lit (.bool false): evalAnd _ .bool false = .bool false
+        have hEq : b = .lit (.bool false) := by
+          cases b with
+          | lit d =>
+            cases d with
+            | bool b' => cases b' with
+                          | false => rfl
+                          | true  => simp [Expr.isLitBoolFalse] at hB
+            | _ => simp [Expr.isLitBoolFalse] at hB
+          | _ => simp [Expr.isLitBoolFalse] at hB
+        rw [hEq] at hRes
+        simp only [eval, evalAnd_right_false] at hRes
+        cases hRes
+      | false =>
+        -- Non-short-circuit. Fall through to recursive check.
+        have hMeReduce :
+            Expr.might_error (.and a b) = (a.might_error || b.might_error) := by
+          show (if a.isLitBoolFalse || b.isLitBoolFalse
+                  then false
+                  else a.might_error || b.might_error)
+              = (a.might_error || b.might_error)
+          rw [hA, hB]; rfl
+        rw [hMeReduce] at hMe
+        have ha : ¬(a.might_error = true) := fun h => hMe (by simp [h])
+        have hb : ¬(b.might_error = true) := fun h => hMe (by simp [h])
+        exact evalAnd_not_err
+          (might_error_sound a env ha hEnv)
+          (might_error_sound b env hb hEnv) hRes
   | .or a b, env, hMe, hEnv => by
     intro hRes
     simp only [eval] at hRes
-    have ha : ¬(a.might_error = true) := fun h => hMe (by simp [Expr.might_error, h])
-    have hb : ¬(b.might_error = true) := fun h => hMe (by simp [Expr.might_error, h])
-    exact evalOr_not_err
-      (might_error_sound a env ha hEnv)
-      (might_error_sound b env hb hEnv) hRes
+    cases hA : a.isLitBoolTrue with
+    | true =>
+      have hEq : a = .lit (.bool true) := by
+        cases a with
+        | lit d =>
+          cases d with
+          | bool b' => cases b' with
+                        | true  => rfl
+                        | false => simp [Expr.isLitBoolTrue] at hA
+          | _ => simp [Expr.isLitBoolTrue] at hA
+        | _ => simp [Expr.isLitBoolTrue] at hA
+      rw [hEq] at hRes
+      simp only [eval, evalOr_left_true] at hRes
+      cases hRes
+    | false =>
+      cases hB : b.isLitBoolTrue with
+      | true =>
+        have hEq : b = .lit (.bool true) := by
+          cases b with
+          | lit d =>
+            cases d with
+            | bool b' => cases b' with
+                          | true  => rfl
+                          | false => simp [Expr.isLitBoolTrue] at hB
+            | _ => simp [Expr.isLitBoolTrue] at hB
+          | _ => simp [Expr.isLitBoolTrue] at hB
+        rw [hEq] at hRes
+        simp only [eval, evalOr_right_true] at hRes
+        cases hRes
+      | false =>
+        have hMeReduce :
+            Expr.might_error (.or a b) = (a.might_error || b.might_error) := by
+          show (if a.isLitBoolTrue || b.isLitBoolTrue
+                  then false
+                  else a.might_error || b.might_error)
+              = (a.might_error || b.might_error)
+          rw [hA, hB]; rfl
+        rw [hMeReduce] at hMe
+        have ha : ¬(a.might_error = true) := fun h => hMe (by simp [h])
+        have hb : ¬(b.might_error = true) := fun h => hMe (by simp [h])
+        exact evalOr_not_err
+          (might_error_sound a env ha hEnv)
+          (might_error_sound b env hb hEnv) hRes
   | .not a, env, hMe, hEnv => by
     intro hRes
     simp only [eval] at hRes
