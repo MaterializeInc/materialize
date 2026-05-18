@@ -2,6 +2,7 @@ import Mz.UnifiedStream
 import Mz.Boolean
 import Mz.Expr
 import Mz.Eval
+import Mz.Laws
 
 /-!
 # Filter fusion
@@ -217,5 +218,75 @@ theorem UnifiedStream.filter_idem (pred : Expr) (us : UnifiedStream) :
           rfl
         | int _ => rfl
         | null => rfl
+
+/-! ## Filter commutativity (under err-freedom)
+
+Two filters can swap order when neither errors on the input's
+data rows. The proof reduces to `filter_filter_fuse` on both
+sides, then equates the fused predicates via `evalAnd_comm_of_no_err`
+applied row by row. -/
+
+/-- Two filters with eval-equivalent predicates on every data row
+of the input produce equal outputs. Useful for re-associating /
+re-ordering fused predicates without re-running the full
+filter analysis. -/
+theorem UnifiedStream.filter_eval_eq
+    (p q : Expr) (us : UnifiedStream)
+    (h : ∀ ud ∈ us, ∀ r, ud.1 = UnifiedRow.row r → eval r p = eval r q) :
+    UnifiedStream.filter p us = UnifiedStream.filter q us := by
+  induction us with
+  | nil => rfl
+  | cons hd tl ih =>
+    obtain ⟨uc, d⟩ := hd
+    have hTl : ∀ ud ∈ tl, ∀ r, ud.1 = UnifiedRow.row r → eval r p = eval r q :=
+      fun ud hMem => h ud (List.mem_cons_of_mem _ hMem)
+    have hConsAsApp : ((uc, d) :: tl : UnifiedStream) = [(uc, d)] ++ tl := rfl
+    rw [hConsAsApp, UnifiedStream.filter_append,
+        UnifiedStream.filter_append, ih hTl]
+    congr 1
+    cases d with
+    | error => rfl
+    | val n =>
+      cases uc with
+      | err _ => rfl
+      | row r =>
+        have hRow : eval r p = eval r q := h (UnifiedRow.row r, DiffWithError.val n)
+                                            List.mem_cons_self r rfl
+        rw [filter_row_singleton p r n, filter_row_singleton q r n, hRow]
+
+/-- `Datum` is not an err iff none of its `err _` matches. The
+predicate `¬d.IsErr` from `Datum.IsErr` is what `evalAnd_comm_of_no_err`
+takes; restate via the err-freedom hypothesis used here. -/
+private theorem datum_not_isErr_of_no_err {d : Datum}
+    (h : ∀ ev, d ≠ Datum.err ev) : ¬d.IsErr := by
+  cases d with
+  | err e => exact absurd rfl (h e)
+  | bool _ => exact id
+  | int _ => exact id
+  | null => exact id
+
+/-- Filters commute when neither predicate errors on any data row
+of the input. Reduces to `filter_filter_fuse` applied both ways,
+then equates `.and q p` with `.and p q` via `evalAnd_comm_of_no_err`. -/
+theorem UnifiedStream.filter_comm
+    (q p : Expr) (us : UnifiedStream)
+    (hQ : UnifiedStream.predNoRowErr q us)
+    (hP : UnifiedStream.predNoRowErr p us) :
+    UnifiedStream.filter p (UnifiedStream.filter q us)
+      = UnifiedStream.filter q (UnifiedStream.filter p us) := by
+  rw [UnifiedStream.filter_filter_fuse q p us hQ hP,
+      UnifiedStream.filter_filter_fuse p q us hP hQ]
+  apply UnifiedStream.filter_eval_eq
+  intro ud hMem r hUc
+  have hQr : ∀ ev, eval r q ≠ Datum.err ev := hQ ud hMem r hUc
+  have hPr : ∀ ev, eval r p ≠ Datum.err ev := hP ud hMem r hUc
+  have hEvalAndQP : eval r (Expr.and q p) = evalAnd (eval r q) (eval r p) := by
+    simp only [eval]
+  have hEvalAndPQ : eval r (Expr.and p q) = evalAnd (eval r p) (eval r q) := by
+    simp only [eval]
+  rw [hEvalAndQP, hEvalAndPQ]
+  exact evalAnd_comm_of_no_err
+    (datum_not_isErr_of_no_err hQr)
+    (datum_not_isErr_of_no_err hPr)
 
 end Mz
