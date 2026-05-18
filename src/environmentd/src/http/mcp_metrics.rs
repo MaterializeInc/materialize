@@ -18,7 +18,7 @@
 use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::stats::histogram_seconds_buckets;
-use prometheus::{HistogramVec, IntCounterVec};
+use prometheus::{HistogramTimer, HistogramVec, IntCounterVec};
 
 /// Metrics emitted by the MCP HTTP handlers.
 ///
@@ -32,6 +32,56 @@ pub struct McpMetrics {
     pub tool_calls: IntCounterVec,
     /// Duration of MCP `tools/call` invocations by endpoint type and tool name.
     pub tool_call_duration: HistogramVec,
+}
+
+/// RAII guard for a single `tools/call` invocation. On drop, increments
+/// `tool_calls_total` with the current status and observes
+/// `tool_call_duration_seconds` via the embedded [`HistogramTimer`]'s own
+/// drop. Designed so that if the surrounding future is dropped before
+/// completion (e.g. by `tokio::time::timeout`), the metric still records
+/// with the default `"cancelled"` status instead of being silently lost.
+pub struct ToolCallGuard<'a> {
+    metrics: &'a McpMetrics,
+    endpoint_label: &'static str,
+    tool_label: String,
+    status: &'static str,
+    /// `HistogramTimer::drop` observes the duration into the histogram, so
+    /// holding the timer here means we get the duration recorded for both
+    /// normal completion and early drop.
+    _timer: HistogramTimer,
+}
+
+impl<'a> ToolCallGuard<'a> {
+    /// Starts a new tool call: begins the duration timer and reserves the
+    /// counter increment that will happen on drop.
+    pub fn new(metrics: &'a McpMetrics, endpoint_label: &'static str, tool_label: String) -> Self {
+        let timer = metrics
+            .tool_call_duration
+            .with_label_values(&[endpoint_label, &tool_label])
+            .start_timer();
+        Self {
+            metrics,
+            endpoint_label,
+            tool_label,
+            status: "cancelled",
+            _timer: timer,
+        }
+    }
+
+    /// Records the outcome of the call. Callers should set this on the
+    /// normal completion path right before the guard is dropped.
+    pub fn set_status(&mut self, status: &'static str) {
+        self.status = status;
+    }
+}
+
+impl Drop for ToolCallGuard<'_> {
+    fn drop(&mut self) {
+        self.metrics
+            .tool_calls
+            .with_label_values(&[self.endpoint_label, &self.tool_label, self.status])
+            .inc();
+    }
 }
 
 impl McpMetrics {
@@ -142,7 +192,8 @@ mod tests {
 
         let gathered = registry.gather();
 
-        // requests_total: 3 metrics with distinct label sets.
+        // requests_total: 3 increments produce 2 distinct label sets (the
+        // first two share labels and so collapse into the same series).
         let requests = gathered
             .iter()
             .find(|m| m.name() == "mz_mcp_requests_total")

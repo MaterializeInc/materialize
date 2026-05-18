@@ -48,7 +48,7 @@ use thiserror::Error;
 use tracing::{debug, warn};
 
 use crate::http::AuthedClient;
-use crate::http::mcp_metrics::McpMetrics;
+use crate::http::mcp_metrics::{McpMetrics, ToolCallGuard};
 use crate::http::sql::{SqlRequest, SqlResponse, SqlResult, execute_request};
 
 // To add a new tool: add entry to tools/list, add handler function, add dispatch case.
@@ -466,7 +466,7 @@ async fn handle_mcp_request(
     };
     if !enabled {
         debug!(endpoint = %endpoint_type, "MCP endpoint disabled by feature flag");
-        record_request("EndpointDisabled");
+        record_request("endpoint_disabled");
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
 
@@ -547,7 +547,7 @@ async fn handle_mcp_request(
                     .into(),
                 ),
             };
-            (response, "Timeout")
+            (response, "timeout")
         }
     };
 
@@ -813,12 +813,11 @@ async fn handle_tools_call(
     max_response_size: usize,
     metrics: &McpMetrics,
 ) -> Result<McpResult, McpRequestError> {
-    let endpoint_label = endpoint_type.as_label();
-    let tool_label = params.to_string();
-    let timer = metrics
-        .tool_call_duration
-        .with_label_values(&[endpoint_label, &tool_label])
-        .start_timer();
+    // The guard records `tool_calls_total` and observes
+    // `tool_call_duration_seconds` on drop, so the metrics are recorded
+    // even if the future is cancelled (e.g. by the outer
+    // `tokio::time::timeout`) before the match below returns.
+    let mut guard = ToolCallGuard::new(metrics, endpoint_type.as_label(), params.to_string());
 
     let result = match (endpoint_type, params) {
         (McpEndpointType::Agent, ToolsCallParams::GetDataProducts(_)) => {
@@ -855,15 +854,10 @@ async fn handle_tools_call(
         ))),
     };
 
-    let status_label = match &result {
+    guard.set_status(match &result {
         Ok(_) => "ok",
         Err(e) => e.error_type(),
-    };
-    metrics
-        .tool_calls
-        .with_label_values(&[endpoint_label, &tool_label, status_label])
-        .inc();
-    timer.observe_duration();
+    });
 
     result
 }
