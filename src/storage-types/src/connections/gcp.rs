@@ -9,7 +9,9 @@
 
 //! GCP configuration for sources and sinks.
 
-use gcp_auth::{CustomServiceAccount, TokenProvider};
+use async_trait::async_trait;
+use gcp_auth::{CustomServiceAccount, TokenProvider as _};
+use iceberg_catalog_rest::TokenProvider;
 use mz_ore::error::ErrorExt;
 use mz_repr::{CatalogItemId, GlobalId};
 use proptest_derive::Arbitrary;
@@ -17,13 +19,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::AlterCompatible;
 use crate::configuration::StorageConfiguration;
+use crate::connections::inline::{
+    ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
+    ReferencedConnection,
+};
 use crate::controller::AlterError;
 
-/// Scope used when probing the credentials during validation. Picked because
-/// every service-account key is allowed to mint tokens for it, so a successful
-/// response confirms the key is well-formed and accepted by Google's token
-/// endpoint without requiring any specific IAM grants on the service account.
-const VALIDATION_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
+/// Every service-account key is allowed to mint tokens for this scope,
+/// and it's a blanket scope that covers both BigLake (Iceberg catalog) and GCS.
+const GCP_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 
 /// Modern GCP Service Account keys always use the same token URI.
 const OAUTH_TOKEN_URI: &str = "https://oauth2.googleapis.com/token";
@@ -66,14 +70,11 @@ impl GcpServiceAccountKeyTokenUri {
 }
 
 impl GcpConnection {
-    /// Validates this connection by reading the service-account key out of the
-    /// secrets store, parsing it, and exchanging it for an OAuth2 access token
-    /// at Google's token endpoint.
-    pub(crate) async fn validate(
+    /// Returns (credentials JSON, parsed service account) because both forms are useful.
+    pub(crate) async fn read_credentials(
         &self,
-        _id: CatalogItemId,
         storage_configuration: &StorageConfiguration,
-    ) -> Result<(), GcpConnectionValidationError> {
+    ) -> Result<(String, CustomServiceAccount), GcpConnectionValidationError> {
         let json = storage_configuration
             .connection_context
             .secrets_reader
@@ -82,10 +83,20 @@ impl GcpConnection {
             .map_err(GcpConnectionValidationError::SecretRead)?;
         GcpServiceAccountKeyTokenUri::validate_json(&json)
             .map_err(GcpConnectionValidationError::ParseKey)?;
-        let service_account = CustomServiceAccount::from_json(&json)
+        let account = CustomServiceAccount::from_json(&json)
             .map_err(|e| GcpConnectionValidationError::ParseKey(anyhow::Error::from(e)))?;
+        Ok((json, account))
+    }
+
+    /// Pull the service account key and check that we can retrieve an access token.
+    pub(crate) async fn validate(
+        &self,
+        _id: CatalogItemId,
+        storage_configuration: &StorageConfiguration,
+    ) -> Result<(), GcpConnectionValidationError> {
+        let (_, service_account) = self.read_credentials(storage_configuration).await?;
         service_account
-            .token(&[VALIDATION_SCOPE])
+            .token(&[GCP_SCOPE])
             .await
             .map_err(GcpConnectionValidationError::FetchToken)?;
         Ok(())
@@ -120,5 +131,61 @@ impl GcpConnectionValidationError {
             ),
             _ => None,
         }
+    }
+}
+
+/// References a GCP connection.
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct GcpConnectionReference<C: ConnectionAccess = InlinedConnection> {
+    /// ID of the GCP connection.
+    pub connection_id: CatalogItemId,
+    /// GCP connection object.
+    pub connection: C::Gcp,
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<GcpConnectionReference, R>
+    for GcpConnectionReference<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> GcpConnectionReference {
+        let GcpConnectionReference {
+            connection,
+            connection_id,
+        } = self;
+
+        GcpConnectionReference {
+            connection: r.resolve_connection(connection).unwrap_gcp(),
+            connection_id,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct GcpTokenProvider {
+    pub(crate) service_account: CustomServiceAccount,
+}
+
+#[async_trait]
+impl TokenProvider for GcpTokenProvider {
+    async fn token(&self) -> iceberg::Result<String> {
+        let token = self
+            .service_account
+            .token(&[GCP_SCOPE])
+            .await
+            .map_err(|e| {
+                iceberg::Error::new(
+                    iceberg::ErrorKind::Unexpected,
+                    format!("gcp_auth: {}", e.display_with_causes()),
+                )
+            })?;
+        Ok(token.as_str().to_string())
+    }
+
+    async fn invalidate(&self) -> iceberg::Result<()> {
+        // gcp_auth caches+refreshes internally based on Token::has_expired.
+        Ok(())
+    }
+
+    async fn regenerate(&self) -> iceberg::Result<()> {
+        Ok(())
     }
 }
