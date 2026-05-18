@@ -1,5 +1,6 @@
 import Mz.Eval
 import Mz.Bag
+import Mz.Pushdown
 
 /-!
 # Data / error stream pair
@@ -310,5 +311,46 @@ theorem projectErrs_eq_nil_of_all_safe
     have hTl : ∀ row ∈ tl, rowAllSafe es row = true :=
       fun row hMem => h row (List.mem_cons_of_mem _ hMem)
     simp [List.flatMap_cons, rowErrs_nil_of_all_safe es hd hHead, ih hTl]
+
+/-! ## Predicate pushdown on `BagStream`
+
+Data-side pushdown lifts `filterRel_pushdown_project` (in
+`Mz/Pushdown.lean`) to `BagStream`: the rows produced by
+filtering after projecting equal the rows produced by
+substituting through the projection and filtering before
+projecting. Errors-side pushdown does *not* hold in general —
+the two orderings produce different error collections — so this
+theorem speaks only about the data slice.
+
+The error-collection asymmetry is structural: filtering after
+projection collects predicate errors from the projected rows,
+while filtering before projection collects them from the
+original rows. Even under substitution `p.subst es`, the two err
+sets are not equal as multisets when projection's `rowAllSafe`
+filter changes which rows the predicate sees. -/
+
+theorem BagStream.project_filter_pushdown_data
+    (p : Expr) (es : List Expr) (s : BagStream) :
+    (BagStream.filter p (BagStream.project es s)).data
+      = (BagStream.project es (BagStream.filter (p.subst es) s)).data := by
+  show filterRel p ((s.data.filter (rowAllSafe es)).map
+        (fun row => es.map (eval row)))
+      = ((filterRel (p.subst es) s.data).filter (rowAllSafe es)).map
+        (fun row => es.map (eval row))
+  -- Step 1: push `filterRel p` through `map`, using pushdown on plain `project`.
+  rw [show ((s.data.filter (rowAllSafe es)).map (fun row => es.map (eval row)))
+       = Mz.project es (s.data.filter (rowAllSafe es)) from rfl]
+  rw [filterRel_pushdown_project p es (s.data.filter (rowAllSafe es))]
+  -- Now LHS = project es (filterRel (p.subst es) (s.data.filter (rowAllSafe es))).
+  -- Push the rowAllSafe filter through filterRel via filter/filter commutativity.
+  show Mz.project es (filterRel (p.subst es) (s.data.filter (rowAllSafe es)))
+      = ((filterRel (p.subst es) s.data).filter (rowAllSafe es)).map
+        (fun row => es.map (eval row))
+  unfold filterRel Mz.project
+  congr 1
+  rw [List.filter_filter, List.filter_filter]
+  congr 1
+  funext row
+  exact Bool.and_comm _ _
 
 end Mz
