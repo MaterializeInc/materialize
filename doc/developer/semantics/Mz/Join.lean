@@ -198,4 +198,138 @@ theorem UnifiedStream.filter_preserves_error_diff
       rw [List.flatMap_cons]
       exact List.mem_append.mpr (.inr (ih hTail))
 
+/-! ## Associativity of `cross`
+
+`cross` is associative modulo associativity of row concatenation
+on the carrier and associativity of diff multiplication on the
+diff component. The combinatorial structure (one output per
+triple) is identical in both nestings; the only obligation is
+that the two ways of folding three carriers / diffs together
+agree. -/
+
+/-- `combineCarrier` is associative modulo `List.append_assoc` on
+the row case, and trivially so on the err cases (left-wins). -/
+theorem combineCarrier_assoc (a b c : UnifiedRow) :
+    combineCarrier (combineCarrier a b) c = combineCarrier a (combineCarrier b c) := by
+  cases a with
+  | row la =>
+    cases b with
+    | row lb =>
+      cases c with
+      | row lc => show UnifiedRow.row ((la ++ lb) ++ lc)
+                     = UnifiedRow.row (la ++ (lb ++ lc))
+                  rw [List.append_assoc]
+      | err _ => rfl
+    | err _ =>
+      cases c with
+      | row _ => rfl
+      | err _ => rfl
+  | err _ =>
+    cases b with
+    | row _ =>
+      cases c with
+      | row _ => rfl
+      | err _ => rfl
+    | err _ =>
+      cases c with
+      | row _ => rfl
+      | err _ => rfl
+
+/-- Per-record associativity of the cross-product building block.
+The diff side uses `DiffWithError.mul_assoc` instantiated at
+`Int`. -/
+private theorem cross_step_assoc
+    (ad bd cd : UnifiedRow × DiffWithError Int) :
+    (combineCarrier (combineCarrier ad.1 bd.1) cd.1, (ad.2 * bd.2) * cd.2)
+      = (combineCarrier ad.1 (combineCarrier bd.1 cd.1), ad.2 * (bd.2 * cd.2)) := by
+  congr 1
+  · exact combineCarrier_assoc ad.1 bd.1 cd.1
+  · exact DiffWithError.mul_assoc Int.mul_assoc ad.2 bd.2 cd.2
+
+/-- Local lemma: associativity of `flatMap`. Lean core has the
+building blocks (`flatMap_cons`, `flatMap_append`) but not the
+joint statement at this name. -/
+private theorem List.flatMap_flatMap_local {α β γ : Type}
+    (l : List α) (f : α → List β) (g : β → List γ) :
+    (l.flatMap f).flatMap g = l.flatMap (fun a => (f a).flatMap g) := by
+  induction l with
+  | nil => rfl
+  | cons hd tl ih =>
+    show ((hd :: tl).flatMap f).flatMap g
+        = (hd :: tl).flatMap (fun a => (f a).flatMap g)
+    rw [List.flatMap_cons, List.flatMap_append, ih]
+    rfl
+
+/-- Local lemma: pushing a `map` inside a `flatMap`. -/
+private theorem List.map_flatMap_local {α β γ : Type}
+    (l : List α) (f : α → List β) (g : β → γ) :
+    (l.flatMap f).map g = l.flatMap (fun a => (f a).map g) := by
+  induction l with
+  | nil => rfl
+  | cons hd tl ih =>
+    show ((hd :: tl).flatMap f).map g
+        = (hd :: tl).flatMap (fun a => (f a).map g)
+    rw [List.flatMap_cons, List.map_append, ih]
+    rfl
+
+/-- Local lemma: `flatMap` of a `map`. -/
+private theorem List.flatMap_map_local {α β γ : Type}
+    (l : List α) (f : α → β) (g : β → List γ) :
+    (l.map f).flatMap g = l.flatMap (fun a => g (f a)) := by
+  induction l with
+  | nil => rfl
+  | cons hd tl ih =>
+    show ((hd :: tl).map f).flatMap g
+        = (hd :: tl).flatMap (fun a => g (f a))
+    rw [List.map_cons, List.flatMap_cons, List.flatMap_cons, ih]
+
+/-- Local lemma: pointwise-equal bodies give equal `flatMap`s. -/
+private theorem List.flatMap_congr_local {α β : Type}
+    {l : List α} {f g : α → List β}
+    (h : ∀ x ∈ l, f x = g x) :
+    l.flatMap f = l.flatMap g := by
+  induction l with
+  | nil => rfl
+  | cons hd tl ih =>
+    rw [List.flatMap_cons, List.flatMap_cons,
+        h hd List.mem_cons_self,
+        ih (fun x hMem => h x (List.mem_cons_of_mem _ hMem))]
+
+/-- Local lemma: pointwise-equal bodies give equal `map`s. -/
+private theorem List.map_congr_local {α β : Type}
+    {l : List α} {f g : α → β}
+    (h : ∀ x ∈ l, f x = g x) :
+    l.map f = l.map g := by
+  induction l with
+  | nil => rfl
+  | cons hd tl ih =>
+    rw [List.map_cons, List.map_cons,
+        h hd List.mem_cons_self,
+        ih (fun x hMem => h x (List.mem_cons_of_mem _ hMem))]
+
+/-- Cross is associative on the unified stream. The proof rewrites
+both sides into a common triple-fold via the list-monad equations
+and closes the leaves with `cross_step_assoc`. -/
+theorem UnifiedStream.cross_assoc (a b c : UnifiedStream) :
+    UnifiedStream.cross (UnifiedStream.cross a b) c
+      = UnifiedStream.cross a (UnifiedStream.cross b c) := by
+  show (a.flatMap fun ad => b.map fun bd =>
+          (combineCarrier ad.1 bd.1, ad.2 * bd.2)).flatMap
+         (fun abd => c.map fun cd =>
+            (combineCarrier abd.1 cd.1, abd.2 * cd.2))
+      = a.flatMap fun ad =>
+          (b.flatMap fun bd => c.map fun cd =>
+             (combineCarrier bd.1 cd.1, bd.2 * cd.2)).map
+            (fun bcd => (combineCarrier ad.1 bcd.1, ad.2 * bcd.2))
+  rw [List.flatMap_flatMap_local]
+  apply List.flatMap_congr_local
+  intro ad _
+  rw [List.flatMap_map_local, List.map_flatMap_local]
+  apply List.flatMap_congr_local
+  intro bd _
+  rw [List.map_map]
+  apply List.map_congr_local
+  intro cd _
+  exact cross_step_assoc ad bd cd
+
 end Mz
