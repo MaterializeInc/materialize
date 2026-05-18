@@ -205,4 +205,222 @@ theorem TimedUnifiedStream.consolidateAtTime_length_le
     (UnifiedStream.consolidate_length_le _)
     (TimedUnifiedStream.atTime_length_le t s)
 
+/-! ## Timed error-scope extractors
+
+Lift the row-err and collection-err extractors from `UnifiedStream`
+to `TimedUnifiedStream`. The time component is irrelevant to error
+classification — `.err` carriers and `.error` diffs are observed
+the same way regardless of time. -/
+
+/-- Row-scoped err payloads carried by the timed stream. -/
+def TimedUnifiedStream.errCarriers (s : TimedUnifiedStream) : List EvalError :=
+  s.filterMap fun r => match r.1 with
+    | .err e => some e
+    | _      => none
+
+/-- Carriers whose diff is collection-scoped `.error`. -/
+def TimedUnifiedStream.errorDiffCarriers (s : TimedUnifiedStream) :
+    List UnifiedRow :=
+  s.filterMap fun r => match r.2.2 with
+    | .error => some r.1
+    | _      => none
+
+theorem TimedUnifiedStream.errCarriers_nil :
+    TimedUnifiedStream.errCarriers [] = [] := rfl
+
+theorem TimedUnifiedStream.errorDiffCarriers_nil :
+    TimedUnifiedStream.errorDiffCarriers [] = [] := rfl
+
+theorem TimedUnifiedStream.errCarriers_append (a b : TimedUnifiedStream) :
+    TimedUnifiedStream.errCarriers (a ++ b)
+      = TimedUnifiedStream.errCarriers a ++ TimedUnifiedStream.errCarriers b := by
+  show (a ++ b).filterMap _ = a.filterMap _ ++ b.filterMap _
+  exact List.filterMap_append
+
+theorem TimedUnifiedStream.errorDiffCarriers_append (a b : TimedUnifiedStream) :
+    TimedUnifiedStream.errorDiffCarriers (a ++ b)
+      = TimedUnifiedStream.errorDiffCarriers a
+          ++ TimedUnifiedStream.errorDiffCarriers b := by
+  show (a ++ b).filterMap _ = a.filterMap _ ++ b.filterMap _
+  exact List.filterMap_append
+
+/-! ## `advanceFrontier` preserves error scopes
+
+`advanceFrontier` only changes record times; carriers and diffs
+are untouched. Both error scopes are preserved exactly. -/
+
+theorem TimedUnifiedStream.advanceFrontier_errCarriers
+    (f : Nat) (s : TimedUnifiedStream) :
+    TimedUnifiedStream.errCarriers (TimedUnifiedStream.advanceFrontier f s)
+      = TimedUnifiedStream.errCarriers s := by
+  induction s with
+  | nil => rfl
+  | cons hd tl ih =>
+    obtain ⟨uc, t, d⟩ := hd
+    cases uc with
+    | row r =>
+      have hLhs : TimedUnifiedStream.errCarriers
+                    ((UnifiedRow.row r, Nat.max t f, d)
+                      :: TimedUnifiedStream.advanceFrontier f tl)
+                = TimedUnifiedStream.errCarriers
+                    (TimedUnifiedStream.advanceFrontier f tl) := rfl
+      have hRhs : TimedUnifiedStream.errCarriers
+                    ((UnifiedRow.row r, t, d) :: tl)
+                = TimedUnifiedStream.errCarriers tl := rfl
+      show TimedUnifiedStream.errCarriers
+              ((UnifiedRow.row r, Nat.max t f, d)
+                :: TimedUnifiedStream.advanceFrontier f tl)
+          = TimedUnifiedStream.errCarriers
+              ((UnifiedRow.row r, t, d) :: tl)
+      rw [hLhs, hRhs, ih]
+    | err e =>
+      have hLhs : TimedUnifiedStream.errCarriers
+                    ((UnifiedRow.err e, Nat.max t f, d)
+                      :: TimedUnifiedStream.advanceFrontier f tl)
+                = e :: TimedUnifiedStream.errCarriers
+                    (TimedUnifiedStream.advanceFrontier f tl) := rfl
+      have hRhs : TimedUnifiedStream.errCarriers
+                    ((UnifiedRow.err e, t, d) :: tl)
+                = e :: TimedUnifiedStream.errCarriers tl := rfl
+      show TimedUnifiedStream.errCarriers
+              ((UnifiedRow.err e, Nat.max t f, d)
+                :: TimedUnifiedStream.advanceFrontier f tl)
+          = TimedUnifiedStream.errCarriers
+              ((UnifiedRow.err e, t, d) :: tl)
+      rw [hLhs, hRhs, ih]
+
+theorem TimedUnifiedStream.advanceFrontier_errorDiffCarriers
+    (f : Nat) (s : TimedUnifiedStream) :
+    TimedUnifiedStream.errorDiffCarriers (TimedUnifiedStream.advanceFrontier f s)
+      = TimedUnifiedStream.errorDiffCarriers s := by
+  induction s with
+  | nil => rfl
+  | cons hd tl ih =>
+    obtain ⟨uc, t, d⟩ := hd
+    cases d with
+    | val n =>
+      have hLhs : TimedUnifiedStream.errorDiffCarriers
+                    ((uc, Nat.max t f, DiffWithError.val n)
+                      :: TimedUnifiedStream.advanceFrontier f tl)
+                = TimedUnifiedStream.errorDiffCarriers
+                    (TimedUnifiedStream.advanceFrontier f tl) := rfl
+      have hRhs : TimedUnifiedStream.errorDiffCarriers
+                    ((uc, t, DiffWithError.val n) :: tl)
+                = TimedUnifiedStream.errorDiffCarriers tl := rfl
+      show TimedUnifiedStream.errorDiffCarriers
+              ((uc, Nat.max t f, DiffWithError.val n)
+                :: TimedUnifiedStream.advanceFrontier f tl)
+          = TimedUnifiedStream.errorDiffCarriers
+              ((uc, t, DiffWithError.val n) :: tl)
+      rw [hLhs, hRhs, ih]
+    | error =>
+      have hLhs : TimedUnifiedStream.errorDiffCarriers
+                    ((uc, Nat.max t f, DiffWithError.error)
+                      :: TimedUnifiedStream.advanceFrontier f tl)
+                = uc :: TimedUnifiedStream.errorDiffCarriers
+                    (TimedUnifiedStream.advanceFrontier f tl) := rfl
+      have hRhs : TimedUnifiedStream.errorDiffCarriers
+                    ((uc, t, DiffWithError.error) :: tl)
+                = uc :: TimedUnifiedStream.errorDiffCarriers tl := rfl
+      show TimedUnifiedStream.errorDiffCarriers
+              ((uc, Nat.max t f, DiffWithError.error)
+                :: TimedUnifiedStream.advanceFrontier f tl)
+          = TimedUnifiedStream.errorDiffCarriers
+              ((uc, t, DiffWithError.error) :: tl)
+      rw [hLhs, hRhs, ih]
+
+/-! ## `atTime` projects error scopes per time slice
+
+`atTime t s` drops records at times other than `t` and forgets
+the time component. An err carrier or `.error` diff at time `t`
+appears in the time-slice's `UnifiedStream` extractor; one at any
+other time does not. -/
+
+theorem TimedUnifiedStream.atTime_errCarriers_subset
+    (t : Nat) (s : TimedUnifiedStream) (e : EvalError)
+    (h : e ∈ UnifiedStream.errCarriers (TimedUnifiedStream.atTime t s)) :
+    e ∈ TimedUnifiedStream.errCarriers s := by
+  rw [UnifiedStream.mem_errCarriers] at h
+  obtain ⟨d, hMem⟩ := h
+  -- hMem : (.err e, d) ∈ atTime t s = filterMap (...) s
+  have hMem' : (UnifiedRow.err e, d)
+                ∈ s.filterMap (fun r =>
+                    if r.2.1 = t then some (r.1, r.2.2) else none) := hMem
+  obtain ⟨r0, hRMem, hF⟩ := List.mem_filterMap.mp hMem'
+  obtain ⟨uc0, t0, d0⟩ := r0
+  -- hF : (if t0 = t then some (uc0, d0) else none) = some (.err e, d)
+  by_cases hT : t0 = t
+  · rw [if_pos hT] at hF
+    -- hF : some (uc0, d0) = some (.err e, d)
+    have hPair : (uc0, d0) = (UnifiedRow.err e, d) := by injection hF
+    have hUc : uc0 = UnifiedRow.err e := (Prod.mk.injEq _ _ _ _).mp hPair |>.1
+    subst hUc
+    -- (.err e, t0, d0) ∈ s. errCarriers contains e.
+    show e ∈ s.filterMap fun r => match r.1 with
+      | .err e' => some e'
+      | _      => none
+    refine List.mem_filterMap.mpr ⟨(UnifiedRow.err e, t0, d0), hRMem, ?_⟩
+    show (match UnifiedRow.err e with
+            | .err e' => some e'
+            | _      => none) = some e
+    rfl
+  · rw [if_neg hT] at hF
+    cases hF
+
+theorem TimedUnifiedStream.atTime_errorDiffCarriers_subset
+    (t : Nat) (s : TimedUnifiedStream) (uc : UnifiedRow)
+    (h : uc ∈ UnifiedStream.errorDiffCarriers (TimedUnifiedStream.atTime t s)) :
+    uc ∈ TimedUnifiedStream.errorDiffCarriers s := by
+  rw [UnifiedStream.mem_errorDiffCarriers] at h
+  have hMem' : (uc, (DiffWithError.error : DiffWithError Int))
+                ∈ s.filterMap (fun r =>
+                    if r.2.1 = t then some (r.1, r.2.2) else none) := h
+  obtain ⟨r0, hRMem, hF⟩ := List.mem_filterMap.mp hMem'
+  obtain ⟨uc0, t0, d0⟩ := r0
+  by_cases hT : t0 = t
+  · rw [if_pos hT] at hF
+    have hPair : (uc0, d0) = (uc, DiffWithError.error) := by injection hF
+    have hUc : uc0 = uc := (Prod.mk.injEq _ _ _ _).mp hPair |>.1
+    have hD : d0 = DiffWithError.error := (Prod.mk.injEq _ _ _ _).mp hPair |>.2
+    rw [hUc] at hRMem
+    subst hD
+    show uc ∈ s.filterMap fun r => match r.2.2 with
+      | .error => some r.1
+      | _      => none
+    refine List.mem_filterMap.mpr
+      ⟨(uc, t0, (DiffWithError.error : DiffWithError Int)), hRMem, ?_⟩
+    show (match (DiffWithError.error : DiffWithError Int) with
+            | .error => some uc
+            | _      => none) = some uc
+    rfl
+  · rw [if_neg hT] at hF
+    cases hF
+
+/-! ## `consolidateAtTime` error-scope behavior
+
+`consolidateAtTime t = consolidate ∘ atTime t`. Combines
+`atTime`'s subset behavior with `consolidate`'s scope-preserving
+properties.
+
+Row-err: subset (atTime drops non-`t` records; consolidate
+preserves the set as set). Collection-err: subset same shape. -/
+
+theorem TimedUnifiedStream.consolidateAtTime_errCarriers_subset
+    (t : Nat) (s : TimedUnifiedStream) (e : EvalError)
+    (h : e ∈ UnifiedStream.errCarriers
+                (TimedUnifiedStream.consolidateAtTime t s)) :
+    e ∈ TimedUnifiedStream.errCarriers s := by
+  unfold TimedUnifiedStream.consolidateAtTime at h
+  rw [UnifiedStream.consolidate_errCarriers_iff] at h
+  exact TimedUnifiedStream.atTime_errCarriers_subset t s e h
+
+theorem TimedUnifiedStream.consolidateAtTime_errorDiffCarriers_subset
+    (t : Nat) (s : TimedUnifiedStream) (uc : UnifiedRow)
+    (h : uc ∈ UnifiedStream.errorDiffCarriers
+                (TimedUnifiedStream.consolidateAtTime t s)) :
+    uc ∈ TimedUnifiedStream.errorDiffCarriers s := by
+  unfold TimedUnifiedStream.consolidateAtTime at h
+  rw [UnifiedStream.consolidate_errorDiffCarriers_iff] at h
+  exact TimedUnifiedStream.atTime_errorDiffCarriers_subset t s uc h
+
 end Mz
