@@ -2539,3 +2539,106 @@ That's a single call but it does several distinct operations:
 opening write+since handles, downgrading the since, installing
 collection state into the controller's BTreeMap. Worth splitting
 those phases next.
+
+
+## 2026-05-18 — `create_table_collections` phase split: storage.create_collections owns it
+
+Added four sub-phase labels on `mz_apply_catalog_implications_phase_seconds`
+that wrap each operation inside `create_table_collections`:
+
+* `create_table_write_ts` — `self.get_local_write_ts().await`
+* `create_table_advance_upper` — `catalog.advance_upper(advance_to)`
+* `create_table_storage_create_collections` —
+  `controller.storage.create_collections(...)`
+* `create_table_apply_local_write` — `self.apply_local_write(register_ts)`
+
+These are emitted **once per CREATE TABLE** (not per DROP — DROP does
+not enter this code path).
+
+### Per CREATE TABLE (ms; CREATE-only, count = 1/rep)
+
+| sub-phase                                | 5k    | 10k   | 15k   | Δ 5→10 | Δ 10→15 |
+|------------------------------------------|------:|------:|------:|-------:|--------:|
+| `create_table_write_ts`                  |  3.27 |  3.62 |  3.61 |  +0.35 |   −0.01 |
+| `create_table_advance_upper`             |  0.56 |  0.61 |  0.71 |  +0.05 |   +0.10 |
+| **`create_table_storage_create_collections`** | **8.16**|**8.98**|**11.57**|**+0.82**|**+2.59** |
+| `create_table_apply_local_write`         |  2.88 |  3.12 |  3.29 |  +0.24 |   +0.17 |
+| Sum of named sub-phases                  | 14.87 | 16.33 | 19.18 |  +1.46 |   +2.85 |
+| `inner_controller_setup` (CREATE-only)   | 16.18 | 18.07 | 21.58 |  +1.89 |   +3.51 |
+
+The 1.3 → 2.4 ms gap between the sum and the parent timer is the
+`set_statement_execution_timestamp` loop + the
+`storage_metadata = self.catalog.state().storage_metadata()` fetch
++ general overhead between the named steps.
+
+### What this tells us
+
+1. **`controller.storage.create_collections` is the dominant slope
+   owner inside CREATE TABLE.** It carries +2.59 ms of the +3.51 ms
+   `inner_controller_setup` slope at 10→15 (74%) and is the single
+   biggest absolute cost at 11.57 ms/CREATE at N=15k. That's a single
+   call into the storage controller that opens persist `WriteHandle`
+   and `SinceHandle` for the new table shard, downgrades the new
+   shard's critical since to `register_ts`, and installs the collection
+   into the in-memory controller state.
+2. **`get_local_write_ts` is a hidden 3.6 ms tax per CREATE.** That's
+   a synchronous timestamp-oracle round-trip happening *after* the
+   one already done at the top of `catalog_transact_inner`. Flat
+   slope, but absolute cost is 18% of `inner_controller_setup`.
+   Worth understanding why a CREATE TABLE needs two `get_local_write_ts`
+   calls when the previously-acquired `oracle_write_ts` should already
+   be valid for the register-ts purpose.
+3. **`apply_local_write` is another flat 3 ms.** This bumps the local
+   timeline read frontier so the new table is immediately readable.
+   We probably need it, but it's another sync await.
+4. **`catalog.advance_upper` is just 0.7 ms.** It's a single catalog-shard
+   CAS, and slope is tiny (+0.1 / +5k). It's the 2nd `advance_upper`
+   call per CREATE — the first one is inside `group_commit` to keep
+   `mz_catalog_raw` readable at the oracle ts.
+
+### CREATE TABLE end-to-end picture at N=15k
+
+create_p50 = 48.55 ms. Per-CREATE attribution:
+
+| component                                | ms     |
+|------------------------------------------|-------:|
+| coord_inner_total (CREATE estimate)      | ~30    |
+|  ↳ Catalog::transact (transact_inner+tx_commit+assign_state)| ~14 |
+|  ↳ coord_pre_transact                    | ~4     |
+|  ↳ coord_post_transact (builtin_table_execute) | ~5 |
+|  ↳ gap                                   | ~7     |
+| **apply_catalog_implications (CREATE)**  | **~25** |
+|  ↳ inner_controller_setup                | 21.58  |
+|     ↳ get_local_write_ts                 |  3.61  |
+|     ↳ catalog.advance_upper              |  0.71  |
+|     ↳ storage.create_collections         | 11.57  |
+|     ↳ apply_local_write                  |  3.29  |
+|     ↳ gap                                |  2.40  |
+|  ↳ inner_finalize                        | ~0     |
+|  ↳ everything else                       | ~3     |
+| append_table_duration_seconds (concurrent)|  ~5   |
+
+For CREATE the sequence in `catalog_transact_with_side_effects` is
+synchronous: `catalog_transact_inner` → `apply_catalog_implications`
+→ join(empty_side_effect, table_updates_notify). The table_updates
+write happens concurrent with apply_implications.
+
+### Where to go next
+
+The biggest remaining levers, in order of opportunity:
+
+1. **`storage.create_collections` (slope owner)** — 11.57 ms at N=15k,
+   +2.59 ms per +5k. Worth splitting into the named operations inside
+   `storage_collections.create_collections_for_bootstrap`:
+   `open_data_handles` (concurrent stream of write+since handle
+   opens), `compare_and_downgrade_since` for tables, the collection
+   sort, and the `install_collection_states` post-loop. We already
+   have `info_span!` annotations there — pair them with metrics.
+2. **The two oracle round-trips per CREATE
+   (`get_local_write_ts` + `apply_local_write`)** — flat ~6.5 ms
+   combined. Not slope-driving but a structural cost. Unclear if
+   both are required for correctness; needs design review.
+3. **Storage controller's installation loop** — `acquire_read_holds`
+   in `create_collections_for_bootstrap` per-collection might be
+   where the slope lives (read holds touch shared `BTreeMap`s sized
+   to N).
