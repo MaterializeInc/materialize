@@ -27,7 +27,7 @@ namespace Mz
 /-- A dataflow stream: row collection plus accompanying error
 collection. Operators below take a `BagStream` and return a
 `BagStream`. -/
-structure BagStream where
+@[ext] structure BagStream where
   data   : Relation
   errors : List EvalError
 
