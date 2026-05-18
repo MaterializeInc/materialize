@@ -807,4 +807,17 @@ theorem UnifiedStream.exceptAll_nil_left (r : UnifiedStream) :
   rw [UnifiedStream.unionAll_nil_left]
   exact (UnifiedStream.negate_consolidate r).symm
 
+/-- `bagExceptAll [] r = clampPositive (negate (consolidate r))`.
+With an all-`.val` `r`, the negation makes every diff non-positive,
+which `clampPositive` then drops, yielding the spec-correct empty
+result. `.error` records survive both stages. -/
+theorem UnifiedStream.bagExceptAll_nil_left (r : UnifiedStream) :
+    UnifiedStream.bagExceptAll [] r
+      = UnifiedStream.clampPositive
+          (UnifiedStream.negate (UnifiedStream.consolidate r)) := by
+  show UnifiedStream.clampPositive (UnifiedStream.exceptAll [] r)
+      = UnifiedStream.clampPositive
+          (UnifiedStream.negate (UnifiedStream.consolidate r))
+  rw [UnifiedStream.exceptAll_nil_left]
+
 end Mz
