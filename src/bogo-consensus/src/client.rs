@@ -38,7 +38,12 @@ pub use crate::proto::CaSResult;
 /// `consensus_cas`): with `1` channel ≈ 5-10% of CAS calls land in
 /// the 32-64 ms bucket and dominate the mean; bumping to a small
 /// pool clears that tail without measurable overhead at idle.
-const DEFAULT_CHANNELS: usize = 8;
+///
+/// Matches the default `persist_consensus_connection_pool_max_size`
+/// (50) for the Postgres/CRDB backend — that's the size persist is
+/// already designed to drive concurrently against a consensus
+/// backend, so it's the right shape for an apples-to-apples bogo.
+const DEFAULT_CHANNELS: usize = 50;
 
 /// A handle to a bogo-consensus server.
 ///
