@@ -21,6 +21,7 @@ import shlex
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from dataclasses import dataclass
 from textwrap import dedent
 from typing import Any, TextIO
 
@@ -2585,11 +2586,67 @@ class EnvdObjectsScalabilityMvsScenario(EnvdObjectsScalabilityScenario):
         self._pad_clusters_created = 0
 
 
+@dataclass(frozen=True)
+class ClusterObjectLimitsKind:
+    """Per-materialization-type knobs for a ClusterObjectLimitsScenario.
+
+    Each materialization (one "test object") is created from one or more SQL
+    statements (indexes need a view + a default index; MVs need a single
+    CREATE MATERIALIZED VIEW). Statement templates take ``{schema}``,
+    ``{base}``, and ``{i}`` placeholders; the ``WHERE id < {i}`` predicate
+    is what makes each view/MV structurally distinct so plan caching can't
+    collapse them.
+    """
+
+    scenario_name: str
+    create_templates: tuple[str, ...]
+    drop_template: str
+    label: str
+    # Join clause linking mz_materialization_lag (aliased `l`) to the
+    # cluster name, filtered to cluster `c`. Differs because cluster_id is
+    # carried on mz_indexes vs mz_materialized_views.
+    lag_filter: str
+
+
+CLUSTER_OBJECT_LIMITS_INDEXES_KIND = ClusterObjectLimitsKind(
+    scenario_name=SCENARIO_CLUSTER_OBJECT_LIMITS_INDEXES,
+    # Each (view, default index) pair is one independent index dataflow on
+    # `c`. DROP VIEW CASCADE removes the dependent default index too.
+    create_templates=(
+        "CREATE VIEW IF NOT EXISTS {schema}.v_{i} AS "
+        "SELECT id, val FROM {schema}.{base} WHERE id < {i}",
+        "CREATE DEFAULT INDEX IF NOT EXISTS IN CLUSTER c ON {schema}.v_{i}",
+    ),
+    drop_template="DROP VIEW IF EXISTS {schema}.v_{i} CASCADE",
+    label="indexed views",
+    lag_filter="""
+    JOIN mz_catalog.mz_indexes idx ON l.object_id = idx.id
+    JOIN mz_catalog.mz_clusters c ON idx.cluster_id = c.id
+    WHERE c.name = 'c'
+    """,
+)
+
+CLUSTER_OBJECT_LIMITS_MVS_KIND = ClusterObjectLimitsKind(
+    scenario_name=SCENARIO_CLUSTER_OBJECT_LIMITS_MVS,
+    create_templates=(
+        "CREATE MATERIALIZED VIEW IF NOT EXISTS {schema}.mv_{i} IN CLUSTER c "
+        "AS SELECT id, val FROM {schema}.{base} WHERE id < {i}",
+    ),
+    drop_template="DROP MATERIALIZED VIEW IF EXISTS {schema}.mv_{i}",
+    label="MVs",
+    lag_filter="""
+    JOIN mz_catalog.mz_materialized_views mv ON l.object_id = mv.id
+    JOIN mz_catalog.mz_clusters c ON mv.cluster_id = c.id
+    WHERE c.name = 'c'
+    """,
+)
+
+
 class ClusterObjectLimitsScenario(Scenario):
     """
-    Base class for cluster_object_limits scenarios. These find the maximum
-    number of idle materializations (indexes or materialized views) one can
-    place on a single cluster, while still preserving freshness.
+    Scenario for cluster_object_limits. Finds the maximum number of idle
+    materializations (indexes or materialized views, picked via ``kind``)
+    that one cluster can keep fresh.
 
     Structure:
       - A single one-row base table `base_t` (never updated) lives in
@@ -2597,8 +2654,8 @@ class ClusterObjectLimitsScenario(Scenario):
         no writes the cluster must keep ticking every materialization's
         write_frontier — which is what saturates an undersized cluster.
       - N structurally-distinct materializations on the measurement cluster
-        ``c``: a view-plus-default-index for the index scenario, or an MV for
-        the MV scenario, all derived from ``base_t``.
+        ``c``, all derived from ``base_t``. The exact materialization type
+        (indexed view vs MV) and the lag-query join are carried by ``kind``.
       - Per cluster-size iteration we drop+recreate ``c`` and ``PAD_SCHEMA``
         and then walk an N-list, adding the delta of objects at each step and
         probing freshness via ``mz_internal.mz_materialization_lag``.
@@ -2614,12 +2671,15 @@ class ClusterObjectLimitsScenario(Scenario):
     # cluster, so the probe does not add load to `c`.
     PROBE_CLUSTER: str = "mz_catalog_server"
 
-    def __init__(self, replica_size: str | None = None) -> None:
+    def __init__(
+        self, kind: ClusterObjectLimitsKind, replica_size: str | None = None
+    ) -> None:
         super().__init__(scale=0, replica_size=replica_size)
+        self._kind = kind
         self._current_n = 0
 
     def name(self) -> str:
-        raise NotImplementedError
+        return self._kind.scenario_name
 
     # The framework-level `setup()` / `drop()` are unused here; lifecycle is
     # driven by `run_scenario_cluster_object_limits`.
@@ -2651,7 +2711,19 @@ class ClusterObjectLimitsScenario(Scenario):
         self._current_n = 0
 
     def add_objects(self, runner: ScenarioRunner, target_n: int) -> None:
-        raise NotImplementedError
+        if target_n <= self._current_n:
+            return
+        statements = [
+            template.format(schema=self.PAD_SCHEMA, base=self.BASE_TABLE, i=i)
+            for i in range(self._current_n + 1, target_n + 1)
+            for template in self._kind.create_templates
+        ]
+        _bulk_run(
+            runner,
+            statements,
+            f"create {self._kind.label} {self._current_n + 1}..{target_n}",
+        )
+        self._current_n = target_n
 
     def remove_objects(self, runner: ScenarioRunner, target_n: int) -> None:
         """Drop the test objects above ``target_n`` from cluster ``c``.
@@ -2661,13 +2733,18 @@ class ClusterObjectLimitsScenario(Scenario):
         cliff, we step back down to probe intermediate N without rebuilding
         the catalog from scratch.
         """
-        raise NotImplementedError
-
-    def lag_filter(self) -> str:
-        """SQL fragment that filters `mz_materialization_lag` to our test
-        objects on cluster `c`. Subclass-specific because the cluster_id is
-        carried on `mz_indexes` vs `mz_materialized_views`."""
-        raise NotImplementedError
+        if target_n >= self._current_n:
+            return
+        statements = [
+            self._kind.drop_template.format(schema=self.PAD_SCHEMA, i=i)
+            for i in range(target_n + 1, self._current_n + 1)
+        ]
+        _bulk_run(
+            runner,
+            statements,
+            f"drop {self._kind.label} {target_n + 1}..{self._current_n}",
+        )
+        self._current_n = target_n
 
     def probe_lag_ms(self, runner: ScenarioRunner) -> tuple[int, int, float]:
         """Return (total, reporting, max_local_lag_ms) for our test objects.
@@ -2690,7 +2767,7 @@ class ClusterObjectLimitsScenario(Scenario):
                     0
                 )::float8
             FROM mz_internal.mz_materialization_lag l
-            {self.lag_filter()}
+            {self._kind.lag_filter}
             """,
             fetch=True,
         )
@@ -2710,104 +2787,6 @@ class ClusterObjectLimitsScenario(Scenario):
         # The freshness probe is driven externally by
         # `run_scenario_cluster_object_limits`; nothing else to measure here.
         return
-
-
-class ClusterObjectLimitsIndexesScenario(ClusterObjectLimitsScenario):
-    """N indexed views on cluster `c`, each derived from a one-row base table."""
-
-    def name(self) -> str:
-        return SCENARIO_CLUSTER_OBJECT_LIMITS_INDEXES
-
-    def add_objects(self, runner: ScenarioRunner, target_n: int) -> None:
-        if target_n <= self._current_n:
-            return
-        # Each (view, default index) pair is one independent index dataflow on
-        # `c`. WHERE id < {i} makes the views structurally distinct (avoids
-        # plan caching collapse).
-        statements: list[str] = []
-        for i in range(self._current_n + 1, target_n + 1):
-            statements.append(
-                f"CREATE VIEW IF NOT EXISTS {self.PAD_SCHEMA}.v_{i} AS "
-                f"SELECT id, val FROM {self.PAD_SCHEMA}.{self.BASE_TABLE} "
-                f"WHERE id < {i}"
-            )
-            statements.append(
-                f"CREATE DEFAULT INDEX IF NOT EXISTS "
-                f"IN CLUSTER c ON {self.PAD_SCHEMA}.v_{i}"
-            )
-        _bulk_run(
-            runner,
-            statements,
-            f"create indexed views {self._current_n + 1}..{target_n}",
-        )
-        self._current_n = target_n
-
-    def remove_objects(self, runner: ScenarioRunner, target_n: int) -> None:
-        if target_n >= self._current_n:
-            return
-        # DROP VIEW CASCADE removes the dependent default index too.
-        statements = [
-            f"DROP VIEW IF EXISTS {self.PAD_SCHEMA}.v_{i} CASCADE"
-            for i in range(target_n + 1, self._current_n + 1)
-        ]
-        _bulk_run(
-            runner,
-            statements,
-            f"drop indexed views {target_n + 1}..{self._current_n}",
-        )
-        self._current_n = target_n
-
-    def lag_filter(self) -> str:
-        return """
-        JOIN mz_catalog.mz_indexes idx ON l.object_id = idx.id
-        JOIN mz_catalog.mz_clusters c ON idx.cluster_id = c.id
-        WHERE c.name = 'c'
-        """
-
-
-class ClusterObjectLimitsMvsScenario(ClusterObjectLimitsScenario):
-    """N materialized views on cluster `c`, each derived from a one-row base table."""
-
-    def name(self) -> str:
-        return SCENARIO_CLUSTER_OBJECT_LIMITS_MVS
-
-    def add_objects(self, runner: ScenarioRunner, target_n: int) -> None:
-        if target_n <= self._current_n:
-            return
-        statements = [
-            f"CREATE MATERIALIZED VIEW IF NOT EXISTS {self.PAD_SCHEMA}.mv_{i} "
-            f"IN CLUSTER c "
-            f"AS SELECT id, val FROM {self.PAD_SCHEMA}.{self.BASE_TABLE} "
-            f"WHERE id < {i}"
-            for i in range(self._current_n + 1, target_n + 1)
-        ]
-        _bulk_run(
-            runner,
-            statements,
-            f"create MVs {self._current_n + 1}..{target_n}",
-        )
-        self._current_n = target_n
-
-    def remove_objects(self, runner: ScenarioRunner, target_n: int) -> None:
-        if target_n >= self._current_n:
-            return
-        statements = [
-            f"DROP MATERIALIZED VIEW IF EXISTS {self.PAD_SCHEMA}.mv_{i}"
-            for i in range(target_n + 1, self._current_n + 1)
-        ]
-        _bulk_run(
-            runner,
-            statements,
-            f"drop MVs {target_n + 1}..{self._current_n}",
-        )
-        self._current_n = target_n
-
-    def lag_filter(self) -> str:
-        return """
-        JOIN mz_catalog.mz_materialized_views mv ON l.object_id = mv.id
-        JOIN mz_catalog.mz_clusters c ON mv.cluster_id = c.id
-        WHERE c.name = 'c'
-        """
 
 
 # TODO: We should factor out the below
@@ -3360,7 +3339,9 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
                 if scenario == SCENARIO_CLUSTER_OBJECT_LIMITS_INDEXES:
                     print("--- SCENARIO: Running cluster object limits (indexes)")
                     run_scenario_cluster_object_limits(
-                        scenario=ClusterObjectLimitsIndexesScenario(),
+                        scenario=ClusterObjectLimitsScenario(
+                            CLUSTER_OBJECT_LIMITS_INDEXES_KIND
+                        ),
                         results_writer=cluster_object_limits_writer,
                         connection=conn,
                         target=target,
@@ -3373,7 +3354,9 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
                         "--- SCENARIO: Running cluster object limits (materialized views)"
                     )
                     run_scenario_cluster_object_limits(
-                        scenario=ClusterObjectLimitsMvsScenario(),
+                        scenario=ClusterObjectLimitsScenario(
+                            CLUSTER_OBJECT_LIMITS_MVS_KIND
+                        ),
                         results_writer=cluster_object_limits_writer,
                         connection=conn,
                         target=target,
