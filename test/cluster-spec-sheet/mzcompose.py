@@ -22,7 +22,7 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from textwrap import dedent
-from typing import Any
+from typing import Any, TextIO
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -2384,6 +2384,41 @@ def _bulk_run(runner: ScenarioRunner, statements: list[str], log_label: str) -> 
             print(f"  {log_label}: {i}/{total} ({rate:.1f}/s)")
 
 
+# CSV schemas used by `workflow_default`. The cluster-focused schema is the
+# default; envd_qps_scalability uses its own QPS-focused shape;
+# envd_objects_scalability reuses CLUSTER_FIELDNAMES verbatim and
+# cluster_object_limits extends it with an extra `healthy` column.
+CLUSTER_FIELDNAMES: list[str] = [
+    "scenario",
+    "scenario_version",
+    "scale",
+    "mode",
+    "category",
+    "test_name",
+    "cluster_size",
+    "repetition",
+    "size_bytes",
+    "time_ms",
+]
+ENVD_FIELDNAMES: list[str] = [
+    "scenario",
+    "scenario_version",
+    "scale",
+    "mode",
+    "category",
+    "test_name",
+    "envd_cpus",
+    "repetition",
+    "qps",
+]
+
+
+def _make_csv_writer(file: TextIO, fieldnames: list[str]) -> csv.DictWriter:
+    writer = csv.DictWriter(file, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    return writer
+
+
 def _best_effort_drop(runner: ScenarioRunner, stmt: str, label: str) -> None:
     """Run a DROP statement, swallowing any error as a WARNING.
 
@@ -3120,85 +3155,27 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
         )
         cluster_object_limits_file = open(cluster_object_limits_path, "w", newline="")
 
-        # Traditional scenarios: cluster-focused schema
-        cluster_writer = csv.DictWriter(
-            cluster_file,
-            fieldnames=[
-                "scenario",
-                "scenario_version",
-                "scale",
-                "mode",
-                "category",
-                "test_name",
-                "cluster_size",
-                "repetition",
-                "size_bytes",
-                "time_ms",
-            ],
-            extrasaction="ignore",
-        )
-        cluster_writer.writeheader()
+        # Cluster-focused schema, used by traditional cluster scenarios as
+        # well as the new envd_objects_scalability and cluster_object_limits
+        # scenarios (the latter extends with `healthy`).
+        cluster_writer = _make_csv_writer(cluster_file, CLUSTER_FIELDNAMES)
 
-        # Envd-focused scenarios: QPS schema
-        envd_writer = csv.DictWriter(
-            envd_file,
-            fieldnames=[
-                "scenario",
-                "scenario_version",
-                "scale",
-                "mode",
-                "category",
-                "test_name",
-                "envd_cpus",
-                "repetition",
-                "qps",
-            ],
-            extrasaction="ignore",
-        )
-        envd_writer.writeheader()
+        # Envd-focused (QPS) schema, used by envd_qps_scalability.
+        envd_writer = _make_csv_writer(envd_file, ENVD_FIELDNAMES)
 
-        # Envd-scalability scenarios reuse the cluster-focused schema:
+        # envd_objects_scalability reuses the cluster-focused schema:
         # `scale` carries the catalog object count (N), `cluster_size` is the
         # fixed measurement cluster, `time_ms` is the latency.
-        envd_objects_scalability_writer = csv.DictWriter(
-            envd_objects_scalability_file,
-            fieldnames=[
-                "scenario",
-                "scenario_version",
-                "scale",
-                "mode",
-                "category",
-                "test_name",
-                "cluster_size",
-                "repetition",
-                "size_bytes",
-                "time_ms",
-            ],
-            extrasaction="ignore",
+        envd_objects_scalability_writer = _make_csv_writer(
+            envd_objects_scalability_file, CLUSTER_FIELDNAMES
         )
-        envd_objects_scalability_writer.writeheader()
 
-        # cluster_object_limits scenarios: per-(cluster_size, N) freshness
-        # sample. `scale` carries N, `time_ms` carries the max local lag,
-        # `healthy` is an extra boolean column (1/0).
-        cluster_object_limits_writer = csv.DictWriter(
-            cluster_object_limits_file,
-            fieldnames=[
-                "scenario",
-                "scenario_version",
-                "scale",
-                "mode",
-                "category",
-                "test_name",
-                "cluster_size",
-                "repetition",
-                "size_bytes",
-                "time_ms",
-                "healthy",
-            ],
-            extrasaction="ignore",
+        # cluster_object_limits: per-(cluster_size, N) freshness sample.
+        # `scale` carries N, `time_ms` carries the max local lag, `healthy`
+        # is an extra boolean column (1/0).
+        cluster_object_limits_writer = _make_csv_writer(
+            cluster_object_limits_file, CLUSTER_FIELDNAMES + ["healthy"]
         )
-        cluster_object_limits_writer.writeheader()
 
         def process(scenario: str) -> None:
             with composition.test_case(scenario):
