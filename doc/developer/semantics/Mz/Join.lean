@@ -433,4 +433,106 @@ theorem UnifiedStream.cross_assoc (a b c : UnifiedStream) :
   intro cd _
   exact cross_step_assoc ad bd cd
 
+/-! ## Cross and error scopes
+
+A pair `(ld, rd)` of input records produces one output record
+`(combineCarrier ld.1 rd.1, ld.2 * rd.2)` in `cross l r`. The
+error-scope behavior of cross is then:
+
+* Row-err on left propagates to row-err on output (left wins on
+  carrier-combine conflict).
+* Row-err on right propagates to row-err on output *when the
+  left record's carrier is `.row`* (otherwise the left's err wins).
+* Collection-err on either side propagates to collection-err on
+  output, because `.error` absorbs in `DiffWithError` multiplication.
+
+These rules collectively show cross *grows* both error scopes
+multiplicatively in the size of the opposite input. -/
+
+/-- Every input pair `(ld, rd)` contributes one output record to
+`cross l r`. -/
+theorem UnifiedStream.mem_cross_of_mems
+    (l r : UnifiedStream)
+    (ld : UnifiedRow × DiffWithError Int) (hL : ld ∈ l)
+    (rd : UnifiedRow × DiffWithError Int) (hR : rd ∈ r) :
+    (combineCarrier ld.1 rd.1, ld.2 * rd.2) ∈ UnifiedStream.cross l r := by
+  induction l with
+  | nil => exact absurd hL List.not_mem_nil
+  | cons hdL tlL ih =>
+    rw [UnifiedStream.cross_cons_left]
+    rcases List.mem_cons.mp hL with hHd | hTl
+    · subst hHd
+      exact List.mem_append.mpr (Or.inl (List.mem_map.mpr ⟨rd, hR, rfl⟩))
+    · exact List.mem_append.mpr (Or.inr (ih hTl))
+
+/-- Left-side row-err propagates: a `.err e` carrier on the left
+combined with any right record produces an `.err e` carrier in
+the output (left wins on combineCarrier). -/
+theorem UnifiedStream.cross_errCarriers_from_left
+    (l r : UnifiedStream) (e : EvalError) (d : DiffWithError Int)
+    (hL : (UnifiedRow.err e, d) ∈ l)
+    (rd : UnifiedRow × DiffWithError Int) (hR : rd ∈ r) :
+    e ∈ UnifiedStream.errCarriers (UnifiedStream.cross l r) := by
+  have hMem : (combineCarrier (UnifiedRow.err e) rd.1, d * rd.2)
+                ∈ UnifiedStream.cross l r :=
+    UnifiedStream.mem_cross_of_mems l r (UnifiedRow.err e, d) hL rd hR
+  have hCombine : combineCarrier (UnifiedRow.err e) rd.1 = UnifiedRow.err e := by
+    cases rd.1 <;> rfl
+  rw [hCombine] at hMem
+  exact (UnifiedStream.mem_errCarriers _ _).mpr ⟨d * rd.2, hMem⟩
+
+/-- Right-side row-err propagates when paired with a left-row
+record. A right `.err e` combined with a left `.row la` gives
+output `.err e` (combineCarrier's third arm). When paired with a
+left `.err e'`, the left wins; the right `.err e` does not appear
+under that pairing. -/
+theorem UnifiedStream.cross_errCarriers_from_right
+    (l r : UnifiedStream) (e : EvalError) (d : DiffWithError Int)
+    (hR : (UnifiedRow.err e, d) ∈ r)
+    (la : Row) (dL : DiffWithError Int)
+    (hL : (UnifiedRow.row la, dL) ∈ l) :
+    e ∈ UnifiedStream.errCarriers (UnifiedStream.cross l r) := by
+  have hMem : (combineCarrier (UnifiedRow.row la) (UnifiedRow.err e), dL * d)
+                ∈ UnifiedStream.cross l r :=
+    UnifiedStream.mem_cross_of_mems l r
+      (UnifiedRow.row la, dL) hL (UnifiedRow.err e, d) hR
+  have hCombine : combineCarrier (UnifiedRow.row la) (UnifiedRow.err e)
+                = UnifiedRow.err e := rfl
+  rw [hCombine] at hMem
+  exact (UnifiedStream.mem_errCarriers _ _).mpr ⟨dL * d, hMem⟩
+
+/-- Left-side collection-err propagates: a `.error`-diff record on
+the left combined with any right record produces an `.error`-diff
+output (`.error * d = .error`). -/
+theorem UnifiedStream.cross_errorDiffCarriers_from_left
+    (l r : UnifiedStream) (uc : UnifiedRow)
+    (hL : (uc, (DiffWithError.error : DiffWithError Int)) ∈ l)
+    (rd : UnifiedRow × DiffWithError Int) (hR : rd ∈ r) :
+    combineCarrier uc rd.1
+      ∈ UnifiedStream.errorDiffCarriers (UnifiedStream.cross l r) := by
+  have hMem : (combineCarrier uc rd.1,
+               (DiffWithError.error : DiffWithError Int) * rd.2)
+                ∈ UnifiedStream.cross l r :=
+    UnifiedStream.mem_cross_of_mems l r
+      (uc, (DiffWithError.error : DiffWithError Int)) hL rd hR
+  rw [DiffWithError.error_mul_left] at hMem
+  exact (UnifiedStream.mem_errorDiffCarriers _ _).mpr hMem
+
+/-- Right-side collection-err propagates: a `.error`-diff record
+on the right combined with any left record produces an
+`.error`-diff output (`d * .error = .error`). -/
+theorem UnifiedStream.cross_errorDiffCarriers_from_right
+    (l r : UnifiedStream) (uc : UnifiedRow)
+    (hR : (uc, (DiffWithError.error : DiffWithError Int)) ∈ r)
+    (ld : UnifiedRow × DiffWithError Int) (hL : ld ∈ l) :
+    combineCarrier ld.1 uc
+      ∈ UnifiedStream.errorDiffCarriers (UnifiedStream.cross l r) := by
+  have hMem : (combineCarrier ld.1 uc,
+               ld.2 * (DiffWithError.error : DiffWithError Int))
+                ∈ UnifiedStream.cross l r :=
+    UnifiedStream.mem_cross_of_mems l r ld hL
+      (uc, (DiffWithError.error : DiffWithError Int)) hR
+  rw [DiffWithError.error_mul_right] at hMem
+  exact (UnifiedStream.mem_errorDiffCarriers _ _).mpr hMem
+
 end Mz
