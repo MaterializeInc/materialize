@@ -92,6 +92,23 @@ theorem error_add_right [Add α] (x : DiffWithError α) :
   | val _ => rfl
   | error => rfl
 
+/-- Converse of absorption: `.error` can only emerge from `+` if at
+least one summand was `.error`. The `.val + .val` branch always
+returns `.val`, so the result `.error` rules it out. -/
+theorem add_eq_error_left_or_right [Add α] (a b : DiffWithError α)
+    (h : a + b = error) :
+    a = error ∨ b = error := by
+  cases a with
+  | error => exact Or.inl rfl
+  | val x =>
+    cases b with
+    | error => exact Or.inr rfl
+    | val y =>
+      have hEq : (DiffWithError.val x : DiffWithError α) + DiffWithError.val y
+               = DiffWithError.val (x + y) := rfl
+      rw [hEq] at h
+      cases h
+
 theorem error_mul_left [Mul α] (y : DiffWithError α) :
     (error : DiffWithError α) * y = error := rfl
 

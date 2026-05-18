@@ -1492,4 +1492,18 @@ theorem UnifiedStream.consolidate_errorDiffCarriers_mono
   rw [UnifiedStream.mem_errorDiffCarriers]
   exact UnifiedStream.consolidate_preserves_error us uc h
 
+/-- Full equivalence: the collection-err set of the consolidated
+stream equals the input's. Combines `consolidate_preserves_error`
+(forward) with `consolidate_error_inv` (reverse — no spurious
+`.error` emerges from `.val + .val`). -/
+theorem UnifiedStream.consolidate_errorDiffCarriers_iff
+    (us : UnifiedStream) (uc : UnifiedRow) :
+    uc ∈ UnifiedStream.errorDiffCarriers (UnifiedStream.consolidate us)
+      ↔ uc ∈ UnifiedStream.errorDiffCarriers us := by
+  rw [UnifiedStream.mem_errorDiffCarriers,
+      UnifiedStream.mem_errorDiffCarriers]
+  constructor
+  · intro h; exact UnifiedStream.consolidate_error_inv us uc h
+  · intro h; exact UnifiedStream.consolidate_preserves_error us uc h
+
 end Mz
