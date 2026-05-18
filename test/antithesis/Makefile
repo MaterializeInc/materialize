@@ -12,7 +12,7 @@
 # The harness emits one docker-compose.yaml per workload group (see
 # `test/antithesis/groups.yaml`).  Use `GROUP=<name>` to pick one;
 # defaults to `combined` (kitchen-sink) for back-compat.  Valid groups:
-# kafka, pg-cdc, mysql-cdc, parallel-workload, combined.
+# kafka, pg-cdc, mysql-cdc, parallel-workload, upsert-stress, combined.
 #
 # Targets:
 #   make build GROUP=kafka           # regen this group's compose YAML, acquire images
@@ -39,7 +39,7 @@ SHELL := /usr/bin/env bash
 GROUP     ?= combined
 PROJECT   := materialize-antithesis-$(GROUP)
 REPO_ROOT := $(realpath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
-ALL_GROUPS := kafka pg-cdc mysql-cdc parallel-workload combined
+ALL_GROUPS := kafka pg-cdc mysql-cdc parallel-workload upsert-stress combined
 
 # Pick podman if available, else docker.
 ifndef RUNTIME
@@ -64,6 +64,16 @@ PSQL         := $(COMPOSE) exec materialized psql -h localhost -p 6875 -U materi
 # transitively, since it's a no-op FROM-scratch image referencing the
 # materialized + antithesis-workload fingerprints.
 MZBUILD_IMAGES := materialized antithesis-workload-$(GROUP)
+
+# The upsert-stress group's compose adds `upsert-hammer-{i}` services
+# backed by a dedicated `antithesis-upsert-hammer` image (kept tiny +
+# free of any /opt/antithesis/ directory so Antithesis doesn't pick it
+# up as a Test Composer target).  Only acquire it when the active
+# group actually references it; other groups would just be paying the
+# build cost for no consumer.
+ifeq ($(GROUP),upsert-stress)
+  MZBUILD_IMAGES += antithesis-upsert-hammer
+endif
 
 # ---------------------------------------------------------------------------
 # Build

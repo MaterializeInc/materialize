@@ -70,6 +70,18 @@ from materialize.mzcompose.services.zookeeper import Zookeeper
 # topology closer to production replica counts.
 CLUSTERD_POOL_SIZE = int(os.environ.get("ANTITHESIS_CLUSTERD_POOL_SIZE", "2"))
 
+# Number of `upsert-hammer-{i}` containers the kitchen-sink topology
+# declares.  Only the `upsert-stress` group lists them in its
+# `services:` block in groups.yaml; every other group filters them
+# out at export-compose time.  Default 4: with the hammer's ~100-key
+# shared space spread across 8 topic partitions, this gives each
+# timely worker meaningful traffic while still piling concurrent
+# retract+insert events on the same per-(key, ts) consolidation
+# window.  Bumping this requires adding the extra `upsert-hammer-{i}`
+# names to the `upsert-stress` group's `services:` list — export-
+# compose validates the names match.
+UPSERT_HAMMER_REPLICAS = int(os.environ.get("ANTITHESIS_UPSERT_HAMMER_REPLICAS", "4"))
+
 # Timely worker threads per clusterd process. Reverted from 16 back to 4
 # on suspicion that Antithesis's deterministic hypervisor runs the whole
 # fleet on a single core — 16 work-stealing Timely workers per process
@@ -156,6 +168,62 @@ class FaultOrchestrator(Service):
         super().__init__(name="fault-orchestrator", config=config)
 
 
+class UpsertHammer(Service):
+    """Continuous Kafka load generator for the INC-936 upsert-stress group.
+
+    Reuses the per-group workload image but overrides the entrypoint to
+    run `/opt/upsert-hammer/upsert_hammer_loop.py` — a tight produce
+    loop that hammers the multi-partition stress topic with overlapping
+    upserts and tombstones on a ~100-key shared space. Unlike Test
+    Composer drivers (bounded, re-launched), this container's process
+    is long-lived and the load is uninterrupted.
+
+    `restart: no` per Antithesis docker best practices — under fault
+    injection, docker auto-restart fights Antithesis's kill directives.
+    The hammer's internal retry loop handles transient broker/network
+    failures already; a process exit means a genuine bug we want
+    visible, not papered over.
+
+    Only the `upsert-stress` group lists these in its `services:`;
+    every other group filters them out at export-compose time.
+    """
+
+    def __init__(self, name: str, instance_id: str) -> None:
+        config: ServiceConfig = {
+            # Dedicated minimal image.  Crucially this image has *no*
+            # `/opt/antithesis/test/v1/` directory baked in, which is
+            # what Antithesis scans (off the image layout, not the
+            # running container) to discover Test Composer commands —
+            # reusing a workload image and rm'ing at startup is too
+            # late.  See test/antithesis/upsert-hammer/Dockerfile for
+            # the full rationale.
+            "mzbuild": "antithesis-upsert-hammer",
+            # Wait for the rest of the topology to be ready before
+            # producing.  `workload: service_healthy` is the key one:
+            # it gates the hammer on workload-entrypoint.sh finishing
+            # cluster provisioning + emitting setup_complete, so the
+            # `first_upsert_stress_setup` driver has had a chance to
+            # create the source before any traffic lands.  The rest
+            # mirror the relevant subset of workload's own depends_on
+            # (mysql / postgres-source / schema-registry are omitted —
+            # the upsert-stress group's topology doesn't include them
+            # and the hammer doesn't talk to them).
+            "depends_on": {
+                "workload": {"condition": "service_healthy"},
+                "materialized": {"condition": "service_healthy"},
+                "clusterd1": {"condition": "service_started"},
+                "clusterd2": {"condition": "service_started"},
+                "kafka": {"condition": "service_healthy"},
+            },
+            "environment": [
+                "KAFKA_BROKER=kafka:9092",
+                f"HAMMER_INSTANCE_ID={instance_id}",
+            ],
+            "restart": "no",
+        }
+        super().__init__(name=name, config=config)
+
+
 class Workload(Service):
     """Antithesis workload client — Python test driver."""
 
@@ -228,6 +296,21 @@ class Workload(Service):
                 "CLUSTER_REPLICA_SIZES="
                 + json.dumps(cluster_replica_size_map()),
             ],
+            # Healthcheck so other services can gate their start on
+            # the workload service finishing its setup phase
+            # (provisioning antithesis_cluster, running first_*
+            # drivers, emitting setup_complete).  Used by the upsert-
+            # stress group's upsert-hammer-{i} containers so they
+            # don't start producing into Kafka before the source
+            # exists.  Sentinel is touched at the very end of
+            # workload-entrypoint.sh after setup-complete.sh fires.
+            "healthcheck": {
+                "test": ["CMD-SHELL", "test -f /tmp/workload-ready"],
+                "interval": "5s",
+                "timeout": "5s",
+                "retries": 60,
+                "start_period": "60s",
+            },
         }
         super().__init__(name="workload", config=config)
 
@@ -402,6 +485,17 @@ SERVICES = [
             scratch_directory=None,
         )
         for i in range(CLUSTERD_POOL_SIZE)
+    ],
+    # Standalone continuous-load containers for the INC-936 upsert-
+    # stress group.  Declared in the kitchen-sink SERVICES list so
+    # mzcompose validation and the kitchen-sink combined image can
+    # see them; only the upsert-stress group lists them under
+    # `services:` in groups.yaml, so every other group's per-group
+    # docker-compose.yaml filters them out at export time.  See
+    # UpsertHammer above for the role + rationale.
+    *[
+        UpsertHammer(name=f"upsert-hammer-{i}", instance_id=str(i))
+        for i in range(UPSERT_HAMMER_REPLICAS)
     ],
     Materialized(
         external_blob_store=True,

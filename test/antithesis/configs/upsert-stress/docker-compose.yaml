@@ -8,10 +8,10 @@
 # by the Apache License, Version 2.0.
 
 # GENERATED FILE — do not edit. Regenerate via:
-#   bin/pyactivate test/antithesis/export-compose.py --group=mysql-cdc > \
-#     test/antithesis/configs/mysql-cdc/docker-compose.yaml
+#   bin/pyactivate test/antithesis/export-compose.py --group=upsert-stress > \
+#     test/antithesis/configs/upsert-stress/docker-compose.yaml
 # Source of truth: test/antithesis/mzcompose.py + test/antithesis/groups.yaml.
-# Group: mysql-cdc
+# Group: upsert-stress
 
 services:
   postgres-metadata:
@@ -98,74 +98,87 @@ services:
     hostname: minio
     networks:
     - antithesis-net
-  mysql:
-    init: true
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.9.4
     environment:
-    - MYSQL_ROOT_PASSWORD=p@ssw0rd
-    command:
-    - --secure-file-priv=/var/lib/mysql-files
-    - --log-bin=mysql-bin
-    - --gtid_mode=ON
-    - --enforce_gtid_consistency=ON
-    - --binlog-format=row
-    - --binlog-row-image=full
-    - --binlog-row-metadata=full
-    - --server-id=1
-    - --max-connections=500
+    - ZOOKEEPER_CLIENT_PORT=2181
     healthcheck:
       test:
       - CMD
-      - mysqladmin
-      - ping
-      - --password=p@ssw0rd
-      - --protocol=TCP
+      - nc
+      - -z
+      - localhost
+      - '2181'
       interval: 1s
-      start_period: 180s
-    volumes:
-    - mysqldata_primary:/var/lib/mysql
-    - mydata:/var/lib/mysql-files
-    image: mysql:9.5.0
+      start_period: 120s
     platform: linux/amd64
-    container_name: mysql
-    hostname: mysql
+    container_name: zookeeper
+    hostname: zookeeper
     networks:
     - antithesis-net
-  mysql-replica:
-    init: true
+  kafka:
+    image: confluentinc/cp-kafka:7.9.4
     environment:
-    - MYSQL_ROOT_PASSWORD=p@ssw0rd
-    command:
-    - --secure-file-priv=/var/lib/mysql-files
-    - --log-bin=mysql-bin
-    - --gtid_mode=ON
-    - --enforce_gtid_consistency=ON
-    - --binlog-format=row
-    - --binlog-row-image=full
-    - --binlog-row-metadata=full
-    - --server-id=2
-    - --max-connections=500
-    - --log-slave-updates
-    - --skip-replica-start
-    - --replica_parallel_workers=4
-    - --replica_preserve_commit_order=ON
+    - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
+    - KAFKA_CONFLUENT_SUPPORT_METRICS_ENABLE=false
+    - KAFKA_MIN_INSYNC_REPLICAS=1
+    - KAFKA_OFFSETS_TOPIC_NUM_PARTITIONS=1
+    - KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1
+    - KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1
+    - KAFKA_MESSAGE_MAX_BYTES=15728640
+    - KAFKA_REPLICA_FETCH_MAX_BYTES=15728640
+    - KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS=100
+    - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+    - KAFKA_BROKER_ID=1
+    - KAFKA_AUTO_CREATE_TOPICS_ENABLE=True
+    - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+    depends_on:
+      zookeeper:
+        condition: service_healthy
     healthcheck:
       test:
       - CMD
-      - mysqladmin
-      - ping
-      - --password=p@ssw0rd
-      - --protocol=TCP
+      - nc
+      - -z
+      - localhost
+      - '9092'
       interval: 1s
-      start_period: 180s
-    volumes:
-    - mysqldata_replica:/var/lib/mysql
-    - mydata:/var/lib/mysql-files
-    image: mysql:9.5.0
+      start_period: 120s
     platform: linux/amd64
-    container_name: mysql-replica
-    hostname: mysql-replica
+    container_name: kafka
+    hostname: kafka
     networks:
     - antithesis-net
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.9.4
+    networks:
+    - antithesis-net
+    environment:
+    - SCHEMA_REGISTRY_KAFKASTORE_TIMEOUT_MS=10000
+    - SCHEMA_REGISTRY_KAFKASTORE_TOPIC_REPLICATION_FACTOR=1
+    - SCHEMA_REGISTRY_HOST_NAME=schema-registry
+    - SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=PLAINTEXT://kafka:9092
+    command:
+    - /bin/bash
+    - -c
+    - . /etc/confluent/docker/bash-config && . /etc/confluent/docker/mesos-setup.sh
+      && . /etc/confluent/docker/apply-mesos-overrides && /etc/confluent/docker/configure
+      && exec /etc/confluent/docker/launch
+    depends_on:
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test:
+      - CMD
+      - curl
+      - -fu
+      - materialize:sekurity
+      - localhost:8081
+      interval: 1s
+      start_period: 120s
+    platform: linux/amd64
+    container_name: schema-registry
+    hostname: schema-registry
   clusterd1:
     entrypoint:
     - tini
@@ -242,6 +255,98 @@ services:
     pull_policy: never
     container_name: clusterd2
     hostname: clusterd2
+    networks:
+    - antithesis-net
+  upsert-hammer-0:
+    depends_on:
+      workload:
+        condition: service_healthy
+      materialized:
+        condition: service_healthy
+      clusterd1:
+        condition: service_started
+      clusterd2:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+    environment:
+    - KAFKA_BROKER=kafka:9092
+    - HAMMER_INSTANCE_ID=0
+    restart: 'no'
+    platform: linux/amd64
+    image: ${ANTITHESIS_UPSERT_HAMMER_IMAGE}
+    pull_policy: never
+    container_name: upsert-hammer-0
+    hostname: upsert-hammer-0
+    networks:
+    - antithesis-net
+  upsert-hammer-1:
+    depends_on:
+      workload:
+        condition: service_healthy
+      materialized:
+        condition: service_healthy
+      clusterd1:
+        condition: service_started
+      clusterd2:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+    environment:
+    - KAFKA_BROKER=kafka:9092
+    - HAMMER_INSTANCE_ID=1
+    restart: 'no'
+    platform: linux/amd64
+    image: ${ANTITHESIS_UPSERT_HAMMER_IMAGE}
+    pull_policy: never
+    container_name: upsert-hammer-1
+    hostname: upsert-hammer-1
+    networks:
+    - antithesis-net
+  upsert-hammer-2:
+    depends_on:
+      workload:
+        condition: service_healthy
+      materialized:
+        condition: service_healthy
+      clusterd1:
+        condition: service_started
+      clusterd2:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+    environment:
+    - KAFKA_BROKER=kafka:9092
+    - HAMMER_INSTANCE_ID=2
+    restart: 'no'
+    platform: linux/amd64
+    image: ${ANTITHESIS_UPSERT_HAMMER_IMAGE}
+    pull_policy: never
+    container_name: upsert-hammer-2
+    hostname: upsert-hammer-2
+    networks:
+    - antithesis-net
+  upsert-hammer-3:
+    depends_on:
+      workload:
+        condition: service_healthy
+      materialized:
+        condition: service_healthy
+      clusterd1:
+        condition: service_started
+      clusterd2:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+    environment:
+    - KAFKA_BROKER=kafka:9092
+    - HAMMER_INSTANCE_ID=3
+    restart: 'no'
+    platform: linux/amd64
+    image: ${ANTITHESIS_UPSERT_HAMMER_IMAGE}
+    pull_policy: never
+    container_name: upsert-hammer-3
+    hostname: upsert-hammer-3
     networks:
     - antithesis-net
   materialized:
@@ -500,9 +605,9 @@ services:
         condition: service_started
       clusterd2:
         condition: service_started
-      mysql:
+      kafka:
         condition: service_healthy
-      mysql-replica:
+      schema-registry:
         condition: service_healthy
     environment:
     - PGHOST=materialized
@@ -641,7 +746,7 @@ services:
       32, "workers": 1}, "scale=32,workers=32": {"cpu_exclusive": false, "cpu_limit":
       null, "credits_per_hour": "1024", "disabled": false, "disk_limit": null, "is_cc":
       true, "memory_limit": "4 GiB", "scale": 32, "workers": 32}}'
-    - ANTITHESIS_WORKLOAD_GROUP=mysql-cdc
+    - ANTITHESIS_WORKLOAD_GROUP=upsert-stress
     healthcheck:
       test:
       - CMD-SHELL
@@ -665,5 +770,3 @@ volumes:
   mydata: null
   tmp: null
   scratch: null
-  mysqldata_primary: null
-  mysqldata_replica: null

@@ -46,7 +46,11 @@ from groups import load_manifest  # noqa: E402
 
 # `materialized` is shared across every group; both workload and config
 # images are per-group and discovered from the manifest at runtime.
-SHARED_IMAGES = ["materialized"]
+# `antithesis-upsert-hammer` is also shared (one fingerprint regardless
+# of group) — currently only the upsert-stress group's compose
+# references it, but pushing once means a future group can pick it up
+# with no additional plumbing.
+SHARED_IMAGES = ["materialized", "antithesis-upsert-hammer"]
 
 
 def main() -> None:

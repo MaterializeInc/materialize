@@ -148,6 +148,7 @@ COPY bake-test-templates.sh /usr/local/bin/bake-test-templates.sh
 RUN chmod +x /usr/local/bin/bake-test-templates.sh \
  && /usr/local/bin/bake-test-templates.sh "$ANTITHESIS_WORKLOAD_GROUP"
 
+
 COPY workload-entrypoint.sh /usr/local/bin/workload-entrypoint.sh
 RUN chmod +x /usr/local/bin/workload-entrypoint.sh
 
