@@ -72,4 +72,33 @@ theorem TimedUnifiedStream.consolidateAtTimeFlat_eq_error_of_mem
   refine List.mem_map.mpr ⟨r, ?_, h_err⟩
   exact List.mem_filter.mpr ⟨h_mem, by simp [h_time]⟩
 
+/-! ## Reverse direction: from `.error` total to `.error` record -/
+
+/-- If the collection-wide consolidation is `.error`, at least
+one record in the stream carries an `.error` diff. The converse
+of `consolidateAll_eq_error_of_mem`. -/
+theorem TimedUnifiedStream.consolidateAll_error_inv
+    {s : TimedUnifiedStream}
+    (h : TimedUnifiedStream.consolidateAll s = DiffWithError.error) :
+    ∃ r ∈ s, r.2.2 = (DiffWithError.error : DiffWithError Int) := by
+  unfold TimedUnifiedStream.consolidateAll at h
+  obtain ⟨d, hMem, hD⟩ := DiffWithError.sumAll_error_inv h
+  obtain ⟨r, hRMem, hRD⟩ := List.mem_map.mp hMem
+  exact ⟨r, hRMem, by rw [hRD]; exact hD⟩
+
+/-- Time-slice version: an `.error` total at time `t` witnesses
+an `.error` record at time `t`. -/
+theorem TimedUnifiedStream.consolidateAtTimeFlat_error_inv
+    {s : TimedUnifiedStream} (t : Nat)
+    (h : TimedUnifiedStream.consolidateAtTimeFlat t s = DiffWithError.error) :
+    ∃ r ∈ s, r.2.1 = t ∧ r.2.2 = (DiffWithError.error : DiffWithError Int) := by
+  unfold TimedUnifiedStream.consolidateAtTimeFlat at h
+  obtain ⟨d, hMem, hD⟩ := DiffWithError.sumAll_error_inv h
+  obtain ⟨r, hRMem, hRD⟩ := List.mem_map.mp hMem
+  have hRFilter : r ∈ s.filter (·.2.1 = t) := hRMem
+  rw [List.mem_filter] at hRFilter
+  refine ⟨r, hRFilter.1, ?_, ?_⟩
+  · exact of_decide_eq_true hRFilter.2
+  · rw [hRD]; exact hD
+
 end Mz

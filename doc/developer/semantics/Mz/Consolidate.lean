@@ -82,6 +82,31 @@ theorem sumAll_val_of_all_val [Zero α] [Add α]
     rw [hh_eq, ht_eq]
     rfl
 
+/-- Reverse direction: a `sumAll` equal to `.error` witnesses an
+`.error` summand somewhere in the list. The `.val + .val` arm of
+`+` never returns `.error`, so an `.error` total rules in at
+least one `.error` input. -/
+theorem sumAll_error_inv [Zero α] [Add α]
+    {ds : List (DiffWithError α)}
+    (h : sumAll ds = error) :
+    ∃ d ∈ ds, d = error := by
+  induction ds with
+  | nil =>
+    -- sumAll [] = 0 = val 0 ≠ error
+    show ∃ d ∈ ([] : List (DiffWithError α)), d = error
+    exfalso
+    have h0 : (0 : DiffWithError α) = (error : DiffWithError α) := h
+    have : (DiffWithError.val (0 : α) : DiffWithError α)
+         = (DiffWithError.error : DiffWithError α) := h0
+    cases this
+  | cons hd tl ih =>
+    show ∃ d ∈ hd :: tl, d = error
+    have hSum : hd + sumAll tl = error := h
+    rcases add_eq_error_left_or_right hd (sumAll tl) hSum with hHd | hTl
+    · exact ⟨hd, List.mem_cons_self, hHd⟩
+    · obtain ⟨d, hMem, hD⟩ := ih hTl
+      exact ⟨d, List.mem_cons_of_mem _ hMem, hD⟩
+
 end DiffWithError
 
 end Mz
