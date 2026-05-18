@@ -811,6 +811,32 @@ def UnifiedStream.lookup (uc : UnifiedRow) :
 theorem UnifiedStream.lookup_nil (uc : UnifiedRow) :
     UnifiedStream.lookup uc [] = none := rfl
 
+/-- If a carrier is in the stream (with some diff), the lookup
+returns `some` value. The returned diff need not be the input one
+(consolidated streams keep each carrier once, but `lookup` does
+not depend on that invariant). -/
+theorem UnifiedStream.lookup_isSome_of_mem
+    (uc : UnifiedRow) (us : UnifiedStream)
+    (h : ∃ d, (uc, d) ∈ us) :
+    ∃ d, UnifiedStream.lookup uc us = some d := by
+  induction us with
+  | nil => obtain ⟨_, hMem⟩ := h; exact absurd hMem List.not_mem_nil
+  | cons hd tl ih =>
+    obtain ⟨uc', d'⟩ := hd
+    by_cases hEq : uc = uc'
+    · refine ⟨d', ?_⟩
+      show (if uc = uc' then some d' else UnifiedStream.lookup uc tl) = some d'
+      rw [if_pos hEq]
+    · have hTl : ∃ d, (uc, d) ∈ tl := by
+        obtain ⟨d, hMem⟩ := h
+        rcases List.mem_cons.mp hMem with hHead | hTail
+        · exact absurd ((Prod.mk.injEq _ _ _ _).mp hHead).1 hEq
+        · exact ⟨d, hTail⟩
+      obtain ⟨d, hLookup⟩ := ih hTl
+      refine ⟨d, ?_⟩
+      show (if uc = uc' then some d' else UnifiedStream.lookup uc tl) = some d
+      rw [if_neg hEq]; exact hLookup
+
 /-- `INTERSECT ALL` on `UnifiedStream`. Consolidates both sides,
 then per left-carrier emits `(uc, min(L_diff, R_diff))` if the
 carrier exists in the right's consolidate; otherwise drops it. -/
@@ -830,6 +856,35 @@ theorem UnifiedStream.intersectAll_length_le (l r : UnifiedStream) :
           ≤ (UnifiedStream.consolidate l).length
     exact List.length_filterMap_le _ _
   exact Nat.le_trans h1 (UnifiedStream.consolidate_length_le l)
+
+/-- `.error` diff in the left input survives `intersectAll`,
+provided the same carrier also appears (with any diff) in the
+right input. The min combinator's left-absorbing property
+(`error_min_left`) ensures the output diff is `.error`. -/
+theorem UnifiedStream.intersectAll_preserves_error_diff_left
+    (l r : UnifiedStream) (uc : UnifiedRow)
+    (hL : (uc, (DiffWithError.error : DiffWithError Int))
+            ∈ UnifiedStream.consolidate l)
+    (hR : ∃ d, (uc, d) ∈ UnifiedStream.consolidate r) :
+    (uc, (DiffWithError.error : DiffWithError Int))
+      ∈ UnifiedStream.intersectAll l r := by
+  obtain ⟨d', hLookup⟩ :=
+    UnifiedStream.lookup_isSome_of_mem uc _ hR
+  show (uc, DiffWithError.error)
+    ∈ (UnifiedStream.consolidate l).filterMap _
+  rw [List.mem_filterMap]
+  refine ⟨(uc, DiffWithError.error), hL, ?_⟩
+  show (match UnifiedStream.lookup uc (UnifiedStream.consolidate r) with
+        | none    => none
+        | some d' => some (uc, DiffWithError.min DiffWithError.error d'))
+      = some (uc, DiffWithError.error)
+  rw [hLookup]
+  rfl
+
+-- A right-side counterpart `intersectAll_preserves_error_diff_right`
+-- needs `lookup` to find the `.error` *specifically* when the
+-- carrier has `.error` in `consolidate r`. That requires
+-- consolidate-key-uniqueness as a lemma. Deferred.
 
 /-- `bagExceptAll [] r = clampPositive (negate (consolidate r))`.
 With an all-`.val` `r`, the negation makes every diff non-positive,
