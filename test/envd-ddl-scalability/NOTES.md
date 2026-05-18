@@ -2450,3 +2450,92 @@ would tell us whether the cost is in the implication-batching loop,
 the controller calls (`create_table_collections`,
 `initialize_storage_collections`), or the inner match arms. That's
 the next investigation.
+
+
+## 2026-05-18 — `apply_catalog_implications` phase split: it's the controller setup
+
+Added a new `mz_apply_catalog_implications_phase_seconds{phase}`
+histogram with six labels:
+
+* `absorb_updates` — the leading implication-batching loop (before
+  calling `apply_catalog_implications_inner`)
+* `inner_total` — the whole `apply_catalog_implications_inner` call
+* `inner_item_loop` — the `for (catalog_id, implication) in implications`
+  walk
+* `inner_cluster_loops` — cluster + cluster-replica command loops
+* `inner_controller_setup` — `create_source_collections`,
+  `create_table_collections`, `initialize_storage_collections`,
+  vpc-endpoint queueing, alter_* connection / source-desc / data-config /
+  ingestion-source-desc batches
+* `inner_dependency_scan` — sink / peek / copy cleanup for dropped
+  relations + global-timeline association rebuild
+* `inner_finalize` — the "no error returns" async block: actual
+  drop_tables / drop_sources / drop_sinks / drop_replicas, peek + copy
+  cancellation, retire_compute_sinks, plus the spawned
+  drop_replication_slots/secrets task
+
+Fresh-from-scratch bench at N=5k/10k/15k (`BENCH_MODE=phase5`).
+
+### Per-call mean (ms), CREATE+DROP averaged (count = 2/rep)
+
+| phase                       | 5k    | 10k   | 15k   | Δ 5→10 | Δ 10→15 |
+|-----------------------------|------:|------:|------:|-------:|--------:|
+| `absorb_updates`            | 0.01  | 0.01  | 0.01  |   0    |   0     |
+| `inner_item_loop`           | 0.01  | 0.01  | 0.02  |   0    |   0.01  |
+| `inner_cluster_loops`       | 0.00  | 0.00  | 0.00  |   0    |   0     |
+| **`inner_controller_setup`**| **8.16**| **8.56**| **9.85**| **+0.40** | **+1.29** |
+| `inner_dependency_scan`     | 0.01  | 0.01  | 0.01  |   0    |   0     |
+| `inner_finalize`            | 1.56  | 1.71  | 1.81  | +0.15  |  +0.10  |
+| `inner_total`               | 9.76  | 10.31 | 11.70 | +0.55  |  +1.39  |
+
+### What this tells us
+
+* **`inner_controller_setup` is both the dominant absolute cost AND
+  the dominant slope inside `apply_catalog_implications`.** It is
+  84% of `inner_total` and carries ~93% of the slope.
+* `inner_finalize` is a fixed ~1.7 ms — that's the DROP TABLE path's
+  `drop_tables` (which goes through txn-wal). It does not scale.
+* Everything else is rounding noise. The implication-batching loop,
+  the per-item match arms, the cluster loops, the dependency-scan
+  loops over `active_compute_sinks` / `pending_peeks` / `active_copies`
+  — all microseconds in this workload. They will not become a problem
+  until we actually have user-cluster activity.
+
+### CREATE-only attribution
+
+`inner_controller_setup` fires for both CREATE and DROP (count = 2/rep),
+but only CREATE does work there — DROP runs through `inner_finalize`
+instead. So the CREATE-only cost is the mean × 2:
+
+| phase (CREATE-only)         | 5k    | 10k   | 15k   |
+|-----------------------------|------:|------:|------:|
+| `inner_controller_setup`    | 16.32 | 17.13 | 19.70 |
+
+CREATE pays ~**20 ms** at N=15k in `apply_catalog_implications`'s
+controller-setup phase. That's a single call into
+`create_table_collections`, which does:
+
+1. `get_local_write_ts()` — get a register timestamp
+2. `self.catalog.advance_upper(write_ts.advance_to)` — CAS on the
+   catalog persist shard (already measured separately at ~0.6 ms via
+   `mz_group_commit_catalog_upper_seconds`)
+3. `set_statement_execution_timestamp` loop — cheap
+4. `self.controller.storage.create_collections(...)` — opens a fresh
+   persist `WriteHandle` + `SinceHandle` for the new table shard,
+   then `compare_and_downgrade_since` to advance the new shard's
+   since to `register_ts`. This is the meaty piece.
+5. `self.apply_local_write(register_ts)` — finalize on timeline
+
+DROP-only `inner_finalize` is ~3.6 ms at N=15k, almost entirely
+`self.drop_tables(...)` calling `controller.storage.drop_tables`,
+which goes through the txn-wal append path.
+
+### Where to go next
+
+The fix removed the wrapper-layer scaling. Inside
+`apply_catalog_implications`, the dominant slope is now in
+**storage-controller `create_collections`** during a CREATE TABLE.
+That's a single call but it does several distinct operations:
+opening write+since handles, downgrading the since, installing
+collection state into the controller's BTreeMap. Worth splitting
+those phases next.
