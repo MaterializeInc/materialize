@@ -568,6 +568,7 @@ impl Catalog {
                 expr_cache_handle,
                 transient_revision: 1,
                 storage: Arc::new(tokio::sync::Mutex::new(storage)),
+                transact_phase_metrics: None,
             };
 
             // Operators aren't stored in the catalog, but we would like them in

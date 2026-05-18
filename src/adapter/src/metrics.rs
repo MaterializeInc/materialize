@@ -53,6 +53,7 @@ pub struct Metrics {
     pub catalog_snapshot_seconds: HistogramVec,
     pub pgwire_recv_scheduling_delay_ms: HistogramVec,
     pub catalog_transact_seconds: HistogramVec,
+    pub catalog_transact_phase_seconds: HistogramVec,
     pub apply_catalog_implications_seconds: Histogram,
     pub group_commit_catalog_upper_seconds: Histogram,
     pub group_commit_table_advancement_seconds: Histogram,
@@ -241,6 +242,14 @@ impl Metrics {
                 name: "mz_catalog_transact_seconds",
                 help: "The time it takes to run various catalog transact methods.",
                 var_labels: ["method"],
+                buckets: histogram_seconds_buckets(0.001, 32.0),
+            )),
+            catalog_transact_phase_seconds: registry.register(metric!(
+                name: "mz_catalog_transact_phase_seconds",
+                help: "The time spent in each phase of a catalog::transact call \
+                       (op_loop, final_apply_updates, prepare_state, \
+                       post_prepare_apply_updates, tx_commit, assign_state).",
+                var_labels: ["phase"],
                 buckets: histogram_seconds_buckets(0.001, 32.0),
             )),
             apply_catalog_implications_seconds: registry.register(metric!(

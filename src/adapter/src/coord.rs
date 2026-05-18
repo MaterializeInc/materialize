@@ -4688,6 +4688,8 @@ pub fn serve(
                     handle.block_on(epoch_millis_oracle.apply_write(boot_ts));
                 }
 
+                catalog.set_transact_phase_metrics(metrics.catalog_transact_phase_seconds.clone());
+
                 let catalog = Arc::new(catalog);
 
                 let caching_secrets_reader = CachingSecretsReader::new(secrets_controller.reader());

@@ -138,6 +138,9 @@ pub struct Catalog {
     expr_cache_handle: Option<ExpressionCacheHandle>,
     storage: Arc<tokio::sync::Mutex<Box<dyn mz_catalog::durable::DurableCatalogState>>>,
     transient_revision: u64,
+    /// Set by the Coordinator after construction. `None` in tests / debug
+    /// catalogs that don't bother wiring a metrics registry through.
+    transact_phase_metrics: Option<prometheus::HistogramVec>,
 }
 
 // Implement our own Clone because derive can't unless S is Clone, which it's
@@ -149,11 +152,19 @@ impl Clone for Catalog {
             expr_cache_handle: self.expr_cache_handle.clone(),
             storage: Arc::clone(&self.storage),
             transient_revision: self.transient_revision,
+            transact_phase_metrics: self.transact_phase_metrics.clone(),
         }
     }
 }
 
 impl Catalog {
+    /// Install a `HistogramVec` (one label: `phase`) for phase-level timing
+    /// inside `Catalog::transact`. The Coordinator calls this once at startup.
+    /// Without it, phase timing is silently skipped.
+    pub fn set_transact_phase_metrics(&mut self, phase_metrics: prometheus::HistogramVec) {
+        self.transact_phase_metrics = Some(phase_metrics);
+    }
+
     /// Set the optimized plan for the item identified by `id`.
     ///
     /// # Panics

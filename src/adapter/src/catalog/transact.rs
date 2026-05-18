@@ -469,35 +469,47 @@ impl Catalog {
             .await
             .unwrap_or_terminate("starting catalog transaction");
 
-        let new_state = Self::transact_inner(
-            TransactInnerMode::Commit,
-            storage_collections,
-            oracle_write_ts,
-            session,
-            ops,
-            temporary_ids,
-            &mut builtin_table_updates,
-            &mut catalog_updates,
-            &mut audit_events,
-            &mut tx,
-            &self.state,
-        )
-        .await?;
+        let phase_metrics = self.transact_phase_metrics.as_ref();
+
+        let new_state = {
+            let _t = phase_metrics.map(|m| m.with_label_values(&["transact_inner"]).start_timer());
+            Self::transact_inner(
+                TransactInnerMode::Commit,
+                storage_collections,
+                oracle_write_ts,
+                session,
+                ops,
+                temporary_ids,
+                &mut builtin_table_updates,
+                &mut catalog_updates,
+                &mut audit_events,
+                &mut tx,
+                &self.state,
+                phase_metrics,
+            )
+            .await?
+        };
 
         // The user closure was successful, apply the updates. Terminate the
         // process if this fails, because we have to restart envd due to
         // indeterminate catalog state, which we only reconcile during catalog
         // init.
-        tx.commit(&mut **storage, oracle_write_ts)
-            .await
-            .unwrap_or_terminate("catalog storage transaction commit must succeed");
+        {
+            let _t = phase_metrics.map(|m| m.with_label_values(&["tx_commit"]).start_timer());
+            tx.commit(&mut **storage, oracle_write_ts)
+                .await
+                .unwrap_or_terminate("catalog storage transaction commit must succeed");
+        }
 
         // Dropping here keeps the mutable borrow on self, preventing us accidentally
         // mutating anything until after f is executed.
         drop(storage);
-        if let Some(new_state) = new_state {
-            self.transient_revision += 1;
-            self.state = new_state;
+        {
+            let _t = phase_metrics.map(|m| m.with_label_values(&["assign_state"]).start_timer());
+            if let Some(new_state) = new_state {
+                self.transient_revision += 1;
+                self.state = new_state;
+            }
         }
 
         Ok(TransactionResult {
@@ -565,6 +577,9 @@ impl Catalog {
             &mut audit_events,
             &mut tx,
             base_state,
+            // Dry runs are a different code path and we don't want them
+            // polluting the bench measurements; skip phase metrics.
+            None,
         )
         .await?;
 
@@ -646,6 +661,7 @@ impl Catalog {
         audit_events: &mut Vec<VersionedEvent>,
         tx: &mut Transaction,
         state: &CatalogState,
+        phase_metrics: Option<&prometheus::HistogramVec>,
     ) -> Result<Option<CatalogState>, AdapterError> {
         // We come up with new catalog state, builtin state updates, and parsed
         // catalog updates (for deriving catalog implications) in two phases:
@@ -693,6 +709,7 @@ impl Catalog {
 
         let mut updates = Vec::new();
 
+        let _op_loop_timer = phase_metrics.map(|m| m.with_label_values(&["op_loop"]).start_timer());
         for op in ops {
             let (weird_builtin_table_update, temporary_item_updates) = Self::transact_op(
                 oracle_write_ts,
@@ -747,53 +764,67 @@ impl Catalog {
             }
             updates.append(&mut op_updates);
         }
+        drop(_op_loop_timer);
 
-        if !updates.is_empty() {
-            let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
-            let (op_builtin_table_updates, op_catalog_updates) = state
-                .to_mut()
-                .apply_updates(updates.clone(), &mut local_expr_cache)
-                .await;
-            let op_builtin_table_updates = state
-                .to_mut()
-                .resolve_builtin_table_updates(op_builtin_table_updates);
-            builtin_table_updates.extend(op_builtin_table_updates);
-            parsed_catalog_updates.extend(op_catalog_updates);
+        {
+            let _t =
+                phase_metrics.map(|m| m.with_label_values(&["final_apply_updates"]).start_timer());
+            if !updates.is_empty() {
+                let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
+                let (op_builtin_table_updates, op_catalog_updates) = state
+                    .to_mut()
+                    .apply_updates(updates.clone(), &mut local_expr_cache)
+                    .await;
+                let op_builtin_table_updates = state
+                    .to_mut()
+                    .resolve_builtin_table_updates(op_builtin_table_updates);
+                builtin_table_updates.extend(op_builtin_table_updates);
+                parsed_catalog_updates.extend(op_catalog_updates);
+            }
         }
 
-        match mode {
-            TransactInnerMode::Commit => {
-                // `storage_collections` can be `None` in tests.
-                if let Some(c) = storage_collections {
-                    c.prepare_state(
-                        tx,
-                        storage_collections_to_create,
-                        storage_collections_to_drop,
-                        storage_collections_to_register,
-                    )
-                    .await?;
+        {
+            let _t = phase_metrics.map(|m| m.with_label_values(&["prepare_state"]).start_timer());
+            match mode {
+                TransactInnerMode::Commit => {
+                    // `storage_collections` can be `None` in tests.
+                    if let Some(c) = storage_collections {
+                        c.prepare_state(
+                            tx,
+                            storage_collections_to_create,
+                            storage_collections_to_drop,
+                            storage_collections_to_register,
+                        )
+                        .await?;
+                    }
+                }
+                TransactInnerMode::DryRun => {
+                    debug_assert!(
+                        storage_collections.is_none(),
+                        "dry-run mode must not prepare storage state"
+                    );
                 }
             }
-            TransactInnerMode::DryRun => {
-                debug_assert!(
-                    storage_collections.is_none(),
-                    "dry-run mode must not prepare storage state"
-                );
-            }
         }
 
-        let updates = tx.get_and_commit_op_updates();
-        if !updates.is_empty() {
-            let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
-            let (op_builtin_table_updates, op_catalog_updates) = state
-                .to_mut()
-                .apply_updates(updates.clone(), &mut local_expr_cache)
-                .await;
-            let op_builtin_table_updates = state
-                .to_mut()
-                .resolve_builtin_table_updates(op_builtin_table_updates);
-            builtin_table_updates.extend(op_builtin_table_updates);
-            parsed_catalog_updates.extend(op_catalog_updates);
+        {
+            let _t = phase_metrics.map(|m| {
+                m.with_label_values(&["post_prepare_apply_updates"])
+                    .start_timer()
+            });
+            let updates = tx.get_and_commit_op_updates();
+            if !updates.is_empty() {
+                let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
+                let (op_builtin_table_updates, op_catalog_updates) = state
+                    .to_mut()
+                    .apply_updates(updates.clone(), &mut local_expr_cache)
+                    .await;
+                let op_builtin_table_updates = state
+                    .to_mut()
+                    .resolve_builtin_table_updates(op_builtin_table_updates);
+                builtin_table_updates.extend(op_builtin_table_updates);
+                parsed_catalog_updates.extend(op_catalog_updates);
+            }
         }
 
         match state {
