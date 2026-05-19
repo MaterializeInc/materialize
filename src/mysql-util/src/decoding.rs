@@ -24,6 +24,27 @@ use mz_repr::{Datum, Row, RowPacker, SqlScalarType};
 use crate::desc::MySqlColumnMeta;
 use crate::{MySqlColumnDesc, MySqlError, MySqlTableDesc};
 
+/// Canonical text for the MySQL zero-date sentinel ('0000-00-00 00:00:00').
+/// In binlog MYSQL_TYPE_DATETIME/MYSQL_TYPE_DATETIME2 encodings, sec=0 *cannot* represent unix
+/// epoch 0.  The TIMESTAMP type's supported range starts at '1970-01-01 00:00:01' UTC
+/// (<https://dev.mysql.com/doc/refman/8.0/en/datetime.html>), so any sec=0 is
+/// unambiguously this sentinel.
+const MYSQL_ZERO_TIMESTAMP: &str = "0000-00-00 00:00:00";
+
+/// Format the zero-date sentinel for a column with the given fractional
+/// precision (matches the Date arm's `{:0precision$}` behavior).
+fn mysql_zero_timestamp(precision: u32) -> String {
+    if precision > 0 {
+        format!(
+            "{}.{}",
+            MYSQL_ZERO_TIMESTAMP,
+            "0".repeat(usize::cast_from(precision))
+        )
+    } else {
+        MYSQL_ZERO_TIMESTAMP.to_string()
+    }
+}
+
 pub fn pack_mysql_row(
     row_container: &mut Row,
     row: MySqlRow,
@@ -325,9 +346,15 @@ fn pack_val_as_datum(
                         }
                     }
                     Some(MySqlColumnMeta::Timestamp(precision)) => {
-                        // TIMESTAMP arrives as three mysql_common::Value variants
-                        // (refs: mysql_common v0.35.5):
-                        //   Value::Date  — binary query response + binlog DATETIME[2]
+                        // Materialize treats DATETIME and TIMESTAMP as MySqlColumnMeta::Timestamp,
+                        // but they have slightly different semantics as far as the range of dates
+                        // they can represent.
+                        // (see https://dev.mysql.com/doc/refman/8.0/en/date-and-time-types.html).
+                        //
+                        // Three mysql_common::Value variants exist, which are mapped to
+                        // [`MySqlColumnMeta::Timestamp`]
+                        // (see https://github.com/blackbeam/rust_mysql_common/blob/2e6f6696de03c91b9fd95a87356d081285290704/src/binlog/value.rs):
+                        //   Value::Date  — MZ snapshot & binlog MYSQL_TYPE_DATETIME/MYSQL_TYPE_DATETIME2
                         //                  (value/mod.rs:443-445, binlog/value.rs:109-161)
                         //   Value::Int   — legacy binlog MYSQL_TYPE_TIMESTAMP, pre-5.6,
                         //                  4-byte unix epoch (binlog/value.rs:87-90)
@@ -356,6 +383,8 @@ fn pack_val_as_datum(
                                 }
                             }
                             // Pre-5.6 unix epoch, no fractional seconds.
+                            // val == 0 is the zero-date sentinel, not epoch 0.
+                            Value::Int(0) => mysql_zero_timestamp(*precision),
                             Value::Int(val) => chrono::DateTime::from_timestamp(val, 0)
                                 .ok_or_else(|| {
                                     anyhow::anyhow!("received invalid timestamp value: {}", val)
@@ -369,19 +398,25 @@ fn pack_val_as_datum(
                                 let s = std::str::from_utf8(&data).map_err(|_| {
                                     anyhow::anyhow!("received invalid timestamp value: {:?}", data)
                                 })?;
-                                let dt = if s.contains('.') {
-                                    chrono::NaiveDateTime::parse_from_str(s, "%s%.6f")
+                                // sec=0 (with or without fractional component) is the
+                                // zero-date sentinel.
+                                if s.split('.').next() == Some("0") {
+                                    mysql_zero_timestamp(*precision)
                                 } else {
-                                    chrono::NaiveDateTime::parse_from_str(s, "%s")
-                                }
-                                .map_err(|_| {
-                                    anyhow::anyhow!("received invalid timestamp value: {:?}", s)
-                                })?;
-                                if *precision > 0 {
-                                    let p: usize = (*precision).try_into()?;
-                                    dt.format(&format!("%Y-%m-%d %H:%M:%S.%{p}f")).to_string()
-                                } else {
-                                    dt.format("%Y-%m-%d %H:%M:%S").to_string()
+                                    let dt = if s.contains('.') {
+                                        chrono::NaiveDateTime::parse_from_str(s, "%s%.6f")
+                                    } else {
+                                        chrono::NaiveDateTime::parse_from_str(s, "%s")
+                                    }
+                                    .map_err(|_| {
+                                        anyhow::anyhow!("received invalid timestamp value: {:?}", s)
+                                    })?;
+                                    if *precision > 0 {
+                                        let p: usize = (*precision).try_into()?;
+                                        dt.format(&format!("%Y-%m-%d %H:%M:%S.%{p}f")).to_string()
+                                    } else {
+                                        dt.format("%Y-%m-%d %H:%M:%S").to_string()
+                                    }
                                 }
                             }
                             _ => Err(anyhow::anyhow!(
@@ -433,8 +468,8 @@ fn pack_val_as_datum(
                 // Timestamps are encoded as different mysql_common::Value types depending on
                 // whether they are from a binlog event or a query, and depending on which
                 // mysql timestamp version is used. We handle those cases here
-                // https://github.com/blackbeam/rust_mysql_common/blob/v0.31.0/src/binlog/value.rs#L87-L155
-                // https://github.com/blackbeam/rust_mysql_common/blob/v0.31.0/src/value/mod.rs#L332
+                // https://github.com/blackbeam/rust_mysql_common/blob/v0.35.5/src/binlog/value.rs#L87-L155
+                // https://github.com/blackbeam/rust_mysql_common/blob/v0.35.5/src/value/mod.rs#L332
                 let chrono_timestamp = match value {
                     Value::Date(..) => from_value_opt::<chrono::NaiveDateTime>(value)?,
                     // old temporal format from before MySQL 5.6; didn't support fractional seconds
@@ -605,12 +640,24 @@ mod tests {
         assert_eq!(s, "2025-04-03 06:20:34");
     }
 
+    /// sec=0 in the legacy TIMESTAMP encoding is the zero-date sentinel,
+    /// not unix epoch 0 — TIMESTAMP's range starts at '1970-01-01 00:00:01'
+    /// UTC so epoch 0 isn't a representable column value.
     #[mz_ore::test]
-    fn timestamp_value_int_epoch_zero() {
-        // Unix epoch 0; legacy format has no fractional seconds.
+    fn timestamp_value_int_zero_is_sentinel() {
         let col = timestamp_text_col(0);
         let s = pack_one(Value::Int(0), &col).unwrap();
-        assert_eq!(s, "1970-01-01 00:00:00");
+        assert_eq!(s, "0000-00-00 00:00:00");
+    }
+
+    /// Zero-date pads to the column's fractional precision so that the
+    /// snapshot (Date arm) and binlog (Int/Bytes arms) produce identical
+    /// text for the same upstream row.
+    #[mz_ore::test]
+    fn timestamp_value_int_zero_with_precision() {
+        let col = timestamp_text_col(6);
+        let s = pack_one(Value::Int(0), &col).unwrap();
+        assert_eq!(s, "0000-00-00 00:00:00.000000");
     }
 
     /// Out-of-range epochs must error rather than silently producing
@@ -636,16 +683,31 @@ mod tests {
         assert_eq!(s, "2025-04-03 06:20:34");
     }
 
-    /// Regression: the zero-date can also surface as Value::Bytes("0")
-    /// from the binlog replication path; this was the variant the
-    /// local integration test triggered most often.
+    /// sec=0 in the TIMESTAMP2 encoding is the zero-date sentinel; same
+    /// reasoning as `timestamp_value_int_zero_is_sentinel`.
     #[mz_ore::test]
-    fn timestamp_value_bytes_zero() {
+    fn timestamp_value_bytes_zero_is_sentinel() {
         let col = timestamp_text_col(0);
         let s = pack_one(Value::Bytes(b"0".to_vec()), &col).unwrap();
-        // Treat literal "0" as the unix epoch, matching the non-TEXT
-        // path's behavior at `SqlScalarType::Timestamp` above.
-        assert_eq!(s, "1970-01-01 00:00:00");
+        assert_eq!(s, "0000-00-00 00:00:00");
+    }
+
+    #[mz_ore::test]
+    fn timestamp_value_bytes_zero_with_precision() {
+        let col = timestamp_text_col(6);
+        let s = pack_one(Value::Bytes(b"0".to_vec()), &col).unwrap();
+        assert_eq!(s, "0000-00-00 00:00:00.000000");
+    }
+
+    /// Defensively handle a hypothetical "0.NNNNNN" form (TIMESTAMP2
+    /// would only emit this if the stored microsecond component were
+    /// non-zero, which the upstream type doesn't actually allow for
+    /// sec=0, but the sentinel check should still fire).
+    #[mz_ore::test]
+    fn timestamp_value_bytes_zero_with_fractional_is_sentinel() {
+        let col = timestamp_text_col(6);
+        let s = pack_one(Value::Bytes(b"0.000000".to_vec()), &col).unwrap();
+        assert_eq!(s, "0000-00-00 00:00:00.000000");
     }
 
     /// Fractional form of the TIMESTAMP2 binlog encoding —
