@@ -581,13 +581,119 @@ class TestTargetDeploy:
 
         run_dbt(["run-operation", "deploy_promote"], expect_pass=False)
 
-    def test_fails_on_unmanaged_cluster(self, project):
+    def test_dbt_deploy_init_unmanaged_empty(self, project):
         project.run_sql("CREATE CLUSTER prod REPLICAS ()")
         project.run_sql("CREATE SCHEMA prod")
         project.run_sql("CREATE SCHEMA staging")
-        project.run_sql("CREATE SCHEMA staging_dbt_deploy")
 
-        run_dbt(["run-operation", "deploy_init"], expect_pass=False)
+        run_dbt(["run-operation", "deploy_init"])
+
+        managed = project.run_sql(
+            "SELECT managed FROM mz_clusters WHERE name = 'prod_dbt_deploy'",
+            fetch="one",
+        )
+        assert managed == (False,)
+
+        replica_count = project.run_sql(
+            """
+            SELECT count(*)
+            FROM mz_cluster_replicas cr
+            JOIN mz_clusters c ON cr.cluster_id = c.id
+            WHERE c.name = 'prod_dbt_deploy'
+            """,
+            fetch="one",
+        )
+        assert replica_count == (0,)
+
+    def test_dbt_deploy_init_unmanaged_single_replica(self, project):
+        project.run_sql("CREATE CLUSTER prod REPLICAS (r1 (SIZE 'scale=1,workers=1'))")
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA staging")
+
+        run_dbt(["run-operation", "deploy_init"])
+
+        managed = project.run_sql(
+            "SELECT managed FROM mz_clusters WHERE name = 'prod_dbt_deploy'",
+            fetch="one",
+        )
+        assert managed == (False,)
+
+        replicas = project.run_sql(
+            """
+            SELECT cr.name, cr.size
+            FROM mz_cluster_replicas cr
+            JOIN mz_clusters c ON cr.cluster_id = c.id
+            WHERE c.name = 'prod_dbt_deploy'
+            ORDER BY cr.name
+            """,
+            fetch="all",
+        )
+        assert replicas == [("r1", "scale=1,workers=1")]
+
+    def test_dbt_deploy_init_unmanaged_multi_replica(self, project):
+        project.run_sql(
+            "CREATE CLUSTER prod REPLICAS ("
+            "r1 (SIZE 'scale=1,workers=1'), "
+            "r2 (SIZE 'scale=1,workers=1'))"
+        )
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA staging")
+
+        run_dbt(["run-operation", "deploy_init"])
+
+        replicas = project.run_sql(
+            """
+            SELECT cr.name, cr.size
+            FROM mz_cluster_replicas cr
+            JOIN mz_clusters c ON cr.cluster_id = c.id
+            WHERE c.name = 'prod_dbt_deploy'
+            ORDER BY cr.name
+            """,
+            fetch="all",
+        )
+        assert replicas == [
+            ("r1", "scale=1,workers=1"),
+            ("r2", "scale=1,workers=1"),
+        ]
+
+    def test_dbt_deploy_init_unmanaged_idempotent(self, project):
+        project.run_sql("CREATE CLUSTER prod REPLICAS (r1 (SIZE 'scale=1,workers=1'))")
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA staging")
+
+        run_dbt(["run-operation", "deploy_init"])
+        run_dbt(["run-operation", "deploy_init"])
+
+        replicas = project.run_sql(
+            """
+            SELECT cr.name, cr.size
+            FROM mz_cluster_replicas cr
+            JOIN mz_clusters c ON cr.cluster_id = c.id
+            WHERE c.name = 'prod_dbt_deploy'
+            ORDER BY cr.name
+            """,
+            fetch="all",
+        )
+        assert replicas == [("r1", "scale=1,workers=1")]
+
+    def test_dbt_deploy_init_unmanaged_errors_on_unsized_replica(self, project):
+        try:
+            project.run_sql(
+                "CREATE CLUSTER prod REPLICAS "
+                "(r1 (STORAGECTL ADDRESSES ['s:1234'], "
+                "COMPUTECTL ADDRESSES ['c:1234'], "
+                "WORKERS 1))"
+            )
+        except psycopg2.Error as e:
+            pytest.skip(f"local Materialize image rejects unsized replicas: {e}")
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA staging")
+
+        _, log_output = run_dbt_and_capture(
+            ["run-operation", "deploy_init"], expect_pass=False
+        )
+        assert "r1" in log_output
+        assert "no SIZE" in log_output
 
     def test_dbt_deploy_init_with_refresh_hydration_time(self, project):
         project.run_sql(
