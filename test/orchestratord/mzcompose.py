@@ -2396,6 +2396,191 @@ def workflow_orchestratord_upgrade(
         check_balancerd_version(versions[-1])
 
 
+def workflow_revert_rollout(c: Composition, parser: WorkflowArgumentParser) -> None:
+    # Regression test for DEP-42: if a user starts an upgrade and then cancels
+    # by reverting only `spec.requestRollout` without also reverting
+    # `spec.environmentdImageRef`, the spec image stays ahead of the image
+    # actually running in environmentd. Downstream resources (balancerd,
+    # console) must continue tracking the last completed rollout's image
+    # rather than the diverged spec image — otherwise they end up
+    # version-skewed from environmentd.
+    #
+    # We exercise this end-to-end by initial-deploying on a prior released
+    # version, then starting a `ManuallyPromote` upgrade to the current
+    # build's image and parking it at `ReadyToPromote` (never promoting it),
+    # and finally reverting only `requestRollout`.
+    parser.add_argument(
+        "--recreate-cluster",
+        action=argparse.BooleanOptionalAction,
+        help="Recreate cluster if it exists already",
+    )
+    parser.add_argument("--tag", type=str, help="Custom version tag to use")
+    parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
+    )
+    args = parser.parse_args()
+
+    def get_cr(plural: str) -> dict[str, Any]:
+        # orchestratord creates the Balancer and Console CRs after writing
+        # `lastCompletedRolloutRequest`, so `post_run_check` can return
+        # before they exist. Retry until the resource shows up.
+        result: dict[str, Any] = {}
+
+        def fetch() -> None:
+            data = json.loads(
+                spawn.capture(
+                    [
+                        "kubectl",
+                        "get",
+                        plural,
+                        "-n",
+                        "materialize-environment",
+                        "-o",
+                        "json",
+                    ]
+                )
+            )
+            assert len(data["items"]) >= 1, f"{plural} not yet present"
+            result["item"] = data["items"][0]
+
+        retry(fetch, 120)
+        return result["item"]
+
+    definition = setup(c, args)
+
+    # Initial deploy on a prior released version, so the upgrade target
+    # (current build) is a real, pullable, different image. orchestratord
+    # itself stays on the current build — that's the binary whose fix is
+    # under test.
+    initial_version = get_all_self_managed_versions()[-1]
+    initial_image = get_image(
+        c.compose["services"]["environmentd"]["image"],
+        str(initial_version),
+    )
+    upgrade_image = get_image(
+        c.compose["services"]["environmentd"]["image"],
+        args.tag,
+    )
+    assert upgrade_image != initial_image, (
+        "test setup invariant: initial and upgrade env images must differ "
+        f"(both are {initial_image!r})"
+    )
+
+    definition["materialize"]["spec"]["environmentdImageRef"] = initial_image
+    init(definition)
+    run(definition, False)
+
+    initial_mz = get_cr("materializes")
+    initial_request = initial_mz["spec"]["requestRollout"]
+    assert initial_mz["status"]["lastCompletedRolloutRequest"] == initial_request
+    assert (
+        initial_mz["status"]["lastCompletedRolloutEnvironmentdImageRef"]
+        == initial_image
+    ), (
+        "status.lastCompletedRolloutEnvironmentdImageRef was not populated "
+        "with the rolled-out image"
+    )
+    initial_balancerd_image_ref = get_cr("balancers")["spec"]["balancerdImageRef"]
+    initial_console_image_ref = get_cr("consoles")["spec"]["consoleImageRef"]
+
+    # Kick off a real ManuallyPromote upgrade to the current build's image
+    # and leave it parked at ReadyToPromote. At this point the new-generation
+    # environmentd is up and running, but the active environmentd is still
+    # the initial-version pod, so `status.lastCompletedRollout*` must not
+    # have advanced.
+    definition["materialize"]["spec"]["rolloutStrategy"] = "ManuallyPromote"
+    definition["materialize"]["spec"]["environmentdImageRef"] = upgrade_image
+    definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
+    spawn.runv(
+        ["kubectl", "apply", "-f", "-"],
+        stdin=yaml.dump_all(
+            [
+                definition["namespace"],
+                definition["secret"],
+                definition["materialize"],
+            ]
+        ).encode(),
+    )
+    for _ in range(900):
+        time.sleep(1)
+        if is_ready_to_manually_promote():
+            break
+    else:
+        spawn.runv(
+            [
+                "kubectl",
+                "get",
+                "materializes",
+                "-n",
+                "materialize-environment",
+                "-o",
+                "yaml",
+            ],
+        )
+        raise RuntimeError("upgrade never became ready for manual promotion")
+
+    parked_mz = get_cr("materializes")
+    assert parked_mz["status"]["lastCompletedRolloutRequest"] == initial_request
+    assert (
+        parked_mz["status"]["lastCompletedRolloutEnvironmentdImageRef"] == initial_image
+    )
+
+    # Even mid-rollout (spec.envImageRef = upgrade, status = initial),
+    # downstream CRs must track the active image, not the spec image.
+    parked_balancerd_image_ref = get_cr("balancers")["spec"]["balancerdImageRef"]
+    assert parked_balancerd_image_ref == initial_balancerd_image_ref, (
+        f"Balancer CR balancerdImageRef drifted during a parked upgrade: "
+        f"{initial_balancerd_image_ref!r} -> {parked_balancerd_image_ref!r}"
+    )
+    parked_console_image_ref = get_cr("consoles")["spec"]["consoleImageRef"]
+    assert parked_console_image_ref == initial_console_image_ref, (
+        f"Console CR consoleImageRef drifted during a parked upgrade: "
+        f"{initial_console_image_ref!r} -> {parked_console_image_ref!r}"
+    )
+
+    # Cancel the upgrade by reverting only `requestRollout`. Deliberately
+    # leave `environmentdImageRef` pointed at the upgrade image — that's the
+    # DEP-42 scenario: spec image and running image diverge.
+    definition["materialize"]["spec"]["requestRollout"] = initial_request
+    spawn.runv(
+        ["kubectl", "apply", "-f", "-"],
+        stdin=yaml.dump(definition["materialize"]).encode(),
+    )
+
+    def check_revert_applied() -> None:
+        mz = get_cr("materializes")
+        assert mz["spec"]["requestRollout"] == initial_request
+        assert mz["spec"]["environmentdImageRef"] == upgrade_image
+
+    retry(check_revert_applied, 60)
+
+    # Let orchestratord reconcile several times after the revert.
+    time.sleep(30)
+
+    final_mz = get_cr("materializes")
+    assert final_mz["status"]["lastCompletedRolloutRequest"] == initial_request
+    assert (
+        final_mz["status"]["lastCompletedRolloutEnvironmentdImageRef"] == initial_image
+    ), "lastCompletedRolloutEnvironmentdImageRef should not change without a completed rollout"
+
+    final_balancerd_image_ref = get_cr("balancers")["spec"]["balancerdImageRef"]
+    assert final_balancerd_image_ref == initial_balancerd_image_ref, (
+        f"Balancer CR balancerdImageRef tracked diverged spec image instead "
+        f"of the last completed rollout image: "
+        f"{initial_balancerd_image_ref!r} -> {final_balancerd_image_ref!r}"
+    )
+
+    final_console_image_ref = get_cr("consoles")["spec"]["consoleImageRef"]
+    assert final_console_image_ref == initial_console_image_ref, (
+        f"Console CR consoleImageRef tracked diverged spec image instead of "
+        f"the last completed rollout image: "
+        f"{initial_console_image_ref!r} -> {final_console_image_ref!r}"
+    )
+
+
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--recreate-cluster",

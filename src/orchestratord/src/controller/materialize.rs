@@ -724,7 +724,7 @@ impl k8s_controller::Context for Context {
                 metadata: mz.managed_resource_meta(mz.name_unchecked()),
                 spec: BalancerSpec {
                     balancerd_image_ref: matching_image_from_environmentd_image_ref(
-                        &mz.spec.environmentd_image_ref,
+                        mz.active_environmentd_image_ref(),
                         "balancerd",
                         None,
                     ),
@@ -759,8 +759,9 @@ impl k8s_controller::Context for Context {
         // enforced by wait_for_balancer
 
         if self.config.create_console {
+            let active_environmentd_image_ref = mz.active_environmentd_image_ref();
             let environmentd_image_tag =
-                parse_image_tag(&mz.spec.environmentd_image_ref).unwrap_or("latest");
+                parse_image_tag(active_environmentd_image_ref).unwrap_or("latest");
             let console_image_tag = self
                 .config
                 .console_image_tag_map
@@ -772,7 +773,7 @@ impl k8s_controller::Context for Context {
                 metadata: mz.managed_resource_meta(mz.name_unchecked()),
                 spec: ConsoleSpec {
                     console_image_ref: matching_image_from_environmentd_image_ref(
-                        &mz.spec.environmentd_image_ref,
+                        active_environmentd_image_ref,
                         "console",
                         Some(&console_image_tag),
                     ),

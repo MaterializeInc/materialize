@@ -2374,6 +2374,19 @@ steps:
         agents:
           queue: hetzner-aarch64-16cpu-32gb
 
+      - id: orchestratord-revert-rollout
+        label: Orchestratord revert in-progress rollout
+        artifact_paths: ["mz_debug_*.zip"]
+        depends_on: devel-docker-tags
+        timeout_in_minutes: 60
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              run: revert-rollout
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
       - id: orchestratord-upgrade-operator
         label: Orchestratord operator upgrade
         artifact_paths: ["mz_debug_*.zip"]
