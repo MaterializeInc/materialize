@@ -2710,21 +2710,12 @@ impl AggregateExpr {
                 let input_value =
                     tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
 
-                let result_expr = if *offset == 0 {
-                    input_value
-                } else {
-                    MirScalarExpr::literal_ok(
-                        default.unpack_first(),
-                        lag_lead_return_type,
-                    )
-                };
-
-                // Column name follows the same convention as `LagLead`.
-                let column_name = if *offset < 0 {
-                    ColumnName::from("?lag?")
-                } else {
-                    ColumnName::from("?lead?")
-                };
+                let (result_expr, column_name) = Self::on_unique_lag_lead_const(
+                    *offset,
+                    default,
+                    input_value,
+                    lag_lead_return_type,
+                );
 
                 MirScalarExpr::call_variadic(
                     ListCreate {
@@ -3041,22 +3032,13 @@ impl AggregateExpr {
                         } => {
                             assert_eq!(order_by, outer_order_by);
                             // For the const constituent, `args_for_func` is
-                            // the bare input value (no encoded-args record);
-                            // the result is a plain constant fold.
-                            let result = if *offset == 0 {
-                                args_for_func
-                            } else {
-                                MirScalarExpr::literal_ok(
-                                    default.unpack_first(),
-                                    return_type_for_func,
-                                )
-                            };
-                            let column_name = if *offset < 0 {
-                                ColumnName::from("?lag?")
-                            } else {
-                                ColumnName::from("?lead?")
-                            };
-                            (result, column_name)
+                            // the bare input value (no encoded-args record).
+                            Self::on_unique_lag_lead_const(
+                                *offset,
+                                default,
+                                args_for_func,
+                                return_type_for_func,
+                            )
                         }
                         AggregateFunc::FirstValue {
                             window_frame,
@@ -3195,6 +3177,36 @@ impl AggregateExpr {
                 ],
             )],
         )
+    }
+
+    /// `on_unique` for `LagLeadConst`.
+    ///
+    /// The per-row payload for `LagLeadConst` is the *bare* input value (no
+    /// 3-field encoded-args record), so the single-row computation is a
+    /// plain constant fold: when the constant offset is `0` the result is
+    /// the input value, otherwise it's the constant default value. No
+    /// `RecordGet`, no `IsNull`, no equality.
+    ///
+    /// Note: `specialize_lag_lead` declines to rewrite `offset == 0`, so in
+    /// practice `offset == 0` is unreachable here. The branch is kept as
+    /// defensive coding (and to keep `on_unique` cheap).
+    fn on_unique_lag_lead_const(
+        offset: i32,
+        default: &Row,
+        input_value: MirScalarExpr,
+        return_type: ReprScalarType,
+    ) -> (MirScalarExpr, ColumnName) {
+        let result_expr = if offset == 0 {
+            input_value
+        } else {
+            MirScalarExpr::literal_ok(default.unpack_first(), return_type)
+        };
+        let column_name = if offset < 0 {
+            ColumnName::from("?lag?")
+        } else {
+            ColumnName::from("?lead?")
+        };
+        (result_expr, column_name)
     }
 
     /// `on_unique` for `lag` and `lead`

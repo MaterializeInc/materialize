@@ -5479,7 +5479,9 @@ fn plan_function<'a>(
 
             if ignore_nulls {
                 match func {
-                    ValueWindowFunc::Lag | ValueWindowFunc::Lead => {}
+                    ValueWindowFunc::Lag
+                    | ValueWindowFunc::Lead
+                    | ValueWindowFunc::LagLeadConst { .. } => {}
                     _ => bail_unsupported!(IGNORE_NULLS_ERROR_MSG),
                 }
             }

@@ -644,6 +644,7 @@ impl Display for ValueWindowFunc {
         match self {
             ValueWindowFunc::Lag => write!(f, "lag"),
             ValueWindowFunc::Lead => write!(f, "lead"),
+            ValueWindowFunc::LagLeadConst { .. } => write!(f, "lag_lead_const"),
             ValueWindowFunc::FirstValue => write!(f, "first_value"),
             ValueWindowFunc::LastValue => write!(f, "last_value"),
             ValueWindowFunc::Fused(funcs) => write!(f, "fused[{}]", separated(", ", funcs)),
@@ -737,6 +738,17 @@ impl VisitChildren<HirScalarExpr> for ValueWindowExpr {
 pub enum ValueWindowFunc {
     Lag,
     Lead,
+    /// Specialized `lag`/`lead` whose offset and default were literal at plan
+    /// time. `specialize_lag_lead` rewrites `Lag`/`Lead` calls into this when
+    /// the args record is a 3-field literal `(value, offset, default)` with
+    /// `offset` a non-NULL `Int32(n)`. Direction is encoded in the sign of
+    /// `offset` (negative = lag, positive = lead). `specialize_lag_lead`
+    /// deliberately declines to rewrite `offset == 0`, so the variant is
+    /// always constructed with a non-zero offset in practice.
+    LagLeadConst {
+        offset: i32,
+        default: mz_repr::Row,
+    },
     FirstValue,
     LastValue,
     Fused(Vec<ValueWindowFunc>),
@@ -750,6 +762,12 @@ impl ValueWindowFunc {
                 input_type.scalar_type.unwrap_record_element_type()[0]
                     .clone()
                     .nullable(true)
+            }
+            ValueWindowFunc::LagLeadConst { .. } => {
+                // After `specialize_lag_lead`, the input is the *bare* value
+                // (no encoded (value, offset, default) record), so just take
+                // the input type and make it nullable.
+                input_type.scalar_type.nullable(true)
             }
             ValueWindowFunc::FirstValue | ValueWindowFunc::LastValue => {
                 input_type.scalar_type.nullable(true)
@@ -787,6 +805,14 @@ impl ValueWindowFunc {
                 lag_lead: mz_expr::LagLeadType::Lead,
                 ignore_nulls,
             },
+            ValueWindowFunc::LagLeadConst { offset, default } => {
+                mz_expr::AggregateFunc::LagLeadConst {
+                    order_by,
+                    ignore_nulls,
+                    offset,
+                    default,
+                }
+            }
             ValueWindowFunc::FirstValue => mz_expr::AggregateFunc::FirstValue {
                 order_by,
                 window_frame,
