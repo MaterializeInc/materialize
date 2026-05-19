@@ -12,7 +12,7 @@
 # The harness emits one docker-compose.yaml per workload group (see
 # `test/antithesis/groups.yaml`).  Use `GROUP=<name>` to pick one;
 # defaults to `combined` (kitchen-sink) for back-compat.  Valid groups:
-# kafka, pg-cdc, mysql-cdc, parallel-workload, upsert-stress, combined.
+# kafka, pg-cdc, mysql-cdc, sql-server-cdc, parallel-workload, upsert-stress, combined.
 #
 # Targets:
 #   make build GROUP=kafka           # regen this group's compose YAML, acquire images
@@ -39,7 +39,7 @@ SHELL := /usr/bin/env bash
 GROUP     ?= combined
 PROJECT   := materialize-antithesis-$(GROUP)
 REPO_ROOT := $(realpath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
-ALL_GROUPS := kafka pg-cdc mysql-cdc parallel-workload upsert-stress combined
+ALL_GROUPS := kafka pg-cdc mysql-cdc sql-server-cdc parallel-workload upsert-stress combined
 
 # Pick podman if available, else docker.
 ifndef RUNTIME

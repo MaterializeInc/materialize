@@ -56,7 +56,9 @@ import helper_random
 from helper_mysql_source import (
     MYSQL_DATABASE,
     MYSQL_TABLE_MYISAM,
+    SOURCE_BASENAME,
     SOURCE_NAME,
+    TABLE_BASENAME_MYISAM,
     TABLE_NAME_MYISAM,
 )
 from helper_pg import query_retry
@@ -74,8 +76,10 @@ POLL_INTERVAL_S = 1.0
 
 def _source_ready() -> bool:
     """Source + MyISAM reference table both exist in Materialize."""
-    src = query_retry("SELECT 1 FROM mz_sources WHERE name = %s", (SOURCE_NAME,))
-    tbl = query_retry("SELECT 1 FROM mz_tables WHERE name = %s", (TABLE_NAME_MYISAM,))
+    src = query_retry("SELECT 1 FROM mz_sources WHERE name = %s", (SOURCE_BASENAME,))
+    tbl = query_retry(
+        "SELECT 1 FROM mz_tables WHERE name = %s", (TABLE_BASENAME_MYISAM,)
+    )
     return bool(src) and bool(tbl)
 
 

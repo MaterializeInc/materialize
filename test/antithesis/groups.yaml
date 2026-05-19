@@ -96,17 +96,29 @@ groups:
       forever, and containerize that," so the produce loop runs in
       dedicated `upsert-hammer-{i}` containers outside the workload
       service. Multiple replicas race on a shared ~100-key space
-      against a multi-partition upsert-envelope source — sized so each
-      timely worker sees meaningful consolidation traffic while still
-      piling concurrent retract+insert events on the same per-(key,
-      ts) windows where the bug manifests.
+      against a multi-partition upsert-envelope source — sized so the
+      sole timely worker sees high-density consolidation traffic and
+      hammers pile concurrent retract+insert events on the same per-
+      (key, ts) windows where the bug manifests.
 
-      Reuses kafka/first_select_upsert_implementation so each timeline
-      picks v1 or v2 of the upsert continual-feedback operator from
-      Antithesis SDK entropy; both arms surface as separate `sometimes`
-      signals. Multi-replica antithesis_cluster (clusterd1 + clusterd2)
-      exposes the replica-specific-panic shape observed in Slack (one
-      replica panics while the other stays healthy).
+      Topology is intentionally minimal: one clusterd replica
+      (clusterd1) running one timely worker.  This matches the Flare
+      50cc single-worker shape that actually panicked in the wild and
+      frees Antithesis compute budget for exploring more distinct
+      interleavings per timeline.  The bug-relevant concurrency comes
+      from the hammer producers (multi-partition Kafka source
+      capabilities) and the RocksDB foreground/background thread
+      boundary inside the upsert operator — neither of which needs
+      additional timely workers or a second replica.  Other groups
+      that care about compute-replica-epoch-isolation still run with
+      replica1 + replica2 (see workload-entrypoint.sh).
+
+      Uses kafka/first_pin_upsert_v1 to pin the upsert continual-feedback
+      operator to v1 (the existing operator) for every timeline.  The
+      kafka group's `first_select_upsert_implementation` rolls v1/v2
+      from SDK entropy, but here we deliberately *don't* — INC-936
+      reproduces against v1, and splitting timelines across two
+      operator implementations would dilute the v1-side signal.
 
       Uses the `kafka` runtime template so the kafka anytime safety
       drivers (frontier monotonicity, `offset_known >= offset_committed`)
@@ -115,20 +127,27 @@ groups:
       Antithesis catches via the built-in process-termination property.
 
       The hammer container count is set by `UPSERT_HAMMER_REPLICAS` in
-      mzcompose.py (default 4). If you raise it, list the new
+      mzcompose.py (default 6). If you raise it, list the new
       `upsert-hammer-{i}` names below — export-compose validates that
       every referenced service exists in mzcompose's output.
+
+      Single-worker / single-replica override: export-compose.py rewrites
+      clusterd1's `CLUSTERD_{COMPUTE,STORAGE}_TIMELY_CONFIG` and the
+      workload service's `CLUSTERD_WORKERS` to `1` for this group, and
+      workload-entrypoint.sh branches on `ANTITHESIS_WORKLOAD_GROUP` to
+      provision only `replica1`.
     services:
       - zookeeper
       - kafka
       - schema-registry
-      - clusterd2
       - upsert-hammer-0
       - upsert-hammer-1
       - upsert-hammer-2
       - upsert-hammer-3
+      - upsert-hammer-4
+      - upsert-hammer-5
     setup:
-      - kafka/first_select_upsert_implementation
+      - kafka/first_pin_upsert_v1
       - kafka/first_upsert_stress_setup
     drivers: []
     anytime:
@@ -154,6 +173,13 @@ groups:
       MySQL CDC source correctness, including the MyISAM no-data-loss
       property and GTID monotonicity at the source. Multithreaded
       replica + multi-replica antithesis_cluster.
+
+      The data-loss workload owns `antithesis.cdc_test` (InnoDB) and
+      `antithesis.cdc_test_myisam` (MyISAM). The testdrive runner
+      (singleton_driver_mysql_cdc_testdrive) operates on whatever
+      schemas the repo's `test/mysql-cdc/*.td` files own (most use
+      their own `CREATE SCHEMA` blocks and DROP cleanly), with no
+      overlap on the `antithesis` schema.
     services:
       - mysql
       - mysql-replica
@@ -163,6 +189,29 @@ groups:
     drivers:
       - mysql-cdc/parallel_driver_mysql_cdc
       - mysql-cdc/parallel_driver_mysql_myisam
+      - mysql-cdc/singleton_driver_mysql_cdc_testdrive
+    anytime: []
+
+  sql-server-cdc:
+    description: >-
+      SQL Server CDC source correctness under upstream SQL Server /
+      clusterd / environmentd fault injection. Multi-replica
+      antithesis_cluster (clusterd1 + clusterd2).
+
+      The data-loss workload owns the dedicated `antithesis_test`
+      database (CDC enabled, ALLOW_SNAPSHOT_ISOLATION ON). The
+      testdrive runner (singleton_driver_sql_server_cdc_testdrive)
+      operates on the `test` database — DROPped and recreated by the
+      repo's `test/sql-server-cdc/setup/setup.td` prelude before each
+      .td run, so the two layers can't collide.
+    services:
+      - sql-server
+      - clusterd2
+    setup:
+      - sql-server-cdc/first_sql_server_cdc_setup
+    drivers:
+      - sql-server-cdc/parallel_driver_sql_server_cdc
+      - sql-server-cdc/singleton_driver_sql_server_cdc_testdrive
     anytime: []
 
   parallel-workload:
@@ -226,6 +275,7 @@ groups:
       - postgres-source
       - mysql
       - mysql-replica
+      - sql-server
       - polaris-bootstrap
       - polaris
       - clusterd2
@@ -235,6 +285,7 @@ groups:
       - kafka/first_select_upsert_implementation
       - pg-cdc/first_pg_cdc_setup
       - mysql-cdc/first_mysql_replica_setup
+      - sql-server-cdc/first_sql_server_cdc_setup
       - parallel-workload/first_setup
     drivers:
       - kafka/parallel_driver_kafka_none_envelope
@@ -245,6 +296,9 @@ groups:
       - pg-cdc/singleton_driver_pg_cdc_testdrive
       - mysql-cdc/parallel_driver_mysql_cdc
       - mysql-cdc/parallel_driver_mysql_myisam
+      - mysql-cdc/singleton_driver_mysql_cdc_testdrive
+      - sql-server-cdc/parallel_driver_sql_server_cdc
+      - sql-server-cdc/singleton_driver_sql_server_cdc_testdrive
       - parallel-workload/parallel_driver_parallel_workload
       - parallel-workload/parallel_driver_explicit_txn_no_since_violation
       - parallel-workload/parallel_driver_pw_hot_objects

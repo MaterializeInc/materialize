@@ -86,3 +86,7 @@ pre-image:
     source: .
     destination: testdrive-files
     matching: test/pg-cdc/*.td
+  - type: copy
+    source: .
+    destination: testdrive-files
+    matching: test/mysql-cdc/*.td

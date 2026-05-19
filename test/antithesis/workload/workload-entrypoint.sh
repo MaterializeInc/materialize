@@ -47,20 +47,42 @@ until curl -sf http://materialized:6878/api/readyz > /dev/null 2>&1; do
 done
 echo "materialized is healthy."
 
-# Provision the antithesis_cluster with replicas on clusterd1 +
-# clusterd2.  Every workload group includes both clusterds so multi-
-# replica fault windows (compute-replica-epoch-isolation) get
-# exercised regardless of which group is running.  Idempotent —
-# `IF NOT EXISTS` is unsupported on `CREATE CLUSTER REPLICAS (...)`,
-# so we query mz_clusters first.  Must run before setup-complete so
-# Test Composer assertions can target the cluster from the start.
+# Provision the antithesis_cluster.  Default topology is two replicas
+# (clusterd1 + clusterd2) so multi-replica fault windows (compute-
+# replica-epoch-isolation) get exercised.  The `upsert-stress` group
+# overrides to a single 1-worker replica: matches the Flare 50cc shape
+# that actually panicked in INC-936, and frees Antithesis compute budget
+# for exploring more interleavings per timeline (the bug-relevant
+# concurrency comes from the hammer producers + RocksDB foreground/
+# background threading, not from extra timely workers or replicas).
+# Idempotent — `IF NOT EXISTS` is unsupported on `CREATE CLUSTER
+# REPLICAS (...)`, so we query mz_clusters first.  Must run before
+# setup-complete so Test Composer assertions can target the cluster
+# from the start.
 existing=$(
     psql -h "$PGHOST" -p "$PGPORT_INTERNAL" -U "$PGUSER_INTERNAL" -tAc \
         "SELECT 1 FROM mz_clusters WHERE name = '$CLUSTER'"
 )
 if [[ -z "$existing" ]]; then
-    echo "Provisioning cluster '$CLUSTER' with replicas on clusterd1 + clusterd2..."
-    psql -h "$PGHOST" -p "$PGPORT_INTERNAL" -U "$PGUSER_INTERNAL" <<SQL
+    case "$ANTITHESIS_WORKLOAD_GROUP" in
+        upsert-stress)
+            echo "Provisioning cluster '$CLUSTER' with one replica on clusterd1 (WORKERS=${CLUSTERD_WORKERS})..."
+            psql -h "$PGHOST" -p "$PGPORT_INTERNAL" -U "$PGUSER_INTERNAL" <<SQL
+CREATE CLUSTER ${CLUSTER} REPLICAS (
+    replica1 (
+        STORAGECTL ADDRESSES ['clusterd1:2100'],
+        STORAGE ADDRESSES ['clusterd1:2103'],
+        COMPUTECTL ADDRESSES ['clusterd1:2101'],
+        COMPUTE ADDRESSES ['clusterd1:2102'],
+        WORKERS ${CLUSTERD_WORKERS}
+    )
+);
+GRANT ALL ON CLUSTER ${CLUSTER} TO ${PGUSER};
+SQL
+            ;;
+        *)
+            echo "Provisioning cluster '$CLUSTER' with replicas on clusterd1 + clusterd2..."
+            psql -h "$PGHOST" -p "$PGPORT_INTERNAL" -U "$PGUSER_INTERNAL" <<SQL
 CREATE CLUSTER ${CLUSTER} REPLICAS (
     replica1 (
         STORAGECTL ADDRESSES ['clusterd1:2100'],
@@ -79,6 +101,8 @@ CREATE CLUSTER ${CLUSTER} REPLICAS (
 );
 GRANT ALL ON CLUSTER ${CLUSTER} TO ${PGUSER};
 SQL
+            ;;
+    esac
 else
     echo "Cluster '$CLUSTER' already exists; skipping provisioning."
 fi
