@@ -44,8 +44,11 @@ def _get_offsets(c: Composition, topic: str) -> tuple[int, int]:
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    workflow_low_watermark(c)
-    workflow_responsible_partition_filter(c)
+    for name in c.workflows:
+        if name == "default":
+            continue
+        with c.test_case(name):
+            c.workflow(name)
 
 
 def workflow_low_watermark(c: Composition) -> None:
