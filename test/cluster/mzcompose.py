@@ -4109,6 +4109,63 @@ def workflow_cluster_drop_concurrent(
                 assert not thread.is_alive(), f"Thread {thread.name} is still running"
 
 
+def workflow_test_drop_cluster_during_peeks(c: Composition) -> None:
+    """Race peeks against DROP/CREATE of their target cluster; environmentd
+    must not panic in `set_statement_execution_cluster`."""
+
+    with c.override(Materialized()):
+        c.up("materialized")
+
+        c.sql(
+            """
+            ALTER SYSTEM SET statement_logging_max_sample_rate = 1.0;
+            ALTER SYSTEM SET statement_logging_default_sample_rate = 1.0;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+        c.sql("CREATE CLUSTER victim SIZE 'scale=1,workers=1'")
+
+        stop = [False]
+
+        def peek_loop() -> None:
+            while not stop[0]:
+                try:
+                    with c.sql_cursor() as cur:
+                        cur.execute("SET auto_route_catalog_queries = false")
+                        cur.execute("SET cluster = victim")
+                        while not stop[0]:
+                            cur.execute("SELECT 1")
+                            cur.fetchone()
+                except DatabaseError:
+                    pass
+
+        def churn_loop() -> None:
+            while not stop[0]:
+                try:
+                    with c.sql_cursor() as cur:
+                        cur.execute("DROP CLUSTER IF EXISTS victim CASCADE")
+                        cur.execute("CREATE CLUSTER victim SIZE 'scale=1,workers=1'")
+                except DatabaseError:
+                    pass
+
+        threads = [
+            PropagatingThread(target=peek_loop, name=f"peek-{i}") for i in range(8)
+        ] + [PropagatingThread(target=churn_loop, name="churn")]
+        for t in threads:
+            t.start()
+        try:
+            time.sleep(30)
+        finally:
+            stop[0] = True
+            for t in threads:
+                t.join(timeout=10)
+
+        with c.sql_cursor() as cur:
+            cur.execute("SELECT 1")
+            assert cur.fetchone() == (1,)
+
+
 def workflow_test_refresh_mv_warmup(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:

@@ -526,6 +526,11 @@ impl Coordinator {
 
     /// Set the `cluster_id` for a statement, once it's known.
     ///
+    /// Swallows any errors that occur during cluster resolution. This is fine, because if the
+    /// cluster went away during sequencing, then the sequencing will error out anyway. (We don't
+    /// want to make this synchronous just to report the error back, because we want these
+    /// statement logging messages to be pipelined.)
+    ///
     /// TODO(peek-seq): We could do cluster resolution and packing in the frontend task, and just
     /// send over the rows.
     pub(crate) fn set_statement_execution_cluster(
@@ -533,11 +538,13 @@ impl Coordinator {
         id: StatementLoggingId,
         cluster_id: ClusterId,
     ) {
-        let cluster_name = self.catalog().get_cluster(cluster_id).name.clone();
-        self.mutate_record(id, |record| {
-            record.cluster_name = Some(cluster_name);
-            record.cluster_id = Some(cluster_id);
-        });
+        if let Some(cluster) = self.catalog().try_get_cluster(cluster_id) {
+            let cluster_name = cluster.name.clone();
+            self.mutate_record(id, |record| {
+                record.cluster_name = Some(cluster_name);
+                record.cluster_id = Some(cluster_id);
+            });
+        }
     }
 
     /// Set the `execution_timestamp` for a statement, once it's known
