@@ -59,7 +59,12 @@ t1_pk_sql_server sql-server quickstart ""
 t1_pk_sql_server_progress progress <null> ""
 t3_text subsource quickstart ""
 
-> SELECT schema_name, table_name FROM mz_internal.mz_sql_server_source_tables;
+# Scope by table_name so this assertion holds even when other SQL Server
+# sources (referencing different upstream tables) coexist in the catalog
+# — Antithesis runs this file in a topology that also hosts an unrelated
+# data-loss workload source.
+> SELECT schema_name, table_name FROM mz_internal.mz_sql_server_source_tables
+  WHERE schema_name = 'dbo' AND table_name IN ('dummy', 't1_pk', 't3_text');
 dbo dummy
 dbo t1_pk
 dbo t3_text

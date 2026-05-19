@@ -60,6 +60,7 @@ from materialize.mzcompose.services.mysql import MySql, create_mysql_server_args
 from materialize.mzcompose.services.polaris import Polaris, PolarisBootstrap
 from materialize.mzcompose.services.postgres import Postgres, PostgresMetadata
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.mzcompose.services.zookeeper import Zookeeper
 
 # Number of pool clusterd containers reserved for parallel-workload clusters
@@ -73,14 +74,14 @@ CLUSTERD_POOL_SIZE = int(os.environ.get("ANTITHESIS_CLUSTERD_POOL_SIZE", "2"))
 # Number of `upsert-hammer-{i}` containers the kitchen-sink topology
 # declares.  Only the `upsert-stress` group lists them in its
 # `services:` block in groups.yaml; every other group filters them
-# out at export-compose time.  Default 4: with the hammer's ~100-key
-# shared space spread across 8 topic partitions, this gives each
-# timely worker meaningful traffic while still piling concurrent
-# retract+insert events on the same per-(key, ts) consolidation
-# window.  Bumping this requires adding the extra `upsert-hammer-{i}`
-# names to the `upsert-stress` group's `services:` list — export-
-# compose validates the names match.
-UPSERT_HAMMER_REPLICAS = int(os.environ.get("ANTITHESIS_UPSERT_HAMMER_REPLICAS", "4"))
+# out at export-compose time.  Default 6 — with the upsert-stress
+# group dropped to a single timely worker on a single clusterd
+# replica, the freed compute budget goes into more producers piling
+# concurrent retract+insert events on the same per-(key, ts)
+# consolidation windows where INC-936 manifests.  Bumping this requires
+# adding the extra `upsert-hammer-{i}` names to the `upsert-stress`
+# group's `services:` list — export-compose validates the names match.
+UPSERT_HAMMER_REPLICAS = int(os.environ.get("ANTITHESIS_UPSERT_HAMMER_REPLICAS", "6"))
 
 # Timely worker threads per clusterd process. Reverted from 16 back to 4
 # on suspicion that Antithesis's deterministic hypervisor runs the whole
@@ -245,6 +246,7 @@ class Workload(Service):
                 "mysql": {"condition": "service_healthy"},
                 "mysql-replica": {"condition": "service_healthy"},
                 "postgres-source": {"condition": "service_healthy"},
+                "sql-server": {"condition": "service_healthy"},
             },
             "environment": [
                 "PGHOST=materialized",
@@ -284,6 +286,21 @@ class Workload(Service):
                 "PG_SOURCE_USER=postgres",
                 "PG_SOURCE_PASSWORD=postgres",
                 "PG_SOURCE_DATABASE=postgres",
+                # SQL Server CDC upstream connection details. Mirrors the
+                # `DEFAULT_USER` / `DEFAULT_SA_PASSWORD` constants on the
+                # SqlServer service so a future credential change in the
+                # mzcompose service propagates here.
+                "SQL_SERVER_HOST=sql-server",
+                "SQL_SERVER_PORT=1433",
+                f"SQL_SERVER_USER={SqlServer.DEFAULT_USER}",
+                f"SQL_SERVER_PASSWORD={SqlServer.DEFAULT_SA_PASSWORD}",
+                # Data-loss workload database. Distinct from `test` —
+                # the testdrive-runner's setup.td DROP/CREATEs `test`
+                # before each run, so the data-loss source has to live
+                # in a database the testdrive layer never touches. The
+                # first_sql_server_cdc_setup driver creates it (CDC
+                # enabled, ALLOW_SNAPSHOT_ISOLATION ON).
+                "SQL_SERVER_DATABASE=antithesis_test",
                 # The testdrive binary inside the workload image reads
                 # this from the env (clap `env=CLUSTER_REPLICA_SIZES`)
                 # and uses it for any `CREATE CLUSTER REPLICAS (... SIZE
@@ -313,6 +330,15 @@ class Workload(Service):
             },
         }
         super().__init__(name="workload", config=config)
+
+
+def _override_platform(svc: Service, platform: str) -> Service:
+    """Pin a per-service `platform:` so export-compose doesn't replace it
+    with the global per-run arch. Used for services whose image is
+    available on only one architecture (currently just `sql-server`,
+    whose Microsoft image is amd64-only)."""
+    svc.config["platform"] = platform
+    return svc
 
 
 def _polaris_bootstrap() -> PolarisBootstrap:
@@ -426,6 +452,32 @@ SERVICES = [
         ports=["5432"],
         extra_command=["-c", "max_slot_wal_keep_size=64MB"],
     ),
+    # SQL Server upstream — single instance, CDC enabled at the database
+    # level by first_sql_server_cdc_setup.py at runtime. Materialize talks
+    # to this SQL Server directly via the SQL Server CDC source code path
+    # (mz_storage::source::sql_server), which polls the engine's CDC
+    # capture-instance tables for change events.
+    #
+    # No TLS volume mount (unlike test/sql-server-cdc/mzcompose.py which
+    # wires in test-certs). Antithesis-internal traffic only — we connect
+    # with `TrustServerCertificate=true` against a plain SQL Server. The
+    # 11-sql-server-cdc-ssl.td suite is excluded from the testdrive runner
+    # for the same reason.
+    #
+    # `enable_agent=True` (the SqlServer ctor default) — required because
+    # the setup-time DummyTicker job that test/sql-server-cdc/setup/setup.td
+    # relies on runs as a SQL Server Agent job, and the source itself
+    # transitively depends on the agent being available at purify time
+    # (test/sql-server-cdc/mzcompose.py's workflow_no_agent exists
+    # precisely to assert the no-agent rejection).
+    #
+    # Pin platform=linux/amd64: Microsoft's mssql/server image is amd64-
+    # only, so on an aarch64 host (Apple Silicon for local dev,
+    # `make up-local`) we have to run it under Rosetta/qemu emulation.
+    # Antithesis itself runs amd64 throughout, so this is a no-op there.
+    # export-compose preserves an existing `platform:` rather than
+    # overriding it with the global per-run arch, so this lands as-is.
+    _override_platform(SqlServer(), "linux/amd64"),
     _polaris_bootstrap(),
     _polaris(),
     # Two clusterd processes, one per replica of the unmanaged
@@ -531,6 +583,7 @@ def workflow_default(c: Composition) -> None:
         "mysql",
         "mysql-replica",
         "postgres-source",
+        "sql-server",
     )
     c.up("materialized")
     c.up("fault-orchestrator")

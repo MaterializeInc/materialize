@@ -785,6 +785,11 @@ services:
     - PG_SOURCE_USER=postgres
     - PG_SOURCE_PASSWORD=postgres
     - PG_SOURCE_DATABASE=postgres
+    - SQL_SERVER_HOST=sql-server
+    - SQL_SERVER_PORT=1433
+    - SQL_SERVER_USER=SA
+    - SQL_SERVER_PASSWORD=RPSsql12345
+    - SQL_SERVER_DATABASE=antithesis_test
     - 'CLUSTER_REPLICA_SIZES={"bootstrap": {"cpu_exclusive": false, "cpu_limit": null,
       "credits_per_hour": "1", "disabled": false, "disk_limit": null, "is_cc": true,
       "memory_limit": "4 GiB", "scale": 1, "workers": 1}, "scale=2,workers=4": {"cpu_exclusive":

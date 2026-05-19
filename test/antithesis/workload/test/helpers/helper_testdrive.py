@@ -60,6 +60,14 @@ SCHEMA_REGISTRY_URL = os.environ.get(
     "SCHEMA_REGISTRY_URL", "http://schema-registry:8081"
 )
 
+# Upstream credentials surfaced as `${arg.*}` to checked-in .td files.
+# Sourced from the Workload service's environment (see the Workload
+# class in test/antithesis/mzcompose.py) so a credential change in the
+# mzcompose service propagates here automatically.
+MYSQL_ROOT_PASSWORD = os.environ.get("MYSQL_PASSWORD", "p@ssw0rd")
+SQL_SERVER_USER = os.environ.get("SQL_SERVER_USER", "SA")
+SQL_SERVER_PASSWORD = os.environ.get("SQL_SERVER_PASSWORD", "RPSsql12345")
+
 # Patterns we treat as transient fault-injection artifacts rather than
 # property violations. Testdrive surfaces these as non-zero exits when an
 # Antithesis fault window happens to overlap a sensitive moment in the
@@ -86,6 +94,23 @@ TRANSIENT_PATTERNS = (
     # testdrive as `error: catalog inconsistency: catalog state`.  The
     # catalog isn't inconsistent — the dump request just died.
     "connection closed before message completed",
+    # tokio-postgres surfaces a TCP-level disconnect (Antithesis killing
+    # materialized) as a bare "connection closed" wrapped by testdrive
+    # as `error: executing query failed: connection closed` on a `>`
+    # checkpoint or `error: preparing query failed: connection closed`
+    # on a `> SELECT … PREPARE …` line.  Neither is a query semantic
+    # failure — the upstream crates never produce this string for a
+    # successful round-trip, only when the TCP stream drops.
+    "connection closed",
+    # tiberius (the Rust TDS driver testdrive uses for sql-server)
+    # surfaces a TDS-stream disconnect (Antithesis killing the
+    # sql-server container) as `An error occured during the attempt of
+    # performing I/O: No more packets in the wire`, wrapped by
+    # testdrive's `$ sql-server-execute` directive as
+    # `error: executing SQL Server query: ...`.  Same shape as the
+    # tokio-postgres case above — protocol-layer disconnect, never a
+    # logical error.
+    "No more packets in the wire",
 )
 
 # `$ skip-if` directive removal regex. testdrive parses skip-if as:
@@ -138,18 +163,12 @@ def _strip_skip_if_true(content: str) -> tuple[str, bool]:
     return rewritten, n > 0
 
 
-def run(
-    td_file: str,
-    *,
-    timeout_s: float = 600.0,
-    extra_args: list[str] | None = None,
-) -> TestdriveResult:
-    """Run a bundled testdrive file. `td_file` is repo-relative, e.g.
-    "test/pg-cdc/dropped-slot-errors.td".
+def _read_and_rewrite(td_file: str) -> str:
+    """Load a bundled testdrive file and strip skip-if-true headers.
 
-    The repo file is read, rewritten in memory to strip a skip-if-true
-    header if present, and the rewritten copy is fed to testdrive. The
-    on-disk repo file is never modified.
+    Returns the rewritten file contents. Raises FileNotFoundError if
+    the bundle is missing the requested path (most likely cause: the
+    pre-image: copy glob in mzbuild.yml doesn't cover the directory).
     """
     src_path = os.path.join(TESTDRIVE_FILES_ROOT, td_file)
     if not os.path.isfile(src_path):
@@ -163,6 +182,37 @@ def run(
     rewritten, stripped = _strip_skip_if_true(content)
     if stripped:
         LOG.info("td %s: stripped `$ skip-if / SELECT true` header", td_file)
+    return rewritten
+
+
+def run(
+    td_file: str,
+    *,
+    timeout_s: float = 600.0,
+    extra_args: list[str] | None = None,
+    prelude_files: list[str] | None = None,
+) -> TestdriveResult:
+    """Run a bundled testdrive file. `td_file` is repo-relative, e.g.
+    "test/pg-cdc/dropped-slot-errors.td".
+
+    The repo file is read, rewritten in memory to strip a skip-if-true
+    header if present, and the rewritten copy is fed to testdrive. The
+    on-disk repo file is never modified.
+
+    `prelude_files` lets the caller prepend the contents of one or more
+    other bundled .td files before the target. Used by the sql-server-cdc
+    testdrive runner to inline `test/sql-server-cdc/setup/setup.td`
+    (which DROPs and re-creates the `test` database + DummyTicker job)
+    ahead of each random .td file, mirroring what the repo's
+    workflow_cdc does. Each prelude file is also rewritten by the
+    skip-if-true stripper.
+    """
+    rewritten = _read_and_rewrite(td_file)
+    if prelude_files:
+        parts = [_read_and_rewrite(p) for p in prelude_files]
+        # Append the target last; a `\n` between parts so a non-newline-
+        # terminated prelude doesn't merge with the next file's first line.
+        rewritten = "\n".join([*parts, rewritten])
 
     # testdrive treats its positional arg as a *glob pattern* and matches
     # it against files found by `WalkDir::new(".").sort_by_file_name()` —
@@ -199,6 +249,19 @@ def run(
         # "unknown variable: arg.default-replica-size".
         "--var=default-replica-size=scale=4,workers=4",
         "--var=default-storage-size=scale=4,workers=1",
+        # `test/mysql-cdc/*.td` references the upstream MySQL password
+        # as `${arg.mysql-root-password}`. The antithesis topology has
+        # one MySQL primary at `mysql`; tests that create connections
+        # via `HOST mysql` work unmodified.
+        f"--var=mysql-root-password={MYSQL_ROOT_PASSWORD}",
+        # `test/sql-server-cdc/*.td` references the upstream SQL
+        # Server creds as `${arg.default-sql-server-user}` and
+        # `${arg.default-sql-server-password}`. Test files expect the
+        # `test` database to already exist with CDC enabled —
+        # first_sql_server_cdc_setup.py handles that during the setup
+        # phase, before any testdrive run.
+        f"--var=default-sql-server-user={SQL_SERVER_USER}",
+        f"--var=default-sql-server-password={SQL_SERVER_PASSWORD}",
         tmp_name,
     ]
     if extra_args:

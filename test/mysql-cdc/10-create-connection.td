@@ -21,7 +21,12 @@ ALTER SYSTEM SET max_mysql_connections = 0
     USER root,
     PASSWORD SECRET mysqlpass
   )
-contains:creating MySQL Connection would violate max_mysql_connections limit (desired: 1, limit: 0, current: 0)
+# Truncated: the `(desired: N, limit: 0, current: M)` suffix tracks the
+# global connection count, which is non-zero when this test runs in a
+# topology that already hosts a data-loss workload connection
+# (Antithesis). The `contains:` substring still verifies the
+# max-connections enforcement path.
+contains:creating MySQL Connection would violate max_mysql_connections limit
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET max_mysql_connections = 1000

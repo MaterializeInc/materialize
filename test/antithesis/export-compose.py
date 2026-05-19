@@ -47,6 +47,7 @@ Usage:
 """
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -79,6 +80,7 @@ MATERIALIZE_IMAGES = {
     "antithesis-workload-kafka": "${ANTITHESIS_WORKLOAD_IMAGE}",
     "antithesis-workload-pg-cdc": "${ANTITHESIS_WORKLOAD_IMAGE}",
     "antithesis-workload-mysql-cdc": "${ANTITHESIS_WORKLOAD_IMAGE}",
+    "antithesis-workload-sql-server-cdc": "${ANTITHESIS_WORKLOAD_IMAGE}",
     "antithesis-workload-parallel-workload": "${ANTITHESIS_WORKLOAD_IMAGE}",
     "antithesis-workload-upsert-stress": "${ANTITHESIS_WORKLOAD_IMAGE}",
     "antithesis-workload-combined": "${ANTITHESIS_WORKLOAD_IMAGE}",
@@ -96,6 +98,14 @@ MATERIALIZE_IMAGES = {
 PUBLIC_FALLBACKS = {
     "postgres": "postgres:17.7",
     "minio": "minio/minio:latest",
+    # Materialize's `mssql-server` image is just the Microsoft base
+    # image plus a build-time seed of `/var/opt/mssql` for faster cold
+    # start.  Antithesis doesn't need the seed (it pays the ~30s
+    # initialize-system-databases cost once per run — well within the
+    # SqlServer service's 300s healthcheck start_period), so swap to
+    # the upstream image directly.  Mirrors the same `Dockerfile`
+    # `FROM mcr.microsoft.com/mssql/server:2022-CU21-ubuntu-22.04`.
+    "mssql-server": "mcr.microsoft.com/mssql/server:2022-CU21-ubuntu-22.04",
 }
 
 # Header prepended to the generated YAML so check-copyright passes and
@@ -481,6 +491,92 @@ def inject_workload_group_env(compose: dict[str, Any], group_name: str) -> None:
     env.append(f"ANTITHESIS_WORKLOAD_GROUP={group_name}")
 
 
+def _override_env_var(env: list[str], key: str, value: str) -> None:
+    """Replace the `KEY=...` entry in a compose env list, or fail loud.
+
+    Used by the per-group overrides below; the entries we're targeting
+    are always emitted by mzcompose.py, so a missing entry means the
+    upstream service definition drifted and the override needs revisiting
+    rather than silently no-op'ing.
+    """
+    prefix = f"{key}="
+    for i, entry in enumerate(env):
+        if isinstance(entry, str) and entry.startswith(prefix):
+            env[i] = f"{prefix}{value}"
+            return
+    raise ValueError(
+        f"expected env entry starting with {prefix!r} in compose service env; "
+        f"got {env!r}. Did mzcompose.py drift?"
+    )
+
+
+def _rewrite_timely_workers(env: list[str], key: str, workers: int) -> None:
+    """Re-stringify `CLUSTERD_{COMPUTE,STORAGE}_TIMELY_CONFIG` with new workers.
+
+    The Clusterd service emits these as a JSON blob with a `workers` key
+    (see `misc/python/materialize/mzcompose/services/clusterd.py::timely_config`).
+    We parse, mutate, re-serialize so the rest of the config (process,
+    addresses, arrangement_exert_proportionality, zero-copy flags) is
+    preserved verbatim — touching only the dimension that actually needs
+    to differ for the group.
+    """
+    prefix = f"{key}="
+    for i, entry in enumerate(env):
+        if isinstance(entry, str) and entry.startswith(prefix):
+            cfg = json.loads(entry[len(prefix) :])
+            cfg["workers"] = workers
+            env[i] = f"{prefix}{json.dumps(cfg)}"
+            return
+    raise ValueError(
+        f"expected env entry starting with {prefix!r} in clusterd1 env; "
+        f"got {env!r}. Did mzcompose.py drift?"
+    )
+
+
+def apply_group_overrides(compose: dict[str, Any], group_name: str) -> None:
+    """Apply per-group last-mile rewrites to the filtered compose.
+
+    `mzcompose.py` builds one kitchen-sink topology shared across every
+    group; most per-group differences fall out of `filter_to_group`. The
+    upsert-stress group additionally needs a worker-count reduction that
+    isn't expressible purely by filtering — it has to mutate env vars on
+    services that mzcompose.py emitted with the kitchen-sink defaults.
+    Keeping the override here (instead of in mzcompose.py) means the
+    kitchen-sink stays a single straightforward topology that other tools
+    (snouty validate, ad-hoc local up) can consume without per-group
+    branching.
+    """
+    if group_name != "upsert-stress":
+        return
+
+    services = compose.get("services", {})
+
+    # clusterd1: drop both timely configs to a single worker. Storage and
+    # compute must agree with the WORKERS clause in CREATE CLUSTER REPLICAS
+    # (the controller validates), so both have to flip together.
+    clusterd1 = services.get("clusterd1")
+    if clusterd1 is None:
+        raise ValueError(
+            "upsert-stress override: clusterd1 missing from compose — "
+            "the group's services list must include clusterd1 (it's a "
+            "universal service)."
+        )
+    env = clusterd1.setdefault("environment", [])
+    _rewrite_timely_workers(env, "CLUSTERD_COMPUTE_TIMELY_CONFIG", 1)
+    _rewrite_timely_workers(env, "CLUSTERD_STORAGE_TIMELY_CONFIG", 1)
+
+    # workload: workload-entrypoint.sh reads CLUSTERD_WORKERS to fill in
+    # the WORKERS clause of every CREATE CLUSTER REPLICAS it runs. Must
+    # match the clusterd1 timely-config workers above.
+    workload = services.get("workload")
+    if workload is None:
+        raise ValueError(
+            "upsert-stress override: workload service missing — universal "
+            "service should always be present."
+        )
+    _override_env_var(workload.setdefault("environment", []), "CLUSTERD_WORKERS", "1")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
@@ -537,7 +633,13 @@ def main() -> None:
             workload_svc["mzbuild"] = f"antithesis-workload-{group.name}"
 
     for name, svc in c.compose["services"].items():
-        svc["platform"] = platform
+        # Honor a per-service `platform` override emitted by
+        # mzcompose.py — e.g. `sql-server` pins itself to `linux/amd64`
+        # because Microsoft's SQL Server image is amd64-only and won't
+        # run native on an aarch64 host (Apple Silicon, etc.).  Without
+        # this skip, the blanket override below would clobber it.
+        if "platform" not in svc:
+            svc["platform"] = platform
         if "mzbuild" in svc:
             resolve_mzbuild(svc)
         inline_postgres_setup(svc)
@@ -549,6 +651,7 @@ def main() -> None:
         assign_network(name, svc)
 
     inject_workload_group_env(c.compose, group.name)
+    apply_group_overrides(c.compose, group.name)
     declare_top_level_network(c.compose)
     upgrade_started_to_healthy(c.compose)
     register_referenced_named_volumes(c.compose)

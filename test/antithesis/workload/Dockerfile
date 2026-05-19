@@ -76,6 +76,7 @@ RUN pip install --no-cache-dir \
     antithesis==0.2.0 \
     PyMySQL==1.1.1 \
     pg8000==1.31.2 \
+    pymssql==2.3.4 \
     PyYAML==6.0.2 \
     websocket-client==1.8.0 \
     requests==2.32.3 \

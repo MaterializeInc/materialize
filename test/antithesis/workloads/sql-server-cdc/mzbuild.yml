@@ -12,11 +12,11 @@
 # selects the group's script subset at build time using the
 # ANTITHESIS_WORKLOAD_GROUP build arg.
 
-name: antithesis-workload-combined
+name: antithesis-workload-sql-server-cdc
 publish: false
 
 build-args:
-  ANTITHESIS_WORKLOAD_GROUP: combined
+  ANTITHESIS_WORKLOAD_GROUP: sql-server-cdc
 
 pre-image:
   # Source files shared with the other workload-<group> images.  The
@@ -78,20 +78,15 @@ pre-image:
     destination: .
     matching: materialize/data_ingest/**
   # Repository-checked-in testdrive scripts that the testdrive-runner
-  # drivers execute under Antithesis fault injection.  Keeping the
-  # source-of-truth path means new tests in `test/{pg,mysql,sql-server}-cdc/`
-  # are exercised against Antithesis as soon as their filenames are
-  # referenced by a singleton driver.
+  # drivers execute under Antithesis fault injection.  pg-cdc is bundled
+  # by every group's image (parity with the other workload images);
+  # the sql-server-cdc bundle also pulls in `setup/setup.td`, which the
+  # singleton runner inlines as a prelude before each random .td file
+  # to reset the `test` database + DummyTicker job to a known state.
   - type: copy
     source: .
     destination: testdrive-files
     matching: test/pg-cdc/*.td
-  - type: copy
-    source: .
-    destination: testdrive-files
-    matching: test/mysql-cdc/*.td
-  # SQL Server testdrive scripts plus the shared setup.td that the
-  # singleton runner prepends to each .td file.
   - type: copy
     source: .
     destination: testdrive-files
