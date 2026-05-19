@@ -69,7 +69,7 @@ MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = {
     "memory_limiter_interval": "0s",
     "max_credit_consumption_rate": "1024",
     # Headroom over the 30k default cap from `--envd-objects-scalability-sizes`,
-    # plus the MVs-per-cluster sharding on pad clusters. Cloud targets need
+    # plus the per-pad-cluster MV split. Cloud targets need
     # matching limits configured server-side.
     "max_tables": "200000",
     "max_materialized_views": "200000",
@@ -140,28 +140,16 @@ CLUSTER_OBJECT_LIMITS_LINEAR_STEP = 1_000
 
 # Freshness probe knobs. Healthy = max local lag below threshold.
 CLUSTER_OBJECT_LIMITS_LAG_THRESHOLD_MS = 2_000
-# Ceiling applied to recorded lag values when a materialization has
-# completely stalled (e.g. its write_frontier never advanced past the
-# minimum timestamp, yielding ~unix-epoch-ms readings). Without a cap, those
-# values dwarf the healthy-band data and make plots unreadable. The
-# `healthy` column preserves the underlying truth, and the analysis labels
-# the plot to make the cap explicit. Set to 10x the threshold.
+# Cap on recorded lag values for plot legibility; the `healthy`
+# column preserves the underlying truth.
 CLUSTER_OBJECT_LIMITS_LAG_CAP_MS = 10 * CLUSTER_OBJECT_LIMITS_LAG_THRESHOLD_MS
-# How long to wait, after a batch of objects has been created, for all N
-# materializations to report ``hydrated=true`` in `mz_hydration_statuses`
-# before we declare "unhealthy". This is a definitive per-object signal
-# (dataflow has finished initial snapshotting) and not an indirect lag
-# threshold, so it converges quickly even on big replicas — an overloaded
-# cluster trips the steady-state lag check below instead of timing out
-# here.
+# Per-batch deadline for all N materializations to report
+# `hydrated=true` in `mz_hydration_statuses`. Steady-state lag
+# check below handles overloaded clusters.
 CLUSTER_OBJECT_LIMITS_HYDRATION_TIMEOUT_S = 60
-# Longer timeout applied only to the very first probe after each
-# ``CREATE CLUSTER c``. Big replicas (1600cc/3200cc multi-process on
-# staging) need more time to come up and start serving introspection than
-# small ones, and a too-tight first-probe budget produces false "cluster
-# only handles ~100 objects" cliffs that disappear on every subsequent
-# bisect step. After the first probe the replica is warm and the regular
-# timeout is plenty.
+# Longer timeout for the first probe after `CREATE CLUSTER c`,
+# to absorb cold-start cost on larger replicas. Subsequent probes
+# (warmer replica) use the shorter timeout above.
 CLUSTER_OBJECT_LIMITS_FIRST_PROBE_HYDRATION_TIMEOUT_S = 180
 # Steady-state sampling window after hydration: take this many samples spaced
 # CLUSTER_OBJECT_LIMITS_SAMPLE_INTERVAL_S apart and use the max as the
@@ -251,25 +239,16 @@ class ScenarioRunner:
         name: str,
         repetition: int,
         size_bytes: int | None,
-        time: float | None = None,
-        qps: float | None = None,
         time_ms: int | None = None,
+        qps: float | None = None,
         healthy: int | None = None,
     ) -> None:
         """Write one result row.
 
-        Pass either ``time`` (seconds) or ``time_ms`` (milliseconds, used
-        when the underlying value is already in ms — e.g. local-lag in the
-        cluster_object_limits scenario). ``healthy`` is recorded for
-        cluster_object_limits only; the extra column is silently dropped
-        on streams whose schema doesn't include it
-        (``csv.DictWriter(extrasaction="ignore")``).
+        ``healthy`` is recorded for cluster_object_limits only; the extra
+        column is silently dropped on streams whose schema doesn't include
+        it (``csv.DictWriter(extrasaction="ignore")``).
         """
-        assert (
-            time is None or time_ms is None
-        ), "pass `time` (seconds) or `time_ms`, not both"
-        if time_ms is None and time is not None:
-            time_ms = int(time * 1000)
         self.results_writer.writerow(
             {
                 "scenario": self.scenario,
@@ -351,7 +330,11 @@ class ScenarioRunner:
                 else:
                     size_bytes = None
                 self.add_result(
-                    category, name, repetition, size_bytes, (end_time - start_time)
+                    category,
+                    name,
+                    repetition,
+                    size_bytes,
+                    time_ms=int((end_time - start_time) * 1000),
                 )
                 for after_part in after:
                     self.run_query(after_part)
@@ -495,7 +478,6 @@ class ScenarioRunner:
             # we ever want also multiple repetitions for QPS).
             0,
             None,
-            None,
             qps=qps_val,
         )
 
@@ -516,14 +498,15 @@ class ScenarioRunner:
 
 
 class ClusterScalingScenario(ABC):
-    """Base for scenarios driven by the strong/weak/envd_qps families.
+    """Workload base for the strong/weak/envd_cpu sweep families.
 
-    These scenarios share a four-step lifecycle: `drop()` cleans up state from
-    a prior run, `setup()` creates load-generator clusters / sources / tables,
-    `materialize_views()` lists persist objects to hydrate, and `run()`
-    performs the measurements. The drivers (`run_scenario_strong`,
-    `run_scenario_weak`, `run_scenario_envd_strong_scaling`) wrap this with a
-    cluster-size loop.
+    Wrapped by `StrongScalingSweep` / `WeakScalingSweep` /
+    `EnvdCpuSweep`, which drive the cluster-size or envd-cpu loop and
+    delegate per-point measurement to `run()` here.
+
+    Lifecycle: `setup()` builds load-generator clusters / sources /
+    tables, `materialize_views()` lists persist objects to hydrate,
+    `run()` measures, `drop()` cleans up.
     """
 
     # Bump this version in the individual test if it changes in a way that
@@ -2082,7 +2065,7 @@ class CopyFromStdinEnvdStrongScalingScenario(ClusterScalingScenario):
                     "copy_from_stdin_1m_rows",
                     repetition,
                     None,
-                    elapsed,
+                    time_ms=int(elapsed * 1000),
                     qps=rows_per_sec,
                 )
 
@@ -2241,14 +2224,11 @@ class SourceIngestionScenario(ClusterScalingScenario):
 
 
 class EnvdObjectsScalabilityScenario(ABC):
-    """
-    Base class for envd_objects_scalability scenarios. These vary the number
-    of catalog objects and measure adapter/envd latency for a DDL and a
-    simple peek.
+    """Workload base for the envd_objects_scalability family.
 
-    The scale point (number of catalog objects, N) is driven externally by
-    `run_scenario_envd_objects_scalability` via init/add_objects/teardown;
-    `runner.scale` is updated per step so that result rows carry N.
+    Wrapped by `EnvdObjectsSweep`, which drives the N-loop and calls
+    `init` / `add_objects` / `run` / `teardown`. `runner.scale` is
+    updated per step so result rows carry N.
     """
 
     VERSION: str = "1.0.0"
@@ -2375,9 +2355,9 @@ def _recreate_cluster_c(
     ``max_credit_consumption_rate``). ``OperationalError`` always propagates
     so connection-level failures aren't swallowed.
 
-    ``smoke_test=True`` issues ``SELECT * FROM t`` after the SET, surfacing
-    cluster-startup failures immediately (relies on `_prepare_probe_table`
-    having already created ``t``).
+    ``smoke_test=True`` issues ``SELECT * FROM t`` after the SET as a
+    cluster-startup sanity check before the scenario runs (relies on
+    `_prepare_probe_table` having already created ``t``).
     """
     runner.run_query("DROP CLUSTER IF EXISTS c CASCADE")
     try:
@@ -2469,9 +2449,15 @@ class ScalePoint:
     """
 
     label: str
+    # Replica size string, e.g. "100cc". Used in `CREATE CLUSTER c SIZE ...`.
     cluster_size: str | None = None
+    # Integer index from `REPLICA_SCALES` (1, 2, 4, ...). Used by weak
+    # scaling to multiply the workload's input scale per cluster step.
     replica_scale: int | None = None
+    # environmentd CPU cores for the EnvdCpuSweep.
     envd_cpus: int | None = None
+    # Number of catalog objects for envd_objects_scalability /
+    # cluster_object_limits sweeps.
     n: int | None = None
 
 
@@ -2543,7 +2529,7 @@ class EnvdObjectsScalabilityTablesScenario(EnvdObjectsScalabilityScenario):
 
 
 class EnvdObjectsScalabilityMvsScenario(EnvdObjectsScalabilityScenario):
-    """N materialized views in the catalog, sharded across pad clusters.
+    """N materialized views in the catalog, spread across pad clusters.
 
     To bound per-cluster dataflow count, MVs are spread across multiple
     single-replica pad clusters (`pad_c_0`, `pad_c_1`, ...), at most
@@ -2551,7 +2537,11 @@ class EnvdObjectsScalabilityMvsScenario(EnvdObjectsScalabilityScenario):
 
     Each MV is a trivial transformation of a single 1-row base table, with
     the predicate parameterised on the index `i` so MVs are structurally
-    distinct (and not collapsible via plan caching).
+    distinct (forcing separate dataflows).
+
+    Each MV reads directly from `base_t` — i.e. one persist source per
+    MV — as opposed to a topology where the table feeds one index, and
+    many MVs read from that index.
     """
 
     MVS_PER_CLUSTER: int = ENVD_OBJECTS_SCALABILITY_MVS_PER_CLUSTER
@@ -2594,17 +2584,16 @@ class EnvdObjectsScalabilityMvsScenario(EnvdObjectsScalabilityScenario):
             self._pad_clusters_created += 1
 
     def add_objects(self, runner: ScenarioRunner, target_n: int) -> None:
-        # Build one shard at a time: each shard lives on its own pad cluster
-        # (created lazily before the shard's CREATE batch), bounded by
-        # MVS_PER_CLUSTER MVs per cluster.
+        # Build one pad cluster's worth at a time: create the pad cluster,
+        # then fill it up to MVS_PER_CLUSTER MVs before moving on.
         while self._current_n < target_n:
             cluster_idx = self._current_n // self.MVS_PER_CLUSTER
             self._ensure_pad_cluster(runner, cluster_idx)
-            shard_end = min(target_n, (cluster_idx + 1) * self.MVS_PER_CLUSTER)
+            cluster_end = min(target_n, (cluster_idx + 1) * self.MVS_PER_CLUSTER)
             self._current_n = _extend_incremental(
                 runner,
                 current_n=self._current_n,
-                target_n=shard_end,
+                target_n=cluster_end,
                 templates_for=lambda i, c=cluster_idx: (
                     f"CREATE MATERIALIZED VIEW IF NOT EXISTS {self.PAD_SCHEMA}.pad_mv_{i} "
                     f"IN CLUSTER pad_c_{c} "
@@ -2633,8 +2622,7 @@ class ClusterObjectLimitsKind:
     statements (indexes need a view + a default index; MVs need a single
     CREATE MATERIALIZED VIEW). Statement templates take ``{schema}``,
     ``{base}``, and ``{i}`` placeholders; the ``WHERE id < {i}`` predicate
-    is what makes each view/MV structurally distinct so plan caching can't
-    collapse them.
+    makes each view/MV structurally distinct so we get separate dataflows.
     """
 
     scenario_name: str
@@ -2655,6 +2643,12 @@ CLUSTER_OBJECT_LIMITS_INDEXES_KIND = ClusterObjectLimitsKind(
     scenario_name=SCENARIO_CLUSTER_OBJECT_LIMITS_INDEXES,
     # Each (view, default index) pair is one independent index dataflow on
     # `c`. DROP VIEW CASCADE removes the dependent default index too.
+    #
+    # TODO(follow-up): add a "base_t -> one index -> many indexes"
+    # topology to compare against the current "many indexes off
+    # base_t directly" shape. The analogous MV variant isn't needed
+    # — the cluster_object_limits MV scenario already covers the
+    # persist-source-breadth axis.
     create_templates=(
         "CREATE VIEW IF NOT EXISTS {schema}.v_{i} AS "
         "SELECT id, val FROM {schema}.{base} WHERE id < {i}",
@@ -2705,10 +2699,13 @@ class ClusterObjectLimitsScenario(Scenario):
       - A single one-row base table `base_t` (never updated) lives in
         ``PAD_SCHEMA``. Frontiers advance over wall-clock time, so even with
         no writes the cluster must keep ticking every materialization's
-        write_frontier — which is what saturates an undersized cluster.
+        write_frontier.
       - N structurally-distinct materializations on the measurement cluster
-        ``c``, all derived from ``base_t``. The exact materialization type
-        (indexed view vs MV) and the lag-query join are carried by ``kind``.
+        ``c``, all reading directly from ``base_t`` — i.e. one persist
+        source per materialization, as opposed to a topology where
+        ``base_t`` feeds one index and the N materializations read from
+        that. The materialization type (indexed view vs MV) and the
+        lag-query join are carried by ``kind``.
       - The outer sweep is the cluster size: ``apply`` drops+recreates ``c``
         and ``PAD_SCHEMA`` for each size. ``measure`` walks an N-list,
         adding the delta of objects at each step and probing freshness via
@@ -2760,13 +2757,10 @@ class ClusterObjectLimitsScenario(Scenario):
 
     def apply(self, runner: ScenarioRunner, point: ScalePoint) -> bool:
         assert point.cluster_size is not None
-        # (Re)create the test cluster. Skip the iteration if this cluster
-        # size isn't available on the target — e.g. it isn't in
-        # `mz_cluster_replica_sizes` for this region, or allocating it would
-        # exceed `max_credit_consumption_rate`. Without this guard, on
-        # staging the larger sizes either fail with a noisy traceback or
-        # show up as a confusing "unhealthy at the smallest N" data point
-        # instead of a clear "size unavailable" line.
+        # (Re)create the test cluster. Skip the iteration if this
+        # cluster size isn't available on the target (not in
+        # `mz_cluster_replica_sizes`, or exceeds
+        # `max_credit_consumption_rate`).
         if not _recreate_cluster_c(
             runner,
             point.cluster_size,
@@ -2860,9 +2854,8 @@ class ClusterObjectLimitsScenario(Scenario):
     def probe_hydrated(self, runner: ScenarioRunner) -> tuple[int, int]:
         """Return (total, hydrated) for our test objects on cluster ``c``.
 
-        Decoupled from `local_lag` so the freshness loop can wait for the
-        cluster to be *running* first, then judge whether it can keep up —
-        without burning the full hydration timeout on every overloaded probe.
+        Decoupled from `local_lag` so the freshness loop can wait for
+        objects to be hydrated first, then sample steady-state lag.
         """
         rows = runner.run_query(
             f"""
@@ -2891,11 +2884,10 @@ class ClusterObjectLimitsScenario(Scenario):
         Two-phase probe: wait for hydration, then take steady-state lag
         samples. Returns (max_lag_ms, healthy, reporting, total).
 
-        Splitting the two phases keeps unhealthy probes fast: an overloaded
-        cluster typically still hydrates quickly, then trips the lag
-        threshold in Phase 2 within `samples * sample_interval_s`. A
-        combined predicate would burn the full hydration_timeout on every
-        unhealthy probe.
+        Splitting the phases distinguishes "still hydrating" (transient
+        high lag is expected) from "hydrated but not keeping up" (the
+        steady-state lag check). If hydration times out, the probe is
+        unhealthy and Phase 2 doesn't run.
 
         Probes run on the catalog-server cluster so they don't load `c`;
         the SET is lifted out of the per-probe loop and restored on exit.
@@ -2958,12 +2950,6 @@ class ClusterObjectLimitsScenario(Scenario):
         max_lag_ms, healthy, reporting, total = self._hydrate_and_sample(
             runner, n, timeout_s, samples, sample_interval_s, lag_threshold_ms
         )
-        # A fully stalled materialization can report `local_lag` as
-        # `now() - <minimum timestamp>`, i.e. the current unix time in ms
-        # (~1.78e12). Cap the recorded value so the cliff doesn't crush
-        # every other data point on the plot. The `healthy` column carries
-        # the underlying truth, and the analysis labels the plot to make
-        # the cap explicit.
         capped_lag_ms = min(max_lag_ms, CLUSTER_OBJECT_LIMITS_LAG_CAP_MS)
         print(
             f"    {'(bisect) ' if refinement else ''}"
@@ -3461,11 +3447,10 @@ def wait_for_envd(target: "BenchTarget", timeout_secs: int = 300) -> None:
         )
 
 
-# System parameters we expect to be lifted server-side on cloud targets (via
-# LaunchDarkly defaults or equivalent). Local Docker sets these directly via
-# `MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS`. We log them at workflow
-# start so we can verify the environment we're actually talking to matches what
-# we configured.
+# Parameters we expect to be in effect at workflow start (set by
+# `MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS` on Docker; set
+# server-side on cloud). Logged so we can verify the environment
+# matches what we configured.
 SYSTEM_PARAMETERS_TO_LOG: list[str] = [
     "max_tables",
     "max_materialized_views",
@@ -3618,8 +3603,8 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
     print(f"--- Running scenarios: {', '.join(scenarios)}")
 
     # cluster_object_limits scenarios push the cluster to its idle-object
-    # limit; we only run them on staging or local Docker to avoid burning
-    # production resources or hitting production-only catalog limits.
+    # limit; we only run them on staging or local Docker to avoid
+    # spill-over effects to real customer environments.
     cluster_object_limits_requested = scenarios & set(
         SCENARIO_GROUPS.get("cluster_object_limits", [])
     )

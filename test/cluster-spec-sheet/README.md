@@ -47,7 +47,7 @@ There are four kinds of scenarios:
 - envd objects scalability: These measure adapter/envd latency (DDL, simple peeks) as the number of catalog objects grows.
 - cluster object limits: These find the maximum number of idle indexes / materialized views a cluster can hold while remaining fresh.
 
-The envd qps scalability and cluster object limits scenarios can't be run in Production: the former because changing envd's CPU cores using `mz` is not allowed there, the latter because we don't want to burn production resources on long object-limit searches. Both need to be run with `--target=cloud-staging` (or `--target=docker`).
+The envd qps scalability and cluster object limits scenarios can't be run in Production: the former because changing envd's CPU cores using `mz` is not allowed there, the latter because we don't want spill-over effects to real customer environments. Both need to be run with `--target=cloud-staging` (or `--target=docker`).
 
 You can invoke only one kind of scenarios by using the group name from `SCENARIO_GROUPS`. For example:
 ```
@@ -79,9 +79,9 @@ The `envd_objects_scalability_tables` and `envd_objects_scalability_mvs`
 scenarios fix the measurement cluster size and vary the number of pre-existing
 catalog objects, measuring `CREATE TABLE` and `SELECT` latency at each size
 point. By default they walk the full size list (`1, 10, 100, 1000, 3000, 5000,
-10000, 20000, 30000`); the MV scenario shards across pad clusters at
-10000 materialized views per cluster (so 30000 MVs spans 3 single-replica
-clusters). Override the size list with `--envd-objects-scalability-sizes`.
+10000, 20000, 30000`); the MV scenario spreads MVs across pad clusters
+at 10000 materialized views per cluster (so 30000 MVs spans 3
+single-replica clusters). Override the size list with `--envd-objects-scalability-sizes`.
 These runs are long; expect hours for the full size range, especially the MV
 scenario.
 
