@@ -7850,6 +7850,216 @@ Target cluster: quickstart
 
 EOF
 
+## Tests for lag/lead constant-arg specialization (LagLeadConst)
+#
+# These tests pin down which lag/lead calls get rewritten to the specialized
+# LagLeadConst executor by the `specialize_lag_lead` HIR transform, and which
+# ones are left as plain Lag/Lead. Result-correctness for lag/lead is already
+# exhaustively covered by the existing `## lag`, `## lead`, and
+# `## lag/lead ignore nulls` sections; these EXPLAIN tests focus on the
+# decision matrix and on user-facing MIR rendering. Two small equivalence
+# queries at the end cross-check the specialized executor against the
+# unspecialized path on the same data.
+
+statement ok
+CREATE TABLE t_str(x text);
+
+statement ok
+INSERT INTO t_str VALUES ('a'), ('b'), (NULL), ('d'), (NULL), ('f');
+
+# A.1: Should specialize -- basic offsets/defaults, including negative literal
+# offsets (sign-flip coverage) for both lag and lead.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
+SELECT
+  lag(x) OVER (ORDER BY x),
+  lead(x) OVER (ORDER BY x),
+  lag(x, 5, -1) OVER (ORDER BY x),
+  lead(x, 7, -1) OVER (ORDER BY x),
+  lag(x, -2) OVER (ORDER BY x),
+  lead(x, -3) OVER (ORDER BY x)
+FROM t7;
+----
+Explained Query:
+  Project (#8, #7, #6, #5, #4, #3)
+    Map (record_get[0](#1), record_get[0](#2), record_get[1](#2), record_get[2](#2), record_get[3](#2), record_get[4](#2), record_get[5](#2))
+      FlatMap unnest_list(#0{fused_value_window_func})
+        Reduce aggregates=[fused_value_window_func[lag_lead_const[offset=-3, default=null, order_by=[#0{x} asc nulls_last]], lag_lead_const[offset=2, default=null, order_by=[#0{x} asc nulls_last]], lag_lead_const[offset=7, default=-1, order_by=[#0{x} asc nulls_last]], lag_lead_const[offset=-5, default=-1, order_by=[#0{x} asc nulls_last]], lag_lead_const[offset=1, default=null, order_by=[#0{x} asc nulls_last]], lag_lead_const[offset=-1, default=null, order_by=[#0{x} asc nulls_last]] order_by=[#0{x} asc nulls_last]](row(row(row(#0{x}, #1{y}), row(#0{x}, #0{x}, #0{x}, #0{x}, #0{x}, #0{x})), #0{x}))]
+          ReadStorage materialize.public.t7
+
+Source materialize.public.t7
+
+Target cluster: quickstart
+
+EOF
+
+# A.2: Should specialize -- IGNORE NULLS path, exercising both const FORWARD
+# monomorphizations of `lag_lead_inner_ignore_nulls_const`. lag with positive
+# offset -> FORWARD=false; lead with positive offset -> FORWARD=true; lag with
+# negative literal offset -> FORWARD=true (sign flips); lead with negative
+# literal offset -> FORWARD=false.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
+SELECT
+  lag(x, 3, 'default') IGNORE NULLS OVER (ORDER BY x || x),
+  lead(x, 3, 'default') IGNORE NULLS OVER (ORDER BY x || x),
+  lag(x, -3) IGNORE NULLS OVER (ORDER BY x || x),
+  lead(x, -3) IGNORE NULLS OVER (ORDER BY x || x)
+FROM t_str;
+----
+Explained Query:
+  Project (#6, #5, #4, #3)
+    Map (record_get[0](#1), record_get[0](#2), record_get[1](#2), record_get[2](#2), record_get[3](#2))
+      FlatMap unnest_list(#0{fused_value_window_func})
+        Reduce aggregates=[fused_value_window_func[lag_lead_const[ignore_nulls=true, offset=-3, default=null, order_by=[#0{x} asc nulls_last]], lag_lead_const[ignore_nulls=true, offset=3, default=null, order_by=[#0{x} asc nulls_last]], lag_lead_const[ignore_nulls=true, offset=3, default="default", order_by=[#0{x} asc nulls_last]], lag_lead_const[ignore_nulls=true, offset=-3, default="default", order_by=[#0{x} asc nulls_last]] order_by=[#0{x} asc nulls_last]](row(row(row(#0{x}), row(#0{x}, #0{x}, #0{x}, #0{x})), (#0{x} || #0{x})))]
+          ReadStorage materialize.public.t_str
+
+Source materialize.public.t_str
+
+Target cluster: quickstart
+
+EOF
+
+# A.3: Should NOT specialize -- bail-out cases. offset == 0 (with and without
+# non-NULL default), NULL offset, column-typed offset, and column-typed
+# default all leave the call as plain lag[...] with the 3-field
+# row(value, offset, default) payload.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
+SELECT
+  lag(x, 0) OVER (ORDER BY x),
+  lag(x, 0, -1) OVER (ORDER BY x),
+  lag(x, NULL::int) OVER (ORDER BY x),
+  lag(x, y) OVER (ORDER BY x),
+  lag(x, 1, y) OVER (ORDER BY x)
+FROM t7;
+----
+Explained Query:
+  Project (#7, #6, #5, #4, #3)
+    Map (record_get[0](#1), record_get[0](#2), record_get[1](#2), record_get[2](#2), record_get[3](#2), record_get[4](#2))
+      FlatMap unnest_list(#0{fused_value_window_func})
+        Reduce aggregates=[fused_value_window_func[lag[order_by=[#0{x} asc nulls_last]], lag[order_by=[#0{x} asc nulls_last]], lag[order_by=[#0{x} asc nulls_last]], lag[order_by=[#0{x} asc nulls_last]], lag[order_by=[#0{x} asc nulls_last]] order_by=[#0{x} asc nulls_last]](row(row(row(#0{x}, #1{y}), row(row(#0{x}, 1, #1{y}), row(#0{x}, #1{y}, null), row(#0{x}, null, null), row(#0{x}, 0, -1), row(#0{x}, 0, null))), #0{x}))]
+          ReadStorage materialize.public.t7
+
+Source materialize.public.t7
+
+Target cluster: quickstart
+
+EOF
+
+# A.4: Fusion interaction. A specialized lag, a specialized lead, an
+# unspecialized lag (column-typed offset), and a non-lag/lead value-window
+# function (first_value) all share the same ORDER BY and should be combined
+# into a single `fused_value_window_func[...]`, with the per-call
+# `lag_lead_const[...]` variants flowing through fusion unchanged.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
+SELECT
+  lag(x) OVER (ORDER BY x),
+  lead(y, 3) OVER (ORDER BY x),
+  first_value(y) OVER (ORDER BY x),
+  lag(x, y) OVER (ORDER BY x)
+FROM t7;
+----
+Explained Query:
+  Project (#6, #5, #4, #3)
+    Map (record_get[0](#1), record_get[0](#2), record_get[1](#2), record_get[2](#2), record_get[3](#2))
+      FlatMap unnest_list(#0{fused_value_window_func})
+        Reduce aggregates=[fused_value_window_func[lag[order_by=[#0{x} asc nulls_last]], first_value[order_by=[#0{x} asc nulls_last]], lag_lead_const[offset=3, default=null, order_by=[#0{x} asc nulls_last]], lag_lead_const[offset=-1, default=null, order_by=[#0{x} asc nulls_last]] order_by=[#0{x} asc nulls_last]](row(row(row(#0{x}, #1{y}), row(row(#0{x}, #1{y}, null), #1{y}, #1{y}, #0{x})), #0{x}))]
+          ReadStorage materialize.public.t7
+
+Source materialize.public.t7
+
+Target cluster: quickstart
+
+EOF
+
+# A.5: Specialized + reduce-elision interaction. When the input is a DISTINCT
+# subquery and the PARTITION BY matches the grouping key, the planner
+# elides the reduce; this must still happen after specialization, i.e. the
+# planner must see LagLeadConst as an "elision-friendly" Lag.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
+SELECT f1, lag(f1, 2, -1) OVER (PARTITION BY f1)
+FROM (SELECT DISTINCT f1 FROM t1) q;
+----
+Explained Query:
+  Project (#2, #3)
+    Map (record_get[0](record_get[1](#1)), record_get[0](#1))
+      FlatMap unnest_list(#0)
+        Project (#1)
+          Map (list[row(-1, row(#0{f1}))])
+            Distinct project=[#0{f1}]
+              Project (#0{f1})
+                ReadStorage materialize.public.t1
+
+Source materialize.public.t1
+
+Target cluster: quickstart
+
+EOF
+
+# A.6: Constant-foldable but non-literal offset/default. `1 + 2` and
+# `'a' || 'b'` are not bare literals, but `simplify_to_literal_with_result`
+# folds them; specialization succeeds with offset=-3, default="ab".
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
+SELECT
+  lag(x, 1 + 2, 'a' || 'b') OVER (ORDER BY x)
+FROM t_str;
+----
+Explained Query:
+  Project (#2)
+    Map (record_get[0](#1))
+      FlatMap unnest_list(#0{lag_lead_const})
+        Reduce aggregates=[lag_lead_const[offset=-3, default="ab", order_by=[#0{x} asc nulls_last]](row(row(row(#0{x}), #0{x}), #0{x}))]
+          ReadStorage materialize.public.t_str
+
+Source materialize.public.t_str
+
+Target cluster: quickstart
+
+EOF
+
+# B.7: Result-equivalence sanity check -- RESPECT NULLS path. The specialized
+# `lag(y, 2, -1)` must produce the same result as the logically-equivalent
+# but column-typed-arg form `lag(y, x - x + 2, x - x - 1)`, which the
+# transform refuses to specialize.
+query IIB
+SELECT x, y,
+       lag(y, 2, -1) OVER (ORDER BY x) IS NOT DISTINCT FROM lag(y, x - x + 2, x - x - 1) OVER (ORDER BY x) AS eq
+FROM t6
+ORDER BY x;
+----
+1  2  true
+3  NULL  true
+5  6  true
+7  8  true
+9  NULL  true
+11  NULL  true
+13  14  true
+15  16  true
+17  18  true
+
+# B.8: Result-equivalence sanity check -- IGNORE NULLS, negative offset.
+# Exercises the FORWARD=false monomorphization of
+# `lag_lead_inner_ignore_nulls_const` against the unspecialized path.
+query IB
+SELECT x,
+       lead(y, -3, 100) IGNORE NULLS OVER (ORDER BY x) IS NOT DISTINCT FROM lead(y, x - x - 3, x - x + 100) IGNORE NULLS OVER (ORDER BY x) AS eq
+FROM t6_no_nulls
+ORDER BY x;
+----
+1  true
+3  true
+5  true
+7  true
+9  true
+11  true
+13  true
+15  true
+17  true
+
 ## Window functions on big relations.
 
 statement ok
