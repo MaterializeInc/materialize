@@ -36,3 +36,13 @@ rows:
       `external_login_password_mz_system`. See [Configuring password
       authentication](#configuring-password-authentication) for details.
       {{</ tip >}}
+  - "authenticatorKind Value": "**Oidc**"
+    "Description": |
+      Enables [OIDC authentication](/security/self-managed/sso/) using JWT
+      tokens from an external identity provider. Users authenticate via their
+      organization's identity provider (e.g., Okta, Microsoft Entra ID).
+
+      {{< tip >}}
+      When enabled, you must also set the `mz_system` user password in
+      `external_login_password_mz_system`. See [Single sign-on (SSO)](/security/self-managed/sso/) for details.
+      {{</ tip >}}
