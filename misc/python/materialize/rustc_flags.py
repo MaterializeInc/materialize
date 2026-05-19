@@ -25,6 +25,20 @@ coverage = [
 ]
 
 
+# Flags to enable Antithesis coverage instrumentation.
+# Requires libvoidstar.so at /usr/lib/ (installed in ci-builder and
+# the materialized Docker image).
+# See: https://antithesis.com/docs/using_antithesis/sdk/rust/instrumentation/
+antithesis = [
+    "-Ccodegen-units=1",
+    "-Cpasses=sancov-module",
+    "-Cllvm-args=-sanitizer-coverage-level=3",
+    "-Cllvm-args=-sanitizer-coverage-trace-pc-guard",
+    "-Clink-args=-Wl,--build-id",
+    "-lvoidstar",
+]
+
+
 class Sanitizer(Enum):
     """What sanitizer to use"""
 

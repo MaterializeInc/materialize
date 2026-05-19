@@ -173,6 +173,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "antithesis_sdk"
+version = "0.2.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "18dbd97a5b6c21cc9176891cf715f7f0c273caf3959897f43b9bd1231939e675"
+dependencies = [
+ "libc",
+ "libloading",
+ "linkme",
+ "once_cell",
+ "rand 0.8.5",
+ "rustc_version_runtime",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "anyhow"
 version = "1.0.102"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5121,6 +5137,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "linkme"
+version = "0.3.36"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e83272d46373fb8decca684579ac3e7c8f3d71d4cc3aa693df8759e260ae41cf"
+dependencies = [
+ "linkme-impl",
+]
+
+[[package]]
+name = "linkme-impl"
+version = "0.3.36"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32d59e20403c7d08fe62b4376edfe5c7fb2ef1e6b1465379686d0f21c8df444b"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.4.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5779,6 +5815,7 @@ dependencies = [
 name = "mz-catalog"
 version = "0.0.0"
 dependencies = [
+ "antithesis_sdk",
  "anyhow",
  "async-trait",
  "base64 0.22.1",
@@ -7170,8 +7207,9 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "26.26.0-dev.0"
+version = "26.25.0-dev.0"
 dependencies = [
+ "antithesis_sdk",
  "anyhow",
  "arrayvec 0.7.6",
  "arrow",
@@ -7956,6 +7994,7 @@ dependencies = [
 name = "mz-storage"
 version = "0.0.0"
 dependencies = [
+ "antithesis_sdk",
  "anyhow",
  "arrow",
  "arrow-ipc",
@@ -10695,6 +10734,16 @@ version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bfa0f585226d2e68097d4f95d113b15b83a82e819ab25717ec0590d9584ef366"
 dependencies = [
+ "semver",
+]
+
+[[package]]
+name = "rustc_version_runtime"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2dd18cd2bae1820af0b6ad5e54f4a51d0f3fcc53b05f845675074efcc7af071d"
+dependencies = [
+ "rustc_version",
  "semver",
 ]
 

@@ -10,6 +10,9 @@
 import random
 from enum import Enum
 
+import psycopg
+import requests
+
 
 class Complexity(Enum):
     Read = "read"
@@ -36,6 +39,75 @@ class Scenario(Enum):
     def _missing_(cls, value):
         if value == "random":
             return cls(random.choice([elem.value for elem in cls]))
+
+
+# Message substrings produced by connection drops, DNS partitions, broker
+# transport failures, and Mz-restart admission control.  Used by
+# `is_fault_shaped()` to decide whether a Scenario.Kill / ZeroDowntimeDeploy
+# swallow site should tolerate `exc` or re-raise it.  Anything not in this
+# list is treated as a real correctness signal worth surfacing.
+_FAULT_SHAPED_MSG_PATTERNS: tuple[str, ...] = (
+    # psycopg connection-drop wordings
+    "server closed the connection unexpectedly",
+    "the connection is lost",
+    "EOF detected",
+    "Cursor closed",
+    # libc / socket
+    "connection refused",
+    "connection reset",
+    "broken pipe",
+    "could not connect to server",
+    "Failed to resolve hostname",
+    "failed to lookup address information",
+    "Temporary failure in name resolution",
+    "Multiple connection attempts failed",
+    "connection timeout",
+    # Materialize admission control during restart
+    "is (re)initializing",
+    "TooManyRequests",
+    # Postgres source visiting its own restart window
+    "terminating connection due to administrator command",
+    # Kafka transport during broker fault windows
+    "BrokerTransportFailure",
+    "Meta data fetch error",
+    # HTTP / WS
+    "Remote end closed connection without response",
+    "Connection aborted",
+    "Connection broken: IncompleteRead",
+    "Connection to remote host was lost",
+    "socket is already closed",
+    "WS connect",
+)
+
+
+def is_fault_shaped(exc: BaseException) -> bool:
+    """True if `exc` looks like a fault-injection / kill-test artifact
+    rather than a SUT correctness bug.
+
+    Used by `Scenario.Kill` / `Scenario.ZeroDowntimeDeploy` tolerance
+    sites in `action.py` and `executor.py`: matching exceptions get
+    swallowed (the kill-thread can plausibly produce them); everything
+    else re-raises so real bugs surface.
+
+    The bare `except:` shape that this function replaces previously
+    swallowed *every* exception under those scenarios, including
+    AssertionError / KeyError / TypeError from framework bugs and
+    actual SUT misbehavior.  Narrow it to the shapes a kill / fault
+    actually produces.
+    """
+    # Operational connection-error types — always tolerated regardless
+    # of the surface message (drivers don't promise a stable wording).
+    if isinstance(
+        exc,
+        (
+            psycopg.OperationalError,
+            psycopg.InterfaceError,
+            requests.exceptions.ConnectionError,
+        ),
+    ):
+        return True
+    msg = getattr(exc, "msg", None) or str(exc)
+    return any(p in msg for p in _FAULT_SHAPED_MSG_PATTERNS)
 
 
 ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = {

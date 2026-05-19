@@ -11,6 +11,8 @@
 
 use std::collections::BTreeMap;
 
+use antithesis_sdk::assert_unreachable;
+use serde_json::json;
 use timely::progress::Antichain;
 use uuid::Uuid;
 
@@ -92,6 +94,14 @@ impl GtidReplicationPartitions {
                 // should only see GTID transaction-ids
                 // in a monotonic order for each source, starting at that upper.
                 if active_part.timestamp() > new_part.timestamp() {
+                    assert_unreachable!(
+                        "mysql: BinlogGtidMonotonicityViolation — received out-of-order GTID from multithreaded replica",
+                        &json!({
+                            "source_uuid": source_id.to_string(),
+                            "active_timestamp": format!("{:?}", active_part.timestamp()),
+                            "new_timestamp": format!("{:?}", new_part.timestamp()),
+                        })
+                    );
                     let err = DefiniteError::BinlogGtidMonotonicityViolation(
                         source_id.to_string(),
                         new_part.timestamp().clone(),

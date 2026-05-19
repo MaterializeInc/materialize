@@ -65,6 +65,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
+use antithesis_sdk::{assert_always, assert_unreachable};
 use differential_dataflow::difference::{IsZero, Semigroup};
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
@@ -81,6 +82,7 @@ use mz_storage_types::errors::{DataflowError, EnvelopeError};
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
+use serde_json::json;
 use std::convert::Infallible;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::StreamVec;
@@ -312,6 +314,11 @@ where
                     AsyncEvent::Data(cap, data) => {
                         let mut pushed_any = false;
                         for ((key, value, from_time), ts, diff) in data {
+                            assert_always!(
+                                diff.is_positive(),
+                                "upsert: input diff positive (cf v2)",
+                                &json!({"diff": diff.into_inner()})
+                            );
                             assert!(diff.is_positive(), "invalid upsert input");
                             if PartialOrder::less_equal(&input_upper, &resume_upper)
                                 && !resume_upper.less_equal(&ts)
@@ -480,7 +487,13 @@ where
                         (Some(a), Some(b)) => std::cmp::min(a, b).clone(),
                         (Some(a), None) => a.clone(),
                         (None, Some(b)) => b.clone(),
-                        (None, None) => unreachable!(),
+                        (None, None) => {
+                            assert_unreachable!(
+                                "upsert: cf v2 join produced (None, None)",
+                                &json!({"site": "min_ts join"})
+                            );
+                            unreachable!()
+                        }
                     };
                     cap.downgrade(&min_ts);
                 } else {
