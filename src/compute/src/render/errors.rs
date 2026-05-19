@@ -51,6 +51,7 @@ use std::fmt;
     Deserialize,
     Columnar
 )]
+#[columnar(derive(Eq, PartialEq, Ord, PartialOrd))]
 pub struct DataflowErrorSer(Vec<u8>);
 
 impl DataflowErrorSer {
