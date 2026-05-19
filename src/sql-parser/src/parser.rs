@@ -8495,6 +8495,10 @@ impl<'a> Parser<'a> {
         if self.parse_keyword(AS) {
             self.expect_keyword(OF)?;
             if self.parse_keywords(&[AT, LEAST]) {
+                if self.parse_keywords(&[FRONTIER, OF]) {
+                    let names = self.parse_comma_separated(Parser::parse_raw_name)?;
+                    return Ok(Some(AsOf::AtLeastFrontierOf(names)));
+                }
                 match self.parse_expr() {
                     Ok(expr) => Ok(Some(AsOf::AtLeast(expr))),
                     Err(e) => self.expected(
