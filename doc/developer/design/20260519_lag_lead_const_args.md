@@ -124,12 +124,22 @@ transform alongside `fuse_window_functions` because (a) it keeps HIR planning
 In `src/sql/src/plan/transform_hir.rs`, add a transform alongside
 `fuse_window_functions`. It walks the HIR tree (using the same `visit_mut_post`
 pattern) and, for every
-`ValueWindowExpr { func: Lag | Lead, args: RecordCreate([_, lit_offset, lit_default]), .. }`
-whose `lit_offset` and `lit_default` are both `HirScalarExpr::Literal` and whose
-offset Datum is a non-NULL `Int32(n)`:
+`ValueWindowExpr { func: Lag | Lead, args: RecordCreate([value, offset_expr, default_expr]), .. }`
+attempts to constant-fold the `offset_expr` and `default_expr` children via
+`HirScalarExpr::simplify_to_literal_with_result` (defined in
+`src/sql/src/plan/hir.rs`). We deliberately do **not** gate this with a
+cheap "looks constant-ish" pre-check on the children — the common case is
+that `lag`/`lead` is called with literal offset/default, so calling
+`simplify_to_literal_with_result` unconditionally and using its result is
+both simpler and good enough. When both calls succeed, the offset is a
+non-NULL `Int32(n)` with `n != 0`, and the default folds to some `Row`:
 
-- Replaces `args` with the bare first record field.
+- Replaces `args` with the bare `value` field.
 - Replaces `func` with `LagLeadConst { offset: if Lag { -n } else { n }, default: row_of_default }`.
+
+Any other outcome (either child not constant-foldable, evaluation error,
+NULL offset, or `offset == 0`) leaves the call as `Lag`/`Lead` on the
+generic path.
 
 The transform is invoked from `src/sql/src/plan/lowering.rs:213`, immediately
 before `transform_hir::fuse_window_functions`. Running it first means any fused
