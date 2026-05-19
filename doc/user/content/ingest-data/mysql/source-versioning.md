@@ -9,7 +9,7 @@ menu:
         weight: 85
 ---
 
-{{< private-preview />}}
+{{< public-preview />}}
 {{< note >}}
 Changing column types is currently unsupported.
 {{< /note >}}
@@ -30,7 +30,7 @@ how to connect a database to Materialize.
 
 ### Set up a MySQL database
 
-For this guide, setup a MySQL 5.7+ database. In your MySQL database, create a
+For this guide, setup a MySQL 8.0.1+ database. In your MySQL database, create a
 table `t1` and populate it:
 
 ```sql

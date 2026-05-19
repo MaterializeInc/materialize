@@ -10,7 +10,7 @@ menu:
     weight: 21
 ---
 
-{{< private-preview />}}
+{{< public-preview />}}
 
 {{< source-versioning-disambiguation is_new=true
 other_ref="[old reference page](/sql/create-source/mysql/)" include_blurb=true >}}
@@ -18,7 +18,7 @@ other_ref="[old reference page](/sql/create-source/mysql/)" include_blurb=true >
 ## Prerequisites
 
 {{% create-source/intro %}}
-Materialize supports MySQL (5.7+) as a real-time data source. To connect to a
+Materialize supports MySQL (8.0.1+) as a real-time data source. To connect to a
 MySQL database, you first need to tweak its configuration to enable
 [GTID-based binary log (binlog) replication](#change-data-capture) and set
 [`binlog_row_metadata=FULL`](#change-data-capture), and then
@@ -38,7 +38,7 @@ create multiple tables that reference the same upstream table.
 
 See [`CREATE TABLE FROM SOURCE`](/sql/create-table/) for details.
 
-#### Handling table schema changes
+### Handling table schema changes
 
 The use of `CREATE SOURCE` with the new [`CREATE TABLE FROM
 SOURCE`](/sql/create-table/) allows for the handling of certain upstream DDL
@@ -46,7 +46,7 @@ changes without downtime.
 
 See [`CREATE TABLE FROM SOURCE`](/sql/create-table/#handling-table-schema-changes) for details.
 
-#### Supported types
+### Supported types
 
 With the new syntax, after a MySQL source is created, you [`CREATE TABLE FROM
 SOURCE`](/sql/create-table/) to create a corresponding table in Materialize and
@@ -61,7 +61,7 @@ name="mysql-unsupported-types" %}}
 For more information, including strategies for handling unsupported types,
 see [`CREATE TABLE FROM SOURCE`](/sql/create-table/).
 
-#### Upstream table truncation restrictions
+### Upstream table truncation restrictions
 
 {{% include-from-yaml data="mysql_source_details"
 name="mysql-truncation-restriction" %}}
@@ -106,9 +106,15 @@ upstream MySQL server:
 SET GLOBAL binlog_row_metadata = FULL;
 ```
 
+Note that `SET GLOBAL` does not persist across MySQL server restarts. To make
+the setting durable, use `SET PERSIST` (MySQL 8.0.11+) or set
+`binlog_row_metadata=FULL` in the server's configuration file. On managed
+services, set the variable through the service's parameter configuration
+instead.
+
 If you're running MySQL using a managed service, additional configuration
-changes might be required. For step-by-step instructions on enabling GTID-based
-binlog replication for your MySQL service, see the integration guides.
+changes might be required. To enable GTID-based binlog replication for your
+MySQL service, see the integration guides.
 
 #### Binlog retention
 
@@ -138,10 +144,6 @@ that overrides `binlog_expire_logs_seconds` and is set to `NULL` by default.
 
 ### Monitoring source progress
 
-[//]: # "TODO(morsapaes) Replace this section with guidance using the new
-progress metrics in mz_source_statistics + console monitoring, when available
-(also for PostgreSQL)."
-
 By default, MySQL sources expose progress metadata as a subsource that you can
 use to monitor source **ingestion progress**. The name of the progress subsource
 can be specified when creating a source using the `EXPOSE PROGRESS AS` clause;
@@ -167,8 +169,7 @@ of future possible GTIDs, which is similar to the
 [`gtid_executed`](https://dev.mysql.com/doc/refman/8.0/en/replication-options-gtids.html#sysvar_gtid_executed)
 system variable on a MySQL replica. The reported `transaction_id` should
 increase as Materialize consumes **new** binlog records from the upstream MySQL
-database. For more details on monitoring source ingestion progress and debugging
-related issues, see [Troubleshooting](/ops/troubleshooting/).
+database. For more information, see [Troubleshooting](/ops/troubleshooting/).
 
 ## Known limitations
 
@@ -197,8 +198,7 @@ describes how to connect and authenticate to an external system you want
 Materialize to read data from.
 
 Once created, a connection is **reusable** across multiple `CREATE SOURCE`
-statements. For more details on creating connections, check the
-[`CREATE CONNECTION`](/sql/create-connection/#mysql) documentation page.
+statements. For more information, see [`CREATE CONNECTION`](/sql/create-connection/#mysql).
 
 ```mzsql
 CREATE SECRET mysqlpass AS '<MYSQL_PASSWORD>';
@@ -235,9 +235,7 @@ CREATE CONNECTION mysql_connection TO MYSQL (
 );
 ```
 
-For step-by-step instructions on creating AWS PrivateLink connections and
-configuring an AWS PrivateLink service to accept connections from Materialize,
-check [this guide](/ops/network-security/privatelink/).
+For more information, see [this guide](/ops/network-security/privatelink/).
 
 {{< /tab >}}
 {{< tab "SSH tunnel">}}
@@ -257,9 +255,7 @@ CREATE CONNECTION mysql_connection TO MYSQL (
 );
 ```
 
-For step-by-step instructions on creating SSH tunnel connections and configuring
-an SSH bastion server to accept connections from Materialize, check
-[this guide](/ops/network-security/ssh-tunnel/).
+For more information, see [this guide](/ops/network-security/ssh-tunnel/).
 
 {{< /tab >}}
 {{< /tabs >}}
