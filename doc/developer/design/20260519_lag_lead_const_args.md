@@ -48,6 +48,13 @@ plan time.
 - Catalog / persisted-state migrations. `AggregateFunc` is not persisted across
   restarts; rendered dataflow plans live only in memory.
 - Changes to SQL surface area or PostgreSQL compatibility.
+- **Specializing `offset == 0`.** When the literal offset is exactly `0`,
+  `specialize_lag_lead` deliberately declines to rewrite the call and leaves
+  it on the generic `LagLead` path. This is an extremely rare corner case
+  (it returns the current row, modulo NULL/IGNORE NULLS edge cases), and
+  bailing out keeps the const path free of a degenerate branch and avoids
+  any risk of subtle behavior divergence between the const and generic
+  IGNORE NULLS implementations at `offset == 0`.
 
 ## Solution proposal
 
