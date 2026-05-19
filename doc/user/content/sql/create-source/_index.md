@@ -8,7 +8,7 @@ menu:
     identifier: 'create-source'
 ---
 
-A [source](/concepts/sources/) describes an external system you want Materialize to read data from, and provides details about how to decode and interpret that data.
+{{% include-headless "/headless/source-definition" %}}
 
 ## Syntax summary
 
