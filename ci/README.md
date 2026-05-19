@@ -58,12 +58,6 @@ free to be aggressive with stopping agents. You can determine which agent ran a
 given build job under the "Timeline" tab, listed above the build job's log
 output.
 
-## Build caching
-
-We configure [`sccache`](https://github.com/mozilla/sccache) to write
-compilation artifacts to an S3 bucket that is shared amongst the build agents.
-This makes from-scratch compilation on a fresh agent *much* faster.
-
 ## macOS agent
 
 We run two macOS agents on Buildkite, via [MacStadium], to produce our macOS
