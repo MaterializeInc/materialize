@@ -408,6 +408,8 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         updates: Vec<(S, Diff)>,
         commit_ts: Timestamp,
     ) -> Result<Timestamp, CompareAndAppendError> {
+        let phase = self.metrics.commit_transaction_phase_seconds.clone();
+        let _fence_timer = phase.with_label_values(&["caa_fence_check"]).start_timer();
         // The fencing check is expensive, so run it only with soft assertions enabled.
         let contains_fence = if mz_ore::assert::soft_assertions_enabled() {
             let parsed_updates: Vec<_> = updates
@@ -430,6 +432,8 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             None
         };
 
+        drop(_fence_timer);
+        let _encode_timer = phase.with_label_values(&["caa_encode"]).start_timer();
         let updates = updates.into_iter().map(|(kind, diff)| {
             let kind: StateUpdateKindJson = kind.into();
             (
@@ -439,6 +443,10 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             )
         });
         let next_upper = commit_ts.step_forward();
+        drop(_encode_timer);
+        let _inner_timer = phase
+            .with_label_values(&["caa_persist_caa_inner"])
+            .start_timer();
         self.compare_and_append_inner(updates, next_upper)
             .await
             .inspect_err(|e| {
@@ -453,6 +461,8 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
                     );
                 }
             })?;
+        drop(_inner_timer);
+        let _sync_timer = phase.with_label_values(&["caa_post_sync"]).start_timer();
 
         self.sync(next_upper).await?;
         Ok(next_upper)
@@ -479,6 +489,10 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             self.upper,
         );
 
+        let phase = self.metrics.commit_transaction_phase_seconds.clone();
+        let _persist_caa = phase
+            .with_label_values(&["caa_persist_compare_and_append"])
+            .start_timer();
         let res = self
             .write_handle
             .compare_and_append(
@@ -488,6 +502,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             )
             .await
             .expect("invalid usage");
+        drop(_persist_caa);
 
         if let Err(e @ UpperMismatch { .. }) = res {
             // Most likely we were fenced out.
@@ -496,6 +511,9 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             return Err(e.into());
         }
 
+        let _downgrade = phase
+            .with_label_values(&["caa_since_downgrade"])
+            .start_timer();
         // Lag the shard's upper by 1 to keep it readable.
         let downgrade_to = Antichain::from_elem(next_upper.saturating_sub(1));
 
@@ -581,8 +599,15 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         // current snapshot size as its baseline.
         self.size_at_last_consolidation = None;
 
+        let phase = self.metrics.sync_phase_seconds.clone();
+        let mut listen_fetch_secs = 0.0;
+        let mut apply_secs = 0.0;
+        let mut consolidate_secs = 0.0;
+
         while self.upper < target_upper {
+            let t = std::time::Instant::now();
             let listen_events = self.listen.fetch_next().await;
+            listen_fetch_secs += t.elapsed().as_secs_f64();
             for listen_event in listen_events {
                 match listen_event {
                     ListenEvent::Progress(upper) => {
@@ -605,8 +630,12 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
                                     }
                                 },
                             );
+                            let t = std::time::Instant::now();
                             self.apply_updates(updates)?;
+                            apply_secs += t.elapsed().as_secs_f64();
+                            let t = std::time::Instant::now();
                             self.maybe_consolidate();
+                            consolidate_secs += t.elapsed().as_secs_f64();
                         }
                     }
                     ListenEvent::Updates(batch_updates) => {
@@ -620,7 +649,19 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         }
         assert_eq!(updates, BTreeMap::new(), "all updates should be applied");
         // Always consolidate at the end to ensure the snapshot is clean.
+        let t = std::time::Instant::now();
         self.consolidate();
+        consolidate_secs += t.elapsed().as_secs_f64();
+
+        phase
+            .with_label_values(&["listen_fetch"])
+            .observe(listen_fetch_secs);
+        phase
+            .with_label_values(&["apply_updates"])
+            .observe(apply_secs);
+        phase
+            .with_label_values(&["consolidate"])
+            .observe(consolidate_secs);
         Ok(())
     }
 
