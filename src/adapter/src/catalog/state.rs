@@ -1898,9 +1898,9 @@ impl CatalogState {
                 },
                 id: SchemaSpecifier::Temporary,
                 oid,
-                items: BTreeMap::new(),
-                functions: BTreeMap::new(),
-                types: BTreeMap::new(),
+                items: imbl::OrdMap::new(),
+                functions: imbl::OrdMap::new(),
+                types: imbl::OrdMap::new(),
                 owner_id,
                 privileges: PrivilegeMap::from_mz_acl_items(vec![rbac::owner_privilege(
                     mz_sql::catalog::ObjectType::Schema,
@@ -2210,7 +2210,7 @@ impl CatalogState {
     #[allow(clippy::useless_let_if_seq)]
     pub fn resolve(
         &self,
-        get_schema_entries: fn(&Schema) -> &BTreeMap<String, CatalogItemId>,
+        get_schema_entries: fn(&Schema) -> &imbl::OrdMap<String, CatalogItemId>,
         current_database: Option<&DatabaseId>,
         search_path: &Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
         name: &PartialItemName,

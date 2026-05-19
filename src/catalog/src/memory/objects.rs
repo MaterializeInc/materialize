@@ -153,9 +153,18 @@ pub struct Schema {
     pub name: QualifiedSchemaName,
     pub id: SchemaSpecifier,
     pub oid: u32,
-    pub items: BTreeMap<String, CatalogItemId>,
-    pub functions: BTreeMap<String, CatalogItemId>,
-    pub types: BTreeMap<String, CatalogItemId>,
+    // `imbl::OrdMap` instead of `BTreeMap`: `Schema` is stored inline inside
+    // `imbl::OrdMap<SchemaId, Schema>` (on `Database` or `CatalogState`).
+    // When that outer map gets `get_mut`'d under a shared Cow (the
+    // `preliminary_state`/`state` pattern in `Catalog::transact_inner`),
+    // imbl path-copies the leaf node containing this `Schema` value. A
+    // `BTreeMap` here would be deep-cloned in O(M); for the audit_pad
+    // schema at 15k items that was ~5 ms per `apply_item_update`. With an
+    // `imbl::OrdMap`, that clone is O(1) (refcount bump on the persistent
+    // tree root).
+    pub items: imbl::OrdMap<String, CatalogItemId>,
+    pub functions: imbl::OrdMap<String, CatalogItemId>,
+    pub types: imbl::OrdMap<String, CatalogItemId>,
     pub owner_id: RoleId,
     pub privileges: PrivilegeMap,
 }
@@ -191,9 +200,9 @@ impl From<durable::Schema> for Schema {
             },
             id: id.into(),
             oid,
-            items: BTreeMap::new(),
-            functions: BTreeMap::new(),
-            types: BTreeMap::new(),
+            items: imbl::OrdMap::new(),
+            functions: imbl::OrdMap::new(),
+            types: imbl::OrdMap::new(),
             owner_id,
             privileges: PrivilegeMap::from_mz_acl_items(privileges),
         }
