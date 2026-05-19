@@ -1366,20 +1366,23 @@ impl CatalogState {
     ) {
         match diff {
             StateDiff::Addition => {
-                let newly_inserted = Arc::make_mut(&mut self.storage_metadata)
+                // `imbl::OrdSet::insert` returns the previous value as `Option<T>`
+                // (`Some` if it was already present), unlike `BTreeSet::insert`
+                // which returns `bool` (`true` if newly inserted).
+                let prev = Arc::make_mut(&mut self.storage_metadata)
                     .unfinalized_shards
                     .insert(unfinalized_shard.shard);
                 assert!(
-                    newly_inserted,
+                    prev.is_none(),
                     "values must be explicitly retracted before inserting a new value: {unfinalized_shard:?}",
                 );
             }
             StateDiff::Retraction => {
-                let removed = Arc::make_mut(&mut self.storage_metadata)
+                let prev = Arc::make_mut(&mut self.storage_metadata)
                     .unfinalized_shards
                     .remove(&unfinalized_shard.shard);
                 assert!(
-                    removed,
+                    prev.is_some(),
                     "retraction does not match existing value: {unfinalized_shard:?}"
                 );
             }

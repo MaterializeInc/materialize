@@ -8066,6 +8066,7 @@ dependencies = [
  "chrono",
  "differential-dataflow",
  "futures",
+ "imbl",
  "itertools 0.14.0",
  "mz-build-info",
  "mz-ccsr",

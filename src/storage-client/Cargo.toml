@@ -15,6 +15,7 @@ async-trait.workspace = true
 chrono.workspace = true
 differential-dataflow.workspace = true
 futures.workspace = true
+imbl.workspace = true
 itertools.workspace = true
 mz-ccsr = { path = "../ccsr" }
 mz-cluster-client = { path = "../cluster-client" }
