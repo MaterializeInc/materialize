@@ -70,7 +70,6 @@
   test_setup: |
     > DROP CONNECTION privatelink_svc
   code: |
-
     CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
         SERVICE NAME 'com.amazonaws.vpce.us-west-1.  vpce-svc-<endpoint_service_id>',
         -- For now, the AVAILABILITY ZONES clause **is** required, but will be
