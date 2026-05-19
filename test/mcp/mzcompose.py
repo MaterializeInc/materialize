@@ -9,6 +9,9 @@
 
 """End-to-end tests for the MCP (Model Context Protocol) HTTP endpoints."""
 
+import json
+import time
+
 import requests
 
 from materialize import MZ_ROOT
@@ -351,6 +354,102 @@ def workflow_default(c: Composition) -> None:
 
         r = post_mcp(c, "developer", jsonrpc("tools/list"))
         assert r.status_code == 200
+
+    # -- DEX-27: read_data_product auto-routes to the catalog cluster ---------
+    #
+    # Verifies that when an MV lives on a cluster other than the session's
+    # default, `read_data_product` (called without a `cluster` argument)
+    # transparently issues `SET CLUSTER` to the data product's home cluster
+    # so the read actually hits the index/MV's dataflow. We confirm this by
+    # checking `mz_internal.mz_recent_activity_log` for the SELECT we
+    # issued and asserting it ran on the off-default cluster.
+
+    with c.test_case("agent_read_data_product_auto_routes_cluster"):
+        # Provision the off-default cluster + MV + grants for the HTTP user.
+        c.sql(
+            """
+            DROP MATERIALIZED VIEW IF EXISTS public.dex27_routed_mv;
+            DROP CLUSTER IF EXISTS dex27_other CASCADE;
+            CREATE CLUSTER dex27_other REPLICAS (r1 (SIZE 'scale=1,workers=1'));
+            CREATE MATERIALIZED VIEW public.dex27_routed_mv IN CLUSTER dex27_other
+                AS SELECT 7::int AS id, 'routed'::text AS name;
+            GRANT USAGE ON CLUSTER dex27_other TO anonymous_http_user;
+            GRANT SELECT ON public.dex27_routed_mv TO anonymous_http_user;
+            -- Make sure statement logging fires for our read so we can
+            -- inspect mz_recent_activity_log without flakiness.
+            ALTER SYSTEM SET statement_logging_default_sample_rate = 1.0;
+            ALTER SYSTEM SET statement_logging_max_sample_rate = 1.0;
+            """,
+            user="mz_system",
+            port=6877,
+            print_statement=False,
+        )
+
+        # First touch the agent endpoint so `anonymous_http_user` is
+        # auto-provisioned, then call `read_data_product` with NO cluster
+        # argument — the server should route to `dex27_other` based on the
+        # catalog row, not the session-default `quickstart`.
+        post_mcp(
+            c,
+            "agent",
+            jsonrpc(
+                "initialize",
+                {
+                    "protocolVersion": "2025-11-25",
+                    "capabilities": {},
+                    "clientInfo": {"name": "dex27", "version": "0.1.0"},
+                },
+                req_id=2700,
+            ),
+        )
+        r = post_mcp(
+            c,
+            "agent",
+            jsonrpc(
+                "tools/call",
+                {
+                    "name": "read_data_product",
+                    "arguments": {
+                        "name": '"materialize"."public"."dex27_routed_mv"',
+                        "limit": 5,
+                    },
+                },
+                req_id=2701,
+            ),
+        )
+        assert r.status_code == 200, f"unexpected status: {r.status_code} {r.text}"
+        body = r.json()
+        assert "error" not in body, f"read_data_product errored: {body}"
+        rows = json.loads(body["result"]["content"][0]["text"])
+        assert rows == [["7", "routed"]], f"unexpected rows: {rows}"
+
+        # Now confirm via the activity log that the read ran on
+        # `dex27_other`, not the session default. The log is emitted
+        # asynchronously, so poll briefly.
+        deadline = time.monotonic() + 30
+        observed_cluster: str | None = None
+        while time.monotonic() < deadline:
+            rows = c.sql_query(
+                """
+                SELECT cluster_name
+                FROM mz_internal.mz_recent_activity_log
+                WHERE application_name = 'mz_mcp_agents'
+                  AND sql ILIKE '%dex27_routed_mv%'
+                  AND finished_status = 'success'
+                ORDER BY began_at DESC
+                LIMIT 1
+                """,
+                user="mz_system",
+                port=6877,
+            )
+            if rows:
+                observed_cluster = rows[0][0]
+                break
+            time.sleep(0.5)
+        assert observed_cluster == "dex27_other", (
+            "no-override read should auto-route to the data product's cluster "
+            f"(dex27_other), but activity log shows cluster_name = {observed_cluster!r}"
+        )
 
     # -- agent: disable/enable via flag ----------------------------------------
 
