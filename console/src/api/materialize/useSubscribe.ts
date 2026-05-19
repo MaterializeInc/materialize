@@ -34,6 +34,11 @@ export type UseSubscribeOptions<T extends object, R> = {
   closeSocketOnComplete?: boolean;
   clusterName?: string;
   select?: SelectFunction<T, R>;
+  /**
+   * If set, every raw WebSocket message and buffer flush for this subscribe
+   * is logged to the console, prefixed with this label. Diagnostics only.
+   */
+  debugLabel?: string;
 };
 
 export type UseSubscribeReturn<T> = {
@@ -65,18 +70,20 @@ export function useSubscribe<T extends object, R = SubscribeRow<T>>(
   const httpAddress = useCurrentEnvironmentHttpAddress();
   const request = useSubscribeRequest(options.subscribe);
   const [subscribe] = React.useState(
-    new SubscribeManager<T, R>({
-      request,
-      httpAddress,
-      upsert: {
-        key: options.upsertKey,
-      },
-      select: options.select,
-      sessionVariables: {
-        cluster: options.clusterName,
-      },
-      closeSocketOnComplete: options.closeSocketOnComplete,
-    }),
+    () =>
+      new SubscribeManager<T, R>({
+        request,
+        httpAddress,
+        upsert: {
+          key: options.upsertKey,
+        },
+        select: options.select,
+        sessionVariables: {
+          cluster: options.clusterName,
+        },
+        closeSocketOnComplete: options.closeSocketOnComplete,
+        debugLabel: options.debugLabel,
+      }),
   );
   useAutomaticallyConnectSocket<T, R>({
     target: subscribe,
@@ -119,18 +126,20 @@ export function useGlobalUpsertSubscribe<T extends object, R = SubscribeRow<T>>(
   const httpAddress = useCurrentEnvironmentHttpAddress();
   const request = useSubscribeRequest(options.subscribe);
   const [subscribe] = React.useState(
-    new SubscribeManager<T, R>({
-      request,
-      httpAddress,
-      upsert: {
-        key: options.upsertKey,
-      },
-      sessionVariables: {
-        cluster: options?.clusterName,
-      },
-      closeSocketOnComplete: options?.closeSocketOnComplete,
-      select: options.select,
-    }),
+    () =>
+      new SubscribeManager<T, R>({
+        request,
+        httpAddress,
+        upsert: {
+          key: options.upsertKey,
+        },
+        sessionVariables: {
+          cluster: options?.clusterName,
+        },
+        closeSocketOnComplete: options?.closeSocketOnComplete,
+        select: options.select,
+        debugLabel: options.debugLabel,
+      }),
   );
   useAutomaticallyConnectSocket<T, R>({
     target: subscribe,
@@ -138,15 +147,44 @@ export function useGlobalUpsertSubscribe<T extends object, R = SubscribeRow<T>>(
     request,
   });
 
+  const debugLabel = options.debugLabel;
   React.useEffect(() => {
+    if (debugLabel) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[subscribe:${debugLabel}] atom-listener attached`,
+      );
+    }
     const cleanup = subscribe.onChange(() => {
       const snapshot = subscribe.getSnapshot();
-      if (getStore().get(options.atom) === snapshot) return;
+      if (getStore().get(options.atom) === snapshot) {
+        if (debugLabel) {
+          // eslint-disable-next-line no-console
+          console.log(
+            `[subscribe:${debugLabel}] atom-set SKIPPED (reference unchanged)`,
+          );
+        }
+        return;
+      }
 
+      if (debugLabel) {
+        // eslint-disable-next-line no-console
+        console.log(
+          `[subscribe:${debugLabel}] atom-set snapshotComplete=${snapshot.snapshotComplete} data.length=${(snapshot.data as unknown[]).length} error=${snapshot.error ? snapshot.error.code : "none"}`,
+        );
+      }
       setValue(snapshot);
     });
-    return cleanup;
-  }, [options.atom, setValue, subscribe]);
+    return () => {
+      if (debugLabel) {
+        // eslint-disable-next-line no-console
+        console.log(
+          `[subscribe:${debugLabel}] atom-listener detached`,
+        );
+      }
+      cleanup();
+    };
+  }, [options.atom, setValue, subscribe, debugLabel]);
 
   return {
     subscribe,
@@ -170,15 +208,16 @@ export function useSubscribeManager<T extends object, R = SubscribeRow<T>>({
   const httpAddress = useCurrentEnvironmentHttpAddress();
   const request = useSubscribeRequest(subscribe);
   const [subscribeInstance] = React.useState(
-    new SubscribeManager<T, R>({
-      request,
-      httpAddress,
-      sessionVariables: {
-        cluster: options?.clusterName,
-      },
-      closeSocketOnComplete: options?.closeSocketOnComplete,
-      select: options?.select,
-    }),
+    () =>
+      new SubscribeManager<T, R>({
+        request,
+        httpAddress,
+        sessionVariables: {
+          cluster: options?.clusterName,
+        },
+        closeSocketOnComplete: options?.closeSocketOnComplete,
+        select: options?.select,
+      }),
   );
   useAutomaticallyConnectSocket<T, R>({
     target: subscribeInstance,
