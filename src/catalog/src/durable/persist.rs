@@ -595,9 +595,15 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
 
         let mut updates: BTreeMap<_, Vec<_>> = BTreeMap::new();
 
-        // Reset the amortized consolidation tracker so it picks up the
-        // current snapshot size as its baseline.
-        self.size_at_last_consolidation = None;
+        // We deliberately do NOT reset `size_at_last_consolidation` here.
+        // The doubling threshold is meant to amortize consolidation across
+        // the snapshot's lifetime, not per `sync_inner` invocation. Resetting
+        // it means that for the common steady-state case (one ts per sync)
+        // `maybe_consolidate` never fires (delta-vs-current is far below 2x),
+        // and consolidation only ever happens via the unconditional pass
+        // below — paying O(N log N) on every commit. Persisting the threshold
+        // across calls makes `maybe_consolidate` actually trigger when total
+        // growth doubles, which is what we want.
 
         let phase = self.metrics.sync_phase_seconds.clone();
         let mut listen_fetch_secs = 0.0;
@@ -648,9 +654,13 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             }
         }
         assert_eq!(updates, BTreeMap::new(), "all updates should be applied");
-        // Always consolidate at the end to ensure the snapshot is clean.
+        // Do one final amortized consolidate check. Combined with the per-ts
+        // `maybe_consolidate` above, this is enough to bound memory at 2x the
+        // last-consolidated snapshot size while keeping per-call cost O(K log K)
+        // where K is the delta from the last consolidation (not O(N log N)
+        // every sync).
         let t = std::time::Instant::now();
-        self.consolidate();
+        self.maybe_consolidate();
         consolidate_secs += t.elapsed().as_secs_f64();
 
         phase
