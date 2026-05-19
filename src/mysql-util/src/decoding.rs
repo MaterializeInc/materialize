@@ -650,16 +650,6 @@ mod tests {
         assert_eq!(s, "0000-00-00 00:00:00");
     }
 
-    /// Zero-date pads to the column's fractional precision so that the
-    /// snapshot (Date arm) and binlog (Int/Bytes arms) produce identical
-    /// text for the same upstream row.
-    #[mz_ore::test]
-    fn timestamp_value_int_zero_with_precision() {
-        let col = timestamp_text_col(6);
-        let s = pack_one(Value::Int(0), &col).unwrap();
-        assert_eq!(s, "0000-00-00 00:00:00.000000");
-    }
-
     /// Out-of-range epochs must error rather than silently producing
     /// a zero-timestamp — they aren't the MySQL zero-date marker, just
     /// garbage chrono can't represent.
@@ -692,17 +682,10 @@ mod tests {
         assert_eq!(s, "0000-00-00 00:00:00");
     }
 
-    #[mz_ore::test]
-    fn timestamp_value_bytes_zero_with_precision() {
-        let col = timestamp_text_col(6);
-        let s = pack_one(Value::Bytes(b"0".to_vec()), &col).unwrap();
-        assert_eq!(s, "0000-00-00 00:00:00.000000");
-    }
-
-    /// Defensively handle a hypothetical "0.NNNNNN" form (TIMESTAMP2
-    /// would only emit this if the stored microsecond component were
-    /// non-zero, which the upstream type doesn't actually allow for
-    /// sec=0, but the sentinel check should still fire).
+    /// Sentinel detection survives a fractional component ("0.NNNNNN"),
+    /// and the helper pads the output to the column's precision so that
+    /// snapshot and binlog paths produce identical text for the same
+    /// upstream row.
     #[mz_ore::test]
     fn timestamp_value_bytes_zero_with_fractional_is_sentinel() {
         let col = timestamp_text_col(6);
