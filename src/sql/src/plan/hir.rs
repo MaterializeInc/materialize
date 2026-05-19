@@ -3822,7 +3822,7 @@ impl HirScalarExpr {
     ///
     /// TODO: use this everywhere instead of `simplify_to_literal`, so that we don't hide the error
     /// msg.
-    fn simplify_to_literal_with_result(self) -> Result<Row, PlanError> {
+    pub(crate) fn simplify_to_literal_with_result(self) -> Result<Row, PlanError> {
         let mut expr = self
             .lower_uncorrelated(crate::plan::lowering::Config::default())
             .map_err(|err| {
