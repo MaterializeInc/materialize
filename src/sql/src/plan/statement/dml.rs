@@ -66,9 +66,7 @@ use crate::plan::{
     QueryContext, ReadThenWritePlan, SelectPlan, SubscribeFrom, SubscribePlan, query,
 };
 use crate::plan::{CopyFromSource, with_options};
-use crate::session::vars::{
-    self, DISALLOW_UNMATERIALIZABLE_FUNCTIONS_AS_OF, ENABLE_COPY_FROM_REMOTE,
-};
+use crate::session::vars::{self, DISALLOW_UNMATERIALIZABLE_FUNCTIONS_AS_OF};
 
 // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
 // plans the whole query to determine its shape and parameter types,
@@ -1948,8 +1946,6 @@ fn plan_copy_from(
     let source = match target {
         CopyTarget::Stdin => CopyFromSource::Stdin,
         CopyTarget::Expr(from) => {
-            scx.require_feature_flag(&ENABLE_COPY_FROM_REMOTE)?;
-
             // Converting the expr to an HirScalarExpr
             let mut from_expr = from.clone();
             transform_ast::transform(scx, &mut from_expr)?;
@@ -2136,14 +2132,6 @@ pub fn plan_copy(
             _ => sql_bail!("COPY FROM {} not supported", target),
         },
         (CopyDirection::To, CopyTarget::Expr(to_expr)) => {
-            // System users are always allowed to use this feature, even when
-            // the flag is disabled, so that we can dogfood for analytics in
-            // production environments. The feature is stable enough that we're
-            // not worried about it crashing.
-            if !scx.catalog.active_role_id().is_system() {
-                scx.require_feature_flag(&vars::ENABLE_COPY_TO_EXPR)?;
-            }
-
             let format = match format {
                 Some(inner) => inner,
                 _ => sql_bail!("COPY TO <expr> requires a FORMAT option"),

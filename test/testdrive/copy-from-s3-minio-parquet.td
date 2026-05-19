@@ -13,8 +13,6 @@
 $ set-max-tries max-tries=1
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_copy_from_remote = true;
-
 > CREATE SECRET aws_secret AS '${arg.aws-secret-access-key}'
 
 > CREATE CONNECTION aws_conn

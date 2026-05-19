@@ -25,7 +25,6 @@ INSERT INTO t1 VALUES ('one');
 
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_sql_server_source = true;
 ALTER SYSTEM SET storage_statistics_collection_interval = 1000;
 ALTER SYSTEM SET storage_statistics_interval = 2000;
 

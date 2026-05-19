@@ -71,8 +71,6 @@ $ kafka-ingest format=avro topic=csr_test key-format=avro key-schema=${keyschema
 contains:Address resolved to a private IP
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_copy_from_remote = true
-
 > CREATE TABLE copy_ssrf_target (a text, b text)
 
 # COPY FROM rejects non-http(s) schemes outright.

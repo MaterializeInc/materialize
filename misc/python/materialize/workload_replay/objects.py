@@ -206,12 +206,6 @@ def run_create_objects_part_1(
     iceberg_credentials: tuple[str, str] | None = None
     if has_iceberg:
         print("Setting up Polaris for Iceberg sinks")
-        c.sql(
-            "ALTER SYSTEM SET enable_iceberg_sink = true",
-            user="mz_system",
-            port=6877,
-            print_statement=verbose,
-        )
         iceberg_credentials = setup_polaris_for_iceberg(c)
         # Create any additional namespaces referenced by iceberg sinks
         namespaces: set[str] = set()

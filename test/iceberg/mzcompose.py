@@ -34,7 +34,6 @@ SERVICES = [
     Materialized(
         depends_on=["minio"],
         sanity_restart=False,
-        system_parameter_defaults={"enable_iceberg_sink": "true"},
         additional_system_parameter_defaults={
             "log_filter": "mz_storage::sink::iceberg=debug",
         },

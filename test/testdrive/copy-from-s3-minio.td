@@ -13,9 +13,6 @@
 $ set-max-tries max-tries=1
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_copy_from_remote = true;
-
-
 # Prepare the table we want to COPY INTO.
 > CREATE TABLE t1 (a text, b text);
 > CREATE TABLE t1_num (a text, b numeric);
