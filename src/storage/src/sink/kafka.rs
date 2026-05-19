@@ -115,7 +115,9 @@ use mz_storage_types::StorageDiff;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::dyncfgs::{
-    KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS, SINK_ENSURE_TOPIC_CONFIG, SINK_PROGRESS_SEARCH,
+    KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS, KAFKA_SINK_BATCH_NUM_MESSAGES,
+    KAFKA_SINK_BATCH_SIZE, KAFKA_SINK_MESSAGE_MAX_BYTES, SINK_ENSURE_TOPIC_CONFIG,
+    SINK_PROGRESS_SEARCH,
 };
 use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt, DataflowError};
 use mz_storage_types::sinks::{
@@ -318,6 +320,32 @@ impl TransactionalProducer {
         options.insert("client.id", client_id);
         // We want to be notified regularly with statistics
         options.insert("statistics.interval.ms", "1000".into());
+        // Maximum size of a single produced message, controlled by dyncfg so
+        // operators can raise the limit when messages exceed librdkafka's 1MB
+        // default.
+        options.insert(
+            "message.max.bytes",
+            format!(
+                "{}",
+                KAFKA_SINK_MESSAGE_MAX_BYTES.get(storage_configuration.config_set())
+            ),
+        );
+        // Maximum size (bytes) of a produced MessageSet.
+        options.insert(
+            "batch.size",
+            format!(
+                "{}",
+                KAFKA_SINK_BATCH_SIZE.get(storage_configuration.config_set())
+            ),
+        );
+        // Maximum number of messages batched in one MessageSet.
+        options.insert(
+            "batch.num.messages",
+            format!(
+                "{}",
+                KAFKA_SINK_BATCH_NUM_MESSAGES.get(storage_configuration.config_set())
+            ),
+        );
 
         let ctx = MzClientContext::default();
 

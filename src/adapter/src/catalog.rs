@@ -928,14 +928,6 @@ impl Catalog {
         self.state.try_get_role_by_name(role_name)
     }
 
-    pub fn try_get_role_by_name_case_insensitive(&self, role_name: &str) -> Option<&Role> {
-        self.state.try_get_role_by_name_case_insensitive(role_name)
-    }
-
-    pub fn roles_by_lowercase_name(&self) -> BTreeMap<String, &Role> {
-        self.state.roles_by_lowercase_name()
-    }
-
     pub fn try_get_role_auth_by_id(&self, id: &RoleId) -> Option<&RoleAuth> {
         self.state.try_get_role_auth_by_id(id)
     }

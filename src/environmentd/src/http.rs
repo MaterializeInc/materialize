@@ -122,8 +122,10 @@ mod catalog;
 mod cluster;
 mod console;
 mod mcp;
+pub mod mcp_metrics;
 mod memory;
 mod metrics;
+mod metrics_public;
 mod metrics_viz;
 mod probe;
 mod prometheus;
@@ -158,6 +160,7 @@ pub struct HttpConfig {
     pub concurrent_webhook_req: Arc<tokio::sync::Semaphore>,
     pub metrics: Metrics,
     pub metrics_registry: MetricsRegistry,
+    pub mcp_metrics: mcp_metrics::McpMetrics,
     pub allowed_roles: AllowedRoles,
     pub internal_route_config: Arc<InternalRouteConfig>,
     pub routes_enabled: HttpRoutesEnabled,
@@ -213,6 +216,7 @@ impl HttpServer {
             concurrent_webhook_req,
             metrics,
             metrics_registry,
+            mcp_metrics,
             allowed_roles,
             internal_route_config,
             routes_enabled,
@@ -255,6 +259,9 @@ impl HttpServer {
 
         let mut router = Router::new();
         let mut base_router = Router::new();
+        let cluster_proxy_config = Arc::new(cluster::ClusterProxyConfig::new(Arc::clone(
+            &replica_http_locator,
+        )));
         if routes_enabled.base {
             base_router = base_router
                 .route(
@@ -271,7 +278,13 @@ impl HttpServer {
                     "/metrics-viz",
                     routing::get(metrics_viz::handle_metrics_viz),
                 )
-                .route("/static/{*path}", routing::get(root::handle_static));
+                .route("/static/{*path}", routing::get(root::handle_static))
+                .route(
+                    "/metrics/public",
+                    routing::get(metrics_public::handle_public_metrics),
+                )
+                .layer(Extension(metrics_registry.clone()))
+                .layer(Extension(Arc::clone(&cluster_proxy_config)));
 
             let mut ws_router = Router::new()
                 .route("/api/experimental/sql", routing::get(sql::handle_sql_ws))
@@ -398,9 +411,6 @@ impl HttpServer {
                 .layer(Extension(console_config));
 
             // Cluster HTTP proxy routes.
-            let cluster_proxy_config = Arc::new(cluster::ClusterProxyConfig::new(Arc::clone(
-                &replica_http_locator,
-            )));
             base_router = base_router
                 .route("/clusters", routing::get(cluster::handle_clusters))
                 .route(
@@ -411,7 +421,7 @@ impl HttpServer {
                     "/api/cluster/{:cluster_id}/replica/{:replica_id}/process/{:process}/{*path}",
                     routing::any(cluster::handle_cluster_proxy),
                 )
-                .layer(Extension(cluster_proxy_config));
+                .layer(Extension(Arc::clone(&cluster_proxy_config)));
 
             let leader_router = Router::new()
                 .route("/api/leader/status", routing::get(handle_leader_status))
@@ -426,39 +436,44 @@ impl HttpServer {
         }
 
         if routes_enabled.metrics {
+            // Clone into the closure so the outer `metrics_registry` binding
+            // stays available for other route blocks below (e.g. MCP metric
+            // registration).
+            let metrics_registry_for_handler = metrics_registry.clone();
             let metrics_router = Router::new()
                 .route(
                     "/metrics",
-                    routing::get(move || async move {
-                        mz_http_util::handle_prometheus(&metrics_registry).await
+                    routing::get(move |headers: HeaderMap| async move {
+                        mz_http_util::handle_prometheus(&metrics_registry_for_handler, headers)
+                            .await
                     }),
                 )
                 .route(
                     "/metrics/mz_usage",
-                    routing::get(|client: AuthedClient| async move {
+                    routing::get(|client: AuthedClient, headers: HeaderMap| async move {
                         let registry = sql::handle_promsql(client, USAGE_METRIC_QUERIES).await;
-                        mz_http_util::handle_prometheus(&registry).await
+                        mz_http_util::handle_prometheus(&registry, headers).await
                     }),
                 )
                 .route(
                     "/metrics/mz_frontier",
-                    routing::get(|client: AuthedClient| async move {
+                    routing::get(|client: AuthedClient, headers: HeaderMap| async move {
                         let registry = sql::handle_promsql(client, FRONTIER_METRIC_QUERIES).await;
-                        mz_http_util::handle_prometheus(&registry).await
+                        mz_http_util::handle_prometheus(&registry, headers).await
                     }),
                 )
                 .route(
                     "/metrics/mz_compute",
-                    routing::get(|client: AuthedClient| async move {
+                    routing::get(|client: AuthedClient, headers: HeaderMap| async move {
                         let registry = sql::handle_promsql(client, COMPUTE_METRIC_QUERIES).await;
-                        mz_http_util::handle_prometheus(&registry).await
+                        mz_http_util::handle_prometheus(&registry, headers).await
                     }),
                 )
                 .route(
                     "/metrics/mz_storage",
-                    routing::get(|client: AuthedClient| async move {
+                    routing::get(|client: AuthedClient, headers: HeaderMap| async move {
                         let registry = sql::handle_promsql(client, STORAGE_METRIC_QUERIES).await;
-                        mz_http_util::handle_prometheus(&registry).await
+                        mz_http_util::handle_prometheus(&registry, headers).await
                     }),
                 )
                 .route(
@@ -521,6 +536,7 @@ impl HttpServer {
                 .layer(Extension(active_connection_counter.clone()))
                 .layer(Extension(HelmChartVersion(helm_chart_version.clone())))
                 .layer(Extension(mcp_allowed_origins))
+                .layer(Extension(mcp_metrics))
                 .layer(
                     CorsLayer::new()
                         .allow_methods(Method::POST)

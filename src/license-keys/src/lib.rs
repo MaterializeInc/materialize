@@ -44,6 +44,10 @@ pub struct ValidatedLicenseKey {
     pub allow_credit_consumption_override: bool,
     pub expiration_behavior: ExpirationBehavior,
     pub expired: bool,
+    /// Optional feature flags / third-party integrations enabled for this key
+    /// (e.g. `"ory"` to permit pulling images through the OCI registry proxy).
+    /// Empty for keys that predate this field.
+    pub entitlements: Vec<String>,
 }
 
 impl ValidatedLicenseKey {
@@ -59,6 +63,7 @@ impl ValidatedLicenseKey {
             allow_credit_consumption_override: true,
             expiration_behavior: ExpirationBehavior::Warn,
             expired: false,
+            entitlements: Vec::new(),
         }
     }
 
@@ -74,7 +79,13 @@ impl ValidatedLicenseKey {
             allow_credit_consumption_override: true,
             expiration_behavior: ExpirationBehavior::Warn,
             expired: false,
+            entitlements: Vec::new(),
         }
+    }
+
+    /// Returns true if `entitlement` is present in this key.
+    pub fn has_entitlement(&self, entitlement: &str) -> bool {
+        self.entitlements.iter().any(|e| e == entitlement)
     }
 
     pub fn max_credit_consumption_rate(&self) -> Option<f64> {
@@ -106,6 +117,7 @@ impl Default for ValidatedLicenseKey {
             allow_credit_consumption_override: false,
             expiration_behavior: ExpirationBehavior::Disable,
             expired: false,
+            entitlements: Vec::new(),
         }
     }
 }
@@ -176,6 +188,11 @@ struct Payload {
     #[serde(default, skip_serializing_if = "is_default")]
     allow_credit_consumption_override: bool,
     expiration_behavior: ExpirationBehavior,
+    // Defaulted + skipped-when-empty so keys issued before entitlements
+    // existed continue to validate and we don't bloat keys that don't need
+    // any entitlements.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    entitlements: Vec<String>,
 }
 
 fn validate_with_pubkey_v1(
@@ -231,9 +248,77 @@ fn validate_with_pubkey_v1(
         allow_credit_consumption_override: jwt.claims.allow_credit_consumption_override,
         expiration_behavior: jwt.claims.expiration_behavior,
         expired,
+        entitlements: jwt.claims.entitlements,
     })
 }
 
 fn is_default<T: PartialEq + Eq + Default>(val: &T) -> bool {
     *val == T::default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_payload(entitlements: Vec<String>) -> Payload {
+        Payload {
+            sub: "org-1".to_string(),
+            exp: 200,
+            nbf: 100,
+            iss: ISSUER.to_string(),
+            aud: "env-1".to_string(),
+            iat: 100,
+            jti: "jti-1".to_string(),
+            version: 1,
+            max_credit_consumption_rate: 10.0,
+            allow_credit_consumption_override: false,
+            expiration_behavior: ExpirationBehavior::Warn,
+            entitlements,
+        }
+    }
+
+    #[mz_ore::test]
+    fn entitlements_roundtrip_through_payload() {
+        let payload = sample_payload(vec!["ory".to_string(), "foo".to_string()]);
+        let json = serde_json::to_string(&payload).unwrap();
+        assert!(
+            json.contains(r#""entitlements":["ory","foo"]"#),
+            "payload should serialize entitlements: {json}"
+        );
+
+        let decoded: Payload = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.entitlements, vec!["ory", "foo"]);
+    }
+
+    #[mz_ore::test]
+    fn empty_entitlements_omitted_from_payload() {
+        let payload = sample_payload(Vec::new());
+        let json = serde_json::to_string(&payload).unwrap();
+        // Skipping the field on empty keeps issued JWTs the same shape they
+        // were before entitlements existed, so old + new validators agree.
+        assert!(
+            !json.contains("entitlements"),
+            "empty entitlements should be skipped: {json}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn legacy_payload_without_entitlements_decodes() {
+        // Pre-DEP-130 keys have no `entitlements` field. They must still
+        // deserialize, with entitlements defaulting to empty.
+        let legacy = serde_json::json!({
+            "sub": "org-1",
+            "exp": 200,
+            "nbf": 100,
+            "iss": ISSUER,
+            "aud": "env-1",
+            "iat": 100,
+            "jti": "jti-1",
+            "version": 1,
+            "max_credit_consumption_rate": 10.0,
+            "expiration_behavior": "Warn",
+        });
+        let decoded: Payload = serde_json::from_value(legacy).unwrap();
+        assert!(decoded.entitlements.is_empty());
+    }
 }

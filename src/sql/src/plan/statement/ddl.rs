@@ -20,7 +20,6 @@ use std::time::Duration;
 
 use itertools::Itertools;
 use mz_adapter_types::compaction::{CompactionWindow, DEFAULT_LOGICAL_COMPACTION_WINDOW_DURATION};
-use mz_adapter_types::dyncfgs::ENABLE_MULTI_REPLICA_SOURCES;
 use mz_arrow_util::builder::ArrowBuilder;
 use mz_auth::password::Password;
 use mz_controller_types::{ClusterId, DEFAULT_REPLICA_LOGGING_INTERVAL, ReplicaId};
@@ -564,13 +563,6 @@ pub fn plan_create_webhook_source(
     // We will rewrite the cluster if one is not provided, so we must use the `in_cluster` value
     // we plan to normalize when we canonicalize the create statement.
     let in_cluster = source_sink_cluster_config(scx, &mut stmt.in_cluster)?;
-    let enable_multi_replica_sources =
-        ENABLE_MULTI_REPLICA_SOURCES.get(scx.catalog.system_vars().dyncfgs());
-    if !enable_multi_replica_sources {
-        if in_cluster.replica_ids().len() > 1 {
-            sql_bail!("cannot create webhook source in cluster with more than one replica")
-        }
-    }
     let create_sql =
         normalize::create_statement(scx, Statement::CreateWebhookSource(stmt.clone()))?;
 
@@ -3264,7 +3256,7 @@ fn plan_sink(
             }
             let indices = key_columns
                 .iter()
-                .map(|col| -> anyhow::Result<usize> {
+                .map(|col| {
                     let name_idx =
                         desc.get_by_name(col)
                             .map(|(idx, _type)| idx)
@@ -3272,7 +3264,7 @@ fn plan_sink(
                                 sql_err!("column referenced in KEY does not exist: {}", col)
                             })?;
                     if desc.get_unambiguous_name(name_idx).is_none() {
-                        sql_err!("column referenced in KEY is ambiguous: {}", col);
+                        sql_bail!("column referenced in KEY is ambiguous: {}", col);
                     }
                     Ok(name_idx)
                 })
@@ -5176,15 +5168,6 @@ pub fn plan_create_cluster_replica(
     let cluster = scx
         .catalog
         .resolve_cluster(Some(&normalize::ident(of_cluster)))?;
-    let current_replica_count = cluster.replica_ids().iter().count();
-    if contains_single_replica_objects(scx, cluster) && current_replica_count > 0 {
-        let internal_replica_count = cluster.replicas().iter().filter(|r| r.internal()).count();
-        return Err(PlanError::CreateReplicaFailStorageObjects {
-            current_replica_count,
-            internal_replica_count,
-            hypothetical_replica_count: current_replica_count + 1,
-        });
-    }
 
     let config = plan_replica_config(scx, options)?;
 
@@ -5507,24 +5490,6 @@ fn plan_drop_network_policy(
         }
         Err(_) if if_exists => Ok(None),
         Err(e) => Err(e.into()),
-    }
-}
-
-/// Returns `true` if the cluster has any object that requires a single replica.
-/// Returns `false` if the cluster has no objects.
-fn contains_single_replica_objects(scx: &StatementContext, cluster: &dyn CatalogCluster) -> bool {
-    // If this feature is enabled then all objects support multiple-replicas
-    if ENABLE_MULTI_REPLICA_SOURCES.get(scx.catalog.system_vars().dyncfgs()) {
-        false
-    } else {
-        // Othewise we check for the existence of sources or sinks
-        cluster.bound_objects().iter().any(|id| {
-            let item = scx.catalog.get_item(id);
-            matches!(
-                item.item_type(),
-                CatalogItemType::Sink | CatalogItemType::Source
-            )
-        })
     }
 }
 
@@ -6131,7 +6096,7 @@ pub fn plan_alter_cluster(
                         scx.require_feature_flag(&ENABLE_CLUSTER_SCHEDULE_REFRESH)?;
                     }
 
-                    if let Some(replication_factor) = replication_factor {
+                    if replication_factor.is_some() {
                         if schedule.is_some()
                             && !matches!(schedule, Some(ClusterScheduleOptionValue::Manual))
                         {
@@ -6145,37 +6110,6 @@ pub fn plan_alter_cluster(
                                     "REPLICATION FACTOR cannot be set if the cluster SCHEDULE is anything other than MANUAL"
                                 );
                             }
-                        }
-
-                        let internal_replica_count =
-                            cluster.replicas().iter().filter(|r| r.internal()).count();
-                        let hypothetical_replica_count =
-                            internal_replica_count + usize::cast_from(replication_factor);
-
-                        // Total number of replicas running is internal replicas
-                        // + replication factor.
-                        if contains_single_replica_objects(scx, cluster)
-                            && hypothetical_replica_count > 1
-                        {
-                            return Err(PlanError::CreateReplicaFailStorageObjects {
-                                current_replica_count: cluster.replica_ids().iter().count(),
-                                internal_replica_count,
-                                hypothetical_replica_count,
-                            });
-                        }
-                    } else if alter_strategy.is_some() {
-                        // AlterClusterPlanStrategies that are not None will standup pending replicas of the new configuration
-                        // and violate the single replica for sources constraint. If there are any storage objects (sources or sinks) we should
-                        // just fail.
-                        let internal_replica_count =
-                            cluster.replicas().iter().filter(|r| r.internal()).count();
-                        let hypothetical_replica_count = internal_replica_count * 2;
-                        if contains_single_replica_objects(scx, cluster) {
-                            return Err(PlanError::CreateReplicaFailStorageObjects {
-                                current_replica_count: cluster.replica_ids().iter().count(),
-                                internal_replica_count,
-                                hypothetical_replica_count,
-                            });
                         }
                     }
                 }
@@ -7020,7 +6954,7 @@ pub fn plan_alter_connection(
         Err(_) if if_exists => {
             scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
                 name: conn_name.to_string(),
-                object_type: ObjectType::Sink,
+                object_type: ObjectType::Connection,
             });
 
             return Ok(Plan::AlterNoop(AlterNoopPlan {

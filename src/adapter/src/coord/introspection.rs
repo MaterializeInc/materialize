@@ -523,7 +523,8 @@ impl SubscribeSpec {
     fn to_plan(&self, catalog: &dyn SessionCatalog) -> Result<SubscribePlan, anyhow::Error> {
         let parsed = mz_sql::parse::parse(self.sql)?.into_element();
         let (stmt, resolved_ids) = mz_sql::names::resolve(catalog, parsed.ast)?;
-        let plan = mz_sql::plan::plan(None, catalog, stmt, &Params::empty(), &resolved_ids)?;
+        let (plan, _sql_impl_ids) =
+            mz_sql::plan::plan(None, catalog, stmt, &Params::empty(), &resolved_ids)?;
         match plan {
             Plan::Subscribe(plan) => Ok(plan),
             _ => bail!("unexpected plan type: {plan:?}"),

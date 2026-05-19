@@ -214,7 +214,7 @@ fn get_statement_logging_record_counts(
                 .iter()
                 .any(|l| l.name() == "sample" && l.value() == "true")
         })
-        .map(|m| u64::cast_lossy(m.get_counter().get_value()))
+        .map(|m| u64::cast_lossy(m.get_counter().value()))
         .unwrap_or(0);
     let sampled_false = metric_entries
         .iter()
@@ -223,7 +223,7 @@ fn get_statement_logging_record_counts(
                 .iter()
                 .any(|l| l.name() == "sample" && l.value() == "false")
         })
-        .map(|m| u64::cast_lossy(m.get_counter().get_value()))
+        .map(|m| u64::cast_lossy(m.get_counter().value()))
         .unwrap_or(0);
 
     (sampled_true, sampled_false)
@@ -649,14 +649,14 @@ ORDER BY mseh.began_at",
         .expect("mz_statement_logging_actual_bytes metric should exist")
         .get_metric()[0]
         .get_counter()
-        .get_value();
+        .value();
     let unsampled_bytes = metrics
         .iter()
         .find(|m| m.name() == "mz_statement_logging_unsampled_bytes")
         .expect("mz_statement_logging_unsampled_bytes metric should exist")
         .get_metric()[0]
         .get_counter()
-        .get_value();
+        .value();
     assert!(
         actual_bytes > 0.0,
         "actual_bytes should be > 0 with 100% sample rate"
@@ -972,7 +972,7 @@ fn test_statement_logging_unsampled_metrics() {
         .unwrap()
         .take_metric()[0]
         .get_counter()
-        .get_value();
+        .value();
     let metric_value = usize::cast_from(u64::try_cast_from(metric_value).unwrap());
     assert_eq!(expected_total, metric_value);
 
@@ -2686,6 +2686,57 @@ fn test_internal_console_proxy() {
 }
 
 #[mz_ore::test]
+fn test_metrics_public_endpoint() {
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default(
+            "enable_public_metrics_endpoint".to_string(),
+            "true".to_string(),
+        )
+        .start_blocking();
+
+    let cluster_name = "test_cluster_1";
+    let label = format!("cluster_name=\"{cluster_name}\"");
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client
+        .batch_execute(&format!(
+            "CREATE CLUSTER {cluster_name} REPLICAS (r1 (SIZE 'scale=2,workers=2'))"
+        ))
+        .unwrap();
+
+    let url = Url::parse(&format!(
+        "http://{}/metrics/public",
+        server.http_local_addr()
+    ))
+    .unwrap();
+    let fetch_body = || {
+        let res = Client::new().get(url.clone()).send().unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        res.text().unwrap()
+    };
+
+    // Retry the scrape until the replica's `http` listener is up;
+    // until then `/metrics/public` only returns env's local metrics with no
+    // cluster_name labels.
+    Retry::default()
+        .max_duration(Duration::from_secs(60))
+        .retry(|_| {
+            if fetch_body().contains(label.as_str()) {
+                Ok(())
+            } else {
+                Err(format!("{label} not yet in /metrics/public"))
+            }
+        })
+        .unwrap();
+
+    client
+        .batch_execute(&format!("DROP CLUSTER {cluster_name}"))
+        .unwrap();
+
+    assert!(!fetch_body().contains(label.as_str()));
+}
+
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_internal_http_auth() {
     let server = test_util::TestHarness::default().start_blocking();
@@ -3081,7 +3132,7 @@ async fn smoketest_webhook_source() {
         .find(|metric| metric.name() == "mz_http_requests_total")
         .unwrap();
     let total_requests_metric = &total_requests_metric.get_metric()[0];
-    assert_eq!(total_requests_metric.get_counter().get_value(), 100.0);
+    assert_eq!(total_requests_metric.get_counter().value(), 100.0);
 
     let path_label = &total_requests_metric.get_label()[0];
     assert_eq!(
@@ -3450,12 +3501,12 @@ async fn test_http_metrics() {
 
     let request_metric = request_metrics.pop().unwrap();
     let success_metric = &request_metric.get_metric()[0];
-    assert_eq!(success_metric.get_counter().get_value(), 2.0);
+    assert_eq!(success_metric.get_counter().value(), 2.0);
     assert_eq!(success_metric.get_label()[0].value(), "/api/sql");
     assert_eq!(success_metric.get_label()[2].value(), "200");
 
     let failure_metric = &request_metric.get_metric()[1];
-    assert_eq!(failure_metric.get_counter().get_value(), 1.0);
+    assert_eq!(failure_metric.get_counter().value(), 1.0);
     assert_eq!(failure_metric.get_label()[0].value(), "/api/sql");
     assert_eq!(failure_metric.get_label()[2].value(), "422");
 }
@@ -3771,7 +3822,7 @@ fn webhook_too_large_request() {
         })
         .unwrap()
         .get_counter()
-        .get_value();
+        .value();
     assert_eq!(payload_too_large, 1.0);
 }
 
@@ -3992,7 +4043,7 @@ async fn webhook_concurrent_swap() {
         .unwrap()
         .take_metric()[0]
         .get_counter()
-        .get_value();
+        .value();
 
     // We should only get a webhook appender from the Coordinator 4 times, once for each source
     // when we start posting, and then once again for each source after they are renamed.
@@ -5585,7 +5636,9 @@ fn test_mcp_agent_with_data_product() {
         "limit 0 should return no rows"
     );
 
-    // read_data_product with limit > MAX_READ_LIMIT (1000) should be clamped, not error.
+    // read_data_product with a large `limit` is not clamped or rejected: the
+    // response is bounded only by the size cap, matching the SQL HTTP layer.
+    // The test data product has 1 row, so LIMIT 9999 just returns that 1 row.
     let (status, body) = mcp_post(
         &agents_url,
         serde_json::json!({
@@ -5601,8 +5654,11 @@ fn test_mcp_agent_with_data_product() {
     assert_eq!(status, StatusCode::OK);
     assert!(
         body["error"].is_null(),
-        "limit above max should be clamped, not rejected"
+        "large limit should succeed; size cap is the only guard"
     );
+    let rows_text = body["result"]["content"][0]["text"].as_str().unwrap();
+    let rows: serde_json::Value = serde_json::from_str(rows_text).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 1);
 
     // SQL injection attempt in data product name: should return DataProductNotFound, not execute.
     let (status, body) = mcp_post(
@@ -5667,6 +5723,172 @@ fn test_mcp_agent_with_data_product() {
     assert!(
         body["error"].is_object(),
         "injection in cluster should produce an error, not succeed"
+    );
+}
+
+/// Verifies that MCP requests update the Prometheus counters and that
+/// tool calls record a histogram observation.
+#[mz_ore::test]
+fn test_mcp_metrics() {
+    let server = test_util::TestHarness::default()
+        .with_mcp_routes(true, false)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .start_blocking();
+
+    let agents_url = format!("http://{}/api/mcp/agent", server.http_local_addr());
+
+    // Exercise three distinct request shapes:
+    //   1. `initialize`: succeeds.
+    //   2. `tools/list`: succeeds.
+    //   3. `tools/call` for `read_data_product` with a nonexistent name:
+    //      the request itself completes with an MCP error
+    //      (`DataProductNotFound`), which both `requests_total` and
+    //      `tool_calls_total` should reflect via the status label.
+
+    let (status, _) = mcp_post(
+        &agents_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {"name": "metrics-test", "version": "0"}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _) = mcp_post(
+        &agents_url,
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+    );
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _) = mcp_post(
+        &agents_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "read_data_product",
+                "arguments": {"name": "nonexistent_product"}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+
+    // Helper: look up a counter value by exact (endpoint, method/tool, status)
+    // label combination. Panics with a helpful message if not found, so test
+    // failures point at the missing label set rather than a generic `None`.
+    fn find_counter(
+        gathered: &[prometheus::proto::MetricFamily],
+        metric_name: &str,
+        labels: &[(&str, &str)],
+    ) -> f64 {
+        let family = gathered
+            .iter()
+            .find(|m| m.name() == metric_name)
+            .unwrap_or_else(|| panic!("metric family {} should be present", metric_name));
+        for metric in family.get_metric() {
+            let matches_all = labels.iter().all(|(name, want)| {
+                metric
+                    .get_label()
+                    .iter()
+                    .any(|l| l.name() == *name && l.value() == *want)
+            });
+            if matches_all {
+                return metric.get_counter().value();
+            }
+        }
+        panic!(
+            "no {} entry matching labels {:?} in {:?}",
+            metric_name,
+            labels,
+            family
+                .get_metric()
+                .iter()
+                .map(|m| m
+                    .get_label()
+                    .iter()
+                    .map(|l| (l.name().to_string(), l.value().to_string()))
+                    .collect::<Vec<_>>())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    let gathered = server.metrics_registry().gather();
+
+    // requests_total: one entry per (endpoint, method, status). The
+    // tools/call request failed at the tool level, so its status label is
+    // the McpRequestError error_type, not "ok".
+    assert_eq!(
+        find_counter(
+            &gathered,
+            "mz_mcp_requests_total",
+            &[
+                ("endpoint_type", "agent"),
+                ("method", "initialize"),
+                ("status", "ok"),
+            ],
+        ),
+        1.0,
+    );
+    assert_eq!(
+        find_counter(
+            &gathered,
+            "mz_mcp_requests_total",
+            &[
+                ("endpoint_type", "agent"),
+                ("method", "tools/list"),
+                ("status", "ok"),
+            ],
+        ),
+        1.0,
+    );
+    assert_eq!(
+        find_counter(
+            &gathered,
+            "mz_mcp_requests_total",
+            &[
+                ("endpoint_type", "agent"),
+                ("method", "tools/call"),
+                ("status", "DataProductNotFound"),
+            ],
+        ),
+        1.0,
+    );
+
+    // tool_calls_total: one entry per (endpoint, tool_name, status).
+    assert_eq!(
+        find_counter(
+            &gathered,
+            "mz_mcp_tool_calls_total",
+            &[
+                ("endpoint_type", "agent"),
+                ("tool_name", "read_data_product"),
+                ("status", "DataProductNotFound"),
+            ],
+        ),
+        1.0,
+    );
+
+    // tool_call_duration_seconds: the single tools/call above should
+    // produce exactly one histogram observation.
+    let duration = gathered
+        .iter()
+        .find(|m| m.name() == "mz_mcp_tool_call_duration_seconds")
+        .expect("mz_mcp_tool_call_duration_seconds should be present");
+    let total_samples: u64 = duration
+        .get_metric()
+        .iter()
+        .map(|m| m.get_histogram().get_sample_count())
+        .sum();
+    assert_eq!(
+        total_samples, 1,
+        "tool_call_duration_seconds should record exactly 1 sample",
     );
 }
 

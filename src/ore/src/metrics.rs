@@ -1037,7 +1037,7 @@ mod tests {
 
         let exec_counter = exec_metric[0].get_counter();
         // Since we're synchronously sleeping the execution time will be long.
-        assert!(exec_counter.get_value() >= 1.0);
+        assert!(exec_counter.value() >= 1.0);
 
         let wall_family = reports
             .iter()
@@ -1048,6 +1048,6 @@ mod tests {
 
         let wall_counter = wall_metric[0].get_counter();
         // We filtered wall time to < 10ms, so our wall time metric should be filtered out.
-        assert_eq!(wall_counter.get_value(), 0.0);
+        assert_eq!(wall_counter.value(), 0.0);
     }
 }

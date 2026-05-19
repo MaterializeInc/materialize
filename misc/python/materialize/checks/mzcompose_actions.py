@@ -41,6 +41,9 @@ class StartMz(MzcomposeAction):
         system_parameter_defaults: dict[str, str] | None = None,
         additional_system_parameter_defaults: dict[str, str] = {},
         system_parameter_version: MzVersion | None = None,
+        soft_assertions: bool = True,
+        builtin_system_cluster_replication_factor: int | None = None,
+        builtin_probe_cluster_replication_factor: int | None = None,
         mz_service: str | None = None,
         platform: str | None = None,
         healthcheck: list[str] | None = None,
@@ -56,6 +59,13 @@ class StartMz(MzcomposeAction):
         self.system_parameter_defaults = system_parameter_defaults
         self.additional_system_parameter_defaults = additional_system_parameter_defaults
         self.system_parameter_version = system_parameter_version or tag
+        self.soft_assertions = soft_assertions
+        self.builtin_system_cluster_replication_factor = (
+            builtin_system_cluster_replication_factor
+        )
+        self.builtin_probe_cluster_replication_factor = (
+            builtin_probe_cluster_replication_factor
+        )
         self.healthcheck = healthcheck
         self.mz_service = mz_service
         self.platform = platform
@@ -97,6 +107,7 @@ class StartMz(MzcomposeAction):
             system_parameter_defaults=self.system_parameter_defaults,
             additional_system_parameter_defaults=self.additional_system_parameter_defaults,
             system_parameter_version=self.system_parameter_version,
+            soft_assertions=self.soft_assertions,
             sanity_restart=False,
             platform=self.platform,
             healthcheck=self.healthcheck,
@@ -106,6 +117,8 @@ class StartMz(MzcomposeAction):
             publish=self.publish,
             default_replication_factor=2,
             support_external_clusterd=True,
+            builtin_system_cluster_replication_factor=self.builtin_system_cluster_replication_factor,
+            builtin_probe_cluster_replication_factor=self.builtin_probe_cluster_replication_factor,
             listeners_config_path=listeners_config_path,
         )
 

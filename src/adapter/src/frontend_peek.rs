@@ -324,7 +324,8 @@ impl PeekClient {
         let (stmt, resolved_ids) = mz_sql::names::resolve(&conn_catalog, (*stmt).clone())?;
 
         let pcx = session.pcx();
-        let plan = mz_sql::plan::plan(Some(pcx), &conn_catalog, stmt, &params, &resolved_ids)?;
+        let (plan, sql_impl_ids) =
+            mz_sql::plan::plan(Some(pcx), &conn_catalog, stmt, &params, &resolved_ids)?;
 
         /// What do we do with the result of the select?
         enum QueryPlan<'a> {
@@ -509,6 +510,7 @@ impl PeekClient {
             &plan,
             Some(target_cluster_id),
             &resolved_ids,
+            &sql_impl_ids,
         )?;
 
         if let Some((_, wait_future)) =

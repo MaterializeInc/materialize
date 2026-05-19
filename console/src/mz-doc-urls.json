@@ -290,6 +290,7 @@
   "/docs/serve-results/sink/kafka/": "https://materialize.com/docs/serve-results/sink/kafka/",
   "/docs/transform-data/idiomatic-materialize-sql/lag/": "https://materialize.com/docs/transform-data/idiomatic-materialize-sql/lag/",
   "/docs/integrations/llm/": "https://materialize.com/docs/integrations/llm/",
+  "/docs/integrations/mcp-server/": "https://materialize.com/docs/integrations/mcp-server/",
   "/docs/transform-data/idiomatic-materialize-sql/last-value/": "https://materialize.com/docs/transform-data/idiomatic-materialize-sql/last-value/",
   "/docs/transform-data/idiomatic-materialize-sql/lead/": "https://materialize.com/docs/transform-data/idiomatic-materialize-sql/lead/",
   "/docs/sql/functions/length/": "https://materialize.com/docs/sql/functions/length/",

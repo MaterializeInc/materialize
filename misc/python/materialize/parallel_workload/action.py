@@ -1496,6 +1496,7 @@ class FlipFlagsAction(Action):
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["enable_eager_delta_joins"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_public_metrics_endpoint"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["persist_batch_structured_key_lower_len"] = [
             "0",
             "1",
@@ -1787,7 +1788,6 @@ class FlipFlagsAction(Action):
             "enable_introspection_subscribes",
             "plan_insights_notice_fast_path_clusters_optimize_duration",
             "enable_expression_cache",
-            "enable_multi_replica_sources",
             "enable_password_auth",
             "persist_fast_path_order",
             "enable_mcp_agent",
@@ -1809,6 +1809,9 @@ class FlipFlagsAction(Action):
             "kafka_retry_backoff_max",
             "kafka_reconnect_backoff",
             "kafka_reconnect_backoff_max",
+            "kafka_sink_message_max_bytes",
+            "kafka_sink_batch_size",
+            "kafka_sink_batch_num_messages",
             "pg_source_validate_timeline",
             "sql_server_source_validate_restore_history",
             "oidc_issuer",

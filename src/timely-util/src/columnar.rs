@@ -32,7 +32,7 @@ use differential_dataflow::Hashable;
 use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use timely::Accountable;
 use timely::bytes::arc::Bytes;
-use timely::container::{DrainContainer, PushInto};
+use timely::container::{DrainContainer, PushInto, SizableContainer};
 use timely::dataflow::channels::ContainerBytes;
 
 use crate::columnation::{ColInternalMerger, ColumnationStack};
@@ -135,6 +135,52 @@ where
                 unimplemented!("Pushing into Column::Bytes without first clearing");
             }
         }
+    }
+}
+
+/// Words per 2 MiB. `length_in_words` returns serialized size in `u64` units,
+/// so this is the page count we round up to. Picked to match
+/// [`builder::ColumnBuilder`]'s output granularity so chunks shipped from the
+/// merger and chunks shipped from the builder are sized comparably.
+const SHIP_WORDS: usize = 1 << 18;
+
+/// Returns true once the serialized size of `borrow` is within 10% of the next
+/// `SHIP_WORDS` boundary.
+///
+/// Same heuristic as `ColumnBuilder::push_into`; lifted out so the merger and
+/// the `SizableContainer` impl agree on the ship signal.
+#[inline]
+pub(crate) fn at_serialized_capacity<'a, A>(borrow: &A) -> bool
+where
+    A: columnar::AsBytes<'a>,
+{
+    let words = indexed::length_in_words(borrow);
+    let round = (words + (SHIP_WORDS - 1)) & !(SHIP_WORDS - 1);
+    round - words < round / 10
+}
+
+impl<C: Columnar> SizableContainer for Column<C> {
+    fn at_capacity(&self) -> bool {
+        // Match `ColumnBuilder`'s ship heuristic: serialized size within 10%
+        // of the next 2 MiB. Aligns chunk-size choices across the two paths
+        // and keeps recipients dealing with a single granularity.
+        //
+        // Serialized chunks (`Bytes` / `Align`) have no typed builder to push
+        // into, so they're trivially "at capacity" — there's no further work
+        // they can absorb.
+        match self {
+            Column::Typed(c) => at_serialized_capacity(&c.borrow()),
+            Column::Bytes(_) | Column::Align(_) => true,
+        }
+    }
+
+    fn ensure_capacity(&mut self, _stash: &mut Option<Self>) {
+        // No pre-reservation: chunks are recycled by the merge framework, so
+        // leaf capacities settle to steady-state after the first round and
+        // there is nothing useful to reserve up front. The `SizableContainer`
+        // impl exists so `at_capacity` is callable on result chunks during
+        // `Merger::merge` orchestration; `ensure_capacity` is a required
+        // method on the trait but has no work to do here.
     }
 }
 

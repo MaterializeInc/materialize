@@ -43,12 +43,18 @@ use timely::container::{ContainerBuilder, PushInto};
 
 use crate::columnar::Column;
 
-/// Items per staging buffer. Small enough that O(n log n) sort stays cheap, large enough to
-/// amortize the sort + drain overhead across many pushes.
-const STAGING_CAP_ITEMS: usize = 16 * 1024;
-/// Drain a multiple of this on consolidate. Remainder stays in staging so cross-batch keys
-/// keep consolidating on the next sort.
-const DRAIN_GRAIN: usize = STAGING_CAP_ITEMS / 2;
+/// Per-buffer byte budget for the staging cap. Matches the 8 KiB basis DD's
+/// `ConsolidatingContainerBuilder` uses via `timely::container::buffer::default_capacity`.
+const STAGING_BUFFER_BYTES: usize = 8 * 1024;
+
+/// Default items per staging buffer: `2 * STAGING_BUFFER_BYTES / size_of::<(D, T, R)>()`,
+/// matching DD's `ConsolidatingContainerBuilder`. Small enough that O(n log n) sort stays
+/// cheap, large enough to amortize the sort + drain overhead across many pushes.
+fn default_staging_cap<D, T, R>() -> usize {
+    let elem = std::mem::size_of::<(D, T, R)>().max(1);
+    // Floor at 2 so the half-cap drain grain is at least 1.
+    (2 * STAGING_BUFFER_BYTES / elem).max(2)
+}
 /// Target serialized chunk size in u64 words (2 MiB). Bounded slop matters once we put these
 /// behind huge pages.
 const OUTPUT_TARGET_WORDS: usize = 1 << 18;
@@ -79,8 +85,10 @@ where
     T: Columnar,
     R: Columnar,
 {
-    /// AoS staging buffer for in-place consolidation. Cap = [`STAGING_CAP_ITEMS`].
+    /// AoS staging buffer for in-place consolidation. Cap = [`Self::staging_cap`].
     staging: Vec<(D, T, R)>,
+    /// Capacity of `staging`. Drain triggers when `staging.len()` hits this.
+    staging_cap: usize,
     /// SoA accumulator, one sub-container per column.
     cur_d: D::Container,
     cur_t: T::Container,
@@ -100,10 +108,12 @@ where
     R: Columnar,
 {
     fn default() -> Self {
+        let cap = default_staging_cap::<D, T, R>();
         Self {
             // Pre-allocate so `push` is unconditional (no per-push capacity check or lazy
             // reserve branch).
-            staging: Vec::with_capacity(STAGING_CAP_ITEMS),
+            staging: Vec::with_capacity(cap),
+            staging_cap: cap,
             cur_d: D::Container::default(),
             cur_t: T::Container::default(),
             cur_r: R::Container::default(),
@@ -202,8 +212,8 @@ where
     #[inline]
     fn push_into(&mut self, item: (D, T, R)) {
         self.staging.push(item);
-        if self.staging.len() == STAGING_CAP_ITEMS {
-            self.consolidate_and_drain(DRAIN_GRAIN);
+        if self.staging.len() == self.staging_cap {
+            self.consolidate_and_drain(self.staging_cap / 2);
         }
     }
 }
@@ -302,10 +312,11 @@ mod tests {
     #[mz_ore::test]
     fn consolidates_on_threshold() {
         let mut builder: ConsolidatingColumnBuilder<u64, u64, i64> = Default::default();
-        // Push enough +1/-1 pairs to exceed `STAGING_CAP_ITEMS * 2` and trigger several
-        // consolidation cycles. Everything cancels in the staging buffer before ever reaching
-        // the SoA accumulator.
-        for _ in 0..(STAGING_CAP_ITEMS * 4) {
+        // Push enough +1/-1 pairs to exceed the staging cap several times over and trigger
+        // multiple consolidation cycles. Everything cancels in the staging buffer before
+        // ever reaching the SoA accumulator.
+        let cap = default_staging_cap::<u64, u64, i64>();
+        for _ in 0..(cap * 4) {
             builder.push_into((7u64, 0u64, 1i64));
             builder.push_into((7u64, 0u64, -1i64));
         }

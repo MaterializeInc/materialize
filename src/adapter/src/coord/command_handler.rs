@@ -322,7 +322,8 @@ impl Coordinator {
                     };
 
                     let conn_id = ctx.session().conn_id().clone();
-                    self.sequence_plan(ctx, plan, ResolvedIds::empty()).await;
+                    self.sequence_plan(ctx, plan, ResolvedIds::empty(), ResolvedIds::empty())
+                        .await;
                     // Part of the Command::Commit contract is that the Coordinator guarantees that
                     // it has cleared its transaction state for the connection.
                     self.clear_connection(&conn_id).await;
@@ -371,8 +372,12 @@ impl Coordinator {
 
                     match result {
                         Ok(Some(fut)) => {
+                            let catalog = Arc::clone(&self.catalog);
                             task::spawn(|| "determine real time recent timestamp", async move {
-                                let result = fut.await.map(Some).map_err(AdapterError::from);
+                                let result =
+                                    Coordinator::await_real_time_recent_timestamp(catalog, fut)
+                                        .await
+                                        .map(Some);
                                 let _ = tx.send(result);
                             });
                         }
@@ -1318,7 +1323,8 @@ impl Coordinator {
                     | Statement::RevokeRole(_)
                     | Statement::Update(_)
                     | Statement::ValidateConnection(_)
-                    | Statement::Comment(_) => {
+                    | Statement::Comment(_)
+                    | Statement::ExecuteUnitTest(_) => {
                         let txn_status = ctx.session_mut().transaction_mut();
 
                         // If we're not in an implicit transaction and we could generate exactly one
@@ -1576,7 +1582,10 @@ impl Coordinator {
         };
 
         match self.plan_statement(ctx.session(), stmt, &params, &resolved_ids) {
-            Ok(plan) => self.sequence_plan(ctx, plan, resolved_ids).await,
+            Ok((plan, sql_impl_ids)) => {
+                self.sequence_plan(ctx, plan, resolved_ids, sql_impl_ids)
+                    .await
+            }
             Err(e) => ctx.retire(Err(e)),
         }
     }

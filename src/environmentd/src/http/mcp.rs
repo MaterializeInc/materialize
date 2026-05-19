@@ -37,6 +37,7 @@ use mz_adapter_types::dyncfgs::{
 use mz_repr::namespaces::{self, SYSTEM_SCHEMAS};
 use mz_sql::parse::parse;
 use mz_sql::session::metadata::SessionMetadata;
+use mz_sql::session::vars::{APPLICATION_NAME, Var, VarInput};
 use mz_sql_parser::ast::display::{AstDisplay, escaped_string_literal};
 use mz_sql_parser::ast::visit::{self, Visit};
 use mz_sql_parser::ast::{Raw, RawItemName};
@@ -47,6 +48,7 @@ use thiserror::Error;
 use tracing::{debug, warn};
 
 use crate::http::AuthedClient;
+use crate::http::mcp_metrics::{McpMetrics, ToolCallGuard};
 use crate::http::sql::{SqlRequest, SqlResponse, SqlResult, execute_request};
 
 // To add a new tool: add entry to tools/list, add handler function, add dispatch case.
@@ -220,9 +222,6 @@ fn default_read_limit() -> u32 {
     500
 }
 
-/// Maximum number of rows that can be returned by read_data_product.
-const MAX_READ_LIMIT: u32 = 1000;
-
 #[derive(Debug, Deserialize)]
 struct QueryParams {
     cluster: String,
@@ -362,12 +361,20 @@ enum McpEndpointType {
     Developer,
 }
 
+impl McpEndpointType {
+    /// Static label for metrics. Avoids per-request allocation that would
+    /// come from going through `Display`.
+    fn as_label(self) -> &'static str {
+        match self {
+            McpEndpointType::Agent => "agent",
+            McpEndpointType::Developer => "developer",
+        }
+    }
+}
+
 impl std::fmt::Display for McpEndpointType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            McpEndpointType::Agent => write!(f, "agent"),
-            McpEndpointType::Developer => write!(f, "developer"),
-        }
+        f.write_str(self.as_label())
     }
 }
 
@@ -381,13 +388,14 @@ pub async fn handle_mcp_method_not_allowed() -> impl IntoResponse {
 pub async fn handle_mcp_agent(
     headers: HeaderMap,
     Extension(allowed_origins): Extension<Arc<Vec<HeaderValue>>>,
+    Extension(metrics): Extension<McpMetrics>,
     client: AuthedClient,
     Json(body): Json<McpRequest>,
 ) -> axum::response::Response {
     if let Some(resp) = validate_origin(&headers, &allowed_origins) {
         return resp;
     }
-    handle_mcp_request(client, body, McpEndpointType::Agent)
+    handle_mcp_request(client, body, McpEndpointType::Agent, metrics)
         .await
         .into_response()
 }
@@ -396,13 +404,14 @@ pub async fn handle_mcp_agent(
 pub async fn handle_mcp_developer(
     headers: HeaderMap,
     Extension(allowed_origins): Extension<Arc<Vec<HeaderValue>>>,
+    Extension(metrics): Extension<McpMetrics>,
     client: AuthedClient,
     Json(body): Json<McpRequest>,
 ) -> axum::response::Response {
     if let Some(resp) = validate_origin(&headers, &allowed_origins) {
         return resp;
     }
-    handle_mcp_request(client, body, McpEndpointType::Developer)
+    handle_mcp_request(client, body, McpEndpointType::Developer, metrics)
         .await
         .into_response()
 }
@@ -434,7 +443,17 @@ async fn handle_mcp_request(
     mut client: AuthedClient,
     request: McpRequest,
     endpoint_type: McpEndpointType,
+    metrics: McpMetrics,
 ) -> impl IntoResponse {
+    let endpoint_label = endpoint_type.as_label();
+    let method_label = request.method.to_string();
+    let record_request = |status: &str| {
+        metrics
+            .requests
+            .with_label_values(&[endpoint_label, &method_label, status])
+            .inc();
+    };
+
     // Check the per-endpoint feature flag via a catalog snapshot, similar to frontend_peek.rs.
     let catalog = client.client.catalog_snapshot("mcp").await;
     let dyncfgs = catalog.system_config().dyncfgs();
@@ -444,11 +463,26 @@ async fn handle_mcp_request(
     };
     if !enabled {
         debug!(endpoint = %endpoint_type, "MCP endpoint disabled by feature flag");
+        record_request("endpoint_disabled");
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
 
     let query_tool_enabled = ENABLE_MCP_AGENT_QUERY_TOOL.get(dyncfgs);
     let max_response_size = MCP_MAX_RESPONSE_SIZE.get(dyncfgs);
+
+    // Tag MCP-originated sessions so they're distinguishable in
+    // mz_session_history / mz_statement_execution_history. set_default lets a
+    // caller still override via `?options={"application_name":"..."}`
+    let app_name = match endpoint_type {
+        McpEndpointType::Agent => "mz_mcp_agents",
+        McpEndpointType::Developer => "mz_mcp_developer",
+    };
+    client
+        .client
+        .session()
+        .vars_mut()
+        .set_default(APPLICATION_NAME.name(), VarInput::Flat(app_name))
+        .expect("application_name is a known session var");
 
     let user = client.client.session().user().name.clone();
     let is_notification = request.id.is_none();
@@ -464,12 +498,17 @@ async fn handle_mcp_request(
     // Handle notifications (no response needed)
     if is_notification {
         debug!(method = %request.method, "Received notification (no response will be sent)");
+        record_request("ok");
         return StatusCode::OK.into_response();
     }
 
     let request_id = request.id.clone().unwrap_or(serde_json::Value::Null);
 
     // Spawn task for fault isolation, with a timeout safety net.
+    // `abort_on_drop` propagates the timeout to the task itself; without
+    // it the task orphans and the SQL query keeps running in the
+    // background after the client gives up.
+    let metrics_inner = metrics.clone();
     let result = tokio::time::timeout(
         MCP_REQUEST_TIMEOUT,
         mz_ore::task::spawn(|| "mcp_request", async move {
@@ -479,13 +518,15 @@ async fn handle_mcp_request(
                 endpoint_type,
                 query_tool_enabled,
                 max_response_size,
+                metrics_inner,
             )
             .await
-        }),
+        })
+        .abort_on_drop(),
     )
     .await;
 
-    let response = match result {
+    let (response, status_label): (McpResponse, &'static str) = match result {
         Ok(inner) => inner,
         Err(_elapsed) => {
             warn!(
@@ -493,7 +534,7 @@ async fn handle_mcp_request(
                 timeout = ?MCP_REQUEST_TIMEOUT,
                 "MCP request timed out",
             );
-            McpResponse {
+            let response = McpResponse {
                 jsonrpc: JSONRPC_VERSION.to_string(),
                 id: request_id,
                 result: None,
@@ -504,10 +545,12 @@ async fn handle_mcp_request(
                     ))
                     .into(),
                 ),
-            }
+            };
+            (response, "timeout")
         }
     };
 
+    record_request(status_label);
     (StatusCode::OK, Json(response)).into_response()
 }
 
@@ -517,7 +560,8 @@ async fn handle_mcp_request_inner(
     endpoint_type: McpEndpointType,
     query_tool_enabled: bool,
     max_response_size: usize,
-) -> McpResponse {
+    metrics: McpMetrics,
+) -> (McpResponse, &'static str) {
     // Extract request ID (guaranteed to be Some since notifications are filtered earlier)
     let request_id = request.id.clone().unwrap_or(serde_json::Value::Null);
 
@@ -527,10 +571,16 @@ async fn handle_mcp_request_inner(
         endpoint_type,
         query_tool_enabled,
         max_response_size,
+        &metrics,
     )
     .await;
 
-    match result {
+    let status_label = match &result {
+        Ok(_) => "ok",
+        Err(e) => e.error_type(),
+    };
+
+    let response = match result {
         Ok(result_value) => McpResponse {
             jsonrpc: JSONRPC_VERSION.to_string(),
             id: request_id,
@@ -552,7 +602,9 @@ async fn handle_mcp_request_inner(
                 error: Some(e.into()),
             }
         }
-    }
+    };
+
+    (response, status_label)
 }
 
 async fn handle_mcp_method(
@@ -561,6 +613,7 @@ async fn handle_mcp_method(
     endpoint_type: McpEndpointType,
     query_tool_enabled: bool,
     max_response_size: usize,
+    metrics: &McpMetrics,
 ) -> Result<McpResult, McpRequestError> {
     // Validate JSON-RPC version
     if request.jsonrpc != JSONRPC_VERSION {
@@ -585,6 +638,7 @@ async fn handle_mcp_method(
                 endpoint_type,
                 query_tool_enabled,
                 max_response_size,
+                metrics,
             )
             .await
         }
@@ -598,7 +652,13 @@ async fn handle_mcp_method(
 /// These guide the AI agent on how to use the server correctly.
 fn endpoint_instructions(endpoint_type: McpEndpointType) -> Option<String> {
     match endpoint_type {
-        McpEndpointType::Agent => None,
+        McpEndpointType::Agent => Some(concat!(
+            "You have access to Materialize data products via MCP. ",
+            "Prefer indexed objects (served from memory) over unindexed materialized views ",
+            "(read from persistent storage). Indexes are cluster-local; if a data product's ",
+            "cluster differs from your session, pass the `cluster` parameter to `read_data_product` ",
+            "so the index is actually used.",
+        ).to_string()),
         McpEndpointType::Developer => Some(concat!(
             "You are connected to the Materialize developer MCP server. ",
             "You have read-only access to system catalog tables (mz_*, pg_catalog, information_schema) ",
@@ -670,7 +730,7 @@ async fn handle_tools_list(
                 ToolDefinition {
                     name: "read_data_product".to_string(),
                     title: Some("Read Data Product".to_string()),
-                    description: format!("Read rows from a specific data product. Returns up to `limit` rows (default 500, max 1000). The data product must exist in the catalog (use get_data_products() to discover available products). Use this to retrieve actual data from a known data product. {size_hint}"),
+                    description: format!("Read rows from a specific data product. Returns up to `limit` rows (default 500). The data product must exist in the catalog (use get_data_products() to discover available products). Use this to retrieve actual data from a known data product. {size_hint}"),
                     input_schema: json!({
                         "type": "object",
                         "properties": {
@@ -680,7 +740,7 @@ async fn handle_tools_list(
                             },
                             "limit": {
                                 "type": "integer",
-                                "description": "Maximum number of rows to return (default 500, max 1000)",
+                                "description": "Maximum number of rows to return (default 500)",
                                 "default": 500
                             },
                             "cluster": {
@@ -750,8 +810,12 @@ async fn handle_tools_call(
     endpoint_type: McpEndpointType,
     query_tool_enabled: bool,
     max_response_size: usize,
+    metrics: &McpMetrics,
 ) -> Result<McpResult, McpRequestError> {
-    match (endpoint_type, params) {
+    // Drop-recording so metrics survive task cancellation.
+    let mut guard = ToolCallGuard::new(metrics, endpoint_type.as_label(), params.to_string());
+
+    let result = match (endpoint_type, params) {
         (McpEndpointType::Agent, ToolsCallParams::GetDataProducts(_)) => {
             get_data_products(client, max_response_size).await
         }
@@ -784,7 +848,14 @@ async fn handle_tools_call(
             "{} is not available on {} endpoint",
             tool, endpoint
         ))),
-    }
+    };
+
+    guard.set_status(match &result {
+        Ok(_) => "ok",
+        Err(e) => e.error_type(),
+    });
+
+    result
 }
 
 /// Execute SQL via `execute_request` from sql.rs.
@@ -943,17 +1014,19 @@ async fn read_data_product(
         return Err(McpRequestError::DataProductNotFound(name.to_string()));
     }
 
-    let clamped_limit = limit.min(MAX_READ_LIMIT);
-
+    // No row cap is applied here: the response is bounded by the size cap
+    // enforced in format_rows_response (MCP_MAX_RESPONSE_SIZE), and by
+    // max_result_size at the adapter layer. Mirrors the SQL HTTP endpoint,
+    // which also leans on a size cap rather than a row cap.
     let read_query = match cluster_override {
         Some(cluster) => format!(
             "BEGIN READ ONLY; SET CLUSTER = {}; SELECT * FROM {} LIMIT {}\n; COMMIT;",
             escaped_string_literal(cluster),
             safe_name,
-            clamped_limit,
+            limit,
         ),
         // Single statement — skip explicit transaction for better performance.
-        None => format!("SELECT * FROM {} LIMIT {}", safe_name, clamped_limit),
+        None => format!("SELECT * FROM {} LIMIT {}", safe_name, limit),
     };
 
     let rows = execute_sql(client, &read_query).await?;

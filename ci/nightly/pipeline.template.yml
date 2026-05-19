@@ -1097,6 +1097,18 @@ steps:
               composition: platform-checks
               args: [--scenario=UpgradeEntireMzFromPreviousSelfManaged, "--seed=$BUILDKITE_JOB_ID"]
 
+      - id: checks-v80-migration
+        label: "Checks upgrade v80 migration"
+        depends_on: build-x86_64
+        timeout_in_minutes: 60
+        parallelism: 4
+        agents:
+          queue: hetzner-x86-64-12cpu-24gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=UpgradeV80Migration, "--seed=$BUILDKITE_JOB_ID"]
+
       - id: checks-preflight-check-rollback
         label: "Checks preflight-check and roll back upgrade"
         depends_on: build-x86_64
@@ -2087,6 +2099,16 @@ steps:
               args: ["--versions-source=docs", "--self-managed-upgrade"]
         agents:
           queue: hetzner-aarch64-4cpu-8gb
+      - id: catalog-migration-incident-1007
+        label: "v80->v81 catalog migration fix (incident-1007)"
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: incident-1007
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+
 
   - group: Cloud
     key: cloudtests
@@ -2361,6 +2383,20 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: orchestratord
               run: orchestratord-upgrade
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
+      - id: orchestratord-oidc-auth
+        label: Orchestratord OIDC auth end-to-end
+        artifact_paths: ["mz_debug_*.zip"]
+        depends_on: devel-docker-tags
+        timeout_in_minutes: 60
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              run: oidc-auth
+              args: [--recreate-cluster]
               ci-builder: stable
         agents:
           queue: hetzner-aarch64-16cpu-32gb

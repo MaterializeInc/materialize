@@ -1121,6 +1121,13 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // too slow
     async fn forget_at() {
+        // Body is boxed because the debug-build async state machine for this
+        // test exceeds 2 MiB (~940 KiB single frame) and overflows the default
+        // tokio test thread stack.
+        Box::pin(forget_at_inner()).await
+    }
+
+    async fn forget_at_inner() {
         let client = PersistClient::new_for_tests().await;
         let mut txns = TxnsHandle::expect_open(client.clone()).await;
         let log = txns.new_log();

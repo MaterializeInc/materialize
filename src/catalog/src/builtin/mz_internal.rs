@@ -1431,7 +1431,8 @@ pub static MZ_RECENT_ACTIVITY_LOG: LazyLock<BuiltinView> = LazyLock::new(|| Buil
         ),
         (
             "finished_status",
-            "The final status of the statement (e.g., `success`, `canceled`, `error`, or `aborted`). `aborted` means that Materialize exited before the statement finished executing.",
+            "The final status of the statement (e.g., `success`, `canceled`, `error`, or `aborted`). \
+            `aborted` means that the client disconnected before the statement finished executing.",
         ),
         (
             "error_message",
@@ -1447,7 +1448,12 @@ pub static MZ_RECENT_ACTIVITY_LOG: LazyLock<BuiltinView> = LazyLock::new(|| Buil
         ),
         (
             "execution_strategy",
-            "For `SELECT` queries, the strategy for executing the query. `constant` means computed in the control plane without the involvement of a cluster, `fast-path` means read by a cluster directly from an in-memory index, and `standard` means computed by a temporary dataflow.",
+            "For `SELECT` statements (and similar statement types), the strategy for executing the query. \
+             `standard` means computed by a temporary dataflow, \
+             `fast-path` means read by a cluster directly from an in-memory index, \
+             `persist-fast-path` means read a source, table, or materialized view from blob storage (without an index or dataflow), \
+             and `constant` means computed in the control plane without the involvement of a cluster. \
+             (It's `NULL` for statements that errored/canceled/aborted and for non-query-like statement types.)",
         ),
         (
             "transaction_id",
@@ -1479,7 +1485,7 @@ pub static MZ_RECENT_ACTIVITY_LOG: LazyLock<BuiltinView> = LazyLock::new(|| Buil
         ),
         (
             "throttled_count",
-            "The number of statement executions that were dropped due to throttling before the current one was seen. If you have a very high volume of queries and need to log them without throttling, contact our team.",
+            "The number of statement executions dropped due to throttling between the previously logged statement and this one. If you have a very high volume of queries and need to log them without throttling, contact our team.",
         ),
         (
             "connected_at",
@@ -5271,7 +5277,7 @@ pub static MZ_MCP_DATA_PRODUCTS: LazyLock<BuiltinView> = LazyLock::new(|| Builti
         ),
         (
             "cluster",
-            "Cluster where the object computes or its index is hosted. The object can be read from any cluster.",
+            "Cluster where the object computes or its index is hosted. Reads from any cluster work, but only reads on this cluster benefit from the index.",
         ),
         (
             "description",
@@ -5326,7 +5332,7 @@ pub static MZ_MCP_DATA_PRODUCT_DETAILS: LazyLock<BuiltinView> = LazyLock::new(||
         ),
         (
             "cluster",
-            "Cluster where the object computes or its index is hosted. The object can be read from any cluster.",
+            "Cluster where the object computes or its index is hosted. Reads from any cluster work, but only reads on this cluster benefit from the index.",
         ),
         (
             "description",
@@ -5345,7 +5351,7 @@ SELECT * FROM (
         COALESCE(cts_idx.comment, cts_obj.comment) AS description,
         COALESCE(jsonb_build_object(
         'type', 'object',
-        'required', jsonb_agg(distinct ccol.name) FILTER (WHERE ccol.position = ic.on_position),
+        'indexedColumns', jsonb_agg(distinct ccol.name) FILTER (WHERE ccol.position = ic.on_position),
         'properties', jsonb_strip_nulls(jsonb_object_agg(
             ccol.name,
             CASE
@@ -5813,7 +5819,12 @@ FROM mz_internal.mz_show_object_privileges
 WHERE
     CASE
         WHEN grantee = 'PUBLIC' THEN true
-        ELSE pg_has_role(grantee, 'USAGE')
+        -- Semantically equivalent to pg_has_role(grantee, 'USAGE'), which checks
+        -- whether the current user holds role `grantee`. For a nonexistent grantee
+        -- name, both return false. We use mz_session_role_memberships() instead
+        -- because pg_has_role internally calls mz_role_oid_memberships(), which
+        -- loads the full system role graph and is blocked in restricted sessions.
+        ELSE grantee = ANY(mz_internal.mz_session_role_memberships())
     END"#,
     access: vec![PUBLIC_SELECT],
     ontology: None,

@@ -105,6 +105,7 @@ impl Coordinator {
         mut ctx: ExecuteContext,
         plan: Plan,
         resolved_ids: ResolvedIds,
+        sql_impl_resolved_ids: ResolvedIds,
     ) -> LocalBoxFuture<'_, ()> {
         async move {
             let responses = ExecuteResponse::generated_from(&PlanKind::from(&plan));
@@ -202,6 +203,7 @@ impl Coordinator {
                 &plan,
                 target_cluster_id,
                 &resolved_ids,
+                &sql_impl_resolved_ids,
             ) {
                 return ctx.retire(Err(e.into()));
             }
@@ -377,7 +379,11 @@ impl Coordinator {
                         } else {
                             self.serialized_ddl.push_back(DeferredPlanStatement {
                                 ctx,
-                                ps: PlanStatement::Plan { plan, resolved_ids },
+                                ps: PlanStatement::Plan {
+                                    plan,
+                                    resolved_ids,
+                                    sql_impl_resolved_ids,
+                                },
                             });
                             return;
                         }

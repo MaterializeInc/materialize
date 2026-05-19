@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::sync::Arc;
+
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
@@ -181,11 +183,13 @@ impl Coordinator {
 
         match fut {
             Some(fut) => {
+                let catalog = Arc::clone(&self.catalog);
                 let span = Span::current();
                 Ok(StageResult::Handle(mz_ore::task::spawn(
                     || "explain timestamp real time recency",
                     async move {
-                        let real_time_recency_ts = fut.await?;
+                        let real_time_recency_ts =
+                            Coordinator::await_real_time_recent_timestamp(catalog, fut).await?;
                         let stage = ExplainTimestampStage::Finish(ExplainTimestampFinish {
                             validity,
                             format,

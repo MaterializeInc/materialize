@@ -9179,6 +9179,12 @@ impl<'a> Parser<'a> {
     /// Parse a `EXECUTE` statement, assuming that the `EXECUTE` token
     /// has already been consumed.
     fn parse_execute(&mut self) -> Result<Statement<Raw>, ParserError> {
+        // Check if this is EXECUTE UNIT TEST
+        if self.parse_keywords(&[UNIT, TEST]) {
+            return self.parse_execute_unit_test();
+        }
+
+        // Otherwise parse as regular EXECUTE (prepared statement)
         let name = self.parse_identifier()?;
         let params = if self.consume_token(&Token::LParen) {
             let params = self.parse_comma_separated(Parser::parse_expr)?;
@@ -9188,6 +9194,97 @@ impl<'a> Parser<'a> {
             Vec::new()
         };
         Ok(Statement::Execute(ExecuteStatement { name, params }))
+    }
+
+    /// Parse an `EXECUTE UNIT TEST` statement, assuming that the
+    /// `EXECUTE UNIT TEST` tokens have already been consumed.
+    fn parse_execute_unit_test(&mut self) -> Result<Statement<Raw>, ParserError> {
+        // Parse test name
+        let name = self.parse_identifier()?;
+
+        // Expect FOR keyword
+        self.expect_keyword(FOR)?;
+
+        // Parse target view name
+        let target = self.parse_raw_name()?;
+
+        // Parse optional AT TIME clause
+        let at_time = if self.parse_keywords(&[AT, TIME]) {
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
+
+        // Parse MOCK definitions (0 or more). Like CTEs, MOCK clauses are
+        // comma-separated; no comma appears before the trailing `EXPECTED`
+        // clause.
+        let mut mocks = Vec::new();
+        if self.parse_keyword(MOCK) {
+            mocks.push(self.parse_mock_view_def()?);
+            while self.consume_token(&Token::Comma) {
+                self.expect_keyword(MOCK)?;
+                mocks.push(self.parse_mock_view_def()?);
+            }
+        }
+
+        self.expect_keyword(EXPECTED)?;
+
+        self.expect_token(&Token::LParen)?;
+        let expected_columns = self.parse_comma_separated(|parser| {
+            Ok(ColumnDef {
+                name: parser.parse_identifier()?,
+                data_type: parser.parse_data_type()?,
+                collation: None,
+                options: vec![],
+            })
+        })?;
+        self.expect_token(&Token::RParen)?;
+
+        self.expect_keyword(AS)?;
+        self.expect_token(&Token::LParen)?;
+        let expected_query = self.parse_query()?;
+        self.expect_token(&Token::RParen)?;
+
+        let expected = ExpectedResultDef {
+            columns: expected_columns,
+            query: expected_query,
+        };
+
+        Ok(Statement::ExecuteUnitTest(ExecuteUnitTestStatement {
+            name,
+            target,
+            at_time,
+            mocks,
+            expected,
+        }))
+    }
+
+    /// Parse a single `MOCK <name> (<cols>) AS (<query>)` definition,
+    /// assuming the leading `MOCK` keyword has already been consumed.
+    fn parse_mock_view_def(&mut self) -> Result<MockViewDef<Raw>, ParserError> {
+        let name = self.parse_raw_name()?;
+
+        self.expect_token(&Token::LParen)?;
+        let columns = self.parse_comma_separated(|parser| {
+            Ok(ColumnDef {
+                name: parser.parse_identifier()?,
+                data_type: parser.parse_data_type()?,
+                collation: None,
+                options: vec![],
+            })
+        })?;
+        self.expect_token(&Token::RParen)?;
+
+        self.expect_keyword(AS)?;
+        self.expect_token(&Token::LParen)?;
+        let query = self.parse_query()?;
+        self.expect_token(&Token::RParen)?;
+
+        Ok(MockViewDef {
+            name,
+            columns,
+            query,
+        })
     }
 
     /// Parse a `DEALLOCATE` statement, assuming that the `DEALLOCATE` token

@@ -5705,7 +5705,7 @@ dependencies = [
 
 [[package]]
 name = "mz-balancerd"
-version = "26.25.0-dev.0"
+version = "26.26.0-dev.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5842,7 +5842,7 @@ dependencies = [
 
 [[package]]
 name = "mz-catalog-debug"
-version = "26.25.0-dev.0"
+version = "26.26.0-dev.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -5994,7 +5994,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "26.25.0-dev.0"
+version = "26.26.0-dev.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -6043,6 +6043,7 @@ dependencies = [
  "columnar",
  "columnation",
  "core_affinity",
+ "criterion",
  "dec",
  "differential-dataflow",
  "differential-dogs3",
@@ -6070,6 +6071,7 @@ dependencies = [
  "prometheus",
  "proptest",
  "prost",
+ "rand 0.9.4",
  "scopeguard",
  "serde",
  "smallvec",
@@ -6289,7 +6291,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "26.25.0-dev.0"
+version = "26.26.0-dev.0"
 dependencies = [
  "anyhow",
  "askama",
@@ -6359,6 +6361,7 @@ dependencies = [
  "mz-pgwire",
  "mz-pgwire-common",
  "mz-prof-http",
+ "mz-prometheus-protobuf",
  "mz-repr",
  "mz-secrets",
  "mz-segment",
@@ -6657,6 +6660,7 @@ dependencies = [
  "http 1.4.0",
  "hyper 1.9.0",
  "include_dir",
+ "mime",
  "mz-ore",
  "prometheus",
  "serde",
@@ -6745,6 +6749,7 @@ dependencies = [
  "clap",
  "jsonwebtoken",
  "mz-aws-util",
+ "mz-ore",
  "pem",
  "serde",
  "serde_json",
@@ -6778,7 +6783,7 @@ dependencies = [
 
 [[package]]
 name = "mz-materialized"
-version = "26.25.0-dev.0"
+version = "26.26.0-dev.0"
 dependencies = [
  "custom-labels",
  "mz-clusterd",
@@ -6983,7 +6988,7 @@ dependencies = [
 
 [[package]]
 name = "mz-orchestratord"
-version = "26.25.0-dev.0"
+version = "26.26.0-dev.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7165,7 +7170,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "26.25.0-dev.0"
+version = "26.26.0-dev.0"
 dependencies = [
  "anyhow",
  "arrayvec 0.7.6",
@@ -7456,6 +7461,15 @@ dependencies = [
  "serde",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "mz-prometheus-protobuf"
+version = "0.0.0"
+dependencies = [
+ "mz-ore",
+ "prometheus",
+ "protobuf",
 ]
 
 [[package]]
@@ -8242,7 +8256,7 @@ dependencies = [
 
 [[package]]
 name = "mz-testdrive"
-version = "26.25.0-dev.0"
+version = "26.26.0-dev.0"
 dependencies = [
  "anyhow",
  "arrow",
@@ -8338,6 +8352,8 @@ dependencies = [
  "lgalloc",
  "mz-ore",
  "num-traits",
+ "proptest",
+ "rand 0.9.4",
  "serde",
  "timely",
  "tokio",
@@ -9788,6 +9804,7 @@ dependencies = [
  "lazy_static",
  "memchr",
  "parking_lot",
+ "protobuf",
  "thiserror 2.0.18",
 ]
 
@@ -9884,6 +9901,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "protobuf"
+version = "3.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d65a1d4ddae7d8b5de68153b48f6aa3bba8cb002b243dbdbc55a5afbc98f99f4"
+dependencies = [
+ "once_cell",
+ "protobuf-support",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "protobuf-native"
 version = "0.3.3+26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9902,6 +9930,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6217c3504da19b85a3a4b2e9a5183d635822d83507ba0986624b5c05b83bfc40"
 dependencies = [
  "cmake",
+]
+
+[[package]]
+name = "protobuf-support"
+version = "3.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e36c2f31e0a47f9280fb347ef5e461ffcd2c52dd520d8e216b52f93b0b0d7d6"
+dependencies = [
+ "thiserror 1.0.69",
 ]
 
 [[package]]

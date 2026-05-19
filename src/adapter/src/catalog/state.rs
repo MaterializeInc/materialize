@@ -914,31 +914,6 @@ impl CatalogState {
             .map(|id| &self.roles_by_id[id])
     }
 
-    /// Case-insensitive role lookup for JWT group-to-role sync.
-    ///
-    /// Groups from JWTs are lowercased during extraction. SQL role names are
-    /// stored as-is (unquoted identifiers are lowercased by the parser, but
-    /// quoted identifiers preserve case). This method iterates all roles to
-    /// find a case-insensitive match.
-    pub fn try_get_role_by_name_case_insensitive(&self, role_name: &str) -> Option<&Role> {
-        let lower = role_name.to_lowercase();
-        self.roles_by_name
-            .iter()
-            .find(|(name, _)| name.to_lowercase() == lower)
-            .map(|(_, id)| &self.roles_by_id[id])
-    }
-
-    /// Returns a map from lowercased role name to `Role` for all roles.
-    ///
-    /// Use this when doing multiple case-insensitive lookups (e.g. iterating
-    /// JWT group claims) to avoid O(n) per lookup.
-    pub fn roles_by_lowercase_name(&self) -> BTreeMap<String, &Role> {
-        self.roles_by_name
-            .iter()
-            .map(|(name, id)| (name.to_lowercase(), &self.roles_by_id[id]))
-            .collect()
-    }
-
     pub(super) fn get_role_auth(&self, id: &RoleId) -> &RoleAuth {
         self.role_auth_by_id
             .get(id)
@@ -1035,7 +1010,7 @@ impl CatalogState {
 
             let stmt = mz_sql::parse::parse(create_sql)?.into_element().ast;
             let (stmt, resolved_ids) = mz_sql::names::resolve(&session_catalog, stmt)?;
-            let plan =
+            let (plan, _sql_impl_ids) =
                 mz_sql::plan::plan(pcx, &session_catalog, stmt, &Params::empty(), &resolved_ids)?;
 
             Ok((plan, resolved_ids))
@@ -1051,7 +1026,8 @@ impl CatalogState {
     ) -> Result<(Plan, ResolvedIds), AdapterError> {
         let stmt = mz_sql::parse::parse(create_sql)?.into_element().ast;
         let (stmt, resolved_ids) = mz_sql::names::resolve(catalog, stmt)?;
-        let plan = mz_sql::plan::plan(pcx, catalog, stmt, &Params::empty(), &resolved_ids)?;
+        let (plan, _sql_impl_ids) =
+            mz_sql::plan::plan(pcx, catalog, stmt, &Params::empty(), &resolved_ids)?;
 
         Ok((plan, resolved_ids))
     }

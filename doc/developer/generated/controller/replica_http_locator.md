@@ -1,6 +1,6 @@
 ---
 source: src/controller/src/replica_http_locator.rs
-revision: 101efde02a
+revision: 8b77a4950e
 ---
 
 # controller::replica_http_locator

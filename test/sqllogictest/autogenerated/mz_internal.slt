@@ -58,11 +58,11 @@ params  text[]  The␠parameters␠with␠which␠the␠statement␠was␠execut
 mz_version  text  The␠version␠of␠Materialize␠that␠was␠running␠when␠the␠statement␠was␠executed.
 began_at  timestamp␠with␠time␠zone  The␠wall-clock␠time␠at␠which␠the␠statement␠began␠executing.
 finished_at  timestamp␠with␠time␠zone  The␠wall-clock␠time␠at␠which␠the␠statement␠finished␠executing.
-finished_status  text  The␠final␠status␠of␠the␠statement␠(e.g.,␠`success`,␠`canceled`,␠`error`,␠or␠`aborted`).␠`aborted`␠means␠that␠Materialize␠exited␠before␠the␠statement␠finished␠executing.
+finished_status  text  The␠final␠status␠of␠the␠statement␠(e.g.,␠`success`,␠`canceled`,␠`error`,␠or␠`aborted`).␠`aborted`␠means␠that␠the␠client␠disconnected␠before␠the␠statement␠finished␠executing.
 error_message  text  The␠error␠message,␠if␠the␠statement␠failed.
 result_size  bigint  The␠size␠in␠bytes␠of␠the␠result,␠for␠statements␠that␠return␠rows.
 rows_returned  bigint  The␠number␠of␠rows␠returned,␠for␠statements␠that␠return␠rows.
-execution_strategy  text  For␠`SELECT`␠queries,␠the␠strategy␠for␠executing␠the␠query.␠`constant`␠means␠computed␠in␠the␠control␠plane␠without␠the␠involvement␠of␠a␠cluster,␠`fast-path`␠means␠read␠by␠a␠cluster␠directly␠from␠an␠in-memory␠index,␠and␠`standard`␠means␠computed␠by␠a␠temporary␠dataflow.
+execution_strategy  text  For␠`SELECT`␠statements␠(and␠similar␠statement␠types),␠the␠strategy␠for␠executing␠the␠query.␠`standard`␠means␠computed␠by␠a␠temporary␠dataflow,␠`fast-path`␠means␠read␠by␠a␠cluster␠directly␠from␠an␠in-memory␠index,␠`persist-fast-path`␠means␠read␠a␠source,␠table,␠or␠materialized␠view␠from␠blob␠storage␠(without␠an␠index␠or␠dataflow),␠and␠`constant`␠means␠computed␠in␠the␠control␠plane␠without␠the␠involvement␠of␠a␠cluster.␠(It's␠`NULL`␠for␠statements␠that␠errored/canceled/aborted␠and␠for␠non-query-like␠statement␠types.)
 transaction_id  uint8  The␠ID␠of␠the␠transaction␠that␠the␠statement␠was␠part␠of.␠Note␠that␠transaction␠IDs␠are␠only␠unique␠per␠session.
 prepared_statement_id  uuid  An␠ID␠that␠is␠unique␠for␠each␠prepared␠statement.␠For␠example,␠if␠a␠statement␠is␠prepared␠once␠and␠then␠executed␠multiple␠times,␠all␠executions␠will␠have␠the␠same␠value␠for␠this␠column␠(but␠different␠values␠for␠`execution_id`).
 sql_hash  bytea  An␠opaque␠value␠uniquely␠identifying␠the␠text␠of␠the␠query.
@@ -70,7 +70,7 @@ prepared_statement_name  text  The␠name␠given␠by␠the␠client␠library�
 session_id  uuid  An␠ID␠that␠is␠unique␠for␠each␠session.␠Corresponds␠to␠mz_sessions.id.
 prepared_at  timestamp␠with␠time␠zone  The␠time␠at␠which␠the␠statement␠was␠prepared.
 statement_type  text  The␠_type_␠of␠the␠statement,␠e.g.␠`select`␠for␠a␠`SELECT`␠query,␠or␠`NULL`␠if␠the␠statement␠was␠empty.
-throttled_count  uint8  The␠number␠of␠statement␠executions␠that␠were␠dropped␠due␠to␠throttling␠before␠the␠current␠one␠was␠seen.␠If␠you␠have␠a␠very␠high␠volume␠of␠queries␠and␠need␠to␠log␠them␠without␠throttling,␠contact␠our␠team.
+throttled_count  uint8  The␠number␠of␠statement␠executions␠dropped␠due␠to␠throttling␠between␠the␠previously␠logged␠statement␠and␠this␠one.␠If␠you␠have␠a␠very␠high␠volume␠of␠queries␠and␠need␠to␠log␠them␠without␠throttling,␠contact␠our␠team.
 connected_at  timestamp␠with␠time␠zone  The␠time␠at␠which␠the␠session␠was␠established.
 initial_application_name  text  The␠initial␠value␠of␠`application_name`␠at␠the␠beginning␠of␠the␠session.
 authenticated_user  text  The␠name␠of␠the␠user␠for␠which␠the␠session␠was␠established.
@@ -317,14 +317,14 @@ query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_mcp_data_products' ORDER BY position
 ----
 object_name  text  Fully␠qualified␠object␠name␠(database.schema.name).
-cluster  text  Cluster␠where␠the␠object␠computes␠or␠its␠index␠is␠hosted.␠The␠object␠can␠be␠read␠from␠any␠cluster.
+cluster  text  Cluster␠where␠the␠object␠computes␠or␠its␠index␠is␠hosted.␠Reads␠from␠any␠cluster␠work,␠but␠only␠reads␠on␠this␠cluster␠benefit␠from␠the␠index.
 description  text  Index␠comment␠if␠available,␠otherwise␠object␠comment.␠Used␠as␠data␠product␠description.
 
 query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_mcp_data_product_details' ORDER BY position
 ----
 object_name  text  Fully␠qualified␠object␠name␠(database.schema.name).
-cluster  text  Cluster␠where␠the␠object␠computes␠or␠its␠index␠is␠hosted.␠The␠object␠can␠be␠read␠from␠any␠cluster.
+cluster  text  Cluster␠where␠the␠object␠computes␠or␠its␠index␠is␠hosted.␠Reads␠from␠any␠cluster␠work,␠but␠only␠reads␠on␠this␠cluster␠benefit␠from␠the␠index.
 description  text  Index␠comment␠if␠available,␠otherwise␠object␠comment.␠Used␠as␠data␠product␠description.
 schema  jsonb  JSON␠Schema␠describing␠the␠object's␠columns␠and␠types.
 

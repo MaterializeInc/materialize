@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/sink/materialized_view_v2.rs
-revision: 4d8deb2de7
+revision: 9a2394a9a5
 ---
 
 # mz-compute::sink::materialized_view_v2
@@ -23,6 +23,7 @@ Batch descriptions carry a round-robin `append_worker` assignment and are broadc
 
 Runs on all workers with desired and persist data exchanged by row hash so cancelling updates land on the same worker.
 Owns a `Correction` buffer per worker (managed by a Tokio `batch_writer` task) and coalesces all per-activation input data, frontier advances, and consolidation requests into a single `WriteCommand::Batch` per activation before sending it to the task.
+When `MV_SINK_ADVANCE_PERSIST_FRONTIERS` is enabled, both the Timely-side `persist_frontiers` and the Tokio-side `corrections.since` are initialized to `as_of` at startup; this keeps the two sides in lockstep and prevents snapshot-replay updates from slipping into a batch with a `lower` of `as_of`, which would otherwise trip persist's `UpdateNotBeyondLower` invariant.
 Once a batch description is ready and both the desired and persist frontiers have passed its bounds, the operator sends a `WriteCommand::WriteBatch` and waits for a `WriteResponse` containing the serialized `ProtoBatch`, which is forwarded downstream.
 
 ### append

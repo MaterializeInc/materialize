@@ -958,7 +958,7 @@ impl SessionClient {
             let (resolved_stmt, resolved_ids) =
                 mz_sql::names::resolve(&conn_catalog, (**stmt).clone())?;
             let pcx = session.pcx();
-            let plan = mz_sql::plan::plan(
+            let (plan, _sql_impl_ids) = mz_sql::plan::plan(
                 Some(pcx),
                 &conn_catalog,
                 resolved_stmt,

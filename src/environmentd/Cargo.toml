@@ -1,7 +1,7 @@
 [package]
 name = "mz-environmentd"
 description = "Manages a single Materialize environment."
-version = "26.25.0-dev.0"
+version = "26.26.0-dev.0"
 authors = ["Materialize, Inc."]
 license = "proprietary"
 edition.workspace = true
@@ -27,6 +27,7 @@ fail.workspace = true
 futures.workspace = true
 headers.workspace = true
 http.workspace = true
+http-body-util.workspace = true
 humantime.workspace = true
 hyper.workspace = true
 hyper-openssl.workspace = true
@@ -69,6 +70,7 @@ mz-pgrepr = { path = "../pgrepr" }
 mz-pgwire = { path = "../pgwire" }
 mz-pgwire-common = { path = "../pgwire-common" }
 mz-prof-http = { path = "../prof-http" }
+mz-prometheus-protobuf = { path = "../prometheus-protobuf" }
 mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
 mz-segment = { path = "../segment" }

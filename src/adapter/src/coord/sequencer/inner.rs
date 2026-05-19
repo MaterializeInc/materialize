@@ -20,7 +20,7 @@ use futures::{Future, StreamExt, future};
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
-use mz_adapter_types::dyncfgs::{ENABLE_MULTI_REPLICA_SOURCES, ENABLE_PASSWORD_AUTH};
+use mz_adapter_types::dyncfgs::ENABLE_PASSWORD_AUTH;
 use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{
     CatalogItem, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
@@ -64,7 +64,6 @@ use mz_sql::plan::{
 };
 use mz_sql::pure::{PurifiedSourceExport, generate_subsource_statements};
 use mz_storage_types::sinks::StorageSinkDesc;
-use mz_storage_types::sources::GenericSourceConnection;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_sql::plan::{
     AlterConnectionAction, AlterConnectionPlan, CreateSourcePlanBundle, ExplainSinkSchemaPlan,
@@ -96,7 +95,7 @@ use timely::progress::Antichain;
 use tokio::sync::{oneshot, watch};
 use tracing::{Instrument, Span, info, warn};
 
-use crate::catalog::{self, ConnCatalog, DropObjectInfo, UpdatePrivilegeVariant};
+use crate::catalog::{self, Catalog, ConnCatalog, DropObjectInfo, UpdatePrivilegeVariant};
 use crate::command::{ExecuteResponse, Response};
 use crate::coord::appends::{BuiltinTableAppendNotify, DeferredOp, DeferredPlan, PendingWriteTxn};
 use crate::coord::read_then_write::validate_read_then_write_dependencies;
@@ -300,50 +299,6 @@ impl Coordinator {
         {
             let name = plan.name.clone();
 
-            match plan.source.data_source {
-                plan::DataSourceDesc::Ingestion(ref desc)
-                | plan::DataSourceDesc::OldSyntaxIngestion { ref desc, .. } => {
-                    let cluster_id = plan
-                        .in_cluster
-                        .expect("ingestion plans must specify cluster");
-                    match desc.connection {
-                        GenericSourceConnection::Postgres(_)
-                        | GenericSourceConnection::MySql(_)
-                        | GenericSourceConnection::SqlServer(_)
-                        | GenericSourceConnection::Kafka(_)
-                        | GenericSourceConnection::LoadGenerator(_) => {
-                            if let Some(cluster) = self.catalog().try_get_cluster(cluster_id) {
-                                let enable_multi_replica_sources = ENABLE_MULTI_REPLICA_SOURCES
-                                    .get(self.catalog().system_config().dyncfgs());
-
-                                if !enable_multi_replica_sources && cluster.replica_ids().len() > 1
-                                {
-                                    return Err(AdapterError::Unsupported(
-                                        "sources in clusters with >1 replicas",
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                }
-                plan::DataSourceDesc::Webhook { .. } => {
-                    let cluster_id = plan.in_cluster.expect("webhook plans must specify cluster");
-                    if let Some(cluster) = self.catalog().try_get_cluster(cluster_id) {
-                        let enable_multi_replica_sources = ENABLE_MULTI_REPLICA_SOURCES
-                            .get(self.catalog().system_config().dyncfgs());
-
-                        if !enable_multi_replica_sources {
-                            if cluster.replica_ids().len() > 1 {
-                                return Err(AdapterError::Unsupported(
-                                    "webhook sources in clusters with >1 replicas",
-                                ));
-                            }
-                        }
-                    }
-                }
-                plan::DataSourceDesc::IngestionExport { .. } | plan::DataSourceDesc::Progress => {}
-            }
-
             // Attempt to reduce the `CHECK` expression, we timeout if this takes too long.
             if let mz_sql::plan::DataSourceDesc::Webhook {
                 validate_using: Some(validate),
@@ -408,7 +363,7 @@ impl Coordinator {
         let catalog = self.catalog().for_session(session);
         let resolved_ids = mz_sql::names::visit_dependencies(&catalog, &subsource_stmt);
 
-        let plan = self.plan_statement(
+        let (plan, _sql_impl_ids) = self.plan_statement(
             session,
             Statement::CreateSubsource(subsource_stmt),
             params,
@@ -569,8 +524,8 @@ impl Coordinator {
             &params,
             &resolved_ids,
         )? {
-            Plan::CreateSource(plan) => plan,
-            p => unreachable!("s must be CreateSourcePlan but got {:?}", p),
+            (Plan::CreateSource(plan), _sql_impl_ids) => plan,
+            (p, _) => unreachable!("s must be CreateSourcePlan but got {:?}", p),
         };
 
         let (item_id, global_id) = self.allocate_user_id().await?;
@@ -2359,6 +2314,32 @@ impl Coordinator {
         Ok(Some(r))
     }
 
+    pub(crate) async fn await_real_time_recent_timestamp<F>(
+        catalog: Arc<Catalog>,
+        fut: F,
+    ) -> Result<Timestamp, AdapterError>
+    where
+        F: Future<Output = Result<Timestamp, StorageError>>,
+    {
+        fut.await
+            .map_err(|error| Self::real_time_recent_timestamp_error(&catalog, error))
+    }
+
+    fn real_time_recent_timestamp_error(catalog: &Catalog, error: StorageError) -> AdapterError {
+        let rtr_name = |id: &GlobalId| {
+            catalog
+                .try_get_entry_by_global_id(id)
+                .map(|e| e.name().item.clone())
+                .unwrap_or_else(|| id.to_string())
+        };
+
+        match error {
+            StorageError::RtrTimeout(id) => AdapterError::RtrTimeout(rtr_name(&id)),
+            StorageError::RtrDropFailure(id) => AdapterError::RtrDropFailure(rtr_name(&id)),
+            error => error.into(),
+        }
+    }
+
     /// Checks to see if the session needs a real time recency timestamp and if so returns
     /// a future that will return the timestamp.
     pub(crate) async fn determine_real_time_recent_timestamp_if_needed(
@@ -3559,8 +3540,10 @@ impl Coordinator {
             )
             .map_err(|e| AdapterError::InvalidAlter("CONNECTION", e))?
             {
-                Plan::CreateConnection(plan) => plan,
-                _ => unreachable!("create source plan is only valid response"),
+                (Plan::CreateConnection(plan), _sql_impl_ids) => plan,
+                (p, _) => {
+                    unreachable!("create connection plan is only valid response, got {:?}", p)
+                }
             };
 
             // Parse statement.
@@ -3958,8 +3941,10 @@ impl Coordinator {
                 )
                 .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
                 let plan = match planned {
-                    Plan::CreateSource(plan) => plan,
-                    _ => unreachable!("create source plan is only valid response"),
+                    (Plan::CreateSource(plan), _sql_impl_ids) => plan,
+                    (p, _) => {
+                        unreachable!("create source plan is only valid response, got {:?}", p)
+                    }
                 };
 
                 // Asserting that we've done the right thing with dependencies
@@ -4600,8 +4585,13 @@ impl Coordinator {
             crate::coord::PlanStatement::Statement { stmt, params } => {
                 self.handle_execute_inner(stmt, params, ctx).await;
             }
-            crate::coord::PlanStatement::Plan { plan, resolved_ids } => {
-                self.sequence_plan(ctx, plan, resolved_ids).await;
+            crate::coord::PlanStatement::Plan {
+                plan,
+                resolved_ids,
+                sql_impl_resolved_ids,
+            } => {
+                self.sequence_plan(ctx, plan, resolved_ids, sql_impl_resolved_ids)
+                    .await;
             }
         }
     }

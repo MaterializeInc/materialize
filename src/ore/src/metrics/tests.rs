@@ -43,5 +43,5 @@ fn thirdparty_metric_vecs() {
     assert_eq!(readings[0].get_name(), "test_counter_third_party");
     let metrics = readings[0].get_metric();
     assert_eq!(metrics.len(), 1);
-    assert!((metrics[0].get_counter().get_value() - 1.0).abs() < f64::EPSILON);
+    assert!((metrics[0].get_counter().value() - 1.0).abs() < f64::EPSILON);
 }

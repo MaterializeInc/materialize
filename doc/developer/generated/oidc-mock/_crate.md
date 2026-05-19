@@ -1,6 +1,6 @@
 ---
 source: src/oidc-mock/src/lib.rs
-revision: 03db92b55b
+revision: fda8736965
 ---
 
 # mz-oidc-mock

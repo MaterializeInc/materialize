@@ -261,4 +261,35 @@ mod tests {
             .expect("host:port form should parse");
         assert!(ips.contains(&PUBLIC_V4.parse::<IpAddr>().unwrap()));
     }
+
+    #[crate::test]
+    fn ensure_url_ip_global_rejects_metadata_encodings() {
+        // Alternative encodings of 169.254.169.254 (AWS instance metadata).
+        // The WHATWG URL Standard (implemented by the `url` crate) normalizes
+        // decimal-integer, hex, octal, and mixed-notation IPv4 literals to
+        // dotted-decimal, so they all resolve to the same link-local address.
+        let evil_urls = [
+            "http://169.254.169.254/",
+            "http://2852039166/",
+            "http://0xa9fea9fe/",
+            "http://025177524776/",
+            "http://0251.0376.0251.0376/",
+            "http://0xa9.0xfe.0xa9.0xfe/",
+            "http://169.16689662/",
+            "http://169.254.0xa9fe/",
+            // IPv6 forms
+            "http://[::ffff:a9fe:a9fe]/",
+            "http://[::ffff:169.254.169.254]/",
+            // EC2 metadata alternate IPv6 (ULA range)
+            "http://[fd00:ec2::254]/",
+        ];
+        for raw in &evil_urls {
+            let url = url::Url::parse(raw).unwrap_or_else(|e| panic!("{raw} should parse: {e}"));
+            let result = ensure_url_ip_global(&url);
+            assert!(
+                matches!(result, Err(DnsResolutionError::PrivateAddress)),
+                "{raw} should be rejected as private, got {result:?}"
+            );
+        }
+    }
 }

@@ -1,6 +1,6 @@
 ---
 source: src/timely-util/src/columnar/consolidate.rs
-revision: b5e66703dc
+revision: a766b48485
 ---
 
 # timely-util::columnar::consolidate
@@ -9,7 +9,7 @@ Provides `ConsolidatingColumnBuilder<D, T, R>`, a `ContainerBuilder` that consol
 
 The builder uses two-level buffering:
 
-1. **AoS staging buffer** (`Vec<(D, T, R)>` with capacity `STAGING_CAP_ITEMS` = 16 384): incoming items are pushed here. When the buffer fills, `consolidate_and_drain` sorts and consolidates in-place using `consolidate_updates`, then drains a multiple-of-`DRAIN_GRAIN` (= 8 192) prefix so that the last in-progress consolidated key remains in staging for potential merging with the next batch.
+1. **AoS staging buffer** (`Vec<(D, T, R)>` with capacity computed by `default_staging_cap()` as `(2 * 8 KiB / size_of::<(D, T, R)>()).max(2)`, stored in `staging_cap`): incoming items are pushed here. When the buffer fills, `consolidate_and_drain` sorts and consolidates in-place using `consolidate_updates`, then drains a `staging_cap / 2` prefix so that the last in-progress consolidated key remains in staging for potential merging with the next batch.
 
 2. **SoA accumulator** (three separate columnar sub-containers, one per column): consolidated rows are drained from staging in chunks of `DRAIN_CHUNK_ROWS` = 16 rows, with three sequential per-column passes per chunk to enable autovectorization. After each chunk the serialized size is checked via `indexed::length_in_words`; once it reaches `FLUSH_THRESHOLD_WORDS` (90% of `OUTPUT_TARGET_WORDS` = 2 MiB), `flush_aligned` serializes the accumulator into an aligned `Vec<u64>` via `indexed::encode` and enqueues it as `Column::Align`.
 

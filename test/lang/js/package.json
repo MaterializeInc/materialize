@@ -19,6 +19,7 @@
     "prettier": "^2.0.4"
   },
   "resolutions": {
+    "@babel/plugin-transform-modules-systemjs": ">=7.29.4",
     "js-yaml": "^3.14.2",
     "lodash": ">=4.18.0"
   },

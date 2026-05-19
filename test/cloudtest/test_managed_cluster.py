@@ -117,7 +117,6 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
     mz.environmentd.sql(
         """
         ALTER SYSTEM SET enable_zero_downtime_cluster_reconfiguration = true;
-        ALTER SYSTEM SET enable_multi_replica_sources = true;
         """,
         port="internal",
         user="mz_system",

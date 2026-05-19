@@ -199,6 +199,9 @@ pub fn create_stmt_rename_refs(
         Statement::CreateSink(CreateSinkStatement { from, .. }) => {
             maybe_update_item_name(from.name_mut());
         }
+        Statement::CreateTableFromSource(CreateTableFromSourceStatement { source, .. }) => {
+            maybe_update_item_name(source.name_mut());
+        }
         Statement::CreateView(CreateViewStatement {
             definition: ViewDefinition { query, .. },
             ..
@@ -218,7 +221,6 @@ pub fn create_stmt_rename_refs(
         Statement::CreateSource(_)
         | Statement::CreateSubsource(_)
         | Statement::CreateTable(_)
-        | Statement::CreateTableFromSource(_)
         | Statement::CreateSecret(_)
         | Statement::CreateConnection(_)
         | Statement::CreateWebhookSource(_) => {}

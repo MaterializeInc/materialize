@@ -1,6 +1,6 @@
 ---
 source: src/compute-types/src/explain/text.rs
-revision: fec2af8da2
+revision: c6c5bfbbc2
 ---
 
 # compute-types::explain::text

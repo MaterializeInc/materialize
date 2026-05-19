@@ -13,6 +13,7 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{Arc, Mutex};
 
 use mz_repr::namespaces::is_system_schema;
 use mz_repr::{
@@ -117,6 +118,7 @@ pub fn describe(
         catalog,
         param_types: RefCell::new(param_types),
         ambiguous_columns: RefCell::new(false),
+        sql_impl_resolved_ids: Arc::new(Mutex::new(ResolvedIds::empty())),
     };
 
     let desc = match stmt {
@@ -254,6 +256,12 @@ pub fn describe(
             scl::describe_inspect_shard(&scx, stmt)?
         }
         Statement::ValidateConnection(stmt) => validate::describe_validate_connection(&scx, stmt)?,
+        Statement::ExecuteUnitTest(_) => {
+            return Err(PlanError::Unsupported {
+                feature: "EXECUTE UNIT TEST statement".to_string(),
+                discussion_no: None,
+            });
+        }
     };
 
     let desc = desc.with_params(scx.finalize_param_types()?);
@@ -283,7 +291,7 @@ pub fn plan(
     stmt: Statement<Aug>,
     params: &Params,
     resolved_ids: &ResolvedIds,
-) -> Result<Plan, PlanError> {
+) -> Result<(Plan, ResolvedIds), PlanError> {
     let param_types = params
         // We need the `expected_types` here, not the `actual_types`! This is because
         // `expected_types` is how the parameter expression (e.g. `$1`) looks "from the outside":
@@ -302,6 +310,7 @@ pub fn plan(
         catalog,
         param_types: RefCell::new(param_types),
         ambiguous_columns: RefCell::new(false),
+        sql_impl_resolved_ids: Arc::new(Mutex::new(ResolvedIds::empty())),
     };
 
     if resolved_ids
@@ -440,6 +449,12 @@ pub fn plan(
         Statement::Raise(stmt) => raise::plan_raise(scx, stmt),
         Statement::Show(ShowStatement::InspectShard(stmt)) => scl::plan_inspect_shard(scx, stmt),
         Statement::ValidateConnection(stmt) => validate::plan_validate_connection(scx, stmt),
+        Statement::ExecuteUnitTest(_) => {
+            return Err(PlanError::Unsupported {
+                feature: "EXECUTE UNIT TEST statement".to_string(),
+                discussion_no: None,
+            });
+        }
     };
 
     if let Ok(plan) = &plan {
@@ -451,7 +466,17 @@ pub fn plan(
         );
     }
 
-    plan
+    // Return the plan along with any resolved IDs accumulated from sql_impl
+    // function bodies. These are kept separate from the main resolved_ids
+    // because they are implementation details of the functions, not real
+    // dependencies of the statement. They should only be used for the
+    // restrict_to_user_objects RBAC check.
+    let sql_impl_ids = scx
+        .sql_impl_resolved_ids
+        .lock()
+        .expect("planning is single-threaded")
+        .clone();
+    plan.map(|p| (p, sql_impl_ids))
 }
 
 pub fn plan_copy_from(
@@ -509,6 +534,16 @@ pub struct StatementContext<'a> {
     /// Whether the statement contains an expression that can make the exact column list
     /// ambiguous. For example `NATURAL JOIN` or `SELECT *`. This is filled in as planning occurs.
     pub ambiguous_columns: RefCell<bool>,
+    /// Accumulates resolved IDs from SQL-implemented function bodies (`sql_impl_func`,
+    /// `sql_impl_table_func`). These are kept separate from the statement's main
+    /// `resolved_ids` because they are implementation details of the functions, not
+    /// real dependencies of the statement. They are only used for the
+    /// `restrict_to_user_objects` RBAC check.
+    ///
+    /// Uses `Arc<Mutex<_>>` so that cloned `StatementContext`s (as in `sql_impl`)
+    /// share the same underlying storage. `Arc` (vs `Rc`) is needed because
+    /// `StatementContext` must be `Send`.
+    pub sql_impl_resolved_ids: Arc<Mutex<ResolvedIds>>,
 }
 
 impl<'a> StatementContext<'a> {
@@ -521,6 +556,7 @@ impl<'a> StatementContext<'a> {
             catalog,
             param_types: Default::default(),
             ambiguous_columns: RefCell::new(false),
+            sql_impl_resolved_ids: Arc::new(Mutex::new(ResolvedIds::empty())),
         }
     }
 
@@ -1102,6 +1138,7 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::Raise(_) => Other,
             Statement::Show(ShowStatement::InspectShard(_)) => Other,
             Statement::ValidateConnection(_) => Other,
+            Statement::ExecuteUnitTest(_) => Other,
         }
     }
 }

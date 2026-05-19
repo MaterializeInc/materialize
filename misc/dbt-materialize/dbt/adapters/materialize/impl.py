@@ -38,6 +38,7 @@ from dbt.adapters.capability import (
 from dbt.adapters.events.logging import AdapterLogger
 from dbt.adapters.materialize.connections import MaterializeConnectionManager
 from dbt.adapters.materialize.exceptions import (
+    PartitionByConfigError,
     RefreshIntervalConfigError,
     RefreshIntervalConfigNotDictError,
 )
@@ -107,6 +108,7 @@ class MaterializeRefreshIntervalConfig(dbtClassMixin):
 @dataclass
 class MaterializeConfig(AdapterConfig):
     cluster: Optional[str] = None
+    partition_by: Optional[List[str]] = None
     refresh_interval: Optional[MaterializeRefreshIntervalConfig] = None
     retain_history: Optional[str] = None
 
@@ -194,6 +196,20 @@ class MaterializeAdapter(PostgresAdapter, SQLAdapter):
         self, raw_refresh_interval: Any
     ) -> Optional[MaterializeRefreshIntervalConfig]:
         return MaterializeRefreshIntervalConfig.parse(raw_refresh_interval)
+
+    @available
+    def parse_partition_by(self, raw_partition_by: Any) -> Optional[List[str]]:
+        # Materialize requires PARTITION BY columns to be a prefix of the
+        # relation's columns and to have order-preserving types. We don't
+        # duplicate those checks here; they are enforced server-side and
+        # produce clear errors. We only validate the shape of the config.
+        if raw_partition_by is None:
+            return None
+        if not isinstance(raw_partition_by, list) or not all(
+            isinstance(c, str) for c in raw_partition_by
+        ):
+            raise PartitionByConfigError(raw_partition_by)
+        return raw_partition_by or None
 
     def list_relations_without_caching(
         self, schema_relation: MaterializeRelation
