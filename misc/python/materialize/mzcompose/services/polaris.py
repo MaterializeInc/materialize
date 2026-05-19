@@ -24,7 +24,7 @@ class PolarisBootstrap(Service):
             "POLARIS_PERSISTENCE_TYPE=relational-jdbc",
             "QUARKUS_DATASOURCE_USERNAME=postgres",
             "QUARKUS_DATASOURCE_PASSWORD=postgres",
-            "QUARKUS_DATASOURCE_JDBC_URL=jdbc:postgresql://postgres:5432/postgres",
+            "QUARKUS_DATASOURCE_JDBC_URL=jdbc:postgresql://postgres:5432/polaris",
             "POLARIS_PERSISTENCE_RELATIONAL_JDBC_MAX_RETRIES=5",
             "POLARIS_PERSISTENCE_RELATIONAL_JDBC_INITIAL_DELAY_IN_MS=100",
             "POLARIS_PERSISTENCE_RELATIONAL_JDBC_MAX_DURATION_IN_MS=5000",
@@ -57,7 +57,7 @@ class Polaris(Service):
         environment: list[str] = [
             "QUARKUS_DATASOURCE_USERNAME=postgres",
             "QUARKUS_DATASOURCE_PASSWORD=postgres",
-            "QUARKUS_DATASOURCE_JDBC_URL=jdbc:postgresql://postgres:5432/postgres",
+            "QUARKUS_DATASOURCE_JDBC_URL=jdbc:postgresql://postgres:5432/polaris",
             "POLARIS_PERSISTENCE_TYPE=relational-jdbc",
             "POLARIS_PERSISTENCE_RELATIONAL_JDBC_MAX_RETRIES=5",
             "POLARIS_PERSISTENCE_RELATIONAL_JDBC_INITIAL_DELAY_IN_MS=100",

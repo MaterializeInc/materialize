@@ -19,6 +19,7 @@ from materialize.checks.mzcompose_actions import (
     ConfigureMz,
     KillClusterdCompute,
     KillMz,
+    SetupIcebergTesting,
     SetupSqlServerTesting,
     StartClusterdCompute,
     StartMz,
@@ -90,6 +91,7 @@ class Scenario:
             actions.insert(0, ConfigureMz(self))
 
         sql_server_testing_setup = False
+        iceberg_setup = self.base_version() < MzVersion.parse_mz("v26.10.0-dev")
         for index, action in enumerate(actions):
             # Implicitly call configure to raise version-dependent limits
             if isinstance(action, StartMz) and not action.deploy_generation:
@@ -103,6 +105,13 @@ class Scenario:
                         SetupSqlServerTesting(self, mz_service=action.mz_service),
                     )
                     sql_server_testing_setup = True
+                if not iceberg_setup:
+                    # Can only be run once
+                    actions.insert(
+                        index + 1,
+                        SetupIcebergTesting(self, mz_service=action.mz_service),
+                    )
+                    iceberg_setup = True
             elif isinstance(action, ReplaceEnvironmentdStatefulSet):
                 actions.insert(index + 1, ConfigureMz(self))
 
