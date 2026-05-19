@@ -2959,3 +2959,191 @@ The `prepare_state` jump at N=15k (0.08 → 1.25 ms/call) is also
 worth a look — that's
 `storage_collections.prepare_state(tx, create, drop, register)`,
 which calls `insert_collection_metadata` etc. on the durable txn.
+
+## Phase 10: drill into `CatalogState::apply_updates`
+
+Phase 9's `mz_catalog_transact_phase_seconds` split showed the residual
++5.81 ms/+5k slope at 10k→15k lives in the in-memory state-apply
+path inside `Catalog::transact`. The umbrella for all that work is
+`CatalogState::apply_updates`, called multiple times per transact
+(op_loop's per-op apply, `final_apply_updates`, `post_prepare_apply_updates`).
+We had no visibility into which sub-step of `apply_updates` was responsible.
+
+### Instrumentation (commit `00025cb9c2`)
+
+Two new histograms wired through `CatalogState`:
+
+* `mz_catalog_apply_updates_phase_seconds{phase}`: one observation
+  per `apply_updates` call for each of `consolidate_initial`,
+  `sort_per_group`, `apply_updates_inner`, `cleanup_notices`.
+* `mz_catalog_apply_update_kind_seconds{kind}`: one observation per
+  applied `StateUpdate`, labeled by `StateUpdateKind` variant (item,
+  schema, storage_collection_metadata, etc.). Per-update events wrap
+  the full `parse_state_update + generate_builtin_table_update +
+  apply_update` triplet, so the timing captures everything we do
+  for that update.
+
+### Results (phase 10 bench)
+
+`mz_catalog_apply_updates_phase_seconds` (ms/DDL):
+
+| phase                  | 5k    | 10k   | 15k   | slope (10→15) |
+|------------------------|------:|------:|------:|--------------:|
+| `apply_updates_inner`  | 3.23  | 5.58  | 7.52  | **+1.94**     |
+| `cleanup_notices`      | 0.02  | 0.02  | 0.02  | flat          |
+| `consolidate_initial`  | 0.01  | 0.01  | 0.01  | flat          |
+| `sort_per_group`       | 0.05  | 0.06  | 0.06  | flat          |
+
+The slope is concentrated entirely in `apply_updates_inner` — the
+kind-dispatched loop. `consolidate_initial` (per-call
+`consolidate_updates`) and `sort_per_group` are noise at these sizes.
+
+Per-kind split (`mz_catalog_apply_update_kind_seconds`):
+
+| kind                        | 5k        | 10k       | 15k       | slope (10→15) |
+|-----------------------------|----------:|----------:|----------:|--------------:|
+| `item`                      | 2.34 (4×586µs) | 4.21 (4×1051µs) | **5.75 (4×1436µs)** | **+1.54 ms/DDL** |
+| `storage_collection_metadata` | 0.34 (2×171µs) | 0.74 (2×371µs)  | 1.13 (2×567µs)  | +0.39 ms/DDL |
+| `audit_log`                 | 0.04      | 0.05      | 0.05      | flat          |
+| `unfinalized_shard`         | 0.01–0.06 | …         | …         | flat          |
+
+(Numbers in parens are `count/DDL × mean_per_event`.) Two findings:
+
+1. The dominant slope owner is **`StateUpdateKind::Item`**: +850 µs
+   per `apply_item_update`+`pack_item_update`+`parse_item_update`
+   triplet per +10k tables, on 4 calls/DDL. Accounts for ~80% of
+   the `apply_updates_inner` slope.
+
+2. **`storage_collection_metadata`** has a clean ~+200 µs per call
+   per +5k tables on 2 calls/DDL — consistent with full O(N) clone
+   of `StorageMetadata.collection_metadata` (a plain
+   `BTreeMap<GlobalId, ShardId>` wrapped in `Arc`). The
+   `preliminary_state`/`state` Cow pattern in `transact_inner`
+   forces `Arc::make_mut` to deep-clone this BTreeMap once per
+   independently-owned `CatalogState`.
+
+### Root cause hypothesis for the item slope
+
+`apply_item_update` Addition path is dominated by
+`with_enable_for_item_parsing` → `deserialize_item` → `insert_entry`.
+`insert_entry` calls `self.get_schema_mut(...)` which walks
+`database_by_id.get_mut(...).schemas_by_id.get_mut(...)` —
+both `imbl::OrdMap`s. `get_mut` on a shared `imbl::OrdMap` does
+path-copy of the affected B-tree leaf, **cloning every value in
+that leaf**, not just the targeted one.
+
+Critically, `Schema` (the leaf value type) embeds three
+*non-persistent* `BTreeMap`s:
+
+```rust
+pub struct Schema {
+    pub items: BTreeMap<String, CatalogItemId>,
+    pub functions: BTreeMap<String, CatalogItemId>,
+    pub types: BTreeMap<String, CatalogItemId>,
+    ...
+}
+```
+
+At N=15k the audit_pad schema's `items` map has 15k entries. The B-tree
+leaf containing audit_pad and audit_meas almost certainly fits in a
+single `imbl::OrdMap` chunk, so every `apply_item_update` (which
+mutates `audit_meas`, not `audit_pad`) path-copies that leaf and
+clones audit_pad's 15k-entry `BTreeMap` along the way. That's an
+O(N) memcpy+tree-build per call — exactly the shape of the
+observed slope.
+
+### Phase 11 plan
+
+Two surgical changes informed by the per-kind data:
+
+1. `Schema.items`/`functions`/`types`: `BTreeMap` → `imbl::OrdMap`.
+   Drop-in replacement (all callers already use ops common to both
+   types: `get`, `insert`, `remove`, `contains_key`, `is_empty`,
+   `len`, `values`, `iter`). `imbl::OrdMap` clones in O(1) (refcount
+   bump on a persistent tree root), turning the leaf-copy cost from
+   O(audit_pad.items.len()) into O(1).
+
+2. `StorageMetadata.{collection_metadata, unfinalized_shards}`:
+   `BTreeMap`/`BTreeSet` → `imbl::OrdMap`/`imbl::OrdSet`. Same
+   reasoning; this directly attacks the
+   `storage_collection_metadata` 200 µs/call slope.
+
+Re-bench in phase 11 should drive `item` mean back toward flat
+(N-independent constant) and zero-out the `storage_collection_metadata`
+slope.
+
+## Phase 11+12: the fixes land
+
+Both fixes from the phase 10 plan shipped on this branch:
+
+* `ad197b0bc3` — `catalog: switch Schema items/functions/types to imbl::OrdMap`
+* `4b6f5d171b` — `storage-client: switch StorageMetadata fields to imbl persistent collections`
+
+Re-bench at N=5k/10k/15k. Phase 10 here is the *pre-fix* baseline,
+phase 11 has only the Schema fix, phase 12 has both fixes:
+
+### Per-call cost in apply_updates_inner (mean µs/call)
+
+| kind                          | phase 10 (pre) | phase 11 (Schema only) | phase 12 (both) |
+|-------------------------------|---------------:|-----------------------:|----------------:|
+| `item` @ N=5k                 |   586          |   166                  |   164           |
+| `item` @ N=10k                |  1051          |   214                  |   200           |
+| `item` @ N=15k                |  1436          |   251                  |   242           |
+| `storage_collection_metadata` @ N=5k  | 171   |   181                  |     3.84        |
+| `storage_collection_metadata` @ N=10k | 371   |   344                  |     4.03        |
+| `storage_collection_metadata` @ N=15k | 567   |   523                  |     5.12        |
+
+* **item**: 1436 → 242 µs/call at N=15k (**−83%**). The per-call
+  slope across 5k→15k went from +850 µs to +78 µs — the
+  `audit_pad`-schema BTreeMap clone-via-leaf-copy is gone.
+* **storage_collection_metadata**: 567 → 5.12 µs/call at N=15k
+  (**−99%**). The per-call slope is gone entirely; what's left is
+  just the `Arc::make_mut` shallow clone of the StorageMetadata
+  struct itself (now O(1) because all its fields are persistent).
+
+### apply_updates_inner total (ms/DDL)
+
+| N     | phase 9 (consolidate only) | phase 10 (instrumented) | phase 11 (Schema) | phase 12 (both) |
+|-------|---------------------------:|------------------------:|------------------:|----------------:|
+|  5000 |  —                         | 3.23                    | 1.53              | **1.16**        |
+| 10000 |  —                         | 5.58                    | 2.11              | **1.31**        |
+| 15000 |  —                         | 7.52                    | 2.61              | **1.49**        |
+| slope (10→15)                       | **+1.94**          | +0.50            | **+0.18**       |
+
+apply_updates_inner slope at 10→15k went from +1.94 ms/+5k to
++0.18 ms/+5k — a **>90% reduction**. The phase 10 instrumentation
+attributed the slope; the phase 11/12 fixes erased it.
+
+### create_p50 end-to-end (ms)
+
+| N     | phase 7 | phase 9 | phase 10 | phase 11 | phase 12 | Δ from p7 |
+|-------|--------:|--------:|---------:|---------:|---------:|----------:|
+|  5000 | 33.57   | 31.34   | 32.88    | 32.29    | 32.43    | −1.14     |
+| 10000 | 39.82   | 38.70   | 38.26    | 35.87    | 35.81    | −4.01     |
+| 15000 | 48.93   | 44.51   | 43.87    | 42.91    | **42.84** | **−6.09** |
+| slope (10→15) | +9.11 | +5.81 | +5.61 | +7.04 | +7.03 |              |
+
+At N=15k, create_p50 is down 6.09 ms from the start of this branch
+(48.93 → 42.84). The 10→15k slope on the end-to-end metric stays
+noisy across runs (±2 ms per scale point), but the internal
+attribution is unambiguous: the two structural fixes erased the
+apply_updates_inner slope they targeted. Residual slope in
+create_p50 is now distributed across other transact phases (notably
+`prepare_state`, `op_loop`, `transact_inner` outer) — none of which
+have a single dominant N-scaling step on the magnitude of the two
+that just got fixed.
+
+### Pattern note
+
+Both fixes are the same shape: a struct held inline inside an
+`imbl::OrdMap<K, V>` had non-persistent (B-tree) collections as
+fields. Path-copy on the outer OrdMap leaf-clones the V, which
+deep-clones those collections.
+
+When putting a value type into an `imbl::OrdMap` (or behind an
+`Arc` that gets `make_mut`'d under sharing), prefer **persistent
+sub-collections** (`imbl::OrdMap`/`OrdSet`/`Vector`) for any field
+that can grow with the workload — otherwise the persistent outer
+structure silently loses its O(1) clone advantage to its first
+non-persistent inner field. This pattern is worth grep-flagging
+across the rest of the catalog and controller state types.
