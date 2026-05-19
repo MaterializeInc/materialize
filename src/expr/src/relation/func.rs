@@ -861,8 +861,14 @@ where
     I: IntoIterator<Item = Datum<'a>>,
 {
     let temp_storage = RowArena::new();
-    let iter =
-        lag_lead_const_no_list(datums, &temp_storage, order_by, ignore_nulls, offset, default);
+    let iter = lag_lead_const_no_list(
+        datums,
+        &temp_storage,
+        order_by,
+        ignore_nulls,
+        offset,
+        default,
+    );
     callers_temp_storage.make_datum(|packer| {
         packer.push_list(iter);
     })

@@ -2707,8 +2707,7 @@ impl AggregateExpr {
                     .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
 
                 // Extract the bare input value (no encoded-args record).
-                let input_value =
-                    tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
+                let input_value = tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
 
                 let (result_expr, column_name) = Self::on_unique_lag_lead_const(
                     *offset,
