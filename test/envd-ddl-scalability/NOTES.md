@@ -2830,3 +2830,132 @@ Of these, `tx_commit` is the highest-confidence O(N)-eliminator: it's
 a persist-shard apply, which we already know grows because the diff
 log grows. Compaction of the catalog shard should bound this — but
 only if compaction is keeping up.
+
+## 2026-05-19 — `tx_commit` phase split + consolidate fix
+
+Phase 7 attributed the +1.51 ms/+5k slope inside `tx_commit` (per call;
++3 ms/+5k per DDL since CREATE+DROP both hit this path) to the catalog
+durable commit. Phase 8 instrumented two sub-phase histograms inside
+the catalog persist crate:
+
+  `mz_catalog_commit_transaction_phase_seconds{phase}`
+    caa_fence_check / caa_encode / caa_persist_caa_inner /
+    caa_persist_compare_and_append / caa_since_downgrade / caa_post_sync
+
+  `mz_catalog_sync_phase_seconds{phase}`
+    listen_fetch / apply_updates / consolidate
+
+(All these histograms aggregate per `sync_inner` call: each sample is
+the total time spent in that phase across all listen events that one
+call processes. There are ~3 sync_inner calls per catalog
+tx_commit — one inside the CaA itself, one after, one from the
+`sync_updates(upper)` drain — and 2 tx_commits per DDL (CREATE +
+DROP), so `count/DDL` for the sync phases is ~6.)
+
+### Phase 8: consolidate is the slope owner
+
+Per DDL (sum across all sync_inner calls):
+
+| phase           | N=5k  | N=10k | N=15k | slope (+5k→10k / 10k→15k) |
+|-----------------|------:|------:|------:|---------------------------:|
+| listen_fetch    | 0.20  | 0.31  | 0.36  | +0.11 / +0.05              |
+| apply_updates   | 0.16  | 0.24  | 0.22  | flat                       |
+| **consolidate** | 3.82  |11.20  |14.37  | **+7.38 / +3.17 (slope)**  |
+
+`consolidate()` was running unconditionally at the end of every
+`sync_inner` call, doing O(N log N) work on the entire snapshot
+(15k+ entries at N=15k). It did this even when the sync only
+processed one timestamp adding ~5-10 entries — paying the full
+sort+dedup cost for a trivial delta.
+
+The doubling-threshold `maybe_consolidate` (added in #36233 to
+amortize this exact cost) was *never triggering* on the hot path
+because `sync_inner` reset `size_at_last_consolidation = None` at
+the top of every call. Resetting re-baselined the threshold against
+the current snapshot size, and a single DDL never grows the snapshot
+by 2× — so `maybe_consolidate` inside the loop did nothing, and the
+unconditional `self.consolidate()` after the loop ate the entire
+cost every time.
+
+### The fix (`00d31c5be5`)
+
+Two-line conceptual change in `sync_inner`:
+
+1. Drop `self.size_at_last_consolidation = None` at the top.
+   The doubling threshold is meant to amortize across the snapshot's
+   lifetime, not per `sync_inner` invocation.
+2. Replace the unconditional `self.consolidate()` at the end with
+   `self.maybe_consolidate()`.
+
+Result: `consolidate` only fires when the snapshot has actually
+doubled since the last consolidation, keeping memory bounded at 2×
+the consolidated size while making the typical per-call cost O(K log K)
+where K is the delta (not O(N log N) on every commit).
+
+The two existing tests still pass:
+ - `test_persist_sync_consolidation_not_quadratic` (asserts < 10
+   consolidations during a 100-ts sync) — still passes; with the
+   persistent threshold ~7 consolidations fire across the doubling
+   sweep.
+ - `test_persist_sync_snapshot_stays_bounded_under_churn` (200 DB
+   renames; asserts peak unconsolidated growth stays bounded) —
+   still passes; per-ts `maybe_consolidate` keeps growth bounded.
+
+### Phase 9: the fix lands
+
+Per-DDL `consolidate` time:
+
+| N     | pre-fix | post-fix |
+|-------|--------:|---------:|
+|  5000 |  3.82   | **0.00** |
+| 10000 | 11.20   | **0.00** |
+| 15000 | 14.37   | **0.00** |
+
+(0.00 because it never triggered — the snapshot at N=15k starts at
+~15k entries and the bench's 200 tx_commits add only ~2k more, which
+doesn't double the threshold.)
+
+`tx_commit` per call dropped to flat:
+
+| N     | pre-fix | post-fix |
+|-------|--------:|---------:|
+|  5000 |  2.92   | **1.24** |
+| 10000 |  4.03   | **1.13** |
+| 15000 |  5.54   | **1.13** |
+
+`create_p50` end-to-end:
+
+| N     | phase 7 (pre) | phase 9 (post) | savings |
+|-------|--------------:|---------------:|--------:|
+|  5000 | 33.57         | 31.34          | −2.23   |
+| 10000 | 39.82         | 38.70          | −1.12   |
+| 15000 | 48.93         | **44.51**      | **−4.42** |
+
+Slope at 10k→15k: **+9.11 → +5.81 ms/+5k tables (35% reduction)**.
+
+### What's left
+
+The residual slope (+5.81 ms/+5k at 10k→15k in create_p50) still lives
+in `Catalog::transact` but no longer in the durable-commit path. Phase 9
+attribution per call:
+
+| phase                   | N=5k  | N=15k | slope (10→15) |
+|-------------------------|------:|------:|--------------:|
+| `transact_inner` outer  | 2.20  | 6.74  | +2.68         |
+| `op_loop`               | 1.14  | 2.57  | +0.61         |
+| `final_apply_updates`   | 0.58  | 1.37  | +0.35         |
+| `prepare_state`         | 0.02  | 1.25  | +1.17 (jumped at 15k) |
+| `assign_state`          | 0.39  | 1.17  | +0.39         |
+| `tx_commit`             | 1.24  | 1.13  | flat (FIXED)  |
+
+The slope has moved entirely to the in-memory state-apply paths
+(`apply_updates` family) and `transact_inner` outer. Next iteration
+target: profile `CatalogState::apply_updates` — there's a per-update
+walk somewhere that scales with N. Likely candidates: `generate_builtin_table_update`
+for some StateUpdateKinds (e.g. shard mapping), or one of the
+`apply_*_update` arms that consults global state.
+
+The `prepare_state` jump at N=15k (0.08 → 1.25 ms/call) is also
+worth a look — that's
+`storage_collections.prepare_state(tx, create, drop, register)`,
+which calls `insert_collection_metadata` etc. on the durable txn.
