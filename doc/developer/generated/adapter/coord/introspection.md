@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/introspection.rs
-revision: 3df8ae2fd8
+revision: 92df2739a1
 ---
 
 # adapter::coord::introspection
