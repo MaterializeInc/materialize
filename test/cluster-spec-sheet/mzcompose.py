@@ -231,7 +231,6 @@ class ScenarioRunner:
         mode: str,
         connection: ConnectionHandler,
         results_writer: csv.DictWriter,
-        replica_size: Any,
         target: "BenchTarget",
     ) -> None:
         self.scenario = scenario
@@ -240,9 +239,11 @@ class ScenarioRunner:
         self.mode = mode
         self.connection = connection
         self.results_writer = results_writer
-        self.replica_size = replica_size
+        # Per-point fields populated by the scenario's `apply()` (cluster
+        # size and envd CPU count) before each `measure()` call.
+        self.replica_size: str | None = None
         self.target = target
-        self.envd_cpus: int | None = None  # Used only in QPS scenarios
+        self.envd_cpus: int | None = None
 
     def add_result(
         self,
@@ -252,7 +253,23 @@ class ScenarioRunner:
         size_bytes: int | None,
         time: float | None = None,
         qps: float | None = None,
+        time_ms: int | None = None,
+        healthy: int | None = None,
     ) -> None:
+        """Write one result row.
+
+        Pass either ``time`` (seconds) or ``time_ms`` (milliseconds, used
+        when the underlying value is already in ms — e.g. local-lag in the
+        cluster_object_limits scenario). ``healthy`` is recorded for
+        cluster_object_limits only; the extra column is silently dropped
+        on streams whose schema doesn't include it
+        (``csv.DictWriter(extrasaction="ignore")``).
+        """
+        assert (
+            time is None or time_ms is None
+        ), "pass `time` (seconds) or `time_ms`, not both"
+        if time_ms is None and time is not None:
+            time_ms = int(time * 1000)
         self.results_writer.writerow(
             {
                 "scenario": self.scenario,
@@ -265,8 +282,9 @@ class ScenarioRunner:
                 "envd_cpus": self.envd_cpus,
                 "repetition": repetition,
                 "size_bytes": size_bytes,
-                "time_ms": int(time * 1000) if time is not None else None,
+                "time_ms": time_ms,
                 "qps": qps,
+                "healthy": healthy,
             }
         )
 
@@ -2925,7 +2943,6 @@ class ClusterObjectLimitsScenario(Scenario):
         self,
         runner: ScenarioRunner,
         n: int,
-        replica_size: str,
         lag_threshold_ms: int,
         hydration_timeout_s: int,
         first_probe_hydration_timeout_s: int,
@@ -2953,22 +2970,13 @@ class ClusterObjectLimitsScenario(Scenario):
             f"N={n}: max_local_lag_ms={max_lag_ms:.1f} "
             f"reporting={reporting}/{total} healthy={healthy}"
         )
-        runner.results_writer.writerow(
-            {
-                "scenario": self.name(),
-                "scenario_version": self.VERSION,
-                "scale": n,
-                "mode": "cluster_object_limits",
-                "category": "freshness",
-                "test_name": "max_local_lag_ms",
-                "cluster_size": replica_size,
-                "envd_cpus": None,
-                "repetition": 0,
-                "size_bytes": None,
-                "time_ms": int(capped_lag_ms),
-                "qps": None,
-                "healthy": 1 if healthy else 0,
-            }
+        runner.add_result(
+            "freshness",
+            "max_local_lag_ms",
+            repetition=0,
+            size_bytes=None,
+            time_ms=int(capped_lag_ms),
+            healthy=1 if healthy else 0,
         )
         return healthy
 
@@ -2987,7 +2995,6 @@ class ClusterObjectLimitsScenario(Scenario):
             return self._probe_and_record(
                 runner,
                 n,
-                replica_size,
                 CLUSTER_OBJECT_LIMITS_LAG_THRESHOLD_MS,
                 CLUSTER_OBJECT_LIMITS_HYDRATION_TIMEOUT_S,
                 CLUSTER_OBJECT_LIMITS_FIRST_PROBE_HYDRATION_TIMEOUT_S,
@@ -3899,7 +3906,6 @@ def run_scenario(
         scenario.mode(),
         connection,
         results_writer,
-        replica_size=None,
         target=target,
     )
     scenario.prepare(runner)
