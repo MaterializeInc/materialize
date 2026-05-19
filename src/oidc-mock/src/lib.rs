@@ -16,7 +16,7 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::future::IntoFuture;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use axum::extract::State;
 use axum::routing::get;
@@ -24,7 +24,7 @@ use axum::{Json, Router};
 use base64::Engine;
 use jsonwebtoken::{EncodingKey, Header, encode};
 use mz_ore::now::NowFn;
-use mz_ore::task::JoinHandle;
+use mz_ore::task::AbortOnDropHandle;
 use openssl::pkey::{PKey, Private};
 use openssl::rsa::Rsa;
 use serde::{Deserialize, Serialize};
@@ -113,8 +113,12 @@ pub struct OidcMockServer {
     pub now: NowFn,
     /// How long tokens should be valid (in seconds).
     pub expires_in_secs: i64,
-    /// Handle to the server task.
-    pub handle: JoinHandle<Result<(), std::io::Error>>,
+    /// Handle to the server task. Aborts the task when dropped.
+    pub handle: AbortOnDropHandle<Result<(), std::io::Error>>,
+    /// Per-user group memberships. When set, `generate_jwt` auto-includes
+    /// the `groups` claim for any user with a registered group list.
+    /// Can be overridden by passing `extra_claims` in `GenerateJwtOptions`.
+    pub user_groups: Arc<Mutex<BTreeMap<String, Vec<String>>>>,
 }
 
 impl OidcMockServer {
@@ -176,7 +180,8 @@ impl OidcMockServer {
         );
         println!("oidc-mock listening...");
         println!(" HTTP address: {}", issuer);
-        let handle = mz_ore::task::spawn(|| "oidc-mock-server", server.into_future());
+        let handle =
+            mz_ore::task::spawn(|| "oidc-mock-server", server.into_future()).abort_on_drop();
 
         Ok(OidcMockServer {
             issuer,
@@ -185,10 +190,15 @@ impl OidcMockServer {
             now,
             expires_in_secs,
             handle,
+            user_groups: Arc::new(Mutex::new(BTreeMap::new())),
         })
     }
 
     /// Generates a JWT token for testing.
+    ///
+    /// If `opts.extra_claims` does not include a `"groups"` key and the user
+    /// has registered groups via [`Self::set_user_groups`], the groups are
+    /// automatically included as the `"groups"` claim.
     ///
     /// # Arguments
     ///
@@ -203,6 +213,23 @@ impl OidcMockServer {
             .into_iter()
             .map(|(k, v)| (k, serde_json::Value::String(v)))
             .collect();
+
+        // Auto-include groups from the registry unless the caller already
+        // provided a "groups" key in extra_claims.
+        let extra_has_groups = opts
+            .extra_claims
+            .as_ref()
+            .is_some_and(|e| e.contains_key("groups"));
+        if !extra_has_groups {
+            if let Some(groups) = self.user_groups.lock().unwrap().get(sub) {
+                let arr: serde_json::Value = groups
+                    .iter()
+                    .map(|g| serde_json::Value::String(g.clone()))
+                    .collect::<Vec<_>>()
+                    .into();
+                unknown_claims.insert("groups".to_string(), arr);
+            }
+        }
 
         if let Some(extra) = opts.extra_claims {
             unknown_claims.extend(extra);
@@ -220,6 +247,46 @@ impl OidcMockServer {
         header.kid = Some(self.kid.clone());
 
         encode(&header, &claims, &self.encoding_key).expect("failed to encode JWT")
+    }
+
+    /// Generates a JWT with an explicit `groups` claim.
+    ///
+    /// Shorthand for passing `groups` via [`GenerateJwtOptions::extra_claims`].
+    ///
+    /// # Arguments
+    ///
+    /// * `sub` - Subject (user identifier).
+    /// * `groups` - Group names to include in the `"groups"` claim.
+    pub fn generate_jwt_with_groups(&self, sub: &str, groups: &[&str]) -> String {
+        let groups_val: serde_json::Value = groups
+            .iter()
+            .map(|g| serde_json::Value::String(g.to_string()))
+            .collect::<Vec<_>>()
+            .into();
+        self.generate_jwt(
+            sub,
+            GenerateJwtOptions {
+                extra_claims: Some(BTreeMap::from([("groups".to_string(), groups_val)])),
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Registers the group memberships for a user.
+    ///
+    /// After calling this, [`Self::generate_jwt`] will automatically include the
+    /// `"groups"` claim for `sub` unless overridden by `extra_claims`.
+    /// Passing an empty slice clears all groups for the user.
+    pub fn set_user_groups(&self, sub: &str, groups: &[&str]) {
+        self.user_groups.lock().unwrap().insert(
+            sub.to_string(),
+            groups.iter().map(|s| s.to_string()).collect(),
+        );
+    }
+
+    /// Removes all registered group memberships for a user.
+    pub fn clear_user_groups(&self, sub: &str) {
+        self.user_groups.lock().unwrap().remove(sub);
     }
 
     /// Returns the JWKS URL for this server.

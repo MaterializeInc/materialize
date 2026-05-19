@@ -2299,7 +2299,8 @@ async fn test_auth_oidc_fetch_error() {
     );
 
     // Stop the OIDC server so the JWKS endpoint becomes unreachable.
-    oidc_server.handle.abort_and_wait().await;
+    // Dropping the server aborts the Axum task immediately via AbortOnDropHandle.
+    drop(oidc_server);
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
@@ -5858,4 +5859,73 @@ async fn test_oidc_group_sync_case_sensitive() {
         .expect("exact 'admin' group should grant SELECT on secrets");
     let val: String = rows[0].get(0);
     assert_eq!(val, "top-secret");
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method`
+async fn test_oidc_generate_jwt_with_groups() {
+    let (server, admin_client, oidc_server) = setup_group_sync_test().await;
+
+    let token = oidc_server.generate_jwt_with_groups(GROUP_SYNC_USER, &["analytics", "data_eng"]);
+    let _client = oidc_connect(&server, &token)
+        .await
+        .expect("login should succeed");
+
+    let role_names = fetch_user_role_memberships(&admin_client, GROUP_SYNC_USER).await;
+    assert_eq!(
+        role_names,
+        vec!["analytics", "data_eng"],
+        "generate_jwt_with_groups should grant the same roles as the raw extra_claims path"
+    );
+}
+
+/// Groups registered via `set_user_groups` are auto-included in `generate_jwt`
+/// without any `extra_claims`. Updating the registry and regenerating reflects
+/// the new groups. Clearing the registry suppresses the claim.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method`
+async fn test_oidc_set_user_groups_registry() {
+    let (server, admin_client, oidc_server) = setup_group_sync_test().await;
+
+    // Register groups for the user and generate a plain JWT (no extra_claims).
+    oidc_server.set_user_groups(GROUP_SYNC_USER, &["analytics", "platform_eng"]);
+    let token = oidc_server.generate_jwt(GROUP_SYNC_USER, GenerateJwtOptions::default());
+    let _client = oidc_connect(&server, &token)
+        .await
+        .expect("login should succeed with auto-injected groups");
+
+    let role_names = fetch_user_role_memberships(&admin_client, GROUP_SYNC_USER).await;
+    assert_eq!(
+        role_names,
+        vec!["analytics", "platform_eng"],
+        "groups from registry should be auto-included in JWT"
+    );
+
+    // Update the registry: only data_eng now. Reconnect and verify sync.
+    oidc_server.set_user_groups(GROUP_SYNC_USER, &["data_eng"]);
+    let token = oidc_server.generate_jwt(GROUP_SYNC_USER, GenerateJwtOptions::default());
+    let _client = oidc_connect(&server, &token)
+        .await
+        .expect("login should succeed after registry update");
+
+    let role_names = fetch_user_role_memberships(&admin_client, GROUP_SYNC_USER).await;
+    assert_eq!(
+        role_names,
+        vec!["data_eng"],
+        "updated registry should revoke old roles and grant new ones"
+    );
+
+    // Clear the registry: no groups claim in JWT → sync is skipped, roles preserved.
+    oidc_server.clear_user_groups(GROUP_SYNC_USER);
+    let token = oidc_server.generate_jwt(GROUP_SYNC_USER, GenerateJwtOptions::default());
+    let _client = oidc_connect(&server, &token)
+        .await
+        .expect("login should succeed with no groups claim");
+
+    let role_names = fetch_user_role_memberships(&admin_client, GROUP_SYNC_USER).await;
+    assert_eq!(
+        role_names,
+        vec!["data_eng"],
+        "missing groups claim should skip sync and preserve current roles"
+    );
 }
