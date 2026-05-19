@@ -141,6 +141,8 @@ pub struct Catalog {
     /// Set by the Coordinator after construction. `None` in tests / debug
     /// catalogs that don't bother wiring a metrics registry through.
     transact_phase_metrics: Option<prometheus::HistogramVec>,
+    apply_updates_phase_metrics: Option<prometheus::HistogramVec>,
+    apply_update_kind_metrics: Option<prometheus::HistogramVec>,
 }
 
 // Implement our own Clone because derive can't unless S is Clone, which it's
@@ -153,6 +155,8 @@ impl Clone for Catalog {
             storage: Arc::clone(&self.storage),
             transient_revision: self.transient_revision,
             transact_phase_metrics: self.transact_phase_metrics.clone(),
+            apply_updates_phase_metrics: self.apply_updates_phase_metrics.clone(),
+            apply_update_kind_metrics: self.apply_update_kind_metrics.clone(),
         }
     }
 }
@@ -163,6 +167,20 @@ impl Catalog {
     /// Without it, phase timing is silently skipped.
     pub fn set_transact_phase_metrics(&mut self, phase_metrics: prometheus::HistogramVec) {
         self.transact_phase_metrics = Some(phase_metrics);
+    }
+
+    /// Install a `HistogramVec` (label: `phase`) for sub-phase timing inside
+    /// `CatalogState::apply_updates`.
+    pub fn set_apply_updates_phase_metrics(&mut self, phase_metrics: prometheus::HistogramVec) {
+        self.state.set_apply_updates_phase_metrics(phase_metrics);
+        self.apply_updates_phase_metrics = self.state.apply_updates_phase_metrics().cloned();
+    }
+
+    /// Install a `HistogramVec` (label: `kind`) for per-update-kind timing
+    /// inside `CatalogState::apply_updates_inner`.
+    pub fn set_apply_update_kind_metrics(&mut self, phase_metrics: prometheus::HistogramVec) {
+        self.state.set_apply_update_kind_metrics(phase_metrics);
+        self.apply_update_kind_metrics = self.state.apply_update_kind_metrics().cloned();
     }
 
     /// Set the optimized plan for the item identified by `id`.

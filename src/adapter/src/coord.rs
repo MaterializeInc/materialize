@@ -4689,6 +4689,12 @@ pub fn serve(
                 }
 
                 catalog.set_transact_phase_metrics(metrics.catalog_transact_phase_seconds.clone());
+                catalog.set_apply_updates_phase_metrics(
+                    metrics.catalog_apply_updates_phase_seconds.clone(),
+                );
+                catalog.set_apply_update_kind_metrics(
+                    metrics.catalog_apply_update_kind_seconds.clone(),
+                );
 
                 let catalog = Arc::new(catalog);
 

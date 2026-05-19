@@ -173,6 +173,8 @@ impl Catalog {
             aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
             http_host_name: config.http_host_name,
             license_key: config.license_key,
+            apply_updates_phase_metrics: None,
+            apply_update_kind_metrics: None,
         };
 
         let deploy_generation = storage.get_deployment_generation().await?;
@@ -569,6 +571,8 @@ impl Catalog {
                 transient_revision: 1,
                 storage: Arc::new(tokio::sync::Mutex::new(storage)),
                 transact_phase_metrics: None,
+                apply_updates_phase_metrics: None,
+                apply_update_kind_metrics: None,
             };
 
             // Operators aren't stored in the catalog, but we would like them in

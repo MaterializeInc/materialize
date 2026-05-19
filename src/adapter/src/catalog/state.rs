@@ -187,6 +187,30 @@ pub struct CatalogState {
     // Read-only not derived from the durable catalog.
     #[serde(skip)]
     pub(super) license_key: ValidatedLicenseKey,
+
+    /// Installed by the Coordinator at startup to time sub-phases of
+    /// `apply_updates`. `None` in tests / debug catalogs.
+    #[serde(skip)]
+    pub(super) apply_updates_phase_metrics: Option<prometheus::HistogramVec>,
+    /// Installed by the Coordinator at startup to time individual update kinds
+    /// inside `apply_updates_inner`. `None` in tests / debug catalogs.
+    #[serde(skip)]
+    pub(super) apply_update_kind_metrics: Option<prometheus::HistogramVec>,
+}
+
+impl CatalogState {
+    pub fn set_apply_updates_phase_metrics(&mut self, phase_metrics: prometheus::HistogramVec) {
+        self.apply_updates_phase_metrics = Some(phase_metrics);
+    }
+    pub fn apply_updates_phase_metrics(&self) -> Option<&prometheus::HistogramVec> {
+        self.apply_updates_phase_metrics.as_ref()
+    }
+    pub fn set_apply_update_kind_metrics(&mut self, phase_metrics: prometheus::HistogramVec) {
+        self.apply_update_kind_metrics = Some(phase_metrics);
+    }
+    pub fn apply_update_kind_metrics(&self) -> Option<&prometheus::HistogramVec> {
+        self.apply_update_kind_metrics.as_ref()
+    }
 }
 
 /// Sub-classification of user connections that we maintain bucketed counts
@@ -372,6 +396,8 @@ impl CatalogState {
             storage_metadata: Arc::new(StorageMetadata::default()),
             license_key: ValidatedLicenseKey::for_tests(),
             mock_authentication_nonce: Default::default(),
+            apply_updates_phase_metrics: None,
+            apply_update_kind_metrics: None,
         }
     }
 
