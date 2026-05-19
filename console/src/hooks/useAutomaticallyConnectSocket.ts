@@ -19,7 +19,6 @@ import {
   ReconnectionState,
   WebsocketConnectionManager,
 } from "~/api/materialize/WebsocketConnectionManager";
-import { currentEnvironmentState } from "~/store/environments";
 
 // Atom for reconnection state - can be shared across components if needed
 export const reconnectionStateAtom = atom<ReconnectionState>({
@@ -74,27 +73,16 @@ export const useAutomaticallyConnectSocket = <T extends object, R>({
     };
   }, [target, store, getSessionVariablesRef]);
 
-  // Handle request changes for subscribe queries
-  const currentEnvironment = useAtomValue(currentEnvironmentState);
   const previousRequest = usePrevious(request);
 
   React.useEffect(() => {
     if (!subscribe || !request) return;
     if (previousRequest === request) return;
-    if (currentEnvironment?.state !== "enabled") return;
-
-    subscribe.connect(
-      request,
-      currentEnvironment.httpAddress,
-      getSessionVariablesRef.current?.({ hasEverConnected: false }),
-    );
-  }, [
-    subscribe,
-    request,
-    previousRequest,
-    currentEnvironment,
-    getSessionVariablesRef,
-  ]);
+    subscribe.setRequest(request);
+    // The manager owns the initial connect; only force a reconnect on changes.
+    if (previousRequest === undefined) return;
+    managerRef.current?.reconnect();
+  }, [subscribe, request, previousRequest]);
 
   return { reconnectionState };
 };

@@ -205,6 +205,33 @@ describe("WebsocketConnectionManager", () => {
       vi.advanceTimersByTime(5000);
       expect(mockTarget.reconnect).not.toHaveBeenCalled();
     });
+
+    it("does not start a second connect while a handshake is in progress", () => {
+      const store = getStore();
+      store.set(
+        environmentsWithHealth,
+        new Map([
+          ["aws/us-east-1", createHealthyEnvironment("localhost:6875")],
+        ]) as unknown as EnvironmentsWithHealth,
+      );
+
+      // Constructor starts a connect; handshake is still in progress.
+      manager = new WebsocketConnectionManager(
+        mockTarget,
+        store,
+        reconnectionStateAtom,
+      );
+      expect(mockTarget.reconnect).toHaveBeenCalledTimes(1);
+
+      // Overlapping reconnect is dropped while the handshake is in progress.
+      manager.reconnect();
+      expect(mockTarget.reconnect).toHaveBeenCalledTimes(1);
+
+      // Once the handshake completes, the next reconnect proceeds.
+      mockTarget.simulateOpen();
+      manager.reconnect();
+      expect(mockTarget.reconnect).toHaveBeenCalledTimes(2);
+    });
   });
 
   describe("destroy", () => {
