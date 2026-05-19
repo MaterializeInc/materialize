@@ -5613,6 +5613,67 @@ fn test_mcp_agent_with_data_product() {
     let rows: serde_json::Value = serde_json::from_str(rows_text).unwrap();
     assert_eq!(rows.as_array().unwrap().len(), 1);
 
+    // DEX-27: an MV whose home cluster is NOT the HTTP session's default
+    // (`quickstart`) must still be readable without the caller passing a
+    // `cluster` argument. Before the auto-routing change the read would
+    // execute against `quickstart`, missing the index. Reading without an
+    // override must still succeed and return the row.
+    {
+        let mut super_user = server
+            .pg_config_internal()
+            .user(&SYSTEM_USER.name)
+            .connect(postgres::NoTls)
+            .unwrap();
+        super_user
+            .batch_execute(
+                "CREATE CLUSTER dex27_other_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'))",
+            )
+            .unwrap();
+        super_user
+            .batch_execute(
+                "CREATE MATERIALIZED VIEW test_off_default IN CLUSTER dex27_other_cluster \
+                 AS SELECT 42::int AS id, 'off_default'::text AS name",
+            )
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "GRANT SELECT ON test_off_default TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "GRANT USAGE ON CLUSTER dex27_other_cluster TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+    }
+    // The MV was created after the cached `get_data_products` snapshot, so
+    // build the qualified name directly rather than re-querying.
+    let off_default_name = r#""materialize"."public"."test_off_default""#.to_string();
+    let (status, body) = mcp_post(
+        &agents_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 41,
+            "method": "tools/call",
+            "params": {
+                "name": "read_data_product",
+                "arguments": {"name": off_default_name, "limit": 10}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["error"].is_null(),
+        "no-override read on off-default cluster should auto-route, got: {body}",
+    );
+    let rows_text = body["result"]["content"][0]["text"].as_str().unwrap();
+    let rows: serde_json::Value = serde_json::from_str(rows_text).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 1);
+    assert_eq!(rows[0][0].as_str().unwrap(), "42");
+    assert_eq!(rows[0][1].as_str().unwrap(), "off_default");
+
     // read_data_product with limit 0 should return no rows.
     let (status, body) = mcp_post(
         &agents_url,
