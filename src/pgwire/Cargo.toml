@@ -20,6 +20,7 @@ csv-core.workspace = true
 enum-kinds.workspace = true
 futures.workspace = true
 itertools.workspace = true
+jsonwebtoken.workspace = true
 mz-adapter = { path = "../adapter" }
 mz-adapter-types = { path = "../adapter-types" }
 mz-auth = { path = "../auth", default-features = false }
