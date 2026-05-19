@@ -8390,6 +8390,7 @@ dependencies = [
  "differential-dataflow",
  "either",
  "futures-util",
+ "itertools 0.14.0",
  "lgalloc",
  "lz4_flex",
  "mz-ore",

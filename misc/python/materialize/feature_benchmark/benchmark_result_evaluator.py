@@ -51,7 +51,13 @@ class RelativeThresholdEvaluator(BenchmarkResultEvaluator[float | None]):
         return self.threshold_by_measurement_type[metric.measurement_type]
 
     def ratio(self, metric: BenchmarkScenarioMetric) -> float | None:
-        if metric._points[0] is None or metric._points[1] is None:
+        # `_points` has length 1 when the runner ran only the THIS side
+        # (e.g. `--skip-other`); there's no baseline to compare against.
+        if (
+            len(metric._points) < 2
+            or metric._points[0] is None
+            or metric._points[1] is None
+        ):
             return None
         else:
             return metric._points[0] / metric._points[1]
