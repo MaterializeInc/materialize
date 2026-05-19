@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { loadStripe } from "@stripe/stripe-js";
+import type { Stripe } from "@stripe/stripe-js";
 
 export const getLaunchDarklyKey = (consoleEnv: string) => {
   if (consoleEnv === "production") {
@@ -43,12 +43,16 @@ export const getSegmentApiKey = ({
   return "dGeQYRjmGVsqDI0KIARrAhTvk1BdJJhk";
 };
 
-export const getStripePromise = (consoleEnv: string) => {
-  if (consoleEnv === "production") {
-    // Production key
-    return loadStripe("pk_live_eILilEpJ7DCwmw9I4JHuBLEB001qSrxuw0");
-  }
-
-  // Stripe development key
-  return loadStripe("pk_test_XUB2NGLtbtzx9HQbTKlP1ZCw00FZqUgrXf");
+export const getStripePromise = async (
+  consoleEnv: string,
+): Promise<Stripe | null> => {
+  // Dynamic import keeps @stripe/stripe-js out of the main bundle; combined
+  // with the lazy getter on AppConfig.stripePromise, the Stripe.js script
+  // only loads when the billing route is visited.
+  const { loadStripe } = await import("@stripe/stripe-js");
+  const key =
+    consoleEnv === "production"
+      ? "pk_live_eILilEpJ7DCwmw9I4JHuBLEB001qSrxuw0"
+      : "pk_test_XUB2NGLtbtzx9HQbTKlP1ZCw00FZqUgrXf";
+  return loadStripe(key);
 };

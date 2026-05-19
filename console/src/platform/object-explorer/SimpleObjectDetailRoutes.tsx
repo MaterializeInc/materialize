@@ -18,8 +18,6 @@ import {
 import { ALLOWED_OBJECT_TYPES } from "~/api/materialize/workflowGraph";
 import { AppErrorBoundary } from "~/components/AppErrorBoundary";
 import { LoadingContainer } from "~/components/LoadingContainer";
-import { ShowCreateBlock } from "~/components/ShowCreateBlock";
-import WorkflowGraph from "~/components/WorkflowGraph/WorkflowGraph";
 import { useFlags } from "~/hooks/useFlags";
 import { MainContentContainer, Tab } from "~/layouts/BaseLayout";
 import { SentryRoutes } from "~/sentry";
@@ -36,6 +34,14 @@ import { useToastIfObjectNotExtant } from "./useToastIfObjectNotExtant";
 
 const DataflowVisualizer = React.lazy(
   () => import("~/platform/clusters/DataflowVisualizer"),
+);
+
+const ShowCreateBlock = React.lazy(
+  () => import("~/components/ShowCreateBlock"),
+);
+
+const WorkflowGraph = React.lazy(
+  () => import("~/components/WorkflowGraph/WorkflowGraph"),
 );
 
 const SIMPLE_OBJECTS_WITH_INDEXES = ["materialized-view", "view", "table"];
@@ -86,10 +92,12 @@ export const SimpleObjectDetailsContent = ({
           sourceType={object?.sourceType}
         />
         {canShowCreate && (
-          <ShowCreateBlock
-            {...databaseObject}
-            objectType={databaseObject.type as ShowCreateObjectType}
-          />
+          <React.Suspense fallback={<LoadingContainer />}>
+            <ShowCreateBlock
+              {...databaseObject}
+              objectType={databaseObject.type as ShowCreateObjectType}
+            />
+          </React.Suspense>
         )}
       </ObjectDetailsContainer>
     </MainContentContainer>
@@ -194,7 +202,11 @@ export const SimpleObjectDetailRoutes = () => {
         {shouldShowWorkflowGraph && (
           <Route
             path="workflow"
-            element={<WorkflowGraph focusedObjectId={id} />}
+            element={
+              <React.Suspense fallback={<LoadingContainer />}>
+                <WorkflowGraph focusedObjectId={id} />
+              </React.Suspense>
+            }
           />
         )}
         {shouldShowIndexes && (
