@@ -471,13 +471,24 @@ class Copy(PreImage):
 
     def run(self, prep: Any) -> None:
         super().run(prep)
-        for src in self.inputs():
-            dst = self.path / self.destination / src
+        source_prefix = f"{self.source}/"
+        for input in self.inputs():
+            # `inputs()` reports paths relative to the repository root so the
+            # mzbuild fingerprinter can locate them. Strip the source prefix
+            # before resolving the destination inside the build context.
+            assert input.startswith(source_prefix), (
+                f"Copy pre-image input {input!r} does not start with source "
+                f"{source_prefix!r}"
+            )
+            relative = input[len(source_prefix) :]
+            dst = self.path / self.destination / relative
             dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy(self.rd.root / self.source / src, dst)
+            shutil.copy(self.rd.root / input, dst)
 
     def inputs(self) -> set[str]:
-        return set(git.expand_globs(self.rd.root / self.source, self.matching))
+        # Paths are relative to the repository root so that
+        # `ResolvedImage.fingerprint` can resolve them via `rd.root / path`.
+        return set(git.expand_globs(self.rd.root, f"{self.source}/{self.matching}"))
 
 
 class CargoPreImage(PreImage):

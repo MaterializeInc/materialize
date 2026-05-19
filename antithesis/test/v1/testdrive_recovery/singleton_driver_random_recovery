@@ -1,0 +1,39 @@
+#!/usr/bin/env python3
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Antithesis area template — files chosen specifically because their
+# property is "the system survives and recovers from a perturbation."
+# Examples: source progress/recovery (`kafka-progress.td`), hydration
+# status (`hydration-status.td`), topic recreate (`kafka-recreate-topic.td`),
+# dataflow GC (`dataflow-cleanup.td`), sink progress (`kafka-sink-empty-
+# progress-topic.td`).
+#
+# This area deliberately overlaps with `testdrive_kafka` and
+# `testdrive_load_generator`: the split is for Antithesis triage attribution,
+# not exclusivity. Landing on a recovery-focused file via this template
+# means triage flags it as recovery work even when the same file might also
+# have been picked from another bucket.
+
+from helper_bootstrap import add_materialize_python_to_path
+
+add_materialize_python_to_path()
+
+from materialize.antithesis.sdk import random_choice
+from materialize.antithesis.td_runner import run_file
+from materialize.antithesis.testdrive_corpus import BASE_RECOVERY
+
+chosen = random_choice(BASE_RECOVERY)
+run_file(
+    f"/opt/materialize/td/testdrive/{chosen}",
+    source=(
+        "antithesis/testdrive_recovery/"
+        f"singleton_driver_random_recovery:{chosen}"
+    ),
+)

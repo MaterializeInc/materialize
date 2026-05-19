@@ -26,6 +26,7 @@ check_all_files_referenced_in_ci() {
         -not -wholename "./test/console/mzcompose.py" `# Only run manually` \
         -not -wholename "./test/mzcompose_examples/mzcompose.py" `# Example only` \
         -not -wholename "./test/get-cloud-hostname/mzcompose.py" `# Utility, no test` \
+        -not -path "./antithesis/configs/*/mzcompose.py" `# Submitted via snouty to Antithesis, not Buildkite` \
         | sed -e "s|.*/\([^/]*\)/mzcompose.py|\1|")
     while read -r composition; do
         if ! grep -q "composition: $composition" ci/*/pipeline.template.yml; then

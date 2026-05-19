@@ -1,0 +1,201 @@
+#!/usr/bin/env python3
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+"""Render `antithesis/configs/<scenario>/docker-compose.yaml` from the matching
+`antithesis/configs/<scenario>/mzcompose.py`.
+
+Why this is its own script (rather than an mzcompose workflow): `bin/mzcompose
+run <workflow>` acquires every mzbuild dependency image before invoking the
+workflow, which is wasteful when all we need is the rendered YAML. Calling
+`bin/mzcompose --find <scenario> config` directly resolves mzbuild image
+fingerprint tags without pulling.
+
+Pipeline:
+
+    1. `bin/mzcompose --find <scenario> --arch x86_64 config` produces
+       canonical compose YAML with mzbuild references resolved to ghcr.io tags
+       at the architecture Antithesis runs on (amd64).
+    2. Layer on the Antithesis-required attributes mzcompose does not emit:
+       `platform: linux/amd64`, matching `container_name` / `hostname`, and
+       `NO_COLOR=1` on every service.
+    3. Strip Docker Compose's host-port bindings. Antithesis runs hermetically;
+       host ports are noise and can collide on dev hosts.
+    4. Write `antithesis/configs/<scenario>/docker-compose.yaml`.
+
+Run via:
+
+    bin/pyactivate antithesis/bin/render-compose-yaml.py --scenario <name>
+
+`--scenario base` (the default) covers the SQL + Kafka topology. New scenarios
+live as sibling directories under `antithesis/configs/`; see
+`antithesis/scratchbook/scenario-strategy.md` for when to add one.
+"""
+
+from __future__ import annotations
+
+import argparse
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+from materialize import MZ_ROOT
+
+
+def render_compose(scenario: str) -> dict[str, Any]:
+    """Run `bin/mzcompose --find <scenario> config` and return the parsed YAML.
+
+    `--arch x86_64` pins the mzbuild fingerprint to the architecture
+    Antithesis runs on. Without it, image tags would track the host arch and
+    drift between dev machines (Apple Silicon, x86 CI, …).
+    """
+    bin_mzcompose = MZ_ROOT / "bin" / "mzcompose"
+    if not bin_mzcompose.exists():
+        raise SystemExit(f"bin/mzcompose not found at {bin_mzcompose}")
+
+    raw = subprocess.run(
+        [
+            str(bin_mzcompose),
+            "--mz-quiet",
+            "--arch",
+            "x86_64",
+            "--find",
+            scenario,
+            "config",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    return yaml.safe_load(raw)
+
+
+def decorate_for_antithesis(compose: dict[str, Any]) -> None:
+    """Add the attributes the Antithesis platform requires that mzcompose
+    does not emit by default.
+    """
+    services = compose.get("services", {})
+    for name, svc in services.items():
+        svc.setdefault("platform", "linux/amd64")
+        svc.setdefault("container_name", name)
+        svc.setdefault("hostname", name)
+        _ensure_no_color(svc)
+        _drop_host_ports(svc)
+
+
+def _ensure_no_color(svc: dict[str, Any]) -> None:
+    """Force `NO_COLOR=1` on the service's environment block.
+
+    Antithesis stores raw bytes from container output; ANSI escape sequences
+    appear as garbage in logs and triage. The list/dict branches both reflect
+    forms that mzcompose may emit (lists with `KEY=VALUE` strings and dict
+    forms after Compose canonicalizes).
+    """
+    env = svc.get("environment")
+    if env is None:
+        svc["environment"] = ["NO_COLOR=1"]
+    elif isinstance(env, list):
+        if not any(
+            entry == "NO_COLOR=1" or entry.startswith("NO_COLOR=") for entry in env
+        ):
+            env.append("NO_COLOR=1")
+    elif isinstance(env, dict):
+        env.setdefault("NO_COLOR", "1")
+
+
+def _drop_host_ports(svc: dict[str, Any]) -> None:
+    """Remove host-side port bindings so Antithesis runs hermetically.
+
+    Containers still talk to each other across the compose network — only the
+    `host_ip`/published port is removed. mzcompose adds these for local dev
+    convenience; in Antithesis they're noise (and can collide on host).
+    """
+    ports = svc.get("ports")
+    if not ports:
+        return
+    del svc["ports"]
+
+
+_COPYRIGHT_HEADER = """\
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Generated by antithesis/bin/render-compose-yaml.py — do not hand-edit.
+# Edit antithesis/configs/<scenario>/mzcompose.py and rerun:
+#   bin/pyactivate antithesis/bin/render-compose-yaml.py --scenario <name>
+"""
+
+
+def write_compose(compose: dict[str, Any], path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rendered = yaml.safe_dump(compose, sort_keys=False, default_flow_style=False)
+    path.write_text(_COPYRIGHT_HEADER + rendered)
+
+
+def _scenarios_dir() -> Path:
+    return MZ_ROOT / "antithesis" / "configs"
+
+
+def _available_scenarios() -> list[str]:
+    return sorted(
+        p.name
+        for p in _scenarios_dir().iterdir()
+        if p.is_dir() and (p / "mzcompose.py").exists()
+    )
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--scenario",
+        default="base",
+        help=(
+            "Antithesis scenario to render. Looks up "
+            "antithesis/configs/<scenario>/mzcompose.py and writes "
+            "antithesis/configs/<scenario>/docker-compose.yaml."
+        ),
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        help=(
+            "Override the default output path "
+            "(antithesis/configs/<scenario>/docker-compose.yaml)."
+        ),
+    )
+    args = parser.parse_args(argv)
+
+    scenario_dir = _scenarios_dir() / args.scenario
+    if not (scenario_dir / "mzcompose.py").exists():
+        available = ", ".join(_available_scenarios()) or "(none)"
+        raise SystemExit(
+            f"unknown scenario {args.scenario!r}: no mzcompose.py at "
+            f"{scenario_dir}. Available: {available}"
+        )
+
+    output = args.output or (scenario_dir / "docker-compose.yaml")
+
+    compose = render_compose(args.scenario)
+    decorate_for_antithesis(compose)
+    write_compose(compose, output)
+    print(f"wrote {output}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
