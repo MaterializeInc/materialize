@@ -1,6 +1,6 @@
 ---
 source: src/environmentd/src/http/mcp.rs
-revision: df9e016020
+revision: b395b12e3d
 ---
 
 # environmentd::http::mcp
@@ -14,3 +14,4 @@ Both endpoints' `initialize` responses include static usage instructions (via `e
 Both endpoints accept GET requests with a 405 Method Not Allowed response (via `handle_mcp_method_not_allowed`) and validate the `Origin` header against the CORS allowlist (injected as `Arc<Vec<HeaderValue>>` via Axum `Extension`) to prevent DNS rebinding attacks, rejecting origins not on the allowlist with 403 Forbidden. The CORS layer alone is insufficient because DNS rebinding causes the browser to treat the request as same-origin, bypassing preflight; the server-side check via `mz_http_util::origin_is_allowed` closes this gap.
 Enforces read-only SQL validation and AST-based system-table access control before executing queries; the developer endpoint allows SHOW and EXPLAIN statements without table references but rejects constant SELECT queries (e.g., `SELECT 1`) to prevent misuse for arbitrary computation.
 `McpRequestError` maps domain errors to standard JSON-RPC error codes.
+Prometheus metrics are collected via `McpMetrics` (injected as an Axum `Extension`): request counts labeled by endpoint, JSON-RPC method, and status; tool call counts and durations labeled by endpoint and tool name. `ToolCallGuard` is an RAII guard that records tool call duration and status on drop, ensuring metrics are recorded even when a future is dropped early (e.g. by a timeout).
