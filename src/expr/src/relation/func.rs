@@ -3594,7 +3594,11 @@ impl TableFunc {
                 } else if count > 1 {
                     Err(EvalError::MultipleRowsFromSubquery)
                 } else if count < 0 {
-                    Err(EvalError::NegativeRowsFromSubquery)
+                    Err(EvalError::MultiplicityError(crate::MultiplicityError {
+                        kind: crate::MultiplicityErrorKind::Negative,
+                        code_place: "scalar subquery".into(),
+                        detail: format!("count={count}").into(),
+                    }))
                 } else {
                     // This shouldn't happen because this is not an SQL `count` but an MIR `count`,
                     // which produces no output on 0 input rows.

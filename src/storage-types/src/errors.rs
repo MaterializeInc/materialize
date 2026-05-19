@@ -652,7 +652,6 @@ mod columnation {
                         | e @ EvalError::KeyCannotBeNull
                         | e @ EvalError::UnterminatedLikeEscapeSequence
                         | e @ EvalError::MultipleRowsFromSubquery
-                        | e @ EvalError::NegativeRowsFromSubquery
                         | e @ EvalError::LikePatternTooLong
                         | e @ EvalError::LikeEscapeTooLong
                         | e @ EvalError::MultidimensionalArrayRemovalNotSupported
@@ -873,6 +872,13 @@ mod columnation {
                         }
                         EvalError::RedactError(x) => {
                             EvalError::RedactError(self.string_region.copy(x))
+                        }
+                        EvalError::MultiplicityError(err) => {
+                            EvalError::MultiplicityError(mz_expr::MultiplicityError {
+                                kind: err.kind,
+                                code_place: self.string_region.copy(&err.code_place),
+                                detail: self.string_region.copy(&err.detail),
+                            })
                         }
                     };
                     let reference = self.eval_error_region.copy_iter(once(err));

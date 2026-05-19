@@ -207,7 +207,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     assert len(e.errors) > 0, "Exception contains no errors"
                     for error in e.errors:
                         # TODO(def-): Remove when database-issues#6825 is fixed
-                        if "Non-positive multiplicity in DistinctBy" in error.message:
+                        if (
+                            "non-positive record multiplicity in DistinctBy"
+                            in error.message
+                        ):
                             continue
                         if is_connection_error(error.message):
                             now = datetime.datetime.now(
@@ -226,7 +229,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 except CommandFailureCausedUIError as e:
                     msg = (e.stdout or "") + (e.stderr or "")
                     # TODO(def-): Remove when database-issues#6825 is fixed
-                    if "Non-positive multiplicity in DistinctBy" in msg:
+                    if "non-positive record multiplicity in DistinctBy" in msg:
                         continue
                     if is_connection_error(msg):
                         now = datetime.datetime.now(
