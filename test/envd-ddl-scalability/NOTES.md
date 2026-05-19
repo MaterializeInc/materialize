@@ -3147,3 +3147,117 @@ that can grow with the workload — otherwise the persistent outer
 structure silently loses its O(1) clone advantage to its first
 non-persistent inner field. This pattern is worth grep-flagging
 across the rest of the catalog and controller state types.
+
+## Sweep: other instances of the same pattern
+
+Read-only audit triggered by the pattern note above. Scope: every
+`imbl::OrdMap<K, V>` (or `Arc<imbl::OrdMap<...>>` / `Arc<Foo>` over
+something we `make_mut`) in `adapter`, `catalog`, `storage-client`,
+`storage-controller`, `compute-client`, `controller`. For each, ask:
+does the value type embed a non-persistent sub-collection that can
+grow with the workload, where path-copy / `make_mut` would deep-clone
+it?
+
+Findings, ranked by likely impact:
+
+### HIGH — same shape as the just-shipped fixes, in the same hot path
+
+**`Database.{schemas_by_id, schemas_by_name}`** (`src/catalog/src/memory/objects.rs:87`):
+
+```rust
+pub struct Database {
+    ...
+    pub schemas_by_id: BTreeMap<SchemaId, Schema>,
+    pub schemas_by_name: BTreeMap<String, SchemaId>,
+    ...
+}
+```
+
+`Database` lives inside `CatalogState.database_by_id: imbl::OrdMap<DatabaseId, Database>`.
+Every `get_schema_mut` call path-copies the database_by_id leaf →
+clones a `Database` → deep-clones `schemas_by_id`. That's a
+`BTreeMap<SchemaId, Schema>` clone — and since `Schema` now embeds
+three `imbl::OrdMap`s (post phase 11), each `Schema` shallow-clones
+in O(1), so the cost is `K` shallow-clones where `K` is the number
+of schemas in the database. For `materialize` that's ~5 (including
+`audit_pad`/`audit_meas`), so per-call this is small constant.
+
+But: `database_by_id.get_mut` happens on **every** apply_item_update,
+and that constant gets multiplied by 4 item-events per DDL plus the
+preliminary/state Cow split. Swapping to `imbl::OrdMap<SchemaId, Schema>`
+and `imbl::OrdMap<String, SchemaId>` is a drop-in change (callers use
+get / get_mut / insert / remove / iter / values — all common). Likely
+worth doing in the next pass; the fix is mechanically identical to
+the Schema/StorageMetadata fixes.
+
+### MEDIUM — grows with workload, not exercised by the audit_pad bench
+
+**`Cluster.bound_objects`** (`src/catalog/src/memory/objects.rs:352`):
+
+```rust
+pub struct Cluster {
+    ...
+    pub bound_objects: BTreeSet<CatalogItemId>,   // grows with N
+    pub replica_id_by_name_: BTreeMap<String, ReplicaId>,
+    pub replicas_by_id_: BTreeMap<ReplicaId, ClusterReplica>,
+    pub log_indexes: BTreeMap<LogVariant, GlobalId>,
+    ...
+}
+```
+
+`Cluster` lives inside `clusters_by_id: imbl::OrdMap<ClusterId, Cluster>`.
+`bound_objects` accumulates every MV / index / source / continual task
+bound to that cluster — for an MV-heavy workload on a single cluster,
+this can grow to thousands of entries. `insert_entry` does
+`clusters_by_id.get_mut(cluster_id).bound_objects.insert(...)` on
+every CREATE for any object that has a `cluster_id`, so the
+path-copy clones a sibling-set of Clusters, each cloning its
+`bound_objects` `BTreeSet`.
+
+Our bench (audit_pad of plain `CREATE TABLE`s, no cluster binding)
+doesn't exercise this — `Table::cluster_id()` returns `None`. So the
+slope is invisible here. Worth instrumenting next time we benchmark
+MV / index scale.
+
+**`Cluster.replica_id_by_name_` / `replicas_by_id_` / `log_indexes`**:
+small in practice (single-digit entries per cluster typically), but
+swapping is mechanically the same.
+
+### LOW — workload-dependent, mostly small in practice
+
+* `Role.{vars: RoleVars { map: BTreeMap }, membership: RoleMembership { map: BTreeMap }}`
+  in `roles_by_id: imbl::OrdMap<RoleId, Role>`. Per-role counts are
+  small (a few memberships, a few vars). Only matters if a deployment
+  has many roles with large memberships.
+* `SourceReferences.references: Vec<SourceReference>` in
+  `source_references: imbl::OrdMap<CatalogItemId, SourceReferences>`.
+  Grows with the number of references *of one source*, not with N
+  tables. Workload-specific.
+* `CatalogEntry.{referenced_by, used_by}: Vec<CatalogItemId>` in
+  `entry_by_id: imbl::OrdMap<CatalogItemId, CatalogEntry>`. Per-entry
+  usually small; `entry_by_id` itself has 15k+ entries, so each
+  `get_mut` leaf-clones ~16 sibling `CatalogEntry`s. The Vec clones
+  are cheap (`Copy` ids), but cloning `CatalogEntry.item: CatalogItem`
+  for unaffected siblings is real work — and for MaterializedView /
+  Index / ContinualTask items that carry optimized/physical plans
+  (#35834), that clone is expensive. Not exercised by the audit_pad
+  table bench, but a future MV-scale bench would surface this.
+* `notices_by_dep_id: imbl::OrdMap<GlobalId, Vec<Arc<OptimizerNotice>>>`:
+  `Vec<Arc<_>>` clones are shallow (refcount bumps). Cheap.
+
+### Recommended next step
+
+Land the `Database.schemas_by_id` / `schemas_by_name` swap (HIGH
+priority above). It's the same pattern, in the same hot path, with
+the same drop-in semantics — and the per-DDL constant gets
+multiplied by every `apply_item_update` event. Phases 11/12 fixed
+the inner layer (Schema's BTreeMaps); the database layer is its
+outer sibling.
+
+For the MEDIUM tier, the path forward is to design a real MV /
+index / source scale bench (audit_pad currently only stresses
+plain tables) and re-run the per-kind apply_updates timer. The
+existing `mz_catalog_apply_update_kind_seconds{kind}` histogram is
+the right tool — if `cluster` / `cluster_replica` / `system_object_mapping`
+kinds show a per-call slope, that's the signal to land the
+`Cluster.bound_objects` swap and friends.
