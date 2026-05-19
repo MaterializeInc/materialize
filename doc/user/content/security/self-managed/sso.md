@@ -33,17 +33,32 @@ Make sure you have:
 
 ## Step 1. Configure your identity provider
 
+{{< note >}}
+**Audience**: this step is typically performed by your IT or security team.
+The remaining steps (Step 2 onward) are performed by the Materialize
+infrastructure admin. When Step 1 is complete, hand off the following to the
+Materialize admin:
+
+- The OIDC **issuer URL**
+- The **client ID** for the console application
+- (If using service accounts) the client ID, client secret, and expected
+  audience for each service-account application
+{{</ note >}}
+
 Create an OIDC application in your identity provider and note the **issuer URL**
 and **client ID**. You will need these to configure Materialize.
 
-Set the redirect URI to:
+Set the following redirect URIs on the OIDC application:
 
 ```
 https://<your-console-domain>/auth/callback
+http://localhost:9876/callback
 ```
 
 Replace `<your-console-domain>` with the domain where your Materialize console
-is accessible.
+is accessible. The `http://localhost:9876/callback` URI is used by
+[`oauth2c`](#get-a-token-using-cli-tools) to fetch ID tokens from the command
+line; you can omit it if no one in your org will use the CLI flow.
 
 {{< tabs >}}
 {{< tab "Okta" >}}
@@ -63,7 +78,9 @@ additional applications in the [Service accounts](#service-accounts) section.
    - **Grant type**: Ensure **Authorization Code** is selected (PKCE is used
      automatically for single-page applications).
    - **Sign-in redirect URIs**: Enter
-     `https://<your-console-domain>/auth/callback`.
+     `https://<your-console-domain>/auth/callback`. If you want to use the
+     [CLI token flow](#get-a-token-using-cli-tools), also add
+     `http://localhost:9876/callback`.
    - **Sign-out redirect URIs**: Optionally, enter
      `https://<your-console-domain>/account/login`.
 
@@ -77,6 +94,9 @@ additional applications in the [Service accounts](#service-accounts) section.
 1. Go to **Security** > **API** and note your **Issuer URI** from the
    authorization server you want to use (e.g.,
    `https://your-org.okta.com/oauth2/default`).
+
+
+   **Custom domains:** When the authorization server **Issuer** is set to **Dynamic (based on Request Domain)**, Okta issues tokens whose `iss` claim uses your custom domain (for example, `https://sso.your-org.com/oauth2/default`) instead of the default Okta URL. Configure the `oidc_issuer` system parameter in Materialize to match that issuer value exactly.
 
 1. Go to the **Assignments** tab and assign the users or groups that should have
    access to Materialize.
@@ -123,7 +143,9 @@ additional applications in the [Service accounts](#service-accounts) section.
    - **Supported account types**: Select the appropriate option for your
      organization (typically **Accounts in this organizational directory only**).
    - **Redirect URI**: Select **Single-page application (SPA)** and enter
-     `https://<your-console-domain>/auth/callback`.
+     `https://<your-console-domain>/auth/callback`. After registration, you
+     can add `http://localhost:9876/callback` under **Authentication** if you
+     want to use the [CLI token flow](#get-a-token-using-cli-tools).
 
 1. Click **Register**.
 
@@ -161,7 +183,9 @@ additional applications in the [Service accounts](#service-accounts) section.
    (single-page application type) with the **Authorization Code** grant type
    and **PKCE** support.
 
-1. Set the redirect URI to `https://<your-console-domain>/auth/callback`.
+1. Set the redirect URI to `https://<your-console-domain>/auth/callback`. If
+   you want to use the [CLI token flow](#get-a-token-using-cli-tools), also
+   add `http://localhost:9876/callback`.
 
 1. Note the **client ID** and **issuer URL** provided by your identity provider.
    The issuer URL is typically the base URL of your identity provider's OIDC
@@ -176,6 +200,16 @@ additional applications in the [Service accounts](#service-accounts) section.
 
 {{< /tab >}}
 {{< /tabs >}}
+
+{{< note >}}
+**Handoff checklist**: before continuing to Step 2, the Materialize admin
+needs the following from whoever configured the IdP:
+
+- The OIDC **issuer URL**
+- The **client ID** for the console application
+- (If using service accounts) the client ID, client secret, and expected
+  audience for each service-account application
+{{</ note >}}
 
 ## Step 2. Enable OIDC authentication
 
@@ -349,26 +383,55 @@ ALTER SYSTEM SET console_oidc_scopes = 'openid email';
 
 To connect to Materialize using a SQL client like `psql`, you need an OIDC ID token and the `oidc_auth_enabled=true` connection option.
 
+If your client doesn't support OAuth, you can
+create a role with a SQL password instead. See [SQL password authentication](#sql-password-authentication-recommended-for-non-oauth-clients).
+
 {{< important >}}
 The `oidc_auth_enabled=true` connection option is **required** for OIDC
 authentication over the PostgreSQL wire protocol. Without it, Materialize
 defaults to password authentication.
 {{</ important >}}
 
-<!-- TODO (SangJunBak): Uncomment once v26.19 is released.
-### Get your token from the console
 
-The easiest way to get an ID token is through the Materialize console:
+### Get a token using CLI tools
 
-1. Sign in to the console via SSO.
-1. Click **Connect** in the navigation bar. The connection dialog displays your
-   ID token along with connection instructions.
-1. Copy the provided ID token.
+You can fetch an
+ID token from the command line using [`oauth2c`](https://github.com/cloudentity/oauth2c).
+This is useful when configuring a non-interactive client like dbt or Terraform.
 
-![Materialize console Connect dialog showing the ID
-token](/images/sso-connect-token.png "Materialize console Connect dialog
-with ID token")
--->
+1. **Confirm `http://localhost:9876/callback` is registered as a redirect URI**
+   on the console OIDC client (added in
+   [Step 1](#step-1-configure-your-identity-provider)). `oauth2c` listens on
+   this URL during the auth code exchange.
+
+1. **Install `oauth2c`.** On macOS:
+
+    ```shell
+    brew install cloudentity/tap/oauth2c
+    ```
+
+    Other platforms: see the
+    [`oauth2c` installation guide](https://github.com/cloudentity/oauth2c#installation).
+
+1. **Run `oauth2c` to fetch the ID token:**
+
+    ```shell
+    oauth2c <ISSUER_URL> \
+      --client-id <ISSUER_URL> \
+      --response-types code \
+      --response-mode form_post \
+      --grant-type authorization_code \
+      --pkce \
+      --scopes 'openid email' \
+      --auth-method none \
+      --silent | jq -r '.id_token'
+    ```
+
+    A browser window opens to complete the IdP login. After signing in,
+    `oauth2c` prints the ID token to stdout.
+
+ID tokens expire (typically within an hour). Re-run the command above when
+your token expires.
 
 ### Connect with psql
 
@@ -388,11 +451,6 @@ Materialize validates the token at **connection time only**. Once a connection
 is established, it persists until disconnected, regardless of token expiry.
 {{</ note >}}
 
-### Get a token using CLI tools
-
-You can also obtain an ID token outside the console using OIDC CLI tools such as
-[`oidc-agent`](https://indigo-dc.gitbook.io/oidc-agent) or
-[`oauth2c`](https://github.com/cloudentity/oauth2c).
 
 ## Auto-provisioned roles
 
@@ -434,9 +492,42 @@ Roles created through OIDC authentication will have `auto_provision_source` set 
 
 ## Service accounts
 
-For machine-to-machine access, you can use service accounts that authenticate
-via OIDC tokens. There are two approaches depending on what your identity
-provider supports.
+For machine-to-machine access, you have three options. Use **SQL password
+authentication** unless your service account specifically needs to
+authenticate against your IdP — in that case, use one of the OAuth flows
+([Resource Owner Password](#resource-owner-password-flow) or
+[Client Credentials](#client-credentials-flow)).
+
+### SQL password authentication (recommended for non-OAuth clients)
+
+The simplest way to give a service or application access to Materialize on an
+OIDC listener is to create a role with a SQL password.
+
+Use this approach when your client doesn't speak OAuth natively.
+
+1. As a user with the `CREATEROLE` privilege, create the role with a password:
+
+    ```mzsql
+    CREATE ROLE "svc-dbt" WITH LOGIN PASSWORD 'a-strong-password';
+    ```
+
+1. Grant the privileges this service account needs. See
+   [Manage database roles](/security/self-managed/access-control/manage-roles/)
+   for the full privilege model.
+
+1. Connect using the password directly:
+
+    ```shell
+    PGPASSWORD="a-strong-password" \
+    psql -h <materialize-host> -p 6875 -U svc-dbt materialize
+    ```
+
+For dbt-specific setup, see [dbt connection profiles](/manage/dbt/get-started/).
+For Terraform, see [Terraform: get started](/manage/terraform/get-started/).
+
+Use the OAuth-based flows below ([Resource Owner Password](#resource-owner-password-flow),
+[Client Credentials](#client-credentials-flow)) when youneed
+the service account to authenticate against your IdP.
 
 ### Resource Owner Password flow
 
