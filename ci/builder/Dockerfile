@@ -245,7 +245,6 @@ RUN mkdir rust \
     && cargo install --root /usr/local --version "=0.9.114" --locked cargo-nextest \
     && cargo install --root /usr/local --version "=0.6.21" --locked cargo-llvm-cov \
     && cargo install --root /usr/local --version "=0.1.60" --locked --features=vendored-openssl cargo-udeps \
-    && cargo install --root /usr/local --version "=0.12.0" --locked --no-default-features --features=s3,openssl/vendored sccache \
     && cargo install --root /usr/local --version "=0.4.0" --locked cargo-binutils \
     && cargo install --root /usr/local --version "=0.13.1" --locked wasm-pack \
     && rm -rf /cargo/registry /cargo/git
