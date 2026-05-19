@@ -273,19 +273,28 @@ kubectl logs -l app.kubernetes.io/name=materialize-operator -n materialize
 
 You may want to cancel an in-progress rollout if the upgrade has failed. This may be indicated by new pods not being healthy. Before cancelling, verify that the upgrade has not already completed by checking that the deploy generation (found via `status.activeGeneration`) is still the one from before the upgrade. Once an upgrade has already happened, you cannot revert using this method.
 
-To cancel an in-progress rollout and revert to the last completed rollout state, first retrieve the last rollout request ID from your Materialize CR:
+To cancel an in-progress rollout and revert to the last completed rollout
+state, revert both `requestRollout` and `environmentdImageRef` back to the
+values from the last completed rollout. Reverting `environmentdImageRef`
+alongside `requestRollout` keeps the spec aligned with what is actually
+running, so a later rollout doesn't accidentally pick up the previously
+attempted upgrade image.
+
+First, retrieve the last completed rollout request ID and the matching
+environmentd image ref from your Materialize CR:
 
 ```shell
-kubectl get materialize <instance-name> -n materialize-environment -o jsonpath='{.status.lastCompletedRolloutRequest}'
+kubectl get materialize <instance-name> -n materialize-environment \
+  -o jsonpath='{.status.lastCompletedRolloutRequest} {.status.lastCompletedRolloutEnvironmentdImageRef}'
 ```
 
-Then, set the `requestRollout` back to this value:
+Then, set both fields back to these values in a single patch:
 
 ```shell
 kubectl patch materialize <instance-name> \
   -n materialize-environment \
   --type='merge' \
-  -p "{\"spec\": {\"requestRollout\": \"<lastCompletedRolloutRequest-value>\"}}"
+  -p "{\"spec\": {\"requestRollout\": \"<lastCompletedRolloutRequest-value>\", \"environmentdImageRef\": \"<lastCompletedRolloutEnvironmentdImageRef-value>\"}}"
 ```
 
 ## Version Specific Upgrade Notes

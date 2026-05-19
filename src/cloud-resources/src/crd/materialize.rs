@@ -414,6 +414,20 @@ pub mod v1alpha1 {
                     .map_or_else(Uuid::nil, |status| status.last_completed_rollout_request)
         }
 
+        /// Returns the environmentd image ref of the currently-active
+        /// generation: the image of the last completed rollout, falling back
+        /// to the spec image when no rollout has completed yet. Downstream
+        /// resources (balancerd, console) should track this rather than
+        /// [`MaterializeSpec::environmentd_image_ref`] so they stay aligned
+        /// with the running environmentd when the spec is mid-rollout or has
+        /// been partially reverted (DEP-42).
+        pub fn active_environmentd_image_ref(&self) -> &str {
+            self.status
+                .as_ref()
+                .and_then(|s| s.last_completed_rollout_environmentd_image_ref.as_deref())
+                .unwrap_or(&self.spec.environmentd_image_ref)
+        }
+
         pub fn set_force_promote(&mut self) {
             self.spec.force_promote = self.spec.request_rollout;
         }
@@ -823,5 +837,66 @@ mod tests {
                 "v{active_version} can't upgrade to v{next_version}"
             );
         }
+    }
+
+    #[mz_ore::test]
+    fn active_environmentd_image_ref() {
+        use super::v1alpha1::MaterializeStatus;
+
+        const OLD: &str = "materialize/environmentd:v26.0.0";
+        const NEW: &str = "materialize/environmentd:v27.0.0";
+
+        let mz_with = |spec_image: &str, status: Option<MaterializeStatus>| Materialize {
+            spec: MaterializeSpec {
+                environmentd_image_ref: spec_image.to_owned(),
+                ..Default::default()
+            },
+            metadata: ObjectMeta::default(),
+            status,
+        };
+
+        // No status yet (pre-initial-reconcile): fall back to spec.
+        let mz = mz_with(NEW, None);
+        assert_eq!(mz.active_environmentd_image_ref(), NEW);
+
+        // Status present but last_completed_rollout_environmentd_image_ref
+        // unset (e.g. resource upgraded from older orchestratord that didn't
+        // populate the field): fall back to spec.
+        let mz = mz_with(
+            NEW,
+            Some(MaterializeStatus {
+                last_completed_rollout_environmentd_image_ref: None,
+                ..Default::default()
+            }),
+        );
+        assert_eq!(mz.active_environmentd_image_ref(), NEW);
+
+        // Steady state: spec image == last completed image. Either source is
+        // fine; the method must return that image.
+        let mz = mz_with(
+            NEW,
+            Some(MaterializeStatus {
+                last_completed_rollout_environmentd_image_ref: Some(NEW.to_owned()),
+                ..Default::default()
+            }),
+        );
+        assert_eq!(mz.active_environmentd_image_ref(), NEW);
+
+        // DEP-42 / mid-rollout: spec image == NEW but last_completed_* still
+        // holds OLD — either because the user canceled the rollout by
+        // reverting only requestRollout, or because the new generation has
+        // not yet been promoted. The active environmentd is still OLD, so
+        // downstream resources must track OLD. Without this method,
+        // balancerd would inherit the spec's NEW image while environmentd
+        // still runs OLD, leaving balancerd pods skewed from the running
+        // env.
+        let mz = mz_with(
+            NEW,
+            Some(MaterializeStatus {
+                last_completed_rollout_environmentd_image_ref: Some(OLD.to_owned()),
+                ..Default::default()
+            }),
+        );
+        assert_eq!(mz.active_environmentd_image_ref(), OLD);
     }
 }
