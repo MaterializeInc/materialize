@@ -141,7 +141,13 @@ export function useGlobalUpsertSubscribe<T extends object, R = SubscribeRow<T>>(
   React.useEffect(() => {
     const cleanup = subscribe.onChange(() => {
       const snapshot = subscribe.getSnapshot();
-      if (getStore().get(options.atom) === snapshot) return;
+      const current = getStore().get(options.atom);
+      if (current === snapshot) return;
+
+      // Hold cached atom data through a fresh manager's empty pre-snapshot state.
+      const snapshotIsEmptyPreload =
+        !snapshot.snapshotComplete && !snapshot.data.length && !snapshot.error;
+      if (snapshotIsEmptyPreload && current.data.length) return;
 
       setValue(snapshot);
     });

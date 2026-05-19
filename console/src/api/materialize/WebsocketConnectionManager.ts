@@ -81,6 +81,8 @@ export class WebsocketConnectionManager {
   private hasEverConnected = false;
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
   private initialized = false;
+  /** Set while a connect is mid-handshake. Reentry would strand the CONNECTING socket on Safari. */
+  private connectInFlight = false;
 
   private unsubscribeFromClose: (() => void) | undefined;
   private unsubscribeFromOpen: (() => void) | undefined;
@@ -148,17 +150,15 @@ export class WebsocketConnectionManager {
   private handleEnvironmentChange = () => {
     const currentEnvironment = this.getCurrentEnvironment();
     const nowHealthy = this.isEnvironmentHealthy(currentEnvironment);
-    const prevHealthy = this.isHealthy;
 
     this.isHealthy = nowHealthy;
 
-    // Update http address if environment is enabled
     if (currentEnvironment?.state === "enabled") {
       this.currentHttpAddress = currentEnvironment.httpAddress;
     }
 
     if (nowHealthy) {
-      if (!prevHealthy || !this.target.isConnected()) {
+      if (!this.target.isConnected()) {
         this.resumeConnection();
       }
     } else {
@@ -192,6 +192,7 @@ export class WebsocketConnectionManager {
   // --- Target event handlers ---
 
   private handleTargetClose = () => {
+    this.connectInFlight = false;
     if (this.isHealthy) {
       this.scheduleRetry();
     }
@@ -199,11 +200,17 @@ export class WebsocketConnectionManager {
   };
 
   private handleTargetOpen = () => {
+    this.connectInFlight = false;
     this.hasEverConnected = true;
     this.retryAttempt = 0;
     this.clearRetryTimer();
     this.notifyStateChange();
   };
+
+  /** Tear down and reopen the socket. Used on SQL request changes. */
+  reconnect() {
+    this.attemptConnection();
+  }
 
   // --- Retry scheduling ---
 
@@ -225,18 +232,18 @@ export class WebsocketConnectionManager {
   }
 
   private attemptConnection() {
-    if (this.target.isConnected()) return;
-    if (this.currentHttpAddress) {
-      const sessionVariables = this.options.getSessionVariables?.({
-        hasEverConnected: this.hasEverConnected,
-      });
-      try {
-        this.target.reconnect(this.currentHttpAddress, sessionVariables);
-      } catch {
-        // If the WebSocket constructor throws (e.g. network blocked),
-        // schedule another retry
-        this.scheduleRetry();
-      }
+    if (this.connectInFlight) return;
+    if (!this.currentHttpAddress) return;
+
+    const sessionVariables = this.options.getSessionVariables?.({
+      hasEverConnected: this.hasEverConnected,
+    });
+    this.connectInFlight = true;
+    try {
+      this.target.reconnect(this.currentHttpAddress, sessionVariables);
+    } catch {
+      this.connectInFlight = false;
+      this.scheduleRetry();
     }
   }
 

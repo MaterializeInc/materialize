@@ -141,6 +141,10 @@ export class SubscribeManager<T extends object, R> implements Connectable {
     );
   };
 
+  setRequest = (request: SqlRequest) => {
+    this.sqlRequest = request;
+  };
+
   disconnect = () => {
     clearInterval(this.flushIntervalHandle);
     this.socket.disconnect();
