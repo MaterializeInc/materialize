@@ -561,7 +561,9 @@ schema information.
 ## `mz_mcp_data_product_details`
 
 The `mz_mcp_data_product_details` view extends [`mz_mcp_data_products`](#mz_mcp_data_products)
-with a JSON Schema describing each data product's columns and types.
+with a JSON Schema describing each data product's columns and types, and a
+readiness summary that lets agents tell "still warming up" apart from
+"genuinely empty."
 
 <!-- RELATION_SPEC mz_internal.mz_mcp_data_product_details -->
 | Field         | Type     | Meaning                                                                                  |
@@ -570,6 +572,7 @@ with a JSON Schema describing each data product's columns and types.
 | `cluster`     | [`text`] | Cluster where the object computes or its index is hosted. Reads from any cluster work, but only reads on this cluster benefit from the index. |
 | `description` | [`text`] | Index comment if available, otherwise object comment. Used as data product description.   |
 | `schema`      | [`jsonb`]| JSON Schema describing the object's columns and types.                                   |
+| `hydration`   | [`jsonb`]| Readiness summary as a JSON object with `hydrated` (bool), `replica_count` (int), and `hydrated_replica_count` (int). `hydrated` is true only when the cluster has at least one replica and the dataflow is hydrated on every replica. Agents should back off and retry when `hydrated` is false rather than treating an empty read as final. |
 
 ## `mz_object_dependencies`
 
