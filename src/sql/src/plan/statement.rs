@@ -575,6 +575,18 @@ impl<'a> StatementContext<'a> {
         self.pcx.ok_or_else(|| sql_err!("no plan context"))
     }
 
+    /// Records resolved IDs from a SQL-implemented expression body (e.g. a SHOW
+    /// command's inner query or an EXPLAIN ANALYZE query) into the accumulator
+    /// checked by `restrict_to_user_objects`. These are kept separate from the
+    /// statement's main `resolved_ids` because they are implementation details,
+    /// not real dependencies.
+    pub(crate) fn record_sql_impl_ids(&self, ids: &ResolvedIds) {
+        self.sql_impl_resolved_ids
+            .lock()
+            .expect("planning is single-threaded")
+            .extend_from(ids);
+    }
+
     pub fn allocate_full_name(&self, name: PartialItemName) -> Result<FullItemName, PlanError> {
         let (database, schema): (RawDatabaseSpecifier, String) = match (name.database, name.schema)
         {
