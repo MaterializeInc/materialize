@@ -15,6 +15,88 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.24.2
+*Released to Materialize Self-Managed: 2026-05-18* <br>
+
+This patch release extends the v26.24.0 catalog migration repair to cover
+additional edge cases.
+
+### Bug Fixes {#v26.24.2-bug-fixes}
+
+- Extended the v26.24.0 catalog migration repair to also clear residual
+  negative multiplicities and normalize Role rows still stored in the
+  pre-v81 byte form.
+
+## v26.24.1
+*Released to Materialize Cloud: 2026-05-14 on as-needs basis* <br>
+
+This patch release adds configurable Kafka sink message and batch size limits.
+
+### Improvements {#v26.24.1-improvements}
+Configurable Kafka sink size limits: The maximum size of individual Kafka sink messages and message batches can now be configured beyond their previous defaults.
+
+## v26.24.0
+*Released to Materialize Cloud: 2026-05-14* <br>
+
+This release introduces the built-in MCP server for agents, improvements, and
+bug fixes.
+
+### MCP Server for Agents
+
+{{< public-preview />}}
+
+Give your agents fresh context using Materialize. Materialize environments now
+include a built-in Model Context Protocol (MCP) [server for agents
+(`/api/mcp/agent`)](/integrations/mcp-server/mcp-agent/). Once connected, an
+agent can discover your data products, understand the underlying data ontology,
+and run queries to fetch fresh data.
+
+Agents can discover [materialized views](/sql/create-materialized-view/) or [indexed](/sql/create-index/) views. You can use [comments](/sql/comment-on/) to document the data products, and describe them to agents. Agents authenticate as [roles](/sql/create-role/) in Materialize, so [RBAC privileges](/manage/access-control/) govern which data products are visible. Finally, you can set up a dedicated [cluster](/concepts/clusters/) for your agents, so they're isolated from the rest of your environment.
+
+The MCP server for agents complements the [MCP server for
+developers](/integrations/mcp-server/mcp-developer/) released in v26.20.2. The
+developer server gives coding agents (like Claude Code) access to Materialize's
+observability so you can build on Materialize faster; the agent server gives
+production agents fresh, governed context from your data products.
+
+For more information, refer to:
+- [Integrations: MCP Server for Agents](/integrations/mcp-server/mcp-agent/)
+
+### Improvements {#v26.24-improvements}
+
+- **`dbt-materialize` connection overrides**: The dbt adapter now supports
+  passing custom connection options via the `options` field in `profiles.yml`,
+  enabling OIDC authentication and other advanced connection configurations.
+- **`COPY FROM` rejects HTTP redirects**: `COPY FROM` now returns a clear error
+  if the target URL responds with an HTTP redirect, preventing unexpected data
+  sources and potential security issues.
+- **[Agent skills](/integrations/coding-agent-skills/) — improved `mcp-developer-analysis` client setup**: The skill now includes a comprehensive playbook for connecting MCP-capable clients (Claude Code, Cursor, VS Code, Zed, Continue, Windsurf, Claude Desktop) to the [MCP server for developers](/integrations/mcp-server/mcp-developer/).
+
+### Bug Fixes {#v26.24-bug-fixes}
+
+- Fixed MySQL sources with RDS IAM authentication failing when the database
+  username contains special characters like `&` or `#`.
+- Fixed joins incorrectly failing with a type mismatch error when join columns
+  differed only in nullability.
+- Fixed fast-path `SELECT` queries returning incorrect results when `OFFSET`
+  was specified.
+- Fixed `string_to_array` returning incorrect results when `null_string` is
+  specified and the delimiter is empty.
+- Fixed `INSERT INTO ... SELECT` silently ignoring the `OFFSET` clause in the
+  source query.
+- Fixed `seahash` function catalog metadata reporting the wrong return type
+  (`uint4` instead of `uint8`).
+- Fixed `mz_egress_ips` storing non-canonical CIDR notation (e.g.,
+  `10.0.5.7/24` instead of `10.0.5.0/24`).
+- Fixed Console crashing on OIDC-protected routes when the identity provider
+  initialization fails, instead of falling through to password-based sign-in.
+- Fixed catalog migration bug from v26.18.0 by which a
+  `Non-positive multiplicity in DistinctBy` error could occur on queries
+  containing `SELECT DISTINCT` over role-derived catalog views (e.g.,
+  anything reading from `mz_roles`, `mz_role_members`, or views that
+  internally project role columns). The error is resolved automatically by
+  upgrading to v26.24.2 or newer.
+
 ## v26.23.2
 *Released to Materialize Cloud: 2026-05-11* <br>
 
@@ -206,7 +288,7 @@ with up to 50% lower memory usage, and bug fixes.
 This release introduces the built-in Developer MCP server, Console
 improvements, and bug fixes.
 
-### Developer MCP server
+### MCP Server for Developers
 
 {{< public-preview />}}
 
