@@ -11,8 +11,8 @@ menu:
 
 ## Change Data Capture (CDC)
 
-Materialize supports MySQL as a real-time data source. The [MySQL source](/sql/create-source/mysql/)
-uses MySQL's [binlog replication protocol](/sql/create-source/mysql/#change-data-capture)
+Materialize supports MySQL as a real-time data source. The [MySQL source](/sql/create-source/mysql-v2/)
+uses MySQL's [binlog replication protocol](/sql/create-source/mysql-v2/#change-data-capture)
 to **continually ingest changes** resulting from CRUD operations in the upstream
 database. The native support for MySQL Change Data Capture (CDC) in Materialize
 gives you the following benefits:
