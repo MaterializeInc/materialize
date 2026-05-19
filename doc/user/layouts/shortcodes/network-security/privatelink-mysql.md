@@ -19,9 +19,11 @@
 
     **Remarks**:
 
-    a. Network Load Balancers do not have associated security groups. Therefore, the security groups for your targets must use IP addresses to allow traffic.
+    a. Network Load Balancers do not have associated security groups by default. Therefore, the security groups for your targets must use IP addresses to allow traffic.
 
     b. You can't use the security groups for the clients as a source in the security groups for the targets. Therefore, the security groups for your targets must use the IP addresses of the clients to allow traffic. For more details, check the [AWS documentation](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-register-targets.html).
+
+    c. If you have associated a [security group with your Network Load Balancer](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/load-balancer-security-groups.html) and enabled **Enforce inbound rules on PrivateLink traffic**, the NLB's inbound rules will be applied to traffic arriving from Materialize's VPC endpoint. In that case, the source IPs are private IPs from Materialize's VPC — **not** the IPs of any client (e.g., `mysql` running from a workstation or bastion host) that you might use to verify connectivity to the database directly. Inbound rules that only permit your own test traffic will silently block Materialize, even when your own connectivity tests succeed. To resolve this, either disable **Enforce inbound rules on PrivateLink traffic**, or add inbound rules to the NLB's security group that permit the relevant ports (the listener port and the health check port) from a source that covers Materialize's VPC endpoint traffic.
 
 1. #### Create a Network Load Balancer (NLB)
     Create a [Network Load Balancer](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-network-load-balancer.html) that is **enabled for the same subnets** that the RDS instance is in.
