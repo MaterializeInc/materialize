@@ -329,6 +329,7 @@ impl Coordinator {
                 plan::MaterializedView {
                     expr,
                     cluster_id,
+                    target_replica,
                     refresh_schedule,
                     ..
                 },
@@ -359,8 +360,18 @@ impl Coordinator {
             });
         }
 
-        let validity =
-            PlanValidity::require_transient_revision(self.catalog().transient_revision());
+        // Track the target cluster/replica and resolved dependencies so that
+        // concurrent drops (e.g. `ALTER CLUSTER ... SET (REPLICATION FACTOR
+        // ...)` racing with the off-thread optimizer) are caught between
+        // stages instead of panicking later when the persisted SQL is
+        // re-parsed during catalog application.
+        let validity = PlanValidity::new(
+            self.catalog().transient_revision(),
+            resolved_ids.items().copied().collect(),
+            Some(*cluster_id),
+            *target_replica,
+            session.role_metadata().clone(),
+        );
 
         // Check whether we can read all inputs at all the REFRESH AT times.
         if let Some(refresh_schedule) = refresh_schedule {

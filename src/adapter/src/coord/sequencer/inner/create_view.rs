@@ -84,7 +84,7 @@ impl Coordinator {
         resolved_ids: ResolvedIds,
     ) {
         let stage = return_if_err!(
-            self.create_view_validate(plan, resolved_ids, ExplainContext::None),
+            self.create_view_validate(ctx.session(), plan, resolved_ids, ExplainContext::None),
             ctx
         );
         self.sequence_staged(ctx, Span::current(), stage).await;
@@ -129,7 +129,7 @@ impl Coordinator {
             optimizer_trace,
         });
         let stage = return_if_err!(
-            self.create_view_validate(plan, resolved_ids, explain_ctx),
+            self.create_view_validate(ctx.session(), plan, resolved_ids, explain_ctx),
             ctx
         );
         self.sequence_staged(ctx, Span::current(), stage).await;
@@ -182,7 +182,7 @@ impl Coordinator {
             optimizer_trace,
         });
         let stage = return_if_err!(
-            self.create_view_validate(plan, resolved_ids, explain_ctx),
+            self.create_view_validate(ctx.session(), plan, resolved_ids, explain_ctx),
             ctx
         );
         self.sequence_staged(ctx, Span::current(), stage).await;
@@ -245,6 +245,7 @@ impl Coordinator {
     #[instrument]
     fn create_view_validate(
         &self,
+        session: &Session,
         plan: plan::CreateViewPlan,
         resolved_ids: ResolvedIds,
         // An optional context set iff the state machine is initiated from
@@ -266,8 +267,16 @@ impl Coordinator {
             .validate_timeline_context(expr_depends_on.iter().copied())?;
         self.validate_system_column_references(*ambiguous_columns, &expr_depends_on)?;
 
-        let validity =
-            PlanValidity::require_transient_revision(self.catalog().transient_revision());
+        // Track resolved dependencies so concurrent drops are caught between
+        // stages instead of panicking later when the persisted SQL is
+        // re-parsed during catalog application.
+        let validity = PlanValidity::new(
+            self.catalog().transient_revision(),
+            resolved_ids.items().copied().collect(),
+            None,
+            None,
+            session.role_metadata().clone(),
+        );
 
         Ok(CreateViewStage::Optimize(CreateViewOptimize {
             validity,
