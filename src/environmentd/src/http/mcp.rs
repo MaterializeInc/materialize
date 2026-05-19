@@ -68,7 +68,11 @@ const MCP_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 // Discovery uses the lightweight view (no JSON schema computation).
 const DISCOVERY_QUERY: &str = "SELECT * FROM mz_internal.mz_mcp_data_products";
-// Details uses the full view with JSON schema.
+// Details uses the full view, which also exposes a `hydration` JSON column
+// (`{hydrated, replica_count, hydrated_replica_count}`) so agents can decide
+// whether to back off and retry vs treat empty reads as final. See DEX-30
+// and the comments on `mz_mcp_data_product_details` in
+// `src/catalog/src/builtin/mz_internal.rs`.
 const DETAILS_QUERY_PREFIX: &str =
     "SELECT * FROM mz_internal.mz_mcp_data_product_details WHERE object_name = ";
 
@@ -657,7 +661,12 @@ fn endpoint_instructions(endpoint_type: McpEndpointType) -> Option<String> {
             "Prefer indexed objects (served from memory) over unindexed materialized views ",
             "(read from persistent storage). Indexes are cluster-local; if a data product's ",
             "cluster differs from your session, pass the `cluster` parameter to `read_data_product` ",
-            "so the index is actually used.",
+            "so the index is actually used. ",
+            "`get_data_product_details` returns a `hydration` object with `hydrated`, ",
+            "`replica_count`, and `hydrated_replica_count` fields: if `hydrated` is false, ",
+            "the dataflow is still warming up. Back off and retry rather than looping on ",
+            "empty results — an empty answer from a not-yet-hydrated product is not the ",
+            "same as a genuinely empty result.",
         ).to_string()),
         McpEndpointType::Developer => Some(concat!(
             "You are connected to the Materialize developer MCP server. ",
@@ -714,7 +723,7 @@ async fn handle_tools_list(
                 ToolDefinition {
                     name: "get_data_product_details".to_string(),
                     title: Some("Get Data Product Details".to_string()),
-                    description: "Get the complete schema and structure of a specific data product. This shows you exactly what fields are available, their types, and what data you can query. Use this after finding a data product from get_data_products() to understand how to query it.".to_string(),
+                    description: "Get the complete schema and structure of a specific data product, plus a `hydration` object reporting whether the dataflow is fully hydrated across the cluster's replicas (`{hydrated, replica_count, hydrated_replica_count}`). This shows you exactly what fields are available, their types, what data you can query, and whether the data product is ready to serve fresh results. Use this after finding a data product from get_data_products() to understand how to query it; if `hydrated` is false, back off and retry rather than treating empty reads as final.".to_string(),
                     input_schema: json!({
                         "type": "object",
                         "properties": {

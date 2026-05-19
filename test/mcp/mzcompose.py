@@ -9,6 +9,9 @@
 
 """End-to-end tests for the MCP (Model Context Protocol) HTTP endpoints."""
 
+import json
+import time
+
 import requests
 
 from materialize import MZ_ROOT
@@ -380,3 +383,159 @@ def workflow_default(c: Composition) -> None:
 
         r = post_mcp(c, "agent", jsonrpc("tools/list"))
         assert r.status_code == 200
+
+    # -- hydration: end-to-end coverage for DEX-30 ----------------------------
+    #
+    # Verifies that `mz_internal.mz_mcp_data_product_details` exposes a
+    # `hydration` JSON column that the agent endpoint surfaces through
+    # `get_data_product_details`, so agents can distinguish "still warming
+    # up" from "genuinely empty." Two scenarios:
+    #
+    #   1. MV on `quickstart` (1 replica) → hydrated=true, 1/1 replicas.
+    #   2. MV on a cluster with zero replicas → hydrated=false, 0/0.
+    #
+    # The HTTP user that the MCP server runs as on this no-auth listener is
+    # `anonymous_http_user`; it gets auto-provisioned on the first MCP
+    # request, so we provision it eagerly with an `initialize` call and then
+    # grant the necessary privileges as `mz_system`.
+
+    # First touch the agent endpoint so `anonymous_http_user` exists as a role
+    # and we can GRANT to it.
+    post_mcp(
+        c,
+        "agent",
+        jsonrpc(
+            "initialize",
+            {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {"name": "setup", "version": "0.1.0"},
+            },
+            req_id=999,
+        ),
+    )
+
+    c.sql(
+        """
+        GRANT USAGE ON CLUSTER quickstart TO anonymous_http_user;
+        GRANT USAGE ON DATABASE materialize TO anonymous_http_user;
+        GRANT USAGE, CREATE ON SCHEMA materialize.public TO anonymous_http_user;
+        """,
+        user="mz_system",
+        port=6877,
+        print_statement=False,
+    )
+
+    def hydration_for(object_name: str) -> dict:
+        """Calls `get_data_product_details` and returns the parsed hydration
+        object from the first row. Asserts the row has the documented 5-cell
+        shape and that the hydration cell carries the three required keys."""
+        r = post_mcp(
+            c,
+            "agent",
+            jsonrpc(
+                "tools/call",
+                {
+                    "name": "get_data_product_details",
+                    "arguments": {"name": object_name},
+                },
+            ),
+        )
+        assert r.status_code == 200, f"unexpected status: {r.status_code} {r.text}"
+        body = r.json()
+        assert "error" not in body, f"unexpected error response: {body}"
+        rows = json.loads(body["result"]["content"][0]["text"])
+        assert rows, f"expected at least one details row, got: {rows}"
+        row = rows[0]
+        assert (
+            len(row) == 5
+        ), f"details row should have 5 cells (object_name, cluster, description, schema, hydration), got: {row}"
+        hydration = row[4]
+        assert isinstance(hydration, dict), f"hydration should be a dict: {hydration}"
+        for key in ("hydrated", "replica_count", "hydrated_replica_count"):
+            assert key in hydration, f"hydration missing `{key}`: {hydration}"
+        return hydration
+
+    with c.test_case("agent_get_data_product_details_hydrated"):
+        c.sql(
+            """
+            DROP MATERIALIZED VIEW IF EXISTS public.test_hydration_mv;
+            CREATE MATERIALIZED VIEW public.test_hydration_mv IN CLUSTER quickstart
+                AS SELECT 1::int AS id, 'widget'::text AS name;
+            GRANT SELECT ON public.test_hydration_mv TO anonymous_http_user;
+            """,
+            user="mz_system",
+            port=6877,
+            print_statement=False,
+        )
+
+        # The MV runs on `quickstart`, which has a single ready replica, so
+        # hydration should converge almost immediately. Poll briefly to
+        # avoid a race with hydration-status updates.
+        object_name = '"materialize"."public"."test_hydration_mv"'
+        deadline = time.monotonic() + 30
+        last: dict = {}
+        while time.monotonic() < deadline:
+            last = hydration_for(object_name)
+            if last["hydrated"]:
+                break
+            time.sleep(0.5)
+        assert (
+            last.get("hydrated") is True
+        ), f"expected hydrated=true within 30s, last: {last}"
+        assert (
+            last["replica_count"] == last["hydrated_replica_count"]
+        ), f"counts should match when hydrated: {last}"
+        assert last["replica_count"] >= 1, f"quickstart has a replica: {last}"
+
+    with c.test_case("agent_get_data_product_details_zero_replicas"):
+        # A cluster with no replicas can't hydrate anything, so `hydrated`
+        # must be false with 0/0 counts. This is the canary case for the
+        # `replica_count > 0` guard in the view's `hydrated` expression.
+        c.sql(
+            """
+            DROP MATERIALIZED VIEW IF EXISTS public.test_hydration_empty_mv;
+            DROP CLUSTER IF EXISTS test_hydration_empty;
+            CREATE CLUSTER test_hydration_empty REPLICAS ();
+            CREATE MATERIALIZED VIEW public.test_hydration_empty_mv
+                IN CLUSTER test_hydration_empty
+                AS SELECT 1::int AS id;
+            GRANT USAGE ON CLUSTER test_hydration_empty TO anonymous_http_user;
+            GRANT SELECT ON public.test_hydration_empty_mv TO anonymous_http_user;
+            """,
+            user="mz_system",
+            port=6877,
+            print_statement=False,
+        )
+
+        hydration = hydration_for(
+            '"materialize"."public"."test_hydration_empty_mv"',
+        )
+        assert hydration == {
+            "hydrated": False,
+            "replica_count": 0,
+            "hydrated_replica_count": 0,
+        }, f"expected zero-replica hydration, got: {hydration}"
+
+    with c.test_case("agent_mcp_data_product_details_view_sql"):
+        # The hydration column should also be queryable directly via SQL,
+        # not just through MCP. This locks in the catalog surface so users
+        # and dashboards can build on it independently of the MCP server.
+        rows = c.sql_query(
+            """
+            SELECT object_name, hydration
+            FROM mz_internal.mz_mcp_data_product_details
+            WHERE object_name = '"materialize"."public"."test_hydration_mv"'
+            """,
+        )
+        assert rows, f"expected at least one row, got: {rows}"
+        _, hydration = rows[0]
+        # psycopg decodes jsonb to a Python dict.
+        assert isinstance(hydration, dict), f"hydration should be dict: {hydration!r}"
+        assert hydration.get("hydrated") is True, hydration
+        assert hydration["replica_count"] == hydration["hydrated_replica_count"]
+        assert set(hydration.keys()) == {
+            "hydrated",
+            "replica_count",
+            "hydrated_replica_count",
+        }, f"unexpected keys in hydration object: {hydration}"
