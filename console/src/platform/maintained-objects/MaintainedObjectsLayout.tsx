@@ -19,6 +19,8 @@ import { MaintainedObjectListItem, useMaintainedObjectsList } from "./queries";
 export interface MaintainedObjectsOutletContext {
   data: MaintainedObjectListItem[];
   isLoading: boolean;
+  lookbackMinutes: number;
+  setLookbackMinutes: React.Dispatch<React.SetStateAction<number>>;
 }
 
 export const MaintainedObjectsLayout = () => {
@@ -42,7 +44,14 @@ export const MaintainedObjectsLayout = () => {
         setLookbackMinutes={setLookbackMinutes}
       />
       <Outlet
-        context={{ data, isLoading } satisfies MaintainedObjectsOutletContext}
+        context={
+          {
+            data,
+            isLoading,
+            lookbackMinutes,
+            setLookbackMinutes,
+          } satisfies MaintainedObjectsOutletContext
+        }
       />
     </>
   );
