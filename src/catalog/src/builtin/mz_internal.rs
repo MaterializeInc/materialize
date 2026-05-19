@@ -5318,13 +5318,18 @@ pub static MZ_MCP_DATA_PRODUCT_DETAILS: LazyLock<BuiltinView> = LazyLock::new(||
     name: "mz_mcp_data_product_details",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_MCP_DATA_PRODUCT_DETAILS_OID,
+    // Note: no `.with_key` here. The view's row identity is semantically
+    // (object_name, cluster, description) — same as the underlying details
+    // CTE — but the planner can't prove key propagation through the
+    // `LEFT JOIN ... ON ... IS NOT DISTINCT FROM` to the hydration CTE,
+    // so declaring it here would diverge from the inferred RelationDesc
+    // and fail `verify_builtin_descs`.
     desc: RelationDesc::builder()
         .with_column("object_name", SqlScalarType::String.nullable(false))
         .with_column("cluster", SqlScalarType::String.nullable(true))
         .with_column("description", SqlScalarType::String.nullable(true))
         .with_column("schema", SqlScalarType::Jsonb.nullable(false))
         .with_column("hydration", SqlScalarType::Jsonb.nullable(false))
-        .with_key(vec![0, 1, 2])
         .finish(),
     column_comments: BTreeMap::from_iter([
         (
