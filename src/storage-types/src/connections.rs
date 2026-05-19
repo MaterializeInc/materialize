@@ -13,18 +13,24 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use anyhow::{Context, anyhow};
 use async_trait::async_trait;
-use aws_credential_types::provider::ProvideCredentials;
+use aws_credential_types::provider::{ProvideCredentials, SharedCredentialsProvider};
+use aws_sigv4::http_request::{SignableBody, SignableRequest, SigningSettings, sign};
+use aws_sigv4::sign::v4;
+// Aliased to avoid colliding with `mz_ccsr::tls::Identity`.
+use aws_smithy_runtime_api::client::identity::Identity as AwsIdentity;
+use http::{HeaderName, HeaderValue};
 use iceberg::Catalog;
 use iceberg::CatalogBuilder;
-use iceberg::io::{
-    AwsCredential, AwsCredentialLoad, CustomAwsCredentialLoader, S3_ACCESS_KEY_ID,
-    S3_DISABLE_EC2_METADATA, S3_REGION, S3_SECRET_ACCESS_KEY,
-};
+use iceberg::io::{S3_ACCESS_KEY_ID, S3_DISABLE_EC2_METADATA, S3_REGION, S3_SECRET_ACCESS_KEY};
 use iceberg_catalog_rest::{
-    REST_CATALOG_PROP_URI, REST_CATALOG_PROP_WAREHOUSE, RestCatalogBuilder,
+    REST_CATALOG_PROP_URI, REST_CATALOG_PROP_WAREHOUSE, RequestAuthenticator, RestCatalogBuilder,
+};
+use iceberg_storage_opendal::{
+    AwsCredential, AwsCredentialLoad, CustomAwsCredentialLoader, OpenDalStorageFactory,
 };
 use itertools::Itertools;
 use mz_ccsr::tls::{Certificate, Identity};
@@ -51,6 +57,7 @@ use rdkafka::ClientContext;
 use rdkafka::config::FromClientConfigAndContext;
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use regex::Regex;
+use reqwest::Request;
 use serde::{Deserialize, Deserializer, Serialize};
 use tokio::net;
 use tokio::runtime::Handle;
@@ -89,11 +96,11 @@ const REST_CATALOG_PROP_CREDENTIAL: &str = "credential";
 struct AwsSdkCredentialLoader {
     /// The underlying AWS SDK credentials provider. For assume role auth, this provider
     /// already handles the full chain: ambient creds -> jump role -> user role.
-    provider: aws_credential_types::provider::SharedCredentialsProvider,
+    provider: SharedCredentialsProvider,
 }
 
 impl AwsSdkCredentialLoader {
-    fn new(provider: aws_credential_types::provider::SharedCredentialsProvider) -> Self {
+    fn new(provider: SharedCredentialsProvider) -> Self {
         Self { provider }
     }
 }
@@ -126,6 +133,96 @@ impl AwsCredentialLoad for AwsSdkCredentialLoader {
             session_token: creds.session_token().map(|s| s.to_string()),
             expires_in: creds.expiry().map(|t| t.into()),
         }))
+    }
+}
+
+/// Signs each outgoing REST-catalog request with AWS SigV4.
+///
+/// Holds a [`SharedCredentialsProvider`] (not static `Credentials`) so each
+/// request signs with refreshable creds from Materialize's chain
+/// (ambient -> jump role -> user role w/ external ID).
+struct Sigv4Authenticator {
+    provider: SharedCredentialsProvider,
+    region: String,
+    /// The AWS signing name. `"s3tables"` for AWS S3 Tables REST catalog.
+    signing_name: String,
+}
+
+impl std::fmt::Debug for Sigv4Authenticator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Sigv4Authenticator")
+            .field("region", &self.region)
+            .field("signing_name", &self.signing_name)
+            .finish_non_exhaustive()
+    }
+}
+
+fn sigv4_err(e: impl Into<anyhow::Error>) -> iceberg::Error {
+    iceberg::Error::new(iceberg::ErrorKind::DataInvalid, "AWS SigV4").with_source(e)
+}
+
+#[async_trait]
+impl RequestAuthenticator for Sigv4Authenticator {
+    async fn authenticate_request(&self, req: &mut Request) -> iceberg::Result<()> {
+        let creds = self
+            .provider
+            .provide_credentials()
+            .await
+            .map_err(sigv4_err)?;
+        let identity: AwsIdentity = creds.into();
+        let params = v4::SigningParams::builder()
+            .identity(&identity)
+            .region(&self.region)
+            .name(&self.signing_name)
+            .time(SystemTime::now())
+            .settings(SigningSettings::default())
+            .build()
+            .map_err(sigv4_err)?
+            .into();
+        let body: Vec<u8> = req
+            .body()
+            .and_then(|b| b.as_bytes())
+            .map(|b| b.to_vec())
+            .unwrap_or_default();
+        let headers: Vec<(&str, &str)> = req
+            .headers()
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.to_str().unwrap_or("")))
+            .collect();
+        let signable = SignableRequest::new(
+            req.method().as_str(),
+            req.url().as_str(),
+            headers.into_iter(),
+            SignableBody::Bytes(&body),
+        )
+        .map_err(sigv4_err)?;
+        let (instructions, _sig) = sign(signable, &params).map_err(sigv4_err)?.into_parts();
+        let (new_headers, new_query) = instructions.into_parts();
+        for header in new_headers {
+            let mut value = HeaderValue::from_str(header.value()).map_err(sigv4_err)?;
+            value.set_sensitive(header.sensitive());
+            req.headers_mut()
+                .insert(HeaderName::from_static(header.name()), value);
+        }
+        if !new_query.is_empty() {
+            let url = req.url_mut();
+            let mut pairs = url.query_pairs_mut();
+            for (name, value) in new_query {
+                pairs.append_pair(name, &value);
+            }
+        }
+        Ok(())
+    }
+
+    // SigV4 is stateless: nothing to cache, invalidate, or refresh.
+    async fn ensure_cached(&self) -> iceberg::Result<()> {
+        Ok(())
+    }
+    async fn invalidate_cache(&self) -> iceberg::Result<()> {
+        Ok(())
+    }
+    async fn regenerate_cache(&self) -> iceberg::Result<()> {
+        Ok(())
     }
 }
 
@@ -606,7 +703,7 @@ impl IcebergCatalogConnection<InlinedConnection> {
             .unwrap_or_else(|| "us-east-1".to_string());
 
         let mut props = vec![
-            (S3_REGION.to_string(), aws_region),
+            (S3_REGION.to_string(), aws_region.clone()),
             (S3_DISABLE_EC2_METADATA.to_string(), "true".to_string()),
             (
                 REST_CATALOG_PROP_WAREHOUSE.to_string(),
@@ -631,11 +728,35 @@ impl IcebergCatalogConnection<InlinedConnection> {
             ));
         }
 
-        // Build the catalog with aws_config for REST API signing.
-        // For AssumeRole auth, we also add a FileIO extension so OpenDAL can
-        // use our credential chain for S3 object access.
+        // Sign REST catalog requests with the Materialize AWS credential chain
+        // via a custom `RequestAuthenticator`. For AssumeRole auth, also feed
+        // the chain to OpenDAL's S3 loader so data-file IO uses the same creds.
+        let credentials_provider = aws_config
+            .credentials_provider()
+            .ok_or_else(|| anyhow!("aws_config missing credentials provider"))?;
+
+        let authenticator = Arc::new(Sigv4Authenticator {
+            provider: credentials_provider.clone(),
+            region: aws_region.clone(),
+            signing_name: "s3tables".to_string(),
+        });
+
+        let customized_credential_load = if matches!(aws_auth, AwsAuth::AssumeRole(_)) {
+            Some(CustomAwsCredentialLoader::new(Arc::new(
+                AwsSdkCredentialLoader::new(credentials_provider),
+            )))
+        } else {
+            None
+        };
+
+        let storage_factory = Arc::new(OpenDalStorageFactory::S3 {
+            configured_scheme: "s3".to_string(),
+            customized_credential_load,
+        });
+
         let catalog = RestCatalogBuilder::default()
-            .with_aws_config(aws_config.clone())
+            .with_storage_factory(storage_factory)
+            .with_authenticator(authenticator)
             .load("IcebergCatalog", props.into_iter().collect())
             .await
             .with_context(|| {
@@ -645,18 +766,6 @@ impl IcebergCatalogConnection<InlinedConnection> {
                     aws_ref.connection_id, self.uri, s3tables.warehouse
                 )
             })?;
-
-        let catalog = if matches!(aws_auth, AwsAuth::AssumeRole(_)) {
-            let credentials_provider = aws_config
-                .credentials_provider()
-                .ok_or_else(|| anyhow!("aws_config missing credentials provider"))?;
-            let file_io_loader = CustomAwsCredentialLoader::new(Arc::new(
-                AwsSdkCredentialLoader::new(credentials_provider),
-            ));
-            catalog.with_file_io_extension(file_io_loader)
-        } else {
-            catalog
-        };
 
         Ok(Arc::new(catalog))
     }
@@ -691,6 +800,14 @@ impl IcebergCatalogConnection<InlinedConnection> {
         }
 
         let catalog = RestCatalogBuilder::default()
+            .with_storage_factory(Arc::new(OpenDalStorageFactory::S3 {
+                configured_scheme: "s3".to_string(),
+                // Polaris returns a config with:
+                //   s3.access-key-id, s3.secret-access-key, s3.endpoint, ...
+                // `iceberg-rust` forwards these props to `opendal`.
+                // N.B. This is not confirmed to work with other catalog & storage implementations.
+                customized_credential_load: None,
+            }))
             .load("IcebergCatalog", props.into_iter().collect())
             .await
             .map_err(|e| anyhow!("failed to create Iceberg catalog: {e}"))?;
