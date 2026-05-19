@@ -1,6 +1,6 @@
 ---
 title: "Grafana using Prometheus"
-description: "How to monitor the performance and overall health of your Materialize instance using Prometheus and Grafana."
+description: "How to monitor the performance and overall health of your Self-Managed Materialize environment using Prometheus and Grafana."
 menu:
   main:
     parent: "monitor-sm"
@@ -8,92 +8,176 @@ menu:
     identifier: "grafana-prometheus-sm"
 ---
 
-{{< warning >}}
-The metrics scraped are unstable and may change across releases.
-{{< /warning >}}
+Self-Managed Materialize exposes a native Prometheus endpoint out of the box at
+`/metrics`. This guide walks you through the steps to scrape these metrics
+with Prometheus and visualize them in Grafana.
 
-This guide walks you through the steps required to monitor the performance and
-overall health of your Materialize instance using Prometheus and Grafana.
+In this guide, you will:
+1. Verify that the Prometheus metrics endpoint is working.
+2. Configure Prometheus to scrape your Materialize environment.
+3. Set up Grafana to visualize the scraped metrics.
+4. Import pre-built Grafana dashboards for Materialize.
 
-## Before you begin
+For a full list of available metrics, see the
+[Metrics reference](/manage/monitor/metrics/).
+
+## When to use Prometheus vs. `mz_catalog`
+
+Materialize provides two complementary observability surfaces:
+
+| | Prometheus metrics | `mz_catalog` / `mz_internal` |
+|---|---|---|
+| **Best for** | Monitoring health, alerting, and historical trends | Investigating issues and taking corrective action |
+| **Access** | Scraped via HTTP (`/metrics`) | Queried via SQL |
+| **Stability** | Stable, versioned API with deprecation policy | `mz_catalog` is stable; `mz_internal` is unstable |
+| **Example use** | "Alert when CPU utilization exceeds 85%" | "Which dataflow is using the most memory?" |
+
+**Our recommendation:** Use Prometheus metrics to detect *whether* there is a
+problem and to build dashboards and alerts. Use `mz_catalog` to diagnose *what*
+the problem is and to take action.
+
+## Guide
+
+### Before you begin
 
 Ensure you have:
 
-- A self-managed instance of Materialize installed with helm values `observability.enabled=true`, `observability.podMetrics.enabled=true`, and `prometheus.scrapeAnnotations.enabled=true`
-- [Helm](https://helm.sh/docs/intro/install/) version 3.2.0+ installed
+- A running [Self-Managed Materialize](/self-managed/) environment
 - [kubectl](https://kubernetes.io/docs/tasks/tools/) installed and configured
+- [Helm](https://helm.sh/docs/intro/install/) version 3.2.0+ installed
 
 {{< important >}}
-This guide assumes you have administrative access to your Kubernetes cluster and the necessary permissions to install Prometheus.
+This guide assumes you have administrative access to your Kubernetes cluster and
+the necessary permissions to install Prometheus.
 {{< /important >}}
 
-## 1. Download our Prometheus scrape configurations (`prometheus.yml`)
-  Download the Prometheus scrape configurations that we'll use to configure Prometheus to collect metrics from Materialize:
-  {{% self-managed/step-download-prometheus-scrape-configs %}}
+### Step 1. Verify the Prometheus endpoint
 
+By default, each Materialize service exposes Prometheus metrics on port `9363`.
+Verify that the endpoint is working:
 
+```bash
+curl http://<your-materialize-host>:9363/metrics
+```
 
-## 2. Install Prometheus to your Kubernetes cluster
+You should see Prometheus-formatted metrics output with lines like:
 
-  {{< note >}}
-  This guide uses the [prometheus-community](https://github.com/prometheus-community/helm-charts) Helm chart to install Prometheus.
-  {{< /note >}}
+```
+# HELP mz_environment_up Whether the environment is up (1) or down (0)
+# TYPE mz_environment_up gauge
+mz_environment_up 1
+```
 
+**TODO: Confirm port number, path, and whether each service (environmentd, clusterd) has its own endpoint**
 
-1. Download the prometheus-community default chart values (`values.yaml`):
+{{< note >}}
+All stable metrics use the `mz_` prefix and follow
+[Prometheus naming conventions](https://prometheus.io/docs/practices/naming/).
+For a full list of available metrics, see the
+[Metrics reference](/manage/monitor/metrics/).
+{{< /note >}}
+
+### Step 2. Configure Prometheus to scrape Materialize
+
+Follow the [Prometheus getting started guide](https://prometheus.io/docs/prometheus/latest/getting_started/)
+to set up Prometheus if you don't already have it running.
+
+The recommended approach is to use **Kubernetes service discovery** so
+Prometheus can automatically discover and scrape all Materialize pods.
+
+Edit your Prometheus configuration:
+
+```yaml
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'materialize'
+    metrics_path: '/metrics'
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names:
+            - materialize
+
+    relabel_configs:
+      # Only scrape pods with the Materialize app label
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        regex: materialize
+        action: keep
+
+    # Optional:
+    scrape_timeout: 10s
+```
+
+**TODO: Confirm the exact pod label selectors and whether separate jobs are needed for environmentd vs clusterd**
+
+### Step 3. Verify that Prometheus is scraping Materialize
+
+1. Open the Prometheus UI.
+2. Navigate to **Status > Targets**.
+3. Verify that the `materialize` job appears and shows targets in the **UP** state.
+
+You can also run a quick query in the Prometheus expression browser to confirm
+metrics are flowing:
+
+```promql
+mz_environment_up
+```
+
+### Step 4. Set up Grafana
+
+1. Install the Grafana Helm chart following
+   [this guide](https://grafana.com/docs/grafana/latest/setup-grafana/installation/helm/).
+
+2. Set up port forwarding to access the Grafana UI:
    ```bash
-   curl -O https://raw.githubusercontent.com/prometheus-community/helm-charts/refs/heads/main/charts/prometheus/values.yaml
+   MZ_POD_GRAFANA=$(kubectl get pods -n monitoring -l app.kubernetes.io/name=grafana -o custom-columns="NAME:.metadata.name" --no-headers)
+   kubectl port-forward pod/$MZ_POD_GRAFANA 3000:3000 -n monitoring
    ```
 
-2. Within `values.yaml`, replace `serverFiles > prometheus.yml > scrape_configs` with our scrape configurations (`prometheus_scrape_configs.yml`).
+   {{< warning >}}
+   The port forwarding method is for testing purposes only. For production
+   environments, configure an ingress controller to securely expose the
+   Grafana UI.
+   {{< /warning >}}
 
-3. Install the operator with the updated `values.yaml`:
-   ```bash
-   kubectl create namespace prometheus
-   helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-   helm repo update
-   helm install --namespace prometheus prometheus prometheus-community/prometheus \
-   --values values.yaml
-   ```
+3. Open the Grafana UI at [http://localhost:3000](http://localhost:3000).
 
-## 3. Optional. Visualize through Grafana
+4. Add a Prometheus data source. In the Grafana UI, under
+   **Connection > Data sources**:
+   - Click **Add data source** and select **Prometheus**.
+   - In the Connection section, set **Prometheus server URL** to
+     `http://<prometheus-server-name>.<namespace>.svc.cluster.local:<port>`
+     (e.g., `http://prometheus-server.prometheus.svc.cluster.local:80`).
 
-1. Install the Grafana helm chart following [this guide](https://grafana.com/docs/grafana/latest/setup-grafana/installation/helm/).
+   ![Grafana Prometheus data source setup](/images/self-managed/grafana-prometheus-datasource-setup.png)
 
+### Step 5. Import Grafana dashboards
 
-2.  Set up port forwarding to access the Grafana UI:
-    ```bash
-    MZ_POD_GRAFANA=$(kubectl get pods -n monitoring -l app.kubernetes.io/name=grafana -o custom-columns="NAME:.metadata.name" --no-headers)
-    kubectl port-forward pod/$MZ_POD_GRAFANA 3000:3000 -n monitoring
-    ```
+Materialize provides pre-built Grafana dashboard templates to get you started:
 
-    {{< warning >}}
-  The port forwarding method is for testing purposes only. For production environments, configure an ingress controller to securely expose the Grafana UI.
-    {{< /warning >}}
+**TODO: Update dashboard download URLs to the correct branch/release once finalized**
 
-3. Open the Grafana UI on [http://localhost:3000](http://localhost:3000) in a browser.
+To import the dashboards, follow the
+[Grafana import dashboard guide](https://grafana.com/docs/grafana/latest/dashboards/build-dashboards/import-dashboards/#importing-a-dashboard).
 
-4. Add a Prometheus data source. In the Grafana UI, under **Connection > Data sources**,
-   - Click **Add data source** and select **prometheus**
-   - In the Connection section, set **Prometheus server URL** to `http://<prometheus server name>.<namespace>.svc.cluster.local:<port>`(e.g. `http://prometheus-server.prometheus.svc.cluster.local:80`).
+![Grafana monitoring dashboard](/images/self-managed/grafana-monitoring-success.png)
 
-    ![Image of Materialize Console login screen with mz_system user](/images/self-managed/grafana-prometheus-datasource-setup.png)
+## Metrics deprecation policy
 
-4. Download the following dashboards:
-    ### Environment overview dashboard
-    An overview of the state of different objects in your environment.
+Materialize follows a deprecation policy for Prometheus metrics:
 
-    ```bash
-    # environment_overview_dashboard.json
-    curl -O https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/self-managed-docs/v25.2/doc/user/data/monitoring/grafana_dashboards/environment_overview_dashboard.json
-    ```
-    ### Freshness overview dashboard
-    An overview of how out of date objects in your environment are.
-     ```bash
-     # freshness_overview_dashboard.json
-    curl -O https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/self-managed-docs/v25.2/doc/user/data/monitoring/grafana_dashboards/freshness_overview_dashboard.json
-    ```
+1. A metric scheduled for removal will have `deprecated` added to its `HELP`
+   text.
+2. Deprecated metrics are removed only with **major version upgrades**
 
-5. [Import the dashboards using the Prometheus data source](https://grafana.com/docs/grafana/latest/dashboards/build-dashboards/import-dashboards/#importing-a-dashboard)
+This gives you time to update your dashboards and alert rules before a metric
+is removed.
 
-    ![Image of Materialize Console login screen with mz_system user](/images/self-managed/grafana-monitoring-success.png)
+## Related pages
+
+- [Metrics reference](/manage/monitor/metrics/)
+- [Alerting](/manage/monitor/self-managed/alerting/)
+- [Datadog using Prometheus SQL Exporter](/manage/monitor/self-managed/datadog/)
+- [Prometheus naming conventions](https://prometheus.io/docs/practices/naming/)
