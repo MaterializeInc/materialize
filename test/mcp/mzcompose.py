@@ -553,12 +553,18 @@ def workflow_default(c: Composition) -> None:
         return hydration
 
     with c.test_case("agent_get_data_product_details_hydrated"):
+        # Grant SELECT to both `anonymous_http_user` (the MCP server's
+        # session user on this no-auth listener) and `materialize` (the
+        # default user for `c.sql_query`, used by the SQL-level test
+        # below). `mz_mcp_data_product_details` filters by
+        # `mz_show_my_object_privileges`, which is per-user.
         c.sql(
             """
             DROP MATERIALIZED VIEW IF EXISTS public.test_hydration_mv;
             CREATE MATERIALIZED VIEW public.test_hydration_mv IN CLUSTER quickstart
                 AS SELECT 1::int AS id, 'widget'::text AS name;
             GRANT SELECT ON public.test_hydration_mv TO anonymous_http_user;
+            GRANT SELECT ON public.test_hydration_mv TO materialize;
             """,
             user="mz_system",
             port=6877,
