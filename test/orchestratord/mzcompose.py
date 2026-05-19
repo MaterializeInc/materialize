@@ -3512,9 +3512,6 @@ def workflow_oidc_auth(c: Composition, parser: WorkflowArgumentParser) -> None:
         token = _fetch_hydra_jwt()
 
         print(f"Verifying OIDC pgwire login as {OIDC_CLIENT_ID}...")
-        # `-c oidc_auth_enabled=true` opts this connection into the OIDC
-        # authenticator. The role is auto-provisioned by environmentd on first
-        # login if it doesn't already exist.
         with (
             psycopg.connect(
                 host="127.0.0.1",
@@ -3522,7 +3519,6 @@ def workflow_oidc_auth(c: Composition, parser: WorkflowArgumentParser) -> None:
                 user=OIDC_CLIENT_ID,
                 password=token,
                 dbname="materialize",
-                options="-c oidc_auth_enabled=true",
                 connect_timeout=30,
             ) as conn,
             conn.cursor() as cur,
@@ -3540,7 +3536,6 @@ def workflow_oidc_auth(c: Composition, parser: WorkflowArgumentParser) -> None:
                 user=OIDC_CLIENT_ID,
                 password=bad_token,
                 dbname="materialize",
-                options="-c oidc_auth_enabled=true",
                 connect_timeout=30,
             ).close()
         except psycopg.OperationalError:

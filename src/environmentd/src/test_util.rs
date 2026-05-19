@@ -379,6 +379,7 @@ impl TestHarness {
         issuer: Option<String>,
         authentication_claim: Option<String>,
         expected_audiences: Option<Vec<String>>,
+        external_login_password_mz_system: Option<Password>,
     ) -> Self {
         let enable_tls = self.tls.is_some();
         self.listeners_config = ListenersConfig {
@@ -386,7 +387,7 @@ impl TestHarness {
                 "external".to_owned() => SqlListenerConfig {
                     addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
                     authenticator_kind: AuthenticatorKind::Oidc,
-                    allowed_roles: AllowedRoles::Normal,
+                    allowed_roles: AllowedRoles::NormalAndInternal,
                     enable_tls,
                 },
                 "internal".to_owned() => SqlListenerConfig {
@@ -401,7 +402,7 @@ impl TestHarness {
                     base: BaseListenerConfig {
                         addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
                         authenticator_kind: AuthenticatorKind::Oidc,
-                        allowed_roles: AllowedRoles::Normal,
+                        allowed_roles: AllowedRoles::NormalAndInternal,
                         enable_tls,
                     },
                     routes: HttpRoutesEnabled{
@@ -453,6 +454,12 @@ impl TestHarness {
                 "oidc_audience".to_string(),
                 serde_json::to_string(&expected_audiences).unwrap(),
             );
+        }
+
+        if let Some(external_login_password_mz_system) = external_login_password_mz_system {
+            self.external_login_password_mz_system = Some(external_login_password_mz_system);
+            self.system_parameter_defaults
+                .insert("enable_password_auth".to_string(), "true".to_string());
         }
 
         self
