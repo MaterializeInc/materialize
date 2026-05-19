@@ -15,10 +15,13 @@ In Materialize, you can create:
 - Read-write tables. With read-write tables, users can read ([`SELECT`]) and
   write to the tables ([`INSERT`], [`UPDATE`], [`DELETE`]).
 
--  ***Private Preview***. Read-only tables from [PostgreSQL sources (new
-  syntax)](/sql/create-source/postgres-v2/). Users cannot be write ([`INSERT`],
-  [`UPDATE`], [`DELETE`]) to these tables. These tables are populated by [data
-  ingestion from a source](/ingest-data/postgres/). {{% include-example file="examples/create_table/example_postgres_table"
+- Read-only tables from sources that use the new syntax:
+  [PostgreSQL](/sql/create-source/postgres-v2/),
+  [MySQL](/sql/create-source/mysql-v2/), and
+  [SQL Server](/sql/create-source/sql-server-v2/). Users cannot write
+  ([`INSERT`], [`UPDATE`], [`DELETE`]) to these tables. These tables are
+  populated by [data ingestion from a
+  source](/ingest-data/). {{% include-example file="examples/create_table/example_postgres_table"
 example="syntax-version-requirement" %}}
 
 
@@ -46,7 +49,7 @@ example="syntax" %}}
 {{< tab "PostgreSQL source table" >}}
 ### PostgreSQL source table
 
-{{< private-preview />}}
+{{< public-preview />}}
 
 {{< note >}}
 {{% include-example file="examples/create_table_postgres"
@@ -60,10 +63,24 @@ For an example, see [Create a table (PostgreSQL
 source)](/sql/create-table/#create-a-table-postgresql-source).
 
 {{< /tab >}}
+{{< tab "MySQL source table" >}}
+### MySQL source table
+
+{{< public-preview />}}
+
+{{< note >}}
+{{% include-example file="examples/create_table_mysql"
+example="syntax-version-requirement" %}}
+{{< /note >}}
+
+{{% include-syntax file="examples/create_table_mysql"
+example="syntax" %}}
+
+{{< /tab >}}
 {{< tab "SQL Server source table" >}}
 ### SQL Server source table
 
-{{< private-preview />}}
+{{< public-preview />}}
 
 {{< note >}}
 {{% include-example file="examples/create_table_sql_server"
@@ -98,7 +115,7 @@ See also the known limitations for [`INSERT`](/sql/insert#known-limitations),
 
 ## Source-populated tables
 
-{{< private-preview />}}
+{{< public-preview />}}
 
 {{< note >}}
 {{% include-example file="examples/create_table_postgres"
@@ -138,6 +155,14 @@ use within a [transaction block](/sql/begin/#ddl-only-transactions).
 {{% include-from-yaml data="postgres_source_details" name="postgres-unsupported-types" %}}
 
 {{< /tab >}}
+{{< tab "MySQL" >}}
+#### MySQL types
+
+{{% include-from-yaml data="mysql_source_details" name="mysql-supported-types" %}}
+
+{{% include-from-yaml data="mysql_source_details" name="mysql-unsupported-types" %}}
+
+{{< /tab >}}
 {{< tab "SQL Server" >}}
 #### SQL Server types
 
@@ -152,13 +177,15 @@ use within a [transaction block](/sql/begin/#ddl-only-transactions).
 
 ### Handling table schema changes
 
-The use of [`CREATE SOURCE`](/sql/create-source/postgres-v2/) with `CREATE
-TABLE FROM SOURCE` allows for the handling of the upstream DDL changes,
-specifically adding or dropping columns in the upstream tables, without
-downtime. For details, see:
+The use of `CREATE SOURCE` (new syntax) with `CREATE TABLE FROM SOURCE` allows
+for the handling of the upstream DDL changes, specifically adding or dropping
+columns in the upstream tables, without downtime. For details, see:
 
 - [PostgreSQL: Handling upstream schema changes with zero
 downtime](/ingest-data/postgres/source-versioning/)
+
+- [MySQL: Handling upstream schema changes with zero
+downtime](/ingest-data/mysql/source-versioning/)
 
 - [SQL Server: Handling upstream schema changes with zero
 downtime](/ingest-data/sql-server/source-versioning/)
@@ -205,7 +232,7 @@ Once a user-populated table is created, you can perform CRUD
 
 ### Create a table (PostgreSQL source)
 
-{{< private-preview />}}
+{{< public-preview />}}
 
 {{< note >}}
 

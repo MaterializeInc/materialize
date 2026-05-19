@@ -28,7 +28,7 @@ the MySQL source documentation and syntax **standardize on `schema`** as the
 preferred keyword.
 {{< /note >}}
 
-{{% include-syntax file="examples/create_source_mysql" example="syntax" %}}
+{{% include-syntax file="examples/create_source_mysql_legacy" example="syntax" %}}
 
 ### `CONNECTION` options
 

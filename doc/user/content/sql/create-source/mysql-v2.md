@@ -171,10 +171,6 @@ system variable on a MySQL replica. The reported `transaction_id` should
 increase as Materialize consumes **new** binlog records from the upstream MySQL
 database. For more information, see [Troubleshooting](/ops/troubleshooting/).
 
-## Known limitations
-
-{{% include-headless "/headless/mysql-considerations" %}}
-
 ## Example
 
 {{< important >}}
