@@ -68,50 +68,13 @@ MYSQL_ROOT_PASSWORD = os.environ.get("MYSQL_PASSWORD", "p@ssw0rd")
 SQL_SERVER_USER = os.environ.get("SQL_SERVER_USER", "SA")
 SQL_SERVER_PASSWORD = os.environ.get("SQL_SERVER_PASSWORD", "RPSsql12345")
 
-# Patterns we treat as transient fault-injection artifacts rather than
-# property violations. Testdrive surfaces these as non-zero exits when an
-# Antithesis fault window happens to overlap a sensitive moment in the
-# script. The driver layer demotes these to "didn't get a clean signal,
-# try again next time" rather than firing `always(False)`.
-TRANSIENT_PATTERNS = (
-    # Network / process-down windows.
-    "connection refused",
-    "connection reset",
-    "no route to host",
-    "broken pipe",
-    "could not connect to server",
-    "Failed to resolve hostname",
-    "Temporary failure in name resolution",
-    # Materialize admission control during a restart.
-    "is (re)initializing",
-    "TooManyRequests",
-    # Postgres source visiting its own restart window.
-    "terminating connection due to administrator command",
-    # testdrive's post-test `--check-catalog-consistency` does a GET to
-    # http://materialized:6878/api/catalog/dump.  If Antithesis kills
-    # environmentd mid-response, reqwest reports `error sending request
-    # ... connection closed before message completed`, wrapped by
-    # testdrive as `error: catalog inconsistency: catalog state`.  The
-    # catalog isn't inconsistent — the dump request just died.
-    "connection closed before message completed",
-    # tokio-postgres surfaces a TCP-level disconnect (Antithesis killing
-    # materialized) as a bare "connection closed" wrapped by testdrive
-    # as `error: executing query failed: connection closed` on a `>`
-    # checkpoint or `error: preparing query failed: connection closed`
-    # on a `> SELECT … PREPARE …` line.  Neither is a query semantic
-    # failure — the upstream crates never produce this string for a
-    # successful round-trip, only when the TCP stream drops.
-    "connection closed",
-    # tiberius (the Rust TDS driver testdrive uses for sql-server)
-    # surfaces a TDS-stream disconnect (Antithesis killing the
-    # sql-server container) as `An error occured during the attempt of
-    # performing I/O: No more packets in the wire`, wrapped by
-    # testdrive's `$ sql-server-execute` directive as
-    # `error: executing SQL Server query: ...`.  Same shape as the
-    # tokio-postgres case above — protocol-layer disconnect, never a
-    # logical error.
-    "No more packets in the wire",
-)
+# Fault-shape pattern list and matcher live in `helper_fault_tolerance`
+# so every Antithesis driver agrees on what "looks like Antithesis killed
+# something" means.  Re-exported here as `TRANSIENT_PATTERNS` for
+# backwards-compatibility with any external caller that imported the
+# module-level tuple before the extraction.
+from helper_fault_tolerance import FAULT_PATTERNS as TRANSIENT_PATTERNS
+from helper_fault_tolerance import looks_like_fault
 
 # `$ skip-if` directive removal regex. testdrive parses skip-if as:
 #   $ skip-if
@@ -140,16 +103,13 @@ class TestdriveResult:
     def looks_transient(self) -> bool:
         """True if a non-zero exit is plausibly a fault-injection artifact.
 
-        Used by the driver layer to demote transient failures to
-        `sometimes(False)` rather than fire a hard `always(False)`. The
-        match is intentionally generous — false-positive transients
-        sacrifice some signal but avoid false-positive property
-        violations, which are far costlier in triage.
+        Delegates to `helper_fault_tolerance.looks_like_fault` so the
+        pattern list stays canonical across all Antithesis drivers.  See
+        that module's docstring for what qualifies.
         """
         if self.succeeded:
             return False
-        blob = (self.stdout + "\n" + self.stderr).lower()
-        return any(p.lower() in blob for p in TRANSIENT_PATTERNS)
+        return looks_like_fault(self.stdout + "\n" + self.stderr)
 
 
 def _strip_skip_if_true(content: str) -> tuple[str, bool]:

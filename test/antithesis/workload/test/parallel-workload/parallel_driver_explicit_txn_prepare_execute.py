@@ -52,7 +52,8 @@ Each invocation:
   3. SDK coin flip picks plain-MV vs REFRESH-EVERY-MV per invocation,
      same as the SELECT arm.
   4. SinceViolation pattern -> `always(False)` on the shared property.
-     Other errors classified as `_TRANSIENT_PATTERNS` -> `sometimes(False)`.
+     Other errors that match `helper_fault_tolerance.looks_like_fault`
+     -> `sometimes(False)` (fault-injection noise, not a bug).
 """
 
 from __future__ import annotations
@@ -64,6 +65,7 @@ import time
 import helper_logging
 import helper_random
 import psycopg
+from helper_fault_tolerance import looks_like_fault
 from helper_pg import connect
 
 from antithesis.assertions import always, sometimes
@@ -75,12 +77,10 @@ TABLE_NAME = "antithesis_txn_table"
 MV_NAME_PLAIN = "antithesis_txn_mv"
 MV_NAME_REFRESH_EVERY = "antithesis_txn_mv_refresh_every"
 
-# Same patterns as the SELECT driver — see the comment block there for
-# why each entry is on the list. Keeping the lists locally duplicated
-# (rather than importing from the sibling driver) so each driver remains
-# self-contained for Antithesis's per-template script scanning, and so
-# triage doesn't have to chase cross-file references when reading the
-# assertion catalog.
+# Property-violation indicators: substrings the driver actively *catches*
+# and fires `always(False)` on. Distinct from fault-injection noise
+# (matched via `helper_fault_tolerance.looks_like_fault`) and kept local
+# because they define this driver's catch surface, not what it ignores.
 _SINCE_VIOLATION_PATTERNS = (
     "sinceviolation",
     "as_of not beyond",
@@ -88,15 +88,6 @@ _SINCE_VIOLATION_PATTERNS = (
     "since of our read handle is merely",
     "insufficient read holds",
     "dataflow has an as_of not beyond",
-)
-
-_TRANSIENT_PATTERNS = (
-    "connection refused",
-    "connection reset",
-    "server closed the connection",
-    "is (re)initializing",
-    "toomanyrequests",
-    "terminating connection due to administrator command",
 )
 
 # Number of EXECUTE calls + interleaved direct SELECTs per txn. Sized
@@ -302,7 +293,7 @@ def main() -> int:
         LOG.warning("batch=%s SINCE VIOLATION caught: %s", batch_id, err[:200])
         return 0
 
-    if _matches_any(err, _TRANSIENT_PATTERNS):
+    if looks_like_fault(err):
         sometimes(
             False,
             "explicit-txn-prepare-execute: BEGIN..(PREPARE/EXECUTE+SELECT)..COMMIT completes cleanly",

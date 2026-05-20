@@ -66,6 +66,7 @@ import time
 import helper_logging
 import helper_random
 import psycopg
+from helper_fault_tolerance import looks_like_fault
 from helper_pg import connect
 
 from antithesis.assertions import always, sometimes
@@ -101,18 +102,11 @@ _SINCE_VIOLATION_PATTERNS = (
     "dataflow has an as_of not beyond",
 )
 
-# Other errors that we treat as transient: connection dropped because
-# Antithesis killed clusterd/materialized; admission control; broker
-# blips. None of these are the bug; they're noise we expect under fault
-# injection.
-_TRANSIENT_PATTERNS = (
-    "connection refused",
-    "connection reset",
-    "server closed the connection",
-    "is (re)initializing",
-    "toomanyrequests",
-    "terminating connection due to administrator command",
-)
+# Fault-injection-shape patterns (connection drops, admission control,
+# broker blips, etc.) are matched via `helper_fault_tolerance.looks_like_fault`,
+# which owns the canonical list shared across every Antithesis driver.
+# Only the property-violation patterns above are local — those define
+# what this driver *catches*, not what it ignores.
 
 # How many SELECTs to fire inside each explicit transaction. Big enough
 # that we cover the >1-subsequent-query case (which is where stored
@@ -284,7 +278,7 @@ def main() -> int:
         LOG.warning("batch=%s SINCE VIOLATION caught: %s", batch_id, err[:200])
         return 0
 
-    if _matches_any(err, _TRANSIENT_PATTERNS):
+    if looks_like_fault(err):
         sometimes(
             False,
             "explicit-txn: full BEGIN..SELECTs..COMMIT cycle completes cleanly",
