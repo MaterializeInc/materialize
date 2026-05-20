@@ -196,8 +196,9 @@ pub(crate) fn attempt_left_join_magic(
                 inc_metrics("voj_5");
                 return Ok(None);
             }
-            // Only columns not from the outer scope introduce bindings.
-            if left >= oa {
+            // Only columns not from the outer scope introduce bindings (`oa <= left`)
+            // And `left` needs to be a column in the left relation (`left < oa + ba`)
+            if oa <= left && left < oa + ba {
                 if let Some(bound) = bound_input {
                     // If left references come from different inputs, bail out.
                     if bound_to[left] != bound {
