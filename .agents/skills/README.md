@@ -19,6 +19,7 @@ explicitly with `$<skill-name>` in Codex and `/<skill-name>` in Claude Code.
 | **mz-commit** | Committing, creating PRs, pushing | Pre-commit checklist, PR title conventions, Cargo.lock discipline, git workflows |
 | **mz-pr-review** | Reviewing code changes | Local code review against Materialize standards for tests, style, error messages, architecture, and polish |
 | **mz-debug-ci** | CI failures, red builds, Buildkite issues | Investigates Buildkite failures using `gh` and `bk` CLI tools to identify root causes |
+| **mz-dbt-release** | Cutting a new `dbt-materialize` PyPI release | Bumps the version in `__version__.py` + `setup.py`, dates the `Unreleased` CHANGELOG entry, opens the release PR |
 
 ## Performance
 
