@@ -114,8 +114,6 @@
             c.managed,
             c.size,
             c.replication_factor,
-            c.id AS cluster_id,
-            c.name AS cluster_name,
             cs.type AS schedule_type,
             cs.refresh_hydration_time_estimate
         FROM mz_clusters c
@@ -131,22 +129,27 @@
         {% set managed = results[0] %}
         {% set size = results[1] %}
         {% set replication_factor = results[2] %}
-        {% set schedule_type = results[5] %}
-        {% set refresh_hydration_time_estimate = results[6] %}
+        {% set schedule_type = results[3] %}
+        {% set refresh_hydration_time_estimate = results[4] %}
 
-        {% if not managed %}
-            {{ exceptions.raise_compiler_error("Production cluster " ~ origin_cluster ~ " is not managed") }}
+        {% if managed %}
+            {% set deploy_cluster = create_cluster(
+                cluster_name=cluster,
+                size=size,
+                replication_factor=replication_factor,
+                schedule_type=schedule_type,
+                refresh_hydration_time_estimate=refresh_hydration_time_estimate,
+                ignore_existing_objects=ignore_existing_objects,
+                force_deploy_suffix=True
+            ) %}
+        {% else %}
+            {% set deploy_cluster = create_unmanaged_cluster(
+                cluster_name=cluster,
+                origin_cluster=origin_cluster,
+                ignore_existing_objects=ignore_existing_objects,
+                force_deploy_suffix=True
+            ) %}
         {% endif %}
-
-        {% set deploy_cluster = create_cluster(
-            cluster_name=cluster,
-            size=size,
-            replication_factor=replication_factor,
-            schedule_type=schedule_type,
-            refresh_hydration_time_estimate=refresh_hydration_time_estimate,
-            ignore_existing_objects=ignore_existing_objects,
-            force_deploy_suffix=True
-        ) %}
 
         {{ internal_copy_cluster_grants(cluster, deploy_cluster) }}
     {% endif %}
