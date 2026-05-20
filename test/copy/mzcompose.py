@@ -372,7 +372,6 @@ def workflow_test_column_dedup(c: Composition):
 
         c.testdrive(dedent("""
                 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-                ALTER SYSTEM SET enable_copy_to_expr = true;
 
                 > CREATE SECRET aws_secret AS '${arg.aws-secret-access-key}'
                 > CREATE CONNECTION aws_conn
@@ -449,12 +448,6 @@ def workflow_test_github_9627(c: Composition):
 def workflow_copy_from_ssrf_redirect(c: Composition) -> None:
     """Regression: COPY FROM must not follow redirects to private IPs."""
     c.up("materialized", "redirect-server")
-
-    c.sql(
-        "ALTER SYSTEM SET enable_copy_from_remote = true;",
-        port=6877,
-        user="mz_system",
-    )
     c.sql("CREATE TABLE ssrf_target (a text)")
 
     copy_succeeded = True

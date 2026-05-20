@@ -24,8 +24,6 @@
   );
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_copy_from_remote = true;
-
 # Author the Parquet file directly in minio with DuckDB, so the bytes are not
 # something MZ's own sink produced. The struct shape mirrors MZ's range
 # encoding (lower/upper/lower_inclusive/upper_inclusive/empty).

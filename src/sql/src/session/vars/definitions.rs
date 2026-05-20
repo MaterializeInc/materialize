@@ -2093,12 +2093,6 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
-        name: enable_copy_to_expr,
-        desc: "COPY ... TO 's3://...'",
-        default: true,
-        enable_for_item_parsing: false,
-    },
-    {
         name: enable_session_timelines,
         desc: "strong session serializable isolation levels",
         default: false,
@@ -2153,12 +2147,6 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
-        name: enable_aws_msk_iam_auth,
-        desc: "Enable AWS MSK IAM authentication for Kafka connections",
-        default: true,
-        enable_for_item_parsing: true,
-    },
-    {
         name: enable_network_policies,
         desc: "ENABLE NETWORK POLICIES",
         default: true,
@@ -2171,21 +2159,9 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_copy_from_remote,
-        desc: "Whether to allow COPY FROM <url>.",
-        default: true,
-        enable_for_item_parsing: false,
-    },
-    {
         name: enable_join_prioritize_arranged,
         desc: "Whether join planning should prioritize already-arranged keys over keys with more fields.",
         default: false,
-        enable_for_item_parsing: false,
-    },
-    {
-        name: enable_sql_server_source,
-        desc: "Creating a SQL SERVER source",
-        default: true,
         enable_for_item_parsing: false,
     },
     {
@@ -2222,12 +2198,6 @@ feature_flags!(
         name: enable_with_ordinality_legacy_fallback,
         desc: "When the new WITH ORDINALITY implementation can't be used with a table func, whether to fall back to the legacy implementation or error out.",
         default: false,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_iceberg_sink,
-        desc: "Whether to enable the Iceberg sink.",
-        default: true,
         enable_for_item_parsing: true,
     },
     {

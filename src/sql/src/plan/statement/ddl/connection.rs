@@ -43,7 +43,7 @@ use crate::names::Aug;
 use crate::plan::statement::{Connection, ResolvedItemName};
 use crate::plan::with_options::{self};
 use crate::plan::{ConnectionDetails, PlanError, SshKey, StatementContext};
-use crate::session::vars::{self, ENABLE_AWS_MSK_IAM_AUTH};
+use crate::session::vars;
 
 generate_extracted_config!(
     ConnectionOption,
@@ -562,8 +562,6 @@ impl ConnectionOptionExtracted {
                 })
             }
             CreateConnectionType::SqlServer => {
-                scx.require_feature_flag(&vars::ENABLE_SQL_SERVER_SOURCE)?;
-
                 let aws_connection = get_aws_connection_reference(scx, &self)?;
                 if aws_connection.is_some() && self.password.is_some() {
                     sql_bail!(
@@ -891,15 +889,12 @@ fn plan_kafka_security(
         SecurityProtocol::SaslPlaintext | SecurityProtocol::SaslSsl => {
             outstanding.remove(&ConnectionOptionName::AwsConnection);
             match get_aws_connection_reference(scx, v)? {
-                Some(aws) => {
-                    scx.require_feature_flag(&ENABLE_AWS_MSK_IAM_AUTH)?;
-                    Some(KafkaSaslConfig {
-                        mechanism: "OAUTHBEARER".into(),
-                        username: "".into(),
-                        password: None,
-                        aws: Some(aws),
-                    })
-                }
+                Some(aws) => Some(KafkaSaslConfig {
+                    mechanism: "OAUTHBEARER".into(),
+                    username: "".into(),
+                    password: None,
+                    aws: Some(aws),
+                }),
                 None => {
                     outstanding.remove(&ConnectionOptionName::SaslMechanisms);
                     outstanding.remove(&ConnectionOptionName::SaslUsername);

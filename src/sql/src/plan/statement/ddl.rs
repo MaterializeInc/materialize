@@ -3651,8 +3651,6 @@ fn iceberg_sink_builder(
     commit_interval: Option<Duration>,
     desc: &RelationDesc,
 ) -> Result<StorageSinkConnection<ReferencedConnection>, PlanError> {
-    scx.require_feature_flag(&vars::ENABLE_ICEBERG_SINK)?;
-
     // Reject types that arrow-rs's parquet writer cannot handle, before
     // sink creation. Pass the iceberg overrides so types iceberg remaps
     // (e.g. interval -> string) don't trip the check.

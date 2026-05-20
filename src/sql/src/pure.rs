@@ -85,7 +85,6 @@ use crate::plan::statement::ddl::load_generator_ast_to_generator;
 use crate::plan::{SourceReferences, StatementContext};
 use crate::pure::error::{IcebergSinkPurificationError, SqlServerSourcePurificationError};
 use crate::pure::mysql::{ensure_binlog_full_metadata, is_binlog_full_metadata};
-use crate::session::vars::ENABLE_SQL_SERVER_SOURCE;
 use crate::{kafka_util, normalize};
 
 use self::error::{
@@ -978,8 +977,6 @@ async fn purify_create_source(
             connection,
             options,
         } => {
-            scx.require_feature_flag(&ENABLE_SQL_SERVER_SOURCE)?;
-
             // Connect to the upstream SQL Server instance so we can validate
             // we're compatible with CDC.
             let connection_item = scx.get_item_by_resolved_name(connection)?;
