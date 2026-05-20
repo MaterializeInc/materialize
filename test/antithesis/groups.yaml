@@ -257,6 +257,7 @@ groups:
     drivers:
       - parallel-workload/parallel_driver_parallel_workload
       - parallel-workload/parallel_driver_explicit_txn_no_since_violation
+      - parallel-workload/parallel_driver_explicit_txn_prepare_execute
       - parallel-workload/parallel_driver_pw_hot_objects
     anytime: []
 
@@ -301,6 +302,7 @@ groups:
       - sql-server-cdc/singleton_driver_sql_server_cdc_testdrive
       - parallel-workload/parallel_driver_parallel_workload
       - parallel-workload/parallel_driver_explicit_txn_no_since_violation
+      - parallel-workload/parallel_driver_explicit_txn_prepare_execute
       - parallel-workload/parallel_driver_pw_hot_objects
     anytime:
       - kafka/anytime_kafka_frontier_monotonic
