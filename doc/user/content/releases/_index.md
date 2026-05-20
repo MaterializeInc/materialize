@@ -23,8 +23,8 @@ This patch release fixes a MySQL source ingestion bug.
 ### Bug Fixes {#v26.24.3-bug-fixes}
 
 - Fixed MySQL sources failing to decode `TIMESTAMP` and `DATETIME` columns
-  ingested via `TEXT COLUMNS`, including MySQL's special zero-value timestamps
-  (`0000-00-00 00:00:00`).
+  ingested via `TEXT COLUMNS`. Zero-value timestamps (`0000-00-00 00:00:00`)
+  continue to require `TEXT COLUMNS` plus a `CAST` in user queries.
 
 ## v26.24.2
 *Released to Materialize Self-Managed: 2026-05-18* <br>
