@@ -13,6 +13,7 @@ import React from "react";
 import { ObjectDetailsCard } from "./ObjectDetailsCard";
 import { ObjectFreshness } from "./ObjectFreshness";
 import { ObjectMetadata } from "./ObjectMetadata";
+import { ObjectPerformance } from "./ObjectPerformance";
 import { MaintainedObjectListItem } from "./queries";
 
 export interface ObjectDetailPanelProps {
@@ -36,6 +37,7 @@ export const ObjectDetailPanel = ({
         <TabList mb={6}>
           <Tab>Definition</Tab>
           <Tab>Freshness</Tab>
+          <Tab>Performance</Tab>
         </TabList>
         <TabPanels>
           <TabPanel px={0}>
@@ -47,6 +49,9 @@ export const ObjectDetailPanel = ({
               timePeriodMinutes={lookbackMinutes}
               setTimePeriodMinutes={setLookbackMinutes}
             />
+          </TabPanel>
+          <TabPanel px={0}>
+            <ObjectPerformance item={item} />
           </TabPanel>
         </TabPanels>
       </Tabs>
