@@ -1938,6 +1938,9 @@ impl CatalogState {
                     .expect("catalog out of sync")
                     .bound_objects
                     .insert(entry.id);
+                // `imbl::OrdSet::insert` returns the previous value as
+                // `Option<T>`; we don't check it here because the
+                // pre-existing `BTreeSet` version didn't either.
             };
         }
 
@@ -2082,14 +2085,13 @@ impl CatalogState {
 
         if !id.is_system() {
             if let Some(cluster_id) = metadata.item().cluster_id() {
-                assert!(
-                    self.clusters_by_id
-                        .get_mut(&cluster_id)
-                        .expect("catalog out of sync")
-                        .bound_objects
-                        .remove(&id),
-                    "catalog out of sync"
-                );
+                let prev = self
+                    .clusters_by_id
+                    .get_mut(&cluster_id)
+                    .expect("catalog out of sync")
+                    .bound_objects
+                    .remove(&id);
+                assert!(prev.is_some(), "catalog out of sync");
             }
         }
 

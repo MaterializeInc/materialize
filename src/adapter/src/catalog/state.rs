@@ -109,6 +109,43 @@ use crate::session::Session;
 ///
 /// [`Serialize`] is implemented to create human readable dumps of the in-memory state, not for
 /// storing the contents of this struct on disk.
+///
+/// # A note on persistent collections (`imbl::OrdMap` / `imbl::OrdSet` / `imbl::Vector`)
+///
+/// Almost every collection field on `CatalogState` — and on the value
+/// types stored inside those collections (`Database`, `Schema`, `Cluster`,
+/// `Role`, `CatalogEntry`, `SourceReferences`, `StorageMetadata`, …) —
+/// is an `imbl::*` persistent collection rather than a `std::collections`
+/// one. This is load-bearing: `Catalog::transact_inner` builds two
+/// `Cow<CatalogState>` handles (`preliminary_state` and `state`) and
+/// calls `to_mut()` on each, so all `imbl::OrdMap`s end up shared
+/// across two `CatalogState`s during a single DDL. Any later
+/// `get_mut(...)` on a shared `imbl::OrdMap` triggers a leaf path-copy
+/// that **clones every value in the affected B-tree leaf**, not just
+/// the targeted one. If any of those values embeds a non-persistent
+/// inner collection (`BTreeMap`, `BTreeSet`, `Vec`, …), that inner
+/// collection gets deep-cloned in O(M) — and if M scales with the
+/// workload (e.g. items in a schema), the per-DDL cost scales too.
+///
+/// Concretely: the audit_pad-scalability bench (`test/envd-ddl-scalability/`)
+/// caught two ~5 ms/DDL N-dependent slopes at N=15k tables that were
+/// nothing more than `Arc::make_mut`/`imbl` leaf-copies deep-cloning
+/// non-persistent inner collections (`Schema.items: BTreeMap` and
+/// `StorageMetadata.collection_metadata: BTreeMap`). Switching those
+/// inners to `imbl::OrdMap` made the leaf-copy O(1) (persistent
+/// tree-root refcount bump) and erased the slope.
+///
+/// **Rule:** when adding a field whose value type lives inside any
+/// of these `imbl::OrdMap`s (or behind an `Arc` we `make_mut`), use
+/// a persistent collection (`imbl::OrdMap`, `imbl::OrdSet`,
+/// `imbl::Vector`) for any sub-field that can grow with the
+/// workload. Two intentional holdouts exist:
+/// * `Cluster.log_indexes` (`BTreeMap<LogVariant, GlobalId>`) — has
+///   a tight `arranged_logs: BTreeMap<LogVariant, GlobalId>` API
+///   contract with the compute controller and is bounded by the
+///   number of log variants (~10).
+/// * `*_by_name_` legacy fields elsewhere — see comments at the
+///   call sites.
 #[derive(Debug, Clone, Serialize)]
 pub struct CatalogState {
     // State derived from the durable catalog. These fields should only be mutated in `open.rs` or

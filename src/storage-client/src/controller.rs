@@ -210,15 +210,6 @@ pub enum Response {
 /// included it in this struct it would never be read.
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct StorageMetadata {
-    // `imbl::OrdMap`/`imbl::OrdSet` instead of `BTreeMap`/`BTreeSet`:
-    // `StorageMetadata` lives behind `Arc<StorageMetadata>` on `CatalogState`,
-    // and the `preliminary_state`/`state` Cow pattern in
-    // `Catalog::transact_inner` shares that Arc between two `CatalogState`s.
-    // The first `Arc::make_mut(storage_metadata)` per state then deep-clones
-    // these collections; with non-persistent collections that cost was
-    // O(N) per DDL (~5 ms at N=15k). The imbl variants clone in O(1)
-    // (refcount bump on the persistent tree root), keeping
-    // `apply_storage_collection_metadata_update` flat.
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub collection_metadata: imbl::OrdMap<GlobalId, ShardId>,
     pub unfinalized_shards: imbl::OrdSet<ShardId>,
