@@ -3466,13 +3466,13 @@ fn plan_sink(
             commit_interval,
         )?,
         CreateSinkConnection::Iceberg {
-            connection,
+            catalog_connection,
             aws_connection,
             options,
             ..
         } => iceberg_sink_builder(
             scx,
-            connection,
+            catalog_connection,
             aws_connection,
             options,
             relation_key_indices,
@@ -3644,7 +3644,7 @@ impl std::convert::TryFrom<Vec<CsrConfigOption<Aug>>> for CsrConfigOptionExtract
 fn iceberg_sink_builder(
     scx: &StatementContext,
     catalog_connection: ResolvedItemName,
-    aws_connection: ResolvedItemName,
+    storage_connection: Option<ResolvedItemName>,
     options: Vec<IcebergSinkConfigOption<Aug>>,
     relation_key_indices: Option<Vec<usize>>,
     key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
@@ -3658,10 +3658,9 @@ fn iceberg_sink_builder(
     // (e.g. interval -> string) don't trip the check.
     ArrowBuilder::validate_desc_for_parquet(desc, iceberg_type_overrides)
         .map_err(|e| sql_err!("{}", e))?;
+
     let catalog_connection_item = scx.get_item_by_resolved_name(&catalog_connection)?;
     let catalog_connection_id = catalog_connection_item.id();
-    let aws_connection_item = scx.get_item_by_resolved_name(&aws_connection)?;
-    let aws_connection_id = aws_connection_item.id();
     if !matches!(
         catalog_connection_item.connection()?,
         Connection::IcebergCatalog(_)
@@ -3675,13 +3674,16 @@ fn iceberg_sink_builder(
         );
     };
 
-    if !matches!(aws_connection_item.connection()?, Connection::Aws(_)) {
+    let storage_connection_item = storage_connection
+        .map(|c| scx.get_item_by_resolved_name(&c))
+        .transpose()?;
+    let storage_connection_id = storage_connection_item.as_ref().map(|c| c.id());
+    if let Some(c) = &storage_connection_item
+        && !matches!(c.connection()?, Connection::Aws(_))
+    {
         sql_bail!(
             "{} is not an AWS connection",
-            scx.catalog
-                .resolve_full_name(aws_connection_item.name())
-                .to_string()
-                .quoted()
+            scx.catalog.resolve_full_name(c.name()).to_string().quoted()
         );
     }
 
@@ -3704,8 +3706,8 @@ fn iceberg_sink_builder(
     Ok(StorageSinkConnection::Iceberg(IcebergSinkConnection {
         catalog_connection_id,
         catalog_connection: catalog_connection_id,
-        aws_connection_id,
-        aws_connection: aws_connection_id,
+        storage_connection_id,
+        storage_connection: storage_connection_id,
         table,
         namespace,
         relation_key_indices,

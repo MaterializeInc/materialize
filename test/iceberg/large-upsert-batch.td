@@ -19,13 +19,6 @@
 
 > CREATE SECRET access_key_secret AS '${arg.s3-access-key}'
 
-> CREATE CONNECTION aws_conn TO AWS (
-    ACCESS KEY ID = 'tduser',
-    SECRET ACCESS KEY = SECRET access_key_secret,
-    ENDPOINT = '${arg.aws-endpoint}',
-    REGION = 'us-east-1'
-  );
-
 > CREATE CONNECTION polaris TO ICEBERG CATALOG (
     CATALOG TYPE = 'REST',
     URL = 'http://polaris:8181/api/catalog',
@@ -42,7 +35,6 @@
         NAMESPACE 'default_namespace',
         TABLE 'large_upsert_table'
     )
-    USING AWS CONNECTION aws_conn
     KEY (key) NOT ENFORCED
     MODE UPSERT
     WITH (COMMIT INTERVAL '120s');

@@ -1542,8 +1542,11 @@ pub enum CreateSinkConnection<T: AstInfo> {
         headers: Option<Ident>,
     },
     Iceberg {
-        connection: T::ItemName,
-        aws_connection: T::ItemName,
+        catalog_connection: T::ItemName,
+
+        /// AWS creds for the storage layer.
+        aws_connection: Option<T::ItemName>,
+
         key: Option<SinkKey>,
         options: Vec<IcebergSinkConfigOption<T>>,
     },
@@ -1575,20 +1578,22 @@ impl<T: AstInfo> AstDisplay for CreateSinkConnection<T> {
                 }
             }
             CreateSinkConnection::Iceberg {
-                connection,
+                catalog_connection,
                 aws_connection,
                 key,
                 options,
             } => {
                 f.write_str("ICEBERG CATALOG CONNECTION ");
-                f.write_node(connection);
+                f.write_node(catalog_connection);
                 if !options.is_empty() {
                     f.write_str(" (");
                     f.write_node(&display::comma_separated(options));
                     f.write_str(")");
                 }
-                f.write_str(" USING AWS CONNECTION ");
-                f.write_node(aws_connection);
+                if let Some(aws_connection) = aws_connection {
+                    f.write_str(" USING AWS CONNECTION ");
+                    f.write_node(aws_connection);
+                }
                 if let Some(key) = key.as_ref() {
                     f.write_str(" ");
                     f.write_node(key);
