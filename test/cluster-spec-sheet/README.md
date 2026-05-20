@@ -87,13 +87,29 @@ scenario.
 
 ### cluster object limits scenarios
 
-The `cluster_object_limits_indexes` and `cluster_object_limits_mvs` scenarios
-find, per cluster size, how many idle materializations (indexes or
-materialized views) one cluster can keep fresh. Each materialization is
-derived from a one-row base table that is never updated, so the only work the
-cluster has to do is keep advancing each materialization's `write_frontier`
-in step with the table's frontier. Once the cluster can't keep up, freshness
-collapses; we record the largest N at which freshness was still good.
+The `cluster_object_limits_indexes_from_persist_sources`,
+`cluster_object_limits_indexes_from_index`, and
+`cluster_object_limits_mvs_from_persist_sources` scenarios find, per cluster
+size, how many idle materializations one cluster can keep fresh. Each
+materialization is derived from a one-row base table that is never updated,
+so the only work the cluster has to do is keep advancing each
+materialization's `write_frontier` in step with the table's frontier. Once
+the cluster can't keep up, freshness collapses; we record the largest N at
+which freshness was still good.
+
+The three variants differ in topology:
+- `cluster_object_limits_indexes_from_persist_sources`: N indexed views each
+  read directly from `base_t`, i.e. one persist source per test object.
+  Dominated by persist-source breadth.
+- `cluster_object_limits_indexes_from_index`: a single root view `v_root`
+  with one index on `c` sits between `base_t` and the N test indexes. The N
+  test indexes read from `v_root`, so the optimizer imports the root index's
+  arrangement and the whole topology has one persist source regardless of N.
+  Isolates the "how many compute-only dataflows can a cluster tick" axis
+  from persist-source overhead.
+- `cluster_object_limits_mvs_from_persist_sources`: N materialized views,
+  each with its own persist source from `base_t` and its own persist sink.
+  Dominated by persist-source and persist-sink breadth.
 
 Procedure (per cluster size in `REPLICA_SCALES`, capped by `--max-scale`):
 1. (Re)create the test cluster `c` at that size, plus a one-row base table.

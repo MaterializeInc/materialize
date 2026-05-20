@@ -110,8 +110,15 @@ SCENARIO_QPS_ENVD_STRONG_SCALING = "qps_envd_strong_scaling"
 SCENARIO_COPY_FROM_STDIN_ENVD_STRONG_SCALING = "copy_from_stdin_envd_strong_scaling"
 SCENARIO_ENVD_OBJECTS_SCALABILITY_TABLES = "envd_objects_scalability_tables"
 SCENARIO_ENVD_OBJECTS_SCALABILITY_MVS = "envd_objects_scalability_mvs"
-SCENARIO_CLUSTER_OBJECT_LIMITS_INDEXES = "cluster_object_limits_indexes"
-SCENARIO_CLUSTER_OBJECT_LIMITS_MVS = "cluster_object_limits_mvs"
+SCENARIO_CLUSTER_OBJECT_LIMITS_INDEXES_FROM_PERSIST_SOURCES = (
+    "cluster_object_limits_indexes_from_persist_sources"
+)
+SCENARIO_CLUSTER_OBJECT_LIMITS_INDEXES_FROM_INDEX = (
+    "cluster_object_limits_indexes_from_index"
+)
+SCENARIO_CLUSTER_OBJECT_LIMITS_MVS_FROM_PERSIST_SOURCES = (
+    "cluster_object_limits_mvs_from_persist_sources"
+)
 
 # Scenario groupings (`SCENARIO_GROUPS`, `SCENARIOS_BY_NAME`) are derived
 # from the `SCENARIOS` registry further down — see `ScenarioSpec`.
@@ -2641,18 +2648,24 @@ class ClusterObjectLimitsKind:
     # to count how many of our test objects on `c` are hydrated before we
     # start sampling freshness.
     hydration_filter: str
+    # Optional statements run once per cluster-size iteration (after the
+    # cluster, schema, and base table exist) to set up extra topology that
+    # the per-i `create_templates` then build on top of. Used by the
+    # `indexes_from_index` variant to pre-create a single root index that
+    # the N test indexes share. Statements take `{schema}` and `{base}`
+    # placeholders.
+    setup_statements: tuple[str, ...] = ()
 
 
-CLUSTER_OBJECT_LIMITS_INDEXES_KIND = ClusterObjectLimitsKind(
-    scenario_name=SCENARIO_CLUSTER_OBJECT_LIMITS_INDEXES,
+CLUSTER_OBJECT_LIMITS_INDEXES_FROM_PERSIST_SOURCES_KIND = ClusterObjectLimitsKind(
+    scenario_name=SCENARIO_CLUSTER_OBJECT_LIMITS_INDEXES_FROM_PERSIST_SOURCES,
     # Each (view, default index) pair is one independent index dataflow on
-    # `c`. DROP VIEW CASCADE removes the dependent default index too.
-    #
-    # TODO(follow-up): add a "base_t -> one index -> many indexes"
-    # topology to compare against the current "many indexes off
-    # base_t directly" shape. The analogous MV variant isn't needed
-    # — the cluster_object_limits MV scenario already covers the
-    # persist-source-breadth axis.
+    # `c`, reading directly from `base_t`'s persist shard — i.e. one
+    # persist source per test object. DROP VIEW CASCADE removes the
+    # dependent default index too. Compare against
+    # `cluster_object_limits_indexes_from_index`, which inserts a single
+    # root index in front so the N test indexes share one in-memory
+    # arrangement instead of N persist sources.
     create_templates=(
         "CREATE VIEW IF NOT EXISTS {schema}.v_{i} AS "
         "SELECT id, val FROM {schema}.{base} WHERE id < {i}",
@@ -2672,8 +2685,51 @@ CLUSTER_OBJECT_LIMITS_INDEXES_KIND = ClusterObjectLimitsKind(
     """,
 )
 
-CLUSTER_OBJECT_LIMITS_MVS_KIND = ClusterObjectLimitsKind(
-    scenario_name=SCENARIO_CLUSTER_OBJECT_LIMITS_MVS,
+# Variant with one root index between `base_t` and the N test indexes:
+# a single view `v_root` with an index on `c` sits in front of `base_t`,
+# and the N test indexes read from `v_root` instead of `base_t`. The
+# optimizer imports the root index's arrangement, so the whole topology
+# has one persist source regardless of N. That isolates "how many
+# compute-only dataflows can a cluster tick" from "how many persist
+# sources can it pull in parallel" — the latter dominates
+# `cluster_object_limits_indexes_from_persist_sources`. `base_t` is
+# still on the data path so frontier ticks propagate through the root
+# index into every test index.
+#
+# No analogous MV variant:
+# `cluster_object_limits_mvs_from_persist_sources` already covers the
+# persist-sink-breadth axis (each MV is its own sink), so a from-index
+# version wouldn't measure something new.
+CLUSTER_OBJECT_LIMITS_INDEXES_FROM_INDEX_KIND = ClusterObjectLimitsKind(
+    scenario_name=SCENARIO_CLUSTER_OBJECT_LIMITS_INDEXES_FROM_INDEX,
+    setup_statements=(
+        "CREATE VIEW IF NOT EXISTS {schema}.v_root AS "
+        "SELECT id, val FROM {schema}.{base}",
+        "CREATE DEFAULT INDEX v_root_primary_idx IN CLUSTER c ON {schema}.v_root",
+    ),
+    create_templates=(
+        "CREATE VIEW IF NOT EXISTS {schema}.v_{i} AS "
+        "SELECT id, val FROM {schema}.v_root WHERE id < {i}",
+        "CREATE DEFAULT INDEX IF NOT EXISTS IN CLUSTER c ON {schema}.v_{i}",
+    ),
+    drop_template="DROP VIEW IF EXISTS {schema}.v_{i} CASCADE",
+    label="indexed views (from root index)",
+    # Exclude the shared root index from the freshness counts: it's
+    # topology, not one of the N test objects.
+    lag_filter="""
+    JOIN mz_catalog.mz_indexes idx ON l.object_id = idx.id
+    JOIN mz_catalog.mz_clusters c ON idx.cluster_id = c.id
+    WHERE c.name = 'c' AND idx.name <> 'v_root_primary_idx'
+    """,
+    hydration_filter="""
+    JOIN mz_catalog.mz_indexes idx ON hs.object_id = idx.id
+    JOIN mz_catalog.mz_clusters c ON idx.cluster_id = c.id
+    WHERE c.name = 'c' AND idx.name <> 'v_root_primary_idx'
+    """,
+)
+
+CLUSTER_OBJECT_LIMITS_MVS_FROM_PERSIST_SOURCES_KIND = ClusterObjectLimitsKind(
+    scenario_name=SCENARIO_CLUSTER_OBJECT_LIMITS_MVS_FROM_PERSIST_SOURCES,
     create_templates=(
         "CREATE MATERIALIZED VIEW IF NOT EXISTS {schema}.mv_{i} IN CLUSTER c "
         "AS SELECT id, val FROM {schema}.{base} WHERE id < {i}",
@@ -2784,6 +2840,8 @@ class ClusterObjectLimitsScenario(Scenario):
         runner.run_query(
             f"INSERT INTO {self.PAD_SCHEMA}.{self.BASE_TABLE} VALUES (1, 'x')"
         )
+        for stmt in self._kind.setup_statements:
+            runner.run_query(stmt.format(schema=self.PAD_SCHEMA, base=self.BASE_TABLE))
         self._current_n = 0
         return True
 
@@ -4046,20 +4104,30 @@ SCENARIOS: list[ScenarioSpec] = [
         groups=("envd_objects_scalability",),
     ),
     ScenarioSpec(
-        SCENARIO_CLUSTER_OBJECT_LIMITS_INDEXES,
-        "cluster object limits (indexes)",
+        SCENARIO_CLUSTER_OBJECT_LIMITS_INDEXES_FROM_PERSIST_SOURCES,
+        "cluster object limits (indexes, from persist sources)",
         lambda a, t: ClusterObjectLimitsScenario(
-            CLUSTER_OBJECT_LIMITS_INDEXES_KIND,
+            CLUSTER_OBJECT_LIMITS_INDEXES_FROM_PERSIST_SOURCES_KIND,
             sizes=a.cluster_object_limits_sizes,
             bisect_steps=a.cluster_object_limits_bisect_steps,
         ),
         groups=("cluster_object_limits",),
     ),
     ScenarioSpec(
-        SCENARIO_CLUSTER_OBJECT_LIMITS_MVS,
-        "cluster object limits (materialized views)",
+        SCENARIO_CLUSTER_OBJECT_LIMITS_INDEXES_FROM_INDEX,
+        "cluster object limits (indexes, from root index)",
         lambda a, t: ClusterObjectLimitsScenario(
-            CLUSTER_OBJECT_LIMITS_MVS_KIND,
+            CLUSTER_OBJECT_LIMITS_INDEXES_FROM_INDEX_KIND,
+            sizes=a.cluster_object_limits_sizes,
+            bisect_steps=a.cluster_object_limits_bisect_steps,
+        ),
+        groups=("cluster_object_limits",),
+    ),
+    ScenarioSpec(
+        SCENARIO_CLUSTER_OBJECT_LIMITS_MVS_FROM_PERSIST_SOURCES,
+        "cluster object limits (materialized views, from persist sources)",
+        lambda a, t: ClusterObjectLimitsScenario(
+            CLUSTER_OBJECT_LIMITS_MVS_FROM_PERSIST_SOURCES_KIND,
             sizes=a.cluster_object_limits_sizes,
             bisect_steps=a.cluster_object_limits_bisect_steps,
         ),
