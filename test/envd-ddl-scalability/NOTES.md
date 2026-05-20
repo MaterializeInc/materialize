@@ -3466,3 +3466,39 @@ Sweep totals (POST-fix, same run):
 | 10000 |   52.04         |   29.52                    |
 | 15000 |   60.12         |   36.33                    |
 | slope 10→15 | **+8.08** | **+6.81** |
+
+## Phase 15+: extend to N=20k / N=25k and iterate
+
+The slope is *flatter* than at the start of the investigation but it
+is not flat. Concretely we still see roughly +1.6 ms/+1k tables in
+`create_p50` between N=10k and N=15k, and `coord_inner_total` still
+climbs by +6.81 ms over that same step. Before declaring victory, we
+need to:
+
+1. **Extend the bench to N=20k and N=25k.** Most of our prior
+   evidence is dominated by run-to-run noise at N≤15k; pushing to
+   25k gives us a longer lever arm to discriminate "slope-of-zero
+   plus noise" from "slope-of-something". Bench harness change:
+   `SCALES = [5000, 10000, 15000, 20000, 25000]` in
+   `/home/ubuntu/envd-ddl-investigation/bench.py`. The
+   `max_tables` / `max_objects_per_schema` system vars are already
+   set to 30000 so headroom is fine.
+
+2. **Iterate the investigation as discrete one-shot agent runs.**
+   Each iteration is: (a) run the bench, (b) attribute the slope
+   using existing metrics + new ones if needed, (c) design *one*
+   fix that addresses the slope owner, (d) implement, commit, write
+   up. Between iterations we look at the headline numbers and
+   decide whether to keep going. Stop when slope is flat across
+   N=10k → 25k or when we run out of obvious leverage.
+
+   The agents driving each iteration should be encouraged to step
+   back and consider architectural cuts — especially boundaries
+   between Coordinator / Storage Controller / StorageCollections /
+   persist. The next-up known suspect (txns upper fanout to N
+   per-collection `write_frontier` fields) is itself a
+   boundary-shape problem: the txns shard's upper is a single
+   value that we currently propagate to N owners on every tick;
+   keeping one shared field on `StorageCollectionsImpl` and
+   reading from it would just delete the work. Simple, narrow
+   interfaces beat clever caching.
