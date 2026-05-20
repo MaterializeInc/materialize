@@ -40,6 +40,10 @@ import {
   fetchClusters,
 } from "~/api/materialize/cluster/clusterList";
 import {
+  DataflowCpuPerWorkerParams,
+  fetchDataflowCpuPerWorker,
+} from "~/api/materialize/cluster/dataflowCpuPerWorker";
+import {
   fetchIndexesList,
   ListFilters,
 } from "~/api/materialize/cluster/indexesList";
@@ -153,6 +157,11 @@ export const clusterQueryKeys = {
     [
       ...clusterQueryKeys.all(),
       buildQueryKeyPart("clusterFreshness", params),
+    ] as const,
+  dataflowCpuPerWorker: (params: DataflowCpuPerWorkerParams) =>
+    [
+      ...clusterQueryKeys.all(),
+      buildQueryKeyPart("dataflowCpuPerWorker", params),
     ] as const,
 };
 
@@ -687,3 +696,30 @@ export function useClusterFreshness({
 export type CurrentClusterFreshnessData = Awaited<
   ReturnType<typeof useClusterFreshness>["data"]
 >["currentData"][0];
+
+/**
+ * Per-worker CPU breakdown of every dataflow on the cluster replica. The shape
+ * (object x worker x elapsed_ns) drives the cluster CPU heatmap. `null` while
+ * any of the required parameters are missing.
+ */
+export function useDataflowCpuPerWorker(
+  params: Partial<DataflowCpuPerWorkerParams>,
+) {
+  return useQuery({
+    refetchInterval: 30_000,
+    enabled: Boolean(params.clusterName && params.replicaName),
+    queryKey: clusterQueryKeys.dataflowCpuPerWorker({
+      clusterName: params.clusterName ?? "",
+      replicaName: params.replicaName ?? "",
+    }),
+    queryFn: ({ queryKey, signal }) => {
+      const [, paramsFromKey] = queryKey;
+      return fetchDataflowCpuPerWorker({
+        queryKey,
+        params: paramsFromKey,
+        requestOptions: { signal },
+      });
+    },
+    select: (data) => data?.rows ?? [],
+  });
+}
