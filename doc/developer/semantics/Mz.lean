@@ -30,8 +30,10 @@ import Mz.Join
 import Mz.Join2
 import Mz.JoinPushdown
 import Mz.FilterFusion
+import Mz.FilterFusion2
 import Mz.ProjectFusion
 import Mz.Demand
+import Mz.Demand2
 import Mz.GroupBy
 import Mz.SetOps
 import Mz.SetOps2
