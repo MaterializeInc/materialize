@@ -145,8 +145,9 @@ CLUSTER_OBJECT_LIMITS_LAG_THRESHOLD_MS = 2_000
 CLUSTER_OBJECT_LIMITS_LAG_CAP_MS = 10 * CLUSTER_OBJECT_LIMITS_LAG_THRESHOLD_MS
 # Per-batch deadline for all N materializations to report
 # `hydrated=true` in `mz_hydration_statuses`. Steady-state lag
-# check below handles overloaded clusters.
-CLUSTER_OBJECT_LIMITS_HYDRATION_TIMEOUT_S = 60
+# check below handles overloaded clusters. Probes that time out
+# are recorded with `failure_mode="hydration_timeout"`.
+CLUSTER_OBJECT_LIMITS_HYDRATION_TIMEOUT_S = 300
 # Longer timeout for the first probe after `CREATE CLUSTER c`,
 # to absorb cold-start cost on larger replicas. Subsequent probes
 # (warmer replica) use the shorter timeout above.
@@ -242,12 +243,14 @@ class ScenarioRunner:
         time_ms: int | None = None,
         qps: float | None = None,
         healthy: int | None = None,
+        failure_mode: str | None = None,
     ) -> None:
         """Write one result row.
 
-        ``healthy`` is recorded for cluster_object_limits only; the extra
-        column is silently dropped on streams whose schema doesn't include
-        it (``csv.DictWriter(extrasaction="ignore")``).
+        ``healthy`` and ``failure_mode`` are recorded for
+        cluster_object_limits only; extra columns are silently dropped
+        on streams whose schema doesn't include them
+        (``csv.DictWriter(extrasaction="ignore")``).
         """
         self.results_writer.writerow(
             {
@@ -264,6 +267,7 @@ class ScenarioRunner:
                 "time_ms": time_ms,
                 "qps": qps,
                 "healthy": healthy,
+                "failure_mode": failure_mode,
             }
         )
 
@@ -2308,7 +2312,7 @@ def _bulk_run(runner: ScenarioRunner, statements: list[str], log_label: str) -> 
 # CSV schemas used by `workflow_default`. The cluster-focused schema is the
 # default; envd_qps_scalability uses its own QPS-focused shape;
 # envd_objects_scalability reuses CLUSTER_FIELDNAMES verbatim and
-# cluster_object_limits extends it with an extra `healthy` column.
+# cluster_object_limits extends it with `healthy` and `failure_mode` columns.
 CLUSTER_FIELDNAMES: list[str] = [
     "scenario",
     "scenario_version",
@@ -2879,10 +2883,14 @@ class ClusterObjectLimitsScenario(Scenario):
         samples: int,
         sample_interval_s: float,
         lag_threshold_ms: int,
-    ) -> tuple[float, bool, int, int]:
+    ) -> tuple[float, str, int, int]:
         """
         Two-phase probe: wait for hydration, then take steady-state lag
-        samples. Returns (max_lag_ms, healthy, reporting, total).
+        samples. Returns (max_lag_ms, status, reporting, total), where
+        ``status`` is one of:
+          - "healthy": hydrated and steady-state lag below threshold
+          - "lag": hydrated but steady-state lag above threshold
+          - "hydration_timeout": Phase 1 timed out
 
         Splitting the phases distinguishes "still hydrating" (transient
         high lag is expected) from "hydrated but not keeping up" (the
@@ -2912,7 +2920,7 @@ class ClusterObjectLimitsScenario(Scenario):
                     f"    hydration timeout: {last_hydrated}/{target_n} "
                     f"hydrated after {timeout_s}s"
                 )
-                return max_lag_ms, False, reporting, last_total
+                return max_lag_ms, "hydration_timeout", reporting, last_total
 
             # Phase 2: steady-state lag sampling.
             max_lag_over_samples = 0.0
@@ -2927,7 +2935,8 @@ class ClusterObjectLimitsScenario(Scenario):
             healthy = (
                 worst_reporting == target_n and max_lag_over_samples < lag_threshold_ms
             )
-            return max_lag_over_samples, healthy, worst_reporting, last_total
+            status = "healthy" if healthy else "lag"
+            return max_lag_over_samples, status, worst_reporting, last_total
         finally:
             runner.run_query("SET cluster = 'c'")
 
@@ -2947,14 +2956,15 @@ class ClusterObjectLimitsScenario(Scenario):
         timeout_s = (
             first_probe_hydration_timeout_s if first_probe else hydration_timeout_s
         )
-        max_lag_ms, healthy, reporting, total = self._hydrate_and_sample(
+        max_lag_ms, status, reporting, total = self._hydrate_and_sample(
             runner, n, timeout_s, samples, sample_interval_s, lag_threshold_ms
         )
+        healthy = status == "healthy"
         capped_lag_ms = min(max_lag_ms, CLUSTER_OBJECT_LIMITS_LAG_CAP_MS)
         print(
             f"    {'(bisect) ' if refinement else ''}"
             f"N={n}: max_local_lag_ms={max_lag_ms:.1f} "
-            f"reporting={reporting}/{total} healthy={healthy}"
+            f"reporting={reporting}/{total} status={status}"
         )
         runner.add_result(
             "freshness",
@@ -2963,6 +2973,7 @@ class ClusterObjectLimitsScenario(Scenario):
             size_bytes=None,
             time_ms=int(capped_lag_ms),
             healthy=1 if healthy else 0,
+            failure_mode=None if healthy else status,
         )
         return healthy
 
@@ -3701,9 +3712,10 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
                 target.cleanup()
 
         # Upload, archive, and analyze each result stream uniformly. The
-        # cluster_object_limits stream's extra `healthy` column is silently
-        # dropped on upload (CSV writer uses extrasaction="ignore"); to
-        # recover it, consult the artifact CSV directly.
+        # cluster_object_limits stream's extra `healthy` / `failure_mode`
+        # columns are silently dropped on upload (CSV writer uses
+        # extrasaction="ignore"); to recover them, consult the artifact
+        # CSV directly.
         for stream in streams.values():
             stream.spec.upload(composition, stream.path, not test_failed)
 
@@ -4547,7 +4559,7 @@ RESULT_STREAMS: list[ResultStreamSpec] = [
     ResultStreamSpec(
         "cluster_object_limits",
         ".cluster_object_limits.csv",
-        CLUSTER_FIELDNAMES + ["healthy"],
+        CLUSTER_FIELDNAMES + ["healthy", "failure_mode"],
         analyze_cluster_object_limits_results_file,
         upload_cluster_results_to_test_analytics,
     ),
