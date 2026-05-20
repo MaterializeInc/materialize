@@ -14,6 +14,7 @@ import Mz.Pushdown
 import Mz.ColRefs
 import Mz.DiffSemiring
 import Mz.DiffErrCount
+import Mz.DiffWithGlobal
 import Mz.UnifiedStream
 import Mz.UnifiedConsolidate
 import Mz.TimedConsolidate
