@@ -3261,3 +3261,43 @@ existing `mz_catalog_apply_update_kind_seconds{kind}` histogram is
 the right tool — if `cluster` / `cluster_replica` / `system_object_mapping`
 kinds show a per-call slope, that's the signal to land the
 `Cluster.bound_objects` swap and friends.
+
+## Phase 13: the sweep lands
+
+Committed in `1a8446c2bf` (and consolidated comment-block on
+`CatalogState` removed the per-field "why imbl" comments on Schema
+and StorageMetadata that phases 11/12 had added):
+
+  Database.{schemas_by_id, schemas_by_name}
+  Cluster.{bound_objects, replica_id_by_name_, replicas_by_id_}
+  RoleMembership.map, RoleVars.map
+  SourceReferences.references
+
+Trait sigs in `mz_sql::catalog` updated to match (`CatalogDatabase`,
+`CatalogRole`, `CatalogCluster`). Intentional holdouts: see the
+comment block on `CatalogState`.
+
+### Sanity-bench (`results_phase13/`)
+
+The audit_pad bench doesn't actually touch most of these paths
+(plain `CREATE TABLE` doesn't mutate clusters, roles, or sources).
+Expected outcome: no regression on internal metrics, no slope
+change. Result:
+
+| kind                          | phase 12 µs/call | phase 13 µs/call |
+|-------------------------------|-----------------:|-----------------:|
+| `item` @ N=15k                |  242             |  238             |
+| `storage_collection_metadata` @ N=15k | 5.12      |  5.95            |
+
+apply_updates_inner total ms/DDL also unchanged at N=15k
+(1.49 → 1.48). Run-to-run noise dominates; no regression, no
+measurable win on *this* workload — which was the point. The fix
+is landmine-prevention for cluster-heavy, role-heavy, and
+source-heavy workloads where the same leaf-clone-deep-clone
+pattern would otherwise surface a slope on its respective DDLs.
+
+A future scale bench that exercises `CREATE INDEX` / `CREATE
+MATERIALIZED VIEW` on a single cluster, or `GRANT` across many
+roles, is the right way to actually measure the cluster/role swaps;
+the existing `mz_catalog_apply_update_kind_seconds{kind}` histogram
+will surface any residual slope per kind.
