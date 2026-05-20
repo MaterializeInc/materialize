@@ -21,6 +21,7 @@ import { Link as RouterLink } from "react-router-dom";
 
 import { createNamespace } from "~/api/materialize";
 import { OUTDATED_THRESHOLD_SECONDS } from "~/api/materialize/cluster/materializationLag";
+import StatusPill from "~/components/StatusPill";
 import TextLink from "~/components/TextLink";
 import { DetailItem } from "~/platform/connectors/AsideBox";
 import { absoluteClusterPath } from "~/platform/routeHelpers";
@@ -30,7 +31,13 @@ import { MaterializeTheme } from "~/theme";
 import { pluralize } from "~/util";
 import { formatIntervalShort } from "~/utils/format";
 
-import { MaintainedObjectListItem } from "./queries";
+import {
+  bucketForHydration,
+  HYDRATION_LABELS,
+  STATUS_COLOR_SCHEMES,
+} from "./filters";
+import { pMaxFromHistory } from "./freshnessHistory";
+import { MaintainedObjectListItem, useObjectFreshnessHistory } from "./queries";
 
 const OUTDATED_MS = OUTDATED_THRESHOLD_SECONDS * 1_000;
 const WARNING_MS = OUTDATED_MS / 2;
@@ -41,9 +48,13 @@ const formatReplicaName = (replica: { name: string; size: string | null }) =>
 
 export interface ObjectDetailsCardProps {
   item: MaintainedObjectListItem;
+  freshnessLookbackMinutes: number;
 }
 
-export const ObjectDetailsCard = ({ item }: ObjectDetailsCardProps) => {
+export const ObjectDetailsCard = ({
+  item,
+  freshnessLookbackMinutes,
+}: ObjectDetailsCardProps) => {
   const { colors } = useTheme<MaterializeTheme>();
   const regionSlug = useRegionSlug();
   const { getClusterById } = useAllClusters();
@@ -51,6 +62,14 @@ export const ObjectDetailsCard = ({ item }: ObjectDetailsCardProps) => {
   const cluster = item.cluster ? getClusterById(item.cluster.id) : undefined;
   const namespace = createNamespace(item.databaseName, item.schemaName);
   const replicas = cluster?.replicas ?? [];
+
+  const { data: freshness } = useObjectFreshnessHistory({
+    objectId: item.id,
+    lookbackMs: freshnessLookbackMinutes * 60 * 1000,
+  });
+  const badgeLag = freshness
+    ? pMaxFromHistory(freshness.historicalData, item.id)
+    : item.lag;
 
   return (
     <Card
@@ -61,9 +80,18 @@ export const ObjectDetailsCard = ({ item }: ObjectDetailsCardProps) => {
       borderColor={colors.border.primary}
     >
       <VStack align="start" spacing={4} width="100%">
-        <HStack spacing={3} alignItems="center">
-          <Text textStyle="heading-lg">{item.name}</Text>
-          <LagBadge lag={item.lag} />
+        <HStack spacing={3} alignItems="center" width="100%" minW={0}>
+          <Text
+            textStyle="heading-lg"
+            noOfLines={1}
+            title={item.name}
+            minW={0}
+            flex="1"
+          >
+            {item.name}
+          </Text>
+          <LagBadge lag={badgeLag} />
+          <HydrationBadge item={item} />
         </HStack>
 
         <Text textStyle="heading-sm" color={colors.foreground.secondary}>
@@ -115,6 +143,19 @@ export const ObjectDetailsCard = ({ item }: ObjectDetailsCardProps) => {
   );
 };
 
+const HydrationBadge = ({ item }: { item: MaintainedObjectListItem }) => {
+  const bucket = bucketForHydration(item.hydratedReplicas, item.totalReplicas);
+  if (!bucket) return null;
+  return (
+    <StatusPill
+      status={bucket}
+      label={HYDRATION_LABELS[bucket]}
+      colorScheme={STATUS_COLOR_SCHEMES[bucket]}
+      flexShrink={0}
+    />
+  );
+};
+
 const LagBadge = ({ lag }: { lag: MaintainedObjectListItem["lag"] }) => {
   const { colors } = useTheme<MaterializeTheme>();
   if (!lag) return null;
@@ -134,6 +175,8 @@ const LagBadge = ({ lag }: { lag: MaintainedObjectListItem["lag"] }) => {
       borderRadius="full"
       bg={bg}
       color={colors.foreground.primaryButtonLabel}
+      whiteSpace="nowrap"
+      flexShrink={0}
     >
       {formatIntervalShort(lag.value)} behind
     </Text>

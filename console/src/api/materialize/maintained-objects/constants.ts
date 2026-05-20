@@ -9,15 +9,14 @@
 
 /**
  * Object types we treat as "maintained" — sources, materialized views,
- * indexes, sinks, and tables. Values match `mz_objects.type` (and the
- * hyphenated form used by `mz_object_fully_qualified_names.object_type`).
+ * indexes, and sinks. Values match `mz_objects.type` (and the hyphenated
+ * form used by `mz_object_fully_qualified_names.object_type`).
  */
 export const MAINTAINED_OBJECT_TYPES = [
   "source",
   "materialized-view",
   "index",
   "sink",
-  "table",
 ] as const;
 
 export type MaintainedObjectType = (typeof MAINTAINED_OBJECT_TYPES)[number];

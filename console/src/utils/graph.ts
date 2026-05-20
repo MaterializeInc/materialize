@@ -24,6 +24,24 @@ export function niceTicks(start: number, stop: number, desiredCount: number) {
   return ticks(niceStart, niceStop, desiredCount);
 }
 
+/** Map a pointer event to its cursor timestamp in ms, clamped to `[startTime, endTime]`. Returns `null` only when the event has no coordinates. */
+export function eventToTimestamp({
+  event,
+  xScale,
+  startTime,
+  endTime,
+}: {
+  event: PointerEvent | MouseEvent;
+  xScale: { invert: (x: number) => Date };
+  startTime: number;
+  endTime: number;
+}): number | null {
+  const svgPoint = localPoint(event);
+  if (!svgPoint) return null;
+  const ms = xScale.invert(svgPoint.x).getTime();
+  return Math.min(Math.max(ms, startTime), endTime);
+}
+
 // This function was copied and then modified from the visx XYchart:
 // https://github.com/airbnb/visx/blob/6edbde496fc461094f6b3c60e8ec86c4b720b4f5/packages/visx-xychart/src/utils/findNearestDatumSingleDimension.ts#L7
 export function findNearestDatum<

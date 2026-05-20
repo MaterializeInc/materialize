@@ -17,12 +17,21 @@ import { MaintainedObjectListItem } from "./queries";
 
 export interface ObjectDetailPanelProps {
   item: MaintainedObjectListItem;
+  lookbackMinutes: number;
+  setLookbackMinutes: React.Dispatch<React.SetStateAction<number>>;
 }
 
-export const ObjectDetailPanel = ({ item }: ObjectDetailPanelProps) => {
+export const ObjectDetailPanel = ({
+  item,
+  lookbackMinutes,
+  setLookbackMinutes,
+}: ObjectDetailPanelProps) => {
   return (
     <Box p={4}>
-      <ObjectDetailsCard item={item} />
+      <ObjectDetailsCard
+        item={item}
+        freshnessLookbackMinutes={lookbackMinutes}
+      />
       <Tabs mt={6}>
         <TabList mb={6}>
           <Tab>Definition</Tab>
@@ -33,7 +42,11 @@ export const ObjectDetailPanel = ({ item }: ObjectDetailPanelProps) => {
             <ObjectMetadata item={item} />
           </TabPanel>
           <TabPanel px={0}>
-            <ObjectFreshness item={item} />
+            <ObjectFreshness
+              item={item}
+              timePeriodMinutes={lookbackMinutes}
+              setTimePeriodMinutes={setLookbackMinutes}
+            />
           </TabPanel>
         </TabPanels>
       </Tabs>

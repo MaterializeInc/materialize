@@ -10,11 +10,25 @@
 import { useQuery } from "@tanstack/react-query";
 import React from "react";
 
+import {
+  buildQueryKeyPart,
+  buildRegionQueryKey,
+} from "~/api/buildQueryKeySchema";
 import { IPostgresInterval, isSystemId } from "~/api/materialize";
+import {
+  Bucket,
+  fetchReplicaUtilizationHistory,
+} from "~/api/materialize/cluster/replicaUtilizationHistory";
+import { fetchLagHistory } from "~/api/materialize/freshness/lagHistory";
 import {
   MAINTAINED_OBJECT_TYPES,
   MaintainedObjectType,
 } from "~/api/materialize/maintained-objects/constants";
+import {
+  CriticalPathRow,
+  fetchCriticalPathAtTime,
+  fetchCriticalPathLive,
+} from "~/api/materialize/maintained-objects/criticalPath";
 import {
   buildHydrationAggregateQuery,
   HydrationAggregateRow,
@@ -31,6 +45,8 @@ import {
 import { sourceQueryKeys } from "~/platform/sources/queries";
 import { useAllObjects } from "~/store/allObjects";
 import { sumPostgresIntervalMs } from "~/util";
+
+import { transformObjectFreshnessHistory } from "./freshnessHistory";
 
 /** Cluster the object is maintained on. `null` for tables, which aren't
  *  bound to a cluster. */
@@ -204,3 +220,193 @@ export function useObjectSourceStatistics(sourceId: string) {
     },
   });
 }
+
+const freshnessHistoryQueryKey = (objectId: string, lookbackMs: number) =>
+  [
+    ...buildRegionQueryKey("maintainedObjects"),
+    buildQueryKeyPart("freshnessHistory", { objectId, lookbackMs }),
+  ] as const;
+
+export function useObjectFreshnessHistory({
+  objectId,
+  lookbackMs,
+}: {
+  objectId: string;
+  lookbackMs: number;
+}) {
+  return useQuery({
+    queryKey: freshnessHistoryQueryKey(objectId, lookbackMs),
+    queryFn: async ({ queryKey, signal }) => {
+      const { rows } = await fetchLagHistory({
+        params: {
+          lookback: { type: "historical", lookbackMs },
+          objectIds: [objectId],
+        },
+        requestOptions: { signal },
+        queryKey,
+      });
+      return transformObjectFreshnessHistory(rows, lookbackMs);
+    },
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+  });
+}
+
+export interface CriticalPathData {
+  rows: CriticalPathRow[];
+  /** Immediate direct upstream inputs for the object. */
+  directInputs: CriticalPathRow[];
+}
+
+type CriticalPathMode =
+  | { kind: "live"; lookbackMinutes: number; bucketSizeMs: number }
+  | {
+      kind: "atTime";
+      timestamp: Date;
+      bucketSizeMs: number;
+      lookbackMinutes: number;
+    };
+
+const criticalPathQueryKey = (objectId: string, mode: CriticalPathMode) =>
+  [
+    ...buildRegionQueryKey("maintainedObjects"),
+    buildQueryKeyPart("criticalPath", {
+      objectId,
+      mode:
+        mode.kind === "live"
+          ? {
+              kind: "live",
+              lookbackMinutes: mode.lookbackMinutes,
+              bucketSizeMs: mode.bucketSizeMs,
+            }
+          : {
+              kind: "atTime",
+              timestamp: mode.timestamp.toISOString(),
+              bucketSizeMs: mode.bucketSizeMs,
+              lookbackMinutes: mode.lookbackMinutes,
+            },
+    }),
+  ] as const;
+
+export function useCriticalPath({
+  objectId,
+  timestamp,
+  bucketSizeMs,
+  lookbackMinutes,
+}: {
+  objectId: string | undefined;
+  timestamp: Date | null;
+  bucketSizeMs: number;
+  lookbackMinutes: number;
+}) {
+  const isLive = timestamp === null;
+  const mode: CriticalPathMode = isLive
+    ? { kind: "live", lookbackMinutes, bucketSizeMs }
+    : { kind: "atTime", timestamp, bucketSizeMs, lookbackMinutes };
+  return useQuery({
+    queryKey: criticalPathQueryKey(objectId ?? "", mode),
+    queryFn: ({ queryKey, signal }) =>
+      fetchCriticalPath({
+        objectId: objectId!,
+        mode,
+        signal,
+        queryKey,
+      }),
+    enabled: !!objectId,
+    staleTime: isLive ? 30_000 : Infinity,
+    refetchInterval: isLive ? 30_000 : false,
+  });
+}
+
+const fetchCriticalPath = async ({
+  objectId,
+  mode,
+  signal,
+  queryKey,
+}: {
+  objectId: string;
+  mode: CriticalPathMode;
+  signal: AbortSignal | undefined;
+  queryKey: readonly unknown[];
+}): Promise<CriticalPathData> => {
+  const result =
+    mode.kind === "live"
+      ? await fetchCriticalPathLive({
+          objectId,
+          lookbackMinutes: mode.lookbackMinutes,
+          bucketSizeMs: mode.bucketSizeMs,
+          queryKey,
+          requestOptions: { signal },
+        })
+      : await fetchCriticalPathAtTime({
+          objectId,
+          timestamp: mode.timestamp,
+          bucketSizeMs: mode.bucketSizeMs,
+          lookbackMinutes: mode.lookbackMinutes,
+          queryKey,
+          requestOptions: { signal },
+        });
+
+  const rows = result.rows;
+  const directInputs = rows.filter(
+    (r) => r.childId === objectId && r.id !== objectId,
+  );
+  return { rows, directInputs };
+};
+
+export interface ReplicaInWindow {
+  replicaId: string;
+  name: string;
+  size: string | null;
+  lastSeenAt: Date;
+}
+
+/** Returns each replica's metric buckets in a `lookbackMs`-long window
+ *  ending at `anchorTimestamp` (or now if `anchorTimestamp` is null).
+ *  Polls every 30s when anchored to now; otherwise stays static. */
+export const useClusterBucketsInWindow = ({
+  clusterId,
+  lookbackMs,
+  bucketSizeMs,
+  anchorTimestamp,
+}: {
+  clusterId: string | null;
+  lookbackMs: number;
+  bucketSizeMs: number;
+  anchorTimestamp: Date | null;
+}) => {
+  const isLive = anchorTimestamp === null;
+  const anchorMs = (anchorTimestamp ?? new Date()).getTime();
+  const startMs =
+    Math.floor((anchorMs - lookbackMs) / bucketSizeMs) * bucketSizeMs;
+
+  return useQuery({
+    queryKey: [
+      ...buildRegionQueryKey("maintainedObjects"),
+      buildQueryKeyPart("clusterBucketsInWindow", {
+        clusterId: clusterId ?? "",
+        startMs,
+        bucketSizeMs,
+      }),
+    ],
+    queryFn: async ({
+      queryKey,
+      signal,
+    }): Promise<Record<string, Bucket[]>> => {
+      if (clusterId === null) return {};
+      const { bucketsByReplicaId } = await fetchReplicaUtilizationHistory({
+        params: {
+          clusterIds: [clusterId],
+          startDate: new Date(startMs).toISOString(),
+          bucketSizeMs,
+        },
+        queryKey,
+        requestOptions: { signal },
+      });
+      return bucketsByReplicaId;
+    },
+    enabled: !!clusterId,
+    staleTime: isLive ? 30_000 : Infinity,
+    refetchInterval: isLive ? 30_000 : false,
+  });
+};
