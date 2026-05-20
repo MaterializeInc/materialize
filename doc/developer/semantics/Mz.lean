@@ -16,6 +16,7 @@ import Mz.DiffSemiring
 import Mz.DiffErrCount
 import Mz.DiffWithGlobal
 import Mz.UnifiedStream
+import Mz.UnifiedStream2
 import Mz.UnifiedConsolidate
 import Mz.TimedConsolidate
 import Mz.Aggregate
