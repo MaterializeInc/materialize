@@ -23,29 +23,26 @@
 $ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-password}
 
 # Insert data into MySQL that can't be decoded using native types and must be decoded
-# as a TEXT COLUMN
-# NOTE: We need to use `sql_mode = ''` to have MySQL allow the 0000-00-00 dates which it
-# correctly disallows by default in newer versions, but used to allow in previous ones.
+# as a TEXT COLUMN. DATE-type coverage lives in text-columns-date.td;
+# TIMESTAMP/DATETIME coverage lives in text-columns-timestamp.td.
 
 $ mysql-execute name=mysql
 DROP DATABASE IF EXISTS public;
 CREATE DATABASE public;
 USE public;
-CREATE TABLE t1 (f1 JSON, f2 ENUM('small', 'medium', 'large'), f3 YEAR, f4 DATE, f5 DATE, f6 DATE, f7 DATETIME, f8 DATETIME, f9 DATETIME(4));
-SET SESSION sql_mode = '';
-INSERT INTO t1 VALUES (CAST('{"bar": "baz", "balance": 7.77, "active": false, "nest": {"birds": ["seagull", "robin"]}}' AS JSON), 'large', 2024, '0000-00-00', '2024-00-01', '2024-01-00', '0000-00-00 00:00:00',  '0000-00-00 00:00:00.000000',  '0000-00-00 00:00:00.000000');
+CREATE TABLE t1 (f1 JSON, f2 ENUM('small', 'medium', 'large'), f3 YEAR);
+INSERT INTO t1 VALUES (CAST('{"bar": "baz", "balance": 7.77, "active": false, "nest": {"birds": ["seagull", "robin"]}}' AS JSON), 'large', 2024);
 
 > BEGIN
 > CREATE SOURCE da
   FROM MYSQL CONNECTION mysqc;
 > CREATE TABLE t1 FROM SOURCE da (REFERENCE public.t1)
-  WITH (TEXT COLUMNS = (f1, f2, f3, f4, f5, f6, f7, f8, f9));
+  WITH (TEXT COLUMNS = (f1, f2, f3));
 > COMMIT
 
 # Insert the same data post-snapshot
 $ mysql-execute name=mysql
 USE public;
-SET SESSION sql_mode = '';
 INSERT INTO t1 SELECT * FROM t1;
 
 > SELECT f1::jsonb->>'balance' FROM t1;
@@ -65,37 +62,13 @@ INSERT INTO t1 SELECT * FROM t1;
 "{\"bar\":\"baz\",\"nest\":{\"birds\":[\"seagull\",\"robin\"]},\"active\":false,\"balance\":7.77}"
 "{\"bar\":\"baz\",\"nest\":{\"birds\":[\"seagull\",\"robin\"]},\"active\":false,\"balance\":7.77}"
 
-> SELECT f4 FROM t1;
-0000-00-00
-0000-00-00
-
-> SELECT f5 FROM t1;
-2024-00-01
-2024-00-01
-
-> SELECT f6 FROM t1;
-2024-01-00
-2024-01-00
-
-> SELECT f7 FROM t1;
-"0000-00-00 00:00:00"
-"0000-00-00 00:00:00"
-
-> SELECT f8 FROM t1;
-"0000-00-00 00:00:00"
-"0000-00-00 00:00:00"
-
-> SELECT f9 FROM t1;
-"0000-00-00 00:00:00.0000"
-"0000-00-00 00:00:00.0000"
-
 $ set-regex match="DETAILS = '[a-f0-9]+'" replacement=<DETAILS>
 
 >[version<2600700] SHOW CREATE TABLE t1;
-materialize.public.t1 "CREATE TABLE materialize.public.t1 (f1 pg_catalog.text, f2 pg_catalog.text, f3 pg_catalog.text, f4 pg_catalog.text, f5 pg_catalog.text, f6 pg_catalog.text, f7 pg_catalog.text, f8 pg_catalog.text, f9 pg_catalog.text) FROM SOURCE materialize.public.da (REFERENCE = public.t1) WITH (TEXT COLUMNS = (f1, f2, f3, f4, f5, f6, f7, f8, f9), <DETAILS>);"
+materialize.public.t1 "CREATE TABLE materialize.public.t1 (f1 pg_catalog.text, f2 pg_catalog.text, f3 pg_catalog.text) FROM SOURCE materialize.public.da (REFERENCE = public.t1) WITH (TEXT COLUMNS = (f1, f2, f3), <DETAILS>);"
 
 >[version>=2600700] SHOW CREATE TABLE t1;
-materialize.public.t1 "CREATE TABLE\n    materialize.public.t1\n        (\n            f1 pg_catalog.text,\n            f2 pg_catalog.text,\n            f3 pg_catalog.text,\n            f4 pg_catalog.text,\n            f5 pg_catalog.text,\n            f6 pg_catalog.text,\n            f7 pg_catalog.text,\n            f8 pg_catalog.text,\n            f9 pg_catalog.text\n        )\nFROM SOURCE materialize.public.da (REFERENCE = public.t1)\nWITH (\n    TEXT COLUMNS = (f1, f2, f3, f4, f5, f6, f7, f8, f9),\n    <DETAILS>\n);"
+materialize.public.t1 "CREATE TABLE materialize.public.t1 (f1 pg_catalog.text, f2 pg_catalog.text, f3 pg_catalog.text)\nFROM SOURCE materialize.public.da (REFERENCE = public.t1)\nWITH (\n    TEXT COLUMNS = (f1, f2, f3),\n    <DETAILS>\n);"
 
 > DROP SOURCE da CASCADE;
 
