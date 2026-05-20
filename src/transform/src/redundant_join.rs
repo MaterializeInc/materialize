@@ -26,7 +26,9 @@ use std::collections::BTreeMap;
 
 use itertools::Itertools;
 use mz_expr::visit::Visit;
-use mz_expr::{Id, JoinInputMapper, LocalId, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
+use mz_expr::{
+    Columns, Id, JoinInputMapper, LocalId, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
+};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_ore::{assert_none, soft_panic_or_log};
 

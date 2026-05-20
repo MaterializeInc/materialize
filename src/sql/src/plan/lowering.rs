@@ -42,7 +42,7 @@ use std::iter::repeat;
 use itertools::Itertools;
 use mz_expr::func::variadic;
 use mz_expr::visit::Visit;
-use mz_expr::{AccessStrategy, AggregateFunc, MirRelationExpr, MirScalarExpr, func};
+use mz_expr::{AccessStrategy, AggregateFunc, Columns, MirRelationExpr, MirScalarExpr, func};
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack::maybe_grow;
 use mz_repr::*;

@@ -28,7 +28,7 @@ use mz_compute_types::plan::top_k::{
     BasicTopKPlan, MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan,
 };
 use mz_expr::func::CastUint64ToInt64;
-use mz_expr::{BinaryFunc, EvalError, MirScalarExpr, UnaryFunc, func};
+use mz_expr::{BinaryFunc, Columns, Eval, EvalError, MirScalarExpr, UnaryFunc, func};
 use mz_ore::cast::CastFrom;
 use mz_ore::soft_assert_or_log;
 use mz_repr::{Datum, DatumVec, Diff, ReprScalarType, Row, SharedRow};

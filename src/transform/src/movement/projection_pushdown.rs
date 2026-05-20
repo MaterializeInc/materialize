@@ -34,7 +34,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::{Itertools, zip_eq};
 use mz_expr::{
-    Id, JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
+    Columns, Id, JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr,
+    RECURSION_LIMIT,
 };
 use mz_ore::assert_none;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};

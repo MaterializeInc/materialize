@@ -45,6 +45,7 @@ use crate::Id::Local;
 use crate::explain::{HumanizedExpr, HumanizerMode};
 use crate::relation::func::{AggregateFunc, LagLeadType, TableFunc};
 use crate::row::{RowCollection, RowCollectionIter};
+use crate::scalar::columns::Columns;
 use crate::scalar::func::variadic::{
     JsonbBuildArray, JsonbBuildObject, ListCreate, ListIndex, MapBuild, RecordCreate,
 };

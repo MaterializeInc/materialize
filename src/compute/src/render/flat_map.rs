@@ -11,7 +11,7 @@ use std::collections::VecDeque;
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use mz_compute_types::dyncfgs::COMPUTE_FLAT_MAP_FUEL;
-use mz_expr::MfpPlan;
+use mz_expr::{Eval, MfpPlan};
 use mz_expr::{MapFilterProject, MirScalarExpr, TableFunc};
 use mz_repr::{DatumVec, RowArena, SharedRow};
 use mz_repr::{Diff, Row, Timestamp};

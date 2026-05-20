@@ -18,8 +18,8 @@
 //! not create any new stateful operators.
 
 use mz_expr::{
-    JoinInputCharacteristics, JoinInputMapper, MapFilterProject, MirScalarExpr, join_permutations,
-    permutation_for_arrangement,
+    Columns, JoinInputCharacteristics, JoinInputMapper, MapFilterProject, MirScalarExpr,
+    join_permutations, permutation_for_arrangement,
 };
 use serde::{Deserialize, Serialize};
 

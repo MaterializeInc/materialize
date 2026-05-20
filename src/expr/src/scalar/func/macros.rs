@@ -159,7 +159,7 @@ macro_rules! derive_unary {
                 &'a self,
                 datums: &[Datum<'a>],
                 temp_storage: &'a RowArena,
-                a: &'a MirScalarExpr,
+                a: &'a impl crate::func::eval::Eval,
             ) -> Result<Datum<'a>, EvalError> {
                 match self {
                     $(Self::$name(f) => f.eval(datums, temp_storage, a),)*
@@ -251,7 +251,7 @@ macro_rules! derive_variadic {
                 &'a self,
                 datums: &[Datum<'a>],
                 temp_storage: &'a RowArena,
-                exprs: &'a [MirScalarExpr],
+                exprs: &'a [impl Eval],
             ) -> Result<Datum<'a>, EvalError> {
                 match self {
                     $(Self::$name(f) => f.eval(datums, temp_storage, exprs),)*
@@ -348,7 +348,7 @@ macro_rules! derive_binary {
                 &'a self,
                 datums: &[Datum<'a>],
                 temp_storage: &'a RowArena,
-                exprs: &[&'a MirScalarExpr],
+                exprs: &[&'a impl Eval],
             ) -> Result<Datum<'a>, EvalError> {
                 match self {
                     $(Self::$name(f) => f.eval(datums, temp_storage, exprs),)*

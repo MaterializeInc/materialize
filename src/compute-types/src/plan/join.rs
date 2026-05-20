@@ -29,7 +29,7 @@
 
 use std::collections::BTreeMap;
 
-use mz_expr::{MapFilterProject, MirScalarExpr};
+use mz_expr::{Columns, Eval, MapFilterProject, MirScalarExpr};
 use mz_repr::{Datum, Row, RowArena};
 use serde::{Deserialize, Serialize};
 

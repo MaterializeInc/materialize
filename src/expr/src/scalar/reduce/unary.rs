@@ -12,7 +12,7 @@
 use mz_repr::{ReprColumnType, RowArena};
 
 use crate::MirScalarExpr;
-use crate::scalar::func::{self, UnaryFunc, VariadicFunc};
+use crate::scalar::func::{self, Eval, UnaryFunc, VariadicFunc};
 
 pub(super) fn reduce_call_unary(
     e: &mut MirScalarExpr,

@@ -14,7 +14,7 @@
 //! can be simplified to a map operation.
 
 use itertools::Itertools;
-use mz_expr::MirRelationExpr;
+use mz_expr::{Columns, MirRelationExpr};
 
 use crate::TransformCtx;
 use crate::analysis::{DerivedBuilder, DerivedView};

@@ -21,7 +21,7 @@ use crate::EvalError;
 use crate::MirScalarExpr;
 use crate::scalar::func::format::DateTimeFormat;
 use crate::scalar::func::variadic::And;
-use crate::scalar::func::{self, BinaryFunc, UnaryFunc, VariadicFunc, parse_timezone};
+use crate::scalar::func::{self, BinaryFunc, Eval, UnaryFunc, VariadicFunc, parse_timezone};
 use crate::scalar::like_pattern;
 
 pub(super) fn reduce_call_binary(

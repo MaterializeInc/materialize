@@ -53,6 +53,7 @@ use num::traits::CheckedNeg;
 use crate::scalar::func::format::DateTimeFormat;
 use crate::{EvalError, like_pattern};
 
+pub mod eval;
 #[macro_use]
 mod macros;
 mod binary;
@@ -64,6 +65,7 @@ mod unmaterializable;
 pub mod variadic;
 
 pub use binary::BinaryFunc;
+pub use eval::Eval;
 pub use impls::*;
 pub use unary::{EagerUnaryFunc, LazyUnaryFunc, UnaryFunc};
 pub use unmaterializable::UnmaterializableFunc;

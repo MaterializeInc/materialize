@@ -931,7 +931,7 @@ mod tests {
     // (Ok values and Err variants) as MirScalarExpr for the same inputs.
 
     mod parity {
-        use mz_expr::{MirScalarExpr, UnaryFunc};
+        use mz_expr::{Eval, MirScalarExpr, UnaryFunc};
         use mz_repr::{Datum, RowArena};
 
         use super::*;

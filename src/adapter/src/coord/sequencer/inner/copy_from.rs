@@ -11,6 +11,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use mz_adapter_types::connection::ConnectionId;
+use mz_expr::Eval;
 use mz_ore::cast::CastInto;
 use mz_persist_client::Diagnostics;
 use mz_persist_client::batch::ProtoBatch;
