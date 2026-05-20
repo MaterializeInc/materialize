@@ -25,6 +25,7 @@ import Mz.Aggregate
 import Mz.Consolidate
 import Mz.Consolidate2
 import Mz.Triple
+import Mz.Triple2
 import Mz.Join
 import Mz.Join2
 import Mz.JoinPushdown
