@@ -2899,49 +2899,65 @@ impl BackgroundTask {
     async fn update_write_frontiers(&self, updates: &[(GlobalId, &Antichain<Timestamp>)]) {
         let mut read_capability_changes = BTreeMap::default();
 
-        let mut self_collections = self.collections.lock().expect("lock poisoned");
+        // The txns-upper branch in `run()` calls this with one entry per
+        // txns-backed collection (all sharing the same `upper`), so `updates`
+        // grows linearly with the number of user tables. We can't hold
+        // `self.collections` for a whole O(N) iteration: it's the same mutex
+        // that `prepare_state` (and every DDL path that reads/writes
+        // CollectionState) needs, so a single sweep starves all DDL behind it.
+        //
+        // Process the updates in chunks, releasing the lock between chunks so
+        // that competing acquirers get a chance to interleave. The chunk size
+        // is a tradeoff: smaller = lower lock-hold ceiling for prepare_state,
+        // larger = less lock acquire/release overhead. 256 keeps per-chunk
+        // worst-case under ~1 ms even at higher per-iteration cost.
+        const CHUNK_SIZE: usize = 256;
+        for chunk in updates.chunks(CHUNK_SIZE) {
+            let mut self_collections = self.collections.lock().expect("lock poisoned");
+            for (id, new_upper) in chunk.iter() {
+                let collection = if let Some(c) = self_collections.get_mut(id) {
+                    c
+                } else {
+                    trace!(
+                        "Reference to absent collection {id}, due to concurrent removal of that collection"
+                    );
+                    continue;
+                };
 
-        for (id, new_upper) in updates.iter() {
-            let collection = if let Some(c) = self_collections.get_mut(id) {
-                c
-            } else {
-                trace!(
-                    "Reference to absent collection {id}, due to concurrent removal of that collection"
-                );
-                continue;
-            };
+                if PartialOrder::less_than(&collection.write_frontier, *new_upper) {
+                    collection.write_frontier.clone_from(new_upper);
+                }
 
-            if PartialOrder::less_than(&collection.write_frontier, *new_upper) {
-                collection.write_frontier.clone_from(new_upper);
-            }
+                let mut new_read_capability = collection
+                    .read_policy
+                    .frontier(collection.write_frontier.borrow());
 
-            let mut new_read_capability = collection
-                .read_policy
-                .frontier(collection.write_frontier.borrow());
+                if id.is_user() {
+                    trace!(
+                        %id,
+                        implied_capability = ?collection.implied_capability,
+                        policy = ?collection.read_policy,
+                        write_frontier = ?collection.write_frontier,
+                        ?new_read_capability,
+                        "update_write_frontiers");
+                }
 
-            if id.is_user() {
-                trace!(
-                    %id,
-                    implied_capability = ?collection.implied_capability,
-                    policy = ?collection.read_policy,
-                    write_frontier = ?collection.write_frontier,
-                    ?new_read_capability,
-                    "update_write_frontiers");
-            }
+                if PartialOrder::less_equal(&collection.implied_capability, &new_read_capability) {
+                    let mut update = ChangeBatch::new();
+                    update.extend(new_read_capability.iter().map(|time| (*time, 1)));
+                    std::mem::swap(&mut collection.implied_capability, &mut new_read_capability);
+                    update.extend(new_read_capability.iter().map(|time| (*time, -1)));
 
-            if PartialOrder::less_equal(&collection.implied_capability, &new_read_capability) {
-                let mut update = ChangeBatch::new();
-                update.extend(new_read_capability.iter().map(|time| (*time, 1)));
-                std::mem::swap(&mut collection.implied_capability, &mut new_read_capability);
-                update.extend(new_read_capability.iter().map(|time| (*time, -1)));
-
-                if !update.is_empty() {
-                    read_capability_changes.insert(*id, update);
+                    if !update.is_empty() {
+                        read_capability_changes.insert(*id, update);
+                    }
                 }
             }
+            // Lock released at end of scope.
         }
 
         if !read_capability_changes.is_empty() {
+            let mut self_collections = self.collections.lock().expect("lock poisoned");
             StorageCollectionsImpl::update_read_capabilities_inner(
                 &self.cmds_tx,
                 &mut self_collections,
