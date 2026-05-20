@@ -26,6 +26,7 @@ pub struct StorageCollectionsMetrics {
     pub finalization_succeeded: Counter,
     pub finalization_failed: Counter,
     pub create_collections_phase_seconds: HistogramVec,
+    pub prepare_state_phase_seconds: HistogramVec,
 }
 
 impl StorageCollectionsMetrics {
@@ -57,6 +58,13 @@ impl StorageCollectionsMetrics {
                        StorageCollections::create_collections_for_bootstrap call.",
                 var_labels: ["phase"],
                 buckets: histogram_seconds_buckets(0.0001, 32.0),
+            )),
+            prepare_state_phase_seconds: registry.register(metric!(
+                name: "mz_storage_collections_prepare_state_phase_seconds",
+                help: "The time spent in each phase of a single \
+                       StorageCollections::prepare_state call.",
+                var_labels: ["phase"],
+                buckets: histogram_seconds_buckets(0.000_01, 32.0),
             )),
         }
     }

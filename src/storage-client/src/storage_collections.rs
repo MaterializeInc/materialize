@@ -413,6 +413,9 @@ pub struct StorageCollectionsImpl {
     /// Per-phase histograms for `create_collections_for_bootstrap`.
     create_collections_phase_seconds: prometheus::HistogramVec,
 
+    /// Per-phase histograms for `prepare_state`.
+    prepare_state_phase_seconds: prometheus::HistogramVec,
+
     /// Handles to tasks we own, making sure they're dropped when we are.
     _background_task: Arc<AbortOnDropHandle<()>>,
     _finalize_shards_task: Arc<AbortOnDropHandle<()>>,
@@ -526,6 +529,7 @@ impl StorageCollectionsImpl {
             });
 
         let create_collections_phase_seconds = metrics.create_collections_phase_seconds.clone();
+        let prepare_state_phase_seconds = metrics.prepare_state_phase_seconds.clone();
 
         let finalize_shards_task = mz_ore::task::spawn(
             || "storage_collections::finalize_shards_task",
@@ -555,6 +559,7 @@ impl StorageCollectionsImpl {
             cmd_tx,
             holds_tx,
             create_collections_phase_seconds,
+            prepare_state_phase_seconds,
             _background_task: Arc::new(background_task.abort_on_drop()),
             _finalize_shards_task: Arc::new(finalize_shards_task.abort_on_drop()),
         }
@@ -1665,21 +1670,35 @@ impl StorageCollections for StorageCollectionsImpl {
         ids_to_drop: BTreeSet<GlobalId>,
         ids_to_register: BTreeMap<GlobalId, ShardId>,
     ) -> Result<(), StorageError> {
-        txn.insert_collection_metadata(
-            ids_to_add
-                .into_iter()
-                .map(|id| (id, ShardId::new()))
-                .collect(),
-        )?;
-        txn.insert_collection_metadata(ids_to_register)?;
+        let phase = self.prepare_state_phase_seconds.clone();
+
+        {
+            let _t = phase.with_label_values(&["insert_add"]).start_timer();
+            txn.insert_collection_metadata(
+                ids_to_add
+                    .into_iter()
+                    .map(|id| (id, ShardId::new()))
+                    .collect(),
+            )?;
+        }
+        {
+            let _t = phase.with_label_values(&["insert_register"]).start_timer();
+            txn.insert_collection_metadata(ids_to_register)?;
+        }
 
         // Delete the metadata for any dropped collections.
-        let dropped_mappings = txn.delete_collection_metadata(ids_to_drop);
+        let dropped_mappings = {
+            let _t = phase.with_label_values(&["delete"]).start_timer();
+            txn.delete_collection_metadata(ids_to_drop)
+        };
 
         // Only finalize the shards of dropped collections that don't have a primary.
         // Otherwise the shard might still be in use by the primary.
-        let mut dropped_shards = BTreeSet::new();
-        {
+        let dropped_shards = {
+            let _t = phase
+                .with_label_values(&["dropped_shard_lookup"])
+                .start_timer();
+            let mut dropped_shards = BTreeSet::new();
             let collections = self.collections.lock().expect("poisoned");
             for (id, shard) in dropped_mappings {
                 let coll = collections.get(&id).expect("must exist");
@@ -1687,13 +1706,22 @@ impl StorageCollections for StorageCollectionsImpl {
                     dropped_shards.insert(shard);
                 }
             }
+            dropped_shards
+        };
+        {
+            let _t = phase
+                .with_label_values(&["insert_unfinalized"])
+                .start_timer();
+            txn.insert_unfinalized_shards(dropped_shards)?;
         }
-        txn.insert_unfinalized_shards(dropped_shards)?;
 
         // Reconcile any shards we've successfully finalized with the shard
         // finalization collection.
-        let finalized_shards = self.finalized_shards.lock().iter().copied().collect();
-        txn.mark_shards_as_finalized(finalized_shards);
+        {
+            let _t = phase.with_label_values(&["mark_finalized"]).start_timer();
+            let finalized_shards = self.finalized_shards.lock().iter().copied().collect();
+            txn.mark_shards_as_finalized(finalized_shards);
+        }
 
         Ok(())
     }
@@ -2391,6 +2419,7 @@ impl StorageCollections for StorageCollectionsImpl {
             cmd_tx: _,
             holds_tx: _,
             create_collections_phase_seconds: _,
+            prepare_state_phase_seconds: _,
             _background_task: _,
             _finalize_shards_task: _,
         } = self;
