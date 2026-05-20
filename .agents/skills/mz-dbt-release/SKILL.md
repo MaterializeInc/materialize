@@ -1,9 +1,14 @@
 ---
 name: mz-dbt-release
 description: >
-  Trigger: "cut a dbt release", "release dbt-materialize", "release the dbt
-  adapter", "bump dbt-materialize version", "new dbt adapter version", or
-  opening the PR that ships an `Unreleased` CHANGELOG entry to PyPI.
+  Cut a dbt-materialize PyPI release: bump the version in `__version__.py`
+  and `setup.py`, date the `Unreleased` CHANGELOG entry, and open the
+  release PR with a `Ship: <url>` body. Trigger: "cut a dbt release",
+  "release dbt-materialize", "release the dbt adapter", "ship
+  dbt-materialize vX.Y.Z", "publish dbt-materialize to PyPI", "bump
+  dbt-materialize version", "new dbt adapter version". Use this skill
+  even if the user just says "ship the dbt adapter" or pastes a feature
+  PR and asks for "the next dbt release" without naming version mechanics.
 ---
 
 # Cutting a dbt-materialize release
@@ -64,9 +69,7 @@ Use today's date in `YYYY-MM-DD`.
 
 ## Branch, commit, PR
 
-* Branch name: `dbt-release-X.Y.Z` off `main` (or any commit that is an
-  ancestor of `upstream/main` — the `misc/dbt-materialize/` directory is the
-  only thing that matters).
+* Branch name: `dbt-release-X.Y.Z`, branched from current `main`.
 * Commit subject: `dbt-materialize: release vX.Y.Z`
 * Commit body / PR body: a single `Ship: <url>` line pointing at the PR that
   triggered this release (the feature/fix PR being shipped). If multiple PRs
@@ -91,15 +94,21 @@ This PR touches only Python version strings and Markdown. Skip:
 * `cargo check`, `cargo clippy`, Cargo.lock work — no Rust changes.
 * Test suites — there are no tests to add for a version bump.
 
+`bin/fmt` and `bin/lint` cover `misc/dbt-materialize/*.py`, but a
+one-character version bump almost never triggers them. Run them if
+you've made an accidental wider change; otherwise they're optional.
+
 ## Verifying before pushing
 
 ```
 git diff --stat
 ```
 
-Should show exactly three files with a `+4 / -2` shape (one line each in the
-two version files, two added lines in `CHANGELOG.md`). If anything else is
-staged, you've gone off-script.
+Should show exactly three files, predominantly a `+4 / -2` shape (one
+line each in the two version files, two added lines in `CHANGELOG.md`).
+A few extra lines in `CHANGELOG.md` are fine if a bullet was reformatted
+while finalising it; an unexpected fourth file means you've gone
+off-script.
 
 ## Quick reference
 
