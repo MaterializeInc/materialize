@@ -42,13 +42,11 @@ and [PlanetScale](https://planetscale.com/) are currently **not supported**.
 The MySQL source requires **MySQL 8.0.1+** and is compatible with most common
 MySQL hosted services.
 
-| Integration guides                       |
-| ---------------------------------------- |
-| {{% ingest-data/mysql-native-support %}} |
+## Integration guides
 
-If there is a hosted service or MySQL distribution that is not listed above but
-you would like to use with Materialize, please submit a [feature request](https://github.com/MaterializeInc/materialize/discussions/new?category=feature-requests&labels=A-integration)
-or reach out in the Materialize [Community Slack](https://materialize.com/s/chat).
+To help you get started, the following integration guides are available:
+
+{{% include-headless "/headless/mysql-ingest-guides" %}}
 
 ## Considerations
 

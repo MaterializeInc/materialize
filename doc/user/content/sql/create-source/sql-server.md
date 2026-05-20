@@ -1,5 +1,5 @@
 ---
-title: "CREATE SOURCE: SQL Server"
+title: "CREATE SOURCE: SQL Server (Legacy Syntax)"
 description: "Connecting Materialize to a SQL Server database for Change Data Capture (CDC)."
 pagerank: 40
 menu:
@@ -7,8 +7,12 @@ menu:
     parent: 'create-source'
     identifier: cs_sql-server
     name: SQL Server (Legacy Syntax)
-    weight: 23
+    weight: 31
 ---
+
+{{< source-versioning-disambiguation is_new=false
+other_ref="[new reference page](/sql/create-source/sql-server-v2)"
+include_blurb=true >}}
 
 {{% create-source/intro %}}
 Materialize supports SQL Server (2016+) as a real-time data source. To connect to a

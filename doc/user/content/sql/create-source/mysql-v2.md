@@ -7,7 +7,7 @@ menu:
         parent: "create-source"
         identifier: cs_mysql-v2
         name: MySQL (New Syntax)
-        weight: 21
+        weight: 15
 ---
 
 {{< public-preview />}}
@@ -15,16 +15,12 @@ menu:
 {{< source-versioning-disambiguation is_new=true
 other_ref="[old reference page](/sql/create-source/mysql/)" include_blurb=true >}}
 
+{{% create-source-intro external_source="MySQL" version="8.0.1+"
+create_table="/sql/create-table/" %}}
+
 ## Prerequisites
 
-{{% create-source/intro %}}
-Materialize supports MySQL (8.0.1+) as a real-time data source. To connect to a
-MySQL database, you first need to tweak its configuration to enable
-[GTID-based binary log (binlog) replication](#change-data-capture) and set
-[`binlog_row_metadata=FULL`](#change-data-capture), and then
-[create a connection](#prerequisite-creating-a-connection-to-mysql) in
-Materialize that specifies access and authentication parameters.
-{{% /create-source/intro %}}
+{{% include-from-yaml data="mysql_source_details" name="mysql-source-prereq" %}}
 
 ## Syntax
 
@@ -33,18 +29,21 @@ Materialize that specifies access and authentication parameters.
 ## Ingesting data
 
 After a source is created, you can create tables from the source referencing
-upstream MySQL tables that have GTID-based binlog replication enabled. You can
-create multiple tables that reference the same upstream table.
-
-See [`CREATE TABLE FROM SOURCE`](/sql/create-table/) for details.
+upstream MySQL tables that have [GTID-based binlog replication
+enabled](#change-data-capture) (Note: `binlog_row_metadata=FULL` is required to
+use the new syntax). You can create multiple tables that reference the same
+upstream table. See [`CREATE TABLE FROM SOURCE`](/sql/create-table/) for
+details.
 
 ### Handling table schema changes
 
 The use of `CREATE SOURCE` with the new [`CREATE TABLE FROM
 SOURCE`](/sql/create-table/) allows for the handling of certain upstream DDL
-changes without downtime.
+changes, specifically adding or dropping columns in the upstream tables, without
+downtime.
 
-See [`CREATE TABLE FROM SOURCE`](/sql/create-table/#handling-table-schema-changes) for details.
+See [Guide: Handle upstream schema
+changes](/ingest-data/mysql/source-versioning/) for details.
 
 ### Supported types
 
@@ -74,11 +73,7 @@ For additional considerations, see also [`CREATE TABLE`](/sql/create-table/).
 
 For step-by-step instructions on enabling GTID-based binlog replication for your
 MySQL service, see the integration guides:
-[Amazon RDS](/ingest-data/mysql/amazon-rds/),
-[Amazon Aurora](/ingest-data/mysql/amazon-aurora/),
-[Azure DB](/ingest-data/mysql/azure-db/),
-[Google Cloud SQL](/ingest-data/mysql/google-cloud-sql/),
-[Self-hosted](/ingest-data/mysql/self-hosted/).
+{{% include-headless "headless/mysql-ingest-guides" %}}
 
 {{< /note >}}
 
@@ -98,19 +93,15 @@ MySQL database for GTID-based binlog replication:
 
 {{% mysql-direct/ingesting-data/mysql-configs %}}
 
-In addition, the new `CREATE TABLE FROM SOURCE` syntax requires full row
-metadata in the binlog. You must set the following system variable on the
-upstream MySQL server:
+{{< tip >}}
 
-```sql
-SET GLOBAL binlog_row_metadata = FULL;
-```
-
-Note that `SET GLOBAL` does not persist across MySQL server restarts. To make
+For `binlog_row_metadata`, using `SET GLOBAL binlog_row_metadata = FULL;` does
+not persist across MySQL server restarts. To make
 the setting durable, use `SET PERSIST` (MySQL 8.0.11+) or set
 `binlog_row_metadata=FULL` in the server's configuration file. On managed
 services, set the variable through the service's parameter configuration
 instead.
+{{< /tip >}}
 
 If you're running MySQL using a managed service, additional configuration
 changes might be required. To enable GTID-based binlog replication for your
@@ -175,107 +166,26 @@ database. For more information, see [Troubleshooting](/ops/troubleshooting/).
 
 {{< important >}}
 
-Before creating a MySQL source, you must enable GTID-based binlog replication in
-the upstream database. For step-by-step instructions, see the integration guide
-for your MySQL service: [Amazon RDS](/ingest-data/mysql/amazon-rds/),
-[Amazon Aurora](/ingest-data/mysql/amazon-aurora/),
-[Azure DB](/ingest-data/mysql/azure-db/),
-[Google Cloud SQL](/ingest-data/mysql/google-cloud-sql/),
-[Self-hosted](/ingest-data/mysql/self-hosted/).
+Before creating a MySQL source, you must enable [GTID-based binary log (binlog)
+replication](#change-data-capture), including setting
+[`binlog_row_metadata=FULL`](#change-data-capture) to use the new syntax.
 
 {{< /important >}}
 
-### Creating a source {#create-source-example}
+### Prerequisites
 
-#### Prerequisite: Creating a connection to MySQL
+{{% include-from-yaml data="mysql_source_details" name="mysql-source-prereq" %}}
 
-First, you must create a connection to your MySQL database. A connection
-describes how to connect and authenticate to an external system you want
-Materialize to read data from.
+For details, see the [MySQL integration
+guides](/ingest-data/mysql/#integration-guides).
 
-Once created, a connection is **reusable** across multiple `CREATE SOURCE`
-statements. For more information, see [`CREATE CONNECTION`](/sql/create-connection/#mysql).
+### Create a source
 
-```mzsql
-CREATE SECRET mysqlpass AS '<MYSQL_PASSWORD>';
+{{% include-example file="examples/create_source_mysql"
+ example="create-source" %}}
 
-CREATE CONNECTION mysql_connection TO MYSQL (
-    HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
-    PORT 3306,
-    USER 'materialize',
-    PASSWORD SECRET mysqlpass
-);
-```
-
-If your MySQL server is not exposed to the public internet, you can [tunnel the
-connection](/sql/create-connection/#network-security-connections) through an
-AWS PrivateLink service (Materialize Cloud) or an SSH bastion host.
-
-{{< tabs tabID="1" >}}
-{{< tab "AWS PrivateLink (Materialize Cloud)">}}
-
-{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
-
-```mzsql
-CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
-   SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
-   AVAILABILITY ZONES ('use1-az1', 'use1-az4')
-);
-
-CREATE CONNECTION mysql_connection TO MYSQL (
-    HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
-    PORT 3306,
-    USER 'root',
-    PASSWORD SECRET mysqlpass,
-    AWS PRIVATELINK privatelink_svc
-);
-```
-
-For more information, see [this guide](/ops/network-security/privatelink/).
-
-{{< /tab >}}
-{{< tab "SSH tunnel">}}
-
-```mzsql
-CREATE CONNECTION ssh_connection TO SSH TUNNEL (
-    HOST 'bastion-host',
-    PORT 22,
-    USER 'materialize'
-);
-```
-
-```mzsql
-CREATE CONNECTION mysql_connection TO MYSQL (
-    HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
-    SSH TUNNEL ssh_connection
-);
-```
-
-For more information, see [this guide](/ops/network-security/ssh-tunnel/).
-
-{{< /tab >}}
-{{< /tabs >}}
-
-#### Creating the source in Materialize
-
-You **must** enable GTID-based binlog replication before creating the source.
-See [Change data capture](#change-data-capture) for configuration details.
-
-Once replication is configured, create a `SOURCE` in Materialize:
-
-```mzsql
-CREATE SOURCE mz_source
-    FROM MYSQL CONNECTION mysql_connection;
-```
-
-After a source is created, you can create a table from the source, referencing
-specific upstream table(s).
-
-_Creates a table in Materialize from the upstream table `mydb.orders`_
-
-```mzsql
-CREATE TABLE orders FROM SOURCE mz_source (REFERENCE mydb.orders);
-```
+{{% include-example file="examples/create_source_mysql"
+ example="create-table" %}}
 
 ## Related pages
 
@@ -283,9 +193,4 @@ CREATE TABLE orders FROM SOURCE mz_source (REFERENCE mydb.orders);
 - [`CREATE SECRET`](/sql/create-secret)
 - [`CREATE CONNECTION`](/sql/create-connection)
 - [`CREATE SOURCE`](../)
-- MySQL integration guides:
-    - [Amazon RDS](/ingest-data/mysql/amazon-rds/)
-    - [Amazon Aurora](/ingest-data/mysql/amazon-aurora/)
-    - [Azure DB](/ingest-data/mysql/azure-db/)
-    - [Google Cloud SQL](/ingest-data/mysql/google-cloud-sql/)
-    - [Self-hosted](/ingest-data/mysql/self-hosted/)
+- [MySQL integration guides](/ingest-data/mysql/#integration-guides)

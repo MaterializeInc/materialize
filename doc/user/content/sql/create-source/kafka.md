@@ -7,7 +7,7 @@ menu:
     parent: 'create-source'
     identifier: cs_kafka
     name: Kafka/Redpanda
-    weight: 20
+    weight: 10
 aliases:
     - /sql/create-source/avro-kafka
     - /sql/create-source/json-kafka

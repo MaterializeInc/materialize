@@ -39,3 +39,31 @@
         To start ingesting data, create a [`CREATE TABLE FROM
         SOURCE`](/sql/create-table/) statement for each upstream table to
         replicate.
+
+- name: "create-source"
+  description: |
+     Once you have configured the upstream MySQL, network security, and created
+     the [connection to MySQL](/sql/create-connection/#mysql), you can create
+     the source. In this example, assume the connection you created is named
+     `mysql_connection`.
+  code: |
+     CREATE SOURCE mysql_source
+     FROM MYSQL CONNECTION mysql_connection;
+
+  testable_results: false
+- name: "create-table"
+  description: |
+    After a source is created, you can [create a table from the
+    source](/sql/create-table/), referencing specific upstream table(s). Use a
+    [DDL transaction block](/sql/begin/#ddl-only-transactions) to create
+    multiple tables from the same source.
+  code: |
+    BEGIN;
+    CREATE TABLE items
+    FROM SOURCE mysql_source (REFERENCE mydb.items);
+
+    CREATE TABLE orders
+    FROM SOURCE mysql_source (REFERENCE mydb.orders);
+    COMMIT;
+
+  testable_results: false

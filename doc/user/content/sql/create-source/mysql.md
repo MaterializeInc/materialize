@@ -1,5 +1,5 @@
 ---
-title: "CREATE SOURCE: MySQL"
+title: "CREATE SOURCE: MySQL (Legacy syntax)"
 description: "Connecting Materialize to a MySQL database for Change Data Capture (CDC)."
 pagerank: 40
 menu:
@@ -7,16 +7,20 @@ menu:
         parent: "create-source"
         identifier: cs_mysql
         name: MySQL (Legacy Syntax)
-        weight: 20
+        weight: 16
 ---
 
-{{% create-source/intro %}}
-Materialize supports MySQL (5.7+) as a real-time data source. To connect to a
-MySQL database, you first need to tweak its configuration to enable
-[GTID-based binary log (binlog) replication](#change-data-capture), and then
-[create a connection](#creating-a-connection) in Materialize that specifies
+{{< source-versioning-disambiguation is_new=false
+other_ref="[new reference page](/sql/create-source/mysql-v2)"
+include_blurb=true >}}
+
+Creates a new source from MySQL. Materialize supports creating sources from
+MySQL (8.0.1+).
+
+To connect to a MySQL database, you first need to update its configuration to
+enable [GTID-based binary log (binlog) replication](#change-data-capture), and
+then [create a connection](#creating-a-connection) in Materialize that specifies
 access and authentication parameters.
-{{% /create-source/intro %}}
 
 {{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
 

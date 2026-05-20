@@ -14,8 +14,8 @@ menu:
 Changing column types is currently unsupported.
 {{< /note >}}
 
-Materialize allows you to handle certain types of upstream
-table schema changes seamlessly, specifically:
+Materialize allows you to handle certain types of upstream table schema changes
+seamlessly, specifically:
 
 - Adding a column in the upstream database.
 - Dropping a column in the upstream database.
@@ -25,15 +25,17 @@ This guide walks you through how to handle these changes without any downtime in
 ## Prerequisites
 
 Some familiarity with Materialize. If you've never used Materialize before,
-start with our [guide to getting started](/get-started/quickstart/) to learn
-how to connect a database to Materialize.
+start with our [guide to getting started](/get-started/quickstart/).
 
 ### Set up a MySQL database
 
-For this guide, setup a MySQL 8.0.1+ database. In your MySQL database, create a
-table `t1` and populate it:
+For this guide, set up a MySQL 8.0.1+ database. In your MySQL database, create a
+table `t1` in `mydb` and populate it:
 
 ```sql
+CREATE DATABASE mydb;
+USE mydb;
+
 CREATE TABLE t1 (
     a INT
 );
@@ -43,10 +45,11 @@ INSERT INTO t1 (a) VALUES (10);
 
 ### Configure your MySQL database
 
-Configure your MySQL database for GTID-based binlog replication using the
-[configuration instructions for self-hosted MySQL](/ingest-data/mysql/self-hosted/#a-configure-mysql).
+Configure your MySQL database for GTID-based binlog replication. You must set
+`binlog_row_metadata=FULL` to use the new [`CREATE
+SOURCE`](/sql/create-source/mysql-v2/) syntax.
 
-In addition to the standard setup, in order to use the [`CREATE SOURCE` syntax](/sql/create-source/mysql-v2/) and use source versioning, you must also ensure that the MySQL system variable `binlog_row_metadata` is set to `FULL`, which will allow Materialize to access additional information about the schemas of the MySQL tables you want to replicate.
+{{% include-headless "/headless/mysql-ingest-guides" %}}
 
 ### Connect your source database to Materialize
 
@@ -79,9 +82,7 @@ snapshot](/ingest-data/#snapshotting) of table `v1.t1` will begin.
 
 {{< note >}}
 
-During the snapshotting, the data ingestion for the other tables associated with
-the source is temporarily blocked. You can monitor progress for the snapshot
-operation on the overview page for the source in the Materialize console.
+{{% include-headless "/headless/source-versioning-snapshotting-note" %}}
 
 {{< /note >}}
 
@@ -108,6 +109,11 @@ ALTER TABLE t1
 INSERT INTO t1 (a, b) VALUES (20, true);
 ```
 
+{{< note >}}
+In MySQL, `BOOL`/`BOOLEAN` is an alias for MySQL type `TINYINT(1)`. As such, the
+column `b` will be ingested as `smallint` in Materialize. See  [MySQL's data type documentation](https://dev.mysql.com/doc/refman/9.7/en/other-vendor-data-types.html).
+{{< /note >}}
+
 This operation has no immediate effect in Materialize. In Materialize:
 
 - The table `v1.t1` will continue to ingest only column `a`.
@@ -116,9 +122,9 @@ This operation has no immediate effect in Materialize. In Materialize:
 
 ### B. Incorporate the new column in Materialize
 
-Unlike SQL Server CDC, MySQL uses binlog-based replication, which automatically
-includes all columns. To incorporate the new column into Materialize, create a
-new `v2` schema and recreate the table in the new schema:
+MySQL uses binlog-based replication, which automatically includes all columns.
+To incorporate the new column into Materialize, create a new `v2` schema and
+recreate the table in the new schema:
 
 ```mzsql
 CREATE SCHEMA v2;
@@ -132,20 +138,18 @@ The [snapshotting](/ingest-data/#snapshotting) of table `v2.t1` will begin.
 
 {{< note >}}
 
-During the snapshotting, the data ingestion for the other tables associated with
-the source is temporarily blocked. You can monitor progress for the snapshot
-operation on the overview page for the source in the Materialize console.
+{{% include-headless "/headless/source-versioning-snapshotting-note" %}}
 
 {{< /note >}}
 
 When `v2.t1` has finished snapshotting, create a new materialized view in the
-new schema. Since `v2.matview` references `v2.t1`, it can now reference column `b`:
+new schema. Since `v2.matview` references `v2.t1`, it can reference column `b`:
 
 ```mzsql {hl_lines="4"}
 CREATE MATERIALIZED VIEW v2.matview AS
     SELECT SUM(a)
     FROM v2.t1
-    WHERE b = true;
+    WHERE b = 1;
 ```
 
 ## Handle upstream column drop
@@ -165,9 +169,7 @@ CREATE TABLE v3.t1
 
 {{< note >}}
 
-During the snapshotting, the data ingestion for the other tables associated with
-the source is temporarily blocked. You can monitor progress for the snapshot
-operation on the overview page for the source in the Materialize console.
+{{% include-headless "/headless/source-versioning-snapshotting-note" %}}
 
 {{< /note >}}
 
@@ -181,7 +183,7 @@ ALTER TABLE t1 DROP COLUMN b;
 
 Dropping column `b` will have no effect on `v3.t1` in Materialize, provided
 you completed step A before dropping the column. However, the drop affects
-`v2.T` and `v2.matview` from our earlier examples. When the user attempts to
+`v2.t1` and `v2.matview` from our earlier examples. When you attempt to
 read from either, Materialize will report an error that the source table schema
 has been altered.
 
