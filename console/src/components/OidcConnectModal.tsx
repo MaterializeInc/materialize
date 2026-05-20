@@ -26,7 +26,7 @@ import {
 } from "~/components/copyableComponents";
 import McpConnectInstructions from "~/components/McpConnectInstructions";
 import { Modal } from "~/components/Modal";
-import { useAuth } from "~/external-library-wrappers/oidc";
+import { type AuthContextProps } from "~/external-library-wrappers/oidc";
 import ConnectionIcon from "~/svg/ConnectionIcon";
 import { MaterializeTheme } from "~/theme";
 import { obfuscateSecret } from "~/utils/format";
@@ -36,12 +36,13 @@ const OIDC_USERNAME_PLACEHOLDER = "<your_oidc_username>";
 const OidcConnectModal = ({
   onClose,
   isOpen,
+  auth,
 }: {
   onClose: () => void;
   isOpen: boolean;
+  auth: AuthContextProps;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
-  const auth = useAuth();
   const idToken = auth.user?.id_token;
 
   const obfuscated = idToken ? obfuscateSecret(idToken) : "";

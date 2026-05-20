@@ -279,7 +279,7 @@ export const NavBar = ({ isCollapsed }: NavBarProps) => {
                 </HideIfEnvironmentDisabled>
               )
             }
-            selfManagedConfigElement={({ appConfig }) =>
+            selfManagedConfigElement={({ appConfig, runtimeConfig }) =>
               appConfig.authMode === "None" ? null : (
                 <HideIfEnvironmentDisabled>
                   <ConnectMenuItem
@@ -287,10 +287,11 @@ export const NavBar = ({ isCollapsed }: NavBarProps) => {
                     width="100%"
                     onClick={onOpenConnectModal}
                   />
-                  {appConfig.authMode === "Oidc" ? (
+                  {runtimeConfig.isOidcAvailable ? (
                     <OidcConnectModal
                       onClose={onCloseConnectModal}
                       isOpen={isConnectModalOpen}
+                      auth={runtimeConfig.auth}
                     />
                   ) : (
                     <PasswordConnectModal

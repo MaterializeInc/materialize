@@ -315,7 +315,7 @@ const NavMenuMobile = (props: {
                 </HideIfEnvironmentDisabled>
               )
             }
-            selfManagedConfigElement={({ appConfig }) =>
+            selfManagedConfigElement={({ appConfig, runtimeConfig }) =>
               appConfig.authMode === "None" ? null : (
                 <HideIfEnvironmentDisabled>
                   <ConnectMenuItem
@@ -323,10 +323,11 @@ const NavMenuMobile = (props: {
                     onClick={onOpenConnectModal}
                     mb={{ base: 0, lg: 6 }}
                   />
-                  {appConfig.authMode === "Oidc" ? (
+                  {runtimeConfig.isOidcAvailable ? (
                     <OidcConnectModal
                       onClose={onCloseConnectModal}
                       isOpen={isConnectModalOpen}
+                      auth={runtimeConfig.auth}
                     />
                   ) : (
                     <PasswordConnectModal

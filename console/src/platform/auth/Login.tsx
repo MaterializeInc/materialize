@@ -29,8 +29,7 @@ import { LOGIN_ERROR_PARAM, loginOrThrow } from "~/api/materialize/auth";
 import Alert from "~/components/Alert";
 import { LabeledInput } from "~/components/formComponentsV2";
 import { MaterializeLogo } from "~/components/MaterializeLogo";
-import { useAppConfig } from "~/config/useAppConfig";
-import { useAuth } from "~/external-library-wrappers/oidc";
+import { useAuth, useOidcManagerQuery } from "~/external-library-wrappers/oidc";
 import { AuthContentContainer, AuthLayout } from "~/layouts/AuthLayout";
 import EyeClosedIcon from "~/svg/EyeClosedIcon";
 import EyeOpenIcon from "~/svg/EyeOpenIcon";
@@ -152,10 +151,12 @@ const PasswordLoginForm = () => {
 
 const SsoLoginLink = () => {
   const { colors } = useTheme<MaterializeTheme>();
-  const auth = useAuth();
   const [error, setError] = useState<string | null>(null);
+  const auth = useAuth();
 
-  if (!auth) return null;
+  if (!auth) {
+    return null;
+  }
 
   const handleSsoLogin = () => {
     setError(null);
@@ -184,12 +185,10 @@ const SsoLoginLink = () => {
 };
 
 export const Login = () => {
-  const appConfig = useAppConfig();
   const [searchParams] = useSearchParams();
-  const isOidc =
-    appConfig.mode === "self-managed" && appConfig.authMode === "Oidc";
+  const { data: auth, error: oidcInitializationError } = useOidcManagerQuery();
 
-  const errorMessage = searchParams.get(LOGIN_ERROR_PARAM);
+  const oidcError = searchParams.get(LOGIN_ERROR_PARAM);
 
   return (
     <AuthLayout>
@@ -198,16 +197,19 @@ export const Login = () => {
           <HStack my={{ base: "8", lg: "0" }} paddingBottom="8">
             <MaterializeLogo height="12" />
           </HStack>
-          {errorMessage && (
+          {oidcError && (
+            <Alert variant="error" minWidth="100%" message={oidcError} mb="4" />
+          )}
+          {oidcInitializationError && (
             <Alert
-              variant="error"
+              variant="info"
               minWidth="100%"
-              message={errorMessage}
+              message={oidcInitializationError.message}
               mb="4"
             />
           )}
           <PasswordLoginForm />
-          {isOidc && <SsoLoginLink />}
+          {!!auth && <SsoLoginLink />}
         </VStack>
       </AuthContentContainer>
     </AuthLayout>

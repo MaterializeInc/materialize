@@ -39,7 +39,7 @@ import {
   AuthState,
   type User,
 } from "~/external-library-wrappers/frontegg";
-import { useAuth } from "~/external-library-wrappers/oidc";
+import { type AuthContextProps } from "~/external-library-wrappers/oidc";
 import { AUTH_ROUTES } from "~/fronteggRoutes";
 import { useSelfManagedProfile } from "~/hooks/useSelfManagedProfile";
 import { NAV_HORIZONTAL_SPACING, NAV_HOVER_STYLES } from "~/layouts/constants";
@@ -74,8 +74,8 @@ const UserInfoHeaderBlock = ({
   );
 };
 
-const SelfManagedUserInfoMenuItem = () => {
-  const { name, email, sqlRole, isLoading } = useSelfManagedProfile();
+const SelfManagedUserInfoMenuItem = ({ auth }: { auth?: AuthContextProps }) => {
+  const { name, email, sqlRole, isLoading } = useSelfManagedProfile(auth);
   if (isLoading && !name && !email && !sqlRole) {
     return (
       <>
@@ -114,9 +114,15 @@ const UserInfoMenuItem = () => {
           </>
         );
       }}
-      selfManagedConfigElement={({ appConfig }) => {
+      selfManagedConfigElement={({ appConfig, runtimeConfig }) => {
         if (appConfig.authMode === "None") return null;
-        return <SelfManagedUserInfoMenuItem />;
+        return (
+          <SelfManagedUserInfoMenuItem
+            auth={
+              runtimeConfig.isOidcAvailable ? runtimeConfig.auth : undefined
+            }
+          />
+        );
       }}
     />
   );
@@ -134,9 +140,9 @@ const PricingMenuItem = () => (
   </MenuItem>
 );
 
-const SelfManagedMenuButtonLabel = () => {
+const SelfManagedMenuButtonLabel = ({ auth }: { auth?: AuthContextProps }) => {
   const { colors } = useTheme<MaterializeTheme>();
-  const { name } = useSelfManagedProfile();
+  const { name } = useSelfManagedProfile(auth);
   return (
     <Text textStyle="text-ui-med" color={colors.foreground.primary}>
       {name ?? "Settings"}
@@ -144,9 +150,7 @@ const SelfManagedMenuButtonLabel = () => {
   );
 };
 
-const OidcSignOutMenuItem = () => {
-  const auth = useAuth();
-
+const OidcSignOutMenuItem = ({ auth }: { auth: AuthContextProps }) => {
   const handleLogout = async () => {
     // Clear both the session cookie and OIDC state so that
     // logout works regardless of which method the user used.
@@ -188,9 +192,11 @@ const SignOutMenuItem = () => {
           </>
         );
       }}
-      selfManagedConfigElement={({ appConfig }) => {
+      selfManagedConfigElement={({ appConfig, runtimeConfig }) => {
         if (appConfig.authMode === "None") return null;
-        if (appConfig.authMode === "Oidc") return <OidcSignOutMenuItem />;
+        if (runtimeConfig.isOidcAvailable) {
+          return <OidcSignOutMenuItem auth={runtimeConfig.auth} />;
+        }
         return (
           <>
             <MenuDivider />
@@ -208,8 +214,8 @@ const DefaultAvatar = () => {
   return <ChakraAvatar size="xs" />;
 };
 
-const SelfManagedAvatar = () => {
-  const { name, picture } = useSelfManagedProfile();
+const SelfManagedAvatar = ({ auth }: { auth?: AuthContextProps }) => {
+  const { name, picture } = useSelfManagedProfile(auth);
   return <ChakraAvatar size="xs" src={picture} name={name} />;
 };
 
@@ -229,9 +235,15 @@ const Avatar = () => {
           />
         );
       }}
-      selfManagedConfigElement={({ appConfig }) => {
+      selfManagedConfigElement={({ appConfig, runtimeConfig }) => {
         if (appConfig.authMode === "None") return <DefaultAvatar />;
-        return <SelfManagedAvatar />;
+        return (
+          <SelfManagedAvatar
+            auth={
+              runtimeConfig.isOidcAvailable ? runtimeConfig.auth : undefined
+            }
+          />
+        );
       }}
     />
   );
@@ -312,7 +324,7 @@ const ProfileDropdown = ({
                     </>
                   );
                 }}
-                selfManagedConfigElement={({ appConfig }) => {
+                selfManagedConfigElement={({ appConfig, runtimeConfig }) => {
                   if (appConfig.authMode === "None") {
                     return (
                       <Text
@@ -323,7 +335,15 @@ const ProfileDropdown = ({
                       </Text>
                     );
                   }
-                  return <SelfManagedMenuButtonLabel />;
+                  return (
+                    <SelfManagedMenuButtonLabel
+                      auth={
+                        runtimeConfig.isOidcAvailable
+                          ? runtimeConfig.auth
+                          : undefined
+                      }
+                    />
+                  );
                 }}
               />
             </VStack>
