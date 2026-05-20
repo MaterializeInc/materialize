@@ -74,7 +74,17 @@ LOG = helper_logging.setup_logging("driver.explicit_txn")
 
 CLUSTER = "antithesis_cluster"
 TABLE_NAME = "antithesis_txn_table"
-MV_NAME = "antithesis_txn_mv"
+# Two MV variants from helper_explicit_txn_setup. The plain MV's `since`
+# advances continuously with the table's frontier; the REFRESH EVERY MV
+# advances in discrete ticks. Per-invocation SDK coin flip picks one,
+# so each timeline visits both code paths.
+#
+# The REFRESH EVERY variant is the one the INC database-issues#11200
+# repro hit — a stepped-`since` MV interacting with stored read holds
+# inside an explicit txn is the most direct reproduction of that
+# failure shape.
+MV_NAME_PLAIN = "antithesis_txn_mv"
+MV_NAME_REFRESH_EVERY = "antithesis_txn_mv_refresh_every"
 
 # Pulled from the bug surface (see frontend_peek.rs +
 # compute-client/src/controller.rs around the SinceViolation returns).
@@ -153,8 +163,12 @@ def _drive_frontier_advance(batch_id: str) -> int:
     return inserted
 
 
-def _run_explicit_txn(batch_id: str) -> tuple[bool, str | None]:
+def _run_explicit_txn(batch_id: str, mv_name: str) -> tuple[bool, str | None]:
     """Open a non-autocommit connection, run BEGIN -> N SELECTs -> COMMIT.
+
+    `mv_name` is the materialized view to interleave with table reads —
+    one of `MV_NAME_PLAIN` or `MV_NAME_REFRESH_EVERY`. The caller picks
+    via SDK coin flip so each timeline visits both MV shapes.
 
     Returns (clean, error_message_or_None). `clean` is True iff every
     SELECT inside the txn succeeded and the COMMIT landed. The caller
@@ -180,7 +194,7 @@ def _run_explicit_txn(batch_id: str) -> tuple[bool, str | None]:
                             (i,),
                         )
                     else:
-                        cur.execute(f"SELECT n, s FROM {MV_NAME}")
+                        cur.execute(f"SELECT n, s FROM {mv_name}")
                     cur.fetchall()
                 cur.execute("COMMIT")
             except psycopg.Error:
@@ -203,7 +217,13 @@ def _run_explicit_txn(batch_id: str) -> tuple[bool, str | None]:
 
 def main() -> int:
     batch_id = f"t{helper_random.random_u64():016x}"
-    LOG.info("driver starting; batch_id=%s", batch_id)
+    # SDK-sourced coin flip picks the MV variant for this timeline. Both
+    # arms get a `sometimes` signal so a coverage regression on either
+    # MV shape is visible in the dashboard.
+    use_refresh_mv = (helper_random.random_u64() & 1) == 1
+    mv_name = MV_NAME_REFRESH_EVERY if use_refresh_mv else MV_NAME_PLAIN
+    mv_kind = "refresh_every" if use_refresh_mv else "plain"
+    LOG.info("driver starting; batch_id=%s mv=%s", batch_id, mv_name)
 
     # Step 1: drive frontier advance.
     inserted = _drive_frontier_advance(batch_id)
@@ -216,13 +236,24 @@ def main() -> int:
     time.sleep(0.05)
 
     # Step 2: run the explicit transaction; capture verdict.
-    clean, err = _run_explicit_txn(batch_id)
+    clean, err = _run_explicit_txn(batch_id, mv_name)
+
+    sometimes(
+        use_refresh_mv,
+        "explicit-txn: invocation reads from the REFRESH EVERY MV",
+        {"batch_id": batch_id, "mv": mv_name},
+    )
+    sometimes(
+        not use_refresh_mv,
+        "explicit-txn: invocation reads from the plain (continuously-refreshed) MV",
+        {"batch_id": batch_id, "mv": mv_name},
+    )
 
     if clean:
         sometimes(
             True,
             "explicit-txn: full BEGIN..SELECTs..COMMIT cycle completes cleanly",
-            {"batch_id": batch_id, "selects": SELECTS_PER_TXN},
+            {"batch_id": batch_id, "selects": SELECTS_PER_TXN, "mv_kind": mv_kind},
         )
         # Safety side fires a trivially-true `always` so the assertion
         # site exists in the catalog even on no-fault runs; Antithesis

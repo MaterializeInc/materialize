@@ -299,6 +299,22 @@ _SETUP_FAULT_PATTERNS = (
     # `postgres-metadata`, etc. while Antithesis has the DNS path
     # partitioned.
     "Temporary failure in name resolution",
+    # Sibling glibc DNS error, EAI_NONAME ("[Errno -2] Name or service
+    # not known"). Lands when the upstream container is gone entirely
+    # (Antithesis killed it) rather than transiently partitioned —
+    # resolver has no record at all, not just a temporary failure.
+    "Name or service not known",
+    # Materialize's `CREATE CONNECTION TO ICEBERG CATALOG` validates by
+    # asking polaris to list namespaces. When polaris itself can't talk
+    # to its upstream (postgres-metadata paused, network partitioned),
+    # polaris's REST handler surfaces a generic reqwest transport
+    # failure as `Failed to execute http request`, wrapped by
+    # materialized as `failed to list namespaces: Unexpected => Failed
+    # to execute http request, source: error sending request for url
+    # (http://polaris:8181/...)`. Distinct from the
+    # `terminating connection due to administrator command` shape
+    # below — that's polaris's *JDBC* connection getting reset; this
+    # is polaris's *HTTP* layer failing to reach its dependency.
     # psycopg's wording when the server-side connection drops mid-statement
     # — e.g. Antithesis kills environmentd while CREATE CONNECTION's
     # validation is in flight.  The CREATE may or may not have committed;
@@ -317,7 +333,30 @@ _SETUP_FAULT_PATTERNS = (
     # waiting for a fresh connection and times out.  Same DataInvalid
     # wrapper from materialized; distinct inner cause.
     "Acquisition timeout while waiting for new connection",
+    # Polaris's HTTP transport failure wording — see the long comment
+    # on `Name or service not known` above for context.
+    "Failed to execute http request",
+    # librdkafka's admin client (used by `CREATE SINK ... INTO KAFKA`'s
+    # validation step) surfaces broker-side timeouts as
+    # `Meta data fetch error: OperationTimedOut (Local: Timed out)`
+    # when Antithesis pauses the kafka container long enough that the
+    # admin op exceeds its timeout. Distinct from BrokerTransportFailure
+    # (connection-level failure, broker unreachable at all) — this is
+    # connection-up-but-not-responding.
+    "OperationTimedOut",
 )
+
+
+def _msg_contains(msg: str, pat: str) -> bool:
+    """Case-insensitive substring test used by `_matches_setup_tolerance`.
+
+    Several fault-shaped errors arrive with inconsistent casing — e.g.
+    librdkafka emits `"Connection refused"` (capital C) while psycopg's
+    older wording is lowercase. Hand-curating both cases in the pattern
+    lists is fragile; matching case-insensitively gives the lists one
+    canonical form (lowercase by convention) and absorbs the variants.
+    """
+    return pat.lower() in msg.lower()
 
 
 def _matches_setup_tolerance(exc: BaseException) -> bool:
@@ -328,7 +367,10 @@ def _matches_setup_tolerance(exc: BaseException) -> bool:
     signal).
     """
     msg = getattr(exc, "msg", None) or str(exc)
-    return any(pat in msg for pat in (*_SETUP_RACE_PATTERNS, *_SETUP_FAULT_PATTERNS))
+    return any(
+        _msg_contains(msg, pat)
+        for pat in (*_SETUP_RACE_PATTERNS, *_SETUP_FAULT_PATTERNS)
+    )
 
 
 def _worker_death_tolerable(occurred: Exception | None) -> bool:
