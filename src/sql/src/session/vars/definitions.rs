@@ -1773,12 +1773,6 @@ feature_flags!(
     },
     // Actual feature flags
     {
-        name: enable_guard_subquery_tablefunc,
-        desc: "Whether HIR -> MIR lowering should use a new tablefunc to guard subquery sizes",
-        default: true,
-        enable_for_item_parsing: false,
-    },
-    {
         name: enable_binary_date_bin,
         desc: "the binary version of date_bin function",
         default: false,
@@ -2250,7 +2244,6 @@ feature_flags!(
 impl From<&super::SystemVars> for OptimizerFeatures {
     fn from(vars: &super::SystemVars) -> Self {
         Self {
-            enable_guard_subquery_tablefunc: vars.enable_guard_subquery_tablefunc(),
             enable_consolidate_after_union_negate: vars.enable_consolidate_after_union_negate(),
             enable_eager_delta_joins: vars.enable_eager_delta_joins(),
             enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),
@@ -2295,7 +2288,6 @@ mod tests {
         let false_features = OptimizerFeatures::default();
         let OptimizerFeatures {
             enable_eq_classes_withholding_errors,
-            enable_guard_subquery_tablefunc,
             enable_consolidate_after_union_negate,
             enable_eager_delta_joins,
             enable_letrec_fixpoint_analysis,
@@ -2326,7 +2318,6 @@ mod tests {
         }
 
         set_var!(enable_eq_classes_withholding_errors);
-        set_var!(enable_guard_subquery_tablefunc);
         set_var!(enable_consolidate_after_union_negate);
         set_var!(enable_eager_delta_joins);
         set_var!(enable_letrec_fixpoint_analysis);
