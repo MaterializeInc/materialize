@@ -217,7 +217,7 @@ def _bootstrap_darwin(arch: Arch) -> None:
     # Building in Docker for Mac is painfully slow, so we install a
     # cross-compiling toolchain on the host and use that instead.
 
-    BOOTSTRAP_VERSION = "6"
+    BOOTSTRAP_VERSION = "7"
     BOOTSTRAP_FILE = MZ_ROOT / "target-xcompile" / target(arch) / ".xcompile-bootstrap"
     try:
         contents = BOOTSTRAP_FILE.read_text()

@@ -948,43 +948,41 @@ impl ColReader {
                     .map(|n| !n.is_valid(idx))
                     .unwrap_or(false);
 
-                // Read finite bounds into owned Rows so the packing closures
-                // handed to `push_range_with` can capture them by move.
-                let lower_bound = if lower_is_infinite {
+                // Read finite bounds into owned Rows that live for the rest of
+                // this block, so the Datums we borrow out of them stay valid
+                // for the `push_range` call below.
+                let lower_row = if lower_is_infinite {
                     None
                 } else {
                     let mut temp = SharedRow::get();
                     lower.read(idx, &mut temp.packer())?;
-                    let row = temp.clone();
-                    Some(move |packer: &mut RowPacker| -> Result<(), anyhow::Error> {
-                        packer.push(row.unpack_first());
-                        Ok(())
-                    })
+                    Some(temp.clone())
                 };
-
-                let upper_bound = if upper_is_infinite {
+                let upper_row = if upper_is_infinite {
                     None
                 } else {
                     let mut temp = SharedRow::get();
                     upper.read(idx, &mut temp.packer())?;
-                    let row = temp.clone();
-                    Some(move |packer: &mut RowPacker| -> Result<(), anyhow::Error> {
-                        packer.push(row.unpack_first());
-                        Ok(())
-                    })
+                    Some(temp.clone())
                 };
 
+                let lower_bound = RangeLowerBound {
+                    inclusive: lower_inclusive.value(idx),
+                    bound: lower_row.as_ref().map(|row| row.unpack_first()),
+                };
+                let upper_bound = RangeUpperBound {
+                    inclusive: upper_inclusive.value(idx),
+                    bound: upper_row.as_ref().map(|row| row.unpack_first()),
+                };
+
+                // Use `push_range` (not `push_range_with`) so the range is
+                // canonicalized before being packed. Parquet files authored by
+                // external engines may encode discrete ranges in non-canonical
+                // form (e.g. `[1,10]` for int4range, which MZ stores as
+                // `[1,11)`); without canonicalization those rows would not
+                // compare or hash equal to MZ-constructed values.
                 packer
-                    .push_range_with(
-                        RangeLowerBound {
-                            inclusive: lower_inclusive.value(idx),
-                            bound: lower_bound,
-                        },
-                        RangeUpperBound {
-                            inclusive: upper_inclusive.value(idx),
-                            bound: upper_bound,
-                        },
-                    )
+                    .push_range(Range::new(Some((lower_bound, upper_bound))))
                     .context("pack range")?;
 
                 return Ok(());
@@ -1183,5 +1181,107 @@ mod tests {
         reader.read(2, &mut rnd_row).unwrap();
         let num = rnd_row.into_element().unwrap_numeric();
         assert_eq!(num.0, Numeric::from(100000000.009f64));
+    }
+
+    /// Regression test for database-issues#11330: when a Parquet file authored
+    /// by an external engine encodes a discrete range in non-canonical form
+    /// (e.g. `[1,10]` for `int4range`), the reader must canonicalize it to MZ's
+    /// internal form (`[1,11)`). Otherwise rows ingested via `COPY FROM PARQUET`
+    /// don't compare or hash equal to logically-identical rows constructed
+    /// inside MZ.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+    fn range_canonicalizes_noncanonical_input() {
+        use arrow::array::ArrayRef;
+        use arrow::datatypes::DataType;
+        use mz_repr::adt::range::{Range, RangeLowerBound, RangeUpperBound};
+
+        let desc = RelationDesc::builder()
+            .with_column(
+                "r",
+                SqlScalarType::Range {
+                    element_type: Box::new(SqlScalarType::Int32),
+                }
+                .nullable(true),
+            )
+            .finish();
+
+        // Build a range StructArray containing two non-canonical encodings:
+        //   row 0: `[1,10]`  -> canonicalizes to `[1,11)`
+        //   row 1: `(5,15)`  -> canonicalizes to `[6,15)`
+        let lower = Int32Array::from(vec![Some(1), Some(5)]);
+        let upper = Int32Array::from(vec![Some(10), Some(15)]);
+        let lower_inclusive = BooleanArray::from(vec![true, false]);
+        let upper_inclusive = BooleanArray::from(vec![true, false]);
+        let empty = BooleanArray::from(vec![false, false]);
+
+        #[allow(clippy::as_conversions)]
+        let range_fields: Vec<(Arc<Field>, ArrayRef)> = vec![
+            (
+                Arc::new(Field::new("lower", DataType::Int32, true)),
+                Arc::new(lower) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("upper", DataType::Int32, true)),
+                Arc::new(upper) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("lower_inclusive", DataType::Boolean, false)),
+                Arc::new(lower_inclusive) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("upper_inclusive", DataType::Boolean, false)),
+                Arc::new(upper_inclusive) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("empty", DataType::Boolean, false)),
+                Arc::new(empty) as ArrayRef,
+            ),
+        ];
+        let range_struct = StructArray::from(range_fields);
+
+        #[allow(clippy::as_conversions)]
+        let batch = StructArray::from(vec![(
+            Arc::new(Field::new("r", range_struct.data_type().clone(), true)),
+            Arc::new(range_struct) as ArrayRef,
+        )]);
+
+        let reader = ArrowReader::new(&desc, batch).unwrap();
+
+        // Row 0: `[1,10]` -> `[1,11)`
+        let mut got = Row::default();
+        reader.read(0, &mut got).unwrap();
+        let mut want = Row::default();
+        want.packer()
+            .push_range(Range::new(Some((
+                RangeLowerBound {
+                    inclusive: true,
+                    bound: Some(Datum::Int32(1)),
+                },
+                RangeUpperBound {
+                    inclusive: true,
+                    bound: Some(Datum::Int32(10)),
+                },
+            ))))
+            .unwrap();
+        assert_eq!(got, want, "row 0: [1,10] should canonicalize to [1,11)");
+
+        // Row 1: `(5,15)` -> `[6,15)`
+        let mut got = Row::default();
+        reader.read(1, &mut got).unwrap();
+        let mut want = Row::default();
+        want.packer()
+            .push_range(Range::new(Some((
+                RangeLowerBound {
+                    inclusive: false,
+                    bound: Some(Datum::Int32(5)),
+                },
+                RangeUpperBound {
+                    inclusive: false,
+                    bound: Some(Datum::Int32(15)),
+                },
+            ))))
+            .unwrap();
+        assert_eq!(got, want, "row 1: (5,15) should canonicalize to [6,15)");
     }
 }

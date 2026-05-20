@@ -1500,12 +1500,22 @@ class Repository:
             type=Sanitizer,
             choices=Sanitizer,
         )
+
+        def _parse_arch(s: str) -> Arch:
+            try:
+                return Arch(s)
+            except ValueError:
+                valid = ", ".join(m.value for m in Arch)
+                raise argparse.ArgumentTypeError(
+                    f"invalid arch: {s!r} (choose from {valid})"
+                )
+
         parser.add_argument(
             "--arch",
             default=Arch.host(),
             help="the CPU architecture to build for",
-            type=Arch,
-            choices=Arch,
+            type=_parse_arch,
+            metavar="{" + ",".join(m.value for m in Arch) + "}",
         )
         parser.add_argument(
             "--image-registry",

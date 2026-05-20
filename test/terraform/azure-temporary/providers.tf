@@ -32,8 +32,9 @@ terraform {
       version = "~> 1.0"
     }
     kubectl = {
-      source  = "alekc/kubectl"
-      version = "~> 2.0"
+      source = "alekc/kubectl"
+      # TODO: Unpin once fixed: https://github.com/alekc/terraform-provider-kubectl/issues/283
+      version = "~> 2.0, < 2.3"
     }
   }
 }
