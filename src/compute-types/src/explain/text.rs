@@ -290,6 +290,7 @@ impl Plan {
                 key_val_plan,
                 plan,
                 mfp_after,
+                input_strategy: _,
             } => {
                 ctx.indent.set();
                 if !mfp_after.expressions.is_empty() || !mfp_after.predicates.is_empty() {
@@ -740,6 +741,7 @@ impl Plan {
                 key_val_plan,
                 plan,
                 mfp_after,
+                input_strategy: _,
             } => {
                 use crate::plan::reduce::ReducePlan;
                 match plan {

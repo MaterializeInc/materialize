@@ -309,6 +309,11 @@ pub enum PlanNode {
         /// predicates so that it can be readily evaluated.
         /// TODO(ggevay): should we wrap this in [`mz_expr::SafeMfpPlan`]?
         mfp_after: MapFilterProject,
+        /// Rendering strategy for the input collection. Consulted by the renderer when the
+        /// reduce performs a pre-aggregation consolidation (currently: monotonic hierarchical
+        /// reductions with `must_consolidate` set), to decide whether to insert temporal
+        /// bucketing before that consolidation. Ignored otherwise.
+        input_strategy: ArrangementStrategy,
     },
     /// Key-based "Top K" operator, retaining the first K records in each group.
     TopK {
@@ -811,6 +816,7 @@ impl CollectionPlan for PlanNode {
                 key_val_plan: _,
                 plan: _,
                 mfp_after: _,
+                input_strategy: _,
             }
             | PlanNode::TopK {
                 input,

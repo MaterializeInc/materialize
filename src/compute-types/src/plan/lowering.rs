@@ -1218,6 +1218,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 key_val_plan,
                 plan: reduce_plan,
                 mfp_after,
+                input_strategy: strategy_from_future(input_future),
             }
             .as_plan(lir_id),
             keys: output_keys,

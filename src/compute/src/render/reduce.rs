@@ -27,6 +27,10 @@ use differential_dataflow::trace::implementations::merge_batcher::container::Int
 use differential_dataflow::trace::{Builder, Trace};
 use differential_dataflow::{Data, VecCollection};
 use itertools::Itertools;
+use mz_compute_types::dyncfgs::{
+    ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY,
+};
+use mz_compute_types::plan::ArrangementStrategy;
 use mz_compute_types::plan::reduce::{
     AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, MonotonicPlan,
     ReducePlan, ReductionType, SingleBasicPlan, reduction_type,
@@ -49,7 +53,7 @@ use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::errors::MaybeValidatingRow;
 use crate::render::reduce::monoids::{ReductionMonoid, get_monoid};
-use crate::render::{ArrangementFlavor, Pairer, RenderTimestamp};
+use crate::render::{ArrangementFlavor, MaybeBucketByTime, Pairer, RenderTimestamp};
 use crate::row_spine::{
     DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBatcher, RowValBuilder,
 };
@@ -58,7 +62,7 @@ use crate::typedefs::{
     RowRowSpine, RowSpine, RowValSpine,
 };
 
-impl<'scope, T: RenderTimestamp> Context<'scope, T> {
+impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
     /// Renders a `MirRelationExpr::Reduce` using various non-obvious techniques to
     /// minimize worst-case incremental update times and memory footprint.
     pub fn render_reduce(
@@ -68,6 +72,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         key_val_plan: KeyValPlan,
         reduce_plan: ReducePlan,
         mfp_after: Option<MapFilterProject>,
+        input_strategy: ArrangementStrategy,
     ) -> CollectionBundle<'scope, T> {
         // Convert `mfp_after` to an actionable plan.
         let mfp_after = mfp_after.map(|m| {
@@ -163,6 +168,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 err,
                 key_arity,
                 mfp_after,
+                input_strategy,
             )
             .leave_region(self.scope)
         })
@@ -180,10 +186,17 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         err_input: VecCollection<'s, T, DataflowErrorSer, Diff>,
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
+        input_strategy: ArrangementStrategy,
     ) -> CollectionBundle<'s, T> {
         let mut errors = Default::default();
-        let arrangement =
-            self.render_reduce_plan_inner(plan, collection, &mut errors, key_arity, mfp_after);
+        let arrangement = self.render_reduce_plan_inner(
+            plan,
+            collection,
+            &mut errors,
+            key_arity,
+            mfp_after,
+            input_strategy,
+        );
         let errs: KeyCollection<_, _, _> = err_input.concatenate(errors).into();
         CollectionBundle::from_columns(
             0..key_arity,
@@ -201,6 +214,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         errors: &mut Vec<VecCollection<'s, T, DataflowErrorSer, Diff>>,
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
+        input_strategy: ArrangementStrategy,
     ) -> Arranged<'s, RowRowAgent<T, Diff>> {
         // TODO(vmarcos): Arrangement specialization here could eventually be extended to keys,
         // not only values (database-issues#6658).
@@ -219,7 +233,8 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 arranged_output
             }
             ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(expr)) => {
-                let (output, errs) = self.build_monotonic(collection, expr, mfp_after);
+                let (output, errs) =
+                    self.build_monotonic(collection, expr, mfp_after, input_strategy);
                 errors.push(errs);
                 output
             }
@@ -1143,28 +1158,48 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             must_consolidate,
         }: MonotonicPlan,
         mfp_after: Option<SafeMfpPlan>,
+        input_strategy: ArrangementStrategy,
     ) -> (
         RowRowArrangement<'s, T>,
         VecCollection<'s, T, DataflowErrorSer, Diff>,
     ) {
         let aggregations = aggr_funcs.len();
         // Gather the relevant values into a vec of rows ordered by aggregation_index
-        let collection = collection
-            .map(move |(key, row)| {
-                let mut row_builder = SharedRow::get();
-                let mut values = Vec::with_capacity(aggregations);
-                values.extend(
-                    row.iter()
-                        .take(aggregations)
-                        .map(|v| row_builder.pack_using(std::iter::once(v))),
-                );
-
-                (key, values)
-            })
-            .consolidate_named_if::<KeyBatcher<_, _, _>>(
-                must_consolidate,
-                "Consolidated ReduceMonotonic input",
+        let collection = collection.map(move |(key, row)| {
+            let mut row_builder = SharedRow::get();
+            let mut values = Vec::with_capacity(aggregations);
+            values.extend(
+                row.iter()
+                    .take(aggregations)
+                    .map(|v| row_builder.pack_using(std::iter::once(v))),
             );
+
+            (key, values)
+        });
+        // Bucket future-stamped updates before the consolidate to avoid piling them in the
+        // `KeyBatcher` until the input frontier catches up. Only meaningful when we will
+        // actually consolidate; `MaybeBucketByTime` is also a no-op for partially-ordered
+        // timestamps.
+        let collection = if must_consolidate
+            && matches!(input_strategy, ArrangementStrategy::TemporalBucketing)
+            && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(&self.config_set)
+        {
+            let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
+                .get(&self.config_set)
+                .try_into()
+                .expect("must fit");
+            T::maybe_apply_temporal_bucketing(
+                collection.inner,
+                self.as_of_frontier.clone(),
+                summary,
+            )
+        } else {
+            collection
+        };
+        let collection = collection.consolidate_named_if::<KeyBatcher<_, _, _>>(
+            must_consolidate,
+            "Consolidated ReduceMonotonic input",
+        );
 
         // It should be now possible to ensure that we have a monotonic collection.
         let error_logger = self.error_logger();

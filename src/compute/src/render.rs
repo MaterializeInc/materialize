@@ -1265,10 +1265,18 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                 key_val_plan,
                 plan,
                 mfp_after,
+                input_strategy,
             } => {
                 let input = expect_input(input);
                 let mfp_option = (!mfp_after.is_identity()).then_some(mfp_after);
-                self.render_reduce(input_key, input, key_val_plan, plan, mfp_option)
+                self.render_reduce(
+                    input_key,
+                    input,
+                    key_val_plan,
+                    plan,
+                    mfp_option,
+                    input_strategy,
+                )
             }
             TopK { input, top_k_plan } => {
                 let input = expect_input(input);
@@ -1511,11 +1519,18 @@ pub trait RenderTimestamp: MzTimestamp + Refines<mz_repr::Timestamp> {
 /// Total-ordered timestamps perform real bucketing; partially-ordered timestamps
 /// (e.g. `Product<…>` in iterative scopes) implement this as a no-op.
 pub trait MaybeBucketByTime: Timestamp {
-    fn maybe_apply_temporal_bucketing<'scope>(
-        stream: StreamVec<'scope, Self, (Row, Self, Diff)>,
+    fn maybe_apply_temporal_bucketing<'scope, D>(
+        stream: StreamVec<'scope, Self, (D, Self, Diff)>,
         as_of: Antichain<mz_repr::Timestamp>,
         summary: mz_repr::Timestamp,
-    ) -> VecCollection<'scope, Self, Row, Diff>;
+    ) -> VecCollection<'scope, Self, D, Diff>
+    where
+        D: timely::ExchangeData
+            + crate::typedefs::MzData
+            + Ord
+            + Clone
+            + std::fmt::Debug
+            + differential_dataflow::Hashable;
 }
 
 impl RenderTimestamp for mz_repr::Timestamp {
@@ -1540,11 +1555,19 @@ impl RenderTimestamp for mz_repr::Timestamp {
 }
 
 impl MaybeBucketByTime for mz_repr::Timestamp {
-    fn maybe_apply_temporal_bucketing<'scope>(
-        stream: StreamVec<'scope, Self, (Row, Self, Diff)>,
+    fn maybe_apply_temporal_bucketing<'scope, D>(
+        stream: StreamVec<'scope, Self, (D, Self, Diff)>,
         as_of: Antichain<mz_repr::Timestamp>,
         summary: mz_repr::Timestamp,
-    ) -> VecCollection<'scope, Self, Row, Diff> {
+    ) -> VecCollection<'scope, Self, D, Diff>
+    where
+        D: timely::ExchangeData
+            + crate::typedefs::MzData
+            + Ord
+            + Clone
+            + std::fmt::Debug
+            + differential_dataflow::Hashable,
+    {
         stream
             .bucket::<CapacityContainerBuilder<_>>(as_of, summary)
             .as_collection()
@@ -1581,11 +1604,19 @@ impl RenderTimestamp for Product<mz_repr::Timestamp, PointStamp<u64>> {
 }
 
 impl MaybeBucketByTime for Product<mz_repr::Timestamp, PointStamp<u64>> {
-    fn maybe_apply_temporal_bucketing<'scope>(
-        stream: StreamVec<'scope, Self, (Row, Self, Diff)>,
+    fn maybe_apply_temporal_bucketing<'scope, D>(
+        stream: StreamVec<'scope, Self, (D, Self, Diff)>,
         _as_of: Antichain<mz_repr::Timestamp>,
         _summary: mz_repr::Timestamp,
-    ) -> VecCollection<'scope, Self, Row, Diff> {
+    ) -> VecCollection<'scope, Self, D, Diff>
+    where
+        D: timely::ExchangeData
+            + crate::typedefs::MzData
+            + Ord
+            + Clone
+            + std::fmt::Debug
+            + differential_dataflow::Hashable,
+    {
         // TODO: Implement bucketing on outer timestamp for iterative scopes.
         stream.as_collection()
     }
