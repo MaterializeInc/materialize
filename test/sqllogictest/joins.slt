@@ -842,6 +842,19 @@ SELECT ROW(x.*) FROM t1 JOIN t2 USING (f1) AS x;
 row
 ("(3)")
 
+query I
+SELECT x.f1 FROM t1 FULL JOIN t2 USING (f1) AS x ORDER BY 1
+----
+1
+3
+5
+
+query I
+SELECT x.f1 FROM t1 RIGHT JOIN t2 USING (f1) AS x ORDER BY 1
+----
+3
+5
+
 statement ok
 CREATE VIEW v1 AS SELECT x.* FROM t1 JOIN t2 USING (f1) AS x WHERE x.f1 = 3;
 
