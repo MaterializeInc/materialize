@@ -46,6 +46,8 @@ INSERT INTO t1 (a) VALUES (10);
 Configure your MySQL database for GTID-based binlog replication using the
 [configuration instructions for self-hosted MySQL](/ingest-data/mysql/self-hosted/#a-configure-mysql).
 
+In addition to the standard setup, in order to use the [`CREATE SOURCE` syntax](/sql/create-source/mysql-v2/) and use source versioning, you must also ensure that the MySQL system variable `binlog_row_metadata` is set to `FULL`, which will allow Materialize to access additional information about the schemas of the MySQL tables you want to replicate.
+
 ### Connect your source database to Materialize
 
 Create a connection to your MySQL database using the [`CREATE CONNECTION` syntax](/sql/create-connection/).

@@ -3,11 +3,11 @@ title: "CREATE SOURCE: MySQL (New Syntax)"
 description: "Connecting Materialize to a MySQL database for Change Data Capture (CDC)."
 pagerank: 40
 menu:
-  main:
-    parent: 'create-source'
-    identifier: cs_mysql-v2
-    name: MySQL (New Syntax)
-    weight: 21
+    main:
+        parent: "create-source"
+        identifier: cs_mysql-v2
+        name: MySQL (New Syntax)
+        weight: 21
 ---
 
 {{< public-preview />}}
@@ -151,11 +151,11 @@ otherwise, it will be named `<src_name>_progress`.
 
 The following metadata is available for each source as a progress subsource:
 
-Field              | Type                                                    | Details
--------------------|---------------------------------------------------------|--------------
-`source_id_lower`  | [`uuid`](/sql/types/uuid/)                              | The lower-bound GTID `source_id` of the GTIDs covered by this range.
-`source_id_upper`  | [`uuid`](/sql/types/uuid/)                              | The upper-bound GTID `source_id` of the GTIDs covered by this range.
-`transaction_id`   | [`uint8`](/sql/types/uint/#uint8-info)                  | The `transaction_id` of the next GTID possible from the GTID `source_id`s covered by this range.
+| Field             | Type                                   | Details                                                                                          |
+| ----------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `source_id_lower` | [`uuid`](/sql/types/uuid/)             | The lower-bound GTID `source_id` of the GTIDs covered by this range.                             |
+| `source_id_upper` | [`uuid`](/sql/types/uuid/)             | The upper-bound GTID `source_id` of the GTIDs covered by this range.                             |
+| `transaction_id`  | [`uint8`](/sql/types/uint/#uint8-info) | The `transaction_id` of the next GTID possible from the GTID `source_id`s covered by this range. |
 
 And can be queried using:
 
@@ -277,10 +277,6 @@ _Creates a table in Materialize from the upstream table `mydb.orders`_
 CREATE TABLE orders FROM SOURCE mz_source (REFERENCE mydb.orders);
 ```
 
-### Modifying an existing source
-
-{{< include-md file="headless/alter-source-snapshot-blocking-behavior.md" >}}
-
 ## Related pages
 
 - [`CREATE TABLE`](/sql/create-table/)
@@ -288,8 +284,8 @@ CREATE TABLE orders FROM SOURCE mz_source (REFERENCE mydb.orders);
 - [`CREATE CONNECTION`](/sql/create-connection)
 - [`CREATE SOURCE`](../)
 - MySQL integration guides:
-  - [Amazon RDS](/ingest-data/mysql/amazon-rds/)
-  - [Amazon Aurora](/ingest-data/mysql/amazon-aurora/)
-  - [Azure DB](/ingest-data/mysql/azure-db/)
-  - [Google Cloud SQL](/ingest-data/mysql/google-cloud-sql/)
-  - [Self-hosted](/ingest-data/mysql/self-hosted/)
+    - [Amazon RDS](/ingest-data/mysql/amazon-rds/)
+    - [Amazon Aurora](/ingest-data/mysql/amazon-aurora/)
+    - [Azure DB](/ingest-data/mysql/azure-db/)
+    - [Google Cloud SQL](/ingest-data/mysql/google-cloud-sql/)
+    - [Self-hosted](/ingest-data/mysql/self-hosted/)

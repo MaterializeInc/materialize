@@ -26,3 +26,7 @@ rows:
   - MySQL Configuration: "`replica_preserve_commit_order`"
     Value: "`ON`"
     Notes: "Only required when connecting Materialize to a read-replica."
+
+  - MySQL Configuration: "`binlog_row_metadata`"
+    Value: "`FULL`"
+    Notes: "Highly recommended, and required to use [`CREATE SOURCE` syntax](/sql/create-source/mysql-v2/)"
