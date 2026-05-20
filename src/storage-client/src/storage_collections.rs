@@ -398,6 +398,26 @@ pub struct StorageCollectionsImpl {
     /// cannot hydrate in read-only mode.
     initial_txn_upper: Antichain<Timestamp>,
 
+    /// Latest known upper of the txns shard. The [`BackgroundTask`] updates
+    /// this whenever the txns shard upper advances and is the authoritative
+    /// source of the write frontier for every txns-backed (table)
+    /// collection. Readers that need the current write frontier of a
+    /// txns-backed collection should consult this field rather than the
+    /// per-collection `write_frontier` on [`CollectionState`].
+    ///
+    /// Background: previously, the `BackgroundTask`'s txns-upper branch
+    /// would fan the freshly observed upper out to N per-collection
+    /// `write_frontier` fields on every tick. With many user tables, that
+    /// O(N) work under the global `collections` mutex blocked every other
+    /// taker (notably `prepare_state` on the DDL hot path), driving DDL
+    /// latency superlinearly with N. By storing the shared upper here once
+    /// and resolving reads through this field, we eliminate the fanout from
+    /// the hot path entirely. The implied capability (since) downgrade for
+    /// txns-backed collections still needs to happen so persist can compact;
+    /// it is driven by a separate timer-based sweep in `BackgroundTask::run`
+    /// (see `TXNS_SINCE_DOWNGRADE_INTERVAL`).
+    txns_upper: Arc<std::sync::RwLock<Antichain<Timestamp>>>,
+
     /// The persist location where all storage collections are being written to
     persist_location: PersistLocation,
 
@@ -507,6 +527,9 @@ impl StorageCollectionsImpl {
         )));
 
         let initial_txn_upper = txns_write.fetch_recent_upper().await.to_owned();
+        // Initialize the shared txns upper to the boot-time value; the
+        // BackgroundTask will keep it updated as the txns shard advances.
+        let txns_upper = Arc::new(std::sync::RwLock::new(initial_txn_upper.clone()));
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (holds_tx, holds_rx) = mpsc::unbounded_channel();
@@ -521,6 +544,7 @@ impl StorageCollectionsImpl {
             since_handles: BTreeMap::new(),
             txns_handle: Some(txns_write),
             txns_shards: Default::default(),
+            txns_upper: Arc::clone(&txns_upper),
         };
 
         let background_task =
@@ -554,6 +578,7 @@ impl StorageCollectionsImpl {
             read_only,
             config,
             initial_txn_upper,
+            txns_upper,
             persist_location,
             persist: persist_clients,
             cmd_tx,
@@ -562,6 +587,38 @@ impl StorageCollectionsImpl {
             prepare_state_phase_seconds,
             _background_task: Arc::new(background_task.abort_on_drop()),
             _finalize_shards_task: Arc::new(finalize_shards_task.abort_on_drop()),
+        }
+    }
+
+    /// Returns the effective write frontier of `collection`: the shared
+    /// txns upper if the collection is txns-backed, otherwise the
+    /// per-collection `write_frontier`.
+    ///
+    /// The per-collection `write_frontier` is no longer kept current by
+    /// the [`BackgroundTask`] for txns-backed collections (the per-tick
+    /// fanout used to drive that field was the slope owner of
+    /// `prepare_state`). Callers that need the up-to-date write frontier
+    /// of a txns-backed collection must consult `self.txns_upper`. The
+    /// periodic sweep in `BackgroundTask::run` does still rewrite each
+    /// txns-backed collection's `write_frontier` once per second so that
+    /// downstream bookkeeping (implied capability, read holds) stays in
+    /// step, but between those sweeps the shared field is the source of
+    /// truth.
+    fn effective_write_frontier(&self, collection: &CollectionState) -> Antichain<Timestamp> {
+        if collection.collection_metadata.txns_shard.is_some() {
+            let shared = self.txns_upper.read().expect("lock poisoned");
+            // The shared upper monotonically advances; pick whichever is
+            // later. We compare instead of unconditionally taking the
+            // shared one because `collection.write_frontier` may have been
+            // advanced past `shared` by the periodic sweep / a direct
+            // upper update path.
+            if PartialOrder::less_than(&collection.write_frontier, &*shared) {
+                shared.clone()
+            } else {
+                collection.write_frontier.clone()
+            }
+        } else {
+            collection.write_frontier.clone()
         }
     }
 
@@ -1159,6 +1216,9 @@ impl StorageCollectionsImpl {
         trace!("set_read_policies: {:?}", policies);
 
         let mut read_capability_changes = BTreeMap::default();
+        // Snapshot the shared txns upper once so all txns-backed
+        // collections in this batch see a consistent value.
+        let txns_upper = self.txns_upper.read().expect("lock poisoned").clone();
 
         for (id, policy) in policies.into_iter() {
             let collection = match collections.get_mut(&id) {
@@ -1168,7 +1228,17 @@ impl StorageCollectionsImpl {
                 }
             };
 
-            let mut new_read_capability = policy.frontier(collection.write_frontier.borrow());
+            // For txns-backed collections, the per-collection
+            // `write_frontier` may lag the actual upper between periodic
+            // sweeps. Use the shared txns upper if it is more advanced.
+            let effective_write_frontier = if collection.collection_metadata.txns_shard.is_some()
+                && PartialOrder::less_than(&collection.write_frontier, &txns_upper)
+            {
+                txns_upper.clone()
+            } else {
+                collection.write_frontier.clone()
+            };
+            let mut new_read_capability = policy.frontier(effective_write_frontier.borrow());
 
             if PartialOrder::less_equal(&collection.implied_capability, &new_read_capability) {
                 let mut update = ChangeBatch::new();
@@ -1406,7 +1476,7 @@ impl StorageCollections for StorageCollectionsImpl {
                     .get(&id)
                     .map(|c| CollectionFrontiers {
                         id: id.clone(),
-                        write_frontier: c.write_frontier.clone(),
+                        write_frontier: self.effective_write_frontier(c),
                         implied_capability: c.implied_capability.clone(),
                         read_capabilities: c.read_capabilities.frontier().to_owned(),
                     })
@@ -1425,7 +1495,7 @@ impl StorageCollections for StorageCollectionsImpl {
             .filter(|(_id, c)| !c.is_dropped())
             .map(|(id, c)| CollectionFrontiers {
                 id: id.clone(),
-                write_frontier: c.write_frontier.clone(),
+                write_frontier: self.effective_write_frontier(c),
                 implied_capability: c.implied_capability.clone(),
                 read_capabilities: c.read_capabilities.frontier().to_owned(),
             })
@@ -2215,7 +2285,11 @@ impl StorageCollections for StorageCollectionsImpl {
             // The new table starts with two holds - the implied capability, and the hold from
             // the previous version - both at the previous version's read frontier.
             let implied_capability = existing.read_capabilities.frontier().to_owned();
-            let write_frontier = existing.write_frontier.clone();
+            // Use the effective write frontier: for a txns-backed table the
+            // per-collection `write_frontier` may be stale (see
+            // `effective_write_frontier`). The new version's starting upper
+            // must not regress past the actual current txns upper.
+            let write_frontier = self.effective_write_frontier(existing);
 
             // Determine the relevant read capabilities on the new collection.
             //
@@ -2414,6 +2488,7 @@ impl StorageCollections for StorageCollectionsImpl {
             txns_read: _,
             config,
             initial_txn_upper,
+            txns_upper,
             persist_location,
             persist: _,
             cmd_tx: _,
@@ -2442,6 +2517,8 @@ impl StorageCollections for StorageCollectionsImpl {
             .collect();
         let config = format!("{:?}", config.lock().expect("poisoned"));
 
+        let txns_upper = format!("{:?}", txns_upper.read().expect("lock poisoned"));
+
         Ok(serde_json::json!({
             "envd_epoch": envd_epoch,
             "read_only": read_only,
@@ -2450,6 +2527,7 @@ impl StorageCollections for StorageCollectionsImpl {
             "collections": collections,
             "config": config,
             "initial_txn_upper": initial_txn_upper,
+            "txns_upper": txns_upper,
             "persist_location": format!("{persist_location:?}"),
         }))
     }
@@ -2669,6 +2747,10 @@ struct BackgroundTask {
     since_handles: BTreeMap<GlobalId, SinceHandleWrapper>,
     txns_handle: Option<WriteHandle<SourceData, (), Timestamp, StorageDiff>>,
     txns_shards: BTreeSet<GlobalId>,
+    /// Shared with [`StorageCollectionsImpl::txns_upper`]; the latest observed
+    /// upper of the txns shard. See the doc comment on the parent field for
+    /// rationale.
+    txns_upper: Arc<std::sync::RwLock<Antichain<Timestamp>>>,
 }
 
 #[derive(Debug)]
@@ -2738,18 +2820,59 @@ impl BackgroundTask {
             None => async { std::future::pending().await }.boxed(),
         };
 
+        // Periodic sweep that downgrades the implied capability of every
+        // txns-backed collection to track the shared txns upper. The
+        // txns-upper branch updates the shared field on every advance, but
+        // does *not* fan out per-collection: doing so on every tick is O(N)
+        // under the global `collections` mutex and starves the DDL hot path
+        // (see the doc comment on `StorageCollectionsImpl::txns_upper`). We
+        // still need to drive persist's since forward for these collections,
+        // so we do the bookkeeping here at a fixed cadence. The cost per
+        // sweep is unchanged from the per-tick fanout, but it no longer
+        // contends with `prepare_state` once per txns-upper-tick.
+        const TXNS_SINCE_DOWNGRADE_INTERVAL: Duration = Duration::from_secs(1);
+        let mut txns_since_downgrade_interval =
+            tokio::time::interval(TXNS_SINCE_DOWNGRADE_INTERVAL);
+        // Avoid the initial immediate tick — the txns_shards set starts
+        // empty at boot, so the first sweep would be a no-op.
+        txns_since_downgrade_interval
+            .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
         loop {
             tokio::select! {
                 (id, handle, upper) = &mut txns_upper_future => {
                     trace!("new upper from txns shard: {:?}", upper);
-                    let mut uppers = Vec::new();
-                    for id in self.txns_shards.iter() {
-                        uppers.push((*id, &upper));
-                    }
-                    self.update_write_frontiers(&uppers).await;
+                    // Publish the new upper to the shared field. Readers
+                    // that want the current write_frontier of a
+                    // txns-backed collection consult this field rather than
+                    // the per-collection `write_frontier`. We deliberately
+                    // do NOT iterate `self.txns_shards` here: that was the
+                    // O(N) lock-hold on `self.collections` that drove the
+                    // prepare_state slope. The implied-capability /
+                    // since-downgrade work that previously happened in this
+                    // branch is now handled by the periodic
+                    // `txns_since_downgrade_interval` arm below.
+                    *self.txns_upper.write().expect("lock poisoned") = upper.clone();
 
                     let fut = gen_upper_future(id, handle, upper);
                     txns_upper_future = fut.boxed();
+                }
+                _ = txns_since_downgrade_interval.tick() => {
+                    // Apply the shared txns upper to the implied capability
+                    // of every txns-backed collection, exactly as the
+                    // pre-Phase-15 txns-upper branch did. We coalesce many
+                    // upper-ticks into one sweep so this O(N) work happens
+                    // at a known low frequency instead of on the DDL hot
+                    // path.
+                    let upper = self.txns_upper.read().expect("lock poisoned").clone();
+                    if !upper.is_empty() && !self.txns_shards.is_empty() {
+                        let uppers: Vec<_> = self
+                            .txns_shards
+                            .iter()
+                            .map(|id| (*id, &upper))
+                            .collect();
+                        self.update_write_frontiers(&uppers).await;
+                    }
                 }
                 Some((id, handle, upper)) = upper_futures.next() => {
                     if id.is_user() {
@@ -3457,6 +3580,7 @@ mod tests {
                 since_handles: BTreeMap::new(),
                 txns_handle: None,
                 txns_shards: BTreeSet::new(),
+                txns_upper: Arc::new(std::sync::RwLock::new(Antichain::new())),
             };
 
             (cmds_tx, task)
