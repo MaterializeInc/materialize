@@ -3301,3 +3301,168 @@ MATERIALIZED VIEW` on a single cluster, or `GRANT` across many
 roles, is the right way to actually measure the cluster/role swaps;
 the existing `mz_catalog_apply_update_kind_seconds{kind}` histogram
 will surface any residual slope per kind.
+
+## Phase 14: prepare_state slope = BackgroundTask lock contention
+
+With apply_updates flat, the largest residual slope in
+`mz_catalog_transact_phase_seconds` at N=15k was **`prepare_state`**:
+0.06 → 1.31 → 2.40 ms per call across 5k → 10k → 15k (count=200 per
+scale, two calls per CREATE+DROP rep). Counted as ms/DDL: 0.11 →
+2.62 → 4.79, **+2.17 ms/+5k** — bigger than any other phase by 10×.
+
+### Phase 14 instrumentation
+
+Added `mz_storage_collections_prepare_state_phase_seconds{phase}` with
+sub-phase labels `insert_add`, `insert_register`, `delete`,
+`dropped_shard_lookup`, `insert_unfinalized`, `mark_finalized` —
+exactly matching the source layout of
+`StorageCollections::prepare_state`. Committed in `0a671b7f6a`.
+
+### Attribution
+
+Re-bench at N=5k and N=10k (before the fix). Mean per-call cost in
+each sub-phase of `prepare_state`:
+
+| sub-phase                | N=5k µs | N=10k µs | Δ/+5k |
+|--------------------------|--------:|---------:|------:|
+| insert_add               |   6.7   |   7.9    |  +1.2 |
+| insert_register          |   0.08  |   0.08   |   0   |
+| delete                   |   6.9   |   7.5    |  +0.6 |
+| **dropped_shard_lookup** | **1.6** | **599**  | **+598** |
+| insert_unfinalized       |   1.4   |   1.6    |  +0.2 |
+| mark_finalized           |   3.5   |   4.2    |  +0.7 |
+
+**`dropped_shard_lookup` is the entire slope**: 1.6 → 599 µs per
+call (375×). Every other sub-phase is sub-µs/+5k.
+
+`dropped_shard_lookup` wraps:
+
+```rust
+let collections = self.collections.lock().expect("poisoned");
+for (id, shard) in dropped_mappings { … }
+```
+
+In our `CREATE TABLE` workload `dropped_mappings` is **always
+empty**, so the for-loop is a no-op. The 600 µs is purely
+`self.collections.lock()` waiting on a contended mutex.
+
+### Who holds the lock for that long?
+
+`StorageCollectionsImpl::collections` is
+`Arc<std::sync::Mutex<BTreeMap<GlobalId, CollectionState>>>` — a
+single global mutex shared by every DDL path and by the storage
+`BackgroundTask`. The background task's `run()` loop has this branch
+(`storage_collections.rs:2742`):
+
+```rust
+(id, handle, upper) = &mut txns_upper_future => {
+    let mut uppers = Vec::new();
+    for id in self.txns_shards.iter() {        // N entries!
+        uppers.push((*id, &upper));
+    }
+    self.update_write_frontiers(&uppers).await;
+    …
+}
+```
+
+Every time the txns shard's upper advances, the task walks **every
+txns-backed user table** (N = 5k/10k/15k in our bench) and calls
+`update_write_frontiers`, which then does:
+
+```rust
+let mut self_collections = self.collections.lock().expect("…");
+for (id, new_upper) in updates.iter() {        // O(N) under the lock
+    …
+}
+```
+
+So one txns-upper tick = one O(N) lock-hold against the only mutex
+`prepare_state` needs. With 100 reps of CREATE+DROP firing in close
+sequence, the txns upper ticks often enough to collide with most
+prepare_state calls; the slope we see is just the average waiting
+time per call.
+
+### Fix: chunked unlock in `update_write_frontiers`
+
+Process `updates` in chunks of 256 entries, releasing
+`self.collections` between chunks. The per-acquisition work is now
+bounded by chunk size (≈256 × ~1 µs ≈ 256 µs worst case) instead of
+N × ~1 µs. The total CPU work is unchanged; the change is just
+lock-hold ceiling and how often other acquirers can interleave.
+
+We considered a deeper refactor — moving the shared txns upper out
+of each per-collection `write_frontier` field into a single shared
+field on `StorageCollectionsImpl` — and that would eliminate the
+work entirely. We didn't do it because it touches every reader of
+`write_frontier` and the chunked-unlock fix is mechanical and
+sufficient: contention scales with chunk size, not with N.
+
+### Re-bench (`results_phase14/`)
+
+Fresh envd (CRDB consensus, instrumentation included). Baseline run
+killed after N=10k; fix run completed all three scales. Apples-to-apples
+within the same build:
+
+| metric                          | N=5k | N=10k | N=15k |
+|---------------------------------|----:|-----:|-----:|
+| `create_p50` PRE (ms)           | 59.00 | 63.18 |   —  |
+| `create_p50` POST (ms)          | 48.80 | 52.04 | 60.12 |
+| **Δ create_p50**                | **−10.20** | **−11.14** |  —  |
+| `dropped_shard_lookup` PRE (µs/call) |  1.60 | 599.39 |   —  |
+| `dropped_shard_lookup` POST (µs/call)|  9.61 | 1110.41 | 2722.10 |
+| `prepare_state` PRE (ms/DDL)    | 0.05 | 1.25 |   —  |
+| `prepare_state` POST (ms/DDL)   | 0.07 | 2.27 | 5.50 |
+
+Two surprises in the data:
+
+1. **`dropped_shard_lookup` and `prepare_state` got *worse* after the
+   fix.** Releasing the lock more often gives the BackgroundTask
+   more chances to re-win it (Linux pthread mutex isn't fair); a
+   `prepare_state` caller losing the lock race 40× per BG tick can
+   wait longer than losing it once and waiting out a single 10 ms
+   hold. So the chunked unlock is not actually shrinking
+   `prepare_state`'s lock-wait.
+
+2. **End-to-end `create_p50` got better anyway.** The
+   `catalog_transact_phase` breakdown at N=10k shows where:
+
+   | phase                          |   Δ (ms/DDL) |
+   |--------------------------------|-------------:|
+   | `coord_builtin_table_execute`  |    **−3.58** |
+   | `coord_post_transact`          |    **−3.58** |
+   | `coord_pre_transact`           |    **−1.87** |
+   | `tx_commit`                    |    **−1.56** |
+   | `op_loop`                      |    −0.14 |
+   | `final_apply_updates`          |    −0.09 |
+   | `prepare_state`                |    **+1.02** |
+   | `transact_inner`               |    +0.78 |
+   | `coord_inner_total`            |    **−8.07** |
+
+   These phases don't take the storage `collections` lock — but they
+   do compete with `BackgroundTask::run` for **CPU**. By yielding
+   between chunks the background task stops monopolizing both the
+   lock and the runtime, and the txns-shard writer, persist client,
+   and builtin-table execute path catch up much faster. The fix is a
+   CPU-yield win, not the lock-wait win it advertised in the source
+   comment.
+
+### What this *doesn't* fix
+
+The post-fix `prepare_state` slope at N=10k → 15k is still +3.23
+ms/+5k, and `coord_inner_total` is still +6.81 ms/+5k. The
+fundamental issue — `update_write_frontiers` doing O(N) work on
+every txns-upper tick — is still there, just split across more
+lock cycles. A future architectural pass should store the shared
+txns upper in one field on `StorageCollectionsImpl` and skip the
+per-collection propagation entirely; that's the only way to make
+`dropped_shard_lookup` actually flat. The chunked unlock is a
+mechanical, low-risk intermediate.
+
+Sweep totals (POST-fix, same run):
+
+| N     | create_p50 (ms) | coord_inner_total (ms/DDL) |
+|-------|----------------:|---------------------------:|
+|  5000 |   48.80         |   25.52                    |
+| 10000 |   52.04         |   29.52                    |
+| 15000 |   60.12         |   36.33                    |
+| slope 10→15 | **+8.08** | **+6.81** |
