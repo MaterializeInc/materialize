@@ -15,6 +15,17 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.24.3
+*Released to Materialize Self-Managed: 2026-05-20* <br>
+
+This patch release fixes a MySQL source ingestion bug.
+
+### Bug Fixes {#v26.24.3-bug-fixes}
+
+- Fixed MySQL sources failing to decode `TIMESTAMP` and `DATETIME` columns
+  ingested via `TEXT COLUMNS`, including MySQL's special zero-value timestamps
+  (`0000-00-00 00:00:00`).
+
 ## v26.24.2
 *Released to Materialize Self-Managed: 2026-05-18* <br>
 
