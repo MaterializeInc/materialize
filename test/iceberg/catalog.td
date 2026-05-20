@@ -28,6 +28,8 @@
 
 > insert into foo values (1, 'one'), (2, 'two'), (3, 'three');
 
+# NOTE: This sink has "USING AWS CONNECTION aws_conn", which we validate but don't use.
+#       It's included here just to make sure its presence doesn't break the sink.
 > CREATE SINK demo
     FROM foo
     INTO ICEBERG CATALOG CONNECTION polaris (
@@ -169,7 +171,6 @@ SELECT a, b FROM polaris.default_namespace.demo_table ORDER BY a
         NAMESPACE 'default_namespace',
         TABLE 'uint_table'
     )
-    USING AWS CONNECTION aws_conn
     KEY (id) NOT ENFORCED
     MODE UPSERT
     WITH (COMMIT INTERVAL '1s');
@@ -205,7 +206,6 @@ SELECT id, name FROM iceberg_scan('s3://test-bucket/default_namespace/uint_table
         NAMESPACE 'default_namespace',
         TABLE 'interval_table'
     )
-    USING AWS CONNECTION aws_conn
     KEY (id) NOT ENFORCED
     MODE UPSERT
     WITH (COMMIT INTERVAL '1s');
@@ -244,7 +244,6 @@ SELECT id, dur FROM iceberg_scan('s3://test-bucket/default_namespace/interval_ta
         NAMESPACE 'default_namespace',
         TABLE 'range_table'
     )
-    USING AWS CONNECTION aws_conn
     KEY (id) NOT ENFORCED
     MODE UPSERT
     WITH (COMMIT INTERVAL '1s');
