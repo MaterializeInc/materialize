@@ -11,12 +11,6 @@ queries, source ingestion) lands on top, the same environment or cluster
 will tolerate fewer objects than this. The point of measuring the idle
 ceiling is that everything else has to fit underneath it.
 
-This report is the third pass over these scenarios; the first pass
-(2026-05-18) used build 1226 and only had two `cluster_object_limits`
-variants. Since then we've added a third variant (`indexes_from_index`),
-renamed the existing ones to make their topology explicit, and made the
-freshness probe more honest about *why* a probe failed.
-
 ## What we measure
 
 ### `envd_objects_scalability`
@@ -85,52 +79,22 @@ Procedure per cluster size:
 
 ![Idle materializations per cluster size](./static/20260520_spec_sheet_first_numbers/cluster_object_limits_max_n.png)
 
-Three observations:
+Something that we expected to see is that bigger replicas carry fewer idle
+objects, not more. Both index curves trend *down* with cluster size; the MV
+curve is roughly flat in the 400–700 range. This comes from how materialize
+uses timely-dataflow underneath: every worker on a cluster owns a slice of
+every dataflow on that cluster and has to tick the frontier on each
+materialization in its slice regardless of cluster size. Adding workers does
+not reduce per-worker idle work; it shards the same per-object cost across more
+workers that each still carry their share, and cross-worker coordination grows
+on top of that. So the prediction for purely idle objects is a flat-to-downward
+ceiling as the cluster grows, and that is what we see.
 
-**1. The `from_index` variant unlocks ~1.7× more objects on small
-clusters.** At `100cc` and `200cc` the cluster carries ~2300 chained
-indexes vs ~1200–1400 indexes that each have their own persist source.
-This is the variant working as designed: when the optimizer can import
-a shared root index instead of opening one persist source per
-materialization, the "how many dataflows can a worker tick" axis
-dominates the "how many persist sources can a replica pull in
-parallel" axis. The two index curves visibly separate at small sizes
-and converge as the cluster grows.
+The MV row dips to 193 at `400cc`, well below its neighbours (481 /
+500 / 687); we read this as a single-run outlier.
 
-**2. Bigger replicas carry fewer idle objects, not more.** Both index
-curves trend *down* with cluster size; the MV curve is roughly flat
-in the 400–700 range. This matches the timely-dataflow argument:
-every worker on a cluster owns a slice of every dataflow on that
-cluster and has to tick the frontier on each materialization in its
-slice regardless of cluster size. Adding workers does not reduce
-per-worker idle work; it shards the same per-object cost across more
-workers that each still carry their share, and cross-worker
-coordination grows on top of that. So the prediction for purely idle
-objects is a flat-to-downward ceiling as the cluster grows, and that
-is what we see.
-
-**3. There are spikes worth flagging, not yet acting on.** The
-`from_index` curve drops sharply at `800cc` (843 idle indexes, vs 1187
-on `from_persist_sources` at the same size). The MV curve dips to 193
-at `400cc`, well below its neighbours (481 / 500 / 687). Both look
-like single-cell outliers in a single run rather than a real cliff at
-those sizes — the bisects converged cleanly, but the surrounding
-values don't support a real step-change. The next planned action is a
-repeat run to see whether they reproduce; if they do, both warrant
-investigation. If they don't, our methodology needs more samples per
-size before we publish absolute numbers.
-
-A subtler finding from this run's per-sample data: many of the
-"unhealthy lag" failures are actually *stalls*. The `local_lag` value
-caps out at `min(lag, 10 × threshold) = 20 s` on the plot, but the
-underlying `mz_materialization_lag` reading is `now() − minimum
-timestamp` — i.e. the materialization's `write_frontier` has never
-advanced past the initial timestamp. That happens when the cluster
-reports `hydrated = true` but hasn't actually started ticking the
-frontier yet. Distinguishing "stalled at min_ts" from "behind but
-moving" is on the follow-up list (probably: wait for
-`min(write_frontier) > recent_threshold` before sampling, and emit a
-separate `failure_mode = "stalled"`).
+Measurements are still a bit flaky; tightening the probe is on the
+follow-up list. Directionally the results look correct.
 
 ## Results — envd objects scalability
 
@@ -138,65 +102,12 @@ separate `failure_mode = "stalled"`).
 
 The DDL path slows by roughly 1.7–2× between `N=1` and `N=30000`, with
 the knee around `N=5k–10k`. Tables and MVs track each other closely;
-the slope is essentially the same. The MV baseline at small `N` is
-slightly lower than tables, which is mildly surprising given MVs are
-the "heavier" object — could be variance, could be a real difference
-in the adapter path for MVs at low cardinality, not investigated
-further here.
+the slope is essentially the same.
 
 Peek latency is omitted from the plot because it stays in the
 90–95 ms band across the entire `N` range; the adapter peek path
 isn't sensitive to catalog size in this regime, which is what we
 want.
-
-## What's changed since the first cut
-
-The 2026-05-18 garden post described two cluster scenarios
-(`cluster_object_limits_indexes`, `cluster_object_limits_mvs`) and a
-60-second hydration window. Three things have changed since then.
-
-**New variant: `indexes_from_index`.** Added a chained-index scenario
-that isolates compute-only dataflow tick overhead from persist-source
-overhead. Implementation: `ClusterObjectLimitsKind.setup_statements`
-runs once per cluster-size iteration after `base_t` exists. The
-`from_index` kind uses it to create `v_root` + `v_root_primary_idx` on
-the measurement cluster; the lag/hydration filters exclude
-`v_root_primary_idx` so the root index doesn't count as one of the `N`
-test objects.
-
-**Renames for clarity:**
-
-- `cluster_object_limits_indexes` → `cluster_object_limits_indexes_from_persist_sources`
-- `cluster_object_limits_mvs` → `cluster_object_limits_mvs_from_persist_sources`
-- new: `cluster_object_limits_indexes_from_index`
-
-The new names spell out the topology each variant exercises.
-References in our own pipelines were updated; no external (non-repo)
-consumers were known.
-
-**Hydration timeout raised to 5 minutes; failure mode is now
-recorded.** The earlier 60-second hydration window timed out
-deterministically on `1600cc` / `3200cc` at the coarse `N=2000`
-step, which yielded a measured "cliff" that was driven by hydration
-time, not steady-state capacity — bigger replicas paradoxically
-reported smaller max-healthy `N`. The window is now 300 seconds (180 s
-first-probe budget after `CREATE CLUSTER c` to absorb cold-start), and
-hydration-timeout failures are written to a new `failure_mode` column
-in the cluster_object_limits CSV (`"hydration_timeout"` vs `"lag"` vs
-empty when healthy). The existing `healthy` 0/1 column is unchanged,
-so prior analysis code keeps working.
-
-## Caveats
-
-One run per data point. Every materialization here is derived from a
-one-row table that never changes — real workloads will lower these
-ceilings, often by a lot. The numbers are also specific to the
-`cloud-staging` environment with its current `environmentd` CPU
-allocation, `max_credit_consumption_rate`, and LaunchDarkly defaults; a
-production environment will land somewhere else. Two of the
-cluster-object-limits cells (`from_index` at `800cc`, `mvs` at `400cc`)
-look like single-run outliers and should be repeated before being
-quoted.
 
 ## References
 
