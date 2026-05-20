@@ -122,13 +122,12 @@ use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
 use mz_compute_types::dyncfgs::{
     COMPUTE_APPLY_COLUMN_DEMANDS, COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK,
     COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES, ENABLE_COMPUTE_LOGICAL_BACKPRESSURE,
-    ENABLE_COMPUTE_TEMPORAL_BUCKETING, SUBSCRIBE_SNAPSHOT_OPTIMIZATION,
-    TEMPORAL_BUCKETING_SUMMARY,
+    ENABLE_COMPUTE_TEMPORAL_BUCKETING, SUBSCRIBE_SNAPSHOT_OPTIMIZATION, TEMPORAL_BUCKETING_SUMMARY,
 };
-use mz_compute_types::plan::{ArrangementStrategy, LirId};
 use mz_compute_types::plan::render_plan::{
     self, BindStage, LetBind, LetFreePlan, RecBind, RenderPlan,
 };
+use mz_compute_types::plan::{ArrangementStrategy, LirId};
 use mz_expr::{EvalError, Id, LocalId, permutation_for_arrangement};
 use mz_persist_client::operators::shard_source::{ErrorHandler, SnapshotMode};
 use mz_repr::explain::DummyHumanizer;

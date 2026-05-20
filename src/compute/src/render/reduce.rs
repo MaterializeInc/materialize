@@ -27,9 +27,7 @@ use differential_dataflow::trace::implementations::merge_batcher::container::Int
 use differential_dataflow::trace::{Builder, Trace};
 use differential_dataflow::{Data, VecCollection};
 use itertools::Itertools;
-use mz_compute_types::dyncfgs::{
-    ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY,
-};
+use mz_compute_types::dyncfgs::{ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY};
 use mz_compute_types::plan::ArrangementStrategy;
 use mz_compute_types::plan::reduce::{
     AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, MonotonicPlan,
