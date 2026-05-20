@@ -76,10 +76,12 @@ impl CompressionFormat {
         }
 
         match s.to_lowercase().as_str() {
-            "" => CompressionFormat::None,
-            "none" => CompressionFormat::None,
+            "" | "none" => CompressionFormat::None,
             "snappy" => CompressionFormat::Snappy,
             "lz4" => CompressionFormat::Lz4,
+            "brotli" => CompressionFormat::Brotli(CompressionLevel::default()),
+            "gzip" => CompressionFormat::Gzip(CompressionLevel::default()),
+            "zstd" => CompressionFormat::Zstd(CompressionLevel::default()),
             other => match other.split_once('-') {
                 Some(("brotli", level)) => CompressionFormat::Brotli(parse_level("brotli", level)),
                 Some(("zstd", level)) => CompressionFormat::Zstd(parse_level("zstd", level)),
@@ -222,6 +224,9 @@ mod tests {
             ("snappy", CompressionFormat::Snappy),
             ("lz4", CompressionFormat::Lz4),
             ("lZ4", CompressionFormat::Lz4),
+            ("brotli", CompressionFormat::Brotli(Default::default())),
+            ("gzip", CompressionFormat::Gzip(Default::default())),
+            ("zstd", CompressionFormat::Zstd(Default::default())),
             ("gzip-1", CompressionFormat::Gzip(CompressionLevel(1))),
             ("GZIp-6", CompressionFormat::Gzip(CompressionLevel(6))),
             ("gzip-9", CompressionFormat::Gzip(CompressionLevel(9))),
