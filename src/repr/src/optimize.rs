@@ -95,7 +95,6 @@ optimizer_feature_flags!({
     // Use `EquivalenceClassesWithholdingErrors` instead of raw
     // `EquivalenceClasses` during eq prop for joins.
     enable_eq_classes_withholding_errors: bool,
-    enable_guard_subquery_tablefunc: bool,
     // Enable consolidation of unions that happen immediately after negate.
     //
     // The refinement happens in the LIR ⇒ LIR phase.
