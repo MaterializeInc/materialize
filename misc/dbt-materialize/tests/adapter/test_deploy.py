@@ -679,9 +679,12 @@ class TestTargetDeploy:
     def test_dbt_deploy_init_unmanaged_errors_on_unsized_replica(self, project):
         try:
             project.run_sql(
-                "CREATE CLUSTER prod REPLICAS "
-                "(r1 (STORAGECTL ADDRESSES ['s:1234'], "
+                "CREATE CLUSTER prod REPLICAS ("
+                "r1 (STORAGECTL ADDRESSES ['s:1234'], "
                 "COMPUTECTL ADDRESSES ['c:1234'], "
+                "WORKERS 1), "
+                "r2 (STORAGECTL ADDRESSES ['s:1235'], "
+                "COMPUTECTL ADDRESSES ['c:1235'], "
                 "WORKERS 1))"
             )
         except psycopg2.Error as e:
@@ -693,6 +696,7 @@ class TestTargetDeploy:
             ["run-operation", "deploy_init"], expect_pass=False
         )
         assert "r1" in log_output
+        assert "r2" in log_output
         assert "no SIZE" in log_output
 
     def test_dbt_deploy_init_with_refresh_hydration_time(self, project):

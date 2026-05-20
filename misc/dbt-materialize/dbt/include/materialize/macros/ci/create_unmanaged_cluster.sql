@@ -48,63 +48,7 @@ cloned and produce a compiler error.
     {% set deploy_cluster = adapter.generate_final_cluster_name(cluster_name, force_deploy_suffix) %}
 
     {% if cluster_exists(deploy_cluster) %}
-        {{ log("Deployment cluster " ~ deploy_cluster ~ " already exists", info=True) }}
-        {% set cluster_empty %}
-            WITH dataflows AS (
-                SELECT mz_indexes.id
-                FROM mz_indexes
-                JOIN mz_clusters ON mz_indexes.cluster_id = mz_clusters.id
-                WHERE mz_clusters.name = {{ dbt.string_literal(deploy_cluster) }}
-
-                UNION ALL
-
-                SELECT mz_materialized_views.id
-                FROM mz_materialized_views
-                JOIN mz_clusters ON mz_materialized_views.cluster_id = mz_clusters.id
-                WHERE mz_clusters.name = {{ dbt.string_literal(deploy_cluster) }}
-
-                UNION ALL
-
-                SELECT mz_sources.id
-                FROM mz_sources
-                JOIN mz_clusters ON mz_clusters.id = mz_sources.cluster_id
-                WHERE mz_clusters.name = {{ dbt.string_literal(deploy_cluster) }}
-
-                UNION ALL
-
-                SELECT mz_sinks.id
-                FROM mz_sinks
-                JOIN mz_clusters ON mz_clusters.id = mz_sinks.cluster_id
-                WHERE mz_clusters.name = {{ dbt.string_literal(deploy_cluster) }}
-            )
-
-            SELECT count(*)
-            FROM dataflows
-            WHERE id LIKE 'u%'
-        {% endset %}
-
-        {% set cluster_object_count = run_query(cluster_empty) %}
-        {% if execute %}
-            {% if cluster_object_count and cluster_object_count.columns[0] and cluster_object_count.rows[0][0] > 0 %}
-                {% if check_cluster_ci_tag(deploy_cluster) %}
-                    {{ log("Cluster " ~ deploy_cluster ~ " was already created for this pull request", info=True) }}
-                {% elif ignore_existing_objects %}
-                    {{ log("[Warning] Deployment cluster " ~ deploy_cluster ~ " is not empty", info=True) }}
-                    {{ log("[Warning] Confirm the objects it contains are expected before deployment", info=True) }}
-                {% else %}
-                    {{ exceptions.raise_compiler_error("
-                        Deployment cluster " ~ deploy_cluster ~ " already exists and is not empty.
-                        This is potentially dangerous as you may end up deploying objects to production you
-                        do not intend.
-
-                        If you are certain the objects in this cluster are supposed to exist, you can ignore this
-                        error by setting ignore_existing_objects to True.
-
-                        dbt run-operation create_unmanaged_cluster --args '{ignore_existing_objects: True}'
-                    ") }}
-                {% endif %}
-            {% endif %}
-        {% endif %}
+        {{ internal_check_existing_deploy_cluster(deploy_cluster, ignore_existing_objects) }}
     {% else %}
         {{ log("Creating deployment cluster " ~ deploy_cluster ~ " from unmanaged origin " ~ origin_cluster, info=True) }}
 
@@ -121,17 +65,22 @@ cloned and produce a compiler error.
         {% set replica_results = run_query(replica_query) %}
 
         {% if execute %}
+            {% set unsized_replicas = [] %}
             {% for row in replica_results.rows %}
                 {% if row[1] is none %}
-                    {{ exceptions.raise_compiler_error(
-                        "Cannot clone replica '" ~ row[0] ~ "' of unmanaged cluster '"
-                        ~ origin_cluster ~ "': it has no SIZE. Orchestrated replicas "
-                        ~ "(using COMPUTECTL/STORAGECTL ADDRESSES) cannot be cloned by "
-                        ~ "blue/green deployments. Recreate the cluster as managed or "
-                        ~ "replace this replica with a sized one."
-                    ) }}
+                    {% do unsized_replicas.append(row[0]) %}
                 {% endif %}
             {% endfor %}
+            {% if unsized_replicas %}
+                {{ exceptions.raise_compiler_error(
+                    "Cannot clone the following replicas of unmanaged cluster '"
+                    ~ origin_cluster ~ "' because they have no SIZE: "
+                    ~ unsized_replicas | join(", ") ~ ". Orchestrated replicas "
+                    ~ "(using COMPUTECTL/STORAGECTL ADDRESSES) cannot be cloned by "
+                    ~ "blue/green deployments. Recreate the cluster as managed or "
+                    ~ "replace these replicas with sized ones."
+                ) }}
+            {% endif %}
 
             {% set replica_clauses = [] %}
             {% for row in replica_results.rows %}

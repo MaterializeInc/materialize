@@ -2,12 +2,9 @@
 
 ## Unreleased
 
-* Support unmanaged origin clusters in `deploy_init`. The deployment
-  cluster is now created by cloning the production cluster's replicas
-  (including SIZE and AVAILABILITY ZONE attributes). Internal replicas
-  are skipped. `deploy_init` errors with a clear message if any
-  user-facing replica lacks a SIZE (orchestrated replicas using
-  COMPUTECTL/STORAGECTL ADDRESSES cannot be cloned).
+* Support unmanaged clusters in `deploy_init`. The deployment cluster
+  is now created by cloning the production cluster's replicas (including
+  `SIZE` and `AVAILABILITY ZONE`). 
 
 ## 1.9.9 - 2026-05-18
 
