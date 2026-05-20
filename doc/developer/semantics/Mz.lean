@@ -18,14 +18,17 @@ import Mz.DiffWithGlobal
 import Mz.UnifiedStream
 import Mz.UnifiedStream2
 import Mz.UnifiedConsolidate
+import Mz.UnifiedConsolidate2
 import Mz.TimedConsolidate
 import Mz.Aggregate
 import Mz.Consolidate
 import Mz.Triple
 import Mz.Join
+import Mz.Join2
 import Mz.JoinPushdown
 import Mz.FilterFusion
 import Mz.ProjectFusion
 import Mz.Demand
 import Mz.GroupBy
 import Mz.SetOps
+import Mz.SetOps2
