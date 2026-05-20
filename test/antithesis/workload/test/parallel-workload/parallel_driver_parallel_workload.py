@@ -51,6 +51,7 @@ from typing import Any
 import helper_logging
 import helper_random
 import psycopg
+from helper_fault_tolerance import looks_like_fault
 from helper_pg import (
     CONNECT_TIMEOUT_S,
     PGDATABASE,
@@ -250,113 +251,12 @@ _SETUP_RACE_PATTERNS = (
     "object state changed while transaction was in progress",
 )
 
-# Substring matches for setup-phase errors caused by Antithesis fault
-# injection rather than workload misuse. Antithesis can pause any container
-# (materialized, kafka, postgres-metadata, minio) at any time; if a pause
-# lands during the driver's setup phase we see one of these shapes. The
-# distinction matters because the always() assertion at the bottom of main()
-# treats setup failures as unexpected by default — a connection timeout to
-# materialized or a hostname-resolve failure for kafka is fault timing, not
-# a correctness bug to fail the run on.
-#
-#   "connection timeout"        — driver's psycopg.connect to materialized
-#                                 timed out (materialized container paused).
-#   "Multiple connection attempts failed"
-#                               — same shape, retry-exhaustion wording.
-#   "Failed to resolve hostname"— materialized's CREATE CONNECTION
-#                                 validation can't resolve `kafka` (kafka
-#                                 container paused or DNS path partitioned).
-#   "connection refused"        — target is up but socket closed; transient.
-#   "connection reset"          — TCP reset during a fault.
-#   "broken pipe"               — write to a socket the peer closed.
-#   "EOF detected"              — psycopg's wording for peer-closed during
-#                                 query.
-#   "server closed the connection unexpectedly"
-#                               — common psycopg flavour.
-_SETUP_FAULT_PATTERNS = (
-    "connection timeout",
-    "Multiple connection attempts failed",
-    "Failed to resolve hostname",
-    "connection refused",
-    "connection reset",
-    "broken pipe",
-    "EOF detected",
-    "server closed the connection unexpectedly",
-    # CREATE CONNECTION FOR KAFKA validates by fetching broker metadata
-    # at create time.  An Antithesis fault on the kafka container during
-    # validation surfaces as "Meta data fetch error: BrokerTransportFailure".
-    "BrokerTransportFailure",
-    # materialized's internal hostname-resolve path uses libc
-    # getaddrinfo(); when the upstream container is down/paused the
-    # validation error reads "failed to lookup address information: …".
-    # Distinct from "Failed to resolve hostname" (which is materialized's
-    # own catch-all wording for the same condition).
-    "failed to lookup address information",
-    # Python-side wording for the same condition: when the workload
-    # container's own resolver hits an EAI_AGAIN, glibc surfaces it via
-    # socket.gaierror as "[Errno -3] Temporary failure in name resolution".
-    # We see this on psycopg.connect / requests.get against `kafka`,
-    # `postgres-metadata`, etc. while Antithesis has the DNS path
-    # partitioned.
-    "Temporary failure in name resolution",
-    # Sibling glibc DNS error, EAI_NONAME ("[Errno -2] Name or service
-    # not known"). Lands when the upstream container is gone entirely
-    # (Antithesis killed it) rather than transiently partitioned —
-    # resolver has no record at all, not just a temporary failure.
-    "Name or service not known",
-    # Materialize's `CREATE CONNECTION TO ICEBERG CATALOG` validates by
-    # asking polaris to list namespaces. When polaris itself can't talk
-    # to its upstream (postgres-metadata paused, network partitioned),
-    # polaris's REST handler surfaces a generic reqwest transport
-    # failure as `Failed to execute http request`, wrapped by
-    # materialized as `failed to list namespaces: Unexpected => Failed
-    # to execute http request, source: error sending request for url
-    # (http://polaris:8181/...)`. Distinct from the
-    # `terminating connection due to administrator command` shape
-    # below — that's polaris's *JDBC* connection getting reset; this
-    # is polaris's *HTTP* layer failing to reach its dependency.
-    # psycopg's wording when the server-side connection drops mid-statement
-    # — e.g. Antithesis kills environmentd while CREATE CONNECTION's
-    # validation is in flight.  The CREATE may or may not have committed;
-    # the IF NOT EXISTS on these statements makes the next call idempotent.
-    "the connection is lost",
-    # CREATE CONNECTION TO ICEBERG CATALOG validates by listing namespaces
-    # against polaris, which forces polaris to read its catalog state from
-    # postgres-metadata.  An Antithesis fault on postgres-metadata during
-    # that read terminates polaris's backing connection (`pg_terminate_backend`
-    # under the hood); polaris's JDBC layer surfaces it as a Postgres FATAL
-    # 57P01 wrapped in `failed to list namespaces: DataInvalid` from
-    # materialized's validation path.
-    "terminating connection due to administrator command",
-    # Same path as above, different fault timing: postgres-metadata pauses
-    # long enough that polaris's connection pool (HikariCP-style) exhausts
-    # waiting for a fresh connection and times out.  Same DataInvalid
-    # wrapper from materialized; distinct inner cause.
-    "Acquisition timeout while waiting for new connection",
-    # Polaris's HTTP transport failure wording — see the long comment
-    # on `Name or service not known` above for context.
-    "Failed to execute http request",
-    # librdkafka's admin client (used by `CREATE SINK ... INTO KAFKA`'s
-    # validation step) surfaces broker-side timeouts as
-    # `Meta data fetch error: OperationTimedOut (Local: Timed out)`
-    # when Antithesis pauses the kafka container long enough that the
-    # admin op exceeds its timeout. Distinct from BrokerTransportFailure
-    # (connection-level failure, broker unreachable at all) — this is
-    # connection-up-but-not-responding.
-    "OperationTimedOut",
-)
-
-
-def _msg_contains(msg: str, pat: str) -> bool:
-    """Case-insensitive substring test used by `_matches_setup_tolerance`.
-
-    Several fault-shaped errors arrive with inconsistent casing — e.g.
-    librdkafka emits `"Connection refused"` (capital C) while psycopg's
-    older wording is lowercase. Hand-curating both cases in the pattern
-    lists is fragile; matching case-insensitively gives the lists one
-    canonical form (lowercase by convention) and absorbs the variants.
-    """
-    return pat.lower() in msg.lower()
+# Fault-injection-shape patterns (network drops, DNS failures, broker
+# timeouts, etc.) live in the shared `helper_fault_tolerance` module so
+# every Antithesis driver agrees on what looks like a fault.  The
+# `_SETUP_RACE_PATTERNS` list above is kept local because race shapes
+# are unique to setup-phase concurrency between parallel-driver
+# invocations — not a fault-injection concept.
 
 
 def _matches_setup_tolerance(exc: BaseException) -> bool:
@@ -367,10 +267,10 @@ def _matches_setup_tolerance(exc: BaseException) -> bool:
     signal).
     """
     msg = getattr(exc, "msg", None) or str(exc)
-    return any(
-        _msg_contains(msg, pat)
-        for pat in (*_SETUP_RACE_PATTERNS, *_SETUP_FAULT_PATTERNS)
-    )
+    if looks_like_fault(msg):
+        return True
+    lo = msg.lower()
+    return any(pat.lower() in lo for pat in _SETUP_RACE_PATTERNS)
 
 
 def _worker_death_tolerable(occurred: Exception | None) -> bool:
@@ -384,8 +284,8 @@ def _worker_death_tolerable(occurred: Exception | None) -> bool:
     inside its main action loop, captured `QueryError`s that don't match
     `errors_to_ignore` populate `occurred_exception` — those are the ones
     we want to look at. If the captured exception matches a fault shape
-    (`_SETUP_FAULT_PATTERNS`) it's still the fault that killed the worker,
-    not a SUT correctness bug.
+    (via `helper_fault_tolerance.looks_like_fault`) it's still the fault
+    that killed the worker, not a SUT correctness bug.
     """
     if occurred is None:
         return True
@@ -393,8 +293,9 @@ def _worker_death_tolerable(occurred: Exception | None) -> bool:
 
 
 def _tolerate_setup_race(fn, *args, **kwargs):
-    """Run `fn(...)`, swallowing the messages in `_SETUP_RACE_PATTERNS` or
-    `_SETUP_FAULT_PATTERNS` and propagating anything else.
+    """Run `fn(...)`, swallowing messages in `_SETUP_RACE_PATTERNS` or
+    any pattern in the shared `helper_fault_tolerance` list, and
+    propagating anything else.
 
     The setup phase is invoked by every parallel-driver invocation, and the
     framework picks deterministic object names from a small pool. Concurrent

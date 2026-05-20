@@ -68,20 +68,11 @@ SINCE_VIOLATION_PATTERNS = (
     "peek timestamp is not beyond the since",
 )
 
-# Errors we expect to see under Antithesis fault injection but that
-# aren't the bug: a kill of clusterd, a pause of materialized, a broker
-# blip. Demoted to `sometimes(False)` rather than `always(False)` so
-# transients don't fire false-positive property violations.
-TRANSIENT_PATTERNS = (
-    "connection refused",
-    "connection reset",
-    "server closed the connection",
-    "is (re)initializing",
-    "toomanyrequests",
-    "terminating connection due to administrator command",
-    "broken pipe",
-    "eof detected",
-)
+# Fault-injection-shape matching lives in `helper_fault_tolerance` —
+# the canonical list shared across every Antithesis driver. We expose
+# `is_transient` here as a thin alias so callers in this module don't
+# need to import from two helpers.
+from helper_fault_tolerance import looks_like_fault as is_transient
 
 
 def matches_any(msg: str, patterns: tuple[str, ...]) -> bool:
@@ -92,7 +83,3 @@ def matches_any(msg: str, patterns: tuple[str, ...]) -> bool:
 
 def is_since_violation(msg: str) -> bool:
     return matches_any(msg, SINCE_VIOLATION_PATTERNS)
-
-
-def is_transient(msg: str) -> bool:
-    return matches_any(msg, TRANSIENT_PATTERNS)
