@@ -35,7 +35,7 @@ use crate::{
     matching_image_from_environmentd_image_ref,
     metrics::Metrics,
     parse_image_tag,
-    tls::{DefaultCertificateSpecs, issuer_ref_defined},
+    tls::{DefaultCertificateSpecs, issuer_ref_defined, resolved_dns_names},
 };
 use mz_cloud_provider::CloudProvider;
 use mz_cloud_resources::crd::{
@@ -793,6 +793,10 @@ impl k8s_controller::Context for Context {
                         } else {
                             HttpConnectionScheme::Http
                         },
+                        dns_names: resolved_dns_names(
+                            &self.config.default_certificate_specs.balancerd_external,
+                            &mz.spec.balancerd_external_certificate_spec,
+                        ),
                     },
                     authenticator_kind: mz.spec.authenticator_kind,
                     resource_id: Some(status.resource_id),
