@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.9.10 - 2026-05-20
+
 * Support unmanaged clusters in `deploy_init`. The deployment cluster
   is now created by cloning the production cluster's replicas (including
   `SIZE` and `AVAILABILITY ZONE`).
