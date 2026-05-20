@@ -622,8 +622,8 @@ mod tests {
     #[mz_ore::test]
     fn timestamp_value_date_zero_date() {
         // The whole reason TEXT COLUMNS exists for TIMESTAMP: a
-        // zero-date arriving as Value::Date(0,..) should round-trip as
-        // the literal MySQL zero-timestamp string.
+        // zero-date arriving as Value::Date(0,..) should decode to the same
+        // "zero" timestamp value MySQL would display.
         let col = timestamp_text_col(0);
         let s = pack_one(Value::Date(0, 0, 0, 0, 0, 0, 0), &col).unwrap();
         assert_eq!(s, "0000-00-00 00:00:00");
@@ -725,6 +725,8 @@ mod tests {
     #[mz_ore::test]
     fn timestamp_value_bytes_unparseable_errors() {
         let col = timestamp_text_col(0);
+        // "2024-04-03 10:15:13" is not valid because Value::Bytes must contain seconds since
+        // epoch, Value::Bytes("<sec>"/"<sec>.<usec>")
         for payload in [&b""[..], &b"not-an-epoch"[..], &b"2024-04-03 10:15:13"[..]] {
             let err = pack_one(Value::Bytes(payload.to_vec()), &col).unwrap_err();
             assert!(

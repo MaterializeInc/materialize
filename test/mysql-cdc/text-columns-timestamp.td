@@ -118,11 +118,9 @@ COMMIT;
 > SELECT pg_typeof(created_at), pg_typeof(updated_at), pg_typeof(archived_at), pg_typeof(born_at) FROM products LIMIT 1;
 text text text text
 
-# The decode error stalls the source even after the queries above appear to
-# succeed (the snapshot rows are already in dataflow and remain queryable).
-# Asserting on the source status is what makes this a hard regression check.
-# We poll until either the source is fully healthy or surfaces the stall;
-# this avoids a race where the binlog error has not yet been recorded.
+# None of the data above should have caused the source to go into a stalled state. This may be
+# slight overkill as a check. We've verified that all the rows are readable in previous
+# queries above.
 > SELECT name, status, error IS NULL FROM mz_internal.mz_source_statuses WHERE name IN ('da', 'products') ORDER BY name;
 da running true
 products running true
