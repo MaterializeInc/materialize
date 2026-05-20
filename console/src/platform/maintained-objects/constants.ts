@@ -8,9 +8,9 @@
 // by the Apache License, Version 2.0.
 
 /**
- * Lookback window options (in minutes) for the maintained-objects freshness
- * filter. Capped at 24 hours to match the retention of
- * `mz_wallclock_global_lag_recent_history`.
+ * Lookback window options (in minutes) shared across the maintained-objects
+ * list page and the per-object freshness drawer. Capped at 24 hours to match
+ * the retention of `mz_wallclock_global_lag_recent_history`.
  */
 export const LOOKBACK_OPTIONS: Record<string, string> = {
   "1": "Live",

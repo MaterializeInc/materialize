@@ -23,7 +23,15 @@ export function useChartLegend({
 }) {
   const [visibleLegendItems, setVisibleLegendItems] = React.useState<
     Set<string>
-  >(new Set(allLegendItems));
+  >(() => new Set(allLegendItems));
+
+  // Reset visibility when the legend keys change (e.g. chart reused for a different object).
+  const allKey = allLegendItems.join("\0");
+  const [prevAllKey, setPrevAllKey] = React.useState(allKey);
+  if (prevAllKey !== allKey) {
+    setPrevAllKey(allKey);
+    setVisibleLegendItems(new Set(allLegendItems));
+  }
 
   const toggleLegendItem = (
     key: string,

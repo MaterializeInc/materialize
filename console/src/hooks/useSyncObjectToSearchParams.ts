@@ -78,7 +78,7 @@ export const useSyncObjectToSearchParams = (
   object: Record<string, any>,
   pathPrefix: string | undefined = undefined,
 ) => {
-  const { pathname } = useLocation();
+  const { pathname, state } = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
 
   useEffect(() => {
@@ -87,7 +87,8 @@ export const useSyncObjectToSearchParams = (
     }
     const newSearchParams = encodeObjectAsSearchParams(object);
     if (newSearchParams.toString() !== searchParams.toString()) {
-      setSearchParams(newSearchParams, { replace: true });
+      // setSearchParams drops state unless forwarded
+      setSearchParams(newSearchParams, { replace: true, state });
     }
-  }, [searchParams, setSearchParams, object, pathname, pathPrefix]);
+  }, [searchParams, setSearchParams, object, pathname, pathPrefix, state]);
 };

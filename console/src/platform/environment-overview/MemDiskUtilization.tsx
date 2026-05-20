@@ -43,9 +43,10 @@ import { useRegionSlug } from "~/store/environments";
 import { MaterializeTheme } from "~/theme";
 import { notNullOrUndefined } from "~/util";
 import { formatDate } from "~/utils/dateFormat";
+import { formatPercentage } from "~/utils/format";
 
 import { useClusterMemDiskUtilization } from "./queries";
-import { MemDiskUtilizationStatus, ThresholdPercentages } from "./utils";
+import { ThresholdPercentages, utilizationStatusToColor } from "./utils";
 
 const UTILIZATION_STATUS_TO_DESCRIPTION = {
   optimal: "The cluster is performing optimally.",
@@ -53,25 +54,6 @@ const UTILIZATION_STATUS_TO_DESCRIPTION = {
   underProvisioned:
     "The cluster is at risk of crash looping due to running out of memory and disk. Consider increasing the size of your cluster.",
 };
-
-const utilizationStatusToColor = (
-  utilizationStatus: MemDiskUtilizationStatus,
-  colors: MaterializeTheme["colors"],
-) => {
-  switch (utilizationStatus) {
-    case "empty":
-      return colors.foreground.tertiary;
-    case "optimal":
-      return colors.green[400];
-    case "suboptimal":
-      return colors.yellow[600];
-    case "underProvisioned":
-      return colors.accent.red;
-  }
-};
-
-const formatPercentage = (percentage: number) =>
-  `${(percentage * 100).toFixed(2)}%`;
 
 const buildReplicaTickMarks = ({
   thresholdPercentages,

@@ -15,11 +15,12 @@ import { SideDrawer } from "~/components/SideDrawer";
 
 import { MaintainedObjectsOutletContext } from "./MaintainedObjectsLayout";
 import { ObjectDetailPanel } from "./ObjectDetailPanel";
+import { ObjectJourneyBreadcrumb } from "./ObjectJourneyBreadcrumb";
 
 export const ObjectDetailDrawer = () => {
   const { objectId } = useParams<{ objectId: string }>();
   const navigate = useNavigate();
-  const { data, isLoading } =
+  const { data, isLoading, lookbackMinutes, setLookbackMinutes } =
     useOutletContext<MaintainedObjectsOutletContext>();
 
   const item = data.find((o) => o.id === objectId) ?? null;
@@ -30,12 +31,23 @@ export const ObjectDetailDrawer = () => {
     <SideDrawer
       isOpen
       onClose={handleClose}
-      title={item?.name}
+      title={
+        item ? (
+          <ObjectJourneyBreadcrumb
+            currentId={item.id}
+            currentName={item.name}
+          />
+        ) : undefined
+      }
       width="66%"
       trapFocus={false}
     >
       {item ? (
-        <ObjectDetailPanel item={item} />
+        <ObjectDetailPanel
+          item={item}
+          lookbackMinutes={lookbackMinutes}
+          setLookbackMinutes={setLookbackMinutes}
+        />
       ) : (
         <Center py={10}>
           {isLoading ? <Spinner data-testid="loading-spinner" /> : null}

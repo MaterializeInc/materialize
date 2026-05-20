@@ -16,6 +16,7 @@ import { scaleLinear, scaleTime } from "@visx/scale";
 import { LinePath } from "@visx/shape";
 import { useTooltip, useTooltipInPortal } from "@visx/tooltip";
 import { max } from "d3";
+import debounce from "lodash.debounce";
 import React, { PointerEvent } from "react";
 
 import { NULL_LAG_TEXT } from "~/api/materialize/freshness/lagHistory";
@@ -37,6 +38,7 @@ import { formatDurationForAxis, formatInterval } from "~/utils/format";
 import {
   buildXYGraphLayoutProps,
   calculateTooltipPosition,
+  eventToTimestamp,
   findNearestDatum,
   niceTicks,
   relativeTimeTickFormat,
@@ -49,6 +51,8 @@ const MARGIN = { top: 20, right: 8, bottom: 36, left: 44 };
 const MAX_LAG_MS = 86_400_000; // 24 hours
 const X_TICK_COUNT = 4;
 const Y_TICK_COUNT = 4;
+
+export type FreshnessGraphVariant = "static" | "interactive";
 
 export type FreshnessGraphProps = {
   bucketSizeMs: number;
@@ -63,6 +67,13 @@ export type FreshnessGraphProps = {
     lineData: GraphLineSeries;
   }) => React.ReactNode;
   maxTooltipLines?: number;
+  /** Controls cursor styling and pointer affordances. Defaults to `"static"`. */
+  variant?: FreshnessGraphVariant;
+  /** Fires as the cursor scrubs across the graph. Debounced (150ms). */
+  onPointMove?: (timestamp: number | null) => void;
+  onPointClick?: (timestamp: number | null) => void;
+  selectedTimestamp?: number | null;
+  isLocked?: boolean;
 };
 
 export const FreshnessGraph = (props: FreshnessGraphProps) => {
@@ -223,6 +234,17 @@ const FreshnessGraphInner = (
 
   const { cursor, handleCursorMove, hideCursor } = useCursorState();
 
+  // The marker tracks the cursor synchronously; the parent is notified on a
+  // debounce so scrubbing doesn't fire a query on every pixel.
+  const [hoverTimestamp, setHoverTimestamp] = React.useState<number | null>(
+    null,
+  );
+  const { onPointMove } = props;
+  const debouncedPointSelect = React.useMemo(
+    () => debounce((ts: number) => onPointMove?.(ts), 150),
+    [onPointMove],
+  );
+
   const handleTooltip = React.useCallback(
     (event: PointerEvent) => {
       const svgPoint = localPoint(event);
@@ -354,14 +376,60 @@ const FreshnessGraphInner = (
         ))}
         <GraphEventOverlay
           {...graphEventOverlayProps}
+          style={{
+            cursor:
+              props.variant === "interactive"
+                ? props.isLocked
+                  ? "pointer"
+                  : "crosshair"
+                : "default",
+          }}
           onPointerMove={(event) => {
             handleCursorMove(event);
             handleTooltip(event);
+            if (props.isLocked || !props.onPointMove) return;
+            const ts = eventToTimestamp({
+              event,
+              xScale,
+              startTime: props.startTime,
+              endTime: props.endTime,
+            });
+            if (ts === null) return;
+            setHoverTimestamp(ts);
+            debouncedPointSelect(ts);
           }}
           onPointerLeave={() => {
             hideCursor();
             hideTooltip();
           }}
+          onClick={
+            props.onPointClick
+              ? (event) => {
+                  if (props.isLocked) {
+                    props.onPointClick?.(null);
+                    return;
+                  }
+                  const ts = eventToTimestamp({
+                    event,
+                    xScale,
+                    startTime: props.startTime,
+                    endTime: props.endTime,
+                  });
+                  if (ts !== null) props.onPointClick?.(ts);
+                }
+              : undefined
+          }
+        />
+        <SelectedMarker
+          timestamp={
+            props.isLocked
+              ? props.selectedTimestamp
+              : (hoverTimestamp ?? props.selectedTimestamp)
+          }
+          xScale={xScale}
+          y1={graphLineCursorProps.graphTop}
+          y2={graphLineCursorProps.graphBottom}
+          color={colors.accent.brightPurple}
         />
         {cursor && <GraphLineCursor point={cursor} {...graphLineCursorProps} />}
         {tooltipOpen && tooltipData && (
@@ -460,5 +528,33 @@ const FreshnessGraphInner = (
         </GraphTooltip>
       )}
     </>
+  );
+};
+
+const SelectedMarker = ({
+  timestamp,
+  xScale,
+  y1,
+  y2,
+  color,
+}: {
+  timestamp: number | null | undefined;
+  xScale: (value: number) => number;
+  y1: number;
+  y2: number;
+  color: string;
+}) => {
+  if (timestamp == null) return null;
+  return (
+    <line
+      x1={xScale(timestamp)}
+      x2={xScale(timestamp)}
+      y1={y1}
+      y2={y2}
+      stroke={color}
+      strokeWidth={2}
+      strokeDasharray="4 3"
+      pointerEvents="none"
+    />
   );
 };
