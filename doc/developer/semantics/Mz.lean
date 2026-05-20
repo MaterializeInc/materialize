@@ -20,8 +20,10 @@ import Mz.UnifiedStream2
 import Mz.UnifiedConsolidate
 import Mz.UnifiedConsolidate2
 import Mz.TimedConsolidate
+import Mz.TimedConsolidate2
 import Mz.Aggregate
 import Mz.Consolidate
+import Mz.Consolidate2
 import Mz.Triple
 import Mz.Join
 import Mz.Join2
