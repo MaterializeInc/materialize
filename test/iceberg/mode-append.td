@@ -18,13 +18,6 @@
 
 > CREATE SECRET IF NOT EXISTS append_access_key_secret AS '${arg.s3-access-key}'
 
-> CREATE CONNECTION IF NOT EXISTS append_aws_conn TO AWS (
-    ACCESS KEY ID = 'tduser',
-    SECRET ACCESS KEY = SECRET append_access_key_secret,
-    ENDPOINT = '${arg.aws-endpoint}',
-    REGION = 'us-east-1'
-  );
-
 > CREATE CONNECTION append_polaris TO ICEBERG CATALOG (
     CATALOG TYPE = 'REST',
     URL = 'http://polaris:8181/api/catalog',
@@ -44,7 +37,6 @@
         NAMESPACE 'default_namespace',
         TABLE 'append_demo_table'
     )
-    USING AWS CONNECTION append_aws_conn
     MODE APPEND
     WITH (COMMIT INTERVAL '1s');
 
@@ -121,7 +113,6 @@ SELECT a, b, _mz_diff FROM polaris.default_namespace.append_demo_table ORDER BY 
         NAMESPACE 'default_namespace',
         TABLE 'append_clash_table'
     )
-    USING AWS CONNECTION append_aws_conn
     MODE APPEND
     WITH (COMMIT INTERVAL '1s');
 contains:conflicts with the system column that MODE APPEND adds to the Iceberg table
@@ -134,7 +125,6 @@ contains:conflicts with the system column that MODE APPEND adds to the Iceberg t
         NAMESPACE 'default_namespace',
         TABLE 'append_clash_table_1'
     )
-    USING AWS CONNECTION append_aws_conn
     MODE APPEND
     WITH (COMMIT INTERVAL '1s');
 contains:conflicts with the system column that MODE APPEND adds to the Iceberg table

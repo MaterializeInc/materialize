@@ -688,8 +688,18 @@ pub fn iceberg_type_overrides(
 pub struct IcebergSinkConnection<C: ConnectionAccess = InlinedConnection> {
     pub catalog_connection_id: CatalogItemId,
     pub catalog_connection: C::IcebergCatalog,
-    pub aws_connection_id: CatalogItemId,
-    pub aws_connection: C::Aws,
+
+    /// We allow users to specify a separate (from the catalog) connection
+    /// for the storage layer, but we currently ignore it.
+    /// S3 Tables uses the same AWS connection for catalog and storage.
+    /// BigLake/Lakehouse uses the same GCP connection for catalog and storage.
+    ///
+    /// TODO(kynan): Once we need separate storage creds, make this generic.
+    ///   And check that the [`IcebergSinkConnection::alter_compatible`]
+    ///   implementation still handles `storage_connection` acceptably.
+    pub storage_connection_id: Option<CatalogItemId>,
+    pub storage_connection: Option<C::Aws>,
+
     /// A natural key of the sinked relation (view or source).
     pub relation_key_indices: Option<Vec<usize>>,
     /// The user-specified key for the sink.
@@ -710,8 +720,8 @@ impl<C: ConnectionAccess> IcebergSinkConnection<C> {
         let IcebergSinkConnection {
             catalog_connection_id: connection_id,
             catalog_connection,
-            aws_connection_id,
-            aws_connection,
+            storage_connection_id,
+            storage_connection,
             relation_key_indices,
             key_desc_and_indices,
             namespace,
@@ -729,15 +739,24 @@ impl<C: ConnectionAccess> IcebergSinkConnection<C> {
                     .is_ok(),
                 "catalog_connection",
             ),
+            // We don't use `storage_connection_id` and `storage_connection`,
+            // so allow them to be removed.
             (
-                aws_connection_id == &other.aws_connection_id,
-                "aws_connection_id",
+                other.storage_connection_id.is_none()
+                    || storage_connection_id == &other.storage_connection_id,
+                "storage_connection_id",
             ),
             (
-                aws_connection
-                    .alter_compatible(id, &other.aws_connection)
-                    .is_ok(),
-                "aws_connection",
+                match &other.storage_connection {
+                    None => true, // Removing a storage connection OR not adding a storage connection.
+                    Some(after) => {
+                        match storage_connection {
+                            None => false, // Adding a storage connection where there wasn't one before.
+                            Some(before) => before.alter_compatible(id, after).is_ok(),
+                        }
+                    }
+                },
+                "storage_connection",
             ),
             (
                 relation_key_indices == &other.relation_key_indices,
@@ -773,8 +792,8 @@ impl<R: ConnectionResolver> IntoInlineConnection<IcebergSinkConnection, R>
         let IcebergSinkConnection {
             catalog_connection_id,
             catalog_connection,
-            aws_connection_id,
-            aws_connection,
+            storage_connection_id,
+            storage_connection,
             relation_key_indices,
             key_desc_and_indices,
             namespace,
@@ -785,8 +804,8 @@ impl<R: ConnectionResolver> IntoInlineConnection<IcebergSinkConnection, R>
             catalog_connection: r
                 .resolve_connection(catalog_connection)
                 .unwrap_iceberg_catalog(),
-            aws_connection_id,
-            aws_connection: r.resolve_connection(aws_connection).unwrap_aws(),
+            storage_connection_id,
+            storage_connection: storage_connection.map(|c| r.resolve_connection(c).unwrap_aws()),
             relation_key_indices,
             key_desc_and_indices,
             namespace,

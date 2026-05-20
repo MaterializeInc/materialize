@@ -771,6 +771,8 @@ impl IcebergCatalogConnection<InlinedConnection> {
             signing_name: "s3tables".to_string(),
         });
 
+        // N.B. We're using the AWS credentials from the catalog connection for the storage layer
+        //   even though the sink comes with its own (unused) AWS credentials for storage.
         let customized_credential_load = if matches!(aws_auth, AwsAuth::AssumeRole(_)) {
             Some(CustomAwsCredentialLoader::new(Arc::new(
                 AwsSdkCredentialLoader::new(credentials_provider),

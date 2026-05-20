@@ -11,13 +11,6 @@
 
 > CREATE SECRET nested_access_key_secret AS '${arg.s3-access-key}'
 
-> CREATE CONNECTION nested_aws_conn TO AWS (
-    ACCESS KEY ID = 'tduser',
-    SECRET ACCESS KEY = SECRET nested_access_key_secret,
-    ENDPOINT = '${arg.aws-endpoint}',
-    REGION = 'us-east-1'
-  );
-
 > CREATE CONNECTION nested_polaris TO ICEBERG CATALOG (
     CATALOG TYPE = 'REST',
     URL = 'http://polaris:8181/api/catalog',
@@ -46,7 +39,6 @@
         NAMESPACE 'default_namespace',
         TABLE 'nested_record_table'
     )
-    USING AWS CONNECTION nested_aws_conn
     KEY (id) NOT ENFORCED
     MODE UPSERT
     WITH (COMMIT INTERVAL '1s');
@@ -95,7 +87,6 @@ SELECT id, name, addr.street, addr.city, addr.zip FROM iceberg_scan('s3://test-b
         NAMESPACE 'default_namespace',
         TABLE 'deeply_nested_table'
     )
-    USING AWS CONNECTION nested_aws_conn
     KEY (id) NOT ENFORCED
     MODE UPSERT
     WITH (COMMIT INTERVAL '1s');
@@ -127,7 +118,6 @@ SELECT id, data.inner.x, data.inner.y, data.z FROM iceberg_scan('s3://test-bucke
         NAMESPACE 'default_namespace',
         TABLE 'nullable_record_table'
     )
-    USING AWS CONNECTION nested_aws_conn
     KEY (id) NOT ENFORCED
     MODE UPSERT
     WITH (COMMIT INTERVAL '1s');
@@ -149,7 +139,6 @@ SELECT id, rec.required_field, rec.optional_field FROM iceberg_scan('s3://test-b
         NAMESPACE 'default_namespace',
         TABLE 'nested_record_append_table'
     )
-    USING AWS CONNECTION nested_aws_conn
     MODE APPEND
     WITH (COMMIT INTERVAL '1s');
 

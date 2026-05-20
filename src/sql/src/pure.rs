@@ -542,13 +542,13 @@ async fn purify_create_sink(
             }
         }
         CreateSinkConnection::Iceberg {
-            connection,
+            catalog_connection,
             aws_connection,
             ..
         } => {
             let scx = StatementContext::new(None, &catalog);
             let connection = {
-                let item = scx.get_item_by_resolved_name(connection)?;
+                let item = scx.get_item_by_resolved_name(catalog_connection)?;
                 // Get Iceberg connection
                 match item.connection()? {
                     Connection::IcebergCatalog(connection) => {
@@ -561,63 +561,72 @@ async fn purify_create_sink(
                 }
             };
 
-            let aws_conn_id = aws_connection.item_id();
+            // Validate the sink's (optional) AWS connection even though we never use it.
+            // TODO(kynan): If we do start using the sink's creds, check again that this validation
+            //   accurately reflects what we need.
+            //   Consider rolling the storage creds validation into the catalog connection's "connect" fn,
+            //   which already validates the catalog creds (currently also used for the storage layer).
+            if let Some(aws_connection) = aws_connection {
+                let aws_conn_id = aws_connection.item_id();
+                let aws_connection = {
+                    let item = scx.get_item_by_resolved_name(aws_connection)?;
+                    // Get AWS connection
+                    match item.connection()? {
+                        Connection::Aws(aws_connection) => aws_connection.clone(),
+                        _ => sql_bail!(
+                            "{} is not an aws connection",
+                            scx.catalog.resolve_full_name(item.name())
+                        ),
+                    }
+                };
 
-            let aws_connection = {
-                let item = scx.get_item_by_resolved_name(aws_connection)?;
-                // Get AWS connection
-                match item.connection()? {
-                    Connection::Aws(aws_connection) => aws_connection.clone(),
-                    _ => sql_bail!(
-                        "{} is not an aws connection",
-                        scx.catalog.resolve_full_name(item.name())
-                    ),
-                }
-            };
-
-            // For S3 Tables connections in the Materialize Cloud product, verify the
-            // AWS region matches the environment's region. This check only applies when
-            // the enable_s3_tables_region_check dyncfg is set.
-            if let Some(s3tables) = connection.s3tables_catalog() {
-                let enable_region_check =
-                    ENABLE_S3_TABLES_REGION_CHECK.get(scx.catalog.system_vars().dyncfgs());
-                if enable_region_check {
-                    let env_id = &catalog.config().environment_id;
-                    if matches!(env_id.cloud_provider(), CloudProvider::Aws) {
-                        let env_region = env_id.cloud_provider_region();
-                        // Later on we default to "us-east-1" if the region is not set on the S3 Tables
-                        // connection, so we need to do the same check here.
-                        let s3_tables_region = s3tables
-                            .aws_connection
-                            .connection
-                            .region
-                            .clone()
-                            .unwrap_or_else(|| "us-east-1".to_string());
-                        if s3_tables_region != env_region {
-                            Err(IcebergSinkPurificationError::S3TablesRegionMismatch {
-                                s3_tables_region,
-                                environment_region: env_region.to_string(),
-                            })?;
+                // For S3 Tables connections in the Materialize Cloud product, verify the
+                // AWS region matches the environment's region. This check only applies when
+                // the enable_s3_tables_region_check dyncfg is set.
+                if let Some(s3tables) = connection.s3tables_catalog() {
+                    let enable_region_check =
+                        ENABLE_S3_TABLES_REGION_CHECK.get(scx.catalog.system_vars().dyncfgs());
+                    if enable_region_check {
+                        let env_id = &catalog.config().environment_id;
+                        if matches!(env_id.cloud_provider(), CloudProvider::Aws) {
+                            let env_region = env_id.cloud_provider_region();
+                            // Later on we default to "us-east-1" if the region is not set on the S3 Tables
+                            // connection, so we need to do the same check here.
+                            let s3_tables_region = s3tables
+                                .aws_connection
+                                .connection
+                                .region
+                                .clone()
+                                .unwrap_or_else(|| "us-east-1".to_string());
+                            if s3_tables_region != env_region {
+                                Err(IcebergSinkPurificationError::S3TablesRegionMismatch {
+                                    s3_tables_region,
+                                    environment_region: env_region.to_string(),
+                                })?;
+                            }
                         }
                     }
                 }
+
+                let _sdk_config = aws_connection
+                    .load_sdk_config(
+                        &storage_configuration.connection_context,
+                        aws_conn_id.clone(),
+                        InTask::No,
+                        mz_storage_types::dyncfgs::ENFORCE_EXTERNAL_ADDRESSES
+                            .get(storage_configuration.config_set()),
+                    )
+                    .await
+                    .map_err(|e| IcebergSinkPurificationError::AwsSdkContextError(Arc::new(e)))?;
             }
 
+            // Now that we've validated the sink's storage creds (if they exist)
+            // we _could_ use them to build a complete Iceberg client (both catalog and storage).
+            // TODO(kynan): Actually use those sink-specific creds here instead of ignoring them.
             let _catalog = connection
                 .connect(storage_configuration, InTask::No)
                 .await
                 .map_err(|e| IcebergSinkPurificationError::CatalogError(Arc::new(e)))?;
-
-            let _sdk_config = aws_connection
-                .load_sdk_config(
-                    &storage_configuration.connection_context,
-                    aws_conn_id.clone(),
-                    InTask::No,
-                    mz_storage_types::dyncfgs::ENFORCE_EXTERNAL_ADDRESSES
-                        .get(storage_configuration.config_set()),
-                )
-                .await
-                .map_err(|e| IcebergSinkPurificationError::AwsSdkContextError(Arc::new(e)))?;
         }
     }
 
