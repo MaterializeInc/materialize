@@ -215,6 +215,9 @@ pub enum Expr {
         /// the key for the reduction; otherwise, the results become undefined. Additionally, the
         /// MFP must be free from temporal predicates so that it can be readily evaluated.
         mfp_after: MapFilterProject,
+        /// How the renderer should form the internal input arrangement built by `Reduce`.
+        /// Mirrors [`PlanNode::Reduce::temporal_bucketing_strategy`].
+        temporal_bucketing_strategy: ArrangementStrategy,
     },
     /// Key-based "Top K" operator, retaining the first K records in each group.
     TopK {
@@ -438,6 +441,7 @@ impl TryFrom<Plan> for LetFreePlan {
                     key_val_plan,
                     plan,
                     mfp_after,
+                    temporal_bucketing_strategy,
                 } => {
                     let expr = Reduce {
                         input_key,
@@ -445,6 +449,7 @@ impl TryFrom<Plan> for LetFreePlan {
                         key_val_plan,
                         plan,
                         mfp_after,
+                        temporal_bucketing_strategy,
                     };
                     insert_node(lir_id, parent, expr, nesting);
 
@@ -911,6 +916,7 @@ impl<'a> std::fmt::Display for RenderPlanExprHumanizer<'a> {
                 key_val_plan: _key_val_plan,
                 plan,
                 mfp_after: _mfp_after,
+                temporal_bucketing_strategy: _,
             } => match plan {
                 ReducePlan::Distinct => write!(f, "Distinct GroupAggregate"),
                 ReducePlan::Accumulable(..) => write!(f, "Accumulable GroupAggregate"),

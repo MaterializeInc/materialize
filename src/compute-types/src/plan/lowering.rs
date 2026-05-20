@@ -31,6 +31,11 @@ use crate::plan::{ArrangementStrategy, AvailableCollections, GetPlan, LirId, Pla
 
 /// Pick an [`ArrangementStrategy`] based on whether the input may contain future-stamped
 /// updates. Future updates are the only case where temporal bucketing pays off.
+///
+/// Convention: every caller that returns `TemporalBucketing` must also clear
+/// `LoweredExpr::has_future_updates` on the resulting `LoweredExpr`, so that a stack of
+/// bucketing-eligible operators only buckets at the lowest one. A trailing temporal MFP
+/// fused on top naturally re-arms the flag.
 fn strategy_from_future(has_future_updates: bool) -> ArrangementStrategy {
     if has_future_updates {
         ArrangementStrategy::TemporalBucketing
@@ -294,6 +299,12 @@ impl Context {
                 // Even with a non-temporal MFP, we must propagate `has_future_updates`
                 // from the underlying binding — applying an MFP doesn't drop future-
                 // timestamped updates that already exist on the input.
+                //
+                // TODO(temporal-bucketing): `has_future_updates` is computed per
+                // dataflow; we don't currently propagate it across `Id::Global`
+                // boundaries (e.g., from an MV's dataflow to its consumer's), so a
+                // downstream-only `Get`-then-`ArrangeBy` won't bucket unless the
+                // consumer has its own local temporal MFP.
                 let has_future_updates = self.has_future_updates.contains(id)
                     || match &plan {
                         GetPlan::Arrangement(_, _, mfp) | GetPlan::Collection(mfp) => {
@@ -1054,17 +1065,24 @@ This is not expected to cause incorrect results, but could indicate a performanc
 
                     // Return the plan and extended keys.
                     let lir_id = self.allocate_lir_id();
+                    let strategy = strategy_from_future(future);
+                    // Bucketing absorption: see `strategy_from_future`. If we bucket, clear
+                    // the future-updates flag so the immediate parent is lowered as `Direct`.
+                    let has_future_updates = match strategy {
+                        ArrangementStrategy::TemporalBucketing => false,
+                        ArrangementStrategy::Direct => future,
+                    };
                     LoweredExpr {
                         plan: PlanNode::ArrangeBy {
                             input_key,
                             input: Box::new(input),
                             input_mfp,
                             forms,
-                            strategy: strategy_from_future(future),
+                            strategy,
                         }
                         .as_plan(lir_id),
                         keys: input_keys,
-                        has_future_updates: future,
+                        has_future_updates,
                     }
                 }
             }
@@ -1226,9 +1244,21 @@ This is not expected to cause incorrect results, but could indicate a performanc
         );
         let output_keys = reduce_plan.keys(group_key.len(), output_arity);
         let lir_id = self.allocate_lir_id();
+        // `Reduce` builds its own input arrangement inside `render_reduce` (via `KeyValPlan`),
+        // bypassing `ensure_collections`. So we can't piggy-back on an upstream `ArrangeBy`'s
+        // strategy to request temporal bucketing on a temporal-MFP-fed input: there is no such
+        // `ArrangeBy`. Instead we record the strategy directly on the `Reduce` node, and
+        // `render_reduce` applies bucketing to the keyed `(key, val)` stream itself.
+        let temporal_bucketing_strategy = strategy_from_future(input_future);
         // `extract_mfp_after` strips temporal predicates back into `*mfp_on_top` (the residual
         // MFP installed above the reduce), so `mfp_after` is non-temporal and cannot introduce
-        // future updates. The output's future flag is just whatever the input had.
+        // future updates.
+        //
+        // Bucketing absorption: see `strategy_from_future`.
+        let has_future_updates = match temporal_bucketing_strategy {
+            ArrangementStrategy::TemporalBucketing => false,
+            ArrangementStrategy::Direct => input_future,
+        };
         Ok(LoweredExpr {
             plan: PlanNode::Reduce {
                 input_key,
@@ -1236,10 +1266,11 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 key_val_plan,
                 plan: reduce_plan,
                 mfp_after,
+                temporal_bucketing_strategy,
             }
             .as_plan(lir_id),
             keys: output_keys,
-            has_future_updates: input_future,
+            has_future_updates,
         })
     }
 

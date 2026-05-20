@@ -130,6 +130,15 @@ pub enum ArrangementStrategy {
     TemporalBucketing,
 }
 
+impl std::fmt::Display for ArrangementStrategy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ArrangementStrategy::Direct => write!(f, "Direct"),
+            ArrangementStrategy::TemporalBucketing => write!(f, "TemporalBucketing"),
+        }
+    }
+}
+
 /// An identifier for an LIR node.
 #[derive(
     Clone,
@@ -308,6 +317,20 @@ pub enum PlanNode {
         /// predicates so that it can be readily evaluated.
         /// TODO(ggevay): should we wrap this in [`mz_expr::SafeMfpPlan`]?
         mfp_after: MapFilterProject,
+        /// Strategy for forming the internal input arrangement built by `Reduce`
+        /// (materialized via `key_val_plan`).
+        ///
+        /// Set by the lowering from the input's `has_future_updates` flag. The
+        /// renderer applies it to the keyed `(key, val)` stream feeding the
+        /// reduce. See `render_reduce` for the rationale on why this is
+        /// plumbed through `Reduce` rather than handled at the arrangement site.
+        ///
+        /// Note: unrelated to the hash buckets used by hierarchical reductions
+        /// (e.g. `ReducePlan::Hierarchical`'s `buckets`), which are an internal
+        /// sharding scheme for `min`/`max`-style aggregations. Here "bucketing"
+        /// refers exclusively to temporal (time-domain) bucketing of
+        /// future-stamped updates.
+        temporal_bucketing_strategy: ArrangementStrategy,
     },
     /// Key-based "Top K" operator, retaining the first K records in each group.
     TopK {
@@ -805,6 +828,7 @@ impl CollectionPlan for PlanNode {
                 key_val_plan: _,
                 plan: _,
                 mfp_after: _,
+                temporal_bucketing_strategy: _,
             }
             | PlanNode::TopK {
                 input,

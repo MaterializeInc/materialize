@@ -393,6 +393,7 @@ where
                     key_val_plan,
                     plan,
                     mfp_after,
+                    temporal_bucketing_strategy: _,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
@@ -676,6 +677,7 @@ where
                     key_val_plan,
                     plan,
                     mfp_after,
+                    temporal_bucketing_strategy: _,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;

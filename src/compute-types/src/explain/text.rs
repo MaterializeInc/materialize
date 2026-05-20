@@ -314,6 +314,7 @@ impl Plan {
                 key_val_plan,
                 plan,
                 mfp_after,
+                temporal_bucketing_strategy: _,
             } => {
                 ctx.indent.set();
                 if !mfp_after.expressions.is_empty() || !mfp_after.predicates.is_empty() {
@@ -763,6 +764,7 @@ impl Plan {
                 key_val_plan,
                 plan,
                 mfp_after,
+                temporal_bucketing_strategy,
             } => {
                 use crate::plan::reduce::ReducePlan;
                 match plan {
@@ -787,6 +789,13 @@ impl Plan {
                         let key = mode.seq(key, None);
                         let key = CompactScalars(key);
                         writeln!(f, "{}input_key={}", ctx.indent, key)?;
+                    }
+                    if !matches!(temporal_bucketing_strategy, ArrangementStrategy::Direct) {
+                        writeln!(
+                            f,
+                            "{}temporal_bucketing_strategy={}",
+                            ctx.indent, temporal_bucketing_strategy
+                        )?;
                     }
                     if key_val_plan.key_plan.deref().is_identity() {
                         writeln!(f, "{}key_plan=id", ctx.indent)?;

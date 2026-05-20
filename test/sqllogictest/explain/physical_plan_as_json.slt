@@ -1813,7 +1813,8 @@ SELECT DISTINCT a, b FROM t
                 1
               ],
               "input_arity": 2
-            }
+            },
+            "temporal_bucketing_strategy": "Direct"
           }
         }
       }
@@ -1972,7 +1973,8 @@ GROUP BY a
                 2
               ],
               "input_arity": 3
-            }
+            },
+            "temporal_bucketing_strategy": "Direct"
           }
         }
       }
@@ -2144,7 +2146,8 @@ FROM t
                       1
                     ],
                     "input_arity": 2
-                  }
+                  },
+                  "temporal_bucketing_strategy": "Direct"
                 }
               }
             },
@@ -2436,7 +2439,8 @@ SELECT * FROM hierarchical_group_by
                 2
               ],
               "input_arity": 3
-            }
+            },
+            "temporal_bucketing_strategy": "Direct"
           }
         }
       }
@@ -2568,7 +2572,8 @@ MATERIALIZED VIEW hierarchical_global_mv
                       1
                     ],
                     "input_arity": 2
-                  }
+                  },
+                  "temporal_bucketing_strategy": "Direct"
                 }
               }
             },
@@ -2875,7 +2880,8 @@ SELECT * FROM hierarchical_global
                       1
                     ],
                     "input_arity": 2
-                  }
+                  },
+                  "temporal_bucketing_strategy": "Direct"
                 }
               }
             },
@@ -3342,7 +3348,8 @@ GROUP BY a
                         1
                       ],
                       "input_arity": 2
-                    }
+                    },
+                    "temporal_bucketing_strategy": "Direct"
                   }
                 }
               },
@@ -3601,7 +3608,8 @@ GROUP BY a
                         1
                       ],
                       "input_arity": 2
-                    }
+                    },
+                    "temporal_bucketing_strategy": "Direct"
                   }
                 }
               }
@@ -3976,7 +3984,8 @@ FROM t
                                     0
                                   ],
                                   "input_arity": 1
-                                }
+                                },
+                                "temporal_bucketing_strategy": "Direct"
                               }
                             }
                           },
@@ -4205,7 +4214,8 @@ FROM t
                                     0
                                   ],
                                   "input_arity": 1
-                                }
+                                },
+                                "temporal_bucketing_strategy": "Direct"
                               }
                             }
                           }
@@ -4499,7 +4509,8 @@ MATERIALIZED VIEW collated_group_by_mv
                         2
                       ],
                       "input_arity": 3
-                    }
+                    },
+                    "temporal_bucketing_strategy": "Direct"
                   }
                 }
               },
@@ -4638,7 +4649,8 @@ MATERIALIZED VIEW collated_group_by_mv
                         2
                       ],
                       "input_arity": 3
-                    }
+                    },
+                    "temporal_bucketing_strategy": "Direct"
                   }
                 }
               },
@@ -4897,7 +4909,8 @@ MATERIALIZED VIEW collated_group_by_mv
                         1
                       ],
                       "input_arity": 2
-                    }
+                    },
+                    "temporal_bucketing_strategy": "Direct"
                   }
                 }
               },
@@ -5156,7 +5169,8 @@ MATERIALIZED VIEW collated_group_by_mv
                         1
                       ],
                       "input_arity": 2
-                    }
+                    },
+                    "temporal_bucketing_strategy": "Direct"
                   }
                 }
               }
@@ -5912,7 +5926,8 @@ SELECT * FROM collated_group_by
                         2
                       ],
                       "input_arity": 3
-                    }
+                    },
+                    "temporal_bucketing_strategy": "Direct"
                   }
                 }
               },
@@ -6051,7 +6066,8 @@ SELECT * FROM collated_group_by
                         2
                       ],
                       "input_arity": 3
-                    }
+                    },
+                    "temporal_bucketing_strategy": "Direct"
                   }
                 }
               },
@@ -6310,7 +6326,8 @@ SELECT * FROM collated_group_by
                         1
                       ],
                       "input_arity": 2
-                    }
+                    },
+                    "temporal_bucketing_strategy": "Direct"
                   }
                 }
               },
@@ -6569,7 +6586,8 @@ SELECT * FROM collated_group_by
                         1
                       ],
                       "input_arity": 2
-                    }
+                    },
+                    "temporal_bucketing_strategy": "Direct"
                   }
                 }
               }
@@ -7368,7 +7386,8 @@ MATERIALIZED VIEW collated_global_mv
                                     1
                                   ],
                                   "input_arity": 2
-                                }
+                                },
+                                "temporal_bucketing_strategy": "Direct"
                               }
                             }
                           },
@@ -7477,7 +7496,8 @@ MATERIALIZED VIEW collated_global_mv
                                     1
                                   ],
                                   "input_arity": 2
-                                }
+                                },
+                                "temporal_bucketing_strategy": "Direct"
                               }
                             }
                           },
@@ -7706,7 +7726,8 @@ MATERIALIZED VIEW collated_global_mv
                                     0
                                   ],
                                   "input_arity": 1
-                                }
+                                },
+                                "temporal_bucketing_strategy": "Direct"
                               }
                             }
                           },
@@ -7935,7 +7956,8 @@ MATERIALIZED VIEW collated_global_mv
                                     0
                                   ],
                                   "input_arity": 1
-                                }
+                                },
+                                "temporal_bucketing_strategy": "Direct"
                               }
                             }
                           }
@@ -8716,7 +8738,8 @@ SELECT * FROM collated_global
                                     1
                                   ],
                                   "input_arity": 2
-                                }
+                                },
+                                "temporal_bucketing_strategy": "Direct"
                               }
                             }
                           },
@@ -8825,7 +8848,8 @@ SELECT * FROM collated_global
                                     1
                                   ],
                                   "input_arity": 2
-                                }
+                                },
+                                "temporal_bucketing_strategy": "Direct"
                               }
                             }
                           },
@@ -9054,7 +9078,8 @@ SELECT * FROM collated_global
                                     0
                                   ],
                                   "input_arity": 1
-                                }
+                                },
+                                "temporal_bucketing_strategy": "Direct"
                               }
                             }
                           },
@@ -9283,7 +9308,8 @@ SELECT * FROM collated_global
                                     0
                                   ],
                                   "input_arity": 1
-                                }
+                                },
+                                "temporal_bucketing_strategy": "Direct"
                               }
                             }
                           }

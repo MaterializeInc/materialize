@@ -1004,7 +1004,21 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             );
         }
 
-        // Track whether we applied temporal bucketing, to avoid double-bucketing.
+        // Track whether we already applied temporal bucketing in this call, to
+        // avoid bucketing the same updates twice.
+        //
+        // Stacked bucketing across operators is prevented at the LIR level: in
+        // `strategy_from_future` (see `src/compute-types/src/plan/lowering.rs`),
+        // a bucketing consumer clears `LoweredExpr::has_future_updates`, so its
+        // parent is lowered with `ArrangementStrategy::Direct`.
+        //
+        // This flag is a belt-and-suspenders check for the case where a single
+        // `ensure_collections` call would otherwise fire bucketing twice on the
+        // same collection: once when forming the raw collection (via
+        // `as_collection_core` below) and again when building an arrangement in
+        // `collections.arranged`, or across two arrangements in that loop. The
+        // same `strategy` argument applies to all sites; the flag downgrades
+        // every application after the first to `Direct`.
         let mut bucketed = false;
 
         // True iff at least one new arrangement will actually be built below. Bucketing only
@@ -1023,19 +1037,17 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             // Apply temporal bucketing when the lowering selected `TemporalBucketing` and
             // we will build at least one arrangement. This path fires when the collection
             // must be formed from scratch (e.g., from an arrangement via as_collection_core).
-            let oks = if will_create_arrangement
-                && matches!(strategy, ArrangementStrategy::TemporalBucketing)
-                && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(config_set)
-            {
-                let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
-                    .get(config_set)
-                    .try_into()
-                    .expect("must fit");
-                bucketed = true;
-                T::maybe_apply_temporal_bucketing(oks.inner, as_of.clone(), summary)
-            } else {
-                oks
-            };
+            let (oks, applied) = apply_bucketing_strategy(
+                oks,
+                if will_create_arrangement {
+                    strategy
+                } else {
+                    ArrangementStrategy::Direct
+                },
+                as_of.clone(),
+                config_set,
+            );
+            bucketed |= applied;
             self.collection = Some((oks, errs));
         }
         for (key, _, thinning) in collections.arranged {
@@ -1051,19 +1063,14 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 // the bundle (e.g., from an upstream temporal Mfp or Get) and we
                 // haven't bucketed yet. This is the common path for temporal-MFP
                 // → ArrangeBy flows.
-                let oks = if !bucketed
-                    && matches!(strategy, ArrangementStrategy::TemporalBucketing)
-                    && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(config_set)
-                {
-                    let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
-                        .get(config_set)
-                        .try_into()
-                        .expect("must fit");
-                    bucketed = true;
-                    T::maybe_apply_temporal_bucketing(oks.inner, as_of.clone(), summary)
+                let effective_strategy = if bucketed {
+                    ArrangementStrategy::Direct
                 } else {
-                    oks
+                    strategy
                 };
+                let (oks, applied) =
+                    apply_bucketing_strategy(oks, effective_strategy, as_of.clone(), config_set);
+                bucketed |= applied;
                 let (oks, errs_keyed, passthrough) =
                     Self::arrange_collection(&name, oks, key.clone(), thinning.clone());
                 let errs_concat: KeyCollection<_, _, _> = errs.clone().concat(errs_keyed).into();
@@ -1352,4 +1359,45 @@ fn walk_cursor<C, F>(
         }
     }
     *fuel -= work;
+}
+
+/// Apply temporal bucketing to a per-row stream when the requested `strategy` selects it and the
+/// `enable_compute_temporal_bucketing` dyncfg is on; otherwise return `oks` unchanged.
+///
+/// Returns `(stream, applied)` where `applied` is true iff bucketing actually fired. Callers
+/// use this flag to avoid double-bucketing the same stream within a single `ensure_collections`
+/// invocation.
+///
+/// Generic over the row data type `D` so the helper can serve both `Row` streams (the
+/// `ArrangeBy` rendering in `ensure_collections`) and `(Row, Row)` streams (the internal
+/// keyed input arrangement built by `render_reduce`).
+pub(crate) fn apply_bucketing_strategy<'scope, T, D>(
+    oks: VecCollection<'scope, T, D, Diff>,
+    strategy: ArrangementStrategy,
+    as_of: Antichain<mz_repr::Timestamp>,
+    config_set: &ConfigSet,
+) -> (VecCollection<'scope, T, D, Diff>, bool)
+where
+    T: RenderTimestamp + MaybeBucketByTime,
+    D: timely::ExchangeData
+        + crate::typedefs::MzData
+        + Ord
+        + Clone
+        + std::fmt::Debug
+        + differential_dataflow::Hashable,
+{
+    if matches!(strategy, ArrangementStrategy::TemporalBucketing)
+        && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(config_set)
+    {
+        let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
+            .get(config_set)
+            .try_into()
+            .expect("must fit");
+        (
+            T::maybe_apply_temporal_bucketing(oks.inner, as_of, summary),
+            true,
+        )
+    } else {
+        (oks, false)
+    }
 }
