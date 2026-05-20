@@ -31,6 +31,11 @@ use crate::{MySqlColumnDesc, MySqlError, MySqlTableDesc};
 /// unambiguously this sentinel.
 const MYSQL_ZERO_TIMESTAMP: &str = "0000-00-00 00:00:00";
 
+/// Maximum fractional-seconds precision MySQL accepts for DATETIME(p) and
+/// TIMESTAMP(p) — values are stored in microseconds, so 6 digits is the
+/// upper bound (<https://dev.mysql.com/doc/refman/8.0/en/fractional-seconds.html>).
+const MYSQL_MAX_FRACTIONAL_PRECISION: u32 = 6;
+
 /// Format the zero-date sentinel for a column with the given fractional
 /// precision (matches the Date arm's `{:0precision$}` behavior).
 fn mysql_zero_timestamp(precision: u32) -> String {
@@ -43,6 +48,32 @@ fn mysql_zero_timestamp(precision: u32) -> String {
     } else {
         MYSQL_ZERO_TIMESTAMP.to_string()
     }
+}
+
+/// Format MySQL DATETIME/TIMESTAMP components as `YYYY-MM-DD HH:MM:SS[.ffff]`.
+/// `micros` is the raw microseconds (0..1_000_000); only the leading
+/// `precision` digits are kept, matching MySQL's DATETIME(p)/TIMESTAMP(p)
+/// display.
+fn format_mysql_timestamp(
+    y: u16,
+    m: u8,
+    d: u8,
+    hr: u8,
+    min: u8,
+    sec: u8,
+    micros: u32,
+    precision: u32,
+) -> String {
+    if precision == 0 {
+        return format!("{y:04}-{m:02}-{d:02} {hr:02}:{min:02}:{sec:02}");
+    }
+    // Clamp defensively: MySQL itself rejects precision > 6, but upstream
+    // metadata is untrusted and a larger value would make `pow()` below
+    // overflow its u32 exponent.
+    let p = precision.min(MYSQL_MAX_FRACTIONAL_PRECISION);
+    let scaled = micros / 10u32.pow(MYSQL_MAX_FRACTIONAL_PRECISION - p);
+    let width = usize::cast_from(p);
+    format!("{y:04}-{m:02}-{d:02} {hr:02}:{min:02}:{sec:02}.{scaled:0width$}")
 }
 
 pub fn pack_mysql_row(
@@ -362,25 +393,7 @@ fn pack_val_as_datum(
                         //                  "<sec>" or "<sec>.<usec>" (binlog/value.rs:145-154)
                         let str_timestamp = match value {
                             Value::Date(y, m, d, h, mm, s, ms) => {
-                                if *precision > 0 {
-                                    let precision: usize = (*precision).try_into()?;
-                                    format!(
-                                        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:0precision$}",
-                                        y,
-                                        m,
-                                        d,
-                                        h,
-                                        mm,
-                                        s,
-                                        ms,
-                                        precision = precision
-                                    )
-                                } else {
-                                    format!(
-                                        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
-                                        y, m, d, h, mm, s
-                                    )
-                                }
+                                format_mysql_timestamp(y, m, d, h, mm, s, ms, *precision)
                             }
                             // Pre-5.6 unix epoch, no fractional seconds.
                             // val == 0 is the zero-date sentinel, not epoch 0.
@@ -411,12 +424,23 @@ fn pack_val_as_datum(
                                     .map_err(|_| {
                                         anyhow::anyhow!("received invalid timestamp value: {:?}", s)
                                     })?;
-                                    if *precision > 0 {
-                                        let p: usize = (*precision).try_into()?;
-                                        dt.format(&format!("%Y-%m-%d %H:%M:%S.%{p}f")).to_string()
-                                    } else {
-                                        dt.format("%Y-%m-%d %H:%M:%S").to_string()
-                                    }
+                                    use chrono::{Datelike, Timelike};
+                                    let y = u16::try_from(dt.year()).map_err(|_| {
+                                        anyhow::anyhow!(
+                                            "timestamp year out of range: {}",
+                                            dt.year()
+                                        )
+                                    })?;
+                                    format_mysql_timestamp(
+                                        y,
+                                        u8::try_from(dt.month())?,
+                                        u8::try_from(dt.day())?,
+                                        u8::try_from(dt.hour())?,
+                                        u8::try_from(dt.minute())?,
+                                        u8::try_from(dt.second())?,
+                                        dt.nanosecond() / 1000,
+                                        *precision,
+                                    )
                                 }
                             }
                             _ => Err(anyhow::anyhow!(
