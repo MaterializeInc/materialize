@@ -10,11 +10,13 @@
 /// The `ReclockOperator` observes the progress of a stream that is
 /// timestamped with some source time `FromTime` and generates bindings that describe how the
 /// collection should evolve in target time `IntoTime`.
+use antithesis_sdk::assert_reachable;
 use differential_dataflow::consolidation;
 use differential_dataflow::lattice::Lattice;
 use mz_persist_client::error::UpperMismatch;
 use mz_repr::Diff;
 use mz_storage_client::util::remap_handle::RemapHandle;
+use serde_json::json;
 use timely::order::PartialOrder;
 use timely::progress::Timestamp;
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
@@ -128,6 +130,12 @@ where
             upper: self.upper.clone(),
         };
 
+        // Tracks whether append_batch hit an UpperMismatch during this mint
+        // invocation. If true and we still exit the while loop normally,
+        // we've exercised the retry path covered by the catalog property
+        // `reclock-mint-eventually-succeeds`.
+        let mut cas_retry_count: u64 = 0;
+
         while *self.upper == [IntoTime::minimum()]
             || (PartialOrder::less_equal(&self.source_upper.frontier(), &new_from_upper)
                 && PartialOrder::less_than(&self.upper, &new_into_upper)
@@ -159,10 +167,26 @@ where
 
             let new_batch = match self.append_batch(updates, &new_into_upper).await {
                 Ok(trace_batch) => trace_batch,
-                Err(UpperMismatch { current, .. }) => self.sync(current.borrow()).await,
+                Err(UpperMismatch { current, .. }) => {
+                    cas_retry_count = cas_retry_count.saturating_add(1);
+                    self.sync(current.borrow()).await
+                }
             };
             batch.updates.extend(new_batch.updates);
             batch.upper = new_batch.upper;
+        }
+
+        // Reachability anchor for `reclock-mint-eventually-succeeds`: this
+        // line fires only when a CaS UpperMismatch was observed and the
+        // mint loop nonetheless terminated. That's the path the catalog
+        // wants Antithesis to observe at least once per run; reaching it
+        // is the signal, so the marker is unconditional `assert_reachable!`
+        // rather than `assert_sometimes!(true, …)`.
+        if cas_retry_count > 0 {
+            assert_reachable!(
+                "reclock: mint completed after at least one compare_and_append UpperMismatch",
+                &json!({"cas_retry_count": cas_retry_count})
+            );
         }
 
         batch

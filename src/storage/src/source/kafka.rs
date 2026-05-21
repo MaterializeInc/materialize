@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use antithesis_sdk::{assert_always, assert_unreachable};
 use anyhow::anyhow;
 use chrono::{DateTime, NaiveDateTime};
 use differential_dataflow::{AsCollection, Hashable};
@@ -52,6 +53,7 @@ use rdkafka::statistics::Statistics;
 use rdkafka::topic_partition_list::Offset;
 use rdkafka::{ClientContext, Message, TopicPartitionList};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
@@ -274,7 +276,13 @@ fn render_reader<'scope>(
                 .iter()
                 .map(|(_name, kind)| kind.clone())
                 .collect::<Vec<_>>(),
-            _ => panic!("unexpected source export details: {:?}", details),
+            _ => {
+                assert_unreachable!(
+                    "kafka: unexpected source export details",
+                    &json!({"source_id": id.to_string()})
+                );
+                panic!("unexpected source export details: {:?}", details)
+            }
         };
 
         let statistics = config
@@ -1030,6 +1038,11 @@ fn render_reader<'scope>(
                     }
                 }
                 // We can now put them back
+                assert_always!(
+                    reader.partition_consumers.is_empty(),
+                    "kafka: partition_consumers not drained at shutdown",
+                    &json!({"remaining": reader.partition_consumers.len()})
+                );
                 assert!(reader.partition_consumers.is_empty());
                 reader.partition_consumers = consumers;
 
@@ -1281,6 +1294,20 @@ impl KafkaSourceReader {
 
         // Given the explicit consumer to partition assignment, we should never receive a message
         // for a partition for which we have no metadata
+        let partition_known = self
+            .last_offsets
+            .get(output_index)
+            .map(|m| m.contains_key(&partition))
+            .unwrap_or(false);
+        assert_always!(
+            partition_known,
+            "kafka: partition missing from last_offsets",
+            &json!({
+                "source_id": self.id.to_string(),
+                "partition": partition,
+                "output_index": output_index,
+            })
+        );
         assert!(
             self.last_offsets
                 .get(output_index)
@@ -1332,6 +1359,13 @@ fn construct_source_message(
 ) {
     let pid = msg.partition();
     let Ok(offset) = u64::try_from(msg.offset()) else {
+        assert_unreachable!(
+            "kafka: negative offset from non-error message",
+            &json!({
+                "partition": msg.partition(),
+                "raw_offset": msg.offset(),
+            })
+        );
         panic!(
             "got negative offset ({}) from otherwise non-error'd kafka message",
             msg.offset()

@@ -10,7 +10,7 @@
 # Stage 1: Build a minimum CI Builder image that we can use for the initial
 # steps like `mkpipeline` and `Build`, as well as any tests that are self
 # contained and use other Docker images.
-FROM ubuntu:noble-20260410 AS ci-builder-min
+FROM ubuntu:noble-20260210.1 AS ci-builder-min
 
 WORKDIR /workdir
 
@@ -398,8 +398,13 @@ ENV CARGO_HOME=/cargo
 RUN mkdir /cargo && chmod 777 /cargo
 VOLUME /cargo
 
+# Antithesis coverage instrumentation library (used when --antithesis is passed)
+RUN curl -sSL https://antithesis.com/assets/instrumentation/libvoidstar.so \
+      -o /usr/lib/libvoidstar.so \
+    && ldconfig
+
 # Stage 3: Build a lightweight CI Builder image for console/playwright jobs.
-FROM ubuntu:noble-20260410 AS ci-builder-console
+FROM ubuntu:noble-20260324 AS ci-builder-console
 
 ARG ARCH_GCC
 ARG ARCH_GO
