@@ -435,7 +435,7 @@ steps:
 
       - id: testdrive-alloydb
         label: "testdrive with AlloyDB"
-        depends_on: build-aarch64
+        depends_on: build-x86_64
         timeout_in_minutes: 60
         parallelism: 2
         inputs: [test/testdrive]

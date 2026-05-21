@@ -22,8 +22,7 @@ $ mysql-connect name=mysql-replica url=mysql://root@mysql-replica password=${arg
 # state when we create our source.
 #
 $ mysql-execute name=mysql
-DROP DATABASE IF EXISTS public;
-RESET BINARY LOGS AND GTIDS;
+DROP DATABASE IF EXISTS public; ${arg.reset-binlog};
 CREATE DATABASE public;
 USE public;
 CREATE TABLE t1 (f1 INTEGER);

@@ -89,6 +89,13 @@ def get_targeted_mysql_version(parser: WorkflowArgumentParser) -> str:
     return args.mysql_version
 
 
+def reset_binlog_stmt(mysql_version: str) -> str:
+    # RESET BINARY LOGS AND GTIDS was introduced in MySQL 8.2;
+    # RESET MASTER was removed in MySQL 8.4.
+    major_minor = tuple(int(p) for p in mysql_version.split(".")[:2])
+    return "RESET MASTER" if major_minor < (8, 2) else "RESET BINARY LOGS AND GTIDS"
+
+
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     def process(name: str) -> None:
         if name in ("default", "migration"):
@@ -160,6 +167,7 @@ def workflow_replica_connection(c: Composition, parser: WorkflowArgumentParser) 
         c.up("materialized", "mysql", "mysql-replica")
         c.run_testdrive_files(
             f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+            f"--var=reset-binlog={reset_binlog_stmt(mysql_version)}",
             "override/10-replica-connection.td",
         )
 
