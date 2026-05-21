@@ -29,7 +29,12 @@ SERVICES = [
     SchemaRegistry(
         kafka_servers=[("kafka1", "9092"), ("kafka2", "9092"), ("kafka3", "9092")]
     ),
-    Materialized(default_replication_factor=2),
+    Materialized(
+        additional_system_parameter_defaults={
+            "log_filter": "mz_storage::sink::kafka=trace,librdkafka=debug,info"
+        },
+        default_replication_factor=2,
+    ),
     Testdrive(
         entrypoint_extra=[
             "--kafka-option=acks=all",
