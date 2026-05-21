@@ -234,7 +234,7 @@ BASE TABLE
 materialize
 mz_catalog
 mz_sources
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_ssh_tunnel_connections
@@ -290,6 +290,10 @@ VIEW
 materialize
 mz_internal
 mz_builtin_materialized_views
+VIEW
+materialize
+mz_internal
+mz_builtin_sources
 VIEW
 materialize
 mz_internal
