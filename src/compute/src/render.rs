@@ -115,7 +115,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::iterate::Variable;
 use differential_dataflow::trace::{BatchReader, TraceReader};
-use differential_dataflow::{AsCollection, Data, VecCollection};
+use differential_dataflow::{AsCollection, Data, ExchangeData, Hashable, VecCollection};
 use futures::FutureExt;
 use futures::channel::oneshot;
 use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
@@ -1524,12 +1524,7 @@ pub trait MaybeBucketByTime: Timestamp {
         summary: mz_repr::Timestamp,
     ) -> VecCollection<'scope, Self, D, Diff>
     where
-        D: timely::ExchangeData
-            + crate::typedefs::MzData
-            + Ord
-            + Clone
-            + std::fmt::Debug
-            + differential_dataflow::Hashable;
+        D: crate::typedefs::MzData + ExchangeData + Hashable;
 }
 
 impl RenderTimestamp for mz_repr::Timestamp {
@@ -1560,12 +1555,7 @@ impl MaybeBucketByTime for mz_repr::Timestamp {
         summary: mz_repr::Timestamp,
     ) -> VecCollection<'scope, Self, D, Diff>
     where
-        D: timely::ExchangeData
-            + crate::typedefs::MzData
-            + Ord
-            + Clone
-            + std::fmt::Debug
-            + differential_dataflow::Hashable,
+        D: crate::typedefs::MzData + ExchangeData + Hashable,
     {
         stream
             .bucket::<CapacityContainerBuilder<_>>(as_of, summary)
@@ -1609,12 +1599,7 @@ impl MaybeBucketByTime for Product<mz_repr::Timestamp, PointStamp<u64>> {
         _summary: mz_repr::Timestamp,
     ) -> VecCollection<'scope, Self, D, Diff>
     where
-        D: timely::ExchangeData
-            + crate::typedefs::MzData
-            + Ord
-            + Clone
-            + std::fmt::Debug
-            + differential_dataflow::Hashable,
+        D: crate::typedefs::MzData + ExchangeData + Hashable,
     {
         // TODO: Implement bucketing on outer timestamp for iterative scopes.
         stream.as_collection()
