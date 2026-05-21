@@ -891,7 +891,12 @@ def workflow_oauth_metadata_host_injection(c: Composition) -> None:
             )
             assert r.status_code == 401, f"{r.status_code}: {r.text}"
             challenges = r.headers.get("WWW-Authenticate", "")
-            m = re.search(r'Bearer\s+resource_metadata="([^"]*)"', challenges)
+            # The Bearer challenge has both `scope` and `resource_metadata`
+            # parameters; their relative order is part of the wire format
+            # but we don't pin it here — what matters for this regression
+            # guard is that resource_metadata is not pointing at the
+            # attacker-controlled host.
+            m = re.search(r'resource_metadata="([^"]*)"', challenges)
             assert m, challenges
             assert not m.group(1).startswith(attacker_prefix), m.group(1)
 
@@ -909,4 +914,66 @@ def workflow_oauth_metadata_host_injection(c: Composition) -> None:
             cache_control = r.headers.get("Cache-Control", "")
             assert "no-store" in cache_control or "private" in cache_control, repr(
                 cache_control
+            )
+
+
+def workflow_oauth_metadata_extras(c: Composition) -> None:
+    """Smoke tests for the production-ready additions to the discovery
+    endpoint: `scopes_supported`, scope in WWW-Authenticate, path-suffixed
+    well-known aliases, and invalid-issuer rejection."""
+    with c.override(
+        Materialized(
+            listeners_config_path=f"{MZ_ROOT}/test/mcp/listener_config_password.json",
+        )
+    ):
+        c.up("materialized")
+        base = f"http://localhost:{c.port('materialized', 6876)}"
+        c.sql(
+            "ALTER SYSTEM SET oidc_issuer = 'https://issuer.example.com'",
+            user="mz_system",
+            port=6877,
+            print_statement=False,
+        )
+
+        with c.test_case("metadata_advertises_scope"):
+            r = requests.get(f"{base}/.well-known/oauth-protected-resource")
+            assert r.status_code == 200, f"{r.status_code}: {r.text}"
+            scopes = r.json().get("scopes_supported", [])
+            assert scopes == ["mcp.read"], scopes
+
+        with c.test_case("path_suffixed_aliases_serve_same_doc"):
+            base_doc = requests.get(
+                f"{base}/.well-known/oauth-protected-resource"
+            ).json()
+            for suffix in ("api/mcp/agent", "api/mcp/developer"):
+                url = f"{base}/.well-known/oauth-protected-resource/{suffix}"
+                r = requests.get(url)
+                assert r.status_code == 200, f"{url}: {r.status_code}: {r.text}"
+                assert r.json() == base_doc, url
+
+        with c.test_case("www_authenticate_emits_scope"):
+            r = requests.post(
+                f"{base}/api/mcp/agent",
+                json=jsonrpc("tools/list"),
+            )
+            assert r.status_code == 401, f"{r.status_code}: {r.text}"
+            challenges = r.headers.get("WWW-Authenticate", "")
+            assert 'scope="mcp.read"' in challenges, challenges
+            assert "resource_metadata=" in challenges, challenges
+
+        with c.test_case("invalid_issuer_returns_503"):
+            c.sql(
+                "ALTER SYSTEM SET oidc_issuer = 'not a url'",
+                user="mz_system",
+                port=6877,
+                print_statement=False,
+            )
+            r = requests.get(f"{base}/.well-known/oauth-protected-resource")
+            assert r.status_code == 503, f"{r.status_code}: {r.text}"
+            # Restore so subsequent test cases (if any are added) start clean.
+            c.sql(
+                "ALTER SYSTEM SET oidc_issuer = 'https://issuer.example.com'",
+                user="mz_system",
+                port=6877,
+                print_statement=False,
             )

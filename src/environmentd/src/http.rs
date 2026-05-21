@@ -128,7 +128,7 @@ mod memory;
 mod metrics;
 mod metrics_public;
 mod metrics_viz;
-mod oauth_metadata;
+pub mod oauth_metadata;
 mod probe;
 mod prometheus;
 mod root;
@@ -176,6 +176,7 @@ pub struct HttpConfig {
     pub metrics: Metrics,
     pub metrics_registry: MetricsRegistry,
     pub mcp_metrics: mcp_metrics::McpMetrics,
+    pub oauth_metadata_metrics: oauth_metadata::OAuthMetadataMetrics,
     pub allowed_roles: AllowedRoles,
     pub internal_route_config: Arc<InternalRouteConfig>,
     pub routes_enabled: HttpRoutesEnabled,
@@ -233,6 +234,7 @@ impl HttpServer {
             metrics,
             metrics_registry,
             mcp_metrics,
+            oauth_metadata_metrics,
             allowed_roles,
             internal_route_config,
             routes_enabled,
@@ -530,16 +532,30 @@ impl HttpServer {
             // (`oidc_issuer` dyncfg unset) OR when the listener uses the
             // `None` authenticator (no token would ever be validated), so
             // it is safe to enable unconditionally whenever MCP is enabled.
+            // RFC 9728 §3.1 lets clients look up per-resource metadata
+            // via a path-suffixed well-known URI before falling back to
+            // the bare one. The MCP endpoints share an identical
+            // metadata view today, so we serve the same handler at all
+            // three paths.
             let oauth_metadata_router = Router::new()
                 .route(
                     oauth_metadata::PROTECTED_RESOURCE_METADATA_PATH,
+                    routing::get(oauth_metadata::handle_protected_resource_metadata),
+                )
+                .route(
+                    oauth_metadata::PROTECTED_RESOURCE_METADATA_PATH_AGENT,
+                    routing::get(oauth_metadata::handle_protected_resource_metadata),
+                )
+                .route(
+                    oauth_metadata::PROTECTED_RESOURCE_METADATA_PATH_DEVELOPER,
                     routing::get(oauth_metadata::handle_protected_resource_metadata),
                 )
                 .layer(Extension(adapter_client_rx.clone()))
                 .layer(Extension(oauth_metadata::DiscoveryConfig {
                     http_host_name: http_host_name.clone(),
                     authenticator_kind,
-                }));
+                }))
+                .layer(Extension(oauth_metadata_metrics.clone()));
             router = router.merge(oauth_metadata_router);
 
             let mut mcp_router = Router::new();
@@ -947,6 +963,11 @@ pub(crate) struct WwwAuthenticateChallenges {
     /// Protected Resource Metadata document, which advertises the
     /// authorization server the client should use.
     pub bearer_resource_metadata: Option<String>,
+    /// If `Some`, also emit `scope="<scope>"` inside the Bearer challenge.
+    /// Tells clients which OAuth scope to request a token with for this
+    /// resource. Only set in conjunction with `bearer_resource_metadata`
+    /// (a scope challenge with no resource hint would be confusing).
+    pub bearer_scope: Option<&'static str>,
 }
 
 #[derive(Debug, Error)]
@@ -988,7 +1009,17 @@ impl IntoResponse for AuthError {
             // with multiple schemes on a single header value.
             AuthError::MissingHttpAuthentication { challenges } => {
                 if let Some(resource_metadata) = &challenges.bearer_resource_metadata {
-                    let value = format!("Bearer resource_metadata=\"{resource_metadata}\"");
+                    // `scope` is hard-coded to a vetted constant
+                    // (`MCP_SCOPE`); only `resource_metadata` is derived
+                    // from a header value, and `resolve_host` has already
+                    // round-tripped it through the URI grammar. The quoted
+                    // form follows RFC 6749 §3.3 / RFC 6750 §3.
+                    let value = match &challenges.bearer_scope {
+                        Some(scope) => format!(
+                            "Bearer scope=\"{scope}\", resource_metadata=\"{resource_metadata}\"",
+                        ),
+                        None => format!("Bearer resource_metadata=\"{resource_metadata}\""),
+                    };
                     match HeaderValue::from_str(&value) {
                         Ok(v) => {
                             headers.append(http::header::WWW_AUTHENTICATE, v);
@@ -1158,16 +1189,20 @@ async fn http_auth(
     // OAuth discovery is only meaningful when the listener actually
     // validates tokens. When the listener uses the `None` authenticator
     // (anonymous_http_user), there is no OAuth flow to advertise.
-    let bearer_resource_metadata = if path.starts_with("/api/mcp/")
+    let (bearer_resource_metadata, bearer_scope) = if path.starts_with("/api/mcp/")
         && !matches!(authenticator_kind, listeners::AuthenticatorKind::None)
     {
-        oauth_metadata::metadata_url(&req, http_host_name.as_deref())
+        (
+            oauth_metadata::metadata_url(&req, http_host_name.as_deref()),
+            Some(oauth_metadata::MCP_SCOPE),
+        )
     } else {
-        None
+        (None, None)
     };
     let challenges = WwwAuthenticateChallenges {
         include_basic,
         bearer_resource_metadata,
+        bearer_scope,
     };
     let authenticator = get_authenticator(
         authenticator_kind,

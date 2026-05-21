@@ -5897,8 +5897,9 @@ fn test_mcp_unauth_emits_bearer_and_basic_challenges() {
         assert!(
             challenges.iter().any(|c| c.starts_with("Bearer ")
                 && c.contains("resource_metadata=")
-                && c.contains("/.well-known/oauth-protected-resource")),
-            "expected a Bearer challenge with resource_metadata on /api/mcp/{endpoint}, got: {challenges:?}",
+                && c.contains("/.well-known/oauth-protected-resource")
+                && c.contains("scope=\"mcp.read\"")),
+            "expected a Bearer challenge with resource_metadata AND scope on /api/mcp/{endpoint}, got: {challenges:?}",
         );
         assert!(
             challenges.iter().any(|c| c.starts_with("Basic ")),
@@ -6003,6 +6004,93 @@ fn test_oauth_protected_resource_metadata_advertises_issuer() {
         bearer_methods,
         vec!["header".to_string()],
         "we only accept the Authorization header, not a query param",
+    );
+
+    let scopes_supported: Vec<String> = body["scopes_supported"]
+        .as_array()
+        .expect("scopes_supported is an array")
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        scopes_supported,
+        vec!["mcp.read".to_string()],
+        "should advertise the mcp.read scope so clients know what to request",
+    );
+}
+
+/// Path-suffixed well-known URIs (RFC 9728 §3.1) MUST serve the same
+/// document as the bare well-known URI. Strict clients look these up
+/// first based on the resource path; if they 404 here, those clients
+/// never make it to the working bare URI.
+#[mz_ore::test]
+fn test_oauth_protected_resource_metadata_path_suffixed_aliases() {
+    let server = test_util::TestHarness::default()
+        .with_password_auth(Password("mz_system_password".to_string()))
+        .with_mcp_routes(true, true)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string())
+        .with_system_parameter_default(
+            "oidc_issuer".to_string(),
+            "https://issuer.test.example.com".to_string(),
+        )
+        .start_blocking();
+
+    for suffix in [
+        "/.well-known/oauth-protected-resource",
+        "/.well-known/oauth-protected-resource/api/mcp/agent",
+        "/.well-known/oauth-protected-resource/api/mcp/developer",
+    ] {
+        let res = Client::new()
+            .get(&format!("http://{}{suffix}", server.http_local_addr()))
+            .send()
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "expected 200 at {suffix}");
+        let body: serde_json::Value = res.json().unwrap();
+        let authorization_servers: Vec<String> = body["authorization_servers"]
+            .as_array()
+            .expect("authorization_servers is an array")
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            authorization_servers,
+            vec!["https://issuer.test.example.com".to_string()],
+            "all three URIs must serve the same metadata document",
+        );
+    }
+}
+
+/// An `oidc_issuer` value that does not parse as a URL must NOT be
+/// published verbatim — RFC 9728 §3 requires entries in
+/// `authorization_servers` to be valid URLs, and publishing garbage
+/// would steer every client into an unrecoverable error on their next
+/// discovery hop. The honest response is a 503 plus a server-side
+/// warning so operators can see and fix the misconfiguration.
+#[mz_ore::test]
+fn test_oauth_protected_resource_metadata_rejects_invalid_issuer() {
+    let server = test_util::TestHarness::default()
+        .with_password_auth(Password("mz_system_password".to_string()))
+        .with_mcp_routes(true, false)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .with_system_parameter_default(
+            "oidc_issuer".to_string(),
+            // Whitespace + missing scheme: not a valid URI per `http::Uri`.
+            "not a url".to_string(),
+        )
+        .start_blocking();
+
+    let res = Client::new()
+        .get(&format!(
+            "http://{}/.well-known/oauth-protected-resource",
+            server.http_local_addr()
+        ))
+        .send()
+        .unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "invalid oidc_issuer must surface as 503, not a published malformed doc",
     );
 }
 

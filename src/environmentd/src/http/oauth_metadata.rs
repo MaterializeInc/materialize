@@ -48,13 +48,18 @@
 //!
 //! [RFC 9728]: https://datatracker.ietf.org/doc/html/rfc9728
 
+use std::str::FromStr;
+
 use axum::Extension;
 use axum::extract::Request;
 use axum::response::{IntoResponse, Response};
 use http::{HeaderValue, StatusCode};
 use mz_adapter::Client;
 use mz_adapter_types::dyncfgs::OIDC_ISSUER;
+use mz_ore::metric;
+use mz_ore::metrics::MetricsRegistry;
 use mz_server_core::listeners;
+use prometheus::IntCounterVec;
 use serde::Serialize;
 use tracing::warn;
 
@@ -68,6 +73,31 @@ use crate::http::Delayed;
 ///
 /// [RFC 9728 §3]: https://datatracker.ietf.org/doc/html/rfc9728#section-3
 pub const PROTECTED_RESOURCE_METADATA_PATH: &str = "/.well-known/oauth-protected-resource";
+
+/// Path-suffixed aliases of [`PROTECTED_RESOURCE_METADATA_PATH`] per
+/// RFC 9728 §3.1. A client that hits `/api/mcp/<endpoint>` and follows
+/// the protected-resource discovery rules will look up
+/// `/.well-known/oauth-protected-resource/<path>` first, falling back
+/// to the bare well-known URI. We serve the same document at both: the
+/// MCP endpoints share an identical metadata view today, so there is
+/// nothing per-endpoint to vary. Registering the aliases keeps strict
+/// clients working without forcing them to fall back.
+pub const PROTECTED_RESOURCE_METADATA_PATH_AGENT: &str =
+    "/.well-known/oauth-protected-resource/api/mcp/agent";
+pub const PROTECTED_RESOURCE_METADATA_PATH_DEVELOPER: &str =
+    "/.well-known/oauth-protected-resource/api/mcp/developer";
+
+/// OAuth scope advertised for the MCP endpoints.
+///
+/// Today every authenticated caller can hit every MCP route — RBAC is
+/// enforced at the SQL layer below, not on the HTTP scope. Advertising a
+/// single coarse scope is honest: it tells clients "request a token that
+/// names this scope and any valid IdP token will be accepted" without
+/// promising scope-based authorization we do not enforce. Splitting into
+/// per-route scopes (e.g. an extra `mcp.read.system` for the developer
+/// endpoint) requires a separate scope-enforcement step in the auth
+/// middleware and is deferred until that lands.
+pub const MCP_SCOPE: &str = "mcp.read";
 
 /// `Cache-Control` value set on the discovery response.
 ///
@@ -103,6 +133,50 @@ pub struct ProtectedResourceMetadata {
     /// Mechanisms by which the client may present the bearer token.
     /// We accept the `Authorization` header only.
     pub bearer_methods_supported: Vec<String>,
+    /// Scopes a client may request a token for in order to call this
+    /// resource. We advertise a single coarse scope; see [`MCP_SCOPE`]
+    /// for the reasoning.
+    pub scopes_supported: Vec<String>,
+}
+
+/// Prometheus counter for the discovery endpoint, labeled by outcome.
+///
+/// Cheaply `Clone`: the underlying Prometheus collector handle is
+/// `Arc`-shared, so the struct is safe to clone into an axum
+/// `Extension` per listener.
+///
+/// `status` label values are stable strings (not HTTP status numbers)
+/// so dashboards do not have to know which integer maps to which
+/// failure path:
+///
+///   * `ok` — 200 with a metadata document.
+///   * `no_auth_listener` — 404 because the listener does not validate
+///     tokens.
+///   * `no_issuer` — 404 because `oidc_issuer` is unset.
+///   * `invalid_issuer` — 503 because `oidc_issuer` is not a parseable
+///     URL (operator misconfiguration).
+///   * `no_host` — 400 because the request had no host information.
+///   * `adapter_unavailable` — 503 during startup before the adapter
+///     client is ready.
+#[derive(Debug, Clone)]
+pub struct OAuthMetadataMetrics {
+    pub requests: IntCounterVec,
+}
+
+impl OAuthMetadataMetrics {
+    pub fn register_into(registry: &MetricsRegistry) -> Self {
+        Self {
+            requests: registry.register(metric!(
+                name: "mz_oauth_protected_resource_metadata_requests_total",
+                help: "Total number of requests to the OAuth Protected Resource Metadata endpoint.",
+                var_labels: ["status"],
+            )),
+        }
+    }
+
+    fn inc(&self, status: &'static str) {
+        self.requests.with_label_values(&[status]).inc();
+    }
 }
 
 /// Per-listener inputs the discovery handler needs.
@@ -136,6 +210,7 @@ pub struct DiscoveryConfig {
 pub async fn handle_protected_resource_metadata(
     Extension(adapter_client_rx): Extension<Delayed<Client>>,
     Extension(config): Extension<DiscoveryConfig>,
+    Extension(metrics): Extension<OAuthMetadataMetrics>,
     req: Request,
 ) -> Response {
     // No-auth listener: there is no token to validate, nothing to
@@ -144,6 +219,7 @@ pub async fn handle_protected_resource_metadata(
         config.authenticator_kind,
         listeners::AuthenticatorKind::None
     ) {
+        metrics.inc("no_auth_listener");
         return StatusCode::NOT_FOUND.into_response();
     }
 
@@ -151,12 +227,14 @@ pub async fn handle_protected_resource_metadata(
         warn!(
             "oauth-protected-resource: no http_host_name configured and request has no Host header"
         );
+        metrics.inc("no_host");
         return (StatusCode::BAD_REQUEST, "no host available").into_response();
     };
     let scheme = scheme_for(&req);
     let resource = format!("{scheme}://{host}/api/mcp");
 
     let Ok(adapter_client) = adapter_client_rx.clone().await else {
+        metrics.inc("adapter_unavailable");
         return (StatusCode::SERVICE_UNAVAILABLE, "adapter not ready").into_response();
     };
     let system_vars = adapter_client.get_system_vars().await;
@@ -165,13 +243,34 @@ pub async fn handle_protected_resource_metadata(
         // document MUST contain at least one entry in
         // `authorization_servers`, so the honest response is 404 rather
         // than an empty document that misleads the client.
+        metrics.inc("no_issuer");
         return StatusCode::NOT_FOUND.into_response();
     };
+    let issuer = issuer.to_string();
+    // `oidc_issuer` is operator-supplied via a dyncfg, with no
+    // upstream syntactic validation. RFC 9728 §3 requires that
+    // `authorization_servers` entries are valid URLs; publishing
+    // garbage here would steer every connected client into an
+    // unrecoverable error during their next discovery step. Refuse
+    // to publish in that case rather than emit a malformed document.
+    if http::Uri::from_str(&issuer).is_err() {
+        warn!(
+            %issuer,
+            "oauth-protected-resource: oidc_issuer is not a valid URL; refusing to publish",
+        );
+        metrics.inc("invalid_issuer");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "oidc_issuer is not a valid URL",
+        )
+            .into_response();
+    }
 
     let metadata = ProtectedResourceMetadata {
         resource,
-        authorization_servers: vec![issuer.to_string()],
+        authorization_servers: vec![issuer],
         bearer_methods_supported: vec!["header".to_string()],
+        scopes_supported: vec![MCP_SCOPE.to_string()],
     };
 
     let mut response = axum::Json(metadata).into_response();
@@ -179,6 +278,7 @@ pub async fn handle_protected_resource_metadata(
         http::header::CACHE_CONTROL,
         HeaderValue::from_static(METADATA_CACHE_CONTROL),
     );
+    metrics.inc("ok");
     response
 }
 
@@ -280,6 +380,7 @@ mod tests {
             resource: "https://mcp.example.com/api/mcp".to_string(),
             authorization_servers: vec!["https://auth.example.com".to_string()],
             bearer_methods_supported: vec!["header".to_string()],
+            scopes_supported: vec!["mcp.read".to_string()],
         };
         let json = serde_json::to_value(&metadata).unwrap();
         assert_eq!(
@@ -288,6 +389,7 @@ mod tests {
                 "resource": "https://mcp.example.com/api/mcp",
                 "authorization_servers": ["https://auth.example.com"],
                 "bearer_methods_supported": ["header"],
+                "scopes_supported": ["mcp.read"],
             }),
         );
     }
@@ -443,6 +545,58 @@ mod tests {
         assert_eq!(
             metadata_url(&req, Some("public.example.com")).as_deref(),
             Some("https://public.example.com/.well-known/oauth-protected-resource"),
+        );
+    }
+
+    /// The path-suffixed aliases are part of the public contract with
+    /// strict RFC 9728 §3.1 clients. Pin them so a typo here surfaces
+    /// as a test failure rather than a silent 404 in the field.
+    #[mz_ore::test]
+    fn test_path_suffixed_alias_paths_are_correct() {
+        assert_eq!(
+            PROTECTED_RESOURCE_METADATA_PATH_AGENT,
+            "/.well-known/oauth-protected-resource/api/mcp/agent",
+        );
+        assert_eq!(
+            PROTECTED_RESOURCE_METADATA_PATH_DEVELOPER,
+            "/.well-known/oauth-protected-resource/api/mcp/developer",
+        );
+    }
+
+    /// The scope value is wire-visible (clients ask the IdP for tokens
+    /// with this exact string), so a rename is breaking. Pin it.
+    #[mz_ore::test]
+    fn test_mcp_scope_constant() {
+        assert_eq!(MCP_SCOPE, "mcp.read");
+    }
+
+    /// The metric registers cleanly with the expected name. Mirrors the
+    /// `McpMetrics` pattern: counter families only appear in `gather()`
+    /// after a label combination is observed, so we touch each once.
+    #[mz_ore::test]
+    fn test_metric_registers() {
+        let registry = MetricsRegistry::new();
+        let metrics = OAuthMetadataMetrics::register_into(&registry);
+        for status in [
+            "ok",
+            "no_auth_listener",
+            "no_issuer",
+            "invalid_issuer",
+            "no_host",
+            "adapter_unavailable",
+        ] {
+            metrics.inc(status);
+        }
+        let names: Vec<String> = registry
+            .gather()
+            .iter()
+            .map(|m| m.name().to_string())
+            .collect();
+        assert!(
+            names
+                .iter()
+                .any(|n| n == "mz_oauth_protected_resource_metadata_requests_total"),
+            "metric should be registered, got: {names:?}",
         );
     }
 }
