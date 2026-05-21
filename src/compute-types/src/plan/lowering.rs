@@ -863,6 +863,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     plan: PlanNode::TopK {
                         input: Box::new(input),
                         top_k_plan,
+                        input_strategy: strategy_from_future(input_future),
                     }
                     .as_plan(lir_id),
                     keys: AvailableCollections::new_raw(),

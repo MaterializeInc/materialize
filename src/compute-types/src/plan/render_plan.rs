@@ -230,6 +230,10 @@ pub enum Expr {
         /// the Top-K, and the input itself. Please check out the documentation for this type for
         /// more detail.
         top_k_plan: TopKPlan,
+        /// Rendering strategy for the input collection. Consulted by the renderer when the
+        /// top-k performs a pre-aggregation consolidation, to decide whether to insert temporal
+        /// bucketing before that consolidation. Ignored otherwise.
+        input_strategy: ArrangementStrategy,
     },
     /// Inverts the sign of each update.
     Negate {
@@ -460,10 +464,15 @@ impl TryFrom<Plan> for LetFreePlan {
 
                     todo.push((*input, Some(lir_id), nesting.saturating_add(1)));
                 }
-                PlanNode::TopK { input, top_k_plan } => {
+                PlanNode::TopK {
+                    input,
+                    top_k_plan,
+                    input_strategy,
+                } => {
                     let expr = TopK {
                         input: input.lir_id,
                         top_k_plan,
+                        input_strategy,
                     };
                     insert_node(lir_id, parent, expr, nesting);
 
@@ -952,6 +961,7 @@ impl<'a> std::fmt::Display for RenderPlanExprHumanizer<'a> {
             TopK {
                 input: _,
                 top_k_plan,
+                input_strategy: _,
             } => {
                 match top_k_plan {
                     TopKPlan::MonotonicTop1(..) => write!(f, "Monotonic Top1")?,

@@ -1277,9 +1277,13 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                     input_strategy,
                 )
             }
-            TopK { input, top_k_plan } => {
+            TopK {
+                input,
+                top_k_plan,
+                input_strategy,
+            } => {
                 let input = expect_input(input);
-                self.render_topk(input, top_k_plan)
+                self.render_topk(input, top_k_plan, input_strategy)
             }
             Negate { input } => {
                 let input = expect_input(input);
@@ -1298,16 +1302,6 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                 consolidate_output,
                 input_strategies,
             } => {
-                // `input_strategies` is only consulted when we're about to consolidate;
-                // without a downstream consolidate, bucketing buys nothing.
-                let bucketing_enabled =
-                    consolidate_output && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(&self.config_set);
-                let summary: Option<mz_repr::Timestamp> = bucketing_enabled.then(|| {
-                    TEMPORAL_BUCKETING_SUMMARY
-                        .get(&self.config_set)
-                        .try_into()
-                        .expect("must fit")
-                });
                 // The lowering populates `input_strategies` in lockstep with `inputs`. Guard
                 // the access with `get` so a malformed plan degrades to `Direct` rather than
                 // panicking.
@@ -1316,31 +1310,28 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                 for (idx, input) in inputs.into_iter().enumerate() {
                     let (os, es) =
                         expect_input(input).as_specific_collection(None, &self.config_set);
-                    let strategy = input_strategies
-                        .get(idx)
-                        .copied()
-                        .unwrap_or(ArrangementStrategy::Direct);
-                    let os = if bucketing_enabled
-                        && matches!(strategy, ArrangementStrategy::TemporalBucketing)
-                    {
-                        T::maybe_apply_temporal_bucketing(
-                            os.inner,
-                            self.as_of_frontier.clone(),
-                            summary.expect("set when bucketing_enabled"),
-                        )
+                    // Bucketing only buys anything in front of a downstream consolidate.
+                    let os = if consolidate_output {
+                        let strategy = input_strategies
+                            .get(idx)
+                            .copied()
+                            .unwrap_or(ArrangementStrategy::Direct);
+                        self.bucket_for_consolidate(os, strategy)
                     } else {
                         os
                     };
                     oks.push(os);
                     errs.push(es);
                 }
-                let mut oks = differential_dataflow::collection::concatenate(self.scope, oks);
-                if consolidate_output {
-                    oks = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
+                let oks = differential_dataflow::collection::concatenate(self.scope, oks);
+                let oks = if consolidate_output {
+                    CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
                         oks,
                         "UnionConsolidation",
                     )
-                }
+                } else {
+                    oks
+                };
                 let errs = differential_dataflow::collection::concatenate(self.scope, errs);
                 CollectionBundle::from_collections(oks, errs)
             }
@@ -1487,6 +1478,35 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                 }
             }
         })
+    }
+
+    /// If `strategy` is `TemporalBucketing` and `ENABLE_COMPUTE_TEMPORAL_BUCKETING` is set,
+    /// insert temporal bucketing in front of an upcoming consolidate. Use this when the caller
+    /// already knows it is about to consolidate; the consolidate itself is the caller's
+    /// responsibility.
+    pub(crate) fn bucket_for_consolidate<'s, D>(
+        &self,
+        collection: VecCollection<'s, T, D, Diff>,
+        strategy: ArrangementStrategy,
+    ) -> VecCollection<'s, T, D, Diff>
+    where
+        D: crate::typedefs::MzData + ExchangeData + Hashable,
+    {
+        if matches!(strategy, ArrangementStrategy::TemporalBucketing)
+            && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(&self.config_set)
+        {
+            let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
+                .get(&self.config_set)
+                .try_into()
+                .expect("must fit");
+            T::maybe_apply_temporal_bucketing(
+                collection.inner,
+                self.as_of_frontier.clone(),
+                summary,
+            )
+        } else {
+            collection
+        }
     }
 }
 

@@ -325,6 +325,11 @@ pub enum PlanNode {
         /// on the properties of the reduction, and the input itself. Please check
         /// out the documentation for this type for more detail.
         top_k_plan: TopKPlan,
+        /// Rendering strategy for the input collection. Consulted by the renderer when the
+        /// top-k performs a pre-aggregation consolidation (currently: monotonic top-k variants
+        /// with `must_consolidate` set), to decide whether to insert temporal bucketing before
+        /// that consolidation. Ignored otherwise.
+        input_strategy: ArrangementStrategy,
     },
     /// Inverts the sign of each update.
     Negate {
@@ -821,6 +826,7 @@ impl CollectionPlan for PlanNode {
             | PlanNode::TopK {
                 input,
                 top_k_plan: _,
+                input_strategy: _,
             }
             | PlanNode::Negate { input }
             | PlanNode::Threshold {

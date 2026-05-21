@@ -407,7 +407,11 @@ where
                         mfp_after,
                     ))
                 }
-                TopK { input, top_k_plan } => {
+                TopK {
+                    input,
+                    top_k_plan,
+                    input_strategy: _,
+                } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
                     // Interpret the current node.
@@ -696,7 +700,11 @@ where
                     // Pass the interpretation result up.
                     Ok(result)
                 }
-                TopK { input, top_k_plan } => {
+                TopK {
+                    input,
+                    top_k_plan,
+                    input_strategy: _,
+                } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
                     // Interpret the current node.

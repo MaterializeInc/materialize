@@ -24,6 +24,7 @@ use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::implementations::merge_batcher::container::InternalMerge;
 use differential_dataflow::trace::{Builder, Trace};
 use differential_dataflow::{Data, VecCollection};
+use mz_compute_types::plan::ArrangementStrategy;
 use mz_compute_types::plan::top_k::{
     BasicTopKPlan, MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan,
 };
@@ -50,11 +51,14 @@ use crate::row_spine::{
 use crate::typedefs::{KeyBatcher, MzTimestamp, RowRowSpine, RowSpine};
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
-impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
+impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTime>
+    Context<'scope, T>
+{
     pub(crate) fn render_topk(
         &self,
         input: CollectionBundle<'scope, T>,
         top_k_plan: TopKPlan,
+        input_strategy: ArrangementStrategy,
     ) -> CollectionBundle<'scope, T> {
         let (ok_input, err_input) = input.as_specific_collection(None, &self.config_set);
 
@@ -109,6 +113,7 @@ impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
                         group_key,
                         order_key,
                         must_consolidate,
+                        input_strategy,
                     );
                     err_collection = err_collection.concat(errs);
                     oks
@@ -132,18 +137,22 @@ impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
                     // Map the group key along with the row and consolidate if required to do so.
                     let mut datum_vec = mz_repr::DatumVec::new();
                     let ok_scope = ok_input.scope();
-                    let collection = ok_input
-                        .map(move |row| {
-                            let group_row = {
-                                let datums = datum_vec.borrow_with(&row);
-                                SharedRow::pack(group_key.iter().map(|i| datums[*i]))
-                            };
-                            (group_row, row)
-                        })
-                        .consolidate_named_if::<KeyBatcher<_, _, _>>(
-                            must_consolidate,
+                    let collection = ok_input.map(move |row| {
+                        let group_row = {
+                            let datums = datum_vec.borrow_with(&row);
+                            SharedRow::pack(group_key.iter().map(|i| datums[*i]))
+                        };
+                        (group_row, row)
+                    });
+                    let collection = if must_consolidate {
+                        let collection = self.bucket_for_consolidate(collection, input_strategy);
+                        CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
+                            collection,
                             "Consolidated MonotonicTopK input",
-                        );
+                        )
+                    } else {
+                        collection
+                    };
 
                     // It should be now possible to ensure that we have a monotonic collection.
                     let error_logger = self.error_logger();
@@ -449,6 +458,7 @@ impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
         group_key: Vec<usize>,
         order_key: Vec<mz_expr::ColumnOrder>,
         must_consolidate: bool,
+        input_strategy: ArrangementStrategy,
     ) -> (
         VecCollection<'s, T, Row, Diff>,
         VecCollection<'s, T, DataflowErrorSer, Diff>,
@@ -457,22 +467,26 @@ impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
         // corresponding to evaluating our aggregate, instead of having to do a hierarchical
         // reduction. We start by mapping the group key along with the row and consolidating
         // if required to do so.
-        let collection = collection
-            .map({
-                let mut datum_vec = mz_repr::DatumVec::new();
-                move |row| {
-                    // Scoped to allow borrow of `row` to drop.
-                    let group_key = {
-                        let datums = datum_vec.borrow_with(&row);
-                        SharedRow::pack(group_key.iter().map(|i| datums[*i]))
-                    };
-                    (group_key, row)
-                }
-            })
-            .consolidate_named_if::<KeyBatcher<_, _, _>>(
-                must_consolidate,
+        let collection = collection.map({
+            let mut datum_vec = mz_repr::DatumVec::new();
+            move |row| {
+                // Scoped to allow borrow of `row` to drop.
+                let group_key = {
+                    let datums = datum_vec.borrow_with(&row);
+                    SharedRow::pack(group_key.iter().map(|i| datums[*i]))
+                };
+                (group_key, row)
+            }
+        });
+        let collection = if must_consolidate {
+            let collection = self.bucket_for_consolidate(collection, input_strategy);
+            CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
+                collection,
                 "Consolidated MonotonicTop1 input",
-            );
+            )
+        } else {
+            collection
+        };
 
         // It should be now possible to ensure that we have a monotonic collection and process it.
         let error_logger = self.error_logger();

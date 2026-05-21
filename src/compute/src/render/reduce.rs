@@ -27,7 +27,6 @@ use differential_dataflow::trace::implementations::merge_batcher::container::Int
 use differential_dataflow::trace::{Builder, Trace};
 use differential_dataflow::{Data, VecCollection};
 use itertools::Itertools;
-use mz_compute_types::dyncfgs::{ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY};
 use mz_compute_types::plan::ArrangementStrategy;
 use mz_compute_types::plan::reduce::{
     AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, MonotonicPlan,
@@ -1176,28 +1175,16 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
         });
         // Bucket future-stamped updates before the consolidate to avoid piling them in the
         // `KeyBatcher` until the input frontier catches up. Only meaningful when we will
-        // actually consolidate; `MaybeBucketByTime` is also a no-op for partially-ordered
-        // timestamps.
-        let collection = if must_consolidate
-            && matches!(input_strategy, ArrangementStrategy::TemporalBucketing)
-            && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(&self.config_set)
-        {
-            let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
-                .get(&self.config_set)
-                .try_into()
-                .expect("must fit");
-            T::maybe_apply_temporal_bucketing(
-                collection.inner,
-                self.as_of_frontier.clone(),
-                summary,
+        // actually consolidate.
+        let collection = if must_consolidate {
+            let collection = self.bucket_for_consolidate(collection, input_strategy);
+            CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
+                collection,
+                "Consolidated ReduceMonotonic input",
             )
         } else {
             collection
         };
-        let collection = collection.consolidate_named_if::<KeyBatcher<_, _, _>>(
-            must_consolidate,
-            "Consolidated ReduceMonotonic input",
-        );
 
         // It should be now possible to ensure that we have a monotonic collection.
         let error_logger = self.error_logger();
