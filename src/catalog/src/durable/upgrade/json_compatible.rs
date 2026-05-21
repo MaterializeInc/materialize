@@ -46,13 +46,11 @@ macro_rules! json_compatible {
     ($a:ident $(:: $a_sub:ident)* with $b:ident $(:: $b_sub:ident)*) => {
         ::static_assertions::assert_impl_all!(
             $a $(::$a_sub)* :
-                ::proptest::arbitrary::Arbitrary,
                 ::serde::Serialize,
                 ::serde::de::DeserializeOwned,
         );
         ::static_assertions::assert_impl_all!(
             $b $(::$b_sub)* :
-                ::proptest::arbitrary::Arbitrary,
                 ::serde::Serialize,
                 ::serde::de::DeserializeOwned,
         );
@@ -67,6 +65,18 @@ macro_rules! json_compatible {
             ::JsonCompatible< $a $(::$a_sub)* >
             for $b $(::$b_sub)* {}
 
+        #[cfg(test)]
+        ::static_assertions::assert_impl_all!(
+            $a $(::$a_sub)* :
+                ::proptest::arbitrary::Arbitrary,
+        );
+        #[cfg(test)]
+        ::static_assertions::assert_impl_all!(
+            $b $(::$b_sub)* :
+                ::proptest::arbitrary::Arbitrary,
+        );
+
+        #[cfg(test)]
         ::paste::paste! {
             ::proptest::proptest! {
                 #![proptest_config(::proptest::test_runner::Config {

@@ -43,6 +43,7 @@ use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::numeric::{Dec, Numeric};
 use mz_storage_types::StorageDiff;
 use mz_storage_types::sources::SourceData;
+#[cfg(test)]
 use proptest_derive::Arbitrary;
 use tracing::error;
 
@@ -216,7 +217,8 @@ impl StateUpdate {
 ///
 /// The entire catalog is serialized as bytes and saved in a single persist shard. We use this
 /// enum to determine what collection something in the catalog belongs to.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Arbitrary)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub enum StateUpdateKind {
     AuditLog(proto::AuditLogKey, ()),
     Cluster(proto::ClusterKey, proto::ClusterValue),

@@ -45,6 +45,7 @@ use mz_sql::catalog::{
 };
 use mz_sql::names::{CommentObjectId, DatabaseId, SchemaId};
 use mz_sql::plan::{ClusterSchedule, NetworkPolicyRule};
+#[cfg(test)]
 use proptest_derive::Arbitrary;
 
 use crate::builtin::RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL;
@@ -586,7 +587,8 @@ pub struct SourceReferences {
     pub references: Vec<SourceReference>,
 }
 
-#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq, Arbitrary)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct SourceReference {
     pub name: String,
     pub namespace: Option<String>,
@@ -1172,7 +1174,8 @@ impl Snapshot {
 ///
 /// Every time a new process takes over, the `epoch` should be incremented.
 /// Every time a new version is deployed, the `deploy` generation should be incremented.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Arbitrary)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct FenceToken {
     pub(crate) deploy_generation: u64,
     pub(crate) epoch: Epoch,
@@ -1265,12 +1268,14 @@ pub struct ClusterReplicaValue {
     pub(crate) owner_id: RoleId,
 }
 
-#[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct DatabaseKey {
     pub(crate) id: DatabaseId,
 }
 
-#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord, Arbitrary)]
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct DatabaseValue {
     pub(crate) name: String,
     pub(crate) owner_id: RoleId,
@@ -1278,23 +1283,27 @@ pub struct DatabaseValue {
     pub(crate) oid: u32,
 }
 
-#[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct SourceReferencesKey {
     pub(crate) source_id: CatalogItemId,
 }
 
-#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord, Arbitrary)]
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct SourceReferencesValue {
     pub(crate) references: Vec<SourceReference>,
     pub(crate) updated_at: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct SchemaKey {
     pub(crate) id: SchemaId,
 }
 
-#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord, Arbitrary)]
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct SchemaValue {
     pub(crate) database_id: Option<DatabaseId>,
     pub(crate) name: String,
@@ -1303,12 +1312,14 @@ pub struct SchemaValue {
     pub(crate) oid: u32,
 }
 
-#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash, Debug, Arbitrary)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash, Debug)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct ItemKey {
     pub(crate) id: CatalogItemId,
 }
 
-#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord, Arbitrary)]
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct ItemValue {
     pub(crate) schema_id: SchemaId,
     pub(crate) name: String,
@@ -1363,7 +1374,8 @@ pub struct CommentKey {
     pub(crate) sub_component: Option<usize>,
 }
 
-#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord, Arbitrary)]
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct CommentValue {
     pub(crate) comment: String,
 }
