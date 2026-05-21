@@ -6121,11 +6121,67 @@ fn test_oauth_protected_resource_metadata_404_when_no_issuer() {
     );
 }
 
+/// End-to-end discovery flow: an unauthenticated MCP request returns a
+/// 401 with a `resource_metadata` URL in the Bearer challenge; fetching
+/// that URL returns a 200 with the metadata document. This is what a
+/// real OAuth-aware client does — pinning the sequence guards against
+/// any one piece being broken in a way the per-piece tests would miss.
+#[mz_ore::test]
+fn test_oauth_protected_resource_metadata_end_to_end_flow() {
+    let server = test_util::TestHarness::default()
+        .with_password_auth(Password("mz_system_password".to_string()))
+        .with_mcp_routes(true, false)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .with_system_parameter_default(
+            "oidc_issuer".to_string(),
+            "https://issuer.test.example.com".to_string(),
+        )
+        .start_blocking();
+
+    let mcp_url = format!("http://{}/api/mcp/agent", server.http_local_addr());
+    let mcp_res = Client::new()
+        .post(&mcp_url)
+        .header("Content-Type", "application/json")
+        .body(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)
+        .send()
+        .unwrap();
+    assert_eq!(mcp_res.status(), StatusCode::UNAUTHORIZED);
+
+    let bearer_challenge = mcp_res
+        .headers()
+        .get_all(http::header::WWW_AUTHENTICATE)
+        .iter()
+        .map(|v| v.to_str().unwrap().to_string())
+        .find(|c| c.starts_with("Bearer "))
+        .expect("a Bearer WWW-Authenticate challenge");
+    let metadata_url = bearer_challenge
+        .split(',')
+        .find_map(|part| {
+            part.trim()
+                .strip_prefix("resource_metadata=\"")
+                .and_then(|s| s.strip_suffix('"'))
+        })
+        .expect("resource_metadata parameter in Bearer challenge");
+
+    // Follow the URL the server advertised. This is what an
+    // OAuth-aware client does: the URL is authoritative; the
+    // well-known fallback is only used when no parameter is given.
+    let discovery_res = Client::new().get(metadata_url).send().unwrap();
+    assert_eq!(discovery_res.status(), StatusCode::OK);
+    let body: serde_json::Value = discovery_res.json().unwrap();
+    assert_eq!(
+        body["authorization_servers"]
+            .as_array()
+            .and_then(|a| a.first())
+            .and_then(|v| v.as_str()),
+        Some("https://issuer.test.example.com"),
+    );
+}
+
 /// A `None`-authenticator listener (anonymous_http_user) MUST 404 even
-/// if an `oidc_issuer` is configured. Publishing a metadata document on
-/// a listener that never validates tokens would mislead OAuth-aware
-/// clients into starting a flow they cannot complete. Regression guard
-/// against widening the discovery surface to unauthenticated listeners.
+/// if an `oidc_issuer` is configured: publishing on a listener that
+/// never validates tokens would mislead clients into a flow they cannot
+/// complete.
 #[mz_ore::test]
 fn test_oauth_protected_resource_metadata_404_on_no_auth_listener() {
     let server = test_util::TestHarness::default()

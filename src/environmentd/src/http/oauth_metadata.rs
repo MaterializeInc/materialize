@@ -48,7 +48,7 @@
 //!
 //! [RFC 9728]: https://datatracker.ietf.org/doc/html/rfc9728
 
-use std::str::FromStr;
+use std::time::Duration;
 
 use axum::Extension;
 use axum::extract::Request;
@@ -62,8 +62,16 @@ use mz_server_core::listeners;
 use prometheus::IntCounterVec;
 use serde::Serialize;
 use tracing::warn;
+use url::Url;
 
 use crate::http::Delayed;
+
+/// Upper bound on how long the discovery handler waits for the adapter
+/// client to become available. The handler is unauthenticated, so a
+/// wedged adapter must not be allowed to pin connections indefinitely.
+/// Two seconds is generous for normal startup and tight enough that a
+/// real outage surfaces as 503s instead of hung clients.
+const ADAPTER_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// The well-known path served by this module.
 ///
@@ -72,7 +80,7 @@ use crate::http::Delayed;
 /// `resource_metadata` parameter is present in a 401's `WWW-Authenticate`.
 ///
 /// [RFC 9728 §3]: https://datatracker.ietf.org/doc/html/rfc9728#section-3
-pub const PROTECTED_RESOURCE_METADATA_PATH: &str = "/.well-known/oauth-protected-resource";
+pub(crate) const PROTECTED_RESOURCE_METADATA_PATH: &str = "/.well-known/oauth-protected-resource";
 
 /// Path-suffixed aliases of [`PROTECTED_RESOURCE_METADATA_PATH`] per
 /// RFC 9728 §3.1. A client that hits `/api/mcp/<endpoint>` and follows
@@ -82,9 +90,9 @@ pub const PROTECTED_RESOURCE_METADATA_PATH: &str = "/.well-known/oauth-protected
 /// MCP endpoints share an identical metadata view today, so there is
 /// nothing per-endpoint to vary. Registering the aliases keeps strict
 /// clients working without forcing them to fall back.
-pub const PROTECTED_RESOURCE_METADATA_PATH_AGENT: &str =
+pub(crate) const PROTECTED_RESOURCE_METADATA_PATH_AGENT: &str =
     "/.well-known/oauth-protected-resource/api/mcp/agent";
-pub const PROTECTED_RESOURCE_METADATA_PATH_DEVELOPER: &str =
+pub(crate) const PROTECTED_RESOURCE_METADATA_PATH_DEVELOPER: &str =
     "/.well-known/oauth-protected-resource/api/mcp/developer";
 
 /// OAuth scope advertised for the MCP endpoints.
@@ -97,7 +105,7 @@ pub const PROTECTED_RESOURCE_METADATA_PATH_DEVELOPER: &str =
 /// per-route scopes (e.g. an extra `mcp.read.system` for the developer
 /// endpoint) requires a separate scope-enforcement step in the auth
 /// middleware and is deferred until that lands.
-pub const MCP_SCOPE: &str = "mcp.read";
+pub(crate) const MCP_SCOPE: &str = "mcp.read";
 
 /// `Cache-Control` value set on the discovery response.
 ///
@@ -120,22 +128,19 @@ const METADATA_CACHE_CONTROL: &str = "private, max-age=3600";
 ///
 /// [RFC 9728 §2]: https://datatracker.ietf.org/doc/html/rfc9728#section-2
 #[derive(Debug, Serialize, PartialEq, Eq)]
-pub struct ProtectedResourceMetadata {
-    /// The canonical URL of this resource server. Clients use this as the
+pub(crate) struct ProtectedResourceMetadata {
+    /// Canonical URL of this resource server. Clients use this as the
     /// `resource` parameter in their token request (RFC 8707).
     pub resource: String,
-    /// One or more authorization servers a client may use to obtain a
-    /// token. Each entry is an issuer URL whose own metadata document
-    /// (RFC 8414 / OpenID Connect Discovery) can be fetched at
-    /// `<issuer>/.well-known/oauth-authorization-server` or
-    /// `<issuer>/.well-known/openid-configuration`.
+    /// Authorization servers a client may use to obtain a token. Each
+    /// entry is an issuer URL whose metadata document is fetchable at
+    /// `<issuer>/.well-known/oauth-authorization-server` (RFC 8414)
+    /// or `<issuer>/.well-known/openid-configuration` (OIDC Discovery).
     pub authorization_servers: Vec<String>,
     /// Mechanisms by which the client may present the bearer token.
     /// We accept the `Authorization` header only.
     pub bearer_methods_supported: Vec<String>,
-    /// Scopes a client may request a token for in order to call this
-    /// resource. We advertise a single coarse scope; see [`MCP_SCOPE`]
-    /// for the reasoning.
+    /// Scopes a client may request a token for; see [`MCP_SCOPE`].
     pub scopes_supported: Vec<String>,
 }
 
@@ -160,7 +165,7 @@ pub struct ProtectedResourceMetadata {
 ///     client is ready.
 #[derive(Debug, Clone)]
 pub struct OAuthMetadataMetrics {
-    pub requests: IntCounterVec,
+    requests: IntCounterVec,
 }
 
 impl OAuthMetadataMetrics {
@@ -186,13 +191,12 @@ impl OAuthMetadataMetrics {
 /// `http_host_name`) — the same environmentd process can serve listeners
 /// with different policies.
 #[derive(Debug, Clone)]
-pub struct DiscoveryConfig {
-    /// Externally-visible host (without scheme) for the listener. When
-    /// `Some`, this beats any header-derived value.
+pub(crate) struct DiscoveryConfig {
+    /// Externally-visible host (without scheme). When `Some`, this beats
+    /// any header-derived value.
     pub http_host_name: Option<String>,
-    /// Listener's authenticator kind. When `None`, the handler refuses to
-    /// publish a document — there is no OAuth flow on an unauthenticated
-    /// listener to advertise.
+    /// When `None`, the handler refuses to publish — there is no OAuth
+    /// flow on an unauthenticated listener to advertise.
     pub authenticator_kind: listeners::AuthenticatorKind,
 }
 
@@ -207,7 +211,7 @@ pub struct DiscoveryConfig {
 /// is not yet available (a brief window at startup), 400 if the request
 /// has no host information to construct a URL with, and 200 with the
 /// JSON document otherwise.
-pub async fn handle_protected_resource_metadata(
+pub(crate) async fn handle_protected_resource_metadata(
     Extension(adapter_client_rx): Extension<Delayed<Client>>,
     Extension(config): Extension<DiscoveryConfig>,
     Extension(metrics): Extension<OAuthMetadataMetrics>,
@@ -233,10 +237,17 @@ pub async fn handle_protected_resource_metadata(
     let scheme = scheme_for(&req);
     let resource = format!("{scheme}://{host}/api/mcp");
 
-    let Ok(adapter_client) = adapter_client_rx.clone().await else {
-        metrics.inc("adapter_unavailable");
-        return (StatusCode::SERVICE_UNAVAILABLE, "adapter not ready").into_response();
-    };
+    // The endpoint is unauthenticated, so a hung adapter must not be
+    // allowed to pin connections indefinitely. Bound the wait and
+    // surface a 503 instead.
+    let adapter_client =
+        match tokio::time::timeout(ADAPTER_WAIT_TIMEOUT, adapter_client_rx.clone()).await {
+            Ok(Ok(client)) => client,
+            Ok(Err(_)) | Err(_) => {
+                metrics.inc("adapter_unavailable");
+                return (StatusCode::SERVICE_UNAVAILABLE, "adapter not ready").into_response();
+            }
+        };
     let system_vars = adapter_client.get_system_vars().await;
     let Some(issuer) = OIDC_ISSUER.get(system_vars.dyncfgs()) else {
         // No OAuth authorization server is configured. Per RFC 9728 the
@@ -246,25 +257,14 @@ pub async fn handle_protected_resource_metadata(
         metrics.inc("no_issuer");
         return StatusCode::NOT_FOUND.into_response();
     };
-    let issuer = issuer.to_string();
-    // `oidc_issuer` is operator-supplied via a dyncfg, with no
-    // upstream syntactic validation. RFC 9728 §3 requires that
-    // `authorization_servers` entries are valid URLs; publishing
-    // garbage here would steer every connected client into an
-    // unrecoverable error during their next discovery step. Refuse
-    // to publish in that case rather than emit a malformed document.
-    if http::Uri::from_str(&issuer).is_err() {
-        warn!(
-            %issuer,
-            "oauth-protected-resource: oidc_issuer is not a valid URL; refusing to publish",
-        );
-        metrics.inc("invalid_issuer");
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "oidc_issuer is not a valid URL",
-        )
-            .into_response();
-    }
+    let issuer = match validate_issuer_url(&issuer) {
+        Ok(validated) => validated.to_string(),
+        Err(err) => {
+            warn!(%issuer, error = %err, "oauth-protected-resource: refusing to publish invalid oidc_issuer");
+            metrics.inc("invalid_issuer");
+            return (StatusCode::SERVICE_UNAVAILABLE, err).into_response();
+        }
+    };
 
     let metadata = ProtectedResourceMetadata {
         resource,
@@ -282,12 +282,48 @@ pub async fn handle_protected_resource_metadata(
     response
 }
 
+/// Validates the operator-supplied `oidc_issuer` before it is published.
+///
+/// RFC 9728 §3 requires entries in `authorization_servers` to be valid
+/// URLs; RFC 8414 §2 further requires that the issuer identifier
+/// contain no query or fragment components, since the issuer string
+/// must match the `iss` claim in tokens byte-for-byte.
+///
+/// We require:
+///
+///   * Parseable as a URL.
+///   * Scheme of `https` (or `http` for dev) — OAuth 2.1 forbids
+///     other schemes for an authorization server.
+///   * No userinfo component — operators occasionally embed
+///     credentials in URLs by mistake; this endpoint is public and
+///     must not leak them.
+///   * No query or fragment — required by RFC 8414 §2.
+///
+/// On success returns the **original** issuer string unchanged. We do
+/// not return `url.to_string()` because [`Url`] normalises some forms
+/// (notably appending a trailing slash to a bare authority) and a
+/// silently mutated issuer would no longer match the `iss` claim in
+/// tokens minted by the IdP.
+fn validate_issuer_url(issuer: &str) -> Result<&str, &'static str> {
+    let url = Url::parse(issuer).map_err(|_| "oidc_issuer is not a parseable URL")?;
+    if !matches!(url.scheme(), "https" | "http") {
+        return Err("oidc_issuer must use the https or http scheme");
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("oidc_issuer must not contain userinfo");
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err("oidc_issuer must not contain a query or fragment");
+    }
+    Ok(issuer)
+}
+
 /// Builds the absolute URL of the protected resource metadata document
 /// for use as the `resource_metadata` parameter in a `WWW-Authenticate`
 /// challenge. Returns `None` if the request lacks enough host information
 /// to construct a URL; the caller is expected to skip the Bearer challenge
 /// in that case rather than emit a malformed value.
-pub fn metadata_url(req: &Request, http_host_name: Option<&str>) -> Option<String> {
+pub(crate) fn metadata_url(req: &Request, http_host_name: Option<&str>) -> Option<String> {
     let host = resolve_host(req, http_host_name)?;
     let scheme = scheme_for(req);
     Some(format!(
@@ -570,9 +606,9 @@ mod tests {
         assert_eq!(MCP_SCOPE, "mcp.read");
     }
 
-    /// The metric registers cleanly with the expected name. Mirrors the
-    /// `McpMetrics` pattern: counter families only appear in `gather()`
-    /// after a label combination is observed, so we touch each once.
+    /// Mirrors the `McpMetrics` pattern: counter families only appear
+    /// in `gather()` after a label combination is observed, so each
+    /// status value is touched once before gathering.
     #[mz_ore::test]
     fn test_metric_registers() {
         let registry = MetricsRegistry::new();
@@ -598,5 +634,63 @@ mod tests {
                 .any(|n| n == "mz_oauth_protected_resource_metadata_requests_total"),
             "metric should be registered, got: {names:?}",
         );
+    }
+
+    /// IPv6 hosts are valid `Authority` syntax (`[::1]:8080`) and must
+    /// round-trip cleanly. A regression here silently breaks IPv6-only
+    /// deployments.
+    #[mz_ore::test]
+    fn test_resolve_host_accepts_ipv6_literal() {
+        for host in ["[::1]", "[::1]:8080", "[2001:db8::1]:443"] {
+            let req = req_with_host(host);
+            assert_eq!(
+                resolve_host(&req, None).as_deref(),
+                Some(host),
+                "IPv6 literal must round-trip through Authority: {host:?}",
+            );
+        }
+    }
+
+    /// `validate_issuer_url` accepts well-formed issuer URLs and
+    /// returns the **original** string unchanged. Normalisation would
+    /// break the byte-for-byte match against the `iss` token claim.
+    #[mz_ore::test]
+    fn test_validate_issuer_url_accepts_well_formed() {
+        for issuer in [
+            "https://issuer.example.com",
+            "https://issuer.example.com/realms/main",
+            "http://localhost:8080",
+        ] {
+            assert_eq!(
+                validate_issuer_url(issuer),
+                Ok(issuer),
+                "expected {issuer:?} to pass validation",
+            );
+        }
+    }
+
+    /// Rejects values that would surface as a confusing client error
+    /// downstream or that would leak embedded secrets in a public
+    /// document.
+    #[mz_ore::test]
+    fn test_validate_issuer_url_rejects_invalid() {
+        // Format: (issuer, expected substring of the error reason).
+        let cases: &[(&str, &str)] = &[
+            ("not a url", "parseable"),
+            ("issuer.example.com", "parseable"),
+            ("ftp://issuer.example.com", "scheme"),
+            ("https://user:pass@issuer.example.com", "userinfo"),
+            ("https://user@issuer.example.com", "userinfo"),
+            ("https://issuer.example.com?foo=bar", "query"),
+            ("https://issuer.example.com#frag", "query"),
+        ];
+        for (issuer, expected_substr) in cases {
+            let err = validate_issuer_url(issuer)
+                .expect_err(&format!("expected {issuer:?} to be rejected as invalid",));
+            assert!(
+                err.contains(expected_substr),
+                "for {issuer:?}, expected reason to contain {expected_substr:?}, got {err:?}",
+            );
+        }
     }
 }

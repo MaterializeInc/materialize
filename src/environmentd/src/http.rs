@@ -128,7 +128,7 @@ mod memory;
 mod metrics;
 mod metrics_public;
 mod metrics_viz;
-pub mod oauth_metadata;
+pub(crate) mod oauth_metadata;
 mod probe;
 mod prometheus;
 mod root;
