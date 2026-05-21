@@ -48,7 +48,10 @@ fn cast_string_to_bool<'a>(a: &'a str) -> Result<bool, EvalError> {
 
 #[sqlfunc(
     sqlname = "text_to_\"char\"",
-    preserves_uniqueness = true,
+    // Not injective: only the first byte is kept (e.g. 'a' and 'abc' both
+    // collapse to 'a'::"char"), so inverse-cast canonicalization of
+    // `c::text = lit` would silently change results.
+    preserves_uniqueness = false,
     inverse = to_unary!(super::CastPgLegacyCharToString)
 )]
 fn cast_string_to_pg_legacy_char<'a>(a: &'a str) -> PgLegacyChar {
@@ -62,7 +65,12 @@ fn cast_string_to_pg_legacy_name<'a>(a: &'a str) -> PgLegacyName<String> {
 
 #[sqlfunc(
     sqlname = "text_to_bytea",
-    preserves_uniqueness = true,
+    // Not injective: `parse_bytes` accepts both hex (`\x..`) and the
+    // traditional textual encoding for the same bytes, so distinct text
+    // literals can map to the same bytea. Inverse-cast canonicalization of
+    // `b::text = lit` would otherwise rewrite to a comparison that ignores
+    // the actual textual form.
+    preserves_uniqueness = false,
     inverse = to_unary!(super::CastBytesToString)
 )]
 fn cast_string_to_bytes<'a>(a: &'a str) -> Result<Vec<u8>, EvalError> {
