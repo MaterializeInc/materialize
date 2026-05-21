@@ -412,14 +412,6 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
 
     stuck: set[str] = set()
     # TODO(def-): Remove me when Hetzner fixes its aarch64 availability
-    stuck.update(
-        [
-            "hetzner-aarch64-16cpu-32gb",
-            "hetzner-aarch64-8cpu-16gb",
-            "hetzner-aarch64-4cpu-8gb",
-            "hetzner-aarch64-2cpu-4gb",
-        ]
-    )
 
     if ui.env_is_truthy("CI_FORCE_SWITCH_TO_AWS", "0"):
         stuck = set(
