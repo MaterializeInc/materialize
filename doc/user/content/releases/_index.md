@@ -15,6 +15,50 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.25.0
+*Released to Materialize Cloud: 2026-05-21* <br>
+*Released to Materialize Self-Managed: 2026-05-22* <br>
+
+This release includes a new external metrics endpoint for Self-Managed
+deployments, improvements, and bug fixes.
+
+### Features {#v26.25-features}
+
+- **External metrics endpoint**: Self-Managed environments now include a
+  federated Prometheus metrics endpoint that proxies metrics from all processes
+  through `environmentd`, enriching each time series with object, cluster, and
+  replica name labels.
+
+### Improvements {#v26.25-improvements}
+
+- **Source versioning enabled by default**: `CREATE TABLE FROM SOURCE` is now
+  enabled by default for Self-Managed deployments, removing the need to
+  manually set a feature flag.
+
+### Bug Fixes {#v26.25-bug-fixes}
+
+- Fixed dependents of replica-targeted materialized views being left in an
+  inconsistent state when the target replica is dropped, causing subsequent
+  queries against those dependents to fail.
+- Fixed `ALTER CLUSTER ... SET (SIZE, WORKLOAD CLASS) WITH (WAIT FOR ...)`
+  silently dropping the workload class change during zero-downtime
+  reconfiguration.
+- Fixed `CREATE TABLE FROM SOURCE` retaining the old source name in the stored
+  definition after the source is renamed.
+- Fixed `ALTER CONNECTION IF EXISTS` notice reporting the wrong object type.
+- Fixed ambiguous column names being silently accepted in sink `KEY` clauses
+  instead of returning an error.
+- Fixed a panic during query optimization when `EXPECTED GROUP SIZE` is set
+  to `0`.
+- Fixed real-time recency timeout and dropped-object errors returning generic
+  error messages instead of the correct SQL error codes and descriptions.
+- Fixed Kafka sources hanging indefinitely when the start offset no longer
+  exists due to topic retention or compaction.
+- Fixed `EXPLAIN` plans omitting join projections, making some join closures
+  appear as identity when they were not.
+- Fixed Self-Managed replica scheduling when `availability_zones` is set,
+  where `minDomains` could leave additional replicas stuck in a pending state.
+
 ## v26.24.3
 *Released to Materialize Self-Managed: 2026-05-20* <br>
 
