@@ -90,7 +90,8 @@ class SaslAuth(Check):
 
 class AlterRoleCatalogCheck(Check):
     def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.147.0-dev")
+        # validate() queries mz_internal.mz_catalog_raw, which was introduced in v26.16.0.
+        return self.base_version >= MzVersion.parse_mz("v26.16.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive("> CREATE ROLE user_alter1 WITH LOGIN PASSWORD 'password';")
