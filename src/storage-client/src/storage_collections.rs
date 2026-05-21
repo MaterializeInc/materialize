@@ -545,6 +545,8 @@ impl StorageCollectionsImpl {
             txns_handle: Some(txns_write),
             txns_shards: Default::default(),
             txns_upper: Arc::clone(&txns_upper),
+            txns_upper_advances: metrics.txns_upper_advances.clone(),
+            txns_since_sweeps: metrics.txns_since_sweeps.clone(),
         };
 
         let background_task =
@@ -2751,6 +2753,11 @@ struct BackgroundTask {
     /// upper of the txns shard. See the doc comment on the parent field for
     /// rationale.
     txns_upper: Arc<std::sync::RwLock<Antichain<Timestamp>>>,
+    /// Counter incremented on each observed advance of the txns shard upper.
+    txns_upper_advances: prometheus::Counter,
+    /// Counter incremented on each periodic since-downgrade sweep over
+    /// txns-backed collections.
+    txns_since_sweeps: prometheus::Counter,
 }
 
 #[derive(Debug)]
@@ -2853,6 +2860,7 @@ impl BackgroundTask {
                     // branch is now handled by the periodic
                     // `txns_since_downgrade_interval` arm below.
                     *self.txns_upper.write().expect("lock poisoned") = upper.clone();
+                    self.txns_upper_advances.inc();
 
                     let fut = gen_upper_future(id, handle, upper);
                     txns_upper_future = fut.boxed();
@@ -2873,6 +2881,7 @@ impl BackgroundTask {
                             .collect();
                         self.update_write_frontiers(&uppers).await;
                     }
+                    self.txns_since_sweeps.inc();
                 }
                 Some((id, handle, upper)) = upper_futures.next() => {
                     if id.is_user() {
@@ -3581,6 +3590,16 @@ mod tests {
                 txns_handle: None,
                 txns_shards: BTreeSet::new(),
                 txns_upper: Arc::new(std::sync::RwLock::new(Antichain::new())),
+                txns_upper_advances: prometheus::Counter::new(
+                    "txns_upper_advances",
+                    "dummy counter for tests",
+                )
+                .unwrap(),
+                txns_since_sweeps: prometheus::Counter::new(
+                    "txns_since_sweeps",
+                    "dummy counter for tests",
+                )
+                .unwrap(),
             };
 
             (cmds_tx, task)

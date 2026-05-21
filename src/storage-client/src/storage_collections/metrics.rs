@@ -27,6 +27,15 @@ pub struct StorageCollectionsMetrics {
     pub finalization_failed: Counter,
     pub create_collections_phase_seconds: HistogramVec,
     pub prepare_state_phase_seconds: HistogramVec,
+    /// Number of observed advances of the txns shard upper. Incremented once
+    /// each time the `BackgroundTask` learns of a new txns upper. Useful for
+    /// telling apart "txns shard genuinely commits at rate X" from
+    /// "BackgroundTask is doing O(N) work at rate X for some other reason".
+    pub txns_upper_advances: Counter,
+    /// Number of times the periodic since-downgrade sweep for txns-backed
+    /// collections has run. Compare with `txns_upper_advances` to see how
+    /// much fanout work is being coalesced by the sweep.
+    pub txns_since_sweeps: Counter,
 }
 
 impl StorageCollectionsMetrics {
@@ -65,6 +74,16 @@ impl StorageCollectionsMetrics {
                        StorageCollections::prepare_state call.",
                 var_labels: ["phase"],
                 buckets: histogram_seconds_buckets(0.000_01, 32.0),
+            )),
+            txns_upper_advances: registry.register(metric!(
+                name: "mz_storage_collections_txns_upper_advances_total",
+                help: "Count of observed advances of the txns shard upper, as \
+                       observed by the StorageCollections BackgroundTask.",
+            )),
+            txns_since_sweeps: registry.register(metric!(
+                name: "mz_storage_collections_txns_since_sweeps_total",
+                help: "Count of periodic since-downgrade sweeps over txns-backed \
+                       collections performed by the StorageCollections BackgroundTask.",
             )),
         }
     }
