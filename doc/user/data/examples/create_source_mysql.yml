@@ -46,6 +46,18 @@
      the [connection to MySQL](/sql/create-connection/#mysql), you can create
      the source. In this example, assume the connection you created is named
      `mysql_connection`.
+  test_setup: |
+    $ mysql-connect name=mysql url=mysql://root@mysql password=p@ssw0rd
+    $ mysql-execute name=mysql
+    DROP DATABASE IF EXISTS mydb;
+    CREATE DATABASE mydb;
+    USE mydb;
+    CREATE TABLE items (a INT);
+    CREATE TABLE orders (a INT);
+
+    > CREATE SECRET mysqlpass AS 'p@ssw0rd'
+    > CREATE CONNECTION mysql_connection TO MYSQL (HOST mysql, USER root, PASSWORD SECRET mysqlpass)
+
   code: |
      CREATE SOURCE mysql_source
      FROM MYSQL CONNECTION mysql_connection;
