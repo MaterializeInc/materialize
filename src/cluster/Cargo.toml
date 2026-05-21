@@ -15,6 +15,7 @@ async-trait.workspace = true
 differential-dataflow.workspace = true
 futures.workspace = true
 lgalloc.workspace = true
+lgalloc_07.workspace = true
 mz-cluster-client = { path = "../cluster-client" }
 mz-ore = { path = "../ore", features = ["async", "process", "tracing"] }
 mz-service = { path = "../service" }
