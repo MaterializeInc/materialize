@@ -16,7 +16,10 @@ import LoadingScreen from "~/components/LoadingScreen";
 import { type SelfManagedAppConfig } from "~/config/AppConfig";
 import { useAppConfig } from "~/config/useAppConfig";
 import { useIsAuthenticated } from "~/external-library-wrappers/frontegg";
-import { hasAuthParams, useAuth } from "~/external-library-wrappers/oidc";
+import {
+  hasAuthParams,
+  useOidcManagerQuery,
+} from "~/external-library-wrappers/oidc";
 import { AUTH_ROUTES } from "~/fronteggRoutes";
 import { AuthenticatedRoutes } from "~/platform/AuthenticatedRoutes";
 import { SentryRoutes } from "~/sentry";
@@ -25,14 +28,14 @@ import { Login } from "./auth/Login";
 import { OidcCallback } from "./auth/OidcCallback";
 
 const OidcAuthGuard = ({ children }: React.PropsWithChildren) => {
-  const auth = useAuth();
+  const { isLoading, data: auth } = useOidcManagerQuery();
 
   // OIDC initialization failed — `OidcProviderWrapper` rendered us without
   // an `AuthProvider` so password sign-in still works. Skip the OIDC checks
   // and let the user reach the app via their password session cookie.
   if (!auth) return <>{children}</>;
 
-  if (auth.isLoading || hasAuthParams()) {
+  if (isLoading || hasAuthParams()) {
     return <LoadingScreen />;
   }
 

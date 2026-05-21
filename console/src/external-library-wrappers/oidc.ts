@@ -11,9 +11,20 @@
 /**
  * This file is a facade for the react-oidc-context / oidc-client-ts libraries.
  */
-export { AuthProvider, hasAuthParams, useAuth } from "react-oidc-context";
+export {
+  type AuthContextProps,
+  AuthProvider,
+  hasAuthParams,
+  // We should not use this hook directly because it requires AuthProvider to be mounted,
+  // which it only is when OIDC is available. Instead, use AppConfigSwitch.
+  useAuth,
+} from "react-oidc-context";
 
+import { useQuery } from "@tanstack/react-query";
 import { UserManager, WebStorageStateStore } from "oidc-client-ts";
+
+import { apiClient } from "~/api/apiClient";
+import { useAppConfig } from "~/config/useAppConfig";
 
 export interface OidcConfig {
   issuer: string;
@@ -36,7 +47,7 @@ async function fetchOidcConfig(): Promise<OidcConfig> {
 
   if (!data.console_oidc_client_id) {
     throw new Error(
-      "OIDC client ID is required but was empty. Configure the console_oidc_client_id system parameter: https://materialize.com/docs/self-managed-deployments/configuration-system-parameters/",
+      "To use SSO, OIDC client ID must be set. Configure the console_oidc_client_id system parameter: https://materialize.com/docs/self-managed-deployments/configuration-system-parameters/",
     );
   }
   if (
@@ -44,7 +55,7 @@ async function fetchOidcConfig(): Promise<OidcConfig> {
     !data.console_oidc_scopes.includes("openid")
   ) {
     throw new Error(
-      "OIDC scopes must include at least 'openid'. Configure the console_oidc_scopes system parameter: https://materialize.com/docs/self-managed-deployments/configuration-system-parameters/",
+      "To use SSO, OIDC scopes must include at least 'openid'. Configure the console_oidc_scopes system parameter: https://materialize.com/docs/self-managed-deployments/configuration-system-parameters/",
     );
   }
 
@@ -119,3 +130,31 @@ export class MzOidcUserManager {
     return new MzOidcUserManager(config);
   }
 }
+
+/**
+ * Resolves the OIDC manager once initialization completes. Returns `null`
+ * when not in OIDC mode or when init fails — callers should treat the
+ * absence of a manager as "OIDC unavailable, fall back to password sign-in"
+ */
+export const useOidcManagerQuery = () => {
+  const appConfig = useAppConfig();
+  const isOidc =
+    appConfig.mode === "self-managed" && appConfig.authMode === "Oidc";
+
+  return useQuery({
+    queryKey: ["oidc-manager"],
+    queryFn: () => {
+      if (
+        apiClient.type !== "self-managed" ||
+        !apiClient.oidcManagerInitializationPromise
+      ) {
+        return null;
+      }
+      return apiClient.oidcManagerInitializationPromise;
+    },
+    enabled: isOidc,
+    staleTime: Infinity,
+    retry: false,
+    retryOnMount: false, // Do not retry on mount, otherwise we will retry indefinitely
+  });
+};
