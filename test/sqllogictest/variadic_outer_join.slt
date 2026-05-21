@@ -192,3 +192,9 @@ FROM (a LEFT JOIN b ON b.x = b.y) LEFT JOIN c ON b.k = c.k
 1  5  5  100  100
 
 # 1  NULL  NULL  NULL  NULL
+
+query IIII rowsort
+SELECT a.k, b.k, b.x, c.k
+FROM (a LEFT JOIN b ON a.k = b.k AND b.x = b.y) LEFT JOIN c ON a.k = c.k
+----
+1  NULL  NULL  NULL
