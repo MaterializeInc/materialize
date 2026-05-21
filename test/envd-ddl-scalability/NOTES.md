@@ -4369,3 +4369,225 @@ the one-line cfg.rs default bump used to verify the pool
 hypothesis (we did, the rebuild is back to `max_size = 50`). No
 state needs to be retained between iterations beyond
 `metrics_phase19/` and `results_phase19/`.
+
+## Phase 20 — pool bump confirmation sweep
+
+Phase 19 measured a single point (N=10k, steady state) and
+concluded that
+`persist_consensus_connection_pool_max_size = 500` would flatten
+the +0.61 ms/+1k "CRDB-side" half of the create-slope. Phase 20
+re-runs the full phase-17 sweep (N=10k → 25k, 30 warmup + 500
+measure reps per scale, single envd run, ascending pad) with the
+pool default bumped to 500 in `src/persist-client/src/cfg.rs:389`
+and a fresh `--profile=optimized` rebuild. Artefacts:
+`results_phase20_crdb/`, `metrics_phase20_crdb/`.
+
+### Bench: N=10k → N=25k, pool=500
+
+| N     | create_p50 ms | 95% CI            | drop_p50 ms | 95% CI            |
+|------:|--------------:|------------------:|------------:|------------------:|
+| 10000 |         47.53 |    [47.11, 47.96] |       33.25 |    [32.87, 33.59] |
+| 15000 |         50.69 |    [50.02, 51.32] |       35.94 |    [35.48, 36.73] |
+| 20000 |         58.11 |    [57.44, 58.88] |       42.91 |    [42.16, 43.75] |
+| 25000 |         69.85 |    [68.38, 71.84] |       50.69 |    [49.62, 51.94] |
+
+Least-squares slopes over the four medians:
+
+- `create_p50` slope: **+1.487 ms / +1k tables [95% CI +1.391, +1.624]**
+- `drop_p50`   slope: **+1.185 ms / +1k tables [95% CI +1.117, +1.257]**
+
+Compared to phase 17 (pool=50):
+
+| metric | phase17 slope | phase20 slope | Δ slope |
+|---|---|---|---:|
+| create_p50 | +1.296 [1.187, 1.434] | +1.487 [1.391, 1.624] | +0.19 |
+| drop_p50   | +1.108 [1.028, 1.194] | +1.185 [1.117, 1.257] | +0.08 |
+
+The create_p50 slope confidence intervals do **not overlap**:
+phase 20 is statistically steeper than phase 17. The level shifted
+*down* at low/mid N (10k: 50.91→47.53, 15k: 52.46→50.69, 20k:
+58.84→58.11) and *up* at N=25k (70.39→69.85 is a wash, within CI).
+The pool bump made N=10k–N=20k faster and **did not improve N=25k
+at all** — it just made the slope steeper between them.
+
+### Did the pool bump take effect?
+
+Yes, unambiguously:
+
+- `mz_persist_postgres_connpool_size` reaches **500** at every
+  snapshot from N=15k onward (it's at 500 by `before_N10000` too,
+  i.e. post-warmup).
+- Mean per-call `connpool_acquire` at N=10k dropped from **14.2 ms
+  (pool=50, phase17)** to **2.4 ms (pool=500, phase20)**, an 5.9×
+  improvement that matches phase 19's steady-state microbench
+  ("16 → 2 ms per CAS").
+- At N=25k, mean per-call acquire dropped from **96.7 ms** to
+  **65.2 ms** (1.5× improvement). The pool is **still saturating**
+  at the high end, just less catastrophically.
+
+So the dyncfg-init-order worry from phase 19 was unfounded once we
+patched the default and rebuilt — the pool registers at the new
+size from process start. But pool=500 is *not* a sufficient
+ceiling at N=25k.
+
+### Where the residual slope lives (per-call mean, measure window)
+
+Diffing `measure_start_N{N}.prom` against `after_N{N}.prom` from
+`metrics_phase20_crdb/`:
+
+| metric | N=10k | N=15k | N=20k | N=25k | slope ms/+1k |
+|---|---:|---:|---:|---:|---:|
+| `consensus_cas` user_data    |  25.31 |  53.85 | 110.11 | 133.07 | **+7.59** |
+| `connpool_acquire` (overall) |   2.40 |  15.66 |  52.50 |  65.18 | **+4.50** |
+| `consensus_truncate` catalog |  30.69 |  24.88 |  57.85 |  84.63 | +3.90 |
+| `open_data_handles_concurrent` |  15.55 |  14.89 |  18.77 |  22.85 | +0.52 |
+| `transact_inner`             |   1.61 |   2.65 |   3.82 |   5.11 | +0.23 |
+| `prepare_state`              |   0.28 |   1.01 |   1.86 |   2.78 | +0.17 |
+| `consensus_scan` txns        |   1.67 |   3.25 |   1.69 |   3.98 | +0.11 |
+| `consensus_cas` catalog      |   1.89 |   2.17 |   2.58 |   2.99 | +0.07 |
+| `tx_commit`                  |   2.83 |   2.85 |   3.72 |   3.68 | +0.07 |
+| `consensus_cas` txns         |   1.80 |   1.91 |   2.04 |   2.80 | +0.06 |
+
+`consensus_cas` on `user_data` is still by far the dominant
+per-call slope owner. But its breakdown changed:
+
+| N | cas user_data | pool_acquire | non-pool (cas − acquire) |
+|---:|---:|---:|---:|
+| 10k phase17 (pool=50)  | 21.0 | 14.2 | 6.8 |
+| 10k phase20 (pool=500) | 25.3 |  2.4 | **22.9** |
+| 25k phase17 (pool=50)  | 112.7 | 96.7 | 16.0 |
+| 25k phase20 (pool=500) | 133.1 | 65.2 | **67.9** |
+
+The pool went from owning 91 % of CAS at N=25k to owning 49 %.
+The **non-pool portion of CAS** — i.e. the round trip and CRDB
+work that sits behind the pool — **grew 3–4× when we lifted the
+pool throttle**. At N=25k phase17 left only 16 ms outside the
+pool; phase20 has 68 ms outside the pool. Total CAS got 18 % worse
+at N=25k.
+
+This is the cleanest explanation for why DDL p50 didn't improve at
+N=25k: pool=50 was acting as a *throttle* that limited the
+concurrency hitting CRDB. Lifting it shifted the queue to whatever
+sits behind the pool (CRDB connection slot count, CRDB SQL CPU,
+`tokio_postgres` task scheduling, or — most likely — the same
+finite CRDB-side concurrency for `consensus` writes that phase 19
+measured at 2 ms per CAS *in isolation* but did not exercise under
+~1.6 k CAS/sec concurrent load).
+
+Phase 19's microbench was a steady-state, low-concurrency probe
+("user_data CAS mean dropped 16 → 2 ms" measured after the DDL
+burst had finished). It captured the *idle* per-CAS latency at
+pool=500; it does not generalize to the actual DDL-burst regime
+where 25k user_data shards' background tasks are all hitting the
+pool at once.
+
+### Decision: do not ship the default bump
+
+The mandate's first criterion was "if `connpool_acquire` is now
+flat with N, ship the bump even if the slope isn't flatter." It is
+**not** flat: acquire mean grows 2.4 → 65 ms across the sweep.
+The DDL-level evidence:
+
+- N=10k–20k creates are 3–10 ms faster (the level win is real).
+- N=25k creates are unchanged (69.85 vs 70.39, within CI).
+- N=25k slope is statistically steeper (+1.49 vs +1.30, CIs
+  non-overlapping).
+- Total CAS at N=25k is 18 % *worse* under pool=500 because the
+  non-pool component grows 4×.
+
+Net for a real workload (which is N-dependent), pool=500 is a wash
+at the high end and a modest improvement in the middle. It is not
+unambiguously safe to ship as the new default: customers running
+DDL bursts on populated environments (the case we actually care
+about) wouldn't see a clear win, and the unmasked downstream
+contention is unquantified. We **defer** the default bump and
+**revert** the cfg.rs change.
+
+### What this changes vs phase 19's conclusion
+
+Phase 19's headline was "the pool is the bottleneck; bumping it
+gives an 8× CAS speedup." Both halves of that are narrower than
+phase 19 wrote them:
+
+- The pool *is* a bottleneck at high N — confirmed: bumping it
+  from 50 → 500 cut acquire mean from 97 → 65 ms at N=25k.
+- But the **8× speedup was measured on idle steady-state CAS at
+  N=10k**, not on the DDL hot path under concurrent burst load.
+  Under DDL burst, the same change moves the queue to a different
+  bottleneck behind the pool, and the user-visible CAS mean
+  *worsens* by 18 % at N=25k.
+
+The slope-attribution split phase 19 reported ("~47 %
+client-side, in the persist CRDB connection pool") was correct
+about *where* the slope lives at pool=50 but wrong about whether
+removing the pool throttle removes the slope. It doesn't — the
+slope is split across the pool and whatever sits behind it, and
+relaxing one reveals the other.
+
+The phase 19 NOTE that the on-path catalog/txns CAS aren't pool
+bound *is* corroborated: in phase 20, `cas catalog` stays
+1.9–3.0 ms and `cas txns` stays 1.8–2.8 ms across the entire
+sweep. Those calls do not feel the pool size at all because they
+go through different pool instances or are not pool-contended.
+
+### Bigger picture
+
+Across iterations 14–20 the DDL slope at N=5k → N=25k has been
+attributed to multiple roughly-equal contributors, each owning a
+fraction of the +1.3 ms/+1k create-slope:
+
+| phase | finding | landed |
+|---|---|---|
+| 15 | per-DDL O(N) txns-upper fanout in `BackgroundTask` | fix shipped (chunked + shared upper) |
+| 18 | bogo backend: client-side `transact_inner` / `prepare_state` growth (+0.23 + +0.16 ms/+1k) | identified, deferred |
+| 19 | persist CRDB connection-pool saturation | identified |
+| 20 | phase-19's fix made the slope worse; the bottleneck-behind-the-pool is the new top contributor | deferred |
+
+The marginal return is decreasing. Phase 15 erased a +0.6 ms/+1k
+contributor. Phase 18's transact_inner/prepare_state would buy us
++0.4 ms/+1k (combined) if fixed. Phase 19/20's pool / behind-pool
+contributors are entangled and need a coordinated change (pool +
+CRDB-side capacity, or batching to reduce the CAS rate). No
+single big-bang fix remains.
+
+### Suggested next iteration
+
+The pool slope at pool=500 is +4.50 ms/+1k call. Don't spend
+another iteration on it as a single knob — increase the pool
+further and the slope just shifts to behind-pool. The cleaner
+question is **why is the per-CAS rate so high in the first place**:
+phase 17 measured ~176 user_data CAS per CREATE+DROP rep. Most of
+that is background compaction/heartbeat traffic on the existing
+N shards, not DDL-driven. If a future iteration wants to flatten
+the slope at the persist layer, the highest-leverage change is
+reducing the per-shard background CAS rate (e.g. coalescing
+heartbeat ticks across shards, raising
+`persist_consensus_connection_pool_max_age`, batching compaction
+state writes) so the foreground DDL CAS doesn't queue.
+
+Alternatively, pivot to the bogo-visible contributors
+(`transact_inner` + `prepare_state`, +0.4 ms/+1k combined): those
+are visible without CRDB in the picture and are clean targets in
+code we own.
+
+### Methodology artefacts
+
+- `bench_phase20.py` (in `/home/ubuntu/envd-ddl-investigation/`):
+  same 30 warmup + 500 measure harness as phase 17, single envd
+  run, ascending pad, before/measure_start/after metrics snapshots
+  at every scale.
+- `analyze_phase20.py`: per-scale median + 95 % bootstrap CI on
+  the measure window, least-squares slope ms/+1k with bootstrap
+  CI, and the per-call attribution table reproduced above.
+- `compare_phase17_phase20.py`: side-by-side per-call attribution
+  for the two pool sizes. (Slow on 100 MB+ prom files; use
+  `analyze_phase20.py` for the headline numbers.)
+- `metrics_phase20_crdb/`: before/measure_start/after snapshots
+  per scale; `results_phase20_crdb/timings_N{N}.csv`: per-rep
+  create/drop latencies (filter `phase=="measure"`).
+
+### Teardown
+
+Revert the cfg.rs default bump (back to `max_size = 50`); pkill
+envd + clusterd. The phase 20 build was a one-line patch over
+phase 17's code; no source change ships in this iteration.
