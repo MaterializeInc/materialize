@@ -1389,7 +1389,7 @@ mod tests {
 
         fn run(actions: Vec<(Action, bool)>, metrics: &Metrics) {
             let version = Version::new(0, 100, 0);
-            let writer_key = WriterKey::Version(version.to_string());
+            let writer_key = WriterKey::BaseTierVersion(version.to_string());
             let id = ShardId::new();
             let hostname = "computer";
             let typed: TypedState<String, (), u64, i64> =

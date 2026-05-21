@@ -137,6 +137,9 @@ pub struct PersistConfig {
     /// Number of worker threads to create for the [`crate::IsolatedRuntime`], defaults to the
     /// number of threads.
     pub isolated_runtime_worker_threads: usize,
+    /// Whether a fast-tier blob is configured. When true, latency-sensitive
+    /// writes are routed to the fast-tier blob.
+    pub has_fast_tier_blob: bool,
 }
 
 // Impl Deref to ConfigSet for convenience of accessing the dynamic configs.
@@ -178,6 +181,7 @@ impl PersistConfig {
             writer_lease_duration: 60 * Duration::from_secs(60),
             critical_downgrade_interval: Duration::from_secs(30),
             isolated_runtime_worker_threads: num_cpus::get(),
+            has_fast_tier_blob: false,
             // TODO: This doesn't work with the process orchestrator. Instead,
             // separate --log-prefix into --service-name and --enable-log-prefix
             // options, where the first is always provided and the second is
@@ -287,6 +291,7 @@ pub(crate) const MiB: usize = 1024 * 1024;
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     mz_persist::cfg::all_dyn_configs(configs)
         .add(&crate::batch::BATCH_DELETE_ENABLED)
+        .add(&crate::batch::FAST_TIER_WRITES_ENABLED)
         .add(&crate::batch::BLOB_TARGET_SIZE)
         .add(&crate::batch::INLINE_WRITES_TOTAL_MAX_BYTES)
         .add(&crate::batch::INLINE_WRITES_SINGLE_MAX_BYTES)

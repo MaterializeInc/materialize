@@ -858,6 +858,7 @@ impl Listeners {
                             .parse()
                             .expect("invalid blob URI"),
                         consensus_uri,
+                        fast_tier_blob_uri: None,
                     },
                     persist_clients,
                     now: config.now.clone(),
