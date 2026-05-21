@@ -79,11 +79,8 @@
     To ingest columns that contain zero values, use [`TEXT
     COLUMNS`](/sql/create-source/mysql/#handling-unsupported-types) to
     decode the affected columns as `text`. The zero values for `date`,
-    `datetime`, and `timestamp` are preserved verbatim as strings (e.g.
-    `"0000-00-00 00:00:00"`).
-
-    NOTE: The zero value for `year` surfaces as the string `"0"` rather than
-    `"0000"`.
+    `datetime`, `timestamp`, and `year` are preserved verbatim as strings
+    (e.g. `"0000-00-00 00:00:00"`, `"0000"`).
 
 - name: mysql-truncation-restriction
   content: |
