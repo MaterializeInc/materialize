@@ -27,6 +27,7 @@ import {
 import McpConnectInstructions from "~/components/McpConnectInstructions";
 import { Modal } from "~/components/Modal";
 import { type AuthContextProps } from "~/external-library-wrappers/oidc";
+import { useSelfManagedProfile } from "~/hooks/useSelfManagedProfile";
 import ConnectionIcon from "~/svg/ConnectionIcon";
 import { MaterializeTheme } from "~/theme";
 import { obfuscateSecret } from "~/utils/format";
@@ -44,6 +45,9 @@ const OidcConnectModal = ({
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
   const idToken = auth.user?.id_token;
+
+  const { sqlRole } = useSelfManagedProfile(auth);
+  const userStr = sqlRole ?? OIDC_USERNAME_PLACEHOLDER;
 
   const obfuscated = idToken ? obfuscateSecret(idToken) : "";
 
@@ -70,9 +74,8 @@ const OidcConnectModal = ({
           {idToken ? (
             <VStack alignItems="stretch" spacing={6} mt="4">
               <ConnectInstructions
-                userStr={OIDC_USERNAME_PLACEHOLDER}
+                userStr={userStr}
                 environmentdAddress={defaultSqlAddress}
-                psqlQueryParams="options=--oidc_auth_enabled%3Dtrue"
               />
               <VStack alignItems="stretch" spacing={2}>
                 <Text textStyle="heading-xs">ID Token</Text>
@@ -98,11 +101,7 @@ const OidcConnectModal = ({
                 tabs={[
                   {
                     title: "MCP Server",
-                    children: (
-                      <McpConnectInstructions
-                        userStr={OIDC_USERNAME_PLACEHOLDER}
-                      />
-                    ),
+                    children: <McpConnectInstructions userStr={userStr} />,
                     icon: <ConnectionIcon w="4" h="4" />,
                   },
                 ]}
