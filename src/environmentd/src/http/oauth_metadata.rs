@@ -20,26 +20,45 @@
 //! (see [`crate::http::AuthError`]), or by probing the well-known URI
 //! directly.
 //!
-//! The `authorization_servers` field is populated from the `oidc_issuer`
-//! dyncfg, which doubles as the issuer that
-//! [`mz_authenticator::GenericOidcAuthenticator`] already trusts for token
-//! validation. Pointing clients at the same issuer we validate against
-//! avoids the failure mode where the metadata document advertises an AS
-//! whose tokens we then reject. If `oidc_issuer` is unset, the endpoint
-//! returns 404 — the server is honest that no OAuth flow is available.
+//! ## Host derivation
+//!
+//! The `resource` field and the `resource_metadata` URL embedded in the
+//! 401 challenge are both absolute URLs and therefore depend on knowing
+//! the externally-visible host of this environment. We resolve that in
+//! this order:
+//!
+//!   1. `HttpConfig::http_host_name` (set by the operator).
+//!   2. The request's `Host` header.
+//!
+//! We deliberately do **not** consult `X-Forwarded-Host` or
+//! `X-Forwarded-Proto`: environmentd has no proxy-trust configuration
+//! today, and trusting those headers blind would let any client reaching
+//! the server directly poison the published metadata URLs (a host-header
+//! injection on the OAuth flow). Deployments behind a load balancer that
+//! rewrites `Host` are expected to set `http_host_name` explicitly.
+//!
+//! ## When the document is published
+//!
+//! The handler returns 404 when no OAuth flow is meaningful for the
+//! listener — either because `oidc_issuer` is unset (no authorization
+//! server to advertise) or because the listener's authenticator is
+//! [`listeners::AuthenticatorKind::None`] (no token would ever be
+//! validated). Returning an empty or fake document instead would mislead
+//! clients into starting an OAuth dance they cannot complete.
 //!
 //! [RFC 9728]: https://datatracker.ietf.org/doc/html/rfc9728
 
 use axum::Extension;
 use axum::extract::Request;
 use axum::response::{IntoResponse, Response};
-use futures::future::Shared;
-use http::StatusCode;
+use http::{HeaderValue, StatusCode};
 use mz_adapter::Client;
 use mz_adapter_types::dyncfgs::OIDC_ISSUER;
+use mz_server_core::listeners;
 use serde::Serialize;
-use tokio::sync::oneshot;
 use tracing::warn;
+
+use crate::http::Delayed;
 
 /// The well-known path served by this module.
 ///
@@ -49,6 +68,15 @@ use tracing::warn;
 ///
 /// [RFC 9728 §3]: https://datatracker.ietf.org/doc/html/rfc9728#section-3
 pub const PROTECTED_RESOURCE_METADATA_PATH: &str = "/.well-known/oauth-protected-resource";
+
+/// `Cache-Control` value set on the discovery response.
+///
+/// One hour is a balance: long enough that well-behaved clients reuse the
+/// document across a session instead of re-fetching per request, short
+/// enough that an admin who changes `oidc_issuer` does not have to wait a
+/// long tail of stale caches out. RFC 9728 places no requirement here;
+/// this is a pragmatic default.
+const METADATA_CACHE_CONTROL: &str = "public, max-age=3600";
 
 /// JSON shape returned by [`PROTECTED_RESOURCE_METADATA_PATH`].
 ///
@@ -76,11 +104,22 @@ pub struct ProtectedResourceMetadata {
     pub bearer_methods_supported: Vec<String>,
 }
 
-/// Convenience for our delayed-adapter-client extension type.
+/// Per-listener inputs the discovery handler needs.
 ///
-/// Kept aliased here so the handler does not have to import `futures::Shared`
-/// directly. Matches the pattern used elsewhere in `crate::http`.
-type Delayed<T> = Shared<oneshot::Receiver<T>>;
+/// Carried as an axum `Extension` rather than reading from system config
+/// directly because the values are per-listener (`authenticator_kind`,
+/// `http_host_name`) — the same environmentd process can serve listeners
+/// with different policies.
+#[derive(Debug, Clone)]
+pub struct DiscoveryConfig {
+    /// Externally-visible host (without scheme) for the listener. When
+    /// `Some`, this beats any header-derived value.
+    pub http_host_name: Option<String>,
+    /// Listener's authenticator kind. When `None`, the handler refuses to
+    /// publish a document — there is no OAuth flow on an unauthenticated
+    /// listener to advertise.
+    pub authenticator_kind: listeners::AuthenticatorKind,
+}
 
 /// HTTP handler for [`PROTECTED_RESOURCE_METADATA_PATH`].
 ///
@@ -88,29 +127,27 @@ type Delayed<T> = Shared<oneshot::Receiver<T>>;
 /// places no auth requirements on this endpoint; clients must be able to
 /// fetch it before they have a token.
 ///
-/// Returns 503 if the adapter client is not yet available (a brief window
-/// at startup), 404 if no `oidc_issuer` is configured (no OAuth is
-/// available, so there is nothing to advertise), and 200 with the JSON
-/// document otherwise.
+/// Returns 404 when this listener does not validate tokens (`None`
+/// authenticator) or has no issuer configured, 503 if the adapter client
+/// is not yet available (a brief window at startup), 400 if the request
+/// has no host information to construct a URL with, and 200 with the
+/// JSON document otherwise.
 pub async fn handle_protected_resource_metadata(
     Extension(adapter_client_rx): Extension<Delayed<Client>>,
+    Extension(config): Extension<DiscoveryConfig>,
     req: Request,
 ) -> Response {
-    // The MCP spec considers the resource server's canonical URI (used in
-    // RFC 8707 `resource` parameters and as the `aud` constraint) to be
-    // the URL the client used to reach the server. Build that from
-    // forwarded headers when present, with a sane fallback to the request
-    // Host. We deliberately do not consult a server-side configuration
-    // here: if the deployment sits behind a proxy that rewrites Host, the
-    // proxy is also responsible for setting `X-Forwarded-*`.
-    let scheme = forwarded_scheme(&req).unwrap_or("https").to_string();
-    let host = match forwarded_host(&req) {
-        Some(h) => h,
-        None => {
-            warn!("oauth-protected-resource: missing Host header on request");
-            return (StatusCode::BAD_REQUEST, "missing Host header").into_response();
-        }
+    // No-auth listener: there is no token to validate, nothing to
+    // advertise. Refuse to publish.
+    if matches!(config.authenticator_kind, listeners::AuthenticatorKind::None) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
+    let Some(host) = resolve_host(&req, config.http_host_name.as_deref()) else {
+        warn!("oauth-protected-resource: no http_host_name configured and request has no Host header");
+        return (StatusCode::BAD_REQUEST, "no host available").into_response();
     };
+    let scheme = scheme_for(&req);
     let resource = format!("{scheme}://{host}/api/mcp");
 
     let Ok(adapter_client) = adapter_client_rx.clone().await else {
@@ -131,7 +168,12 @@ pub async fn handle_protected_resource_metadata(
         bearer_methods_supported: vec!["header".to_string()],
     };
 
-    axum::Json(metadata).into_response()
+    let mut response = axum::Json(metadata).into_response();
+    response.headers_mut().insert(
+        http::header::CACHE_CONTROL,
+        HeaderValue::from_static(METADATA_CACHE_CONTROL),
+    );
+    response
 }
 
 /// Builds the absolute URL of the protected resource metadata document
@@ -139,40 +181,66 @@ pub async fn handle_protected_resource_metadata(
 /// challenge. Returns `None` if the request lacks enough host information
 /// to construct a URL; the caller is expected to skip the Bearer challenge
 /// in that case rather than emit a malformed value.
-pub fn metadata_url(req: &Request) -> Option<String> {
-    let host = forwarded_host(req)?;
-    let scheme = forwarded_scheme(req).unwrap_or("https");
-    Some(format!("{scheme}://{host}{PROTECTED_RESOURCE_METADATA_PATH}"))
+pub fn metadata_url(req: &Request, http_host_name: Option<&str>) -> Option<String> {
+    let host = resolve_host(req, http_host_name)?;
+    let scheme = scheme_for(req);
+    Some(format!(
+        "{scheme}://{host}{PROTECTED_RESOURCE_METADATA_PATH}"
+    ))
 }
 
-/// Pulls `X-Forwarded-Host` first, then falls back to the request's `Host`
-/// header. Both are checked for validity (non-empty, ASCII-only) before
-/// use; an invalid value returns `None` so the caller can refuse the
-/// request rather than serve a metadata document with a garbage URL.
-fn forwarded_host(req: &Request) -> Option<String> {
+/// Resolves the host string to embed in published absolute URLs.
+///
+/// Prefers the operator-configured `http_host_name`; falls back to the
+/// request's `Host` header. **Never consults `X-Forwarded-*`** — see the
+/// module-level "Host derivation" notes for the security rationale.
+fn resolve_host(req: &Request, http_host_name: Option<&str>) -> Option<String> {
+    if let Some(name) = http_host_name {
+        let trimmed = name.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
     req.headers()
-        .get("x-forwarded-host")
+        .get(http::header::HOST)
         .and_then(|v| v.to_str().ok())
-        .or_else(|| req.headers().get(http::header::HOST).and_then(|v| v.to_str().ok()))
-        .map(|s| s.to_string())
+        .map(str::trim)
         .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
-/// Picks the request's outward-facing scheme. Prefers `X-Forwarded-Proto`
-/// because requests are usually TLS-terminated at a proxy; if absent,
-/// returns `None` and lets the caller default to `https` (TLS is required
-/// by OAuth 2.1 for all endpoints anyway, so we never want to advertise
-/// `http://`).
-fn forwarded_scheme(req: &Request) -> Option<&'static str> {
-    req.headers()
-        .get("x-forwarded-proto")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| if s.eq_ignore_ascii_case("http") { "http" } else { "https" })
+/// Picks the scheme to use in published URLs.
+///
+/// OAuth 2.1 requires `https` for all endpoints, so we always advertise
+/// `https` — the only exception is connections that arrived over plain
+/// HTTP, which we infer from the request's URI scheme. This is *only*
+/// reached in dev/test setups where the listener is on plain HTTP; in
+/// production a TLS-terminating proxy fronts environmentd, but per the
+/// host-derivation rules we do not let the proxy's `X-Forwarded-Proto`
+/// header influence what we publish.
+fn scheme_for(req: &Request) -> &'static str {
+    match req.uri().scheme_str() {
+        Some("http") => "http",
+        _ => "https",
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use axum::body::Body;
+    use http::Request;
+
+    /// Builds a request with the given Host header and URI for use in
+    /// unit tests.
+    fn req_with_host(host: &str) -> Request<Body> {
+        Request::builder()
+            .uri("https://ignored.example.com/")
+            .header(http::header::HOST, host)
+            .body(Body::empty())
+            .unwrap()
+    }
 
     /// The serialized document must use exactly the field names RFC 9728
     /// defines — clients key off them. A rename would break every
@@ -202,6 +270,108 @@ mod tests {
         assert_eq!(
             PROTECTED_RESOURCE_METADATA_PATH,
             "/.well-known/oauth-protected-resource",
+        );
+    }
+
+    /// `http_host_name` beats the request's Host header — operators
+    /// configure it to override what the proxy presents, so it must take
+    /// precedence.
+    #[mz_ore::test]
+    fn test_resolve_host_prefers_http_host_name() {
+        let req = req_with_host("internal.local:6876");
+        assert_eq!(
+            resolve_host(&req, Some("public.example.com")).as_deref(),
+            Some("public.example.com"),
+        );
+    }
+
+    /// When `http_host_name` is empty or whitespace, fall back to the
+    /// request's Host header rather than emitting a blank string.
+    #[mz_ore::test]
+    fn test_resolve_host_ignores_blank_config() {
+        let req = req_with_host("public.example.com");
+        for blank in ["", "   ", "\t"] {
+            assert_eq!(
+                resolve_host(&req, Some(blank)).as_deref(),
+                Some("public.example.com"),
+                "blank http_host_name = {blank:?} should fall back to Host",
+            );
+        }
+    }
+
+    /// The Host header is the last fallback when no config is set.
+    /// Includes port to make sure the helper is not stripping it.
+    #[mz_ore::test]
+    fn test_resolve_host_falls_back_to_host_header_with_port() {
+        let req = req_with_host("example.com:8080");
+        assert_eq!(
+            resolve_host(&req, None).as_deref(),
+            Some("example.com:8080"),
+        );
+    }
+
+    /// `X-Forwarded-Host` MUST be ignored — see the module-level
+    /// "Host derivation" notes. This is a security-relevant regression
+    /// guard: if someone adds back X-Forwarded-Host trust, this test
+    /// fails and they have to confront the trust decision explicitly.
+    #[mz_ore::test]
+    fn test_resolve_host_ignores_x_forwarded_host() {
+        let req = Request::builder()
+            .uri("https://ignored.example.com/")
+            .header(http::header::HOST, "honest.example.com")
+            .header("x-forwarded-host", "evil.example.com")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            resolve_host(&req, None).as_deref(),
+            Some("honest.example.com"),
+            "X-Forwarded-Host must not influence the resolved host",
+        );
+    }
+
+    /// No host config and no Host header → `None`. Callers turn this
+    /// into a 400 (handler) or a missing Bearer challenge (auth
+    /// middleware); both are safer than guessing.
+    #[mz_ore::test]
+    fn test_resolve_host_returns_none_when_unavailable() {
+        let req = Request::builder()
+            .uri("https://ignored.example.com/")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(resolve_host(&req, None), None);
+    }
+
+    /// OAuth 2.1 mandates HTTPS for OAuth endpoints, so we always
+    /// advertise `https` unless the request actually arrived on plain
+    /// HTTP — and we determine that from the URI scheme on the request,
+    /// not from `X-Forwarded-Proto`.
+    #[mz_ore::test]
+    fn test_scheme_for_defaults_to_https() {
+        let req = Request::builder()
+            .uri("/just/a/path")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(scheme_for(&req), "https");
+    }
+
+    #[mz_ore::test]
+    fn test_scheme_for_honors_http_uri() {
+        let req = Request::builder()
+            .uri("http://example.com/foo")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(scheme_for(&req), "http");
+    }
+
+    /// `metadata_url` composes the resolved host with the canonical
+    /// well-known suffix. Pinning the assembled value makes accidental
+    /// path drift visible (e.g. extra slashes, dropped suffix).
+    #[mz_ore::test]
+    fn test_metadata_url_assembles_canonical_suffix() {
+        let req = req_with_host("example.com");
+        assert_eq!(
+            metadata_url(&req, Some("public.example.com")).as_deref(),
+            Some("https://public.example.com/.well-known/oauth-protected-resource"),
         );
     }
 }

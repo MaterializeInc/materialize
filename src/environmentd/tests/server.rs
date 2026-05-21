@@ -5944,9 +5944,16 @@ fn test_sql_http_unauth_keeps_only_basic_challenge() {
 /// auth) and returns the configured authorization server when
 /// `oidc_issuer` is set. Pinning the JSON shape protects MCP clients
 /// from accidental contract drift.
+///
+/// Uses `with_password_auth` because the discovery handler 404s on
+/// `None`-authenticator listeners (it would be misleading to publish a
+/// document when no token would ever be validated). Any authenticator
+/// kind other than `None` would do; Password is the lightest to set up
+/// in tests.
 #[mz_ore::test]
 fn test_oauth_protected_resource_metadata_advertises_issuer() {
     let server = test_util::TestHarness::default()
+        .with_password_auth(Password("mz_system_password".to_string()))
         .with_mcp_routes(true, false)
         .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
         .with_system_parameter_default(
@@ -5999,13 +6006,15 @@ fn test_oauth_protected_resource_metadata_advertises_issuer() {
     );
 }
 
-/// When no `oidc_issuer` is configured, the metadata endpoint MUST 404
-/// — RFC 9728 requires `authorization_servers` to be non-empty, and
-/// returning an honest 404 lets clients fall back to whatever else they
-/// support instead of being misled by a half-baked document.
+/// When no `oidc_issuer` is configured on a listener that *does*
+/// validate tokens, the endpoint MUST 404. RFC 9728 requires
+/// `authorization_servers` to be non-empty, and returning an honest
+/// 404 lets clients fall back to whatever else they support instead of
+/// being misled by a half-baked document.
 #[mz_ore::test]
 fn test_oauth_protected_resource_metadata_404_when_no_issuer() {
     let server = test_util::TestHarness::default()
+        .with_password_auth(Password("mz_system_password".to_string()))
         .with_mcp_routes(true, false)
         .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
         .start_blocking();
@@ -6021,6 +6030,36 @@ fn test_oauth_protected_resource_metadata_404_when_no_issuer() {
         res.status(),
         StatusCode::NOT_FOUND,
         "no oidc_issuer => 404, not an empty metadata doc",
+    );
+}
+
+/// A `None`-authenticator listener (anonymous_http_user) MUST 404 even
+/// if an `oidc_issuer` is configured. Publishing a metadata document on
+/// a listener that never validates tokens would mislead OAuth-aware
+/// clients into starting a flow they cannot complete. Regression guard
+/// against widening the discovery surface to unauthenticated listeners.
+#[mz_ore::test]
+fn test_oauth_protected_resource_metadata_404_on_no_auth_listener() {
+    let server = test_util::TestHarness::default()
+        .with_mcp_routes(true, false)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .with_system_parameter_default(
+            "oidc_issuer".to_string(),
+            "https://issuer.test.example.com".to_string(),
+        )
+        .start_blocking();
+
+    let res = Client::new()
+        .get(&format!(
+            "http://{}/.well-known/oauth-protected-resource",
+            server.http_local_addr()
+        ))
+        .send()
+        .unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::NOT_FOUND,
+        "None-authenticator listener must not publish OAuth metadata even with oidc_issuer set",
     );
 }
 

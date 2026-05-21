@@ -159,6 +159,19 @@ pub struct HttpConfig {
     pub allowed_origin_list: Vec<HeaderValue>,
     pub active_connection_counter: ConnectionCounter,
     pub helm_chart_version: Option<String>,
+    /// Externally-visible host name for this environment (without scheme).
+    ///
+    /// Used as the canonical host when constructing absolute URLs that the
+    /// server needs to publish (e.g. the OAuth Protected Resource Metadata
+    /// `resource` field, RFC 9728). When `None`, callers fall back to the
+    /// request's `Host` header, which is correct for unproxied dev setups
+    /// but loses fidelity behind a load balancer that rewrites Host.
+    ///
+    /// We deliberately do NOT consult `X-Forwarded-Host` or
+    /// `X-Forwarded-Proto`: there is no proxy-trust model in environmentd
+    /// today, and an attacker reaching the server directly can otherwise
+    /// poison the published metadata URLs.
+    pub http_host_name: Option<String>,
     pub concurrent_webhook_req: Arc<tokio::sync::Semaphore>,
     pub metrics: Metrics,
     pub metrics_registry: MetricsRegistry,
@@ -215,6 +228,7 @@ impl HttpServer {
             allowed_origin_list,
             active_connection_counter,
             helm_chart_version,
+            http_host_name,
             concurrent_webhook_req,
             metrics,
             metrics_registry,
@@ -240,10 +254,12 @@ impl HttpServer {
         let frontegg_middleware = frontegg.clone();
         let oidc_middleware_rx = oidc_rx.clone();
         let adapter_client_middleware_rx = adapter_client_rx.clone();
+        let http_host_name_middleware = http_host_name.clone();
         let auth_middleware = middleware::from_fn(move |req, next| {
             let frontegg = frontegg_middleware.clone();
             let oidc_rx = oidc_middleware_rx.clone();
             let adapter_client_rx = adapter_client_middleware_rx.clone();
+            let http_host_name = http_host_name_middleware.clone();
             async move {
                 http_auth(
                     req,
@@ -254,6 +270,7 @@ impl HttpServer {
                     oidc_rx,
                     adapter_client_rx,
                     allowed_roles,
+                    http_host_name,
                 )
                 .await
             }
@@ -510,14 +527,19 @@ impl HttpServer {
             // clients fetch it before they have a token. Sits on its own
             // router so the auth middleware never runs on it. The handler
             // returns 404 when no OAuth authorization server is configured
-            // (`oidc_issuer` dyncfg unset), so this is safe to enable
-            // unconditionally whenever MCP is enabled.
+            // (`oidc_issuer` dyncfg unset) OR when the listener uses the
+            // `None` authenticator (no token would ever be validated), so
+            // it is safe to enable unconditionally whenever MCP is enabled.
             let oauth_metadata_router = Router::new()
                 .route(
                     oauth_metadata::PROTECTED_RESOURCE_METADATA_PATH,
                     routing::get(oauth_metadata::handle_protected_resource_metadata),
                 )
-                .layer(Extension(adapter_client_rx.clone()));
+                .layer(Extension(adapter_client_rx.clone()))
+                .layer(Extension(oauth_metadata::DiscoveryConfig {
+                    http_host_name: http_host_name.clone(),
+                    authenticator_kind,
+                }));
             router = router.merge(oauth_metadata_router);
 
             let mut mcp_router = Router::new();
@@ -733,7 +755,7 @@ async fn x_materialize_user_header_auth(
     Ok(next.run(req).await)
 }
 
-type Delayed<T> = Shared<oneshot::Receiver<T>>;
+pub(crate) type Delayed<T> = Shared<oneshot::Receiver<T>>;
 
 /// Resolve the dyncfg-configured group claim path from a delayed adapter
 /// client. Callers must already have driven `adapter_client_rx` to readiness
@@ -927,12 +949,6 @@ pub(crate) struct WwwAuthenticateChallenges {
     pub bearer_resource_metadata: Option<String>,
 }
 
-impl WwwAuthenticateChallenges {
-    /// Returns true if any challenge should be emitted.
-    pub fn any(&self) -> bool {
-        self.include_basic || self.bearer_resource_metadata.is_some()
-    }
-}
 
 #[derive(Debug, Error)]
 pub(crate) enum AuthError {
@@ -966,26 +982,22 @@ impl IntoResponse for AuthError {
         // exception — its payload is a sanitized `OidcError::Display` that the
         // console embeds in the login-page error.
         let body = match &self {
-            AuthError::MissingHttpAuthentication { challenges } if challenges.any() => {
-                // Bearer challenge goes first because OAuth-aware clients
-                // pick the strongest scheme they see. RFC 7235 allows
-                // emitting multiple `WWW-Authenticate` headers, which is
-                // what we do here so each scheme is unambiguously framed —
-                // some parsers struggle with multiple schemes on a single
-                // header value.
+            // Bearer goes first so OAuth-aware clients see it before the
+            // Basic fallback. RFC 7235 allows emitting multiple
+            // `WWW-Authenticate` headers; we use one per scheme so each
+            // challenge is unambiguously framed — some parsers struggle
+            // with multiple schemes on a single header value.
+            AuthError::MissingHttpAuthentication { challenges } => {
                 if let Some(resource_metadata) = &challenges.bearer_resource_metadata {
-                    let value = format!(
-                        "Bearer resource_metadata=\"{}\"",
-                        resource_metadata,
-                    );
+                    let value = format!("Bearer resource_metadata=\"{resource_metadata}\"");
                     match HeaderValue::from_str(&value) {
                         Ok(v) => {
                             headers.append(http::header::WWW_AUTHENTICATE, v);
                         }
                         Err(e) => {
                             warn!(
-                                "skipping Bearer WWW-Authenticate challenge: \
-                                 invalid header value derived from resource_metadata={resource_metadata:?}: {e}",
+                                "skipping Bearer WWW-Authenticate challenge: invalid header \
+                                 value derived from resource_metadata={resource_metadata:?}: {e}",
                             );
                         }
                     }
@@ -1074,6 +1086,7 @@ async fn http_auth(
     oidc_rx: Delayed<mz_authenticator::GenericOidcAuthenticator>,
     adapter_client_rx: Delayed<Client>,
     allowed_roles: AllowedRoles,
+    http_host_name: Option<String>,
 ) -> Result<impl IntoResponse, AuthError> {
     let creds = if let Some(basic) = req.headers().typed_get::<Authorization<Basic>>() {
         Some(Credentials::Password {
@@ -1143,8 +1156,13 @@ async fn http_auth(
     // stays on these routes so existing curl/Bearer-already users still
     // see a usable challenge. See `crate::http::oauth_metadata` for the
     // discovery document.
-    let bearer_resource_metadata = if path.starts_with("/api/mcp/") {
-        oauth_metadata::metadata_url(&req)
+    // OAuth discovery is only meaningful when the listener actually
+    // validates tokens. When the listener uses the `None` authenticator
+    // (anonymous_http_user), there is no OAuth flow to advertise.
+    let bearer_resource_metadata = if path.starts_with("/api/mcp/")
+        && !matches!(authenticator_kind, listeners::AuthenticatorKind::None)
+    {
+        oauth_metadata::metadata_url(&req, http_host_name.as_deref())
     } else {
         None
     };

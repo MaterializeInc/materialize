@@ -398,6 +398,7 @@ impl Listeners {
                 adapter_client_rx: adapter_client_rx.clone(),
                 active_connection_counter: active_connection_counter.clone(),
                 helm_chart_version: config.helm_chart_version.clone(),
+                http_host_name: config.http_host_name.clone(),
                 source,
                 tls,
                 authenticator_kind,
