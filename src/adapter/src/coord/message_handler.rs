@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use futures::FutureExt;
 use maplit::btreemap;
+use mz_audit_log::VersionedStorageUsage;
 use mz_catalog::memory::objects::ClusterReplicaProcessStatus;
 use mz_controller::ControllerResponse;
 use mz_controller::clusters::{ClusterEvent, ClusterStatus};
@@ -37,7 +38,7 @@ use tracing::{Instrument, Level, event, info_span, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
-use crate::catalog::{BuiltinTableUpdate, Op};
+use crate::catalog::BuiltinTableUpdate;
 use crate::command::Command;
 use crate::coord::{
     AlterConnectionValidationReady, ClusterReplicaStatuses, Coordinator,
@@ -219,6 +220,20 @@ impl Coordinator {
 
     #[mz_ore::instrument(level = "debug")]
     pub async fn storage_usage_fetch(&self) {
+        // In read-only mode (e.g. a standby coordinator during a zero-downtime
+        // deployment) we cannot durably write the per-batch allocator bump or
+        // append to `mz_storage_usage_by_shard`, and we also don't want to do
+        // the slow shard scan on a process that isn't going to record the
+        // results. Skip the whole cycle and reschedule so we resume
+        // automatically once the coordinator transitions out of read-only.
+        if self.controller.read_only() {
+            tracing::info!("skipping storage usage collection in read-only mode");
+            if let Err(e) = self.internal_cmd_tx.send(Message::StorageUsageSchedule) {
+                warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+            }
+            return;
+        }
+
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let client = self.storage_usage_client.clone();
 
@@ -254,45 +269,51 @@ impl Coordinator {
         // increase. This is intentionally the timestamp of when collection
         // finished, not when it started, so that we don't write data with a
         // timestamp in the past.
-        let collection_timestamp = if self.controller.read_only() {
-            self.peek_local_write_ts().await.into()
-        } else {
-            // Getting a write timestamp bumps the write timestamp in the
-            // oracle, which we're not allowed in read-only mode.
-            self.get_local_write_ts().await.timestamp.into()
+        //
+        // `storage_usage_fetch` skips this path in read-only mode, so we can
+        // unconditionally bump the oracle write ts here.
+        let write_ts = self.get_local_write_ts().await.timestamp;
+        let collection_timestamp: EpochMillis = write_ts.into();
+
+        // All rows in this collection cycle share `batch_id` so consumers can
+        // identify rows that were collected together. We use one durable
+        // allocator bump per cycle (rather than per shard) so the id is
+        // monotonic across coordinator restarts while still keeping the
+        // coord-blocking cost proportional to one round-trip, not N.
+        let batch_id = match self.catalog().allocate_storage_usage_id(write_ts).await {
+            Ok(id) => id,
+            Err(err) => {
+                tracing::warn!("failed to allocate storage usage batch id: {:?}", err);
+                return;
+            }
         };
 
-        let ops = shards_usage
+        let updates: Vec<_> = shards_usage
             .by_shard
             .into_iter()
-            .map(|(shard_id, shard_usage)| Op::WeirdStorageUsageUpdates {
-                object_id: Some(shard_id.to_string()),
-                size_bytes: shard_usage.size_bytes(),
-                collection_timestamp,
+            .map(|(shard_id, shard_usage)| {
+                let event = VersionedStorageUsage::new(
+                    batch_id,
+                    Some(shard_id.to_string()),
+                    shard_usage.size_bytes(),
+                    collection_timestamp,
+                );
+                self.catalog().pack_storage_usage_update(event, Diff::ONE)
             })
             .collect();
 
-        match self.catalog_transact_inner(None, ops).await {
-            Ok((table_updates, catalog_updates)) => {
-                assert!(
-                    catalog_updates.is_empty(),
-                    "applying builtin table updates does not produce catalog implications"
-                );
+        let (table_updates, _) = self.builtin_table_update().execute(updates).await;
 
-                let internal_cmd_tx = self.internal_cmd_tx.clone();
-                let task_span =
-                    info_span!(parent: None, "coord::storage_usage_update::table_updates");
-                OpenTelemetryContext::obtain().attach_as_parent_to(&task_span);
-                task::spawn(|| "storage_usage_update_table_updates", async move {
-                    table_updates.instrument(task_span).await;
-                    // It is not an error for this task to be running after `internal_cmd_rx` is dropped.
-                    if let Err(e) = internal_cmd_tx.send(Message::StorageUsageSchedule) {
-                        warn!("internal_cmd_rx dropped before we could send: {e:?}");
-                    }
-                });
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+        let task_span = info_span!(parent: None, "coord::storage_usage_update::table_updates");
+        OpenTelemetryContext::obtain().attach_as_parent_to(&task_span);
+        task::spawn(|| "storage_usage_update_table_updates", async move {
+            table_updates.instrument(task_span).await;
+            // It is not an error for this task to be running after `internal_cmd_rx` is dropped.
+            if let Err(e) = internal_cmd_tx.send(Message::StorageUsageSchedule) {
+                warn!("internal_cmd_rx dropped before we could send: {e:?}");
             }
-            Err(err) => tracing::warn!("Failed to update storage metrics: {:?}", err),
-        }
+        });
     }
 
     #[mz_ore::instrument(level = "debug")]

@@ -35,7 +35,8 @@ use mz_catalog::config::{BuiltinItemMigrationConfig, ClusterReplicaSizeMap, Conf
 #[cfg(test)]
 use mz_catalog::durable::CatalogError;
 use mz_catalog::durable::{
-    BootstrapArgs, DurableCatalogState, TestCatalogStateBuilder, test_bootstrap_args,
+    BootstrapArgs, DurableCatalogState, STORAGE_USAGE_ID_ALLOC_KEY, TestCatalogStateBuilder,
+    test_bootstrap_args,
 };
 use mz_catalog::expr_cache::{ExpressionCacheHandle, GlobalExpressions, LocalExpressions};
 use mz_catalog::memory::error::{Error, ErrorKind};
@@ -603,6 +604,28 @@ impl Catalog {
     pub async fn allocate_user_id_for_test(&self) -> Result<(CatalogItemId, GlobalId), Error> {
         let commit_ts = self.storage().await.current_upper().await;
         self.allocate_user_id(commit_ts).await
+    }
+
+    /// Allocates a single durable id for a storage usage collection batch.
+    ///
+    /// Bumps the durable `STORAGE_USAGE_ID_ALLOC_KEY` allocator by one and
+    /// returns the previous value. The bump is committed at `commit_ts`.
+    /// One id is shared by every row produced by a collection cycle (see
+    /// `Coordinator::storage_usage_update`), so the durable cost is one
+    /// allocator round-trip per cycle, not per shard.
+    pub async fn allocate_storage_usage_id(
+        &self,
+        commit_ts: mz_repr::Timestamp,
+    ) -> Result<u64, Error> {
+        use mz_ore::collections::CollectionExt;
+
+        self.storage()
+            .await
+            .allocate_id(STORAGE_USAGE_ID_ALLOC_KEY, 1, commit_ts)
+            .await
+            .maybe_terminate("allocating storage usage id")
+            .map(|ids| ids.into_element())
+            .err_into()
     }
 
     /// Get the next user item ID without allocating it.

@@ -23,7 +23,7 @@ use mz_adapter_types::dyncfgs::{
 };
 use mz_audit_log::{
     CreateOrDropClusterReplicaReasonV1, EventDetails, EventType, IdFullNameV1, IdNameV1,
-    ObjectType, SchedulingDecisionsWithReasonsV2, VersionedEvent, VersionedStorageUsage,
+    ObjectType, SchedulingDecisionsWithReasonsV2, VersionedEvent,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::BuiltinLog;
@@ -38,13 +38,12 @@ use mz_controller::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLoca
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::HashSet;
 use mz_ore::instrument;
-use mz_ore::now::EpochMillis;
 use mz_persist_types::ShardId;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap, merge_mz_acl_items};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, ColumnName, Diff, GlobalId, SqlColumnType, strconv};
+use mz_repr::{CatalogItemId, ColumnName, GlobalId, SqlColumnType, strconv};
 use mz_sql::ast::RawDataType;
 use mz_sql::catalog::{
     AutoProvisionSource, CatalogDatabase, CatalogError as SqlCatalogError,
@@ -245,17 +244,6 @@ pub enum Op {
         name: String,
     },
     ResetAllSystemConfiguration,
-    /// Performs updates to the storage usage table, which probably should be a builtin source.
-    ///
-    /// TODO(jkosh44) In a multi-writer or high availability catalog world, this
-    /// might not work. If a process crashes after collecting storage usage events
-    /// but before updating the builtin table, then another listening catalog
-    /// will never know to update the builtin table.
-    WeirdStorageUsageUpdates {
-        object_id: Option<String>,
-        size_bytes: u64,
-        collection_timestamp: EpochMillis,
-    },
     /// Injects audit events into the catalog.
     ///
     /// This is a nonstandard path used for manually appending audit events at the current time.
@@ -694,7 +682,7 @@ impl Catalog {
         let mut updates = Vec::new();
 
         for op in ops {
-            let (weird_builtin_table_update, temporary_item_updates) = Self::transact_op(
+            let temporary_item_updates = Self::transact_op(
                 oracle_write_ts,
                 session,
                 op,
@@ -707,18 +695,6 @@ impl Catalog {
                 &mut storage_collections_to_register,
             )
             .await?;
-
-            // Certain builtin tables are not derived from the durable catalog state, so they need
-            // to be updated ad-hoc based on the current transaction. This is weird and will not
-            // work if we ever want multi-writer catalogs or high availability (HA) catalogs. If
-            // this instance crashes after committing the durable catalog but before applying the
-            // weird builtin table updates, then they'll be lost forever in a multi-writer or HA
-            // world. Currently, this works fine and there are no correctness issues because
-            // whenever a Coordinator crashes, a new Coordinator starts up, and it will set the
-            // state of all builtin tables to the correct values.
-            if let Some(builtin_table_update) = weird_builtin_table_update {
-                builtin_table_updates.push(builtin_table_update);
-            }
 
             // Temporary items are not stored in the durable catalog, so they need to be handled
             // separately for updating state and builtin tables.
@@ -821,8 +797,7 @@ impl Catalog {
         storage_collections_to_create: &mut BTreeSet<GlobalId>,
         storage_collections_to_drop: &mut BTreeSet<GlobalId>,
         storage_collections_to_register: &mut BTreeMap<GlobalId, ShardId>,
-    ) -> Result<(Option<BuiltinTableUpdate>, Vec<(TemporaryItem, StateDiff)>), AdapterError> {
-        let mut weird_builtin_table_update = None;
+    ) -> Result<Vec<(TemporaryItem, StateDiff)>, AdapterError> {
         let mut temporary_item_updates = Vec::new();
 
         match op {
@@ -2716,18 +2691,6 @@ impl Catalog {
                     EventDetails::ResetAllV1,
                 )?;
             }
-            Op::WeirdStorageUsageUpdates {
-                object_id,
-                size_bytes,
-                collection_timestamp,
-            } => {
-                let id = tx.allocate_storage_usage_ids()?;
-                let metric =
-                    VersionedStorageUsage::new(id, object_id, size_bytes, collection_timestamp);
-                let builtin_table_update = state.pack_storage_usage_update(metric, Diff::ONE);
-                let builtin_table_update = state.resolve_builtin_table_update(builtin_table_update);
-                weird_builtin_table_update = Some(builtin_table_update);
-            }
             Op::InjectAuditEvents { events } => {
                 for event in events {
                     let id = tx.allocate_audit_log_id()?;
@@ -2744,7 +2707,7 @@ impl Catalog {
                 }
             }
         };
-        Ok((weird_builtin_table_update, temporary_item_updates))
+        Ok(temporary_item_updates)
     }
 
     fn log_update(state: &CatalogState, id: &CatalogItemId) {
