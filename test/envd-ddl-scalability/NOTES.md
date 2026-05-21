@@ -4103,3 +4103,269 @@ from 70 ms back toward 60 ms even on CRDB.
 `pkill` the envd / clusterd / bogo processes after the bench.
 Phase 18 used a single bench run; no rerun is necessary if the
 snapshots in `metrics_phase18_bogo/` are preserved.
+
+## Phase 19 — CRDB consensus CAS scaling root-cause
+
+Phase 18 attributed 47 % of the +1.296 ms/+1k create-slope to
+"CRDB-side per-CAS latency growth": mean
+`persist_external_op_latency_by_shard_kind{op="consensus_cas",shard_kind="user_data"}`
+grew 24.4 ms → 118.6 ms (4.87×) between N=10k and N=25k on CRDB
+while bogo stayed flat (0.93 → 0.96 ms). Phase 19 asks why a
+single CAS against CRDB is 4.87× slower with more shards in the
+consensus table, and whether that growth is in CRDB or in the
+persist client.
+
+### Methodology
+
+Two probes, both at N=10k against a CRDB-backed envd
+(`results_phase19/`, `metrics_phase19/`):
+
+1. **Quiescent CRDB inspection.** Pad to N=10k, stop envd, run
+   `EXPLAIN ANALYZE (VERBOSE)` on the CAS query shape from
+   `src/persist/src/postgres.rs`. Output saved as
+   `results_phase19/probe_N10k.txt` (script:
+   `probe_consensus.sh`). The same SQL is used at every CRDB
+   scale; the bench just varies the shard the query is parameterized
+   to.
+2. **Per-call attribution from phase-17 metrics.** Diff the
+   `mz_persist_postgres_connpool_*` counters between
+   `measure_start_N{N}.prom` and `after_N{N}.prom` from
+   `metrics_phase17/`. Compute mean acquire ms per call (script:
+   `cas_attribute_phase19.py`).
+3. **Pool-size variation experiment.** Pad to N=10k, run the
+   measurement bench at default `persist_consensus_connection_pool_max_size = 50`,
+   then bump the dyncfg default to 500 (one-file patch to
+   `src/persist-client/src/cfg.rs`, rebuild, restart envd) and
+   re-bench at the same scale. Compare per-shard-kind
+   `consensus_cas` mean latency under the two pool sizes. Bench
+   harness: `bench_phase19.py` (30 warmup + 200 measure reps,
+   metrics snapshotted at `before` / `measure_start` / `after`).
+
+### SQL that `compare_and_set` issues
+
+The full CRDB code path is in `src/persist/src/postgres.rs:380`:
+
+```sql
+INSERT INTO consensus (shard, sequence_number, data)
+SELECT $1, $2, $3
+WHERE (SELECT sequence_number FROM consensus
+       WHERE shard = $1
+       ORDER BY sequence_number DESC LIMIT 1) = $4;
+```
+
+The `consensus` table schema (`src/persist/src/postgres.rs:46`):
+
+```sql
+CREATE TABLE consensus (
+    shard text NOT NULL,
+    sequence_number bigint NOT NULL,
+    data bytea NOT NULL,
+    PRIMARY KEY (shard, sequence_number)
+) WITH (sql_stats_automatic_collection_enabled = false);
+ALTER TABLE consensus CONFIGURE ZONE USING gc.ttlseconds = 600;
+```
+
+Both the inner sub-SELECT (a reverse scan with `LIMIT 1` on the
+PK prefix `(shard, ...)`) and the outer `INSERT` are auto-commit,
+one-row, single-round-trip.
+
+### EXPLAIN ANALYZE at N=10k
+
+Run against the widest `user_data` shard in the populated
+consensus table (13 689 rows) and the narrowest (2 rows). Same
+plan, same numbers:
+
+| shape | KV pairs | KV time | KV bytes | MVCC step/seek | exec time | plan |
+|---|---:|---:|---:|---:|---:|---|
+| CAS on shard with 13 689 rows | 1 | 793 µs | 684 B  | 2/2 | 2 ms | `revscan` on `consensus_pkey`, `auto commit` |
+| `head` on shard with 13 689 rows | 1 | 721 µs | 75 B | 2/2 | 845 µs | `revscan` on `consensus_pkey` |
+| CAS on shard with 2 rows | 1 | 722 µs | 223 B | 2/2 | 2 ms | identical plan |
+
+CRDB does **not** scan tombstones at the per-CAS level — MVCC
+step/seek is 2/2 regardless of shard size, because the PK
+`(shard ASC, sequence_number ASC)` with `ORDER BY sequence_number
+DESC LIMIT 1` is a single backward seek to the latest live key.
+At N=10k the consensus table has **224 939 rows across 10 093
+shards**, p50 = 16 rows/shard, p99 = 24 rows/shard, total
+on-disk = 390 MiB. The widest two shards (the `txns` and
+`catalog` shards) are outliers at 13 689 / 13 021 rows; the rest
+are tightly clustered. None of those shapes makes the CAS itself
+slow at the CRDB level.
+
+So at the SQL level, **a single CAS against CRDB takes ~2 ms,
+flat with shard size and consensus-table size**. The 24 ms → 119 ms
+per-call growth from phase 17 cannot live in CRDB's query path.
+
+### Where the per-CAS time actually goes
+
+The phase-17 metrics carry it. Diff
+`mz_persist_postgres_connpool_acquire_seconds` /
+`mz_persist_postgres_connpool_acquires` over the measurement
+window:
+
+| N | acquires | acquire_seconds | mean acquire ms | cas mean ms | acquire / cas |
+|---:|---:|---:|---:|---:|---:|
+| 10 000 |   44 669 |   633.8 |  **14.2** |   21.0 |  **77 %** |
+| 15 000 |   54 958 | 1 635.5 |  **29.8** |   37.9 |  **87 %** |
+| 20 000 |   71 937 | 4 759.2 |  **66.2** |   77.3 |  **92 %** |
+| 25 000 |   98 730 | 9 547.4 |  **96.7** |  112.7 |  **91 %** |
+
+Persist's CRDB connection pool has `max_size = 50` (default
+`persist_consensus_connection_pool_max_size` in
+`src/persist-client/src/cfg.rs:389`). At N=25k there are ~1 645
+concurrent CAS calls/sec arriving across background
+heartbeat/compaction/GC tasks on the 25k user_data shards.
+Mean per-call acquire time blows up from 14 → 97 ms — 7×
+growth that swallows 91 % of the consensus_cas budget at N=25k.
+The actual CRDB work is the ~6–16 ms residue.
+
+**The per-CAS growth on CRDB is not CRDB getting slower. It is
+the persist client's CRDB connection pool saturating under
+N-shard background load.**
+
+### Pool-size experiment (N=10k, post-recovery state)
+
+Same `audit_pad` schema at N=10k under two configurations:
+
+| config | user_data CAS mean ms | catalog CAS mean ms | acquires/measure | acq mean ms |
+|---|---:|---:|---:|---:|
+| pool=50 (default) | **16.4** | 1.82 | 17 168 | 8.93 |
+| pool=500 (patched default + rebuild) | **2.0** | 1.78 |  4 906 (steady-state CAS subset) | n/a |
+
+The patched build registered the pool with `size=500,
+available=499` and the per-call `user_data` CAS mean dropped 8×
+on steady-state shards. Catalog and txns CAS were already fast
+(< 2 ms) under both pools; they aren't pool-bound at N=10k.
+
+There is a transient "unknown" shard_kind bucket in the pool=500
+window with 10 193 calls at 103 ms each — those are CAS calls on
+shards that the freshly-restarted envd has not yet reopened (so
+`shard_kind_for_key()` returns `"unknown"`). They are
+client-side recovery traffic, not on the DDL hot path. They do
+not appear in the pool=50 row because pool=50 was measured after
+envd had been up long enough for the recovery surge to finish.
+
+The DDL-level `create_p50` did not improve from 42.5 ms (pool=50)
+to 46.1 ms (pool=500) at N=10k, because the user_data CAS
+contribution on the DDL hot path is small — only
+`open_data_handles_concurrent` issues a small number of
+user_data CAS per CREATE (phase-17:
++0.54 ms/+1k tables out of the +1.296 ms/+1k total). The
+on-path catalog `tx_commit` and txns CAS calls were never
+pool-bound at this scale.
+
+### Answers to the iteration's questions
+
+1. **The SQL `compare_and_set` issues**: one
+   `INSERT INTO consensus ... SELECT $1,$2,$3 WHERE (SELECT
+   sequence_number FROM consensus WHERE shard = $1 ORDER BY ...
+   DESC LIMIT 1) = $4`, single round trip with auto-commit on
+   CRDB.
+2. **EXPLAIN ANALYZE numbers**: 2 ms total execution at the
+   widest 13 689-row `user_data` shard, identical on a 2-row
+   shard. KV time 721–793 µs, 1 KV pair read, MVCC step/seek
+   2/2 in all cases. The plan and the numbers are independent
+   of shard size at this scale.
+3. **Consensus row counts**: 224 939 rows / 10 093 shards at
+   N=10k (mean 22, p50 16, p99 24, max 13 689). At N=25k the
+   total scales linearly to ~525k rows; the per-CAS work in the
+   CRDB plan stays at 2/2 MVCC seeks because the PK prefix is
+   `shard`, not `sequence_number`.
+4. **Schema/index**: no issue. The PK
+   `(shard ASC, sequence_number ASC)` makes the CAS query a
+   single backward seek to the latest live key on a known prefix.
+   The 600 s GC TTL keeps tombstones bounded; we observe
+   live_count / key_count ratios of 0.45–0.65 per range, well
+   within healthy CRDB territory.
+5. **Retention growth per shard**: ≤ 24 rows per shard at p99,
+   capped by the rollup threshold and GC. Not the cause.
+
+The bottleneck is **the persist-client CRDB connection pool**
+(default `max_size=50`). At N=25k, ~1.6k CAS calls/sec from
+background workers across 25k shards queue at the pool. Each
+caller spends ~97 ms waiting for a connection before doing
+~16 ms of actual CRDB work.
+
+### What this changes vs phase 18's conclusion
+
+Phase 18 split the slope 53 % / 47 % between "coordinator-side
+state-size scaling" (reproduces under bogo) and "CRDB-side
+per-CAS latency growth". Phase 19 refines the second half: that
+47 % is **not** CRDB-side at all. It is the persist client's
+connection pool saturating. The pool is part of the same
+"client side" that phase 18 said held the other half — but it
+shows up only on CRDB because bogo doesn't go through the
+PostgresClient pool. So the cleaner restatement is:
+
+- **~53 % coordinator-side, in-memory** (`transact_inner`,
+  `prepare_state` — visible on both backends).
+- **~47 % client-side, in the persist CRDB connection pool**
+  (only visible on CRDB; bogo's wire path doesn't queue here).
+- **~0 % CRDB-side**. The CRDB query plan is flat with shard
+  count and table size at this range.
+
+### Fix
+
+Increasing `persist_consensus_connection_pool_max_size` (or
+equivalently the dyncfg) is the obvious mitigation. The
+experiment used 500 and dropped steady-state `user_data` CAS
+from 16 → 2 ms at N=10k. We did **not** ship a default change in
+this iteration because:
+
+- The DDL hot path's `create_p50` did not improve at N=10k under
+  pool=500 (the on-path CAS calls aren't pool-bound at this
+  scale). The fix would land at N=20k+ where
+  `open_data_handles_concurrent` (16 → 24 ms in phase-17) starts
+  to feel the pool queue.
+- The dyncfg name (`persist_consensus_connection_pool_max_size`)
+  is read at pool-builder time. `ALTER SYSTEM SET` propagates
+  to envd's dyncfg, but the pool is built before the system-var
+  sync runs in `environmentd/main.rs:982`, so changing the dyncfg
+  at runtime needs an envd restart anyway. Worth aligning the
+  init order so this can be tuned without a redeploy.
+- The "right" pool size depends on workload shape; 50 is a
+  defensible default for low-N envs and ~200–500 looks
+  appropriate at N=10k–25k. A targeted change should come
+  with a sweep across N=5k → 50k and across pool sizes
+  50/200/500/1000 to find the knee.
+
+### Suggested next iteration
+
+Re-run the phase-17 4-scale sweep with `pool_max_size = 500`
+baked in. If the +0.61 ms/+1k of "CRDB-side" slope flattens out,
+ship the pool default bump. If the bench-level create_p50 slope
+still tracks (because the on-path catalog/txns CAS — not
+user_data — drives DDL p50), pivot the search inside
+`Coordinator::sequence_create_table` to find the on-path
+catalog/txns CAS calls and see what part of `tx_commit` walks
+the pool. Either way, the per-CAS slope on `user_data` shards is
+no longer the open question.
+
+### Methodology artefacts
+
+- `bench_phase19.py`: 30 warmup + 200 measure-rep harness, single
+  envd run, metrics snapshots `before` / `measure_start` /
+  `after`.
+- `analyze_phase19.py`: per-pool-size table of create/drop
+  latencies and per-shard-kind consensus_cas means.
+- `dump_pool_phase19.py`,
+  `cas_attribute_phase19.py`: per-rep / per-call attribution
+  scripts; reproducible from `metrics_phase19/` and
+  `metrics_phase17/`.
+- `probe_consensus.sh`: schema + row-count + EXPLAIN ANALYZE
+  probe against a quiescent CRDB consensus table.
+- `metrics_phase19/`: before/measure_start/after snapshots for
+  pool=50, pool=200 (false negative — dyncfg didn't propagate),
+  pool=500 (with patched build).
+- `results_phase19/timings_pool{50,200,500}.csv`: per-rep
+  create/drop latencies.
+- `results_phase19/probe_N10k.txt`: EXPLAIN ANALYZE output and
+  consensus-table stats at N=10k.
+
+### Teardown
+
+`pkill` the envd / clusterd processes after the experiment; revert
+the one-line cfg.rs default bump used to verify the pool
+hypothesis (we did, the rebuild is back to `max_size = 50`). No
+state needs to be retained between iterations beyond
+`metrics_phase19/` and `results_phase19/`.
