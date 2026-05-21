@@ -8,12 +8,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-"""Antithesis first command: provision Polaris + minio for iceberg sinks.
+"""Shared bootstrap for Polaris + minio backing an Iceberg sink.
 
-The parallel_workload framework's `CreateIcebergSinkAction` issues
-`CREATE SINK … INTO ICEBERG CATALOG CONNECTION polaris_conn
-(NAMESPACE 'default_namespace', TABLE …) USING AWS CONNECTION
-aws_conn …`.  For the sink to actually land, Polaris needs:
+The iceberg sink path lights up only if Polaris already exposes a REST
+catalog whose `default-base-location` points at an existing minio bucket
+with valid s3.* properties.  For the sink to actually land we need:
 
   1. A REST catalog named `default_catalog` configured with
      `s3://test-bucket/` as its `default-base-location` plus minio
@@ -28,11 +27,11 @@ isn't available inside the Antithesis workload container, so we do the
 same work here using the local `mc` binary (installed in the workload
 image) plus `requests` for the Polaris HTTP calls.
 
-Antithesis runs `first_*` commands once per execution history, after
-`setup_complete` and before any other commands start.  This script
-lives only in the `parallel-workload` template, so it runs only when
-Antithesis selects that template — kafka / pg-cdc / mysql-cdc
-templates don't reach this code path.
+Lives in `helpers/` rather than under a template directory because both
+the `iceberg` and `parallel-workload` groups need to call it from their
+respective `first_*` setup scripts.  Antithesis runs `first_*` commands
+once per execution history, after `setup_complete` and before any other
+commands start.
 
 Idempotent: re-running against an already-provisioned Polaris is a
 no-op (creates return 409, which we treat as success).

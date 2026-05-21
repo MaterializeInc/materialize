@@ -173,7 +173,35 @@ def run(
         # Append the target last; a `\n` between parts so a non-newline-
         # terminated prelude doesn't merge with the next file's first line.
         rewritten = "\n".join([*parts, rewritten])
+    return _run_content(rewritten, label=td_file, timeout_s=timeout_s, extra_args=extra_args)
 
+
+def run_inline(
+    content: str,
+    *,
+    label: str = "inline",
+    timeout_s: float = 180.0,
+    extra_args: list[str] | None = None,
+) -> TestdriveResult:
+    """Run a literal testdrive script.  Used by drivers that need to assert
+    on an external system (notably iceberg/duckdb) where there's no good
+    way to round-trip through Materialize and a checked-in `.td` doesn't
+    cover the per-invocation parameterisation we want (batch_id, expected
+    count).
+
+    `content` is fed to testdrive verbatim — skip-if-true stripping does
+    not apply.  `label` is logged for triage but is otherwise opaque.
+    """
+    return _run_content(content, label=label, timeout_s=timeout_s, extra_args=extra_args)
+
+
+def _run_content(
+    content: str,
+    *,
+    label: str,
+    timeout_s: float,
+    extra_args: list[str] | None,
+) -> TestdriveResult:
     # testdrive treats its positional arg as a *glob pattern* and matches
     # it against files found by `WalkDir::new(".").sort_by_file_name()` —
     # i.e. it walks the process cwd, not the glob's directory. Passing an
@@ -185,7 +213,7 @@ def run(
     tmp_name = "input.td"
     tmp_path = os.path.join(tmp_dir, tmp_name)
     with open(tmp_path, "w") as f:
-        f.write(rewritten)
+        f.write(content)
 
     cmd = [
         TESTDRIVE_BINARY,
@@ -243,7 +271,7 @@ def run(
             stderr=proc.stderr,
         )
     except subprocess.TimeoutExpired as exc:
-        LOG.warning("testdrive %s timed out after %.0fs", td_file, timeout_s)
+        LOG.warning("testdrive %s timed out after %.0fs", label, timeout_s)
         result = TestdriveResult(
             exit_code=124,
             stdout=exc.stdout.decode()
@@ -266,7 +294,7 @@ def run(
 
     LOG.info(
         "testdrive %s exited %d (transient=%s, stdout=%d bytes, stderr=%d bytes)",
-        td_file,
+        label,
         result.exit_code,
         result.looks_transient,
         len(result.stdout),

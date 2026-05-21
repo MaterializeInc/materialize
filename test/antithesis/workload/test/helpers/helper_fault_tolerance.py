@@ -93,6 +93,26 @@ FAULT_PATTERNS: tuple[str, ...] = (
     # reqwest's wording when materialized's HTTP response (e.g. the
     # `--check-catalog-consistency` GET /api/catalog/dump) is cut off.
     "connection closed before message completed",
+    # duckdb's httpfs extension when its S3 client can't reach the
+    # endpoint (minio or polaris paused/killed/clogged).  Surfaces via
+    # testdrive's `$ duckdb-query` as `IO Error: Could not establish
+    # connection error for HTTP GET to '...'`.  Distinct from
+    # "could not connect to server" (psycopg/libpq) — this one is the
+    # duckdb side's wording for the same TCP-level failure.
+    "Could not establish connection",
+    # reqwest's outer wording when the response body deserialization fails
+    # because the connection was torn mid-body.  Observed via the iceberg
+    # driver's testdrive duckdb-query: the duckdb iceberg catalog client
+    # reaches into the REST API, polaris's TCP gets dropped under fault
+    # injection, and the full error chain surfaces as
+    # `error: catalog inconsistency: catalog state / Caused by: deserialize
+    # catalog / error decoding response body / error reading a body from
+    # connection / end of file before message length reached`.  Matching
+    # the reqwest-level wording absorbs the whole family at once — the
+    # deeper hyper-level "end of file before message length reached" line
+    # is also present, but this string fires earlier in the chain and is
+    # the most stable across reqwest version bumps.
+    "error decoding response body",
     # tiberius (Rust TDS driver) when sql-server's connection dies
     # mid-statement.  Wrapped by testdrive's `$ sql-server-execute`
     # directive as `error: executing SQL Server query: ...`.

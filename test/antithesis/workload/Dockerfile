@@ -112,6 +112,43 @@ COPY --from=testdrive-src /usr/local/lib/libduckdb.so /usr/local/lib/libduckdb.s
 COPY --from=testdrive-src /usr/lib/libfdb_c.so /usr/lib/libfdb_c.so
 RUN ldconfig
 
+# Pre-stage the iceberg + httpfs DuckDB extensions.
+#
+# testdrive's `duckdb-execute` / `duckdb-query` directives open an in-memory
+# DuckDB connection that runs `INSTALL iceberg; LOAD iceberg; INSTALL httpfs;
+# LOAD httpfs;` (see src/testdrive/src/action/duckdb.rs).  `INSTALL` reaches
+# out to `extensions.duckdb.org` over HTTP, which the Antithesis sandbox
+# blocks — the iceberg driver fails at startup with `Failed to download
+# extension "iceberg"`.
+#
+# Fix: download the extensions at image build time (we have network here)
+# and have testdrive `LOAD '<path>'` directly when `MZ_DUCKDB_EXTENSION_DIR`
+# is set.  `LOAD <path>` per duckdb docs
+# (https://duckdb.org/docs/current/extensions/advanced_installation_methods)
+# skips the install step entirely.
+#
+# Version + platform must match the duckdb-sys we build against —
+# `[workspace.dependencies] duckdb = { version = "1.4.3", ... }` in the
+# root Cargo.toml.  Antithesis runs amd64-only; the path here is
+# linux_amd64 unconditionally because every flavor of this image is
+# built for that platform (`--platform=linux/amd64` in mzbuild).
+ARG DUCKDB_VERSION=v1.4.3
+ARG DUCKDB_PLATFORM=linux_amd64
+ENV MZ_DUCKDB_EXTENSION_DIR=/opt/duckdb-extensions
+# `avro` is required by iceberg's `iceberg_duckdb_cpp_init` (the iceberg
+# extension's init function pulls avro on first LOAD).  Without it,
+# `LOAD '.../iceberg.duckdb_extension'` triggers an `INSTALL avro` that
+# tries to fetch from extensions.duckdb.org, fails in the sandbox, and
+# fails the whole LOAD with `automatically install the required
+# extension 'avro'`.  Pre-staging it here means the iceberg LOAD finds
+# avro already-loaded in the duckdb process (provided we LOAD avro
+# first — see src/testdrive/src/action/duckdb.rs).
+RUN mkdir -p "$MZ_DUCKDB_EXTENSION_DIR" \
+ && for ext in avro iceberg httpfs; do \
+        curl -fsSL "http://extensions.duckdb.org/${DUCKDB_VERSION}/${DUCKDB_PLATFORM}/${ext}.duckdb_extension.gz" \
+            | gunzip > "$MZ_DUCKDB_EXTENSION_DIR/${ext}.duckdb_extension" ; \
+    done
+
 # Repo-checked-in testdrive .td files for the testdrive-runner drivers,
 # brought into the build context by the `pre-image: copy` step in
 # mzbuild.yml. The drivers reference these by repo-relative path under

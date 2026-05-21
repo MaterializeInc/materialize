@@ -1,0 +1,99 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Per-group Antithesis workload image.  The Dockerfile is shared across
+# every group via a symlink to test/antithesis/workload/Dockerfile and
+# selects the group's script subset at build time using the
+# ANTITHESIS_WORKLOAD_GROUP build arg.
+
+name: antithesis-workload-iceberg
+publish: false
+
+build-args:
+  ANTITHESIS_WORKLOAD_GROUP: iceberg
+
+pre-image:
+  # Source files shared with the other workload-<group> images.  The
+  # canonical location is test/antithesis/workload/; mzbuild build
+  # contexts can't reach upward in the tree, so each per-group image
+  # copies them in here.
+  - type: copy
+    source: test/antithesis/workload
+    destination: .
+    matching: test/**
+  - type: copy
+    source: test/antithesis/workload
+    destination: .
+    matching: stubs/**
+  - type: copy
+    source: test/antithesis/workload
+    destination: .
+    matching: setup-complete.sh
+  - type: copy
+    source: test/antithesis/workload
+    destination: .
+    matching: workload-entrypoint.sh
+  - type: copy
+    source: test/antithesis/workload
+    destination: .
+    matching: bake-test-templates.sh
+  - type: copy
+    source: test/antithesis/workload
+    destination: .
+    matching: scripts-for-group.py
+  - type: copy
+    source: test/antithesis
+    destination: .
+    matching: groups.yaml
+  # The iceberg group doesn't use the parallel_workload framework
+  # itself, but the shared Dockerfile unconditionally COPYs
+  # /opt/antithesis-pkg/materialize/ (because the stubs layer expects
+  # that destination to exist) and trips if the build context is
+  # missing those files.  Match what the other workload images include
+  # so the COPY is satisfied; the iceberg drivers don't import any of
+  # this and the helper_iceberg/helper_polaris_setup code paths don't
+  # need the parallel_workload package.
+  - type: copy
+    source: misc/python
+    destination: .
+    matching: materialize/__init__.py
+  - type: copy
+    source: misc/python
+    destination: .
+    matching: materialize/util.py
+  - type: copy
+    source: misc/python
+    destination: .
+    matching: materialize/sqlsmith.py
+  - type: copy
+    source: misc/python
+    destination: .
+    matching: materialize/parallel_workload/**
+  - type: copy
+    source: misc/python
+    destination: .
+    matching: materialize/data_ingest/**
+  # Repository-checked-in testdrive scripts.  The shared workload
+  # Dockerfile unconditionally `COPY testdrive-files/ /opt/testdrive-files/`,
+  # so the build context must produce that directory.  The iceberg
+  # parallel driver generates its `.td` content inline via
+  # `helper_testdrive.run_inline` (so it can parameterise on
+  # per-invocation batch_id), but bundling `test/iceberg/*.td` plus a
+  # placeholder pg-cdc glob keeps the layout uniform with the other
+  # groups and leaves the door open for a future
+  # `singleton_driver_iceberg_testdrive` runner that exercises the
+  # checked-in regression tests directly.
+  - type: copy
+    source: .
+    destination: testdrive-files
+    matching: test/iceberg/*.td
+  - type: copy
+    source: .
+    destination: testdrive-files
+    matching: test/pg-cdc/*.td

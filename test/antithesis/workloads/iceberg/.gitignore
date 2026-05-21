@@ -1,0 +1,12 @@
+# Populated at image-build time by the `pre-image: type: copy` directives
+# in mzbuild.yml — committing them would diverge from the source tree at
+# test/antithesis/workload/ and misc/python/materialize/.
+/test/
+/stubs/
+/materialize/
+/testdrive-files/
+/groups.yaml
+/setup-complete.sh
+/workload-entrypoint.sh
+/bake-test-templates.sh
+/scripts-for-group.py

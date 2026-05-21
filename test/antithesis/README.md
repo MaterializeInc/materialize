@@ -166,6 +166,7 @@ the same timeline.
 | `pg-cdc`            | PG CDC source correctness under upstream-PG / clusterd / envd faults                           | postgres-source, clusterd2                                                            |
 | `mysql-cdc`         | MySQL CDC + MyISAM no-data-loss + GTID monotonicity, multithreaded replica                     | mysql, mysql-replica, clusterd2                                                       |
 | `sql-server-cdc`    | SQL Server CDC source correctness                                                              | sql-server, clusterd2                                                                 |
+| `iceberg`           | Iceberg sink correctness: no-data-loss + no-duplication per batch_id under polaris/minio/clusterd faults | polaris-bootstrap, polaris, clusterd2                                                  |
 | `parallel-workload` | Randomized concurrent SQL stress + SinceViolation drivers — broadest                           | kafka stack, postgres-source, mysql primary+replica, polaris, clusterd2, clusterd-pool-0/1 |
 | `upsert-stress`     | Focused stress for INC-936 (single 1-worker clusterd1 + 6 long-lived `upsert-hammer-{i}` pods) | zookeeper, kafka, schema-registry, upsert-hammer-0..5                                  |
 | `combined`          | Kitchen-sink: every service + every driver from every focused group                            | all of the above                                                                      |

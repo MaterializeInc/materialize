@@ -218,6 +218,50 @@ groups:
       - sql-server-cdc/singleton_driver_sql_server_cdc_testdrive
     anytime: []
 
+  iceberg:
+    description: >-
+      Iceberg sink correctness under polaris / minio / clusterd /
+      environmentd fault injection. Mirrors the source-side property
+      tests (no-data-loss, no-data-duplication) from the other end of
+      the pipeline: MZ table -> iceberg sink -> Polaris-backed iceberg
+      table, with duckdb-side verification via `iceberg_scan`.
+
+      Topology: polaris + polaris-bootstrap for the REST catalog,
+      clusterd2 for multi-replica antithesis_cluster (so the sink can
+      survive single-replica kills).  Minio is universal.
+
+      The interesting concurrency for this group comes from many
+      parallel driver invocations writing distinct per-invocation
+      batch_ids through the same long-lived sink, while the global
+      fault-orchestrator partitions polaris, drops minio packets, and
+      kills clusterd.  The properties are the safety contracts that
+      would surface a "double-committed snapshot" bug (SS-148) without
+      specifically targeting it: COUNT(*) on the iceberg side must
+      equal COUNT(*) on the MZ side for every batch_id, and per-row
+      values must match.
+
+      `postgres-source` is in the topology so polaris-bootstrap can
+      reach it via the `postgres` network alias that export-compose
+      attaches.  Polaris stores its catalog metadata in this postgres
+      (parallel-workload uses the same arrangement); without it the
+      polaris-bootstrap container exits with `PSQLException: The
+      connection attempt failed` at setup time and Antithesis fails
+      the run before any driver fires.  Sharing postgres-metadata
+      instead would risk schema collisions with materialized's own
+      consensus store.
+    services:
+      - postgres-source
+      - polaris-bootstrap
+      - polaris
+      - clusterd2
+    setup:
+      - iceberg/first_iceberg_setup
+    drivers:
+      - iceberg/parallel_driver_iceberg_no_data_loss_or_dup
+    anytime:
+      - iceberg/anytime_iceberg_sink_status_running
+      - iceberg/anytime_iceberg_messages_committed_monotonic
+
   parallel-workload:
     description: >-
       Randomized concurrent SQL stress (parallel_workload framework)
@@ -292,6 +336,7 @@ groups:
       - mysql-cdc/first_mysql_replica_setup
       - sql-server-cdc/first_sql_server_cdc_setup
       - parallel-workload/first_setup
+      - iceberg/first_iceberg_setup
     drivers:
       - kafka/parallel_driver_kafka_none_envelope
       - kafka/parallel_driver_upsert_latest_value
@@ -308,6 +353,9 @@ groups:
       - parallel-workload/parallel_driver_explicit_txn_no_since_violation
       - parallel-workload/parallel_driver_explicit_txn_prepare_execute
       - parallel-workload/parallel_driver_pw_hot_objects
+      - iceberg/parallel_driver_iceberg_no_data_loss_or_dup
     anytime:
       - kafka/anytime_kafka_frontier_monotonic
       - kafka/anytime_kafka_offset_known_not_below_committed
+      - iceberg/anytime_iceberg_sink_status_running
+      - iceberg/anytime_iceberg_messages_committed_monotonic

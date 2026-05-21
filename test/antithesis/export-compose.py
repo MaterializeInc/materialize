@@ -82,6 +82,7 @@ MATERIALIZE_IMAGES = {
     "antithesis-workload-mysql-cdc": "${ANTITHESIS_WORKLOAD_IMAGE}",
     "antithesis-workload-sql-server-cdc": "${ANTITHESIS_WORKLOAD_IMAGE}",
     "antithesis-workload-parallel-workload": "${ANTITHESIS_WORKLOAD_IMAGE}",
+    "antithesis-workload-iceberg": "${ANTITHESIS_WORKLOAD_IMAGE}",
     "antithesis-workload-upsert-stress": "${ANTITHESIS_WORKLOAD_IMAGE}",
     "antithesis-workload-combined": "${ANTITHESIS_WORKLOAD_IMAGE}",
     # Standalone hammer image — only referenced by the `upsert-stress`
