@@ -10,6 +10,7 @@
 """End-to-end tests for the MCP (Model Context Protocol) HTTP endpoints."""
 
 import json
+import re
 import time
 
 import requests
@@ -812,3 +813,50 @@ def workflow_default(c: Composition) -> None:
             "replica_count",
             "hydrated_replica_count",
         }, f"unexpected keys in hydration object: {hydration}"
+
+
+def workflow_oauth_metadata_host_injection(c: Composition) -> None:
+    with c.override(
+        Materialized(
+            listeners_config_path=f"{MZ_ROOT}/test/mcp/listener_config_password.json",
+        )
+    ):
+        c.up("materialized")
+        base = f"http://localhost:{c.port('materialized', 6876)}"
+        c.sql(
+            "ALTER SYSTEM SET oidc_issuer = 'https://issuer.example.com'",
+            user="mz_system",
+            port=6877,
+            print_statement=False,
+        )
+
+        attacker_host = 'attacker.example.net" foo=bar'
+        attacker_prefix = "https://attacker.example.net"
+
+        with c.test_case("vuln_www_authenticate_host_injection"):
+            r = requests.post(
+                f"{base}/api/mcp/agent",
+                json=jsonrpc("tools/list"),
+                headers={"X-Forwarded-Host": attacker_host},
+            )
+            assert r.status_code == 401, f"{r.status_code}: {r.text}"
+            challenges = r.headers.get("WWW-Authenticate", "")
+            m = re.search(r'Bearer\s+resource_metadata="([^"]*)"', challenges)
+            assert m, challenges
+            assert not m.group(1).startswith(attacker_prefix), m.group(1)
+
+        with c.test_case("vuln_metadata_resource_host_injection"):
+            r = requests.get(
+                f"{base}/.well-known/oauth-protected-resource",
+                headers={"X-Forwarded-Host": attacker_host},
+            )
+            assert r.status_code == 200, f"{r.status_code}: {r.text}"
+            resource = r.json().get("resource", "")
+            assert not resource.startswith(attacker_prefix), resource
+
+        with c.test_case("vuln_metadata_cache_control_missing"):
+            r = requests.get(f"{base}/.well-known/oauth-protected-resource")
+            cache_control = r.headers.get("Cache-Control", "")
+            assert "no-store" in cache_control or "private" in cache_control, (
+                repr(cache_control)
+            )
