@@ -1416,3 +1416,51 @@ LIMIT 3 OFFSET 1;
 2  l2
 1  a
 1  l1
+
+# Regression test: `text_to_"char"` and `text_to_bytea` are non-injective and
+# must NOT be treated as uniqueness-preserving by cast inversion in
+# `invert_casts_on_expr_eq_literal_inner` (called from `CanonicalizeMfp` and
+# `literal_constraints`). Otherwise `f(col) = lit` is rewritten to
+# `col = f_inv(lit)` where `f_inv` collapses distinct literals, returning rows
+# whose `col::text` does not actually equal the literal.
+
+statement ok
+CREATE TABLE t_char_cast (c "char")
+
+statement ok
+INSERT INTO t_char_cast VALUES ('a'::"char")
+
+statement ok
+CREATE DEFAULT INDEX ON t_char_cast
+
+# 'a'::"char"::text = 'a' which does NOT equal 'abc' — expect 0 rows.
+query T rowsort
+SELECT c FROM t_char_cast WHERE c::text = 'abc'
+----
+
+# Sanity check: the truthful predicate still matches.
+query T rowsort
+SELECT c FROM t_char_cast WHERE c::text = 'a'
+----
+a
+
+statement ok
+CREATE TABLE t_bytea_cast (b bytea)
+
+statement ok
+INSERT INTO t_bytea_cast VALUES (E'\\x41'::bytea)
+
+statement ok
+CREATE DEFAULT INDEX ON t_bytea_cast
+
+# bytea_to_text always formats as hex ('\x41'), so b::text != 'A' — expect 0 rows.
+query T rowsort
+SELECT b FROM t_bytea_cast WHERE b::text = 'A'
+----
+
+# Sanity check: hex-formatted literal that round-trips truthfully.
+# (Sqllogictest formats a one-byte bytea 0x41 as the raw byte, i.e. `A`.)
+query T rowsort
+SELECT b FROM t_bytea_cast WHERE b::text = '\x41'
+----
+A
