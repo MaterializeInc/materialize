@@ -49,6 +49,14 @@ def post_mcp(c: Composition, endpoint: str, body: dict) -> requests.Response:
 
 
 def workflow_default(c: Composition) -> None:
+    for name in c.workflows:
+        if name == "default":
+            continue
+        with c.test_case(name):
+            c.workflow(name)
+
+
+def workflow_endpoints(c: Composition) -> None:
     c.up("materialized")
 
     # MCP feature flags default to true; no explicit enable needed.
