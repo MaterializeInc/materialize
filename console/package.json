@@ -23,7 +23,7 @@
     "typecheck": "tsc",
     "gen:api": "openapi-typescript",
     "gen:types": "bin/generate-types",
-    "gen:mz-doc-urls": "ts-node-esm sitemap-to-json/index.ts"
+    "gen:mz-doc-urls": "tsx sitemap-to-json/index.ts"
   },
   "dependencies": {
     "@chakra-ui/icons": "^2.2.4",
@@ -179,6 +179,7 @@
     "prettier": "^3.3.3",
     "react-refresh": "^0.14.2",
     "terser": "^5.46.1",
+    "tsx": "^4.22.2",
     "typescript-eslint-language-service": "^5.0.5",
     "vite": "^6.4.2",
     "vite-bundle-analyzer": "^0.12.1",

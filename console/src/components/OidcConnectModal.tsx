@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import {
+  Code,
   ModalBody,
   ModalCloseButton,
   ModalContent,
@@ -26,6 +27,7 @@ import {
 } from "~/components/copyableComponents";
 import McpConnectInstructions from "~/components/McpConnectInstructions";
 import { Modal } from "~/components/Modal";
+import TextLink from "~/components/TextLink";
 import { type AuthContextProps } from "~/external-library-wrappers/oidc";
 import { useSelfManagedProfile } from "~/hooks/useSelfManagedProfile";
 import ConnectionIcon from "~/svg/ConnectionIcon";
@@ -33,6 +35,7 @@ import { MaterializeTheme } from "~/theme";
 import { obfuscateSecret } from "~/utils/format";
 
 const OIDC_USERNAME_PLACEHOLDER = "<your_oidc_username>";
+const HOST_PLACEHOLDER = "<host>";
 
 const OidcConnectModal = ({
   onClose,
@@ -51,9 +54,7 @@ const OidcConnectModal = ({
 
   const obfuscated = idToken ? obfuscateSecret(idToken) : "";
 
-  // Default to the console's hostname, but customers may need to adjust
-  // if Materialize is exposed on a different host behind a load balancer.
-  const defaultSqlAddress = `${window.location.hostname}:6875`;
+  const sqlAddress = `${HOST_PLACEHOLDER}:6875`;
 
   return (
     <Modal size="3xl" isOpen={isOpen} onClose={onClose}>
@@ -67,15 +68,26 @@ const OidcConnectModal = ({
             whiteSpace="normal"
             color={colors.foreground.secondary}
           >
-            Use the details below to connect to Materialize. The host and port
-            shown are defaults and may need to be adjusted for your deployment.
-            When prompted for a password, paste the ID token.
+            Replace <Code fontSize="xs">{HOST_PLACEHOLDER}</Code> with your
+            Materialize SQL endpoint. For Terraform installs, run{" "}
+            <Code fontSize="xs">
+              terraform output -raw balancerd_load_balancer_ip
+            </Code>{" "}
+            to get it. See the{" "}
+            <TextLink
+              href="https://materialize.com/docs/self-managed-deployments/installation/install-on-gcp/#step-3-apply-the-terraform"
+              isExternal
+            >
+              installation docs
+            </TextLink>{" "}
+            for full setup details. When prompted for a password, paste the ID
+            token below.
           </Text>
           {idToken ? (
             <VStack alignItems="stretch" spacing={6} mt="4">
               <ConnectInstructions
                 userStr={userStr}
-                environmentdAddress={defaultSqlAddress}
+                environmentdAddress={sqlAddress}
               />
               <VStack alignItems="stretch" spacing={2}>
                 <Text textStyle="heading-xs">ID Token</Text>
@@ -92,22 +104,17 @@ const OidcConnectModal = ({
               </VStack>
             </VStack>
           ) : (
-            <VStack alignItems="stretch" spacing={4} mt="4">
-              <Text fontSize="sm">
-                No ID token available. Please sign in again to access SQL
-                connection details.
-              </Text>
-              <TabbedCodeBlock
-                tabs={[
-                  {
-                    title: "MCP Server",
-                    children: <McpConnectInstructions userStr={userStr} />,
-                    icon: <ConnectionIcon w="4" h="4" />,
-                  },
-                ]}
-                minHeight="208px"
-              />
-            </VStack>
+            <TabbedCodeBlock
+              mt="4"
+              tabs={[
+                {
+                  title: "MCP Server",
+                  children: <McpConnectInstructions userStr={userStr} />,
+                  icon: <ConnectionIcon w="4" h="4" />,
+                },
+              ]}
+              minHeight="208px"
+            />
           )}
         </ModalBody>
       </ModalContent>
