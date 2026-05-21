@@ -142,6 +142,25 @@ FAULT_PATTERNS: tuple[str, ...] = (
     # HikariCP-style (polaris's connection pool) exhaustion when the
     # JDBC upstream stays paused longer than the pool's wait budget.
     "Acquisition timeout while waiting for new connection",
+    # Polaris's JDBC PostgreSQL driver (org.postgresql) raises a PSQLException
+    # with this exact wording when its socket to postgres-metadata is torn
+    # mid-write — verbatim from `PgStream.flush()` in the upstream driver.
+    # Surfaces through Materialize's CREATE CONNECTION ... TO ICEBERG
+    # validation path as
+    # `failed to list namespaces: DataInvalid, context: { type:
+    #  RuntimeException, code: 500 } => Failed to retrieve polaris entity
+    #  due to Failed due to 'An I/O error occurred while sending to the
+    #  backend.' (error code 0, sql-state '08006')`.
+    # Distinct from `"terminating connection due to administrator command"`
+    # (server-side pg_terminate_backend) — that fires when postgres-metadata
+    # itself cleanly tears the session; this one fires when the TCP path is
+    # cut while the JDBC driver is mid-send.
+    "An I/O error occurred while sending to the backend",
+    # SQLSTATE 08006 = `connection_failure` (Postgres standard). Catch-all
+    # for any 08006 surface — broadens coverage beyond the specific JDBC
+    # wording above so future Polaris driver versions / different inner
+    # transports don't re-escape tolerance under the same fault profile.
+    "sql-state '08006'",
 )
 
 
