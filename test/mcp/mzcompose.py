@@ -907,6 +907,6 @@ def workflow_oauth_metadata_host_injection(c: Composition) -> None:
         with c.test_case("vuln_metadata_cache_control_missing"):
             r = requests.get(f"{base}/.well-known/oauth-protected-resource")
             cache_control = r.headers.get("Cache-Control", "")
-            assert "no-store" in cache_control or "private" in cache_control, (
-                repr(cache_control)
+            assert "no-store" in cache_control or "private" in cache_control, repr(
+                cache_control
             )

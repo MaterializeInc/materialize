@@ -949,7 +949,6 @@ pub(crate) struct WwwAuthenticateChallenges {
     pub bearer_resource_metadata: Option<String>,
 }
 
-
 #[derive(Debug, Error)]
 pub(crate) enum AuthError {
     #[error("role dissallowed")]

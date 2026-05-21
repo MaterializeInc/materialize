@@ -140,12 +140,17 @@ pub async fn handle_protected_resource_metadata(
 ) -> Response {
     // No-auth listener: there is no token to validate, nothing to
     // advertise. Refuse to publish.
-    if matches!(config.authenticator_kind, listeners::AuthenticatorKind::None) {
+    if matches!(
+        config.authenticator_kind,
+        listeners::AuthenticatorKind::None
+    ) {
         return StatusCode::NOT_FOUND.into_response();
     }
 
     let Some(host) = resolve_host(&req, config.http_host_name.as_deref()) else {
-        warn!("oauth-protected-resource: no http_host_name configured and request has no Host header");
+        warn!(
+            "oauth-protected-resource: no http_host_name configured and request has no Host header"
+        );
         return (StatusCode::BAD_REQUEST, "no host available").into_response();
     };
     let scheme = scheme_for(&req);
