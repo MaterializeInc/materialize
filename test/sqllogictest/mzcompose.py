@@ -30,14 +30,14 @@ from materialize.mzcompose.composition import (
     WorkflowArgumentParser,
 )
 from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
-from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.mzx import Mzx
 from materialize.mzcompose.services.sql_logic_test import SqlLogicTest
 from materialize.ui import CommandFailureCausedUIError
 
 MAX_SLTS = 8
 SLTS = [f"slt_{i+1}" for i in range(MAX_SLTS)]
 
-SERVICES = [CockroachOrPostgresMetadata(), Mz(app_password="")] + [
+SERVICES = [CockroachOrPostgresMetadata(), Mzx(app_password="")] + [
     SqlLogicTest(name=slt) for slt in SLTS
 ]
 

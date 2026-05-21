@@ -25,7 +25,7 @@ from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.mzx import Mzx
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.test_result import FailedTestExecutionError
 from materialize.scalability.config.benchmark_config import BenchmarkConfiguration
@@ -85,7 +85,7 @@ SERVICES = [
     ),
     Postgres(),
     Balancerd(),
-    Mz(app_password=""),
+    Mzx(app_password=""),
 ]
 
 DEFAULT_REGRESSION_THRESHOLD = 0.2

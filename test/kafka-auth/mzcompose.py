@@ -18,7 +18,7 @@ from materialize import MZ_ROOT, buildkite
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.mzx import Mzx
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
 from materialize.mzcompose.services.test_certs import TestCerts
@@ -185,7 +185,7 @@ SERVICES = [
         volumes_extra=["secrets:/share/secrets"],
         default_timeout="30s",
     ),
-    Mz(app_password=""),
+    Mzx(app_password=""),
 ]
 
 

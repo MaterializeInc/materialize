@@ -28,7 +28,7 @@ from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
-from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.mzx import Mzx
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
@@ -49,7 +49,7 @@ SERVICES = [
         ],
     ),
     SchemaRegistry(),
-    Mz(app_password=""),
+    Mzx(app_password=""),
     Materialized(),
     Testdrive(
         entrypoint_extra=[

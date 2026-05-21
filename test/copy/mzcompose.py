@@ -33,7 +33,7 @@ from materialize.mzcompose.service import Service as DockerService
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc
 from materialize.mzcompose.services.minio import Minio as MinioService
-from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.mzx import Mzx
 from materialize.mzcompose.services.testdrive import Testdrive
 
 SERVICES = [
@@ -42,7 +42,7 @@ SERVICES = [
         ports=["9000:9000", "9001:9001"],
         allow_host_ports=True,
     ),
-    Mz(app_password=""),
+    Mzx(app_password=""),
     Materialized(
         additional_system_parameter_defaults={
             "log_filter": "mz_storage_operators::s3_oneshot_sink=trace,info"

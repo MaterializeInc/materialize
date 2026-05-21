@@ -1770,7 +1770,7 @@ class Composition:
     def cloud_hostname(
         self, quiet: bool = False, timeout_secs: int = 180, poll_interval: float = 2.0
     ) -> str:
-        """Uses the mz command line tool to get the hostname of the cloud instance, waiting until the region is ready."""
+        """Uses the mzx command line tool to get the hostname of the cloud instance, waiting until the region is ready."""
         if not quiet:
             print("Obtaining hostname of cloud instance ...")
 
@@ -1779,7 +1779,7 @@ class Composition:
 
         while time.time() < deadline:
             proc = self.run(
-                "mz",
+                "mzx",
                 "region",
                 "show",
                 capture=True,

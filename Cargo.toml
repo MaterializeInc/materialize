@@ -56,7 +56,7 @@ members = [
     "src/metabase",
     "src/metrics",
     "src/mysql-util",
-    "src/mz",
+    "src/mzx",
     "src/mz-debug",
     "src/npm",
     "src/oidc-mock",
@@ -180,7 +180,7 @@ default-members = [
     "src/metabase",
     "src/metrics",
     "src/mysql-util",
-    "src/mz",
+    "src/mzx",
     "src/mz-debug",
     "src/npm",
     "src/oidc-mock",
@@ -459,7 +459,7 @@ schemars = { version = "1.2.1", features = ["uuid1"] }
 scopeguard = "1.2.0"
 seahash = "4.1.0"
 segment = { version = "0.2.6", default-features = false, features = ["native-tls-vendored"] }
-semver = "1.0.28"
+semver = { version = "1.0.28", features = ["serde"] }
 sentry = { version = "0.46.1", default-features = false, features = ["backtrace", "contexts", "debug-images", "transport"] }
 sentry-panic = "0.46.1"
 sentry-tracing = "0.46.1"

@@ -30,7 +30,7 @@ from materialize.mzcompose.composition import (
     Service,
     WorkflowArgumentParser,
 )
-from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.mzx import Mzx
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.test_result import (
     FailedTestExecutionError,
@@ -40,7 +40,7 @@ from materialize.ui import CommandFailureCausedUIError
 
 SERVICES = [
     Testdrive(),  # Overridden below
-    Mz(app_password=""),  # Overridden below
+    Mzx(app_password=""),  # Overridden below
 ]
 
 CONNECTION_ERROR_STRINGS = [

@@ -17,12 +17,12 @@ import requests
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.mzx import Mzx
 
 SENTRY_DSN = os.getenv("BUILDKITE_SENTRY_DSN")
 
 SERVICES = [
-    Mz(app_password=""),
+    Mzx(app_password=""),
     Materialized(
         options=[
             "--opentelemetry-endpoint=whatever:7777",

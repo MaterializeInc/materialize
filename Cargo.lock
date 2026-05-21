@@ -5405,44 +5405,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mz"
-version = "0.3.1"
-dependencies = [
- "assert_cmd",
- "axum",
- "clap",
- "csv",
- "dirs",
- "hyper 1.9.0",
- "indicatif",
- "maplit",
- "mz-build-info",
- "mz-cloud-api",
- "mz-frontegg-auth",
- "mz-frontegg-client",
- "mz-ore",
- "mz-sql-parser",
- "open",
- "openssl-probe",
- "reqwest",
- "rpassword",
- "security-framework",
- "semver",
- "serde",
- "serde-aux",
- "serde_json",
- "tabled",
- "termcolor",
- "thiserror 2.0.18",
- "time",
- "tokio",
- "toml",
- "toml_edit 0.22.26",
- "url",
- "uuid",
-]
-
-[[package]]
 name = "mz-adapter"
 version = "0.0.0"
 dependencies = [
@@ -8477,6 +8439,44 @@ dependencies = [
  "quote",
  "syn 2.0.117",
  "tempfile",
+]
+
+[[package]]
+name = "mzx"
+version = "0.3.1"
+dependencies = [
+ "assert_cmd",
+ "axum",
+ "clap",
+ "csv",
+ "dirs",
+ "hyper 1.9.0",
+ "indicatif",
+ "maplit",
+ "mz-build-info",
+ "mz-cloud-api",
+ "mz-frontegg-auth",
+ "mz-frontegg-client",
+ "mz-ore",
+ "mz-sql-parser",
+ "open",
+ "openssl-probe",
+ "reqwest",
+ "rpassword",
+ "security-framework",
+ "semver",
+ "serde",
+ "serde-aux",
+ "serde_json",
+ "tabled",
+ "termcolor",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "toml",
+ "toml_edit 0.22.26",
+ "url",
+ "uuid",
 ]
 
 [[package]]

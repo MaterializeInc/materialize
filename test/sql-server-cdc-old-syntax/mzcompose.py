@@ -21,12 +21,12 @@ from materialize.mzcompose.composition import (
     WorkflowArgumentParser,
 )
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.mzx import Mzx
 from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.mzcompose.services.testdrive import Testdrive
 
 SERVICES = [
-    Mz(app_password=""),
+    Mzx(app_password=""),
     Materialized(
         additional_system_parameter_defaults={
             "log_filter": "mz_storage::source::sql_server=trace,mz_storage::source::sql_server::replication=trace,mz_sql_server_util=debug,info",

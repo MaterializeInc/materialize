@@ -37,7 +37,7 @@ from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.dnsmasq import Dnsmasq, DnsmasqEntry
 from materialize.mzcompose.services.frontegg import FronteggMock
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.mzx import Mzx
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
 
@@ -162,7 +162,7 @@ SERVICES = [
         ],
         networks={"balancerd": {"ipv4_address": STATIC_IPS["frontegg-mock"]}},
     ),
-    Mz(app_password=""),
+    Mzx(app_password=""),
     Materialized(
         options=[
             # Enable TLS on the public port to verify that balancerd is connecting to the balancerd

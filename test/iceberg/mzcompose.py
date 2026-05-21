@@ -20,13 +20,13 @@ from materialize.mzcompose.helpers.iceberg import (
 )
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc, Minio
-from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.mzx import Mzx
 from materialize.mzcompose.services.polaris import Polaris, PolarisBootstrap
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.testdrive import Testdrive
 
 SERVICES = [
-    Mz(app_password=""),
+    Mzx(app_password=""),
     Postgres(),
     Minio(),
     PolarisBootstrap(),

@@ -36,7 +36,7 @@ from materialize.mzcompose.services.metadata_store import (
     CockroachOrPostgresMetadata,
 )
 from materialize.mzcompose.services.minio import Minio
-from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.mzx import Mzx
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -145,7 +145,7 @@ def get_default_testdrive_size_args():
 
 
 SERVICES = [
-    Mz(app_password=""),
+    Mzx(app_password=""),
     Materialized(
         volumes_extra=["secrets:/share/secrets"],
         additional_system_parameter_defaults={

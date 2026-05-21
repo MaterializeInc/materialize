@@ -19,7 +19,7 @@ from materialize.mzcompose.composition import Composition, WorkflowArgumentParse
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.mzx import Mzx
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -31,7 +31,7 @@ SERVICES = [
     Kafka(),
     SchemaRegistry(),
     Redpanda(),
-    Mz(app_password=""),
+    Mzx(app_password=""),
     Materialized(default_replication_factor=2, support_external_clusterd=True),
     Clusterd(),
     Toxiproxy(),

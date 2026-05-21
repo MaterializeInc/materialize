@@ -30,7 +30,7 @@ from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.mysql import MySql
-from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.mzx import Mzx
 from materialize.mzcompose.services.polaris import Polaris, PolarisBootstrap
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
@@ -72,7 +72,7 @@ SERVICES = [
     Postgres(),
     MySql(),
     Clusterd(),
-    Mz(app_password=""),
+    Mzx(app_password=""),
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
     Mc(),
     PolarisBootstrap(),
