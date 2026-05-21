@@ -30,6 +30,31 @@ def get_default_system_parameters() -> dict[str, str]:
 cluster_replica_size_map: dict[str, Any] = {}
 
 
+def __getattr__(name: str) -> Any:
+    """Lazy re-export of `MzVersion`.
+
+    One Check class (`all_checks/password_auth.py`) still uses the
+    legacy `from materialize.mzcompose import MzVersion` import path
+    that the real `materialize.mzcompose.__init__` keeps as a
+    backwards-compat re-export.  Doing the import lazily here means:
+
+      * The platform-checks workload image (which bundles
+        `materialize.mz_version`) gets a working `MzVersion`.
+      * Every other workload group, which doesn't ship
+        `materialize.mz_version` and the `semver` pip dep it needs,
+        doesn't break on package-load just because the stub re-exports
+        something they never reference.
+
+    Anything other than `MzVersion` falls through to a normal
+    AttributeError, which is what Python's attribute lookup expects.
+    """
+    if name == "MzVersion":
+        from materialize.mz_version import MzVersion
+
+        return MzVersion
+    raise AttributeError(f"module 'materialize.mzcompose' has no attribute {name!r}")
+
+
 class _LoaderModule:
     pass
 

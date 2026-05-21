@@ -87,6 +87,47 @@ groups:
       - kafka/anytime_kafka_frontier_monotonic
       - kafka/anytime_kafka_offset_known_not_below_committed
 
+  testdrive:
+    description: >-
+      Repository-checked-in `test/testdrive/*.td` files run under
+      Antithesis fault injection. Counterpart to the per-source CDC
+      testdrive runners (`{pg,mysql,sql-server}-cdc` groups) — same
+      `singleton_driver_*_testdrive.py` shape, same `helper_testdrive`
+      plumbing, but pointed at the broader generic-testdrive suite.
+
+      Topology mirrors `kafka` (kafka + zookeeper + schema-registry +
+      clusterd2 on top of the universal services). Most files in
+      `test/testdrive/` exercise the Kafka source/sink + materialized-
+      view paths and need no upstream beyond that; the per-driver
+      `_EXCLUDE_FILES` set in `singleton_driver_testdrive.py`
+      explicitly lists files that need postgres-source, mysql,
+      ssh-bastion, SSL/SASL Kafka, AWS/S3, or the fivetran-destination
+      sidecar — services this group's compose deliberately does not
+      include.
+
+      Singleton (not parallel) because most `test/testdrive/*.td`
+      files take exclusive ownership of identifier names in `public`
+      (`t1`, `src1`, `cluster1`, …) with no DROP cleanup. Two
+      concurrent files in the same execution history would collide on
+      those names; Antithesis's singleton primitive runs at most once
+      per timeline, so each file gets the schema to itself.
+
+      No `anytime_kafka_*` probes here: the kafka-group anytime drivers
+      scope to `cluster = 'antithesis_cluster'`, but this group has no
+      `first_*` setup that creates that cluster — every .td file under
+      `test/testdrive/` lands its sources in `quickstart` (via the
+      `$ set-arg-default single-replica-cluster=quickstart` header most
+      of them carry). The probes would simply observe zero sources.
+    services:
+      - zookeeper
+      - kafka
+      - schema-registry
+      - clusterd2
+    setup: []
+    drivers:
+      - testdrive/singleton_driver_testdrive
+    anytime: []
+
   upsert-stress:
     description: >-
       Focused stress test for INC-936 ("invalid upsert state" panic).
@@ -214,6 +255,40 @@ groups:
       - sql-server-cdc/singleton_driver_sql_server_cdc_testdrive
     anytime: []
 
+  workload-replay:
+    description: >-
+      Replays queries from a captured Materialize web-console workload
+      against a live `materialized` under fault injection.  The bundled
+      capture (`workload/test/workload-replay/captured/console_cluster_tabs.yml`)
+      is a one-hour slice of console introspection traffic — 212
+      distinct query shapes (mostly catalog SELECTs plus a handful of
+      SUBSCRIBEs) that all target the built-in `mz_catalog_server`
+      cluster and the built-in `materialize` database.  Every
+      invocation samples a random subset, runs them concurrently via
+      worker threads, and asserts that nothing escaped the fault-
+      tolerance or capture-vs-current-build mismatch tolerance lists.
+
+      Topology is the bare universal set: postgres-metadata, minio,
+      materialized, clusterd1, fault-orchestrator, workload.  No
+      upstream sources / sinks are involved because the captured
+      workload's queries don't reference user objects — they only read
+      the system catalog.  That keeps the fault domain tightly focused
+      on pgwire / adapter / catalog paths and makes this the cheapest
+      of the focused groups to bring up.
+
+      The bundled capture lives under
+      `test/antithesis/workload/test/workload-replay/captured/` and is
+      a deduplicated-by-SQL slice of the upstream
+      `MaterializeInc/captured-workloads` repository's
+      `workload_console_cluster_tabs.yml` — see that file's header
+      comment for the provenance.
+    services: []
+    setup:
+      - workload-replay/first_setup
+    drivers:
+      - workload-replay/parallel_driver_workload_replay
+    anytime: []
+
   parallel-workload:
     description: >-
       Randomized concurrent SQL stress (parallel_workload framework)
@@ -261,6 +336,42 @@ groups:
       - parallel-workload/parallel_driver_pw_hot_objects
     anytime: []
 
+  platform-checks:
+    description: >-
+      Survives-faults coverage for the existing `test/platform-checks`
+      Check class catalog. Each Antithesis timeline picks one Check
+      class from a curated allow-list (table/MV/cluster-DDL-only — no
+      external sources) and runs its
+      `initialize -> manipulate(0) -> manipulate(1) -> validate ->
+      validate` testdrive fragments end-to-end.  Antithesis injects
+      container kills between phases.  Property: validate() must pass
+      after any sequence of injected faults during initialize /
+      manipulate, mirroring what the upstream `RestartEntireMz`,
+      `RestartCockroach`, and `KillClusterdStorage` scenarios verify
+      by hand — but with fault timing randomized rather than
+      enumerated.
+
+      The Antithesis port reuses the real `materialize.checks` Python
+      package (Check base class + all_checks/*.py) bundled into the
+      workload image.  Adding a Check to upstream
+      `misc/python/materialize/checks/all_checks/` automatically
+      extends Antithesis coverage as long as the Check is in the
+      allow-list — no driver edit needed.
+
+      Topology is intentionally minimal: universal services +
+      clusterd2 (so multi-replica scenarios are exercised by the
+      compute-replica-epoch-isolation path).  External sources
+      (Kafka, Postgres, MySQL, SQL Server) deliberately not included
+      — Checks that need them stay out of the allow-list and run in
+      their dedicated cdc groups via the testdrive-runner drivers
+      instead.
+    services:
+      - clusterd2
+    setup: []
+    drivers:
+      - platform-checks/singleton_driver_platform_check
+    anytime: []
+
   combined:
     description: >-
       Kitchen-sink topology: every service + every driver.  Antithesis
@@ -288,6 +399,7 @@ groups:
       - mysql-cdc/first_mysql_replica_setup
       - sql-server-cdc/first_sql_server_cdc_setup
       - parallel-workload/first_setup
+      - workload-replay/first_setup
     drivers:
       - kafka/parallel_driver_kafka_none_envelope
       - kafka/parallel_driver_upsert_latest_value
@@ -300,10 +412,13 @@ groups:
       - mysql-cdc/singleton_driver_mysql_cdc_testdrive
       - sql-server-cdc/parallel_driver_sql_server_cdc
       - sql-server-cdc/singleton_driver_sql_server_cdc_testdrive
+      - testdrive/singleton_driver_testdrive
       - parallel-workload/parallel_driver_parallel_workload
       - parallel-workload/parallel_driver_explicit_txn_no_since_violation
       - parallel-workload/parallel_driver_explicit_txn_prepare_execute
       - parallel-workload/parallel_driver_pw_hot_objects
+      - platform-checks/singleton_driver_platform_check
+      - workload-replay/parallel_driver_workload_replay
     anytime:
       - kafka/anytime_kafka_frontier_monotonic
       - kafka/anytime_kafka_offset_known_not_below_committed

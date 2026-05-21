@@ -81,8 +81,11 @@ MATERIALIZE_IMAGES = {
     "antithesis-workload-pg-cdc": "${ANTITHESIS_WORKLOAD_IMAGE}",
     "antithesis-workload-mysql-cdc": "${ANTITHESIS_WORKLOAD_IMAGE}",
     "antithesis-workload-sql-server-cdc": "${ANTITHESIS_WORKLOAD_IMAGE}",
+    "antithesis-workload-testdrive": "${ANTITHESIS_WORKLOAD_IMAGE}",
     "antithesis-workload-parallel-workload": "${ANTITHESIS_WORKLOAD_IMAGE}",
     "antithesis-workload-upsert-stress": "${ANTITHESIS_WORKLOAD_IMAGE}",
+    "antithesis-workload-platform-checks": "${ANTITHESIS_WORKLOAD_IMAGE}",
+    "antithesis-workload-workload-replay": "${ANTITHESIS_WORKLOAD_IMAGE}",
     "antithesis-workload-combined": "${ANTITHESIS_WORKLOAD_IMAGE}",
     # Standalone hammer image — only referenced by the `upsert-stress`
     # group's compose, but the placeholder is always emitted in `.env`

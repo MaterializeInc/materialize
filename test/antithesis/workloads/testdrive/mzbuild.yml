@@ -12,11 +12,11 @@
 # selects the group's script subset at build time using the
 # ANTITHESIS_WORKLOAD_GROUP build arg.
 
-name: antithesis-workload-combined
+name: antithesis-workload-testdrive
 publish: false
 
 build-args:
-  ANTITHESIS_WORKLOAD_GROUP: combined
+  ANTITHESIS_WORKLOAD_GROUP: testdrive
 
 pre-image:
   # Source files shared with the other workload-<group> images.  The
@@ -72,69 +72,20 @@ pre-image:
   - type: copy
     source: misc/python
     destination: .
-    matching: materialize/mz_version.py
-  - type: copy
-    source: misc/python
-    destination: .
     matching: materialize/parallel_workload/**
   - type: copy
     source: misc/python
     destination: .
     matching: materialize/data_ingest/**
-  # Check classes consumed by the platform-checks driver (also baked
-  # into the combined workload image because the combined group's
-  # drivers list includes platform-checks/singleton_driver_platform_check).
-  # `executors.py` is intentionally excluded — the stubs/ tree ships a
-  # tiny Executor base class so the heavy cloudtest / mzcompose imports
-  # don't follow.
-  - type: copy
-    source: misc/python
-    destination: .
-    matching: materialize/checks/__init__.py
-  - type: copy
-    source: misc/python
-    destination: .
-    matching: materialize/checks/checks.py
-  - type: copy
-    source: misc/python
-    destination: .
-    matching: materialize/checks/actions.py
-  - type: copy
-    source: misc/python
-    destination: .
-    matching: materialize/checks/common.py
-  - type: copy
-    source: misc/python
-    destination: .
-    matching: materialize/checks/features.py
-  - type: copy
-    source: misc/python
-    destination: .
-    matching: materialize/checks/all_checks/**
   # Repository-checked-in testdrive scripts that the testdrive-runner
   # drivers execute under Antithesis fault injection.  Keeping the
-  # source-of-truth path means new tests in `test/{pg,mysql,sql-server}-cdc/`
-  # and `test/testdrive/` are exercised against Antithesis as soon as
-  # their filenames are referenced by a singleton driver (or, for
-  # test/testdrive, allowed through that driver's exclude list).
+  # source-of-truth path means new tests in `test/testdrive/` are exercised
+  # against Antithesis as soon as the per-group exclude list in
+  # `singleton_driver_testdrive.py` allows them through.
   - type: copy
     source: .
     destination: testdrive-files
     matching: test/pg-cdc/*.td
-  - type: copy
-    source: .
-    destination: testdrive-files
-    matching: test/mysql-cdc/*.td
-  # SQL Server testdrive scripts plus the shared setup.td that the
-  # singleton runner prepends to each .td file.
-  - type: copy
-    source: .
-    destination: testdrive-files
-    matching: test/sql-server-cdc/*.td
-  - type: copy
-    source: .
-    destination: testdrive-files
-    matching: test/sql-server-cdc/setup/setup.td
   - type: copy
     source: .
     destination: testdrive-files

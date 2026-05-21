@@ -64,25 +64,30 @@ existing=$(
         "SELECT 1 FROM mz_clusters WHERE name = '$CLUSTER'"
 )
 if [[ -z "$existing" ]]; then
+    # Replica fan-out follows the topology, not the group name.  The
+    # upsert-stress group hard-codes single-replica because the bug it
+    # reproduces (INC-936) is single-worker-specific; other minimal
+    # groups (currently `workload-replay`) drop clusterd2 from the
+    # topology to keep the fault domain tight, and need single-replica
+    # provisioning to keep the CREATE CLUSTER REPLICAS statement from
+    # referencing a service that isn't there.  Detecting via docker DNS
+    # (`getent`) instead of branching on group name keeps future
+    # minimal-topology groups working without an entrypoint edit.
+    #
+    # `|| true` is required because `set -e` would otherwise abort on
+    # a missing host (getent exits 2 on EAI_NONAME); the `if` syntax's
+    # exit-code masking doesn't extend to commands inside `$(...)`.
+    has_clusterd2=$(getent hosts clusterd2 >/dev/null 2>&1 && echo yes || echo no)
     case "$ANTITHESIS_WORKLOAD_GROUP" in
         upsert-stress)
-            echo "Provisioning cluster '$CLUSTER' with one replica on clusterd1 (WORKERS=${CLUSTERD_WORKERS})..."
-            psql -h "$PGHOST" -p "$PGPORT_INTERNAL" -U "$PGUSER_INTERNAL" <<SQL
-CREATE CLUSTER ${CLUSTER} REPLICAS (
-    replica1 (
-        STORAGECTL ADDRESSES ['clusterd1:2100'],
-        STORAGE ADDRESSES ['clusterd1:2103'],
-        COMPUTECTL ADDRESSES ['clusterd1:2101'],
-        COMPUTE ADDRESSES ['clusterd1:2102'],
-        WORKERS ${CLUSTERD_WORKERS}
-    )
-);
-GRANT ALL ON CLUSTER ${CLUSTER} TO ${PGUSER};
-SQL
+            # Hard-pinned to single-replica regardless of topology — see
+            # the group's description in groups.yaml.
+            has_clusterd2=no
             ;;
-        *)
-            echo "Provisioning cluster '$CLUSTER' with replicas on clusterd1 + clusterd2..."
-            psql -h "$PGHOST" -p "$PGPORT_INTERNAL" -U "$PGUSER_INTERNAL" <<SQL
+    esac
+    if [[ "$has_clusterd2" = yes ]]; then
+        echo "Provisioning cluster '$CLUSTER' with replicas on clusterd1 + clusterd2..."
+        psql -h "$PGHOST" -p "$PGPORT_INTERNAL" -U "$PGUSER_INTERNAL" <<SQL
 CREATE CLUSTER ${CLUSTER} REPLICAS (
     replica1 (
         STORAGECTL ADDRESSES ['clusterd1:2100'],
@@ -101,8 +106,21 @@ CREATE CLUSTER ${CLUSTER} REPLICAS (
 );
 GRANT ALL ON CLUSTER ${CLUSTER} TO ${PGUSER};
 SQL
-            ;;
-    esac
+    else
+        echo "Provisioning cluster '$CLUSTER' with one replica on clusterd1 (WORKERS=${CLUSTERD_WORKERS})..."
+        psql -h "$PGHOST" -p "$PGPORT_INTERNAL" -U "$PGUSER_INTERNAL" <<SQL
+CREATE CLUSTER ${CLUSTER} REPLICAS (
+    replica1 (
+        STORAGECTL ADDRESSES ['clusterd1:2100'],
+        STORAGE ADDRESSES ['clusterd1:2103'],
+        COMPUTECTL ADDRESSES ['clusterd1:2101'],
+        COMPUTE ADDRESSES ['clusterd1:2102'],
+        WORKERS ${CLUSTERD_WORKERS}
+    )
+);
+GRANT ALL ON CLUSTER ${CLUSTER} TO ${PGUSER};
+SQL
+    fi
 else
     echo "Cluster '$CLUSTER' already exists; skipping provisioning."
 fi

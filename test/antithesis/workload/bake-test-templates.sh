@@ -73,6 +73,27 @@ for t in $templates; do
     done
 done
 
+# Per-template data subdirectories.  Templates can ship arbitrary
+# bundled data alongside their scripts (e.g. workload-replay's
+# `captured/` subdir holds a multi-megabyte captured-workload YAML
+# the driver replays).  Antithesis's command discovery ignores
+# directories, so any subdir is safe to copy verbatim — only files
+# at the top level can become test commands.  Manifests don't list
+# data dirs, so copy them based on `is a directory`.
+#
+# Skip `__pycache__`: it's noise if anyone py_compiled in the source
+# tree before the build context was staged, never anything we'd want
+# in the runtime image.
+for t in $templates; do
+    for d in "$STAGE/$t"/*/; do
+        [ -d "$d" ] || continue
+        case "$d" in
+            */__pycache__/) continue ;;
+        esac
+        cp -R "$d" "$ROOT/$t/"
+    done
+done
+
 # Copy each manifest entry to its destination(s).
 ANTITHESIS_WORKLOAD_GROUP="$GROUP" scripts-for-group | while read -r path; do
     template=${path%%/*}

@@ -16,7 +16,8 @@ make build-all                     # regenerate compose YAML for every group
 ```
 
 Valid `GROUP` values: `kafka`, `pg-cdc`, `mysql-cdc`, `sql-server-cdc`,
-`parallel-workload`, `upsert-stress`, `combined` (kitchen-sink, default).
+`testdrive`, `parallel-workload`, `upsert-stress`, `workload-replay`,
+`platform-checks`, `combined` (kitchen-sink, default).
 
 If you're here to **understand how this is wired up**, read on.
 
@@ -166,8 +167,11 @@ the same timeline.
 | `pg-cdc`            | PG CDC source correctness under upstream-PG / clusterd / envd faults                           | postgres-source, clusterd2                                                            |
 | `mysql-cdc`         | MySQL CDC + MyISAM no-data-loss + GTID monotonicity, multithreaded replica                     | mysql, mysql-replica, clusterd2                                                       |
 | `sql-server-cdc`    | SQL Server CDC source correctness                                                              | sql-server, clusterd2                                                                 |
+| `testdrive`         | Random `test/testdrive/*.td` file run under fault injection; pair of the per-source CDC testdrive runners against the generic-testdrive suite | zookeeper, kafka, schema-registry, clusterd2                                          |
 | `parallel-workload` | Randomized concurrent SQL stress + SinceViolation drivers — broadest                           | kafka stack, postgres-source, mysql primary+replica, polaris, clusterd2, clusterd-pool-0/1 |
 | `upsert-stress`     | Focused stress for INC-936 (single 1-worker clusterd1 + 6 long-lived `upsert-hammer-{i}` pods) | zookeeper, kafka, schema-registry, upsert-hammer-0..5                                  |
+| `workload-replay`   | Replay of a captured Materialize console workload (212 distinct query shapes) against materialized | none — universal services only                                                       |
+| `platform-checks`   | Survives-faults runner for `materialize.checks.all_checks` Check classes — picks one Check per timeline, runs initialize → manipulate × 2 → validate × 2 with faults interleaved | clusterd2 |
 | `combined`          | Kitchen-sink: every service + every driver from every focused group                            | all of the above                                                                      |
 
 **Universal services** (added to every group automatically by `groups.yaml`):
@@ -218,6 +222,7 @@ test/antithesis/
 │   │   ├── pg-cdc/                 # pg-cdc group …
 │   │   ├── mysql-cdc/              # mysql-cdc group …
 │   │   ├── sql-server-cdc/         # sql-server-cdc group …
+│   │   ├── testdrive/              # testdrive group …
 │   │   ├── parallel-workload/      # parallel-workload group …
 │   │   └── helpers/                # helper_*.py — shared utilities; ignored by Test Composer
 │   └── stubs/materialize/mzcompose/   # stubs satisfying parallel_workload's module-load imports
@@ -537,37 +542,18 @@ Today the POC covers (per workload group):
 - Randomized concurrent SQL stress + SinceViolation — `parallel-workload`
 - Focused upsert stress (INC-936) — `upsert-stress`
 - Strict-serializable reads & MV correctness — `defaults`
+- Captured production-workload query replay — `workload-replay`
+- Generic testdrive suite (`test/testdrive/*.td`) under faults — `testdrive`
+- `test/platform-checks` Check classes under fault injection — `platform-checks`
+  (reuses the upstream `materialize.checks.all_checks` Python tree; adding
+  a new `Check` subclass upstream extends Antithesis coverage as long as
+  the class name is in the driver's allow-list)
 
 There's a long tail of in-tree test frameworks under `test/` that exercise
 correctness properties Antithesis is unusually well-suited to amplify. Below
 are the strongest candidates, roughly in order of return-on-effort.
 
-### 1. `test/platform-checks` — highest leverage
-
-**Why it's a fit.** Platform-checks already encodes properties as
-`Check` classes with `initialize` / `manipulate` / `validate` phases,
-exercised across upgrade / restart / backup-restore / zero-downtime-deploy
-**scenarios**. That structure is a near-1:1 mapping to Antithesis's
-`first_` + `parallel_driver_` + `singleton_driver_` shape — and the
-"scenario" abstraction is exactly the kind of restart/upgrade interleaving
-Antithesis can fault-inject randomly rather than enumerate by hand.
-
-**Properties to land.** "Every materialized DDL persists across an
-environmentd restart" (already partially covered by
-`catalog_recovery_consistency`), "every source resumes ingestion after
-clusterd restart", "schema migrations are atomic across upgrade", and the
-full battery of `Check` subclasses in `misc/python/materialize/checks/`.
-
-**Effort.** Medium. Each Check class needs an adapter that drives its
-`manipulate` phase from a `parallel_driver_` and its `validate` phase from
-either an `anytime_` probe or a `singleton_driver_` post-fault check.
-Scenarios become "this driver should still pass when Antithesis kills
-environmentd/clusterd between cycle N and cycle N+1," which is mostly free.
-
-**Group.** A new `platform-checks` group, or merge into `defaults/` for the
-SUT-anchored ones.
-
-### 2. `test/0dt` — zero-downtime deploy
+### 1. `test/0dt` — zero-downtime deploy
 
 **Why it's a fit.** The `0dt` framework drives an explicit
 "second-environmentd starts, leases transition, first one steps down"
@@ -588,7 +574,7 @@ shells out to `mz` admin commands.
 
 **Group.** New `0dt` group with a second materialized container.
 
-### 3. `test/txn-wal-fencing` — fencing under concurrent workload
+### 2. `test/txn-wal-fencing` — fencing under concurrent workload
 
 **Why it's a fit.** This framework introduces a second Materialize instance
 while a concurrent workload is running and asserts the older instance fences
@@ -607,7 +593,7 @@ property as a singleton driver.
 
 **Group.** Could fold into the `0dt` group above — same topology.
 
-### 4. `test/sqlsmith` — random query generation
+### 3. `test/sqlsmith` — random query generation
 
 **Why it's a fit.** SQLsmith generates random ASTs and runs them against
 Materialize; today it just checks "no panic / known errors only". Under
@@ -627,7 +613,7 @@ binary and drive it from a `parallel_driver_`.
 **Group.** Either fold into `parallel-workload` (it already exercises
 randomized SQL) or stand up a dedicated `sqlsmith` group.
 
-### 5. `test/source-sink-errors` + `test/pubsub-disruption`
+### 4. `test/source-sink-errors` + `test/pubsub-disruption`
 
 **Why it's a fit.** Both frameworks inject specific disruptions (toxiproxy /
 service kill) and assert on `mz_internal.mz_*_statuses` tables. Antithesis
@@ -646,7 +632,7 @@ disruption side comes from Antithesis already.
 **Group.** Fold into the existing `kafka`, `pg-cdc`, etc. groups as
 additional drivers.
 
-### 6. `test/zippy` — generative model-based checking
+### 5. `test/zippy` — generative model-based checking
 
 **Why it's a fit.** Zippy generates pseudo-random DDL/DML sequences while
 keeping an authoritative expected-state model. Translating that to
@@ -669,12 +655,21 @@ the action vocabulary** rather than the orchestration.
 - **`test/feature-benchmark`, `test/parallel-benchmark`, `test/scalability`.**
   Performance measurement. Antithesis's deterministic hypervisor distorts
   wall-clock timing — perf numbers are unreliable under it.
-- **`test/sqllogictest`, `test/pgtest`, `test/testdrive`.** Pure
-  correctness/conformance. They run against a single-process Materialize
-  with no fault injection target. We already pull `test/pg-cdc/*.td` (and
-  mysql-cdc, sql-server-cdc) into the workload image and run them from
-  `singleton_driver_*_testdrive.py`, which is the right pattern when we
-  want a specific .td file to run under faults.
+- **`test/sqllogictest`, `test/pgtest`.** SLT's contract is exact result
+  matching with no notion of "transient error, retry" — every paused
+  Cockroach query under fault injection becomes a reported assertion
+  failure indistinguishable from a real bug, because the SLT runner
+  just diffs. The bulk of SLT is scalar/arithmetic SQL conformance that
+  exercises no external system; the catalog/persist paths it does touch
+  are better covered by the dedicated `defaults/` drivers
+  (`singleton_driver_catalog_recovery_consistency`,
+  `parallel_driver_strict_serializable_reads`,
+  `parallel_driver_mv_reflects_table_updates`). Narrow exception:
+  individual SLT files that document a specific crash (e.g.
+  `alter_table_webhook_crash.slt`, `ct_rename_crash.slt`) are useful as
+  hand-ported `singleton_driver_*` regression probes — but as crash
+  repros, not as conformance tests.
+  `pgtest` is the same story but for pg-wire protocol details.
 - **`test/chbench`, `test/lang`, `test/limits`.** Scaling /
   language-conformance — high-throughput single-shot loads, not interleaved
   property checks.

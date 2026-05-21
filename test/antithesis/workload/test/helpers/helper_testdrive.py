@@ -174,6 +174,35 @@ def run(
         # terminated prelude doesn't merge with the next file's first line.
         rewritten = "\n".join([*parts, rewritten])
 
+    return _run_content(rewritten, timeout_s=timeout_s, extra_args=extra_args)
+
+
+def run_inline(
+    content: str,
+    *,
+    timeout_s: float = 600.0,
+    extra_args: list[str] | None = None,
+) -> TestdriveResult:
+    """Run an in-memory testdrive fragment.
+
+    Used by drivers that source their testdrive scripts from somewhere
+    other than the bundled `/opt/testdrive-files/` tree — currently the
+    platform-checks runner, which extracts fragment strings from
+    `materialize.checks.all_checks` Check instances and runs them under
+    fault injection.  `_strip_skip_if_true` is applied so a Check whose
+    fragment carries a manual disable header (rare for checks, but
+    harmless if present) still runs end-to-end.
+    """
+    stripped, _ = _strip_skip_if_true(content)
+    return _run_content(stripped, timeout_s=timeout_s, extra_args=extra_args)
+
+
+def _run_content(
+    rewritten: str,
+    *,
+    timeout_s: float,
+    extra_args: list[str] | None,
+) -> TestdriveResult:
     # testdrive treats its positional arg as a *glob pattern* and matches
     # it against files found by `WalkDir::new(".").sort_by_file_name()` —
     # i.e. it walks the process cwd, not the glob's directory. Passing an
@@ -243,7 +272,7 @@ def run(
             stderr=proc.stderr,
         )
     except subprocess.TimeoutExpired as exc:
-        LOG.warning("testdrive %s timed out after %.0fs", td_file, timeout_s)
+        LOG.warning("testdrive timed out after %.0fs", timeout_s)
         result = TestdriveResult(
             exit_code=124,
             stdout=exc.stdout.decode()
@@ -265,8 +294,7 @@ def run(
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
     LOG.info(
-        "testdrive %s exited %d (transient=%s, stdout=%d bytes, stderr=%d bytes)",
-        td_file,
+        "testdrive exited %d (transient=%s, stdout=%d bytes, stderr=%d bytes)",
         result.exit_code,
         result.looks_transient,
         len(result.stdout),

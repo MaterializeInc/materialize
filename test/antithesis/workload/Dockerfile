@@ -78,6 +78,7 @@ RUN pip install --no-cache-dir \
     pg8000==1.31.2 \
     pymssql==2.3.4 \
     PyYAML==6.0.2 \
+    semver==3.0.4 \
     websocket-client==1.8.0 \
     requests==2.32.3 \
     xxhash==3.5.0 \
@@ -110,6 +111,20 @@ ENV MZ_ROOT=/opt/antithesis-pkg
 COPY --from=testdrive-src /usr/local/bin/testdrive /usr/local/bin/testdrive
 COPY --from=testdrive-src /usr/local/lib/libduckdb.so /usr/local/lib/libduckdb.so
 COPY --from=testdrive-src /usr/lib/libfdb_c.so /usr/lib/libfdb_c.so
+# Protobuf compiler + well-known-types include tree.  testdrive's
+# `$ protobuf-compile-descriptors` builtin shells out to protoc — used
+# by 14 .td files (protobuf-*.td, kafka-include-key-sources.td,
+# kafka-upsert-sources.td, connection-create-drop.td).  Without these
+# the testdrive runner errors with `invoking protoc failed: No such file
+# or directory (os error 2)`, which doesn't match `looks_like_fault` and
+# would fail the testdrive group's safety assertion on every pick of a
+# protoc-using file.  Same protoc binary the testdrive image ships at
+# build time (sourced from `protobuf-src`), so behavior matches
+# upstream test runs.
+COPY --from=testdrive-src /usr/local/bin/protoc /usr/local/bin/protoc
+COPY --from=testdrive-src /usr/local/include/google /usr/local/include/google
+ENV PROTOC=/usr/local/bin/protoc
+ENV PROTOC_INCLUDE=/usr/local/include
 RUN ldconfig
 
 # Repo-checked-in testdrive .td files for the testdrive-runner drivers,
