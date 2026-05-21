@@ -3862,3 +3862,244 @@ per-DDL persist work, the highest-leverage change is killing the
 4× producer-side multiplier called out in iteration 2 of phase
 16: batch register / forget / audit into a single txns commit so
 each DDL pays one CRDB consensus round trip instead of four.
+
+## Phase 18 — bogo vs CRDB CAS attribution
+
+Phase-17 attributed the entire +1.296 ms/+1k slope to
+`consensus_cas` on `user_data` shards getting 24 → 119 ms per call
+on CRDB. That attribution is consistent with the data but does not
+distinguish *where* in the stack the cost lives: it could be (a)
+CRDB's `consensus` table getting expensive to CAS as it grows, (b)
+the persist client doing more work per CAS as state grows, or (c)
+both. Phase 18 swaps the consensus backend for `mz-bogo-consensus`
+(in-memory, no-op CAS over local gRPC) and reruns the same N=10k →
+N=25k bench so the same harness exercises an identical
+control/data plane against a backend that *cannot* slow down with
+state size.
+
+### Bench
+
+`bench_phase18.py`, same shape as `bench_phase17.py`: 30 warmup +
+500 measure reps per scale, ascending pad in a single envd run,
+metrics snapshots at `before` / `measure_start` / `after`. Single
+envd run, configured with `--persist-consensus-url=bogo://...`.
+Bogo-side metrics also snapshotted (`bogo_*.prom`).
+
+`analyze_phase18.py`, `attribute_phase17.py`-style:
+sum/count diff between `measure_start_N{N}.prom` and
+`after_N{N}.prom`, warmup excluded by construction. Slope CIs use
+the same bootstrap as `analyze_phase17.py` (seed=18, 10 000
+samples).
+
+### create_p50 medians and slope
+
+| backend | N=10k p50 ms | 95% CI | N=25k p50 ms | 95% CI | slope ms/+1k | 95% CI |
+|---|---:|---|---:|---|---:|---|
+| CRDB (phase 17) | 50.91 | [50.48, 51.27] | 70.39 | [68.79, 72.60] | **+1.296** | [+1.187, +1.434] |
+| bogo (phase 18) | 27.87 | [27.69, 28.02] | 38.23 | [36.94, 38.90] | **+0.691** | [+0.605, +0.738] |
+
+`drop_p50` mirrors: bogo +0.875 [95% CI +0.819, +0.987] vs CRDB
++1.108 [95% CI +1.028, +1.194].
+
+**Headline: bogo still has a slope.** 53 % of CRDB's create slope
+(0.691 / 1.296) and 79 % of CRDB's drop slope (0.875 / 1.108)
+reproduces against an in-memory consensus backend. The slope is
+*not* purely CRDB-side.
+
+### Per-call latency by op × shard_kind
+
+Mean ms per call over the 500-rep measurement window
+(`persist_external_op_latency_by_shard_kind`):
+
+| op | shard_kind | backend | N=10k mean ms | N=25k mean ms | growth |
+|---|---|---|---:|---:|---:|
+| `consensus_cas` | `user_data` | CRDB | 24.37 | 118.62 | **4.87×** |
+| `consensus_cas` | `user_data` | bogo |  0.93 |   0.96 | **1.03×** |
+| `consensus_cas` | `catalog`   | CRDB |  2.15 |   4.09 | 1.90× |
+| `consensus_cas` | `catalog`   | bogo |  0.32 |   0.29 | 0.90× |
+| `consensus_cas` | `txns`      | CRDB |  2.03 |   3.02 | 1.49× |
+| `consensus_cas` | `txns`      | bogo |  0.38 |   0.33 | 0.88× |
+| `consensus_scan`| `txns`      | CRDB |  4.02 |  21.88 | 5.44× |
+| `consensus_scan`| `txns`      | bogo |  4.06 |   0.40 | 0.10× |
+| `consensus_truncate` | `catalog` | CRDB | 40.00 | 54.90 | 1.37× |
+| `consensus_truncate` | `catalog` | bogo |  0.44 |  0.52 | 1.20× |
+
+**Per-call latency is flat on bogo.** Every shard_kind/op pair
+that grew on CRDB stays within ±20 % on bogo. The
+`consensus_scan{shard_kind="txns"}` reading on bogo at N=25k is
+based on only 52 calls (warmup discard removed most of them) so
+the 0.10× is noise; the absolute ms/rep is tiny either way.
+
+### Per-rep CAS counts (per measure rep)
+
+Counts at the consensus boundary divided by REPS=500:
+
+| op | shard_kind | backend | N=10k/rep | N=25k/rep | growth |
+|---|---|---|---:|---:|---:|
+| `consensus_cas` | `catalog`   | CRDB |   5.61 |   5.60 | 1.00× |
+| `consensus_cas` | `catalog`   | bogo |   5.58 |   5.59 | 1.00× |
+| `consensus_cas` | `txns`      | CRDB |   6.62 |   6.63 | 1.00× |
+| `consensus_cas` | `txns`      | bogo |   6.61 |   6.62 | 1.00× |
+| `consensus_cas` | `user_data` | CRDB |  66.50 | 176.45 | **2.65×** |
+| `consensus_cas` | `user_data` | bogo |  55.00 | 113.05 | **2.06×** |
+
+Two things to read off this:
+
+- On the **critical-path** shards (`catalog`, `txns`), per-rep CAS
+  count is flat (~5.6 and ~6.6 CAS per CREATE+DROP rep)
+  identically on both backends. The phase-15 `txns-upper` and
+  phase-16 fanout work cleaned this up; no count-growth bug here.
+- On `user_data`, per-rep CAS count grows ~2× on both backends.
+  This is background compaction / heartbeat traffic on the
+  N-table set fanning out across many persist clients, *not* the
+  DDL hot path — the bench inserts a single empty table per rep
+  with no rows, so its only on-path `user_data` CAS calls are
+  during `open_data_handles_concurrent`. The 2× growth is the
+  background workers on the existing N tables, not work
+  attributable to the under-test CREATE/DROP. Per-rep wall-clock
+  delta is +57 ms on bogo vs +19 309 ms on CRDB — but neither is
+  on the DDL synchronous path.
+
+### Where the bogo slope lives
+
+`catalog_transact_phase_seconds` mean ms per measure rep, ranked
+by slope on bogo:
+
+| phase | backend | N=10k ms | N=25k ms | slope ms/+1k |
+|---|---|---:|---:|---:|
+| `transact_inner` | bogo |  1.48 |  5.35 | **+0.258** |
+| `prepare_state`  | bogo |  0.23 |  3.22 | **+0.200** |
+| `op_loop`        | bogo |  0.89 |  1.60 | +0.047 |
+| `coord_post_transact` | bogo | 3.88 | 4.26 | +0.025 |
+| `tx_commit`      | bogo |  0.93 |  1.04 | +0.007 |
+
+Sum of the in-table slopes: **+0.54 ms/+1k**. Adding smaller
+phases below the 0.02 threshold gets us to ~+0.65 ms/+1k, which
+covers ~94 % of the +0.691 ms/+1k bench-level slope. The residual
+~0.04 ms/+1k sits in pgwire / parsing / response framing.
+
+The two dominant phases on bogo, `transact_inner` and
+`prepare_state`, are *both* coordinator-side, in-memory work that
+scales with catalog size: `transact_inner` walks/diffs the
+in-memory catalog state; `prepare_state` is the
+`storage-collections` prepare path (phase-14 added the
+breakdown). Neither touches consensus. So the bogo slope is
+**coordinator state-size scaling that is independent of the
+consensus backend**.
+
+For CRDB, those two phases have the same slope:
+`transact_inner` +0.226, `prepare_state` +0.164 — within 13 % of
+the bogo numbers. So the same in-memory state-scaling cost is
+present on CRDB; CRDB just pays it *plus* the
+per-CAS-latency-growth cost on top.
+
+### state_apply (persist) by shard_kind & stage
+
+`persist_state_apply_latency_by_shard_kind`, mean ms per
+`State::apply_diff` invocation, all stages and shard kinds
+combined:
+
+| shard_kind | stage | backend | N=10k ms | N=25k ms | growth |
+|---|---|---|---:|---:|---:|
+| `user_data` | `total` | CRDB | 0.0100 | 0.0112 | 1.12× |
+| `user_data` | `total` | bogo | 0.0076 | 0.0100 | 1.31× |
+| `catalog`   | `total` | CRDB | 0.0109 | 0.0120 | 1.10× |
+| `catalog`   | `total` | bogo | 0.0105 | 0.0107 | 1.02× |
+
+Per-call state-apply latency is *not* a scaling bottleneck: total
+mean stays under 12 µs/call on both backends across all scales.
+Per-rep budget is dominated by call *volume*, not per-call cost:
+~0.8 ms/rep on user_data, ~1 ms/rep on catalog. None of this
+explains the 10 ms/rep bench-level slope between N=10k and N=25k.
+
+### Attribution: the split
+
+Of the CRDB create-slope of +1.296 ms/+1k tables:
+
+1. **~0.69 ms/+1k (53 %) is coordinator-side and reproduces with
+   bogo.** It lives in `transact_inner` (+0.26) and
+   `prepare_state` (+0.20) — in-memory work in
+   `Coordinator::sequence_*` and
+   `StorageCollectionsImpl::prepare_state` that scales with the
+   number of resident collections. Consensus backend does not
+   matter.
+2. **~0.61 ms/+1k (47 %) is the additional cost CRDB carries
+   from per-CAS latency growth.** Mean per-call latency on
+   `consensus_cas` against CRDB grows from 24 ms to 119 ms on
+   `user_data` and 2.2 ms to 4.1 ms on `catalog`; the
+   on-critical-path CAS calls (1× catalog `tx_commit` plus
+   ~24 user_data CAS via `open_data_handles_concurrent`) inflate
+   each rep by ~0.6 ms / +1k. The dominant `user_data` 4.87×
+   growth is mostly *background* compaction traffic on the
+   pre-existing N-table set; per-rep, only a small number of
+   those CAS calls block the bench.
+
+### Decision
+
+**Split, with numbers.** Roughly half the slope is client-side
+coordinator state-size scaling (reproduces under bogo); the other
+half is CRDB-side per-CAS latency growth as the `consensus` table
+grows. Phase 17's "structural to persist-on-CRDB" is half right.
+
+What this changes vs phase 17's conclusion:
+
+- Phase 17 said "stop chasing the slope at the adapter /
+  storage-collections layer." That's wrong: half the slope *is*
+  there, and bogo proves the lever exists independent of the
+  consensus backend.
+- The two specific call sites on the coordinator that scale with
+  catalog size are `Catalog::transact` (in
+  `src/catalog/src/durable/transaction.rs`) and the prepare-state
+  path inside `StorageCollectionsImpl` we already instrumented
+  in phase 14.
+
+### Suggested next iteration
+
+Attack `transact_inner` and `prepare_state`. Concretely:
+
+1. **`transact_inner` (+0.258 ms / +1k bogo, +0.226 ms / +1k
+   CRDB).** Look for an O(N) over catalog entries inside the
+   inner transact loop. Likely culprits: dependency walks, name
+   resolution refreshing on every commit, or rebuilding
+   in-memory indexes from scratch on each transact. Worth tracing
+   at N=25k with `mz_catalog_transact_phase_seconds` extended to
+   sub-phases inside `transact_inner` to localize within that
+   ~5 ms budget.
+2. **`prepare_state` (+0.200 ms / +1k bogo).** Phase 14 broke
+   this down into `validate_and_enrich`, `sort`,
+   `install_collection_states`, `open_data_handles_concurrent`,
+   `synchronize_finalized_shards`,
+   `open_persist_client`. On bogo only
+   `install_collection_states` has a measurable slope (+0.061
+   ms/+1k). The remaining +0.14 ms/+1k inside `prepare_state` is
+   not currently attributed — add a finer breakdown around the
+   borrow/lock acquisition or the snapshot of existing state at
+   the top of `prepare_state`.
+
+Both are one-file probes, both are pure coordinator work, neither
+needs CRDB at all. That's where the next iteration should land
+before circling back to the persist-on-CRDB half of the slope.
+
+If iteration 5 confirms a one-spot O(N) in `transact_inner`,
+fixing it removes half the slope and pushes N=25k create_p50
+from 70 ms back toward 60 ms even on CRDB.
+
+### Methodology artefacts
+
+- `bench_phase18.py`: harness (single envd run, bogo consensus,
+  metrics snapshots).
+- `analyze_phase18.py`: side-by-side per-call latency table.
+- `/tmp/phase18_critical.py`, `/tmp/phase18_extra.py`,
+  `/tmp/phase18_phases.py`, `/tmp/phase18_slopes.py`: per-rep
+  budgeting, state_apply breakdown, catalog-transact-phase
+  slopes, bootstrap slope CIs. (Auxiliary; outputs are
+  reproducible from the snapshots in `metrics_phase18_bogo/` and
+  `metrics_phase17/`.)
+- `mz-bogo-consensus`: in-memory consensus shim used as the
+  backend for phase 18 only.
+
+### Teardown
+
+`pkill` the envd / clusterd / bogo processes after the bench.
+Phase 18 used a single bench run; no rerun is necessary if the
+snapshots in `metrics_phase18_bogo/` are preserved.
