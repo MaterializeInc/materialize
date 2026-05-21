@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use num_enum::{IntoPrimitive, TryFromPrimitive};
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -20,9 +21,9 @@ use serde::{Deserialize, Serialize};
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ConfigKey {
     pub key: String,
 }
@@ -37,9 +38,9 @@ pub struct ConfigKey {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ConfigValue {
     pub value: u64,
 }
@@ -53,9 +54,9 @@ pub struct ConfigValue {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct SettingKey {
     pub name: String,
 }
@@ -69,9 +70,9 @@ pub struct SettingKey {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct SettingValue {
     pub value: String,
 }
@@ -85,9 +86,9 @@ pub struct SettingValue {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct IdAllocKey {
     pub name: String,
 }
@@ -102,9 +103,9 @@ pub struct IdAllocKey {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct IdAllocValue {
     pub next_id: u64,
 }
@@ -118,9 +119,9 @@ pub struct IdAllocValue {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct GidMappingKey {
     pub schema_name: String,
     pub object_type: i32,
@@ -136,9 +137,9 @@ pub struct GidMappingKey {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct GidMappingValue {
     pub id: u64,
     pub fingerprint: String,
@@ -155,9 +156,9 @@ pub struct GidMappingValue {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ClusterKey {
     pub id: Option<ClusterId>,
 }
@@ -171,9 +172,9 @@ pub struct ClusterKey {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ClusterValue {
     pub name: String,
     pub owner_id: Option<RoleId>,
@@ -190,9 +191,9 @@ pub struct ClusterValue {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ClusterIntrospectionSourceIndexKey {
     pub cluster_id: Option<ClusterId>,
     pub name: String,
@@ -208,9 +209,9 @@ pub struct ClusterIntrospectionSourceIndexKey {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ClusterIntrospectionSourceIndexValue {
     pub index_id: u64,
     pub oid: u32,
@@ -227,9 +228,9 @@ pub struct ClusterIntrospectionSourceIndexValue {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ClusterReplicaKey {
     pub id: Option<ReplicaId>,
 }
@@ -243,9 +244,9 @@ pub struct ClusterReplicaKey {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ClusterReplicaValue {
     pub cluster_id: Option<ClusterId>,
     pub name: String,
@@ -263,9 +264,9 @@ pub struct ClusterReplicaValue {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct DatabaseKey {
     pub id: Option<DatabaseId>,
 }
@@ -279,9 +280,9 @@ pub struct DatabaseKey {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct DatabaseValue {
     pub name: String,
     pub owner_id: Option<RoleId>,
@@ -299,9 +300,9 @@ pub struct DatabaseValue {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct SchemaKey {
     pub id: Option<SchemaId>,
 }
@@ -315,9 +316,9 @@ pub struct SchemaKey {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct SchemaValue {
     pub database_id: Option<DatabaseId>,
     pub name: String,
@@ -336,9 +337,9 @@ pub struct SchemaValue {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ItemKey {
     pub gid: Option<CatalogItemId>,
 }
@@ -352,9 +353,9 @@ pub struct ItemKey {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ItemValue {
     pub schema_id: Option<SchemaId>,
     pub name: String,
@@ -376,9 +377,9 @@ pub struct ItemValue {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ItemVersion {
     pub global_id: Option<GlobalId>,
     pub version: Option<Version>,
@@ -394,9 +395,9 @@ pub struct ItemVersion {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct RoleKey {
     pub id: Option<RoleId>,
 }
@@ -410,9 +411,9 @@ pub struct RoleKey {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct RoleValue {
     pub name: String,
     pub attributes: Option<RoleAttributes>,
@@ -431,9 +432,9 @@ pub struct RoleValue {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct RoleAuthKey {
     pub id: Option<RoleId>,
 }
@@ -447,9 +448,9 @@ pub struct RoleAuthKey {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct RoleAuthValue {
     pub password_hash: Option<String>,
     pub updated_at: Option<EpochMillis>,
@@ -465,9 +466,9 @@ pub struct RoleAuthValue {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct NetworkPolicyKey {
     pub id: Option<NetworkPolicyId>,
 }
@@ -481,9 +482,9 @@ pub struct NetworkPolicyKey {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct NetworkPolicyValue {
     pub name: String,
     pub rules: Vec<NetworkPolicyRule>,
@@ -501,9 +502,9 @@ pub struct NetworkPolicyValue {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ServerConfigurationKey {
     pub name: String,
 }
@@ -517,9 +518,9 @@ pub struct ServerConfigurationKey {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ServerConfigurationValue {
     pub value: String,
 }
@@ -533,9 +534,9 @@ pub struct ServerConfigurationValue {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct AuditLogKey {
     pub event: Option<audit_log_key::Event>,
 }
@@ -543,17 +544,8 @@ pub struct AuditLogKey {
 pub mod audit_log_key {
     use super::*;
 
-    #[derive(
-        Clone,
-        Debug,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        Serialize,
-        Deserialize,
-        Arbitrary
-    )]
+    #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub enum Event {
         V1(AuditLogEventV1),
     }
@@ -569,9 +561,9 @@ pub mod audit_log_key {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct CommentKey {
     pub object: Option<comment_key::Object>,
     pub sub_component: Option<comment_key::SubComponent>,
@@ -589,9 +581,9 @@ pub mod comment_key {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub enum Object {
         Table(CatalogItemId),
         View(CatalogItemId),
@@ -621,9 +613,9 @@ pub mod comment_key {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub enum SubComponent {
         ColumnPos(u64),
     }
@@ -638,9 +630,9 @@ pub mod comment_key {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct CommentValue {
     pub comment: String,
 }
@@ -655,9 +647,9 @@ pub struct CommentValue {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct SourceReferencesKey {
     pub source: Option<CatalogItemId>,
 }
@@ -671,9 +663,9 @@ pub struct SourceReferencesKey {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct SourceReferencesValue {
     pub references: Vec<SourceReference>,
     pub updated_at: Option<EpochMillis>,
@@ -688,9 +680,9 @@ pub struct SourceReferencesValue {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct SourceReference {
     pub name: String,
     pub namespace: Option<String>,
@@ -707,9 +699,9 @@ pub struct SourceReference {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct StorageCollectionMetadataKey {
     pub id: Option<GlobalId>,
 }
@@ -723,9 +715,9 @@ pub struct StorageCollectionMetadataKey {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct StorageCollectionMetadataValue {
     pub shard: String,
 }
@@ -739,9 +731,9 @@ pub struct StorageCollectionMetadataValue {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct UnfinalizedShardKey {
     pub shard: String,
 }
@@ -755,9 +747,9 @@ pub struct UnfinalizedShardKey {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct TxnWalShardValue {
     pub shard: String,
 }
@@ -772,9 +764,9 @@ pub struct TxnWalShardValue {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct Empty {}
 
 #[derive(
@@ -786,9 +778,9 @@ pub struct Empty {}
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct StringWrapper {
     pub inner: String,
 }
@@ -803,9 +795,9 @@ pub struct StringWrapper {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct Duration {
     pub secs: u64,
     pub nanos: u32,
@@ -821,9 +813,9 @@ pub struct Duration {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct EpochMillis {
     pub millis: u64,
 }
@@ -838,9 +830,9 @@ pub struct EpochMillis {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct Timestamp {
     pub internal: u64,
 }
@@ -855,9 +847,9 @@ pub struct Timestamp {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct Version {
     pub value: u64,
 }
@@ -871,9 +863,9 @@ pub struct Version {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct CatalogItem {
     pub value: Option<catalog_item::Value>,
 }
@@ -890,24 +882,15 @@ pub mod catalog_item {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct V1 {
         pub create_sql: String,
     }
 
-    #[derive(
-        Clone,
-        Debug,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        Serialize,
-        Deserialize,
-        Arbitrary
-    )]
+    #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub enum Value {
         V1(V1),
     }
@@ -923,9 +906,9 @@ pub mod catalog_item {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct CatalogItemId {
     pub value: Option<catalog_item_id::Value>,
 }
@@ -942,9 +925,9 @@ pub mod catalog_item_id {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub enum Value {
         System(u64),
         User(u64),
@@ -963,9 +946,9 @@ pub mod catalog_item_id {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct SystemCatalogItemId {
     pub value: u64,
 }
@@ -980,9 +963,9 @@ pub struct SystemCatalogItemId {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct IntrospectionSourceIndexCatalogItemId {
     pub value: u64,
 }
@@ -997,9 +980,9 @@ pub struct IntrospectionSourceIndexCatalogItemId {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct GlobalId {
     pub value: Option<global_id::Value>,
 }
@@ -1016,9 +999,9 @@ pub mod global_id {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub enum Value {
         System(u64),
         User(u64),
@@ -1038,9 +1021,9 @@ pub mod global_id {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct SystemGlobalId {
     pub value: u64,
 }
@@ -1055,9 +1038,9 @@ pub struct SystemGlobalId {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct IntrospectionSourceIndexGlobalId {
     pub value: u64,
 }
@@ -1072,9 +1055,9 @@ pub struct IntrospectionSourceIndexGlobalId {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ClusterId {
     pub value: Option<cluster_id::Value>,
 }
@@ -1091,9 +1074,9 @@ pub mod cluster_id {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub enum Value {
         System(u64),
         User(u64),
@@ -1110,9 +1093,9 @@ pub mod cluster_id {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct DatabaseId {
     pub value: Option<database_id::Value>,
 }
@@ -1129,9 +1112,9 @@ pub mod database_id {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub enum Value {
         System(u64),
         User(u64),
@@ -1148,9 +1131,9 @@ pub mod database_id {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ResolvedDatabaseSpecifier {
     pub spec: Option<resolved_database_specifier::Spec>,
 }
@@ -1167,9 +1150,9 @@ pub mod resolved_database_specifier {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub enum Spec {
         Ambient(Empty),
         Id(DatabaseId),
@@ -1186,9 +1169,9 @@ pub mod resolved_database_specifier {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct SchemaId {
     pub value: Option<schema_id::Value>,
 }
@@ -1205,9 +1188,9 @@ pub mod schema_id {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub enum Value {
         System(u64),
         User(u64),
@@ -1224,9 +1207,9 @@ pub mod schema_id {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct SchemaSpecifier {
     pub spec: Option<schema_specifier::Spec>,
 }
@@ -1243,9 +1226,9 @@ pub mod schema_specifier {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub enum Spec {
         Temporary(Empty),
         Id(SchemaId),
@@ -1262,9 +1245,9 @@ pub mod schema_specifier {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ResolvedSchema {
     pub database: Option<ResolvedDatabaseSpecifier>,
     pub schema: Option<SchemaSpecifier>,
@@ -1280,9 +1263,9 @@ pub struct ResolvedSchema {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ReplicaId {
     pub value: Option<replica_id::Value>,
 }
@@ -1299,9 +1282,9 @@ pub mod replica_id {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub enum Value {
         System(u64),
         User(u64),
@@ -1318,9 +1301,9 @@ pub mod replica_id {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ClusterReplicaId {
     pub cluster_id: Option<ClusterId>,
     pub replica_id: Option<ReplicaId>,
@@ -1336,9 +1319,9 @@ pub struct ClusterReplicaId {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct NetworkPolicyId {
     pub value: Option<network_policy_id::Value>,
 }
@@ -1355,9 +1338,9 @@ pub mod network_policy_id {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub enum Value {
         System(u64),
         User(u64),
@@ -1374,9 +1357,9 @@ pub mod network_policy_id {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ReplicaLogging {
     pub log_logging: bool,
     pub interval: Option<Duration>,
@@ -1391,9 +1374,9 @@ pub struct ReplicaLogging {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct OptimizerFeatureOverride {
     pub name: String,
     pub value: String,
@@ -1409,9 +1392,9 @@ pub struct OptimizerFeatureOverride {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ClusterScheduleRefreshOptions {
     pub rehydration_time_estimate: Option<Duration>,
 }
@@ -1426,9 +1409,9 @@ pub struct ClusterScheduleRefreshOptions {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ClusterSchedule {
     pub value: Option<cluster_schedule::Value>,
 }
@@ -1445,9 +1428,9 @@ pub mod cluster_schedule {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub enum Value {
         Manual(Empty),
         Refresh(ClusterScheduleRefreshOptions),
@@ -1463,9 +1446,9 @@ pub mod cluster_schedule {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ClusterConfig {
     pub workload_class: Option<String>,
     pub variant: Option<cluster_config::Variant>,
@@ -1483,9 +1466,9 @@ pub mod cluster_config {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct ManagedCluster {
         pub size: String,
         pub replication_factor: u32,
@@ -1496,17 +1479,8 @@ pub mod cluster_config {
         pub schedule: Option<ClusterSchedule>,
     }
 
-    #[derive(
-        Clone,
-        Debug,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        Serialize,
-        Deserialize,
-        Arbitrary
-    )]
+    #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub enum Variant {
         Unmanaged(Empty),
         Managed(ManagedCluster),
@@ -1522,9 +1496,9 @@ pub mod cluster_config {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ReplicaConfig {
     pub logging: Option<ReplicaLogging>,
     pub location: Option<replica_config::Location>,
@@ -1542,9 +1516,9 @@ pub mod replica_config {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct UnmanagedLocation {
         pub storagectl_addrs: Vec<String>,
         pub computectl_addrs: Vec<String>,
@@ -1559,9 +1533,9 @@ pub mod replica_config {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct ManagedLocation {
         pub size: String,
         pub availability_zone: Option<String>,
@@ -1571,17 +1545,8 @@ pub mod replica_config {
         pub pending: bool,
     }
 
-    #[derive(
-        Clone,
-        Debug,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        Serialize,
-        Deserialize,
-        Arbitrary
-    )]
+    #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub enum Location {
         Unmanaged(UnmanagedLocation),
         Managed(ManagedLocation),
@@ -1598,9 +1563,9 @@ pub mod replica_config {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct RoleId {
     pub value: Option<role_id::Value>,
 }
@@ -1617,9 +1582,9 @@ pub mod role_id {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub enum Value {
         System(u64),
         User(u64),
@@ -1638,9 +1603,9 @@ pub mod role_id {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct RoleAttributes {
     pub inherit: bool,
     pub superuser: Option<bool>,
@@ -1656,9 +1621,9 @@ pub struct RoleAttributes {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct RoleMembership {
     pub map: Vec<role_membership::Entry>,
 }
@@ -1676,9 +1641,9 @@ pub mod role_membership {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct Entry {
         pub key: Option<RoleId>,
         pub value: Option<RoleId>,
@@ -1694,9 +1659,9 @@ pub mod role_membership {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct RoleVars {
     pub entries: Vec<role_vars::Entry>,
 }
@@ -1713,9 +1678,9 @@ pub mod role_vars {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct SqlSet {
         pub entries: Vec<String>,
     }
@@ -1729,9 +1694,9 @@ pub mod role_vars {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct Entry {
         pub key: String,
         pub val: Option<entry::Val>,
@@ -1740,17 +1705,8 @@ pub mod role_vars {
     pub mod entry {
         use super::*;
 
-        #[derive(
-            Clone,
-            Debug,
-            PartialEq,
-            Eq,
-            PartialOrd,
-            Ord,
-            Serialize,
-            Deserialize,
-            Arbitrary
-        )]
+        #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+        #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
         pub enum Val {
             Flat(String),
             SqlSet(SqlSet),
@@ -1767,9 +1723,9 @@ pub mod role_vars {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct NetworkPolicyRule {
     pub name: String,
     pub address: String,
@@ -1789,9 +1745,9 @@ pub mod network_policy_rule {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub enum Action {
         Allow(Empty),
     }
@@ -1805,9 +1761,9 @@ pub mod network_policy_rule {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub enum Direction {
         Ingress(Empty),
     }
@@ -1823,9 +1779,9 @@ pub mod network_policy_rule {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct AclMode {
     pub bitflags: u64,
 }
@@ -1840,9 +1796,9 @@ pub struct AclMode {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct MzAclItem {
     pub grantee: Option<RoleId>,
     pub grantor: Option<RoleId>,
@@ -1859,9 +1815,9 @@ pub struct MzAclItem {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct DefaultPrivilegesKey {
     pub role_id: Option<RoleId>,
     pub database_id: Option<DatabaseId>,
@@ -1880,9 +1836,9 @@ pub struct DefaultPrivilegesKey {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct DefaultPrivilegesValue {
     pub privileges: Option<AclMode>,
 }
@@ -1897,9 +1853,9 @@ pub struct DefaultPrivilegesValue {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct SystemPrivilegesKey {
     pub grantee: Option<RoleId>,
     pub grantor: Option<RoleId>,
@@ -1915,9 +1871,9 @@ pub struct SystemPrivilegesKey {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct SystemPrivilegesValue {
     pub acl_mode: Option<AclMode>,
 }
@@ -1931,9 +1887,9 @@ pub struct SystemPrivilegesValue {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct AuditLogEventV1 {
     pub id: u64,
     pub event_type: i32,
@@ -1955,9 +1911,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct IdFullNameV1 {
         pub id: String,
         pub name: Option<FullNameV1>,
@@ -1972,9 +1928,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct FullNameV1 {
         pub database: String,
         pub schema: String,
@@ -1990,9 +1946,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct IdNameV1 {
         pub id: String,
         pub name: String,
@@ -2007,9 +1963,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct RenameClusterV1 {
         pub id: String,
         pub old_name: String,
@@ -2025,9 +1981,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct RenameClusterReplicaV1 {
         pub cluster_id: String,
         pub replica_id: String,
@@ -2044,9 +2000,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct RenameItemV1 {
         pub id: String,
         pub old_name: Option<FullNameV1>,
@@ -2062,9 +2018,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct CreateClusterReplicaV1 {
         pub cluster_id: String,
         pub cluster_name: String,
@@ -2085,9 +2041,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct CreateClusterReplicaV2 {
         pub cluster_id: String,
         pub cluster_name: String,
@@ -2110,9 +2066,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct CreateClusterReplicaV3 {
         pub cluster_id: String,
         pub cluster_name: String,
@@ -2135,9 +2091,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct DropClusterReplicaV1 {
         pub cluster_id: String,
         pub cluster_name: String,
@@ -2154,9 +2110,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct DropClusterReplicaV2 {
         pub cluster_id: String,
         pub cluster_name: String,
@@ -2175,9 +2131,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct DropClusterReplicaV3 {
         pub cluster_id: String,
         pub cluster_name: String,
@@ -2197,9 +2153,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct CreateOrDropClusterReplicaReasonV1 {
         pub reason: Option<create_or_drop_cluster_replica_reason_v1::Reason>,
     }
@@ -2216,9 +2172,9 @@ pub mod audit_log_event_v1 {
             PartialOrd,
             Ord,
             Serialize,
-            Deserialize,
-            Arbitrary
+            Deserialize
         )]
+        #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
         pub enum Reason {
             Manual(Empty),
             Schedule(Empty),
@@ -2235,9 +2191,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct SchedulingDecisionsWithReasonsV1 {
         pub on_refresh: Option<RefreshDecisionWithReasonV1>,
     }
@@ -2251,9 +2207,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct SchedulingDecisionsWithReasonsV2 {
         pub on_refresh: Option<RefreshDecisionWithReasonV2>,
     }
@@ -2267,9 +2223,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct RefreshDecisionWithReasonV1 {
         pub objects_needing_refresh: Vec<String>,
         pub rehydration_time_estimate: String,
@@ -2288,9 +2244,9 @@ pub mod audit_log_event_v1 {
             PartialOrd,
             Ord,
             Serialize,
-            Deserialize,
-            Arbitrary
+            Deserialize
         )]
+        #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
         pub enum Decision {
             On(Empty),
             Off(Empty),
@@ -2306,9 +2262,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct RefreshDecisionWithReasonV2 {
         pub objects_needing_refresh: Vec<String>,
         pub objects_needing_compaction: Vec<String>,
@@ -2328,9 +2284,9 @@ pub mod audit_log_event_v1 {
             PartialOrd,
             Ord,
             Serialize,
-            Deserialize,
-            Arbitrary
+            Deserialize
         )]
+        #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
         pub enum Decision {
             On(Empty),
             Off(Empty),
@@ -2346,9 +2302,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct CreateSourceSinkV1 {
         pub id: String,
         pub name: Option<FullNameV1>,
@@ -2364,9 +2320,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct CreateSourceSinkV2 {
         pub id: String,
         pub name: Option<FullNameV1>,
@@ -2383,9 +2339,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct CreateSourceSinkV3 {
         pub id: String,
         pub name: Option<FullNameV1>,
@@ -2401,9 +2357,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct CreateSourceSinkV4 {
         pub id: String,
         pub cluster_id: Option<StringWrapper>,
@@ -2420,9 +2376,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct CreateIndexV1 {
         pub id: String,
         pub cluster_id: String,
@@ -2438,9 +2394,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct CreateMaterializedViewV1 {
         pub id: String,
         pub cluster_id: String,
@@ -2456,9 +2412,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct AlterSourceSinkV1 {
         pub id: String,
         pub name: Option<FullNameV1>,
@@ -2475,9 +2431,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct AlterSetClusterV1 {
         pub id: String,
         pub name: Option<FullNameV1>,
@@ -2494,9 +2450,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct GrantRoleV1 {
         pub role_id: String,
         pub member_id: String,
@@ -2512,9 +2468,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct GrantRoleV2 {
         pub role_id: String,
         pub member_id: String,
@@ -2531,9 +2487,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct RevokeRoleV1 {
         pub role_id: String,
         pub member_id: String,
@@ -2548,9 +2504,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct RevokeRoleV2 {
         pub role_id: String,
         pub member_id: String,
@@ -2567,9 +2523,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct UpdatePrivilegeV1 {
         pub object_id: String,
         pub grantee_id: String,
@@ -2586,9 +2542,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct AlterDefaultPrivilegeV1 {
         pub role_id: String,
         pub database_id: Option<StringWrapper>,
@@ -2606,9 +2562,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct UpdateOwnerV1 {
         pub object_id: String,
         pub old_owner_id: String,
@@ -2624,9 +2580,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct SchemaV1 {
         pub id: String,
         pub name: String,
@@ -2642,9 +2598,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct SchemaV2 {
         pub id: String,
         pub name: String,
@@ -2660,9 +2616,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct RenameSchemaV1 {
         pub id: String,
         pub database_name: Option<String>,
@@ -2679,9 +2635,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct UpdateItemV1 {
         pub id: String,
         pub name: Option<FullNameV1>,
@@ -2696,9 +2652,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct AlterRetainHistoryV1 {
         pub id: String,
         pub old_history: Option<String>,
@@ -2714,9 +2670,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct ToNewIdV1 {
         pub id: String,
         pub new_id: String,
@@ -2731,9 +2687,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct FromPreviousIdV1 {
         pub id: String,
         pub previous_id: String,
@@ -2748,9 +2704,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct SetV1 {
         pub name: String,
         pub value: Option<String>,
@@ -2765,9 +2721,9 @@ pub mod audit_log_event_v1 {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct RotateKeysV1 {
         pub id: String,
         pub name: String,
@@ -2782,10 +2738,10 @@ pub mod audit_log_event_v1 {
         Hash,
         PartialOrd,
         Ord,
-        Arbitrary,
         IntoPrimitive,
         TryFromPrimitive
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     #[repr(i32)]
     pub enum EventType {
         Unknown = 0,
@@ -2806,10 +2762,10 @@ pub mod audit_log_event_v1 {
         Hash,
         PartialOrd,
         Ord,
-        Arbitrary,
         IntoPrimitive,
         TryFromPrimitive
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     #[repr(i32)]
     pub enum ObjectType {
         Unknown = 0,
@@ -2832,17 +2788,8 @@ pub mod audit_log_event_v1 {
         ContinualTask = 17,
         NetworkPolicy = 18,
     }
-    #[derive(
-        Clone,
-        Debug,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        Serialize,
-        Deserialize,
-        Arbitrary
-    )]
+    #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub enum Details {
         CreateClusterReplicaV1(CreateClusterReplicaV1),
         CreateClusterReplicaV2(CreateClusterReplicaV2),
@@ -2892,9 +2839,9 @@ pub mod audit_log_event_v1 {
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct StateUpdateKind {
     pub kind: Option<state_update_kind::Kind>,
 }
@@ -2911,9 +2858,9 @@ pub mod state_update_kind {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct AuditLog {
         pub key: Option<AuditLogKey>,
     }
@@ -2927,9 +2874,9 @@ pub mod state_update_kind {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct Cluster {
         pub key: Option<ClusterKey>,
         pub value: Option<ClusterValue>,
@@ -2944,9 +2891,9 @@ pub mod state_update_kind {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct ClusterReplica {
         pub key: Option<ClusterReplicaKey>,
         pub value: Option<ClusterReplicaValue>,
@@ -2961,9 +2908,9 @@ pub mod state_update_kind {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct Comment {
         pub key: Option<CommentKey>,
         pub value: Option<CommentValue>,
@@ -2978,9 +2925,9 @@ pub mod state_update_kind {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct Config {
         pub key: Option<ConfigKey>,
         pub value: Option<ConfigValue>,
@@ -2995,9 +2942,9 @@ pub mod state_update_kind {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct Database {
         pub key: Option<DatabaseKey>,
         pub value: Option<DatabaseValue>,
@@ -3013,9 +2960,9 @@ pub mod state_update_kind {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct DefaultPrivileges {
         pub key: Option<DefaultPrivilegesKey>,
         pub value: Option<DefaultPrivilegesValue>,
@@ -3031,9 +2978,9 @@ pub mod state_update_kind {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct FenceToken {
         pub deploy_generation: u64,
         pub epoch: i64,
@@ -3048,9 +2995,9 @@ pub mod state_update_kind {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct IdAlloc {
         pub key: Option<IdAllocKey>,
         pub value: Option<IdAllocValue>,
@@ -3065,9 +3012,9 @@ pub mod state_update_kind {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct ClusterIntrospectionSourceIndex {
         pub key: Option<ClusterIntrospectionSourceIndexKey>,
         pub value: Option<ClusterIntrospectionSourceIndexValue>,
@@ -3082,9 +3029,9 @@ pub mod state_update_kind {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct Item {
         pub key: Option<ItemKey>,
         pub value: Option<ItemValue>,
@@ -3099,9 +3046,9 @@ pub mod state_update_kind {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct Role {
         pub key: Option<RoleKey>,
         pub value: Option<RoleValue>,
@@ -3116,9 +3063,9 @@ pub mod state_update_kind {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct RoleAuth {
         pub key: Option<RoleAuthKey>,
         pub value: Option<RoleAuthValue>,
@@ -3133,9 +3080,9 @@ pub mod state_update_kind {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct NetworkPolicy {
         pub key: Option<NetworkPolicyKey>,
         pub value: Option<NetworkPolicyValue>,
@@ -3150,9 +3097,9 @@ pub mod state_update_kind {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct Schema {
         pub key: Option<SchemaKey>,
         pub value: Option<SchemaValue>,
@@ -3167,9 +3114,9 @@ pub mod state_update_kind {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct Setting {
         pub key: Option<SettingKey>,
         pub value: Option<SettingValue>,
@@ -3184,9 +3131,9 @@ pub mod state_update_kind {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct ServerConfiguration {
         pub key: Option<ServerConfigurationKey>,
         pub value: Option<ServerConfigurationValue>,
@@ -3201,9 +3148,9 @@ pub mod state_update_kind {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct SourceReferences {
         pub key: Option<SourceReferencesKey>,
         pub value: Option<SourceReferencesValue>,
@@ -3218,9 +3165,9 @@ pub mod state_update_kind {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct GidMapping {
         pub key: Option<GidMappingKey>,
         pub value: Option<GidMappingValue>,
@@ -3236,9 +3183,9 @@ pub mod state_update_kind {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct SystemPrivileges {
         pub key: Option<SystemPrivilegesKey>,
         pub value: Option<SystemPrivilegesValue>,
@@ -3253,9 +3200,9 @@ pub mod state_update_kind {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct StorageCollectionMetadata {
         pub key: Option<StorageCollectionMetadataKey>,
         pub value: Option<StorageCollectionMetadataValue>,
@@ -3270,9 +3217,9 @@ pub mod state_update_kind {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct UnfinalizedShard {
         pub key: Option<UnfinalizedShardKey>,
     }
@@ -3286,24 +3233,15 @@ pub mod state_update_kind {
         PartialOrd,
         Ord,
         Serialize,
-        Deserialize,
-        Arbitrary
+        Deserialize
     )]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     pub struct TxnWalShard {
         pub value: Option<TxnWalShardValue>,
     }
 
-    #[derive(
-        Clone,
-        Debug,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        Serialize,
-        Deserialize,
-        Arbitrary
-    )]
+    #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+    #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
     // Serialize the top-level enum in the persist-backed catalog as internally tagged to set up
     // persist pushdown statistics for success.
     #[serde(tag = "kind")]
@@ -3343,10 +3281,10 @@ pub mod state_update_kind {
     Hash,
     PartialOrd,
     Ord,
-    Arbitrary,
     IntoPrimitive,
     TryFromPrimitive
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 #[repr(i32)]
 pub enum CatalogItemType {
     Unknown = 0,
@@ -3372,10 +3310,10 @@ pub enum CatalogItemType {
     Hash,
     PartialOrd,
     Ord,
-    Arbitrary,
     IntoPrimitive,
     TryFromPrimitive
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 #[repr(i32)]
 pub enum ObjectType {
     Unknown = 0,

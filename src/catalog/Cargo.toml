@@ -53,8 +53,6 @@ mz-transform = { path = "../transform" }
 openssl.workspace = true
 paste.workspace = true
 prometheus.workspace = true
-proptest.workspace = true
-proptest-derive.workspace = true
 prost.workspace = true
 rand.workspace = true
 semver.workspace = true
@@ -72,6 +70,9 @@ uuid.workspace = true
 [dev-dependencies]
 base64.workspace = true
 insta.workspace = true
+mz-catalog-protos = { path = "../catalog-protos", features = ["proptest"] }
+proptest.workspace = true
+proptest-derive.workspace = true
 
 [features]
 default = []

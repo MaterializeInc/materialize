@@ -5874,6 +5874,7 @@ dependencies = [
  "anyhow",
  "md-5",
  "mz-audit-log",
+ "mz-catalog-protos",
  "mz-compute-types",
  "mz-controller-types",
  "mz-expr",
