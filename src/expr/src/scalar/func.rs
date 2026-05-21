@@ -2024,10 +2024,15 @@ where
         )
     })?;
 
-    let mut tm_delta = tm_diff - tm_diff % stride_ns;
+    let remainder = tm_diff % stride_ns;
+    let mut tm_delta = tm_diff - remainder;
 
-    if sub_stride {
-        tm_delta -= stride_ns;
+    if sub_stride && remainder != 0 {
+        tm_delta = tm_delta.checked_sub(stride_ns).ok_or_else(|| {
+            EvalError::DateBinOutOfRange(
+                "source and origin must not differ more than 2^63 nanoseconds".into(),
+            )
+        })?;
     }
 
     let res = origin
