@@ -382,6 +382,26 @@ pub struct StorageCollectionsImpl {
     /// Collections maintained by this [StorageCollections].
     collections: Arc<std::sync::Mutex<BTreeMap<GlobalId, CollectionState>>>,
 
+    /// IDs of collections whose `CollectionState::primary` is `Some(_)`.
+    ///
+    /// This is a small "side index" maintained in lockstep with writes to
+    /// `CollectionState::primary` so that hot-path DDL code (specifically
+    /// `prepare_state`'s `dropped_shard_lookup` step) can decide whether a
+    /// dropped collection had a primary without taking the global
+    /// `collections` mutex. The big mutex is contended by the
+    /// `BackgroundTask`'s O(N) periodic sweep over txns-backed collections
+    /// (see `update_write_frontiers`), so any lock acquire from the DDL hot
+    /// path can queue behind hundreds of chunked acquires from the sweep.
+    /// By moving this single read off the contended path we kill the
+    /// `prepare_state` slope that survived phase 15: at N=25k tables it was
+    /// the dominant contributor to the per-DDL latency growth.
+    ///
+    /// Invariant: an id appears here iff it has a corresponding entry in
+    /// `collections` whose `primary.is_some()`. Maintained at every site
+    /// that writes `CollectionState::primary` and at the single
+    /// `collections.remove` site.
+    primaried_ids: Arc<std::sync::Mutex<BTreeSet<GlobalId>>>,
+
     /// A shared TxnsCache running in a task and communicated with over a channel.
     txns_read: TxnsRead<Timestamp>,
 
@@ -517,6 +537,7 @@ impl StorageCollectionsImpl {
         let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
 
         let collections = Arc::new(std::sync::Mutex::new(BTreeMap::default()));
+        let primaried_ids = Arc::new(std::sync::Mutex::new(BTreeSet::default()));
         let finalizable_shards =
             Arc::new(ShardIdSet::new(metrics.finalization_outstanding.clone()));
         let finalized_shards =
@@ -539,6 +560,7 @@ impl StorageCollectionsImpl {
             cmds_rx: cmd_rx,
             holds_rx,
             collections: Arc::clone(&collections),
+            primaried_ids: Arc::clone(&primaried_ids),
             finalizable_shards: Arc::clone(&finalizable_shards),
             shard_by_id: BTreeMap::new(),
             since_handles: BTreeMap::new(),
@@ -575,6 +597,7 @@ impl StorageCollectionsImpl {
             finalizable_shards,
             finalized_shards,
             collections,
+            primaried_ids,
             txns_read,
             envd_epoch,
             read_only,
@@ -1020,6 +1043,7 @@ impl StorageCollectionsImpl {
         StorageCollectionsImpl::update_read_capabilities_inner(
             &self.cmd_tx,
             self_collections,
+            &self.primaried_ids,
             &mut storage_read_updates,
         );
 
@@ -1265,6 +1289,7 @@ impl StorageCollectionsImpl {
             StorageCollectionsImpl::update_read_capabilities_inner(
                 &self.cmd_tx,
                 collections,
+                &self.primaried_ids,
                 &mut read_capability_changes,
             );
         }
@@ -1277,6 +1302,7 @@ impl StorageCollectionsImpl {
     fn update_read_capabilities_inner(
         cmd_tx: &mpsc::UnboundedSender<BackgroundCmd>,
         collections: &mut BTreeMap<GlobalId, CollectionState>,
+        primaried_ids: &std::sync::Mutex<BTreeSet<GlobalId>>,
         updates: &mut BTreeMap<GlobalId, ChangeBatch<Timestamp>>,
     ) {
         // Location to record consequences that we need to act on.
@@ -1360,20 +1386,36 @@ impl StorageCollectionsImpl {
         // Translate our net compute actions into downgrades of persist sinces.
         // The actual downgrades are performed by a Tokio task asynchronously.
         let mut persist_compaction_commands = Vec::with_capacity(collections_net.len());
+        let mut removed_primaried = Vec::new();
         for (key, (mut changes, frontier)) in collections_net {
             if !changes.is_empty() {
                 // If the collection has a "primary" collection, let that primary drive compaction.
                 let collection = collections.get(&key).expect("must still exist");
-                let should_emit_persist_compaction = collection.primary.is_none();
+                let was_primaried = collection.primary.is_some();
+                let should_emit_persist_compaction = !was_primaried;
 
                 if frontier.is_empty() {
                     info!(id = %key, "removing collection state because the since advanced to []!");
                     collections.remove(&key).expect("must still exist");
+                    if was_primaried {
+                        removed_primaried.push(key);
+                    }
                 }
 
                 if should_emit_persist_compaction {
                     persist_compaction_commands.push((key, frontier));
                 }
+            }
+        }
+
+        // Keep the `primaried_ids` side index in lockstep with the
+        // `collections` removals above. Doing this in a single lock acquire
+        // after the removal loop keeps it off the per-iteration critical
+        // path. (Typical loop body: 0 entries; in rare cases <small.)
+        if !removed_primaried.is_empty() {
+            let mut primaried_ids = primaried_ids.lock().expect("lock poisoned");
+            for id in removed_primaried {
+                primaried_ids.remove(&id);
             }
         }
 
@@ -1766,15 +1808,24 @@ impl StorageCollections for StorageCollectionsImpl {
 
         // Only finalize the shards of dropped collections that don't have a primary.
         // Otherwise the shard might still be in use by the primary.
+        //
+        // We deliberately consult `self.primaried_ids` (a small side index
+        // of ids whose `primary.is_some()`) instead of the big `collections`
+        // BTreeMap. The `collections` mutex is contended by the
+        // `BackgroundTask`'s periodic O(N) sweep (`update_write_frontiers`)
+        // over txns-backed collections; that sweep takes the lock in chunks
+        // so any DDL acquire here queues behind in-flight chunks. The lock
+        // wait drove the `prepare_state` slope by +0.2 ms / +1k tables at
+        // N=10k → 25k. By using a separate, rarely-written side index we
+        // remove this contention entirely.
         let dropped_shards = {
             let _t = phase
                 .with_label_values(&["dropped_shard_lookup"])
                 .start_timer();
             let mut dropped_shards = BTreeSet::new();
-            let collections = self.collections.lock().expect("poisoned");
+            let primaried_ids = self.primaried_ids.lock().expect("lock poisoned");
             for (id, shard) in dropped_mappings {
-                let coll = collections.get(&id).expect("must exist");
-                if coll.primary.is_none() {
+                if !primaried_ids.contains(&id) {
                     dropped_shards.insert(shard);
                 }
             }
@@ -2119,6 +2170,14 @@ impl StorageCollections for StorageCollectionsImpl {
                 metadata.clone(),
             );
 
+            // Keep the `primaried_ids` side index in lockstep with writes to
+            // `CollectionState::primary`. `description.primary` is almost
+            // always `None` in normal usage, but if a fresh collection is
+            // installed with a primary already set, record it.
+            if description.primary.is_some() {
+                self.primaried_ids.lock().expect("lock poisoned").insert(id);
+            }
+
             // Install the collection state in the appropriate spot.
             match &description.data_source {
                 DataSource::Introspection(_) => {
@@ -2283,6 +2342,15 @@ impl StorageCollections for StorageCollectionsImpl {
             existing.primary = Some(new_collection);
             existing.storage_dependencies.push(new_collection);
 
+            // Mirror the primary-set into the `primaried_ids` side index so
+            // that `prepare_state`'s `dropped_shard_lookup` can answer the
+            // primary question without taking the contended `collections`
+            // mutex.
+            self.primaried_ids
+                .lock()
+                .expect("lock poisoned")
+                .insert(existing_collection);
+
             // Copy over the frontiers from the previous version.
             // The new table starts with two holds - the implied capability, and the hold from
             // the previous version - both at the previous version's read frontier.
@@ -2326,6 +2394,7 @@ impl StorageCollections for StorageCollectionsImpl {
             StorageCollectionsImpl::update_read_capabilities_inner(
                 &self.cmd_tx,
                 &mut *self_collections,
+                &self.primaried_ids,
                 &mut updates,
             );
         };
@@ -2455,6 +2524,7 @@ impl StorageCollections for StorageCollectionsImpl {
         StorageCollectionsImpl::update_read_capabilities_inner(
             &self.cmd_tx,
             &mut collections,
+            &self.primaried_ids,
             &mut updates,
         );
 
@@ -2487,6 +2557,7 @@ impl StorageCollections for StorageCollectionsImpl {
             finalizable_shards,
             finalized_shards,
             collections,
+            primaried_ids,
             txns_read: _,
             config,
             initial_txn_upper,
@@ -2517,6 +2588,12 @@ impl StorageCollections for StorageCollectionsImpl {
             .iter()
             .map(|(id, c)| (id.to_string(), format!("{c:?}")))
             .collect();
+        let primaried_ids: Vec<_> = primaried_ids
+            .lock()
+            .expect("lock poisoned")
+            .iter()
+            .map(ToString::to_string)
+            .collect();
         let config = format!("{:?}", config.lock().expect("poisoned"));
 
         let txns_upper = format!("{:?}", txns_upper.read().expect("lock poisoned"));
@@ -2527,6 +2604,7 @@ impl StorageCollections for StorageCollectionsImpl {
             "finalizable_shards": finalizable_shards,
             "finalized_shards": finalized_shards,
             "collections": collections,
+            "primaried_ids": primaried_ids,
             "config": config,
             "initial_txn_upper": initial_txn_upper,
             "txns_upper": txns_upper,
@@ -2743,6 +2821,9 @@ struct BackgroundTask {
     holds_rx: mpsc::UnboundedReceiver<(GlobalId, ChangeBatch<Timestamp>)>,
     finalizable_shards: Arc<ShardIdSet>,
     collections: Arc<std::sync::Mutex<BTreeMap<GlobalId, CollectionState>>>,
+    /// Shared with [`StorageCollectionsImpl::primaried_ids`]; see the doc
+    /// comment on the parent field for rationale.
+    primaried_ids: Arc<std::sync::Mutex<BTreeSet<GlobalId>>>,
     // So we know what shard ID corresponds to what global ID, which we need
     // when re-enqueing futures for determining the next upper update.
     shard_by_id: BTreeMap<GlobalId, ShardId>,
@@ -3018,6 +3099,7 @@ impl BackgroundTask {
                     StorageCollectionsImpl::update_read_capabilities_inner(
                         &self.cmds_tx,
                         &mut collections,
+                        &self.primaried_ids,
                         &mut batched_changes,
                     );
                 }
@@ -3093,6 +3175,7 @@ impl BackgroundTask {
             StorageCollectionsImpl::update_read_capabilities_inner(
                 &self.cmds_tx,
                 &mut self_collections,
+                &self.primaried_ids,
                 &mut read_capability_changes,
             );
         }
@@ -3585,6 +3668,7 @@ mod tests {
                     UIntGauge::new("finalizable_shards", "dummy gauge for tests").unwrap(),
                 )),
                 collections: Arc::new(Mutex::new(BTreeMap::new())),
+                primaried_ids: Arc::new(Mutex::new(BTreeSet::new())),
                 shard_by_id: BTreeMap::new(),
                 since_handles: BTreeMap::new(),
                 txns_handle: None,
