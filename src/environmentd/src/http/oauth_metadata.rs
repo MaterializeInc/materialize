@@ -71,12 +71,13 @@ pub const PROTECTED_RESOURCE_METADATA_PATH: &str = "/.well-known/oauth-protected
 
 /// `Cache-Control` value set on the discovery response.
 ///
-/// One hour is a balance: long enough that well-behaved clients reuse the
-/// document across a session instead of re-fetching per request, short
-/// enough that an admin who changes `oidc_issuer` does not have to wait a
-/// long tail of stale caches out. RFC 9728 places no requirement here;
-/// this is a pragmatic default.
-const METADATA_CACHE_CONTROL: &str = "public, max-age=3600";
+/// `private` keeps the document out of shared caches (CDNs, forward
+/// proxies) which could otherwise serve a metadata document built for
+/// one listener / virtual host to clients of another. End-user clients
+/// can still cache it for an hour — long enough to amortise discovery
+/// across a session, short enough that an admin who changes
+/// `oidc_issuer` does not have to wait a long tail of stale caches out.
+const METADATA_CACHE_CONTROL: &str = "private, max-age=3600";
 
 /// JSON shape returned by [`PROTECTED_RESOURCE_METADATA_PATH`].
 ///
@@ -193,20 +194,43 @@ pub fn metadata_url(req: &Request, http_host_name: Option<&str>) -> Option<Strin
 ///
 /// Prefers the operator-configured `http_host_name`; falls back to the
 /// request's `Host` header. **Never consults `X-Forwarded-*`** — see the
-/// module-level "Host derivation" notes for the security rationale.
+/// module-level "Host derivation" notes.
+///
+/// The returned value is parsed through [`http::uri::Authority`] before
+/// it is returned, so it is guaranteed to be a syntactically valid
+/// `host[:port]` per RFC 3986. This is the second layer of defense
+/// against header-smuggling attacks: even if a future change accepts a
+/// malicious value as input, the parser rejects anything containing
+/// characters outside the URI host grammar (notably `"`, whitespace,
+/// `;`, etc.) so the value cannot break out of the quoted
+/// `resource_metadata="..."` parameter in a `WWW-Authenticate` challenge
+/// or smuggle additional fields into the published `resource` URL.
 fn resolve_host(req: &Request, http_host_name: Option<&str>) -> Option<String> {
-    if let Some(name) = http_host_name {
-        let trimmed = name.trim();
-        if !trimmed.is_empty() {
-            return Some(trimmed.to_string());
-        }
-    }
-    req.headers()
-        .get(http::header::HOST)
-        .and_then(|v| v.to_str().ok())
+    let candidate = http_host_name
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
+        .or_else(|| {
+            req.headers()
+                .get(http::header::HOST)
+                .and_then(|v| v.to_str().ok())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        })?;
+    // Round-trip through `http::uri::Authority` to confirm the value is
+    // a syntactically valid `host[:port]`. This rejects header-smuggling
+    // payloads (quotes, whitespace, control chars, parameter-delimiters)
+    // that `HeaderValue::from_str` lets through.
+    let authority = candidate.parse::<http::uri::Authority>().ok()?;
+    if authority.as_str() != candidate {
+        // The Authority parser is permissive about some forms (e.g.
+        // `userinfo@host`), so additionally require the parsed form to
+        // round-trip exactly. Anything that re-renders differently is
+        // refused.
+        return None;
+    }
+    Some(candidate)
 }
 
 /// Picks the scheme to use in published URLs.
@@ -361,6 +385,48 @@ mod tests {
             .body(Body::empty())
             .unwrap();
         assert_eq!(scheme_for(&req), "http");
+    }
+
+    /// Defense in depth against header-smuggling: a Host header that
+    /// contains characters outside the URI host grammar (quotes,
+    /// whitespace, semicolons, etc.) MUST be rejected. Otherwise a
+    /// malicious value could break out of the quoted
+    /// `resource_metadata="..."` parameter in `WWW-Authenticate` and
+    /// inject extra challenges, or smuggle a different host into the
+    /// published `resource` URL.
+    ///
+    /// The payloads here are restricted to bytes that `HeaderValue::from_str`
+    /// accepts (`HeaderValue` already blocks CR/LF/NUL and other control
+    /// bytes); the point of the URI-grammar parse in `resolve_host` is
+    /// to catch the rest — quotes, whitespace, semicolons, etc.
+    #[mz_ore::test]
+    fn test_resolve_host_rejects_smuggled_characters() {
+        for malicious in [
+            // The headline regression: closes the quoted
+            // resource_metadata parameter and injects a second one.
+            "attacker.example.net\" foo=bar",
+            // Whitespace splits the `host:port` token.
+            "host with space.example.com",
+            // Semicolons inside a quoted parameter still terminate
+            // `auth-param` values in some lenient parsers.
+            "host\";evil=1",
+            // Backslash is reserved in URI host grammar.
+            "host\\backslash",
+            // Quote alone is enough to terminate the parameter.
+            "host\"quote",
+        ] {
+            let req = req_with_host(malicious);
+            assert_eq!(
+                resolve_host(&req, None),
+                None,
+                "smuggling payload via Host header must be rejected: {malicious:?}",
+            );
+            assert_eq!(
+                resolve_host(&req, Some(malicious)),
+                None,
+                "smuggling payload via http_host_name must be rejected: {malicious:?}",
+            );
+        }
     }
 
     /// `metadata_url` composes the resolved host with the canonical
