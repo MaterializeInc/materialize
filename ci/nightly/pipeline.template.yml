@@ -961,6 +961,20 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: secrets-local-file
 
+  - group: GCP
+    key: gcp
+    steps:
+      - id: gcp-real
+        label: GCP (Real)
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        agents:
+          # because of GCP access
+          queue: linux-aarch64-small
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: gcp
+
   - group: "Platform checks"
     key: platform-checks
     steps:
