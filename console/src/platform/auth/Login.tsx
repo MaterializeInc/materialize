@@ -154,9 +154,15 @@ const SsoLoginLink = () => {
   const [error, setError] = useState<string | null>(null);
   const auth = useAuth();
 
-  if (!auth) {
-    return null;
-  }
+  // For internal errors, react-oidc-context won't throw an error in auth.signinRedirect,
+  // but will save it in its error object. So we need to check the error state
+  const oidcError = auth.error?.message ?? null;
+
+  const oidcDisplayError =
+    error ||
+    (oidcError &&
+      `${oidcError}. It looks like there may be an issue with the sign-in configuration. Please review your OIDC settings or check the console logs for more information.`) ||
+    null;
 
   const handleSsoLogin = () => {
     setError(null);
@@ -167,9 +173,15 @@ const SsoLoginLink = () => {
     });
   };
 
+  if (!auth) {
+    return null;
+  }
+
   return (
     <VStack spacing="2" alignItems="center">
-      {error && <Alert variant="error" minWidth="100%" message={error} />}
+      {oidcDisplayError && (
+        <Alert variant="error" minWidth="100%" message={oidcDisplayError} />
+      )}
       <Link
         color={colors.accent.brightPurple}
         fontSize="sm"
