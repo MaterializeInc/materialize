@@ -3717,3 +3717,148 @@ multiplier would be reducing pressure on CRDB consensus (4×
 commits → 4× lease/write QPS to the consensus store) or
 reducing churn in `txns_cache.update_gt`. Both are worth measuring
 before opening a refactor that crosses adapter ↔ storage-controller.
+
+## Phase 17 — high-N slope confirmation
+
+The phase-15 post-fix writeup called the residual slope "+0.42 ms /
++1000 tables, close enough to flat" based on a 100-rep sweep across
+N=5k..25k. That bench had no warmup discard and N=5k carried the
+cold-start cost (66 ms vs 50–58 ms at higher N). Iteration 3 reruns
+the high-N portion with (a) 30 warmup reps discarded at every scale,
+(b) 500 measurement reps per scale, (c) ascending pad in a single
+envd run so no scale needs a restart. Bootstrap 95 % CIs on the
+median and on the regression slope are computed from the 500-rep
+per-scale samples (`/home/ubuntu/envd-ddl-investigation/analyze_phase17.py`,
+seed 17, 10 000 bootstrap samples).
+
+### Bench: N=10k → N=25k (POST = phase 15 + 16)
+
+`results_phase17/`, 4 scales, single optimized envd run against
+CRDB-backed consensus.
+
+| N     | create_p50 ms | create p50 95% CI | drop_p50 ms | drop p50 95% CI |
+|------:|--------------:|------------------:|------------:|----------------:|
+| 10000 |         50.91 |    [50.48, 51.27] |       35.35 |  [34.88, 35.60] |
+| 15000 |         52.46 |    [51.90, 53.21] |       37.95 |  [37.58, 38.74] |
+| 20000 |         58.84 |    [58.01, 59.55] |       44.03 |  [43.00, 45.05] |
+| 25000 |         70.39 |    [68.79, 72.60] |       51.79 |  [50.47, 53.00] |
+
+Slope, fit by least squares over the four scales (medians of 500
+reps each):
+
+- `create_p50` slope: **+1.296 ms / +1k tables [95% CI +1.187, +1.434]**
+- `drop_p50`   slope: **+1.108 ms / +1k tables [95% CI +1.028, +1.194]**
+
+The CI excludes zero by a wide margin. The slope is **3.1×** what
+phase-15 reported (+0.42 ms / +1k). The previous number was biased
+low by warmup contamination at N=5k and by absorbing the first
+warm reps at every scale into the median. The slope is also
+**super-linear** across this range: it accelerates from +0.31 ms/+1k
+(10k → 15k) to +1.28 (15k → 20k) to +2.31 ms/+1k (20k → 25k).
+
+### Where the slope lives
+
+`results_phase17/attribute_all.txt`: per-call mean of every relevant
+`*_sum` / `*_count` pair diffed between
+`metrics_phase17/measure_start_N{N}.prom` and
+`metrics_phase17/after_N{N}.prom` (so the warmup is excluded from
+attribution too).
+
+The top slope contributors, ranked by ms/+1k of mean per-call
+latency, all sit below the catalog-transact layer:
+
+| metric | N=10k | N=25k | slope ms/+1k |
+|---|---:|---:|---:|
+| `persist_external_op_latency_by_shard_kind{op="consensus_cas",shard_kind="user_data"}` | 24.4 | 118.6 | +6.28 |
+| `persist_external_op_latency_by_shard_kind{op="consensus_scan",shard_kind="txns"}` | 4.0 | 21.9 | +1.19 |
+| `persist_external_op_latency_by_shard_kind{op="consensus_truncate",shard_kind="catalog"}` | 40.0 | 54.9 | +0.99 |
+| `storage_collections_create_collections_phase{phase="open_data_handles_concurrent"}` | 16.1 | 24.2 | +0.54 |
+| `apply_catalog_implications_seconds` | 19.3 | 26.8 | +0.50 |
+| `catalog_transact_phase{phase="transact_inner"}` | 1.6 | 5.0 | +0.23 |
+| `catalog_transact_phase{phase="tx_commit"}` | 2.8 | 5.6 | +0.19 |
+| `catalog_transact_phase{phase="prepare_state"}` | 0.2 | 2.7 | +0.16 |
+
+The dominant contributor is **persist's `consensus_cas` on
+`user_data` shards**, mean latency growing from 24 ms to 119 ms per
+call. The same pattern shows up in
+`consensus_scan` on the `txns` shard and `consensus_truncate` on
+the `catalog` shard: as the catalog grows (more user collections
+→ more rows in CRDB's `consensus` table → more state per shard's
+CAS check), every individual CAS, scan and truncate against CRDB
+gets slower. There are ~176 `user_data` CAS calls per CREATE+DROP
+rep, mostly background compaction/heartbeat traffic that runs
+concurrently across many persist clients, so per-rep wall-clock
+impact is far less than `mean_latency × call_count`. But two of
+those CAS-bound calls *are* on the DDL hot path:
+
+1. `open_data_handles_concurrent` (16 → 24 ms) — opens a write/since
+   handle for the new shard during CREATE TABLE.
+   `storage-collections.rs:1875`. One CRDB CAS per handle.
+2. `tx_commit` (2.8 → 5.6 ms) — the catalog transaction commit.
+   Goes through the `catalog` shard's `consensus_cas`.
+
+Both are single CAS-per-DDL operations whose latency tracks the
+per-call CAS latency growth shown above.
+
+### Conclusion
+
+The residual slope is real, larger than phase-15's reading, and
+**structural to the persist-on-CRDB layer**, not in code we own at
+the adapter / coordinator / storage-collections boundary. The
+phase-15 fix correctly removed the per-DDL O(N) work inside
+`StorageCollectionsImpl::BackgroundTask`; what remains is per-CAS
+latency growth in the persist consensus implementation against
+CockroachDB. It is not a one-file mechanical change to fix: it
+would require either CRDB-side tuning (index design on the
+`consensus` table, vacuum/compaction policy), or a redesign that
+batches multiple DDLs' persist commits together, or moving the
+catalog/txns shard's consensus_cas off the per-DDL critical path.
+
+We deliberately do not ship a fix this iteration.
+
+### What the phase-15 writeup got wrong
+
+It reported "+0.42 ms / +1k tables, flat enough" using a 100-rep
+sweep where:
+
+- N=5k was the first scale measured; its median absorbed the
+  envd cold-start (66 ms vs 50–58 ms at warm scales). That single
+  outlier pulled the regression line shallow.
+- No warmup reps were discarded at any scale; the bench median
+  consequently included the per-scale first-rep spike (e.g.
+  rep=0 at N=25k was 2118 ms in `results_phase15_post/`).
+- 100 reps is enough to compute a median but the CI is wide
+  enough (~5 ms) to hide a slope of ±1 ms / +1k.
+
+The 500-rep bench with bootstrap CI cuts that uncertainty by ~3×
+and exposes the slope.
+
+### Methodology artefacts
+
+- `bench_phase17.py` (in the investigation dir): the new harness.
+  `WARMUP_REPS = 30`, `MEASURE_REPS = 500`, scales [10k, 15k, 20k,
+  25k] ascending. CSV gets a `phase` column (`warmup`/`measure`)
+  so analysis can drop the warmup window. Metrics are snapshotted
+  at three points per scale: before-window, measure-start,
+  after-window — so attribution is over the measurement window
+  only.
+- `analyze_phase17.py`: per-scale median + 95 % bootstrap CI, plus
+  least-squares slope ms/+1k tables with bootstrap CI.
+- `attribute_phase17.py`: per-rep mean for each
+  `catalog_transact_phase_seconds` label, slope ms/+1k tables.
+- `/tmp/attribute_apply.py` and `/tmp/attribute_cas.py`: same shape
+  for the broader `pgwire`/`catalog_transact_seconds`/`persist`
+  series; the persist-shard-kind attribution is what surfaced the
+  `user_data consensus_cas` slope.
+
+### Suggested next iteration
+
+Stop chasing the slope at the adapter/storage-collections layer.
+The remaining lever is the persist-on-CRDB cost per operation,
+and the cleanest probe is a microbenchmark on CRDB consensus
+operations as `consensus` table size grows — outside this
+investigation's scope. If a future iteration wants to reduce
+per-DDL persist work, the highest-leverage change is killing the
+4× producer-side multiplier called out in iteration 2 of phase
+16: batch register / forget / audit into a single txns commit so
+each DDL pays one CRDB consensus round trip instead of four.
