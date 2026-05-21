@@ -2268,40 +2268,42 @@ impl CatalogItem {
         Ok(res)
     }
 
-    /// Updates the timestamp interval for a source. Returns an error if this item is not a source.
+    /// Updates the timestamp interval for a source. Returns the previous timestamp interval
+    /// value, if any. Returns an error if this item is not a source.
     pub fn update_timestamp_interval(
         &mut self,
         value: Option<Value>,
         interval: Duration,
-    ) -> Result<(), ()> {
-        let update = |ast: &mut Statement<Raw>| {
-            match ast {
-                Statement::CreateSource(stmt) => {
-                    let pos = stmt.with_options.iter().rposition(|o| {
-                        o.name == mz_sql_parser::ast::CreateSourceOptionName::TimestampInterval
-                    });
-                    if let Some(value) = value {
-                        let next = mz_sql_parser::ast::CreateSourceOption {
-                            name: mz_sql_parser::ast::CreateSourceOptionName::TimestampInterval,
-                            value: Some(WithOptionValue::Value(value)),
-                        };
-                        if let Some(idx) = pos {
-                            stmt.with_options[idx] = next;
-                        } else {
-                            stmt.with_options.push(next);
-                        }
+    ) -> Result<Option<WithOptionValue<Raw>>, ()> {
+        let update = |ast: &mut Statement<Raw>| match ast {
+            Statement::CreateSource(stmt) => {
+                let pos = stmt.with_options.iter().rposition(|o| {
+                    o.name == mz_sql_parser::ast::CreateSourceOptionName::TimestampInterval
+                });
+                let previous = if let Some(value) = value {
+                    let next = mz_sql_parser::ast::CreateSourceOption {
+                        name: mz_sql_parser::ast::CreateSourceOptionName::TimestampInterval,
+                        value: Some(WithOptionValue::Value(value)),
+                    };
+                    if let Some(idx) = pos {
+                        let previous = stmt.with_options[idx].clone();
+                        stmt.with_options[idx] = next;
+                        previous.value
                     } else {
-                        if let Some(idx) = pos {
-                            stmt.with_options.swap_remove(idx);
-                        }
+                        stmt.with_options.push(next);
+                        None
                     }
-                }
-                _ => return Err(()),
-            };
-            Ok(())
+                } else if let Some(idx) = pos {
+                    stmt.with_options.swap_remove(idx).value
+                } else {
+                    None
+                };
+                Ok(previous)
+            }
+            _ => Err(()),
         };
 
-        self.update_sql(update)?;
+        let previous = self.update_sql(update)?;
 
         // Update the in-memory SourceDesc timestamp_interval.
         match self {
@@ -2313,7 +2315,7 @@ impl CatalogItem {
                     }
                     _ => return Err(()),
                 }
-                Ok(())
+                Ok(previous)
             }
             _ => Err(()),
         }
