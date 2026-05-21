@@ -279,11 +279,13 @@ impl EagerBinaryFunc for ListLengthMax {
     #[allow(clippy::as_conversions)]
     fn call<'a>(&self, (a, b): Self::Input<'a>, _: &'a RowArena) -> Self::Output<'a> {
         fn max_len_on_layer(i: DatumList<'_>, on_layer: i64) -> Option<usize> {
-            let mut i = i.iter();
+            let i = i.iter();
             if on_layer > 1 {
                 let mut max_len = None;
-                while let Some(Datum::List(i)) = i.next() {
-                    max_len = std::cmp::max(max_len_on_layer(i, on_layer - 1), max_len);
+                for d in i {
+                    if let Datum::List(i) = d {
+                        max_len = std::cmp::max(max_len_on_layer(i, on_layer - 1), max_len);
+                    }
                 }
                 max_len
             } else {
