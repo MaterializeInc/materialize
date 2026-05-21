@@ -564,6 +564,10 @@ impl Migration {
         let objects = self
             .system_objects
             .iter()
+            // Skip objects that don't yet have a shard registered. These are brand-new builtins
+            // added in this version; the leader will allocate their shards during bootstrap, and
+            // there is nothing to evolve or replace.
+            .filter(|(_, info)| info.shard_id.is_some())
             .filter(|(_, info)| {
                 use Builtin::*;
                 match info.builtin {
