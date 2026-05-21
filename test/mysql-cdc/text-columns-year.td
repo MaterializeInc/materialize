@@ -21,10 +21,12 @@
 #   * YEAR range: 1901 to 2155
 #   * Zero value: 0000 (allowed when sql_mode lacks NO_ZERO_DATE)
 #
-# Note: the zero value surfaces in Materialize as the string "0", not "0000",
-# because decoding.rs renders YEAR via u16::to_string(). DATE/TIMESTAMP zero
-# values are preserved as their literal MySQL form ("0000-00-00",
-# "0000-00-00 00:00:00") — YEAR diverges from that convention today.
+# YEAR values are rendered zero-padded to four digits, matching the
+# literal MySQL form and the DATE/TIMESTAMP zero-value convention
+# ("0000-00-00", "0000-00-00 00:00:00"). The binlog decode path
+# additionally remaps mysql_common's 1900-on-the-wire representation
+# of the zero-year back to 0; the snapshot row (id 2) and the binlog
+# row (id 7) below pin both paths.
 
 > CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
 
@@ -57,23 +59,30 @@ COMMIT;
   WITH (TEXT COLUMNS = (event_year));
 > COMMIT
 
+> SELECT id, event_year FROM events ORDER BY id;
+1 "2024"
+2 "0000"
+3 <null>
+4 "1901"
+5 "2155"
+
 # Post-snapshot rows exercise the replication / binlog decode path.
 $ mysql-execute name=mysql
 USE public;
 SET SESSION sql_mode = '';
 START TRANSACTION;
-INSERT INTO events VALUES (6, '2025'), (7, '0000'), (8, NULL);
+INSERT INTO events VALUES (6, '2025'), (7, 0), (8, NULL);
 INSERT INTO events VALUES (9, '1901'), (10, '2155');
 COMMIT;
 
 > SELECT id, event_year FROM events ORDER BY id;
 1 "2024"
-2 "0"
+2 "0000"
 3 <null>
 4 "1901"
 5 "2155"
 6 "2025"
-7 "0"
+7 "0000"
 8 <null>
 9 "1901"
 10 "2155"
