@@ -113,12 +113,17 @@ groups:
       that care about compute-replica-epoch-isolation still run with
       replica1 + replica2 (see workload-entrypoint.sh).
 
-      Uses kafka/first_pin_upsert_v1 to pin the upsert continual-feedback
-      operator to v1 (the existing operator) for every timeline.  The
-      kafka group's `first_select_upsert_implementation` rolls v1/v2
-      from SDK entropy, but here we deliberately *don't* — INC-936
-      reproduces against v1, and splitting timelines across two
-      operator implementations would dilute the v1-side signal.
+      `kafka/first_upsert_stress_setup` pins the upsert continual-feedback
+      operator to v1 (the existing operator) for every timeline before
+      creating the stress source.  The kafka group's
+      `first_select_upsert_implementation` rolls v1/v2 from SDK entropy,
+      but here we deliberately *don't* — INC-936 reproduces against v1,
+      and splitting timelines across two operator implementations would
+      dilute the v1-side signal.  Pin and source creation must share a
+      single `first_*` script because Antithesis selects exactly one
+      `first_*` per timeline; listing both as separate setup entries
+      would mean half our timelines run without the pin and the other
+      half run without the source.
 
       Uses the `kafka` runtime template so the kafka anytime safety
       drivers (frontier monotonicity, `offset_known >= offset_committed`)
@@ -147,7 +152,6 @@ groups:
       - upsert-hammer-4
       - upsert-hammer-5
     setup:
-      - kafka/first_pin_upsert_v1
       - kafka/first_upsert_stress_setup
     drivers: []
     anytime:
