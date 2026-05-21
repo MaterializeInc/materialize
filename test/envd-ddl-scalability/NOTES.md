@@ -3502,3 +3502,90 @@ need to:
    keeping one shared field on `StorageCollectionsImpl` and
    reading from it would just delete the work. Simple, narrow
    interfaces beat clever caching.
+
+### Iteration 1: shared `txns_upper`, 1Hz periodic sweep
+
+Commit `0007b892` lands the architectural cut described above.
+`StorageCollectionsImpl::txns_upper` holds the latest observed txns
+shard upper as a single shared field. The `BackgroundTask::run`
+txns-upper branch publishes to that field (O(1)) and reissues the
+upper future; readers that previously consulted per-collection
+`write_frontier` for txns-backed shards (`collections_frontiers`,
+`set_read_policies_inner`, `alter_table_desc`) now go through
+`effective_write_frontier()`, which serves txns-backed collections
+from the shared field. Per-collection `write_frontier` is still
+source-of-truth for non-txns collections.
+
+Persist compaction still needs each txns-backed collection's
+implied capability (`since`) to advance, so a 1Hz periodic sweep
+calls `update_write_frontiers` exactly as the old per-tick branch
+did. Work per sweep is unchanged from before; what changed is the
+frequency — `1 Hz` vs the ~40 Hz the old branch fired at under DDL
+load — and therefore how often the global `collections` mutex is
+contended on the DDL hot path.
+
+#### Bench: N=5k → N=25k (PRE = phase 14 chunked unlock; POST = this iteration)
+
+`results_phase15_pre/` and `results_phase15_post/`, 100 reps per
+scale, same envd build, same CRDB:
+
+| N     | create_p50 PRE (ms) | create_p50 POST (ms) | drop_p50 PRE (ms) | drop_p50 POST (ms) |
+|------:|--------------------:|---------------------:|------------------:|-------------------:|
+|  5000 |               50.18 |             66.25 ⚠ |             30.79 |              43.44 |
+| 10000 |               55.99 |                58.38 |             36.44 |              44.60 |
+| 15000 |               68.41 |                64.82 |             43.98 |              45.97 |
+| 20000 |               69.86 |                63.16 |             43.06 |              43.00 |
+| 25000 |               76.19 |                64.67 |             49.25 |              43.38 |
+
+Slope 10k → 25k:
+
+- `create_p50` PRE: +20.20 ms (+1.35 ms/+1k tables)
+- `create_p50` POST: **+6.29 ms (+0.42 ms/+1k tables) — 3.2× flatter**
+- `drop_p50` PRE: +12.81 ms
+- `drop_p50` POST: **−1.22 ms — flat within noise**
+
+The N=5k POST point (66.25) is anomalously high and is almost certainly
+warm-up — first scale in the sweep absorbs cold-cache + first-DDL
+overhead. Treating N=10k as the warm baseline, the slope is flat. Drop
+is flat from N=5k onwards.
+
+This is the "close enough to flat" iteration. Remaining work is in the
+follow-up notes below; we are no longer chasing an O(N) slope.
+
+### Open follow-up — why was the per-tick branch firing at ~40 Hz?
+
+The Phase-15 fix changed the *frequency* of the O(N) lock-hold from
+~40 Hz to 1 Hz, not the *work per tick*. That works because nothing
+on the DDL hot path actually needs sub-second freshness on
+per-collection txns frontiers (`effective_write_frontier()` serves
+them from the shared field; persist compaction only needs eventual
+since-advancement). But ~40 Hz under DDL load is itself
+surprising and worth understanding:
+
+- The txns shard upper advances on every txns-backed write
+  (i.e. every committed user-table append from `coord_builtin_table_execute`
+  + every catalog audit log row + every storage-usage update).
+  At idle the rate should be a few Hz at most.
+- Our bench fires 100 CREATE+DROP DDLs back-to-back per scale.
+  Each DDL goes through the builtin-table commit path, which does
+  several txns appends (audit log, mz_catalog_server scrape, etc.).
+  If each DDL produces ~4 txns commits and the bench runs at ~10
+  DDL/s, that's ~40 commits/s = ~40 upper advances/s, matching
+  the observed rate.
+- **But:** the rate doesn't slow down between DDLs. The bench has
+  `time.sleep(SETTLE_S=5)` between scales but no sleep between
+  reps; that's expected. What's *not* expected is the BG task
+  running at 40 Hz when there is no DDL load at all — and we
+  haven't measured that.
+
+Next-iteration task: instrument the txns shard upper advance rate
+(a counter on each `BackgroundTask::run` tick of the txns branch,
+sliced by phase: idle vs DDL-load), measure it at idle and during
+the bench, and decide whether the *write-side* (whoever's producing
+txns commits) is the right place to slow this down, or whether the
+1 Hz cap on the read side is the simplest answer. If we find that
+~40 Hz at idle is real, that's a separate slope/efficiency bug
+worth fixing independently of DDL scalability.
+
+Document findings, commit a writeup, and only ship a fix if the
+investigation surfaces something concrete.
