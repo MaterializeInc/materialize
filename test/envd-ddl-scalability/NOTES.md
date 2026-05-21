@@ -3589,3 +3589,131 @@ worth fixing independently of DDL scalability.
 
 Document findings, commit a writeup, and only ship a fix if the
 investigation surfaces something concrete.
+
+### Iteration 2: where the 40 Hz comes from
+
+#### Instrumentation
+
+Added two Prometheus counters in `BackgroundTask` (commit `cdb8484d7b`):
+
+- `mz_storage_collections_txns_upper_advances_total`: bumped each
+  time the `txns_upper_future` arm fires (i.e. each observed
+  advance of the txns shard upper).
+- `mz_storage_collections_txns_since_sweeps_total`: bumped each
+  time the periodic 1Hz sweep arm fires.
+
+The ratio of the two is the coalescing factor of phase 15.
+
+#### Experiment
+
+`probe_txns_upper.py` in the investigation dir does three things:
+
+1. Sit idle for 30s and diff the counter.
+2. Fire 100 CREATE+DROP back-to-back from one connection and
+   sample the counter every 1s while the burst runs.
+3. Sit idle for 30s again to confirm baseline.
+
+Pad/measure scales beyond 0 tables are not needed: the question is
+about commits-per-DDL, not about per-collection fanout.
+
+Single envd run, optimized build, CRDB consensus, fresh state.
+
+#### Result
+
+| phase                | elapsed | total advances | advance rate | sweeps/s |
+|---------------------:|--------:|---------------:|-------------:|---------:|
+| idle (pre)           |  30.7 s |             30 |    0.978 Hz  |   0.98   |
+| 100×(CREATE+DROP)    |   8.3 s |            402 |   48.4   Hz  |   1.08   |
+| idle (post)          |  31.0 s |             31 |    1.0   Hz  |   1.0    |
+
+`advances/DDL = 402 / 100 = 4.02`. Almost exactly 4.
+
+#### Theory and verification
+
+At idle the rate is **1 Hz**, driven by
+`Coordinator::advance_timelines_interval`
+(`src/adapter/src/coord.rs:3661`), which fires on a tokio interval
+seeded from `default_timestamp_interval = 1000 ms`. Every tick
+enqueues a `GroupCommitInitiate` message, and a group commit (even
+an empty one) lands one append against the txns shard, advancing
+its upper by one. That's 1.0 Hz, matching the measurement.
+
+Under DDL load the rate is **~48 Hz, broken down as ~4 advances
+per CREATE+DROP pair**. The four come from:
+
+1. `register` of the new table's data shard (txns.register
+   commits to the txns shard) — `src/storage-controller/src/persist_handles.rs:372`.
+2. `coord_builtin_table_execute` for the CREATE audit-log row —
+   `src/adapter/src/coord/ddl.rs:546` → `BuiltinTableAppend::execute`
+   → `group_commit` → one txns append.
+3. `forget` of the dropped table's data shard
+   (txns.forget commits to the txns shard) — same file:397.
+4. `coord_builtin_table_execute` for the DROP audit-log row.
+
+Each of those is its own commit_at against the txns shard, each
+advances the upper by one. The bench drives ~12 CREATE+DROP/s, so
+~48 Hz, matching the measurement and the ~40 Hz hand-estimate in
+the phase-15 writeup.
+
+#### Conclusion
+
+- Idle: 1 Hz. No spinning, no separate efficiency bug. The
+  `advance_timelines_interval` 1Hz tick is intentional — it
+  downgrades read holds and bounds how stale realtime read
+  timestamps can become.
+- Under DDL load: 4 commits per CREATE+DROP, structural to the
+  fact that register, forget, and audit-log append are three
+  separate calls against the txns shard (4 because CREATE and DROP
+  each pay the audit append separately).
+
+The phase-15 fix changed the *consumer* side: the BackgroundTask
+no longer fans out to N collections per advance. The
+**writer-side multiplier** (3 txns commits per single DDL) is a
+property of the catalog/storage-controller boundary: catalog
+DDL produces (a) an audit append routed via the coord group-commit
+path and (b) a storage-controller register/forget routed via the
+TxnsTableWorker; these don't share a transaction and can't
+trivially be coalesced without significant cross-component
+plumbing (timestamps, ordering, register-before-publish).
+
+**No fix shipped.** Phase 15's coalescing is the right answer for
+this workload. Killing the writer-side multiplier would require
+batching register/forget with the same group-commit append, which
+is a larger refactor than the slope justifies (the slope is
+already flat at +0.42 ms/+1k tables across 10k→25k).
+
+#### Bigger-picture observation
+
+The txns shard upper is conceptually a single global value that
+fans out to N owners. There are two boundaries where work is
+spent reacting to its advances:
+
+- *Consumer side* (this investigation): for every advance, walk N
+  collections and downgrade their per-collection implied
+  capability. Fixed by phase 15 (publish once, sweep at fixed
+  cadence).
+- *Producer side* (this iteration): for every DDL, the catalog
+  layer makes three independent commits against the txns shard
+  because audit/register/forget take different code paths.
+
+Both are symptoms of the same boundary mismatch: txns-wal exposes
+a fine-grained "commit a transaction" API, and the layers above
+treat it as an unmetered RPC. A cleaner cut on the producer side
+would be a per-DDL transactional unit that bundles audit-log
+appends together with register/forget into a single txns commit;
+the catalog already serializes DDL, so there's no concurrency
+penalty to merging them. Concretely it would mean teaching
+`Coordinator::catalog_transact_with` to hand a single
+`Txn` (from `txn-wal`) to both `BuiltinTableAppend::execute` and
+the storage controller's `TxnsTableWorker`, rather than each
+opening its own. That's the architectural follow-up if a future
+iteration wants to push past phase 15.
+
+Suggested next iteration (if any): build a stronger justification
+before pursuing producer-side coalescing. At current scale the
+DDL hot path's `prepare_state` slope is flat; the work-per-tick
+is small; CPU is not the bottleneck. The reason to fix the
+multiplier would be reducing pressure on CRDB consensus (4×
+commits → 4× lease/write QPS to the consensus store) or
+reducing churn in `txns_cache.update_gt`. Both are worth measuring
+before opening a refactor that crosses adapter ↔ storage-controller.
