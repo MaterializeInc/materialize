@@ -30,6 +30,7 @@ use futures::FutureExt;
 use http::Request;
 use itertools::Itertools;
 use jsonwebtoken::{DecodingKey, EncodingKey};
+use mz_auth::password::Password;
 use mz_environmentd::test_util::{self, Ca, KAFKA_ADDRS, PostgresErrorExt, make_pg_tls};
 use mz_environmentd::{WebSocketAuth, WebSocketResponse};
 use mz_frontegg_auth::{
@@ -5849,6 +5850,177 @@ fn test_mcp_agent_with_data_product() {
     assert!(
         body["error"].is_object(),
         "injection in cluster should produce an error, not succeed"
+    );
+}
+
+/// Verifies that the `WWW-Authenticate` challenge on a 401 for an MCP
+/// route includes both the Bearer (with `resource_metadata`) and Basic
+/// challenges, so OAuth-aware clients (Claude Desktop, ChatGPT remote
+/// MCP) can discover the protected resource metadata while existing
+/// callers that send Basic still see a usable challenge. This is the
+/// half of RFC 9728 that doesn't require an authorization server to be
+/// configured — even with no `oidc_issuer` set, the Bearer challenge
+/// itself fires (clients then probe the well-known URI and get a 404,
+/// which is the documented fallback path).
+#[mz_ore::test]
+fn test_mcp_unauth_emits_bearer_and_basic_challenges() {
+    // Use the Frontegg-like Password authenticator setup so the MCP
+    // path actually hits the 401 (None authenticator would just default
+    // to anonymous_http_user). Frontegg is heavyweight to set up in a
+    // test, but Password gives us the same 401 surface for our purposes.
+    let server = test_util::TestHarness::default()
+        .with_mcp_routes(true, true)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string())
+        .with_password_auth(Password("mz_system_password".to_string()))
+        .start_blocking();
+
+    for endpoint in ["agent", "developer"] {
+        let url = format!("http://{}/api/mcp/{endpoint}", server.http_local_addr());
+        let res = Client::new()
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .body(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)
+            .send()
+            .unwrap();
+        assert_eq!(
+            res.status(),
+            StatusCode::UNAUTHORIZED,
+            "MCP {endpoint} without auth should 401",
+        );
+        let challenges: Vec<String> = res
+            .headers()
+            .get_all(http::header::WWW_AUTHENTICATE)
+            .iter()
+            .map(|v| v.to_str().unwrap().to_string())
+            .collect();
+        assert!(
+            challenges.iter().any(|c| c.starts_with("Bearer ")
+                && c.contains("resource_metadata=")
+                && c.contains("/.well-known/oauth-protected-resource")),
+            "expected a Bearer challenge with resource_metadata on /api/mcp/{endpoint}, got: {challenges:?}",
+        );
+        assert!(
+            challenges.iter().any(|c| c.starts_with("Basic ")),
+            "expected a Basic challenge alongside Bearer so curl/legacy callers \
+             still see a usable challenge, got: {challenges:?}",
+        );
+    }
+}
+
+/// The SQL HTTP layer must NOT gain the Bearer challenge — only MCP
+/// routes opt into OAuth discovery. Regression guard so we don't
+/// accidentally widen the OAuth surface to the rest of the HTTP server.
+#[mz_ore::test]
+fn test_sql_http_unauth_keeps_only_basic_challenge() {
+    let server = test_util::TestHarness::default()
+        .with_password_auth(Password("mz_system_password".to_string()))
+        .start_blocking();
+
+    // `/` triggers the WWW-Authenticate path (see auth_middleware) so we
+    // get a 401 with the challenge header.
+    let res = Client::new()
+        .get(&format!("http://{}/", server.http_local_addr()))
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    let challenges: Vec<String> = res
+        .headers()
+        .get_all(http::header::WWW_AUTHENTICATE)
+        .iter()
+        .map(|v| v.to_str().unwrap().to_string())
+        .collect();
+    assert!(
+        challenges.iter().any(|c| c.starts_with("Basic ")),
+        "SQL HTTP layer should still emit Basic challenge: {challenges:?}",
+    );
+    assert!(
+        !challenges.iter().any(|c| c.starts_with("Bearer ")),
+        "SQL HTTP layer must NOT advertise OAuth: {challenges:?}",
+    );
+}
+
+/// The well-known protected resource metadata document is public (no
+/// auth) and returns the configured authorization server when
+/// `oidc_issuer` is set. Pinning the JSON shape protects MCP clients
+/// from accidental contract drift.
+#[mz_ore::test]
+fn test_oauth_protected_resource_metadata_advertises_issuer() {
+    let server = test_util::TestHarness::default()
+        .with_mcp_routes(true, false)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .with_system_parameter_default(
+            "oidc_issuer".to_string(),
+            "https://issuer.test.example.com".to_string(),
+        )
+        .start_blocking();
+
+    let res = Client::new()
+        .get(&format!(
+            "http://{}/.well-known/oauth-protected-resource",
+            server.http_local_addr()
+        ))
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body: serde_json::Value = res.json().unwrap();
+
+    // `resource` is built from the request host and must point at the
+    // MCP path prefix — clients use this as the `aud` value in their
+    // RFC 8707 resource indicator.
+    let resource = body["resource"].as_str().expect("resource is a string");
+    assert!(
+        resource.ends_with("/api/mcp"),
+        "resource should point at /api/mcp prefix, got: {resource}",
+    );
+
+    let authorization_servers: Vec<String> = body["authorization_servers"]
+        .as_array()
+        .expect("authorization_servers is an array")
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        authorization_servers,
+        vec!["https://issuer.test.example.com".to_string()],
+        "should advertise the configured oidc_issuer verbatim",
+    );
+
+    let bearer_methods: Vec<String> = body["bearer_methods_supported"]
+        .as_array()
+        .expect("bearer_methods_supported is an array")
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        bearer_methods,
+        vec!["header".to_string()],
+        "we only accept the Authorization header, not a query param",
+    );
+}
+
+/// When no `oidc_issuer` is configured, the metadata endpoint MUST 404
+/// — RFC 9728 requires `authorization_servers` to be non-empty, and
+/// returning an honest 404 lets clients fall back to whatever else they
+/// support instead of being misled by a half-baked document.
+#[mz_ore::test]
+fn test_oauth_protected_resource_metadata_404_when_no_issuer() {
+    let server = test_util::TestHarness::default()
+        .with_mcp_routes(true, false)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .start_blocking();
+
+    let res = Client::new()
+        .get(&format!(
+            "http://{}/.well-known/oauth-protected-resource",
+            server.http_local_addr()
+        ))
+        .send()
+        .unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::NOT_FOUND,
+        "no oidc_issuer => 404, not an empty metadata doc",
     );
 }
 

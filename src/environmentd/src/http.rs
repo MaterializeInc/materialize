@@ -128,6 +128,7 @@ mod memory;
 mod metrics;
 mod metrics_public;
 mod metrics_viz;
+mod oauth_metadata;
 mod probe;
 mod prometheus;
 mod root;
@@ -504,6 +505,20 @@ impl HttpServer {
         // Enabled via runtime `routes_enabled.mcp_agent` and `routes_enabled.mcp_developer` configuration
         if routes_enabled.mcp_agent || routes_enabled.mcp_developer {
             use tracing::info;
+
+            // RFC 9728 Protected Resource Metadata. Public route — MCP
+            // clients fetch it before they have a token. Sits on its own
+            // router so the auth middleware never runs on it. The handler
+            // returns 404 when no OAuth authorization server is configured
+            // (`oidc_issuer` dyncfg unset), so this is safe to enable
+            // unconditionally whenever MCP is enabled.
+            let oauth_metadata_router = Router::new()
+                .route(
+                    oauth_metadata::PROTECTED_RESOURCE_METADATA_PATH,
+                    routing::get(oauth_metadata::handle_protected_resource_metadata),
+                )
+                .layer(Extension(adapter_client_rx.clone()));
+            router = router.merge(oauth_metadata_router);
 
             let mut mcp_router = Router::new();
 
@@ -893,6 +908,32 @@ where
     }
 }
 
+/// Per-request decision about which `WWW-Authenticate` challenges to emit
+/// on a 401, computed by the auth middleware based on the request path.
+///
+/// Carries both the `Basic` toggle (today's behavior, kept for the SQL HTTP
+/// layer and friends) and an optional `Bearer` challenge with a
+/// `resource_metadata` URL per RFC 9728. The latter is only set on routes
+/// that opt in to OAuth discovery (today: `/api/mcp/*`); other routes
+/// emit only `Basic` so their behavior is unchanged.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct WwwAuthenticateChallenges {
+    /// Whether to emit `WWW-Authenticate: Basic realm=Materialize`.
+    pub include_basic: bool,
+    /// If `Some`, also emit `WWW-Authenticate: Bearer
+    /// resource_metadata="<url>"`. The URL points at this server's RFC 9728
+    /// Protected Resource Metadata document, which advertises the
+    /// authorization server the client should use.
+    pub bearer_resource_metadata: Option<String>,
+}
+
+impl WwwAuthenticateChallenges {
+    /// Returns true if any challenge should be emitted.
+    pub fn any(&self) -> bool {
+        self.include_basic || self.bearer_resource_metadata.is_some()
+    }
+}
+
 #[derive(Debug, Error)]
 pub(crate) enum AuthError {
     #[error("role dissallowed")]
@@ -901,7 +942,7 @@ pub(crate) enum AuthError {
     Frontegg(#[from] FronteggError),
     #[error("missing authorization header")]
     MissingHttpAuthentication {
-        include_www_authenticate_header: bool,
+        challenges: WwwAuthenticateChallenges,
     },
     #[error("{0}")]
     MismatchedUser(String),
@@ -925,13 +966,36 @@ impl IntoResponse for AuthError {
         // exception — its payload is a sanitized `OidcError::Display` that the
         // console embeds in the login-page error.
         let body = match &self {
-            AuthError::MissingHttpAuthentication {
-                include_www_authenticate_header,
-            } if *include_www_authenticate_header => {
-                headers.insert(
-                    http::header::WWW_AUTHENTICATE,
-                    HeaderValue::from_static("Basic realm=Materialize"),
-                );
+            AuthError::MissingHttpAuthentication { challenges } if challenges.any() => {
+                // Bearer challenge goes first because OAuth-aware clients
+                // pick the strongest scheme they see. RFC 7235 allows
+                // emitting multiple `WWW-Authenticate` headers, which is
+                // what we do here so each scheme is unambiguously framed —
+                // some parsers struggle with multiple schemes on a single
+                // header value.
+                if let Some(resource_metadata) = &challenges.bearer_resource_metadata {
+                    let value = format!(
+                        "Bearer resource_metadata=\"{}\"",
+                        resource_metadata,
+                    );
+                    match HeaderValue::from_str(&value) {
+                        Ok(v) => {
+                            headers.append(http::header::WWW_AUTHENTICATE, v);
+                        }
+                        Err(e) => {
+                            warn!(
+                                "skipping Bearer WWW-Authenticate challenge: \
+                                 invalid header value derived from resource_metadata={resource_metadata:?}: {e}",
+                            );
+                        }
+                    }
+                }
+                if challenges.include_basic {
+                    headers.append(
+                        http::header::WWW_AUTHENTICATE,
+                        HeaderValue::from_static("Basic realm=Materialize"),
+                    );
+                }
                 "unauthorized".to_string()
             }
             AuthError::OidcFailed(message) => message.clone(),
@@ -1068,10 +1132,26 @@ async fn http_auth(
     }
 
     let path = req.uri().path();
-    let include_www_authenticate_header = path == "/"
+    let include_basic = path == "/"
         || PROFILING_API_ENDPOINTS
             .iter()
-            .any(|prefix| path.starts_with(prefix));
+            .any(|prefix| path.starts_with(prefix))
+        || path.starts_with("/api/mcp/");
+    // For the MCP routes we additionally advertise OAuth via RFC 9728 so
+    // clients like Claude Desktop's Custom Connectors and ChatGPT remote
+    // MCP can discover the authorization server. The `Basic` challenge
+    // stays on these routes so existing curl/Bearer-already users still
+    // see a usable challenge. See `crate::http::oauth_metadata` for the
+    // discovery document.
+    let bearer_resource_metadata = if path.starts_with("/api/mcp/") {
+        oauth_metadata::metadata_url(&req)
+    } else {
+        None
+    };
+    let challenges = WwwAuthenticateChallenges {
+        include_basic,
+        bearer_resource_metadata,
+    };
     let authenticator = get_authenticator(
         authenticator_kind,
         creds.as_ref(),
@@ -1086,7 +1166,7 @@ async fn http_auth(
         &authenticator,
         creds,
         allowed_roles,
-        include_www_authenticate_header,
+        &challenges,
         Some(&group_claim),
     )
     .await?;
@@ -1178,12 +1258,16 @@ async fn init_ws(
                 &adapter_client_rx,
             )
             .await;
+            // WebSocket init: no 401-with-challenge contract, the
+            // client is reading WS frames, not parsing HTTP headers, so
+            // we just suppress challenge emission entirely.
+            let no_challenges = WwwAuthenticateChallenges::default();
             let group_claim = group_claim_for(&adapter_client_rx).await;
             let user = auth(
                 &authenticator,
                 Some(creds),
                 allowed_roles,
-                false,
+                &no_challenges,
                 Some(&group_claim),
             )
             .await?;
@@ -1293,7 +1377,7 @@ async fn auth(
     authenticator: &Authenticator,
     creds: Option<Credentials>,
     allowed_roles: AllowedRoles,
-    include_www_authenticate_header: bool,
+    challenges: &WwwAuthenticateChallenges,
     group_claim: Option<&str>,
 ) -> Result<AuthedUser, AuthError> {
     let (name, external_metadata_rx, authenticated, groups) = match authenticator {
@@ -1323,7 +1407,7 @@ async fn auth(
             }
             None => {
                 return Err(AuthError::MissingHttpAuthentication {
-                    include_www_authenticate_header,
+                    challenges: challenges.clone(),
                 });
             }
         },
@@ -1337,7 +1421,7 @@ async fn auth(
             }
             _ => {
                 return Err(AuthError::MissingHttpAuthentication {
-                    include_www_authenticate_header,
+                    challenges: challenges.clone(),
                 });
             }
         },
@@ -1346,7 +1430,7 @@ async fn auth(
             // If we do, it's a server misconfiguration.
             // Just in case, we return a 401 rather than panic.
             return Err(AuthError::MissingHttpAuthentication {
-                include_www_authenticate_header,
+                challenges: challenges.clone(),
             });
         }
         Authenticator::Oidc(oidc) => match creds {
@@ -1361,7 +1445,7 @@ async fn auth(
             }
             _ => {
                 return Err(AuthError::MissingHttpAuthentication {
-                    include_www_authenticate_header,
+                    challenges: challenges.clone(),
                 });
             }
         },
