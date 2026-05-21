@@ -509,15 +509,6 @@ impl Coordinator {
             }
         }
 
-        // Add table advancements for all tables.
-        let table_advancement_start = Instant::now();
-        for table in self.catalog().entries().filter(|entry| entry.is_table()) {
-            appends.entry(table.id()).or_default();
-        }
-        self.metrics
-            .group_commit_table_advancement_seconds
-            .observe(table_advancement_start.elapsed().as_secs_f64());
-
         // Consolidate all Rows for a given table. We do not consolidate the
         // staged batches, that's up to whoever staged them.
         let mut all_appends = Vec::with_capacity(appends.len());
@@ -561,8 +552,15 @@ impl Coordinator {
                 "Appending to tables, {modified_tables:?}, at {timestamp}, advancing to {advance_to}"
             );
         }
+
         // Instrument our table writes since they can block the coordinator.
         let histogram = self.metrics.append_table_duration_seconds.clone();
+
+        // NOTE: It is important that we append, even when there are no actual
+        // appends. This makes sure we periodically bump the upper of all
+        // tables, which is required to make them readable at the latest oracle
+        // read ts.
+
         let append_fut = self
             .controller
             .storage
