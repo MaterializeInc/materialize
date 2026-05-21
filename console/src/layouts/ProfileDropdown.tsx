@@ -144,7 +144,14 @@ const SelfManagedMenuButtonLabel = ({ auth }: { auth?: AuthContextProps }) => {
   const { colors } = useTheme<MaterializeTheme>();
   const { name } = useSelfManagedProfile(auth);
   return (
-    <Text textStyle="text-ui-med" color={colors.foreground.primary}>
+    <Text
+      textStyle="text-ui-med"
+      minW="100%"
+      maxW="160px"
+      noOfLines={1}
+      textAlign="left"
+      color={colors.foreground.primary}
+    >
       {name ?? "Settings"}
     </Text>
   );
