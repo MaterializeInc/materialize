@@ -25,7 +25,7 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
 # TODO: Put this back when merged: https://github.com/sqlancer/sqlancer/pull/1307 & DQP
 RUN git clone https://github.com/MaterializeInc/sqlancer \
     && cd sqlancer \
-    && git checkout 04873e8f449c484060b80cf4bf80ce91a27e758e \
+    && git checkout 24bccd84c7a7279fc3746c54884c9b742b6a5ff2 \
     && rm -rf .git \
     && mvn package -DskipTests
 # RUN git clone --depth=1 --single-branch https://github.com/sqlancer/sqlancer \
