@@ -176,7 +176,7 @@ pub struct HttpConfig {
     pub metrics: Metrics,
     pub metrics_registry: MetricsRegistry,
     pub mcp_metrics: mcp_metrics::McpMetrics,
-    pub oauth_metadata_metrics: oauth_metadata::OAuthMetadataMetrics,
+    pub oauth_metadata_metrics: oauth_metadata::OauthMetadataMetrics,
     pub allowed_roles: AllowedRoles,
     pub internal_route_config: Arc<InternalRouteConfig>,
     pub routes_enabled: HttpRoutesEnabled,

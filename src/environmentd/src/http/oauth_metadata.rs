@@ -66,11 +66,9 @@ use url::Url;
 
 use crate::http::Delayed;
 
-/// Upper bound on how long the discovery handler waits for the adapter
-/// client to become available. The handler is unauthenticated, so a
-/// wedged adapter must not be allowed to pin connections indefinitely.
-/// Two seconds is generous for normal startup and tight enough that a
-/// real outage surfaces as 503s instead of hung clients.
+/// Bounds how long the unauthenticated discovery handler waits for the
+/// adapter client. Without this, a wedged adapter could pin connections
+/// indefinitely from any caller on the network.
 const ADAPTER_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// The well-known path served by this module.
@@ -83,48 +81,31 @@ const ADAPTER_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
 pub(crate) const PROTECTED_RESOURCE_METADATA_PATH: &str = "/.well-known/oauth-protected-resource";
 
 /// Path-suffixed aliases of [`PROTECTED_RESOURCE_METADATA_PATH`] per
-/// RFC 9728 §3.1. A client that hits `/api/mcp/<endpoint>` and follows
-/// the protected-resource discovery rules will look up
-/// `/.well-known/oauth-protected-resource/<path>` first, falling back
-/// to the bare well-known URI. We serve the same document at both: the
-/// MCP endpoints share an identical metadata view today, so there is
-/// nothing per-endpoint to vary. Registering the aliases keeps strict
-/// clients working without forcing them to fall back.
+/// RFC 9728 §3.1. Both MCP endpoints serve an identical metadata
+/// document today, so the same handler is mounted at all three paths;
+/// the aliases exist so strict clients that always probe with a path
+/// suffix do not have to fall back to the bare URI.
 pub(crate) const PROTECTED_RESOURCE_METADATA_PATH_AGENT: &str =
     "/.well-known/oauth-protected-resource/api/mcp/agent";
 pub(crate) const PROTECTED_RESOURCE_METADATA_PATH_DEVELOPER: &str =
     "/.well-known/oauth-protected-resource/api/mcp/developer";
 
-/// OAuth scope advertised for the MCP endpoints.
-///
-/// Today every authenticated caller can hit every MCP route — RBAC is
-/// enforced at the SQL layer below, not on the HTTP scope. Advertising a
-/// single coarse scope is honest: it tells clients "request a token that
-/// names this scope and any valid IdP token will be accepted" without
-/// promising scope-based authorization we do not enforce. Splitting into
-/// per-route scopes (e.g. an extra `mcp.read.system` for the developer
-/// endpoint) requires a separate scope-enforcement step in the auth
-/// middleware and is deferred until that lands.
+/// OAuth scope advertised for the MCP endpoints. We do not enforce
+/// scope server-side today (authorization happens at the SQL layer via
+/// RBAC), so a single coarse scope is the honest advertisement:
+/// clients know what to request and we don't overclaim per-route
+/// authorization we are not performing.
 pub(crate) const MCP_SCOPE: &str = "mcp.read";
 
-/// `Cache-Control` value set on the discovery response.
-///
-/// `private` keeps the document out of shared caches (CDNs, forward
-/// proxies) which could otherwise serve a metadata document built for
-/// one listener / virtual host to clients of another. End-user clients
-/// can still cache it for an hour — long enough to amortise discovery
-/// across a session, short enough that an admin who changes
-/// `oidc_issuer` does not have to wait a long tail of stale caches out.
+/// `private` keeps shared caches (CDNs, forward proxies) from serving a
+/// document built for one listener to clients of another; one hour
+/// bounds how long an `oidc_issuer` change takes to be reflected
+/// in the field.
 const METADATA_CACHE_CONTROL: &str = "private, max-age=3600";
 
-/// JSON shape returned by [`PROTECTED_RESOURCE_METADATA_PATH`].
-///
-/// Fields are a strict subset of [RFC 9728 §2 "Protected Resource
-/// Metadata"]; we emit only the fields MCP clients actually need today
-/// (resource identifier, list of authorization servers, bearer method)
-/// rather than padding the document with optional metadata the resource
-/// server is not opinionated about. Adding fields later is
-/// backwards-compatible per the RFC's extensibility guidance.
+/// JSON shape returned by [`PROTECTED_RESOURCE_METADATA_PATH`]. A
+/// strict subset of [RFC 9728 §2]; further fields can be added without
+/// breaking clients per the RFC's extensibility guidance.
 ///
 /// [RFC 9728 §2]: https://datatracker.ietf.org/doc/html/rfc9728#section-2
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -145,30 +126,22 @@ pub(crate) struct ProtectedResourceMetadata {
 }
 
 /// Prometheus counter for the discovery endpoint, labeled by outcome.
-///
-/// Cheaply `Clone`: the underlying Prometheus collector handle is
-/// `Arc`-shared, so the struct is safe to clone into an axum
-/// `Extension` per listener.
-///
-/// `status` label values are stable strings (not HTTP status numbers)
-/// so dashboards do not have to know which integer maps to which
-/// failure path:
+/// `status` label values are stable strings (rather than HTTP status
+/// numbers) so dashboards do not have to map integers to failure
+/// paths:
 ///
 ///   * `ok` — 200 with a metadata document.
-///   * `no_auth_listener` — 404 because the listener does not validate
-///     tokens.
-///   * `no_issuer` — 404 because `oidc_issuer` is unset.
-///   * `invalid_issuer` — 503 because `oidc_issuer` is not a parseable
-///     URL (operator misconfiguration).
-///   * `no_host` — 400 because the request had no host information.
-///   * `adapter_unavailable` — 503 during startup before the adapter
-///     client is ready.
+///   * `no_auth_listener` — 404, listener does not validate tokens.
+///   * `no_issuer` — 404, `oidc_issuer` is unset.
+///   * `invalid_issuer` — 503, `oidc_issuer` is not a valid URL.
+///   * `no_host` — 400, request had no usable host.
+///   * `adapter_unavailable` — 503, adapter client not ready.
 #[derive(Debug, Clone)]
-pub struct OAuthMetadataMetrics {
+pub struct OauthMetadataMetrics {
     requests: IntCounterVec,
 }
 
-impl OAuthMetadataMetrics {
+impl OauthMetadataMetrics {
     pub fn register_into(registry: &MetricsRegistry) -> Self {
         Self {
             requests: registry.register(metric!(
@@ -184,19 +157,16 @@ impl OAuthMetadataMetrics {
     }
 }
 
-/// Per-listener inputs the discovery handler needs.
-///
-/// Carried as an axum `Extension` rather than reading from system config
-/// directly because the values are per-listener (`authenticator_kind`,
-/// `http_host_name`) — the same environmentd process can serve listeners
-/// with different policies.
+/// Per-listener config for the discovery handler. Carried as an axum
+/// `Extension` because the same environmentd process can serve
+/// listeners with different `authenticator_kind` and `http_host_name`.
 #[derive(Debug, Clone)]
 pub(crate) struct DiscoveryConfig {
-    /// Externally-visible host (without scheme). When `Some`, this beats
-    /// any header-derived value.
+    /// Operator-configured external host (without scheme). Beats the
+    /// `Host` header when set.
     pub http_host_name: Option<String>,
-    /// When `None`, the handler refuses to publish — there is no OAuth
-    /// flow on an unauthenticated listener to advertise.
+    /// `None` makes the handler refuse to publish: no OAuth flow to
+    /// advertise.
     pub authenticator_kind: listeners::AuthenticatorKind,
 }
 
@@ -214,11 +184,9 @@ pub(crate) struct DiscoveryConfig {
 pub(crate) async fn handle_protected_resource_metadata(
     Extension(adapter_client_rx): Extension<Delayed<Client>>,
     Extension(config): Extension<DiscoveryConfig>,
-    Extension(metrics): Extension<OAuthMetadataMetrics>,
+    Extension(metrics): Extension<OauthMetadataMetrics>,
     req: Request,
 ) -> Response {
-    // No-auth listener: there is no token to validate, nothing to
-    // advertise. Refuse to publish.
     if matches!(
         config.authenticator_kind,
         listeners::AuthenticatorKind::None
@@ -234,12 +202,8 @@ pub(crate) async fn handle_protected_resource_metadata(
         metrics.inc("no_host");
         return (StatusCode::BAD_REQUEST, "no host available").into_response();
     };
-    let scheme = scheme_for(&req);
-    let resource = format!("{scheme}://{host}/api/mcp");
+    let resource = format!("{PUBLISHED_SCHEME}://{host}/api/mcp");
 
-    // The endpoint is unauthenticated, so a hung adapter must not be
-    // allowed to pin connections indefinitely. Bound the wait and
-    // surface a 503 instead.
     let adapter_client =
         match tokio::time::timeout(ADAPTER_WAIT_TIMEOUT, adapter_client_rx.clone()).await {
             Ok(Ok(client)) => client,
@@ -282,28 +246,12 @@ pub(crate) async fn handle_protected_resource_metadata(
     response
 }
 
-/// Validates the operator-supplied `oidc_issuer` before it is published.
-///
-/// RFC 9728 §3 requires entries in `authorization_servers` to be valid
-/// URLs; RFC 8414 §2 further requires that the issuer identifier
-/// contain no query or fragment components, since the issuer string
-/// must match the `iss` claim in tokens byte-for-byte.
-///
-/// We require:
-///
-///   * Parseable as a URL.
-///   * Scheme of `https` (or `http` for dev) — OAuth 2.1 forbids
-///     other schemes for an authorization server.
-///   * No userinfo component — operators occasionally embed
-///     credentials in URLs by mistake; this endpoint is public and
-///     must not leak them.
-///   * No query or fragment — required by RFC 8414 §2.
-///
-/// On success returns the **original** issuer string unchanged. We do
-/// not return `url.to_string()` because [`Url`] normalises some forms
-/// (notably appending a trailing slash to a bare authority) and a
-/// silently mutated issuer would no longer match the `iss` claim in
-/// tokens minted by the IdP.
+/// Validates `oidc_issuer` before it is published: parseable URL,
+/// http/https scheme, no userinfo (we publish it on a public endpoint),
+/// no query or fragment (RFC 8414 §2). Returns the **original** string
+/// unchanged — `url.to_string()` would silently normalise (e.g. add a
+/// trailing slash) and a mutated issuer would not match the `iss`
+/// claim in tokens minted by the IdP.
 fn validate_issuer_url(issuer: &str) -> Result<&str, &'static str> {
     let url = Url::parse(issuer).map_err(|_| "oidc_issuer is not a parseable URL")?;
     if !matches!(url.scheme(), "https" | "http") {
@@ -325,9 +273,8 @@ fn validate_issuer_url(issuer: &str) -> Result<&str, &'static str> {
 /// in that case rather than emit a malformed value.
 pub(crate) fn metadata_url(req: &Request, http_host_name: Option<&str>) -> Option<String> {
     let host = resolve_host(req, http_host_name)?;
-    let scheme = scheme_for(req);
     Some(format!(
-        "{scheme}://{host}{PROTECTED_RESOURCE_METADATA_PATH}"
+        "{PUBLISHED_SCHEME}://{host}{PROTECTED_RESOURCE_METADATA_PATH}"
     ))
 }
 
@@ -374,21 +321,11 @@ fn resolve_host(req: &Request, http_host_name: Option<&str>) -> Option<String> {
     Some(candidate)
 }
 
-/// Picks the scheme to use in published URLs.
-///
-/// OAuth 2.1 requires `https` for all endpoints, so we always advertise
-/// `https` — the only exception is connections that arrived over plain
-/// HTTP, which we infer from the request's URI scheme. This is *only*
-/// reached in dev/test setups where the listener is on plain HTTP; in
-/// production a TLS-terminating proxy fronts environmentd, but per the
-/// host-derivation rules we do not let the proxy's `X-Forwarded-Proto`
-/// header influence what we publish.
-fn scheme_for(req: &Request) -> &'static str {
-    match req.uri().scheme_str() {
-        Some("http") => "http",
-        _ => "https",
-    }
-}
+/// Scheme used in published URLs. OAuth 2.1 §3.1 requires `https` for
+/// all OAuth endpoints, and environmentd is fronted by TLS in every
+/// production deployment. Plain-HTTP local dev is not a supported
+/// OAuth flow.
+const PUBLISHED_SCHEME: &str = "https";
 
 #[cfg(test)]
 mod tests {
@@ -397,8 +334,6 @@ mod tests {
     use axum::body::Body;
     use http::Request;
 
-    /// Builds a request with the given Host header and URI for use in
-    /// unit tests.
     fn req_with_host(host: &str) -> Request<Body> {
         Request::builder()
             .uri("https://ignored.example.com/")
@@ -407,9 +342,7 @@ mod tests {
             .unwrap()
     }
 
-    /// The serialized document must use exactly the field names RFC 9728
-    /// defines — clients key off them. A rename would break every
-    /// connected client silently, so this test pins the wire format.
+    /// Pin the serialized field names — clients key off them.
     #[mz_ore::test]
     fn test_metadata_serialization_matches_rfc9728_field_names() {
         let metadata = ProtectedResourceMetadata {
@@ -430,8 +363,7 @@ mod tests {
         );
     }
 
-    /// MCP clients construct the well-known URI from the documented path
-    /// suffix. The constant is part of our public contract with them.
+    /// The well-known path is part of the public contract with clients.
     #[mz_ore::test]
     fn test_well_known_path_is_rfc9728_canonical() {
         assert_eq!(
@@ -440,9 +372,7 @@ mod tests {
         );
     }
 
-    /// `http_host_name` beats the request's Host header — operators
-    /// configure it to override what the proxy presents, so it must take
-    /// precedence.
+    /// `http_host_name` beats the request's Host header.
     #[mz_ore::test]
     fn test_resolve_host_prefers_http_host_name() {
         let req = req_with_host("internal.local:6876");
@@ -452,8 +382,7 @@ mod tests {
         );
     }
 
-    /// When `http_host_name` is empty or whitespace, fall back to the
-    /// request's Host header rather than emitting a blank string.
+    /// Empty or whitespace-only `http_host_name` falls back to `Host`.
     #[mz_ore::test]
     fn test_resolve_host_ignores_blank_config() {
         let req = req_with_host("public.example.com");
@@ -466,8 +395,7 @@ mod tests {
         }
     }
 
-    /// The Host header is the last fallback when no config is set.
-    /// Includes port to make sure the helper is not stripping it.
+    /// Host header is the final fallback; port must be preserved.
     #[mz_ore::test]
     fn test_resolve_host_falls_back_to_host_header_with_port() {
         let req = req_with_host("example.com:8080");
@@ -477,10 +405,8 @@ mod tests {
         );
     }
 
-    /// `X-Forwarded-Host` MUST be ignored — see the module-level
-    /// "Host derivation" notes. This is a security-relevant regression
-    /// guard: if someone adds back X-Forwarded-Host trust, this test
-    /// fails and they have to confront the trust decision explicitly.
+    /// Security regression guard: `X-Forwarded-Host` is never trusted
+    /// (see module-level "Host derivation" notes).
     #[mz_ore::test]
     fn test_resolve_host_ignores_x_forwarded_host() {
         let req = Request::builder()
@@ -496,9 +422,7 @@ mod tests {
         );
     }
 
-    /// No host config and no Host header → `None`. Callers turn this
-    /// into a 400 (handler) or a missing Bearer challenge (auth
-    /// middleware); both are safer than guessing.
+    /// No host config and no `Host` header → `None`.
     #[mz_ore::test]
     fn test_resolve_host_returns_none_when_unavailable() {
         let req = Request::builder()
@@ -508,40 +432,12 @@ mod tests {
         assert_eq!(resolve_host(&req, None), None);
     }
 
-    /// OAuth 2.1 mandates HTTPS for OAuth endpoints, so we always
-    /// advertise `https` unless the request actually arrived on plain
-    /// HTTP — and we determine that from the URI scheme on the request,
-    /// not from `X-Forwarded-Proto`.
-    #[mz_ore::test]
-    fn test_scheme_for_defaults_to_https() {
-        let req = Request::builder()
-            .uri("/just/a/path")
-            .body(Body::empty())
-            .unwrap();
-        assert_eq!(scheme_for(&req), "https");
-    }
-
-    #[mz_ore::test]
-    fn test_scheme_for_honors_http_uri() {
-        let req = Request::builder()
-            .uri("http://example.com/foo")
-            .body(Body::empty())
-            .unwrap();
-        assert_eq!(scheme_for(&req), "http");
-    }
-
-    /// Defense in depth against header-smuggling: a Host header that
-    /// contains characters outside the URI host grammar (quotes,
-    /// whitespace, semicolons, etc.) MUST be rejected. Otherwise a
-    /// malicious value could break out of the quoted
-    /// `resource_metadata="..."` parameter in `WWW-Authenticate` and
-    /// inject extra challenges, or smuggle a different host into the
-    /// published `resource` URL.
-    ///
-    /// The payloads here are restricted to bytes that `HeaderValue::from_str`
-    /// accepts (`HeaderValue` already blocks CR/LF/NUL and other control
-    /// bytes); the point of the URI-grammar parse in `resolve_host` is
-    /// to catch the rest — quotes, whitespace, semicolons, etc.
+    /// Defense in depth against header-smuggling: a Host value with
+    /// characters outside the URI host grammar must be rejected so it
+    /// cannot break out of the quoted `resource_metadata="..."`
+    /// parameter or smuggle a host into the published `resource` URL.
+    /// The payloads here are bytes that `HeaderValue::from_str`
+    /// already accepts (control bytes are blocked upstream).
     #[mz_ore::test]
     fn test_resolve_host_rejects_smuggled_characters() {
         for malicious in [
@@ -572,9 +468,8 @@ mod tests {
         }
     }
 
-    /// `metadata_url` composes the resolved host with the canonical
-    /// well-known suffix. Pinning the assembled value makes accidental
-    /// path drift visible (e.g. extra slashes, dropped suffix).
+    /// Pin the assembled URL — accidental path drift (extra slashes,
+    /// dropped suffix) breaks every connected client.
     #[mz_ore::test]
     fn test_metadata_url_assembles_canonical_suffix() {
         let req = req_with_host("example.com");
@@ -584,9 +479,8 @@ mod tests {
         );
     }
 
-    /// The path-suffixed aliases are part of the public contract with
-    /// strict RFC 9728 §3.1 clients. Pin them so a typo here surfaces
-    /// as a test failure rather than a silent 404 in the field.
+    /// Pin the path-suffixed aliases — strict RFC 9728 §3.1 clients
+    /// probe these before the bare URI.
     #[mz_ore::test]
     fn test_path_suffixed_alias_paths_are_correct() {
         assert_eq!(
@@ -599,20 +493,19 @@ mod tests {
         );
     }
 
-    /// The scope value is wire-visible (clients ask the IdP for tokens
-    /// with this exact string), so a rename is breaking. Pin it.
+    /// Pin the wire-visible scope string — clients ask the IdP for a
+    /// token with this exact value.
     #[mz_ore::test]
     fn test_mcp_scope_constant() {
         assert_eq!(MCP_SCOPE, "mcp.read");
     }
 
-    /// Mirrors the `McpMetrics` pattern: counter families only appear
-    /// in `gather()` after a label combination is observed, so each
-    /// status value is touched once before gathering.
+    /// Counter families only appear in `gather()` after a label
+    /// combination is observed, so each status value is touched first.
     #[mz_ore::test]
     fn test_metric_registers() {
         let registry = MetricsRegistry::new();
-        let metrics = OAuthMetadataMetrics::register_into(&registry);
+        let metrics = OauthMetadataMetrics::register_into(&registry);
         for status in [
             "ok",
             "no_auth_listener",
@@ -636,9 +529,8 @@ mod tests {
         );
     }
 
-    /// IPv6 hosts are valid `Authority` syntax (`[::1]:8080`) and must
-    /// round-trip cleanly. A regression here silently breaks IPv6-only
-    /// deployments.
+    /// IPv6 literals (`[::1]:8080`) are valid `Authority` syntax and
+    /// must round-trip — a regression silently breaks IPv6 deployments.
     #[mz_ore::test]
     fn test_resolve_host_accepts_ipv6_literal() {
         for host in ["[::1]", "[::1]:8080", "[2001:db8::1]:443"] {
@@ -651,9 +543,8 @@ mod tests {
         }
     }
 
-    /// `validate_issuer_url` accepts well-formed issuer URLs and
-    /// returns the **original** string unchanged. Normalisation would
-    /// break the byte-for-byte match against the `iss` token claim.
+    /// Well-formed issuers pass through unchanged; normalisation
+    /// would break byte-for-byte match against the `iss` token claim.
     #[mz_ore::test]
     fn test_validate_issuer_url_accepts_well_formed() {
         for issuer in [
@@ -669,9 +560,8 @@ mod tests {
         }
     }
 
-    /// Rejects values that would surface as a confusing client error
-    /// downstream or that would leak embedded secrets in a public
-    /// document.
+    /// Rejects values that would confuse clients downstream or leak
+    /// embedded secrets in a public document.
     #[mz_ore::test]
     fn test_validate_issuer_url_rejects_invalid() {
         // Format: (issuer, expected substring of the error reason).

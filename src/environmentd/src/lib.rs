@@ -386,7 +386,7 @@ impl Listeners {
         let metrics = http::Metrics::register_into(&metrics_registry, "mz_http");
         let mcp_metrics = http::mcp_metrics::McpMetrics::register_into(&metrics_registry);
         let oauth_metadata_metrics =
-            http::oauth_metadata::OAuthMetadataMetrics::register_into(&metrics_registry);
+            http::oauth_metadata::OauthMetadataMetrics::register_into(&metrics_registry);
         let mut http_listener_handles = BTreeMap::new();
         for (name, listener) in self.http {
             let authenticator_kind = listener.config.authenticator_kind();

@@ -6121,11 +6121,16 @@ fn test_oauth_protected_resource_metadata_404_when_no_issuer() {
     );
 }
 
-/// End-to-end discovery flow: an unauthenticated MCP request returns a
-/// 401 with a `resource_metadata` URL in the Bearer challenge; fetching
-/// that URL returns a 200 with the metadata document. This is what a
-/// real OAuth-aware client does — pinning the sequence guards against
-/// any one piece being broken in a way the per-piece tests would miss.
+/// End-to-end discovery flow: an unauthenticated MCP request emits a
+/// 401 with a `resource_metadata` URL on the same host as the request,
+/// and the discovery document at that path resolves to a 200 with the
+/// configured issuer. Pinning the sequence guards against any one
+/// piece being broken in a way the per-piece tests would miss.
+///
+/// The published `resource_metadata` URL uses the `https` scheme even
+/// though the test listener is plain HTTP (we always advertise `https`;
+/// see `oauth_metadata::PUBLISHED_SCHEME`), so we extract the path
+/// suffix and re-issue the GET against the actual local HTTP listener.
 #[mz_ore::test]
 fn test_oauth_protected_resource_metadata_end_to_end_flow() {
     let server = test_util::TestHarness::default()
@@ -6138,9 +6143,9 @@ fn test_oauth_protected_resource_metadata_end_to_end_flow() {
         )
         .start_blocking();
 
-    let mcp_url = format!("http://{}/api/mcp/agent", server.http_local_addr());
+    let local_addr = server.http_local_addr();
     let mcp_res = Client::new()
-        .post(&mcp_url)
+        .post(&format!("http://{local_addr}/api/mcp/agent"))
         .header("Content-Type", "application/json")
         .body(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)
         .send()
@@ -6154,7 +6159,7 @@ fn test_oauth_protected_resource_metadata_end_to_end_flow() {
         .map(|v| v.to_str().unwrap().to_string())
         .find(|c| c.starts_with("Bearer "))
         .expect("a Bearer WWW-Authenticate challenge");
-    let metadata_url = bearer_challenge
+    let advertised_url = bearer_challenge
         .split(',')
         .find_map(|part| {
             part.trim()
@@ -6162,11 +6167,19 @@ fn test_oauth_protected_resource_metadata_end_to_end_flow() {
                 .and_then(|s| s.strip_suffix('"'))
         })
         .expect("resource_metadata parameter in Bearer challenge");
+    assert!(
+        advertised_url.starts_with("https://"),
+        "discovery URL must always be https: {advertised_url}",
+    );
 
-    // Follow the URL the server advertised. This is what an
-    // OAuth-aware client does: the URL is authoritative; the
-    // well-known fallback is only used when no parameter is given.
-    let discovery_res = Client::new().get(metadata_url).send().unwrap();
+    let path_suffix = advertised_url
+        .splitn(4, '/')
+        .nth(3)
+        .expect("path on the advertised URL");
+    let discovery_res = Client::new()
+        .get(&format!("http://{local_addr}/{path_suffix}"))
+        .send()
+        .unwrap();
     assert_eq!(discovery_res.status(), StatusCode::OK);
     let body: serde_json::Value = discovery_res.json().unwrap();
     assert_eq!(
