@@ -196,8 +196,12 @@ def _run_explicit_txn(batch_id: str, mv_name: str) -> tuple[bool, str | None]:
                         direct_idx += 1
                     else:
                         # EXECUTE — old peek sequencing path.
+                        # Inline the integer rather than parameter-binding it:
+                        # psycopg's %s rewrites to the extended-protocol $1,
+                        # and Materialize rejects $1 inside EXECUTE's argument
+                        # list with "there is no parameter $1".
                         if exec_idx % 2 == 0:
-                            cur.execute("EXECUTE p_table(%s)", (exec_idx,))
+                            cur.execute(f"EXECUTE p_table({int(exec_idx)})")
                         else:
                             cur.execute("EXECUTE p_mv")
                         exec_idx += 1
