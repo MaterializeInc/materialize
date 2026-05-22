@@ -42,7 +42,7 @@ common PostgreSQL hosted services.
 
 ## Integration guides
 
-The following integration guides are available:
+To help you get started, the following integration guides are available:
 
 {{% include-md file="shared-content/postgresql-ingest-data-guides.md" %}}
 

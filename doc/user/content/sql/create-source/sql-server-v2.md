@@ -7,7 +7,7 @@ menu:
     parent: 'create-source'
     identifier: cs_sql-server-v2
     name: SQL Server (New Syntax)
-    weight: 24
+    weight: 30
 ---
 
 {{< private-preview />}}
@@ -15,16 +15,22 @@ menu:
 {{< source-versioning-disambiguation is_new=true
 other_ref="[old reference page](/sql/create-source/sql-server/)" include_blurb=true >}}
 
+{{% create-source-intro external_source="SQL Server" version="2016+"
+create_table="/sql/create-table/" %}}
+
 ## Prerequisites
 
-{{% create-source/intro %}}
-Materialize supports SQL Server (2016+) as a real-time data source. To connect to a
-SQL Server database, you first need to tweak its configuration to enable [Change Data
+To create a source from SQL Server (2016+), you must first:
+
+- Configure your SQL Server.
+  - Enable [Change Data
 Capture](https://learn.microsoft.com/en-us/sql/relational-databases/track-changes/enable-and-disable-change-data-capture-sql-server)
-and [`SNAPSHOT` transaction isolation](https://learn.microsoft.com/en-us/dotnet/framework/data/adonet/sql/snapshot-isolation-in-sql-server)
-for the database that you would like to replicate. Then [create a connection](#prerequisite-creating-a-connection-to-sql-server)
-in Materialize that specifies access and authentication parameters.
-{{% /create-source/intro %}}
+and [`SNAPSHOT` transaction
+isolation](https://learn.microsoft.com/en-us/dotnet/framework/data/adonet/sql/snapshot-isolation-in-sql-server)
+for the database that you would like to replicate.
+- [Create a connection to SQL
+  Server](#prerequisite-creating-a-connection-to-sql-server) in Materialize.
+  - The connection setup depends on your network security configuration.
 
 ## Syntax
 

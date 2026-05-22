@@ -30,11 +30,18 @@ For details, see [CREATE SOURCE: PostgreSQL (New Syntax)](/sql/create-source/pos
 
 For details, see [CREATE SOURCE: PostgreSQL (Legacy)](/sql/create-source/postgres/).
 {{< /tab >}}
-{{< tab "MySQL" >}}
+{{< tab "MySQL (New)" >}}
 
 {{% include-example file="examples/create_source_mysql" example="syntax" %}}
 
-For details, see [CREATE SOURCE: MySQL](/sql/create-source/mysql/).
+For details, see [CREATE SOURCE: MySQL (New Syntax)](/sql/create-source/mysql-v2/).
+{{< /tab >}}
+
+{{< tab "MySQL (Legacy)" >}}
+
+{{% include-example file="examples/create_source_mysql_legacy" example="syntax" %}}
+
+For details, see [CREATE SOURCE: MySQL (Legacy)](/sql/create-source/mysql/).
 {{< /tab >}}
 
 {{< tab "SQL Server (New)" >}}
