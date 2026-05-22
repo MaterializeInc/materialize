@@ -39,23 +39,7 @@ in a subquery.
 <td><blue>Idiomatic Materialize SQL</blue></td>
 <td class="copyableCode">
 
-Use a subquery that uses the [MIN()](/sql/functions/#min) or
-[MAX()](/sql/functions/#max) aggregate function.
-
-<br>
-<div style="background-color: var(--code-block)">
-
-```mzsql
-SELECT tableA.fieldA, tableA.fieldB, minmax.Z
- FROM tableA,
- (SELECT fieldA,
-    MAX(fieldZ),
-    MIN(fieldZ)
- FROM tableA
- GROUP BY fieldA) minmax
-WHERE tableA.fieldA = minmax.fieldA
-ORDER BY fieldA ... ;
-```
+{{% include-from-yaml data="idiomatic_mzsql/patterns_window_functions" name="last-value" field="syntax_idiomatic" %}}
 
 </td>
 </tr>
@@ -64,38 +48,8 @@ ORDER BY fieldA ... ;
 <td><red>Anti-pattern</red> ❌</td>
 <td>
 
-<red>Do not use [`LAST_VALUE() OVER (PARTITION BY ... ORDER BY ... RANGE
-...)` window function](/sql/functions/#last_value) for last value in each group
-queries.</red>
+{{% include-from-yaml data="idiomatic_mzsql/patterns_window_functions" name="last-value" field="syntax_anti_pattern" %}}
 
-{{< note >}}
-
-Materialize does not support `RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED
-FOLLOWING`.
-
-{{</ note >}}
-
-<br>
-<div style="background-color: var(--code-block)">
-
-```nofmt
--- Unsupported --
-SELECT fieldA, fieldB,
-  LAST_VALUE(fieldZ)
-    OVER (PARTITION BY fieldA ORDER BY fieldZ
-          RANGE BETWEEN
-            UNBOUNDED PRECEDING AND
-            UNBOUNDED FOLLOWING),
-  LAST_VALUE(fieldZ)
-    OVER (PARTITION BY fieldA ORDER BY fieldZ DESC
-          RANGE BETWEEN
-            UNBOUNDED PRECEDING AND
-            UNBOUNDED FOLLOWING)
-FROM tableA
-ORDER BY fieldA, ...;
-```
-
-</div>
 </td>
 </tr>
 
@@ -154,18 +108,7 @@ highest price (i.e., the last price if ordered by ascending price values):
 <td><blue>Idiomatic Materialize SQL</blue> ✅</td>
 <td class="copyableCode">
 
-
-```mzsql
-SELECT o.order_id, minmax.highest_price, o.item, o.price,
-  o.price - minmax.highest_price AS diff_highest_price
-FROM orders_view o,
-     (SELECT order_id,
-        MAX(price) AS highest_price
-     FROM orders_view
-     GROUP BY order_id) minmax
-WHERE o.order_id = minmax.order_id
-ORDER BY o.order_id, o.item;
-```
+{{% include-from-yaml data="idiomatic_mzsql/patterns_window_functions" name="last-value" field="extra_example_idiomatic_max" %}}
 
 </td>
 </tr>
@@ -174,38 +117,8 @@ ORDER BY o.order_id, o.item;
 <td><red>Anti-pattern</red> ❌</td>
 <td>
 
-<red>Do not use of `LAST_VALUE() OVER (PARTITION BY ... ORDER BY ... RANGE ...)`
-for last value in each group queries.</red>
+{{% include-from-yaml data="idiomatic_mzsql/patterns_window_functions" name="last-value" field="extra_example_anti_pattern_max" %}}
 
-{{< note >}}
-
-Materialize does not support `RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED
-FOLLOWING`.
-
-{{</ note >}}
-
-<div style="background-color: var(--code-block)">
-
-```nofmt
--- Unsupported --
-SELECT order_id,
-  LAST_VALUE(price)
-    OVER (PARTITION BY order_id ORDER BY price
-          RANGE BETWEEN
-            UNBOUNDED PRECEDING AND
-            UNBOUNDED FOLLOWING) AS highest_price,
-  item,
-  price,
-  price - LAST_VALUE(price)
-    OVER (PARTITION BY order_id ORDER BY price
-           RANGE BETWEEN
-            UNBOUNDED PRECEDING AND
-            UNBOUNDED FOLLOWING) AS diff_highest_price
-FROM orders_view
-ORDER BY order_id, item;
-```
-
-</div>
 </td>
 </tr>
 </tbody>
@@ -231,18 +144,7 @@ in the order and the lowest price.  That is, use a subquery that groups by the
 <td><blue>Idiomatic Materialize SQL</blue> ✅</td>
 <td class="copyableCode">
 
-
-```mzsql
-SELECT o.order_id, minmax.lowest_price, o.item, o.price,
-  o.price - minmax.lowest_price AS diff_lowest_price
-FROM orders_view o,
-     (SELECT order_id,
-        MIN(price) AS lowest_price
-     FROM orders_view
-     GROUP BY order_id) minmax
-WHERE o.order_id = minmax.order_id
-ORDER BY o.order_id, o.item;
-```
+{{% include-from-yaml data="idiomatic_mzsql/patterns_window_functions" name="last-value" field="extra_example_idiomatic_min" %}}
 
 </td>
 </tr>
@@ -251,38 +153,8 @@ ORDER BY o.order_id, o.item;
 <td><red>Anti-pattern</red> ❌</td>
 <td>
 
-<red>Do not use `LAST_VALUE() OVER (PARTITION BY ... ORDER BY ... RANGE ... )`
-for last value in each group queries.</red>
+{{% include-from-yaml data="idiomatic_mzsql/patterns_window_functions" name="last-value" field="extra_example_anti_pattern_min" %}}
 
-{{< note >}}
-
-Materialize does not support `RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED
-FOLLOWING`.
-
-{{</ note >}}
-
-<div style="background-color: var(--code-block)">
-
-```nofmt
--- Unsupported --
-SELECT order_id,
-  LAST_VALUE(price)
-    OVER (PARTITION BY order_id ORDER BY price DESC
-          RANGE BETWEEN
-            UNBOUNDED PRECEDING AND
-            UNBOUNDED FOLLOWING) AS lowest_price,
-  item,
-  price,
-  price - LAST_VALUE(price)
-    OVER (PARTITION BY order_id ORDER BY price DESC
-          RANGE BETWEEN
-            UNBOUNDED PRECEDING AND
-            UNBOUNDED FOLLOWING) AS diff_lowest_price
-FROM orders_view
-ORDER BY order_id, item;
-```
-
-</div>
 </td>
 </tr>
 </tbody>
@@ -310,67 +182,16 @@ ordered by ascending price values).
 <td><blue>Idiomatic Materialize SQL</blue> ✅</td>
 <td class="copyableCode">
 
-```mzsql
-SELECT o.order_id, minmax.lowest_price, minmax.highest_price, o.item, o.price,
-  o.price - minmax.lowest_price AS diff_lowest_price,
-  o.price - minmax.highest_price AS diff_highest_price
-FROM orders_view o,
-      (SELECT order_id,
-         MIN(price) AS lowest_price,
-         MAX(price) AS highest_price
-      FROM orders_view
-      GROUP BY order_id) minmax
-WHERE o.order_id = minmax.order_id
-ORDER BY o.order_id, o.item;
-```
+{{% include-from-yaml data="idiomatic_mzsql/patterns_window_functions" name="last-value" field="example_idiomatic" %}}
 
 </td>
 </tr>
+<tr>
 <td><red>Anti-pattern</red> ❌</td>
 <td>
 
-<red>Do not use `LAST_VALUE() OVER (PARTITION BY ... ORDER BY
-)` for last value within groups queries.</red>
+{{% include-from-yaml data="idiomatic_mzsql/patterns_window_functions" name="last-value" field="example_anti_pattern" %}}
 
-{{< note >}}
-
-Materialize does not support `RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED
-FOLLOWING`.
-
-{{</ note >}}
-
-<div style="background-color: var(--code-block)">
-
-```nofmt
--- Unsupported --
-SELECT order_id,
-  LAST_VALUE(price)
-    OVER (PARTITION BY order_id ORDER BY price DESC
-          RANGE BETWEEN
-            UNBOUNDED PRECEDING AND
-            UNBOUNDED FOLLOWING) AS lowest_price,
-  LAST_VALUE(price)
-    OVER (PARTITION BY order_id ORDER BY price
-          RANGE BETWEEN
-            UNBOUNDED PRECEDING AND
-            UNBOUNDED FOLLOWING) AS highest_price,
-  item,
-  price,
-  price - LAST_VALUE(price)
-    OVER (PARTITION BY order_id ORDER BY price DESC
-          RANGE BETWEEN
-            UNBOUNDED PRECEDING AND
-            UNBOUNDED FOLLOWING) AS diff_lowest_price,
-  price - LAST_VALUE(price)
-    OVER (PARTITION BY order_id ORDER BY price
-           RANGE BETWEEN
-            UNBOUNDED PRECEDING AND
-            UNBOUNDED FOLLOWING) AS diff_highest_price
-FROM orders_view
-ORDER BY order_id, item;
-```
-
-</div>
 </td>
 </tr>
 
