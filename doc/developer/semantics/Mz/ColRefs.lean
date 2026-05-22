@@ -32,8 +32,6 @@ mutual
 def Expr.colReferencesBoundedBy (n : Nat) : Expr → Bool
   | .lit _            => true
   | .col i            => decide (i < n)
-  | .and a b          => a.colReferencesBoundedBy n && b.colReferencesBoundedBy n
-  | .or  a b          => a.colReferencesBoundedBy n && b.colReferencesBoundedBy n
   | .not a            => a.colReferencesBoundedBy n
   | .ifThen c t e     =>
     c.colReferencesBoundedBy n &&
@@ -102,16 +100,6 @@ theorem eval_append_left_of_bounded :
     have h_lt : i < l.length := of_decide_eq_true h
     simp only [eval]
     exact Env.get_append_left l r i h_lt
-  | l, r, .and a b,      h => by
-    simp only [Expr.colReferencesBoundedBy, Bool.and_eq_true] at h
-    simp only [eval]
-    rw [eval_append_left_of_bounded l r a h.1,
-        eval_append_left_of_bounded l r b h.2]
-  | l, r, .or a b,       h => by
-    simp only [Expr.colReferencesBoundedBy, Bool.and_eq_true] at h
-    simp only [eval]
-    rw [eval_append_left_of_bounded l r a h.1,
-        eval_append_left_of_bounded l r b h.2]
   | l, r, .not a,        h => by
     simp only [Expr.colReferencesBoundedBy] at h
     simp only [eval]
@@ -197,14 +185,6 @@ theorem Expr.colReferencesBoundedBy_mono :
     have h_lt : i < n := of_decide_eq_true h
     show decide (i < m) = true
     exact decide_eq_true (Nat.lt_of_lt_of_le h_lt hLe)
-  | _, _, .and a b,          h, hLe => by
-    simp only [Expr.colReferencesBoundedBy, Bool.and_eq_true] at h ⊢
-    exact ⟨Expr.colReferencesBoundedBy_mono a h.1 hLe,
-           Expr.colReferencesBoundedBy_mono b h.2 hLe⟩
-  | _, _, .or a b,           h, hLe => by
-    simp only [Expr.colReferencesBoundedBy, Bool.and_eq_true] at h ⊢
-    exact ⟨Expr.colReferencesBoundedBy_mono a h.1 hLe,
-           Expr.colReferencesBoundedBy_mono b h.2 hLe⟩
   | _, _, .not a,            h, hLe => Expr.colReferencesBoundedBy_mono a h hLe
   | _, _, .ifThen c t e,     h, hLe => by
     simp only [Expr.colReferencesBoundedBy, Bool.and_eq_true] at h ⊢
@@ -283,8 +263,6 @@ mutual
 def Expr.colShift (k : Nat) : Expr → Expr
   | .lit d            => .lit d
   | .col i            => .col (k + i)
-  | .and a b          => .and (a.colShift k) (b.colShift k)
-  | .or  a b          => .or  (a.colShift k) (b.colShift k)
   | .not a            => .not (a.colShift k)
   | .ifThen c t e     => .ifThen (c.colShift k) (t.colShift k) (e.colShift k)
   | .andN args        => .andN (Expr.argsColShift k args)
@@ -317,12 +295,6 @@ theorem eval_append_right_shift :
     show eval (l ++ r) (.col (l.length + i)) = eval r (.col i)
     simp only [eval]
     exact Env.get_append_right l r i
-  | l, r, .and a b       => by
-    simp only [Expr.colShift, eval]
-    rw [eval_append_right_shift l r a, eval_append_right_shift l r b]
-  | l, r, .or a b        => by
-    simp only [Expr.colShift, eval]
-    rw [eval_append_right_shift l r a, eval_append_right_shift l r b]
   | l, r, .not a         => by
     simp only [Expr.colShift, eval]
     rw [eval_append_right_shift l r a]
@@ -382,8 +354,6 @@ mutual
 def Expr.colReferencesUnused (n : Nat) : Expr → Bool
   | .lit _            => true
   | .col i            => decide (i ≠ n)
-  | .and a b          => a.colReferencesUnused n && b.colReferencesUnused n
-  | .or  a b          => a.colReferencesUnused n && b.colReferencesUnused n
   | .not a            => a.colReferencesUnused n
   | .ifThen c t e     =>
     c.colReferencesUnused n &&
@@ -455,16 +425,6 @@ theorem eval_replaceAt_of_unused :
     have h_ne : i ≠ n := of_decide_eq_true h
     simp only [eval]
     exact Env.get_replaceAt_ne env n i v h_ne
-  | env, n, v, .and a b,    h => by
-    simp only [Expr.colReferencesUnused, Bool.and_eq_true] at h
-    simp only [eval]
-    rw [eval_replaceAt_of_unused env n v a h.1,
-        eval_replaceAt_of_unused env n v b h.2]
-  | env, n, v, .or a b,     h => by
-    simp only [Expr.colReferencesUnused, Bool.and_eq_true] at h
-    simp only [eval]
-    rw [eval_replaceAt_of_unused env n v a h.1,
-        eval_replaceAt_of_unused env n v b h.2]
   | env, n, v, .not a,      h => by
     simp only [Expr.colReferencesUnused] at h
     simp only [eval]
@@ -549,16 +509,6 @@ theorem Expr.colReferencesUnused_of_bounded :
     show decide (j ≠ i) = true
     have : j ≠ i := fun hEq => Nat.not_lt_of_le hLe (hEq ▸ h_lt)
     exact decide_eq_true this
-  | _, _, .and a b,          h, hLe => by
-    simp only [Expr.colReferencesBoundedBy, Expr.colReferencesUnused,
-               Bool.and_eq_true] at h ⊢
-    exact ⟨Expr.colReferencesUnused_of_bounded a h.1 hLe,
-           Expr.colReferencesUnused_of_bounded b h.2 hLe⟩
-  | _, _, .or a b,           h, hLe => by
-    simp only [Expr.colReferencesBoundedBy, Expr.colReferencesUnused,
-               Bool.and_eq_true] at h ⊢
-    exact ⟨Expr.colReferencesUnused_of_bounded a h.1 hLe,
-           Expr.colReferencesUnused_of_bounded b h.2 hLe⟩
   | _, _, .not a,            h, hLe =>
     Expr.colReferencesUnused_of_bounded a h hLe
   | _, _, .ifThen c t e,     h, hLe => by
@@ -630,12 +580,6 @@ mutual
 theorem Expr.colShift_zero : ∀ (e : Expr), e.colShift 0 = e
   | .lit _            => rfl
   | .col i            => by show Expr.col (0 + i) = .col i; rw [Nat.zero_add]
-  | .and a b          => by
-    show Expr.and (a.colShift 0) (b.colShift 0) = .and a b
-    rw [Expr.colShift_zero a, Expr.colShift_zero b]
-  | .or a b           => by
-    show Expr.or (a.colShift 0) (b.colShift 0) = .or a b
-    rw [Expr.colShift_zero a, Expr.colShift_zero b]
   | .not a            => by
     show Expr.not (a.colShift 0) = .not a
     rw [Expr.colShift_zero a]
@@ -686,14 +630,6 @@ theorem Expr.colShift_add :
   | k, m, .col i            => by
     show Expr.col (m + (k + i)) = Expr.col (k + m + i)
     congr 1; omega
-  | k, m, .and a b          => by
-    show Expr.and ((a.colShift k).colShift m) ((b.colShift k).colShift m)
-        = .and (a.colShift (k + m)) (b.colShift (k + m))
-    rw [Expr.colShift_add k m a, Expr.colShift_add k m b]
-  | k, m, .or a b           => by
-    show Expr.or ((a.colShift k).colShift m) ((b.colShift k).colShift m)
-        = .or (a.colShift (k + m)) (b.colShift (k + m))
-    rw [Expr.colShift_add k m a, Expr.colShift_add k m b]
   | k, m, .not a            => by
     show Expr.not ((a.colShift k).colShift m) = .not (a.colShift (k + m))
     rw [Expr.colShift_add k m a]

@@ -30,8 +30,6 @@ namespace Mz
 def eval (env : Env) : Expr → Datum
   | .lit d        => d
   | .col i        => Env.get env i
-  | .and a b      => evalAnd (eval env a) (eval env b)
-  | .or  a b      => evalOr  (eval env a) (eval env b)
   | .not a        => evalNot (eval env a)
   | .ifThen c t e => evalIfThen (eval env c) (eval env t) (eval env e)
   | .andN args     => evalAndN     (args.map (eval env))
