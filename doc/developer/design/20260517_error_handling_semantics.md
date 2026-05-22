@@ -128,6 +128,45 @@ The natural locus is still the diff field, because the data field is per-row and
 Implementation is out of scope.
 The spec exists so that future operator work targets this two-layer encoding (`Int × ErrCount` for retractable row-scoped, `global` for terminal collection-scoped) rather than inventing alternates.
 
+### Stream equivalence: data-multiplicity equality
+
+The denotational equality on a unified stream is *data-multiplicity equality* plus *global-marker equality*, not record-by-record list equality.
+Two streams `s₁` and `s₂` are equivalent (`s₁ ≡ s₂`) iff:
+
+* for every row `r`, the sum of `val` counts over all records in `s₁` carrying row `r` equals the same sum over `s₂`;
+* `s₁` carries a `global` marker iff `s₂` does.
+
+Per-row err counts (`Diff.errs`) drop out of the equivalence relation.
+Two streams agreeing on data multiplicities and global status are equivalent regardless of how their `ErrCount` components are distributed across records.
+
+The choice of `≡` over strict list equality is forced by the algebra.
+Many natural optimizer rewrites — `predicate_pushdown` over `Cross(L, R)` is the canonical example — change `ErrCount` distributions without changing data multiplicities.
+For instance, `filter pred (cross l r)` with `pred` referencing only the left side preserves err copies that crossed through left's valid copies; the pushed-down form `cross (filter pred l) r` loses them when `filter` zeroes left's valid count before the cross multiplies right's err counts by it.
+Under strict list equality the rewrite is unsound; under `≡` it is sound, because the data side is unchanged and SQL semantics only observes the data side.
+
+The SQL standard does not specify error-multiplicity semantics, so the choice of equivalence is a design decision rather than a forced one.
+The diagnostic-only treatment of per-row err counts matches the standard's silence on the topic and matches how Materialize currently surfaces user-visible errors: through `DataflowError` (the existing pathway) and through the future `global` marker, not through SQL queries that count err copies inside the data stream.
+
+**Implications.**
+
+* Operators are well-defined modulo `≡`.
+  Every operator's output equivalence class is determined by its input equivalence class.
+  Within an equivalence class, an optimizer may pick any representative.
+* Per-row err counts are bookkeeping for `escalateRowErrs`, the single operator that promotes err counts into observable form by emitting one `DataflowError` per err copy.
+  Every other operator may shuffle, accumulate, or drop err counts as long as the data side and global status are preserved.
+* Retractability still holds at the data level.
+  `(row r, val ⟨+1, m⟩)` followed by `(row r, val ⟨-1, n⟩)` sums to `val ⟨0, m + n⟩`, which has data multiplicity 0 — the row is absent from the equivalence class.
+  The err counts `m + n` are diagnostic; they don't change the observable result.
+* Global errors are still terminal under `≡`.
+  The `global` marker absorbs under `+` and `*`, and `globalEq` is part of the equivalence definition.
+  A `global` cannot be cancelled by adding `val d`; both sides of `≡` must agree on whether `global` is present.
+
+**Why this matters for the optimizer.**
+
+The `predicate_pushdown` rewrite over `Cross(L, R)` is sound as a transformation modulo `≡`, but it is *not* sound under strict list equality.
+The optimizer must target `≡`, not `=`.
+Stating this once in the spec frees every rewrite from having to invent its own justification for why err-count shuffling is acceptable.
+
 ### SQL error semantics
 
 The rules below define how `NULL` and `Datum::Error` interact in expression evaluation.
@@ -284,3 +323,8 @@ PostgreSQL has no precedent; candidates are "errors sort last", "errors sort lik
 * For global errors, what is the precise specification of the absorbing element in the `diff` semiring, and how does it interact with consolidation and arrangement?
 * For row-scoped errors carried in the diff's `ErrCount` component, what is the storage / wire cost of a finite map from `EvalError` to `Int` versus the existing single-`Int` diff, and is the cost acceptable for collections in which errors are rare?
 * For row-scoped errors carried in the diff, how does the encoding interact with existing arrangement layouts that assume `Int` diffs, and what is the minimum change required for the runtime to round-trip the new diff type?
+* The stream equivalence section asserts that per-row err counts are diagnostic and the optimizer targets equivalence modulo data multiplicities + global status.
+This is a design choice, not a forced one.
+What user-facing surface (if any) should expose err counts directly?
+Candidates: a per-row `is_error` predicate that observes whether any err count is non-zero, a `count_errors(expr)` aggregate that sums err counts across rows, or no surface at all (err counts strictly serve `escalateRowErrs`).
+The choice constrains which optimizer rewrites can be made unconditional.
