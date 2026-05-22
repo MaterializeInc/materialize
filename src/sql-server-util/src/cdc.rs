@@ -69,6 +69,7 @@ use std::time::Duration;
 use derivative::Derivative;
 use futures::{Stream, StreamExt};
 use mz_repr::GlobalId;
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use tiberius::numeric::Numeric;
@@ -507,9 +508,9 @@ pub enum CdcError {
     Ord,
     Hash,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct Lsn {
     /// Virtual Log File sequence number.
     pub vlf_id: u32,

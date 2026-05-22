@@ -53,12 +53,15 @@ pub use crate::datum_vec::{DatumVec, DatumVecBorrow};
 pub use crate::diff::Diff;
 pub use crate::global_id::GlobalId;
 pub use crate::relation::{
-    ColumnDiff, ColumnIndex, ColumnName, KeyDiff, NotNullViolation, PropRelationDescDiff,
-    ProtoColumnName, ProtoColumnType, ProtoRelationDesc, ProtoRelationType, RelationDesc,
-    RelationDescBuilder, RelationDescDiff, RelationVersion, RelationVersionSelector,
-    ReprColumnType, ReprRelationType, SemanticType, SqlColumnType, SqlRelationType,
-    UNKNOWN_COLUMN_NAME, VersionedRelationDesc, arb_relation_desc_diff,
-    arb_relation_desc_projection, arb_row_for_relation,
+    ColumnDiff, ColumnIndex, ColumnName, KeyDiff, NotNullViolation, ProtoColumnName,
+    ProtoColumnType, ProtoRelationDesc, ProtoRelationType, RelationDesc, RelationDescBuilder,
+    RelationDescDiff, RelationVersion, RelationVersionSelector, ReprColumnType, ReprRelationType,
+    SemanticType, SqlColumnType, SqlRelationType, UNKNOWN_COLUMN_NAME, VersionedRelationDesc,
+};
+#[cfg(any(test, feature = "proptest"))]
+pub use crate::relation::{
+    PropRelationDescDiff, arb_relation_desc_diff, arb_relation_desc_projection,
+    arb_row_for_relation,
 };
 pub use crate::row::encode::{RowColumnarDecoder, RowColumnarEncoder, preserves_order};
 pub use crate::row::iter::{IntoRowIterator, RowIterator};
@@ -69,9 +72,13 @@ pub use crate::row::{
 };
 pub use crate::scalar::{
     ArrayRustType, AsColumnType, Datum, DatumKind, ExcludeNull, InputDatumType, Int2Vector,
-    OptionalArg, OutputDatumType, PropArray, PropDatum, PropDict, PropList, ProtoScalarType,
-    ReprScalarBaseType, ReprScalarType, SqlContainerType, SqlScalarBaseType, SqlScalarType,
-    Variadic, arb_datum, arb_datum_for_column, arb_datum_for_scalar, arb_range_type,
+    OptionalArg, OutputDatumType, ProtoScalarType, ReprScalarBaseType, ReprScalarType,
+    SqlContainerType, SqlScalarBaseType, SqlScalarType, Variadic,
+};
+#[cfg(any(test, feature = "proptest"))]
+pub use crate::scalar::{
+    PropArray, PropDatum, PropDict, PropList, arb_datum, arb_datum_for_column,
+    arb_datum_for_scalar, arb_range_type,
 };
 pub use crate::timestamp::{Timestamp, TimestampManipulation};
 pub use crate::update::{

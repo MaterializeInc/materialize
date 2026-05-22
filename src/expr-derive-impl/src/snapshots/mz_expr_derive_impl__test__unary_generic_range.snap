@@ -3,7 +3,6 @@ source: src/expr-derive-impl/src/lib.rs
 expression: "#[sqlfunc(sqlname = \"rangelower\", is_monotone = true)]\nfn range_lower<'a, T>(a: Range<T>) -> Option<T> {\n    a.inner.map(|inner| inner.lower.bound).flatten()\n}\n"
 ---
 #[derive(
-    proptest_derive::Arbitrary,
     Ord,
     PartialOrd,
     Clone,
@@ -15,6 +14,7 @@ expression: "#[sqlfunc(sqlname = \"rangelower\", is_monotone = true)]\nfn range_
     Hash,
     mz_lowertest::MzReflect,
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
 pub struct RangeLower;
 impl crate::func::EagerUnaryFunc for RangeLower {
     type Input<'a> = Range<Datum<'a>>;

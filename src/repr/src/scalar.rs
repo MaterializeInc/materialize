@@ -27,7 +27,9 @@ use mz_ore::cast::CastFrom;
 use mz_ore::str::{StrExt, separated};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use ordered_float::OrderedFloat;
+#[cfg(any(test, feature = "proptest"))]
 use proptest::prelude::*;
+#[cfg(any(test, feature = "proptest"))]
 use proptest::strategy::Union;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -4467,6 +4469,7 @@ impl SqlScalarType {
 
 // See the chapter "Generating Recurisve Data" from the proptest book:
 // https://altsysrq.github.io/proptest-book/proptest/tutorial/recursive.html
+#[cfg(any(test, feature = "proptest"))]
 impl Arbitrary for SqlScalarType {
     type Parameters = ();
     type Strategy = BoxedStrategy<SqlScalarType>;
@@ -4595,6 +4598,7 @@ impl Arbitrary for SqlScalarType {
     }
 }
 
+#[cfg(any(test, feature = "proptest"))]
 impl Arbitrary for ReprScalarType {
     type Parameters = ();
     type Strategy = BoxedStrategy<ReprScalarType>;
@@ -5193,6 +5197,7 @@ impl Datum<'_> {
 
 /// A mirror type for [`Datum`] that can be proptest-generated.
 #[derive(Debug, PartialEq, Clone)]
+#[cfg(any(test, feature = "proptest"))]
 pub enum PropDatum {
     Null,
     Bool(bool),
@@ -5232,14 +5237,17 @@ pub enum PropDatum {
     Dummy,
 }
 
+#[cfg(any(test, feature = "proptest"))]
 impl std::cmp::Eq for PropDatum {}
 
+#[cfg(any(test, feature = "proptest"))]
 impl PartialOrd for PropDatum {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
+#[cfg(any(test, feature = "proptest"))]
 impl Ord for PropDatum {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         Datum::from(self).cmp(&Datum::from(other))
@@ -5247,6 +5255,7 @@ impl Ord for PropDatum {
 }
 
 /// Generate an arbitrary [`PropDatum`].
+#[cfg(any(test, feature = "proptest"))]
 pub fn arb_datum(allow_dummy: bool) -> BoxedStrategy<PropDatum> {
     let mut leaf_options = vec![
         any::<bool>().prop_map(PropDatum::Bool).boxed(),
@@ -5299,6 +5308,7 @@ pub fn arb_datum(allow_dummy: bool) -> BoxedStrategy<PropDatum> {
 }
 
 /// Generates an arbitrary [`PropDatum`] for the provided [`SqlColumnType`].
+#[cfg(any(test, feature = "proptest"))]
 pub fn arb_datum_for_column(column_type: SqlColumnType) -> impl Strategy<Value = PropDatum> {
     let strat = arb_datum_for_scalar(column_type.scalar_type);
 
@@ -5310,6 +5320,7 @@ pub fn arb_datum_for_column(column_type: SqlColumnType) -> impl Strategy<Value =
 }
 
 /// Generates an arbitrary [`PropDatum`] for the provided [`SqlScalarType`].
+#[cfg(any(test, feature = "proptest"))]
 pub fn arb_datum_for_scalar(scalar_type: SqlScalarType) -> impl Strategy<Value = PropDatum> {
     match scalar_type {
         SqlScalarType::Bool => any::<bool>().prop_map(PropDatum::Bool).boxed(),
@@ -5452,15 +5463,18 @@ pub fn arb_datum_for_scalar(scalar_type: SqlScalarType) -> impl Strategy<Value =
 }
 
 /// Generates an arbitrary [`NaiveDateTime`].
+#[cfg(any(test, feature = "proptest"))]
 pub fn arb_naive_date_time() -> impl Strategy<Value = NaiveDateTime> {
     add_arb_duration(chrono::DateTime::from_timestamp(0, 0).unwrap().naive_utc())
 }
 
 /// Generates an arbitrary [`DateTime`] in [`Utc`].
+#[cfg(any(test, feature = "proptest"))]
 pub fn arb_utc_date_time() -> impl Strategy<Value = DateTime<Utc>> {
     add_arb_duration(chrono::Utc.timestamp_opt(0, 0).unwrap())
 }
 
+#[cfg(any(test, feature = "proptest"))]
 fn arb_array_dimension() -> BoxedStrategy<ArrayDimension> {
     (1..4_usize)
         .prop_map(|length| ArrayDimension {
@@ -5471,8 +5485,10 @@ fn arb_array_dimension() -> BoxedStrategy<ArrayDimension> {
 }
 
 #[derive(Debug, PartialEq, Clone)]
+#[cfg(any(test, feature = "proptest"))]
 pub struct PropArray(Row, Vec<PropDatum>);
 
+#[cfg(any(test, feature = "proptest"))]
 fn arb_array(element_strategy: BoxedStrategy<PropDatum>) -> BoxedStrategy<PropArray> {
     // Elements in Arrays can always be Null.
     let element_strategy = Union::new_weighted(vec![
@@ -5503,8 +5519,10 @@ fn arb_array(element_strategy: BoxedStrategy<PropDatum>) -> BoxedStrategy<PropAr
 }
 
 #[derive(Debug, PartialEq, Clone)]
+#[cfg(any(test, feature = "proptest"))]
 pub struct PropList(Row, Vec<PropDatum>);
 
+#[cfg(any(test, feature = "proptest"))]
 fn arb_list(element_strategy: BoxedStrategy<PropDatum>) -> BoxedStrategy<PropList> {
     // Elements in Lists can always be Null.
     let element_strategy = Union::new_weighted(vec![
@@ -5523,6 +5541,7 @@ fn arb_list(element_strategy: BoxedStrategy<PropDatum>) -> BoxedStrategy<PropLis
 }
 
 #[derive(Debug, PartialEq, Clone)]
+#[cfg(any(test, feature = "proptest"))]
 pub struct PropRange(
     Row,
     Option<(
@@ -5531,6 +5550,7 @@ pub struct PropRange(
     )>,
 );
 
+#[cfg(any(test, feature = "proptest"))]
 pub fn arb_range_type() -> Union<BoxedStrategy<SqlScalarType>> {
     Union::new(vec![
         Just(SqlScalarType::Int32).boxed(),
@@ -5539,6 +5559,7 @@ pub fn arb_range_type() -> Union<BoxedStrategy<SqlScalarType>> {
     ])
 }
 
+#[cfg(any(test, feature = "proptest"))]
 fn arb_range_data() -> Union<BoxedStrategy<(PropDatum, PropDatum)>> {
     Union::new(vec![
         (
@@ -5559,6 +5580,7 @@ fn arb_range_data() -> Union<BoxedStrategy<(PropDatum, PropDatum)>> {
     ])
 }
 
+#[cfg(any(test, feature = "proptest"))]
 fn arb_range(
     data: impl Strategy<Value = (PropDatum, PropDatum)> + 'static,
 ) -> BoxedStrategy<PropRange> {
@@ -5658,8 +5680,10 @@ fn arb_range(
 }
 
 #[derive(Debug, PartialEq, Clone)]
+#[cfg(any(test, feature = "proptest"))]
 pub struct PropDict(Row, Vec<(String, PropDatum)>);
 
+#[cfg(any(test, feature = "proptest"))]
 fn arb_dict(element_strategy: BoxedStrategy<PropDatum>) -> BoxedStrategy<PropDict> {
     // Elements in Maps can always be Null.
     let element_strategy = Union::new_weighted(vec![
@@ -5679,6 +5703,7 @@ fn arb_dict(element_strategy: BoxedStrategy<PropDatum>) -> BoxedStrategy<PropDic
         .boxed()
 }
 
+#[cfg(any(test, feature = "proptest"))]
 fn arb_record(
     fields: impl Iterator<Item = (String, BoxedStrategy<PropDatum>)>,
 ) -> BoxedStrategy<PropDict> {
@@ -5694,12 +5719,14 @@ fn arb_record(
         .boxed()
 }
 
+#[cfg(any(test, feature = "proptest"))]
 fn arb_date() -> BoxedStrategy<Date> {
     (Date::LOW_DAYS..Date::HIGH_DAYS)
         .prop_map(move |days| Date::from_pg_epoch(days).unwrap())
         .boxed()
 }
 
+#[cfg(any(test, feature = "proptest"))]
 pub fn add_arb_duration<T: 'static + Copy + Add<chrono::Duration> + std::fmt::Debug>(
     to: T,
 ) -> BoxedStrategy<T::Output>
@@ -5721,6 +5748,7 @@ where
         .boxed()
 }
 
+#[cfg(any(test, feature = "proptest"))]
 pub(crate) fn arb_numeric() -> BoxedStrategy<Numeric> {
     let int_value = any::<i128>()
         .prop_map(|v| Numeric::try_from(v).unwrap())
@@ -5760,6 +5788,7 @@ pub(crate) fn arb_numeric() -> BoxedStrategy<Numeric> {
     .boxed()
 }
 
+#[cfg(any(test, feature = "proptest"))]
 impl<'a> From<&'a PropDatum> for Datum<'a> {
     #[inline]
     fn from(pd: &'a PropDatum) -> Self {

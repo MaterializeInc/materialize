@@ -14,6 +14,7 @@ use mz_ore::future::InTask;
 use mz_repr::CatalogItemId;
 use mz_ssh_util::tunnel::{SshTimeoutConfig, SshTunnelConfig};
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -96,17 +97,8 @@ pub enum TunnelConfig {
 ///
 /// Mirror of [`tiberius::EncryptionLevel`] but we define our own so we can
 /// implement traits like [`Serialize`].
-#[derive(
-    Copy,
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    Hash,
-    Arbitrary,
-    Serialize,
-    Deserialize
-)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum EncryptionLevel {
     /// Do not use encryption at all.
     None,
@@ -141,17 +133,8 @@ impl From<EncryptionLevel> for tiberius::EncryptionLevel {
 }
 
 /// Policy that dictates validation of the SQL-SERVER certificate.
-#[derive(
-    Copy,
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    Hash,
-    Arbitrary,
-    Serialize,
-    Deserialize
-)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum CertificateValidationPolicy {
     /// Don't validate the server's certificate; trust all certificates.
     TrustAll,

@@ -20,17 +20,22 @@ use mz_ore::str::StrExt;
 use mz_ore::{assert_none, assert_ok};
 use mz_persist_types::schema::SchemaId;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+#[cfg(any(test, feature = "proptest"))]
 use proptest::prelude::*;
+#[cfg(any(test, feature = "proptest"))]
 use proptest::strategy::{Strategy, Union};
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
+#[cfg(any(test, feature = "proptest"))]
+use crate::arb_datum_for_column;
 use crate::relation_and_scalar::proto_relation_type::ProtoKey;
 pub use crate::relation_and_scalar::{
     ProtoColumnMetadata, ProtoColumnName, ProtoColumnType, ProtoRelationDesc, ProtoRelationType,
     ProtoRelationVersion,
 };
-use crate::{Datum, ReprScalarType, Row, SqlScalarType, arb_datum_for_column};
+use crate::{Datum, ReprScalarType, Row, SqlScalarType};
 
 /// The type of a [`Datum`].
 ///
@@ -40,7 +45,6 @@ use crate::{Datum, ReprScalarType, Row, SqlScalarType, arb_datum_for_column};
 /// To construct a column type, either initialize the struct directly, or
 /// use the [`SqlScalarType::nullable`] method.
 #[derive(
-    Arbitrary,
     Clone,
     Debug,
     Eq,
@@ -52,6 +56,7 @@ use crate::{Datum, ReprScalarType, Row, SqlScalarType, arb_datum_for_column};
     Hash,
     MzReflect
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct SqlColumnType {
     /// The underlying scalar type (e.g., Int32 or String) of this column.
     pub scalar_type: SqlScalarType,
@@ -255,7 +260,6 @@ impl fmt::Display for SqlColumnType {
 
 /// The type of a relation.
 #[derive(
-    Arbitrary,
     Clone,
     Debug,
     Eq,
@@ -267,6 +271,7 @@ impl fmt::Display for SqlColumnType {
     Hash,
     MzReflect
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct SqlRelationType {
     /// The type for each column, in order.
     pub column_types: Vec<SqlColumnType>,
@@ -673,6 +678,7 @@ impl From<ColumnName> for mz_sql_parser::ast::Ident {
     }
 }
 
+#[cfg(any(test, feature = "proptest"))]
 impl proptest::arbitrary::Arbitrary for ColumnName {
     type Parameters = ();
     type Strategy = BoxedStrategy<ColumnName>;
@@ -724,6 +730,7 @@ pub const UNKNOWN_COLUMN_NAME: &str = "?column?";
 )]
 pub struct ColumnIndex(usize);
 
+#[cfg(any(test, feature = "proptest"))]
 static_assertions::assert_not_impl_all!(ColumnIndex: Arbitrary);
 
 impl ColumnIndex {
@@ -753,9 +760,9 @@ impl ColumnIndex {
     Serialize,
     Deserialize,
     Hash,
-    MzReflect,
-    Arbitrary
+    MzReflect
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct RelationVersion(u64);
 
 impl RelationVersion {
@@ -1448,6 +1455,7 @@ impl RelationDesc {
     }
 }
 
+#[cfg(any(test, feature = "proptest"))]
 impl Arbitrary for RelationDesc {
     type Parameters = ();
     type Strategy = BoxedStrategy<RelationDesc>;
@@ -1470,12 +1478,14 @@ impl Arbitrary for RelationDesc {
 
 /// Returns a [`Strategy`] that generates an arbitrary [`RelationDesc`] with a number columns
 /// within the range provided.
+#[cfg(any(test, feature = "proptest"))]
 pub fn arb_relation_desc(num_cols: std::ops::Range<usize>) -> impl Strategy<Value = RelationDesc> {
     proptest::collection::btree_map(any::<ColumnName>(), any::<SqlColumnType>(), num_cols)
         .prop_map(RelationDesc::from_names_and_types)
 }
 
 /// Returns a [`Strategy`] that generates a projection of the provided [`RelationDesc`].
+#[cfg(any(test, feature = "proptest"))]
 pub fn arb_relation_desc_projection(desc: RelationDesc) -> impl Strategy<Value = RelationDesc> {
     let mask: Vec<_> = (0..desc.len()).map(|_| any::<bool>()).collect();
     mask.prop_map(move |mask| {
@@ -1503,6 +1513,7 @@ impl IntoIterator for RelationDesc {
 }
 
 /// Returns a [`Strategy`] that yields arbitrary [`Row`]s for the provided [`RelationDesc`].
+#[cfg(any(test, feature = "proptest"))]
 pub fn arb_row_for_relation(desc: &RelationDesc) -> impl Strategy<Value = Row> + use<> {
     let datums: Vec<_> = desc
         .typ()
@@ -1907,6 +1918,7 @@ impl VersionedRelationDesc {
 /// Diffs that can be generated proptest and applied to a [`RelationDesc`] to
 /// exercise schema migrations.
 #[derive(Debug)]
+#[cfg(any(test, feature = "proptest"))]
 pub enum PropRelationDescDiff {
     AddColumn {
         name: ColumnName,
@@ -1924,6 +1936,7 @@ pub enum PropRelationDescDiff {
     },
 }
 
+#[cfg(any(test, feature = "proptest"))]
 impl PropRelationDescDiff {
     pub fn apply(self, desc: &mut RelationDesc) {
         match self {
@@ -1984,6 +1997,7 @@ impl PropRelationDescDiff {
 }
 
 /// Generates a set of [`PropRelationDescDiff`]s based on some source [`RelationDesc`].
+#[cfg(any(test, feature = "proptest"))]
 pub fn arb_relation_desc_diff(
     source: &RelationDesc,
 ) -> impl Strategy<Value = Vec<PropRelationDescDiff>> + use<> {

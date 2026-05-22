@@ -3,7 +3,6 @@ source: src/expr-derive-impl/src/lib.rs
 expression: "#[sqlfunc(sqlname = \"multi_generic\")]\nfn multi_generic<'a, A, B>(a: DatumList<'a, A>, b: DatumList<'a, B>) -> Option<B> {\n    unimplemented!()\n}\n"
 ---
 #[derive(
-    proptest_derive::Arbitrary,
     Ord,
     PartialOrd,
     Clone,
@@ -15,6 +14,7 @@ expression: "#[sqlfunc(sqlname = \"multi_generic\")]\nfn multi_generic<'a, A, B>
     Hash,
     mz_lowertest::MzReflect,
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
 pub struct MultiGeneric;
 impl crate::func::binary::EagerBinaryFunc for MultiGeneric {
     type Input<'a> = (DatumList<'a, Datum<'a>>, DatumList<'a, Datum<'a>>);

@@ -14,7 +14,9 @@ use anyhow::bail;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_proto::{RustType, TryFromProtoError};
+#[cfg(any(test, feature = "proptest"))]
 use proptest::arbitrary::Arbitrary;
+#[cfg(any(test, feature = "proptest"))]
 use proptest::strategy::{BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
 
@@ -71,6 +73,7 @@ impl TryFrom<i64> for CharLength {
     }
 }
 
+#[cfg(any(test, feature = "proptest"))]
 impl Arbitrary for CharLength {
     type Parameters = ();
     type Strategy = BoxedStrategy<CharLength>;

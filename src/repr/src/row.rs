@@ -26,7 +26,9 @@ use mz_ore::vec::Vector;
 use mz_persist_types::Codec64;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use ordered_float::OrderedFloat;
+#[cfg(any(test, feature = "proptest"))]
 use proptest::prelude::*;
+#[cfg(any(test, feature = "proptest"))]
 use proptest::strategy::{BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -43,7 +45,9 @@ use crate::adt::range::{
     self, InvalidRangeError, Range, RangeBound, RangeInner, RangeLowerBound, RangeUpperBound,
 };
 use crate::adt::timestamp::CheckedTimestamp;
-use crate::scalar::{DatumKind, SqlScalarType, arb_datum};
+#[cfg(any(test, feature = "proptest"))]
+use crate::scalar::arb_datum;
+use crate::scalar::{DatumKind, SqlScalarType};
 use crate::{Datum, RelationDesc, Timestamp};
 
 pub(crate) mod encode;
@@ -310,6 +314,7 @@ impl std::hash::Hash for Row {
     }
 }
 
+#[cfg(any(test, feature = "proptest"))]
 impl Arbitrary for Row {
     type Parameters = prop::collection::SizeRange;
     type Strategy = BoxedStrategy<Row>;

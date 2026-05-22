@@ -34,12 +34,16 @@ use mz_persist_types::stats::{
     StructStats,
 };
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+#[cfg(any(test, feature = "proptest"))]
+use mz_repr::arb_row_for_relation;
 use mz_repr::{
     CatalogItemId, Datum, GlobalId, ProtoRelationDesc, ProtoRow, RelationDesc, Row,
-    RowColumnarDecoder, RowColumnarEncoder, arb_row_for_relation,
+    RowColumnarDecoder, RowColumnarEncoder,
 };
 use mz_sql_parser::ast::{Ident, IdentError, UnresolvedItemName};
+#[cfg(any(test, feature = "proptest"))]
 use proptest::prelude::any;
+#[cfg(any(test, feature = "proptest"))]
 use proptest::strategy::Strategy;
 use prost::Message;
 use serde::{Deserialize, Serialize};
@@ -1130,6 +1134,7 @@ impl Codec for SourceData {
 }
 
 /// Given a [`RelationDesc`] returns an arbitrary [`SourceData`].
+#[cfg(any(test, feature = "proptest"))]
 pub fn arb_source_data_for_relation_desc(
     desc: &RelationDesc,
 ) -> impl Strategy<Value = SourceData> + use<> {

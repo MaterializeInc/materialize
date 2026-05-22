@@ -12,7 +12,9 @@ use std::collections::BTreeSet;
 use anyhow::bail;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::SqlColumnType;
+#[cfg(any(test, feature = "proptest"))]
 use proptest::prelude::any;
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -20,7 +22,8 @@ use self::proto_my_sql_column_desc::Meta;
 
 include!(concat!(env!("OUT_DIR"), "/mz_mysql_util.rs"));
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct MySqlTableDesc {
     /// In MySQL the schema and database of a table are synonymous.
     pub schema_name: String,
@@ -31,11 +34,17 @@ pub struct MySqlTableDesc {
     /// The index of each column is based on its `ordinal_position`
     /// reported by the information_schema.columns table, which defines
     /// the order of column values when received in a row.
-    #[proptest(strategy = "proptest::collection::vec(any::<MySqlColumnDesc>(), 0..4)")]
+    #[cfg_attr(
+        any(test, feature = "proptest"),
+        proptest(strategy = "proptest::collection::vec(any::<MySqlColumnDesc>(), 0..4)")
+    )]
     pub columns: Vec<MySqlColumnDesc>,
     /// Applicable keys for this table (i.e. primary key and unique
     /// constraints).
-    #[proptest(strategy = "proptest::collection::btree_set(any::<MySqlKeyDesc>(), 0..4)")]
+    #[cfg_attr(
+        any(test, feature = "proptest"),
+        proptest(strategy = "proptest::collection::btree_set(any::<MySqlKeyDesc>(), 0..4)")
+    )]
     pub keys: BTreeSet<MySqlKeyDesc>,
 }
 
@@ -165,9 +174,13 @@ impl MySqlTableDesc {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct MySqlColumnMetaEnum {
-    #[proptest(strategy = "proptest::collection::vec(any::<String>(), 0..3)")]
+    #[cfg_attr(
+        any(test, feature = "proptest"),
+        proptest(strategy = "proptest::collection::vec(any::<String>(), 0..3)")
+    )]
     pub values: Vec<String>,
 }
 
@@ -189,7 +202,8 @@ trait IsCompatible {
     fn is_compatible(&self, other: &Self) -> bool;
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum MySqlColumnMeta {
     /// The described column is an enum, with the given possible values.
     Enum(MySqlColumnMetaEnum),
@@ -235,7 +249,8 @@ impl IsCompatible for Option<MySqlColumnMeta> {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct MySqlColumnDesc {
     /// The name of the column.
     pub name: String,
@@ -313,24 +328,18 @@ impl IsCompatible for MySqlColumnDesc {
     }
 }
 
-#[derive(
-    Debug,
-    Clone,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Ord,
-    PartialOrd,
-    Arbitrary
-)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Ord, PartialOrd)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct MySqlKeyDesc {
     /// The name of the index.
     pub name: String,
     /// Whether or not this key is the primary key.
     pub is_primary: bool,
     /// The columns that make up the key.
-    #[proptest(strategy = "proptest::collection::vec(any::<String>(), 0..4)")]
+    #[cfg_attr(
+        any(test, feature = "proptest"),
+        proptest(strategy = "proptest::collection::vec(any::<String>(), 0..4)")
+    )]
     pub columns: Vec<String>,
 }
 

@@ -14,6 +14,7 @@ use std::time::Duration;
 use dec::TryFromDecimalError;
 use mz_proto::{RustType, TryFromProtoError};
 use mz_timely_util::temporal::BucketTimestamp;
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize, Serializer};
 
@@ -34,10 +35,10 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.timestamp.rs"));
     Ord,
     Hash,
     Default,
-    Arbitrary,
     bytemuck::AnyBitPattern,
     bytemuck::NoUninit,
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 #[repr(transparent)]
 pub struct Timestamp {
     /// note no `pub`.

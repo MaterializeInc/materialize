@@ -31,6 +31,7 @@
 //! not support this `$format`.
 
 use itertools::Itertools;
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -812,7 +813,6 @@ impl UsedIndexes {
 #[derive(
     Debug,
     Clone,
-    Arbitrary,
     Serialize,
     Deserialize,
     Eq,
@@ -821,6 +821,7 @@ impl UsedIndexes {
     PartialOrd,
     Hash
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum IndexUsageType {
     /// Read the entire index.
     FullScan,
@@ -867,7 +868,6 @@ pub enum IndexUsageType {
 #[derive(
     Debug,
     Clone,
-    Arbitrary,
     Serialize,
     Deserialize,
     Eq,
@@ -876,6 +876,7 @@ pub enum IndexUsageType {
     PartialOrd,
     Hash
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum DeltaJoinIndexUsageType {
     Unknown,
     Lookup,

@@ -73,8 +73,8 @@ tokio-postgres.workspace = true
 tracing-core.workspace = true
 url = { workspace = true, features = ["serde"] }
 uuid = { workspace = true, features = ["serde"] }
-proptest.workspace = true
-proptest-derive.workspace = true
+proptest = { workspace = true, optional = true }
+proptest-derive = { workspace = true, optional = true }
 thiserror.workspace = true
 tracing.workspace = true
 
@@ -86,6 +86,9 @@ bincode.workspace = true
 criterion.workspace = true
 insta.workspace = true
 mz-persist = { path = "../persist" }
+mz-repr = { path = ".", features = ["proptest"] }
+proptest.workspace = true
+proptest-derive.workspace = true
 rand.workspace = true
 
 [build-dependencies]
@@ -99,4 +102,5 @@ default = [
     "mz-pgtz/default",
     "mz-proto/default",
     ]
+proptest = ["dep:proptest", "dep:proptest-derive"]
 tracing = ["tracing-subscriber"]

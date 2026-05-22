@@ -3,7 +3,6 @@ source: src/expr-derive-impl/src/lib.rs
 expression: "#[sqlfunc(Replace, sqlname = \"replace\")]\nfn replace(text: &str, from: &str, to: &str) -> Result<String, EvalError> {\n    Ok(text.replace(from, to))\n}\n"
 ---
 #[derive(
-    proptest_derive::Arbitrary,
     Ord,
     PartialOrd,
     Clone,
@@ -15,6 +14,7 @@ expression: "#[sqlfunc(Replace, sqlname = \"replace\")]\nfn replace(text: &str, 
     Hash,
     mz_lowertest::MzReflect,
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
 pub struct Replace;
 impl crate::func::variadic::EagerVariadicFunc for Replace {
     type Input<'a> = (&'a str, &'a str, &'a str);

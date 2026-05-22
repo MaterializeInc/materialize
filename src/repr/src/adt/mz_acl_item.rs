@@ -22,9 +22,13 @@ use mz_ore::soft_assert_no_log;
 use mz_ore::str::StrExt;
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::{RustType, TryFromProtoError};
+#[cfg(any(test, feature = "proptest"))]
 use proptest::arbitrary::Arbitrary;
+#[cfg(any(test, feature = "proptest"))]
 use proptest::prelude::*;
+#[cfg(any(test, feature = "proptest"))]
 use proptest::strategy::{BoxedStrategy, Strategy};
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -245,6 +249,7 @@ impl RustType<ProtoAclMode> for AclMode {
     }
 }
 
+#[cfg(any(test, feature = "proptest"))]
 impl Arbitrary for AclMode {
     type Parameters = ();
     type Strategy = BoxedStrategy<AclMode>;
@@ -272,9 +277,9 @@ impl Arbitrary for AclMode {
     Ord,
     Serialize,
     Hash,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct MzAclItem {
     /// Role that this item grants privileges to.
     pub grantee: RoleId,
@@ -526,9 +531,9 @@ impl FixedSizeCodec<MzAclItem> for PackedMzAclItem {
     Ord,
     Serialize,
     Hash,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct AclItem {
     /// Role that this item grants privileges to.
     pub grantee: Oid,
@@ -1151,6 +1156,7 @@ fn test_acl_item_binary_size() {
     assert_eq!(16, AclItem::binary_size());
 }
 
+#[cfg(test)]
 proptest! {
   #[mz_ore::test]
   #[cfg_attr(miri, ignore)] // slow
@@ -1170,6 +1176,7 @@ proptest! {
 }
 
 #[mz_ore::test]
+#[cfg(any(test, feature = "proptest"))]
 fn proptest_packed_acl_item_roundtrips() {
     fn roundtrip_acl_item(og: AclItem) {
         let packed = PackedAclItem::from_value(og);
@@ -1184,6 +1191,7 @@ fn proptest_packed_acl_item_roundtrips() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // slow
+#[cfg(any(test, feature = "proptest"))]
 fn proptest_packed_acl_item_sorts() {
     fn sort_acl_items(mut og: Vec<AclItem>) {
         let mut packed: Vec<_> = og.iter().copied().map(PackedAclItem::from_value).collect();
@@ -1201,6 +1209,7 @@ fn proptest_packed_acl_item_sorts() {
 }
 
 #[mz_ore::test]
+#[cfg(any(test, feature = "proptest"))]
 fn proptest_packed_mz_acl_item_roundtrips() {
     fn roundtrip_mz_acl_item(og: MzAclItem) {
         let packed = PackedMzAclItem::from_value(og);
@@ -1215,6 +1224,7 @@ fn proptest_packed_mz_acl_item_roundtrips() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // slow
+#[cfg(any(test, feature = "proptest"))]
 fn proptest_packed_mz_acl_item_sorts() {
     fn sort_mz_acl_items(mut og: Vec<MzAclItem>) {
         let mut packed: Vec<_> = og
