@@ -7,16 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::fmt;
-
 use mz_expr_derive::sqlfunc;
 use mz_lowertest::MzReflect;
 use mz_repr::adt::range::Range;
-use mz_repr::{Datum, RowArena, SqlColumnType, SqlScalarType};
+use mz_repr::{Datum, RowArena, SqlScalarType};
 use serde::{Deserialize, Serialize};
 
-use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
-use crate::{EvalError, MirScalarExpr};
+use crate::EvalError;
+use crate::scalar::func::stringify_datum;
 
 #[derive(
     Ord,
@@ -34,56 +32,25 @@ pub struct CastRangeToString {
     pub ty: SqlScalarType,
 }
 
-impl LazyUnaryFunc for CastRangeToString {
-    fn eval<'a>(
-        &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
-        }
-        let mut buf = String::new();
-        stringify_datum(&mut buf, a, &self.ty)?;
-        Ok(Datum::String(temp_storage.push_string(buf)))
-    }
-
-    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::String.nullable(input_type.nullable)
-    }
-
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
-
-    fn introduces_nulls(&self) -> bool {
-        false
-    }
-
-    fn preserves_uniqueness(&self) -> bool {
-        true
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        // TODO? if typeconv was in expr, we could determine this
-        None
-    }
-
-    fn is_monotone(&self) -> bool {
-        false
-    }
-
-    fn is_eliminable_cast(&self) -> bool {
-        false
-    }
-}
-
-impl fmt::Display for CastRangeToString {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("rangetostr")
-    }
+#[sqlfunc(
+    CastRangeToString,
+    sqlname = "rangetostr",
+    preserves_uniqueness = true,
+    introduces_nulls = false
+)]
+fn cast_range_to_string<'a, T>(
+    &self,
+    a: Range<T>,
+    temp_storage: &'a RowArena,
+) -> Result<String, EvalError>
+where
+    T: Into<Datum<'a>>,
+{
+    let d =
+        a.into_bounds(|bound| temp_storage.make_datum_nested(|packer| packer.push(bound.into())));
+    let mut buf = String::new();
+    stringify_datum(&mut buf, Datum::Range(d), &self.ty)?;
+    Ok(buf)
 }
 
 #[sqlfunc(sqlname = "rangelower", is_monotone = true)]

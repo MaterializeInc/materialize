@@ -215,7 +215,11 @@ impl EagerUnaryFunc for CastFloat64ToNumeric {
     type Input<'a> = f64;
     type Output<'a> = Result<Numeric, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(
+        &'a self,
+        a: Self::Input<'a>,
+        _temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
         if a.is_infinite() {
             return Err(EvalError::InfinityOutOfDomain(
                 "casting double precision to numeric".into(),

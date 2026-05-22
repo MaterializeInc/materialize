@@ -19,7 +19,11 @@ pub struct RangeLower;
 impl crate::func::EagerUnaryFunc for RangeLower {
     type Input<'a> = Range<Datum<'a>>;
     type Output<'a> = Option<Datum<'a>>;
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(
+        &'a self,
+        a: Self::Input<'a>,
+        _temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
         range_lower(a)
     }
     fn output_sql_type(

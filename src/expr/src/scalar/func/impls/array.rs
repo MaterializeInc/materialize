@@ -7,15 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::fmt;
-
 use mz_expr_derive::sqlfunc;
 use mz_lowertest::MzReflect;
 use mz_repr::adt::array::{Array, ArrayDimension};
-use mz_repr::{Datum, DatumList, Row, RowArena, RowPacker, SqlColumnType, SqlScalarType};
+use mz_repr::{Datum, DatumList, Row, RowArena, RowPacker, SqlScalarType};
 use serde::{Deserialize, Serialize};
 
-use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
+use crate::scalar::func::stringify_datum;
 use crate::{EvalError, MirScalarExpr};
 
 #[sqlfunc(
@@ -54,57 +52,20 @@ pub struct CastArrayToString {
     pub ty: SqlScalarType,
 }
 
-impl LazyUnaryFunc for CastArrayToString {
-    fn eval<'a>(
-        &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
-        }
-        let mut buf = String::new();
-        stringify_datum(&mut buf, a, &self.ty)?;
-        Ok(Datum::String(temp_storage.push_string(buf)))
-    }
-
-    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::String.nullable(input_type.nullable)
-    }
-
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
-
-    fn introduces_nulls(&self) -> bool {
-        false
-    }
-
-    fn preserves_uniqueness(&self) -> bool {
-        true
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        // TODO? If we moved typeconv into `expr` we could determine the right
-        // inverse of this.
-        None
-    }
-
-    fn is_monotone(&self) -> bool {
-        false
-    }
-
-    fn is_eliminable_cast(&self) -> bool {
-        false
-    }
-}
-
-impl fmt::Display for CastArrayToString {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("arraytostr")
-    }
+#[sqlfunc(
+    CastArrayToString,
+    sqlname = "arraytostr",
+    preserves_uniqueness = true,
+    introduces_nulls = false
+)]
+fn cast_array_to_string<'a>(
+    &self,
+    a: Array<'a>,
+    _temp_storage: &'a RowArena,
+) -> Result<String, EvalError> {
+    let mut buf = String::new();
+    stringify_datum(&mut buf, Datum::Array(a), &self.ty)?;
+    Ok(buf)
 }
 
 #[derive(
@@ -123,95 +84,58 @@ pub struct CastArrayToJsonb {
     pub cast_element: Box<MirScalarExpr>,
 }
 
-impl LazyUnaryFunc for CastArrayToJsonb {
-    fn eval<'a>(
-        &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        fn pack<'a>(
-            temp_storage: &RowArena,
-            elems: &mut impl Iterator<Item = Datum<'a>>,
-            dims: &[ArrayDimension],
-            cast_element: &MirScalarExpr,
-            packer: &mut RowPacker,
-        ) -> Result<(), EvalError> {
-            packer.push_list_with(|packer| match dims {
-                [] => Ok(()),
-                [dim] => {
-                    for _ in 0..dim.length {
-                        let elem = elems.next().unwrap();
-                        let elem = match cast_element.eval(&[elem], temp_storage)? {
-                            Datum::Null => Datum::JsonNull,
-                            d => d,
-                        };
-                        packer.push(elem);
-                    }
-                    Ok(())
+#[sqlfunc(
+    CastArrayToJsonb,
+    sqlname = "arraytojsonb",
+    output_type_expr = "SqlScalarType::Jsonb.nullable(false)",
+    preserves_uniqueness = true,
+    introduces_nulls = false
+)]
+fn cast_array_to_jsonb<'a>(
+    &'a self,
+    a: Array<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    fn pack<'a>(
+        temp_storage: &RowArena,
+        elems: &mut impl Iterator<Item = Datum<'a>>,
+        dims: &[ArrayDimension],
+        cast_element: &MirScalarExpr,
+        packer: &mut RowPacker,
+    ) -> Result<(), EvalError> {
+        packer.push_list_with(|packer| match dims {
+            [] => Ok(()),
+            [dim] => {
+                for _ in 0..dim.length {
+                    let elem = elems.next().unwrap();
+                    let elem = match cast_element.eval(&[elem], temp_storage)? {
+                        Datum::Null => Datum::JsonNull,
+                        d => d,
+                    };
+                    packer.push(elem);
                 }
-                [dim, rest @ ..] => {
-                    for _ in 0..dim.length {
-                        pack(temp_storage, elems, rest, cast_element, packer)?;
-                    }
-                    Ok(())
+                Ok(())
+            }
+            [dim, rest @ ..] => {
+                for _ in 0..dim.length {
+                    pack(temp_storage, elems, rest, cast_element, packer)?;
                 }
-            })
-        }
-
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
-        }
-        let a = a.unwrap_array();
-        let elements = a.elements();
-        let dims = a.dims().into_iter().collect::<Vec<_>>();
-        let mut row = Row::default();
-        pack(
-            temp_storage,
-            &mut elements.into_iter(),
-            &dims,
-            &self.cast_element,
-            &mut row.packer(),
-        )?;
-        Ok(temp_storage.push_unary_row(row))
+                Ok(())
+            }
+        })
     }
 
-    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Jsonb.nullable(input_type.nullable)
-    }
-
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
-
-    fn introduces_nulls(&self) -> bool {
-        false
-    }
-
-    fn preserves_uniqueness(&self) -> bool {
-        true
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        // TODO? If we moved typeconv into `expr` we could determine the right
-        // inverse of this.
-        None
-    }
-
-    fn is_monotone(&self) -> bool {
-        false
-    }
-
-    fn is_eliminable_cast(&self) -> bool {
-        false
-    }
-}
-
-impl fmt::Display for CastArrayToJsonb {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("arraytojsonb")
-    }
+    let elements = a.elements();
+    let dims = a.dims().into_iter().collect::<Vec<_>>();
+    let mut row = Row::default();
+    pack(
+        temp_storage,
+        &mut elements.into_iter(),
+        &dims,
+        &self.cast_element,
+        &mut row.packer(),
+    )?;
+    Ok(temp_storage.push_unary_row(row))
 }
 
 /// Casts an array of one type to an array of another type. Does so by casting
@@ -234,61 +158,22 @@ pub struct CastArrayToArray {
     pub cast_expr: Box<MirScalarExpr>,
 }
 
-impl LazyUnaryFunc for CastArrayToArray {
-    fn eval<'a>(
-        &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
-        }
-
-        let arr = a.unwrap_array();
-        let dims = arr.dims().into_iter().collect::<Vec<ArrayDimension>>();
-
-        let casted_datums = arr
-            .elements()
-            .iter()
-            .map(|datum| self.cast_expr.eval(&[datum], temp_storage))
-            .collect::<Result<Vec<Datum<'a>>, EvalError>>()?;
-
-        Ok(temp_storage.try_make_datum(|packer| packer.try_push_array(&dims, casted_datums))?)
-    }
-
-    fn output_sql_type(&self, _input_type: SqlColumnType) -> SqlColumnType {
-        self.return_ty.clone().nullable(true)
-    }
-
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
-
-    fn introduces_nulls(&self) -> bool {
-        false
-    }
-
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-
-    fn is_monotone(&self) -> bool {
-        false
-    }
-
-    fn is_eliminable_cast(&self) -> bool {
-        false
-    }
-}
-
-impl fmt::Display for CastArrayToArray {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("arraytoarray")
-    }
+#[sqlfunc(
+    CastArrayToArray,
+    sqlname = "arraytoarray",
+    output_type_expr = "self.return_ty.clone().nullable(true)",
+    introduces_nulls = false
+)]
+fn cast_array_to_array<'a>(
+    &'a self,
+    a: Array<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let dims = a.dims().into_iter().collect::<Vec<ArrayDimension>>();
+    let casted_datums = a
+        .elements()
+        .iter()
+        .map(|datum| self.cast_expr.eval(&[datum], temp_storage))
+        .collect::<Result<Vec<Datum<'a>>, EvalError>>()?;
+    Ok(temp_storage.try_make_datum(|packer| packer.try_push_array(&dims, casted_datums))?)
 }

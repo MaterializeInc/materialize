@@ -105,7 +105,11 @@ impl EagerUnaryFunc for ExtractTime {
     type Input<'a> = NaiveTime;
     type Output<'a> = Result<Numeric, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(
+        &'a self,
+        a: Self::Input<'a>,
+        _temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
         date_part_time_inner(self.0, a)
     }
 
@@ -138,7 +142,11 @@ impl EagerUnaryFunc for DatePartTime {
     type Input<'a> = NaiveTime;
     type Output<'a> = Result<f64, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(
+        &'a self,
+        a: Self::Input<'a>,
+        _temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
         date_part_time_inner(self.0, a)
     }
 
@@ -184,7 +192,11 @@ impl EagerUnaryFunc for TimezoneTime {
     type Input<'a> = NaiveTime;
     type Output<'a> = NaiveTime;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(
+        &'a self,
+        a: Self::Input<'a>,
+        _temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
         timezone_time(self.tz, a, &self.wall_time)
     }
 
