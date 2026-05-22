@@ -28,7 +28,7 @@ performance.
 
 ### Materialize and window functions
 
-{{< idiomatic-sql/materialize-window-functions >}}
+{{% include-headless "/headless/materialize-window-functions" %}}
 
 {{</ callout >}}
 

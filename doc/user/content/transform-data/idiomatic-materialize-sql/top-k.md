@@ -22,7 +22,7 @@ elements within each group according to some ordering.
 
 ### Materialize and window functions
 
-{{< idiomatic-sql/materialize-window-functions >}}
+{{% include-headless "/headless/materialize-window-functions" %}}
 
 {{</ callout >}}
 

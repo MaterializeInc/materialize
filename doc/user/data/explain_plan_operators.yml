@@ -242,7 +242,7 @@ operators:
 
       1. `Distinct GroupAggregate` corresponds to the SQL `DISTINCT` operator.
 
-      2. `Accumulable GroupAggregate` (e.g., `SUM`, `COUNT`) corresponds to several easy to implement aggregations that can be executed simultaneously and efficiently.
+      2. `Accumulable GroupAggregate` (e.g., `SUM`, `COUNT`) corresponds to several easy to implement aggregations that can be executed efficiently.
 
       3. `Hierarchical GroupAggregate` (e.g., `MIN`, `MAX`) corresponds to an aggregation requiring a tower of arrangements. These can be either monotonic (more efficient) or bucketed. These may benefit from a hint; [see `mz_introspection.mz_expected_group_size_advice`](/reference/system-catalog/mz_introspection/#mz_expected_group_size_advice).
          These may either be bucketed or monotonic (more efficient).
