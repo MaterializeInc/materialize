@@ -38,6 +38,7 @@ CREATE SCHEMA public;
 
 DROP PUBLICATION IF EXISTS mz_source;
 CREATE PUBLICATION mz_source FOR ALL TABLES;
+DO $do$ BEGIN IF current_setting('server_version_num')::int >= 180000 THEN EXECUTE 'ALTER PUBLICATION mz_source SET (publish_generated_columns = ''stored'')'; END IF; END $do$;
 
 CREATE TABLE pk_table (pk INTEGER PRIMARY KEY, f2 TEXT);
 INSERT INTO pk_table VALUES (1, 'one');

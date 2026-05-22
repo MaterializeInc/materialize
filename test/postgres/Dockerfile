@@ -9,11 +9,12 @@
 
 MZFROM test-certs as certs
 
-FROM postgres:17.7
+FROM postgres:18.4
 
 ENV POSTGRES_PASSWORD=postgres
+ENV PGDATA=/var/lib/postgresql/data
 
-RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends postgresql-17-cron eatmydata \
+RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends postgresql-18-cron eatmydata \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
     && rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/* /var/cache/* /var/log/*

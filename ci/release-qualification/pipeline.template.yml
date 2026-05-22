@@ -279,20 +279,6 @@ steps:
   - group: "MySQL: other versions"
     key: mysql-versions
     steps:
-      - id: mysql-cdc-5_7
-        label: "MySQL CDC w/ 5.7"
-        depends_on: build-x86_64
-        timeout_in_minutes: 60
-        agents:
-          # no matching manifest of MySQL 5.7.x for linux/arm64/v8 in the manifest list entries
-          # Increased memory usage following new source syntax
-          queue: hetzner-x86-64-12cpu-24gb
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: mysql-cdc
-              args: [ "--mysql-version=5.7.44" ]
-        skip: "Fails when restarted"
-
       - id: mysql-cdc-8_0
         label: "MySQL CDC w/ 8.0"
         depends_on: build-aarch64
@@ -302,12 +288,143 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc
-              args: [ "--mysql-version=8.0.40" ]
-        skip: "Doesn't support new RESET BINARY LOGS AND GTIDS syntax"
+              args: [ "--mysql-version=8.0.42" ]
+
+      - id: mysql-cdc-8_1
+        label: "MySQL CDC w/ 8.1"
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: mysql-cdc
+              args: [ "--mysql-version=8.1.0" ]
+
+      - id: mysql-cdc-8_2
+        label: "MySQL CDC w/ 8.2"
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: mysql-cdc
+              args: [ "--mysql-version=8.2.0" ]
+
+      - id: mysql-cdc-8_3
+        label: "MySQL CDC w/ 8.3"
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: mysql-cdc
+              args: [ "--mysql-version=8.3.0" ]
+
+      - id: mysql-cdc-8_4
+        label: "MySQL CDC w/ 8.4"
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: mysql-cdc
+              args: [ "--mysql-version=8.4.9" ]
+
+      - id: mysql-cdc-9_0
+        label: "MySQL CDC w/ 9.0"
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: mysql-cdc
+              args: [ "--mysql-version=9.0.1" ]
+
+      - id: mysql-cdc-9_1
+        label: "MySQL CDC w/ 9.1"
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: mysql-cdc
+              args: [ "--mysql-version=9.1.0" ]
+
+      - id: mysql-cdc-9_2
+        label: "MySQL CDC w/ 9.2"
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: mysql-cdc
+              args: [ "--mysql-version=9.2.0" ]
+
+      - id: mysql-cdc-9_3
+        label: "MySQL CDC w/ 9.3"
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: mysql-cdc
+              args: [ "--mysql-version=9.3.0" ]
+
+      - id: mysql-cdc-9_4
+        label: "MySQL CDC w/ 9.4"
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: mysql-cdc
+              args: [ "--mysql-version=9.4.0" ]
+
+      - id: mysql-cdc-9_5
+        label: "MySQL CDC w/ 9.5"
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: mysql-cdc
+              args: [ "--mysql-version=9.5.0" ]
+
+      - id: mysql-cdc-9_6
+        label: "MySQL CDC w/ 9.6"
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: mysql-cdc
+              args: [ "--mysql-version=9.6.0" ]
 
   - group: "Postgres: other versions"
     key: postgres-versions
     steps:
+      - id: pg-cdc-17
+        label: "Postgres CDC w/ 17"
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        inputs: [test/pg-cdc]
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: pg-cdc
+              args: [ "--pg-version=17.10" ]
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
       - id: pg-cdc-16
         label: "Postgres CDC w/ 16"
         depends_on: build-aarch64
@@ -316,7 +433,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc
-              args: [ "--pg-version=16.6" ]
+              args: [ "--pg-version=16.14" ]
         agents:
           queue: hetzner-aarch64-4cpu-8gb
       - id: pg-cdc-15
@@ -327,7 +444,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc
-              args: [ "--pg-version=15.10" ]
+              args: [ "--pg-version=15.18" ]
         agents:
           queue: hetzner-aarch64-4cpu-8gb
       - id: pg-cdc-14
@@ -338,7 +455,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc
-              args: [ "--pg-version=14.15" ]
+              args: [ "--pg-version=14.23" ]
         agents:
           queue: hetzner-aarch64-4cpu-8gb
       - id: pg-cdc-13
