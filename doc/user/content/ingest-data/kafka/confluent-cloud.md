@@ -76,7 +76,7 @@ of the following steps:
 
     Otherwise, you can find more information about how to do that [here](https://docs.confluent.io/cloud/current/get-started/index.html#step-2-create-a-ak-topic).
 
-4. #### Create a source in Materialize
+4. #### Create a connection in Materialize
 
     a. Open the [Confluent Cloud dashboard](https://confluent.cloud/) and select your cluster.
 
@@ -87,39 +87,117 @@ of the following steps:
     d. Connect to Materialize using the [SQL Shell](/console/),
        or your preferred SQL client.
 
-    e. Run the following command. Replace `<confluent_cloud>` with whatever you
-    want to name your source. The broker URL is what you copied in step c of
-    this subsection. The `<topic-name>` is the name of the topic you created in
-    Step 4. The `<your-api-key>` and `<your-api-secret>` are from the _Create
-    an API Key_ step.
+    e. Create the connection. The exact steps depend on your networking
+    configuration, so start by selecting the relevant option.
+
+{{< tabs >}}
+{{< tab "Public">}}
+
+```mzsql
+CREATE SECRET confluent_username AS '<your-api-key>';
+CREATE SECRET confluent_password AS '<your-api-secret>';
+
+CREATE CONNECTION confluent_cloud TO KAFKA (
+    BROKER '<confluent-broker-url>',
+    SASL MECHANISMS = 'PLAIN',
+    SASL USERNAME = SECRET confluent_username,
+    SASL PASSWORD = SECRET confluent_password
+);
+```
+
+{{< /tab >}}
+
+{{< tab "PrivateLink">}}
+
+[AWS PrivateLink](https://aws.amazon.com/privatelink/) lets you connect
+Materialize to your Confluent Cloud cluster without exposing traffic to the
+public internet.
+
+1. In the [Confluent Cloud console](https://confluent.cloud/), navigate to
+your cluster's **Networking** settings and set up a PrivateLink endpoint.
+Record the **VPC Endpoint Service Name** and the **DNS domain**.
+
+1. In the Materialize [SQL shell](/console/), create a
+[PrivateLink connection](/ingest-data/network-security/privatelink/) using
+the service name from the previous step. Be sure to specify **all
+availability zones** of your Confluent Cloud cluster.
 
     ```mzsql
-      CREATE SECRET confluent_username AS '<your-api-key>';
-      CREATE SECRET confluent_password AS '<your-api-secret>';
+    CREATE CONNECTION confluent_privatelink TO AWS PRIVATELINK (
+        SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
+        AVAILABILITY ZONES ('use1-az1', 'use1-az4', 'use1-az6')
+    );
+    ```
 
-      CREATE CONNECTION <confluent_cloud> TO KAFKA (
-        BROKER '<confluent-broker-url>',
+1. Retrieve the AWS principal for the PrivateLink connection:
+
+    ```mzsql
+    SELECT principal
+    FROM mz_aws_privatelink_connections plc
+    JOIN mz_connections c ON plc.id = c.id
+    WHERE c.name = 'confluent_privatelink';
+    ```
+
+1. In the Confluent Cloud console, add the AWS principal to the PrivateLink
+access list.
+
+1. In Materialize, validate the PrivateLink connection:
+
+    ```mzsql
+    VALIDATE CONNECTION confluent_privatelink;
+    ```
+
+    If no validation error is returned, move to the next step.
+
+1. Create the Kafka connection. The static broker (used for bootstrapping)
+does not need an `AVAILABILITY ZONE` — Materialize will find it across
+availability zones. The `MATCHING` rules should specify `AVAILABILITY ZONE`
+to route discovered brokers through their specific AZ endpoint. The
+availability zones in the `MATCHING` rules must match the AZs where Confluent
+has deployed brokers. For best results, deploy brokers across 3 AZs and
+select those same AZs during the Confluent PrivateLink ingress setup.
+
+    ```mzsql
+    CREATE SECRET confluent_username AS '<your-api-key>';
+    CREATE SECRET confluent_password AS '<your-api-secret>';
+
+    CREATE CONNECTION confluent_cloud TO KAFKA (
+        BROKERS (
+            '<confluent-broker-url>' USING AWS PRIVATELINK confluent_privatelink,
+            MATCHING '*.use1-az1.*' USING AWS PRIVATELINK confluent_privatelink (AVAILABILITY ZONE = 'use1-az1'),
+            MATCHING '*.use1-az4.*' USING AWS PRIVATELINK confluent_privatelink (AVAILABILITY ZONE = 'use1-az4'),
+            MATCHING '*.use1-az6.*' USING AWS PRIVATELINK confluent_privatelink (AVAILABILITY ZONE = 'use1-az6')
+        ),
         SASL MECHANISMS = 'PLAIN',
         SASL USERNAME = SECRET confluent_username,
         SASL PASSWORD = SECRET confluent_password
-      );
+    );
+    ```
 
-      CREATE SOURCE <source-name>
+    The `MATCHING` patterns correspond to the AZ-specific DNS subdomains
+    from your Confluent Cloud networking settings. Adjust the patterns and
+    availability zones to match your cluster's configuration.
+
+{{< /tab >}}
+{{< /tabs >}}
+
+5. #### Start ingesting data
+
+    Once you have created the connection, create a source and start ingesting
+    data from your topic. By default, the source will be created in the active
+    cluster; to use a different cluster, use the `IN CLUSTER` clause.
+
+    ```mzsql
+    CREATE SOURCE confluent_source
         FROM KAFKA CONNECTION confluent_cloud (TOPIC '<topic-name>')
         FORMAT JSON;
     ```
-    By default, the source will be created in the active cluster; to use a different
-    cluster, use the `IN CLUSTER` clause.
 
-    f. If the command executes without an error and outputs _CREATE SOURCE_, it
+    If the command executes without an error and outputs _CREATE SOURCE_, it
     means that you have successfully connected Materialize to your Confluent
     Cloud Kafka cluster.
 
-    **Note:** The example above walked through creating a source, which is a way
-    of connecting Materialize to an external data source. We created a
-    connection to Confluent Cloud Kafka using SASL authentication and credentials
-    securely stored as secrets in Materialize's secret management system. For
-    input formats, we used `JSON`, but you can also ingest Kafka messages
+    **Note:** The example above used `JSON`, but you can also ingest Kafka messages
     formatted in other supported formats; e.g., [Avro and CSV](/sql/create-source/kafka/#syntax).
     You can find more details about the various different supported formats and
     possible configurations in the [reference documentation](/sql/create-source/kafka/).
