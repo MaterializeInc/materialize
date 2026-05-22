@@ -886,7 +886,8 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         AvailableCollections::new_raw(),
                         &keys,
                         arity,
-                        input_future,
+                        // `new_raw` means no arrangement, so no bucketing is needed
+                        false,
                     )
                 } else {
                     input
@@ -919,7 +920,8 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         AvailableCollections::new_raw(),
                         &keys,
                         arity,
-                        input_future,
+                        // `new_raw` means no arrangement, so no bucketing is needed
+                        false,
                     )
                 } else {
                     input
@@ -986,7 +988,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         |LoweredExpr {
                              plan,
                              keys,
-                             has_future_updates: future,
+                             has_future_updates: _,
                          }| {
                             // We don't have an MFP here -- install an operator to permute the
                             // input, if necessary.
@@ -996,7 +998,8 @@ This is not expected to cause incorrect results, but could indicate a performanc
                                     AvailableCollections::new_raw(),
                                     &keys,
                                     arity,
-                                    future,
+                                    // `new_raw` means no arrangement, so no bucketing is needed
+                                    false,
                                 )
                             } else {
                                 plan
