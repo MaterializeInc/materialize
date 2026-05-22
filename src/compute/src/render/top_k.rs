@@ -24,6 +24,7 @@ use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::implementations::merge_batcher::container::InternalMerge;
 use differential_dataflow::trace::{Builder, Trace};
 use differential_dataflow::{Data, VecCollection};
+use mz_compute_types::plan::ArrangementStrategy;
 use mz_compute_types::plan::top_k::{
     BasicTopKPlan, MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan,
 };
@@ -50,13 +51,33 @@ use crate::row_spine::{
 use crate::typedefs::{KeyBatcher, MzTimestamp, RowRowSpine, RowSpine};
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
-impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
+impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTime>
+    Context<'scope, T>
+{
     pub(crate) fn render_topk(
         &self,
         input: CollectionBundle<'scope, T>,
         top_k_plan: TopKPlan,
+        temporal_bucketing_strategy: ArrangementStrategy,
     ) -> CollectionBundle<'scope, T> {
         let (ok_input, err_input) = input.as_specific_collection(None, &self.config_set);
+
+        // Bucket the per-row input stream when lowering chose `TemporalBucketing`.
+        // `TopK` builds its own arrangement(s) inside the variants below, bypassing
+        // `ensure_collections`, so the strategy is plumbed through `PlanNode::TopK`
+        // rather than inferred at the arrangement site. `apply_bucketing_strategy`
+        // is a no-op for `Direct`.
+        //
+        // Note: for `MonotonicTop1Plan` with `must_consolidate: false`, bucketing
+        // adds a small operator overhead with no corresponding consolidation
+        // benefit. We accept this for now; a future refinement could gate the
+        // bucket op on a `has_batcher_downstream()` check.
+        let (ok_input, _bucketed) = crate::render::context::apply_bucketing_strategy(
+            ok_input,
+            temporal_bucketing_strategy,
+            self.as_of_frontier.clone(),
+            &self.config_set,
+        );
 
         // We create a new region to compartmentalize the topk logic.
         let outer_scope = ok_input.scope();

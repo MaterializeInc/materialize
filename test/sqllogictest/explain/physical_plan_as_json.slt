@@ -577,7 +577,8 @@ SELECT * FROM ov
                 "arity": 2,
                 "must_consolidate": true
               }
-            }
+            },
+            "temporal_bucketing_strategy": "Direct"
           }
         }
       }
@@ -699,7 +700,11 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                             }
                           }
                         ],
-                        "consolidate_output": true
+                        "consolidate_output": true,
+                        "temporal_bucketing_strategies": [
+                          "Direct",
+                          "Direct"
+                        ]
                       }
                     }
                   },
@@ -885,7 +890,8 @@ SELECT * FROM ov
                 "arity": 2,
                 "must_consolidate": true
               }
-            }
+            },
+            "temporal_bucketing_strategy": "Direct"
           }
         }
       }
@@ -1013,7 +1019,11 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                   }
                                 }
                               ],
-                              "consolidate_output": true
+                              "consolidate_output": true,
+                              "temporal_bucketing_strategies": [
+                                "Direct",
+                                "Direct"
+                              ]
                             }
                           }
                         },
@@ -1235,7 +1245,11 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                       }
                     }
                   ],
-                  "consolidate_output": false
+                  "consolidate_output": false,
+                  "temporal_bucketing_strategies": [
+                    "Direct",
+                    "Direct"
+                  ]
                 }
               }
             }
@@ -1475,7 +1489,11 @@ SELECT x * 5 FROM cte WHERE x = 5
                                   }
                                 }
                               ],
-                              "consolidate_output": true
+                              "consolidate_output": true,
+                              "temporal_bucketing_strategies": [
+                                "Direct",
+                                "Direct"
+                              ]
                             }
                           }
                         },
@@ -2278,7 +2296,11 @@ FROM t
                                     }
                                   }
                                 ],
-                                "consolidate_output": true
+                                "consolidate_output": true,
+                                "temporal_bucketing_strategies": [
+                                  "Direct",
+                                  "Direct"
+                                ]
                               }
                             }
                           },
@@ -2327,7 +2349,11 @@ FROM t
                       }
                     }
                   ],
-                  "consolidate_output": false
+                  "consolidate_output": false,
+                  "temporal_bucketing_strategies": [
+                    "Direct",
+                    "Direct"
+                  ]
                 }
               }
             }
@@ -2704,7 +2730,11 @@ MATERIALIZED VIEW hierarchical_global_mv
                                     }
                                   }
                                 ],
-                                "consolidate_output": true
+                                "consolidate_output": true,
+                                "temporal_bucketing_strategies": [
+                                  "Direct",
+                                  "Direct"
+                                ]
                               }
                             }
                           },
@@ -2753,7 +2783,11 @@ MATERIALIZED VIEW hierarchical_global_mv
                       }
                     }
                   ],
-                  "consolidate_output": false
+                  "consolidate_output": false,
+                  "temporal_bucketing_strategies": [
+                    "Direct",
+                    "Direct"
+                  ]
                 }
               }
             }
@@ -3012,7 +3046,11 @@ SELECT * FROM hierarchical_global
                                     }
                                   }
                                 ],
-                                "consolidate_output": true
+                                "consolidate_output": true,
+                                "temporal_bucketing_strategies": [
+                                  "Direct",
+                                  "Direct"
+                                ]
                               }
                             }
                           },
@@ -3061,7 +3099,11 @@ SELECT * FROM hierarchical_global
                       }
                     }
                   ],
-                  "consolidate_output": false
+                  "consolidate_output": false,
+                  "temporal_bucketing_strategies": [
+                    "Direct",
+                    "Direct"
+                  ]
                 }
               }
             }
@@ -4332,7 +4374,11 @@ FROM t
                                           }
                                         }
                                       ],
-                                      "consolidate_output": true
+                                      "consolidate_output": true,
+                                      "temporal_bucketing_strategies": [
+                                        "Direct",
+                                        "Direct"
+                                      ]
                                     }
                                   }
                                 },
@@ -4381,7 +4427,11 @@ FROM t
                             }
                           }
                         ],
-                        "consolidate_output": false
+                        "consolidate_output": false,
+                        "temporal_bucketing_strategies": [
+                          "Direct",
+                          "Direct"
+                        ]
                       }
                     }
                   }
@@ -8470,7 +8520,11 @@ MATERIALIZED VIEW collated_global_mv
                                           }
                                         }
                                       ],
-                                      "consolidate_output": true
+                                      "consolidate_output": true,
+                                      "temporal_bucketing_strategies": [
+                                        "Direct",
+                                        "Direct"
+                                      ]
                                     }
                                   }
                                 },
@@ -8583,7 +8637,11 @@ MATERIALIZED VIEW collated_global_mv
                             }
                           }
                         ],
-                        "consolidate_output": false
+                        "consolidate_output": false,
+                        "temporal_bucketing_strategies": [
+                          "Direct",
+                          "Direct"
+                        ]
                       }
                     }
                   }
@@ -9822,7 +9880,11 @@ SELECT * FROM collated_global
                                           }
                                         }
                                       ],
-                                      "consolidate_output": true
+                                      "consolidate_output": true,
+                                      "temporal_bucketing_strategies": [
+                                        "Direct",
+                                        "Direct"
+                                      ]
                                     }
                                   }
                                 },
@@ -9935,7 +9997,11 @@ SELECT * FROM collated_global
                             }
                           }
                         ],
-                        "consolidate_output": false
+                        "consolidate_output": false,
+                        "temporal_bucketing_strategies": [
+                          "Direct",
+                          "Direct"
+                        ]
                       }
                     }
                   }

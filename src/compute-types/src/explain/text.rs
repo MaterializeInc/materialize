@@ -399,7 +399,11 @@ impl Plan {
 
                 ctx.indent.reset();
             }
-            TopK { input, top_k_plan } => {
+            TopK {
+                input,
+                top_k_plan,
+                temporal_bucketing_strategy: _,
+            } => {
                 use crate::plan::top_k::TopKPlan;
                 match top_k_plan {
                     TopKPlan::MonotonicTop1(plan) => {
@@ -494,6 +498,7 @@ impl Plan {
             Union {
                 inputs,
                 consolidate_output,
+                temporal_bucketing_strategies: _,
             } => {
                 write!(f, "{}→", ctx.indent)?;
                 if *consolidate_output {
@@ -823,7 +828,11 @@ impl Plan {
                     input.fmt_text(f, ctx)
                 })?;
             }
-            TopK { input, top_k_plan } => {
+            TopK {
+                input,
+                top_k_plan,
+                temporal_bucketing_strategy,
+            } => {
                 use crate::plan::top_k::TopKPlan;
                 match top_k_plan {
                     TopKPlan::MonotonicTop1(plan) => {
@@ -884,7 +893,16 @@ impl Plan {
                     }
                 }
                 writeln!(f, "{}", annotations)?;
-                ctx.indented(|ctx| input.fmt_text(f, ctx))?;
+                ctx.indented(|ctx| {
+                    if !matches!(temporal_bucketing_strategy, ArrangementStrategy::Direct) {
+                        writeln!(
+                            f,
+                            "{}temporal_bucketing_strategy={}",
+                            ctx.indent, temporal_bucketing_strategy
+                        )?;
+                    }
+                    input.fmt_text(f, ctx)
+                })?;
             }
             Negate { input } => {
                 writeln!(f, "{}Negate{}", ctx.indent, annotations)?;
@@ -909,6 +927,7 @@ impl Plan {
             Union {
                 inputs,
                 consolidate_output,
+                temporal_bucketing_strategies,
             } => {
                 if *consolidate_output {
                     writeln!(
@@ -920,6 +939,21 @@ impl Plan {
                     writeln!(f, "{}Union{}", ctx.indent, annotations)?;
                 }
                 ctx.indented(|ctx| {
+                    if temporal_bucketing_strategies
+                        .iter()
+                        .any(|s| !matches!(s, ArrangementStrategy::Direct))
+                    {
+                        let strategies = temporal_bucketing_strategies
+                            .iter()
+                            .map(|s| format!("{}", s))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        writeln!(
+                            f,
+                            "{}temporal_bucketing_strategies=[{}]",
+                            ctx.indent, strategies
+                        )?;
+                    }
                     for input in inputs.iter() {
                         input.fmt_text(f, ctx)?;
                     }

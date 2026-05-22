@@ -342,6 +342,14 @@ pub enum PlanNode {
         /// on the properties of the reduction, and the input itself. Please check
         /// out the documentation for this type for more detail.
         top_k_plan: TopKPlan,
+        /// Strategy for bucketing the input collection ahead of the Top-K operator.
+        ///
+        /// Set by the lowering from the input's `has_future_updates` flag. The
+        /// renderer applies it to the per-row input stream at the top of
+        /// `render_topk`, covering all three `TopKPlan` arms uniformly. See
+        /// `PlanNode::Reduce::temporal_bucketing_strategy` for the underlying
+        /// convention.
+        temporal_bucketing_strategy: ArrangementStrategy,
     },
     /// Inverts the sign of each update.
     Negate {
@@ -373,6 +381,15 @@ pub enum PlanNode {
         inputs: Vec<Plan>,
         /// Whether to consolidate the output, e.g., cancel negated records.
         consolidate_output: bool,
+        /// Per-input bucketing strategies. Lockstep with `inputs`: index `i` is the
+        /// strategy applied to `inputs[i]` before concatenation.
+        ///
+        /// Set by the lowering from each input's `has_future_updates` flag. Only
+        /// consolidating Unions (`consolidate_output: true`) carry non-`Direct`
+        /// entries, because bucketing only pays off ahead of a consolidating
+        /// downstream operator. See `PlanNode::Reduce::temporal_bucketing_strategy`
+        /// for the underlying convention.
+        temporal_bucketing_strategies: Vec<ArrangementStrategy>,
     },
     /// The `input` plan, but with additional arrangements.
     ///
@@ -536,9 +553,14 @@ impl Plan {
         // Subsequently, we perform plan refinements for the dataflow.
         Self::refine_source_mfps(&mut dataflow);
 
-        if features.enable_consolidate_after_union_negate {
-            Self::refine_union_negate_consolidation(&mut dataflow);
-        }
+        // Note: `consolidate_output` for `Union` and per-input
+        // `temporal_bucketing_strategies` are decided at lowering time (see the
+        // `Union` arm of `lower_mir_expr_stack_safe`). The pre-existing
+        // `refine_union_negate_consolidation` pass — which used to flip
+        // `consolidate_output` to `true` for Unions with a `Negate` child — has
+        // been folded into the lowering, since lowering is the only point where
+        // the bucketing decision (which depends on `has_future_updates`) is
+        // available.
 
         if dataflow.is_single_time() {
             Self::refine_single_time_operator_selection(&mut dataflow);
@@ -657,38 +679,6 @@ impl Plan {
         mz_repr::explain::trace_plan(dataflow);
     }
 
-    /// Changes the `consolidate_output` flag of such Unions that have at least one Negated input.
-    #[mz_ore::instrument(
-        target = "optimizer",
-        level = "debug",
-        fields(path.segment = "refine_union_negate_consolidation")
-    )]
-    fn refine_union_negate_consolidation(dataflow: &mut DataflowDescription<Self>) {
-        for build_desc in dataflow.objects_to_build.iter_mut() {
-            let mut todo = vec![&mut build_desc.plan];
-            while let Some(expression) = todo.pop() {
-                let node = &mut expression.node;
-                match node {
-                    PlanNode::Union {
-                        inputs,
-                        consolidate_output,
-                        ..
-                    } => {
-                        if inputs
-                            .iter()
-                            .any(|input| matches!(input.node, PlanNode::Negate { .. }))
-                        {
-                            *consolidate_output = true;
-                        }
-                    }
-                    _ => {}
-                }
-                todo.extend(node.children_mut());
-            }
-        }
-        mz_repr::explain::trace_plan(dataflow);
-    }
-
     /// Refines the plans of objects to be built as part of `dataflow` to take advantage
     /// of monotonic operators if the dataflow refers to a single-time, i.e., is for a
     /// one-shot SELECT query.
@@ -798,6 +788,7 @@ impl CollectionPlan for PlanNode {
             | PlanNode::Union {
                 inputs,
                 consolidate_output: _,
+                temporal_bucketing_strategies: _,
             } => {
                 for input in inputs {
                     input.depends_on_into(out);
@@ -833,6 +824,7 @@ impl CollectionPlan for PlanNode {
             | PlanNode::TopK {
                 input,
                 top_k_plan: _,
+                temporal_bucketing_strategy: _,
             }
             | PlanNode::Negate { input }
             | PlanNode::Threshold {

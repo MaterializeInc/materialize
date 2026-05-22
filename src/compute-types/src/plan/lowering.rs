@@ -67,6 +67,10 @@ pub(super) struct Context {
     debug_info: LirDebugInfo,
     /// Whether to enable fusion of MFPs in reductions.
     enable_reduce_mfp_fusion: bool,
+    /// Whether `Union`s with at least one `Negate` input should set
+    /// `consolidate_output = true`. Folded in from the deleted
+    /// `refine_union_negate_consolidation` LIR pass.
+    enable_consolidate_after_union_negate: bool,
 }
 
 impl Context {
@@ -80,6 +84,7 @@ impl Context {
                 id: GlobalId::Transient(0),
             },
             enable_reduce_mfp_fusion: features.enable_reduce_mfp_fusion,
+            enable_consolidate_after_union_negate: features.enable_consolidate_after_union_negate,
         }
     }
 
@@ -893,15 +898,27 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     input
                 };
                 // Return the plan, and no arrangements.
+                //
+                // `TopK` itself buckets (via `apply_bucketing_strategy` at the
+                // top of `render_topk`) when the strategy says so, so the
+                // output flag is cleared whenever bucketing actually fires.
+                //
+                // Bucketing absorption: see `strategy_from_future`.
+                let temporal_bucketing_strategy = strategy_from_future(input_future);
+                let has_future_updates = match temporal_bucketing_strategy {
+                    ArrangementStrategy::TemporalBucketing => false,
+                    ArrangementStrategy::Direct => input_future,
+                };
                 let lir_id = self.allocate_lir_id();
                 LoweredExpr {
                     plan: PlanNode::TopK {
                         input: Box::new(input),
                         top_k_plan,
+                        temporal_bucketing_strategy,
                     }
                     .as_plan(lir_id),
                     keys: AvailableCollections::new_raw(),
-                    has_future_updates: input_future,
+                    has_future_updates,
                 }
             }
             MirRelationExpr::Negate { input } => {
@@ -945,11 +962,17 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 } = self.lower_mir_expr(input)?;
                 let arity = input.arity();
                 let (threshold_plan, required_arrangement) = ThresholdPlan::create_from(arity);
-                let plan = if !keys
+                // If the conditional `arrange_by` wrap fires, the synthesized
+                // `ArrangeBy` builds a real arrangement (`new_arranged`) and so
+                // its `apply_bucketing_strategy` call at render time will
+                // actually bucket. If the wrap is skipped, the input already
+                // had a suitable arrangement and an upstream operator was
+                // responsible for bucketing.
+                let wrap_fires = !keys
                     .arranged
                     .iter()
-                    .any(|(key, _, _)| key == &required_arrangement.0)
-                {
+                    .any(|(key, _, _)| key == &required_arrangement.0);
+                let plan = if wrap_fires {
                     self.arrange_by(
                         plan,
                         AvailableCollections::new_arranged(vec![required_arrangement]),
@@ -959,6 +982,18 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     )
                 } else {
                     plan
+                };
+
+                // Clear the future flag whenever the wrap actually bucketed
+                // the future-stamped updates.
+                let has_future_updates = if wrap_fires
+                    && matches!(
+                        strategy_from_future(input_future),
+                        ArrangementStrategy::TemporalBucketing
+                    ) {
+                    false
+                } else {
+                    input_future
                 };
 
                 let output_keys = threshold_plan.keys();
@@ -971,7 +1006,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     }
                     .as_plan(lir_id),
                     keys: output_keys,
-                    has_future_updates: input_future,
+                    has_future_updates,
                 }
             }
             MirRelationExpr::Union { base, inputs } => {
@@ -981,7 +1016,49 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 for input in inputs.iter() {
                     lowered_inputs.push(self.lower_mir_expr(input)?);
                 }
-                let any_future = lowered_inputs.iter().any(|l| l.has_future_updates);
+
+                // Fold the deleted `refine_union_negate_consolidation` pass in
+                // here: a Union with any `Negate` input should consolidate its
+                // output. The lowering is the only place where this decision
+                // can be coupled with the per-input bucketing strategy.
+                let has_negate_input = lowered_inputs
+                    .iter()
+                    .any(|l| matches!(l.plan.node, PlanNode::Negate { .. }));
+                let consolidate_output =
+                    self.enable_consolidate_after_union_negate && has_negate_input;
+
+                // Per-input bucketing strategies: only meaningful when the
+                // Union consolidates its output, since bucketing only pays off
+                // ahead of a downstream consolidator.
+                let temporal_bucketing_strategies: Vec<ArrangementStrategy> = if consolidate_output
+                {
+                    lowered_inputs
+                        .iter()
+                        .map(|l| strategy_from_future(l.has_future_updates))
+                        .collect()
+                } else {
+                    lowered_inputs
+                        .iter()
+                        .map(|_| ArrangementStrategy::Direct)
+                        .collect()
+                };
+
+                // If the Union itself buckets each input (consolidating Union
+                // with `TemporalBucketing` strategies), the future-stamped
+                // updates are absorbed here and we should clear the outer
+                // flag for those legs. Otherwise, propagate `any_future`.
+                let has_future_updates = if consolidate_output {
+                    lowered_inputs
+                        .iter()
+                        .zip_eq(temporal_bucketing_strategies.iter())
+                        .any(|(l, s)| {
+                            l.has_future_updates
+                                && !matches!(s, ArrangementStrategy::TemporalBucketing)
+                        })
+                } else {
+                    lowered_inputs.iter().any(|l| l.has_future_updates)
+                };
+
                 let plans = lowered_inputs
                     .into_iter()
                     .map(
@@ -1012,11 +1089,12 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 LoweredExpr {
                     plan: PlanNode::Union {
                         inputs: plans,
-                        consolidate_output: false,
+                        consolidate_output,
+                        temporal_bucketing_strategies,
                     }
                     .as_plan(lir_id),
                     keys: AvailableCollections::new_raw(),
-                    has_future_updates: any_future,
+                    has_future_updates,
                 }
             }
             MirRelationExpr::ArrangeBy { input, keys } => {

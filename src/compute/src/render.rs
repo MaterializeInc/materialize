@@ -118,6 +118,7 @@ use differential_dataflow::trace::{BatchReader, TraceReader};
 use differential_dataflow::{AsCollection, Data, VecCollection};
 use futures::FutureExt;
 use futures::channel::oneshot;
+use itertools::Itertools;
 use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
 use mz_compute_types::dyncfgs::{
     COMPUTE_APPLY_COLUMN_DEMANDS, COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK,
@@ -1277,9 +1278,13 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                     temporal_bucketing_strategy,
                 )
             }
-            TopK { input, top_k_plan } => {
+            TopK {
+                input,
+                top_k_plan,
+                temporal_bucketing_strategy,
+            } => {
                 let input = expect_input(input);
-                self.render_topk(input, top_k_plan)
+                self.render_topk(input, top_k_plan, temporal_bucketing_strategy)
             }
             Negate { input } => {
                 let input = expect_input(input);
@@ -1296,12 +1301,22 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
             Union {
                 inputs,
                 consolidate_output,
+                temporal_bucketing_strategies,
             } => {
                 let mut oks = Vec::new();
                 let mut errs = Vec::new();
-                for input in inputs.into_iter() {
+                for (input, strategy) in inputs.into_iter().zip_eq(temporal_bucketing_strategies) {
                     let (os, es) =
                         expect_input(input).as_specific_collection(None, &self.config_set);
+                    // Apply per-input temporal bucketing. No-op for `Direct`.
+                    // Only consolidating Unions carry non-`Direct` strategies;
+                    // see the `Union` arm of `lower_mir_expr_stack_safe`.
+                    let (os, _bucketed) = context::apply_bucketing_strategy(
+                        os,
+                        strategy,
+                        self.as_of_frontier.clone(),
+                        &self.config_set,
+                    );
                     oks.push(os);
                     errs.push(es);
                 }
