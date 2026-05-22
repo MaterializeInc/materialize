@@ -17,6 +17,33 @@ LOCATION = MZ_ROOT / "test" / "workload-replay" / "captured-workloads"
 WORKLOAD_REPLAY_VERSION = "1.0.0"  # Used for uploading test analytics results
 SEED_RANGE = 1_000_000
 
+# Captured production workloads can have far more objects than the default
+# per-region limits; raise them all generously so replay isn't rejected by the
+# planner's resource caps.
+additional_system_parameter_defaults = {
+    "enable_rbac_checks": "false",
+    "webhook_concurrent_request_limit": "5000",
+    "max_aws_privatelink_connections": "1000000",
+    "max_clusters": "1000000",
+    "max_credit_consumption_rate": "1000000",
+    "max_databases": "1000000",
+    "max_kafka_connections": "1000000",
+    "max_materialized_views": "1000000",
+    "max_mysql_connections": "1000000",
+    "max_network_policies": "1000000",
+    "max_objects_per_schema": "1000000",
+    "max_postgres_connections": "1000000",
+    "max_replicas_per_cluster": "1000000",
+    "max_roles": "1000000",
+    "max_rules_per_network_policy": "1000000",
+    "max_schemas_per_database": "1000000",
+    "max_secrets": "1000000",
+    "max_sinks": "1000000",
+    "max_sources": "1000000",
+    "max_sql_server_connections": "1000000",
+    "max_tables": "1000000",
+}
+
 cluster_replica_sizes = {
     "bootstrap": {
         "cpu_exclusive": False,
@@ -410,4 +437,186 @@ cluster_replica_sizes = {
         "scale": 4,
         "workers": 1,
     },
+    # Source ingestion cluster replica sizes (name pattern:
+    # source_ingestion_<size>_<cpu>_<memory_GB>)
+    "source_ingestion_xxxsmall_0.5_1": {
+        "cpu_exclusive": False,
+        "cpu_limit": 0.5,
+        "credits_per_hour": "0.25",
+        "disk_limit": "6790MiB",
+        "memory_limit": "970MiB",
+        "scale": 1,
+        "workers": 1,
+    },
+    "source_ingestion_xxsmall_1_2": {
+        "cpu_exclusive": True,
+        "cpu_limit": 1,
+        "credits_per_hour": "0.5",
+        "disk_limit": "13580MiB",
+        "memory_limit": "1940MiB",
+        "scale": 1,
+        "workers": 1,
+    },
+    "source_ingestion_xsmall_2_4": {
+        "cpu_exclusive": True,
+        "cpu_limit": 2,
+        "credits_per_hour": "1",
+        "disk_limit": "27160MiB",
+        "memory_limit": "3881MiB",
+        "scale": 1,
+        "workers": 2,
+    },
+    "source_ingestion_small_4_8": {
+        "cpu_exclusive": True,
+        "cpu_limit": 4,
+        "credits_per_hour": "2",
+        "disk_limit": "54272MiB",
+        "memory_limit": "7762MiB",
+        "scale": 1,
+        "workers": 4,
+    },
+    "source_ingestion_medium_8_16": {
+        "cpu_exclusive": True,
+        "cpu_limit": 8,
+        "credits_per_hour": "4",
+        "disk_limit": "108544MiB",
+        "memory_limit": "15525MiB",
+        "scale": 1,
+        "workers": 8,
+    },
+    # Balanced cluster replica sizes (name pattern:
+    # balanced_<size>_<cpu>_<memory_GB>)
+    "balanced_xxsmall_1_7": {
+        "cpu_exclusive": True,
+        "cpu_limit": 1,
+        "credits_per_hour": "1",
+        "disk_limit": "47530MiB",
+        "memory_limit": "6790MiB",
+        "scale": 1,
+        "workers": 1,
+    },
+    "balanced_xsmall_2_13": {
+        "cpu_exclusive": True,
+        "cpu_limit": 2,
+        "credits_per_hour": "2",
+        "disk_limit": "88270MiB",
+        "memory_limit": "12610MiB",
+        "scale": 1,
+        "workers": 2,
+    },
+    "balanced_small_4_26": {
+        "cpu_exclusive": True,
+        "cpu_limit": 4,
+        "credits_per_hour": "4",
+        "disk_limit": "176540MiB",
+        "memory_limit": "25220MiB",
+        "scale": 1,
+        "workers": 4,
+    },
+    "balanced_medium_7_45": {
+        "cpu_exclusive": True,
+        "cpu_limit": 7,
+        "credits_per_hour": "7",
+        "disk_limit": "305550MiB",
+        "memory_limit": "43650MiB",
+        "scale": 1,
+        "workers": 7,
+    },
+    "balanced_large_14_90": {
+        "cpu_exclusive": True,
+        "cpu_limit": 14,
+        "credits_per_hour": "14",
+        "disk_limit": "611100MiB",
+        "memory_limit": "87300MiB",
+        "scale": 1,
+        "workers": 14,
+    },
+    "balanced_xlarge_21_135": {
+        "cpu_exclusive": True,
+        "cpu_limit": 21,
+        "credits_per_hour": "21",
+        "disk_limit": "916650MiB",
+        "memory_limit": "130950MiB",
+        "scale": 1,
+        "workers": 21,
+    },
+    "balanced_xxlarge_28_180": {
+        "cpu_exclusive": True,
+        "cpu_limit": 28,
+        "credits_per_hour": "28",
+        "disk_limit": "1222200MiB",
+        "memory_limit": "174600MiB",
+        "scale": 1,
+        "workers": 28,
+    },
+    "balanced_xxxlarge_36_232": {
+        "cpu_exclusive": True,
+        "cpu_limit": 36,
+        "credits_per_hour": "36",
+        "disk_limit": "1575280MiB",
+        "memory_limit": "225040MiB",
+        "scale": 1,
+        "workers": 36,
+    },
+    "balanced_xxxxlarge_48_310": {
+        "cpu_exclusive": True,
+        "cpu_limit": 48,
+        "credits_per_hour": "48",
+        "disk_limit": "2104900MiB",
+        "memory_limit": "300700MiB",
+        "scale": 1,
+        "workers": 48,
+    },
+    "balanced_xxxxxlarge_64_412": {
+        "cpu_exclusive": True,
+        "cpu_limit": 62,
+        "credits_per_hour": "64",
+        "disk_limit": "2797480MiB",
+        "memory_limit": "399640MiB",
+        "scale": 1,
+        "workers": 62,
+    },
+    # High CPU cluster replica sizes (name pattern:
+    # highcpu_<size>_<cpu>_<memory_GB>)
+    "highcpu_small_4_8": {
+        "cpu_exclusive": True,
+        "cpu_limit": 4,
+        "credits_per_hour": "4",
+        "disk_limit": "54272MiB",
+        "memory_limit": "7762MiB",
+        "scale": 1,
+        "workers": 4,
+    },
+    "highcpu_large_14_28": {
+        "cpu_exclusive": True,
+        "cpu_limit": 14,
+        "credits_per_hour": "14",
+        "disk_limit": "190120MiB",
+        "memory_limit": "27160MiB",
+        "scale": 1,
+        "workers": 14,
+    },
 }
+
+
+def _clamp_cluster_replica_sizes(
+    sizes: dict[str, dict],
+    max_workers: int = 2,
+    max_cpu: float = 2.0,
+    memory_limit: str = "4096MiB",
+    disk_limit: str = "20480MiB",
+) -> dict[str, dict]:
+    clamped: dict[str, dict] = {}
+    for name, spec in sizes.items():
+        new_spec = dict(spec)
+        new_spec["workers"] = min(new_spec["workers"], max_workers)
+        new_spec["cpu_limit"] = min(new_spec["cpu_limit"], max_cpu)
+        new_spec["cpu_exclusive"] = False
+        new_spec["memory_limit"] = memory_limit
+        new_spec["disk_limit"] = disk_limit
+        new_spec["scale"] = 1
+        clamped[name] = new_spec
+    return clamped
+
+
+cluster_replica_sizes = _clamp_cluster_replica_sizes(cluster_replica_sizes)

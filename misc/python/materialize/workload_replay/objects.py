@@ -233,12 +233,12 @@ def run_create_objects_part_1(
             for name, connection in items["connections"].items():
                 if connection["type"] == "postgres":
                     match = re.search(
-                        r"DATABASE\s*=\s*('?)([a-zA-Z_][a-zA-Z0-9_]*|\w+)\1(?=\s*[,\)])",
+                        r"DATABASE\s*=\s*(?:'([^']+)'|([a-zA-Z_][a-zA-Z0-9_]*))(?=\s*[,\)])",
                         connection["create_sql"],
                         re.IGNORECASE,
                     )
                     assert match, f"No database found in {connection['create_sql']}"
-                    ref_database = match.group(2)
+                    ref_database = match.group(1) or match.group(2)
                     if ref_database not in existing_dbs["postgres"]:
                         if pg_conn is None:
                             pg_conn = psycopg.connect(
@@ -280,12 +280,12 @@ def run_create_objects_part_1(
                     )
                 elif connection["type"] == "sql-server":
                     match = re.search(
-                        r"DATABASE\s*=\s*('?)([a-zA-Z_][a-zA-Z0-9_]*|\w+)\1(?=\s*[,\)])",
+                        r"DATABASE\s*=\s*(?:'([^']+)'|([a-zA-Z_][a-zA-Z0-9_]*))(?=\s*[,\)])",
                         connection["create_sql"],
                         re.IGNORECASE,
                     )
                     assert match, f"No database found in {connection['create_sql']}"
-                    ref_database = match.group(2)
+                    ref_database = match.group(1) or match.group(2)
                     if ref_database not in existing_dbs["sql-server"]:
                         c.testdrive(dedent(f"""
                                 $ sql-server-connect name=sql-server
@@ -458,7 +458,7 @@ def run_create_objects_part_1(
                         conn = get_mysql_source_conn(ref_database)
                         with conn.cursor() as cur:
                             cur.execute(
-                                f"CREATE TABLE `{ref_table}` ({', '.join(columns)})"
+                                f"CREATE TABLE IF NOT EXISTS `{ref_table}` ({', '.join(columns)})"
                             )
                     elif source["type"] == "postgres":
                         ref_database, ref_schema, ref_table = (
@@ -495,7 +495,7 @@ def run_create_objects_part_1(
                                 )
                             )
                             cur.execute(
-                                f'CREATE TABLE "{ref_schema}"."{ref_table}" ({", ".join(columns)})'.encode()
+                                f'CREATE TABLE IF NOT EXISTS "{ref_schema}"."{ref_table}" ({", ".join(columns)})'.encode()
                             )
                             cur.execute(
                                 SQL("ALTER TABLE {}.{} REPLICA IDENTITY FULL").format(
@@ -527,8 +527,7 @@ def run_create_objects_part_1(
 
                             $ sql-server-execute name=sql-server
                             USE {ref_database};
-                            CREATE TABLE "{ref_schema}"."{ref_table}" ({", ".join(columns)});
-                            EXEC sys.sp_cdc_enable_table @source_schema = '{ref_schema}', @source_name = '{ref_table}', @role_name = 'SA', @supports_net_changes = 0;
+                            IF OBJECT_ID(N'{ref_schema}.{ref_table}', N'U') IS NULL BEGIN CREATE TABLE "{ref_schema}"."{ref_table}" ({", ".join(columns)}); EXEC sys.sp_cdc_enable_table @source_schema = '{ref_schema}', @source_name = '{ref_table}', @role_name = 'SA', @supports_net_changes = 0; END
                                 """))
 
                 if source["type"] == "kafka":
@@ -580,8 +579,19 @@ def run_create_objects_part_2(
     for schemas in workload["databases"].values():
         for items in schemas.values():
             for name, source in items["sources"].items():
+                source_sql = source["create_sql"]
+                if source["type"] == "kafka":
+                    # Locally we recreate Kafka topics with a single partition,
+                    # so drop START OFFSET which lists per-partition offsets.
+                    # TODO: Remove when fixed: SS-161
+                    source_sql = re.sub(
+                        r",?\s*START\s+OFFSET\s*=\s*\([^)]*\)",
+                        "",
+                        source_sql,
+                        flags=re.IGNORECASE,
+                    )
                 c.sql(
-                    source["create_sql"],
+                    source_sql,
                     user="mz_system",
                     port=6877,
                     print_statement=verbose,
@@ -594,6 +604,22 @@ def run_create_objects_part_2(
                             r",?\s*DETAILS\s*=\s*'[^']*'",
                             "",
                             child["create_sql"],
+                            flags=re.IGNORECASE,
+                        )
+                        # An empty `TEXT COLUMNS = ()` panics the planner; drop it.
+                        # TODO: Remove when fixed: SS-159
+                        create_sql = re.sub(
+                            r",?\s*TEXT\s+COLUMNS\s*=\s*\(\s*\)",
+                            "",
+                            create_sql,
+                            flags=re.IGNORECASE,
+                        )
+                        # `EXCLUDE COLUMNS` names upstream columns we don't
+                        # recreate in the simulated PG/MySQL table, so drop it.
+                        create_sql = re.sub(
+                            r",?\s*EXCLUDE\s+COLUMNS\s*=\s*\([^)]*\)",
+                            "",
+                            create_sql,
                             flags=re.IGNORECASE,
                         )
                         create_sql = re.sub(
@@ -652,7 +678,21 @@ def run_create_objects_part_2(
             for obj_type in ("views", "materialized_views", "sinks"):
                 for name, obj in items.get(obj_type, {}).items():
                     fqn = f"{db_name}.{schema_name}.{name}"
-                    to_create[fqn] = obj["create_sql"]
+                    create_sql = obj["create_sql"]
+                    if obj_type == "sinks":
+                        # `VERSION = N` is an internal-only option emitted on
+                        # ALTER SINK; the planner rejects it on CREATE.
+                        # TODO: Remove when fixed: SS-160
+                        create_sql = re.sub(
+                            r",?\s*VERSION\s*=\s*\d+",
+                            "",
+                            create_sql,
+                            flags=re.IGNORECASE,
+                        )
+                        create_sql = re.sub(
+                            r"\sWITH \(\s*\)", "", create_sql, flags=re.IGNORECASE
+                        )
+                    to_create[fqn] = create_sql
                     known_names.add(fqn)
 
     deps: dict[str, set[str]] = {}

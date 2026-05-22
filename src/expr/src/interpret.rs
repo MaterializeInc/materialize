@@ -1075,14 +1075,12 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
         let mz_now = mfp_eval.unmaterializable(&UnmaterializableFunc::MzNow);
         for bound in &plan.lower_bounds {
             let bound_range = mfp_eval.expr(bound);
-            let result =
-                mfp_eval.binary(&BinaryFunc::Lte(func::Lte), bound_range, mz_now.clone());
+            let result = mfp_eval.binary(&BinaryFunc::Lte(func::Lte), bound_range, mz_now.clone());
             results.push(result);
         }
         for bound in &plan.upper_bounds {
             let bound_range = mfp_eval.expr(bound);
-            let result =
-                mfp_eval.binary(&BinaryFunc::Gte(func::Gte), bound_range, mz_now.clone());
+            let result = mfp_eval.binary(&BinaryFunc::Gte(func::Gte), bound_range, mz_now.clone());
             results.push(result);
         }
         let mut result = self.variadic(&And.into(), results);
@@ -1601,10 +1599,7 @@ mod tests {
         // "not-a-uuid" is in the stats range and definitely doesn't parse as a UUID.
         interpreter.push_column(
             0,
-            ResultSpec::value_between(
-                Datum::String("not-a-uuid"),
-                Datum::String("not-a-uuid"),
-            ),
+            ResultSpec::value_between(Datum::String("not-a-uuid"), Datum::String("not-a-uuid")),
         );
         let spec = interpreter.mfp_filter(&mfp);
         assert!(
@@ -2061,10 +2056,7 @@ mod tests {
             let mut interpreter = ColumnSpecs::new(&relation, &arena);
             interpreter.push_column(
                 0,
-                ResultSpec::value_between(
-                    ts("2024-01-15T00:00:00"),
-                    ts("2024-01-20T00:00:00"),
-                ),
+                ResultSpec::value_between(ts("2024-01-15T00:00:00"), ts("2024-01-20T00:00:00")),
             );
             let range_out = interpreter.expr(&expr).range;
             assert!(
@@ -2098,10 +2090,7 @@ mod tests {
             let mut interpreter = ColumnSpecs::new(&relation, &arena);
             interpreter.push_column(
                 0,
-                ResultSpec::value_between(
-                    ts("2024-01-17T00:00:00"),
-                    ts("2024-01-20T00:00:00"),
-                ),
+                ResultSpec::value_between(ts("2024-01-17T00:00:00"), ts("2024-01-20T00:00:00")),
             );
             let range_out = interpreter.expr(&expr).range;
             assert!(
@@ -2131,10 +2120,7 @@ mod tests {
             let mut interpreter = ColumnSpecs::new(&relation, &arena);
             interpreter.push_column(
                 0,
-                ResultSpec::value_between(
-                    ts("2024-01-17T00:00:00"),
-                    ts("2024-01-20T00:00:00"),
-                ),
+                ResultSpec::value_between(ts("2024-01-17T00:00:00"), ts("2024-01-20T00:00:00")),
             );
             let range_out = interpreter.expr(&expr).range;
             assert!(
