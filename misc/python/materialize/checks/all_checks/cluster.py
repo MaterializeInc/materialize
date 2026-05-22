@@ -202,9 +202,15 @@ class CreateClusterRF0(Check):
 
     def validate(self) -> Testdrive:
         return Testdrive(dedent("""
-                > SHOW CREATE CLUSTER create_cluster_rf0_1;
+                >[version<15500] SHOW CREATE CLUSTER create_cluster_rf0_1;
+                create_cluster_rf0_1 "CREATE CLUSTER \\"create_cluster_rf0_1\\" (DISK = true, INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 0, SIZE = 'scale=2,workers=2', SCHEDULE = MANUAL)"
+
+                >[version>=15500] SHOW CREATE CLUSTER create_cluster_rf0_1;
                 create_cluster_rf0_1 "CREATE CLUSTER \\"create_cluster_rf0_1\\" (INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 0, SIZE = 'scale=2,workers=2', SCHEDULE = MANUAL)"
 
-                > SHOW CREATE CLUSTER create_cluster_rf0_2;
+                >[version<15500] SHOW CREATE CLUSTER create_cluster_rf0_2;
+                create_cluster_rf0_2 "CREATE CLUSTER \\"create_cluster_rf0_2\\" (DISK = true, INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 0, SIZE = 'scale=2,workers=2', SCHEDULE = MANUAL)"
+
+                >[version>=15500] SHOW CREATE CLUSTER create_cluster_rf0_2;
                 create_cluster_rf0_2 "CREATE CLUSTER \\"create_cluster_rf0_2\\" (INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 0, SIZE = 'scale=2,workers=2', SCHEDULE = MANUAL)"
            """))

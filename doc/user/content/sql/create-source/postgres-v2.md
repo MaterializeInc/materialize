@@ -6,7 +6,7 @@ menu:
     parent: 'create-source'
     name: "PostgreSQL (New Syntax)"
     identifier: 'create-source-postgresql-v2'
-    weight: 22
+    weight: 20
 ---
 
 {{< private-preview />}}

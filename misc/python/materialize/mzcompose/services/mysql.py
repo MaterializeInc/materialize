@@ -37,7 +37,7 @@ def create_mysql_server_args(
 
 class MySql(Service):
     DEFAULT_ROOT_PASSWORD = "p@ssw0rd"
-    DEFAULT_VERSION = "9.5.0"
+    DEFAULT_VERSION = "9.7.0"
 
     DEFAULT_ADDITIONAL_ARGS = create_mysql_server_args(server_id="1", is_master=True)
 

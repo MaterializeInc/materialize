@@ -19,21 +19,38 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-05-21* <br>
 *Released to Materialize Self-Managed: 2026-05-22* <br>
 
-This release includes a new external metrics endpoint for Self-Managed
-deployments, improvements, and bug fixes.
+This release includes source versioning for MySQL sources, improvements, and
+bug fixes.
 
-### Features {#v26.25-features}
+### MySQL: Source versioning
 
-- **External metrics endpoint**: Self-Managed environments now include a
-  federated Prometheus metrics endpoint that proxies metrics from all processes
-  through `environmentd`, enriching each time series with object, cluster, and
-  replica name labels.
+{{< public-preview />}}
+
+For MySQL sources, we've introduced new syntax for [`CREATE
+SOURCE`](/sql/create-source/mysql-v2/) and [`CREATE
+TABLE`](/sql/create-table/). This allows you to better handle schema changes
+in your source MySQL tables.
+
+{{< note >}}
+- Changing column types is currently unsupported.
+{{< /note >}}
+
+For more information, refer to:
+- [Guide: Handling upstream MySQL schema changes with zero
+  downtime](/ingest-data/mysql/source-versioning/)
+- [Syntax: `CREATE SOURCE`](/sql/create-source/mysql-v2/)
+- [Syntax: `CREATE TABLE`](/sql/create-table/)
 
 ### Improvements {#v26.25-improvements}
 
-- **Source versioning enabled by default**: `CREATE TABLE FROM SOURCE` is now
-  enabled by default for Self-Managed deployments, removing the need to
-  manually set a feature flag.
+- **Source versioning in public preview**: Source versioning helps you handle
+  upstream schema changes without downtime in Materialize. With v26.25, source
+  versioning has graduated from private preview to public preview, and is now
+  available by default across all environments. For more information, refer to
+  the source versioning guides:
+    - [PostgreSQL](/ingest-data/postgres/source-versioning/)
+    - [MySQL](/ingest-data/mysql/source-versioning/)
+    - [SQL Server](/ingest-data/sql-server/source-versioning/)
 
 ### Bug Fixes {#v26.25-bug-fixes}
 

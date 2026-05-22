@@ -1,7 +1,7 @@
-- name: "create-source"
+- name: "create-source-legacy"
   description: |
     Once you have created the connection, you can use the connection in the
-    [`CREATE SOURCE`](/sql/create-source/) command to connect to your MySQL instance and start ingesting
+    [`CREATE SOURCE`](/sql/create-source/mysql/) command to connect to your MySQL instance and start ingesting
     data:
   test_setup: |
     > CREATE SECRET IF NOT EXISTS mysqlpass AS 'p@ssw0rd'
@@ -19,7 +19,7 @@
       FROM MYSQL CONNECTION mysql_connection
       FOR ALL TABLES;
 
-- name: "create-source-options"
+- name: "create-source-options-legacy"
   description: |
 
     - By default, the source will be created in the active cluster; to use a different cluster, use the `IN CLUSTER` clause.
@@ -28,7 +28,51 @@
 
     - To handle [unsupported data types](#supported-types), use the `TEXT COLUMNS` or `EXCLUDE COLUMNS` options.
 
+- name: "create-source"
+  description: |
+    Once you have created the connection, you can:
+    - use the connection in the [`CREATE SOURCE`](/sql/create-source/mysql-v2/)
+    command to connect to your MySQL instance, and
+    - use the source in [`CREATE TABLE FROM SOURCE`](/sql/create-table/) to
+    create tables in Materialize and start ingesting data:
+
+  test_setup: |
+    > DROP SOURCE mz_source CASCADE
+  code: |
+    -- Step 1: Create the source
+    CREATE SOURCE mz_source
+      FROM MYSQL CONNECTION mysql_connection;
+
+    -- Step 2: Create tables from the source
+    CREATE TABLE t FROM SOURCE mz_source (REFERENCE public.t);
+
+  results: |
+    - By default, the source will be created in the active cluster; to use a different cluster, use the `IN CLUSTER` clause.
+    - After creating the source, you can query `mz_internal.mz_source_references` to see all available tables.
+    - Create individual tables using [`CREATE TABLE <table_name> FROM SOURCE <source_name> (REFERENCE <upstream_table>)`](/sql/create-table/).
+    - To handle [unsupported data types](#supported-types), use `WITH (TEXT COLUMNS = [<column>])` or `WITH (EXCLUDE COLUMNS = [<column>])` in the [`CREATE TABLE`](/sql/create-table/) statement.
+  testable_results: false
+
 - name: "schema-changes"
   description: |
     After source creation, refer to [schema changes
     considerations](#schema-changes) for information on handling upstream schema changes.
+
+- name: "ingest-data-step"
+  description: |
+    {{< tabs >}}
+    {{< tab "New Syntax" >}}
+    #### New syntax
+
+    {{% include-example file="examples/ingest_data/mysql/create_source_cloud" example="create-source" %}}
+    {{% include-example file="examples/ingest_data/mysql/create_source_cloud" example="schema-changes" %}}
+    {{< /tab >}}
+
+    {{< tab "Legacy Syntax" >}}
+    #### Legacy syntax
+
+    {{% include-example file="examples/ingest_data/mysql/create_source_cloud" example="create-source-legacy" %}}
+    {{% include-example file="examples/ingest_data/mysql/create_source_cloud" example="create-source-options-legacy" %}}
+    {{% include-example file="examples/ingest_data/mysql/create_source_cloud" example="schema-changes" %}}
+    {{< /tab >}}
+    {{< /tabs >}}

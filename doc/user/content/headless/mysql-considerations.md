@@ -3,11 +3,20 @@ headless: true
 ---
 ### Schema changes
 
-{{% include-headless "/headless/schema-changes-in-progress" %}}
-
 Materialize supports schema changes in the upstream database as follows:
 
-#### Compatible schema changes
+#### Compatible schema changes (Legacy syntax)
+
+{{< note >}}
+
+This section refer to the legacy [`CREATE SOURCE ... FOR
+...`](/sql/create-source/mysql/) that creates subsources as part of the `CREATE
+SOURCE` operation.  To be able to handle the upstream column additions and
+drops, use [`CREATE SOURCE (New Syntax)`](/sql/create-source/mysql-v2/) and
+[`CREATE TABLE FROM SOURCE`](/sql/create-table) instead.  For details, see
+[MySQL: Source versioning guide](/ingest-data/mysql/source-versioning/).
+
+{{< /note >}}
 
 {{% include-from-yaml data="mysql_source_details"
 name="mysql-compatible-schema-changes-legacy" %}}

@@ -1,22 +1,26 @@
 ---
-title: "CREATE SOURCE: MySQL"
+title: "CREATE SOURCE: MySQL (Legacy syntax)"
 description: "Connecting Materialize to a MySQL database for Change Data Capture (CDC)."
 pagerank: 40
 menu:
-  main:
-    parent: 'create-source'
-    identifier: cs_mysql
-    name: MySQL
-    weight: 20
+    main:
+        parent: "create-source"
+        identifier: cs_mysql
+        name: MySQL (Legacy Syntax)
+        weight: 16
 ---
 
-{{% create-source/intro %}}
-Materialize supports MySQL (5.7+) as a real-time data source. To connect to a
-MySQL database, you first need to tweak its configuration to enable
-[GTID-based binary log (binlog) replication](#change-data-capture), and then
-[create a connection](#creating-a-connection) in Materialize that specifies
+{{< source-versioning-disambiguation is_new=false
+other_ref="[new reference page](/sql/create-source/mysql-v2)"
+include_blurb=true >}}
+
+Creates a new source from MySQL. Materialize supports creating sources from
+MySQL (8.0.1+).
+
+To connect to a MySQL database, you first need to update its configuration to
+enable [GTID-based binary log (binlog) replication](#change-data-capture), and
+then [create a connection](#creating-a-connection) in Materialize that specifies
 access and authentication parameters.
-{{% /create-source/intro %}}
 
 {{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
 
@@ -28,14 +32,14 @@ the MySQL source documentation and syntax **standardize on `schema`** as the
 preferred keyword.
 {{< /note >}}
 
-{{% include-syntax file="examples/create_source_mysql" example="syntax" %}}
+{{% include-syntax file="examples/create_source_mysql_legacy" example="syntax" %}}
 
 ### `CONNECTION` options
 
-Field             | Value                           | Description
-------------------|---------------------------------|-------------------------------------
-`EXCLUDE COLUMNS` | A list of fully-qualified names | Exclude specific columns that cannot be decoded or should not be included in the subsources created in Materialize.
-`TEXT COLUMNS`    | A list of fully-qualified names | Decode data as `text` for specific columns that contain MySQL types that are [unsupported in Materialize](#supported-types).
+| Field             | Value                           | Description                                                                                                                  |
+| ----------------- | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `EXCLUDE COLUMNS` | A list of fully-qualified names | Exclude specific columns that cannot be decoded or should not be included in the subsources created in Materialize.          |
+| `TEXT COLUMNS`    | A list of fully-qualified names | Decode data as `text` for specific columns that contain MySQL types that are [unsupported in Materialize](#supported-types). |
 
 ## Features
 
@@ -156,11 +160,11 @@ AS` clause; otherwise, it will be named `<src_name>_progress`.
 
 The following metadata is available for each source as a progress subsource:
 
-Field              | Type                                                    | Details
--------------------|---------------------------------------------------------|--------------
-`source_id_lower`  | [`uuid`](/sql/types/uuid/)  | The lower-bound GTID `source_id` of the GTIDs covered by this range.
-`source_id_upper`  | [`uuid`](/sql/types/uuid/)  | The upper-bound GTID `source_id` of the GTIDs covered by this range.
-`transaction_id`   | [`uint8`](/sql/types/uint/#uint8-info)                  | The `transaction_id` of the next GTID possible from the GTID `source_id`s covered by this range.
+| Field             | Type                                   | Details                                                                                          |
+| ----------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `source_id_lower` | [`uuid`](/sql/types/uuid/)             | The lower-bound GTID `source_id` of the GTIDs covered by this range.                             |
+| `source_id_upper` | [`uuid`](/sql/types/uuid/)             | The upper-bound GTID `source_id` of the GTIDs covered by this range.                             |
+| `transaction_id`  | [`uint8`](/sql/types/uint/#uint8-info) | The `transaction_id` of the next GTID possible from the GTID `source_id`s covered by this range. |
 
 And can be queried using:
 
@@ -242,6 +246,7 @@ check [this guide](/ops/network-security/privatelink/).
 
 {{< /tab >}}
 {{< tab "SSH tunnel">}}
+
 ```mzsql
 CREATE CONNECTION ssh_connection TO SSH TUNNEL (
     HOST 'bastion-host',
@@ -345,8 +350,8 @@ ALTER SOURCE mz_source ADD SUBSOURCE table_1;
 - [`CREATE CONNECTION`](/sql/create-connection)
 - [`CREATE SOURCE`](../)
 - MySQL integration guides:
-  - [Amazon RDS](/ingest-data/mysql/amazon-rds/)
-  - [Amazon Aurora](/ingest-data/mysql/amazon-aurora/)
-  - [Azure DB](/ingest-data/mysql/azure-db/)
-  - [Google Cloud SQL](/ingest-data/mysql/google-cloud-sql/)
-  - [Self-hosted](/ingest-data/mysql/self-hosted/)
+    - [Amazon RDS](/ingest-data/mysql/amazon-rds/)
+    - [Amazon Aurora](/ingest-data/mysql/amazon-aurora/)
+    - [Azure DB](/ingest-data/mysql/azure-db/)
+    - [Google Cloud SQL](/ingest-data/mysql/google-cloud-sql/)
+    - [Self-hosted](/ingest-data/mysql/self-hosted/)

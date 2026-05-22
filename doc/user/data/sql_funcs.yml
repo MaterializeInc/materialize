@@ -881,7 +881,7 @@
     ROW`.
 
     {{< note >}}
-    {{% idiomatic-sql/materialize-window-functions %}}
+    {{% include-headless "/headless/materialize-window-functions" %}}
 
     See [Idiomatic Materialize SQL](/transform-data/idiomatic-materialize-sql/)
     for examples of rewriting window functions.

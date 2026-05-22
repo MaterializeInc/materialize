@@ -58,7 +58,7 @@ fn cast_string_to_pg_legacy_char<'a>(a: &'a str) -> PgLegacyChar {
     PgLegacyChar(a.as_bytes().get(0).copied().unwrap_or(0))
 }
 
-#[sqlfunc(sqlname = "text_to_name", preserves_uniqueness = true)]
+#[sqlfunc(sqlname = "text_to_name", preserves_uniqueness = false)]
 fn cast_string_to_pg_legacy_name<'a>(a: &'a str) -> PgLegacyName<String> {
     PgLegacyName(strconv::parse_pg_legacy_name(a))
 }
@@ -825,7 +825,7 @@ impl EagerUnaryFunc for CastStringToVarChar {
     }
 
     fn preserves_uniqueness(&self) -> bool {
-        !self.fail_on_len || self.length.is_none()
+        self.length.is_none()
     }
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
