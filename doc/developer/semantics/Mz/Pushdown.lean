@@ -38,8 +38,6 @@ fallback. -/
 def Expr.subst (es : List Expr) : Expr → Expr
   | .lit d            => .lit d
   | .col i            => es.getD i (.lit .null)
-  | .and a b          => .and (a.subst es) (b.subst es)
-  | .or  a b          => .or  (a.subst es) (b.subst es)
   | .not a            => .not (a.subst es)
   | .ifThen c t e     => .ifThen (c.subst es) (t.subst es) (e.subst es)
   | .andN args        => .andN (Expr.substArgs es args)
@@ -112,12 +110,6 @@ theorem eval_subst :
   | env, es, .col i => by
     simp only [Expr.subst, eval]
     exact (Env.get_map_eval env es i).symm
-  | env, es, .and a b => by
-    simp only [Expr.subst, eval]
-    rw [eval_subst env es a, eval_subst env es b]
-  | env, es, .or a b => by
-    simp only [Expr.subst, eval]
-    rw [eval_subst env es a, eval_subst env es b]
   | env, es, .not a => by
     simp only [Expr.subst, eval]
     rw [eval_subst env es a]

@@ -167,7 +167,9 @@ theorem eval_and_comm_of_no_might_error
     eval env (.and a b) = eval env (.and b a) := by
   have hae := might_error_sound a env ha hEnv
   have hbe := might_error_sound b env hb hEnv
-  simp only [eval]
+  show eval env (Expr.andN [a, b]) = eval env (Expr.andN [b, a])
+  simp only [eval, List.map_cons, List.map_nil, evalAndN]
+  rw [evalAnd_true_right, evalAnd_true_right]
   exact evalAnd_comm_of_no_err hae hbe
 
 theorem eval_or_comm_of_no_might_error
@@ -177,7 +179,9 @@ theorem eval_or_comm_of_no_might_error
     eval env (.or a b) = eval env (.or b a) := by
   have hae := might_error_sound a env ha hEnv
   have hbe := might_error_sound b env hb hEnv
-  simp only [eval]
+  show eval env (Expr.orN [a, b]) = eval env (Expr.orN [b, a])
+  simp only [eval, List.map_cons, List.map_nil, evalOrN]
+  rw [evalOr_false_right, evalOr_false_right]
   exact evalOr_comm_of_no_err hae hbe
 
 end Mz

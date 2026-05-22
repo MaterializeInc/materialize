@@ -64,19 +64,10 @@ theorem eval_orN_singleton (env : Env) (a : Expr) :
   exact evalOrN_singleton (eval env a)
 
 theorem eval_andN_binary (env : Env) (a b : Expr) :
-    eval env (.andN [a, b]) = eval env (.and a b) := by
-  rw [eval_andN]
-  show evalAndN [eval env a, eval env b] = eval env (.and a b)
-  rw [evalAndN_binary]
-  -- Goal: evalAnd (eval env a) (eval env b) = eval env (.and a b)
-  simp only [eval]
+    eval env (.andN [a, b]) = eval env (.and a b) := rfl
 
 theorem eval_orN_binary (env : Env) (a b : Expr) :
-    eval env (.orN [a, b]) = eval env (.or a b) := by
-  rw [eval_orN]
-  show evalOrN [eval env a, eval env b] = eval env (.or a b)
-  rw [evalOrN_binary]
-  simp only [eval]
+    eval env (.orN [a, b]) = eval env (.or a b) := rfl
 
 /-! ## Coalesce base cases at the `Expr` level -/
 

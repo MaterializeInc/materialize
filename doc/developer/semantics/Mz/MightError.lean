@@ -426,12 +426,6 @@ def Expr.might_error : Expr → Bool
   | .lit (.err _)         => true
   | .lit _                => false
   | .col _                => false
-  | .and a b              =>
-    if a.isLitBoolFalse || b.isLitBoolFalse then false
-    else a.might_error || b.might_error
-  | .or  a b              =>
-    if a.isLitBoolTrue || b.isLitBoolTrue then false
-    else a.might_error || b.might_error
   | .not a                => a.might_error
   | .ifThen c t e         =>
     if c.isLitBoolTrue  then t.might_error
@@ -649,101 +643,6 @@ theorem might_error_sound :
     intro hRes
     simp only [eval] at hRes
     exact Env.get_not_err hEnv i hRes
-  | .and a b, env, hMe, hEnv => by
-    intro hRes
-    simp only [eval] at hRes
-    cases hA : a.isLitBoolFalse with
-    | true =>
-      -- a = .lit (.bool false): evalAnd .bool false _ = .bool false
-      have hEq : a = .lit (.bool false) := by
-        cases a with
-        | lit d =>
-          cases d with
-          | bool b' => cases b' with
-                        | false => rfl
-                        | true  => simp [Expr.isLitBoolFalse] at hA
-          | _ => simp [Expr.isLitBoolFalse] at hA
-        | _ => simp [Expr.isLitBoolFalse] at hA
-      rw [hEq] at hRes
-      simp only [eval, evalAnd_left_false] at hRes
-      cases hRes
-    | false =>
-      cases hB : b.isLitBoolFalse with
-      | true =>
-        -- b = .lit (.bool false): evalAnd _ .bool false = .bool false
-        have hEq : b = .lit (.bool false) := by
-          cases b with
-          | lit d =>
-            cases d with
-            | bool b' => cases b' with
-                          | false => rfl
-                          | true  => simp [Expr.isLitBoolFalse] at hB
-            | _ => simp [Expr.isLitBoolFalse] at hB
-          | _ => simp [Expr.isLitBoolFalse] at hB
-        rw [hEq] at hRes
-        simp only [eval, evalAnd_right_false] at hRes
-        cases hRes
-      | false =>
-        -- Non-short-circuit. Fall through to recursive check.
-        have hMeReduce :
-            Expr.might_error (.and a b) = (a.might_error || b.might_error) := by
-          show (if a.isLitBoolFalse || b.isLitBoolFalse
-                  then false
-                  else a.might_error || b.might_error)
-              = (a.might_error || b.might_error)
-          rw [hA, hB]; rfl
-        rw [hMeReduce] at hMe
-        have ha : ¬(a.might_error = true) := fun h => hMe (by simp [h])
-        have hb : ¬(b.might_error = true) := fun h => hMe (by simp [h])
-        exact evalAnd_not_err
-          (might_error_sound a env ha hEnv)
-          (might_error_sound b env hb hEnv) hRes
-  | .or a b, env, hMe, hEnv => by
-    intro hRes
-    simp only [eval] at hRes
-    cases hA : a.isLitBoolTrue with
-    | true =>
-      have hEq : a = .lit (.bool true) := by
-        cases a with
-        | lit d =>
-          cases d with
-          | bool b' => cases b' with
-                        | true  => rfl
-                        | false => simp [Expr.isLitBoolTrue] at hA
-          | _ => simp [Expr.isLitBoolTrue] at hA
-        | _ => simp [Expr.isLitBoolTrue] at hA
-      rw [hEq] at hRes
-      simp only [eval, evalOr_left_true] at hRes
-      cases hRes
-    | false =>
-      cases hB : b.isLitBoolTrue with
-      | true =>
-        have hEq : b = .lit (.bool true) := by
-          cases b with
-          | lit d =>
-            cases d with
-            | bool b' => cases b' with
-                          | true  => rfl
-                          | false => simp [Expr.isLitBoolTrue] at hB
-            | _ => simp [Expr.isLitBoolTrue] at hB
-          | _ => simp [Expr.isLitBoolTrue] at hB
-        rw [hEq] at hRes
-        simp only [eval, evalOr_right_true] at hRes
-        cases hRes
-      | false =>
-        have hMeReduce :
-            Expr.might_error (.or a b) = (a.might_error || b.might_error) := by
-          show (if a.isLitBoolTrue || b.isLitBoolTrue
-                  then false
-                  else a.might_error || b.might_error)
-              = (a.might_error || b.might_error)
-          rw [hA, hB]; rfl
-        rw [hMeReduce] at hMe
-        have ha : ¬(a.might_error = true) := fun h => hMe (by simp [h])
-        have hb : ¬(b.might_error = true) := fun h => hMe (by simp [h])
-        exact evalOr_not_err
-          (might_error_sound a env ha hEnv)
-          (might_error_sound b env hb hEnv) hRes
   | .not a, env, hMe, hEnv => by
     intro hRes
     simp only [eval] at hRes
