@@ -1017,6 +1017,21 @@ SELECT (list_length_max((LIST[NULL]::INT LIST LIST), 2))::text
 ----
 NULL
 
+query R
+SELECT list_length_max(LIST[NULL, LIST[1, 2, 3]]::INT LIST LIST, 2)
+----
+3
+
+query R
+SELECT list_length_max(LIST[NULL, LIST[1, 2, 3], NULL, LIST[1, 2, 3, 4, 5]]::INT LIST LIST, 2)
+----
+5
+
+query R
+SELECT list_length_max(LIST[NULL, LIST[LIST[1, 2, 3, 4]]]::INT LIST LIST LIST, 3)
+----
+4
+
 # 🔬🔬🔬 errors
 
 query error invalid layer: 2; must use value within \[1, 1\]
