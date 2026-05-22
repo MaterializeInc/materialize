@@ -3,7 +3,6 @@ source: src/expr-derive-impl/src/lib.rs
 expression: "#[sqlfunc(Greatest, sqlname = \"greatest\", could_error = false, is_monotone = true)]\nfn greatest<'a>(datums: Variadic<Datum<'a>>) -> Datum<'a> {\n    datums.into_iter().max().unwrap_or(Datum::Null)\n}\n"
 ---
 #[derive(
-    proptest_derive::Arbitrary,
     Ord,
     PartialOrd,
     Clone,
@@ -15,6 +14,7 @@ expression: "#[sqlfunc(Greatest, sqlname = \"greatest\", could_error = false, is
     Hash,
     mz_lowertest::MzReflect,
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
 pub struct Greatest;
 impl crate::func::variadic::EagerVariadicFunc for Greatest {
     type Input<'a> = Variadic<Datum<'a>>;
