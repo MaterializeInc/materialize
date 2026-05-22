@@ -121,6 +121,10 @@ fn round_numeric(mut a: Numeric) -> Numeric {
         return a;
     }
     numeric::cx_datum().round(&mut a);
+    // Canonicalize: `dec`'s round preserves the sign on zero results, so e.g.
+    // `round(-0.4)` yields `-0`. munge_numeric strips that, ensuring row
+    // encodings match decimal equality.
+    numeric::munge_numeric(&mut a).unwrap();
     a
 }
 
