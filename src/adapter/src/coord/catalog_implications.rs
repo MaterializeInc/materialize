@@ -87,6 +87,13 @@ impl Coordinator {
         catalog_updates: Vec<ParsedStateUpdate>,
     ) -> Result<(), AdapterError> {
         let start = Instant::now();
+        let phase_metric = self
+            .metrics
+            .apply_catalog_implications_phase_seconds
+            .clone();
+        let _absorb_timer = phase_metric
+            .with_label_values(&["absorb_updates"])
+            .start_timer();
 
         let mut catalog_implications: BTreeMap<CatalogItemId, CatalogImplication> = BTreeMap::new();
         let mut cluster_commands: BTreeMap<ClusterId, CatalogImplication> = BTreeMap::new();
@@ -162,6 +169,11 @@ impl Coordinator {
             }
         }
 
+        drop(_absorb_timer);
+
+        let _inner_timer = phase_metric
+            .with_label_values(&["inner_total"])
+            .start_timer();
         self.apply_catalog_implications_inner(
             ctx,
             catalog_implications.into_iter().collect_vec(),
@@ -170,6 +182,7 @@ impl Coordinator {
             introspection_source_indexes,
         )
         .await?;
+        drop(_inner_timer);
 
         self.metrics
             .apply_catalog_implications_seconds
@@ -187,6 +200,10 @@ impl Coordinator {
         cluster_replica_commands: Vec<((ClusterId, ReplicaId), CatalogImplication)>,
         mut introspection_source_indexes: BTreeMap<ClusterId, BTreeMap<LogVariant, GlobalId>>,
     ) -> Result<(), AdapterError> {
+        let phase_metric = self
+            .metrics
+            .apply_catalog_implications_phase_seconds
+            .clone();
         let mut tables_to_drop = BTreeSet::new();
         let mut sources_to_drop = vec![];
         let mut replication_slots_to_drop: Vec<(PostgresConnection, String)> = vec![];
@@ -235,6 +252,9 @@ impl Coordinator {
         // just a log message. Over the next couple of PRs all of these will go
         // away.
 
+        let _item_loop_timer = phase_metric
+            .with_label_values(&["inner_item_loop"])
+            .start_timer();
         for (catalog_id, implication) in implications {
             tracing::trace!(?implication, "have to apply catalog implication");
 
@@ -550,7 +570,11 @@ impl Coordinator {
                 }
             }
         }
+        drop(_item_loop_timer);
 
+        let _cluster_loop_timer = phase_metric
+            .with_label_values(&["inner_cluster_loops"])
+            .start_timer();
         for (cluster_id, command) in cluster_commands {
             tracing::trace!(?command, "have cluster command to apply!");
 
@@ -670,7 +694,11 @@ impl Coordinator {
                 }
             }
         }
+        drop(_cluster_loop_timer);
 
+        let _controller_setup_timer = phase_metric
+            .with_label_values(&["inner_controller_setup"])
+            .start_timer();
         if !source_collections_to_create.is_empty() {
             self.create_source_collections(source_collections_to_create)
                 .await?;
@@ -740,7 +768,11 @@ impl Coordinator {
                 .await
                 .unwrap_or_terminate("cannot fail to alter ingestion source desc");
         }
+        drop(_controller_setup_timer);
 
+        let _dep_scan_timer = phase_metric
+            .with_label_values(&["inner_dependency_scan"])
+            .start_timer();
         // Apply source drop overwrites.
         sources_to_drop.retain(|(_, gid)| !source_gids_to_keep.contains(gid));
 
@@ -825,54 +857,62 @@ impl Coordinator {
             .chain(tables_to_drop.iter().map(|(_id, gid)| gid))
             .copied()
             .collect();
-        let compute_gids_to_drop: Vec<_> = indexes_to_drop
+        let compute_gids_to_drop: BTreeSet<_> = indexes_to_drop
             .iter()
             .chain(compute_sinks_to_drop.iter())
             .copied()
             .collect();
+        let clusters_to_drop_set: BTreeSet<_> = clusters_to_drop.iter().copied().collect();
 
         // Gather resources that we have to remove from timeline state and
         // pre-check if any Timelines become empty, when we drop the specified
         // storage and compute resources.
         //
         // Note: We only apply these changes below.
-        let mut timeline_id_bundles = BTreeMap::new();
+        let mut timeline_associations = BTreeMap::new();
 
         for (timeline, TimelineState { read_holds, .. }) in &self.global_timelines {
             let mut id_bundle = CollectionIdBundle::default();
 
-            for storage_id in read_holds.storage_ids() {
-                if storage_gids_to_drop.contains(&storage_id) {
-                    id_bundle.storage_ids.insert(storage_id);
+            // Probe the (small) drop sets against read_holds, which can be O(N).
+            for storage_id in &storage_gids_to_drop {
+                if read_holds.storage_holds.contains_key(storage_id) {
+                    id_bundle.storage_ids.insert(*storage_id);
                 }
             }
-
-            for (instance_id, id) in read_holds.compute_ids() {
-                if compute_gids_to_drop.contains(&(instance_id, id))
-                    || clusters_to_drop.contains(&instance_id)
-                {
+            for (instance_id, gid) in &compute_gids_to_drop {
+                if read_holds.compute_holds.contains_key(&(*instance_id, *gid)) {
                     id_bundle
                         .compute_ids
-                        .entry(instance_id)
+                        .entry(*instance_id)
                         .or_default()
-                        .insert(id);
+                        .insert(*gid);
+                }
+            }
+            // Whole-cluster drops are rare, so the linear scan here is fine.
+            if !clusters_to_drop_set.is_empty() {
+                for (instance_id, gid) in read_holds.compute_ids() {
+                    if clusters_to_drop_set.contains(&instance_id) {
+                        id_bundle
+                            .compute_ids
+                            .entry(instance_id)
+                            .or_default()
+                            .insert(gid);
+                    }
                 }
             }
 
-            timeline_id_bundles.insert(timeline.clone(), id_bundle);
+            let bundle_compute_len: usize =
+                id_bundle.compute_ids.values().map(|ids| ids.len()).sum();
+            let empty = read_holds.storage_holds.len() == id_bundle.storage_ids.len()
+                && read_holds.compute_holds.len() == bundle_compute_len;
+            timeline_associations.insert(timeline.clone(), (empty, id_bundle));
         }
+        drop(_dep_scan_timer);
 
-        let mut timeline_associations = BTreeMap::new();
-        for (timeline, id_bundle) in timeline_id_bundles.into_iter() {
-            let TimelineState { read_holds, .. } = self
-                .global_timelines
-                .get(&timeline)
-                .expect("all timelines have a timestamp oracle");
-
-            let empty = read_holds.id_bundle().difference(&id_bundle).is_empty();
-            timeline_associations.insert(timeline, (empty, id_bundle));
-        }
-
+        let _finalize_timer = phase_metric
+            .with_label_values(&["inner_finalize"])
+            .start_timer();
         // No error returns are allowed after this point. Enforce this at compile time
         // by using this odd structure so we don't accidentally add a stray `?`.
         let _: () = async {
@@ -931,7 +971,7 @@ impl Coordinator {
             }
 
             if !compute_gids_to_drop.is_empty() {
-                self.drop_compute_collections(compute_gids_to_drop);
+                self.drop_compute_collections(compute_gids_to_drop.into_iter().collect());
             }
 
             if !vpc_endpoints_to_drop.is_empty() {
@@ -1040,8 +1080,18 @@ impl Coordinator {
         table_collections_to_create: BTreeMap<GlobalId, CollectionDescription>,
         execution_timestamps_to_set: BTreeSet<StatementLoggingId>,
     ) -> Result<(), AdapterError> {
+        let phase_metric = self
+            .metrics
+            .apply_catalog_implications_phase_seconds
+            .clone();
+
         // If we have tables, determine the initial validity for the table.
-        let write_ts = self.get_local_write_ts().await;
+        let write_ts = {
+            let _t = phase_metric
+                .with_label_values(&["create_table_write_ts"])
+                .start_timer();
+            self.get_local_write_ts().await
+        };
         let register_ts = write_ts.timestamp;
 
         // After acquiring `register_ts` but before using it, we need to
@@ -1053,10 +1103,15 @@ impl Coordinator {
         // is readable at the oracle read ts after we bump it to the
         // `register_ts` below. Both of these needs are served by calling
         // `advance_upper`.
-        self.catalog
-            .advance_upper(write_ts.advance_to)
-            .await
-            .unwrap_or_terminate("unable to advance catalog upper");
+        {
+            let _t = phase_metric
+                .with_label_values(&["create_table_advance_upper"])
+                .start_timer();
+            self.catalog
+                .advance_upper(write_ts.advance_to)
+                .await
+                .unwrap_or_terminate("unable to advance catalog upper");
+        }
 
         for id in execution_timestamps_to_set {
             self.set_statement_execution_timestamp(id, register_ts);
@@ -1064,17 +1119,27 @@ impl Coordinator {
 
         let storage_metadata = self.catalog.state().storage_metadata();
 
-        self.controller
-            .storage
-            .create_collections(
-                storage_metadata,
-                Some(register_ts),
-                table_collections_to_create.into_iter().collect_vec(),
-            )
-            .await
-            .unwrap_or_terminate("cannot fail to create collections");
+        {
+            let _t = phase_metric
+                .with_label_values(&["create_table_storage_create_collections"])
+                .start_timer();
+            self.controller
+                .storage
+                .create_collections(
+                    storage_metadata,
+                    Some(register_ts),
+                    table_collections_to_create.into_iter().collect_vec(),
+                )
+                .await
+                .unwrap_or_terminate("cannot fail to create collections");
+        }
 
-        self.apply_local_write(register_ts).await;
+        {
+            let _t = phase_metric
+                .with_label_values(&["create_table_apply_local_write"])
+                .start_timer();
+            self.apply_local_write(register_ts).await;
+        }
 
         Ok(())
     }

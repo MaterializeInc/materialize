@@ -58,7 +58,7 @@ use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::MissedTickBehavior;
-use tracing::{debug, info, trace, warn};
+use tracing::{Instrument, debug, info, info_span, trace, warn};
 
 use crate::client::TimestamplessUpdateBuilder;
 use crate::controller::{
@@ -382,6 +382,26 @@ pub struct StorageCollectionsImpl {
     /// Collections maintained by this [StorageCollections].
     collections: Arc<std::sync::Mutex<BTreeMap<GlobalId, CollectionState>>>,
 
+    /// IDs of collections whose `CollectionState::primary` is `Some(_)`.
+    ///
+    /// This is a small "side index" maintained in lockstep with writes to
+    /// `CollectionState::primary` so that hot-path DDL code (specifically
+    /// `prepare_state`'s `dropped_shard_lookup` step) can decide whether a
+    /// dropped collection had a primary without taking the global
+    /// `collections` mutex. The big mutex is contended by the
+    /// `BackgroundTask`'s O(N) periodic sweep over txns-backed collections
+    /// (see `update_write_frontiers`), so any lock acquire from the DDL hot
+    /// path can queue behind hundreds of chunked acquires from the sweep.
+    /// By moving this single read off the contended path we kill the
+    /// `prepare_state` slope that survived phase 15: at N=25k tables it was
+    /// the dominant contributor to the per-DDL latency growth.
+    ///
+    /// Invariant: an id appears here iff it has a corresponding entry in
+    /// `collections` whose `primary.is_some()`. Maintained at every site
+    /// that writes `CollectionState::primary` and at the single
+    /// `collections.remove` site.
+    primaried_ids: Arc<std::sync::Mutex<BTreeSet<GlobalId>>>,
+
     /// A shared TxnsCache running in a task and communicated with over a channel.
     txns_read: TxnsRead<Timestamp>,
 
@@ -398,6 +418,26 @@ pub struct StorageCollectionsImpl {
     /// cannot hydrate in read-only mode.
     initial_txn_upper: Antichain<Timestamp>,
 
+    /// Latest known upper of the txns shard. The [`BackgroundTask`] updates
+    /// this whenever the txns shard upper advances and is the authoritative
+    /// source of the write frontier for every txns-backed (table)
+    /// collection. Readers that need the current write frontier of a
+    /// txns-backed collection should consult this field rather than the
+    /// per-collection `write_frontier` on [`CollectionState`].
+    ///
+    /// Background: previously, the `BackgroundTask`'s txns-upper branch
+    /// would fan the freshly observed upper out to N per-collection
+    /// `write_frontier` fields on every tick. With many user tables, that
+    /// O(N) work under the global `collections` mutex blocked every other
+    /// taker (notably `prepare_state` on the DDL hot path), driving DDL
+    /// latency superlinearly with N. By storing the shared upper here once
+    /// and resolving reads through this field, we eliminate the fanout from
+    /// the hot path entirely. The implied capability (since) downgrade for
+    /// txns-backed collections still needs to happen so persist can compact;
+    /// it is driven by a separate timer-based sweep in `BackgroundTask::run`
+    /// (see `TXNS_SINCE_DOWNGRADE_INTERVAL`).
+    txns_upper: Arc<std::sync::RwLock<Antichain<Timestamp>>>,
+
     /// The persist location where all storage collections are being written to
     persist_location: PersistLocation,
 
@@ -409,6 +449,12 @@ pub struct StorageCollectionsImpl {
 
     /// For sending updates about read holds to our internal task.
     holds_tx: mpsc::UnboundedSender<(GlobalId, ChangeBatch<Timestamp>)>,
+
+    /// Per-phase histograms for `create_collections_for_bootstrap`.
+    create_collections_phase_seconds: prometheus::HistogramVec,
+
+    /// Per-phase histograms for `prepare_state`.
+    prepare_state_phase_seconds: prometheus::HistogramVec,
 
     /// Handles to tasks we own, making sure they're dropped when we are.
     _background_task: Arc<AbortOnDropHandle<()>>,
@@ -491,6 +537,7 @@ impl StorageCollectionsImpl {
         let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
 
         let collections = Arc::new(std::sync::Mutex::new(BTreeMap::default()));
+        let primaried_ids = Arc::new(std::sync::Mutex::new(BTreeSet::default()));
         let finalizable_shards =
             Arc::new(ShardIdSet::new(metrics.finalization_outstanding.clone()));
         let finalized_shards =
@@ -501,6 +548,9 @@ impl StorageCollectionsImpl {
         )));
 
         let initial_txn_upper = txns_write.fetch_recent_upper().await.to_owned();
+        // Initialize the shared txns upper to the boot-time value; the
+        // BackgroundTask will keep it updated as the txns shard advances.
+        let txns_upper = Arc::new(std::sync::RwLock::new(initial_txn_upper.clone()));
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (holds_tx, holds_rx) = mpsc::unbounded_channel();
@@ -510,17 +560,24 @@ impl StorageCollectionsImpl {
             cmds_rx: cmd_rx,
             holds_rx,
             collections: Arc::clone(&collections),
+            primaried_ids: Arc::clone(&primaried_ids),
             finalizable_shards: Arc::clone(&finalizable_shards),
             shard_by_id: BTreeMap::new(),
             since_handles: BTreeMap::new(),
             txns_handle: Some(txns_write),
             txns_shards: Default::default(),
+            txns_upper: Arc::clone(&txns_upper),
+            txns_upper_advances: metrics.txns_upper_advances.clone(),
+            txns_since_sweeps: metrics.txns_since_sweeps.clone(),
         };
 
         let background_task =
             mz_ore::task::spawn(|| "storage_collections::background_task", async move {
                 background_task.run().await
             });
+
+        let create_collections_phase_seconds = metrics.create_collections_phase_seconds.clone();
+        let prepare_state_phase_seconds = metrics.prepare_state_phase_seconds.clone();
 
         let finalize_shards_task = mz_ore::task::spawn(
             || "storage_collections::finalize_shards_task",
@@ -540,17 +597,53 @@ impl StorageCollectionsImpl {
             finalizable_shards,
             finalized_shards,
             collections,
+            primaried_ids,
             txns_read,
             envd_epoch,
             read_only,
             config,
             initial_txn_upper,
+            txns_upper,
             persist_location,
             persist: persist_clients,
             cmd_tx,
             holds_tx,
+            create_collections_phase_seconds,
+            prepare_state_phase_seconds,
             _background_task: Arc::new(background_task.abort_on_drop()),
             _finalize_shards_task: Arc::new(finalize_shards_task.abort_on_drop()),
+        }
+    }
+
+    /// Returns the effective write frontier of `collection`: the shared
+    /// txns upper if the collection is txns-backed, otherwise the
+    /// per-collection `write_frontier`.
+    ///
+    /// The per-collection `write_frontier` is no longer kept current by
+    /// the [`BackgroundTask`] for txns-backed collections (the per-tick
+    /// fanout used to drive that field was the slope owner of
+    /// `prepare_state`). Callers that need the up-to-date write frontier
+    /// of a txns-backed collection must consult `self.txns_upper`. The
+    /// periodic sweep in `BackgroundTask::run` does still rewrite each
+    /// txns-backed collection's `write_frontier` once per second so that
+    /// downstream bookkeeping (implied capability, read holds) stays in
+    /// step, but between those sweeps the shared field is the source of
+    /// truth.
+    fn effective_write_frontier(&self, collection: &CollectionState) -> Antichain<Timestamp> {
+        if collection.collection_metadata.txns_shard.is_some() {
+            let shared = self.txns_upper.read().expect("lock poisoned");
+            // The shared upper monotonically advances; pick whichever is
+            // later. We compare instead of unconditionally taking the
+            // shared one because `collection.write_frontier` may have been
+            // advanced past `shared` by the periodic sweep / a direct
+            // upper update path.
+            if PartialOrder::less_than(&collection.write_frontier, &*shared) {
+                shared.clone()
+            } else {
+                collection.write_frontier.clone()
+            }
+        } else {
+            collection.write_frontier.clone()
         }
     }
 
@@ -580,19 +673,24 @@ impl StorageCollectionsImpl {
         } else {
             // We're managing the data for this shard in read-write mode, which would fence out other
             // processes in read-only mode; it's safe to upgrade the metadata version.
-            persist_client
-                .upgrade_version::<SourceData, (), Timestamp, StorageDiff>(
-                    shard,
-                    Diagnostics {
-                        shard_name: id.to_string(),
-                        handle_purpose: format!("controller data for {}", id),
-                    },
-                )
-                .await
-                .expect("invalid persist usage");
+            async {
+                persist_client
+                    .upgrade_version::<SourceData, (), Timestamp, StorageDiff>(
+                        shard,
+                        Diagnostics {
+                            shard_name: id.to_string(),
+                            handle_purpose: format!("controller data for {}", id),
+                        },
+                    )
+                    .await
+                    .expect("invalid persist usage");
+            }
+            .instrument(info_span!("odh::upgrade_version"))
+            .await;
 
             let since_handle = self
                 .open_critical_handle(id, shard, since, persist_client)
+                .instrument(info_span!("odh::open_critical_handle"))
                 .await;
 
             SinceHandleWrapper::Critical(since_handle)
@@ -600,6 +698,7 @@ impl StorageCollectionsImpl {
 
         let mut write_handle = self
             .open_write_handle(id, shard, relation_desc, persist_client)
+            .instrument(info_span!("odh::open_write_handle"))
             .await;
 
         // N.B.
@@ -612,7 +711,11 @@ impl StorageCollectionsImpl {
         //
         // Note that this returns the upper, but also sets it on the handle to
         // be fetched later.
-        write_handle.fetch_recent_upper().await;
+        async {
+            write_handle.fetch_recent_upper().await;
+        }
+        .instrument(info_span!("odh::fetch_recent_upper"))
+        .await;
 
         (write_handle, since_handle)
     }
@@ -809,6 +912,7 @@ impl StorageCollectionsImpl {
     ///
     /// This is necessary to ensure that the dependency's since does not advance
     /// beyond its dependents'.
+    #[instrument(level = "debug", fields(id = ?id))]
     fn install_collection_dependency_read_holds_inner(
         &self,
         self_collections: &mut BTreeMap<GlobalId, CollectionState>,
@@ -939,6 +1043,7 @@ impl StorageCollectionsImpl {
         StorageCollectionsImpl::update_read_capabilities_inner(
             &self.cmd_tx,
             self_collections,
+            &self.primaried_ids,
             &mut storage_read_updates,
         );
 
@@ -1137,6 +1242,9 @@ impl StorageCollectionsImpl {
         trace!("set_read_policies: {:?}", policies);
 
         let mut read_capability_changes = BTreeMap::default();
+        // Snapshot the shared txns upper once so all txns-backed
+        // collections in this batch see a consistent value.
+        let txns_upper = self.txns_upper.read().expect("lock poisoned").clone();
 
         for (id, policy) in policies.into_iter() {
             let collection = match collections.get_mut(&id) {
@@ -1146,7 +1254,17 @@ impl StorageCollectionsImpl {
                 }
             };
 
-            let mut new_read_capability = policy.frontier(collection.write_frontier.borrow());
+            // For txns-backed collections, the per-collection
+            // `write_frontier` may lag the actual upper between periodic
+            // sweeps. Use the shared txns upper if it is more advanced.
+            let effective_write_frontier = if collection.collection_metadata.txns_shard.is_some()
+                && PartialOrder::less_than(&collection.write_frontier, &txns_upper)
+            {
+                txns_upper.clone()
+            } else {
+                collection.write_frontier.clone()
+            };
+            let mut new_read_capability = policy.frontier(effective_write_frontier.borrow());
 
             if PartialOrder::less_equal(&collection.implied_capability, &new_read_capability) {
                 let mut update = ChangeBatch::new();
@@ -1171,6 +1289,7 @@ impl StorageCollectionsImpl {
             StorageCollectionsImpl::update_read_capabilities_inner(
                 &self.cmd_tx,
                 collections,
+                &self.primaried_ids,
                 &mut read_capability_changes,
             );
         }
@@ -1179,9 +1298,11 @@ impl StorageCollectionsImpl {
     // This is not an associated function so that we can share it with the task
     // that updates the persist handles and also has a reference to the shared
     // collections state.
+    #[instrument(level = "debug")]
     fn update_read_capabilities_inner(
         cmd_tx: &mpsc::UnboundedSender<BackgroundCmd>,
         collections: &mut BTreeMap<GlobalId, CollectionState>,
+        primaried_ids: &std::sync::Mutex<BTreeSet<GlobalId>>,
         updates: &mut BTreeMap<GlobalId, ChangeBatch<Timestamp>>,
     ) {
         // Location to record consequences that we need to act on.
@@ -1265,20 +1386,36 @@ impl StorageCollectionsImpl {
         // Translate our net compute actions into downgrades of persist sinces.
         // The actual downgrades are performed by a Tokio task asynchronously.
         let mut persist_compaction_commands = Vec::with_capacity(collections_net.len());
+        let mut removed_primaried = Vec::new();
         for (key, (mut changes, frontier)) in collections_net {
             if !changes.is_empty() {
                 // If the collection has a "primary" collection, let that primary drive compaction.
                 let collection = collections.get(&key).expect("must still exist");
-                let should_emit_persist_compaction = collection.primary.is_none();
+                let was_primaried = collection.primary.is_some();
+                let should_emit_persist_compaction = !was_primaried;
 
                 if frontier.is_empty() {
                     info!(id = %key, "removing collection state because the since advanced to []!");
                     collections.remove(&key).expect("must still exist");
+                    if was_primaried {
+                        removed_primaried.push(key);
+                    }
                 }
 
                 if should_emit_persist_compaction {
                     persist_compaction_commands.push((key, frontier));
                 }
+            }
+        }
+
+        // Keep the `primaried_ids` side index in lockstep with the
+        // `collections` removals above. Doing this in a single lock acquire
+        // after the removal loop keeps it off the per-iteration critical
+        // path. (Typical loop body: 0 entries; in rare cases <small.)
+        if !removed_primaried.is_empty() {
+            let mut primaried_ids = primaried_ids.lock().expect("lock poisoned");
+            for id in removed_primaried {
+                primaried_ids.remove(&id);
             }
         }
 
@@ -1383,7 +1520,7 @@ impl StorageCollections for StorageCollectionsImpl {
                     .get(&id)
                     .map(|c| CollectionFrontiers {
                         id: id.clone(),
-                        write_frontier: c.write_frontier.clone(),
+                        write_frontier: self.effective_write_frontier(c),
                         implied_capability: c.implied_capability.clone(),
                         read_capabilities: c.read_capabilities.frontier().to_owned(),
                     })
@@ -1402,7 +1539,7 @@ impl StorageCollections for StorageCollectionsImpl {
             .filter(|(_id, c)| !c.is_dropped())
             .map(|(id, c)| CollectionFrontiers {
                 id: id.clone(),
-                write_frontier: c.write_frontier.clone(),
+                write_frontier: self.effective_write_frontier(c),
                 implied_capability: c.implied_capability.clone(),
                 read_capabilities: c.read_capabilities.frontier().to_owned(),
             })
@@ -1647,35 +1784,67 @@ impl StorageCollections for StorageCollectionsImpl {
         ids_to_drop: BTreeSet<GlobalId>,
         ids_to_register: BTreeMap<GlobalId, ShardId>,
     ) -> Result<(), StorageError> {
-        txn.insert_collection_metadata(
-            ids_to_add
-                .into_iter()
-                .map(|id| (id, ShardId::new()))
-                .collect(),
-        )?;
-        txn.insert_collection_metadata(ids_to_register)?;
+        let phase = self.prepare_state_phase_seconds.clone();
+
+        {
+            let _t = phase.with_label_values(&["insert_add"]).start_timer();
+            txn.insert_collection_metadata(
+                ids_to_add
+                    .into_iter()
+                    .map(|id| (id, ShardId::new()))
+                    .collect(),
+            )?;
+        }
+        {
+            let _t = phase.with_label_values(&["insert_register"]).start_timer();
+            txn.insert_collection_metadata(ids_to_register)?;
+        }
 
         // Delete the metadata for any dropped collections.
-        let dropped_mappings = txn.delete_collection_metadata(ids_to_drop);
+        let dropped_mappings = {
+            let _t = phase.with_label_values(&["delete"]).start_timer();
+            txn.delete_collection_metadata(ids_to_drop)
+        };
 
         // Only finalize the shards of dropped collections that don't have a primary.
         // Otherwise the shard might still be in use by the primary.
-        let mut dropped_shards = BTreeSet::new();
-        {
-            let collections = self.collections.lock().expect("poisoned");
+        //
+        // We deliberately consult `self.primaried_ids` (a small side index
+        // of ids whose `primary.is_some()`) instead of the big `collections`
+        // BTreeMap. The `collections` mutex is contended by the
+        // `BackgroundTask`'s periodic O(N) sweep (`update_write_frontiers`)
+        // over txns-backed collections; that sweep takes the lock in chunks
+        // so any DDL acquire here queues behind in-flight chunks. The lock
+        // wait drove the `prepare_state` slope by +0.2 ms / +1k tables at
+        // N=10k → 25k. By using a separate, rarely-written side index we
+        // remove this contention entirely.
+        let dropped_shards = {
+            let _t = phase
+                .with_label_values(&["dropped_shard_lookup"])
+                .start_timer();
+            let mut dropped_shards = BTreeSet::new();
+            let primaried_ids = self.primaried_ids.lock().expect("lock poisoned");
             for (id, shard) in dropped_mappings {
-                let coll = collections.get(&id).expect("must exist");
-                if coll.primary.is_none() {
+                if !primaried_ids.contains(&id) {
                     dropped_shards.insert(shard);
                 }
             }
+            dropped_shards
+        };
+        {
+            let _t = phase
+                .with_label_values(&["insert_unfinalized"])
+                .start_timer();
+            txn.insert_unfinalized_shards(dropped_shards)?;
         }
-        txn.insert_unfinalized_shards(dropped_shards)?;
 
         // Reconcile any shards we've successfully finalized with the shard
         // finalization collection.
-        let finalized_shards = self.finalized_shards.lock().iter().copied().collect();
-        txn.mark_shards_as_finalized(finalized_shards);
+        {
+            let _t = phase.with_label_values(&["mark_finalized"]).start_timer();
+            let finalized_shards = self.finalized_shards.lock().iter().copied().collect();
+            txn.mark_shards_as_finalized(finalized_shards);
+        }
 
         Ok(())
     }
@@ -1690,6 +1859,11 @@ impl StorageCollections for StorageCollectionsImpl {
         mut collections: Vec<(GlobalId, CollectionDescription)>,
         migrated_storage_collections: &BTreeSet<GlobalId>,
     ) -> Result<(), StorageError> {
+        let phase_metric = self.create_collections_phase_seconds.clone();
+        let _validate_timer = phase_metric
+            .with_label_values(&["validate_and_enrich"])
+            .start_timer();
+
         let is_in_txns = |id, metadata: &CollectionMetadata| {
             metadata.txns_shard.is_some()
                 && !(self.read_only && migrated_storage_collections.contains(&id))
@@ -1733,102 +1907,122 @@ impl StorageCollections for StorageCollectionsImpl {
             })
             .collect_vec();
 
+        drop(_validate_timer);
+        let _open_client_timer = phase_metric
+            .with_label_values(&["open_persist_client"])
+            .start_timer();
         // So that we can open `SinceHandle`s for each collections concurrently.
-        let persist_client = self
-            .persist
-            .open(self.persist_location.clone())
-            .await
-            .unwrap();
+        let persist_client = async {
+            self.persist
+                .open(self.persist_location.clone())
+                .await
+                .unwrap()
+        }
+        .instrument(info_span!("ccfb::open_persist_client"))
+        .await;
         let persist_client = &persist_client;
+        drop(_open_client_timer);
+        let _open_handles_timer = phase_metric
+            .with_label_values(&["open_data_handles_concurrent"])
+            .start_timer();
         // Reborrow the `&mut self` as immutable, as all the concurrent work to
         // be processed in this stream cannot all have exclusive access.
         use futures::stream::{StreamExt, TryStreamExt};
         let this = &*self;
-        let mut to_register: Vec<_> = futures::stream::iter(enriched_with_metadata)
-            .map(|data: Result<_, StorageError>| {
-                async move {
-                    let (id, description, metadata) = data?;
+        let mut to_register: Vec<_> = async {
+            futures::stream::iter(enriched_with_metadata)
+                .map(|data: Result<_, StorageError>| {
+                    async move {
+                        let (id, description, metadata) = data?;
 
-                    // should be replaced with real introspection
-                    // (https://github.com/MaterializeInc/database-issues/issues/4078)
-                    // but for now, it's helpful to have this mapping written down
-                    // somewhere
-                    debug!("mapping GlobalId={} to shard ({})", id, metadata.data_shard);
+                        // should be replaced with real introspection
+                        // (https://github.com/MaterializeInc/database-issues/issues/4078)
+                        // but for now, it's helpful to have this mapping written down
+                        // somewhere
+                        debug!("mapping GlobalId={} to shard ({})", id, metadata.data_shard);
 
-                    // If this collection has a primary, the primary is responsible for downgrading
-                    // the critical since and it would be an error if we did so here while opening
-                    // the since handle.
-                    let since = if description.primary.is_some() {
-                        None
-                    } else {
-                        description.since.as_ref()
-                    };
+                        // If this collection has a primary, the primary is responsible for downgrading
+                        // the critical since and it would be an error if we did so here while opening
+                        // the since handle.
+                        let since = if description.primary.is_some() {
+                            None
+                        } else {
+                            description.since.as_ref()
+                        };
 
-                    let (write, mut since_handle) = this
-                        .open_data_handles(
-                            &id,
-                            metadata.data_shard,
-                            since,
-                            metadata.relation_desc.clone(),
-                            persist_client,
-                        )
-                        .await;
+                        let (write, mut since_handle) = this
+                            .open_data_handles(
+                                &id,
+                                metadata.data_shard,
+                                since,
+                                metadata.relation_desc.clone(),
+                                persist_client,
+                            )
+                            .await;
 
-                    // Present tables as springing into existence at the register_ts
-                    // by advancing the since. Otherwise, we could end up in a
-                    // situation where a table with a long compaction window appears
-                    // to exist before the environment (and this the table) existed.
-                    //
-                    // We could potentially also do the same thing for other
-                    // sources, in particular storage's internal sources and perhaps
-                    // others, but leave them for now.
-                    match description.data_source {
-                        DataSource::Introspection(_)
-                        | DataSource::IngestionExport { .. }
-                        | DataSource::Webhook
-                        | DataSource::Ingestion(_)
-                        | DataSource::Progress
-                        | DataSource::Other => {}
-                        DataSource::Sink { .. } => {}
-                        DataSource::Table => {
-                            let register_ts = register_ts.expect(
+                        // Present tables as springing into existence at the register_ts
+                        // by advancing the since. Otherwise, we could end up in a
+                        // situation where a table with a long compaction window appears
+                        // to exist before the environment (and this the table) existed.
+                        //
+                        // We could potentially also do the same thing for other
+                        // sources, in particular storage's internal sources and perhaps
+                        // others, but leave them for now.
+                        match description.data_source {
+                            DataSource::Introspection(_)
+                            | DataSource::IngestionExport { .. }
+                            | DataSource::Webhook
+                            | DataSource::Ingestion(_)
+                            | DataSource::Progress
+                            | DataSource::Other => {}
+                            DataSource::Sink { .. } => {}
+                            DataSource::Table => {
+                                let register_ts = register_ts.expect(
                                 "caller should have provided a register_ts when creating a table",
                             );
-                            if since_handle.since().elements() == &[Timestamp::MIN]
-                                && !migrated_storage_collections.contains(&id)
-                            {
-                                debug!("advancing {} to initial since of {:?}", id, register_ts);
-                                let token = since_handle.opaque();
-                                let _ = since_handle
-                                    .compare_and_downgrade_since(
-                                        &token,
-                                        (&token, &Antichain::from_elem(register_ts)),
-                                    )
-                                    .await;
+                                if since_handle.since().elements() == &[Timestamp::MIN]
+                                    && !migrated_storage_collections.contains(&id)
+                                {
+                                    debug!(
+                                        "advancing {} to initial since of {:?}",
+                                        id, register_ts
+                                    );
+                                    let token = since_handle.opaque();
+                                    let _ = since_handle
+                                        .compare_and_downgrade_since(
+                                            &token,
+                                            (&token, &Antichain::from_elem(register_ts)),
+                                        )
+                                        .await;
+                                }
                             }
                         }
-                    }
 
-                    Ok::<_, StorageError>((id, description, write, since_handle, metadata))
-                }
-            })
-            // Poll each future for each collection concurrently, maximum of 50 at a time.
-            .buffer_unordered(50)
-            // HERE BE DRAGONS:
-            //
-            // There are at least 2 subtleties in using `FuturesUnordered`
-            // (which `buffer_unordered` uses underneath:
-            // - One is captured here
-            //   <https://github.com/rust-lang/futures-rs/issues/2387>
-            // - And the other is deadlocking if processing an OUTPUT of a
-            //   `FuturesUnordered` stream attempts to obtain an async mutex that
-            //   is also obtained in the futures being polled.
-            //
-            // Both of these could potentially be issues in all usages of
-            // `buffer_unordered` in this method, so we stick the standard
-            // advice: only use `try_collect` or `collect`!
-            .try_collect()
-            .await?;
+                        Ok::<_, StorageError>((id, description, write, since_handle, metadata))
+                    }
+                })
+                // Poll each future for each collection concurrently, maximum of 50 at a time.
+                .buffer_unordered(50)
+                // HERE BE DRAGONS:
+                //
+                // There are at least 2 subtleties in using `FuturesUnordered`
+                // (which `buffer_unordered` uses underneath:
+                // - One is captured here
+                //   <https://github.com/rust-lang/futures-rs/issues/2387>
+                // - And the other is deadlocking if processing an OUTPUT of a
+                //   `FuturesUnordered` stream attempts to obtain an async mutex that
+                //   is also obtained in the futures being polled.
+                //
+                // Both of these could potentially be issues in all usages of
+                // `buffer_unordered` in this method, so we stick the standard
+                // advice: only use `try_collect` or `collect`!
+                .try_collect()
+                .await
+        }
+        .instrument(info_span!("ccfb::open_data_handles_concurrent"))
+        .await?;
+        drop(_open_handles_timer);
+        let _sort_timer = phase_metric.with_label_values(&["sort"]).start_timer();
 
         // Reorder in dependency order.
         #[derive(Ord, PartialOrd, Eq, PartialEq)]
@@ -1845,10 +2039,15 @@ impl StorageCollections for StorageCollectionsImpl {
             DataSource::Sink { .. } => DependencyOrder::Sink(*id),
             _ => DependencyOrder::Collection(*id),
         });
+        drop(_sort_timer);
+        let _install_timer = phase_metric
+            .with_label_values(&["install_collection_states"])
+            .start_timer();
 
         // We hold this lock for a very short amount of time, just doing some
         // hashmap inserts and unbounded channel sends.
         let mut self_collections = self.collections.lock().expect("lock poisoned");
+        let _install_span = info_span!("ccfb::install_collection_states").entered();
 
         for (id, description, write_handle, since_handle, metadata) in to_register {
             let write_frontier = write_handle.upper();
@@ -1971,6 +2170,14 @@ impl StorageCollections for StorageCollectionsImpl {
                 metadata.clone(),
             );
 
+            // Keep the `primaried_ids` side index in lockstep with writes to
+            // `CollectionState::primary`. `description.primary` is almost
+            // always `None` in normal usage, but if a fresh collection is
+            // installed with a primary already set, record it.
+            if description.primary.is_some() {
+                self.primaried_ids.lock().expect("lock poisoned").insert(id);
+            }
+
             // Install the collection state in the appropriate spot.
             match &description.data_source {
                 DataSource::Introspection(_) => {
@@ -2019,9 +2226,16 @@ impl StorageCollections for StorageCollectionsImpl {
             self.install_collection_dependency_read_holds_inner(&mut *self_collections, id)?;
         }
 
+        drop(_install_span);
         drop(self_collections);
+        drop(_install_timer);
+        let _finalize_timer = phase_metric
+            .with_label_values(&["synchronize_finalized_shards"])
+            .start_timer();
 
+        let _span = info_span!("ccfb::synchronize_finalized_shards").entered();
         self.synchronize_finalized_shards(storage_metadata);
+        drop(_span);
 
         Ok(())
     }
@@ -2128,11 +2342,24 @@ impl StorageCollections for StorageCollectionsImpl {
             existing.primary = Some(new_collection);
             existing.storage_dependencies.push(new_collection);
 
+            // Mirror the primary-set into the `primaried_ids` side index so
+            // that `prepare_state`'s `dropped_shard_lookup` can answer the
+            // primary question without taking the contended `collections`
+            // mutex.
+            self.primaried_ids
+                .lock()
+                .expect("lock poisoned")
+                .insert(existing_collection);
+
             // Copy over the frontiers from the previous version.
             // The new table starts with two holds - the implied capability, and the hold from
             // the previous version - both at the previous version's read frontier.
             let implied_capability = existing.read_capabilities.frontier().to_owned();
-            let write_frontier = existing.write_frontier.clone();
+            // Use the effective write frontier: for a txns-backed table the
+            // per-collection `write_frontier` may be stale (see
+            // `effective_write_frontier`). The new version's starting upper
+            // must not regress past the actual current txns upper.
+            let write_frontier = self.effective_write_frontier(existing);
 
             // Determine the relevant read capabilities on the new collection.
             //
@@ -2167,6 +2394,7 @@ impl StorageCollections for StorageCollectionsImpl {
             StorageCollectionsImpl::update_read_capabilities_inner(
                 &self.cmd_tx,
                 &mut *self_collections,
+                &self.primaried_ids,
                 &mut updates,
             );
         };
@@ -2256,6 +2484,7 @@ impl StorageCollections for StorageCollectionsImpl {
         }
     }
 
+    #[instrument(level = "debug", fields(n = desired_holds.len()))]
     fn acquire_read_holds(
         &self,
         desired_holds: Vec<GlobalId>,
@@ -2295,6 +2524,7 @@ impl StorageCollections for StorageCollectionsImpl {
         StorageCollectionsImpl::update_read_capabilities_inner(
             &self.cmd_tx,
             &mut collections,
+            &self.primaried_ids,
             &mut updates,
         );
 
@@ -2327,13 +2557,17 @@ impl StorageCollections for StorageCollectionsImpl {
             finalizable_shards,
             finalized_shards,
             collections,
+            primaried_ids,
             txns_read: _,
             config,
             initial_txn_upper,
+            txns_upper,
             persist_location,
             persist: _,
             cmd_tx: _,
             holds_tx: _,
+            create_collections_phase_seconds: _,
+            prepare_state_phase_seconds: _,
             _background_task: _,
             _finalize_shards_task: _,
         } = self;
@@ -2354,7 +2588,15 @@ impl StorageCollections for StorageCollectionsImpl {
             .iter()
             .map(|(id, c)| (id.to_string(), format!("{c:?}")))
             .collect();
+        let primaried_ids: Vec<_> = primaried_ids
+            .lock()
+            .expect("lock poisoned")
+            .iter()
+            .map(ToString::to_string)
+            .collect();
         let config = format!("{:?}", config.lock().expect("poisoned"));
+
+        let txns_upper = format!("{:?}", txns_upper.read().expect("lock poisoned"));
 
         Ok(serde_json::json!({
             "envd_epoch": envd_epoch,
@@ -2362,8 +2604,10 @@ impl StorageCollections for StorageCollectionsImpl {
             "finalizable_shards": finalizable_shards,
             "finalized_shards": finalized_shards,
             "collections": collections,
+            "primaried_ids": primaried_ids,
             "config": config,
             "initial_txn_upper": initial_txn_upper,
+            "txns_upper": txns_upper,
             "persist_location": format!("{persist_location:?}"),
         }))
     }
@@ -2577,12 +2821,24 @@ struct BackgroundTask {
     holds_rx: mpsc::UnboundedReceiver<(GlobalId, ChangeBatch<Timestamp>)>,
     finalizable_shards: Arc<ShardIdSet>,
     collections: Arc<std::sync::Mutex<BTreeMap<GlobalId, CollectionState>>>,
+    /// Shared with [`StorageCollectionsImpl::primaried_ids`]; see the doc
+    /// comment on the parent field for rationale.
+    primaried_ids: Arc<std::sync::Mutex<BTreeSet<GlobalId>>>,
     // So we know what shard ID corresponds to what global ID, which we need
     // when re-enqueing futures for determining the next upper update.
     shard_by_id: BTreeMap<GlobalId, ShardId>,
     since_handles: BTreeMap<GlobalId, SinceHandleWrapper>,
     txns_handle: Option<WriteHandle<SourceData, (), Timestamp, StorageDiff>>,
     txns_shards: BTreeSet<GlobalId>,
+    /// Shared with [`StorageCollectionsImpl::txns_upper`]; the latest observed
+    /// upper of the txns shard. See the doc comment on the parent field for
+    /// rationale.
+    txns_upper: Arc<std::sync::RwLock<Antichain<Timestamp>>>,
+    /// Counter incremented on each observed advance of the txns shard upper.
+    txns_upper_advances: prometheus::Counter,
+    /// Counter incremented on each periodic since-downgrade sweep over
+    /// txns-backed collections.
+    txns_since_sweeps: prometheus::Counter,
 }
 
 #[derive(Debug)]
@@ -2652,18 +2908,61 @@ impl BackgroundTask {
             None => async { std::future::pending().await }.boxed(),
         };
 
+        // Periodic sweep that downgrades the implied capability of every
+        // txns-backed collection to track the shared txns upper. The
+        // txns-upper branch updates the shared field on every advance, but
+        // does *not* fan out per-collection: doing so on every tick is O(N)
+        // under the global `collections` mutex and starves the DDL hot path
+        // (see the doc comment on `StorageCollectionsImpl::txns_upper`). We
+        // still need to drive persist's since forward for these collections,
+        // so we do the bookkeeping here at a fixed cadence. The cost per
+        // sweep is unchanged from the per-tick fanout, but it no longer
+        // contends with `prepare_state` once per txns-upper-tick.
+        const TXNS_SINCE_DOWNGRADE_INTERVAL: Duration = Duration::from_secs(1);
+        let mut txns_since_downgrade_interval =
+            tokio::time::interval(TXNS_SINCE_DOWNGRADE_INTERVAL);
+        // Avoid the initial immediate tick — the txns_shards set starts
+        // empty at boot, so the first sweep would be a no-op.
+        txns_since_downgrade_interval
+            .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
         loop {
             tokio::select! {
                 (id, handle, upper) = &mut txns_upper_future => {
                     trace!("new upper from txns shard: {:?}", upper);
-                    let mut uppers = Vec::new();
-                    for id in self.txns_shards.iter() {
-                        uppers.push((*id, &upper));
-                    }
-                    self.update_write_frontiers(&uppers).await;
+                    // Publish the new upper to the shared field. Readers
+                    // that want the current write_frontier of a
+                    // txns-backed collection consult this field rather than
+                    // the per-collection `write_frontier`. We deliberately
+                    // do NOT iterate `self.txns_shards` here: that was the
+                    // O(N) lock-hold on `self.collections` that drove the
+                    // prepare_state slope. The implied-capability /
+                    // since-downgrade work that previously happened in this
+                    // branch is now handled by the periodic
+                    // `txns_since_downgrade_interval` arm below.
+                    *self.txns_upper.write().expect("lock poisoned") = upper.clone();
+                    self.txns_upper_advances.inc();
 
                     let fut = gen_upper_future(id, handle, upper);
                     txns_upper_future = fut.boxed();
+                }
+                _ = txns_since_downgrade_interval.tick() => {
+                    // Apply the shared txns upper to the implied capability
+                    // of every txns-backed collection, exactly as the
+                    // pre-Phase-15 txns-upper branch did. We coalesce many
+                    // upper-ticks into one sweep so this O(N) work happens
+                    // at a known low frequency instead of on the DDL hot
+                    // path.
+                    let upper = self.txns_upper.read().expect("lock poisoned").clone();
+                    if !upper.is_empty() && !self.txns_shards.is_empty() {
+                        let uppers: Vec<_> = self
+                            .txns_shards
+                            .iter()
+                            .map(|id| (*id, &upper))
+                            .collect();
+                        self.update_write_frontiers(&uppers).await;
+                    }
+                    self.txns_since_sweeps.inc();
                 }
                 Some((id, handle, upper)) = upper_futures.next() => {
                     if id.is_user() {
@@ -2800,6 +3099,7 @@ impl BackgroundTask {
                     StorageCollectionsImpl::update_read_capabilities_inner(
                         &self.cmds_tx,
                         &mut collections,
+                        &self.primaried_ids,
                         &mut batched_changes,
                     );
                 }
@@ -2813,52 +3113,69 @@ impl BackgroundTask {
     async fn update_write_frontiers(&self, updates: &[(GlobalId, &Antichain<Timestamp>)]) {
         let mut read_capability_changes = BTreeMap::default();
 
-        let mut self_collections = self.collections.lock().expect("lock poisoned");
+        // The txns-upper branch in `run()` calls this with one entry per
+        // txns-backed collection (all sharing the same `upper`), so `updates`
+        // grows linearly with the number of user tables. We can't hold
+        // `self.collections` for a whole O(N) iteration: it's the same mutex
+        // that `prepare_state` (and every DDL path that reads/writes
+        // CollectionState) needs, so a single sweep starves all DDL behind it.
+        //
+        // Process the updates in chunks, releasing the lock between chunks so
+        // that competing acquirers get a chance to interleave. The chunk size
+        // is a tradeoff: smaller = lower lock-hold ceiling for prepare_state,
+        // larger = less lock acquire/release overhead. 256 keeps per-chunk
+        // worst-case under ~1 ms even at higher per-iteration cost.
+        const CHUNK_SIZE: usize = 256;
+        for chunk in updates.chunks(CHUNK_SIZE) {
+            let mut self_collections = self.collections.lock().expect("lock poisoned");
+            for (id, new_upper) in chunk.iter() {
+                let collection = if let Some(c) = self_collections.get_mut(id) {
+                    c
+                } else {
+                    trace!(
+                        "Reference to absent collection {id}, due to concurrent removal of that collection"
+                    );
+                    continue;
+                };
 
-        for (id, new_upper) in updates.iter() {
-            let collection = if let Some(c) = self_collections.get_mut(id) {
-                c
-            } else {
-                trace!(
-                    "Reference to absent collection {id}, due to concurrent removal of that collection"
-                );
-                continue;
-            };
+                if PartialOrder::less_than(&collection.write_frontier, *new_upper) {
+                    collection.write_frontier.clone_from(new_upper);
+                }
 
-            if PartialOrder::less_than(&collection.write_frontier, *new_upper) {
-                collection.write_frontier.clone_from(new_upper);
-            }
+                let mut new_read_capability = collection
+                    .read_policy
+                    .frontier(collection.write_frontier.borrow());
 
-            let mut new_read_capability = collection
-                .read_policy
-                .frontier(collection.write_frontier.borrow());
+                if id.is_user() {
+                    trace!(
+                        %id,
+                        implied_capability = ?collection.implied_capability,
+                        policy = ?collection.read_policy,
+                        write_frontier = ?collection.write_frontier,
+                        ?new_read_capability,
+                        "update_write_frontiers");
+                }
 
-            if id.is_user() {
-                trace!(
-                    %id,
-                    implied_capability = ?collection.implied_capability,
-                    policy = ?collection.read_policy,
-                    write_frontier = ?collection.write_frontier,
-                    ?new_read_capability,
-                    "update_write_frontiers");
-            }
+                if PartialOrder::less_equal(&collection.implied_capability, &new_read_capability) {
+                    let mut update = ChangeBatch::new();
+                    update.extend(new_read_capability.iter().map(|time| (*time, 1)));
+                    std::mem::swap(&mut collection.implied_capability, &mut new_read_capability);
+                    update.extend(new_read_capability.iter().map(|time| (*time, -1)));
 
-            if PartialOrder::less_equal(&collection.implied_capability, &new_read_capability) {
-                let mut update = ChangeBatch::new();
-                update.extend(new_read_capability.iter().map(|time| (*time, 1)));
-                std::mem::swap(&mut collection.implied_capability, &mut new_read_capability);
-                update.extend(new_read_capability.iter().map(|time| (*time, -1)));
-
-                if !update.is_empty() {
-                    read_capability_changes.insert(*id, update);
+                    if !update.is_empty() {
+                        read_capability_changes.insert(*id, update);
+                    }
                 }
             }
+            // Lock released at end of scope.
         }
 
         if !read_capability_changes.is_empty() {
+            let mut self_collections = self.collections.lock().expect("lock poisoned");
             StorageCollectionsImpl::update_read_capabilities_inner(
                 &self.cmds_tx,
                 &mut self_collections,
+                &self.primaried_ids,
                 &mut read_capability_changes,
             );
         }
@@ -3351,10 +3668,22 @@ mod tests {
                     UIntGauge::new("finalizable_shards", "dummy gauge for tests").unwrap(),
                 )),
                 collections: Arc::new(Mutex::new(BTreeMap::new())),
+                primaried_ids: Arc::new(Mutex::new(BTreeSet::new())),
                 shard_by_id: BTreeMap::new(),
                 since_handles: BTreeMap::new(),
                 txns_handle: None,
                 txns_shards: BTreeSet::new(),
+                txns_upper: Arc::new(std::sync::RwLock::new(Antichain::new())),
+                txns_upper_advances: prometheus::Counter::new(
+                    "txns_upper_advances",
+                    "dummy counter for tests",
+                )
+                .unwrap(),
+                txns_since_sweeps: prometheus::Counter::new(
+                    "txns_since_sweeps",
+                    "dummy counter for tests",
+                )
+                .unwrap(),
             };
 
             (cmds_tx, task)

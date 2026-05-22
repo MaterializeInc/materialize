@@ -14,8 +14,9 @@ use std::sync::{Mutex, MutexGuard};
 use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::{MetricsRegistry, UIntGauge};
+use mz_ore::stats::histogram_seconds_buckets;
 use mz_persist_types::ShardId;
-use prometheus::Counter;
+use prometheus::{Counter, HistogramVec};
 
 #[derive(Debug)]
 pub struct StorageCollectionsMetrics {
@@ -24,6 +25,17 @@ pub struct StorageCollectionsMetrics {
     pub finalization_started: Counter,
     pub finalization_succeeded: Counter,
     pub finalization_failed: Counter,
+    pub create_collections_phase_seconds: HistogramVec,
+    pub prepare_state_phase_seconds: HistogramVec,
+    /// Number of observed advances of the txns shard upper. Incremented once
+    /// each time the `BackgroundTask` learns of a new txns upper. Useful for
+    /// telling apart "txns shard genuinely commits at rate X" from
+    /// "BackgroundTask is doing O(N) work at rate X for some other reason".
+    pub txns_upper_advances: Counter,
+    /// Number of times the periodic since-downgrade sweep for txns-backed
+    /// collections has run. Compare with `txns_upper_advances` to see how
+    /// much fanout work is being coalesced by the sweep.
+    pub txns_since_sweeps: Counter,
 }
 
 impl StorageCollectionsMetrics {
@@ -48,6 +60,30 @@ impl StorageCollectionsMetrics {
             finalization_failed: registry.register(metric!(
                 name: "mz_shard_finalization_op_failed",
                 help: "count of shard finalization operations that failed",
+            )),
+            create_collections_phase_seconds: registry.register(metric!(
+                name: "mz_storage_collections_create_collections_phase_seconds",
+                help: "The time spent in each phase of a single \
+                       StorageCollections::create_collections_for_bootstrap call.",
+                var_labels: ["phase"],
+                buckets: histogram_seconds_buckets(0.0001, 32.0),
+            )),
+            prepare_state_phase_seconds: registry.register(metric!(
+                name: "mz_storage_collections_prepare_state_phase_seconds",
+                help: "The time spent in each phase of a single \
+                       StorageCollections::prepare_state call.",
+                var_labels: ["phase"],
+                buckets: histogram_seconds_buckets(0.000_01, 32.0),
+            )),
+            txns_upper_advances: registry.register(metric!(
+                name: "mz_storage_collections_txns_upper_advances_total",
+                help: "Count of observed advances of the txns shard upper, as \
+                       observed by the StorageCollections BackgroundTask.",
+            )),
+            txns_since_sweeps: registry.register(metric!(
+                name: "mz_storage_collections_txns_since_sweeps_total",
+                help: "Count of periodic since-downgrade sweeps over txns-backed \
+                       collections performed by the StorageCollections BackgroundTask.",
             )),
         }
     }

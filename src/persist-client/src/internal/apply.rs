@@ -101,6 +101,7 @@ where
         diagnostics: Diagnostics,
     ) -> Result<Self, Box<CodecMismatch>> {
         let shard_metrics = metrics.shards.shard(&shard_id, &diagnostics.shard_name);
+        metrics.register_shard_kind(shard_id, &diagnostics.shard_name);
         let state = shared_states
             .get::<K, V, T, D, _, _>(
                 shard_id,
@@ -665,7 +666,12 @@ where
         let new_seqno = self
             .state
             .write_lock(&self.metrics.locks.applier_write, |state| {
-                state.apply_encoded_diffs(&self.cfg, &self.metrics, &diffs_to_current);
+                state.apply_encoded_diffs(
+                    &self.cfg,
+                    &self.metrics,
+                    "cas_update",
+                    &diffs_to_current,
+                );
                 state.seqno
             });
 

@@ -14,7 +14,7 @@
 //! operations. Only memberships granted by the `MZ_JWT_SYNC_ROLE_ID` sentinel
 //! are managed; manually-granted memberships are never touched.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use mz_adapter_types::dyncfgs::{OIDC_GROUP_ROLE_SYNC_ENABLED, OIDC_GROUP_ROLE_SYNC_STRICT};
 use mz_repr::role_id::RoleId;
@@ -54,7 +54,7 @@ pub struct GroupSyncDiff {
 ///   manual grant takes precedence and we don't overwrite the grantor.
 pub fn compute_group_sync_diff(
     member_id: RoleId,
-    current_membership: &BTreeMap<RoleId, RoleId>,
+    current_membership: &imbl::OrdMap<RoleId, RoleId>,
     target_role_ids: &BTreeSet<RoleId>,
 ) -> GroupSyncDiff {
     // Partition current memberships into sync-managed vs manually-granted.

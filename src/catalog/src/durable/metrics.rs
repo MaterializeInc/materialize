@@ -12,7 +12,7 @@
 use mz_ore::metric;
 use mz_ore::metrics::{IntCounter, MetricsRegistry};
 use mz_ore::stats::histogram_seconds_buckets;
-use prometheus::{Counter, Histogram, IntGauge, IntGaugeVec};
+use prometheus::{Counter, Histogram, HistogramVec, IntGauge, IntGaugeVec};
 
 #[derive(Debug, Clone)]
 pub struct Metrics {
@@ -27,6 +27,8 @@ pub struct Metrics {
     pub allocate_id_seconds: Histogram,
     pub snapshot_consolidations: IntCounter,
     pub snapshot_max_entries: IntGauge,
+    pub commit_transaction_phase_seconds: HistogramVec,
+    pub sync_phase_seconds: HistogramVec,
 }
 
 impl Metrics {
@@ -79,6 +81,20 @@ impl Metrics {
                 name: "mz_catalog_snapshot_max_entries",
                 help: "High-water mark of entries in the unconsolidated in-memory \
                        snapshot since process start.",
+            )),
+            commit_transaction_phase_seconds: registry.register(metric!(
+                name: "mz_catalog_commit_transaction_phase_seconds",
+                help: "The time spent in each phase of a single \
+                       PersistCatalogState::commit_transaction call.",
+                var_labels: ["phase"],
+                buckets: histogram_seconds_buckets(0.0001, 32.0),
+            )),
+            sync_phase_seconds: registry.register(metric!(
+                name: "mz_catalog_sync_phase_seconds",
+                help: "The time spent in each phase of a single \
+                       PersistCatalogState::sync call.",
+                var_labels: ["phase"],
+                buckets: histogram_seconds_buckets(0.0001, 32.0),
             )),
         }
     }

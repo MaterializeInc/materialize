@@ -21,6 +21,7 @@ clap.workspace = true
 derivative.workspace = true
 differential-dataflow.workspace = true
 futures.workspace = true
+imbl.workspace = true
 ipnet.workspace = true
 itertools.workspace = true
 mz-adapter-types = { path = "../adapter-types" }

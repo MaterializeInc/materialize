@@ -27,7 +27,7 @@ use mz_audit_log::{
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::BuiltinLog;
-use mz_catalog::durable::{NetworkPolicy, Snapshot, Transaction};
+use mz_catalog::durable::{DurableCatalogData, NetworkPolicy, Transaction};
 use mz_catalog::expr_cache::LocalExpressions;
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
@@ -457,35 +457,47 @@ impl Catalog {
             .await
             .unwrap_or_terminate("starting catalog transaction");
 
-        let new_state = Self::transact_inner(
-            TransactInnerMode::Commit,
-            storage_collections,
-            oracle_write_ts,
-            session,
-            ops,
-            temporary_ids,
-            &mut builtin_table_updates,
-            &mut catalog_updates,
-            &mut audit_events,
-            &mut tx,
-            &self.state,
-        )
-        .await?;
+        let phase_metrics = self.transact_phase_metrics.as_ref();
+
+        let new_state = {
+            let _t = phase_metrics.map(|m| m.with_label_values(&["transact_inner"]).start_timer());
+            Self::transact_inner(
+                TransactInnerMode::Commit,
+                storage_collections,
+                oracle_write_ts,
+                session,
+                ops,
+                temporary_ids,
+                &mut builtin_table_updates,
+                &mut catalog_updates,
+                &mut audit_events,
+                &mut tx,
+                &self.state,
+                phase_metrics,
+            )
+            .await?
+        };
 
         // The user closure was successful, apply the updates. Terminate the
         // process if this fails, because we have to restart envd due to
         // indeterminate catalog state, which we only reconcile during catalog
         // init.
-        tx.commit(oracle_write_ts)
-            .await
-            .unwrap_or_terminate("catalog storage transaction commit must succeed");
+        {
+            let _t = phase_metrics.map(|m| m.with_label_values(&["tx_commit"]).start_timer());
+            tx.commit(&mut **storage, oracle_write_ts)
+                .await
+                .unwrap_or_terminate("catalog storage transaction commit must succeed");
+        }
 
         // Dropping here keeps the mutable borrow on self, preventing us accidentally
         // mutating anything until after f is executed.
         drop(storage);
-        if let Some(new_state) = new_state {
-            self.transient_revision += 1;
-            self.state = new_state;
+        {
+            let _t = phase_metrics.map(|m| m.with_label_values(&["assign_state"]).start_timer());
+            if let Some(new_state) = new_state {
+                self.transient_revision += 1;
+                self.state = new_state;
+            }
         }
 
         Ok(TransactionResult {
@@ -502,21 +514,21 @@ impl Catalog {
     /// The durable transaction is intentionally never committed and no storage
     /// controller prepare-state side effects are run.
     ///
-    /// If `prev_snapshot` is `Some`, the transaction is initialized from that
-    /// snapshot (which represents the tx state after the previous dry run),
-    /// ensuring it starts in sync with `base_state`. If `None` (first
-    /// statement), a fresh transaction is loaded from durable storage.
+    /// If `prev_durable_data` is `Some`, the transaction is initialized from
+    /// it (representing the tx state after the previous dry run), ensuring it
+    /// starts in sync with `base_state`. If `None` (first statement), a fresh
+    /// transaction is loaded from durable storage.
     ///
-    /// Returns the new accumulated state and a snapshot of the transaction's
-    /// state for use in subsequent incremental dry runs.
+    /// Returns the new accumulated state and the transaction's current
+    /// durable data for use in subsequent incremental dry runs.
     pub async fn transact_incremental_dry_run(
         &self,
         base_state: &CatalogState,
         ops: Vec<Op>,
         session: Option<&ConnMeta>,
-        prev_snapshot: Option<Snapshot>,
+        prev_durable_data: Option<DurableCatalogData>,
         oracle_write_ts: mz_repr::Timestamp,
-    ) -> Result<(CatalogState, Snapshot), AdapterError> {
+    ) -> Result<(CatalogState, DurableCatalogData), AdapterError> {
         // For DDL transactions, items are not temporary (CREATE TABLE FROM SOURCE, etc.)
         // but we still need to check for collisions.
         let temporary_ids = self.temporary_ids(&ops, BTreeSet::new())?;
@@ -525,12 +537,12 @@ impl Catalog {
         let mut catalog_updates = vec![];
         let mut audit_events = vec![];
         let mut storage = self.storage().await;
-        let mut tx = if let Some(snapshot) = prev_snapshot {
-            // Restore transaction from saved snapshot so it starts in sync
+        let mut tx = if let Some(data) = prev_durable_data {
+            // Restore transaction from saved durable data so it starts in sync
             // with the accumulated CatalogState from previous dry runs.
             storage
-                .transaction_from_snapshot(snapshot)
-                .unwrap_or_terminate("starting catalog transaction from snapshot")
+                .transaction_from_durable_data(data)
+                .unwrap_or_terminate("starting catalog transaction from durable data")
         } else {
             // First statement: fresh transaction from durable storage, which
             // is in sync with the real catalog state.
@@ -553,19 +565,22 @@ impl Catalog {
             &mut audit_events,
             &mut tx,
             base_state,
+            // Dry runs are a different code path and we don't want them
+            // polluting the bench measurements; skip phase metrics.
+            None,
         )
         .await?;
 
-        // Save the transaction's current state as a snapshot for the next
+        // Save the transaction's current state as durable data for the next
         // incremental dry run.
-        let new_snapshot = tx.current_snapshot();
+        let new_durable_data = tx.current_durable_data();
 
         // Transaction is NOT committed — drop it.
         drop(storage);
 
         // transact_inner returns Some(state) when ops produced changes.
         let state = new_state.unwrap_or_else(|| base_state.clone());
-        Ok((state, new_snapshot))
+        Ok((state, new_durable_data))
     }
 
     /// Extracts optimized expressions from `Op::CreateItem` operations for views
@@ -632,8 +647,9 @@ impl Catalog {
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         parsed_catalog_updates: &mut Vec<ParsedStateUpdate>,
         audit_events: &mut Vec<VersionedEvent>,
-        tx: &mut Transaction<'_>,
+        tx: &mut Transaction,
         state: &CatalogState,
+        phase_metrics: Option<&prometheus::HistogramVec>,
     ) -> Result<Option<CatalogState>, AdapterError> {
         // We come up with new catalog state, builtin state updates, and parsed
         // catalog updates (for deriving catalog implications) in two phases:
@@ -681,6 +697,7 @@ impl Catalog {
 
         let mut updates = Vec::new();
 
+        let _op_loop_timer = phase_metrics.map(|m| m.with_label_values(&["op_loop"]).start_timer());
         for op in ops {
             let temporary_item_updates = Self::transact_op(
                 oracle_write_ts,
@@ -723,53 +740,67 @@ impl Catalog {
             }
             updates.append(&mut op_updates);
         }
+        drop(_op_loop_timer);
 
-        if !updates.is_empty() {
-            let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
-            let (op_builtin_table_updates, op_catalog_updates) = state
-                .to_mut()
-                .apply_updates(updates.clone(), &mut local_expr_cache)
-                .await;
-            let op_builtin_table_updates = state
-                .to_mut()
-                .resolve_builtin_table_updates(op_builtin_table_updates);
-            builtin_table_updates.extend(op_builtin_table_updates);
-            parsed_catalog_updates.extend(op_catalog_updates);
+        {
+            let _t =
+                phase_metrics.map(|m| m.with_label_values(&["final_apply_updates"]).start_timer());
+            if !updates.is_empty() {
+                let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
+                let (op_builtin_table_updates, op_catalog_updates) = state
+                    .to_mut()
+                    .apply_updates(updates.clone(), &mut local_expr_cache)
+                    .await;
+                let op_builtin_table_updates = state
+                    .to_mut()
+                    .resolve_builtin_table_updates(op_builtin_table_updates);
+                builtin_table_updates.extend(op_builtin_table_updates);
+                parsed_catalog_updates.extend(op_catalog_updates);
+            }
         }
 
-        match mode {
-            TransactInnerMode::Commit => {
-                // `storage_collections` can be `None` in tests.
-                if let Some(c) = storage_collections {
-                    c.prepare_state(
-                        tx,
-                        storage_collections_to_create,
-                        storage_collections_to_drop,
-                        storage_collections_to_register,
-                    )
-                    .await?;
+        {
+            let _t = phase_metrics.map(|m| m.with_label_values(&["prepare_state"]).start_timer());
+            match mode {
+                TransactInnerMode::Commit => {
+                    // `storage_collections` can be `None` in tests.
+                    if let Some(c) = storage_collections {
+                        c.prepare_state(
+                            tx,
+                            storage_collections_to_create,
+                            storage_collections_to_drop,
+                            storage_collections_to_register,
+                        )
+                        .await?;
+                    }
+                }
+                TransactInnerMode::DryRun => {
+                    debug_assert!(
+                        storage_collections.is_none(),
+                        "dry-run mode must not prepare storage state"
+                    );
                 }
             }
-            TransactInnerMode::DryRun => {
-                debug_assert!(
-                    storage_collections.is_none(),
-                    "dry-run mode must not prepare storage state"
-                );
-            }
         }
 
-        let updates = tx.get_and_commit_op_updates();
-        if !updates.is_empty() {
-            let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
-            let (op_builtin_table_updates, op_catalog_updates) = state
-                .to_mut()
-                .apply_updates(updates.clone(), &mut local_expr_cache)
-                .await;
-            let op_builtin_table_updates = state
-                .to_mut()
-                .resolve_builtin_table_updates(op_builtin_table_updates);
-            builtin_table_updates.extend(op_builtin_table_updates);
-            parsed_catalog_updates.extend(op_catalog_updates);
+        {
+            let _t = phase_metrics.map(|m| {
+                m.with_label_values(&["post_prepare_apply_updates"])
+                    .start_timer()
+            });
+            let updates = tx.get_and_commit_op_updates();
+            if !updates.is_empty() {
+                let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
+                let (op_builtin_table_updates, op_catalog_updates) = state
+                    .to_mut()
+                    .apply_updates(updates.clone(), &mut local_expr_cache)
+                    .await;
+                let op_builtin_table_updates = state
+                    .to_mut()
+                    .resolve_builtin_table_updates(op_builtin_table_updates);
+                builtin_table_updates.extend(op_builtin_table_updates);
+                parsed_catalog_updates.extend(op_catalog_updates);
+            }
         }
 
         match state {
@@ -792,7 +823,7 @@ impl Catalog {
         op: Op,
         temporary_ids: &BTreeSet<CatalogItemId>,
         audit_events: &mut Vec<VersionedEvent>,
-        tx: &mut Transaction<'_>,
+        tx: &mut Transaction,
         state: &CatalogState,
         storage_collections_to_create: &mut BTreeSet<GlobalId>,
         storage_collections_to_drop: &mut BTreeSet<GlobalId>,
@@ -2793,7 +2824,7 @@ impl Catalog {
 /// for catalog items. We currently think that there are no use cases that require this assumption,
 /// but no way to know for sure.
 fn tx_replace_item(
-    tx: &mut Transaction<'_>,
+    tx: &mut Transaction,
     state: &CatalogState,
     id: CatalogItemId,
     new_entry: CatalogEntry,
@@ -3230,8 +3261,8 @@ mod tests {
 
             // --- Path A: Incremental (two separate dry-run calls) ---
 
-            // First call: only op_t1, no previous snapshot.
-            let (state_after_t1, snapshot_after_t1) = catalog
+            // First call: only op_t1, no previous durable data.
+            let (state_after_t1, data_after_t1) = catalog
                 .transact_incremental_dry_run(
                     &base_state,
                     vec![op_t1.clone()],
@@ -3260,13 +3291,13 @@ mod tests {
                 "t2 should NOT exist after first dry run"
             );
 
-            // Second call: only op_t2, using state/snapshot from first call.
+            // Second call: only op_t2, using state/durable_data from first call.
             let (state_incremental, _) = catalog
                 .transact_incremental_dry_run(
                     &state_after_t1,
                     vec![op_t2.clone()],
                     None,
-                    Some(snapshot_after_t1),
+                    Some(data_after_t1),
                     oracle_write_ts,
                 )
                 .await

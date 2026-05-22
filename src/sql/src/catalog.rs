@@ -455,7 +455,7 @@ pub trait CatalogDatabase {
 
     /// Returns the schemas of the database as a map from schema name to
     /// schema ID.
-    fn schema_ids(&self) -> &BTreeMap<String, SchemaId>;
+    fn schema_ids(&self) -> &imbl::OrdMap<String, SchemaId>;
 
     /// Returns the schemas of the database.
     fn schemas(&self) -> Vec<&dyn CatalogSchema>;
@@ -699,7 +699,7 @@ impl From<PlannedRoleAttributes> for RoleAttributesRaw {
 #[derive(Default, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct RoleVars {
     /// Map of variable names to their value.
-    pub map: BTreeMap<String, OwnedVarInput>,
+    pub map: imbl::OrdMap<String, OwnedVarInput>,
 }
 
 /// A role in a [`SessionCatalog`].
@@ -714,13 +714,13 @@ pub trait CatalogRole {
     /// membership.
     ///
     /// Key is the role that some role is a member of, value is the grantor role ID.
-    fn membership(&self) -> &BTreeMap<RoleId, RoleId>;
+    fn membership(&self) -> &imbl::OrdMap<RoleId, RoleId>;
 
     /// Returns the attributes associated with this role.
     fn attributes(&self) -> &RoleAttributes;
 
     /// Returns all variables that this role has a default value stored for.
-    fn vars(&self) -> &BTreeMap<String, OwnedVarInput>;
+    fn vars(&self) -> &imbl::OrdMap<String, OwnedVarInput>;
 }
 
 /// A network policy in a [`SessionCatalog`].
@@ -747,11 +747,11 @@ pub trait CatalogCluster<'a> {
     fn id(&self) -> ClusterId;
 
     /// Returns the objects that are bound to this cluster.
-    fn bound_objects(&self) -> &BTreeSet<CatalogItemId>;
+    fn bound_objects(&self) -> &imbl::OrdSet<CatalogItemId>;
 
     /// Returns the replicas of the cluster as a map from replica name to
     /// replica ID.
-    fn replica_ids(&self) -> &BTreeMap<String, ReplicaId>;
+    fn replica_ids(&self) -> &imbl::OrdMap<String, ReplicaId>;
 
     /// Returns the replicas of the cluster.
     fn replicas(&self) -> Vec<&dyn CatalogClusterReplica<'_>>;
@@ -1802,14 +1802,14 @@ pub struct RoleMembership {
     // from different grantors. This isn't a problem now since we don't implement ADMIN OPTION, but
     // we should figure this out before implementing ADMIN OPTION. It will likely require a messy
     // migration.
-    pub map: BTreeMap<RoleId, RoleId>,
+    pub map: imbl::OrdMap<RoleId, RoleId>,
 }
 
 impl RoleMembership {
     /// Creates a new [`RoleMembership`].
     pub fn new() -> RoleMembership {
         RoleMembership {
-            map: BTreeMap::new(),
+            map: imbl::OrdMap::new(),
         }
     }
 }

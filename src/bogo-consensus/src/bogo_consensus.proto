@@ -1,0 +1,73 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file at the root of this repository.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+syntax = "proto3";
+
+package mz_bogo_consensus;
+
+message VersionedData {
+  uint64 seqno = 1;
+  bytes data = 2;
+}
+
+enum CaSResult {
+  UNSPECIFIED = 0;
+  COMMITTED = 1;
+  EXPECTATION_MISMATCH = 2;
+}
+
+message HeadRequest {
+  string key = 1;
+}
+
+message HeadResponse {
+  optional VersionedData data = 1;
+}
+
+message CompareAndSetRequest {
+  string key = 1;
+  VersionedData new = 2;
+}
+
+message CompareAndSetResponse {
+  CaSResult result = 1;
+}
+
+message ScanRequest {
+  string key = 1;
+  uint64 from = 2;
+  uint64 limit = 3;
+}
+
+message ScanResponse {
+  repeated VersionedData data = 1;
+}
+
+message TruncateRequest {
+  string key = 1;
+  uint64 seqno = 2;
+}
+
+message TruncateResponse {
+  optional uint64 deleted = 1;
+}
+
+message ListKeysRequest {}
+
+message ListKeysResponse {
+  string key = 1;
+}
+
+service BogoConsensus {
+  rpc Head(HeadRequest) returns (HeadResponse);
+  rpc CompareAndSet(CompareAndSetRequest) returns (CompareAndSetResponse);
+  rpc Scan(ScanRequest) returns (ScanResponse);
+  rpc Truncate(TruncateRequest) returns (TruncateResponse);
+  rpc ListKeys(ListKeysRequest) returns (stream ListKeysResponse);
+}

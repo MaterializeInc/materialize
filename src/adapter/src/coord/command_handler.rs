@@ -1272,7 +1272,7 @@ impl Coordinator {
                             state,
                             revision,
                             side_effects: vec![],
-                            snapshot: None,
+                            durable_data: None,
                         }) {
                             return ctx.retire(Err(err));
                         }

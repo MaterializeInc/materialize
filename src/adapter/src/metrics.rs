@@ -53,7 +53,11 @@ pub struct Metrics {
     pub catalog_snapshot_seconds: HistogramVec,
     pub pgwire_recv_scheduling_delay_ms: HistogramVec,
     pub catalog_transact_seconds: HistogramVec,
+    pub catalog_transact_phase_seconds: HistogramVec,
+    pub catalog_apply_updates_phase_seconds: HistogramVec,
+    pub catalog_apply_update_kind_seconds: HistogramVec,
     pub apply_catalog_implications_seconds: Histogram,
+    pub apply_catalog_implications_phase_seconds: HistogramVec,
     pub group_commit_catalog_upper_seconds: Histogram,
 }
 
@@ -242,10 +246,42 @@ impl Metrics {
                 var_labels: ["method"],
                 buckets: histogram_seconds_buckets(0.001, 32.0),
             )),
+            catalog_transact_phase_seconds: registry.register(metric!(
+                name: "mz_catalog_transact_phase_seconds",
+                help: "The time spent in each phase of a catalog::transact call \
+                       (op_loop, final_apply_updates, prepare_state, \
+                       post_prepare_apply_updates, tx_commit, assign_state).",
+                var_labels: ["phase"],
+                buckets: histogram_seconds_buckets(0.001, 32.0),
+            )),
+            catalog_apply_updates_phase_seconds: registry.register(metric!(
+                name: "mz_catalog_apply_updates_phase_seconds",
+                help: "The time spent in each sub-phase of a single \
+                       CatalogState::apply_updates call \
+                       (consolidate_initial, sort_per_group, \
+                       apply_updates_inner, cleanup_notices).",
+                var_labels: ["phase"],
+                buckets: histogram_seconds_buckets(0.0001, 32.0),
+            )),
+            catalog_apply_update_kind_seconds: registry.register(metric!(
+                name: "mz_catalog_apply_update_kind_seconds",
+                help: "The time spent applying a single durable state update \
+                       inside CatalogState::apply_updates_inner, broken out by \
+                       update kind. One observation per update.",
+                var_labels: ["kind"],
+                buckets: histogram_seconds_buckets(0.00001, 32.0),
+            )),
             apply_catalog_implications_seconds: registry.register(metric!(
                 name: "mz_apply_catalog_implications_seconds",
                 help: "The time it takes to apply catalog implications.",
                 buckets: histogram_seconds_buckets(0.001, 32.0),
+            )),
+            apply_catalog_implications_phase_seconds: registry.register(metric!(
+                name: "mz_apply_catalog_implications_phase_seconds",
+                help: "The time spent in each phase of a single \
+                       apply_catalog_implications call.",
+                var_labels: ["phase"],
+                buckets: histogram_seconds_buckets(0.0001, 32.0),
             )),
             group_commit_catalog_upper_seconds: registry.register(metric!(
                 name: "mz_group_commit_catalog_upper_seconds",

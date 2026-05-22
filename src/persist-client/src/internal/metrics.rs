@@ -11,7 +11,7 @@
 
 use async_stream::stream;
 use mz_persist_types::stats::PartStatsMetrics;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 use tokio::sync::{OnceCell, OwnedSemaphorePermit, Semaphore};
@@ -113,6 +113,39 @@ pub struct Metrics {
     /// Metrics for Postgres-backed consensus implementation
     pub postgres_consensus: PostgresClientMetrics,
 
+    /// Per-op latency histogram broken down by shard_kind, so we can
+    /// disentangle catalog / txns / user-shard contributions to total CAS time.
+    pub external_op_latency_by_kind: HistogramVec,
+    /// Sub-stage latency histogram for `State::apply_diff` and friends, broken
+    /// down by `[stage, shard_kind]`. `stage` is one of `total`, `flatten`,
+    /// `unflatten`, `decode`. Use this to localize where per-CAS state-apply
+    /// time goes for a given shard kind. The histogram count for `stage="total"`
+    /// also doubles as a "number of `apply_diff` invocations" counter per
+    /// shard_kind, which is what reveals the per-DDL state-apply work growth.
+    pub state_apply_latency_by_kind: HistogramVec,
+    /// Per-`apply_diff` invocation counter, broken down by `[source, shard_kind]`.
+    /// `source` is one of `cas_update` (apply.rs `fetch_and_update_state` fast
+    /// path), `slow_refetch` (`state_versions.rs::fetch_current_state` full
+    /// replay from rollup), `pubsub_push` (`cache.rs::push_diff` from PubSub
+    /// broadcast), or `state_iter` (historical walk via
+    /// `state_versions.rs::StateVersionsIter::next`). Used to attribute the
+    /// per-DDL `apply_diff` count growth on the catalog/txns shards to the
+    /// specific code path that is calling state apply.
+    pub state_apply_calls_by_source_kind: IntCounterVec,
+    /// Per-Consensus-op inner wire latency, broken down by shard_kind. Recorded
+    /// inside `BogoConsensus` around the bogo gRPC client call only, so we can
+    /// split `external_op_latency_by_kind` (post-spawn through `run_op`) from
+    /// the time spent at the actual wire. `external - wire` ≈ overhead inside
+    /// `MetricsConsensus::run_op` + the bogo adapter; `wire` itself ≈ tonic
+    /// client send + server processing + return. Only populated when the
+    /// active consensus backend is `bogo://`.
+    pub consensus_wire_seconds_by_kind: HistogramVec,
+    /// Registry mapping a persist key prefix (the ShardId in stringified form)
+    /// to a coarse `shard_kind` label. Populated when shards are opened by
+    /// `Applier::new` via [Metrics::register_shard_kind] and read on the hot
+    /// path of [MetricsConsensus] / [MetricsBlob] to attribute external ops.
+    shard_kinds: Arc<Mutex<HashMap<String, &'static str>>>,
+
     #[allow(dead_code)]
     pub(crate) registry: MetricsRegistry,
 }
@@ -141,6 +174,31 @@ impl Metrics {
         );
         let s3_blob = S3BlobMetrics::new(registry);
         let columnar = ColumnarMetrics::new(registry);
+        let external_op_latency_by_kind = registry.register(metric!(
+            name: "mz_persist_external_op_latency_by_shard_kind",
+            help: "latency observed by individual performance-critical external ops, broken down by shard_kind",
+            var_labels: ["op", "shard_kind"],
+            buckets: histogram_seconds_buckets(0.000_500, 32.0),
+        ));
+        let state_apply_latency_by_kind = registry.register(metric!(
+            name: "mz_persist_state_apply_latency_by_shard_kind",
+            help: "latency of State::apply_diff sub-stages (total/flatten/unflatten/decode), broken down by shard_kind",
+            var_labels: ["stage", "shard_kind"],
+            // Apply work is mostly sub-millisecond per-call; keep the low end fine.
+            buckets: histogram_seconds_buckets(0.000_050, 32.0),
+        ));
+        let state_apply_calls_by_source_kind = registry.register(metric!(
+            name: "mz_persist_state_apply_calls_by_source_shard_kind",
+            help: "count of State::apply_diff invocations, broken down by call-site source and shard_kind",
+            var_labels: ["source", "shard_kind"],
+        ));
+        let consensus_wire_seconds_by_kind = registry.register(metric!(
+            name: "mz_persist_consensus_wire_seconds_by_shard_kind",
+            help: "wall time of the inner bogo-consensus gRPC call (client-side), broken down by op and shard_kind",
+            var_labels: ["op", "shard_kind"],
+            // Same buckets as external_op_latency_by_kind so they line up.
+            buckets: histogram_seconds_buckets(0.000_500, 32.0),
+        ));
         Metrics {
             blob: vecs.blob_metrics(),
             consensus: vecs.consensus_metrics(),
@@ -169,10 +227,66 @@ impl Metrics {
             sink: SinkMetrics::new(registry),
             s3_blob,
             postgres_consensus: PostgresClientMetrics::new(registry, "mz_persist"),
+            external_op_latency_by_kind,
+            state_apply_latency_by_kind,
+            state_apply_calls_by_source_kind,
+            consensus_wire_seconds_by_kind,
+            shard_kinds: Arc::new(Mutex::new(HashMap::new())),
             _vecs: vecs,
             _uptime: uptime,
             registry: registry.clone(),
         }
+    }
+
+    /// Classify a `shard_name` (as provided in `Diagnostics::shard_name` at
+    /// shard-open time) into a coarse, fixed taxonomy useful for breaking down
+    /// hot-path metrics. The taxonomy intentionally has a small, closed set of
+    /// labels so it does not blow up Prometheus cardinality.
+    pub fn classify_shard_kind(shard_name: &str) -> &'static str {
+        // Known process-singleton shards by exact name. Names below come from
+        // the canonical open sites and should match string literals there.
+        match shard_name {
+            "catalog" => "catalog",
+            "txns" => "txns",
+            "builtin_migration" => "builtin_migration",
+            "expression_cache" => "expression_cache",
+            "storage-usage" | "storage_usage" => "storage_usage",
+            "unknown" => "unknown",
+            _ => "user_data",
+        }
+    }
+
+    /// Register a `shard_id` -> `shard_kind` mapping derived from
+    /// `shard_name`. Called once per shard open from `Applier::new`; the map
+    /// is read on the hot path of [MetricsConsensus] / [MetricsBlob] to
+    /// attribute external-op latency.
+    pub fn register_shard_kind(&self, shard_id: ShardId, shard_name: &str) {
+        let kind = Self::classify_shard_kind(shard_name);
+        let mut map = self.shard_kinds.lock().expect("mutex poisoned");
+        map.entry(shard_id.to_string()).or_insert(kind);
+    }
+
+    /// Look up the `shard_kind` for a persist external-op `key`. The key is a
+    /// ShardId for consensus ops, or a `<shard_id>/<...>` blob path for blob
+    /// ops; we extract just the shard-id prefix and consult [Self::shard_kinds].
+    /// Returns `"unknown"` if the shard has not been registered yet (e.g. for
+    /// pre-registration init writes).
+    pub(crate) fn shard_kind_for_key(&self, key: &str) -> &'static str {
+        let prefix = match key.split_once('/') {
+            Some((p, _)) => p,
+            None => key,
+        };
+        let map = self.shard_kinds.lock().expect("mutex poisoned");
+        map.get(prefix).copied().unwrap_or("unknown")
+    }
+
+    /// Look up the `shard_kind` for a [ShardId]. Returns `"unknown"` if the
+    /// shard has not been registered yet via [Self::register_shard_kind].
+    /// Used by in-persist hot paths (state apply) to attribute work to the
+    /// shard kind without going through the consensus-key prefix logic.
+    pub(crate) fn shard_kind_for(&self, shard_id: &ShardId) -> &'static str {
+        let map = self.shard_kinds.lock().expect("mutex poisoned");
+        map.get(&shard_id.to_string()).copied().unwrap_or("unknown")
     }
 
     /// Returns the current lifetime write amplification reflected in these
@@ -2782,12 +2896,18 @@ impl MetricsBlob {
 impl Blob for MetricsBlob {
     #[instrument(name = "blob::get", fields(shard=blob_key_shard_id(key)))]
     async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
+        let kind = self.metrics.shard_kind_for_key(key);
+        let start = Instant::now();
         let res = self
             .metrics
             .blob
             .get
             .run_op(|| self.blob.get(key), Self::on_err)
             .await;
+        self.metrics
+            .external_op_latency_by_kind
+            .with_label_values(&["blob_get", kind])
+            .observe(start.elapsed().as_secs_f64());
         if let Ok(Some(value)) = res.as_ref() {
             self.metrics
                 .blob
@@ -2837,12 +2957,18 @@ impl Blob for MetricsBlob {
     #[instrument(name = "blob::set", fields(shard=blob_key_shard_id(key),size_bytes=value.len()))]
     async fn set(&self, key: &str, value: Bytes) -> Result<(), ExternalError> {
         let bytes = value.len();
+        let kind = self.metrics.shard_kind_for_key(key);
+        let start = Instant::now();
         let res = self
             .metrics
             .blob
             .set
             .run_op(|| self.blob.set(key, value), Self::on_err)
             .await;
+        self.metrics
+            .external_op_latency_by_kind
+            .with_label_values(&["blob_set", kind])
+            .observe(start.elapsed().as_secs_f64());
         if res.is_ok() {
             self.metrics.blob.set.bytes.inc_by(u64::cast_from(bytes));
             self.metrics.blob.blob_sizes.observe(f64::cast_lossy(bytes));
@@ -2920,12 +3046,18 @@ impl Consensus for MetricsConsensus {
 
     #[instrument(name = "consensus::head", fields(shard=key))]
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
+        let kind = self.metrics.shard_kind_for_key(key);
+        let start = Instant::now();
         let res = self
             .metrics
             .consensus
             .head
             .run_op(|| self.consensus.head(key), Self::on_err)
             .await;
+        self.metrics
+            .external_op_latency_by_kind
+            .with_label_values(&["consensus_head", kind])
+            .observe(start.elapsed().as_secs_f64());
         if let Ok(Some(data)) = res.as_ref() {
             self.metrics
                 .consensus
@@ -2943,12 +3075,18 @@ impl Consensus for MetricsConsensus {
         new: VersionedData,
     ) -> Result<CaSResult, ExternalError> {
         let bytes = new.data.len();
+        let kind = self.metrics.shard_kind_for_key(key);
+        let start = Instant::now();
         let res = self
             .metrics
             .consensus
             .compare_and_set
             .run_op(|| self.consensus.compare_and_set(key, new), Self::on_err)
             .await;
+        self.metrics
+            .external_op_latency_by_kind
+            .with_label_values(&["consensus_cas", kind])
+            .observe(start.elapsed().as_secs_f64());
         match res.as_ref() {
             Ok(CaSResult::Committed) => self
                 .metrics
@@ -2968,12 +3106,18 @@ impl Consensus for MetricsConsensus {
         from: SeqNo,
         limit: usize,
     ) -> Result<Vec<VersionedData>, ExternalError> {
+        let kind = self.metrics.shard_kind_for_key(key);
+        let start = Instant::now();
         let res = self
             .metrics
             .consensus
             .scan
             .run_op(|| self.consensus.scan(key, from, limit), Self::on_err)
             .await;
+        self.metrics
+            .external_op_latency_by_kind
+            .with_label_values(&["consensus_scan", kind])
+            .observe(start.elapsed().as_secs_f64());
         if let Ok(dataz) = res.as_ref() {
             let bytes: usize = dataz.iter().map(|x| x.data.len()).sum();
             self.metrics
@@ -2988,10 +3132,16 @@ impl Consensus for MetricsConsensus {
     #[instrument(name = "consensus::truncate", fields(shard=key))]
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<Option<usize>, ExternalError> {
         let metrics = &self.metrics.consensus;
+        let kind = self.metrics.shard_kind_for_key(key);
+        let start = Instant::now();
         let deleted = metrics
             .truncate
             .run_op(|| self.consensus.truncate(key, seqno), Self::on_err)
             .await?;
+        self.metrics
+            .external_op_latency_by_kind
+            .with_label_values(&["consensus_truncate", kind])
+            .observe(start.elapsed().as_secs_f64());
         if let Some(deleted) = deleted {
             metrics.truncated_count.inc_by(u64::cast_from(deleted));
         }

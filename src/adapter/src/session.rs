@@ -63,7 +63,7 @@ use crate::error::AdapterError;
 use crate::metrics::{Metrics, SessionMetrics};
 use crate::statement_logging::PreparedStatementLoggingInfo;
 use crate::{AdapterNotice, ExecuteContext};
-use mz_catalog::durable::Snapshot;
+use mz_catalog::durable::DurableCatalogData;
 
 const DUMMY_CONNECTION_ID: ConnectionId = ConnectionId::Static(0);
 
@@ -1396,14 +1396,14 @@ impl TransactionStatus {
                         revision: og_revision,
                         state: og_state,
                         side_effects,
-                        snapshot: og_snapshot,
+                        durable_data: og_durable_data,
                     } => match add_ops {
                         TransactionOps::DDL {
                             ops: new_ops,
                             revision: new_revision,
                             side_effects: mut net_new_side_effects,
                             state: new_state,
-                            snapshot: new_snapshot,
+                            durable_data: new_durable_data,
                         } => {
                             if *og_revision != new_revision {
                                 return Err(AdapterError::DDLTransactionRace);
@@ -1412,7 +1412,7 @@ impl TransactionStatus {
                             if !new_ops.is_empty() {
                                 *og_ops = new_ops;
                                 *og_state = new_state;
-                                *og_snapshot = new_snapshot;
+                                *og_durable_data = new_durable_data;
                             }
                             side_effects.append(&mut net_new_side_effects);
                         }
@@ -1603,11 +1603,12 @@ pub enum TransactionOps {
         >,
         /// Transient revision of the `Catalog` when this transaction started.
         revision: u64,
-        /// Snapshot of the durable transaction state after the last dry run.
-        /// Used to initialize the next dry run's transaction so it starts
-        /// in sync with the accumulated `state`. `None` for the first
-        /// statement in the transaction (before any dry run).
-        snapshot: Option<Snapshot>,
+        /// Durable transaction state after the last dry run, carried across
+        /// statements in a multi-statement DDL transaction. Used to initialize
+        /// the next dry run's transaction so it starts in sync with the
+        /// accumulated `state`. `None` for the first statement in the
+        /// transaction (before any dry run).
+        durable_data: Option<DurableCatalogData>,
     },
 }
 

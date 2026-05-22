@@ -18,6 +18,7 @@
 )]
 
 pub mod azure;
+pub mod bogo;
 pub mod cfg;
 pub mod error;
 pub mod file;

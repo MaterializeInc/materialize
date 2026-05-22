@@ -765,6 +765,7 @@ impl<T: Timestamp + Lattice + Codec64> UntypedState<T> {
         &mut self,
         cfg: &PersistConfig,
         metrics: &Metrics,
+        source: &'static str,
         diffs: I,
     ) {
         // The apply_encoded_diffs might panic if T is not correct. Making this
@@ -773,7 +774,7 @@ impl<T: Timestamp + Lattice + Codec64> UntypedState<T> {
         if T::codec_name() != self.ts_codec {
             return;
         }
-        self.state.apply_encoded_diffs(cfg, metrics, diffs);
+        self.state.apply_encoded_diffs(cfg, metrics, source, diffs);
     }
 
     pub fn check_codecs<K: Codec, V: Codec, D: Codec64>(
@@ -2250,7 +2251,12 @@ mod tests {
             seqno: SeqNo(5),
             data: diff_proto.encode_to_vec().into(),
         };
-        state.apply_encoded_diffs(cache.cfg(), &cache.metrics, std::iter::once(&encoded_diff));
+        state.apply_encoded_diffs(
+            cache.cfg(),
+            &cache.metrics,
+            "test",
+            std::iter::once(&encoded_diff),
+        );
         assert_eq!(
             state
                 .state

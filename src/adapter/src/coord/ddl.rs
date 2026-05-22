@@ -50,7 +50,9 @@ use serde_json::json;
 use tracing::{Instrument, Level, event, info_span, warn};
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
-use crate::catalog::{DropObjectInfo, Op, ReplicaCreateDropReason, TransactionResult};
+use crate::catalog::{
+    DropObjectInfo, Op, ReplicaCreateDropReason, TransactionResult, UserConnectionKind,
+};
 use crate::coord::Coordinator;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
@@ -226,7 +228,7 @@ impl Coordinator {
                     ops: txn_ops,
                     revision: txn_revision,
                     state: txn_state,
-                    snapshot: txn_snapshot,
+                    durable_data: txn_durable_data,
                     side_effects: _,
                 },
             ..
@@ -254,7 +256,7 @@ impl Coordinator {
         // Clone what we need from the session before taking &mut below.
         let txn_ops_clone = txn_ops.clone();
         let txn_state_clone = txn_state.clone();
-        let prev_snapshot = txn_snapshot.clone();
+        let prev_durable_data = txn_durable_data.clone();
 
         // Validate resource limits with all accumulated + new ops (cheap O(N) counting).
         let mut combined_ops = txn_ops_clone;
@@ -273,13 +275,13 @@ impl Coordinator {
         // initialize the transaction so it starts in sync with the accumulated
         // state. Otherwise (first statement), the fresh durable transaction is
         // already in sync with the real catalog state.
-        let (new_state, new_snapshot) = self
+        let (new_state, new_durable_data) = self
             .catalog()
             .transact_incremental_dry_run(
                 &txn_state_clone,
                 ops.clone(),
                 conn,
-                prev_snapshot,
+                prev_durable_data,
                 oracle_write_ts,
             )
             .await?;
@@ -293,7 +295,7 @@ impl Coordinator {
                 state: new_state,
                 side_effects: vec![Box::new(side_effect)],
                 revision: self.catalog().transient_revision(),
-                snapshot: Some(new_snapshot),
+                durable_data: Some(new_durable_data),
             });
 
         self.metrics
@@ -313,6 +315,17 @@ impl Coordinator {
         conn_id: Option<&ConnectionId>,
         ops: Vec<catalog::Op>,
     ) -> Result<(BuiltinTableAppendNotify, Vec<ParsedStateUpdate>), AdapterError> {
+        let _coord_inner_timer = self
+            .metrics
+            .catalog_transact_phase_seconds
+            .with_label_values(&["coord_inner_total"])
+            .start_timer();
+        let _coord_pre_transact_timer = self
+            .metrics
+            .catalog_transact_phase_seconds
+            .with_label_values(&["coord_pre_transact"])
+            .start_timer();
+
         if self.controller.read_only() {
             return Err(AdapterError::ReadOnly);
         }
@@ -465,6 +478,9 @@ impl Coordinator {
         // regress or pause for 10s.
         let oracle_write_ts = self.get_local_write_ts().await.timestamp;
 
+        // Cloned out so we can keep using it after the split-borrow below.
+        let phase_metric = self.metrics.catalog_transact_phase_seconds.clone();
+
         let Coordinator {
             catalog,
             active_conns,
@@ -472,8 +488,14 @@ impl Coordinator {
             cluster_replica_statuses,
             ..
         } = self;
-        let catalog = Arc::make_mut(catalog);
+        let catalog = {
+            let _t = phase_metric
+                .with_label_values(&["coord_arc_make_mut"])
+                .start_timer();
+            Arc::make_mut(catalog)
+        };
         let conn = conn_id.map(|id| active_conns.get(id).expect("connection must exist"));
+        drop(_coord_pre_transact_timer);
 
         let TransactionResult {
             builtin_table_updates,
@@ -487,6 +509,10 @@ impl Coordinator {
                 ops,
             )
             .await?;
+
+        let _coord_post_transact_timer = phase_metric
+            .with_label_values(&["coord_post_transact"])
+            .start_timer();
 
         for (cluster_id, replica_id) in &cluster_replicas_to_drop {
             cluster_replica_statuses.remove_cluster_replica_statuses(cluster_id, replica_id);
@@ -513,10 +539,18 @@ impl Coordinator {
 
         // Append our builtin table updates, then return the notify so we can run other tasks in
         // parallel.
-        let (builtin_update_notify, _) = self
-            .builtin_table_update()
-            .execute(builtin_table_updates)
-            .await;
+        let (builtin_update_notify, _) = {
+            let _t = phase_metric
+                .with_label_values(&["coord_builtin_table_execute"])
+                .start_timer();
+            self.builtin_table_update()
+                .execute(builtin_table_updates)
+                .await
+        };
+
+        let _coord_finalize_timer = phase_metric
+            .with_label_values(&["coord_finalize"])
+            .start_timer();
 
         // No error returns are allowed after this point. Enforce this at compile time
         // by using this odd structure so we don't accidentally add a stray `?`.
@@ -1291,96 +1325,69 @@ impl Coordinator {
             }
         }
 
-        let mut current_aws_privatelink_connections = 0;
-        let mut current_postgres_connections = 0;
-        let mut current_mysql_connections = 0;
-        let mut current_sql_server_connections = 0;
-        let mut current_kafka_connections = 0;
-        for c in self.catalog().user_connections() {
-            let connection = c
-                .connection()
-                .expect("`user_connections()` only returns connection objects");
-
-            match connection.details {
-                ConnectionDetails::AwsPrivatelink(_) => current_aws_privatelink_connections += 1,
-                ConnectionDetails::Postgres(_) => current_postgres_connections += 1,
-                ConnectionDetails::MySql(_) => current_mysql_connections += 1,
-                ConnectionDetails::SqlServer(_) => current_sql_server_connections += 1,
-                ConnectionDetails::Kafka(_) => current_kafka_connections += 1,
-                ConnectionDetails::Csr(_)
-                | ConnectionDetails::Ssh { .. }
-                | ConnectionDetails::Aws(_)
-                | ConnectionDetails::IcebergCatalog(_) => {}
-            }
-        }
         self.validate_resource_limit(
-            current_kafka_connections,
+            self.catalog()
+                .user_connection_count(UserConnectionKind::Kafka),
             new_kafka_connections,
             SystemVars::max_kafka_connections,
             "Kafka Connection",
             MAX_KAFKA_CONNECTIONS.name(),
         )?;
         self.validate_resource_limit(
-            current_postgres_connections,
+            self.catalog()
+                .user_connection_count(UserConnectionKind::Postgres),
             new_postgres_connections,
             SystemVars::max_postgres_connections,
             "PostgreSQL Connection",
             MAX_POSTGRES_CONNECTIONS.name(),
         )?;
         self.validate_resource_limit(
-            current_mysql_connections,
+            self.catalog()
+                .user_connection_count(UserConnectionKind::MySql),
             new_mysql_connections,
             SystemVars::max_mysql_connections,
             "MySQL Connection",
             MAX_MYSQL_CONNECTIONS.name(),
         )?;
         self.validate_resource_limit(
-            current_sql_server_connections,
+            self.catalog()
+                .user_connection_count(UserConnectionKind::SqlServer),
             new_sql_server_connections,
             SystemVars::max_sql_server_connections,
             "SQL Server Connection",
             MAX_SQL_SERVER_CONNECTIONS.name(),
         )?;
         self.validate_resource_limit(
-            current_aws_privatelink_connections,
+            self.catalog()
+                .user_connection_count(UserConnectionKind::AwsPrivatelink),
             new_aws_privatelink_connections,
             SystemVars::max_aws_privatelink_connections,
             "AWS PrivateLink Connection",
             MAX_AWS_PRIVATELINK_CONNECTIONS.name(),
         )?;
         self.validate_resource_limit(
-            self.catalog().user_tables().count(),
+            self.catalog().user_tables_count(),
             new_tables,
             SystemVars::max_tables,
             "table",
             MAX_TABLES.name(),
         )?;
-
-        let current_sources: usize = self
-            .catalog()
-            .user_sources()
-            .filter_map(|source| source.source())
-            .map(|source| source.user_controllable_persist_shard_count())
-            .sum::<i64>()
-            .try_into()
-            .expect("non-negative sum of sources");
-
         self.validate_resource_limit(
-            current_sources,
+            self.catalog().user_source_shard_count(),
             new_sources,
             SystemVars::max_sources,
             "source",
             MAX_SOURCES.name(),
         )?;
         self.validate_resource_limit(
-            self.catalog().user_sinks().count(),
+            self.catalog().user_sinks_count(),
             new_sinks,
             SystemVars::max_sinks,
             "sink",
             MAX_SINKS.name(),
         )?;
         self.validate_resource_limit(
-            self.catalog().user_materialized_views().count(),
+            self.catalog().user_materialized_views_count(),
             new_materialized_views,
             SystemVars::max_materialized_views,
             "materialized view",
@@ -1457,7 +1464,7 @@ impl Coordinator {
             )?;
         }
         self.validate_resource_limit(
-            self.catalog().user_secrets().count(),
+            self.catalog().user_secrets_count(),
             new_secrets,
             SystemVars::max_secrets,
             "secret",

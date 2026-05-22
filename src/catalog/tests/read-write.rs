@@ -193,7 +193,7 @@ async fn test_audit_logs(state_builder: TestCatalogStateBuilder) {
     // Drain txn updates.
     let _ = txn.get_and_commit_op_updates();
     let commit_ts = txn.upper();
-    txn.commit(commit_ts).await.unwrap();
+    txn.commit(&mut *state, commit_ts).await.unwrap();
 
     let persisted_audit_logs = state.get_audit_logs().await.unwrap();
     for audit_log in &audit_logs {
@@ -215,7 +215,7 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
     let items = [
         Item {
             id: CatalogItemId::User(100),
-            oid: 20_000,
+            oid: 30_000,
             global_id: GlobalId::User(100),
             schema_id: SchemaId::User(1),
             name: "foo".to_string(),
@@ -226,7 +226,7 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
         },
         Item {
             id: CatalogItemId::User(200),
-            oid: 20_001,
+            oid: 30_001,
             global_id: GlobalId::User(200),
             schema_id: SchemaId::User(1),
             name: "bar".to_string(),
@@ -267,7 +267,7 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
     // Drain txn updates.
     let _ = txn.get_and_commit_op_updates();
     let commit_ts = txn.upper();
-    txn.commit(commit_ts).await.unwrap();
+    txn.commit(&mut *state, commit_ts).await.unwrap();
 
     let snapshot_items: Vec<_> = state
         .snapshot()
@@ -321,7 +321,7 @@ async fn test_schemas(state_builder: TestCatalogStateBuilder) {
     // Drain txn updates.
     let _ = txn.get_and_commit_op_updates();
     let commit_ts = txn.upper();
-    txn.commit(commit_ts).await.unwrap();
+    txn.commit(&mut *state, commit_ts).await.unwrap();
 
     // Test removing schemas where one doesn't exist.
     let mut txn = state.transaction().await.unwrap();
@@ -405,7 +405,7 @@ async fn test_non_writer_commits(state_builder: TestCatalogStateBuilder) {
         // Drain updates.
         let _ = txn.get_and_commit_op_updates();
         let commit_ts = txn.upper();
-        txn.commit(commit_ts).await.unwrap();
+        txn.commit(&mut *writer_state, commit_ts).await.unwrap();
 
         let roles = writer_state.snapshot().await.unwrap().roles;
         let role = roles
@@ -431,7 +431,7 @@ async fn test_non_writer_commits(state_builder: TestCatalogStateBuilder) {
         // Drain updates.
         let _ = txn.get_and_commit_op_updates();
         let commit_ts = txn.upper();
-        txn.commit(commit_ts).await.unwrap();
+        txn.commit(&mut *savepoint_state, commit_ts).await.unwrap();
 
         let snapshot = savepoint_state.snapshot().await.unwrap();
 
@@ -456,7 +456,7 @@ async fn test_non_writer_commits(state_builder: TestCatalogStateBuilder) {
     {
         let txn = reader_state.transaction().await.unwrap();
         let commit_ts = txn.upper();
-        txn.commit(commit_ts).await.unwrap();
+        txn.commit(&mut *reader_state, commit_ts).await.unwrap();
     }
 }
 
@@ -509,7 +509,7 @@ async fn test_persist_ddl_detection_with_batch_allocated_ids() {
         let id = first_id + i;
         txn.insert_item(
             CatalogItemId::User(id),
-            20_000 + u32::try_from(i).unwrap(),
+            30_000 + u32::try_from(i).unwrap(),
             GlobalId::User(id),
             SchemaId::User(1),
             &format!("item_{i}"),
@@ -522,7 +522,7 @@ async fn test_persist_ddl_detection_with_batch_allocated_ids() {
     }
     let _ = txn.get_and_commit_op_updates();
     let commit_ts = txn.upper();
-    txn.commit(commit_ts).await.unwrap();
+    txn.commit(&mut *state, commit_ts).await.unwrap();
 
     // Now verify the two approaches to computing the next ID baseline.
     let txn = state.transaction().await.unwrap();
@@ -609,7 +609,7 @@ async fn test_persist_sync_consolidation_not_quadratic() {
         .unwrap();
         let _ = txn.get_and_commit_op_updates();
         let commit_ts = txn.upper();
-        txn.commit(commit_ts).await.unwrap();
+        txn.commit(&mut *writer, commit_ts).await.unwrap();
     }
 
     // Record the consolidation counter before the reader syncs.
@@ -678,7 +678,7 @@ async fn test_persist_sync_snapshot_stays_bounded_under_churn() {
         .unwrap();
     let _ = txn.get_and_commit_op_updates();
     let commit_ts = txn.upper();
-    txn.commit(commit_ts).await.unwrap();
+    txn.commit(&mut *writer, commit_ts).await.unwrap();
 
     // Open reader, sync to current state.
     let mut reader = state_builder
@@ -705,7 +705,7 @@ async fn test_persist_sync_snapshot_stays_bounded_under_churn() {
         txn.update_database(db.id, db.clone()).unwrap();
         let _ = txn.get_and_commit_op_updates();
         let commit_ts = txn.upper();
-        txn.commit(commit_ts).await.unwrap();
+        txn.commit(&mut *writer, commit_ts).await.unwrap();
     }
 
     // Reader syncs through all 200 renames.

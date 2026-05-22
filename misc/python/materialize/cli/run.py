@@ -121,6 +121,12 @@ def main() -> int:
         default=os.getenv("MZDEV_BLOB", DEFAULT_BLOB),
     )
     parser.add_argument(
+        "--persist-consensus-url",
+        help="Override the persist Consensus URL (e.g. bogo://127.0.0.1:6882). "
+        "Defaults to the postgres URL with `?options=--search_path=consensus`.",
+        default=os.getenv("MZDEV_PERSIST_CONSENSUS_URL"),
+    )
+    parser.add_argument(
         "--release",
         help="Build artifacts in release mode, with optimizations",
         action="store_true",
@@ -292,6 +298,11 @@ def main() -> int:
                 environment_id = f"local-az1-{uuid.uuid4()}-0"
                 environment_file.write_text(environment_id)
 
+            persist_consensus_url = (
+                args.persist_consensus_url
+                or f"{args.postgres}?options=--search_path=consensus"
+            )
+            print(f"persist-consensus-url: {persist_consensus_url}")
             print(f"persist-blob-url: {args.blob}")
             print(f"listeners config path: {args.listeners_config_path}")
             command += [
@@ -302,7 +313,7 @@ def main() -> int:
                 f"--orchestrator-process-prometheus-service-discovery-directory={MZDATA}/prometheus",
                 f"--orchestrator-process-scratch-directory={scratch}",
                 "--secrets-controller=local-file",
-                f"--persist-consensus-url={args.postgres}?options=--search_path=consensus",
+                f"--persist-consensus-url={persist_consensus_url}",
                 f"--persist-blob-url={args.blob}",
                 f"--timestamp-oracle-url={args.postgres}?options=--search_path=tsoracle",
                 f"--environment-id={environment_id}",

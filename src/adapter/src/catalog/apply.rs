@@ -110,49 +110,69 @@ impl CatalogState {
         let mut builtin_table_updates = Vec::with_capacity(updates.len());
         let mut catalog_updates = Vec::with_capacity(updates.len());
 
+        let phase_metrics = self.apply_updates_phase_metrics.clone();
+
         // First, consolidate updates. The code that applies parsed state
         // updates _requires_ that the given updates are consolidated. There
         // must be at most one addition and/or one retraction for a given item,
         // as identified by that items ID type.
-        let updates = Self::consolidate_updates(updates);
+        let updates = {
+            let _t = phase_metrics
+                .as_ref()
+                .map(|m| m.with_label_values(&["consolidate_initial"]).start_timer());
+            Self::consolidate_updates(updates)
+        };
 
         // Apply updates in groups, according to their timestamps.
         let mut groups: Vec<Vec<_>> = Vec::new();
-        for (_, updates) in &updates.into_iter().chunk_by(|update| update.ts) {
-            // Bring the updates into the pseudo-topological order that we need
-            // for updating our in-memory state and generating builtin table
-            // updates.
-            let updates = sort_updates(updates.collect());
-            groups.push(updates);
+        {
+            let _t = phase_metrics
+                .as_ref()
+                .map(|m| m.with_label_values(&["sort_per_group"]).start_timer());
+            for (_, updates) in &updates.into_iter().chunk_by(|update| update.ts) {
+                // Bring the updates into the pseudo-topological order that we need
+                // for updating our in-memory state and generating builtin table
+                // updates.
+                let updates = sort_updates(updates.collect());
+                groups.push(updates);
+            }
         }
 
         for updates in groups {
             let mut apply_state = ApplyState::Updates(Vec::new());
             let mut retractions = InProgressRetractions::default();
 
-            for update in updates {
-                let (next_apply_state, (builtin_table_update, catalog_update)) = apply_state
-                    .step(
-                        ApplyState::new(update),
-                        self,
-                        &mut retractions,
-                        local_expression_cache,
-                    )
+            {
+                let _t = phase_metrics
+                    .as_ref()
+                    .map(|m| m.with_label_values(&["apply_updates_inner"]).start_timer());
+                for update in updates {
+                    let (next_apply_state, (builtin_table_update, catalog_update)) = apply_state
+                        .step(
+                            ApplyState::new(update),
+                            self,
+                            &mut retractions,
+                            local_expression_cache,
+                        )
+                        .await;
+                    apply_state = next_apply_state;
+                    builtin_table_updates.extend(builtin_table_update);
+                    catalog_updates.extend(catalog_update);
+                }
+
+                // Apply remaining state.
+                let (builtin_table_update, catalog_update) = apply_state
+                    .apply(self, &mut retractions, local_expression_cache)
                     .await;
-                apply_state = next_apply_state;
                 builtin_table_updates.extend(builtin_table_update);
                 catalog_updates.extend(catalog_update);
             }
 
-            // Apply remaining state.
-            let (builtin_table_update, catalog_update) = apply_state
-                .apply(self, &mut retractions, local_expression_cache)
-                .await;
-            builtin_table_updates.extend(builtin_table_update);
-            catalog_updates.extend(catalog_update);
-
             // Clean up plans and optimizer notices for items that
             // were retracted but not replaced (i.e., truly dropped).
+            let _t = phase_metrics
+                .as_ref()
+                .map(|m| m.with_label_values(&["cleanup_notices"]).start_timer());
             let dropped_entries: Vec<CatalogEntry> = retractions
                 .items
                 .into_values()
@@ -223,10 +243,17 @@ impl CatalogState {
         let mut builtin_table_updates = Vec::with_capacity(updates.len());
         let mut catalog_updates = Vec::new();
 
+        let kind_metrics = self.apply_update_kind_metrics.clone();
+
         for state_update in updates {
             if matches!(state_update.kind, StateUpdateKind::SystemConfiguration(_)) {
                 update_system_config = true;
             }
+
+            let kind_label = state_update_kind_label(&state_update.kind);
+            let _kind_timer = kind_metrics
+                .as_ref()
+                .map(|m| m.with_label_values(&[kind_label]).start_timer());
 
             match state_update.diff {
                 StateDiff::Retraction => {
@@ -1339,20 +1366,23 @@ impl CatalogState {
     ) {
         match diff {
             StateDiff::Addition => {
-                let newly_inserted = Arc::make_mut(&mut self.storage_metadata)
+                // `imbl::OrdSet::insert` returns the previous value as `Option<T>`
+                // (`Some` if it was already present), unlike `BTreeSet::insert`
+                // which returns `bool` (`true` if newly inserted).
+                let prev = Arc::make_mut(&mut self.storage_metadata)
                     .unfinalized_shards
                     .insert(unfinalized_shard.shard);
                 assert!(
-                    newly_inserted,
+                    prev.is_none(),
                     "values must be explicitly retracted before inserting a new value: {unfinalized_shard:?}",
                 );
             }
             StateDiff::Retraction => {
-                let removed = Arc::make_mut(&mut self.storage_metadata)
+                let prev = Arc::make_mut(&mut self.storage_metadata)
                     .unfinalized_shards
                     .remove(&unfinalized_shard.shard);
                 assert!(
-                    removed,
+                    prev.is_some(),
                     "retraction does not match existing value: {unfinalized_shard:?}"
                 );
             }
@@ -1908,7 +1938,26 @@ impl CatalogState {
                     .expect("catalog out of sync")
                     .bound_objects
                     .insert(entry.id);
+                // `imbl::OrdSet::insert` returns the previous value as
+                // `Option<T>`; we don't check it here because the
+                // pre-existing `BTreeSet` version didn't either.
             };
+        }
+
+        if entry.id.is_user() {
+            *self.user_item_counts.entry(entry.item.typ()).or_insert(0) += 1;
+            if let CatalogItem::Source(source) = &entry.item {
+                let shards: usize = source
+                    .user_controllable_persist_shard_count()
+                    .try_into()
+                    .expect("non-negative shard count");
+                self.user_source_shard_count += shards;
+            }
+            if let CatalogItem::Connection(connection) = &entry.item {
+                let kind =
+                    crate::catalog::state::UserConnectionKind::from_details(&connection.details);
+                *self.user_connection_counts.entry(kind).or_insert(0) += 1;
+            }
         }
 
         for u in entry.references().items() {
@@ -2036,14 +2085,51 @@ impl CatalogState {
 
         if !id.is_system() {
             if let Some(cluster_id) = metadata.item().cluster_id() {
-                assert!(
-                    self.clusters_by_id
-                        .get_mut(&cluster_id)
-                        .expect("catalog out of sync")
-                        .bound_objects
-                        .remove(&id),
-                    "catalog out of sync"
-                );
+                let prev = self
+                    .clusters_by_id
+                    .get_mut(&cluster_id)
+                    .expect("catalog out of sync")
+                    .bound_objects
+                    .remove(&id);
+                assert!(prev.is_some(), "catalog out of sync");
+            }
+        }
+
+        if id.is_user() {
+            let typ = metadata.item().typ();
+            let count = self
+                .user_item_counts
+                .get_mut(&typ)
+                .expect("catalog out of sync: user item count missing");
+            *count = count
+                .checked_sub(1)
+                .expect("catalog out of sync: count underflow");
+            if *count == 0 {
+                self.user_item_counts.remove(&typ);
+            }
+            if let CatalogItem::Source(source) = metadata.item() {
+                let shards: usize = source
+                    .user_controllable_persist_shard_count()
+                    .try_into()
+                    .expect("non-negative shard count");
+                self.user_source_shard_count = self
+                    .user_source_shard_count
+                    .checked_sub(shards)
+                    .expect("catalog out of sync: source shard count underflow");
+            }
+            if let CatalogItem::Connection(connection) = metadata.item() {
+                let kind =
+                    crate::catalog::state::UserConnectionKind::from_details(&connection.details);
+                let count = self
+                    .user_connection_counts
+                    .get_mut(&kind)
+                    .expect("catalog out of sync: user connection count missing");
+                *count = count
+                    .checked_sub(1)
+                    .expect("catalog out of sync: count underflow");
+                if *count == 0 {
+                    self.user_connection_counts.remove(&kind);
+                }
             }
         }
 
@@ -2141,6 +2227,32 @@ impl CatalogState {
 ///
 /// # Panics
 ///
+/// Stable static label per `StateUpdateKind` variant, for per-kind Prometheus
+/// histogram labels.
+fn state_update_kind_label(kind: &StateUpdateKind) -> &'static str {
+    match kind {
+        StateUpdateKind::Role(_) => "role",
+        StateUpdateKind::RoleAuth(_) => "role_auth",
+        StateUpdateKind::Database(_) => "database",
+        StateUpdateKind::Schema(_) => "schema",
+        StateUpdateKind::DefaultPrivilege(_) => "default_privilege",
+        StateUpdateKind::SystemPrivilege(_) => "system_privilege",
+        StateUpdateKind::SystemConfiguration(_) => "system_configuration",
+        StateUpdateKind::Cluster(_) => "cluster",
+        StateUpdateKind::NetworkPolicy(_) => "network_policy",
+        StateUpdateKind::IntrospectionSourceIndex(_) => "introspection_source_index",
+        StateUpdateKind::ClusterReplica(_) => "cluster_replica",
+        StateUpdateKind::SystemObjectMapping(_) => "system_object_mapping",
+        StateUpdateKind::TemporaryItem(_) => "temporary_item",
+        StateUpdateKind::Item(_) => "item",
+        StateUpdateKind::Comment(_) => "comment",
+        StateUpdateKind::SourceReferences(_) => "source_references",
+        StateUpdateKind::AuditLog(_) => "audit_log",
+        StateUpdateKind::StorageCollectionMetadata(_) => "storage_collection_metadata",
+        StateUpdateKind::UnfinalizedShard(_) => "unfinalized_shard",
+    }
+}
+
 /// This function assumes that all provided `updates` have the same timestamp and will panic
 /// otherwise. It also requires that the provided `updates` are consolidated, i.e. all contained
 /// `StateUpdateKinds` are unique.

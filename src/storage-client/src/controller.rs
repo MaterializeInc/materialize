@@ -211,8 +211,8 @@ pub enum Response {
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct StorageMetadata {
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
-    pub collection_metadata: BTreeMap<GlobalId, ShardId>,
-    pub unfinalized_shards: BTreeSet<ShardId>,
+    pub collection_metadata: imbl::OrdMap<GlobalId, ShardId>,
+    pub unfinalized_shards: imbl::OrdSet<ShardId>,
 }
 
 impl StorageMetadata {
@@ -237,6 +237,12 @@ pub trait StorageTxn {
     ///
     /// The value of this map should be treated as opaque.
     fn get_collection_metadata(&self) -> BTreeMap<GlobalId, ShardId>;
+
+    /// Point lookup of the shard backing a single collection. O(log N).
+    fn get_collection_shard(&self, id: GlobalId) -> Option<ShardId>;
+
+    /// Returns whether any collection metadata entry maps to `shard`.
+    fn collection_metadata_contains_shard(&self, shard: ShardId) -> bool;
 
     /// Add new storage metadata for a collection.
     ///

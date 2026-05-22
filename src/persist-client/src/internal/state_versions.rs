@@ -463,7 +463,7 @@ impl StateVersions {
                 }
             };
 
-            state.apply_encoded_diffs(&self.cfg, &self.metrics, &live_diffs);
+            state.apply_encoded_diffs(&self.cfg, &self.metrics, "slow_refetch", &live_diffs);
             return state;
         }
     }
@@ -1137,7 +1137,7 @@ impl<T: Timestamp + Lattice + Codec64> StateVersionsIter<T> {
 
         let diff_seqno_to = diff.seqno_to;
         self.state
-            .apply_diffs(&self.metrics, std::iter::once((diff, data)));
+            .apply_diffs(&self.metrics, "state_iter", std::iter::once((diff, data)));
         assert_eq!(self.state.seqno, diff_seqno_to);
         #[cfg(debug_assertions)]
         {

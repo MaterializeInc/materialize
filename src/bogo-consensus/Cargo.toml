@@ -1,0 +1,46 @@
+[package]
+name = "mz-bogo-consensus"
+description = "In-memory gRPC backend for the persist Consensus trait. For performance testing only."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+axum.workspace = true
+bytes.workspace = true
+clap = { workspace = true, features = ["env"] }
+futures.workspace = true
+mz-build-info = { path = "../build-info" }
+mz-http-util = { path = "../http-util" }
+mz-ore = { path = "../ore", features = ["async", "cli", "metrics", "tracing"], default-features = false }
+prometheus.workspace = true
+prost.workspace = true
+serde.workspace = true
+socket2.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal", "sync"] }
+tokio-stream = { workspace = true, features = ["net"] }
+tonic = { workspace = true, features = ["transport"] }
+tonic-prost.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[build-dependencies]
+mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
+prost-build.workspace = true
+tonic-prost-build.workspace = true
+
+[[bin]]
+name = "mz-bogo-consensus"
+path = "src/bin/mz-bogo-consensus.rs"
+
+[features]
+default = ["mz-build-tools/default"]
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["mz-build-info"]

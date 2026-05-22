@@ -109,6 +109,43 @@ use crate::session::Session;
 ///
 /// [`Serialize`] is implemented to create human readable dumps of the in-memory state, not for
 /// storing the contents of this struct on disk.
+///
+/// # A note on persistent collections (`imbl::OrdMap` / `imbl::OrdSet` / `imbl::Vector`)
+///
+/// Almost every collection field on `CatalogState` — and on the value
+/// types stored inside those collections (`Database`, `Schema`, `Cluster`,
+/// `Role`, `CatalogEntry`, `SourceReferences`, `StorageMetadata`, …) —
+/// is an `imbl::*` persistent collection rather than a `std::collections`
+/// one. This is load-bearing: `Catalog::transact_inner` builds two
+/// `Cow<CatalogState>` handles (`preliminary_state` and `state`) and
+/// calls `to_mut()` on each, so all `imbl::OrdMap`s end up shared
+/// across two `CatalogState`s during a single DDL. Any later
+/// `get_mut(...)` on a shared `imbl::OrdMap` triggers a leaf path-copy
+/// that **clones every value in the affected B-tree leaf**, not just
+/// the targeted one. If any of those values embeds a non-persistent
+/// inner collection (`BTreeMap`, `BTreeSet`, `Vec`, …), that inner
+/// collection gets deep-cloned in O(M) — and if M scales with the
+/// workload (e.g. items in a schema), the per-DDL cost scales too.
+///
+/// Concretely: the audit_pad-scalability bench (`test/envd-ddl-scalability/`)
+/// caught two ~5 ms/DDL N-dependent slopes at N=15k tables that were
+/// nothing more than `Arc::make_mut`/`imbl` leaf-copies deep-cloning
+/// non-persistent inner collections (`Schema.items: BTreeMap` and
+/// `StorageMetadata.collection_metadata: BTreeMap`). Switching those
+/// inners to `imbl::OrdMap` made the leaf-copy O(1) (persistent
+/// tree-root refcount bump) and erased the slope.
+///
+/// **Rule:** when adding a field whose value type lives inside any
+/// of these `imbl::OrdMap`s (or behind an `Arc` we `make_mut`), use
+/// a persistent collection (`imbl::OrdMap`, `imbl::OrdSet`,
+/// `imbl::Vector`) for any sub-field that can grow with the
+/// workload. Two intentional holdouts exist:
+/// * `Cluster.log_indexes` (`BTreeMap<LogVariant, GlobalId>`) — has
+///   a tight `arranged_logs: BTreeMap<LogVariant, GlobalId>` API
+///   contract with the compute controller and is bounded by the
+///   number of log variants (~10).
+/// * `*_by_name_` legacy fields elsewhere — see comments at the
+///   call sites.
 #[derive(Debug, Clone, Serialize)]
 pub struct CatalogState {
     // State derived from the durable catalog. These fields should only be mutated in `open.rs` or
@@ -123,6 +160,15 @@ pub struct CatalogState {
     pub(super) entry_by_id: imbl::OrdMap<CatalogItemId, CatalogEntry>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) entry_by_global_id: imbl::OrdMap<GlobalId, CatalogItemId>,
+    // Bucketed counts derived from `entry_by_id`, maintained by
+    // `insert_entry`/`drop_item`. Used by `validate_resource_limits` to avoid
+    // scanning the full entry map on every DDL.
+    #[serde(skip)]
+    pub(super) user_item_counts: imbl::OrdMap<CatalogItemType, usize>,
+    #[serde(skip)]
+    pub(super) user_source_shard_count: usize,
+    #[serde(skip)]
+    pub(super) user_connection_counts: imbl::OrdMap<UserConnectionKind, usize>,
     pub(super) ambient_schemas_by_name: imbl::OrdMap<String, SchemaId>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) ambient_schemas_by_id: imbl::OrdMap<SchemaId, Schema>,
@@ -178,6 +224,59 @@ pub struct CatalogState {
     // Read-only not derived from the durable catalog.
     #[serde(skip)]
     pub(super) license_key: ValidatedLicenseKey,
+
+    /// Installed by the Coordinator at startup to time sub-phases of
+    /// `apply_updates`. `None` in tests / debug catalogs.
+    #[serde(skip)]
+    pub(super) apply_updates_phase_metrics: Option<prometheus::HistogramVec>,
+    /// Installed by the Coordinator at startup to time individual update kinds
+    /// inside `apply_updates_inner`. `None` in tests / debug catalogs.
+    #[serde(skip)]
+    pub(super) apply_update_kind_metrics: Option<prometheus::HistogramVec>,
+}
+
+impl CatalogState {
+    pub fn set_apply_updates_phase_metrics(&mut self, phase_metrics: prometheus::HistogramVec) {
+        self.apply_updates_phase_metrics = Some(phase_metrics);
+    }
+    pub fn apply_updates_phase_metrics(&self) -> Option<&prometheus::HistogramVec> {
+        self.apply_updates_phase_metrics.as_ref()
+    }
+    pub fn set_apply_update_kind_metrics(&mut self, phase_metrics: prometheus::HistogramVec) {
+        self.apply_update_kind_metrics = Some(phase_metrics);
+    }
+    pub fn apply_update_kind_metrics(&self) -> Option<&prometheus::HistogramVec> {
+        self.apply_update_kind_metrics.as_ref()
+    }
+}
+
+/// Sub-classification of user connections that we maintain bucketed counts
+/// for, mirroring the variants of [`mz_sql::plan::ConnectionDetails`] that
+/// `validate_resource_limits` checks. Variants we don't limit (Csr, Ssh, Aws,
+/// IcebergCatalog) are folded into `Other` so the bucket map covers all
+/// connection items.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum UserConnectionKind {
+    Kafka,
+    Postgres,
+    MySql,
+    SqlServer,
+    AwsPrivatelink,
+    Other,
+}
+
+impl UserConnectionKind {
+    pub(super) fn from_details(details: &mz_sql::plan::ConnectionDetails) -> Self {
+        use mz_sql::plan::ConnectionDetails::*;
+        match details {
+            Kafka(_) => UserConnectionKind::Kafka,
+            Postgres(_) => UserConnectionKind::Postgres,
+            MySql(_) => UserConnectionKind::MySql,
+            SqlServer(_) => UserConnectionKind::SqlServer,
+            AwsPrivatelink(_) => UserConnectionKind::AwsPrivatelink,
+            Csr(_) | Ssh { .. } | Aws(_) | IcebergCatalog(_) => UserConnectionKind::Other,
+        }
+    }
 }
 
 /// Keeps track of what expressions are cached or not during startup.
@@ -293,6 +392,9 @@ impl CatalogState {
             database_by_id: Default::default(),
             entry_by_id: Default::default(),
             entry_by_global_id: Default::default(),
+            user_item_counts: Default::default(),
+            user_source_shard_count: 0,
+            user_connection_counts: Default::default(),
             notices_by_dep_id: Default::default(),
             ambient_schemas_by_name: Default::default(),
             ambient_schemas_by_id: Default::default(),
@@ -331,6 +433,8 @@ impl CatalogState {
             storage_metadata: Arc::new(StorageMetadata::default()),
             license_key: ValidatedLicenseKey::for_tests(),
             mock_authentication_nonce: Default::default(),
+            apply_updates_phase_metrics: None,
+            apply_update_kind_metrics: None,
         }
     }
 
@@ -1809,9 +1913,9 @@ impl CatalogState {
                 },
                 id: SchemaSpecifier::Temporary,
                 oid,
-                items: BTreeMap::new(),
-                functions: BTreeMap::new(),
-                types: BTreeMap::new(),
+                items: imbl::OrdMap::new(),
+                functions: imbl::OrdMap::new(),
+                types: imbl::OrdMap::new(),
                 owner_id,
                 privileges: PrivilegeMap::from_mz_acl_items(vec![rbac::owner_privilege(
                     mz_sql::catalog::ObjectType::Schema,
@@ -2121,7 +2225,7 @@ impl CatalogState {
     #[allow(clippy::useless_let_if_seq)]
     pub fn resolve(
         &self,
-        get_schema_entries: fn(&Schema) -> &BTreeMap<String, CatalogItemId>,
+        get_schema_entries: fn(&Schema) -> &imbl::OrdMap<String, CatalogItemId>,
         current_database: Option<&DatabaseId>,
         search_path: &Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
         name: &PartialItemName,

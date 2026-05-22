@@ -89,8 +89,8 @@ pub struct Database {
     pub id: DatabaseId,
     pub oid: u32,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
-    pub schemas_by_id: BTreeMap<SchemaId, Schema>,
-    pub schemas_by_name: BTreeMap<String, SchemaId>,
+    pub schemas_by_id: imbl::OrdMap<SchemaId, Schema>,
+    pub schemas_by_name: imbl::OrdMap<String, SchemaId>,
     pub owner_id: RoleId,
     pub privileges: PrivilegeMap,
 }
@@ -120,8 +120,8 @@ impl From<durable::Database> for Database {
         Database {
             id,
             oid,
-            schemas_by_id: BTreeMap::new(),
-            schemas_by_name: BTreeMap::new(),
+            schemas_by_id: imbl::OrdMap::new(),
+            schemas_by_name: imbl::OrdMap::new(),
             name,
             owner_id,
             privileges: PrivilegeMap::from_mz_acl_items(privileges),
@@ -153,9 +153,9 @@ pub struct Schema {
     pub name: QualifiedSchemaName,
     pub id: SchemaSpecifier,
     pub oid: u32,
-    pub items: BTreeMap<String, CatalogItemId>,
-    pub functions: BTreeMap<String, CatalogItemId>,
-    pub types: BTreeMap<String, CatalogItemId>,
+    pub items: imbl::OrdMap<String, CatalogItemId>,
+    pub functions: imbl::OrdMap<String, CatalogItemId>,
+    pub types: imbl::OrdMap<String, CatalogItemId>,
     pub owner_id: RoleId,
     pub privileges: PrivilegeMap,
 }
@@ -191,9 +191,9 @@ impl From<durable::Schema> for Schema {
             },
             id: id.into(),
             oid,
-            items: BTreeMap::new(),
-            functions: BTreeMap::new(),
-            types: BTreeMap::new(),
+            items: imbl::OrdMap::new(),
+            functions: imbl::OrdMap::new(),
+            types: imbl::OrdMap::new(),
             owner_id,
             privileges: PrivilegeMap::from_mz_acl_items(privileges),
         }
@@ -345,14 +345,20 @@ pub struct Cluster {
     pub name: String,
     pub id: ClusterId,
     pub config: ClusterConfig,
+    // `log_indexes` stays as `BTreeMap` because it has a tight API
+    // contract with the compute controller (`arranged_logs:
+    // BTreeMap<LogVariant, GlobalId>`) and is bounded in size by the
+    // number of log variants (~10), so it doesn't benefit from the
+    // persistent-clone optimization that applies to the rest of these
+    // collections.
     #[serde(skip)]
     pub log_indexes: BTreeMap<LogVariant, GlobalId>,
     /// Objects bound to this cluster. Does not include introspection source
     /// indexes.
-    pub bound_objects: BTreeSet<CatalogItemId>,
-    pub replica_id_by_name_: BTreeMap<String, ReplicaId>,
+    pub bound_objects: imbl::OrdSet<CatalogItemId>,
+    pub replica_id_by_name_: imbl::OrdMap<String, ReplicaId>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
-    pub replicas_by_id_: BTreeMap<ReplicaId, ClusterReplica>,
+    pub replicas_by_id_: imbl::OrdMap<ReplicaId, ClusterReplica>,
     pub owner_id: RoleId,
     pub privileges: PrivilegeMap,
 }
@@ -481,10 +487,10 @@ impl From<durable::Cluster> for Cluster {
         Cluster {
             name: name.clone(),
             id,
-            bound_objects: BTreeSet::new(),
+            bound_objects: imbl::OrdSet::new(),
             log_indexes: BTreeMap::new(),
-            replica_id_by_name_: BTreeMap::new(),
-            replicas_by_id_: BTreeMap::new(),
+            replica_id_by_name_: imbl::OrdMap::new(),
+            replicas_by_id_: imbl::OrdMap::new(),
             owner_id,
             privileges: PrivilegeMap::from_mz_acl_items(privileges),
             config: config.into(),
@@ -541,7 +547,7 @@ pub struct ClusterReplicaProcessStatus {
 #[derive(Debug, Serialize, Clone, PartialEq)]
 pub struct SourceReferences {
     pub updated_at: u64,
-    pub references: Vec<SourceReference>,
+    pub references: imbl::Vector<SourceReference>,
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq)]
@@ -643,6 +649,14 @@ impl From<SourceReference> for mz_sql::plan::SourceReference {
 #[derive(Clone, Debug, Serialize)]
 pub struct CatalogEntry {
     pub item: CatalogItem,
+    // NOTE: `referenced_by`/`used_by` stay as `Vec` rather than
+    // `imbl::Vector` because the `mz_sql::catalog::CatalogItem` trait
+    // returns `&[CatalogItemId]` for them, which `imbl::Vector` cannot
+    // satisfy (no `Deref<Target=[T]>`). In practice these vectors are
+    // small per entry, and the dominant per-entry clone cost during
+    // `entry_by_id` leaf path-copy is `item: CatalogItem` (which
+    // carries optimized/physical plans for MV/Index/CT items), not
+    // these vectors of ids.
     #[serde(skip)]
     pub referenced_by: Vec<CatalogItemId>,
     // TODO(database-issues#7922)––this should have an invariant tied to it that all
@@ -3355,7 +3369,7 @@ impl mz_sql::catalog::CatalogDatabase for Database {
         !self.schemas_by_name.is_empty()
     }
 
-    fn schema_ids(&self) -> &BTreeMap<String, SchemaId> {
+    fn schema_ids(&self) -> &imbl::OrdMap<String, SchemaId> {
         &self.schemas_by_name
     }
 
@@ -3422,7 +3436,7 @@ impl mz_sql::catalog::CatalogRole for Role {
         self.id
     }
 
-    fn membership(&self) -> &BTreeMap<RoleId, RoleId> {
+    fn membership(&self) -> &imbl::OrdMap<RoleId, RoleId> {
         &self.membership.map
     }
 
@@ -3430,7 +3444,7 @@ impl mz_sql::catalog::CatalogRole for Role {
         &self.attributes
     }
 
-    fn vars(&self) -> &BTreeMap<String, OwnedVarInput> {
+    fn vars(&self) -> &imbl::OrdMap<String, OwnedVarInput> {
         &self.vars.map
     }
 }
@@ -3462,11 +3476,11 @@ impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
         self.id
     }
 
-    fn bound_objects(&self) -> &BTreeSet<CatalogItemId> {
+    fn bound_objects(&self) -> &imbl::OrdSet<CatalogItemId> {
         &self.bound_objects
     }
 
-    fn replica_ids(&self) -> &BTreeMap<String, ReplicaId> {
+    fn replica_ids(&self) -> &imbl::OrdMap<String, ReplicaId> {
         &self.replica_id_by_name_
     }
 

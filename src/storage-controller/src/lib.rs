@@ -746,9 +746,14 @@ impl StorageController for Controller {
         mut collections: Vec<(GlobalId, CollectionDescription)>,
         migrated_storage_collections: &BTreeSet<GlobalId>,
     ) -> Result<(), StorageError> {
+        let phase_metric = self.metrics.create_collections_phase_seconds.clone();
+
         self.migrated_storage_collections
             .extend(migrated_storage_collections.iter().cloned());
 
+        let _sc_timer = phase_metric
+            .with_label_values(&["storage_collections_call"])
+            .start_timer();
         self.storage_collections
             .create_collections_for_bootstrap(
                 storage_metadata,
@@ -757,11 +762,15 @@ impl StorageController for Controller {
                 migrated_storage_collections,
             )
             .await?;
+        drop(_sc_timer);
 
         // At this point we're connected to all the collection shards in persist. Our warming task
         // is no longer useful, so abort it if it's still running.
         drop(self.persist_warm_task.take());
 
+        let _validate_timer = phase_metric
+            .with_label_values(&["validate_and_enrich"])
+            .start_timer();
         // Validate first, to avoid corrupting state.
         // 1. create a dropped identifier, or
         // 2. create an existing identifier with a new description.
@@ -798,6 +807,10 @@ impl StorageController for Controller {
             })
             .collect_vec();
 
+        drop(_validate_timer);
+        let _open_client_timer = phase_metric
+            .with_label_values(&["open_persist_client"])
+            .start_timer();
         // So that we can open persist handles for each collections concurrently.
         let persist_client = self
             .persist
@@ -805,6 +818,10 @@ impl StorageController for Controller {
             .await
             .unwrap();
         let persist_client = &persist_client;
+        drop(_open_client_timer);
+        let _open_handles_timer = phase_metric
+            .with_label_values(&["open_data_handles_concurrent"])
+            .start_timer();
 
         // Reborrow the `&mut self` as immutable, as all the concurrent work to be processed in
         // this stream cannot all have exclusive access.
@@ -847,6 +864,10 @@ impl StorageController for Controller {
             // `collect`!
             .try_collect()
             .await?;
+        drop(_open_handles_timer);
+        let _register_loop_timer = phase_metric
+            .with_label_values(&["register_loop"])
+            .start_timer();
 
         // The set of collections that we should render at the end of this
         // function.
@@ -1121,6 +1142,10 @@ impl StorageController for Controller {
             self.collections.insert(id, collection_state);
         }
 
+        drop(_register_loop_timer);
+        let _stats_timer = phase_metric
+            .with_label_values(&["init_source_statistics"])
+            .start_timer();
         {
             let mut source_statistics = self.source_statistics.lock().expect("poisoned");
 
@@ -1134,6 +1159,10 @@ impl StorageController for Controller {
             // there is a replica that is reporting them. No need to initialize
             // here.
         }
+        drop(_stats_timer);
+        let _table_register_timer = phase_metric
+            .with_label_values(&["table_register"])
+            .start_timer();
 
         // Register the tables all in one batch.
         if !table_registers.is_empty() {
@@ -1164,8 +1193,16 @@ impl StorageController for Controller {
                     .expect("table worker unexpectedly shut down");
             }
         }
+        drop(_table_register_timer);
+        let _append_mapping_timer = phase_metric
+            .with_label_values(&["append_shard_mappings"])
+            .start_timer();
 
         self.append_shard_mappings(new_collections.into_iter(), Diff::ONE);
+        drop(_append_mapping_timer);
+        let _execute_timer = phase_metric
+            .with_label_values(&["run_to_execute"])
+            .start_timer();
 
         // TODO(guswynn): perform the io in this final section concurrently.
         for id in to_execute {
@@ -3235,6 +3272,7 @@ where
     /// - If `IntrospectionType::ShardMapping`'s `GlobalId` is not registered as
     ///   a managed collection.
     /// - If diff is any value other than `1` or `-1`.
+    #[instrument(level = "debug")]
     #[instrument(level = "debug")]
     fn append_shard_mappings<I>(&self, global_ids: I, diff: Diff)
     where

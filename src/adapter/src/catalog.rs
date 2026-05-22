@@ -89,7 +89,7 @@ use uuid::Uuid;
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::open::{InitializeStateResult, OpenCatalogResult};
-pub use crate::catalog::state::CatalogState;
+pub use crate::catalog::state::{CatalogState, UserConnectionKind};
 pub use crate::catalog::transact::{
     DropObjectInfo, InjectedAuditEvent, Op, ReplicaCreateDropReason, TransactionResult,
 };
@@ -139,6 +139,11 @@ pub struct Catalog {
     expr_cache_handle: Option<ExpressionCacheHandle>,
     storage: Arc<tokio::sync::Mutex<Box<dyn mz_catalog::durable::DurableCatalogState>>>,
     transient_revision: u64,
+    /// Set by the Coordinator after construction. `None` in tests / debug
+    /// catalogs that don't bother wiring a metrics registry through.
+    transact_phase_metrics: Option<prometheus::HistogramVec>,
+    apply_updates_phase_metrics: Option<prometheus::HistogramVec>,
+    apply_update_kind_metrics: Option<prometheus::HistogramVec>,
 }
 
 // Implement our own Clone because derive can't unless S is Clone, which it's
@@ -150,11 +155,35 @@ impl Clone for Catalog {
             expr_cache_handle: self.expr_cache_handle.clone(),
             storage: Arc::clone(&self.storage),
             transient_revision: self.transient_revision,
+            transact_phase_metrics: self.transact_phase_metrics.clone(),
+            apply_updates_phase_metrics: self.apply_updates_phase_metrics.clone(),
+            apply_update_kind_metrics: self.apply_update_kind_metrics.clone(),
         }
     }
 }
 
 impl Catalog {
+    /// Install a `HistogramVec` (one label: `phase`) for phase-level timing
+    /// inside `Catalog::transact`. The Coordinator calls this once at startup.
+    /// Without it, phase timing is silently skipped.
+    pub fn set_transact_phase_metrics(&mut self, phase_metrics: prometheus::HistogramVec) {
+        self.transact_phase_metrics = Some(phase_metrics);
+    }
+
+    /// Install a `HistogramVec` (label: `phase`) for sub-phase timing inside
+    /// `CatalogState::apply_updates`.
+    pub fn set_apply_updates_phase_metrics(&mut self, phase_metrics: prometheus::HistogramVec) {
+        self.state.set_apply_updates_phase_metrics(phase_metrics);
+        self.apply_updates_phase_metrics = self.state.apply_updates_phase_metrics().cloned();
+    }
+
+    /// Install a `HistogramVec` (label: `kind`) for per-update-kind timing
+    /// inside `CatalogState::apply_updates_inner`.
+    pub fn set_apply_update_kind_metrics(&mut self, phase_metrics: prometheus::HistogramVec) {
+        self.state.set_apply_update_kind_metrics(phase_metrics);
+        self.apply_update_kind_metrics = self.state.apply_update_kind_metrics().cloned();
+    }
+
     /// Set the optimized plan for the item identified by `id`.
     ///
     /// # Panics
@@ -652,7 +681,7 @@ impl Catalog {
             .into_element();
         // Drain transaction.
         let _ = txn.get_and_commit_op_updates();
-        txn.commit(commit_ts).await?;
+        txn.commit(&mut **storage, commit_ts).await?;
         Ok(id)
     }
 
@@ -1135,6 +1164,43 @@ impl Catalog {
     pub fn user_secrets(&self) -> impl Iterator<Item = &CatalogEntry> {
         self.entries()
             .filter(|entry| entry.is_secret() && entry.id().is_user())
+    }
+
+    /// Number of user items of the given [`SqlCatalogItemType`]. O(log N) on
+    /// the bucket map, vs. O(N) for the iterator-based `user_*()` methods.
+    pub fn user_item_count(&self, typ: SqlCatalogItemType) -> usize {
+        self.state.user_item_counts.get(&typ).copied().unwrap_or(0)
+    }
+
+    pub fn user_tables_count(&self) -> usize {
+        self.user_item_count(SqlCatalogItemType::Table)
+    }
+
+    pub fn user_sinks_count(&self) -> usize {
+        self.user_item_count(SqlCatalogItemType::Sink)
+    }
+
+    pub fn user_materialized_views_count(&self) -> usize {
+        self.user_item_count(SqlCatalogItemType::MaterializedView)
+    }
+
+    pub fn user_secrets_count(&self) -> usize {
+        self.user_item_count(SqlCatalogItemType::Secret)
+    }
+
+    /// Sum of `user_controllable_persist_shard_count()` across all user
+    /// sources. This is what the `max_sources` limit is computed against.
+    pub fn user_source_shard_count(&self) -> usize {
+        self.state.user_source_shard_count
+    }
+
+    /// Number of user connections of a given sub-kind.
+    pub fn user_connection_count(&self, kind: crate::catalog::state::UserConnectionKind) -> usize {
+        self.state
+            .user_connection_counts
+            .get(&kind)
+            .copied()
+            .unwrap_or(0)
     }
 
     pub fn get_network_policy(&self, network_policy_id: NetworkPolicyId) -> &NetworkPolicy {
