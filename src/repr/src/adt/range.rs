@@ -19,6 +19,7 @@ use dec::OrderedDecimal;
 use mz_lowertest::MzReflect;
 use mz_proto::{RustType, TryFromProtoError};
 use postgres_protocol::types;
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use tokio_postgres::types::{FromSql, Type as PgType};
@@ -776,7 +777,6 @@ impl<'a, const UPPER: bool> RangeBound<Datum<'a>, UPPER> {
 }
 
 #[derive(
-    Arbitrary,
     Ord,
     PartialOrd,
     Clone,
@@ -788,6 +788,7 @@ impl<'a, const UPPER: bool> RangeBound<Datum<'a>, UPPER> {
     Hash,
     MzReflect
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum InvalidRangeError {
     MisorderedRangeBounds,
     CanonicalizationOverflow(Box<str>),

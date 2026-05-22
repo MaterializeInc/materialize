@@ -32,8 +32,11 @@ use mz_ore::cast::{self, CastFrom};
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::chrono::ProtoNaiveDateTime;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
+#[cfg(any(test, feature = "proptest"))]
 use proptest::arbitrary::Arbitrary;
+#[cfg(any(test, feature = "proptest"))]
 use proptest::strategy::{BoxedStrategy, Strategy};
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize, Serializer};
 use thiserror::Error;
@@ -42,6 +45,7 @@ use crate::Datum;
 use crate::adt::datetime::DateTimePart;
 use crate::adt::interval::Interval;
 use crate::adt::numeric::DecimalLike;
+#[cfg(any(test, feature = "proptest"))]
 use crate::scalar::{arb_naive_date_time, arb_utc_date_time};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.timestamp.rs"));
@@ -65,7 +69,6 @@ pub const MAX_PRECISION: u8 = 6;
 /// [`SqlScalarType::Timestamp`]: crate::SqlScalarType::Timestamp
 /// [`SqlScalarType::TimestampTz`]: crate::SqlScalarType::TimestampTz
 #[derive(
-    Arbitrary,
     Debug,
     Clone,
     Copy,
@@ -78,6 +81,7 @@ pub const MAX_PRECISION: u8 = 6;
     Deserialize,
     MzReflect
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct TimestampPrecision(pub(crate) u8);
 
 impl TimestampPrecision {
@@ -933,6 +937,8 @@ impl<T: Sub<Duration, Output = T>> Sub<Duration> for CheckedTimestamp<T> {
     }
 }
 
+#[cfg(any(test, feature = "proptest"))]
+#[cfg(any(test, feature = "proptest"))]
 impl Arbitrary for CheckedTimestamp<NaiveDateTime> {
     type Parameters = ();
     type Strategy = BoxedStrategy<CheckedTimestamp<NaiveDateTime>>;
@@ -944,6 +950,8 @@ impl Arbitrary for CheckedTimestamp<NaiveDateTime> {
     }
 }
 
+#[cfg(any(test, feature = "proptest"))]
+#[cfg(any(test, feature = "proptest"))]
 impl Arbitrary for CheckedTimestamp<DateTime<Utc>> {
     type Parameters = ();
     type Strategy = BoxedStrategy<CheckedTimestamp<DateTime<Utc>>>;
@@ -1031,6 +1039,7 @@ impl FixedSizeCodec<NaiveDateTime> for PackedNaiveDateTime {
 }
 
 #[cfg(test)]
+#[cfg(any(test, feature = "proptest"))]
 mod test {
     use super::*;
     use itertools::Itertools;

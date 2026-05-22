@@ -32,6 +32,7 @@ use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampPrecision};
 use mz_repr::adt::varchar::VarCharMaxLength;
 use mz_repr::{Datum, RelationDesc, Row, RowArena, SqlColumnType, SqlScalarType};
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -52,7 +53,8 @@ include!(concat!(env!("OUT_DIR"), "/mz_sql_server_util.rs"));
 /// part of purification. Specifically we use this description to generate a
 /// SQL statement for subsource and it's the _parsing of that statement_ which
 /// actually generates a [`RelationDesc`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Arbitrary)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct SqlServerTableDesc {
     /// Name of the schema that the table belongs to.
     pub schema_name: Arc<str>,
@@ -158,7 +160,8 @@ impl RustType<ProtoSqlServerTableDesc> for SqlServerTableDesc {
 
 /// SQL Server table constraint type (e.g. PRIMARY KEY, UNIQUE, etc.)
 /// See <https://learn.microsoft.com/en-us/sql/relational-databases/system-information-schema-views/table-constraints-transact-sql?view=sql-server-ver17>
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Arbitrary)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum SqlServerTableConstraintType {
     PrimaryKey,
     Unique,
@@ -198,7 +201,8 @@ impl RustType<proto_sql_server_table_constraint::ConstraintType> for SqlServerTa
 }
 
 /// SQL Server table constraint.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Arbitrary)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct SqlServerTableConstraint {
     pub constraint_name: String,
     pub constraint_type: SqlServerTableConstraintType,
@@ -284,7 +288,8 @@ pub struct SqlServerCaptureInstanceRaw {
 }
 
 /// Description of a column from a table in Microsoft SQL Server.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Arbitrary)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct SqlServerColumnDesc {
     /// Name of the column.
     pub name: Arc<str>,
@@ -674,7 +679,8 @@ pub struct SqlServerTableConstraintRaw {
 }
 
 /// Rust type that we should use when reading a column from SQL Server.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Arbitrary)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum SqlServerColumnDecodeType {
     Bool,
     U8,

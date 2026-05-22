@@ -71,6 +71,7 @@ uuid.workspace = true
 base64.workspace = true
 insta.workspace = true
 mz-catalog-protos = { path = "../catalog-protos", features = ["proptest"] }
+mz-repr = { path = "../repr", features = ["proptest"] }
 proptest.workspace = true
 proptest-derive.workspace = true
 

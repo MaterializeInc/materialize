@@ -554,6 +554,7 @@ impl UnaryFunc {
 }
 
 #[cfg(test)]
+#[cfg(any(test, feature = "proptest"))]
 mod test {
     use itertools::Itertools;
     use mz_repr::{PropDatum, SqlScalarType};

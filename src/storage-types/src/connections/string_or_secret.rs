@@ -12,12 +12,14 @@ use std::sync::Arc;
 use mz_ore::future::InTask;
 use mz_repr::CatalogItemId;
 use mz_secrets::SecretsReader;
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::connections::SecretsReaderExt;
 
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum StringOrSecret {
     String(String),
     Secret(CatalogItemId),

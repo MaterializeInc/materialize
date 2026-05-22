@@ -17,6 +17,7 @@ use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::{RustType, TryFromProtoError};
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -183,7 +184,6 @@ impl ArrayDimension {
 
 /// An error that can occur when constructing an array.
 #[derive(
-    Arbitrary,
     Clone,
     Copy,
     Debug,
@@ -196,6 +196,7 @@ impl ArrayDimension {
     Deserialize,
     MzReflect
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum InvalidArrayError {
     /// The number of dimensions in the array exceeds [`MAX_ARRAY_DIMENSIONS]`.
     TooManyDimensions(usize),
@@ -319,6 +320,7 @@ impl FixedSizeCodec<ArrayDimension> for PackedArrayDimension {
 }
 
 #[cfg(test)]
+#[cfg(any(test, feature = "proptest"))]
 mod tests {
     use std::iter::empty;
 

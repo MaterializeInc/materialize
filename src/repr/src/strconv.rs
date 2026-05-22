@@ -43,6 +43,7 @@ use mz_ore::str::StrExt;
 use mz_pgtz::timezone::{Timezone, TimezoneSpec};
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use num_traits::Float as NumFloat;
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use regex::bytes::Regex;
 use ryu::Float as RyuFloat;
@@ -1933,7 +1934,6 @@ where
 
 /// An error while parsing an input as a type.
 #[derive(
-    Arbitrary,
     Ord,
     PartialOrd,
     Clone,
@@ -1945,6 +1945,7 @@ where
     Hash,
     MzReflect
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ParseError {
     pub kind: ParseErrorKind,
     pub type_name: Box<str>,
@@ -1953,7 +1954,6 @@ pub struct ParseError {
 }
 
 #[derive(
-    Arbitrary,
     Ord,
     PartialOrd,
     Clone,
@@ -1966,6 +1966,7 @@ pub struct ParseError {
     Hash,
     MzReflect
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum ParseErrorKind {
     OutOfRange,
     InvalidInputSyntax,
@@ -2074,7 +2075,6 @@ impl RustType<ProtoParseError> for ParseError {
 }
 
 #[derive(
-    Arbitrary,
     Ord,
     PartialOrd,
     Copy,
@@ -2087,6 +2087,7 @@ impl RustType<ProtoParseError> for ParseError {
     Hash,
     MzReflect
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum ParseHexError {
     InvalidHexDigit(char),
     OddLength,
@@ -2132,6 +2133,7 @@ impl RustType<ProtoParseHexError> for ParseHexError {
 }
 
 #[cfg(test)]
+#[cfg(any(test, feature = "proptest"))]
 mod tests {
     use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;

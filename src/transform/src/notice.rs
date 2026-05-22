@@ -46,6 +46,7 @@ use std::{concat, stringify};
 use enum_kinds::EnumKind;
 use mz_repr::GlobalId;
 use mz_repr::explain::ExprHumanizer;
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -58,9 +59,9 @@ use serde::{Deserialize, Serialize};
     Ord,
     Hash,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 /// An long lived in-memory representation of a [`RawOptimizerNotice`] that is
 /// meant to be kept as part of the hydrated catalog state.
 pub struct OptimizerNotice {
@@ -146,9 +147,9 @@ impl OptimizerNotice {
     Ord,
     Hash,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 #[enum_kind(ActionKind)]
 /// An action attached to an [`OptimizerNotice`]
 pub enum Action {
@@ -309,9 +310,19 @@ macro_rules! raw_optimizer_notices {
         paste::paste!{
             /// Notices that the optimizer wants to show to users.
             #[derive(EnumKind, Clone, Debug, Eq, PartialEq, Hash)]
-            #[enum_kind(
-                OptimizerNoticeKind,
-                derive(PartialOrd, Ord, Hash, Serialize, Deserialize, Arbitrary)
+            #[cfg_attr(
+                any(test, feature = "proptest"),
+                enum_kind(
+                    OptimizerNoticeKind,
+                    derive(PartialOrd, Ord, Hash, Serialize, Deserialize, Arbitrary)
+                )
+            )]
+            #[cfg_attr(
+                not(any(test, feature = "proptest")),
+                enum_kind(
+                    OptimizerNoticeKind,
+                    derive(PartialOrd, Ord, Hash, Serialize, Deserialize)
+                )
             )]
             pub enum RawOptimizerNotice {
                 $(

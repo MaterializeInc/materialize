@@ -9,6 +9,7 @@
 
 //! System data types.
 
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -27,9 +28,9 @@ pub struct PgLegacyChar(pub u8);
     PartialOrd,
     Hash,
     Serialize,
-    Deserialize,
-    Arbitrary
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct Oid(pub u32);
 
 /// A Rust type representing the OID of a PostgreSQL class.

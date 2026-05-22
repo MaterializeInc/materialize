@@ -17,6 +17,7 @@ use anyhow::{anyhow, bail};
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::{RustType, TryFromProtoError};
 use num_traits::CheckedMul;
+#[cfg(any(test, feature = "proptest"))]
 use proptest::prelude::{Arbitrary, BoxedStrategy, Strategy, any};
 use serde::{Deserialize, Serialize};
 
@@ -837,6 +838,8 @@ impl fmt::Display for Interval {
     }
 }
 
+#[cfg(any(test, feature = "proptest"))]
+#[cfg(any(test, feature = "proptest"))]
 impl Arbitrary for Interval {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
@@ -927,6 +930,7 @@ impl FixedSizeCodec<Interval> for PackedInterval {
 }
 
 #[cfg(test)]
+#[cfg(any(test, feature = "proptest"))]
 mod test {
     use super::*;
     use proptest::prelude::*;

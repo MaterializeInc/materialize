@@ -10,6 +10,7 @@
 use std::fmt::{self, Display};
 use std::str::FromStr;
 
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -27,7 +28,6 @@ use mz_ore::cast::CastLossy;
 /// 30kB since it can't have a lower unit, but 30.1MB will be rounded to 30822kB.
 /// For [`ByteSize`], the value is an integer and the base unit is bytes (`B`).
 #[derive(
-    Arbitrary,
     Debug,
     Clone,
     PartialEq,
@@ -39,6 +39,7 @@ use mz_ore::cast::CastLossy;
     Deserialize,
     Default
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ByteSize(u64);
 
 impl ByteSize {
@@ -150,7 +151,6 @@ impl FromStr for ByteSize {
 
 /// Valid units for representing bytes
 #[derive(
-    Arbitrary,
     Debug,
     Clone,
     PartialEq,
@@ -162,6 +162,7 @@ impl FromStr for ByteSize {
     Deserialize,
     Default
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum BytesUnit {
     #[default]
     B,
@@ -214,6 +215,7 @@ impl FromStr for BytesUnit {
 }
 
 #[cfg(test)]
+#[cfg(any(test, feature = "proptest"))]
 mod tests {
     use crate::bytes::ByteSize;
     use mz_ore::assert_err;

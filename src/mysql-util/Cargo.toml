@@ -27,8 +27,8 @@ mz-ssh-util = { path = "../ssh-util" }
 mysql_common.workspace = true
 mysql_async.workspace = true
 prost.workspace = true
-proptest.workspace = true
-proptest-derive.workspace = true
+proptest = { workspace = true, optional = true }
+proptest-derive = { workspace = true, optional = true }
 fancy-regex.workspace = true
 regex.workspace = true
 serde.workspace = true
@@ -44,6 +44,10 @@ prost-build.workspace = true
 
 [features]
 default = ["mz-build-tools/default"]
+proptest = ["dep:proptest", "dep:proptest-derive", "mz-repr/proptest"]
 
 [dev-dependencies]
+mz-mysql-util = { path = ".", features = ["proptest"] }
+proptest.workspace = true
+proptest-derive.workspace = true
 tokio.workspace = true

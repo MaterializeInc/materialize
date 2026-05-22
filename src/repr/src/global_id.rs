@@ -14,6 +14,7 @@ use anyhow::{Error, anyhow};
 use columnar::Columnar;
 use mz_lowertest::MzReflect;
 use mz_ore::id_gen::AtomicIdGen;
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -25,7 +26,6 @@ use crate::CatalogItemId;
 /// One should explicitly topologically sort objects by their dependencies, rather
 /// than rely on the order of identifiers.
 #[derive(
-    Arbitrary,
     Clone,
     Copy,
     Debug,
@@ -39,6 +39,7 @@ use crate::CatalogItemId;
     MzReflect,
     Columnar
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum GlobalId {
     /// System namespace.
     System(u64),

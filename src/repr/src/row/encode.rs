@@ -2213,6 +2213,7 @@ impl RustType<ProtoRow> for Row {
 }
 
 #[cfg(test)]
+#[cfg(any(test, feature = "proptest"))]
 mod tests {
     use std::collections::BTreeSet;
 

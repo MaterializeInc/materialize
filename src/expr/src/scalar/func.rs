@@ -3001,6 +3001,7 @@ fn mz_render_typmod(oid: u32, typmod: i32) -> String {
 }
 
 #[cfg(test)]
+#[cfg(any(test, feature = "proptest"))]
 mod test {
     use chrono::prelude::*;
     use mz_repr::PropDatum;
