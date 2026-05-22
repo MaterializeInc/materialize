@@ -679,7 +679,6 @@ impl From<ColumnName> for mz_sql_parser::ast::Ident {
 }
 
 #[cfg(any(test, feature = "proptest"))]
-#[cfg(any(test, feature = "proptest"))]
 impl proptest::arbitrary::Arbitrary for ColumnName {
     type Parameters = ();
     type Strategy = BoxedStrategy<ColumnName>;
@@ -1457,7 +1456,6 @@ impl RelationDesc {
 }
 
 #[cfg(any(test, feature = "proptest"))]
-#[cfg(any(test, feature = "proptest"))]
 impl Arbitrary for RelationDesc {
     type Parameters = ();
     type Strategy = BoxedStrategy<RelationDesc>;
@@ -2086,7 +2084,6 @@ pub fn arb_relation_desc_diff(
 }
 
 #[cfg(test)]
-#[cfg(any(test, feature = "proptest"))]
 mod tests {
     use super::*;
     use prost::Message;

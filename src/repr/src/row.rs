@@ -315,7 +315,6 @@ impl std::hash::Hash for Row {
 }
 
 #[cfg(any(test, feature = "proptest"))]
-#[cfg(any(test, feature = "proptest"))]
 impl Arbitrary for Row {
     type Parameters = prop::collection::SizeRange;
     type Strategy = BoxedStrategy<Row>;

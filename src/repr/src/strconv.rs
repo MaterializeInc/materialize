@@ -2133,7 +2133,6 @@ impl RustType<ProtoParseHexError> for ParseHexError {
 }
 
 #[cfg(test)]
-#[cfg(any(test, feature = "proptest"))]
 mod tests {
     use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;

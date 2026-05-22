@@ -223,7 +223,6 @@ impl RelationPartStats<'_> {
 }
 
 #[cfg(test)]
-#[cfg(any(test, feature = "proptest"))]
 mod tests {
     use arrow::array::AsArray;
     use mz_ore::metrics::MetricsRegistry;

@@ -2051,7 +2051,6 @@ impl<'a> TypeError<'a> {
 }
 
 #[cfg(test)]
-#[cfg(any(test, feature = "proptest"))]
 mod tests {
     use mz_ore::{assert_err, assert_ok};
     use mz_repr::{SqlColumnType, arb_datum, arb_datum_for_column};

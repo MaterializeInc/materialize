@@ -83,7 +83,6 @@ impl RustType<ProtoVarCharMaxLength> for VarCharMaxLength {
 }
 
 #[cfg(any(test, feature = "proptest"))]
-#[cfg(any(test, feature = "proptest"))]
 impl Arbitrary for VarCharMaxLength {
     type Parameters = ();
     type Strategy = BoxedStrategy<VarCharMaxLength>;
@@ -142,7 +141,6 @@ pub fn format_str(
 }
 
 #[cfg(test)]
-#[cfg(any(test, feature = "proptest"))]
 mod tests {
     use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;

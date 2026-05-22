@@ -215,7 +215,6 @@ impl FromStr for BytesUnit {
 }
 
 #[cfg(test)]
-#[cfg(any(test, feature = "proptest"))]
 mod tests {
     use crate::bytes::ByteSize;
     use mz_ore::assert_err;

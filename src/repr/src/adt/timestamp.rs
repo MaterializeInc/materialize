@@ -938,7 +938,6 @@ impl<T: Sub<Duration, Output = T>> Sub<Duration> for CheckedTimestamp<T> {
 }
 
 #[cfg(any(test, feature = "proptest"))]
-#[cfg(any(test, feature = "proptest"))]
 impl Arbitrary for CheckedTimestamp<NaiveDateTime> {
     type Parameters = ();
     type Strategy = BoxedStrategy<CheckedTimestamp<NaiveDateTime>>;
@@ -950,7 +949,6 @@ impl Arbitrary for CheckedTimestamp<NaiveDateTime> {
     }
 }
 
-#[cfg(any(test, feature = "proptest"))]
 #[cfg(any(test, feature = "proptest"))]
 impl Arbitrary for CheckedTimestamp<DateTime<Utc>> {
     type Parameters = ();
@@ -1039,7 +1037,6 @@ impl FixedSizeCodec<NaiveDateTime> for PackedNaiveDateTime {
 }
 
 #[cfg(test)]
-#[cfg(any(test, feature = "proptest"))]
 mod test {
     use super::*;
     use itertools::Itertools;

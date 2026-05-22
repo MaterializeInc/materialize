@@ -320,7 +320,6 @@ impl FixedSizeCodec<ArrayDimension> for PackedArrayDimension {
 }
 
 #[cfg(test)]
-#[cfg(any(test, feature = "proptest"))]
 mod tests {
     use std::iter::empty;
 

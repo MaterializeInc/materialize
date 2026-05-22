@@ -1097,7 +1097,6 @@ impl Interpreter for Trace {
 }
 
 #[cfg(test)]
-#[cfg(any(test, feature = "proptest"))]
 mod tests {
     use itertools::Itertools;
     use mz_repr::adt::datetime::DateTimeUnits;

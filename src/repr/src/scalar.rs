@@ -4470,7 +4470,6 @@ impl SqlScalarType {
 // See the chapter "Generating Recurisve Data" from the proptest book:
 // https://altsysrq.github.io/proptest-book/proptest/tutorial/recursive.html
 #[cfg(any(test, feature = "proptest"))]
-#[cfg(any(test, feature = "proptest"))]
 impl Arbitrary for SqlScalarType {
     type Parameters = ();
     type Strategy = BoxedStrategy<SqlScalarType>;
@@ -4599,7 +4598,6 @@ impl Arbitrary for SqlScalarType {
     }
 }
 
-#[cfg(any(test, feature = "proptest"))]
 #[cfg(any(test, feature = "proptest"))]
 impl Arbitrary for ReprScalarType {
     type Parameters = ();
@@ -5879,7 +5877,6 @@ fn verify_base_eq_record_nullability() {
 }
 
 #[cfg(test)]
-#[cfg(any(test, feature = "proptest"))]
 mod tests {
     use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;

@@ -839,7 +839,6 @@ impl fmt::Display for Interval {
 }
 
 #[cfg(any(test, feature = "proptest"))]
-#[cfg(any(test, feature = "proptest"))]
 impl Arbitrary for Interval {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
@@ -930,7 +929,6 @@ impl FixedSizeCodec<Interval> for PackedInterval {
 }
 
 #[cfg(test)]
-#[cfg(any(test, feature = "proptest"))]
 mod test {
     use super::*;
     use proptest::prelude::*;

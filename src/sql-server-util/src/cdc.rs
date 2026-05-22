@@ -794,7 +794,6 @@ impl Operation {
 }
 
 #[cfg(test)]
-#[cfg(any(test, feature = "proptest"))]
 mod tests {
     use super::Lsn;
     use proptest::prelude::*;

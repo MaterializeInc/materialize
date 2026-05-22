@@ -579,7 +579,6 @@ pub fn stats_for_json<'a>(jsons: impl IntoIterator<Item = Option<&'a str>>) -> C
 }
 
 #[cfg(test)]
-#[cfg(any(test, feature = "proptest"))]
 mod tests {
     use arrow::array::AsArray;
     use mz_persist_types::codec_impls::UnitSchema;

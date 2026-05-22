@@ -250,7 +250,6 @@ impl RustType<ProtoAclMode> for AclMode {
 }
 
 #[cfg(any(test, feature = "proptest"))]
-#[cfg(any(test, feature = "proptest"))]
 impl Arbitrary for AclMode {
     type Parameters = ();
     type Strategy = BoxedStrategy<AclMode>;

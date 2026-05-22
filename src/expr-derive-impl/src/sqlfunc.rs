@@ -998,13 +998,10 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
 
     let result = quote! {
         #[derive(
-
             Ord, PartialOrd, Clone,
             Debug, Eq, PartialEq, serde::Serialize,
             serde::Deserialize, Hash, mz_lowertest::MzReflect,
-
         )]
-
         #[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
         pub struct #struct_name;
 
@@ -1213,13 +1210,10 @@ fn binary_func(
 
     let result = quote! {
         #[derive(
-
             Ord, PartialOrd, Clone,
             Debug, Eq, PartialEq, serde::Serialize,
             serde::Deserialize, Hash, mz_lowertest::MzReflect,
-
         )]
-
         #[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
         pub struct #struct_name;
 
@@ -1583,13 +1577,10 @@ fn variadic_func(
         // Unit struct: generate struct + trait impl + Display + original function.
         quote! {
             #[derive(
-
                 Ord, PartialOrd, Clone,
                 Debug, Eq, PartialEq, serde::Serialize,
                 serde::Deserialize, Hash, mz_lowertest::MzReflect,
-
             )]
-
             #[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
             pub struct #struct_name;
 

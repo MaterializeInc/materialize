@@ -376,7 +376,6 @@ impl IntoRowIterator for RowCollection {
 }
 
 #[cfg(test)]
-#[cfg(any(test, feature = "proptest"))]
 mod tests {
     use std::borrow::Borrow;
 

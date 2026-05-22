@@ -129,7 +129,6 @@ impl RustType<ProtoCatalogItemId> for CatalogItemId {
 }
 
 #[cfg(test)]
-#[cfg(any(test, feature = "proptest"))]
 mod tests {
     use proptest::prelude::*;
 

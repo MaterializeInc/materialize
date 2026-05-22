@@ -1705,7 +1705,6 @@ impl Schema<SourceData> for RelationDesc {
 }
 
 #[cfg(test)]
-#[cfg(any(test, feature = "proptest"))]
 mod tests {
     use arrow::array::{ArrayData, make_comparator};
     use base64::Engine;

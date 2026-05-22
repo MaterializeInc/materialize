@@ -298,7 +298,6 @@ impl<T> UpdateCollection<T> {
 }
 
 #[cfg(test)]
-#[cfg(any(test, feature = "proptest"))]
 mod tests {
     use super::*;
     use proptest::array::uniform;
