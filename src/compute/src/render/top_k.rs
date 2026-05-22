@@ -68,10 +68,33 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
         // rather than inferred at the arrangement site. `apply_bucketing_strategy`
         // is a no-op for `Direct`.
         //
-        // Note: for `MonotonicTop1Plan` with `must_consolidate: false`, bucketing
-        // adds a small operator overhead with no corresponding consolidation
-        // benefit. We accept this for now; a future refinement could gate the
-        // bucket op on a `has_batcher_downstream()` check.
+        // Note: a `MonotonicTop1Plan`/`MonotonicTopKPlan` with `must_consolidate =
+        // false` together with `TemporalBucketing` here would mean we install a
+        // bucket operator with no downstream consolidator -- pure overhead. That
+        // combination cannot actually occur: `RelaxMustConsolidate` (which is the
+        // only writer of `must_consolidate = false`) runs only on single-time
+        // dataflows (one-shot peeks / `COPY TO`), and in single-time dataflows
+        // `ExprPrepOneShot` constant-folds `mz_now()` to the dataflow `as_of`
+        // before lowering, so no temporal predicates survive into LIR and
+        // `has_future_updates` is `false` everywhere -- meaning no operator (TopK
+        // included) is ever lowered with `TemporalBucketing`. The assertion below
+        // pins down this invariant.
+        if matches!(
+            temporal_bucketing_strategy,
+            ArrangementStrategy::TemporalBucketing
+        ) {
+            let must_consolidate = match &top_k_plan {
+                TopKPlan::MonotonicTop1(p) => p.must_consolidate,
+                TopKPlan::MonotonicTopK(p) => p.must_consolidate,
+                TopKPlan::Basic(_) => true,
+            };
+            soft_assert_or_log!(
+                must_consolidate,
+                "TopK with `TemporalBucketing` should not have `must_consolidate = false`; \
+                 `RelaxMustConsolidate` only runs on single-time dataflows where \
+                 `mz_now()` has been const-folded and no temporal bucketing is set",
+            );
+        }
         let (ok_input, _bucketed) = crate::render::context::apply_bucketing_strategy(
             ok_input,
             temporal_bucketing_strategy,
