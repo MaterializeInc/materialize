@@ -15,6 +15,67 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.25.0
+*Released to Materialize Cloud: 2026-05-21* <br>
+*Released to Materialize Self-Managed: 2026-05-22* <br>
+
+This release includes source versioning for MySQL sources, improvements, and
+bug fixes.
+
+### MySQL: Source versioning
+
+{{< public-preview />}}
+
+For MySQL sources, we've introduced new syntax for [`CREATE
+SOURCE`](/sql/create-source/mysql-v2/) and [`CREATE
+TABLE`](/sql/create-table/). This allows you to better handle schema changes
+in your source MySQL tables.
+
+{{< note >}}
+- Changing column types is currently unsupported.
+{{< /note >}}
+
+For more information, refer to:
+- [Guide: Handling upstream MySQL schema changes with zero
+  downtime](/ingest-data/mysql/source-versioning/)
+- [Syntax: `CREATE SOURCE`](/sql/create-source/mysql-v2/)
+- [Syntax: `CREATE TABLE`](/sql/create-table/)
+
+### Improvements {#v26.25-improvements}
+
+- **Source versioning in public preview**: Source versioning helps you handle
+  upstream schema changes without downtime in Materialize. With v26.25, source
+  versioning has graduated from private preview to public preview, and is now
+  available by default across all environments. For more information, refer to
+  the source versioning guides:
+    - [PostgreSQL](/ingest-data/postgres/source-versioning/)
+    - [MySQL](/ingest-data/mysql/source-versioning/)
+    - [SQL Server](/ingest-data/sql-server/source-versioning/)
+
+### Bug Fixes {#v26.25-bug-fixes}
+
+- Fixed dependents of replica-targeted materialized views being left in an
+  inconsistent state when the target replica is dropped, causing subsequent
+  queries against those dependents to fail.
+- Fixed `ALTER CLUSTER ... SET (SIZE, WORKLOAD CLASS) WITH (WAIT FOR ...)`
+  silently dropping the workload class change during zero-downtime
+  reconfiguration.
+- Fixed `CREATE TABLE FROM SOURCE` retaining the old source name in the stored
+  definition after the source is renamed.
+- Fixed `ALTER CONNECTION IF EXISTS` notice reporting the wrong object type.
+- Fixed ambiguous column names being silently accepted in sink `KEY` clauses
+  instead of returning an error.
+- Fixed a panic during query optimization when `EXPECTED GROUP SIZE` is set
+  to `0`.
+- Fixed real-time recency timeout and dropped-object errors returning generic
+  error messages instead of the correct SQL error codes and descriptions.
+- Fixed Kafka sources hanging indefinitely when the start offset no longer
+  exists due to topic retention or compaction.
+- Fixed `EXPLAIN` plans omitting join projections, making some join closures
+  appear as identity when they were not.
+- Fixed Self-Managed replica scheduling when `availability_zones` is set,
+  where `minDomains` could leave additional replicas stuck in a pending state.
+
 ## v26.24.3
 *Released to Materialize Self-Managed: 2026-05-20* <br>
 
