@@ -196,7 +196,10 @@ const ClusterOverview = () => {
               <Spinner data-testid="loading-spinner" />
             </Flex>
           ) : clusterHasNoMetrics ? (
-            <ErrorBox message={CLUSTER_METRICS_UNAVAILABLE_MESSAGE} />
+            <Alert
+              variant="info"
+              message={CLUSTER_METRICS_UNAVAILABLE_MESSAGE}
+            />
           ) : data ? (
             <Grid
               gridTemplateColumns={{
