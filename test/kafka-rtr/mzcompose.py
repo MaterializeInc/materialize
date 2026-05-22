@@ -27,11 +27,9 @@ from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
-from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.util import PropagatingThread
 
 SERVICES = [
-    Zookeeper(),
     Kafka(),
     SchemaRegistry(),
     Mz(app_password=""),
@@ -60,7 +58,7 @@ def workflow_default(c: Composition) -> None:
 #
 def workflow_simple(c: Composition) -> None:
     c.down(destroy_volumes=True)
-    c.up("zookeeper", "kafka", "schema-registry", "materialized", "toxiproxy")
+    c.up("kafka", "schema-registry", "materialized", "toxiproxy")
 
     seed = random.getrandbits(16)
     c.run_testdrive_files(
@@ -75,7 +73,7 @@ def workflow_simple(c: Composition) -> None:
 
 def workflow_resumption(c: Composition) -> None:
     c.down(destroy_volumes=True)
-    c.up("zookeeper", "kafka", "schema-registry", "materialized", "toxiproxy")
+    c.up("kafka", "schema-registry", "materialized", "toxiproxy")
 
     priv_cursor = c.sql_cursor(service="materialized", user="mz_system", port=6877)
     priv_cursor.execute("ALTER SYSTEM SET allow_real_time_recency = true;")
@@ -152,7 +150,6 @@ def workflow_resumption(c: Composition) -> None:
 def workflow_multithreaded(c: Composition) -> None:
     c.down(destroy_volumes=True)
     c.up(
-        "zookeeper",
         "kafka",
         "schema-registry",
         "materialized",

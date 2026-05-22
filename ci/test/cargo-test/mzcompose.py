@@ -36,7 +36,6 @@ from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMet
 from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
-from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.rustc_flags import Sanitizer
 from materialize.util import PropagatingThread
 from materialize.xcompile import Arch, target
@@ -44,15 +43,17 @@ from materialize.xcompile import Arch, target
 FDB_PORT = 40108
 
 SERVICES = [
-    Zookeeper(),
     Kafka(
         # We need a stable port to advertise, so pick one that is unlikely to
         # conflict with a Kafka cluster running on the local machine.
         ports=["30123:30123"],
         allow_host_ports=True,
+        advertised_listeners=[
+            "HOST://localhost:30123",
+            "PLAINTEXT://kafka:9092",
+        ],
         environment_extra=[
-            "KAFKA_ADVERTISED_LISTENERS=HOST://localhost:30123,PLAINTEXT://kafka:9092",
-            "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=HOST:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+            "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,HOST:PLAINTEXT,PLAINTEXT:PLAINTEXT",
         ],
     ),
     SchemaRegistry(),
@@ -119,7 +120,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         os.remove(junit_path)
 
     c.up(
-        "zookeeper",
         "kafka",
         "schema-registry",
         "postgres",
@@ -146,7 +146,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     env = dict(
         os.environ,
-        ZOOKEEPER_ADDR=f"localhost:{c.default_port('zookeeper')}",
         KAFKA_ADDRS="localhost:30123",
         SCHEMA_REGISTRY_URL=f"http://localhost:{c.default_port('schema-registry')}",
         POSTGRES_URL=postgres_url,

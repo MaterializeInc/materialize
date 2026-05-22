@@ -31,11 +31,9 @@ from materialize.mzcompose.services.localstack import Localstack
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.util import selected_by_name
 
 SERVICES = [
-    Zookeeper(),
     Kafka(),
     SchemaRegistry(),
     Localstack(),
@@ -412,7 +410,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     args = parser.parse_args()
 
-    c.up("zookeeper", "kafka", "schema-registry", "localstack")
+    c.up("kafka", "schema-registry", "localstack")
     for id, disruption in enumerate(selected_by_name(args.disruptions, disruptions)):
         run_test(c, disruption, id)
 

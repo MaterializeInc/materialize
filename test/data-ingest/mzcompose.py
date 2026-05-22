@@ -38,20 +38,21 @@ from materialize.mzcompose.services.sql_server import (
     setup_sql_server_testing,
 )
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
     Postgres(),
     MySql(),
     SqlServer(),
-    Zookeeper(),
     Kafka(
         auto_create_topics=False,
         ports=["30123:30123"],
         allow_host_ports=True,
+        advertised_listeners=[
+            "HOST://localhost:30123",
+            "PLAINTEXT://kafka:9092",
+        ],
         environment_extra=[
-            "KAFKA_ADVERTISED_LISTENERS=HOST://localhost:30123,PLAINTEXT://kafka:9092",
-            "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=HOST:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+            "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,HOST:PLAINTEXT,PLAINTEXT:PLAINTEXT",
         ],
     ),
     SchemaRegistry(),
@@ -107,7 +108,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     services = (
         "materialized",
-        "zookeeper",
         "kafka",
         "schema-registry",
         "postgres",

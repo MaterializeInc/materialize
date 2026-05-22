@@ -52,11 +52,9 @@ from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
-from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.util import PropagatingThread
 
 SERVICES = [
-    Zookeeper(),
     Kafka(),
     SchemaRegistry(),
     Localstack(),
@@ -157,7 +155,7 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
             process_names=["clusterd3", "clusterd4"],
         ),
     ):
-        c.up("zookeeper", "kafka", "schema-registry", "localstack")
+        c.up("kafka", "schema-registry", "localstack")
         c.up("materialized")
 
         # Create a cluster and verify that tests pass.
@@ -1294,7 +1292,7 @@ def workflow_test_upsert(c: Composition) -> None:
     with c.override(
         Testdrive(default_timeout="30s", no_reset=True, consistent_seed=True),
     ):
-        c.up("materialized", "zookeeper", "kafka", "schema-registry")
+        c.up("materialized", "kafka", "schema-registry")
 
         c.run_testdrive_files("upsert/01-create-sources.td")
         # Sleep to make sure the errors have made it to persist.
@@ -1329,7 +1327,6 @@ def workflow_test_remote_storage(c: Composition) -> None:
             "materialized",
             "clusterd1",
             "clusterd2",
-            "zookeeper",
             "kafka",
             "schema-registry",
         )
@@ -1420,7 +1417,7 @@ def workflow_sink_failure(c: Composition) -> None:
             workers=4,
         ),
     ):
-        c.up("materialized", "zookeeper", "kafka", "schema-registry", "clusterd1")
+        c.up("materialized", "kafka", "schema-registry", "clusterd1")
 
         c.run_testdrive_files("sink-failure/01-configure-sinks.td")
         c.run_testdrive_files("sink-failure/02-ensure-sink-down.td")
@@ -5217,7 +5214,6 @@ def workflow_test_zero_downtime_reconfigure(
         c.up(
             "materialized",
             "clusterd1",
-            "zookeeper",
             "kafka",
             "schema-registry",
             Service("testdrive", idle=True),
@@ -5736,7 +5732,6 @@ def workflow_test_constant_sink(c: Composition) -> None:
     with c.override(Testdrive(no_reset=True)):
         c.up(
             "materialized",
-            "zookeeper",
             "kafka",
             "schema-registry",
             Service("testdrive", idle=True),

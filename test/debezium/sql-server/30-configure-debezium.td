@@ -46,7 +46,7 @@ $ http-request method=POST url=http://debezium:8083/connectors content-type=appl
         "schema.history.internal.kafka.topic": "schemahistory.sql-server",
         "snapshot.isolation.mode": "exclusive",
         "provide.transaction.metadata": "true",
-        "topic.prefix": "sql-server"
+        "topic.prefix": "sql_server"
 #,
 #        "signal.data.collection": "test.dbo.debezium_signal"
     }
