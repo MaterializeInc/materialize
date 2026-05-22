@@ -109,11 +109,13 @@ export function buildReplicaUtilizationHistoryQuery({
           sql<number>`s.memory_bytes * s.processes`.as("total_memory_bytes"),
           sql<number | null>`MAX(m.heap_bytes::float8)`.as("heap_bytes"),
           sql<number | null>`MAX(m.heap_limit)`.as("heap_limit"),
-          sql<
-            number | null
-          >`MAX(m.heap_bytes::float8 / NULLIF(m.heap_limit, 0))`.as(
-            "heap_percent",
-          ),
+          // heap_limit is NULL when clusterd isn't launched with --heap-limit
+          // (e.g. the emulator's process orchestrator). Fall back to the
+          // size-based memory percent so the chart still renders.
+          sql<number | null>`COALESCE(
+            MAX(m.heap_bytes::float8 / NULLIF(m.heap_limit, 0)),
+            SUM(m.memory_bytes::float8) / (NULLIF(s.memory_bytes, 0) * s.processes)
+          )`.as("heap_percent"),
         ])
         .groupBy([
           "m.occurred_at",
