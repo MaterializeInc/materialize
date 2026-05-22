@@ -75,97 +75,65 @@ The type system treats `Datum::Error` as inhabiting every `ScalarType`.
 This mirrors the way `NULL` inhabits every nullable type.
 The variant carries an `EvalError`, not a string, so that error introspection functions can be added later without a format break.
 
-### Row-scoped errors: `DataflowError` plus diff-encoded multiplicities
+### Stream shape: two-diff records
 
-`DataflowError` continues to carry row-scoped errors through the existing error collection.
-The semantics of the existing collection are unchanged.
-An operator that wishes to escalate a `Datum::Error` to row scope does so by emitting a `DataflowError::EvalError` and dropping the row from the data collection, as today.
-
-Operators that produce row-scoped errors from per-row evaluation — `WHERE`, join predicates, projection scalars — face a tension that the existing `DataflowError` pathway does not resolve.
-The erroring expression's result (for example `1/(a+b)` with `a+b = 0`) has no column in the row to live in.
-Replacing the row with an opaque error marker loses the row's content, which downstream operators may still need to count, consolidate, or retract.
-Routing the failure to `DataflowError` and dropping the row from the data collection has the same effect: the data row is gone, even though the row's data was otherwise well-defined.
-
-The spec therefore extends the `diff` field with a per-error-kind multiplicity component so that row-scoped errors retain row content and participate in normal diff arithmetic.
-A diff is the pair
+The unit of denotation is a stream of records of shape
 
 ```
-Diff = Int × ErrCount
-ErrCount = EvalError -fin-> Int
+(row : List Datum, diff : Int, err_diff : Int)
 ```
 
-where `Int` is the valid-copy multiplicity and `ErrCount` is the finite-support map from error payloads to error-copy multiplicities.
-Addition is pointwise on both axes.
-Multiplication (used by join and cross) is `(a, m) * (b, n) = (a*b, a • n + b • m)` where `a • n` scales every err-count in `n` by the scalar `a`; this is the unique extension that distributes over addition and preserves the absorbing role of `0`.
-Negation is pointwise: `-(a, m) = (-a, -m)`, where `-m` is the pointwise negation of the err-count map.
-Zero is `(0, ∅)`; one is `(1, ∅)`.
+For each `(row, time)` bucket, `diff` is the multiplicity of `row` as a valid output and `err_diff` is the multiplicity of `row` as an erred output.
+Both components are ordinary `Int` diffs that participate in differential dataflow's standard consolidation arithmetic.
+Both retract.
 
-Under this encoding, a `WHERE` predicate that errors with `EvalError::DivisionByZero` on a row carrying diff `(a, m)` produces an output record with the row content preserved and diff `(0, m ∪ {DivisionByZero ↦ a})`.
-A later retraction of the same row produces the negated diff and the err-count cancels through ordinary differential-dataflow consolidation.
-Two distinct rows that happen to produce the same `EvalError` accumulate in the same err-count slot; an `IS DISTINCT FROM`-style query that distinguishes them can still do so via the row content, which the carrier has not touched.
+A row with `(diff, err_diff) = (1, 0)` is a normal valid row.
+A row with `(0, 1)` is a single erred row that exists in the error collection.
+A row with `(1, 1)` exists in both collections (rare but representable).
+Retractions are the natural `(−1, 0)` or `(0, −1)`.
 
-`DataflowError` and the diff-encoded multiplicities are complementary, not redundant.
-A sink that cannot emit error rows still escalates to `DataflowError` and drops the row.
-An intermediate operator that wants to keep counting through an erroring evaluation uses the diff-encoded component and leaves `DataflowError` alone.
-The escalation rule is explicit: an operator opts into `DataflowError` when its downstream contract requires it.
+The single-stream two-diff form is denotationally equivalent to the (`data`, `errors`) two-collection form used elsewhere in Materialize today.
+The two views are interchangeable via the obvious bijection: `(r, d, e) ↦ (r appears `d` times in `data`, `r` appears `e` times in `errors`)`.
+Choosing the single-stream form here means operators have one signature `Stream → Stream` instead of two, and proofs reason about one carrier rather than a pair.
+
+### Row-scoped errors: `err_diff` and `DataflowError`
+
+`DataflowError` continues to carry the structured payload of every erred row.
+The row content lives in the data field of the stream record; the `err_diff` is its multiplicity in the error side.
+`DataflowError::EvalError(EvalError)` is the structured payload for predicate-error / join-predicate-error / aggregate-error escalations; other `DataflowError` variants (source-decoder errors, key-conflict errors, etc.) carry their own structured payloads alongside the row.
+
+An operator escalates a row to row scope by moving its multiplicity from `diff` to `err_diff`.
+Concrete operator rules are listed in *SQL error semantics* below.
+
+### Cell-scoped errors: `Datum::Error` inside the row
+
+`Datum::Error(EvalError)` lives inside the row's cells.
+A row `[Datum::Int 5, Datum::Error EvalError::DivByZero, Datum::Null]` is a perfectly valid row of width three whose middle column happens to be an error.
+The row participates in the stream as a normal `(diff, err_diff) = (1, 0)` record.
+Downstream operators that consume the column propagate the error per the strict-function rules in *SQL error semantics*.
+
+An alternative form extends the diff with a per-`EvalError` multiplicity component (`Diff = Int × (EvalError → Int)`) so that the err side tracks *which* errors caused row escalation at the diff level.
+See *Per-error-payload diff component* under Alternatives; the two-diff baseline and the per-payload form are both viable and the choice is not yet settled.
 
 ### Global-scoped errors: absorbing diff marker (specification only)
 
-A global error at time `t` is encoded as a distinguished record whose diff carries an absorbing element.
-The absorbing element sits outside the `Int × ErrCount` pair, layered as
+A global error at time `t` is encoded as a distinguished record whose `diff` field carries an absorbing element.
+The diff field for global-error records carries a value from the extended semiring
 
 ```
-DiffWithGlobal = val(Diff) | global
+DiffWithGlobal = val(Int) | global
 ```
 
 with `global` absorbing both addition and multiplication: `global + d = global`, `d + global = global`, `global * d = global`, `d * global = global`.
 Any sum involving `global` is itself `global`, which is exactly the propagation rule a downstream operator needs.
-Unlike the row-scoped err-count component, `global` is terminal: a `global` marker at time `t` cannot be retracted, because the claim "this collection is invalid at `t`" is one-way.
+The `global` marker is terminal: it cannot be retracted, because the claim "this collection is invalid at `t`" is one-way.
 
 The intent is that any downstream operator observing a `global` record at time `t` treats the entire input collection at `t` as invalid, propagating the global error to its own output.
-The natural locus is still the diff field, because the data field is per-row and the time field is per-update, and an absorbing monoid extension of the diff semiring captures exactly the propagation rule required.
+The natural locus is the diff field, because the data field is per-row and the time field is per-update, and an absorbing monoid extension of the diff semiring captures exactly the propagation rule required.
 
+The data side and the `DataflowError` side both carry `Int` diffs in the ordinary case; only the global-error pathway uses `DiffWithGlobal`.
 Implementation is out of scope.
-The spec exists so that future operator work targets this two-layer encoding (`Int × ErrCount` for retractable row-scoped, `global` for terminal collection-scoped) rather than inventing alternates.
-
-### Stream equivalence: data-multiplicity equality
-
-The denotational equality on a unified stream is *data-multiplicity equality* plus *global-marker equality*, not record-by-record list equality.
-Two streams `s₁` and `s₂` are equivalent (`s₁ ≡ s₂`) iff:
-
-* for every row `r`, the sum of `val` counts over all records in `s₁` carrying row `r` equals the same sum over `s₂`;
-* `s₁` carries a `global` marker iff `s₂` does.
-
-Per-row err counts (`Diff.errs`) drop out of the equivalence relation.
-Two streams agreeing on data multiplicities and global status are equivalent regardless of how their `ErrCount` components are distributed across records.
-
-The choice of `≡` over strict list equality is forced by the algebra.
-Many natural optimizer rewrites — `predicate_pushdown` over `Cross(L, R)` is the canonical example — change `ErrCount` distributions without changing data multiplicities.
-For instance, `filter pred (cross l r)` with `pred` referencing only the left side preserves err copies that crossed through left's valid copies; the pushed-down form `cross (filter pred l) r` loses them when `filter` zeroes left's valid count before the cross multiplies right's err counts by it.
-Under strict list equality the rewrite is unsound; under `≡` it is sound, because the data side is unchanged and SQL semantics only observes the data side.
-
-The SQL standard does not specify error-multiplicity semantics, so the choice of equivalence is a design decision rather than a forced one.
-The diagnostic-only treatment of per-row err counts matches the standard's silence on the topic and matches how Materialize currently surfaces user-visible errors: through `DataflowError` (the existing pathway) and through the future `global` marker, not through SQL queries that count err copies inside the data stream.
-
-**Implications.**
-
-* Operators are well-defined modulo `≡`.
-  Every operator's output equivalence class is determined by its input equivalence class.
-  Within an equivalence class, an optimizer may pick any representative.
-* Per-row err counts are bookkeeping for `escalateRowErrs`, the single operator that promotes err counts into observable form by emitting one `DataflowError` per err copy.
-  Every other operator may shuffle, accumulate, or drop err counts as long as the data side and global status are preserved.
-* Retractability still holds at the data level.
-  `(row r, val ⟨+1, m⟩)` followed by `(row r, val ⟨-1, n⟩)` sums to `val ⟨0, m + n⟩`, which has data multiplicity 0 — the row is absent from the equivalence class.
-  The err counts `m + n` are diagnostic; they don't change the observable result.
-* Global errors are still terminal under `≡`.
-  The `global` marker absorbs under `+` and `*`, and `globalEq` is part of the equivalence definition.
-  A `global` cannot be cancelled by adding `val d`; both sides of `≡` must agree on whether `global` is present.
-
-**Why this matters for the optimizer.**
-
-The `predicate_pushdown` rewrite over `Cross(L, R)` is sound as a transformation modulo `≡`, but it is *not* sound under strict list equality.
-The optimizer must target `≡`, not `=`.
-Stating this once in the spec frees every rewrite from having to invent its own justification for why err-count shuffling is acceptable.
+The spec exists so that future operator work targets this absorbing-marker encoding rather than inventing alternates.
 
 ### SQL error semantics
 
@@ -206,10 +174,16 @@ The extension is conservative: any cell that PostgreSQL would have produced as `
 `NULL AND ERROR` and `NULL OR ERROR` collapse to `NULL`, preserving PostgreSQL's bias toward `NULL` when ignorance subsumes the question.
 
 **Predicates.**
-A `WHERE` clause emits a row when its predicate evaluates to `TRUE`.
-It drops the row when the predicate is `FALSE` or `NULL`, as today.
-When the predicate is `ERROR`, the row is recorded with diff `(0, {e ↦ a})` where `e` is the error and `a` is the input row's valid-copy multiplicity; the row content is preserved and the err-count participates in retraction via the row-scoped diff encoding described above.
-A downstream operator that must escalate to `DataflowError` does so explicitly; the default behavior preserves the row.
+A `WHERE` clause acts on a record `(r, diff, err_diff)` according to the value of `eval r pred`:
+
+* `TRUE`     → `(r, diff, err_diff)` unchanged (the row passes through with both multiplicities preserved).
+* `FALSE`    → `(r, 0, err_diff)` — the data multiplicity drops to zero; the err side is untouched.
+* `NULL`     → `(r, 0, err_diff)` — same as `FALSE`.
+* `ERROR e`  → `(r, 0, err_diff + diff)` — the data multiplicity migrates to the err side, added to whatever err multiplicity was already there.
+              The structured `EvalError` payload `e` is carried via `DataflowError::EvalError(e)` alongside the err-side multiplicity.
+
+Retractions are the natural negation: a row that was escalated to err side with multiplicity `+1` and is later retracted produces an `err_diff = -1`, cancelling in the consolidated view.
+The row content is preserved across the escalation; downstream operators that consume the row see the same `r` whether it lives in the data side or the err side.
 
 **Comparison.**
 `=`, `<`, `>`, etc., applied to `Datum::Error` return `Datum::Error`.
@@ -228,8 +202,18 @@ An explicit opt-out is provided by future `try_sum`-style aggregates.
 This avoids accidentally collapsing unrelated failures into a single aggregate output.
 
 **Joins.**
-A join predicate evaluating to `ERROR` produces an output row whose diff carries the err-count component, symmetric with the `WHERE` rule and using the multiplicative rule on diffs to combine the contributions of the two input sides.
-A downstream operator that must escalate to `DataflowError` does so explicitly.
+Cross product on two-diff records combines multiplicities multiplicatively, applying the standard differential-dataflow rule on each component:
+
+```
+(rL, dL, eL) × (rR, dR, eR) ⟹ (rL ++ rR, dL · dR, dL · eR + eL · dR + eL · eR)
+```
+
+Valid×valid produces valid (`dL · dR`).
+Valid×err and err×valid produce err (each multiplied by the other side's data count).
+Err×err also produces err (an err record crossed with an err record is still err).
+
+A join predicate evaluating to `ERROR` on a row `(r, d, e)` of the cross product follows the `WHERE` rule: the data multiplicity migrates to the err side, with the structured `EvalError` payload carried via `DataflowError::EvalError`.
+
 Join keys containing `Datum::Error` do not match any other key, including identical `Datum::Error` values, mirroring the grouping rule.
 
 **Casts and `try_cast`.**
@@ -300,16 +284,42 @@ Carry global errors in a separate timely stream.
 Works, but requires every operator to be aware of two error inputs.
 The `diff`-field encoding leverages differential dataflow's existing fan-in and is the natural extension of the semiring.
 
-**Row-scoped errors via carrier replacement rather than a diff component.**
-Encode a row-scoped error by replacing the row with an opaque error marker in the data field while keeping the diff a plain `Int`.
+**Row-scoped errors via carrier replacement rather than the err-side diff.**
+Encode a row-scoped error by replacing the row with an opaque error marker in the data field while keeping a plain `Int` diff.
 This is the simplest extension but loses the row's content at the carrier flip, so any downstream operator that needed the original row data (for join, group-by on other columns, or counting) cannot recover it.
-The `diff`-encoded `ErrCount` keeps the row and counts the error as a parallel multiplicity, which preserves both pieces of information and stays retractable through ordinary diff arithmetic.
+The two-diff `(diff, err_diff)` form keeps the row and tracks the err multiplicity in a parallel `Int` component, which preserves both pieces of information and stays retractable through ordinary diff arithmetic.
 
 **Row-scoped errors via an absorbing diff marker like global errors.**
 Use the same absorbing-monoid extension as the global-scoped case.
 Rejected because per-row evaluation errors must be retractable: a row that errs on `WHERE 1/(a+b) > 5` at time `t` and is retracted at time `t'` must net to zero in the consolidated view.
 An absorbing marker cannot retract.
-The two-layer encoding (`Int × ErrCount` for row-scoped, `global` for collection-scoped) keeps the algebra of each scope faithful to its semantics.
+The two-diff encoding (`Int` data multiplicity + `Int` err multiplicity, with absorbing `global` layered on top) keeps the algebra of each scope faithful to its semantics.
+
+**Per-error-payload diff component (Diff = Int × ErrCount).**
+An earlier iteration of this document proposed extending the diff with a finite map from `EvalError` payloads to multiplicities, so that *which* error caused row escalation would be tracked at the diff level alongside the data multiplicity.
+This is an open alternative, not a rejection — the two-diff `(Int, Int)` form is the current working baseline, but the per-payload form has properties the baseline does not, and the choice is not yet settled.
+
+Properties of the per-payload form that the baseline does not have:
+
+* `which` error caused row escalation is observable at the diff level rather than only through the `DataflowError` companion payload.
+  A future SQL surface that wants to filter or aggregate by error kind without joining on `DataflowError` can read the err-count map directly.
+
+* Multiple errors arising at the same `(row, time)` bucket are distinguished.
+  Under the baseline, two distinct error events for the same row collapse to `err_diff = 2` and the per-event payload information is recoverable only via `DataflowError`.
+  Under the per-payload form, they live in separate keys of the `ErrCount` map.
+
+Properties of the baseline that the per-payload form does not have:
+
+* The err-side diff is an ordinary `Int`, so every existing diff-semiring lemma and runtime arrangement layout applies without modification.
+
+* Multiplication has the simple rule `(a, b) * (a', b') = (a·a', a·b' + b·a' + b·b')` per component, and `predicate_pushdown` over `Cross(L, R)` is sound under strict list equality.
+
+* No stream-equivalence quotient is needed.
+  Under the per-payload form, the multiplication rule `(a, m) * (b, n) = (a·b, a • n + b • m)` makes several optimizer rewrites change err-count distributions without changing data multiplicities; soundness for those rewrites requires the quotient.
+
+The Lean mechanization on this branch carried out the `Int × ErrCount` design and surfaced both the equivalence-relation requirement and the `predicate_pushdown` interaction concretely.
+That work is preserved as a worked alternative.
+Resolving which form to standardize on requires answering the open question about a user-facing error-kind surface (see *Open questions*).
 
 ## Open questions
 
@@ -321,10 +331,15 @@ A reader on an older binary that encounters `Datum::Error` must have a defined b
 PostgreSQL has no precedent; candidates are "errors sort last", "errors sort like `NULL`", and "errors are unordered and produce a sort-key error".
 * What is the storage cost of widening `Row` encoding to include the new tag, and how does it compare to the current cost of routing failures through the error collection?
 * For global errors, what is the precise specification of the absorbing element in the `diff` semiring, and how does it interact with consolidation and arrangement?
-* For row-scoped errors carried in the diff's `ErrCount` component, what is the storage / wire cost of a finite map from `EvalError` to `Int` versus the existing single-`Int` diff, and is the cost acceptable for collections in which errors are rare?
-* For row-scoped errors carried in the diff, how does the encoding interact with existing arrangement layouts that assume `Int` diffs, and what is the minimum change required for the runtime to round-trip the new diff type?
-* The stream equivalence section asserts that per-row err counts are diagnostic and the optimizer targets equivalence modulo data multiplicities + global status.
-This is a design choice, not a forced one.
-What user-facing surface (if any) should expose err counts directly?
-Candidates: a per-row `is_error` predicate that observes whether any err count is non-zero, a `count_errors(expr)` aggregate that sums err counts across rows, or no surface at all (err counts strictly serve `escalateRowErrs`).
-The choice constrains which optimizer rewrites can be made unconditional.
+* The two-diff `(diff, err_diff)` form has the runtime carrying two `Int`s per record where today it carries one.
+What is the storage / wire cost, and is it acceptable for collections in which errors are rare?
+A sparse representation that omits records with `err_diff = 0` is the obvious optimization.
+* For source-decoder errors where the row's columns cannot be fully produced, what row content goes into the data field?
+Candidates: a width-zero placeholder row, a width-N row of all-`Datum::Error` cells, or a `DataflowError::DecodeError` payload that lives alongside the err multiplicity but does not require a row at all.
+The choice affects whether the data-side carrier is always a `List Datum` or whether the stream needs a sum-type carrier after all.
+* Should the err-side multiplicity be a single `Int` (the two-diff baseline) or a per-`EvalError` map `EvalError → Int` (the per-payload alternative)?
+This is the question that resolves whether the `Int × ErrCount` alternative is adopted.
+The answer turns on a downstream concern: is there a user-facing SQL surface that needs to distinguish error kinds at the row level without joining on `DataflowError`?
+If yes, the per-payload form is the natural fit.
+If no, the two-diff form is the simpler home.
+Until that surface is decided, both forms remain on the table.
