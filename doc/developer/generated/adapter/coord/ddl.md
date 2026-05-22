@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/ddl.rs
-revision: 9d0a7c3c6f
+revision: 3a1c877be6
 ---
 
 # adapter::coord::ddl
@@ -10,3 +10,4 @@ Also provides `drop_compute_sinks`, `drop_vpc_endpoints_in_background`, and othe
 `drop_vpc_endpoints_in_background` offloads VPC endpoint deletion to a background task; if `cloud_resource_controller` is absent it logs a warning and returns rather than panicking.
 `catalog_transact_with_side_effects` supports DDL operations that need to run async side-effects (e.g. dropping persist shards) after the catalog transaction commits.
 The `Op::InjectAuditEvents` variant is recognized as a no-op for downstream implication processing.
+Storage usage updates bypass `catalog_transact_inner` entirely and are written directly via `builtin_table_update`.
