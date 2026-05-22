@@ -295,25 +295,25 @@ future change to `evalAnd` that accidentally promotes
 theorem evalAnd_not_errStrict_left :
     ¬ ∀ d e, evalAnd (.err e) d = .err e := by
   intro h
-  have hh := h (.bool false) .placeholder
+  have hh := h (.bool false) .divisionByZero
   simp [evalAnd] at hh
 
 theorem evalAnd_not_errStrict_right :
     ¬ ∀ d e, evalAnd d (.err e) = .err e := by
   intro h
-  have hh := h (.bool false) .placeholder
+  have hh := h (.bool false) .divisionByZero
   simp [evalAnd] at hh
 
 theorem evalOr_not_errStrict_left :
     ¬ ∀ d e, evalOr (.err e) d = .err e := by
   intro h
-  have hh := h (.bool true) .placeholder
+  have hh := h (.bool true) .divisionByZero
   simp [evalOr] at hh
 
 theorem evalOr_not_errStrict_right :
     ¬ ∀ d e, evalOr d (.err e) = .err e := by
   intro h
-  have hh := h (.bool true) .placeholder
+  have hh := h (.bool true) .divisionByZero
   simp [evalOr] at hh
 
 end Mz

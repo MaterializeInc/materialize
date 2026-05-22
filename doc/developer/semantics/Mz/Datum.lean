@@ -19,7 +19,6 @@ namespace Mz
 skeleton's variants are intentionally small; production
 `EvalError` (in `src/expr/src/scalar.rs`) has many more. -/
 inductive EvalError
-  | placeholder
   | divisionByZero
   deriving DecidableEq, Inhabited
 
