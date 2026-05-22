@@ -22,7 +22,36 @@ components that work together to provide a fully functional database
 environment. Understanding these components and how they interact is essential
 for deploying, managing, and troubleshooting your Self-Managed Materialize.
 
-This page provides an overview of the core architectural components in a Self-Managed deployment, from the infrastructure level (Helm chart) down to the application level (clusters and replicas).
+## Getting started
+
+To help you get started, the following installation guides are available:
+
+{{% include-from-yaml data="self_managed/installation"
+name="installation-landing-guides-helm" %}}
+
+### Install using Terraform Modules
+
+{{< note >}}
+
+{{< self-managed/terraform-disclaimer >}}
+
+{{< /note >}}
+
+{{< tabs level=4 >}}
+{{< tab "Terraform Modules (New!)" >}}
+
+Materialize provides [**Terraform
+modules**](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main?tab=readme-ov-file#materialize-self-managed-terraform-modules),
+which provides concrete examples and an opinionated model for deploying Materialize.
+
+{{< yaml-table data="self_managed/terraform_list" >}}
+
+{{< /tab >}}
+{{< tab "Legacy Terraform Modules" >}}
+
+{{< yaml-table data="self_managed/terraform_list_legacy" >}}
+{{< /tab >}}
+{{< /tabs >}}
 
 ## Architecture layers
 
@@ -35,54 +64,22 @@ Layer | Component | Description
 **Database** | [Materialize Instance](#materialize-instance) | The Materialize database instance itself
 **Compute** | [Clusters and Replicas](#clusters-and-replicas) | Isolated compute resources for workloads
 
-## Helm chart
+### Helm chart
 
-The Helm chart is the entry point for deploying Materialize in a self-managed Kubernetes environment. It serves as a package manager component that defines and deploys the Materialize Operator.
+The Helm chart is the entry point for deploying Materialize in a self-managed
+Kubernetes environment. It defines and deploys the Materialize Operator as part
+of the Helm package management workflow.
 
-### Working with the Helm chart
+The Helm repository is hosted at `https://materializeinc.github.io/materialize`.
 
-You interact with the Helm chart through standard Helm commands. For example:
-
-- To add the Materialize Helm chart repository:
-
-  ```bash
-  helm repo add materialize https://materializeinc.github.io/materialize
-  ```
-
-- To update the repository index:
-
-  ```bash
-  helm repo update materialize
-  ```
-
-- To install the Materialize Helm chart and deploy the Materialize Operator and
-  other resources:
-
-  ```bash
-  helm install materialize materialize/materialize-operator
-  ```
-
-- To upgrade the the Materialize Helm chart (and the Materialize Operator and
-  other resources):
-
-  ```bash
-  helm upgrade materialize materialize/materialize-operator
-  ```
-
-- To uninstall the Helm chart (and the Materialize Operator and other
-  resources):
-
-  ```bash
-  helm uninstall materialize
-  ```
-
-### What gets installed
-
-```bash
-helm install materialize materialize/materialize-operator
+```sh
+helm repo add materialize https://materializeinc.github.io/materialize
 ```
 
-When you install the the Materialize Helm Chart, it:
+#### What gets installed
+
+When you install the Materialize Helm Chart (e.g., `helm install materialize
+materialize/materialize-operator ...`), it:
 
 - Deploys the **Materialize Operator** as a Kubernetes deployment.
 - Creates necessary cluster-wide resources (CRDs, RBAC roles, service accounts).
@@ -91,11 +88,11 @@ When you install the the Materialize Helm Chart, it:
 Once installed, the **Materialize Operator** handles the deployment and
 management of Materialize instances.
 
-## Materialize Operator
+### Materialize Operator
 
 The Materialize Operator (implemented as `orchestratord`) is a Kubernetes operator that automates the deployment and lifecycle management of Materialize instances. It implements the [Kubernetes operator pattern](https://kubernetes.io/docs/concepts/extend-kubernetes/operator/) to extend Kubernetes with domain-specific knowledge about Materialize.
 
-### Managed resources
+#### Managed resources
 
 The operator watches for Materialize custom resources and creates/manages all the Kubernetes resources required to run a Materialize instance, including:
 
@@ -107,20 +104,20 @@ The operator watches for Materialize custom resources and creates/manages all th
 - **Deployments**: These support the `balancerd` and `console` pod used as the ingress layer for Materialize.
 - **StatefulSets**: `environmentd` and `clusterd` which are the database control plane and compute resources respectively.
 
-### Configuration
+#### Configuration
 
 For configuration options for the Materialize Operator, see
 the [Materialize Operator Configuration
 page](/self-managed-deployments/operator-configuration/).
 
-## Materialize Instance
+### Materialize Instance
 
 A Materialize instance is the actual database that you connect to and interact
 with. Each instance is an isolated Materialize deployment (deployed via a
 Kubernetes Custom Resource) with its own data, configuration, and compute
 resources.
 
-### Components
+#### Components
 
 When you create a Materialize instance, the operator deploys three core
 components as Kubernetes resources:
@@ -143,7 +140,7 @@ components as Kubernetes resources:
 
 - **console**: Web-based administration interface, deployed as a Deployment.
 
-### Instance responsibilities
+#### Instance responsibilities
 
 A Materialize instance manages:
 
@@ -153,11 +150,10 @@ A Materialize instance manages:
 - **Catalog metadata**: System information about all objects and configuration
 - **Compute orchestration**: Coordination of work across clusters and replicas
 
-
-### Deploying with the operator
+#### Deploying with the operator
 
 To deploy Materialize instances with the operator, create and apply Materialize
-custom resources definitions(CRDs). For a full list of fields available for the
+custom resource definitions(CRDs). For a full list of fields available for the
 Materialize CR, see [Materialize CRD Field
 Descriptions](/self-managed-deployments/materialize-crd-field-descriptions/).
 
@@ -175,13 +171,14 @@ spec:
 When you first apply the Materialize custom resource, the operator automatically
 creates all required Kubernetes resources.
 
-### Modifying the custom resource
+#### Modifying the custom resource
 
 To modify a custom resource, update the CRD with your changes, including the
 `requestRollout` field with a new UUID value. When you apply the CRD, the
 operator will roll out the changes.
 
-{{< note >}} If you do not specify  a new `requestRollout` UUID, the operator
+{{< note >}}
+If you do not specify a new `requestRollout` UUID, the operator
 watches for updates but does not roll out the changes.
 {{< /note >}}
 
@@ -193,7 +190,7 @@ See also:
 
 - [Upgrade Overview](/self-managed-deployments/upgrading/)
 
-### Connecting to an instance
+#### Connecting to an instance
 
 Once deployed, you interact with a Materialize instance through the Materialize
 Console or standard PostgreSQL-compatible tools and drivers:
@@ -217,20 +214,20 @@ CREATE MATERIALIZED VIEW my_view AS
 SELECT * FROM my_view;
 ```
 
-## Clusters and Replicas
+### Clusters and Replicas
 
 Clusters are isolated pools of compute resources that execute workloads in Materialize. They provide resource isolation and fault tolerance for your data processing pipelines.
 
 For a comprehensive overview of clusters in Materialize, see the [Clusters concept page](/concepts/clusters/).
 
-### Cluster architecture
+#### Cluster architecture
 
 - **Clusters**: Logical groupings of compute resources dedicated to specific workloads (sources, sinks, indexes, materialized views, queries)
 - **Replicas**: Physical instantiations of a cluster's compute resources, deployed as Kubernetes StatefulSets
 
 Each replica contains identical compute resources and processes the same data independently, providing fault tolerance and high availability.
 
-### Kubernetes resources
+#### Kubernetes resources
 
 When you create a cluster with one or more replicas in Materialize, the instance coordinates with the operator to create:
 
@@ -247,7 +244,7 @@ CREATE CLUSTER my_cluster SIZE = '100cc', REPLICATION FACTOR = 2;
 
 This creates two separate StatefulSets in Kubernetes, each running compute processes.
 
-### Managing clusters
+#### Managing clusters
 
 You interact with clusters primarily through SQL:
 
@@ -270,12 +267,11 @@ CREATE MATERIALIZED VIEW my_view
 
 -- Resize a cluster
 ALTER CLUSTER compute_cluster SET (SIZE = '200cc');
-
 ```
 
 Materialize handles the underlying Kubernetes resource creation and management automatically.
 
-## Workflow
+### Workflow
 
 The following outlines the workflow process, summarizing how the various
 components work together:
@@ -288,7 +284,7 @@ components work together:
    including the `environmentd`, `balancerd`, and `console` pods.
 
 1. **Connect to the instance**: Use the Materialize Console on port 8080 to
-   connecto to the `console` service endpoint or SQL client on port 6875 to
+   connect to the `console` service endpoint or SQL client on port 6875 to
    connect to the `balancerd` service endpoint.
 
    If authentication is enabled, you must first connect to the Materialize
@@ -299,34 +295,6 @@ components work together:
 
 1. **Run your workloads**: Create sources, materialized views, indexes, and
    sinks on your clusters.
-
-## Available Terraform Modules
-
-To help you get started, Materialize provides Terraform modules.
-
-{{< note >}}
-
-{{< self-managed/terraform-disclaimer >}}
-
-{{< /note >}}
-
-{{< tabs >}}
-{{< tab "Terraform Modules (New!)" >}}
-### Terraform Modules
-
-Materialize provides [**Terraform
-modules**](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main?tab=readme-ov-file#materialize-self-managed-terraform-modules),
-which provides concrete examples and an opinionated model for deploying Materialize.
-
-{{< yaml-table data="self_managed/terraform_list" >}}
-
-{{< /tab >}}
-{{< tab "Legacy Terraform Modules" >}}
-### Legacy Terraform Modules
-
-{{< yaml-table data="self_managed/terraform_list_legacy" >}}
-{{< /tab >}}
-{{< /tabs >}}
 
 ## Related pages
 
