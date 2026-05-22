@@ -82,6 +82,32 @@ class Column:
             return round(rng.uniform(10.0, 1800.0), 2)
         return None
 
+    def _shaped_int(self, lo: int, hi: int, rng: random.Random) -> int | None:
+        """Generate an integer according to data_shape, or None if not applicable.
+
+        Without a shape, integer columns are drawn from `long_tail_int`, which
+        concentrates ~80% of values into a handful of hot numbers. That turns a
+        join on an integer key (e.g. a surrogate `*_id`) into a many-to-many
+        explosion. Shaping a key column makes it high-cardinality so the join
+        stays bounded:
+          * `sequential` — unique, monotonically increasing surrogate keys.
+          * `random`     — uniform over the non-negative range (chunk-independent).
+          * `zipfian`    — long-tailed, for intentionally skewed keys.
+        """
+        if self.data_shape == "sequential":
+            self._seq_counter += 1
+            return max(lo, min(hi, self._seq_counter))
+        elif self.data_shape == "random":
+            return rng.randrange(0, hi) if hi > 0 else rng.randrange(lo, hi)
+        elif self.data_shape == "zipfian":
+            return long_tail_int(lo, hi, rng=rng)
+        return None
+
+    def _gen_int(self, lo: int, hi: int, rng: random.Random) -> int:
+        """Return a shaped integer if a shape applies, else the default long tail."""
+        shaped = self._shaped_int(lo, hi, rng)
+        return shaped if shaped is not None else long_tail_int(lo, hi, rng=rng)
+
     def _random_date(self, rng: random.Random) -> str:
         """Generate a uniformly random date string."""
         year = rng.choice(self._years)
@@ -96,22 +122,41 @@ class Column:
 
     def avro_type(self) -> str | list[str]:
         """Return the Avro type for this column."""
-        result = self.typ
-        if self.typ in ("text", "bytea", "character", "character varying"):
-            result = "string"
+        if self.typ == "boolean":
+            result = "boolean"
         elif self.typ in ("smallint", "integer", "uint2", "uint4"):
             result = "int"
         elif self.typ in ("bigint", "uint8"):
             result = "long"
+        elif self.typ in ("float",):
+            result = "float"
         elif self.typ in ("double precision", "numeric"):
             result = "double"
         elif self.typ in ("timestamp with time zone", "timestamp without time zone"):
             result = "long"
+        else:
+            # Default to string for text-like, JSON, dates, ranges, arrays, maps,
+            # and any other custom/unsupported types — kafka_value emits these
+            # as string-encoded literals.
+            result = "string"
         return ["null", result] if self.nullable else result
+
+    def _scalar_typ(self) -> str | None:
+        """Return the scalar inner type if self.typ is `<scalar>[]`, else None."""
+        if self.typ.endswith("[]"):
+            return self.typ[:-2]
+        return None
 
     def kafka_value(self, rng: random.Random) -> Any:
         """Generate a value suitable for Kafka serialization."""
-        if self.default and rng.randrange(10) == 0 and self.default != "NULL":
+        if (
+            self.default
+            and rng.randrange(10) == 0
+            and self.default != "NULL"
+            # Function-call defaults like pg_catalog.now() can't be sent as
+            # literals in Kafka payloads.
+            and "(" not in str(self.default)
+        ):
             return str(self.default)
         if self.nullable and rng.randrange(10) == 0:
             return None
@@ -120,18 +165,18 @@ class Column:
             return rng.random() < 0.2
 
         elif self.typ == "smallint":
-            return long_tail_int(-32768, 32767, rng=rng)
+            return self._gen_int(-32768, 32767, rng=rng)
         elif self.typ == "integer":
-            return long_tail_int(-2147483648, 2147483647, rng=rng)
+            return self._gen_int(-2147483648, 2147483647, rng=rng)
         elif self.typ == "bigint":
-            return long_tail_int(-9223372036854775808, 9223372036854775807, rng=rng)
+            return self._gen_int(-9223372036854775808, 9223372036854775807, rng=rng)
 
         elif self.typ == "uint2":
-            return long_tail_int(0, 65535, rng=rng)
+            return self._gen_int(0, 65535, rng=rng)
         elif self.typ == "uint4":
-            return long_tail_int(0, 4294967295, rng=rng)
+            return self._gen_int(0, 4294967295, rng=rng)
         elif self.typ == "uint8":
-            return long_tail_int(0, 18446744073709551615, rng=rng)
+            return self._gen_int(0, 18446744073709551615, rng=rng)
 
         elif self.typ in ("float", "double precision", "numeric"):
             shaped = self._shaped_float(rng)
@@ -145,7 +190,11 @@ class Column:
                 return literal(shaped)
             return literal(long_tail_text(self.chars, 100, self._hot_strings, rng=rng))
 
-        elif self.typ in ("character", "character varying"):
+        elif self.typ == "character":
+            # `character` without size = character(1)
+            return literal(rng.choice(self.chars))
+
+        elif self.typ == "character varying":
             shaped = self._shaped_text(rng)
             if shaped is not None:
                 return literal(shaped)
@@ -209,12 +258,42 @@ class Column:
             ]
             return literal(f"{{{', '.join(values)}}}")
 
+        elif self.typ == "interval":
+            return literal(
+                f"{rng.randrange(0, 365)} days {rng.randrange(0, 24)}:{rng.randrange(0, 60)}:{rng.randrange(0, 60)}"
+            )
+
+        elif self.typ == "oid":
+            return long_tail_int(0, 4294967295, rng=rng)
+
+        elif self.typ == "real":
+            return long_tail_float(-1_000_000.0, 1_000_000.0, rng=rng)
+
+        elif self._scalar_typ() is not None:
+            # Array of some scalar — emit as Postgres array literal string for Avro.
+            inner = Column(
+                self.name, self._scalar_typ() or "text", False, None, self.data_shape
+            )
+            items = [str(inner.kafka_value(rng)) for _ in range(3)]
+            return literal("{" + ",".join(items) + "}")
+
+        elif self.typ in ("list", "record[]", "mz_aclitem[]"):
+            return literal("{}")
+
         else:
             raise ValueError(f"Unhandled data type {self.typ}")
 
     def value(self, rng: random.Random, in_query: bool = True) -> Any:
         """Generate a value suitable for SQL queries or COPY operations."""
-        if self.default and rng.randrange(10) == 0 and self.default != "NULL":
+        if (
+            self.default
+            and rng.randrange(10) == 0
+            and self.default != "NULL"
+            # In COPY (in_query=False) defaults are not interpreted, so a
+            # function-call default like pg_catalog.now() would be inserted
+            # as a literal string and fail.
+            and (in_query or "(" not in str(self.default))
+        ):
             return str(self.default) if in_query else self.default
 
         if self.nullable and rng.randrange(10) == 0:
@@ -225,27 +304,27 @@ class Column:
             return ("true" if val else "false") if in_query else val
 
         elif self.typ == "smallint":
-            val = long_tail_int(-32768, 32767, rng=rng)
+            val = self._gen_int(-32768, 32767, rng=rng)
             return str(val) if in_query else val
 
         elif self.typ == "integer":
-            val = long_tail_int(-2147483648, 2147483647, rng=rng)
+            val = self._gen_int(-2147483648, 2147483647, rng=rng)
             return str(val) if in_query else val
 
         elif self.typ == "bigint":
-            val = long_tail_int(-9223372036854775808, 9223372036854775807, rng=rng)
+            val = self._gen_int(-9223372036854775808, 9223372036854775807, rng=rng)
             return str(val) if in_query else val
 
         elif self.typ == "uint2":
-            val = long_tail_int(0, 65535, rng=rng)
+            val = self._gen_int(0, 65535, rng=rng)
             return str(val) if in_query else val
 
         elif self.typ == "uint4":
-            val = long_tail_int(0, 4294967295, rng=rng)
+            val = self._gen_int(0, 4294967295, rng=rng)
             return str(val) if in_query else val
 
         elif self.typ == "uint8":
-            val = long_tail_int(0, 18446744073709551615, rng=rng)
+            val = self._gen_int(0, 18446744073709551615, rng=rng)
             return str(val) if in_query else val
 
         elif self.typ in ("float", "double precision", "numeric"):
@@ -262,7 +341,11 @@ class Column:
             s = long_tail_text(self.chars, 100, self._hot_strings, rng=rng)
             return literal(s) if in_query else s
 
-        elif self.typ in ("character", "character varying"):
+        elif self.typ == "character":
+            s = rng.choice(self.chars)
+            return literal(s) if in_query else s
+
+        elif self.typ == "character varying":
             shaped = self._shaped_text(rng)
             if shaped is not None:
                 return literal(shaped) if in_query else shaped
@@ -355,6 +438,31 @@ class Column:
                     long_tail_text(self.chars, 100, self._hot_strings, rng=rng)
                     for _ in range(5)
                 ]
+
+        elif self.typ == "interval":
+            s = f"{rng.randrange(0, 365)} days {rng.randrange(0, 24)}:{rng.randrange(0, 60)}:{rng.randrange(0, 60)}"
+            return literal(s) if in_query else s
+
+        elif self.typ == "oid":
+            val = long_tail_int(0, 4294967295, rng=rng)
+            return str(val) if in_query else val
+
+        elif self.typ == "real":
+            val = long_tail_float(-1_000_000.0, 1_000_000.0, rng=rng)
+            return str(val) if in_query else val
+
+        elif self._scalar_typ() is not None:
+            inner = Column(
+                self.name, self._scalar_typ() or "text", False, None, self.data_shape
+            )
+            if in_query:
+                items = [str(inner.value(rng, in_query=True)) for _ in range(3)]
+                return literal("{" + ",".join(items) + "}")
+            return [inner.value(rng, in_query=False) for _ in range(3)]
+
+        elif self.typ in ("list", "record[]", "mz_aclitem[]"):
+            # Materialize-specific or compound types — emit empty array literal.
+            return literal("{}") if in_query else []
 
         else:
             # Custom data type, or not supported yet
