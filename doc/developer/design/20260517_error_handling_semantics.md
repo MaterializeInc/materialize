@@ -259,12 +259,27 @@ The prototype intentionally omits global errors, sinks, and aggregates; those la
 
 ## Alternatives
 
+The design space has four semi-orthogonal dimensions, plus a cross-cutting choice about runtime channel structure.
+
+* **Cell encoding** — how a per-cell error sits inside a row.
+* **Row / collection encoding** — how a row's error multiplicity is represented at the stream record.
+* **Global encoding** — how a collection-wide error is represented.
+* **Evaluation-order equivalence** — what relation we treat as "the same" result when two execution orders disagree on whether to err.
+* **Channel structure and wire layout** — whether errors flow in-band with data or in a sidecar, and how they're serialized.
+
+The current proposal picks `Datum::Error` (cell), two-diff `(diff, err_diff)` (row), absorbing `DiffWithGlobal` (global), strict equality (equivalence — provisional, see *Evaluation-order equivalence*), and an in-band single-stream layout.
+Each of these is one point in the larger design space; the subsections below enumerate the others.
+Rejected options are retained for the historical record so that future iterations don't relitigate ground that's already been covered.
+
+### Cell encoding
+
 **Status quo plus TEXT COLUMN guidance.**
 Document that columns with permissive upstream `sql_mode` must be ingested as `text`.
 Cheap, but pushes parsing to query time forever and does not generalize to other cell-failure sources (overflow, JSON cast, decimal precision).
+Rejected as a general solution; remains a valid escape hatch.
 
 **Datum-level `NULL` overload.**
-Coerce zero-dates to `NULL` at ingestion.
+Coerce zero-dates and other unrepresentable values to `NULL` at ingestion.
 Loses the distinction between user-intended `NULL` and ingestion-rejected value.
 Violates the spec rule that error is stronger than `NULL`.
 Rejected on correctness grounds.
@@ -274,28 +289,67 @@ Store `Datum::Error(Box<str>)` rather than `Datum::Error(Box<EvalError>)`.
 Simpler to encode but loses structured error information; introspection functions would parse a string.
 Rejected on extensibility grounds.
 
-**Error rows in the data collection rather than a separate variant.**
-Tag the row itself with a per-column error bitmask, leaving `Row` as today.
-Saves a `Datum` variant but introduces an out-of-band channel that operators must thread through every transformation.
+**Per-column error vector inside `Row` (sidecar metadata).**
+Keep `Row` as today; attach a parallel `error_vec : List (ColIdx, EvalError)` per row.
+Saves a `Datum` variant but introduces an out-of-band channel that operators must thread through every transformation: every projection has to rewrite the index map, every filter has to read both the row and the vector to decide propagation.
 Rejected on uniformity grounds; the `Datum` variant is the same place every existing operator already inspects.
 
-**Global errors via a sidecar collection rather than the `diff` field.**
-Carry global errors in a separate timely stream.
-Works, but requires every operator to be aware of two error inputs.
-The `diff`-field encoding leverages differential dataflow's existing fan-in and is the natural extension of the semiring.
+**Severity-graded `Datum::Error` (open).**
+Extend the variant to `Datum::Error(severity : Severity, EvalError)` where `Severity ∈ {Warning, Error}` and warnings do not escalate under `WHERE`, joins, or sinks.
+A warning denotes "this value may be wrong but the operator chose not to fail"; e.g. a lossy cast that succeeded under a permissive cast rule but whose result the user may want to inspect.
+The strict-function rule generalizes from "any err → err" to "join the severity lattice of arguments"; the boolean truth tables extend with a third row that collapses to the existing four-value behavior when severity is bottom.
+Sink output downgrades warnings to data and only escalates errors.
+This is a strict extension of the current proposal (the existing semantics is the case `Severity = Error` everywhere) and could be added incrementally.
+The cost is one extra tag per `Datum::Error` and one extra column of every boolean / strict-function truth table; the benefit is a path to "permissive but observable" SQL surface for casts and ingestion paths that today have only "reject row" or "produce NULL".
+Open: whether the warning level is needed before MVP ships, or can be added later if a concrete use case (e.g. lossy CAST, MySQL strict-mode toggles) demands it.
 
-**Row-scoped errors via carrier replacement rather than the err-side diff.**
+**Chosen: `Datum::Error(Box<EvalError>)`** as specified in the main proposal.
+
+### Row / collection encoding
+
+**Row-scoped errors via carrier replacement rather than the err-side diff (rejected).**
 Encode a row-scoped error by replacing the row with an opaque error marker in the data field while keeping a plain `Int` diff.
 This is the simplest extension but loses the row's content at the carrier flip, so any downstream operator that needed the original row data (for join, group-by on other columns, or counting) cannot recover it.
 The two-diff `(diff, err_diff)` form keeps the row and tracks the err multiplicity in a parallel `Int` component, which preserves both pieces of information and stays retractable through ordinary diff arithmetic.
 
-**Row-scoped errors via an absorbing diff marker like global errors.**
+**Row-scoped errors via an absorbing diff marker like global errors (rejected).**
 Use the same absorbing-monoid extension as the global-scoped case.
 Rejected because per-row evaluation errors must be retractable: a row that errs on `WHERE 1/(a+b) > 5` at time `t` and is retracted at time `t'` must net to zero in the consolidated view.
 An absorbing marker cannot retract.
 The two-diff encoding (`Int` data multiplicity + `Int` err multiplicity, with absorbing `global` layered on top) keeps the algebra of each scope faithful to its semantics.
 
-**Per-error-payload diff component (Diff = Int × ErrCount).**
+**Sum-type row carrier with a single `Int` diff (open).**
+Make the row position itself a sum: `Payload = Row(List Datum) | Err(DataflowError)`, with one ordinary `Int` diff per record.
+A valid row is `(Row r, 1)`; an erred row is `(Err e, 1)`; retractions are `(_, -1)`.
+This is the encoding closest to Materialize's *current* two-collection model — `data` and `errors` are each a `Stream<Time, (X, Int)>` with `X = Row` on one side and `X = DataflowError` on the other.
+The sum-type carrier merges those two streams into one signature `Stream → Stream` without adding a second diff component.
+
+Properties of the sum-type form that the two-diff form does not have:
+
+* Single `Int` diff means every existing differential-dataflow arrangement layout, batcher, and consolidator applies bit-for-bit.
+  No wire-format change to the `diff` representation.
+
+* Error records always carry their structured `DataflowError` payload as part of the carrier.
+  There is no "err multiplicity without a payload" state — the two-diff form admits `(r, d, e)` with `e ≠ 0` whose payload is recoverable only via a separate `DataflowError` companion stream.
+
+Properties of the two-diff form that the sum-type form does not have:
+
+* A single row that exists simultaneously in both data and error collections (e.g. a row whose ingestion succeeded into data but whose subsequent reprocessing errored) is one record `(r, 1, 1)` in two-diff, but must be two records `(Row r, 1)` and `(Err e, 1)` in sum-type.
+  Two-diff keeps a single arrangement key; sum-type splits across keys.
+
+* Joins multiply two `Int` diffs per component: data×data and the three err cross-terms.
+  Under sum-type, the err side has its own arrangement and joins err×err on a separate key.
+  The two-diff form keeps both sides' multiplicities discoverable from one record under the same carrier.
+
+* `which` error caused escalation lives in the carrier under sum-type, which forces every escalation site to construct a payload.
+  Under two-diff, an operator can migrate `diff → err_diff` while deferring the payload to a parallel `DataflowError` stream — useful if the payload is expensive (e.g. carries the full input row) and most consumers don't need it.
+
+The sum-type form and the two-diff form are denotationally equivalent under the natural conversion: `(r, d, e)` maps to two records `(Row r, d)` and `(Err _, e)` (the payload comes from a companion `DataflowError` lookup), and the inverse projects the diff side and discards the carrier.
+The conversion is *lossy* in one direction: the inverse needs a payload witness for the err side.
+
+Sketched in `doc/developer/semantics/Mz/AltSumStream.lean` with parallel definitions of `filter`, `project`, `negate`, `unionAll`, and `cross`, plus a `toBaseline` projection back to the two-diff form.
+
+**Per-error-payload diff component (Diff = Int × ErrCount) (open).**
 An earlier iteration of this document proposed extending the diff with a finite map from `EvalError` payloads to multiplicities, so that *which* error caused row escalation would be tracked at the diff level alongside the data multiplicity.
 This is an open alternative, not a rejection — the two-diff `(Int, Int)` form is the current working baseline, but the per-payload form has properties the baseline does not, and the choice is not yet settled.
 
@@ -321,6 +375,242 @@ The Lean mechanization on this branch carried out the `Int × ErrCount` design a
 That work is preserved as a worked alternative.
 Resolving which form to standardize on requires answering the open question about a user-facing error-kind surface (see *Open questions*).
 
+**N-component labeled diff (open).**
+Generalize the diff to a labeled product `(d_valid, d_eval_err, d_decode_err, d_overflow, ...)` where each component is an `Int` and the label set is fixed at compile time.
+The two-diff form is the case `Labels = {valid, err}`; the per-payload form is the case `Labels = EvalError` with a sparse map representation.
+A fixed finite label set sits between them: more error-kind discrimination than two-diff, less than per-payload, and still ordinary-`Int` arithmetic per component.
+
+Properties:
+
+* Each component retracts independently.
+  An operator that escalates a row to `decode_err` does not pollute the `eval_err` channel; downstream operators that filter by err-kind can read the relevant component directly.
+
+* Multiplication generalizes via the obvious distributive rule on the full label set, expanding `(|L| · |L|)` cross-terms per join.
+  For `|L| = 2` (two-diff baseline), this is the four-term rule already in the spec.
+  For `|L| = k`, it is `k²` terms; manageable while `k` stays small.
+
+* Storage cost is `k · sizeof(Int)` per record — fixed and predictable, unlike the per-payload form whose map size scales with payload diversity.
+
+* The set of labels must be chosen up front and is part of the wire format.
+  Adding a new label is a format change, unlike the per-payload form which is open-universe.
+
+Open: whether two `Int`s is sufficient discrimination, whether a fixed `k = 4` or `k = 8` covers the operator-error-kind axes we expect, or whether the open-universe per-payload form is needed.
+The Lean mechanization can carry out the N-component form as a follow-up to the per-payload work; the diff-semiring laws factor through the labeled product the same way they factor through the pair.
+
+**Chosen: two-diff `(diff, err_diff)`** as specified in the main proposal; per-payload, sum-type, and N-component remain open alternatives.
+
+### Evaluation-order equivalence
+
+SQL evaluation order is unspecified outside of `CASE`, `AND`/`OR` short-circuit, and a few other explicitly-ordered constructs.
+A conforming implementation is free to evaluate `x + 1 - 1` as either `(x + 1) - 1` or as `x + (1 - 1)`.
+On an `INT` `x` near the type's maximum, the first form raises overflow and the second does not.
+Two equally-valid implementations therefore disagree on whether the same expression errs.
+
+The semantics we mechanize has to admit this freedom, or every interesting rewrite — associativity of `+`, predicate pushdown across `AND`, constant folding under arithmetic — is unsound the moment errors are reachable.
+The pushdown counterexample documented as a PR comment on the prior `Int × ErrCount` iteration was a specific case of this general problem: even the *err multiplicity* of the output of a rewritten pipeline can change while every successful evaluation gives the same value, and a soundness proof based on strict list-of-error-payload equality cannot close.
+
+The choice is which equivalence relation `≡` on `Datum` (and lifted to stream records) we treat as "the same result".
+
+**Strict equality (the trivial choice).**
+`a ≡ b` iff `a = b` as `Datum` values.
+Under this relation, every error payload is distinct, the order in which errors arise is observable, and most useful rewrites fail to hold.
+This is the relation the current Lean skeleton uses for `eval` — and the reason `predicate_pushdown` over `Cross(L, R)` had to be carefully phrased on the data side only, with the err side left out of scope.
+This is the relation a strict reading of SQL semantics would require if SQL pinned evaluation order — but SQL does not, so this relation is *too fine* to model what SQL actually says.
+
+**Error-set equivalence.**
+`a ≡ b` iff both are the same non-error datum, or both are errors (with the inner `EvalError` payloads allowed to differ).
+This collapses all errors at a given position to a single equivalence class.
+Useful because it makes associativity of arithmetic hold under reasonable side conditions: `(x + 1) - 1 ≡ x + (1 - 1)` whenever `x` does not overflow, and *both* err (just possibly with different specific overflow witnesses) when `x` is near the boundary.
+Loses payload information at the equivalence layer, but the payload is still concretely produced by `eval`; the relation just doesn't demand it match.
+
+**Refinement preorder (errors as bottom).**
+A partial order rather than an equivalence: `a ⊑ b` iff `a = b` or `a` is an error.
+"`b` is at least as defined as `a`" with errors as the least-defined element.
+Two values are *equivalent* iff each refines the other, which collapses to error-set equivalence; but the preorder lets us state the asymmetric law that an optimizer may rewrite `e1 → e2` if `eval e1 ⊑ eval e2` pointwise — i.e., the rewrite never *adds* an error.
+This matches the "spurious errors are bugs" posture: the optimizer is permitted to drop an error that the original evaluation order would have produced (e.g., constant folding `1/0` inside a `WHERE FALSE` arm), but is not permitted to introduce an error that no admissible evaluation order would have produced.
+PostgreSQL's posture is closer to the opposite — implementations may produce additional errors the user didn't ask for — and rewrites in that style are sound under the *dual* preorder (`a ⊒ b` iff `a = b` or `b` is an error).
+Mechanizing both directions lets the doc state precisely which rewrites belong to which posture.
+
+In Materialize's setting, pushdown across `Cross(L, R)` of a predicate that may error is the canonical case that distinguishes the postures.
+Under "no spurious errors" the rewrite is gated by `Expr.might_error` (analyzed in `Mz/MightError.lean`); when the analyzer rules out errors the rewrite is sound under `=`, and the preorder discussion is unnecessary.
+Under "spurious errors permitted" the rewrite is sound unconditionally under `⊒` (the dual preorder), and the optimizer is free to apply it without static analysis.
+
+**Value-only equivalence under non-determinism.**
+`a ≡ b` iff there exist evaluation orders for both expressions under which they produce the same non-error value, *or* both expressions err under every admissible evaluation order.
+The strongest equivalence that still permits all the rewrites listed above.
+The cost is that the semantic object stops being a function `Expr → Datum` and becomes a relation `Expr → Set Datum` — every expression denotes a *set* of admissible outcomes, one per evaluation order.
+Properly modeling this requires lifting the entire `eval` function to a non-deterministic semantics, which is a significant restructure of the skeleton.
+The payoff is that pushdown over errors becomes a tractable theorem rather than a counterexample.
+
+The current Lean mechanization uses strict equality and therefore states all its laws as "value-side agrees; err-side out of scope", which is sound but unsatisfying.
+Moving to error-set equivalence is the cheapest upgrade: every existing theorem stated as `=` lifts to `≡` for free, several rewrites that currently fail acquire conditional forms, and the rewrites that need the refinement preorder can be stated as one-directional inclusions instead of equalities.
+
+#### Counterexamples under strict equality
+
+Concrete cases where strict equality fails and a coarser relation is required:
+
+1. **Associativity of `plus` over `Int`.**
+   `eval r ((x.plus 1).plus (-1)) = eval r (x.plus (1.plus (-1)))`?
+   This counterexample requires modeling bounded ints; the current Lean skeleton uses unbounded `Int` (`evalPlus` on `.int n` and `.int m` is `.int (n + m)` without overflow), so the counterexample is moot in the mechanization today.
+   The intended counterexample on a bounded `Int32` is: a row `r` where `x` evaluates to `MAX_INT32`.
+   LHS: `MAX_INT32 + 1` raises `OverflowError`, so the whole expression is `.err OverflowError`.
+   RHS: `1 + (-1) = 0`, then `MAX_INT32 + 0 = MAX_INT32`, so the whole expression is `.int MAX_INT32`.
+   The two are not equal under strict equality.
+   Under error-set equivalence, they are still not equal (one is an err, one is not).
+   Under the refinement preorder (errors as bottom), LHS ⊑ RHS holds (LHS errs, RHS doesn't, RHS is "more defined"), so an optimizer rewrite from LHS-shape to RHS-shape is sound — it removes a spurious error.
+   The reverse rewrite RHS → LHS is sound under the dual preorder (PostgreSQL posture) but not under the no-spurious-errors posture.
+   To exercise this in the mechanization, the skeleton would need an `evalPlusBounded` with explicit overflow; that is one of the natural next-step extensions if the bounded case becomes a forcing function.
+
+2. **Predicate pushdown across `Cross(L, R)` with an erroring predicate.**
+   `filter (p AND q) (cross L R) = cross (filter p L) (filter q R)`?
+   Counterexample: a single row pair `(rL, rR)` where `eval rL p` errs and `eval rR q` errs.
+   LHS evaluates the conjunction on the joined env and produces one error from the AND truth table (`ERROR AND ERROR = ERROR`), so one record migrates to the err side.
+   RHS errs once on the left (filter on `L` migrates `rL` to err side) and once on the right (filter on `R` migrates `rR` to err side), then cross-products: under the two-diff multiplication rule, the err-side combines as `dL · eR + eL · dR + eL · eR`, which is `0 + 0 + 1 = 1` here.
+   The data sides agree; the err multiplicity also coincidentally agrees at 1, but the *carrier* of the err — which row content went with which payload — diverges.
+   This is the case the per-payload form surfaced as a soundness gap.
+   Strict equality fails; error-set equivalence on the err side fails (different payloads); error-set equivalence on err-*multiplicity* (forgetting carriers) succeeds.
+
+3. **Coalesce with reorderable operands.**
+   `coalesce(a, b)` is left-to-right by SQL specification, so no counterexample here — but `coalesce` is the exception that proves the rule.
+   It exists precisely because the default rewriting freedom is too broad to express "rescue the first non-error".
+   Conversely, `least(a, b)` (which SQL leaves order-unspecified) is *not* equivalent to a specific evaluation order, and a strict-equality model proves false equalities involving `least` over erroring inputs.
+
+4. **Constant folding inside a discarded `AND` branch.**
+   `eval r (FALSE AND (1 / 0))` — the boolean truth table absorbs `FALSE` on the left and the result is `.bool false` (the existing `evalAnd` pattern `.bool false, _ => .bool false` matches first).
+   `eval r ((1 / 0) AND FALSE)` — same expression with swapped arguments — *also* evaluates to `.bool false` in the current skeleton because `evalAnd` pattern-matches `.bool false` on the right before evaluating the left operand at all (pattern arm `_, .bool false => .bool false`).
+   So in the *current* `evalAnd` this is not a counterexample.
+   But a *different* implementation strategy — strict left-to-right evaluation that always evaluates both operands before consulting the truth table — would produce `.err divisionByZero` for the swapped form.
+   Two SQL-conformant implementations of `AND` disagree on whether `(1/0) AND FALSE` errs.
+   Under strict equality, the two implementations cannot both be modeled by the same `eval` function.
+   Under error-set equivalence, the eager implementation produces `.err _` and the lazy one produces `.bool false`; not equivalent.
+   Under the refinement preorder, the lazy implementation's `.bool false` *refines* the eager implementation's `.err _` (errors are bottom; `.err _ ⊑ .bool false`), so a rewrite from eager to lazy is sound.
+   Under value-only equivalence under non-determinism, the two are equivalent because there exists an admissible evaluation order (the lazy one) under which the expression succeeds with `.bool false`.
+   The current `evalAnd` *is* the lazy form, so the eager-to-lazy rewrite is implicit in the model; if a future `evalAndEager` is added (e.g. to mirror a different operator), the preorder lets us prove the two implementations interchangeable up to error introduction.
+
+The cases stack: strict equality breaks the most rewrites; error-set equivalence recovers commutativity and some rearrangements; refinement preorder recovers optimizer-introduced rewrites (push down a filter even though it might add an err for an unreachable row); value-only equivalence under non-determinism recovers everything but requires non-deterministic semantics.
+
+The decision is which equivalence the *Lean mechanization* should mechanize.
+A pragmatic path: ship the skeleton on error-set equivalence, with a quotient on `EvalError` payloads at the `Datum` level.
+State the refinement preorder as a separate predicate `Datum.refines` and prove the optimizer-correctness laws against it.
+Defer non-deterministic semantics to a follow-up when a concrete rewrite demands it.
+
+#### Counterexamples I tried and could not prove
+
+These are statements where I expected the proof to go through under one of the relations above but did not.
+Documented here so a future iteration knows the terrain.
+
+* **Associativity of `plus` under error-set equivalence.**
+  Statement: `(x + 1) + (-1) ≡ x + (1 + (-1))`.
+  Counterexample (bounded ints, not in the current skeleton): as above, with `x = MAX_INT32`.
+  Under error-set equivalence the LHS is `err` and the RHS is `.int MAX_INT32`; the relation `≡` requires both sides to be errors or both to be the same value, and one is not.
+  Needed: refinement preorder with the direction LHS ⊑ RHS (the err refines the value) — a *symmetric* equivalence is not strong enough.
+
+* **`filter p ∘ negate = negate ∘ filter p` under error-set equivalence on streams.**
+  Statement: filter commutes with negate at the stream level.
+  Counterexample: a record `(r, 1, 0)` where `eval r p = .err`.
+  Filter then negate: filter migrates to err, producing `(r, 0, 1)`, then negate produces `(r, 0, -1)`.
+  Negate then filter: negate produces `(r, -1, 0)`, then filter migrates with `err_diff + diff = 0 + (-1) = -1`, producing `(r, 0, -1)`.
+  These match.
+  But a record `(r, 1, 1)` (which the two-diff form permits): filter then negate gives `(r, 0, -2)`; negate then filter gives the same `(r, 0, -2)`.
+  These match too.
+  The statement *does* hold under strict equality — I include it here only because I attempted to prove it on the err side under the per-payload diff form and failed: the payload combined into `err_diff` by filter is the payload of `p`, but the payload visible after negate-then-filter has a sign flip on the multiplicity but the same payload, so under per-payload semantics the two err-counts differ in their key when `p`'s payload is not present in the input.
+  This is a per-payload-form artifact, not a two-diff artifact.
+
+* **`predicate_pushdown` (filter across `cross`) on the err side under error-set equivalence.**
+  Statement: `filter p (cross l r) ≡ cross (filter p l) r` (where `p` is bounded by left widths and `r` is err-free).
+  Data side proven in `Mz/JoinPushdown.lean` under strict equality.
+  Err side fails under strict equality (counterexample 2 above) and also under error-set equivalence on per-record err multiplicities (the err-side multiplicity differs by the right-side's data cardinality on the LHS vs the RHS in cases where `p` errs).
+  Holds under value-only equivalence under non-determinism, because both sides are valid evaluation orders of the same SQL expression.
+  Mechanizing this rewrite on the err side is the canonical use case for moving to non-deterministic semantics.
+
+### Global encoding
+
+**Global errors via a sidecar collection rather than the `diff` field (rejected).**
+Carry global errors in a separate timely stream parallel to the data stream.
+Works, but requires every operator to be aware of two error inputs and to fan-in the global stream by hand.
+The `diff`-field encoding leverages differential dataflow's existing fan-in and is the natural extension of the semiring.
+Rejected.
+
+**Chosen: `DiffWithGlobal = val(Int) | global`** as specified in the main proposal.
+
+### Channel structure and wire layout
+
+These choices are largely independent of the encoding choices above and could be revisited even after the encoding is settled.
+
+**Sidecar error stream (open).**
+Run a separate timely stream `Stream<Time, (RowKey, DataflowError, Int)>` keyed by something derivable from each data record — e.g. `RowKey = hash(row) ⊕ source_offset`.
+The data stream carries plain `(Row, Int)` records, never `Datum::Error` and never `err_diff`.
+A downstream consumer that wants per-row error context joins the two streams on `RowKey`.
+
+Properties:
+
+* Zero storage cost on error-free records.
+  The data stream is bit-for-bit identical to today's data stream.
+
+* Operators that don't care about errors don't pay for them.
+  An optimizer-introduced `consolidate` over a column projection of error-free data never touches the error side.
+
+* Cross-stream joins between data and errors are not free.
+  Every operator that *does* need to know per-row errors (sink output, `try_*`, error introspection functions) pays a join cost.
+
+* The key has to be well-defined.
+  A row-mutating operator like `project` changes the row's hash, so the key has to be a stable identifier through the dataflow — likely a `(source, offset)` pair or a synthetic per-record id.
+
+Open: whether the synthetic-id requirement is acceptable.
+Most existing operators don't generate synthetic ids; adding them is a substantial change to the carrier.
+
+**Sparse two-diff wire format (open optimization on the chosen encoding).**
+Keep the two-diff semantics but omit `err_diff = 0` records from the wire and arrangement.
+A serialized record is either `(row, diff)` (the common case) or `(row, diff, err_diff)` (the rare error case), distinguished by a tag bit.
+In-memory representation can keep the two-diff form uniformly; only the persisted and shuffled form is sparse.
+
+Properties:
+
+* Wire cost on error-free streams is exactly today's cost.
+  The two-diff form's "extra `Int` per record" overhead applies only to records that actually carry a nonzero `err_diff`.
+
+* Decode is one tag bit per record plus an optional `Int` read.
+
+* Arrangement layout in memory is unaffected — the sparse form is a serialization concern only, so existing in-memory operators don't care.
+
+This is the obvious optimization on the chosen encoding and resolves the storage-cost concern in *Open questions*.
+It should be a default rather than an alternative: the two-diff form should ship with a sparse wire format unless there's a measured reason not to.
+
+**Errors at distinguished timestamps (rejected).**
+Encode errors by emitting them at a virtual "error time" namespace disjoint from the data timeline.
+A `WHERE` failure at time `t` becomes a data emission at time `t.error_ns`.
+Reuses the time dimension as the error channel.
+Rejected because timestamps in differential dataflow are part of the consistency contract: every operator and arrangement expects the time dimension to be a partial order with a defined meet, and overloading it with an "error namespace" breaks frontier reasoning.
+
+**Chosen: in-band two-diff stream**, with sparse wire format as a default-on optimization.
+
+### Summary table
+
+| Dimension | Option | Retract | Cell-error expressivity | Per-record cost | Open-universe payloads | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| Cell | TEXT COLUMN | n/a | none | 0 | n/a | escape hatch, not general |
+| Cell | NULL overload | n/a | none | 0 | n/a | rejected: collapses NULL vs error |
+| Cell | `Datum::Error(str)` | yes | string only | 1 ptr | yes | rejected: not introspectable |
+| Cell | `Datum::Error(EvalError)` | yes | structured | 1 ptr | extensible | **chosen** |
+| Cell | severity-graded | yes | + warning level | 1 ptr + 1 byte | extensible | open extension |
+| Cell | per-row error vec | yes | structured | per-row sidecar | extensible | rejected: out-of-band |
+| Row | carrier replacement | no (lossy) | n/a | 0 | yes | rejected: loses row content |
+| Row | absorbing diff marker | **no** | n/a | 0 | n/a | rejected: not retractable |
+| Row | two-diff `(d, e)` | yes | n/a | + 1 `Int` | n/a | **chosen** |
+| Row | sum-type carrier | yes | n/a | + 1 tag | yes | open: matches today's two-collection model |
+| Row | per-payload diff | yes | n/a | + map | yes (open universe) | open: error-kind observable at diff |
+| Row | N-component diff | yes | n/a | + k `Int` | no (fixed labels) | open: middle ground |
+| Global | sidecar collection | n/a | n/a | + 1 stream | n/a | rejected |
+| Global | `DiffWithGlobal` | one-way | n/a | wide diff | n/a | **chosen** |
+| Equivalence | strict `=` | n/a | n/a | n/a | n/a | currently mechanized; too fine to model SQL |
+| Equivalence | error-set | n/a | n/a | n/a | n/a | open: minimal upgrade, recovers commutativity |
+| Equivalence | refinement preorder | n/a | n/a | n/a | n/a | open: supports may-add-error rewrites |
+| Equivalence | value-only / non-det | n/a | n/a | n/a | n/a | open: full pushdown soundness; needs non-det semantics |
+| Channel | in-band | n/a | n/a | per encoding | n/a | **chosen** |
+| Channel | sidecar error stream | n/a | n/a | 0 on hot path | n/a | open: requires stable RowKey |
+| Channel | sparse wire | n/a | n/a | 0 on err-free | n/a | open: default-on optimization |
+| Channel | distinguished time | n/a | n/a | 0 | n/a | rejected: breaks frontier |
+
 ## Open questions
 
 * What is the exact set of `EvalError` payloads that operators may produce as `Datum::Error`?
@@ -343,3 +633,7 @@ The answer turns on a downstream concern: is there a user-facing SQL surface tha
 If yes, the per-payload form is the natural fit.
 If no, the two-diff form is the simpler home.
 Until that surface is decided, both forms remain on the table.
+* Which equivalence relation on `Datum` (and stream records) does the Lean mechanization commit to: strict equality, error-set equivalence, refinement preorder, or value-only equivalence under non-deterministic evaluation?
+The choice gates which rewrites the optimizer can claim to be sound under errors.
+The current skeleton uses strict equality, and several rewrites (predicate pushdown across `Cross`, associativity of arithmetic, constant folding inside discarded boolean arms) provably do *not* hold on the err side under that relation.
+A pragmatic first step is to lift `Datum` equality to an error-set equivalence quotient and re-state the existing laws against it; concrete counterexamples and the larger discussion are in *Alternatives → Evaluation-order equivalence*.
