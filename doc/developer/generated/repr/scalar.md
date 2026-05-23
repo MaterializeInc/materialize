@@ -1,6 +1,6 @@
 ---
 source: src/repr/src/scalar.rs
-revision: 227c80d4c2
+revision: c0559e3dbe
 ---
 
 # mz-repr::scalar
@@ -16,4 +16,4 @@ Introduces a dual-type system for scalar types:
 
 `AsColumnType`, `InputDatumType`, and `OutputDatumType` traits bridge between native Rust types and their SQL column type representations.
 `Int2Vector` provides PostgreSQL `int2vector` compatibility; `ExcludeNull`, `OptionalArg`, and `Variadic` are markers for scalar function signatures.
-Proptest strategies (`arb_datum`, `arb_datum_for_scalar`, `arb_datum_for_column`, etc.) support property-based testing.
+Proptest support types (`PropDatum`, `PropArray`, `PropList`, `PropDict`) and strategies (`arb_datum`, `arb_datum_for_scalar`, `arb_datum_for_column`, `arb_range_type`) are gated behind `#[cfg(any(test, feature = "proptest"))]` and support property-based testing.

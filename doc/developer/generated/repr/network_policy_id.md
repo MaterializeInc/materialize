@@ -1,6 +1,6 @@
 ---
 source: src/repr/src/network_policy_id.rs
-revision: 4267863081
+revision: c0559e3dbe
 ---
 
 # mz-repr::network_policy_id
