@@ -12,3 +12,4 @@ import Mz.Bag
 import Mz.Pushdown
 import Mz.ColRefs
 import Mz.Stream
+import Mz.Equiv
