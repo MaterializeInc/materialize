@@ -305,6 +305,7 @@ def run_sanitizer(
         ],
     )
     # Can't just use --workspace because of https://github.com/rust-lang/cargo/issues/7160
+    failed_pkgs: list[str] = []
     for pkg in metadata["packages"]:
         try:
             spawn.runv(
@@ -334,6 +335,12 @@ def run_sanitizer(
             )
         except subprocess.CalledProcessError:
             print(f"Test against package {pkg['name']} failed, continuing")
+            failed_pkgs.append(pkg["name"])
+    if failed_pkgs:
+        raise ui.UIError(
+            f"Sanitizer tests failed for {len(failed_pkgs)} package(s): "
+            + ", ".join(failed_pkgs)
+        )
 
 
 def run_cargo_nextest(

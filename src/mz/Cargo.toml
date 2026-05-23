@@ -28,7 +28,7 @@ openssl-probe.workspace = true
 hyper.workspace = true
 reqwest.workspace = true
 rpassword.workspace = true
-semver.workspace = true
+semver = { workspace = true, features = ["serde"] }
 serde.workspace = true
 serde-aux.workspace = true
 serde_json.workspace = true

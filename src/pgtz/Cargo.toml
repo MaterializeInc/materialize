@@ -23,6 +23,7 @@ uncased.workspace = true
 anyhow.workspace = true
 chrono-tz.workspace = true
 mz-ore-build = { path = "../ore-build", default-features = false }
+phf.workspace = true
 phf_codegen.workspace = true
 uncased.workspace = true
 
