@@ -14,7 +14,7 @@ anyhow.workspace = true
 bincode.workspace = true
 derivative.workspace = true
 itertools.workspace = true
-mz-ore = { path = "../ore", features = ["async", "metrics", "test"] }
+mz-ore = { path = "../ore", features = ["async", "metrics", "overflowing", "test"] }
 mz-rocksdb-types = { path = "../rocksdb-types" }
 num_cpus.workspace = true
 prometheus.workspace = true

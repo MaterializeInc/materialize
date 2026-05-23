@@ -16,7 +16,7 @@ bytesize.workspace = true
 chrono.workspace = true
 derivative.workspace = true
 futures-core.workspace = true
-mz-ore = { path = "../ore", default-features = false }
+mz-ore = { path = "../ore", default-features = false, features = ["assert-no-tracing"] }
 serde.workspace = true
 
 [features]

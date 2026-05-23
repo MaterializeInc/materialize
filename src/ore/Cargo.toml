@@ -109,7 +109,7 @@ async = [
     "tokio",
     "dep:tracing",
 ]
-bytes = ["dep:bytes", "compact_bytes", "smallvec", "smallvec/const_generics", "region", "tracing"]
+bytes = ["dep:bytes", "bytes/serde", "compact_bytes", "smallvec", "smallvec/const_generics", "smallvec/serde", "region", "tracing"]
 network = ["async", "dep:bytes", "smallvec", "dep:tracing"]
 panic = ["sentry-panic"]
 process = ["libc"]
@@ -141,7 +141,7 @@ test = ["anyhow", "ctor", "tracing-subscriber", "assert"]
 metrics = ["prometheus", "assert"]
 id_gen = ["hibitset", "rand", "uuid"]
 capture = ["tracing-capture"]
-assert-no-tracing = []
+assert-no-tracing = ["ctor"]
 assert = ["assert-no-tracing", "ctor", "tracing"]
 proptest = ["dep:proptest", "proptest-derive"]
 overflowing = ["assert"]
