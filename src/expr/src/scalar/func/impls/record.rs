@@ -107,7 +107,7 @@ pub struct RecordGet(pub usize);
     introduces_nulls = true,
     skip_display = true
 )]
-fn record_get<'a>(&self, a: DatumList<'a>, _temp_storage: &'a RowArena) -> Datum<'a> {
+fn record_get<'a>(&self, a: DatumList<'a>) -> Datum<'a> {
     a.iter().nth(self.0).unwrap()
 }
 

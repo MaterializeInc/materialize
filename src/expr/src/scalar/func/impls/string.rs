@@ -17,6 +17,7 @@ use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
 use mz_ore::str::StrExt;
+use mz_repr::adt::array::Array;
 use mz_repr::adt::char::{Char, format_str_trim};
 use mz_repr::adt::date::Date;
 use mz_repr::adt::interval::Interval;
@@ -376,7 +377,7 @@ fn cast_string_to_array<'a>(
     &'a self,
     a: &'a str,
     temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<Array<'a>, EvalError> {
     let (datums, dims) = strconv::parse_array(
         a,
         || Datum::Null,
@@ -389,7 +390,7 @@ fn cast_string_to_array<'a>(
                 .eval(&[Datum::String(elem_text)], temp_storage)
         },
     )?;
-    Ok(temp_storage.try_make_datum(|packer| packer.try_push_array(&dims, datums))?)
+    Ok(temp_storage.make_datum_array(&dims, datums)?)
 }
 
 #[derive(

@@ -3155,6 +3155,25 @@ impl RowArena {
         DatumList::new(datum.unwrap_list().data())
     }
 
+    /// Convenience function to build an array datum from `dims` and an
+    /// iterator of typed elements, and return it as an `Array<'a>`.
+    ///
+    /// Returns an error if the iterator's length does not match the
+    /// cardinality of `dims` or `dims` exceeds [`MAX_ARRAY_DIMENSIONS`].
+    pub fn make_datum_array<'a, T: std::borrow::Borrow<Datum<'a>>>(
+        &'a self,
+        dims: &[ArrayDimension],
+        iter: impl IntoIterator<Item = T>,
+    ) -> Result<Array<'a, T>, InvalidArrayError> {
+        let mut row = Row::default();
+        row.packer().try_push_array(dims, iter)?;
+        let array = self.push_unary_row(row).unwrap_array();
+        Ok(Array {
+            dims: array.dims,
+            elements: DatumList::new(array.elements.data()),
+        })
+    }
+
     /// Convenience function identical to `make_datum` but instead returns a
     /// `DatumNested`.
     pub fn make_datum_nested<'a, F>(&'a self, f: F) -> DatumNested<'a>

@@ -168,12 +168,12 @@ fn cast_array_to_array<'a>(
     &'a self,
     a: Array<'a>,
     temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<Array<'a>, EvalError> {
     let dims = a.dims().into_iter().collect::<Vec<ArrayDimension>>();
     let casted_datums = a
         .elements()
         .iter()
         .map(|datum| self.cast_expr.eval(&[datum], temp_storage))
         .collect::<Result<Vec<Datum<'a>>, EvalError>>()?;
-    Ok(temp_storage.try_make_datum(|packer| packer.try_push_array(&dims, casted_datums))?)
+    Ok(temp_storage.make_datum_array(&dims, casted_datums)?)
 }
