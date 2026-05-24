@@ -1510,11 +1510,8 @@ pub trait MaybeBucketByTime: Timestamp {
         summary: mz_repr::Timestamp,
     ) -> VecCollection<'scope, Self, D, Diff>
     where
-        D: timely::ExchangeData
+        D: differential_dataflow::ExchangeData
             + crate::typedefs::MzData
-            + Ord
-            + Clone
-            + std::fmt::Debug
             + differential_dataflow::Hashable;
 }
 
@@ -1546,11 +1543,8 @@ impl MaybeBucketByTime for mz_repr::Timestamp {
         summary: mz_repr::Timestamp,
     ) -> VecCollection<'scope, Self, D, Diff>
     where
-        D: timely::ExchangeData
+        D: differential_dataflow::ExchangeData
             + crate::typedefs::MzData
-            + Ord
-            + Clone
-            + std::fmt::Debug
             + differential_dataflow::Hashable,
     {
         stream
@@ -1595,11 +1589,8 @@ impl MaybeBucketByTime for Product<mz_repr::Timestamp, PointStamp<u64>> {
         _summary: mz_repr::Timestamp,
     ) -> VecCollection<'scope, Self, D, Diff>
     where
-        D: timely::ExchangeData
+        D: differential_dataflow::ExchangeData
             + crate::typedefs::MzData
-            + Ord
-            + Clone
-            + std::fmt::Debug
             + differential_dataflow::Hashable,
     {
         // TODO: Implement bucketing on outer timestamp for iterative scopes.
