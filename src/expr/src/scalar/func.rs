@@ -2049,7 +2049,12 @@ where
     Ok(CheckedTimestamp::from_timestamplike(res)?)
 }
 
-#[sqlfunc(is_monotone = "(true, true)", sqlname = "bin_unix_epoch_timestamp")]
+// Non-monotone in `stride`: the result is `origin + floor((source - origin) /
+// stride) * stride`. For a fixed source like `2024-01-01 12:00:00`, a 1-day
+// stride bins to `2024-01-01 00:00:00`, but a 2-day stride bins to
+// `2023-12-31 00:00:00` — i.e. the lex-larger interval produces an earlier
+// timestamp. Monotone in `source`.
+#[sqlfunc(is_monotone = "(false, true)", sqlname = "bin_unix_epoch_timestamp")]
 fn date_bin_timestamp(
     stride: Interval,
     source: CheckedTimestamp<NaiveDateTime>,
@@ -2060,7 +2065,8 @@ fn date_bin_timestamp(
     date_bin(stride, source, origin)
 }
 
-#[sqlfunc(is_monotone = "(true, true)", sqlname = "bin_unix_epoch_timestamptz")]
+// See `date_bin_timestamp` for why this is not monotone in `stride`.
+#[sqlfunc(is_monotone = "(false, true)", sqlname = "bin_unix_epoch_timestamptz")]
 fn date_bin_timestamp_tz(
     stride: Interval,
     source: CheckedTimestamp<DateTime<Utc>>,
