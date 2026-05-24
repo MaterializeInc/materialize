@@ -327,7 +327,11 @@ impl EagerUnaryFunc for AdjustNumericScale {
     type Input<'a> = Numeric;
     type Output<'a> = Result<Numeric, EvalError>;
 
-    fn call<'a>(&self, mut d: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(
+        &'a self,
+        mut d: Self::Input<'a>,
+        _temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
         if numeric::rescale(&mut d, self.0.into_u8()).is_err() {
             return Err(EvalError::NumericFieldOverflow);
         };

@@ -1,0 +1,45 @@
+---
+source: src/expr-derive-impl/src/lib.rs
+expression: "#[sqlfunc(\n    CastArrayToString,\n    sqlname = \"arraytostr\",\n    preserves_uniqueness = true,\n    introduces_nulls = false,\n)]\nfn cast_array_to_string<'a>(\n    &self,\n    a: Array<'a>,\n    temp_storage: &'a RowArena,\n) -> Result<&'a str, EvalError> {\n    unimplemented!()\n}\n"
+---
+impl CastArrayToString {
+    fn cast_array_to_string<'a>(
+        &self,
+        a: Array<'a>,
+        temp_storage: &'a RowArena,
+    ) -> Result<&'a str, EvalError> {
+        unimplemented!()
+    }
+}
+impl crate::func::EagerUnaryFunc for CastArrayToString {
+    type Input<'a> = Array<'a>;
+    type Output<'a> = Result<&'a str, EvalError>;
+    fn call<'a>(
+        &'a self,
+        a: Self::Input<'a>,
+        temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
+        self.cast_array_to_string(a, temp_storage)
+    }
+    fn output_sql_type(
+        &self,
+        input_type: mz_repr::SqlColumnType,
+    ) -> mz_repr::SqlColumnType {
+        use mz_repr::AsColumnType;
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = crate::func::EagerUnaryFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && input_type.nullable))
+    }
+    fn introduces_nulls(&self) -> bool {
+        false
+    }
+    fn preserves_uniqueness(&self) -> bool {
+        true
+    }
+}
+impl std::fmt::Display for CastArrayToString {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("arraytostr")
+    }
+}

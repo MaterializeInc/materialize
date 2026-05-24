@@ -47,6 +47,9 @@ pub(crate) struct Modifiers {
     is_eliminable_cast: Option<Expr>,
     /// Whether to generate a snapshot test for the function. Defaults to false.
     test: Option<bool>,
+    /// If true, the macro does not emit a `fmt::Display` implementation. Use this when the
+    /// struct needs a non-trivial `Display` impl that the user supplies manually.
+    skip_display: Option<bool>,
 }
 
 /// A name for the SQL function. It can be either a literal or a macro, thus we
@@ -114,11 +117,12 @@ pub fn sqlfunc(
 
     let tokens = match determine_arity(&func) {
         Arity::Nullary => Err(darling::Error::custom("Nullary functions not supported")),
-        Arity::Unary { arena: false } => unary_func(&func, modifiers),
-        Arity::Unary { arena: true } => Err(darling::Error::custom(
-            "Unary functions do not yet support RowArena.",
-        )),
-        Arity::Binary { arena } => binary_func(&func, modifiers, arena),
+        Arity::Unary { arena, has_self } => {
+            unary_func(&func, modifiers, struct_ty, arena, has_self)
+        }
+        Arity::Binary { arena, has_self } => {
+            binary_func(&func, modifiers, struct_ty, arena, has_self)
+        }
         Arity::Variadic { arena, has_self } => {
             variadic_func(&func, modifiers, struct_ty, arena, has_self)
         }
@@ -172,8 +176,8 @@ fn last_is_arena(func: &syn::ItemFn) -> bool {
 /// Arity classification for a function annotated with `#[sqlfunc]`.
 enum Arity {
     Nullary,
-    Unary { arena: bool },
-    Binary { arena: bool },
+    Unary { arena: bool, has_self: bool },
+    Binary { arena: bool, has_self: bool },
     Variadic { arena: bool, has_self: bool },
 }
 
@@ -229,8 +233,8 @@ fn determine_arity(func: &syn::ItemFn) -> Arity {
     } else {
         match effective_count {
             0 => Arity::Nullary,
-            1 => Arity::Unary { arena },
-            2 => Arity::Binary { arena },
+            1 => Arity::Unary { arena, has_self },
+            2 => Arity::Binary { arena, has_self },
             _ => unreachable!(),
         }
     }
@@ -851,10 +855,29 @@ fn output_type(arg: &syn::ItemFn) -> Result<&syn::Type, syn::Error> {
 }
 
 /// Produce a `EagerUnaryFunc` implementation.
-fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<TokenStream> {
+fn unary_func(
+    func: &syn::ItemFn,
+    modifiers: Modifiers,
+    struct_ty: Option<syn::Path>,
+    arena: bool,
+    has_self: bool,
+) -> darling::Result<TokenStream> {
     let fn_name = &func.sig.ident;
-    let struct_name = camel_case(&func.sig.ident);
-    let input_ty_raw = arg_type(func, 0)?;
+    let struct_name = struct_ty
+        .as_ref()
+        .and_then(|ty| ty.segments.last())
+        .map_or_else(|| camel_case(&func.sig.ident), |seg| seg.ident.clone());
+    let input_ty_raw = arg_type(func, if has_self { 1 } else { 0 })?;
+    let (arena_param, arena_arg) = if arena {
+        (quote! { temp_storage }, quote! { , temp_storage })
+    } else {
+        (quote! { _temp_storage }, quote! {})
+    };
+    let call_expr = if has_self {
+        quote! { self.#fn_name(a #arena_arg) }
+    } else {
+        quote! { #fn_name(a #arena_arg) }
+    };
     let output_ty_raw = output_type(func)?;
     let generic_params = find_generic_type_params(func);
     // Erase generic type params → Datum<'a> for use in the trait impl's associated types.
@@ -875,7 +898,9 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
         is_associative,
         is_eliminable_cast,
         test: _,
+        skip_display,
     } = modifiers;
+    let skip_display = skip_display.unwrap_or(false);
 
     // If generic type parameters are present and no explicit output_type_expr,
     // auto-derive one from the structural relationship between input and output types.
@@ -996,21 +1021,17 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
         }
     });
 
-    let result = quote! {
-        #[derive(
-            Ord, PartialOrd, Clone,
-            Debug, Eq, PartialEq, serde::Serialize,
-            serde::Deserialize, Hash, mz_lowertest::MzReflect,
-        )]
-        #[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
-        pub struct #struct_name;
-
+    let trait_impl = quote! {
         impl crate::func::EagerUnaryFunc for #struct_name {
             type Input<'a> = #input_ty;
             type Output<'a> = #output_ty;
 
-            fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
-                #fn_name(a)
+            fn call<'a>(
+                &'a self,
+                a: Self::Input<'a>,
+                #arena_param: &'a mz_repr::RowArena,
+            ) -> Self::Output<'a> {
+                #call_expr
             }
 
             fn output_sql_type(
@@ -1033,14 +1054,45 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
             #preserves_uniqueness_fn
             #is_eliminable_cast_fn
         }
+    };
 
-        impl std::fmt::Display for #struct_name {
-            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                f.write_str(#name)
+    let display_impl = if skip_display {
+        quote! {}
+    } else {
+        quote! {
+            impl std::fmt::Display for #struct_name {
+                fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                    f.write_str(#name)
+                }
             }
         }
+    };
 
-        #func
+    let result = if has_self {
+        // External struct: generate method impl + trait impl + Display.
+        quote! {
+            impl #struct_name {
+                #func
+            }
+            #trait_impl
+            #display_impl
+        }
+    } else {
+        // Unit struct: generate struct + trait impl + Display + original function.
+        quote! {
+            #[derive(
+                Ord, PartialOrd, Clone,
+                Debug, Eq, PartialEq, serde::Serialize,
+                serde::Deserialize, Hash, mz_lowertest::MzReflect,
+            )]
+            #[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
+            pub struct #struct_name;
+
+            #trait_impl
+            #display_impl
+
+            #func
+        }
     };
     Ok(result)
 }
@@ -1049,12 +1101,18 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
 fn binary_func(
     func: &syn::ItemFn,
     modifiers: Modifiers,
+    struct_ty: Option<syn::Path>,
     arena: bool,
+    has_self: bool,
 ) -> darling::Result<TokenStream> {
     let fn_name = &func.sig.ident;
-    let struct_name = camel_case(&func.sig.ident);
-    let input1_ty_raw = arg_type(func, 0)?;
-    let input2_ty_raw = arg_type(func, 1)?;
+    let struct_name = struct_ty
+        .as_ref()
+        .and_then(|ty| ty.segments.last())
+        .map_or_else(|| camel_case(&func.sig.ident), |seg| seg.ident.clone());
+    let arg_offset = if has_self { 1 } else { 0 };
+    let input1_ty_raw = arg_type(func, arg_offset)?;
+    let input2_ty_raw = arg_type(func, arg_offset + 1)?;
     let output_ty_raw = output_type(func)?;
     let generic_params = find_generic_type_params(func);
     // Erase generic type params → Datum<'a> for use in the trait impl's associated types.
@@ -1077,7 +1135,9 @@ fn binary_func(
         is_associative,
         is_eliminable_cast,
         test: _,
+        skip_display,
     } = modifiers;
+    let skip_display = skip_display.unwrap_or(false);
 
     // Auto-derive output_type_expr from generic parameters, if applicable.
     // Use raw (pre-erasure) types so we can see the generic parameters.
@@ -1179,6 +1239,12 @@ fn binary_func(
         quote! {}
     };
 
+    let call_expr = if has_self {
+        quote! { self.#fn_name(a, b #arena) }
+    } else {
+        quote! { #fn_name(a, b #arena) }
+    };
+
     let could_error_fn = could_error.map(|could_error| {
         quote! {
             fn could_error(&self) -> bool {
@@ -1208,15 +1274,7 @@ fn binary_func(
     let binary_non_nullable_checks =
         non_nullable_position_checks(&[input1_ty.clone(), input2_ty.clone()]);
 
-    let result = quote! {
-        #[derive(
-            Ord, PartialOrd, Clone,
-            Debug, Eq, PartialEq, serde::Serialize,
-            serde::Deserialize, Hash, mz_lowertest::MzReflect,
-        )]
-        #[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
-        pub struct #struct_name;
-
+    let trait_impl = quote! {
         impl crate::func::binary::EagerBinaryFunc for #struct_name {
             type Input<'a> = (#input1_ty, #input2_ty);
             type Output<'a> = #output_ty;
@@ -1226,7 +1284,7 @@ fn binary_func(
                 (a, b): Self::Input<'a>,
                 temp_storage: &'a mz_repr::RowArena
             ) -> Self::Output<'a> {
-                #fn_name(a, b #arena)
+                #call_expr
             }
 
             fn output_sql_type(
@@ -1260,15 +1318,45 @@ fn binary_func(
             #negate_fn
             #propagates_nulls_fn
         }
+    };
 
-        impl std::fmt::Display for #struct_name {
-            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                f.write_str(#name)
+    let display_impl = if skip_display {
+        quote! {}
+    } else {
+        quote! {
+            impl std::fmt::Display for #struct_name {
+                fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                    f.write_str(#name)
+                }
             }
         }
+    };
 
-        #func
+    let result = if has_self {
+        // External struct: generate method impl + trait impl + Display.
+        quote! {
+            impl #struct_name {
+                #func
+            }
+            #trait_impl
+            #display_impl
+        }
+    } else {
+        // Unit struct: generate struct + trait impl + Display + original function.
+        quote! {
+            #[derive(
+                Ord, PartialOrd, Clone,
+                Debug, Eq, PartialEq, serde::Serialize,
+                serde::Deserialize, Hash, mz_lowertest::MzReflect,
+            )]
+            #[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
+            pub struct #struct_name;
 
+            #trait_impl
+            #display_impl
+
+            #func
+        }
     };
     Ok(result)
 }
@@ -1309,7 +1397,9 @@ fn variadic_func(
         is_associative,
         is_eliminable_cast,
         test: _,
+        skip_display,
     } = modifiers;
+    let skip_display = skip_display.unwrap_or(false);
 
     // Reject modifiers that don't apply to variadic functions.
     if preserves_uniqueness.is_some() {
@@ -1556,10 +1646,14 @@ fn variadic_func(
         }
     };
 
-    let display_impl = quote! {
-        impl std::fmt::Display for #struct_name {
-            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                f.write_str(#name)
+    let display_impl = if skip_display {
+        quote! {}
+    } else {
+        quote! {
+            impl std::fmt::Display for #struct_name {
+                fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                    f.write_str(#name)
+                }
             }
         }
     };

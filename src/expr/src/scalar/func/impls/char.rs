@@ -40,7 +40,11 @@ impl EagerUnaryFunc for PadChar {
     type Input<'a> = &'a str;
     type Output<'a> = Char<String>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(
+        &'a self,
+        a: Self::Input<'a>,
+        _temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
         Char(format_str_pad(a, self.length))
     }
 
