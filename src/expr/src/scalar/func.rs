@@ -796,12 +796,24 @@ fn sub_numeric(
     }
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    output_type = "Interval",
-    sqlname = "age",
-    propagates_nulls = true
-)]
+// `age(a, b)` is non-monotone in *both* arguments:
+//
+// * Lex order on `Interval` is `(months, days, micros)`, but the Postgres
+//   `age` algorithm independently subtracts year/month/day/... fields and
+//   then *borrows* across boundaries when a lower field goes negative. With
+//   `b = 2024-02-15` fixed:
+//     a = 2024-03-31  →  age = {1 month, 16 days}
+//     a = 2024-04-01  →  age = {1 month, 15 days}
+//     a = 2024-05-01  →  age = {2 months, 15 days}
+//   As `a` increases past a month boundary, `months` jumps by 1 and `days`
+//   drops, producing a lex-smaller interval than the previous step.
+//
+// * Holding `a` fixed and varying `b`, the result has a V-shape at `a == b`
+//   (sign is flipped when `a < b`):
+//     a = 2024-02-15, b = 2024-02-14  →  age = {0 months, 1 day}
+//     a = 2024-02-15, b = 2024-02-15  →  age = {0 months, 0 days}
+//     a = 2024-02-15, b = 2024-02-16  →  age = {0 months, 1 day}
+#[sqlfunc(sqlname = "age")]
 fn age_timestamp(
     a: CheckedTimestamp<chrono::NaiveDateTime>,
     b: CheckedTimestamp<chrono::NaiveDateTime>,
@@ -809,7 +821,8 @@ fn age_timestamp(
     Ok(a.age(&b)?)
 }
 
-#[sqlfunc(is_monotone = "(true, true)", sqlname = "age", propagates_nulls = true)]
+// See `age_timestamp` for why this is not monotone in either argument.
+#[sqlfunc(sqlname = "age")]
 fn age_timestamp_tz(
     a: CheckedTimestamp<chrono::DateTime<Utc>>,
     b: CheckedTimestamp<chrono::DateTime<Utc>>,
