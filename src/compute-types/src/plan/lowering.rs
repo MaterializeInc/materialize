@@ -32,10 +32,8 @@ use crate::plan::{ArrangementStrategy, AvailableCollections, GetPlan, LirId, Pla
 /// Pick an [`ArrangementStrategy`] based on whether the input may contain future-stamped
 /// updates. Future updates are the only case where temporal bucketing pays off.
 ///
-/// Convention: every caller that returns `TemporalBucketing` must also clear
-/// `LoweredExpr::has_future_updates` on the resulting `LoweredExpr`, so that a stack of
-/// bucketing-eligible operators only buckets at the lowest one. A trailing temporal MFP
-/// fused on top naturally re-arms the flag.
+/// Any arrangement or consolidation that absorbs data that can have future updates should be
+/// guarded by a temporal bucketing operator.
 fn strategy_from_future(has_future_updates: bool) -> ArrangementStrategy {
     if has_future_updates {
         ArrangementStrategy::TemporalBucketing
