@@ -1015,10 +1015,6 @@ async fn read_data_product(
     // can hold multiple rows per object_name when a product is indexed on
     // multiple clusters; `ORDER BY cluster NULLS LAST LIMIT 1` picks one
     // deterministically. Callers can disambiguate via `cluster_override`.
-    //
-    // TODO: Remove this extra round-trip once catalog errors get specific
-    // SQL error codes (see TODO in src/adapter/src/error.rs `fn code()`),
-    // then we can translate the query error directly and drop the lookup.
     let lookup_query = format!(
         "SELECT cluster FROM mz_internal.mz_mcp_data_products \
          WHERE object_name = {} \
@@ -1035,9 +1031,7 @@ async fn read_data_product(
         .and_then(|row| row.first())
         .and_then(|v| v.as_str());
 
-    // Override beats catalog; catalog beats session default. The override
-    // path is unchanged from before, so explicit callers are not affected
-    // by the auto-routing change.
+    // Override beats catalog; catalog beats session default.
     let target_cluster = cluster_override.or(catalog_cluster);
 
     // No row cap is applied here: the response is bounded by the size cap
