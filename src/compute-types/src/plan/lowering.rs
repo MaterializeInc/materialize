@@ -954,38 +954,22 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 } = self.lower_mir_expr(input)?;
                 let arity = input.arity();
                 let (threshold_plan, required_arrangement) = ThresholdPlan::create_from(arity);
-                // If the conditional `arrange_by` wrap fires, the synthesized
-                // `ArrangeBy` builds a real arrangement (`new_arranged`) and so
-                // its `apply_bucketing_strategy` call at render time will
-                // actually bucket. If the wrap is skipped, the input already
-                // had a suitable arrangement and an upstream operator was
-                // responsible for bucketing.
-                let wrap_fires = !keys
+
+                let (plan, has_future_updates) = if !keys
                     .arranged
                     .iter()
-                    .any(|(key, _, _)| key == &required_arrangement.0);
-                let plan = if wrap_fires {
-                    self.arrange_by(
+                    .any(|(key, _, _)| key == &required_arrangement.0)
+                {
+                    let plan = self.arrange_by(
                         plan,
                         AvailableCollections::new_arranged(vec![required_arrangement]),
                         &keys,
                         arity,
                         input_future,
-                    )
+                    );
+                    (plan, false)
                 } else {
-                    plan
-                };
-
-                // Clear the future flag whenever the wrap actually bucketed
-                // the future-stamped updates.
-                let has_future_updates = if wrap_fires
-                    && matches!(
-                        strategy_from_future(input_future),
-                        ArrangementStrategy::TemporalBucketing
-                    ) {
-                    false
-                } else {
-                    input_future
+                    (plan, input_future)
                 };
 
                 let output_keys = threshold_plan.keys();
