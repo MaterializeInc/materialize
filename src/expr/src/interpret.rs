@@ -597,12 +597,26 @@ impl SpecialUnary {
 }
 
 /// A binary function we've added special-case handling for; including:
-/// - A two-argument function, taking and returning [ResultSpec]s. This overrides the
-///   default function-handling logic entirely.
+/// - Either a complete override of [ResultSpec] computation, or a way to
+///   compute monotonicity dynamically from the input specs.
 /// - Metadata on whether / not this function is pushdownable. See [Trace].
 struct SpecialBinary {
-    map_fn: for<'a> fn(ResultSpec<'a>, ResultSpec<'a>) -> ResultSpec<'a>,
+    handler: SpecialBinaryHandler,
     pushdownable: (bool, bool),
+}
+
+/// How a [SpecialBinary] computes the output [ResultSpec].
+enum SpecialBinaryHandler {
+    /// Completely override the spec computation; the default flat-map machinery
+    /// is bypassed.
+    Override(for<'a> fn(ResultSpec<'a>, ResultSpec<'a>) -> ResultSpec<'a>),
+    /// Use the default flat-map machinery, but with a monotonicity verdict that
+    /// depends on the input specs. This lets us claim monotonicity for cases
+    /// the static [LazyBinaryFunc::is_monotone] annotation can't safely claim:
+    /// for instance, `t + INTERVAL '1' day` is monotone in `t`, but `t + i`
+    /// generally isn't (the calendar-month / day-clamping arithmetic in
+    /// `add_timestamp_interval` is non-monotone when `i.months != 0`).
+    DynamicMonotone(fn(&ResultSpec<'_>, &ResultSpec<'_>) -> (bool, bool)),
 }
 
 impl SpecialBinary {
@@ -687,18 +701,55 @@ impl SpecialBinary {
             })
         }
 
+        /// `add_timestamp_interval` and friends do calendar-month arithmetic
+        /// with day-clamping, which is non-monotone in either argument when
+        /// `interval.months != 0`. But when `interval.months == 0` the
+        /// operation reduces to adding a fixed number of microseconds, which
+        /// *is* monotone in both arguments. The static `is_monotone`
+        /// annotation has to pick the conservative answer; this dynamic check
+        /// recovers filter pushdown for the common case of literal
+        /// `INTERVAL '<N>' day`-style predicates.
+        fn timestamp_plus_interval_monotone(
+            _left: &ResultSpec<'_>,
+            right: &ResultSpec<'_>,
+        ) -> (bool, bool) {
+            let months_zero = matches!(
+                &right.values,
+                Values::Within(Datum::Interval(a), Datum::Interval(b))
+                    if a == b && a.months == 0,
+            );
+            if months_zero {
+                (true, true)
+            } else {
+                (false, false)
+            }
+        }
+
         match func {
             BinaryFunc::JsonbGetString(_) => Some(SpecialBinary {
-                map_fn: |l, r| jsonb_get_string(l, r, false),
+                handler: SpecialBinaryHandler::Override(|l, r| jsonb_get_string(l, r, false)),
                 pushdownable: (true, false),
             }),
             BinaryFunc::JsonbGetStringStringify(_) => Some(SpecialBinary {
-                map_fn: |l, r| jsonb_get_string(l, r, true),
+                handler: SpecialBinaryHandler::Override(|l, r| jsonb_get_string(l, r, true)),
                 pushdownable: (true, false),
             }),
             BinaryFunc::Eq(_) => Some(SpecialBinary {
-                map_fn: eq,
+                handler: SpecialBinaryHandler::Override(eq),
                 pushdownable: (true, true),
+            }),
+            BinaryFunc::AddTimestampInterval(_)
+            | BinaryFunc::AddTimestampTzInterval(_)
+            | BinaryFunc::SubTimestampInterval(_)
+            | BinaryFunc::SubTimestampTzInterval(_) => Some(SpecialBinary {
+                handler: SpecialBinaryHandler::DynamicMonotone(timestamp_plus_interval_monotone),
+                // For [Trace]: we *might* be pushdownable in the first argument
+                // (we are when the interval is a literal with no months). The
+                // interval argument is reported as non-pushdownable so that
+                // `t_col +/- col_interval` doesn't get routed through pushdown
+                // for no benefit; if both sides are constants the predicate
+                // collapses anyway.
+                pushdownable: (true, false),
             }),
             _ => None,
         }
@@ -879,24 +930,36 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
         left: Self::Summary,
         right: Self::Summary,
     ) -> Self::Summary {
-        let (left_monotonic, right_monotonic) = func.is_monotone();
         let fallible = func.could_error() || left.range.fallible || right.range.fallible;
 
-        let mapped_spec = if let Some(special) = SpecialBinary::for_func(func) {
-            (special.map_fn)(left.range, right.range)
-        } else {
-            let mut expr = MirScalarExpr::CallBinary {
-                func: func.clone(),
-                expr1: Box::new(Self::placeholder(left.col_type.clone())),
-                expr2: Box::new(Self::placeholder(right.col_type.clone())),
-            };
-            left.range.flat_map(left_monotonic, |left_result| {
-                Self::set_argument(&mut expr, 0, left_result);
-                right.range.flat_map(right_monotonic, |right_result| {
-                    Self::set_argument(&mut expr, 1, right_result);
-                    self.eval_result(expr.eval(&[], self.arena))
+        let special = SpecialBinary::for_func(func);
+        let (left_monotonic, right_monotonic) = match &special {
+            Some(SpecialBinary {
+                handler: SpecialBinaryHandler::DynamicMonotone(monotone_fn),
+                ..
+            }) => monotone_fn(&left.range, &right.range),
+            _ => func.is_monotone(),
+        };
+
+        let mapped_spec = match special {
+            Some(SpecialBinary {
+                handler: SpecialBinaryHandler::Override(f),
+                ..
+            }) => f(left.range, right.range),
+            _ => {
+                let mut expr = MirScalarExpr::CallBinary {
+                    func: func.clone(),
+                    expr1: Box::new(Self::placeholder(left.col_type.clone())),
+                    expr2: Box::new(Self::placeholder(right.col_type.clone())),
+                };
+                left.range.flat_map(left_monotonic, |left_result| {
+                    Self::set_argument(&mut expr, 0, left_result);
+                    right.range.flat_map(right_monotonic, |right_result| {
+                        Self::set_argument(&mut expr, 1, right_result);
+                        self.eval_result(expr.eval(&[], self.arena))
+                    })
                 })
-            })
+            }
         };
 
         let col_type = func.output_type(&[left.col_type, right.col_type]);
@@ -1938,6 +2001,151 @@ mod tests {
             "interpreter incorrectly ruled out matching rows; \
              add_timestamp_interval is not monotone in the interval argument",
         );
+    }
+
+    /// Companion test to `test_add_timestamp_interval_non_monotone`: when the
+    /// interval argument is a literal with `months == 0`, the function reduces
+    /// to a pure linear shift in microseconds and *is* monotone in the
+    /// timestamp. The dynamic-monotonicity handler in `SpecialBinary` should
+    /// recover the tight output range in that case, so that filter pushdown
+    /// can still narrow predicates like `t - INTERVAL '1' day < literal`.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_timestamp_plus_interval_dynamic_monotone() {
+        use chrono::NaiveDateTime;
+        use mz_repr::adt::interval::Interval;
+        use mz_repr::adt::timestamp::CheckedTimestamp;
+        use mz_repr::{Datum, Row};
+
+        let arena = RowArena::new();
+
+        let ts = |s: &str| {
+            Datum::Timestamp(
+                CheckedTimestamp::from_timestamplike(
+                    NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S").unwrap(),
+                )
+                .unwrap(),
+            )
+        };
+        let interval_lit = |months: i32, days: i32, micros: i64| {
+            let mut row = Row::default();
+            row.packer().push(Datum::Interval(Interval {
+                months,
+                days,
+                micros,
+            }));
+            MirScalarExpr::Literal(Ok(row), ReprScalarType::Interval.nullable(false))
+        };
+
+        let relation = ReprRelationType::new(vec![ReprScalarType::Timestamp.nullable(false)]);
+
+        // (a) `t_col - INTERVAL '1' day < 2024-01-15`, with `t_col` ranging
+        // over `[2024-01-15, 2024-01-20]`. With the days-only interval, the
+        // subtraction is monotone, so endpoints alone determine the output:
+        // [2024-01-14, 2024-01-19]. Only `2024-01-14` satisfies `< 2024-01-15`,
+        // so both True and False are reachable.
+        {
+            let expr = MirScalarExpr::column(0)
+                .call_binary(interval_lit(0, 1, 0), SubTimestampInterval)
+                .call_binary(
+                    MirScalarExpr::Literal(
+                        Ok({
+                            let mut r = Row::default();
+                            r.packer().push(ts("2024-01-15T00:00:00"));
+                            r
+                        }),
+                        ReprScalarType::Timestamp.nullable(false),
+                    ),
+                    Lt,
+                );
+            let mut interpreter = ColumnSpecs::new(&relation, &arena);
+            interpreter.push_column(
+                0,
+                ResultSpec::value_between(
+                    ts("2024-01-15T00:00:00"),
+                    ts("2024-01-20T00:00:00"),
+                ),
+            );
+            let range_out = interpreter.expr(&expr).range;
+            assert!(
+                range_out.may_contain(Datum::True),
+                "day-only interval should preserve tight bounds",
+            );
+            assert!(
+                range_out.may_contain(Datum::False),
+                "day-only interval should preserve tight bounds",
+            );
+        }
+
+        // (b) Same predicate, but with `t_col` strictly *after* the literal:
+        // `[2024-01-17, 2024-01-20]`. Output of `t - 1 day`:
+        // `[2024-01-16, 2024-01-19]`, none of which is `< 2024-01-15`. The
+        // interpreter must rule out `True`.
+        {
+            let expr = MirScalarExpr::column(0)
+                .call_binary(interval_lit(0, 1, 0), SubTimestampInterval)
+                .call_binary(
+                    MirScalarExpr::Literal(
+                        Ok({
+                            let mut r = Row::default();
+                            r.packer().push(ts("2024-01-15T00:00:00"));
+                            r
+                        }),
+                        ReprScalarType::Timestamp.nullable(false),
+                    ),
+                    Lt,
+                );
+            let mut interpreter = ColumnSpecs::new(&relation, &arena);
+            interpreter.push_column(
+                0,
+                ResultSpec::value_between(
+                    ts("2024-01-17T00:00:00"),
+                    ts("2024-01-20T00:00:00"),
+                ),
+            );
+            let range_out = interpreter.expr(&expr).range;
+            assert!(
+                !range_out.may_contain(Datum::True),
+                "day-only interval should narrow out impossible matches",
+            );
+        }
+
+        // (c) With a *month*-bearing literal interval, the operation is no
+        // longer monotone (day-clamping), so the dynamic-monotonicity handler
+        // must fall back to `anything()` — the interpreter cannot rule out
+        // either outcome even when the column range is narrow.
+        {
+            let expr = MirScalarExpr::column(0)
+                .call_binary(interval_lit(1, 0, 0), SubTimestampInterval)
+                .call_binary(
+                    MirScalarExpr::Literal(
+                        Ok({
+                            let mut r = Row::default();
+                            r.packer().push(ts("2024-01-15T00:00:00"));
+                            r
+                        }),
+                        ReprScalarType::Timestamp.nullable(false),
+                    ),
+                    Lt,
+                );
+            let mut interpreter = ColumnSpecs::new(&relation, &arena);
+            interpreter.push_column(
+                0,
+                ResultSpec::value_between(
+                    ts("2024-01-17T00:00:00"),
+                    ts("2024-01-20T00:00:00"),
+                ),
+            );
+            let range_out = interpreter.expr(&expr).range;
+            assert!(
+                range_out.may_contain(Datum::True),
+                "month-bearing interval must conservatively admit True",
+            );
+            assert!(
+                range_out.may_contain(Datum::False),
+                "month-bearing interval must conservatively admit False",
+            );
+        }
     }
 
     /// Regression test for `date_bin_timestamp`, which is non-monotone in the
