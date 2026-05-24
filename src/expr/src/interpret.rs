@@ -1763,6 +1763,78 @@ mod tests {
         assert!(range_out.may_contain(Datum::Null));
     }
 
+    /// Regression test for database-issues#9656.
+    ///
+    /// Adding an `Interval` to a `Timestamp` is non-monotone in the interval
+    /// argument: the lex order of intervals (months, days, micros) does not
+    /// respect calendar-month arithmetic with day-clamping. The interpreter
+    /// must therefore not assume monotonicity, otherwise persist filter
+    /// pushdown can incorrectly conclude that a part has no matching rows.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_add_timestamp_interval_non_monotone() {
+        use chrono::NaiveDateTime;
+        use mz_repr::adt::interval::Interval;
+        use mz_repr::adt::timestamp::CheckedTimestamp;
+        use mz_repr::{Datum, Row};
+
+        let arena = RowArena::new();
+
+        // The setup: a timestamp literal `t = 2024-01-31 00:00:00`, and an
+        // interval column whose stats-range spans
+        // `[{0 months, 31 days, 0 us}, {1 month, 0 days, 0 us}]`. In lex order,
+        // the 31-day interval is the lower bound and the 1-month interval is
+        // the upper bound. The function values at the endpoints are:
+        //   t + {0,31,0} = 2024-03-02
+        //   t + {1, 0,0} = 2024-02-29
+        // But an *interior* interval like {0, 60, 0} maps to 2024-03-31, which
+        // lies far outside `[Feb 29, Mar 2]`. Under the (incorrect) monotone
+        // assumption, the interpreter would conclude the output is in that
+        // narrow window, and rule out predicates like `>= 2024-03-15`.
+        let ts_lit = |s: &str| {
+            let mut row = Row::default();
+            row.packer().push(Datum::Timestamp(
+                CheckedTimestamp::from_timestamplike(
+                    NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S").unwrap(),
+                )
+                .unwrap(),
+            ));
+            MirScalarExpr::Literal(Ok(row), ReprScalarType::Timestamp.nullable(false).into())
+        };
+        let interval = |months: i32, days: i32, micros: i64| {
+            Datum::Interval(Interval {
+                months,
+                days,
+                micros,
+            })
+        };
+
+        // Expression: `(timestamp_lit + interval_col) >= 2024-03-15`.
+        let expr = ts_lit("2024-01-31T00:00:00")
+            .call_binary(MirScalarExpr::column(0), AddTimestampInterval)
+            .call_binary(ts_lit("2024-03-15T00:00:00"), Gte);
+
+        let relation = ReprRelationType::new(vec![ReprScalarType::Interval.nullable(false)]);
+        let mut interpreter = ColumnSpecs::new(&relation, &arena);
+        interpreter.push_column(
+            0,
+            ResultSpec::value_between(interval(0, 31, 0), interval(1, 0, 0)),
+        );
+
+        let range_out = interpreter.expr(&expr).range;
+        // The actual data may include e.g. `{0, 60, 0}` → 2024-03-31, which
+        // satisfies `>= 2024-03-15`. The interpreter must admit `True` so that
+        // filter pushdown does not skip the part. Under the buggy
+        // `(true, true)` annotation, the output range would be
+        // `[Feb 29, Mar 2]`, all of which is `< Mar 15`, and the interpreter
+        // would (wrongly) admit only `False`.
+        assert!(
+            range_out.may_contain(Datum::True),
+            "interpreter incorrectly ruled out matching rows; \
+             add_timestamp_interval is not monotone in the interval argument",
+        );
+    }
+
     #[mz_ore::test]
     fn test_trace() {
         use super::Trace;
