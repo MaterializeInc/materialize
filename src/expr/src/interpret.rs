@@ -1799,7 +1799,7 @@ mod tests {
                 )
                 .unwrap(),
             ));
-            MirScalarExpr::Literal(Ok(row), ReprScalarType::Timestamp.nullable(false).into())
+            MirScalarExpr::Literal(Ok(row), ReprScalarType::Timestamp.nullable(false))
         };
         let interval = |months: i32, days: i32, micros: i64| {
             Datum::Interval(Interval {
