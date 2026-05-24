@@ -1065,7 +1065,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 let LoweredExpr {
                     plan: input,
                     keys: mut input_keys,
-                    has_future_updates: future,
+                    has_future_updates: input_has_future_updates,
                 } = self.lower_mir_expr(input)?;
                 // Fill the `types` in `input_keys` if not already present.
                 let arity = input_mir.arity();
@@ -1080,7 +1080,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     LoweredExpr {
                         plan: input,
                         keys: input_keys,
-                        has_future_updates: future,
+                        has_future_updates: input_has_future_updates,
                     }
                 } else {
                     let mut new_keys = new_keys
@@ -1109,13 +1109,9 @@ This is not expected to cause incorrect results, but could indicate a performanc
 
                     // Return the plan and extended keys.
                     let lir_id = self.allocate_lir_id();
-                    let strategy = strategy_from_future(future);
-                    // Bucketing absorption: see `strategy_from_future`. If we bucket, clear
-                    // the future-updates flag so the immediate parent is lowered as `Direct`.
-                    let has_future_updates = match strategy {
-                        ArrangementStrategy::TemporalBucketing => false,
-                        ArrangementStrategy::Direct => future,
-                    };
+                    let strategy = strategy_from_future(input_has_future_updates);
+                    assert!(!forms.arranged.is_empty()); // i.e., we do build an arrangement
+                    let has_future_updates = false;
                     LoweredExpr {
                         plan: PlanNode::ArrangeBy {
                             input_key,
