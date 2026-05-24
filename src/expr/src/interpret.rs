@@ -1835,6 +1835,73 @@ mod tests {
         );
     }
 
+    /// Regression test for `date_bin_timestamp`, which is non-monotone in the
+    /// `stride` argument: a larger stride can bin a source timestamp to an
+    /// *earlier* result than a smaller stride, because the bin alignment to
+    /// the unix epoch depends on the stride magnitude rather than on lex order.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_date_bin_timestamp_non_monotone() {
+        use chrono::NaiveDateTime;
+        use mz_repr::adt::interval::Interval;
+        use mz_repr::adt::timestamp::CheckedTimestamp;
+        use mz_repr::{Datum, Row};
+
+        let arena = RowArena::new();
+
+        let ts_lit = |s: &str| {
+            let mut row = Row::default();
+            row.packer().push(Datum::Timestamp(
+                CheckedTimestamp::from_timestamplike(
+                    NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S").unwrap(),
+                )
+                .unwrap(),
+            ));
+            MirScalarExpr::Literal(Ok(row), ReprScalarType::Timestamp.nullable(false).into())
+        };
+        let interval = |months: i32, days: i32, micros: i64| {
+            Datum::Interval(Interval {
+                months,
+                days,
+                micros,
+            })
+        };
+
+        // Expression: `date_bin(stride_col, 2024-01-01 12:00:00) >= 2024-01-01`.
+        // stride_col ranges over `[1 day, 2 days]`.
+        // - 1 day stride → bins to 2024-01-01 00:00:00 (satisfies `>=`).
+        // - 2 day stride → bins to 2023-12-31 00:00:00 (does not).
+        // Under the buggy `(true, true)` annotation, both endpoint evaluations
+        // give the same boolean answer (`>=` is monotone), so depending on which
+        // way the comparisons fall the interpreter could end up wrongly ruling
+        // out one outcome. The non-monotone fix forces a conservative
+        // `anything()` for the binned value.
+        let expr = MirScalarExpr::column(0)
+            .call_binary(ts_lit("2024-01-01T12:00:00"), DateBinTimestamp)
+            .call_binary(ts_lit("2024-01-01T00:00:00"), Gte);
+
+        let relation = ReprRelationType::new(vec![ReprScalarType::Interval.nullable(false)]);
+        let mut interpreter = ColumnSpecs::new(&relation, &arena);
+        interpreter.push_column(
+            0,
+            ResultSpec::value_between(interval(0, 1, 0), interval(0, 2, 0)),
+        );
+
+        let range_out = interpreter.expr(&expr).range;
+        // The actual data may include a 1-day stride for which the predicate
+        // holds, and a 2-day stride for which it doesn't, so both outcomes are
+        // reachable.
+        assert!(
+            range_out.may_contain(Datum::True),
+            "date_bin is not monotone in the stride argument; \
+             interpreter must not rule out matching rows",
+        );
+        assert!(
+            range_out.may_contain(Datum::False),
+            "interpreter must not rule out non-matching rows either",
+        );
+    }
+
     #[mz_ore::test]
     fn test_trace() {
         use super::Trace;
