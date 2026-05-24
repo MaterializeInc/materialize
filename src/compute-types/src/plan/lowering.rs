@@ -890,17 +890,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     input
                 };
                 // Return the plan, and no arrangements.
-                //
-                // `TopK` itself buckets (via `apply_bucketing_strategy` at the
-                // top of `render_topk`) when the strategy says so, so the
-                // output flag is cleared whenever bucketing actually fires.
-                //
-                // Bucketing absorption: see `strategy_from_future`.
                 let temporal_bucketing_strategy = strategy_from_future(input_future);
-                let has_future_updates = match temporal_bucketing_strategy {
-                    ArrangementStrategy::TemporalBucketing => false,
-                    ArrangementStrategy::Direct => input_future,
-                };
                 let lir_id = self.allocate_lir_id();
                 LoweredExpr {
                     plan: PlanNode::TopK {
@@ -910,7 +900,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     }
                     .as_plan(lir_id),
                     keys: AvailableCollections::new_raw(),
-                    has_future_updates,
+                    has_future_updates: false,
                 }
             }
             MirRelationExpr::Negate { input } => {
