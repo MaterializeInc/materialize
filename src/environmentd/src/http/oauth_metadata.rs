@@ -71,6 +71,12 @@ use crate::http::Delayed;
 /// indefinitely from any caller on the network.
 const ADAPTER_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// Scheme used in published URLs. OAuth 2.1 §3.1 requires `https` for
+/// all OAuth endpoints, and environmentd is fronted by TLS in every
+/// production deployment. Plain-HTTP local dev is not a supported
+/// OAuth flow.
+const PUBLISHED_SCHEME: &str = "https";
+
 /// The well-known path served by this module.
 ///
 /// Per [RFC 9728 §3] this is the OAuth 2.0 Protected Resource Metadata
@@ -218,21 +224,19 @@ pub(crate) async fn handle_protected_resource_metadata(
         // document MUST contain at least one entry in
         // `authorization_servers`, so the honest response is 404 rather
         // than an empty document that misleads the client.
+        warn!("oauth-protected-resource: oidc_issuer is unset; cannot publish");
         metrics.inc("no_issuer");
         return StatusCode::NOT_FOUND.into_response();
     };
-    let issuer = match validate_issuer_url(&issuer) {
-        Ok(validated) => validated.to_string(),
-        Err(err) => {
-            warn!(%issuer, error = %err, "oauth-protected-resource: refusing to publish invalid oidc_issuer");
-            metrics.inc("invalid_issuer");
-            return (StatusCode::SERVICE_UNAVAILABLE, err).into_response();
-        }
-    };
+    if let Err(err) = validate_issuer_url(&issuer) {
+        warn!(%issuer, error = %err, "oauth-protected-resource: refusing to publish invalid oidc_issuer");
+        metrics.inc("invalid_issuer");
+        return (StatusCode::SERVICE_UNAVAILABLE, err).into_response();
+    }
 
     let metadata = ProtectedResourceMetadata {
         resource,
-        authorization_servers: vec![issuer],
+        authorization_servers: vec![issuer.to_string()],
         bearer_methods_supported: vec!["header".to_string()],
         scopes_supported: vec![MCP_SCOPE.to_string()],
     };
@@ -246,13 +250,17 @@ pub(crate) async fn handle_protected_resource_metadata(
     response
 }
 
-/// Validates `oidc_issuer` before it is published: parseable URL,
-/// http/https scheme, no userinfo (we publish it on a public endpoint),
-/// no query or fragment (RFC 8414 §2). Returns the **original** string
-/// unchanged — `url.to_string()` would silently normalise (e.g. add a
-/// trailing slash) and a mutated issuer would not match the `iss`
-/// claim in tokens minted by the IdP.
-fn validate_issuer_url(issuer: &str) -> Result<&str, &'static str> {
+/// Validates `oidc_issuer` before it is published. Required: parses as
+/// a URL, scheme is `https` or `http`, no userinfo (we publish it on a
+/// public endpoint), no query or fragment (RFC 8414 §2). The `http`
+/// scheme is permitted to ease local dev; OAuth 2.1 §3.1 forbids it in
+/// production but enforcement is the operator's responsibility.
+///
+/// The caller publishes the **original** value (not a re-serialised
+/// `Url`) because `url::Url` silently normalises some forms (e.g. adds
+/// a trailing slash to a bare authority), and a mutated issuer would
+/// not match the `iss` claim in tokens minted by the IdP.
+fn validate_issuer_url(issuer: &str) -> Result<(), &'static str> {
     let url = Url::parse(issuer).map_err(|_| "oidc_issuer is not a parseable URL")?;
     if !matches!(url.scheme(), "https" | "http") {
         return Err("oidc_issuer must use the https or http scheme");
@@ -263,7 +271,7 @@ fn validate_issuer_url(issuer: &str) -> Result<&str, &'static str> {
     if url.query().is_some() || url.fragment().is_some() {
         return Err("oidc_issuer must not contain a query or fragment");
     }
-    Ok(issuer)
+    Ok(())
 }
 
 /// Builds the absolute URL of the protected resource metadata document
@@ -321,12 +329,6 @@ fn resolve_host(req: &Request, http_host_name: Option<&str>) -> Option<String> {
     Some(candidate)
 }
 
-/// Scheme used in published URLs. OAuth 2.1 §3.1 requires `https` for
-/// all OAuth endpoints, and environmentd is fronted by TLS in every
-/// production deployment. Plain-HTTP local dev is not a supported
-/// OAuth flow.
-const PUBLISHED_SCHEME: &str = "https";
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -336,7 +338,6 @@ mod tests {
 
     fn req_with_host(host: &str) -> Request<Body> {
         Request::builder()
-            .uri("https://ignored.example.com/")
             .header(http::header::HOST, host)
             .body(Body::empty())
             .unwrap()
@@ -410,7 +411,6 @@ mod tests {
     #[mz_ore::test]
     fn test_resolve_host_ignores_x_forwarded_host() {
         let req = Request::builder()
-            .uri("https://ignored.example.com/")
             .header(http::header::HOST, "honest.example.com")
             .header("x-forwarded-host", "evil.example.com")
             .body(Body::empty())
@@ -425,10 +425,7 @@ mod tests {
     /// No host config and no `Host` header → `None`.
     #[mz_ore::test]
     fn test_resolve_host_returns_none_when_unavailable() {
-        let req = Request::builder()
-            .uri("https://ignored.example.com/")
-            .body(Body::empty())
-            .unwrap();
+        let req = Request::builder().body(Body::empty()).unwrap();
         assert_eq!(resolve_host(&req, None), None);
     }
 
@@ -554,7 +551,7 @@ mod tests {
         ] {
             assert_eq!(
                 validate_issuer_url(issuer),
-                Ok(issuer),
+                Ok(()),
                 "expected {issuer:?} to pass validation",
             );
         }
