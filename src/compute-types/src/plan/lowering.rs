@@ -300,11 +300,8 @@ impl Context {
                 // from the underlying binding — applying an MFP doesn't drop future-
                 // timestamped updates that already exist on the input.
                 //
-                // TODO(temporal-bucketing): `has_future_updates` is computed per
-                // dataflow; we don't currently propagate it across `Id::Global`
-                // boundaries (e.g., from an MV's dataflow to its consumer's), so a
-                // downstream-only `Get`-then-`ArrangeBy` won't bucket unless the
-                // consumer has its own local temporal MFP.
+                // Note that global Gets from different dataflows can't have future updates, because
+                // both indexes and materialized views hold back future updates.
                 let has_future_updates = self.has_future_updates.contains(id)
                     || match &plan {
                         GetPlan::Arrangement(_, _, mfp) | GetPlan::Collection(mfp) => {
