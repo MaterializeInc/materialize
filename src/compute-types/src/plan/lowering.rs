@@ -1294,15 +1294,8 @@ This is not expected to cause incorrect results, but could indicate a performanc
         // `ArrangeBy`. Instead we record the strategy directly on the `Reduce` node, and
         // `render_reduce` applies bucketing to the keyed `(key, val)` stream itself.
         let temporal_bucketing_strategy = strategy_from_future(input_future);
-        // `extract_mfp_after` strips temporal predicates back into `*mfp_on_top` (the residual
-        // MFP installed above the reduce), so `mfp_after` is non-temporal and cannot introduce
-        // future updates.
-        //
-        // Bucketing absorption: see `strategy_from_future`.
-        let has_future_updates = match temporal_bucketing_strategy {
-            ArrangementStrategy::TemporalBucketing => false,
-            ArrangementStrategy::Direct => input_future,
-        };
+        // (This can't currently happen due to `extract_mfp_after` separating out any temporal part.)
+        let has_future_updates = mfp_after.has_temporal_predicates();
         Ok(LoweredExpr {
             plan: PlanNode::Reduce {
                 input_key,
