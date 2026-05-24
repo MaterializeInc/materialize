@@ -1052,6 +1052,7 @@ impl binary::EagerBinaryFunc for RegexpReplace {
         output.nullable(nullable || (propagates_nulls && input_nullable))
     }
 }
+lazy_via_eager_binary!(RegexpReplace);
 
 impl fmt::Display for RegexpReplace {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

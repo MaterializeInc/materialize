@@ -1320,6 +1320,108 @@ fn binary_func(
         }
     };
 
+    // Direct-unwrap `LazyBinaryFunc` impl. The eval body unrolls the two
+    // `try_from_result` calls so we never instantiate the generic
+    // `<(T0,T1) as InputDatumType>::try_from_iter`, which dominated
+    // mz-expr's LLVM IR (93k lines across 218 monomorphizations). Triage
+    // order matches the tuple `try_from_iter` impl: internal errors
+    // first, then eval errors, then null propagation. The accessors
+    // forward to the `EagerBinaryFunc` impl on the same struct.
+    let lazy_impl = quote! {
+        impl crate::func::binary::LazyBinaryFunc for #struct_name {
+            fn eval<'a>(
+                &'a self,
+                datums: &[mz_repr::Datum<'a>],
+                temp_storage: &'a mz_repr::RowArena,
+                exprs: &[&'a crate::MirScalarExpr],
+            ) -> ::std::result::Result<mz_repr::Datum<'a>, crate::EvalError> {
+                use mz_repr::OutputDatumType;
+                let _r0 = match exprs.get(0) {
+                    Some(e) => e.eval(datums, temp_storage),
+                    None => return Err(crate::EvalError::Internal(
+                        "unexpectedly missing parameter".into(),
+                    )),
+                };
+                let _r1 = match exprs.get(1) {
+                    Some(e) => e.eval(datums, temp_storage),
+                    None => return Err(crate::EvalError::Internal(
+                        "unexpectedly missing parameter".into(),
+                    )),
+                };
+                let r0 = <#input1_ty as mz_repr::InputDatumType<'a, crate::EvalError>>
+                    ::try_from_result(_r0);
+                let r1 = <#input2_ty as mz_repr::InputDatumType<'a, crate::EvalError>>
+                    ::try_from_result(_r1);
+                // Internal errors (non-null wrong-typed datum).
+                let r0 = match r0 {
+                    Err(Ok(d)) if !d.is_null() => return Err(crate::EvalError::Internal(
+                        "invalid input type".into(),
+                    )),
+                    els => els,
+                };
+                let r1 = match r1 {
+                    Err(Ok(d)) if !d.is_null() => return Err(crate::EvalError::Internal(
+                        "invalid input type".into(),
+                    )),
+                    els => els,
+                };
+                // Eval errors.
+                let r0 = match r0 {
+                    Err(Err(e)) => return Err(e),
+                    els => els,
+                };
+                let r1 = match r1 {
+                    Err(Err(e)) => return Err(e),
+                    els => els,
+                };
+                // Null propagation.
+                let a = match r0 {
+                    Ok(v) => v,
+                    Err(Ok(d)) => return Ok(d),
+                    Err(Err(_)) => unreachable!(),
+                };
+                let b = match r1 {
+                    Ok(v) => v,
+                    Err(Ok(d)) => return Ok(d),
+                    Err(Err(_)) => unreachable!(),
+                };
+                <Self as crate::func::binary::EagerBinaryFunc>::call(self, (a, b), temp_storage)
+                    .into_result(temp_storage)
+            }
+
+            fn output_sql_type(
+                &self,
+                input_types: &[mz_repr::SqlColumnType],
+            ) -> mz_repr::SqlColumnType {
+                <Self as crate::func::binary::EagerBinaryFunc>::output_sql_type(self, input_types)
+            }
+
+            fn propagates_nulls(&self) -> bool {
+                <Self as crate::func::binary::EagerBinaryFunc>::propagates_nulls(self)
+            }
+
+            fn introduces_nulls(&self) -> bool {
+                <Self as crate::func::binary::EagerBinaryFunc>::introduces_nulls(self)
+            }
+
+            fn could_error(&self) -> bool {
+                <Self as crate::func::binary::EagerBinaryFunc>::could_error(self)
+            }
+
+            fn negate(&self) -> ::std::option::Option<crate::BinaryFunc> {
+                <Self as crate::func::binary::EagerBinaryFunc>::negate(self)
+            }
+
+            fn is_monotone(&self) -> (bool, bool) {
+                <Self as crate::func::binary::EagerBinaryFunc>::is_monotone(self)
+            }
+
+            fn is_infix_op(&self) -> bool {
+                <Self as crate::func::binary::EagerBinaryFunc>::is_infix_op(self)
+            }
+        }
+    };
+
     let display_impl = if skip_display {
         quote! {}
     } else {
@@ -1339,6 +1441,7 @@ fn binary_func(
                 #func
             }
             #trait_impl
+            #lazy_impl
             #display_impl
         }
     } else {
@@ -1353,6 +1456,7 @@ fn binary_func(
             pub struct #struct_name;
 
             #trait_impl
+            #lazy_impl
             #display_impl
 
             #func

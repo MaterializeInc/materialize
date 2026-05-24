@@ -1624,7 +1624,7 @@ pub(crate) trait LazyVariadicFunc: fmt::Display {
     }
 }
 
-pub(crate) trait EagerVariadicFunc: fmt::Display {
+pub(crate) trait EagerVariadicFunc: fmt::Display + 'static + Sized {
     type Input<'a>: InputDatumType<'a, EvalError>;
     type Output<'a>: OutputDatumType<'a, EvalError>;
 

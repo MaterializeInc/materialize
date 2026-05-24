@@ -9,13 +9,11 @@
 
 //! Utilities for binary functions.
 
-use mz_ore::assert_none;
 use mz_repr::{Datum, InputDatumType, OutputDatumType, ReprColumnType, RowArena, SqlColumnType};
 
 use crate::{EvalError, MirScalarExpr};
 
-/// A description of an SQL binary function that has the ability to lazy evaluate its arguments
-// This trait will eventually be annotated with #[enum_dispatch] to autogenerate the UnaryFunc enum
+/// A description of an SQL binary function that has the ability to lazy evaluate its arguments.
 pub(crate) trait LazyBinaryFunc {
     fn eval<'a>(
         &'a self,
@@ -54,25 +52,22 @@ pub(crate) trait LazyBinaryFunc {
     /// Returns the negation of the function, if one exists.
     fn negate(&self) -> Option<crate::BinaryFunc>;
 
-    /// Returns true if the function is monotone. (Non-strict; either increasing or decreasing.)
-    /// Monotone functions map ranges to ranges: ie. given a range of possible inputs, we can
-    /// determine the range of possible outputs just by mapping the endpoints.
-    ///
-    /// This describes the *pointwise* behaviour of the function:
-    /// ie. the behaviour of any specific argument as the others are held constant. (For example, `a - b` is
-    /// monotone in the first argument because for any particular value of `b`, increasing `a` will
-    /// always cause the result to increase... and in the second argument because for any specific `a`,
-    /// increasing `b` will always cause the result to _decrease_.)
-    ///
-    /// This property describes the behaviour of the function over ranges where the function is defined:
-    /// ie. the arguments and the result are non-error datums.
+    /// Returns true if the function is monotone.
     fn is_monotone(&self) -> (bool, bool);
 
-    /// Yep, I guess this returns true for infix operators.
+    /// Whether the function is an infix operator.
     fn is_infix_op(&self) -> bool;
 }
 
-pub(crate) trait EagerBinaryFunc {
+/// A description of an SQL binary function that operates on eagerly evaluated expressions.
+///
+/// `LazyBinaryFunc` is **not** provided via a blanket impl on this trait.
+/// Sqlfunc-generated structs emit their own explicit `LazyBinaryFunc` impl
+/// with a direct per-argument `try_from_result` body, which avoids
+/// monomorphizing `<(T0, T1) as InputDatumType>::try_from_iter` for every
+/// input tuple shape. Hand-written `EagerBinaryFunc` impls should follow
+/// with the `lazy_via_eager_binary!` helper.
+pub(crate) trait EagerBinaryFunc: 'static + Sized {
     type Input<'a>: InputDatumType<'a, EvalError>;
     type Output<'a>: OutputDatumType<'a, EvalError>;
 
@@ -122,63 +117,6 @@ pub(crate) trait EagerBinaryFunc {
 
     fn is_infix_op(&self) -> bool {
         false
-    }
-}
-
-impl<T: EagerBinaryFunc> LazyBinaryFunc for T {
-    fn eval<'a>(
-        &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        exprs: &[&'a MirScalarExpr],
-    ) -> Result<Datum<'a>, EvalError> {
-        let mut datums = exprs
-            .into_iter()
-            .map(|expr| expr.eval(datums, temp_storage));
-        let input = match T::Input::try_from_iter(&mut datums) {
-            // If we can convert to the input type then we call the function
-            Ok(input) => input,
-            // If we can't and we got a non-null datum something went wrong in the planner
-            Err(Ok(Some(datum))) if !datum.is_null() => {
-                return Err(EvalError::Internal("invalid input type".into()));
-            }
-            Err(Ok(None)) => {
-                return Err(EvalError::Internal("unexpectedly missing parameter".into()));
-            }
-            // Otherwise we just propagate NULLs and errors
-            Err(Ok(Some(datum))) => return Ok(datum),
-            Err(Err(res)) => return Err(res),
-        };
-        assert_none!(datums.next(), "No leftover input arguments");
-        self.call(input, temp_storage).into_result(temp_storage)
-    }
-
-    fn output_sql_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType {
-        self.output_sql_type(input_types)
-    }
-
-    fn propagates_nulls(&self) -> bool {
-        self.propagates_nulls()
-    }
-
-    fn introduces_nulls(&self) -> bool {
-        self.introduces_nulls()
-    }
-
-    fn could_error(&self) -> bool {
-        self.could_error()
-    }
-
-    fn negate(&self) -> Option<crate::BinaryFunc> {
-        self.negate()
-    }
-
-    fn is_monotone(&self) -> (bool, bool) {
-        self.is_monotone()
-    }
-
-    fn is_infix_op(&self) -> bool {
-        self.is_infix_op()
     }
 }
 
@@ -415,7 +353,7 @@ mod test {
     use mz_repr::SqlScalarType;
 
     use crate::EvalError;
-    use crate::scalar::func::binary::LazyBinaryFunc;
+    use crate::scalar::func::binary::EagerBinaryFunc;
 
     #[sqlfunc(sqlname = "INFALLIBLE", is_infix_op = true, test = true)]
     #[allow(dead_code)]

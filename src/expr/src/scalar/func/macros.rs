@@ -14,13 +14,84 @@ macro_rules! to_unary {
     };
 }
 
+/// Bridge a hand-written `EagerBinaryFunc` impl to a `LazyBinaryFunc`
+/// impl that goes through tuple `try_from_iter`. The sqlfunc proc macro
+/// emits a direct-unwrap `LazyBinaryFunc` impl per variant — but
+/// hand-written `EagerBinaryFunc` impls do not, so they need this
+/// boilerplate to satisfy the `LazyBinaryFunc` bound consumed by the
+/// `BinaryFunc` enum dispatch.
+macro_rules! lazy_via_eager_binary {
+    ($ty:ty) => {
+        impl crate::func::binary::LazyBinaryFunc for $ty {
+            fn eval<'a>(
+                &'a self,
+                datums: &[mz_repr::Datum<'a>],
+                temp_storage: &'a mz_repr::RowArena,
+                exprs: &[&'a crate::MirScalarExpr],
+            ) -> ::std::result::Result<mz_repr::Datum<'a>, crate::EvalError> {
+                use mz_repr::OutputDatumType;
+                let mut datums = exprs.iter().map(|expr| expr.eval(datums, temp_storage));
+                let input = match <<Self as crate::func::binary::EagerBinaryFunc>::Input<'_>
+                    as mz_repr::InputDatumType<'_, crate::EvalError>>::try_from_iter(&mut datums)
+                {
+                    Ok(input) => input,
+                    Err(Ok(Some(datum))) if !datum.is_null() => {
+                        return Err(crate::EvalError::Internal("invalid input type".into()));
+                    }
+                    Err(Ok(None)) => {
+                        return Err(crate::EvalError::Internal(
+                            "unexpectedly missing parameter".into(),
+                        ));
+                    }
+                    Err(Ok(Some(datum))) => return Ok(datum),
+                    Err(Err(res)) => return Err(res),
+                };
+                ::mz_ore::assert_none!(datums.next(), "No leftover input arguments");
+                <Self as crate::func::binary::EagerBinaryFunc>::call(self, input, temp_storage)
+                    .into_result(temp_storage)
+            }
+
+            fn output_sql_type(
+                &self,
+                input_types: &[mz_repr::SqlColumnType],
+            ) -> mz_repr::SqlColumnType {
+                <Self as crate::func::binary::EagerBinaryFunc>::output_sql_type(self, input_types)
+            }
+
+            fn propagates_nulls(&self) -> bool {
+                <Self as crate::func::binary::EagerBinaryFunc>::propagates_nulls(self)
+            }
+
+            fn introduces_nulls(&self) -> bool {
+                <Self as crate::func::binary::EagerBinaryFunc>::introduces_nulls(self)
+            }
+
+            fn could_error(&self) -> bool {
+                <Self as crate::func::binary::EagerBinaryFunc>::could_error(self)
+            }
+
+            fn negate(&self) -> ::std::option::Option<crate::BinaryFunc> {
+                <Self as crate::func::binary::EagerBinaryFunc>::negate(self)
+            }
+
+            fn is_monotone(&self) -> (bool, bool) {
+                <Self as crate::func::binary::EagerBinaryFunc>::is_monotone(self)
+            }
+
+            fn is_infix_op(&self) -> bool {
+                <Self as crate::func::binary::EagerBinaryFunc>::is_infix_op(self)
+            }
+        }
+    };
+}
+
 #[cfg(test)]
 mod test {
     use mz_expr_derive::sqlfunc;
     use mz_repr::SqlScalarType;
 
     use crate::EvalError;
-    use crate::scalar::func::LazyUnaryFunc;
+    use crate::scalar::func::EagerUnaryFunc;
 
     #[sqlfunc(sqlname = "INFALLIBLE")]
     fn infallible1(a: f32) -> f32 {

@@ -201,6 +201,7 @@ impl EagerBinaryFunc for ListLengthMax {
         output.nullable(nullable || (propagates_nulls && input_nullable))
     }
 }
+lazy_via_eager_binary!(ListLengthMax);
 impl fmt::Display for ListLengthMax {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("list_length_max")
