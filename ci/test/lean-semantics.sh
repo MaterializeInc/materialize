@@ -33,9 +33,14 @@ docker build \
     -f "$semantics_dir/Dockerfile" \
     "$semantics_dir"
 
+# Bind-mount only the Mz library sources over the image's
+# placeholders. The image carries the prebuilt Mathlib oleans under
+# `/workspace/.lake`; masking the full `/workspace` with a bind mount
+# would hide them and force a fresh `lake exe cache get` on every run.
 docker run --rm \
     --user "$(id -u):$(id -g)" \
-    -v "$PWD/$semantics_dir:/workspace" \
+    -v "$PWD/$semantics_dir/Mz:/workspace/Mz" \
+    -v "$PWD/$semantics_dir/Mz.lean:/workspace/Mz.lean" \
     -w /workspace \
     "$image_tag" \
     lake build
