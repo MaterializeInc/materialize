@@ -141,6 +141,28 @@ mod test {
 
     #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
     #[mz_ore::test]
+    fn insta_test_unary_self_arena() {
+        let attr = quote! {
+            CastArrayToString,
+            sqlname = "arraytostr",
+            preserves_uniqueness = true,
+            introduces_nulls = false,
+        };
+        let item = quote! {
+            fn cast_array_to_string<'a>(
+                &self,
+                a: Array<'a>,
+                temp_storage: &'a RowArena,
+            ) -> Result<&'a str, EvalError> {
+                unimplemented!()
+            }
+        };
+        let (output, input) = super::test_sqlfunc(attr, item);
+        insta::assert_snapshot!("unary_self_arena", output, &input);
+    }
+
+    #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
+    #[mz_ore::test]
     fn insta_test_binary_arena() {
         let attr = quote! {test = true};
         let item = quote! {

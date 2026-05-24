@@ -15,7 +15,7 @@ use mz_repr::{AsColumnType, Datum, DatumList, Row, RowArena, SqlColumnType, SqlS
 use serde::{Deserialize, Serialize};
 
 use crate::func::binary::EagerBinaryFunc;
-use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
+use crate::scalar::func::stringify_datum;
 use crate::{EvalError, MirScalarExpr};
 
 #[derive(
@@ -34,56 +34,20 @@ pub struct CastListToString {
     pub ty: SqlScalarType,
 }
 
-impl LazyUnaryFunc for CastListToString {
-    fn eval<'a>(
-        &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
-        }
-        let mut buf = String::new();
-        stringify_datum(&mut buf, a, &self.ty)?;
-        Ok(Datum::String(temp_storage.push_string(buf)))
-    }
-
-    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::String.nullable(input_type.nullable)
-    }
-
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
-
-    fn introduces_nulls(&self) -> bool {
-        false
-    }
-
-    fn preserves_uniqueness(&self) -> bool {
-        true
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        // TODO? if typeconv was in expr, we could determine this
-        None
-    }
-
-    fn is_monotone(&self) -> bool {
-        false
-    }
-
-    fn is_eliminable_cast(&self) -> bool {
-        false
-    }
-}
-
-impl fmt::Display for CastListToString {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("listtostr")
-    }
+#[sqlfunc(
+    CastListToString,
+    sqlname = "listtostr",
+    preserves_uniqueness = true,
+    introduces_nulls = false
+)]
+fn cast_list_to_string<'a>(
+    &self,
+    a: DatumList<'a>,
+    _temp_storage: &'a RowArena,
+) -> Result<String, EvalError> {
+    let mut buf = String::new();
+    stringify_datum(&mut buf, Datum::List(a), &self.ty)?;
+    Ok(buf)
 }
 
 #[derive(
@@ -102,66 +66,30 @@ pub struct CastListToJsonb {
     pub cast_element: Box<MirScalarExpr>,
 }
 
-impl LazyUnaryFunc for CastListToJsonb {
-    fn eval<'a>(
-        &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
+#[sqlfunc(
+    CastListToJsonb,
+    sqlname = "listtojsonb",
+    output_type_expr = "SqlScalarType::Jsonb.nullable(false)",
+    preserves_uniqueness = true,
+    introduces_nulls = false
+)]
+fn cast_list_to_jsonb<'a>(
+    &'a self,
+    a: DatumList<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let mut row = Row::default();
+    row.packer().push_list_with(|packer| {
+        for elem in a.iter() {
+            let elem = match self.cast_element.eval(&[elem], temp_storage)? {
+                Datum::Null => Datum::JsonNull,
+                d => d,
+            };
+            packer.push(elem);
         }
-        let mut row = Row::default();
-        row.packer().push_list_with(|packer| {
-            for elem in a.unwrap_list().iter() {
-                let elem = match self.cast_element.eval(&[elem], temp_storage)? {
-                    Datum::Null => Datum::JsonNull,
-                    d => d,
-                };
-                packer.push(elem);
-            }
-            Ok::<_, EvalError>(())
-        })?;
-        Ok(temp_storage.push_unary_row(row))
-    }
-
-    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Jsonb.nullable(input_type.nullable)
-    }
-
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
-
-    fn introduces_nulls(&self) -> bool {
-        false
-    }
-
-    fn preserves_uniqueness(&self) -> bool {
-        true
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        // TODO? If we moved typeconv into `expr` we could determine the right
-        // inverse of this.
-        None
-    }
-
-    fn is_monotone(&self) -> bool {
-        false
-    }
-
-    fn is_eliminable_cast(&self) -> bool {
-        false
-    }
-}
-
-impl fmt::Display for CastListToJsonb {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("listtojsonb")
-    }
+        Ok::<_, EvalError>(())
+    })?;
+    Ok(temp_storage.push_unary_row(row))
 }
 
 /// Casts between two list types by casting each element of `a` ("list1") using
@@ -185,64 +113,22 @@ pub struct CastList1ToList2 {
     pub cast_expr: Box<MirScalarExpr>,
 }
 
-impl LazyUnaryFunc for CastList1ToList2 {
-    fn eval<'a>(
-        &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
-        }
-        let mut cast_datums = Vec::new();
-        for el in a.unwrap_list().iter() {
-            // `cast_expr` is evaluated as an expression that casts the
-            // first column in `datums` (i.e. `datums[0]`) from the list elements'
-            // current type to a target type.
-            cast_datums.push(self.cast_expr.eval(&[el], temp_storage)?);
-        }
-
-        Ok(temp_storage.make_datum(|packer| packer.push_list(cast_datums)))
+#[sqlfunc(
+    CastList1ToList2,
+    sqlname = "list1tolist2",
+    output_type_expr = "self.return_ty.without_modifiers().nullable(false)",
+    introduces_nulls = false
+)]
+fn cast_list1_to_list2<'a>(
+    &'a self,
+    a: DatumList<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let mut cast_datums = Vec::new();
+    for el in a.iter() {
+        cast_datums.push(self.cast_expr.eval(&[el], temp_storage)?);
     }
-
-    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
-        self.return_ty
-            .without_modifiers()
-            .nullable(input_type.nullable)
-    }
-
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
-
-    fn introduces_nulls(&self) -> bool {
-        false
-    }
-
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        // TODO: this could be figured out--might be easier after enum dispatch?
-        None
-    }
-
-    fn is_monotone(&self) -> bool {
-        false
-    }
-
-    fn is_eliminable_cast(&self) -> bool {
-        false
-    }
-}
-
-impl fmt::Display for CastList1ToList2 {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("list1tolist2")
-    }
+    Ok(temp_storage.make_datum(|packer| packer.push_list(cast_datums)))
 }
 
 #[sqlfunc(sqlname = "list_length")]
@@ -315,6 +201,7 @@ impl EagerBinaryFunc for ListLengthMax {
         output.nullable(nullable || (propagates_nulls && input_nullable))
     }
 }
+lazy_via_eager_binary!(ListLengthMax);
 impl fmt::Display for ListLengthMax {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("list_length_max")

@@ -19,7 +19,11 @@ pub struct UnaryFn;
 impl crate::func::EagerUnaryFunc for UnaryFn {
     type Input<'a> = Datum<'a>;
     type Output<'a> = bool;
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(
+        &'a self,
+        a: Self::Input<'a>,
+        _temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
         unary_fn(a)
     }
     fn output_sql_type(

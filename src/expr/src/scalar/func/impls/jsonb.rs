@@ -110,7 +110,11 @@ impl EagerUnaryFunc for CastJsonbToNumeric {
     type Input<'a> = JsonbRef<'a>;
     type Output<'a> = Result<Numeric, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(
+        &'a self,
+        a: Self::Input<'a>,
+        _temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
         match a.into_datum() {
             Datum::Numeric(mut num) => match self.0 {
                 None => Ok(num.into_inner()),

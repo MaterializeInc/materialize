@@ -143,7 +143,11 @@ impl EagerUnaryFunc for CastInt16ToNumeric {
     type Input<'a> = i16;
     type Output<'a> = Result<Numeric, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(
+        &'a self,
+        a: Self::Input<'a>,
+        _temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
         let mut a = Numeric::from(i32::from(a));
         if let Some(scale) = self.0 {
             if numeric::rescale(&mut a, scale.into_u8()).is_err() {

@@ -3138,9 +3138,12 @@ impl RowArena {
     /// Convenience function to build a list datum from an iterator of typed
     /// elements and return it as a `DatumList<'a, T>`.
     ///
-    /// By accepting an iterator of `T: Borrow<Datum>` instead of a raw
-    /// `RowPacker` closure, this guarantees that only elements of type `T`
-    /// are pushed.
+    /// `T` is a phantom marker on the returned `DatumList<'a, T>`; it is
+    /// **not** verified that the borrowed `Datum`s match T's expected
+    /// variant. The caller must ensure that the pushed `Datum`s match
+    /// what T's `FromDatum` impl (or equivalent reader) expects, or
+    /// downstream reads will panic. Bytes are written via `Datum`'s
+    /// variant tag, not via T.
     pub fn make_datum_list<'a, T: std::borrow::Borrow<Datum<'a>>>(
         &'a self,
         iter: impl IntoIterator<Item = T>,
@@ -3153,6 +3156,32 @@ impl RowArena {
             });
         });
         DatumList::new(datum.unwrap_list().data())
+    }
+
+    /// Convenience function to build an array datum from `dims` and an
+    /// iterator of typed elements, and return it as an `Array<'a, T>`.
+    ///
+    /// Returns an error if the iterator's length does not match the
+    /// cardinality of `dims` or `dims` exceeds [`MAX_ARRAY_DIMENSIONS`].
+    ///
+    /// `T` is a phantom marker on the returned `Array<'a, T>`; it is
+    /// **not** verified that the borrowed `Datum`s match T's expected
+    /// variant. The caller must ensure that the pushed `Datum`s match
+    /// what T's `FromDatum` impl (or equivalent reader) expects, or
+    /// downstream reads will panic. Bytes are written via `Datum`'s
+    /// variant tag, not via T.
+    pub fn make_datum_array<'a, T: std::borrow::Borrow<Datum<'a>>>(
+        &'a self,
+        dims: &[ArrayDimension],
+        iter: impl IntoIterator<Item = T>,
+    ) -> Result<Array<'a, T>, InvalidArrayError> {
+        let mut row = Row::default();
+        row.packer().try_push_array(dims, iter)?;
+        let array = self.push_unary_row(row).unwrap_array();
+        Ok(Array {
+            dims: array.dims,
+            elements: DatumList::new(array.elements.data()),
+        })
     }
 
     /// Convenience function identical to `make_datum` but instead returns a

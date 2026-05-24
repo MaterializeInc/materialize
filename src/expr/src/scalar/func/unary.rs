@@ -22,7 +22,6 @@ use crate::scalar::func::impls::*;
 use crate::{EvalError, MirScalarExpr};
 
 /// A description of an SQL unary function that has the ability to lazy evaluate its arguments
-// This trait will eventually be annotated with #[enum_dispatch] to autogenerate the UnaryFunc enum
 pub trait LazyUnaryFunc {
     fn eval<'a>(
         &'a self,
@@ -66,51 +65,33 @@ pub trait LazyUnaryFunc {
 
     /// The [inverse] of this function, if it has one and we have determined it.
     ///
-    /// The optimizer _can_ use this information when selecting indexes, e.g. an
-    /// indexed column has a cast applied to it, by moving the right inverse of
-    /// the cast to another value, we can select the indexed column.
-    ///
-    /// Note that a value of `None` does not imply that the inverse does not
-    /// exist; it could also mean we have not yet invested the energy in
-    /// representing it. For example, in the case of complex casts, such as
-    /// between two list types, we could determine the right inverse, but doing
-    /// so is not immediately necessary as this information is only used by the
-    /// optimizer.
-    ///
-    /// ## Right vs. left vs. inverses
-    /// - Right inverses are when the inverse function preserves uniqueness.
-    ///   These are the functions that the optimizer uses to move casts between
-    ///   expressions.
-    /// - Left inverses are when the function itself preserves uniqueness.
-    /// - Inverses are when a function is both a right and a left inverse (e.g.,
-    ///   bit_not_int64 is both a right and left inverse of itself).
-    ///
-    /// We call this function `inverse` for simplicity's sake; it doesn't always
-    /// correspond to the mathematical notion of "inverse." However, in
-    /// conjunction with checks to `preserves_uniqueness` you can determine
-    /// which type of inverse we return.
-    ///
     /// [inverse]: https://en.wikipedia.org/wiki/Inverse_function
     fn inverse(&self) -> Option<crate::UnaryFunc>;
 
-    /// Returns true if the function is monotone. (Non-strict; either increasing or decreasing.)
-    /// Monotone functions map ranges to ranges: ie. given a range of possible inputs, we can
-    /// determine the range of possible outputs just by mapping the endpoints.
-    ///
-    /// This property describes the behaviour of the function over ranges where the function is defined:
-    /// ie. the argument and the result are non-error datums.
+    /// Returns true if the function is monotone.
     fn is_monotone(&self) -> bool;
 
     /// Returns true if the function does no actual work, but is merely a type-tracking cast.
     fn is_eliminable_cast(&self) -> bool;
 }
 
-/// A description of an SQL unary function that operates on eagerly evaluated expressions
-pub trait EagerUnaryFunc {
-    type Input<'a>: InputDatumType<'a, EvalError>;
-    type Output<'a>: OutputDatumType<'a, EvalError>;
+/// A description of an SQL unary function that operates on eagerly evaluated expressions.
+///
+/// Every `EagerUnaryFunc` implementor automatically picks up a
+/// `LazyUnaryFunc` impl via the blanket below. Unary dispatch is a single
+/// `try_from_result` call regardless of input shape, so there is no benefit
+/// to overriding it on the sqlfunc-generated structs (unlike the binary
+/// case, which needs a direct-unwrap path to avoid the tuple
+/// `try_from_iter` monomorphization).
+pub trait EagerUnaryFunc: 'static + Sized {
+    type Input<'a>: InputDatumType<'a, EvalError>
+    where
+        Self: 'a;
+    type Output<'a>: OutputDatumType<'a, EvalError>
+    where
+        Self: 'a;
 
-    fn call<'a>(&self, input: Self::Input<'a>) -> Self::Output<'a>;
+    fn call<'a>(&'a self, input: Self::Input<'a>, temp_storage: &'a RowArena) -> Self::Output<'a>;
 
     /// The output SqlColumnType of this function
     fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType;
@@ -164,7 +145,7 @@ impl<T: EagerUnaryFunc> LazyUnaryFunc for T {
     ) -> Result<Datum<'a>, EvalError> {
         match T::Input::<'_>::try_from_result(a.eval(datums, temp_storage)) {
             // If we can convert to the input type then we call the function
-            Ok(input) => self.call(input).into_result(temp_storage),
+            Ok(input) => self.call(input, temp_storage).into_result(temp_storage),
             // If we can't and we got a non-null datum something went wrong in the planner
             Err(Ok(datum)) if !datum.is_null() => {
                 Err(EvalError::Internal("invalid input type".into()))
@@ -175,35 +156,35 @@ impl<T: EagerUnaryFunc> LazyUnaryFunc for T {
     }
 
     fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
-        self.output_sql_type(input_type)
+        EagerUnaryFunc::output_sql_type(self, input_type)
     }
 
     fn propagates_nulls(&self) -> bool {
-        self.propagates_nulls()
+        EagerUnaryFunc::propagates_nulls(self)
     }
 
     fn introduces_nulls(&self) -> bool {
-        self.introduces_nulls()
+        EagerUnaryFunc::introduces_nulls(self)
     }
 
     fn could_error(&self) -> bool {
-        self.could_error()
+        EagerUnaryFunc::could_error(self)
     }
 
     fn preserves_uniqueness(&self) -> bool {
-        self.preserves_uniqueness()
+        EagerUnaryFunc::preserves_uniqueness(self)
     }
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
-        self.inverse()
+        EagerUnaryFunc::inverse(self)
     }
 
     fn is_monotone(&self) -> bool {
-        self.is_monotone()
+        EagerUnaryFunc::is_monotone(self)
     }
 
     fn is_eliminable_cast(&self) -> bool {
-        self.is_eliminable_cast()
+        EagerUnaryFunc::is_eliminable_cast(self)
     }
 }
 

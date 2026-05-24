@@ -92,7 +92,11 @@ impl EagerUnaryFunc for CastTimestampToTimestampTz {
     type Input<'a> = CheckedTimestamp<NaiveDateTime>;
     type Output<'a> = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(
+        &'a self,
+        a: Self::Input<'a>,
+        _temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
         let out =
             CheckedTimestamp::try_from(DateTime::<Utc>::from_naive_utc_and_offset(a.into(), Utc))?;
         let updated = out.round_to_precision(self.to)?;
@@ -149,7 +153,11 @@ impl EagerUnaryFunc for AdjustTimestampPrecision {
     type Input<'a> = CheckedTimestamp<NaiveDateTime>;
     type Output<'a> = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(
+        &'a self,
+        a: Self::Input<'a>,
+        _temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
         // This should never have been called if precisions are same.
         // Adding a soft-assert to flag if there are such instances.
         mz_ore::soft_assert_no_log!(self.to != self.from);
@@ -205,7 +213,11 @@ impl EagerUnaryFunc for CastTimestampTzToTimestamp {
     type Input<'a> = CheckedTimestamp<DateTime<Utc>>;
     type Output<'a> = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(
+        &'a self,
+        a: Self::Input<'a>,
+        _temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
         let out = CheckedTimestamp::try_from(a.naive_utc())?;
         let updated = out.round_to_precision(self.to)?;
         Ok(updated)
@@ -261,7 +273,11 @@ impl EagerUnaryFunc for AdjustTimestampTzPrecision {
     type Input<'a> = CheckedTimestamp<DateTime<Utc>>;
     type Output<'a> = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(
+        &'a self,
+        a: Self::Input<'a>,
+        _temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
         // This should never have been called if precisions are same.
         // Adding a soft-assert to flag if there are such instances.
         mz_ore::soft_assert_no_log!(self.to != self.from);
@@ -359,7 +375,11 @@ impl EagerUnaryFunc for ExtractInterval {
     type Input<'a> = Interval;
     type Output<'a> = Result<Numeric, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(
+        &'a self,
+        a: Self::Input<'a>,
+        _temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
         date_part_interval_inner(self.0, a)
     }
 
@@ -392,7 +412,11 @@ impl EagerUnaryFunc for DatePartInterval {
     type Input<'a> = Interval;
     type Output<'a> = Result<f64, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(
+        &'a self,
+        a: Self::Input<'a>,
+        _temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
         date_part_interval_inner(self.0, a)
     }
 
@@ -471,7 +495,11 @@ impl EagerUnaryFunc for ExtractTimestamp {
     type Input<'a> = CheckedTimestamp<NaiveDateTime>;
     type Output<'a> = Result<Numeric, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(
+        &'a self,
+        a: Self::Input<'a>,
+        _temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
         date_part_timestamp_inner(self.0, &*a)
     }
 
@@ -508,7 +536,11 @@ impl EagerUnaryFunc for ExtractTimestampTz {
     type Input<'a> = CheckedTimestamp<DateTime<Utc>>;
     type Output<'a> = Result<Numeric, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(
+        &'a self,
+        a: Self::Input<'a>,
+        _temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
         date_part_timestamp_inner(self.0, &*a)
     }
 
@@ -548,7 +580,11 @@ impl EagerUnaryFunc for DatePartTimestamp {
     type Input<'a> = CheckedTimestamp<NaiveDateTime>;
     type Output<'a> = Result<f64, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(
+        &'a self,
+        a: Self::Input<'a>,
+        _temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
         date_part_timestamp_inner(self.0, &*a)
     }
 
@@ -581,7 +617,11 @@ impl EagerUnaryFunc for DatePartTimestampTz {
     type Input<'a> = CheckedTimestamp<DateTime<Utc>>;
     type Output<'a> = Result<f64, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(
+        &'a self,
+        a: Self::Input<'a>,
+        _temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
         date_part_timestamp_inner(self.0, &*a)
     }
 
@@ -643,7 +683,11 @@ impl EagerUnaryFunc for DateTruncTimestamp {
     type Input<'a> = CheckedTimestamp<NaiveDateTime>;
     type Output<'a> = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(
+        &'a self,
+        a: Self::Input<'a>,
+        _temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
         date_trunc_inner(self.0, &*a)?.try_into().err_into()
     }
 
@@ -680,7 +724,11 @@ impl EagerUnaryFunc for DateTruncTimestampTz {
     type Input<'a> = CheckedTimestamp<DateTime<Utc>>;
     type Output<'a> = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(
+        &'a self,
+        a: Self::Input<'a>,
+        _temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
         date_trunc_inner(self.0, &*a)?.try_into().err_into()
     }
 
@@ -773,7 +821,11 @@ impl EagerUnaryFunc for TimezoneTimestamp {
     type Input<'a> = CheckedTimestamp<NaiveDateTime>;
     type Output<'a> = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(
+        &'a self,
+        a: Self::Input<'a>,
+        _temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
         timezone_timestamp(self.0, a.to_naive())
     }
 
@@ -806,7 +858,11 @@ impl EagerUnaryFunc for TimezoneTimestampTz {
     type Input<'a> = CheckedTimestamp<DateTime<Utc>>;
     type Output<'a> = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(
+        &'a self,
+        a: Self::Input<'a>,
+        _temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
         timezone_timestamptz(self.0, a.into())?
             .try_into()
             .err_into()
@@ -844,7 +900,11 @@ impl EagerUnaryFunc for ToCharTimestamp {
     type Input<'a> = CheckedTimestamp<NaiveDateTime>;
     type Output<'a> = String;
 
-    fn call<'a>(&self, input: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(
+        &'a self,
+        input: Self::Input<'a>,
+        _temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
         self.format.render(&*input)
     }
 
@@ -880,7 +940,11 @@ impl EagerUnaryFunc for ToCharTimestampTz {
     type Input<'a> = CheckedTimestamp<DateTime<Utc>>;
     type Output<'a> = String;
 
-    fn call<'a>(&self, input: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(
+        &'a self,
+        input: Self::Input<'a>,
+        _temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
         self.format.render(&*input)
     }
 

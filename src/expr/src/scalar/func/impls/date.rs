@@ -52,7 +52,11 @@ impl EagerUnaryFunc for CastDateToTimestamp {
     type Input<'a> = Date;
     type Output<'a> = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(
+        &'a self,
+        a: Self::Input<'a>,
+        _temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
         let out =
             CheckedTimestamp::from_timestamplike(NaiveDate::from(a).and_hms_opt(0, 0, 0).unwrap())?;
         let updated = out.round_to_precision(self.0)?;
@@ -100,7 +104,11 @@ impl EagerUnaryFunc for CastDateToTimestampTz {
     type Input<'a> = Date;
     type Output<'a> = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(
+        &'a self,
+        a: Self::Input<'a>,
+        _temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
         let out =
             CheckedTimestamp::from_timestamplike(DateTime::<Utc>::from_naive_utc_and_offset(
                 NaiveDate::from(a).and_hms_opt(0, 0, 0).unwrap(),
@@ -183,7 +191,11 @@ impl EagerUnaryFunc for ExtractDate {
     type Input<'a> = Date;
     type Output<'a> = Result<Numeric, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(
+        &'a self,
+        a: Self::Input<'a>,
+        _temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
         extract_date_inner(self.0, a.into())
     }
 
