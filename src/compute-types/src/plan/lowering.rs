@@ -67,10 +67,6 @@ pub(super) struct Context {
     debug_info: LirDebugInfo,
     /// Whether to enable fusion of MFPs in reductions.
     enable_reduce_mfp_fusion: bool,
-    /// Whether `Union`s with at least one `Negate` input should set
-    /// `consolidate_output = true`. Folded in from the deleted
-    /// `refine_union_negate_consolidation` LIR pass.
-    enable_consolidate_after_union_negate: bool,
 }
 
 impl Context {
@@ -84,7 +80,6 @@ impl Context {
                 id: GlobalId::Transient(0),
             },
             enable_reduce_mfp_fusion: features.enable_reduce_mfp_fusion,
-            enable_consolidate_after_union_negate: features.enable_consolidate_after_union_negate,
         }
     }
 
@@ -1017,15 +1012,12 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     lowered_inputs.push(self.lower_mir_expr(input)?);
                 }
 
-                // Fold the deleted `refine_union_negate_consolidation` pass in
-                // here: a Union with any `Negate` input should consolidate its
+                // A Union with any `Negate` input should consolidate its
                 // output. The lowering is the only place where this decision
                 // can be coupled with the per-input bucketing strategy.
-                let has_negate_input = lowered_inputs
+                let consolidate_output = lowered_inputs
                     .iter()
                     .any(|l| matches!(l.plan.node, PlanNode::Negate { .. }));
-                let consolidate_output =
-                    self.enable_consolidate_after_union_negate && has_negate_input;
 
                 // Per-input bucketing strategies: only meaningful when the
                 // Union consolidates its output, since bucketing only pays off

@@ -1436,13 +1436,6 @@ pub static ENABLE_STORAGE_SHARD_FINALIZATION: VarDefinition = VarDefinition::new
     false,
 );
 
-pub static ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE: VarDefinition = VarDefinition::new(
-    "enable_consolidate_after_union_negate",
-    value!(bool; true),
-    "consolidation after Unions that have a Negated input (Materialize).",
-    true,
-);
-
 pub static DEFAULT_TIMESTAMP_INTERVAL: VarDefinition = VarDefinition::new(
     "default_timestamp_interval",
     value!(Duration; Duration::from_millis(1000)),
@@ -2244,7 +2237,6 @@ feature_flags!(
 impl From<&super::SystemVars> for OptimizerFeatures {
     fn from(vars: &super::SystemVars) -> Self {
         Self {
-            enable_consolidate_after_union_negate: vars.enable_consolidate_after_union_negate(),
             enable_eager_delta_joins: vars.enable_eager_delta_joins(),
             enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),
             enable_reduce_mfp_fusion: vars.enable_reduce_mfp_fusion(),
@@ -2288,7 +2280,6 @@ mod tests {
         let false_features = OptimizerFeatures::default();
         let OptimizerFeatures {
             enable_eq_classes_withholding_errors,
-            enable_consolidate_after_union_negate,
             enable_eager_delta_joins,
             enable_letrec_fixpoint_analysis,
             enable_new_outer_join_lowering,
@@ -2318,7 +2309,6 @@ mod tests {
         }
 
         set_var!(enable_eq_classes_withholding_errors);
-        set_var!(enable_consolidate_after_union_negate);
         set_var!(enable_eager_delta_joins);
         set_var!(enable_letrec_fixpoint_analysis);
         set_var!(enable_new_outer_join_lowering);
