@@ -1902,6 +1902,218 @@ mod tests {
         );
     }
 
+    /// Regression test for `age_timestamp`, which is non-monotone in the first
+    /// argument: the Postgres-style calendar-aware age computation does not
+    /// respect the lex order of `Interval` results when the input crosses a
+    /// month boundary.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_age_timestamp_non_monotone_in_first_arg() {
+        use chrono::NaiveDateTime;
+        use mz_repr::adt::interval::Interval;
+        use mz_repr::adt::timestamp::CheckedTimestamp;
+        use mz_repr::{Datum, Row};
+
+        let arena = RowArena::new();
+
+        let ts_lit = |s: &str| {
+            let mut row = Row::default();
+            row.packer().push(Datum::Timestamp(
+                CheckedTimestamp::from_timestamplike(
+                    NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S").unwrap(),
+                )
+                .unwrap(),
+            ));
+            MirScalarExpr::Literal(Ok(row), ReprScalarType::Timestamp.nullable(false).into())
+        };
+        let interval = |months: i32, days: i32, micros: i64| {
+            Datum::Interval(Interval {
+                months,
+                days,
+                micros,
+            })
+        };
+
+        // Expression: `age(a_col, 2024-02-15) >= '1 month 16 days'`.
+        // a_col stats: [2024-03-31, 2024-05-01].
+        //   age(2024-03-31, 2024-02-15) = {1 month, 16 days}  ← satisfies `>=`
+        //   age(2024-05-01, 2024-02-15) = {2 months, 15 days} ← satisfies `>=`
+        // Interior a = 2024-04-01:
+        //   age(2024-04-01, 2024-02-15) = {1 month, 15 days}  ← does NOT satisfy.
+        // Under the buggy `(true, true)` annotation, the interpreter would
+        // bound the output of `age` by its endpoint values — lex-range
+        // `[(1m,16d), (2m,15d)]` — and conclude the `>=` predicate is always
+        // True, ruling out parts whose true rows would evaluate False.
+        let expr = MirScalarExpr::column(0)
+            .call_binary(ts_lit("2024-02-15T00:00:00"), AgeTimestamp)
+            .call_binary(
+                MirScalarExpr::Literal(
+                    Ok({
+                        let mut row = Row::default();
+                        row.packer().push(interval(1, 16, 0));
+                        row
+                    }),
+                    ReprScalarType::Interval.nullable(false).into(),
+                ),
+                Gte,
+            );
+
+        let relation = ReprRelationType::new(vec![ReprScalarType::Timestamp.nullable(false)]);
+        let mut interpreter = ColumnSpecs::new(&relation, &arena);
+        let lo = {
+            let mut row = Row::default();
+            row.packer().push(Datum::Timestamp(
+                CheckedTimestamp::from_timestamplike(
+                    NaiveDateTime::parse_from_str("2024-03-31T00:00:00", "%Y-%m-%dT%H:%M:%S")
+                        .unwrap(),
+                )
+                .unwrap(),
+            ));
+            row
+        };
+        let hi = {
+            let mut row = Row::default();
+            row.packer().push(Datum::Timestamp(
+                CheckedTimestamp::from_timestamplike(
+                    NaiveDateTime::parse_from_str("2024-05-01T00:00:00", "%Y-%m-%dT%H:%M:%S")
+                        .unwrap(),
+                )
+                .unwrap(),
+            ));
+            row
+        };
+        interpreter.push_column(
+            0,
+            ResultSpec::value_between(lo.unpack_first(), hi.unpack_first()),
+        );
+
+        let range_out = interpreter.expr(&expr).range;
+        assert!(
+            range_out.may_contain(Datum::False),
+            "age_timestamp is not monotone in the first argument; \
+             interpreter must not rule out non-matching rows",
+        );
+    }
+
+    /// Regression test for `age_timestamp`, which is non-monotone in the
+    /// second argument: the result has a V-shape at `a == b` because the
+    /// algorithm flips sign when `a < b`, so the same interval can be produced
+    /// by `b` values on either side of `a`.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_age_timestamp_non_monotone_in_second_arg() {
+        use chrono::NaiveDateTime;
+        use mz_repr::adt::interval::Interval;
+        use mz_repr::adt::timestamp::CheckedTimestamp;
+        use mz_repr::{Datum, Row};
+
+        let arena = RowArena::new();
+
+        let ts_lit = |s: &str| {
+            let mut row = Row::default();
+            row.packer().push(Datum::Timestamp(
+                CheckedTimestamp::from_timestamplike(
+                    NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S").unwrap(),
+                )
+                .unwrap(),
+            ));
+            MirScalarExpr::Literal(Ok(row), ReprScalarType::Timestamp.nullable(false).into())
+        };
+        let interval = |months: i32, days: i32, micros: i64| {
+            Datum::Interval(Interval {
+                months,
+                days,
+                micros,
+            })
+        };
+
+        // Expression: `age(2024-02-29, b_col) >= '-1 month, -1 day'`.
+        // b_col stats: [2024-03-30, 2024-04-01].
+        //   age(2024-02-29, 2024-03-30) = {-1 month, -1 day, 0}  ← satisfies `>=`
+        //   age(2024-02-29, 2024-04-01) = {-1 month, -1 day, 0}  ← satisfies `>=`
+        // Interior b = 2024-03-31:
+        //   age(2024-02-29, 2024-03-31) = {-1 month, -2 days, 0} ← does NOT satisfy.
+        // The carry logic in `age` borrows a *whole month worth of days* when
+        // the day field goes negative, which (after the sign-revert at the
+        // end) makes the result dip non-monotonically as `b` crosses a month
+        // boundary. Both endpoints lex-coincide above the interior dip, so
+        // under the buggy `(true, true)` annotation the interpreter would
+        // conclude the predicate is always True.
+        let expr = ts_lit("2024-02-29T00:00:00")
+            .call_binary(MirScalarExpr::column(0), AgeTimestamp)
+            .call_binary(
+                MirScalarExpr::Literal(
+                    Ok({
+                        let mut row = Row::default();
+                        row.packer().push(interval(-1, -1, 0));
+                        row
+                    }),
+                    ReprScalarType::Interval.nullable(false).into(),
+                ),
+                Gte,
+            );
+
+        let relation = ReprRelationType::new(vec![ReprScalarType::Timestamp.nullable(false)]);
+        let mut interpreter = ColumnSpecs::new(&relation, &arena);
+        let lo = {
+            let mut row = Row::default();
+            row.packer().push(Datum::Timestamp(
+                CheckedTimestamp::from_timestamplike(
+                    NaiveDateTime::parse_from_str("2024-03-30T00:00:00", "%Y-%m-%dT%H:%M:%S")
+                        .unwrap(),
+                )
+                .unwrap(),
+            ));
+            row
+        };
+        let hi = {
+            let mut row = Row::default();
+            row.packer().push(Datum::Timestamp(
+                CheckedTimestamp::from_timestamplike(
+                    NaiveDateTime::parse_from_str("2024-04-01T00:00:00", "%Y-%m-%dT%H:%M:%S")
+                        .unwrap(),
+                )
+                .unwrap(),
+            ));
+            row
+        };
+        interpreter.push_column(
+            0,
+            ResultSpec::value_between(lo.unpack_first(), hi.unpack_first()),
+        );
+
+        // Sanity-check the counterexample: endpoint and interior values.
+        let a = CheckedTimestamp::from_timestamplike(
+            NaiveDateTime::parse_from_str("2024-02-29T00:00:00", "%Y-%m-%dT%H:%M:%S").unwrap(),
+        )
+        .unwrap();
+        let b_lo = CheckedTimestamp::from_timestamplike(
+            NaiveDateTime::parse_from_str("2024-03-30T00:00:00", "%Y-%m-%dT%H:%M:%S").unwrap(),
+        )
+        .unwrap();
+        let b_mid = CheckedTimestamp::from_timestamplike(
+            NaiveDateTime::parse_from_str("2024-03-31T00:00:00", "%Y-%m-%dT%H:%M:%S").unwrap(),
+        )
+        .unwrap();
+        let b_hi = CheckedTimestamp::from_timestamplike(
+            NaiveDateTime::parse_from_str("2024-04-01T00:00:00", "%Y-%m-%dT%H:%M:%S").unwrap(),
+        )
+        .unwrap();
+        let age_lo = a.age(&b_lo).unwrap();
+        let age_mid = a.age(&b_mid).unwrap();
+        let age_hi = a.age(&b_hi).unwrap();
+        assert_eq!((age_lo.months, age_lo.days, age_lo.micros), (-1, -1, 0));
+        assert_eq!((age_mid.months, age_mid.days, age_mid.micros), (-1, -2, 0));
+        assert_eq!((age_hi.months, age_hi.days, age_hi.micros), (-1, -1, 0));
+
+        let range_out = interpreter.expr(&expr).range;
+        assert!(
+            range_out.may_contain(Datum::False),
+            "age_timestamp is not monotone in the second argument; \
+             interpreter must not rule out non-matching rows",
+        );
+    }
+
     #[mz_ore::test]
     fn test_trace() {
         use super::Trace;
