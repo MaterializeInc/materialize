@@ -93,6 +93,27 @@ def evalPlus : Datum → Datum → Datum
   | .int n, .int m => .int (n + m)
   | _, _           => .null
 
+/-- Bounded integer addition. Parameterized on the symmetric range
+`[-max, max]`. Strict on `.err` and `.null`; type-mismatched
+operands route to `.null`. An `.int + .int` result outside
+`[-max, max]` returns `.err .overflow`.
+
+The runtime counterpart is the bit-width-parameterized addition
+in `src/expr/src/scalar/func/binary.rs`. The symmetric range here
+keeps the bounded-arithmetic counterexample proofs trivial; the
+asymmetry of two's-complement (`MIN = -MAX - 1`) is irrelevant to
+the soundness argument and can be tightened when a bit-width tag
+is added to `Datum`. -/
+def evalPlusBounded (max : Int) : Datum → Datum → Datum
+  | .err e, _      => .err e
+  | _, .err e      => .err e
+  | .null, _       => .null
+  | _, .null       => .null
+  | .int n, .int m =>
+    let r := n + m
+    if r > max ∨ r < -max then .err .overflow else .int r
+  | _, _           => .null
+
 /-- Integer subtraction. Same propagation rules as `evalPlus`. -/
 def evalMinus : Datum → Datum → Datum
   | .err e, _      => .err e

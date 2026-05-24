@@ -17,9 +17,14 @@ namespace Mz
 
 /-- Cell-scoped errors raised by `Datum`-level operations. The
 skeleton's variants are intentionally small; production
-`EvalError` (in `src/expr/src/scalar.rs`) has many more. -/
+`EvalError` (in `src/expr/src/scalar.rs`) has many more.
+
+* `divisionByZero` — the right operand of `evalDivide` was `.int 0`.
+* `overflow` — a bounded-arithmetic primitive (e.g.
+  `evalPlusBounded`) produced a value outside the declared range. -/
 inductive EvalError
   | divisionByZero
+  | overflow
   deriving DecidableEq, Inhabited
 
 /-- A modeled scalar value.
