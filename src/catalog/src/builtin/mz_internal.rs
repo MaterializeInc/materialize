@@ -5449,17 +5449,31 @@ hydration_meta AS (
     WHERE (o.type = 'materialized-view' OR (o.type = 'view' AND i.id IS NOT NULL))
       AND s.name NOT IN ('mz_catalog', 'mz_internal', 'pg_catalog', 'information_schema', 'mz_introspection')
 ),
-hydration AS (
+-- Dedupe by replica before counting: an MV with multiple indexes on the
+-- same cluster has multiple rows in `hydration_meta`, and joining each
+-- of them against `mz_cluster_replicas` would otherwise inflate the
+-- counts by the number of indexes. A replica is "hydrated" only when
+-- every index dataflow for this data product is hydrated on it.
+hydration_per_replica AS (
     SELECT
         m.object_name,
         m.cluster,
-        COUNT(r.id)::int AS replica_count,
-        COUNT(*) FILTER (WHERE COALESCE(h.hydrated, false))::int AS hydrated_replica_count
+        r.id AS replica_id,
+        bool_and(COALESCE(h.hydrated, false)) AS replica_hydrated
     FROM hydration_meta m
     LEFT JOIN mz_catalog.mz_cluster_replicas r ON r.cluster_id = m.cluster_id
     LEFT JOIN mz_internal.mz_hydration_statuses h
         ON h.replica_id = r.id AND h.object_id = m.hydration_object_id
-    GROUP BY m.object_name, m.cluster
+    GROUP BY m.object_name, m.cluster, r.id
+),
+hydration AS (
+    SELECT
+        object_name,
+        cluster,
+        COUNT(replica_id)::int AS replica_count,
+        COUNT(replica_id) FILTER (WHERE replica_hydrated)::int AS hydrated_replica_count
+    FROM hydration_per_replica
+    GROUP BY object_name, cluster
 )
 SELECT
     d.object_name,
