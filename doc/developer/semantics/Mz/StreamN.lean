@@ -1,4 +1,5 @@
 import Mz.Eval
+import Mz.ColRefs
 import Mathlib.Data.Vector.Defs
 import Mathlib.Data.Vector.Basic
 import Mathlib.Tactic.Ring
@@ -255,6 +256,121 @@ theorem cross_assoc (s : StreamN n) (t : StreamN m) (u : StreamN k) :
         castStreamN_append]
     congr 1
     exact cross_map_left rs t u
+
+/-! ## Filter / cross pushdown (left)
+
+The classical relational pushdown `filter p (cross sL sR) = cross
+(filter p sL) sR` is sound on bags. Under the two-diff stream model
+(`Mz/Stream.lean` / this module), the indexed-arity formulation
+makes the obligation precise enough to reveal a soundness gap on
+the err side. The pilot attempted the proof on `filterOne` and was
+unable to discharge the `bool false / null / int` branches: the LHS
+err multiplicity includes a `recL.diff * recR.err_diff` term (from
+the cross product) which the RHS drops when the filter zeroes
+`recL.diff` before the cross.
+
+**Concrete witness.** Let `recL = (rowL, diff = 1, err_diff = 0)`
+and `recR = (rowR, diff = 0, err_diff = 1)`, with `eval rowL p =
+.bool false` (e.g., `p` is the literal `.lit (.bool false)`).
+
+* LHS — `filterOne p (crossOne recL recR)`:
+  * `crossOne recL recR = (rowL ++ rowR, 0, 1)`.
+  * `filterOne (.bool false) zeros data, leaves err: (rowL ++ rowR, 0, 1)`.
+* RHS — `crossOne (filterOne p recL) recR`:
+  * `filterOne (.bool false) recL = (rowL, 0, 0)`.
+  * `crossOne (rowL, 0, 0) (rowR, 0, 1) = (rowL ++ rowR, 0, 0)`.
+
+The two records differ on `err_diff` (1 vs 0). Operationally: the
+right stream's error is unconditional — it surfaces regardless of
+how the left's predicate evaluates. Pushdown loses that error
+because the cross's err-diff formula multiplies `recL.diff` against
+`recR.err_diff`, and filtering recL to `diff = 0` zeroes the product.
+
+The branches that *do* close are the ones where filter's action
+commutes with cross's multiplicative structure:
+
+* `.bool true` — filter is the identity, both sides equal.
+* `.err _` — filter migrates `diff` into `err_diff`; the
+  cross-multiplied result on either order produces the same
+  expanded sum of products.
+
+These are recorded as `filterOne_cross_pushdown_left_true` and
+`filterOne_cross_pushdown_left_err`. The full pushdown
+`filter_cross_pushdown_left` is documented here as an open
+obligation; closing it would require one of:
+
+* a non-deterministic semantics in which the right's err
+  multiplicity is moved to a separate channel that filter does not
+  multiply against;
+* a refinement-based equivalence that ignores err_diff drops;
+* a stream encoding where errors are not multiplied through cross.
+
+This finding mirrors the per-payload-diff soundness gap previously
+documented for predicate pushdown over cross in the design doc's
+*Counterexamples I tried and could not prove* section. -/
+
+/-- Setup lemma: `eval` on the combined row equals `eval` on the
+left row when the predicate's columns are bounded by `n`. Used by
+both the `.bool true` and `.err _` branch lemmas. -/
+private theorem eval_crossOne_left_bounded
+    (p : Expr) (hp : p.colReferencesBoundedBy n = true)
+    (recL : StreamRecordN n) (recR : StreamRecordN m) :
+    eval (crossOne recL recR).row.toList p = eval recL.row.toList p := by
+  have htoList :
+      (crossOne recL recR).row.toList
+        = recL.row.toList ++ recR.row.toList := by
+    show (recL.row ++ recR.row).toList = recL.row.toList ++ recR.row.toList
+    exact List.Vector.toList_append recL.row recR.row
+  have hLen : recL.row.toList.length = n := recL.row.toList_length
+  have hp' : p.colReferencesBoundedBy recL.row.toList.length = true := by
+    rw [hLen]; exact hp
+  rw [htoList]
+  exact eval_append_left_of_bounded _ _ _ hp'
+
+/-- Branch where the predicate evaluates to `.bool true` on the
+left row: filter is the identity, and `filterOne` commutes with
+`crossOne`. -/
+theorem filterOne_cross_pushdown_left_true
+    (p : Expr) (hp : p.colReferencesBoundedBy n = true)
+    (recL : StreamRecordN n) (recR : StreamRecordN m)
+    (htrue : eval recL.row.toList p = .bool true) :
+    filterOne p (crossOne recL recR)
+      = crossOne (filterOne p recL) recR := by
+  have heval := eval_crossOne_left_bounded p hp recL recR
+  unfold filterOne
+  rw [heval, htrue]
+
+/-- Branch where the predicate evaluates to `.err _` on the left
+row: data multiplicity migrates to err on both sides, and the
+arithmetic on err_diff rearranges to the same value. -/
+theorem filterOne_cross_pushdown_left_err
+    (p : Expr) (hp : p.colReferencesBoundedBy n = true)
+    (recL : StreamRecordN n) (recR : StreamRecordN m) (e : EvalError)
+    (herr : eval recL.row.toList p = .err e) :
+    filterOne p (crossOne recL recR)
+      = crossOne (filterOne p recL) recR := by
+  have heval := eval_crossOne_left_bounded p hp recL recR
+  unfold filterOne
+  rw [heval, herr]
+  simp only [crossOne]
+  refine StreamRecordN.mk.injEq .. |>.mpr ⟨rfl, ?_, ?_⟩ <;> ring
+
+/-- Concrete counterexample to the full `filterOne` pushdown.
+With a predicate that evaluates to `.bool false`, `recL` with
+positive `diff`, and `recR` with positive `err_diff`, the two sides
+differ on err multiplicity. -/
+theorem filterOne_cross_pushdown_left_unsound :
+    ∃ (p : Expr) (recL : StreamRecordN 0) (recR : StreamRecordN 0),
+      p.colReferencesBoundedBy 0 = true
+      ∧ filterOne p (crossOne recL recR)
+          ≠ crossOne (filterOne p recL) recR := by
+  refine ⟨.lit (.bool false),
+          { row := ⟨[], rfl⟩, diff := 1, err_diff := 0 },
+          { row := ⟨[], rfl⟩, diff := 0, err_diff := 1 },
+          rfl, ?_⟩
+  intro h
+  have := congrArg StreamRecordN.err_diff h
+  simp [filterOne, crossOne, eval] at this
 
 end StreamN
 
