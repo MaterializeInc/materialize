@@ -8,8 +8,7 @@ import Mz.Coalesce
 import Mz.Laws
 import Mz.Variadic
 import Mz.ExprVariadic
-import Mz.Bag
-import Mz.Pushdown
+import Mz.Subst
 import Mz.ColRefs
 import Mz.Stream
 import Mz.Equiv

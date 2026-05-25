@@ -78,8 +78,8 @@ Static analyses:
 A row is a positional list of `Datum`s.
 Two encodings coexist in the skeleton:
 
-* `Row = List Datum` (untyped) in `Mz/Bag.lean` and `Mz/Stream.lean` —
-  arity lives in a conventional invariant.
+* `Row = List Datum` (untyped) in `Mz/Eval.lean` (alias for `Env`)
+  used by `Mz/Stream.lean` — arity lives in a conventional invariant.
   Operators preserve it by construction but the type system gives no
   feedback.
 * `RowN n = List.Vector Datum n` (indexed) in `Mz/StreamN.lean` —
@@ -249,7 +249,7 @@ Lean evidence accumulated before the restart:
 | -------------------------- | ---------------------------- | -------------------------- | ----------------------------------------- |
 | `Datum`                    | `Mz/Datum.lean`              | —                          | overflow / decode / division-by-zero only |
 | `Expr.eval`                | `Mz/Eval.lean`               | `=`                        | strict eval order (no non-determinism)    |
-| `Row = List Datum`         | `Mz/Bag.lean`                | `=`                        | arity by convention                       |
+| `Row = List Datum`         | `Mz/Eval.lean`               | `=`                        | arity by convention                       |
 | `RowN n = Vector Datum n`  | `Mz/StreamN.lean`            | `=`                        | indexed-arity reasoning verified          |
 | `Stream` (two-diff)        | `Mz/Stream.lean`             | `=` on data side           | err side under `eraseErr` / `refines`     |
 | `eqErrSet`                 | `Mz/Equiv.lean`              | err / err commutativity    | bounded-int assoc, pushdown over cross    |

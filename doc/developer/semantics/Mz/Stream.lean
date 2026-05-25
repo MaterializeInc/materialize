@@ -1,4 +1,3 @@
-import Mz.Bag
 import Mz.Eval
 
 /-!

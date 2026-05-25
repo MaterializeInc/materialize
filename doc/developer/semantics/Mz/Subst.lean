@@ -1,25 +1,23 @@
 import Mz.Eval
-import Mz.Bag
 
 /-!
-# Predicate pushdown across projection
+# Substitution: `Expr.subst` and `eval_subst`
 
-The classical relational rewrite:
+Substituting an expression list `es` into a predicate `p` replaces
+each `Expr.col i` in `p` with `es.get i`. The headline theorem
+`eval_subst` states that substituting and then evaluating against
+the original row equals evaluating the original predicate against
+the row obtained by mapping `eval` over `es`.
 
-  `filterRel p (project es rel) = project es (filterRel (p[es]) rel)`
+The classical relational predicate-pushdown rewrite
 
-where `p[es]` is the substitution that replaces each `Expr.col i` in
-`p` with `es.get i` (the i-th scalar of the projection). The
-rewrite is the basis for moving a `WHERE` clause through a `SELECT`
-clause whenever the predicate's column references can be expressed
-in terms of the projection's source.
+  `filter p (project es rel) = project es (filter (p.subst es) rel)`
 
-This file gives the substitution machinery (`Expr.subst`,
-`Expr.substArgs`) and the two theorems an optimizer cites:
-
-* `eval_subst`: substituting and then evaluating against the
-  original row equals evaluating against the projected row.
-* `filterRel_pushdown_project`: the relational pushdown rewrite.
+is a corollary of this theorem on whichever stream shape carries
+filter and project. The two-diff `Mz/Stream.lean` and indexed-arity
+`Mz/StreamN.lean` are the two callers; the previous bag-relational
+mechanization is dropped because bag-`filter` silently discards
+error rows and the pushdown statement is degenerate on the err side.
 
 `Expr.subst` is mutually recursive with `Expr.substArgs` so Lean's
 structural-recursion checker handles the nested-list constructors
@@ -59,9 +57,8 @@ end
 /-! ## Helpers for substitution / map agreement
 
 `substArgs es args` and `args.map (·.subst es)` produce the same
-list. The skeleton uses the explicit recursive `substArgs` form in
-the definition so structural recursion is accepted; the proofs
-benefit from being able to switch to `List.map` when needed. -/
+list. The recursive `substArgs` form is needed for structural
+recursion; the proofs benefit from the `List.map` form. -/
 
 theorem Expr.substArgs_eq_map (es args : List Expr) :
     Expr.substArgs es args = args.map (·.subst es) := by
@@ -78,18 +75,14 @@ private theorem Env.get_map_eval (env : Env) (es : List Expr) (i : Nat) :
     Env.get (es.map (eval env)) i = eval env (es.getD i (.lit .null)) := by
   induction es generalizing i with
   | nil =>
-    -- both sides reduce to `.null`
     show Env.get [] i = eval env (.lit .null)
     simp [Env.get, eval]
   | cons hd tl ih =>
     cases i with
     | zero =>
-      -- LHS: Env.get (eval env hd :: tl.map (eval env)) 0 = eval env hd
-      -- RHS: eval env ((hd :: tl).getD 0 (.lit .null)) = eval env hd
       show Env.get ((eval env hd) :: tl.map (eval env)) 0 = eval env hd
       rfl
     | succ n =>
-      -- recurse on tl
       show Env.get (eval env hd :: tl.map (eval env)) (n + 1)
            = eval env ((hd :: tl).getD (n + 1) (.lit .null))
       show Env.get (tl.map (eval env)) n = eval env (tl.getD n (.lit .null))
@@ -99,9 +92,9 @@ private theorem Env.get_map_eval (env : Env) (es : List Expr) (i : Nat) :
 against the original row equals evaluating the original `e` against
 the projected row.
 
-The proof is structural recursion on `e`, mirroring the structure of
-`Expr.subst`. The nested-list constructors recurse through
-`Expr.substArgs` and are handled by `eval_substArgs` below. -/
+Structural recursion on `e`, mirroring the structure of `Expr.subst`.
+The nested-list constructors recurse through `Expr.substArgs` and
+are handled through `Expr.substArgs_eq_map`. -/
 theorem eval_subst :
     ∀ (env : Env) (es : List Expr) (e : Expr),
       eval env (e.subst es) = eval (es.map (eval env)) e
@@ -155,22 +148,5 @@ theorem eval_subst :
   | env, es, .lt a b => by
     simp only [Expr.subst, eval]
     rw [eval_subst env es a, eval_subst env es b]
-
-/-! ## Predicate pushdown -/
-
-/-- The classical predicate-pushdown rewrite. Filtering after
-projecting agrees with substituting the projection scalars into the
-predicate and filtering before projecting. -/
-theorem filterRel_pushdown_project (p : Expr) (es : List Expr) (rel : Relation) :
-    filterRel p (project es rel) = project es (filterRel (p.subst es) rel) := by
-  unfold filterRel project
-  rw [List.filter_map]
-  congr 1
-  apply List.filter_congr
-  intro row _
-  -- Goal: (rowPredicate p ∘ (fun row => es.map (eval row))) row = rowPredicate (p.subst es) row
-  show rowPredicate p (es.map (eval row)) = rowPredicate (p.subst es) row
-  unfold rowPredicate
-  rw [eval_subst row es p]
 
 end Mz

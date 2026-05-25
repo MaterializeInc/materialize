@@ -26,6 +26,11 @@ reintroduce the laziness explicitly.
 
 namespace Mz
 
+/-- A row is a positional list of bound values. Alias for `Env`;
+the two names coexist to keep relational notation (`row`) and
+evaluation notation (`env`) readable at the call site. -/
+abbrev Row := Env
+
 /-- Big-step evaluation. -/
 def eval (env : Env) : Expr → Datum
   | .lit d        => d
