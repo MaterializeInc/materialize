@@ -98,6 +98,14 @@ MAX_QUERIES = env_int("WR_MAX_QUERIES", 60)
 # fault injection.  3 s is short enough to keep the worker pool
 # churning yet long enough that fast queries don't trip on it.
 STATEMENT_TIMEOUT_MS = env_int("WR_STATEMENT_TIMEOUT_MS", 3000)
+# Cadence for the in-run progress log line.  A 60s invocation with no
+# output between start and end is hard to triage when faults stall the
+# worker pool; emitting a merged-stats snapshot every PROGRESS_INTERVAL_S
+# means the workload-container logs show forward motion (or its absence)
+# without parsing per-thread state.  Short enough to land at least 3-4
+# lines inside a default 60s window; long enough not to drown the log
+# in idle ticks.
+PROGRESS_INTERVAL_S = env_float("WR_PROGRESS_INTERVAL_S", 15.0)
 
 
 def _set_session(cur: psycopg.Cursor[Any], q: dict[str, Any]) -> None:
@@ -371,11 +379,37 @@ def main() -> int:
         t.start()
         threads.append(t)
 
+    # Periodic mid-run progress log.  A 60s invocation with no output
+    # in the middle is hard to triage when a fault stalls every worker
+    # — print live merged-stats every PROGRESS_INTERVAL_S so logs show
+    # forward motion (or its absence) without parsing per-thread state.
+    next_progress = time.time() + PROGRESS_INTERVAL_S
+    while any(t.is_alive() for t in threads):
+        now = time.time()
+        if now >= next_progress:
+            snap = _merge_stats(per_thread)
+            LOG.info(
+                "[PROGRESS] workload-replay live: succeeded=%d timed_out=%d "
+                "fault_absorbed=%d unexpected_error=%d (t+%ds)",
+                snap["succeeded"],
+                snap["timed_out"],
+                snap["fault_absorbed"],
+                snap["unexpected_error"],
+                int(now - (end_time - RUNTIME_S)),
+            )
+            next_progress = now + PROGRESS_INTERVAL_S
+        # Cap remaining-time so we don't overshoot end_time + margin.
+        remaining = max(0.0, (end_time + 30.0) - now)
+        for t in threads:
+            if not t.is_alive():
+                continue
+            t.join(timeout=min(PROGRESS_INTERVAL_S, remaining))
+            break  # re-check elapsed before joining the next thread
+        if time.time() > end_time + 30.0:
+            break
+    # Catch up: any thread still alive past the window gets a stop +
+    # short final join.  Matches the original 5s grace period.
     for t in threads:
-        # Each thread caps itself at `end_time`; add a small margin
-        # so the join itself never blocks the test framework past the
-        # expected window.
-        t.join(timeout=RUNTIME_S + 30.0)
         if t.is_alive():
             stop_event.set()
             t.join(timeout=5.0)
@@ -383,7 +417,7 @@ def main() -> int:
     merged = _merge_stats(per_thread)
 
     LOG.info(
-        "workload-replay done: succeeded=%d timed_out=%d fault_absorbed=%d "
+        "[SUMMARY] workload-replay done: succeeded=%d timed_out=%d fault_absorbed=%d "
         "expected_skipped=%d unexpected_error=%d session_setup_error=%d "
         "connect_error=%d subscribe_rows=%d",
         merged["succeeded"],
@@ -395,6 +429,23 @@ def main() -> int:
         merged["connect_error"],
         merged["subscribe_rows"],
     )
+
+    # Tiered progress milestones.  Each `sometimes(True, ...)` fires when
+    # ANY timeline observes at least that throughput; the triage report
+    # ends up with green entries at 1, 10, 100, 1000 — telling us at-a-
+    # glance how far we typically get per invocation.  Names parameterised
+    # by threshold (not by per-thread/per-query) so the report breadth
+    # stays bounded.
+    for threshold in (1, 10, 100, 1000):
+        sometimes(
+            merged["succeeded"] >= threshold,
+            f"workload-replay: succeeded >= {threshold} queries in at least one timeline",
+            {
+                "threshold": threshold,
+                "succeeded": merged["succeeded"],
+                "runtime_s": RUNTIME_S,
+            },
+        )
 
     # Liveness: at least sometimes, replay actually completes queries.
     # If this never fires, every other assertion below is vacuous (the

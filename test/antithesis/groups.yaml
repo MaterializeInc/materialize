@@ -54,6 +54,12 @@ universal_services:
 # regardless of template selection.
 default_anytime:
   - defaults/anytime_health_check
+  # Continuous probe asserting `read_frontier <= write_frontier`
+  # (since <= upper) and write_frontier monotonicity per object.
+  # Catches the persist state-machine corruption class that today
+  # only surfaces as the gc.rs:417 panic cascade — at the first
+  # invariant violation rather than at the eventual SIGABRT.
+  - defaults/anytime_persist_invariants
 
 # Setup / driver scripts auto-added to every group.  The catalog,
 # persist, and reclock SUT-anchored properties don't need any
@@ -64,6 +70,20 @@ default_drivers:
   - defaults/singleton_driver_catalog_recovery_consistency
   - defaults/parallel_driver_strict_serializable_reads
   - defaults/parallel_driver_mv_reflects_table_updates
+  # Model-vs-SUT row-data integrity check.  Counterpart to the
+  # catalog driver above — that one tracks table names, this one
+  # tracks (id, value) pairs in a user table and asserts the SUT
+  # matches the in-process model after every DML cycle.  Catches
+  # silent data loss / duplication / torn updates under crash
+  # recovery, which today has no Antithesis coverage at all.
+  - defaults/singleton_driver_table_data_integrity
+  # SUBSCRIBE stream correctness: producer commits monotone-counter
+  # INSERTs while a consumer reads SUBSCRIBE WITH (PROGRESS),
+  # reconnecting AS OF on fault.  Asserts every committed row
+  # eventually appears in the stream (no missed events) and no
+  # spurious events ever appear.  Customer-facing streaming-read
+  # API; zero coverage today.
+  - defaults/singleton_driver_subscribe_correctness
 
 groups:
   kafka:

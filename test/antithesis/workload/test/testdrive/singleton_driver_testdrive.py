@@ -137,6 +137,33 @@ def _list_td_files() -> list[str]:
     return entries
 
 
+def _count_directives(td_file_path: str) -> int | None:
+    """Count `>` / `!` / `$` directives in the bundled .td source.
+
+    Testdrive doesn't print a summary line we can grep for an
+    "executable statements" count, so we use the *source* directive
+    count as a deterministic upper bound on how much work a clean run
+    would have done.  Progress is then "bytes of stdout produced" /
+    "directives in source" as a rough proxy for fraction-completed.
+
+    Returns None if the file isn't readable (image-staging glitch).
+    """
+    full = os.path.join(helper_testdrive.TESTDRIVE_FILES_ROOT, td_file_path)
+    try:
+        with open(full) as f:
+            text = f.read()
+    except OSError:
+        return None
+    # Conservative: only count leading-of-line directives, ignoring
+    # comments / multi-line continuations.  Same shape testdrive
+    # itself uses in its parser.
+    return sum(
+        1
+        for line in text.splitlines()
+        if line.startswith((">", "!", "$"))
+    )
+
+
 def main() -> int:
     files = _list_td_files()
     if not files:
@@ -145,13 +172,15 @@ def main() -> int:
 
     td_file = helper_random.random_choice(files)
     LOG.info(
-        "picked %s from %d candidates (excluded %d)",
+        "[PROGRESS] testdrive START file=%s (of %d candidates, excluded %d)",
         td_file,
         len(files),
         len(_EXCLUDE_FILES),
     )
 
+    source_directives = _count_directives(td_file)
     result = helper_testdrive.run(td_file)
+    stdout_bytes = len(result.stdout)
 
     # Safety: under Antithesis fault injection, a testdrive run on any
     # test/testdrive file must either succeed or fail with a recognized
@@ -167,6 +196,8 @@ def main() -> int:
             "td_file": td_file,
             "exit_code": result.exit_code,
             "looks_transient": result.looks_transient,
+            "source_directives": source_directives,
+            "stdout_bytes": stdout_bytes,
             "stdout_tail": result.stdout[-1500:],
             "stderr_tail": result.stderr[-1500:],
         },
@@ -182,15 +213,40 @@ def main() -> int:
         {
             "td_file": td_file,
             "exit_code": result.exit_code,
+            "source_directives": source_directives,
+            "stdout_bytes": stdout_bytes,
         },
     )
 
+    # Tiered progress milestones.  Each `sometimes(True, ...)` fires when
+    # ANY timeline observes the run produce at least that much stdout —
+    # a proxy for "how deep into the .td body did testdrive get before
+    # a fault stopped execution".  Mirrors the workload-replay driver's
+    # tiered anchors; the triage report ends up with one green entry per
+    # tier.  Names parameterised by tier (not by .td file) so the report
+    # breadth stays bounded; the file path lives in the assertion-detail
+    # blob above.
+    for threshold in (1024, 10_240, 102_400):
+        sometimes(
+            stdout_bytes >= threshold,
+            f"testdrive: stdout_bytes >= {threshold} in at least one timeline",
+            {
+                "threshold": threshold,
+                "stdout_bytes": stdout_bytes,
+                "td_file": td_file,
+                "source_directives": source_directives,
+            },
+        )
+
     LOG.info(
-        "testdrive %s: exit=%d transient=%s clean_or_transient=%s",
+        "[SUMMARY] testdrive END file=%s exit=%d transient=%s clean_or_transient=%s "
+        "stdout_bytes=%d source_directives=%s",
         td_file,
         result.exit_code,
         result.looks_transient,
         clean_or_transient,
+        stdout_bytes,
+        source_directives if source_directives is not None else "?",
     )
     return 0
 

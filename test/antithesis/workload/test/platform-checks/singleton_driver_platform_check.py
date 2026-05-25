@@ -426,9 +426,24 @@ def main() -> int:
         ("validate[1]", validate_td.input),
     ]
 
+    # Per-timeline progress markers.  Every `sometimes(True, name, ...)`
+    # fires when ANY timeline observes that phase land cleanly, so the
+    # Antithesis triage report ends up with one green entry per phase
+    # that's ever been reached — telling us at-a-glance which phases the
+    # driver is actually making it through (vs. silently bailing on
+    # transient errors at initialize).  Mirrors the per-phase visibility
+    # `parallel_driver_workload_replay` gets from its tiered
+    # `succeeded >= N` anchors.
     all_clean = True
     saw_transient = False
+    phases_completed = 0
     phase_results: dict[str, dict[str, Any]] = {}
+
+    sometimes(
+        True,
+        "platform-check: at least one timeline picked a Check from the allow-list",
+        {"check": cls.__name__, "allow_list_size": len(ALLOWED_CHECK_NAMES)},
+    )
 
     for phase_name, fragment in phases:
         if INTER_PHASE_SLEEP_S > 0:
@@ -463,6 +478,27 @@ def main() -> int:
                 )
                 break
 
+        # Phase completed cleanly: bump the counter and fire the
+        # per-phase progress anchor.  The name is parameterised by phase
+        # rather than Check class so the report has 5 entries total
+        # (initialize/manipulate[0]/manipulate[1]/validate[0]/validate[1])
+        # instead of one per Check class — keeps the triage breadth-view
+        # readable while still surfacing per-class detail in the
+        # assertion blob.
+        phases_completed += 1
+        sometimes(
+            True,
+            f"platform-check: phase={phase_name} completed cleanly in at least one timeline",
+            {"check": cls.__name__, "phase": phase_name, "exit_code": result.exit_code},
+        )
+        LOG.info(
+            "[PROGRESS] check=%s phase=%s OK (%d/%d phases this timeline)",
+            cls.__name__,
+            phase_name,
+            phases_completed,
+            len(phases),
+        )
+
     # Safety property: any non-fault failure at any phase, when run
     # against a healthy SUT, is a Check-class regression.  Always(True)
     # if every phase either succeeded or bailed on a fault-shaped
@@ -487,9 +523,18 @@ def main() -> int:
         {"check": cls.__name__},
     )
 
+    # Final summary — single grep-able line for triage logs.  Format
+    # `[SUMMARY]` is shared with the workload-replay driver's terminal
+    # line so a single grep across timelines slices out per-driver
+    # progress without parsing assertion blobs.
     LOG.info(
-        "platform-check %s done; all_clean=%s saw_transient=%s",
-        cls.__name__, all_clean, saw_transient,
+        "[SUMMARY] platform-check check=%s phases_completed=%d/%d "
+        "all_clean=%s saw_transient=%s",
+        cls.__name__,
+        phases_completed,
+        len(phases),
+        all_clean,
+        saw_transient,
     )
     return 0
 
