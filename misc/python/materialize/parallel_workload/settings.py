@@ -99,11 +99,9 @@ def is_fault_shaped(exc: BaseException) -> bool:
     # of the surface message (drivers don't promise a stable wording).
     if isinstance(
         exc,
-        (
-            psycopg.OperationalError,
-            psycopg.InterfaceError,
-            requests.exceptions.ConnectionError,
-        ),
+        psycopg.OperationalError
+        | psycopg.InterfaceError
+        | requests.exceptions.ConnectionError,
     ):
         return True
     msg = getattr(exc, "msg", None) or str(exc)

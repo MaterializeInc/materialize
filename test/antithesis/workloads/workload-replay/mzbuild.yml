@@ -63,18 +63,13 @@ pre-image:
   # Minimum `materialize.*` Python slice to satisfy the shared
   # Dockerfile's `COPY materialize/ /opt/antithesis-pkg/materialize/`
   # step.  The driver itself doesn't import any `materialize.*` module;
-  # `__init__.py` reads `MZ_ROOT` at import time so we ship it for
-  # completeness, and `util.py` is a transitive import target of
-  # `__init__.py` on some build flavors.  Everything beyond is mocked
-  # by the stubs in `stubs/materialize/`.
+  # `__init__.py` is shipped because the shared Dockerfile would fail
+  # the COPY on an empty source dir.  Everything else is mocked by
+  # `stubs/materialize/`.
   - type: copy
     source: misc/python
     destination: .
     matching: materialize/__init__.py
-  - type: copy
-    source: misc/python
-    destination: .
-    matching: materialize/util.py
   # Satisfies the shared Dockerfile's `COPY testdrive-files/ /opt/testdrive-files/`
   # — workload-replay doesn't run any .td scripts, but the COPY would
   # error on a missing directory.  Single placeholder .td keeps the

@@ -37,6 +37,8 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 
+import helper_random
+
 LOG = logging.getLogger("antithesis.helper_testdrive")
 
 # Where the workload Dockerfile lands the bundled .td files. The
@@ -73,18 +75,20 @@ SQL_SERVER_PASSWORD = os.environ.get("SQL_SERVER_PASSWORD", "RPSsql12345")
 # something" means.  Re-exported here as `TRANSIENT_PATTERNS` for
 # backwards-compatibility with any external caller that imported the
 # module-level tuple before the extraction.
-from helper_fault_tolerance import FAULT_PATTERNS as TRANSIENT_PATTERNS
 from helper_fault_tolerance import looks_like_fault
 
 # `$ skip-if` directive removal regex. testdrive parses skip-if as:
 #   $ skip-if
 #   <SQL that returns >0 rows skips the rest of the file>
 # Many checked-in regression tests use `$ skip-if / SELECT true` as a
-# manual disable. We strip *only* that specific shape — any skip-if with
-# a non-trivial query is left intact (those gate on feature flags and
-# should still gate under Antithesis).
+# manual disable. We strip *only* that specific shape — any skip-if
+# with a non-trivial query is left intact (those gate on feature flags
+# such as `${arg.default-replica-size}`, `${arg.replicas}`, or
+# `${arg.uses-redpanda}` and should still gate under Antithesis).  An
+# optional trailing semicolon is allowed; testdrive's parser accepts
+# both `SELECT true` and `SELECT true;` as equivalent.
 _SKIP_IF_TRUE_RE = re.compile(
-    r"^\$ skip-if\s*\n\s*SELECT\s+true\s*\n",
+    r"^\$ skip-if\s*\n\s*SELECT\s+true\s*;?\s*\n",
     re.MULTILINE | re.IGNORECASE,
 )
 
@@ -216,12 +220,25 @@ def _run_content(
     with open(tmp_path, "w") as f:
         f.write(rewritten)
 
+    # Route testdrive's internal RNG (kafka topic-suffix randomization,
+    # tempdir naming, `${testdrive.seed}` substitution in .td files,
+    # shuffle ordering) through Antithesis SDK entropy.  Without this,
+    # testdrive falls back to its own `rand::random()` for the seed and
+    # two replays of the "same" Antithesis timeline see different
+    # in-testdrive randomness — defeating deterministic replay for any
+    # bug whose surface depends on a testdrive-side decision (topic
+    # naming collisions, COPY temp paths, etc.).  Mask to i32 because
+    # testdrive's `--seed` arg is typed as `u32` in clap (see
+    # `src/testdrive/src/bin/testdrive.rs`).
+    td_seed = helper_random.random_u64() & 0xFFFFFFFF
+
     cmd = [
         TESTDRIVE_BINARY,
         f"--materialize-url={MATERIALIZE_URL}",
         f"--materialize-internal-url={MATERIALIZE_INTERNAL_URL}",
         f"--kafka-addr={KAFKA_ADDR}",
         f"--schema-registry-url={SCHEMA_REGISTRY_URL}",
+        f"--seed={td_seed}",
         "--no-reset",
         # Per-statement default timeout; testdrive retries `>` and `!`
         # statements internally until this expires. Long enough to span
@@ -275,9 +292,11 @@ def _run_content(
         LOG.warning("testdrive timed out after %.0fs", timeout_s)
         result = TestdriveResult(
             exit_code=124,
-            stdout=exc.stdout.decode()
-            if isinstance(exc.stdout, bytes)
-            else (exc.stdout or ""),
+            stdout=(
+                exc.stdout.decode()
+                if isinstance(exc.stdout, bytes)
+                else (exc.stdout or "")
+            ),
             stderr=(
                 exc.stderr.decode()
                 if isinstance(exc.stderr, bytes)
@@ -301,4 +320,3 @@ def _run_content(
         len(result.stderr),
     )
     return result
-

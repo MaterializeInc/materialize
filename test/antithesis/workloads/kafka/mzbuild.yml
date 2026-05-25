@@ -52,31 +52,19 @@ pre-image:
     destination: .
     matching: groups.yaml
   # The parallel-workload driver reuses the real
-  # `materialize.parallel_workload` Python package rather than
-  # reimplementing it.  Copy the needed slice of `misc/python/materialize/`
-  # into the build context so the Dockerfile can bundle it into the image.
-  # Everything not listed here is mocked out by the stubs in
-  # `stubs/materialize/mzcompose/...`.
+  # `materialize/__init__.py` only — the kafka group's drivers don't
+  # import any `materialize.*` modules, so we don't need the heavy
+  # `parallel_workload` / `data_ingest` / `sqlsmith` / `util`
+  # bundles.  The __init__.py is kept so the workload Dockerfile's
+  # `COPY materialize/` step has a non-empty source directory to copy
+  # (otherwise docker buildx errors with "no such directory").
+  # Everything `materialize.*`-shaped beyond __init__.py is mocked
+  # out by `stubs/materialize/...`, which the Dockerfile layers in
+  # before the real package copy.
   - type: copy
     source: misc/python
     destination: .
     matching: materialize/__init__.py
-  - type: copy
-    source: misc/python
-    destination: .
-    matching: materialize/util.py
-  - type: copy
-    source: misc/python
-    destination: .
-    matching: materialize/sqlsmith.py
-  - type: copy
-    source: misc/python
-    destination: .
-    matching: materialize/parallel_workload/**
-  - type: copy
-    source: misc/python
-    destination: .
-    matching: materialize/data_ingest/**
   # Repository-checked-in testdrive scripts that the testdrive-runner
   # drivers execute under Antithesis fault injection.  Keeping the
   # source-of-truth path means new tests in `test/pg-cdc/` are exercised

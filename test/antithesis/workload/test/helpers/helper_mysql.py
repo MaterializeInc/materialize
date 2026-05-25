@@ -113,11 +113,11 @@ def _execute(host: str, sql: str, params: tuple = (), database: str = "mysql") -
     deadline = time.monotonic() + _RETRY_BUDGET_S
     backoff = _RETRY_INITIAL_S
     while True:
+        conn = None
         try:
             conn = _open(host, database)
             with conn.cursor() as cur:
                 cur.execute(sql, params)
-            conn.close()
             return
         except Exception as exc:  # noqa: BLE001
             if not _retryable(exc) or time.monotonic() > deadline:
@@ -125,6 +125,19 @@ def _execute(host: str, sql: str, params: tuple = (), database: str = "mysql") -
             LOG.info("mysql execute on %s retrying after %s", host, exc)
             time.sleep(backoff)
             backoff = min(backoff * 2, _RETRY_MAX_S)
+        finally:
+            # `_open` + `cur.execute` + return path each open a fresh
+            # connection per retry; without explicit close, a sustained
+            # fault leaks one socket per retry attempt and eventually
+            # exhausts MySQL's max_connections.  Close in `finally` so
+            # the success path, the retry path, and the deadline-raise
+            # path all release the connection.  pymysql's `close()` is
+            # idempotent on already-closed connections.
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:  # noqa: BLE001
+                    pass
 
 
 def _query(
@@ -133,12 +146,12 @@ def _query(
     deadline = time.monotonic() + _RETRY_BUDGET_S
     backoff = _RETRY_INITIAL_S
     while True:
+        conn = None
         try:
             conn = _open(host, database)
             with conn.cursor() as cur:
                 cur.execute(sql, params)
                 result = list(cur.fetchall())
-            conn.close()
             return result
         except Exception as exc:  # noqa: BLE001
             if not _retryable(exc) or time.monotonic() > deadline:
@@ -146,6 +159,14 @@ def _query(
             LOG.info("mysql query on %s retrying after %s", host, exc)
             time.sleep(backoff)
             backoff = min(backoff * 2, _RETRY_MAX_S)
+        finally:
+            # See _execute above — close in finally so every exit path
+            # releases the connection.
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:  # noqa: BLE001
+                    pass
 
 
 def execute_primary(sql: str, params: tuple = (), database: str = "mysql") -> None:

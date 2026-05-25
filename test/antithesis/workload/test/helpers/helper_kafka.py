@@ -108,21 +108,62 @@ def make_producer(client_id: str | None = None) -> tuple[Producer, DeliveryTrack
     return Producer(config), DeliveryTracker()
 
 
+# Retry budget for the whole `ensure_topic` block — the broker may be
+# paused for the full fault-orchestrator MAX_ON window (~40s) so a
+# single-shot admin call (`list_topics`/`create_topics`) inside one
+# `ADMIN_TIMEOUT_S` ceiling can be smaller than the fault window and
+# hard-fail.  Mirror the pgwire retry budget so admin-path retries
+# span at least one full fault-ON + fault-OFF cycle plus margin.
+_ENSURE_TOPIC_BUDGET_S = 180
+_ENSURE_TOPIC_BACKOFF_INITIAL_S = 0.5
+_ENSURE_TOPIC_BACKOFF_MAX_S = 4.0
+
+
 def ensure_topic(topic: str, num_partitions: int = 1) -> None:
-    """Create the topic if it doesn't already exist. No-op on race with auto-create."""
+    """Create the topic if it doesn't already exist.
+
+    Retries the whole `list → create` block against `_ENSURE_TOPIC_BUDGET_S`
+    so a faults-ON window that exceeds `ADMIN_TIMEOUT_S` (single-shot
+    admin timeout) doesn't propagate a hard failure all the way to the
+    driver.  No-op on race with auto-create (TOPIC_ALREADY_EXISTS = 36
+    is treated as success).  The retry loop reconstructs `AdminClient`
+    from scratch each iteration so a torn-down librdkafka session
+    doesn't bleed state across attempts.
+    """
     LOG.info("kafka admin: probing topic %s (broker=%s)", topic, BROKER)
+    deadline = time.monotonic() + _ENSURE_TOPIC_BUDGET_S
+    backoff = _ENSURE_TOPIC_BACKOFF_INITIAL_S
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            _ensure_topic_once(topic, num_partitions)
+            return
+        except Exception as exc:  # noqa: BLE001
+            if time.monotonic() > deadline:
+                LOG.warning(
+                    "kafka admin: ensure_topic giving up after %d attempts "
+                    "(budget=%ds): %s",
+                    attempt,
+                    _ENSURE_TOPIC_BUDGET_S,
+                    exc,
+                )
+                raise
+            LOG.info(
+                "kafka admin: ensure_topic attempt %d failed (%s); retrying in %.1fs",
+                attempt,
+                exc,
+                backoff,
+            )
+            time.sleep(backoff)
+            backoff = min(backoff * 2, _ENSURE_TOPIC_BACKOFF_MAX_S)
+
+
+def _ensure_topic_once(topic: str, num_partitions: int) -> None:
+    """Single-attempt `list → create` cycle.  See `ensure_topic`."""
     admin = AdminClient({"bootstrap.servers": BROKER})
     list_start = time.monotonic()
-    try:
-        existing = admin.list_topics(timeout=ADMIN_TIMEOUT_S).topics
-    except Exception as exc:  # noqa: BLE001
-        LOG.warning(
-            "kafka admin: list_topics failed in %.2fs (timeout=%ds): %s",
-            time.monotonic() - list_start,
-            ADMIN_TIMEOUT_S,
-            exc,
-        )
-        raise
+    existing = admin.list_topics(timeout=ADMIN_TIMEOUT_S).topics
     LOG.info(
         "kafka admin: list_topics returned %d topics in %.2fs",
         len(existing),

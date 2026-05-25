@@ -43,9 +43,8 @@ import sys
 import helper_logging
 import helper_random
 import helper_testdrive
-from helper_pg import execute_internal_retry, query_retry
-
 from antithesis.assertions import always, sometimes
+from helper_pg import execute_internal_retry, query_retry
 
 LOG = helper_logging.setup_logging("driver.mysql_cdc_testdrive")
 
@@ -158,6 +157,14 @@ def main() -> int:
     if not files:
         LOG.warning("no mysql-cdc td files bundled; exiting cleanly")
         return 0
+
+    # Reset materialize.public before picking the next .td so leftover
+    # sources/clusters from a prior run (local-dev re-runs against a
+    # long-lived SUT) don't collide with the bundled file's CREATE
+    # statements.  Mirrors the sql-server-cdc runner's prelude.
+    # Under Antithesis singleton-per-timeline semantics this is a
+    # no-op (fresh state every timeline) but it's cheap insurance.
+    _reset_public_schema()
 
     td_file = helper_random.random_choice(files)
     LOG.info(

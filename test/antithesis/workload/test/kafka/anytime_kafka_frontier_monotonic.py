@@ -42,10 +42,9 @@ import sys
 import time
 
 import helper_logging
+from antithesis.assertions import always
 from helper_pg import query_retry
 from helper_source_stats import offset_committed
-
-from antithesis.assertions import always
 
 LOG = helper_logging.setup_logging("driver.kafka_frontier_monotonic")
 

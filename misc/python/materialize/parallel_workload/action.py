@@ -512,15 +512,11 @@ class SQLsmithAction(Action):
                 # it. Ignore for now
                 return
         except Exception as exc:
-            if (
-                exe.db.scenario
-                not in (
-                    Scenario.Kill,
-                    Scenario.BackupRestore,
-                    Scenario.ZeroDowntimeDeploy,
-                )
-                or not is_fault_shaped(exc)
-            ):
+            if exe.db.scenario not in (
+                Scenario.Kill,
+                Scenario.BackupRestore,
+                Scenario.ZeroDowntimeDeploy,
+            ) or not is_fault_shaped(exc):
                 raise
         finally:
             self.composition.silent = False
@@ -2186,9 +2182,7 @@ class CreateClusterReplicaAction(Action):
             unmanaged_clusters = [c for c in exe.db.clusters[1:] if not c.managed]
             # Pre-existing (pool) clusters: the framework didn't create them
             # and won't mutate them. Skip.
-            unmanaged_clusters = [
-                c for c in unmanaged_clusters if not c.is_pool_backed
-            ]
+            unmanaged_clusters = [c for c in unmanaged_clusters if not c.is_pool_backed]
             if not unmanaged_clusters:
                 return False
             cluster = self.rng.choice(unmanaged_clusters)
@@ -2213,9 +2207,7 @@ class DropClusterReplicaAction(Action):
             # Keep cluster 0 with 1 replica for sources/sinks
             unmanaged_clusters = [c for c in exe.db.clusters[1:] if not c.managed]
             # Pre-existing (pool) clusters: same reasoning as above. Skip.
-            unmanaged_clusters = [
-                c for c in unmanaged_clusters if not c.is_pool_backed
-            ]
+            unmanaged_clusters = [c for c in unmanaged_clusters if not c.is_pool_backed]
             if not unmanaged_clusters:
                 return False
             cluster = self.rng.choice(unmanaged_clusters)
@@ -2697,11 +2689,10 @@ class CreateKafkaSourceAction(Action):
                 source.create(exe)
                 exe.db.kafka_sources.append(source)
             except Exception as exc:
-                if (
-                    exe.db.scenario
-                    not in (Scenario.Kill, Scenario.ZeroDowntimeDeploy)
-                    or not is_fault_shaped(exc)
-                ):
+                if exe.db.scenario not in (
+                    Scenario.Kill,
+                    Scenario.ZeroDowntimeDeploy,
+                ) or not is_fault_shaped(exc):
                     raise
         return True
 
@@ -2773,11 +2764,10 @@ class CreateMySqlSourceAction(Action):
                 source.create(exe)
                 exe.db.mysql_sources.append(source)
             except Exception as exc:
-                if (
-                    exe.db.scenario
-                    not in (Scenario.Kill, Scenario.ZeroDowntimeDeploy)
-                    or not is_fault_shaped(exc)
-                ):
+                if exe.db.scenario not in (
+                    Scenario.Kill,
+                    Scenario.ZeroDowntimeDeploy,
+                ) or not is_fault_shaped(exc):
                     raise
         return True
 
@@ -2849,11 +2839,10 @@ class CreatePostgresSourceAction(Action):
                 source.create(exe)
                 exe.db.postgres_sources.append(source)
             except Exception as exc:
-                if (
-                    exe.db.scenario
-                    not in (Scenario.Kill, Scenario.ZeroDowntimeDeploy)
-                    or not is_fault_shaped(exc)
-                ):
+                if exe.db.scenario not in (
+                    Scenario.Kill,
+                    Scenario.ZeroDowntimeDeploy,
+                ) or not is_fault_shaped(exc):
                     raise
         return True
 
@@ -2927,11 +2916,10 @@ class CreateSqlServerSourceAction(Action):
                 source.create(exe)
                 exe.db.sql_server_sources.append(source)
             except Exception as exc:
-                if (
-                    exe.db.scenario
-                    not in (Scenario.Kill, Scenario.ZeroDowntimeDeploy)
-                    or not is_fault_shaped(exc)
-                ):
+                if exe.db.scenario not in (
+                    Scenario.Kill,
+                    Scenario.ZeroDowntimeDeploy,
+                ) or not is_fault_shaped(exc):
                     raise
         return True
 

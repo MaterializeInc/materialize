@@ -40,9 +40,8 @@ import sys
 import time
 
 import helper_logging
-from helper_pg import query_retry
-
 from antithesis.assertions import always
+from helper_pg import query_retry
 
 LOG = helper_logging.setup_logging("driver.kafka_offset_known_not_below_committed")
 

@@ -53,6 +53,8 @@ import time
 import helper_logging
 import helper_mysql
 import helper_random
+from antithesis.assertions import always, sometimes
+from helper_fault_tolerance import looks_like_fault
 from helper_mysql_source import (
     MYSQL_DATABASE,
     MYSQL_TABLE_MYISAM,
@@ -62,8 +64,6 @@ from helper_mysql_source import (
     TABLE_NAME_MYISAM,
 )
 from helper_pg import query_retry
-
-from antithesis.assertions import always, sometimes
 
 LOG = helper_logging.setup_logging("driver.mysql_myisam")
 
@@ -93,6 +93,7 @@ def _insert_rows(batch_id: str) -> dict[str, str]:
     acknowledged INSERT shows up," not "every attempted INSERT shows up."
     """
     expected: dict[str, str] = {}
+    non_fault_failures: list[tuple[str, str, str]] = []
     for i in range(ROWS_PER_INVOCATION):
         row_id = f"{batch_id}:{i}"
         value = f"v{helper_random.random_int(0, 9999):04d}"
@@ -106,7 +107,38 @@ def _insert_rows(batch_id: str) -> dict[str, str]:
             )
             expected[row_id] = value
         except Exception as exc:  # noqa: BLE001
-            LOG.info("MyISAM insert failed for row %s: %s; skipping", row_id, exc)
+            # Classify upstream-INSERT failures.  Fault-shape is expected
+            # noise; anything else escapes `looks_like_fault` and
+            # indicates a genuine upstream regression (e.g. the MyISAM
+            # engine returning unexpected SQL state, schema drift).
+            # Skip the row regardless so the loop keeps inserting, but
+            # surface the non-fault case via a sometimes anchor for
+            # triage.
+            if looks_like_fault(str(exc)):
+                LOG.info(
+                    "MyISAM insert failed for row %s (fault-shape): %s; skipping",
+                    row_id,
+                    exc,
+                )
+            else:
+                LOG.warning(
+                    "MyISAM insert failed for row %s with NON-FAULT error: %s; skipping",
+                    row_id,
+                    exc,
+                )
+                non_fault_failures.append((row_id, type(exc).__name__, str(exc)[:300]))
+    if non_fault_failures:
+        sometimes(
+            False,
+            "mysql-cdc-myisam: upstream INSERT escaped fault classification",
+            {
+                "non_fault_failures_sample": non_fault_failures[:5],
+                "non_fault_count": len(non_fault_failures),
+                "batch_id": batch_id,
+                "rows_attempted": ROWS_PER_INVOCATION,
+                "rows_committed": len(expected),
+            },
+        )
     return expected
 
 

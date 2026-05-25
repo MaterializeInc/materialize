@@ -22,10 +22,17 @@ This stub exposes only the `Profile` enum.
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import Enum, auto
 
 
 class Profile(Enum):
-    DEV = "dev"
-    OPTIMIZED = "optimized"
-    RELEASE = "release"
+    # Mirror the value-shape (`auto()` → int) of the real
+    # `materialize.mzbuild.Profile` so any caller that compared
+    # `Profile.X.value == Y` keeps working against the stub.  Order
+    # also mirrors upstream — irrelevant for current callers (which
+    # only reference the enum as a type marker via
+    # `UseOptimizedProfile`'s class attribute), but matters if a
+    # future caller does enum-int comparison.
+    RELEASE = auto()
+    OPTIMIZED = auto()
+    DEV = auto()

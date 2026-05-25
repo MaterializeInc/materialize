@@ -48,6 +48,7 @@ import time
 
 import helper_logging
 import helper_random
+from antithesis.assertions import always, sometimes
 from helper_kafka import FLUSH_TIMEOUT_S, make_producer
 from helper_pg import query_one_retry
 from helper_source_stats import wait_for_catchup
@@ -56,8 +57,6 @@ from helper_upsert_source import (
     TOPIC_UPSERT_TEXT,
     ensure_upsert_text_source,
 )
-
-from antithesis.assertions import always, sometimes
 
 LOG = helper_logging.setup_logging("driver.upsert_state_rehydration")
 

@@ -65,7 +65,6 @@ from typing import TYPE_CHECKING, Any
 import helper_logging
 import helper_random
 import helper_testdrive
-
 from antithesis.assertions import always, sometimes
 
 if TYPE_CHECKING:
@@ -229,7 +228,7 @@ ALLOWED_CHECK_NAMES: frozenset[str] = frozenset(
 )
 
 
-def _all_check_classes() -> list[type["Check"]]:
+def _all_check_classes() -> list[type[Check]]:
     """Import every Check subclass and return the allow-listed ones.
 
     The `from materialize.checks.all_checks import *` glob discovers
@@ -270,12 +269,19 @@ def _run_phase(
     Antithesis triage logs include phase-by-phase progress without
     relying on always/sometimes detail blobs alone.
     """
-    LOG.info("check %s phase=%s: running fragment (%d bytes)",
-             check_name, phase, len(fragment))
+    LOG.info(
+        "check %s phase=%s: running fragment (%d bytes)",
+        check_name,
+        phase,
+        len(fragment),
+    )
     result = helper_testdrive.run_inline(fragment, timeout_s=PHASE_TIMEOUT_S)
     LOG.info(
         "check %s phase=%s: exit=%d transient=%s",
-        check_name, phase, result.exit_code, result.looks_transient,
+        check_name,
+        phase,
+        result.exit_code,
+        result.looks_transient,
     )
     return result.succeeded, result.looks_transient, result
 
@@ -289,6 +295,7 @@ def _query_mz_version() -> Any:
     gates actually care about.
     """
     from helper_pg import query_one_retry
+
     from materialize.mz_version import MzVersion
 
     # `mz_version()` returns "v0.NN.M (commit) (build-info)"; the parser
@@ -321,7 +328,7 @@ def _make_executor_sentinel(version: Any) -> Any:
     return e
 
 
-def _pick_check(candidates: list[type["Check"]]) -> type["Check"] | None:
+def _pick_check(candidates: list[type[Check]]) -> type[Check] | None:
     """Pick one allow-listed Check at random.
 
     Skips Checks whose class-level `enabled` flag is False (the
@@ -374,7 +381,10 @@ def main() -> int:
     # MzVersion features. Call it explicitly here so the assertion
     # space stays small when a Check declines to run.
     if not check._can_run(_make_executor_sentinel(base_version)):
-        LOG.info("Check %s declined to run (_can_run returned False); exiting cleanly", cls.__name__)
+        LOG.info(
+            "Check %s declined to run (_can_run returned False); exiting cleanly",
+            cls.__name__,
+        )
         sometimes(
             False,
             "platform-check: at least one timeline saw _can_run gate skip a Check",
@@ -400,9 +410,12 @@ def main() -> int:
     # doesn't drive pyactions — those need a live psycopg connection
     # held across phases. Skip silently and record a sometimes anchor.
     from materialize.checks.actions import PyAction, Testdrive
-    if not isinstance(initialize_td, Testdrive) or any(
-        not isinstance(td, Testdrive) for td in manipulate_tds
-    ) or not isinstance(validate_td, Testdrive):
+
+    if (
+        not isinstance(initialize_td, Testdrive)
+        or any(not isinstance(td, Testdrive) for td in manipulate_tds)
+        or not isinstance(validate_td, Testdrive)
+    ):
         LOG.info(
             "Check %s uses PyAction phases; not supported by this driver",
             cls.__name__,
@@ -474,7 +487,8 @@ def main() -> int:
                 all_clean = False
                 LOG.error(
                     "check %s phase=%s: NON-TRANSIENT failure",
-                    cls.__name__, phase_name,
+                    cls.__name__,
+                    phase_name,
                 )
                 break
 

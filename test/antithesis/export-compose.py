@@ -254,6 +254,17 @@ def strip_incompatible_env(svc: dict[str, Any]) -> None:
       crash-recovery testing under fault injection.
     - `MZ_LISTENERS_CONFIG_PATH` and `MZ_EXTERNAL_LOGIN_PASSWORD_*` reference
       host paths or host secrets that don't exist in the sandbox.
+    - `MZ_LICENSE_KEY=/license_key/license_key` is paired with a host
+      bind-mount (`${cwd}/license_key:/license_key/license_key`) emitted
+      by `Materialized` when `MZ_CI_LICENSE_KEY` is set on the host
+      (always on CI builders). `strip_host_bindmounts` removes the
+      volume but leaves the env var pointing at a path the Antithesis
+      sandbox can't materialise — environmentd then `bail!`s on
+      "failed to open license key file" at boot. Dropping the env var
+      lets materialized fall back to its built-in default. Without this
+      drop, the export step is non-idempotent w.r.t. the host env
+      (running with vs. without `MZ_CI_LICENSE_KEY` produces different
+      YAMLs), causing CI lint drift.
     - Bare env vars (no `=`) inherit from the host environment, which is
       empty under Antithesis; drop them so materialized's built-in defaults
       apply.
@@ -264,6 +275,7 @@ def strip_incompatible_env(svc: dict[str, Any]) -> None:
         "MZ_EAT_MY_DATA=",
         "MZ_LISTENERS_CONFIG_PATH=",
         "MZ_EXTERNAL_LOGIN_PASSWORD_",
+        "MZ_LICENSE_KEY=",
     )
     svc["environment"] = [
         e for e in svc["environment"] if "=" in e and not e.startswith(drop_prefixes)
@@ -435,9 +447,7 @@ def register_referenced_named_volumes(compose: dict[str, Any]) -> None:
             top_level[name] = None
 
 
-def filter_to_group(
-    compose: dict[str, Any], manifest: Manifest, group: Group
-) -> None:
+def filter_to_group(compose: dict[str, Any], manifest: Manifest, group: Group) -> None:
     """Drop services not in `group`, then prune dangling depends_on refs.
 
     Mutates `compose` in place. Validates that every service the group
@@ -585,9 +595,7 @@ def main() -> None:
     parser.add_argument(
         "--group",
         required=True,
-        help=(
-            "Workload group to emit. Must be a key in test/antithesis/groups.yaml."
-        ),
+        help=("Workload group to emit. Must be a key in test/antithesis/groups.yaml."),
     )
     parser.add_argument(
         "--no-antithesis",

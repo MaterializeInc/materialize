@@ -59,6 +59,7 @@ import time
 import helper_logging
 import helper_random
 import psycopg
+from antithesis.assertions import always, sometimes
 from helper_pg import (
     PGDATABASE,
     PGHOST,
@@ -67,8 +68,6 @@ from helper_pg import (
     execute_retry,
 )
 from helper_table_mv import MV_NAME, TABLE_MV_INPUT, ensure_table_and_mv
-
-from antithesis.assertions import always, sometimes
 
 LOG = helper_logging.setup_logging("driver.strict_serializable_reads")
 
@@ -131,10 +130,23 @@ def main() -> int:
         # *expected* monotone behaviour is that every read is >= the
         # previous one and the final read equals the total insert count
         # (modulo catchup; covered by the liveness anchor below).
+        #
+        # `WHERE NOT EXISTS` gates the INSERT idempotently against
+        # `execute_retry`'s retry semantics: Materialize doesn't
+        # enforce uniqueness as a runtime constraint, so a fault-
+        # window network drop after server-side commit would cause
+        # the retry to re-insert (step, prefix), pushing the MV's
+        # COUNT(*) GROUP BY prefix above the recorded
+        # `observations[-1][0]` and tripping
+        # `final == expected_final` non-monotonicity.  See
+        # `helper_table_mv` for the matching MV-side
+        # `COUNT(DISTINCT id)` belt-and-braces.
         try:
             execute_retry(
-                f"INSERT INTO {TABLE_MV_INPUT} (id, prefix) VALUES (%s, %s)",
-                (step, prefix),
+                f"INSERT INTO {TABLE_MV_INPUT} (id, prefix) "
+                f"SELECT %s, %s WHERE NOT EXISTS "
+                f"(SELECT 1 FROM {TABLE_MV_INPUT} WHERE id = %s AND prefix = %s)",
+                (step, prefix, step, prefix),
             )
         except Exception as exc:  # noqa: BLE001
             # Persistent insert failure under sustained fault — bail.

@@ -29,9 +29,8 @@ from __future__ import annotations
 import sys
 
 import helper_logging
-from helper_pg import execute_internal_retry
-
 from antithesis.assertions import sometimes
+from helper_pg import execute_internal_retry
 
 LOG = helper_logging.setup_logging("first.pin_upsert_v1")
 

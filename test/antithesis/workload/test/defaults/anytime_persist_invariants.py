@@ -63,6 +63,7 @@ import sys
 import time
 
 import helper_logging
+from antithesis.assertions import always, sometimes
 from helper_fault_tolerance import looks_like_fault
 from helper_pg import (
     PGDATABASE,
@@ -71,8 +72,6 @@ from helper_pg import (
     PGUSER,
     query_retry,
 )
-
-from antithesis.assertions import always, sometimes
 
 LOG = helper_logging.setup_logging("anytime.persist_invariants")
 
@@ -273,6 +272,30 @@ def main() -> int:
     return 0
 
 
+def _run_with_fault_tolerance() -> int:
+    """Catch fault-shaped exceptions at the top level.
+
+    `anytime_*` drivers run continuously and any non-zero exit fires
+    Antithesis's built-in "Commands finish with zero exit code"
+    always-check, polluting the triage report with noise that looks
+    like a property violation but isn't.  Demote fault-shaped
+    failures here to a `sometimes(False, ...)` + clean exit; let
+    genuine probe-side bugs (non-fault exceptions) propagate so
+    they surface loudly.
+    """
+    try:
+        return main()
+    except Exception as exc:  # noqa: BLE001
+        if looks_like_fault(str(exc)):
+            sometimes(
+                False,
+                "persist-invariants: probe driver terminated by fault-shaped exception",
+                {"exc_type": type(exc).__name__, "exc": str(exc)[:300]},
+            )
+            return 0
+        raise
+
+
 if __name__ == "__main__":
     _ = (os, PGHOST, PGPORT, PGUSER, PGDATABASE)
-    sys.exit(main())
+    sys.exit(_run_with_fault_tolerance())

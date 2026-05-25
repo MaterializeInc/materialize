@@ -310,8 +310,7 @@ class Workload(Service):
                 # actually configured with, so the size names a test
                 # file references (`scale=1,workers=1`, `'1'`, ...) all
                 # resolve.
-                "CLUSTER_REPLICA_SIZES="
-                + json.dumps(cluster_replica_size_map()),
+                "CLUSTER_REPLICA_SIZES=" + json.dumps(cluster_replica_size_map()),
             ],
             # Healthcheck so other services can gate their start on
             # the workload service finishing its setup phase

@@ -52,6 +52,7 @@ import helper_logging
 import helper_pw_hot
 import helper_random
 import psycopg
+from antithesis.assertions import always, sometimes
 from helper_pg import connect
 from helper_pw_hot import (
     INDEX_NAME,  # noqa: F401  -- exposed for triage details
@@ -60,8 +61,6 @@ from helper_pw_hot import (
     RETENTION,
     TABLE_NAME,
 )
-
-from antithesis.assertions import always, sometimes
 
 LOG = helper_logging.setup_logging("driver.pw_hot")
 

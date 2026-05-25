@@ -61,6 +61,7 @@ import helper_logging
 import helper_random
 import helper_workload_replay
 import psycopg
+from antithesis.assertions import always, sometimes
 from helper_fault_tolerance import looks_like_fault
 from helper_pg import (
     CONNECT_TIMEOUT_S,
@@ -75,8 +76,6 @@ from helper_workload_replay import (
     is_expected_replay_error,
 )
 from psycopg.sql import SQL, Literal
-
-from antithesis.assertions import always, sometimes
 
 LOG = helper_logging.setup_logging("driver.workload_replay")
 
@@ -138,9 +137,7 @@ def _set_session(cur: psycopg.Cursor[Any], q: dict[str, Any]) -> None:
         cur.execute(f"SET search_path = {joined}".encode())
     # statement_timeout is set unconditionally to keep one slow query
     # from hogging the worker thread for the whole invocation budget.
-    cur.execute(
-        SQL("SET statement_timeout = {}").format(Literal(STATEMENT_TIMEOUT_MS))
-    )
+    cur.execute(SQL("SET statement_timeout = {}").format(Literal(STATEMENT_TIMEOUT_MS)))
 
 
 _PARAM_PLACEHOLDER = "$"
@@ -163,7 +160,11 @@ def _convert_pg_params(sql: str, params: list[Any]) -> tuple[bytes, list[Any]]:
     i = 0
     while i < len(sql_escaped):
         ch = sql_escaped[i]
-        if ch == _PARAM_PLACEHOLDER and i + 1 < len(sql_escaped) and sql_escaped[i + 1].isdigit():
+        if (
+            ch == _PARAM_PLACEHOLDER
+            and i + 1 < len(sql_escaped)
+            and sql_escaped[i + 1].isdigit()
+        ):
             j = i + 1
             while j < len(sql_escaped) and sql_escaped[j].isdigit():
                 j += 1

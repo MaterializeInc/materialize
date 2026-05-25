@@ -18,11 +18,18 @@ from __future__ import annotations
 import logging
 import os
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, TypeVar
 
 import psycopg
+
+# Canonical fault-shape classifier shared with every other driver.  See
+# `helper_fault_tolerance` for what qualifies as fault-shaped.  Used
+# below in `_retryable` so server-initiated drops / admission-control
+# / restart-window strings are absorbed without each driver maintaining
+# its own copy of the pattern list.
+from helper_fault_tolerance import looks_like_fault
 
 LOG = logging.getLogger("antithesis.helper_pg")
 
@@ -76,24 +83,22 @@ def _truncate_sql(sql: str, max_len: int = 120) -> str:
 # Keep the patterns specific enough that we don't accidentally swallow
 # real schema errors. Anything not matched here still propagates after
 # one attempt.
-_TRANSIENT_INTERNAL_PATTERNS = (
+# Server-side `InternalError` patterns specific to pgwire callers that
+# `helper_fault_tolerance.FAULT_PATTERNS` doesn't cover.  These surface
+# during DDL validation when an upstream component (broker / schema
+# registry / source PG) is faulted.  Anything in `FAULT_PATTERNS` is
+# matched first (via `looks_like_fault`) so this list is the additive
+# pgwire-only delta — pgwire-helper-specific patterns that don't fit
+# the cross-driver "looks like a kill/pause" categorisation.
+_TRANSIENT_PGWIRE_PATTERNS = (
     # librdkafka error surfaces (CREATE SOURCE / CREATE CONNECTION validation)
-    "BrokerTransportFailure",
-    "Broker transport failure",
     "Meta data fetch error",
     "Local: All broker connections are down",
     "Local: Timed out",
     # schema-registry HTTP failures during CREATE SOURCE FORMAT AVRO ...
     "schema registry",
-    "Connection refused",
-    "Connection reset",
-    # DNS partitioned against an upstream hostname
-    "Failed to resolve hostname",
-    "Temporary failure in name resolution",
-    "no route to host",
     # postgres / mysql source validation reach-the-upstream failures
     "could not translate host name",
-    "could not connect to server",
 )
 
 
@@ -103,12 +108,20 @@ def _retryable(exc: BaseException) -> bool:
     # psycopg wraps server-side admin shutdowns as InterfaceError on next op.
     if isinstance(exc, psycopg.InterfaceError):
         return True
-    # Server-side InternalError caused by a transient external dependency
-    # (broker metadata fetch during CREATE SOURCE validation, schema-
-    # registry unavailable, etc.) — see `_TRANSIENT_INTERNAL_PATTERNS`.
+    # Server-side InternalError caused by a transient external dependency.
+    # First check the canonical cross-driver `FAULT_PATTERNS` (kept in
+    # sync centrally — see `helper_fault_tolerance`), then the pgwire-
+    # specific additive list.  Without the FAULT_PATTERNS branch, a
+    # server-initiated drop wording like
+    # `terminating connection due to administrator command` or
+    # `is (re)initializing` would surface as a hard failure even though
+    # every *other* driver (testdrive, parallel-workload) already knows
+    # those are fault-shaped.
     if isinstance(exc, psycopg.errors.InternalError):
         msg = str(exc)
-        return any(pat in msg for pat in _TRANSIENT_INTERNAL_PATTERNS)
+        if looks_like_fault(msg):
+            return True
+        return any(pat in msg for pat in _TRANSIENT_PGWIRE_PATTERNS)
     return False
 
 
@@ -178,10 +191,28 @@ def connect(autocommit: bool = True) -> Iterator[psycopg.Connection]:
             pass
 
 
-def execute_retry(sql: str, params: Sequence[Any] | None = None) -> None:
-    """Execute a statement, retrying transient errors. No result returned."""
-    sql_summary = _truncate_sql(sql)
-    LOG.debug("pg execute: %s", sql_summary)
+T = TypeVar("T")
+
+
+def _retry_loop(label: str, sql_summary: str, op: Callable[[], T]) -> T:
+    """Shared retry/backoff/deadline loop used by every pgwire helper.
+
+    `op` is a no-arg callable that opens a fresh connection, runs the
+    intended SQL, closes the connection, and either returns a value or
+    raises.  The loop classifies exceptions via `_retryable` (which
+    consults the canonical `helper_fault_tolerance.FAULT_PATTERNS`
+    plus a small pgwire-only additive list) and retries with
+    exponential backoff up to `_RETRY_BUDGET_S`.  Non-retryable
+    exceptions bubble immediately.
+
+    Centralising the loop here means a behaviour change to the retry
+    semantics (e.g. expanding the fault-pattern list, adjusting the
+    budget) lands in one place instead of three.  The previous
+    structure had three near-identical 30-line copies that had
+    already drifted: `execute_internal_retry` opened its own
+    `psycopg.connect` rather than going through `connect()`, so any
+    improvement to the connect helper had to be applied twice.
+    """
     start = time.monotonic()
     deadline = start + _RETRY_BUDGET_S
     backoff = _RETRY_INITIAL_S
@@ -189,19 +220,20 @@ def execute_retry(sql: str, params: Sequence[Any] | None = None) -> None:
     while True:
         attempt += 1
         try:
-            with connect() as conn, conn.cursor() as cur:
-                cur.execute(sql, params or ())
+            result = op()
             LOG.debug(
-                "pg execute: ok on attempt %d in %.2fs (%s)",
+                "pg %s: ok on attempt %d in %.2fs (%s)",
+                label,
                 attempt,
                 time.monotonic() - start,
                 sql_summary,
             )
-            return
+            return result
         except Exception as exc:  # noqa: BLE001
             if not _retryable(exc) or time.monotonic() > deadline:
                 LOG.warning(
-                    "pg execute: giving up after %d attempts (%.2fs total) on %s: %s",
+                    "pg %s: giving up after %d attempts (%.2fs total) on %s: %s",
+                    label,
                     attempt,
                     time.monotonic() - start,
                     sql_summary,
@@ -209,7 +241,8 @@ def execute_retry(sql: str, params: Sequence[Any] | None = None) -> None:
                 )
                 raise
             LOG.info(
-                "pg execute: attempt %d failed (%.2fs of %ds used) on %s: %s",
+                "pg %s: attempt %d failed (%.2fs of %ds used) on %s: %s",
+                label,
                 attempt,
                 time.monotonic() - start,
                 _RETRY_BUDGET_S,
@@ -218,6 +251,18 @@ def execute_retry(sql: str, params: Sequence[Any] | None = None) -> None:
             )
             time.sleep(backoff)
             backoff = min(backoff * 2, _RETRY_MAX_S)
+
+
+def execute_retry(sql: str, params: Sequence[Any] | None = None) -> None:
+    """Execute a statement, retrying transient errors. No result returned."""
+    sql_summary = _truncate_sql(sql)
+    LOG.debug("pg execute: %s", sql_summary)
+
+    def _op() -> None:
+        with connect() as conn, conn.cursor() as cur:
+            cur.execute(sql, params or ())
+
+    _retry_loop("execute", sql_summary, _op)
 
 
 def query_retry(
@@ -241,46 +286,15 @@ def query_retry(
     """
     sql_summary = _truncate_sql(sql)
     LOG.debug("pg query: %s (rtr=%s)", sql_summary, real_time_recency)
-    start = time.monotonic()
-    deadline = start + _RETRY_BUDGET_S
-    backoff = _RETRY_INITIAL_S
-    attempt = 0
-    while True:
-        attempt += 1
-        try:
-            with connect() as conn, conn.cursor() as cur:
-                if real_time_recency:
-                    cur.execute("SET real_time_recency = TRUE")
-                cur.execute(sql, params or ())
-                rows = list(cur.fetchall())
-            LOG.debug(
-                "pg query: ok on attempt %d in %.2fs, %d rows (%s)",
-                attempt,
-                time.monotonic() - start,
-                len(rows),
-                sql_summary,
-            )
-            return rows
-        except Exception as exc:  # noqa: BLE001
-            if not _retryable(exc) or time.monotonic() > deadline:
-                LOG.warning(
-                    "pg query: giving up after %d attempts (%.2fs total) on %s: %s",
-                    attempt,
-                    time.monotonic() - start,
-                    sql_summary,
-                    exc,
-                )
-                raise
-            LOG.info(
-                "pg query: attempt %d failed (%.2fs of %ds used) on %s: %s",
-                attempt,
-                time.monotonic() - start,
-                _RETRY_BUDGET_S,
-                sql_summary,
-                exc,
-            )
-            time.sleep(backoff)
-            backoff = min(backoff * 2, _RETRY_MAX_S)
+
+    def _op() -> list[tuple[Any, ...]]:
+        with connect() as conn, conn.cursor() as cur:
+            if real_time_recency:
+                cur.execute("SET real_time_recency = TRUE")
+            cur.execute(sql, params or ())
+            return list(cur.fetchall())
+
+    return _retry_loop("query", sql_summary, _op)
 
 
 def query_one_retry(
@@ -297,55 +311,34 @@ def execute_internal_retry(sql: str, params: Sequence[Any] | None = None) -> Non
 
     Used for ALTER SYSTEM SET and other operations the regular `materialize`
     role cannot perform. Retries the same transient errors as `execute_retry`.
+
+    Doesn't go through `connect()` because that helper targets the
+    user pgwire port (PGPORT) — internal-port connections need the
+    `mz_system` superuser on PGPORT_INTERNAL.  Connection setup uses
+    a single `psycopg.connect` call; the outer `_retry_loop` handles
+    connect-level fault windows by reattempting from scratch, so
+    losing the connect-level retry that `connect()` has internally
+    isn't a problem (each retry-loop attempt is a fresh
+    connect+exec+close cycle).
     """
     sql_summary = _truncate_sql(sql)
     LOG.debug("pg internal execute: %s", sql_summary)
-    start = time.monotonic()
-    deadline = start + _RETRY_BUDGET_S
-    backoff = _RETRY_INITIAL_S
-    attempt = 0
-    while True:
-        attempt += 1
-        try:
-            with (
-                psycopg.connect(
-                    host=PGHOST,
-                    port=PGPORT_INTERNAL,
-                    user=PGUSER_INTERNAL,
-                    dbname=PGDATABASE,
-                    connect_timeout=CONNECT_TIMEOUT_S,
-                    autocommit=True,
-                ) as conn,
-                conn.cursor() as cur,
-            ):
-                cur.execute(sql, params or ())
-            LOG.debug(
-                "pg internal execute: ok on attempt %d in %.2fs (%s)",
-                attempt,
-                time.monotonic() - start,
-                sql_summary,
-            )
-            return
-        except Exception as exc:  # noqa: BLE001
-            if not _retryable(exc) or time.monotonic() > deadline:
-                LOG.warning(
-                    "pg internal execute: giving up after %d attempts (%.2fs total) on %s: %s",
-                    attempt,
-                    time.monotonic() - start,
-                    sql_summary,
-                    exc,
-                )
-                raise
-            LOG.info(
-                "pg internal execute: attempt %d failed (%.2fs of %ds used) on %s: %s",
-                attempt,
-                time.monotonic() - start,
-                _RETRY_BUDGET_S,
-                sql_summary,
-                exc,
-            )
-            time.sleep(backoff)
-            backoff = min(backoff * 2, _RETRY_MAX_S)
+
+    def _op() -> None:
+        with (
+            psycopg.connect(
+                host=PGHOST,
+                port=PGPORT_INTERNAL,
+                user=PGUSER_INTERNAL,
+                dbname=PGDATABASE,
+                connect_timeout=CONNECT_TIMEOUT_S,
+                autocommit=True,
+            ) as conn,
+            conn.cursor() as cur,
+        ):
+            cur.execute(sql, params or ())
+
+    _retry_loop("internal execute", sql_summary, _op)
 
 
 def create_source_idempotent(create_sql: str, source_name: str) -> None:

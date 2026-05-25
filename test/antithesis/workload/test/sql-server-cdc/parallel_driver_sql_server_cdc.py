@@ -39,6 +39,8 @@ import time
 import helper_logging
 import helper_random
 import helper_sql_server_upstream as sql_server
+from antithesis.assertions import always, sometimes
+from helper_fault_tolerance import looks_like_fault
 from helper_pg import query_retry
 from helper_sql_server_source import (
     SOURCE_BASENAME,
@@ -47,8 +49,6 @@ from helper_sql_server_source import (
     UPSTREAM_SCHEMA,
     UPSTREAM_TABLE,
 )
-
-from antithesis.assertions import always, sometimes
 
 LOG = helper_logging.setup_logging("driver.sql_server_cdc")
 
@@ -69,26 +69,66 @@ def _source_exists() -> bool:
 def _insert_rows(batch_id: str) -> dict[str, str]:
     """Insert ROWS_PER_INVOCATION rows into the upstream SQL Server.
 
-    Returns {id → value} for every successfully inserted row. SQL
-    Server has no native `ON CONFLICT` — but batch_id makes our id
-    space disjoint per invocation, so plain INSERT is safe.
+    Returns {id → value} for every successfully inserted row.
+
+    Idempotency: SQL Server has no native `ON CONFLICT` but the upstream
+    table declares `id VARCHAR(64) NOT NULL PRIMARY KEY` so a naive
+    INSERT-retry that lands twice would raise a unique-constraint
+    violation (which pymssql may or may not classify as
+    `OperationalError` — the helper's `_retryable` would then either
+    spin in an infinite loop or escape as a hard error).  Use a single-
+    statement WHERE-NOT-EXISTS gate via a T-SQL `VALUES` derived
+    table so a fault-window commit-but-no-ack retry no-ops cleanly:
+    the second attempt sees the row already in the table, the WHERE
+    NOT EXISTS filters the VALUES-row out, and the INSERT inserts 0
+    rows without raising.  `expected[row_id] = value` then matches
+    one row in the upstream regardless of how many retries landed.
     """
     expected: dict[str, str] = {}
+    non_fault_failures: list[tuple[str, str, str]] = []
     for i in range(ROWS_PER_INVOCATION):
         row_id = f"{batch_id}:{i}"
         value = f"v{helper_random.random_int(0, 9999):04d}"
         try:
             sql_server.execute(
-                f"INSERT INTO {UPSTREAM_SCHEMA}.{UPSTREAM_TABLE} "
-                f"(id, batch_id, value) VALUES (%s, %s, %s)",
+                f"INSERT INTO {UPSTREAM_SCHEMA}.{UPSTREAM_TABLE} (id, batch_id, value) "
+                f"SELECT v.id, v.batch_id, v.value "
+                f"FROM (VALUES (%s, %s, %s)) AS v(id, batch_id, value) "
+                f"WHERE NOT EXISTS ("
+                f"  SELECT 1 FROM {UPSTREAM_SCHEMA}.{UPSTREAM_TABLE} WHERE id = v.id"
+                f")",
                 (row_id, batch_id, value),
             )
             expected[row_id] = value
         except Exception as exc:  # noqa: BLE001
-            # Under fault injection a write to the upstream may fail. Skip
-            # the row rather than crashing so the driver keeps inserting
-            # others.
-            LOG.info("insert failed for row %s: %s; skipping", row_id, exc)
+            # Classify upstream-INSERT failures.  Fault-shape (broker /
+            # DNS / TDS-connection-reset) is expected noise; anything
+            # else means SQL Server surfaced a genuine SQL error
+            # (schema drift, permissions, CDC misconfiguration) worth
+            # triaging rather than silently swallowing.
+            if looks_like_fault(str(exc)):
+                LOG.info(
+                    "insert failed for row %s (fault-shape): %s; skipping", row_id, exc
+                )
+            else:
+                LOG.warning(
+                    "insert failed for row %s with NON-FAULT error: %s; skipping",
+                    row_id,
+                    exc,
+                )
+                non_fault_failures.append((row_id, type(exc).__name__, str(exc)[:300]))
+    if non_fault_failures:
+        sometimes(
+            False,
+            "sql-server-cdc: upstream INSERT escaped fault classification",
+            {
+                "non_fault_failures_sample": non_fault_failures[:5],
+                "non_fault_count": len(non_fault_failures),
+                "batch_id": batch_id,
+                "rows_attempted": ROWS_PER_INVOCATION,
+                "rows_committed": len(expected),
+            },
+        )
     return expected
 
 

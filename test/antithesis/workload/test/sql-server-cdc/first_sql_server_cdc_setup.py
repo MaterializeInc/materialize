@@ -38,14 +38,13 @@ import sys
 
 import helper_logging
 import helper_sql_server_upstream as sql_server
+from antithesis.assertions import reachable
 from helper_sql_server_source import (
     SQL_SERVER_DATABASE,
     UPSTREAM_SCHEMA,
     UPSTREAM_TABLE,
     ensure_sql_server_cdc_source,
 )
-
-from antithesis.assertions import reachable
 
 LOG = helper_logging.setup_logging("first.sql_server_cdc_setup")
 

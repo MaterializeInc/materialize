@@ -39,9 +39,8 @@ from __future__ import annotations
 import sys
 
 import helper_logging
-from helper_pg import execute_retry, query_retry
-
 from antithesis.assertions import reachable
+from helper_pg import execute_retry, query_retry
 
 LOG = helper_logging.setup_logging("first.explicit_txn_setup")
 
@@ -77,12 +76,26 @@ def main() -> int:
         execute_retry(
             f"CREATE TABLE {TABLE_NAME} (id BIGINT PRIMARY KEY, v BIGINT NOT NULL)"
         )
-        execute_retry(
-            f"INSERT INTO {TABLE_NAME} "
-            f"SELECT i, i * 2 FROM generate_series(1, {INITIAL_ROWS}) AS i"
-        )
     else:
-        LOG.info("%s already exists; skipping", TABLE_NAME)
+        LOG.info("%s already exists; skipping CREATE", TABLE_NAME)
+
+    # Seed the table idempotently — gated separately from the CREATE
+    # above so a fault that lands between `CREATE TABLE` and the seed
+    # INSERT's commit doesn't leave the table existing-but-empty (next
+    # invocation's `_exists` would see the table and skip the seed
+    # entirely, breaking every assertion that expects INITIAL_ROWS).
+    # `WHERE NOT EXISTS` makes the INSERT a no-op for ids already
+    # present, so re-running it after a partial seed inserts only the
+    # missing ids.  Materialize doesn't enforce PRIMARY KEY uniqueness
+    # at runtime, so without the WHERE-NOT-EXISTS gate a re-INSERT
+    # would *also* dup the existing rows even if the table is half-
+    # full.
+    LOG.info("seeding %s up to %d rows (idempotent)", TABLE_NAME, INITIAL_ROWS)
+    execute_retry(
+        f"INSERT INTO {TABLE_NAME} (id, v) "
+        f"SELECT i, i * 2 FROM generate_series(1, {INITIAL_ROWS}) AS i "
+        f"WHERE NOT EXISTS (SELECT 1 FROM {TABLE_NAME} WHERE id = i)"
+    )
 
     if not _exists("mz_materialized_views", MV_NAME):
         LOG.info("creating %s in cluster %s", MV_NAME, CLUSTER)

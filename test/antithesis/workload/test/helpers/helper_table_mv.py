@@ -43,12 +43,27 @@ MV_NAME = "mv_input_count"
 
 
 def ensure_table_and_mv() -> None:
-    """Create the input table and the materialized view if absent.
+    """Create the input table and the materialized view.
 
-    Both DDLs use IF NOT EXISTS so concurrent driver instances racing
-    through setup do not collide. The MV is created in the antithesis
-    cluster so dataflow execution is colocated with the rest of the
-    workload's compute.
+    Table uses `IF NOT EXISTS` (the schema never changes; preserving
+    data across re-runs is desirable).  The MV uses `CREATE OR
+    REPLACE` so a definition change picked up by a redeploy
+    automatically rebuilds the MV against the new SQL — without it,
+    an `IF NOT EXISTS` no-ops against an MV with the *old* definition
+    and the driver's assertions then compare against stale dataflow
+    output.  This actually bit us recently: the MV definition flipped
+    from `COUNT(*)` to `COUNT(DISTINCT id)` to absorb fault-window
+    INSERT retries (Materialize doesn't enforce uniqueness, so a
+    `COUNT(*)` MV would double-count a retried row); any pre-existing
+    `COUNT(*)` MV from a prior build would silently keep firing the
+    old shape under `IF NOT EXISTS`.
+
+    Under Antithesis singleton-per-timeline semantics each timeline
+    runs `ensure_table_and_mv` at most a handful of times, so the
+    cost of `CREATE OR REPLACE` re-rendering the dataflow on every
+    invocation (vs. a no-op `IF NOT EXISTS`) is negligible — the
+    table backing the MV is small (per-prefix tens of rows) and MZ's
+    dataflow setup completes in milliseconds at that scale.
     """
     LOG.info(
         "ensure_table_and_mv: starting (table=%s mv=%s cluster=%s)",
@@ -60,10 +75,16 @@ def ensure_table_and_mv() -> None:
         f"CREATE TABLE IF NOT EXISTS {TABLE_MV_INPUT} "
         f"(id BIGINT NOT NULL, prefix TEXT NOT NULL)"
     )
+    # `COUNT(DISTINCT id)` rather than `COUNT(*)` so a fault-window
+    # INSERT retry that committed at the server but lost the client
+    # ack lands a duplicate (id, prefix) row without skewing the MV's
+    # count.  See the docstring above for the schema-drift recovery
+    # rationale that motivates `CREATE OR REPLACE` over `IF NOT
+    # EXISTS`.
     execute_retry(
-        f"CREATE MATERIALIZED VIEW IF NOT EXISTS {MV_NAME} "
+        f"CREATE OR REPLACE MATERIALIZED VIEW {MV_NAME} "
         f"IN CLUSTER {CLUSTER} AS "
-        f"SELECT prefix, COUNT(*)::BIGINT AS row_count "
+        f"SELECT prefix, COUNT(DISTINCT id)::BIGINT AS row_count "
         f"FROM {TABLE_MV_INPUT} "
         f"GROUP BY prefix"
     )

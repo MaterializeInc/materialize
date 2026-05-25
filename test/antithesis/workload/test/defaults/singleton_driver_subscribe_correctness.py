@@ -82,6 +82,7 @@ from typing import Any
 import helper_logging
 import helper_random
 import psycopg
+from antithesis.assertions import always, sometimes
 from helper_fault_tolerance import looks_like_fault
 from helper_pg import (
     PGDATABASE,
@@ -92,8 +93,6 @@ from helper_pg import (
     query_one_retry,
     query_retry,
 )
-
-from antithesis.assertions import always, sometimes
 
 LOG = helper_logging.setup_logging("driver.subscribe_correctness")
 
@@ -175,7 +174,9 @@ def _producer_loop(
                 state["ambiguous_set"].add(counter)
                 state["fault_attempts"] += 1
             if not looks_like_fault(str(exc)):
-                LOG.warning("producer: non-fault failure on counter=%d: %s", counter, exc)
+                LOG.warning(
+                    "producer: non-fault failure on counter=%d: %s", counter, exc
+                )
         time.sleep(INSERT_GAP_S)
 
 
@@ -352,7 +353,10 @@ def main() -> int:
     end_time = time.time() + RUNTIME_S
     while time.time() < end_time:
         if consumer_state.get("fatal_err"):
-            LOG.error("subscribe-correctness: consumer fatal error: %s", consumer_state["fatal_err"])
+            LOG.error(
+                "subscribe-correctness: consumer fatal error: %s",
+                consumer_state["fatal_err"],
+            )
             break
         time.sleep(2.0)
         with _state_lock:
@@ -427,7 +431,9 @@ def main() -> int:
 
     # Diffs for the assertion blobs.
     missed = sorted(authoritative_set - received_snapshot)[:20]
-    spurious = sorted(received_snapshot - authoritative_set - producer_state["ambiguous_set"])[:20]
+    spurious = sorted(
+        received_snapshot - authoritative_set - producer_state["ambiguous_set"]
+    )[:20]
 
     LOG.info(
         "[SUMMARY] subscribe-correctness prefix=%s attempted=%d committed=%d "
@@ -446,6 +452,26 @@ def main() -> int:
         len(missed),
         len(spurious),
         fatal_err is not None,
+    )
+
+    # Safety: the consumer thread must never terminate on a non-fault
+    # exception.  `_consumer_loop` already classifies via
+    # `looks_like_fault` and reconnects on fault-shape errors; any
+    # other exception means SUBSCRIBE itself surfaced something
+    # unexpected (e.g. a row-shape regression, a `pipeline mode
+    # failed` ProgrammingError, a SQL error from AS OF reconnect).
+    # Surface this directly rather than letting it slip through as
+    # `consumer_caught_up = False` (which would skip the missed/
+    # spurious always-checks and leave the bug invisible).
+    always(
+        fatal_err is None,
+        "subscribe: consumer thread never terminates on a non-fault exception",
+        {
+            "prefix": prefix,
+            "fatal_err": fatal_err,
+            "reconnects": reconnects,
+            "received_count": len(received_snapshot),
+        },
     )
 
     # Safety: every committed row must appear in the stream once

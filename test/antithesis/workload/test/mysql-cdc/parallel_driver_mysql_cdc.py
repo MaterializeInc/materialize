@@ -39,10 +39,10 @@ import time
 import helper_logging
 import helper_mysql
 import helper_random
+from antithesis.assertions import always, sometimes
+from helper_fault_tolerance import looks_like_fault
 from helper_mysql_source import SOURCE_BASENAME, SOURCE_NAME, TABLE_NAME
 from helper_pg import query_retry
-
-from antithesis.assertions import always, sometimes
 
 LOG = helper_logging.setup_logging("driver.mysql_cdc")
 
@@ -65,6 +65,7 @@ def _insert_rows(batch_id: str) -> dict[str, str]:
     Returns {id → value} for every successfully inserted row.
     """
     expected: dict[str, str] = {}
+    non_fault_failures: list[tuple[str, str, str]] = []
     for i in range(ROWS_PER_INVOCATION):
         row_id = f"{batch_id}:{i}"
         value = f"v{helper_random.random_int(0, 9999):04d}"
@@ -78,9 +79,34 @@ def _insert_rows(batch_id: str) -> dict[str, str]:
             )
             expected[row_id] = value
         except Exception as exc:  # noqa: BLE001
-            # Under fault injection a write to the primary may fail. Skip the
-            # row rather than crashing so the driver keeps inserting others.
-            LOG.info("insert failed for row %s: %s; skipping", row_id, exc)
+            # Classify upstream-INSERT failures.  Fault-shape (broker
+            # / DNS / connection-reset) is expected noise; anything
+            # else escapes `looks_like_fault` and indicates the
+            # upstream MySQL surfaced a SQL or schema error worth
+            # triaging rather than silently swallowing.
+            if looks_like_fault(str(exc)):
+                LOG.info(
+                    "insert failed for row %s (fault-shape): %s; skipping", row_id, exc
+                )
+            else:
+                LOG.warning(
+                    "insert failed for row %s with NON-FAULT error: %s; skipping",
+                    row_id,
+                    exc,
+                )
+                non_fault_failures.append((row_id, type(exc).__name__, str(exc)[:300]))
+    if non_fault_failures:
+        sometimes(
+            False,
+            "mysql-cdc: upstream INSERT escaped fault classification",
+            {
+                "non_fault_failures_sample": non_fault_failures[:5],
+                "non_fault_count": len(non_fault_failures),
+                "batch_id": batch_id,
+                "rows_attempted": ROWS_PER_INVOCATION,
+                "rows_committed": len(expected),
+            },
+        )
     return expected
 
 

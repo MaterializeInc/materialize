@@ -47,6 +47,7 @@ import sys
 
 import helper_logging
 import helper_random
+from antithesis.assertions import always, sometimes
 from helper_kafka import FLUSH_TIMEOUT_S, make_producer
 from helper_none_source import (
     SOURCE_NONE_TEXT,
@@ -55,8 +56,6 @@ from helper_none_source import (
 )
 from helper_pg import query_retry
 from helper_source_stats import wait_for_catchup
-
-from antithesis.assertions import always, sometimes
 
 LOG = helper_logging.setup_logging("driver.kafka_none_envelope")
 

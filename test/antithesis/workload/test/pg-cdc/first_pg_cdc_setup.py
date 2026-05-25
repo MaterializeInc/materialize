@@ -32,14 +32,13 @@ import sys
 
 import helper_logging
 import helper_pg_upstream
+from antithesis.assertions import reachable
 from helper_pg_source import (
     UPSTREAM_PUBLICATION,
     UPSTREAM_SCHEMA,
     UPSTREAM_TABLE,
     ensure_pg_cdc_source,
 )
-
-from antithesis.assertions import reachable
 
 LOG = helper_logging.setup_logging("first.pg_cdc_setup")
 
@@ -50,16 +49,14 @@ def setup_upstream() -> None:
     # The data-loss workload owns its own schema (not `public`) so the
     # testdrive-runner drivers can own `public` exclusively.
     helper_pg_upstream.execute(f"CREATE SCHEMA IF NOT EXISTS {UPSTREAM_SCHEMA}")
-    helper_pg_upstream.execute(
-        f"""
+    helper_pg_upstream.execute(f"""
         CREATE TABLE IF NOT EXISTS {UPSTREAM_SCHEMA}.{UPSTREAM_TABLE} (
             id          TEXT PRIMARY KEY,
             batch_id    TEXT NOT NULL,
             value       TEXT NOT NULL,
             updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
         )
-        """
-    )
+        """)
     # REPLICA IDENTITY FULL: send the entire old row in every UPDATE/DELETE
     # record. Without it, DELETE only carries the PK, which is enough for
     # CDC correctness but means the upstream row image and the

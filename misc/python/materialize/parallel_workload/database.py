@@ -1043,9 +1043,7 @@ class Cluster:
         # bracketed `-{name_scope}` segment is only present when seed-
         # scoping is on, so the historical `cluster-0` / `cluster-0-1`
         # shapes (which non-Antithesis consumers parse) are preserved.
-        prefix = (
-            f"cluster-{self.name_scope}" if self.name_scope else "cluster"
-        )
+        prefix = f"cluster-{self.name_scope}" if self.name_scope else "cluster"
         if self.rename:
             return naughtify(f"{prefix}-{self.cluster_id}-{self.rename}")
         return naughtify(f"{prefix}-{self.cluster_id}")

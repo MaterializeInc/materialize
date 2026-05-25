@@ -119,11 +119,11 @@ def execute(sql: str, params: tuple = (), database: str | None = None) -> None:
     deadline = time.monotonic() + _RETRY_BUDGET_S
     backoff = _RETRY_INITIAL_S
     while True:
+        conn = None
         try:
             conn = _open(db)
             with conn.cursor() as cur:
                 cur.execute(sql, params)
-            conn.close()
             return
         except Exception as exc:  # noqa: BLE001
             if not _retryable(exc) or time.monotonic() > deadline:
@@ -131,6 +131,19 @@ def execute(sql: str, params: tuple = (), database: str | None = None) -> None:
             LOG.info("sql-server execute retrying after %s", exc)
             time.sleep(backoff)
             backoff = min(backoff * 2, _RETRY_MAX_S)
+        finally:
+            # Close in `finally` so every exit path (success, retry,
+            # deadline-raise) releases the connection.  Without this,
+            # the retry path opens a fresh connection on every
+            # iteration and the previous one's TCP socket lingers
+            # until pymssql's __del__ collects it — under sustained
+            # faults that's enough to exhaust SQL Server's connection
+            # limit.  Idempotent on already-closed connections.
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:  # noqa: BLE001
+                    pass
 
 
 def query(sql: str, params: tuple = (), database: str | None = None) -> list[tuple]:
@@ -139,12 +152,12 @@ def query(sql: str, params: tuple = (), database: str | None = None) -> list[tup
     deadline = time.monotonic() + _RETRY_BUDGET_S
     backoff = _RETRY_INITIAL_S
     while True:
+        conn = None
         try:
             conn = _open(db)
             with conn.cursor() as cur:
                 cur.execute(sql, params)
                 result = list(cur.fetchall())
-            conn.close()
             return result
         except Exception as exc:  # noqa: BLE001
             if not _retryable(exc) or time.monotonic() > deadline:
@@ -152,6 +165,14 @@ def query(sql: str, params: tuple = (), database: str | None = None) -> list[tup
             LOG.info("sql-server query retrying after %s", exc)
             time.sleep(backoff)
             backoff = min(backoff * 2, _RETRY_MAX_S)
+        finally:
+            # See execute above — close in finally so every exit path
+            # releases the connection.
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:  # noqa: BLE001
+                    pass
 
 
 def wait_until_ready(timeout_s: float = 300.0) -> None:
@@ -179,6 +200,4 @@ def wait_until_ready(timeout_s: float = 300.0) -> None:
         except Exception as exc:  # noqa: BLE001
             LOG.info("waiting for sql-server %s: %s", SQL_SERVER_HOST, exc)
             time.sleep(2)
-    raise TimeoutError(
-        f"SQL Server at {SQL_SERVER_HOST} not ready after {timeout_s}s"
-    )
+    raise TimeoutError(f"SQL Server at {SQL_SERVER_HOST} not ready after {timeout_s}s")

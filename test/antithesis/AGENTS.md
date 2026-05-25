@@ -1,21 +1,57 @@
 Files relevant to running Materialize under Antithesis.
 
-Use the `antithesis-setup` skill to scaffold and manage this directory. Use the `antithesis-research` skill to analyze the system and build a property catalog. Use the `antithesis-workload` skill to implement assertions and test commands.
+See [README.md](./README.md) for the canonical architecture overview, group
+manifest, and authoring guide. Highlights for agents:
 
 **mzcompose.py**
-Source of truth for the Antithesis topology. Standard mzcompose composition: services (`postgres-metadata`, `minio`, `redpanda`, `materialized`, `workload`), dependencies, env, ports. The generated `config/docker-compose.yaml` is derived from this.
+Source of truth for the kitchen-sink Antithesis topology. Every service every
+workload group might want lives here (postgres-metadata, minio, materialized,
+clusterd1, fault-orchestrator, workload, plus kafka+zookeeper+schema-registry,
+postgres-source, mysql+mysql-replica, sql-server, polaris(+bootstrap),
+clusterd2, clusterd-pool-{0..N}, upsert-hammer-{0..M}). Per-group filtering
+happens at export time, not here.
+
+**groups.yaml + groups.py**
+Manifest: 10 workload groups (kafka, pg-cdc, mysql-cdc, sql-server-cdc,
+parallel-workload, upsert-stress, testdrive, workload-replay, platform-checks,
+combined). Each group declares its extra services beyond the universal set,
+plus its `setup` / `drivers` / `anytime` scripts. `default_drivers` and
+`default_anytime` are auto-merged into every group's runtime template at
+image build time.
 
 **export-compose.py**
-Renders `mzcompose.py` into a flat docker-compose YAML that Antithesis can consume. Images are emitted as `ghcr.io/materializeinc/materialize/<name>:mzbuild-<fingerprint>` refs that Antithesis pulls directly from public GHCR.
+Filters `mzcompose.py` to one group, prunes dropped depends_on, resolves
+mzbuild → `${MATERIALIZED_IMAGE}` / `${ANTITHESIS_WORKLOAD_IMAGE}` placeholders
+(per-group `antithesis-workload-<group>`), strips host bind-mounts + unsafe
+env vars (MZ_EAT_MY_DATA, MZ_LICENSE_KEY, host-path configs), upgrades
+`service_started` → `service_healthy` where the dependency has a healthcheck.
 
-**workload/**
-Mzbuild image (`antithesis-workload`) for the Python test driver. Dockerfile, entrypoint, and test-template scripts (`test/*.sh`) live here. Test command files must be prefixed with one of `parallel_driver_`, `singleton_driver_`, `serial_driver_`, `first_`, `eventually_`, `finally_`, `anytime_`; files prefixed with `helper_` are ignored by Test Composer.
+**export-env.py**
+Writes the per-group `.env` (image fingerprints).
 
-**config/**
-Mzbuild image (`antithesis-config`) — a `FROM scratch` container holding the generated `docker-compose.yaml`. This is the image Antithesis points at to bring up the environment.
+**workload/** (per-group flavors live under `workloads/<group>/`)
+Mzbuild image for the Python test driver — one image per group with the same
+Dockerfile (symlinked) and per-group `ANTITHESIS_WORKLOAD_GROUP` build-arg.
+The `bake-test-templates.sh` script copies the active group's scripts into
+`/opt/antithesis/test/v1/<template>/` at image build time. Test command files
+must use one of the Test Composer prefixes (`first_`, `parallel_driver_`,
+`singleton_driver_`, `anytime_`); `helper_*.py` files are imported by drivers
+and ignored by Test Composer's command discovery.
 
-**scratchbook/**
-Antithesis scratchbook: system analysis, property catalog, topology plans, per-property evidence files (in `scratchbook/properties/`), property relationship maps, persistent integration notes. Keep up to date as Antithesis-related decisions change.
+**configs/<group>/**
+Each group has its own `antithesis-config-<group>` image — FROM scratch tarball
+holding the generated docker-compose.yaml + .env. Antithesis ingests this.
 
 **setup-complete.sh** (in `workload/`)
-Inject this script into a Dockerfile to notify Antithesis that setup is complete. Should only run once the system under test is ready for testing — Antithesis will not run test commands until it receives this event.
+Notify Antithesis that the SUT is up and the workload entrypoint has
+provisioned the cluster. Test commands begin after this event fires.
+
+**fault-orchestrator/pause_faults.sh**
+Single bash container alternating `ANTITHESIS_STOP_FAULTS` quiet/active
+windows globally so every driver tunes its budgets against one shared cadence
+(MIN_ON=20, MAX_ON=40, MIN_OFF=20, MAX_OFF=40 by default).
+
+**push-antithesis.py**
+CI: retags + pushes every Materialize-built image (materialized,
+antithesis-workload-<group> × 10, antithesis-config-<group> × 10,
+antithesis-upsert-hammer) to the Antithesis GCP Artifact Registry.

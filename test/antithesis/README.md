@@ -69,7 +69,7 @@ rehydration, GTID monotonicity, frontier monotonicity, etc.
 
 ```
                   test/antithesis/mzcompose.py             (kitchen-sink topology, Python)
-                  test/antithesis/groups.yaml              (manifest: 7 workload groups)
+                  test/antithesis/groups.yaml              (manifest: 10 workload groups)
                               │
                               │  export-compose.py --group=NAME
                               ▼
@@ -180,13 +180,20 @@ the same timeline.
 
 **Default drivers** (auto-merged into every real template at image build time
 via the `defaults/` pseudo-template):
-- `singleton_driver_catalog_recovery_consistency`
-- `parallel_driver_strict_serializable_reads`
-- `parallel_driver_mv_reflects_table_updates`
-- `anytime_health_check`
+- `singleton_driver_catalog_recovery_consistency` — DDL survives crash recovery
+- `singleton_driver_table_data_integrity` — model-vs-SUT row-data integrity across
+  randomized INSERT/UPDATE/DELETE + crashes
+- `singleton_driver_subscribe_correctness` — SUBSCRIBE stream emits every
+  committed row, no spurious / no retractions, reconnects cleanly AS OF
+- `parallel_driver_strict_serializable_reads` — read monotonicity per timeline
+- `parallel_driver_mv_reflects_table_updates` — MV reflects table writes after settle
+- `anytime_health_check` — basic SQL reachability probe
+- `anytime_persist_invariants` — continuous `since ≤ upper` + write-frontier
+  monotonicity probe on `mz_internal.mz_frontiers`
 
-These cover the SUT-anchored properties (catalog, persist, basic
-serializability) regardless of which focused-group template Antithesis picks.
+These cover the SUT-anchored properties (catalog, persist, MV correctness,
+streaming-read correctness, persist state-machine invariants) regardless of
+which focused-group template Antithesis picks.
 
 ---
 

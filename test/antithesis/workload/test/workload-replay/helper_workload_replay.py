@@ -117,7 +117,7 @@ EXPECTED_REPLAY_ERROR_PATTERNS: tuple[str, ...] = (
     # has renamed / removed surfaces as one of these.  Not a bug —
     # the workload bundle is older than HEAD.
     "unknown catalog item",
-    "column \"",
+    'column "',
     "no such function",
     "function ",
     # `param` values come from the capture and may not cast cleanly to
@@ -141,7 +141,7 @@ EXPECTED_REPLAY_ERROR_PATTERNS: tuple[str, ...] = (
     # Some captured queries reference user objects that don't exist
     # because we deliberately skip object creation (the workload only
     # exercises catalog reads).  Same demotion as above.
-    "schema \"",
+    'schema "',
 )
 
 

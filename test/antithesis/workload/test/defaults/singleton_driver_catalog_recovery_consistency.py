@@ -53,6 +53,7 @@ import time
 import helper_logging
 import helper_random
 import psycopg
+from antithesis.assertions import always, sometimes
 from helper_pg import (
     PGDATABASE,
     PGHOST,
@@ -61,8 +62,6 @@ from helper_pg import (
     execute_retry,
     query_retry,
 )
-
-from antithesis.assertions import always, sometimes
 
 LOG = helper_logging.setup_logging("driver.catalog_recovery_consistency")
 

@@ -84,6 +84,7 @@ import time
 import helper_logging
 import helper_random
 import psycopg
+from antithesis.assertions import always, sometimes
 from helper_fault_tolerance import looks_like_fault
 from helper_pg import (
     PGDATABASE,
@@ -93,8 +94,6 @@ from helper_pg import (
     execute_retry,
     query_retry,
 )
-
-from antithesis.assertions import always, sometimes
 
 LOG = helper_logging.setup_logging("driver.table_data_integrity")
 
@@ -232,9 +231,7 @@ def _do_delete(table: str, ident: int) -> bool:
         return False
 
 
-def _pick_action(
-    expected_size: int, weights: dict[str, float]
-) -> str:
+def _pick_action(expected_size: int, weights: dict[str, float]) -> str:
     """Pick INSERT/UPDATE/DELETE honouring weights + model bounds.
 
     Below MODEL_SIZE_FLOOR we force INSERT so there's always
@@ -360,7 +357,9 @@ def main() -> int:
         observed = _fresh_observed_rows(table)
         if observed is None:
             saw_probe_failure = True
-            LOG.info("cycle %d: fresh-connection read failed; skipping assertion", cycle_idx)
+            LOG.info(
+                "cycle %d: fresh-connection read failed; skipping assertion", cycle_idx
+            )
             time.sleep(INTER_CYCLE_SLEEP_S)
             continue
 

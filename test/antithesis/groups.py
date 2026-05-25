@@ -18,9 +18,7 @@ go through `load_manifest()` so a schema change touches one place.
 from __future__ import annotations
 
 import dataclasses
-import os
 from pathlib import Path
-from typing import Any
 
 import yaml
 
@@ -109,37 +107,14 @@ def load_manifest(path: Path | str | None = None) -> Manifest:
     )
 
 
-def resolve_group_from_env(
-    manifest: Manifest,
-    env_var: str = "ANTITHESIS_WORKLOAD_GROUP",
-    default: str = "combined",
-) -> Group:
-    """Return the active Group, defaulting to `combined` if the env var is unset.
-
-    Surfaces a clear error if the env var names a group that isn't in the manifest.
-    """
-    name = os.environ.get(env_var, default)
-    return manifest.group(name)
-
-
-def script_filename(name: str, extension_hint: dict[str, str] | None = None) -> str:
-    """Map a manifest script name to its on-disk filename.
-
-    Most scripts are `.py`; `anytime_health_check` is `.sh`. The manifest
-    omits the extension so the YAML stays terse; this resolver is the
-    one place that knows the exception list.
-    """
-    overrides = extension_hint or {"anytime_health_check": "anytime_health_check.sh"}
-    if name in overrides:
-        return overrides[name]
-    return f"{name}.py"
-
-
 def all_known_scripts(manifest: Manifest) -> set[str]:
-    """Every script name referenced anywhere in the manifest. Used by
-    validation to catch typos (a manifest entry naming a script that
-    doesn't exist on disk) and orphans (a script on disk not referenced
-    by any group)."""
+    """Every script name referenced anywhere in the manifest.
+
+    Used by `_self_check` (below) to catch typos in `groups.yaml`
+    (a manifest entry naming a script that doesn't exist on disk)
+    and orphans (a `workload/test/<template>/<file>` not referenced
+    by any manifest entry — silent dead code in the image).
+    """
     seen: set[str] = set()
     for g in manifest.groups.values():
         seen.update(g.setup)
@@ -151,9 +126,16 @@ def all_known_scripts(manifest: Manifest) -> set[str]:
 
 
 def _self_check() -> int:
-    """Internal sanity check: every group resolves; groups have at least one script."""
+    """Manifest sanity check: every group resolves, every manifest entry
+    points at an existing file under `workload/test/`, and no template
+    script is orphaned (in `workload/test/<template>/` but absent from
+    the manifest).  Invokable via `python3 test/antithesis/groups.py`
+    locally or as a CI lint.
+    """
     m = load_manifest()
     rc = 0
+    test_root = Path(__file__).resolve().parent / "workload" / "test"
+
     for name, g in m.groups.items():
         services = g.all_services(m.universal_services)
         scripts = g.all_scripts(m.default_anytime, m.default_drivers)
@@ -162,6 +144,38 @@ def _self_check() -> int:
             rc = 1
         if not services:
             print(f"WARN: group {name!r} has no services at all")
+            rc = 1
+
+    # Anytime drivers may be `.py` or `.sh`; everything else is `.py`.
+    # Bake-script (workload/scripts-for-group.py) keeps the same rule;
+    # mirror it here so the lint matches what the image actually copies.
+    referenced_paths: set[Path] = set()
+    for entry in all_known_scripts(m):
+        template, basename = entry.split("/", 1)
+        ext = ".sh" if basename == "anytime_health_check" else ".py"
+        p = test_root / template / f"{basename}{ext}"
+        referenced_paths.add(p)
+        if not p.is_file():
+            print(f"ERROR: manifest entry {entry!r} → {p} not found on disk")
+            rc = 1
+
+    # Orphan scan: every `first_`/`parallel_driver_`/`singleton_driver_`/
+    # `anytime_` file under `workload/test/<template>/` should be
+    # referenced by some manifest entry.  `helper_*` files are
+    # intentionally not in the manifest (they're imported by drivers).
+    for path in test_root.rglob("*"):
+        if not path.is_file():
+            continue
+        if path.name.startswith(("helper_", "__")):
+            continue
+        if path.suffix not in (".py", ".sh"):
+            continue
+        # Skip `helpers/` directory entirely (shared across templates).
+        if "helpers" in path.parts:
+            continue
+        if path not in referenced_paths:
+            rel = path.relative_to(test_root)
+            print(f"WARN: orphan script {rel} not referenced by any manifest entry")
             rc = 1
     return rc
 

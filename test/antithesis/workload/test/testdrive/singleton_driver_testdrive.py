@@ -44,7 +44,6 @@ import sys
 import helper_logging
 import helper_random
 import helper_testdrive
-
 from antithesis.assertions import always, sometimes
 
 LOG = helper_logging.setup_logging("driver.testdrive")
@@ -157,11 +156,7 @@ def _count_directives(td_file_path: str) -> int | None:
     # Conservative: only count leading-of-line directives, ignoring
     # comments / multi-line continuations.  Same shape testdrive
     # itself uses in its parser.
-    return sum(
-        1
-        for line in text.splitlines()
-        if line.startswith((">", "!", "$"))
-    )
+    return sum(1 for line in text.splitlines() if line.startswith((">", "!", "$")))
 
 
 def main() -> int:

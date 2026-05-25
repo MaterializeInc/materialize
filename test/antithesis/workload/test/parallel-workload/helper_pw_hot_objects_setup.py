@@ -48,6 +48,7 @@ from __future__ import annotations
 import sys
 
 import helper_logging
+from antithesis.assertions import reachable
 from helper_pg import execute_retry, query_retry
 from helper_pw_hot import (
     CLUSTER,
@@ -56,8 +57,6 @@ from helper_pw_hot import (
     MV_SUM_NAME,
     TABLE_NAME,
 )
-
-from antithesis.assertions import reachable
 
 LOG = helper_logging.setup_logging("first.pw_hot_objects_setup")
 
@@ -83,13 +82,22 @@ def main() -> int:
             f"  ts          TIMESTAMPTZ NOT NULL DEFAULT now()"
             f")"
         )
-        execute_retry(
-            f"INSERT INTO {TABLE_NAME} (id, v, written_by) "
-            f"SELECT i, i * 2, 'initial-seed' "
-            f"FROM generate_series(1, {INITIAL_ROWS}) AS i"
-        )
     else:
-        LOG.info("%s already exists; skipping", TABLE_NAME)
+        LOG.info("%s already exists; skipping CREATE", TABLE_NAME)
+
+    # Idempotent seed — gated separately from CREATE TABLE so a fault
+    # between CREATE-commit and INSERT-commit can be recovered by the
+    # next invocation.  `WHERE NOT EXISTS` filters out any ids already
+    # present so re-running the seed top-up only the missing rows
+    # without duplicating existing ones (Materialize doesn't enforce
+    # PRIMARY KEY at runtime — see helper_table_mv for the same trap).
+    LOG.info("seeding %s up to %d rows (idempotent)", TABLE_NAME, INITIAL_ROWS)
+    execute_retry(
+        f"INSERT INTO {TABLE_NAME} (id, v, written_by) "
+        f"SELECT i, i * 2, 'initial-seed' "
+        f"FROM generate_series(1, {INITIAL_ROWS}) AS i "
+        f"WHERE NOT EXISTS (SELECT 1 FROM {TABLE_NAME} WHERE id = i)"
+    )
 
     if not _exists("mz_materialized_views", MV_COUNT_NAME):
         LOG.info("creating %s in cluster %s", MV_COUNT_NAME, CLUSTER)

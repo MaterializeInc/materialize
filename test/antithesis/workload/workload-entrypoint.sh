@@ -38,7 +38,15 @@ CLUSTERD_POOL_SIZE="${ANTITHESIS_CLUSTERD_POOL_SIZE:-2}"
 # the controller reads worker count from the WORKERS clause we put in
 # CREATE CLUSTER REPLICAS, not from clusterd's runtime config. Plumbed
 # in via the Workload service's environment.
-CLUSTERD_WORKERS="${CLUSTERD_WORKERS:-16}"
+# Default must match the `workers=` value mzcompose.py passes (currently
+# 4 — see `CLUSTERD_WORKERS` in test/antithesis/mzcompose.py).  Compose
+# sets the env var explicitly so production paths are fine; a manual
+# `docker run` or any future refactor that drops the env var from
+# compose would silently fall through to this default and provision
+# WORKERS=N replicas against clusterd processes running M workers,
+# tripping "instance configuration not compatible" at controller boot.
+# Keep this in lockstep with mzcompose.py:CLUSTERD_WORKERS.
+CLUSTERD_WORKERS="${CLUSTERD_WORKERS:-4}"
 
 # Wait for materialized to be ready.
 echo "Waiting for materialized to become healthy..."
