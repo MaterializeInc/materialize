@@ -39,16 +39,17 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
-use crate::EvalError;
 use crate::WindowFrameBound::{
     CurrentRow, OffsetFollowing, OffsetPreceding, UnboundedFollowing, UnboundedPreceding,
 };
 use crate::WindowFrameUnits::{Groups, Range, Rows};
 use crate::explain::{HumanizedExpr, HumanizerMode};
+use crate::relation::eval::eval_relation_with_input;
 use crate::relation::{
     ColumnOrder, WindowFrame, WindowFrameBound, WindowFrameUnits, compare_columns,
 };
 use crate::scalar::func::{add_timestamp_months, jsonb_stringify};
+use crate::{EvalError, LocalId, MirRelationExpr};
 
 // TODO(jamii) be careful about overflow in sum/avg
 // see https://timely.zulipchat.com/#narrow/stream/186635-engineering/topic/additional.20work/near/163507435
@@ -3446,6 +3447,21 @@ pub enum TableFunc {
         name: String,
         relation: SqlRelationType,
     },
+    /// Evaluate a closed relational expression as a function of the input row.
+    ///
+    /// `relation` is a [`MirRelationExpr`] whose only leaves are `Constant`s and
+    /// a distinguished `Get(Id::Local(input_id))` standing for the single input
+    /// row. At evaluation time the input row (built from the `FlatMap` argument
+    /// expressions) is bound to `input_id` and the expression is interpreted by
+    /// [`eval_relation_with_input`], yielding this table function's output rows.
+    /// This lets a row-local subquery — e.g. unnest a list, deduplicate,
+    /// re-aggregate into a list — lower to a stateless `FlatMap` rather than a
+    /// stateful keyed `Reduce`.
+    EvalRelation {
+        relation: Box<MirRelationExpr>,
+        input_id: LocalId,
+        output_type: SqlRelationType,
+    },
     RegexpMatches,
     /// Implements the WITH ORDINALITY clause.
     ///
@@ -3512,6 +3528,7 @@ impl TableFunc {
             // function implementation doesn't see the input diffs, so the thing that matters here
             // is whether the table function itself can emit a negative diff.)
             TableFunc::RepeatRow // can produce negative diffs
+            | TableFunc::EvalRelation { .. } // synthesized internally; not a SQL surface
             | TableFunc::WithOrdinality(_) => None, // no nesting of `WITH ORDINALITY` allowed
         }
     }
@@ -3613,6 +3630,20 @@ impl TableFunc {
             TableFunc::TabletizedScalar { .. } => {
                 let r = Row::pack_slice(datums);
                 Ok(Box::new(std::iter::once((r, Diff::ONE))))
+            }
+            TableFunc::EvalRelation {
+                relation, input_id, ..
+            } => {
+                // Bind the single input row to the placeholder local and
+                // interpret the housed relation as a function of it.
+                let input_row = Row::pack_slice(datums);
+                let rows = eval_relation_with_input(
+                    relation,
+                    *input_id,
+                    vec![(input_row, Diff::ONE)],
+                    None,
+                )?;
+                Ok(Box::new(rows.into_iter()))
             }
             TableFunc::RegexpMatches => Ok(Box::new(regexp_matches(datums)?)),
             TableFunc::WithOrdinality(func_with_ordinality) => {
@@ -3752,6 +3783,9 @@ impl TableFunc {
             TableFunc::TabletizedScalar { relation, .. } => {
                 return relation.clone();
             }
+            TableFunc::EvalRelation { output_type, .. } => {
+                return output_type.clone();
+            }
             TableFunc::RegexpMatches => {
                 let column_types =
                     vec![SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false)];
@@ -3809,6 +3843,7 @@ impl TableFunc {
             TableFunc::UnnestMap { .. } => 2,
             TableFunc::Wrap { width, .. } => *width,
             TableFunc::TabletizedScalar { relation, .. } => relation.column_types.len(),
+            TableFunc::EvalRelation { output_type, .. } => output_type.column_types.len(),
             TableFunc::RegexpMatches => 1,
             TableFunc::WithOrdinality(WithOrdinality { inner }) => inner.output_arity() + 1,
         }
@@ -3839,6 +3874,9 @@ impl TableFunc {
             TableFunc::GuardSubquerySize { .. } => false,
             TableFunc::Wrap { .. } => false,
             TableFunc::TabletizedScalar { .. } => false,
+            // The housed relation may produce output even when an input column
+            // is null (e.g. a count), so it must always be evaluated.
+            TableFunc::EvalRelation { .. } => false,
             TableFunc::WithOrdinality(WithOrdinality { inner }) => inner.empty_on_null_input(),
         }
     }
@@ -3871,6 +3909,9 @@ impl TableFunc {
             TableFunc::TabletizedScalar { .. } => true,
             TableFunc::RegexpMatches => true,
             TableFunc::GuardSubquerySize { .. } => false,
+            // Conservative: the housed relation may contain non-monotone
+            // operators such as `Reduce` or `TopK`.
+            TableFunc::EvalRelation { .. } => false,
             TableFunc::WithOrdinality(WithOrdinality { inner }) => inner.preserves_monotonicity(),
         }
     }
@@ -3901,6 +3942,7 @@ impl fmt::Display for TableFunc {
             TableFunc::UnnestMap { .. } => f.write_str("unnest_map"),
             TableFunc::Wrap { width, .. } => write!(f, "wrap{}", width),
             TableFunc::TabletizedScalar { name, .. } => f.write_str(name),
+            TableFunc::EvalRelation { .. } => f.write_str("eval_relation"),
             TableFunc::RegexpMatches => write!(f, "regexp_matches(_, _, _)"),
             TableFunc::WithOrdinality(WithOrdinality { inner }) => {
                 write!(f, "{}[with_ordinality]", inner)

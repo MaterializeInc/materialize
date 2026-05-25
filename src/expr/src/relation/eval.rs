@@ -675,4 +675,39 @@ mod tests {
             .collect();
         assert_eq!(out, vec![(1, 1)]);
     }
+
+    #[mz_ore::test]
+    fn eval_relation_table_func() {
+        use mz_repr::{RowArena, SqlRelationType, SqlScalarType};
+
+        use crate::TableFunc;
+
+        // Housed relation: count the rows of the single-column input, where the
+        // input row is the placeholder `Get(Local(0))`.
+        let input_id = LocalId::new(0);
+        let input_type = ReprRelationType::new(vec![ReprScalarType::Int64.nullable(false)]);
+        let body = MirRelationExpr::local_get(input_id, input_type).reduce(
+            vec![],
+            vec![AggregateExpr {
+                func: AggregateFunc::Count,
+                expr: MirScalarExpr::column(0),
+                distinct: false,
+            }],
+            None,
+        );
+        let func = TableFunc::EvalRelation {
+            relation: Box::new(body),
+            input_id,
+            output_type: SqlRelationType::new(vec![SqlScalarType::Int64.nullable(false)]),
+        };
+
+        // Evaluating against a single input row binds it and counts to 1.
+        let temp = RowArena::new();
+        let out = func
+            .eval(&[Datum::Int64(7)], &temp)
+            .unwrap()
+            .map(|(row, diff)| (row.unpack_first().unwrap_int64(), diff.into_inner()))
+            .collect::<Vec<_>>();
+        assert_eq!(out, vec![(1, 1)]);
+    }
 }
