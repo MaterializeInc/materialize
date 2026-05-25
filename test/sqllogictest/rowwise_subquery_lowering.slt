@@ -1,0 +1,277 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Row-local correlated subqueries lower to a stateless `FlatMap eval_relation`.
+#
+# When a correlated subquery is a pure function of the outer row (e.g. unnest a
+# list/array, deduplicate, re-aggregate), lowering houses the subquery in a
+# `TableFunc::EvalRelation` driven by a `FlatMap`, rather than a stateful keyed
+# `Reduce` joined back to the outer relation. This file documents, via
+# `EXPLAIN OPTIMIZED PLAN` and result checks, which idioms fire and which do
+# not.
+
+mode cockroach
+
+statement ok
+CREATE TABLE t (id int, arr int[])
+
+statement ok
+INSERT INTO t VALUES (1, ARRAY[3,1,1,2]), (2, ARRAY[5,5]), (3, NULL)
+
+# A real table, for the negative case: a subquery over it is NOT row-local.
+statement ok
+CREATE TABLE s (k int, v int)
+
+statement ok
+INSERT INTO s VALUES (1, 10), (1, 20), (2, 30)
+
+################################################################################
+# CAPABILITIES: fully stateless.
+#
+# These collapse to a single `FlatMap eval_relation` over the base read, with no
+# `Reduce`, `Distinct`, `Join`, or `ArrangeBy` for the subquery.
+################################################################################
+
+# EXISTS over a correlated unnest.
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR
+SELECT id FROM t WHERE EXISTS (SELECT 1 FROM unnest(arr) AS x WHERE x > 2)
+----
+Explained Query:
+  Project (#0)
+    Filter #2
+      FlatMap eval_relation(#1)
+        ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query I
+SELECT id FROM t WHERE EXISTS (SELECT 1 FROM unnest(arr) AS x WHERE x > 2) ORDER BY id
+----
+1
+2
+
+# IN over a correlated unnest.
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR
+SELECT id FROM t WHERE 5 IN (SELECT x FROM unnest(arr) AS x)
+----
+Explained Query:
+  Project (#0)
+    Filter #2
+      FlatMap eval_relation(#1)
+        ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query I
+SELECT id FROM t WHERE 5 IN (SELECT x FROM unnest(arr) AS x) ORDER BY id
+----
+2
+
+# LATERAL aggregate over a correlated unnest.
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR
+SELECT id, c.n FROM t, LATERAL (SELECT count(DISTINCT x) AS n FROM unnest(arr) AS x) c
+----
+Explained Query:
+  Project (#0, #2)
+    FlatMap eval_relation(#1)
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query II
+SELECT id, c.n FROM t, LATERAL (SELECT count(DISTINCT x) AS n FROM unnest(arr) AS x) c ORDER BY id
+----
+1  3
+2  1
+3  0
+
+# LATERAL ORDER BY ... LIMIT (TopK) over a correlated unnest.
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR
+SELECT id, c.m FROM t, LATERAL (SELECT x AS m FROM unnest(arr) AS x ORDER BY x DESC LIMIT 1) c
+----
+Explained Query:
+  Project (#0, #2)
+    FlatMap eval_relation(#1)
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query II
+SELECT id, c.m FROM t, LATERAL (SELECT x AS m FROM unnest(arr) AS x ORDER BY x DESC LIMIT 1) c ORDER BY id
+----
+1  3
+2  5
+
+################################################################################
+# PARTIAL: the stateful keyed `Reduce` is eliminated (the subquery's aggregation
+# now runs inside the stateless `eval_relation`), but `lower_subqueries` still
+# wraps every select-list scalar subquery in a `distinct(outer) + join-back`
+# scaffold. That residual is a redundant semijoin (the right input is a
+# single-valued function of the join key) that a later optimizer pass can
+# remove; it holds O(|outer|) arrangements but no aggregation state.
+################################################################################
+
+# The motivating idiom: unnest a row's array, deduplicate, re-aggregate to an
+# array. Baseline keeps a keyed `Reduce array_agg(distinct ...)`; here that is a
+# `FlatMap eval_relation`.
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR
+SELECT id, (SELECT array_agg(DISTINCT x) FROM unnest(arr) AS x) AS dedup FROM t
+----
+Explained Query:
+  Project (#0, #4)
+    Join on=(#0 = #2 AND #1 = #3) type=differential
+      ArrangeBy keys=[[#0, #1]]
+        ReadStorage materialize.public.t
+      ArrangeBy keys=[[#0, #1]]
+        FlatMap eval_relation(#1)
+          Distinct project=[#0, #1]
+            ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query IT
+SELECT id, (SELECT array_agg(DISTINCT x) FROM unnest(arr) AS x) AS dedup FROM t ORDER BY id
+----
+1  {1,2,3}
+2  {5}
+3  NULL
+
+# Scalar count over a correlated unnest.
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR
+SELECT id, (SELECT count(*) FROM unnest(arr) AS x) AS n FROM t
+----
+Explained Query:
+  Project (#0, #4)
+    Join on=(#0 = #2 AND #1 = #3) type=differential
+      ArrangeBy keys=[[#0, #1]]
+        ReadStorage materialize.public.t
+      ArrangeBy keys=[[#0, #1]]
+        FlatMap eval_relation(#1)
+          Distinct project=[#0, #1]
+            ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query II
+SELECT id, (SELECT count(*) FROM unnest(arr) AS x) AS n FROM t ORDER BY id
+----
+1  4
+2  2
+3  0
+
+################################################################################
+# LIMITATIONS: the subquery is NOT row-local, so the row-wise path correctly
+# does not fire and lowering falls back to the keyed strategy (no
+# `eval_relation` appears). Documented here to pin the boundary.
+################################################################################
+
+# Correlated against a stored table `s` (not a function of the outer row): the
+# subquery genuinely depends on another collection, so it remains a join.
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR
+SELECT id, (SELECT count(*) FROM s WHERE s.k = t.id) AS n FROM t
+----
+Explained Query:
+  With
+    cte l0 =
+      Project (#0)
+        ReadStorage materialize.public.t
+    cte l1 =
+      Distinct project=[#0]
+        Get l0
+    cte l2 =
+      Reduce group_by=[#0] aggregates=[count(*)]
+        Project (#0)
+          Join on=(#0{id} = #1{k}) type=differential
+            ArrangeBy keys=[[#0{id}]]
+              Get l1
+            ArrangeBy keys=[[#0{k}]]
+              Project (#0)
+                Filter (#0{k}) IS NOT NULL
+                  ReadStorage materialize.public.s
+    cte l3 =
+      Union
+        Get l2
+        Map (0)
+          Union
+            Negate
+              Project (#0)
+                Get l2
+            Get l1
+  Return
+    Project (#0, #2)
+      Join on=(#0 = #1) type=differential
+        ArrangeBy keys=[[#0]]
+          Get l0
+        ArrangeBy keys=[[#0]]
+          Union
+            Get l3
+            Map (null)
+              Union
+                Negate
+                  Project (#0)
+                    Get l3
+                Get l1
+
+Source materialize.public.t
+Source materialize.public.s
+  filter=((#0{k}) IS NOT NULL)
+
+Target cluster: quickstart
+
+EOF
+
+query II
+SELECT id, (SELECT count(*) FROM s WHERE s.k = t.id) AS n FROM t ORDER BY id
+----
+1  2
+2  1
+3  0
+
+# Unmaterializable functions (now(), mz_now(), current_database(), ...) cannot be
+# evaluated by eval_relation; a later optimizer pass resolves them to literals,
+# but that pass cannot see inside the housed relation. So a row-local subquery
+# that uses one falls back to the keyed path rather than being housed (it must
+# still produce correct results, not an evaluation error).
+query II
+SELECT id, (SELECT count(*) FROM unnest(arr) AS x WHERE current_database() = 'materialize') AS n FROM t ORDER BY id
+----
+1  4
+2  2
+3  0
