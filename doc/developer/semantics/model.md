@@ -125,20 +125,40 @@ column or row-level invariants:
   `nullable = false` and `errable = false`, the precondition is
   immediate.
 * `NoRowErr_cross` — `cross` preserves row-err-freedom.
+* `NoRowErr_filter` — `filter` preserves row-err-freedom when the
+  predicate is statically err-free on the input cell schema.
+  Combines `might_error_sound` with the schema → `Env.ErrFree`
+  bridge `RowSatisfies.toList_ErrFree`.
+
+Output-schema propagation for `Expr` lives in `Mz/OutputType.lean`:
+
+* `DatumSatisfies cs d` — `Datum` satisfies a `ColSchema` iff the
+  `nullable = false` and `errable = false` claims of the schema are
+  respected by the datum.
+* `Expr.outputType sch e` — derives the output `ColSchema` from
+  the input schema. Precise rules for `.lit` (per-variant
+  constants) and `.col` (schema lookup or null fallback);
+  conservative weakest schema for every other constructor.
+* `eval_satisfies_outputType` — soundness theorem.
 
 Open obligations on the schema side:
 
-* `NoRowErr_filter` — filter preserves `rowErrFree` only when the
-  predicate is statically err-free on the input cell schema.
-  Connects to `might_error_sound` lifted from rows to streams.
-* Output-schema propagation for `Expr` and stream operators —
-  given input schema, derive the output schema. Currently every
-  rewrite cites bare predicates; the propagation rules would let
-  the optimizer reuse one schema fact across multiple operators.
+* Tightening `outputType` per non-foundational constructor: `.not`
+  preserves; `.plus / .minus / .times` propagate `errable` and
+  always nullable (until SQL types land); `.divide` always
+  errable; `.eq / .lt` propagate `errable` with bool/null/err
+  output; `.ifThen` is the disjunction of its arms; variadic
+  `.andN / .orN / .coalesce` need aggregations over the operand
+  list and want mutual recursion.
 * Cell-error-free row schema: an analogue of `NoRowErr` for the
   per-cell `Datum.IsErr` condition. Distinct from `NoRowErr`
   (row-level err multiplicity) — both are honest schema facts and
   both gate different rewrites.
+* Schema propagation through stream operators: `filter` preserves
+  the input schema (with `rowErrFree` adjusted by predicate
+  err-freedom); `project` produces the output schema by lifting
+  `outputType` over the projection vector; `cross` produces
+  `Schema.append`.
 
 ## Stream
 
@@ -303,7 +323,8 @@ Lean evidence accumulated before the restart:
 | `refinesDual`              | `Mz/Equiv.lean`              | rewrites that add err      | pushdown over cross                       |
 | `eraseErr` (data-only)     | `Mz/StreamN.lean`            | filter / cross pushdown    | err-side surfacing                        |
 | `NoRowErr` precondition    | `Mz/StreamN.lean`            | pushdown under `=`         | filter preservation needs static pred     |
-| `Schema n` (sketch)        | `Mz/Schema.lean`             | coalesce id, cross row-err | filter / project output-schema rules      |
+| `Schema n` (sketch)        | `Mz/Schema.lean`             | coalesce id, cross row-err | project output-schema rules               |
+| `Expr.outputType`          | `Mz/OutputType.lean`         | `=` on `.lit` and `.col`   | non-foundational constructors weakest     |
 | Per-payload `(Int×ErrCnt)` | preserved in branch history  | `=` on commutative-monoid  | pushdown over cross                       |
 | Collection-scoped diff     | spec-only post-restart       | —                          | not currently mechanized                  |
 
