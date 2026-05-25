@@ -134,6 +134,12 @@ column or row-level invariants:
   predicate is statically err-free on the input cell schema.
   Combines `might_error_sound` with the schema → `Env.ErrFree`
   bridge `RowSatisfies.toList_ErrFree`.
+* `NoRowErr_project` — `project` preserves row-err-freedom
+  unconditionally (`projectOne` rewrites `row` but leaves
+  `err_diff` untouched).
+* `NoRowErr_unionAll` — list concatenation; conjunctive.
+* `NoRowErr_negate` — `(-0 : Int) = 0`, so a zero `err_diff`
+  stays zero.
 
 Output-schema propagation for `Expr` lives in `Mz/OutputType.lean`:
 
@@ -141,20 +147,30 @@ Output-schema propagation for `Expr` lives in `Mz/OutputType.lean`:
   `nullable = false` and `errable = false` claims of the schema are
   respected by the datum.
 * `Expr.outputType sch e` — derives the output `ColSchema` from
-  the input schema. Precise rules for `.lit` (per-variant
-  constants) and `.col` (schema lookup or null fallback);
-  conservative weakest schema for every other constructor.
-* `eval_satisfies_outputType` — soundness theorem.
+  the input schema. Precise rules for `.lit`, `.col`, and `.not`
+  (preserves both bits). Tight `errable`-OR-of-inputs rules for
+  `.plus`/`.minus`/`.times`, `.eq`/`.lt`, and `.ifThen` (OR over
+  three arms). `nullable := true` on these because the
+  four-valued lattice routes type-mismatched operands to `.null`
+  even when no input is nullable (e.g. `evalPlus (.bool true)
+  (.int 5) = .null`). `.divide` stays conservative (always
+  errable for division-by-zero). Variadic `.andN`/`.orN`/
+  `.coalesce` remain conservative — mutual-recursion lifts are
+  open follow-ups.
+* `eval_satisfies_outputType` — soundness theorem. Recursive on
+  `Expr` (structural recursion via `match`); each tightened arm
+  consumes the matching strictness lemma from `Mz/MightError.lean`
+  (`evalNot_not_err`, `evalPlus_not_err`, etc.).
 
 Open obligations on the schema side:
 
-* Tightening `outputType` per non-foundational constructor: `.not`
-  preserves; `.plus / .minus / .times` propagate `errable` and
-  always nullable (until SQL types land); `.divide` always
-  errable; `.eq / .lt` propagate `errable` with bool/null/err
-  output; `.ifThen` is the disjunction of its arms; variadic
-  `.andN / .orN / .coalesce` need aggregations over the operand
-  list and want mutual recursion.
+* Variadic `.andN`/`.orN`/`.coalesce` — mutual recursion mirroring
+  `Expr.argsMightError` to express `errable := args.any errable`
+  (or, for `.coalesce`, `errable := args.all errable` with the
+  rescue rule).
+* `.divide` static-divisor tightening — when the divisor is a
+  statically-safe literal, `errable := false`. Overlaps with
+  `might_error`'s `divisorIsSafe` analysis.
 * Cell-error-free row schema: an analogue of `NoRowErr` for the
   per-cell `Datum.IsErr` condition. Distinct from `NoRowErr`
   (row-level err multiplicity) — both are honest schema facts and
@@ -376,13 +392,28 @@ Asymmetric.
 
 Posture: "no spurious errors" — the transformed result has no errors
 the original did not have.
-Pushdown `filter_cross_pushdown_left` is plausibly sound in the
-LHS → RHS direction (LHS errs, RHS doesn't), unsound in reverse.
-The lift of `Datum.refines` to `Update` / `Collection` (pointwise or
-otherwise) is not yet mechanized — and `Mz/Equiv.lean`'s
-counterexample-discussion comment flags that even `eqErrSet` lifted
-pointwise fails on update-level carrier shape, so the plausibility
-is not yet underwritten.
+
+The lift of `Datum.refines` to `Update` / `Collection` is
+mechanized in `Mz/Collection.lean`:
+
+* `Row.refines a b := ∀ i : Fin n, (a.get i).refines (b.get i)`.
+* `Update.refines a b := Row.refines a.row b.row ∧ a.diff = b.diff
+  ∧ a.err_diff ≥ b.err_diff` (data multiplicity equal; err
+  multiplicity allowed to drop).
+* `Collection.refines` — recursive pointwise on equal-length
+  lists.
+
+Pushdown `filter_cross_pushdown_left` is **mechanized at the
+collection level** under a sign side condition
+`SignOK sL sR := ∀ recL ∈ sL, ∀ recR ∈ sR, 0 ≤ recL.diff *
+recR.err_diff` (`filter_cross_pushdown_left_refines`). The
+condition is needed because cross's catch-all branch gives
+`LHS.err_diff − RHS.err_diff = recL.diff * recR.err_diff`, which
+may be negative under `Int` retractions; non-negative diffs (the
+operational regime before consolidation retracts) discharge
+`SignOK` trivially. The lift is therefore *not* unconditional, but
+strictly weaker than the `NoRowErr sR` precondition that the
+strict-equality form requires. The reverse direction is unsound.
 
 ### Dual refinement preorder (`refinesDual`, errors as top)
 
@@ -453,7 +484,7 @@ Lean evidence accumulated before the restart:
 | `RowN n = Vector Datum n`  | `Mz/Collection.lean`         | `=`                        | indexed-arity reasoning verified          |
 | `Collection n` (two-diff)  | `Mz/Collection.lean`         | `=` on data side           | err side under `eraseErr` / `refines`     |
 | `eqErrSet`                 | `Mz/Equiv.lean`              | err / err commutativity    | bounded-int assoc, pushdown over cross    |
-| `refines`                  | `Mz/Equiv.lean`              | pushdown LHS → RHS (plausibly; lift to `Collection` open) | rewrites that add err                     |
+| `refines`                  | `Mz/Equiv.lean` + `Mz/Collection.lean` | pushdown LHS → RHS under `SignOK` side condition | rewrites that add err; unconditional pushdown |
 | `refinesDual`              | `Mz/Equiv.lean`              | rewrites that add err      | pushdown over cross                       |
 | `eraseErr` (interior lemma) | `Mz/Collection.lean`        | filter / cross pushdown — data side only | not a user-facing relation; must pair with err-side argument |
 | `NoRowErr` precondition    | `Mz/Collection.lean`         | pushdown under `=`         | filter preservation needs static pred     |

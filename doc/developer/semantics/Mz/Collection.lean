@@ -1,8 +1,10 @@
 import Mz.Eval
 import Mz.ColRefs
+import Mz.Equiv
 import Mathlib.Data.Vector.Defs
 import Mathlib.Data.Vector.Basic
 import Mathlib.Tactic.Ring
+import Mathlib.Tactic.Linarith
 
 /-!
 # Collection: rows with diff and err multiplicities
@@ -601,6 +603,317 @@ theorem filter_cross_pushdown_left_strict
     apply List.map_congr_left
     intro recR hrecR
     exact filterOne_cross_pushdown_left_strict p hp recL recR (hR recR hrecR)
+
+end Collection
+
+/-! ## Lifting `Datum.refines` to rows, updates, and collections
+
+`Datum.refines` (in `Mz/Equiv.lean`) is an errors-as-bottom preorder
+on individual cells. This section lifts it to `RowN n`, `Update n`,
+and `Collection n` so that pushdown obligations whose strict-equality
+form requires `NoRowErr` can be stated and discharged under refinement.
+
+The lifts are deliberately conservative:
+
+* `Row.refines` is pointwise on cells. The pushdown lemma below
+  only uses reflexivity (rows agree exactly), but the pointwise
+  shape is the natural one to expose to a future user who needs
+  cell-level refinement.
+* `Update.refines` fixes `diff` (data multiplicity does not move
+  under a refines-style rewrite) and allows `err_diff` to drop
+  (errors-as-bottom). The relation is `a.refines b` ↔ "a has at
+  least as many errs as b on the same row at the same data
+  multiplicity". -/
+
+/-- Pointwise refinement on length-`n` rows. -/
+def Row.refines {n : Nat} (a b : RowN n) : Prop :=
+  ∀ i : Fin n, (a.get i).refines (b.get i)
+
+/-- Reflexivity of `Row.refines`. -/
+theorem Row.refines_refl {n : Nat} (a : RowN n) : Row.refines a a :=
+  fun _ => Datum.refines_refl _
+
+/-- Transitivity of `Row.refines`. -/
+theorem Row.refines_trans {n : Nat} {a b c : RowN n}
+    (h₁ : Row.refines a b) (h₂ : Row.refines b c) : Row.refines a c :=
+  fun i => Datum.refines_trans (h₁ i) (h₂ i)
+
+/-- Equality on rows implies refinement. -/
+theorem Row.refines_of_eq {n : Nat} {a b : RowN n} (h : a = b) :
+    Row.refines a b := by
+  subst h; exact Row.refines_refl a
+
+/-- Refinement on updates: rows refine pointwise, data multiplicity
+matches, and err multiplicity is allowed to drop (errors-as-bottom).
+The `≥` on `err_diff` reflects "a has at least as many errs as b". -/
+def Update.refines {n : Nat} (a b : Update n) : Prop :=
+  Row.refines a.row b.row ∧ a.diff = b.diff ∧ a.err_diff ≥ b.err_diff
+
+/-- Reflexivity of `Update.refines`. -/
+theorem Update.refines_refl {n : Nat} (a : Update n) : a.refines a :=
+  ⟨Row.refines_refl _, rfl, le_refl _⟩
+
+/-- Transitivity of `Update.refines`. -/
+theorem Update.refines_trans {n : Nat} {a b c : Update n}
+    (h₁ : a.refines b) (h₂ : b.refines c) : a.refines c := by
+  refine ⟨?_, ?_, ?_⟩
+  · exact Row.refines_trans h₁.1 h₂.1
+  · exact h₁.2.1.trans h₂.2.1
+  · exact le_trans h₂.2.2 h₁.2.2
+
+/-- Equality on updates implies refinement. -/
+theorem Update.refines_of_eq {n : Nat} {a b : Update n} (h : a = b) :
+    a.refines b := by
+  subst h; exact Update.refines_refl a
+
+namespace Collection
+
+variable {n m k : Nat}
+
+/-! ## Lifting `Update.refines` to collections
+
+The collection lift is pointwise on a list of equal length. The
+shape is the recursive analogue of Mathlib's `List.Forall₂`,
+inlined here so the proofs do not have to chase the Mathlib API.
+The alternative (Mathlib's `List.Forall₂ Update.refines`) is
+isomorphic; the inline form is chosen because the existing
+`Collection` proofs in this file use only the elementary List
+operations (`map`, `append`, `flatMap`), and matching that style
+keeps the pushdown proof short. -/
+
+/-- Pointwise refinement on collections. Two collections refine
+when they have equal length and updates refine pairwise. -/
+def refines : Collection n → Collection n → Prop
+  | [], [] => True
+  | _ :: _, [] => False
+  | [], _ :: _ => False
+  | a :: as, b :: bs => Update.refines a b ∧ refines as bs
+
+@[simp] theorem refines_nil_nil : refines ([] : Collection n) [] := True.intro
+
+@[simp] theorem refines_cons_cons {a b : Update n} {as bs : Collection n} :
+    refines (a :: as) (b :: bs) ↔ Update.refines a b ∧ refines as bs :=
+  Iff.rfl
+
+/-- Reflexivity of `Collection.refines`. -/
+theorem refines_refl (s : Collection n) : refines s s := by
+  induction s with
+  | nil => exact True.intro
+  | cons a as ih => exact ⟨Update.refines_refl _, ih⟩
+
+/-- Transitivity of `Collection.refines`. -/
+theorem refines_trans {a b c : Collection n} :
+    refines a b → refines b c → refines a c := by
+  induction a generalizing b c with
+  | nil =>
+    cases b with
+    | nil =>
+      cases c with
+      | nil => intro _ _; exact True.intro
+      | cons _ _ => intro _ h₂; exact h₂.elim
+    | cons _ _ => intro h₁ _; exact h₁.elim
+  | cons _ _ ih =>
+    cases b with
+    | nil => intro h₁ _; exact h₁.elim
+    | cons _ _ =>
+      cases c with
+      | nil => intro _ h₂; exact h₂.elim
+      | cons _ _ =>
+        intro h₁ h₂
+        exact ⟨Update.refines_trans h₁.1 h₂.1, ih h₁.2 h₂.2⟩
+
+/-- Equality on collections implies refinement. -/
+theorem refines_of_eq {a b : Collection n} (h : a = b) :
+    refines a b := by
+  subst h; exact refines_refl a
+
+/-- Refinement is preserved by `List.append`. -/
+theorem refines_append {a₁ b₁ a₂ b₂ : Collection n} :
+    refines a₁ b₁ → refines a₂ b₂ → refines (a₁ ++ a₂) (b₁ ++ b₂) := by
+  induction a₁ generalizing b₁ with
+  | nil =>
+    cases b₁ with
+    | nil => intro _ h₂; exact h₂
+    | cons _ _ => intro h₁ _; exact h₁.elim
+  | cons _ _ ih =>
+    cases b₁ with
+    | nil => intro h₁ _; exact h₁.elim
+    | cons _ _ =>
+      intro h₁ h₂
+      exact ⟨h₁.1, ih h₁.2 h₂⟩
+
+/-- Refinement is preserved by mapping a refining per-update action.
+If `f r` refines `g r` for every right-side update `r`, then mapping
+`f` over a collection refines mapping `g`. -/
+theorem refines_map_of_pointwise
+    {sR : Collection m} {f g : Update m → Update n}
+    (h : ∀ r ∈ sR, Update.refines (f r) (g r)) :
+    refines (sR.map f) (sR.map g) := by
+  induction sR with
+  | nil => exact True.intro
+  | cons r rs ih =>
+    refine ⟨h r (List.mem_cons_self), ?_⟩
+    exact ih (fun r' hr' => h r' (List.mem_cons_of_mem _ hr'))
+
+/-! ## Pushdown via refinement (no `NoRowErr` precondition)
+
+The strict-equality form `filter_cross_pushdown_left_strict` requires
+`NoRowErr sR` to make `recL.diff · recR.err_diff` vanish. Under
+`refines`, that term is allowed to *contribute extra* err
+multiplicity on the LHS (the un-pushed side), provided the sign of
+the contribution is non-negative — which it is whenever the data
+multiplicity `recL.diff` and the right err multiplicity
+`recR.err_diff` agree in sign.
+
+The per-update lemma is split by branch on the predicate's value
+on the left row:
+
+* `.bool true` — `filterOne` is the identity; both sides equal,
+  refinement follows from `Update.refines_refl`.
+* `.err _` — both sides have the same err-diff after rearranging,
+  refinement follows from equality.
+* `.bool false / .int / .null` — LHS err-diff exceeds RHS err-diff
+  by exactly `recL.diff · recR.err_diff`. Under refinement, "exceeds"
+  is the right direction (LHS has more errs, RHS has fewer); but the
+  signed `Int` semantics of `diff` means the excess is only
+  guaranteed non-negative when `recL.diff · recR.err_diff ≥ 0`.
+
+The collection-level theorem propagates this sign side condition.
+A fully unconditional collection lift would require either a
+well-formedness predicate excluding negative diffs (Materialize's
+operational regime, where retractions follow insertions), or an
+encoding where the err side is not multiplied through `cross`. Both
+are out of scope here and are the residual obligation the load-
+bearing pushdown still carries; see report. -/
+
+/-- Direct equality on the `.bool true` and `.err _` branches and a
+controlled inequality on the catch-all branch. Internally we go
+through equality `Update.mk.injEq` for the first two branches (to
+reuse `Update.refines_of_eq`), and through component-wise breakdown
+for the catch-all.
+
+The catch-all `err_diff` step. With `dL = recL.diff`, `eL =
+recL.err_diff`, `dR = recR.diff`, `eR = recR.err_diff`:
+
+* LHS update's err_diff = `dL * eR + eL * dR + eL * eR`
+* RHS update's err_diff = `0 * eR + eL * dR + eL * eR`
+* LHS - RHS = `dL * eR` ≥ 0 by `hSign`. -/
+theorem filterOne_cross_pushdown_left_refines
+    (p : Expr) (hp : p.colReferencesBoundedBy n = true)
+    (recL : Update n) (recR : Update m)
+    (hSign : 0 ≤ recL.diff * recR.err_diff) :
+    Update.refines (filterOne p (crossOne recL recR))
+                   (crossOne (filterOne p recL) recR) := by
+  have heval := eval_crossOne_left_bounded p hp recL recR
+  unfold filterOne
+  rw [heval]
+  cases hcase : eval recL.row.toList p with
+  | bool b =>
+    cases b with
+    | true =>
+      -- Both sides are `crossOne recL recR`.
+      exact Update.refines_refl _
+    | false =>
+      -- Catch-all branch. Build the triple directly.
+      refine ⟨?_, ?_, ?_⟩
+      · -- Row.refines: rows on both sides reduce to
+        -- `recL.row ++ recR.row` by definition of `crossOne`.
+        apply Row.refines_of_eq
+        simp only [crossOne]
+      · -- diff: LHS = 0, RHS = (filterOne yields 0) * recR.diff = 0.
+        simp only [crossOne, Int.zero_mul]
+      · -- err_diff: the inequality
+        --   LHS.err_diff = dL*eR + eL*dR + eL*eR
+        --   RHS.err_diff = 0*eR + eL*dR + eL*eR
+        -- The excess (LHS - RHS = dL*eR) is `hSign`.
+        simp only [crossOne, Int.zero_mul, zero_add]
+        -- After simp, goal is
+        --   dL*eR + eL*dR + eL*eR ≥ eL*dR + eL*eR
+        -- (with `≥` unfolded to `≤`). linarith treats the three
+        -- products as atoms and discharges via `hSign`.
+        linarith [hSign]
+  | int _ =>
+    refine ⟨?_, ?_, ?_⟩
+    · apply Row.refines_of_eq; simp only [crossOne]
+    · simp only [crossOne, Int.zero_mul]
+    · simp only [crossOne, Int.zero_mul, zero_add]
+      linarith [hSign]
+  | null =>
+    refine ⟨?_, ?_, ?_⟩
+    · apply Row.refines_of_eq; simp only [crossOne]
+    · simp only [crossOne, Int.zero_mul]
+    · simp only [crossOne, Int.zero_mul, zero_add]
+      linarith [hSign]
+  | err _ =>
+    -- Branch closes by equality: both sides agree on row, diff, and
+    -- err_diff after `ring` rearrangement on the err_diff. We
+    -- discharge the goal by lifting equality through
+    -- `Update.refines_of_eq`, mirroring the existing strict-equality
+    -- proof.
+    apply Update.refines_of_eq
+    simp only [crossOne]
+    refine Update.mk.injEq .. |>.mpr ⟨rfl, ?_, ?_⟩
+    · ring
+    · ring
+
+/-- Sign condition lifted pointwise to a collection: for every
+left and right update, the product `recL.diff · recR.err_diff` is
+non-negative. The natural sufficient condition is that all diffs
+and all err multiplicities are non-negative (Materialize's
+operational regime); the predicate here is the precise condition
+that the per-update pushdown needs. -/
+def SignOK (sL : Collection n) (sR : Collection m) : Prop :=
+  ∀ recL ∈ sL, ∀ recR ∈ sR, 0 ≤ recL.diff * recR.err_diff
+
+/-- Collection-level pushdown under refinement. The right side
+need not be row-err-free; the side condition is the weaker
+sign-agreement on data times err multiplicities.
+
+The induction is on `sL`. Since `SignOK sL sR` mentions `sL`, the
+hypothesis is generalized via `induction ... generalizing hSign`
+so the IH carries a side-condition slot. -/
+theorem filter_cross_pushdown_left_refines
+    (p : Expr) (hp : p.colReferencesBoundedBy n = true)
+    (sL : Collection n) (sR : Collection m)
+    (hSign : SignOK sL sR) :
+    refines (filter p (cross sL sR)) (cross (filter p sL) sR) := by
+  induction sL with
+  | nil => exact True.intro
+  | cons recL sLR ih =>
+    rw [cross_cons_left, filter_append, filter_cons,
+        cross_cons_left]
+    refine refines_append ?_ ?_
+    · -- prefix: filter p (sR.map (crossOne recL))
+      --   refines sR.map (crossOne (filterOne p recL))
+      rw [filter, List.map_map]
+      apply refines_map_of_pointwise
+      intro recR hrecR
+      exact filterOne_cross_pushdown_left_refines p hp recL recR
+        (hSign recL List.mem_cons_self recR hrecR)
+    · -- tail: filter p (cross sLR sR) refines cross (filter p sLR) sR.
+      apply ih
+      intro recL' hL' recR' hR'
+      exact hSign recL' (List.mem_cons_of_mem _ hL') recR' hR'
+
+/-! ## Comparison with the strict-equality form
+
+`filter_cross_pushdown_left_strict` (above) requires
+`NoRowErr sR`, i.e., `recR.err_diff = 0` for every right update.
+That hypothesis makes every `recL.diff · recR.err_diff` zero, hence
+the sign condition `SignOK` is trivially satisfied, and on every
+branch LHS and RHS have *equal* err_diff (not merely ≥). So the
+strict form is a special case of `filter_cross_pushdown_left_refines`
+plus antisymmetry on the err side.
+
+The honest reading: the lift removes the `err_diff = 0` precondition
+in exchange for a weaker sign side condition. It does not close
+the theorem completely unconditionally — a fully unconditional
+form needs either a well-formedness invariant (non-negative diffs)
+that holds for Materialize's operational regime but not for arbitrary
+signed-`Int` differential collections, or a different err-side
+encoding where `cross` does not multiply data against err. The
+sign side condition is the cleanest middle ground; the strict
+`NoRowErr` form is strictly stronger. -/
 
 end Collection
 

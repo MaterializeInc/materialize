@@ -76,7 +76,7 @@ against data multiplicities.
 
 | Transform | Statement | Relation |
 | --- | --- | --- |
-| `filter_cross_pushdown_left` | `filter p (cross l r) = cross (filter p l) r` when `p`'s columns are bounded by `l`'s arity | unsound under `=` (counterexample `filterOne_cross_pushdown_left_unsound`); sound under `eraseErr` (`filter_cross_pushdown_left_data`); sound under `=` given `NoRowErr r` (`filter_cross_pushdown_left_strict`); plausibly sound under `refines` LHS → RHS (open — `Datum.refines` not yet lifted to `Update`/`Collection`) |
+| `filter_cross_pushdown_left` | `filter p (cross l r) = cross (filter p l) r` when `p`'s columns are bounded by `l`'s arity | unsound under `=` (counterexample `filterOne_cross_pushdown_left_unsound`); sound under `eraseErr` (`filter_cross_pushdown_left_data`); sound under `=` given `NoRowErr r` (`filter_cross_pushdown_left_strict`); sound under `Collection.refines` LHS → RHS given `SignOK l r` (`filter_cross_pushdown_left_refines`) |
 | `filter_cross_pushdown_right` (open) | symmetric, via `colShift` to realign the predicate; substrate `eval_append_right_shift` mechanized in `Mz/ColRefs.lean` | mirror of the left form |
 | `project_cross_pushdown` (open) | `project es (cross l r) = cross (project es_l l) (project es_r r)` when `es` splits cleanly into left and right column-sets | expected `=` when the split is clean |
 | `filter_project_pushdown` (open) | `filter p (project es s) = project es (filter (p.subst es) s)` | data side under `=` via `eval_subst`; err side asks the same multiplicity question as the cross pushdown |
@@ -92,11 +92,14 @@ filter preserves. Three recovery windows:
   `err_diff = 0` on every update. Sound at `=`. Discharged by a
   schema's `rowErrFree` bit (`NoRowErr_of_satisfies_rowErrFree`).
 * **`refines` posture.** Allow the transformed side to lose
-  errors. Plausibly sound LHS → RHS only, but the lift of
-  `Datum.refines` to `Update` / `Collection` is not yet
-  mechanized; the comment block at `Mz/Equiv.lean` lines 267-296
-  also flags carrier-row shape mismatches under `eqErrSet`
-  lifted pointwise, so the plausibility is not yet underwritten.
+  errors. Mechanized in `Mz/Collection.lean`
+  (`filter_cross_pushdown_left_refines`) under a sign side
+  condition `SignOK l r := ∀ recL ∈ l, ∀ recR ∈ r,
+  0 ≤ recL.diff * recR.err_diff`. The condition is needed because
+  cross's catch-all branch produces
+  `LHS.err_diff − RHS.err_diff = recL.diff * recR.err_diff`, which
+  may be negative under `Int` retractions. Non-negative-diff
+  collections discharge `SignOK` trivially.
 
 ## Substitution
 
@@ -155,6 +158,9 @@ Each entry assumes the input collection satisfies a `Schema n` (see
 | `coalesce_collapse` | `coalesce(a, b) = a` when `a` evaluates concrete | `a`'s `outputType` has `nullable = false ∧ errable = false`; mechanized via `eval_coalesce_pair_of_a_concrete` |
 | `NoRowErr_filter` | `filter p` preserves `NoRowErr s` | `s` satisfies a schema with `cellErrFree`, and `p.might_error = false` |
 | `NoRowErr_cross` | `cross l r` preserves `NoRowErr l ∧ NoRowErr r` | unconditional |
+| `NoRowErr_project` | `project es s` preserves `NoRowErr s` | unconditional |
+| `NoRowErr_unionAll` | `unionAll a b` preserves `NoRowErr a ∧ NoRowErr b` | unconditional |
+| `NoRowErr_negate` | `negate s` preserves `NoRowErr s` | unconditional |
 | `is_null_fold` (open) | `is_null(a) = false` when `a`'s column is non-nullable | `a`'s `outputType.nullable = false` |
 | `non_null_join_key` (open) | join key need not check NULL | both sides' key columns are non-nullable |
 
@@ -168,12 +174,22 @@ The mechanized soundness statement is:
 | --- | --- |
 | `eval_satisfies_outputType` | `DatumSatisfies (Expr.outputType sch e) (eval row.toList e)` whenever `row` satisfies `sch` |
 
-Currently precise on `.lit` and `.col`; conservative `{ nullable :=
-true, errable := true }` on every other constructor.
-Per-constructor refinements (`.not` preserves; arithmetic propagates
-`errable`; `.divide` always errable; `.ifThen` is the disjunction
-of arms; variadic constructors via mutual recursion) are open work
-listed in `model.md`.
+Per-constructor precision (`Mz/OutputType.lean`):
+* `.lit` / `.col` — precise.
+* `.not a` — preserves both bits of `a` (`evalNot` is strict on
+  `.null` and `.err _`).
+* `.plus` / `.minus` / `.times` / `.eq` / `.lt` — `errable` is the
+  OR of the inputs' `errable`. `nullable := true` because the
+  four-valued lattice routes type-mismatched operands to `.null`
+  (`evalPlus (.bool true) (.int 5) = .null`) even when no input is
+  nullable.
+* `.ifThen c t e` — `errable` is the OR over the three arms.
+  `nullable := true` (a non-bool `c` routes to `.null`).
+* `.divide` — both bits `true`. Division-by-zero forces
+  `errable`; type-mismatch routes to `.null` for `nullable`.
+* `.andN` / `.orN` / `.coalesce` — conservative weakest schema.
+  Tighter rules need mutual recursion mirroring
+  `Expr.argsMightError` (open follow-up).
 
 ## Constructor-level laws
 

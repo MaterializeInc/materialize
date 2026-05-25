@@ -1,4 +1,5 @@
 import Mz.Schema
+import Mz.MightError
 
 /-!
 # Output schema propagation for `Expr`
@@ -7,18 +8,30 @@ import Mz.Schema
 expression `e` evaluated on a row satisfying input schema `sch`,
 with soundness theorem `eval_satisfies_outputType`.
 
-This module lands the *foundation*: precise rules for `.lit` and
-`.col`, conservative `{ nullable := true, errable := true }` for
-every other constructor. The conservative rules are sound by
-`DatumSatisfies.weakest`; refining them per constructor (`.not`
-preserves; arithmetic `errable` propagates; `.coalesce` recovers
-on a non-null non-err first argument; etc.) is mechanical and
-left as a follow-up.
+Per-constructor precision:
 
-The conservative form is already useful as the structural carrier:
-optimizer rewrites that need a precise output column schema can
-cite `eval_satisfies_outputType` for the lit / col fragments, and
-refinements ride on top of the same theorem statement. -/
+* `.lit` / `.col`: precise.
+* `.not a`: preserves both bits of `a` (`evalNot` is strict on
+  `.null` and `.err _`).
+* `.plus` / `.minus` / `.times` / `.eq` / `.lt`: `errable` is the
+  OR of the inputs (no spontaneous err on `Int`; the modeled
+  `evalPlus`/etc. use unbounded `Int`). `nullable` is conservative
+  (`true`) because the four-valued lattice routes type-mismatched
+  operands to `.null` without violating any input nullability bit.
+* `.divide a b`: `errable := true` (division-by-zero on
+  `b = .int 0`). `nullable := true` for the same type-mismatch
+  reason as the other arithmetic operators.
+* `.ifThen c t e`: `errable` is the OR of all three arms (the only
+  way to produce an `.err _` output is via an `.err _` input).
+  `nullable := true` (a non-bool / non-null / non-err condition
+  routes to `.null`).
+* `.andN` / `.orN` / `.coalesce`: left conservative
+  (`{ nullable := true, errable := true }`). The tighter rules —
+  variadic `errable := args.any errable` for the boolean fragment,
+  and the rescue rule for `.coalesce` (see
+  `Mz/Schema.lean`'s `eval_coalesce_pair_of_a_concrete`) — require
+  mutual recursion mirroring `Expr.might_error` and are left as a
+  follow-up. -/
 
 namespace Mz
 
@@ -41,8 +54,17 @@ theorem DatumSatisfies.weakest (d : Datum) :
 
 /-! ## Output type computation -/
 
-/-- Compute the output `ColSchema` for an expression. Precise on
-`.lit` and `.col`; conservative on every other constructor. -/
+/-- Compute the output `ColSchema` for an expression.
+
+Precise on `.lit` and `.col`. Tight `errable` propagation on
+`.not`, `.ifThen`, `.plus`/`.minus`/`.times`, `.eq`/`.lt`, and
+`.not`-preservation of `nullable`. `nullable := true` everywhere
+else because the four-valued lattice produces `.null` outputs from
+non-null/non-err inputs whenever operand types mismatch (e.g.
+`evalPlus (.bool true) (.int 5) = .null`). `.divide` is always
+errable (divide-by-zero). The variadic constructors `.andN`,
+`.orN`, and `.coalesce` are left conservative (see module
+docstring). -/
 def Expr.outputType {n : Nat} (sch : Schema n) : Expr → ColSchema
   | .lit (.bool _) => { nullable := false, errable := false }
   | .lit (.int _)  => { nullable := false, errable := false }
@@ -51,7 +73,34 @@ def Expr.outputType {n : Nat} (sch : Schema n) : Expr → ColSchema
   | .col i =>
     if h : i < n then sch.cols.get ⟨i, h⟩
     else { nullable := true, errable := false }
-  | _ => { nullable := true, errable := true }
+  | .not a =>
+    Expr.outputType sch a
+  | .ifThen c t e =>
+    { nullable := true
+      errable :=
+        (Expr.outputType sch c).errable
+        || (Expr.outputType sch t).errable
+        || (Expr.outputType sch e).errable }
+  | .plus a b =>
+    { nullable := true
+      errable := (Expr.outputType sch a).errable || (Expr.outputType sch b).errable }
+  | .minus a b =>
+    { nullable := true
+      errable := (Expr.outputType sch a).errable || (Expr.outputType sch b).errable }
+  | .times a b =>
+    { nullable := true
+      errable := (Expr.outputType sch a).errable || (Expr.outputType sch b).errable }
+  | .divide _ _ =>
+    { nullable := true, errable := true }
+  | .eq a b =>
+    { nullable := true
+      errable := (Expr.outputType sch a).errable || (Expr.outputType sch b).errable }
+  | .lt a b =>
+    { nullable := true
+      errable := (Expr.outputType sch a).errable || (Expr.outputType sch b).errable }
+  | .andN _ => { nullable := true, errable := true }
+  | .orN _ => { nullable := true, errable := true }
+  | .coalesce _ => { nullable := true, errable := true }
 
 /-! ## `Env.get` on a row that satisfies a schema -/
 
@@ -73,17 +122,37 @@ private theorem Env_get_row_toList_ge
 
 /-! ## Soundness -/
 
+/-! ### Helper for the `nullable := true, errable := f a || f b`
+shape used by the arithmetic and comparison operators. -/
+
+/-- An `errable`-OR rule for a binary operator. Given a strictness
+witness "if neither input is `.err _`, the output is not `.err _`",
+this packages the `DatumSatisfies` conclusion. -/
+private theorem binOp_satisfies
+    {da db : Datum} {csa csb : ColSchema}
+    {f : Datum → Datum → Datum}
+    (hsata : DatumSatisfies csa da) (hsatb : DatumSatisfies csb db)
+    (hNotErr : ¬da.IsErr → ¬db.IsErr → ¬(f da db).IsErr) :
+    DatumSatisfies
+      { nullable := true, errable := csa.errable || csb.errable }
+      (f da db) := by
+  refine ⟨?_, ?_⟩
+  · intro h; cases h
+  · intro hErr
+    simp only [Bool.or_eq_false_iff] at hErr
+    exact hNotErr (hsata.2 hErr.1) (hsatb.2 hErr.2)
+
 /-- Soundness: evaluating `e` on a row satisfying `sch` produces a
-`Datum` satisfying `Expr.outputType sch e`. Precise on `.lit` and
-`.col`; falls through to `DatumSatisfies.weakest` for every other
-constructor. -/
+`Datum` satisfying `Expr.outputType sch e`. Precise on `.lit`,
+`.col`, and `.not`; tight on `errable` for `.ifThen`, the
+arithmetic operators (modulo divide-by-zero), and the comparison
+operators; conservative on `.andN`, `.orN`, and `.coalesce` — those
+fall through to `DatumSatisfies.weakest`. -/
 theorem eval_satisfies_outputType {n : Nat}
-    (sch : Schema n) (row : RowN n) (hsat : RowSatisfies sch row)
-    (e : Expr) :
-    DatumSatisfies (Expr.outputType sch e) (eval row.toList e) := by
-  match e with
-  | .lit d =>
-    simp only [eval, Expr.outputType]
+    (sch : Schema n) (row : RowN n) (hsat : RowSatisfies sch row) :
+    ∀ (e : Expr), DatumSatisfies (Expr.outputType sch e) (eval row.toList e)
+  | .lit d => by
+    simp only [eval]
     cases d with
     | bool b =>
       refine ⟨?_, ?_⟩
@@ -101,7 +170,7 @@ theorem eval_satisfies_outputType {n : Nat}
       refine ⟨?_, ?_⟩
       · intro _ h; cases h
       · intro h; cases h
-  | .col i =>
+  | .col i => by
     simp only [eval, Expr.outputType]
     by_cases h : i < n
     · rw [Env_get_row_toList_lt row i h]
@@ -112,16 +181,72 @@ theorem eval_satisfies_outputType {n : Nat}
       refine ⟨?_, ?_⟩
       · intro hN; cases hN
       · intro _ h; cases h
-  | .not _ => exact DatumSatisfies.weakest _
-  | .ifThen _ _ _ => exact DatumSatisfies.weakest _
-  | .andN _ => exact DatumSatisfies.weakest _
-  | .orN _ => exact DatumSatisfies.weakest _
-  | .coalesce _ => exact DatumSatisfies.weakest _
-  | .plus _ _ => exact DatumSatisfies.weakest _
-  | .minus _ _ => exact DatumSatisfies.weakest _
-  | .times _ _ => exact DatumSatisfies.weakest _
-  | .divide _ _ => exact DatumSatisfies.weakest _
-  | .eq _ _ => exact DatumSatisfies.weakest _
-  | .lt _ _ => exact DatumSatisfies.weakest _
+  | .not a => by
+    -- `outputType (.not a) = outputType a`. `evalNot` is strict on
+    -- both `.null` and `.err _`, so the recursive call transfers
+    -- both bits.
+    have iha := eval_satisfies_outputType sch row hsat a
+    simp only [eval, Expr.outputType]
+    refine ⟨?_, ?_⟩
+    · intro hN
+      have ha_notnull : eval row.toList a ≠ .null := iha.1 hN
+      intro hRes
+      cases h : eval row.toList a with
+      | bool b =>
+        rw [h] at hRes
+        cases b <;> (simp only [evalNot] at hRes; cases hRes)
+      | int _ =>
+        rw [h] at hRes
+        simp only [evalNot] at hRes
+        cases hRes
+      | null  => exact ha_notnull h
+      | err _ =>
+        rw [h] at hRes
+        simp only [evalNot] at hRes
+        cases hRes
+    · intro hErr
+      have ha_noterr : ¬(eval row.toList a).IsErr := iha.2 hErr
+      exact evalNot_not_err ha_noterr
+  | .ifThen c t e => by
+    have ihc := eval_satisfies_outputType sch row hsat c
+    have iht := eval_satisfies_outputType sch row hsat t
+    have ihe := eval_satisfies_outputType sch row hsat e
+    simp only [eval, Expr.outputType]
+    refine ⟨?_, ?_⟩
+    · intro h; cases h
+    · intro hErr
+      -- hErr : (outputType c).errable || (outputType t).errable || (outputType e).errable = false
+      simp only [Bool.or_eq_false_iff] at hErr
+      obtain ⟨⟨hc, ht⟩, he⟩ := hErr
+      exact evalIfThen_not_err (ihc.2 hc) (iht.2 ht) (ihe.2 he)
+  | .andN _ => DatumSatisfies.weakest _
+  | .orN _ => DatumSatisfies.weakest _
+  | .coalesce _ => DatumSatisfies.weakest _
+  | .plus a b => by
+    have iha := eval_satisfies_outputType sch row hsat a
+    have ihb := eval_satisfies_outputType sch row hsat b
+    simp only [eval, Expr.outputType]
+    exact binOp_satisfies iha ihb (fun ha hb => evalPlus_not_err ha hb)
+  | .minus a b => by
+    have iha := eval_satisfies_outputType sch row hsat a
+    have ihb := eval_satisfies_outputType sch row hsat b
+    simp only [eval, Expr.outputType]
+    exact binOp_satisfies iha ihb (fun ha hb => evalMinus_not_err ha hb)
+  | .times a b => by
+    have iha := eval_satisfies_outputType sch row hsat a
+    have ihb := eval_satisfies_outputType sch row hsat b
+    simp only [eval, Expr.outputType]
+    exact binOp_satisfies iha ihb (fun ha hb => evalTimes_not_err ha hb)
+  | .divide _ _ => DatumSatisfies.weakest _
+  | .eq a b => by
+    have iha := eval_satisfies_outputType sch row hsat a
+    have ihb := eval_satisfies_outputType sch row hsat b
+    simp only [eval, Expr.outputType]
+    exact binOp_satisfies iha ihb (fun ha hb => evalEq_not_err ha hb)
+  | .lt a b => by
+    have iha := eval_satisfies_outputType sch row hsat a
+    have ihb := eval_satisfies_outputType sch row hsat b
+    simp only [eval, Expr.outputType]
+    exact binOp_satisfies iha ihb (fun ha hb => evalLt_not_err ha hb)
 
 end Mz

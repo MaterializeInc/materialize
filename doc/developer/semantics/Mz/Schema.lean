@@ -242,6 +242,45 @@ theorem NoRowErr_cross
         exact hL r (List.mem_cons_of_mem _ hr)
       exact ih hL' htail
 
+/-- `project` preserves `NoRowErr`. `projectOne` rewrites `row` via
+the expression vector but leaves `diff` and `err_diff` untouched, so
+this is unconditional in the expressions. -/
+theorem NoRowErr_project (es : VecN Expr m) {s : Collection n}
+    (hs : NoRowErr s) :
+    NoRowErr (project es s) := by
+  intro rec hrec
+  unfold project at hrec
+  rw [List.mem_map] at hrec
+  obtain ⟨rec0, hrec0_mem, hrec0_eq⟩ := hrec
+  have h0 : rec0.err_diff = 0 := hs rec0 hrec0_mem
+  rw [← hrec0_eq]
+  show (projectOne es rec0).err_diff = 0
+  simp only [projectOne]
+  exact h0
+
+/-- `unionAll` preserves `NoRowErr`. `unionAll` is list concatenation,
+so the predicate composes conjunctively over the two inputs. -/
+theorem NoRowErr_unionAll {a b : Collection n}
+    (ha : NoRowErr a) (hb : NoRowErr b) :
+    NoRowErr (unionAll a b) := by
+  intro rec hrec
+  unfold unionAll at hrec
+  rcases List.mem_append.mp hrec with hL | hR
+  · exact ha rec hL
+  · exact hb rec hR
+
+/-- `negate` preserves `NoRowErr`. `negate` flips `err_diff`'s sign;
+`-0 = 0`, so a zero `err_diff` stays zero. -/
+theorem NoRowErr_negate {s : Collection n} (hs : NoRowErr s) :
+    NoRowErr (negate s) := by
+  intro rec hrec
+  unfold negate at hrec
+  rw [List.mem_map] at hrec
+  obtain ⟨rec0, hrec0_mem, hrec0_eq⟩ := hrec
+  have h0 : rec0.err_diff = 0 := hs rec0 hrec0_mem
+  rw [← hrec0_eq]
+  simp only [h0, neg_zero]
+
 end Collection
 
 end Mz
