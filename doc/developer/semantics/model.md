@@ -470,6 +470,54 @@ quotient) before it ships.
 The summary table at the end of this file lists `eraseErr` for
 completeness, but it is not a candidate user-facing surface.
 
+### Non-determinism (`LegalEval`, foundation sketched)
+
+A relational `LegalEval env e d : Prop` replaces `eval : Env →
+Expr → Datum` with "`d` is admissible under *some* legal SQL
+evaluation order". Each `Expr` denotes a *set* of `Datum`s. The
+deterministic `eval` is one legal outcome
+(`legal_of_eval : LegalEval env e (eval env e)`); other admissible
+outcomes correspond to other strategies.
+
+Posture sketched as the right object for SQL-faithful equivalence
+in the design doc. The skeleton's `Mz/Legal.lean` lands the
+foundation:
+
+* `LegalEval` inductive with rules for `.lit`, `.col`, `.not`,
+  `.ifThen` (SQL-pinned), and binary arithmetic / comparison
+  (three rules per op: `Ok` via deterministic primitive, `ErrL` /
+  `ErrR` to admit either err payload symmetrically).
+* `.andN` / `.orN` / `.coalesce` are deterministic for now (one
+  legal outcome via `eval`). Variadic short-circuit admissibility
+  (the canonical case `FALSE AND (1/0)` admitting both
+  `.bool false` and `.err _`) is the principal follow-up.
+* `legal_of_eval` — soundness: the deterministic `eval` produces
+  a legal outcome.
+* `legal_plus_err_either` — motivating theorem: both err payloads
+  of `(.err e₁) + (.err e₂)` are admissible. Demonstrates the
+  relational form recovering an equivalence the deterministic
+  eval loses (left-bias on `evalPlus`).
+* `LegalEquiv` / `LegalSubsume` — set-equality / set-inclusion
+  candidate equivalence relations on `Expr`. `LegalEquiv` is the
+  strongest; `LegalSubsume` matches "no spurious errors" posture.
+* `plus_comm_legal_errL_to_errR` / `_errR_to_errL` — err-side
+  commutativity of `.plus`. Demonstrates that the relational
+  form trivializes the obligation that strict equality on
+  deterministic eval fails (the left-bias).
+
+Open follow-ups on `LegalEval`:
+
+* Variadic short-circuit admissibility (`.andN` / `.orN`).
+* Data-side commutativity of binary ops (needs primitive
+  `evalPlus_comm_of_no_err` lemma plus a `LegalEval` invariant on
+  non-err outcomes).
+* Bounded-int associativity: `(x+1)-1` and `x+(1-1)` admit the
+  same set of outcomes under `LegalEquiv` (the err and the value
+  are both in the set).
+* Collection-level lift: `filter` / `project` / `cross` rephrased
+  to take a relational scalar evaluator, or `Collection.refines`
+  generalized to absorb relational outcomes.
+
 ### Per-error-payload diff (open alternative)
 
 `Diff = Int × (EvalError → Int)` with the bilinear cross rule.
@@ -501,6 +549,7 @@ Lean evidence accumulated before the restart:
 | `Schema n` (sketch)        | `Mz/Schema.lean`             | coalesce id, cross row-err | project output-schema rules               |
 | `Expr.outputType`          | `Mz/OutputType.lean`         | `=` on `.lit` and `.col`   | non-foundational constructors weakest     |
 | Per-payload `(Int×ErrCnt)` | preserved in branch history  | `=` on commutative-monoid  | pushdown over cross                       |
+| `LegalEval` (non-det sketch) | `Mz/Legal.lean`            | foundation + binary err-side commutativity | variadic short-circuit; data-side comm; collection lift |
 | Collection-scoped diff     | spec-only post-restart       | —                          | not currently mechanized                  |
 
 The remaining open obligations live primarily on the err side of

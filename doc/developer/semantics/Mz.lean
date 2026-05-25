@@ -15,3 +15,4 @@ import Mz.EquivBounded
 import Mz.Collection
 import Mz.Schema
 import Mz.OutputType
+import Mz.Legal
