@@ -1,4 +1,4 @@
-import Mz.StreamN
+import Mz.Collection
 import Mz.MightError
 import Mathlib.Data.Vector.Defs
 import Mathlib.Data.Vector.Basic
@@ -7,12 +7,12 @@ import Mathlib.Data.Vector.Mem
 /-!
 # Schema sketch
 
-Per-column nullability and errability bits, plus a stream-level
+Per-column nullability and errability bits, plus a collection-level
 row-error flag. The `Schema n` type is the structural counterpart
 to Materialize's `RelationType` on the Rust side. The skeleton
 keeps it minimal — just the bits and the propositional predicate
-"this stream's records satisfy this schema" — and connects back
-to the existing `StreamN.NoRowErr` predicate so the
+"this collection's updates satisfy this schema" — and connects back
+to the existing `Collection.NoRowErr` predicate so the
 `filter_cross_pushdown_left_strict` precondition can be discharged
 from a schema fact.
 
@@ -38,13 +38,13 @@ structure ColSchema where
   errable : Bool
   deriving DecidableEq, Inhabited
 
-/-- Schema for an `n`-arity stream:
+/-- Schema for an `n`-arity collection:
 
 * `cols` — per-column metadata.
-* `rowErrFree` — the stream-level claim that no record carries
+* `rowErrFree` — the collection-level claim that no update carries
   positive `err_diff`. Modeled as a `Bool` flag so the schema can
   be combined / refined by the optimizer; the matching propositional
-  fact lives in `StreamRecordN.Satisfies`.
+  fact lives in `Update.Satisfies`.
 
 A schema with `rowErrFree = false` makes no claim about
 `err_diff`; the `Satisfies` predicate vacuously accepts records
@@ -80,33 +80,33 @@ def RowSatisfies {n : Nat} (sch : Schema n) (row : RowN n) : Prop :=
     ((sch.cols.get i).nullable = false → row.get i ≠ .null)
     ∧ ((sch.cols.get i).errable = false → ¬(row.get i).IsErr)
 
-/-- A stream record satisfies a schema iff its row does and the
+/-- An update satisfies a schema iff its row does and the
 row-level err claim is honored. -/
-def StreamRecordN.Satisfies {n : Nat}
-    (sch : Schema n) (rec : StreamRecordN n) : Prop :=
+def Update.Satisfies {n : Nat}
+    (sch : Schema n) (rec : Update n) : Prop :=
   RowSatisfies sch rec.row
   ∧ (sch.rowErrFree = true → rec.err_diff = 0)
 
-namespace StreamN
+namespace Collection
 
 variable {n : Nat}
 
-/-- A stream satisfies a schema iff every record does. -/
-def Satisfies (sch : Schema n) (s : StreamN n) : Prop :=
+/-- A collection satisfies a schema iff every update does. -/
+def Satisfies (sch : Schema n) (s : Collection n) : Prop :=
   ∀ rec ∈ s, rec.Satisfies sch
 
-/-- Bridge: a stream that satisfies a schema with
+/-- Bridge: a collection that satisfies a schema with
 `rowErrFree = true` is `NoRowErr`. Lets
 `filter_cross_pushdown_left_strict` cite a schema fact rather than
 the bare predicate. -/
 theorem NoRowErr_of_satisfies_rowErrFree
-    {sch : Schema n} {s : StreamN n}
+    {sch : Schema n} {s : Collection n}
     (hsch : sch.rowErrFree = true) (hsat : s.Satisfies sch) :
     s.NoRowErr := by
   intro rec hrec
   exact (hsat rec hrec).2 hsch
 
-end StreamN
+end Collection
 
 /-! ## Schema-driven rewrites
 
@@ -134,7 +134,7 @@ schema certifies `a`'s output column is `nullable = false` and
 `errable = false`, the hypothesis is discharged for every row
 satisfying the input schema. -/
 theorem eval_coalesce_pair_of_a_concrete
-    {a b : Expr} {row : Row}
+    {a b : Expr} {row : List Datum}
     (h_notnull : eval row a ≠ .null) (h_noterr : ¬(eval row a).IsErr) :
     eval row (.coalesce [a, b]) = eval row a := by
   simp only [eval, List.map_cons, List.map_nil]
@@ -142,16 +142,16 @@ theorem eval_coalesce_pair_of_a_concrete
 
 /-! ## Schema combinators
 
-The schema for a stream produced by an operator is built from the
-input schemas. The combinators here cover the operators currently
-proved in `Mz/StreamN.lean`. -/
+The schema for a collection produced by an operator is built from
+the input schemas. The combinators here cover the operators
+currently proved in `Mz/Collection.lean`. -/
 
 namespace Schema
 
 /-- Concatenate two schemas. The output's `cols` is the append of
 the inputs' `cols`; `rowErrFree` is preserved iff both inputs are.
 
-This is the schema produced by `StreamN.cross` and is the
+This is the schema produced by `Collection.cross` and is the
 structural counterpart to `Vector.append`. -/
 def append {n m : Nat} (a : Schema n) (b : Schema m) : Schema (n + m) :=
   { cols := a.cols ++ b.cols
@@ -159,7 +159,7 @@ def append {n m : Nat} (a : Schema n) (b : Schema m) : Schema (n + m) :=
 
 end Schema
 
-namespace StreamN
+namespace Collection
 
 variable {n m : Nat}
 
@@ -181,7 +181,7 @@ err-free against the input cell schema. Combines
 `might_error_sound` (predicate produces no err on err-free env) with
 the schema bridge above. -/
 theorem NoRowErr_filter
-    {sch : Schema n} {s : StreamN n}
+    {sch : Schema n} {s : Collection n}
     (p : Expr) (hp : ¬p.might_error = true)
     (hcef : sch.cellErrFree) (hsat : s.Satisfies sch) (h_norow : NoRowErr s) :
     NoRowErr (filter p s) := by
@@ -216,11 +216,11 @@ theorem NoRowErr_filter
 /-- `cross` preserves `NoRowErr`: when both inputs are row-err-free,
 the cross's `err_diff` is `0` by the bilinear formula. -/
 theorem NoRowErr_cross
-    {sL : StreamN n} {sR : StreamN m}
+    {sL : Collection n} {sR : Collection m}
     (hL : NoRowErr sL) (hR : NoRowErr sR) :
     NoRowErr (cross sL sR) := by
   intro rec hrec
-  -- Every record in `cross sL sR` is `crossOne recL recR` for some
+  -- Every update in `cross sL sR` is `crossOne recL recR` for some
   -- `recL ∈ sL`, `recR ∈ sR`. Both originals have err_diff = 0, so
   -- the bilinear formula gives 0 for the product.
   induction sL with
@@ -242,6 +242,6 @@ theorem NoRowErr_cross
         exact hL r (List.mem_cons_of_mem _ hr)
       exact ih hL' htail
 
-end StreamN
+end Collection
 
 end Mz

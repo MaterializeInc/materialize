@@ -16,7 +16,7 @@
 #
 # Examples:
 #   bin/in-image lake build
-#   bin/in-image lake env lean Mz/StreamN.lean
+#   bin/in-image lake env lean Mz/Collection.lean
 #   bin/in-image bash -c 'grep -n "def append" .lake/packages/mathlib/Mathlib/Data/Vector/Defs.lean'
 #
 # The script assumes the image is already built; run

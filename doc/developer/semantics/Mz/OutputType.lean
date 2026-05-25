@@ -55,36 +55,12 @@ def Expr.outputType {n : Nat} (sch : Schema n) : Expr → ColSchema
 
 /-! ## `Env.get` on a row that satisfies a schema -/
 
-private theorem Env_get_eq_list_get (l : List Datum) (i : Nat) (h : i < l.length) :
-    Env.get l i = l.get ⟨i, h⟩ := by
-  induction l generalizing i with
-  | nil => cases h
-  | cons hd tl ih =>
-    cases i with
-    | zero => rfl
-    | succ k =>
-      show Env.get tl k = tl.get ⟨k, by simp [List.length_cons] at h; omega⟩
-      apply ih
-
-private theorem Env_get_eq_null_of_ge (l : List Datum) (i : Nat) (h : l.length ≤ i) :
-    Env.get l i = .null := by
-  induction l generalizing i with
-  | nil => cases i <;> rfl
-  | cons hd tl ih =>
-    cases i with
-    | zero => simp [List.length_cons] at h
-    | succ k =>
-      show Env.get tl k = .null
-      apply ih
-      simp [List.length_cons] at h
-      omega
-
 private theorem Env_get_row_toList_lt
     {n : Nat} (row : RowN n) (i : Nat) (h : i < n) :
     Env.get row.toList i = row.get ⟨i, h⟩ := by
   have hLen : row.toList.length = n := row.toList_length
   have hLt : i < row.toList.length := by rw [hLen]; exact h
-  rw [Env_get_eq_list_get row.toList i hLt]
+  rw [Env.get_eq_list_get row.toList i hLt]
   show row.toList.get ⟨i, hLt⟩ = row.get ⟨i, h⟩
   rcases row with ⟨l, hl⟩; rfl
 
@@ -92,7 +68,7 @@ private theorem Env_get_row_toList_ge
     {n : Nat} (row : RowN n) (i : Nat) (h : ¬i < n) :
     Env.get row.toList i = .null := by
   have hLen : row.toList.length = n := row.toList_length
-  apply Env_get_eq_null_of_ge
+  apply Env.get_eq_null_of_ge
   rw [hLen]; omega
 
 /-! ## Soundness -/

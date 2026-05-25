@@ -10,9 +10,8 @@ import Mz.Variadic
 import Mz.ExprVariadic
 import Mz.Subst
 import Mz.ColRefs
-import Mz.Stream
 import Mz.Equiv
 import Mz.EquivBounded
-import Mz.StreamN
+import Mz.Collection
 import Mz.Schema
 import Mz.OutputType

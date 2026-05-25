@@ -269,22 +269,22 @@ argument; RHS ⊒ LHS does not.
 Statement: `filter p (cross l r) = cross (filter p l) r` on the err
 side under any of the relations above.
 
-Counterexample (modeled with two-diff `Stream` in `Mz/Stream.lean`):
-a single-row pair where `eval rL p` errs. LHS errs once per RHS row
-(the cross product first, then filter); the migration moves
-`diff = 1` to `err_diff = |r|`. RHS errs once on the left side alone
-(filter then cross); the cross product multiplies that single err
-through `r.length` records on the right, giving err multiplicity
-`|r|`.
+Counterexample (modeled on the collection model in
+`Mz/Collection.lean`): a single-row pair where `eval rL p` errs.
+LHS errs once per RHS row (the cross product first, then filter);
+the migration moves `diff = 1` to `err_diff = |r|`. RHS errs once
+on the left side alone (filter then cross); the cross product
+multiplies that single err through `r.length` updates on the right,
+giving err multiplicity `|r|`.
 
 The two err multiplicities happen to match (`|r|` in both cases), but
-the *carrier rows* differ: LHS has err records with content
-`rL ++ rR_i` for each i; RHS has err records with content `rL` alone
+the *carrier rows* differ: LHS has err updates with content
+`rL ++ rR_i` for each i; RHS has err updates with content `rL` alone
 (filter does not project to a wider carrier). Strict equality on
-streams fails on the carrier shape.
+collections fails on the carrier shape.
 
-Under `eqErrSet` lifted pointwise to streams: still fails on
-record-level carrier mismatch.
+Under `eqErrSet` lifted pointwise to collections: still fails on
+update-level carrier mismatch.
 Under value-only equivalence under non-determinism: holds, because
 both sides are valid evaluation orders of the same SQL expression
 and their successful-data outputs agree.
@@ -292,8 +292,8 @@ and their successful-data outputs agree.
 Mechanizing this on the err side is the canonical motivation for
 moving to non-deterministic semantics. Until that lift lands, the
 err-side pushdown statement remains an open obligation; the data-side
-form is closed by `Stream.filter` / `Stream.cross` reasoning that
-ignores err multiplicities.
+form is closed by `Collection.filter` / `Collection.cross` reasoning
+that ignores err multiplicities.
 
 ### Preservation of `refines` by binary primitives
 

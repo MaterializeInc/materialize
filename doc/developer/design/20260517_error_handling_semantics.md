@@ -238,13 +238,13 @@ Default for a new operator is transparent unless it has a reason to be aware or 
 ### Schema-driven soundness
 
 Several rewrites are unsound on the err side of the two-diff model in their general form but become sound under a column-schema precondition.
-The optimizer already carries a `RelationType` (per-column SQL type plus a `nullable` flag); adding a per-column `errable` bit and a stream-level `rowErrFree` flag turns these schema facts into discharge conditions for the rewrites.
+The optimizer already carries a `RelationType` (per-column SQL type plus a `nullable` flag); adding a per-column `errable` bit and a collection-level `rowErrFree` flag turns these schema facts into discharge conditions for the rewrites.
 
-The Lean model in `doc/developer/semantics/Mz/Schema.lean` mechanizes the structural skeleton (`ColSchema { nullable, errable }`, `Schema n { cols, rowErrFree }`, `RowSatisfies`, `StreamRecordN.Satisfies`).
+The Lean model in `doc/developer/semantics/Mz/Schema.lean` mechanizes the structural skeleton (`ColSchema { nullable, errable }`, `Schema n { cols, rowErrFree }`, `RowSatisfies`, `Update.Satisfies`).
 The first concrete payoffs riding on it are:
 
 * **Predicate pushdown across cross under strict equality.**
-  `filter p (cross sL sR) = cross (filter p sL) sR` is unsound in general because cross's err-diff bilinear formula carries `recL.diff · recR.err_diff`, which filter zeroes out before the cross when the predicate evaluates to false on `recL` (`Mz/StreamN.lean` `filterOne_cross_pushdown_left_unsound`).
+  `filter p (cross sL sR) = cross (filter p sL) sR` is unsound in general because cross's err-diff bilinear formula carries `recL.diff · recR.err_diff`, which filter zeroes out before the cross when the predicate evaluates to false on `recL` (`Mz/Collection.lean` `filterOne_cross_pushdown_left_unsound`).
   Under the schema fact `sR.rowErrFree = true`, the offending term is zero by hypothesis and the pushdown closes at strict equality (`filter_cross_pushdown_left_strict`).
   Materialize's optimizer can cite the right-side schema rather than carrying an ad-hoc err-multiplicity hypothesis.
 

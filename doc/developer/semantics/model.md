@@ -8,9 +8,14 @@ It complements the design doc at
 discursive; this file is a layered catalog plus honest notes on what
 each variant buys and what it costs.
 
-The model has four layers — `Datum`, `Expression`, `Row`, `Stream` —
-and a separate dimension of error semantics that cuts across all of
-them.
+The model has four layers — `Datum`, `Expression`, `Row`, `Collection`
+— and a separate dimension of error semantics that cuts across all
+of them.
+The skeleton deliberately models a single *collection version* in
+the sense of `../platform/formalism.md`: a multiset of rows with
+diff multiplicities, no time dimension.
+Time-varying collections (TVCs) and frontier reasoning are out of
+scope at this layer.
 After the layers, this doc summarizes the equivalence relations the
 optimizer can pick from and the rewrites each enables.
 
@@ -75,28 +80,28 @@ Static analyses:
 
 ## Row
 
-A row is a positional list of `Datum`s.
-Two encodings coexist in the skeleton:
+A row is a length-`n` positional vector of `Datum`s, where the arity
+`n` lives in the type:
 
-* `Row = List Datum` (untyped) in `Mz/Eval.lean` (alias for `Env`)
-  used by `Mz/Stream.lean` — arity lives in a conventional invariant.
-  Operators preserve it by construction but the type system gives no
-  feedback.
-* `RowN n = List.Vector Datum n` (indexed) in `Mz/StreamN.lean` —
-  arity in the type.
-  `filter` is `StreamN n → StreamN n`, `project` is
-  `StreamN n → StreamN m` (driven by a length-`m` expression vector),
-  `cross` is `StreamN n → StreamN m → StreamN (n + m)`.
+```
+RowN n = List.Vector Datum n
+```
+
+The evaluator's `Env = List Datum` is the row "as seen by `eval`":
+the arity disappears when the row is handed to a scalar evaluator,
+because `eval` is total on `List Datum` (out-of-bounds column
+references return `.null` via `Env.get`).
+The bridge is `row.toList`.
+`Env.get_eq_list_get` and `Env.get_eq_null_of_ge` in
+`Mz/PrimEval.lean` capture the evaluator's column-lookup contract.
 
 The indexed form makes arity mismatches unspeakable and surfaces
 arity-rewriting obligations (`cross_assoc` needs the cast
 `n + m + k = n + (m + k)` via `List.Vector.congr`).
-The untyped form is cheaper to write but cannot witness arity bugs at
-type-check time.
 
 ## Schema
 
-Per-column nullability and errability bits plus a stream-level
+Per-column nullability and errability bits plus a collection-level
 row-error flag, modeled in `Mz/Schema.lean`. The structural
 counterpart to Materialize's `RelationType` on the Rust side.
 
@@ -110,9 +115,9 @@ Propositional satisfaction:
 
 * `RowSatisfies sch row` — `¬nullable → row[i] ≠ .null` and
   `¬errable → ¬(row[i]).IsErr` per column.
-* `StreamRecordN.Satisfies sch rec` — row satisfies the column
-  bits *and* `sch.rowErrFree → rec.err_diff = 0`.
-* `StreamN.Satisfies sch s` — every record satisfies.
+* `Update.Satisfies sch rec` — row satisfies the column bits *and*
+  `sch.rowErrFree → rec.err_diff = 0`.
+* `Collection.Satisfies sch s` — every update satisfies.
 
 Schema discharges optimizer obligations whose soundness depends on
 column or row-level invariants:
@@ -154,43 +159,51 @@ Open obligations on the schema side:
   per-cell `Datum.IsErr` condition. Distinct from `NoRowErr`
   (row-level err multiplicity) — both are honest schema facts and
   both gate different rewrites.
-* Schema propagation through stream operators: `filter` preserves
-  the input schema (with `rowErrFree` adjusted by predicate
-  err-freedom); `project` produces the output schema by lifting
-  `outputType` over the projection vector; `cross` produces
+* Schema propagation through collection operators: `filter`
+  preserves the input schema (with `rowErrFree` adjusted by
+  predicate err-freedom); `project` produces the output schema by
+  lifting `outputType` over the projection vector; `cross` produces
   `Schema.append`.
 
-## Stream
+## Collection
 
-A stream is a list of records carrying multiplicities and (optionally)
-timestamps.
-The current baseline ("two-diff") encodes each record as
+A collection is a multiset of rows carrying data and err
+multiplicities.
+It is the time-stripped slice of `../platform/formalism.md`'s
+time-varying collection: a single collection version.
+Each entry is an `Update n` (named to match `formalism.md`'s
+update-triple vocabulary, minus the time field):
 
 ```
-structure StreamRecord where
-  row : Row
+structure Update (n : Nat) where
+  row : RowN n
   diff : Int      -- data multiplicity, retractable
   err_diff : Int  -- err multiplicity, retractable
 ```
 
 Both diffs are ordinary `Int`s, retractable to model
 differential-dataflow consolidation.
-A record with `(diff, err_diff) = (1, 0)` is a valid output;
+An update with `(diff, err_diff) = (1, 0)` is a valid output;
 `(0, 1)` is an erred output; `(1, 1)` is both (rare but representable
 under the encoding).
+`Collection n = List (Update n)`.
 
-Operators on streams:
+Operators on collections:
 * `filter` — preserves `row`, zeroes `diff`, migrates to `err_diff` on
   an `.err` predicate result.
 * `project` — applies the projection expression vector pointwise,
-  preserving multiplicities.
+  preserving multiplicities; output arity is the projection vector
+  length.
 * `cross` — concatenates rows; multiplies `diff`s; the cross's
   `err_diff` is the bilinear sum
   `dL · eR + eL · dR + eL · eR`.
-* `negate`, `unionAll` — pointwise negation and concatenation.
+  Output arity is `n + m`.
+* `negate`, `unionAll` — pointwise multiplicity negation and list
+  concatenation.
 
-Time is not yet modeled.
-Consolidation, distinct, and aggregate are open.
+Time, consolidation, distinct, and aggregate are out of scope at
+this layer.
+Lifting to a timed collection is additive on top.
 
 ## Errors
 
@@ -201,7 +214,7 @@ Three error scopes, mostly orthogonal:
   Carries a structured payload.
   Surface examples: division by zero, integer overflow, decode error
   on a single column.
-* **Row-scoped** — `err_diff` on the stream record (two-diff model)
+* **Row-scoped** — `err_diff` on the update (two-diff model)
   *or* a row-carrier variant `(Row | DataflowError)`.
   The row failed as a whole.
   Surface examples: a `Datum::Error` in a projected column that the
@@ -240,7 +253,7 @@ Counterexamples (mechanized in `Mz/EquivBounded.lean`,
 `Mz/Equiv.lean`):
 * `evalAnd` not commutative on err / err inputs (left-bias).
 * `evalPlusBounded` not associative at the bounded-int boundary.
-* `filter_cross_pushdown_left` unsound when right stream has
+* `filter_cross_pushdown_left` unsound when right collection has
   `err_diff > 0` (witnessed by
   `filterOne_cross_pushdown_left_unsound`).
 
@@ -253,7 +266,7 @@ What it buys: recovers `evalAnd` commutativity on err / err
 (`evalAnd_err_err_eqErrSet_comm`).
 What it does not buy: bounded-int associativity (one side is err, the
 other value; relation requires both errs or strict equality);
-predicate pushdown over `cross` on the err side (record-level carrier
+predicate pushdown over `cross` on the err side (update-level carrier
 mismatch survives the relation).
 
 ### Refinement preorder (`refines`, errors as bottom)
@@ -285,7 +298,7 @@ Equivalence relation.
 
 What it buys: `filter_cross_pushdown_left_data` closes for every
 branch of the predicate evaluation
-(`filterOne_cross_pushdown_left_data` per record, lifted via
+(`filterOne_cross_pushdown_left_data` per update, lifted via
 `List.map`).
 What it costs: erases the user-visible distinction between "row
 filtered out" and "row errored".
@@ -315,21 +328,20 @@ Lean evidence accumulated before the restart:
 | -------------------------- | ---------------------------- | -------------------------- | ----------------------------------------- |
 | `Datum`                    | `Mz/Datum.lean`              | —                          | overflow / decode / division-by-zero only |
 | `Expr.eval`                | `Mz/Eval.lean`               | `=`                        | strict eval order (no non-determinism)    |
-| `Row = List Datum`         | `Mz/Eval.lean`               | `=`                        | arity by convention                       |
-| `RowN n = Vector Datum n`  | `Mz/StreamN.lean`            | `=`                        | indexed-arity reasoning verified          |
-| `Stream` (two-diff)        | `Mz/Stream.lean`             | `=` on data side           | err side under `eraseErr` / `refines`     |
+| `RowN n = Vector Datum n`  | `Mz/Collection.lean`         | `=`                        | indexed-arity reasoning verified          |
+| `Collection n` (two-diff)  | `Mz/Collection.lean`         | `=` on data side           | err side under `eraseErr` / `refines`     |
 | `eqErrSet`                 | `Mz/Equiv.lean`              | err / err commutativity    | bounded-int assoc, pushdown over cross    |
 | `refines`                  | `Mz/Equiv.lean`              | pushdown LHS → RHS         | rewrites that add err                     |
 | `refinesDual`              | `Mz/Equiv.lean`              | rewrites that add err      | pushdown over cross                       |
-| `eraseErr` (data-only)     | `Mz/StreamN.lean`            | filter / cross pushdown    | err-side surfacing                        |
-| `NoRowErr` precondition    | `Mz/StreamN.lean`            | pushdown under `=`         | filter preservation needs static pred     |
+| `eraseErr` (data-only)     | `Mz/Collection.lean`         | filter / cross pushdown    | err-side surfacing                        |
+| `NoRowErr` precondition    | `Mz/Collection.lean`         | pushdown under `=`         | filter preservation needs static pred     |
 | `Schema n` (sketch)        | `Mz/Schema.lean`             | coalesce id, cross row-err | project output-schema rules               |
 | `Expr.outputType`          | `Mz/OutputType.lean`         | `=` on `.lit` and `.col`   | non-foundational constructors weakest     |
 | Per-payload `(Int×ErrCnt)` | preserved in branch history  | `=` on commutative-monoid  | pushdown over cross                       |
 | Collection-scoped diff     | spec-only post-restart       | —                          | not currently mechanized                  |
 
 The remaining open obligations live primarily on the err side of
-operators that mix records — `cross`, `join`, aggregates over erred
+operators that mix updates — `cross`, `join`, aggregates over erred
 inputs.
 The catalog above is the map of which equivalence relation makes which
 rewrite go through; the open question driving the design doc is which
@@ -339,9 +351,12 @@ of these to settle on as the user-facing surface.
 
 * `../design/20260517_error_handling_semantics.md` — design doc with
   the discursive treatment of the same material plus alternatives.
-* `transforms.md` — catalog of mechanized equational and inclusion
-  laws for optimizer rewrites.
+* `../platform/formalism.md` — the system-level model in which a
+  collection is a time-varying object; this skeleton's `Collection n`
+  is the time-stripped slice.
+* `transforms.md` — catalog of transforms we want to model and
+  their soundness windows.
 * `Mz/Equiv.lean` and `Mz/EquivBounded.lean` — the equivalence
   relations and the live bounded-arithmetic counterexample.
-* `Mz/StreamN.lean` — the indexed-arity pilot and its
+* `Mz/Collection.lean` — the indexed-arity collection model and its
   `filter_cross_pushdown_left` finding.

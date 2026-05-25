@@ -13,11 +13,10 @@ The classical relational predicate-pushdown rewrite
 
   `filter p (project es rel) = project es (filter (p.subst es) rel)`
 
-is a corollary of this theorem on whichever stream shape carries
-filter and project. The two-diff `Mz/Stream.lean` and indexed-arity
-`Mz/StreamN.lean` are the two callers; the previous bag-relational
-mechanization is dropped because bag-`filter` silently discards
-error rows and the pushdown statement is degenerate on the err side.
+is a corollary of this theorem on the collection model in
+`Mz/Collection.lean`. The previous bag-relational mechanization is
+dropped because bag-`filter` silently discards error rows and the
+pushdown statement is degenerate on the err side.
 
 `Expr.subst` is mutually recursive with `Expr.substArgs` so Lean's
 structural-recursion checker handles the nested-list constructors
