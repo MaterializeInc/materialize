@@ -372,6 +372,96 @@ theorem filterOne_cross_pushdown_left_unsound :
   have := congrArg StreamRecordN.err_diff h
   simp [filterOne, crossOne, eval] at this
 
+/-! ## Pushdown under data-side equivalence
+
+The pushdown's strict-equality form fails on `err_diff`, but the
+`row` and `diff` fields agree on every branch. Mechanizing this as
+"data-side equivalence" makes the precise gap explicit: the
+transformation is sound under any equivalence that ignores
+`err_diff`, and unsound under any equivalence that preserves it.
+
+This matches the design doc's *Evaluation-order equivalence*
+alternative §"Refinement preorder" — under an errors-as-bottom
+posture, dropping an err multiplicity is admissible. The
+mechanization here uses an equivalence rather than the asymmetric
+preorder because data-equivalence is the cleanest stateable
+relation on `Int`-valued err_diff: lifting `Datum.refines` to
+`Int` doesn't fall out cleanly when multiplicities can retract
+(go negative). A future iteration with `Nat`-valued or multiset-
+valued err multiplicities would let the asymmetric form work too. -/
+
+end StreamN
+
+/-- Data-side erasure: forget the err multiplicity. Two records are
+"data equivalent" iff their `eraseErr` projections coincide. -/
+@[inline] def StreamRecordN.eraseErr (rec : StreamRecordN n) : StreamRecordN n :=
+  { row := rec.row, diff := rec.diff, err_diff := 0 }
+
+namespace StreamN
+
+variable {n m k : Nat}
+
+/-- Stream-level erasure: map `eraseErr` over every record. -/
+@[inline] def eraseErrAll (s : StreamN n) : StreamN n :=
+  s.map StreamRecordN.eraseErr
+
+/-- Per-record pushdown holds under data-side erasure: the row and
+data multiplicity agree on every branch of `filterOne`. -/
+theorem filterOne_cross_pushdown_left_data
+    (p : Expr) (hp : p.colReferencesBoundedBy n = true)
+    (recL : StreamRecordN n) (recR : StreamRecordN m) :
+    (filterOne p (crossOne recL recR)).eraseErr
+      = (crossOne (filterOne p recL) recR).eraseErr := by
+  have heval := eval_crossOne_left_bounded p hp recL recR
+  unfold filterOne
+  rw [heval]
+  cases eval recL.row.toList p with
+  | bool b =>
+    cases b with
+    | true => rfl
+    | false =>
+      simp only [StreamRecordN.eraseErr, crossOne]
+      refine StreamRecordN.mk.injEq .. |>.mpr ⟨rfl, ?_, rfl⟩
+      ring
+  | int _ =>
+    simp only [StreamRecordN.eraseErr, crossOne]
+    refine StreamRecordN.mk.injEq .. |>.mpr ⟨rfl, ?_, rfl⟩
+    ring
+  | null =>
+    simp only [StreamRecordN.eraseErr, crossOne]
+    refine StreamRecordN.mk.injEq .. |>.mpr ⟨rfl, ?_, rfl⟩
+    ring
+  | err _ =>
+    simp only [StreamRecordN.eraseErr, crossOne]
+    refine StreamRecordN.mk.injEq .. |>.mpr ⟨rfl, ?_, rfl⟩
+    ring
+
+/-- Stream-level pushdown under data-side erasure. The two
+evaluation orders of `filter p (cross sL sR)` agree exactly on row
+and data multiplicity at every record, even though their err
+multiplicities diverge. -/
+theorem filter_cross_pushdown_left_data
+    (p : Expr) (hp : p.colReferencesBoundedBy n = true)
+    (sL : StreamN n) (sR : StreamN m) :
+    eraseErrAll (filter p (cross sL sR))
+      = eraseErrAll (cross (filter p sL) sR) := by
+  unfold eraseErrAll
+  induction sL with
+  | nil => rfl
+  | cons recL sLR ih =>
+    rw [cross_cons_left, filter_append, List.map_append,
+        filter_cons, cross_cons_left, List.map_append,
+        ih]
+    congr 1
+    -- prefix: filter p (sR.map (crossOne recL)) ↦ eraseErr
+    --      vs sR.map (crossOne (filterOne p recL)) ↦ eraseErr
+    rw [filter, List.map_map, List.map_map, List.map_map]
+    apply List.map_congr_left
+    intro recR _
+    show (filterOne p (crossOne recL recR)).eraseErr
+        = (crossOne (filterOne p recL) recR).eraseErr
+    exact filterOne_cross_pushdown_left_data p hp recL recR
+
 end StreamN
 
 end Mz
