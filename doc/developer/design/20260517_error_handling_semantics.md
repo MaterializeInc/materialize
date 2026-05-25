@@ -235,6 +235,39 @@ Examples: `WHERE`, join predicates, sink output (a sink cannot emit a row contai
 Operators document which category they fall into.
 Default for a new operator is transparent unless it has a reason to be aware or escalating.
 
+### Schema-driven soundness
+
+Several rewrites are unsound on the err side of the two-diff model in their general form but become sound under a column-schema precondition.
+The optimizer already carries a `RelationType` (per-column SQL type plus a `nullable` flag); adding a per-column `errable` bit and a stream-level `rowErrFree` flag turns these schema facts into discharge conditions for the rewrites.
+
+The Lean model in `doc/developer/semantics/Mz/Schema.lean` mechanizes the structural skeleton (`ColSchema { nullable, errable }`, `Schema n { cols, rowErrFree }`, `RowSatisfies`, `StreamRecordN.Satisfies`).
+The first concrete payoffs riding on it are:
+
+* **Predicate pushdown across cross under strict equality.**
+  `filter p (cross sL sR) = cross (filter p sL) sR` is unsound in general because cross's err-diff bilinear formula carries `recL.diff · recR.err_diff`, which filter zeroes out before the cross when the predicate evaluates to false on `recL` (`Mz/StreamN.lean` `filterOne_cross_pushdown_left_unsound`).
+  Under the schema fact `sR.rowErrFree = true`, the offending term is zero by hypothesis and the pushdown closes at strict equality (`filter_cross_pushdown_left_strict`).
+  Materialize's optimizer can cite the right-side schema rather than carrying an ad-hoc err-multiplicity hypothesis.
+
+* **Coalesce identity on non-null non-err columns.**
+  `coalesce(a, b) = a` when `a` is statically non-null and non-err.
+  In schema terms: `outputType(a).nullable = false ∧ outputType(a).errable = false`.
+  The Datum-level lemma (`evalCoalesce_cons_of_concrete`) and its `Expr`-level corollary (`eval_coalesce_pair_of_a_concrete`) close once the schema discharges the concrete-value hypothesis.
+
+* **Cross preserves row-err-freedom.**
+  `NoRowErr_cross`: when both inputs have `rowErrFree`, the product does too.
+  This is the schema-propagation rule that lets an optimizer carry `rowErrFree` through a join plan rather than recomputing it.
+
+Open obligations on the schema side that the prototype must close:
+
+* Filter preserves `rowErrFree` only when the predicate is statically err-free on the input cell schema.
+  Connects to the existing `might_error` analysis lifted from rows to streams.
+* Output-schema propagation for `Expr` — given input schema, derive the column metadata of the result.
+  Today every rewrite cites bare predicates; the propagation rules let one schema fact discharge multiple operators.
+* A cell-error-free row schema (every column has `errable = false`), distinct from `rowErrFree` (no `err_diff > 0`).
+  Both are honest schema facts and gate different rewrites; the optimizer needs both.
+
+The optimizer's `RelationType` is the existing carrier; extending it with `errable` per column and a `rowErrFree` flag is purely additive on the schema side, with the operator obligations enumerated above pacing the rollout.
+
 ### Worked example: TiDB zero-date
 
 MySQL and TiDB allow `0000-00-00` as a fallback when permissive `sql_mode` rejects an invalid date.

@@ -94,6 +94,52 @@ arity-rewriting obligations (`cross_assoc` needs the cast
 The untyped form is cheaper to write but cannot witness arity bugs at
 type-check time.
 
+## Schema
+
+Per-column nullability and errability bits plus a stream-level
+row-error flag, modeled in `Mz/Schema.lean`. The structural
+counterpart to Materialize's `RelationType` on the Rust side.
+
+* `ColSchema { nullable, errable : Bool }` — per-column metadata.
+* `Schema n { cols : Vector ColSchema n, rowErrFree : Bool }` — the
+  schema as a whole.
+* `Schema.free n` — information-free starting point.
+* `Schema.append a b` — concatenation, produced by `cross`.
+
+Propositional satisfaction:
+
+* `RowSatisfies sch row` — `¬nullable → row[i] ≠ .null` and
+  `¬errable → ¬(row[i]).IsErr` per column.
+* `StreamRecordN.Satisfies sch rec` — row satisfies the column
+  bits *and* `sch.rowErrFree → rec.err_diff = 0`.
+* `StreamN.Satisfies sch s` — every record satisfies.
+
+Schema discharges optimizer obligations whose soundness depends on
+column or row-level invariants:
+
+* `NoRowErr_of_satisfies_rowErrFree` — bridge to
+  `filter_cross_pushdown_left_strict`'s precondition.
+* `evalCoalesce_cons_of_concrete` + `eval_coalesce_pair_of_a_concrete`
+  — `coalesce(a, b) = a` when `a` evaluates to a concrete (non-null,
+  non-err) value. Schema rider: when `a`'s output column has
+  `nullable = false` and `errable = false`, the precondition is
+  immediate.
+* `NoRowErr_cross` — `cross` preserves row-err-freedom.
+
+Open obligations on the schema side:
+
+* `NoRowErr_filter` — filter preserves `rowErrFree` only when the
+  predicate is statically err-free on the input cell schema.
+  Connects to `might_error_sound` lifted from rows to streams.
+* Output-schema propagation for `Expr` and stream operators —
+  given input schema, derive the output schema. Currently every
+  rewrite cites bare predicates; the propagation rules would let
+  the optimizer reuse one schema fact across multiple operators.
+* Cell-error-free row schema: an analogue of `NoRowErr` for the
+  per-cell `Datum.IsErr` condition. Distinct from `NoRowErr`
+  (row-level err multiplicity) — both are honest schema facts and
+  both gate different rewrites.
+
 ## Stream
 
 A stream is a list of records carrying multiplicities and (optionally)
@@ -256,6 +302,8 @@ Lean evidence accumulated before the restart:
 | `refines`                  | `Mz/Equiv.lean`              | pushdown LHS → RHS         | rewrites that add err                     |
 | `refinesDual`              | `Mz/Equiv.lean`              | rewrites that add err      | pushdown over cross                       |
 | `eraseErr` (data-only)     | `Mz/StreamN.lean`            | filter / cross pushdown    | err-side surfacing                        |
+| `NoRowErr` precondition    | `Mz/StreamN.lean`            | pushdown under `=`         | filter preservation needs static pred     |
+| `Schema n` (sketch)        | `Mz/Schema.lean`             | coalesce id, cross row-err | filter / project output-schema rules      |
 | Per-payload `(Int×ErrCnt)` | preserved in branch history  | `=` on commutative-monoid  | pushdown over cross                       |
 | Collection-scoped diff     | spec-only post-restart       | —                          | not currently mechanized                  |
 

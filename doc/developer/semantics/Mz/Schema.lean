@@ -106,4 +106,90 @@ theorem NoRowErr_of_satisfies_rowErrFree
 
 end StreamN
 
+/-! ## Schema-driven rewrites
+
+Once the schema is in place, optimizer rewrites whose soundness
+depends on column metadata become discharged by a schema fact
+instead of an ad-hoc hypothesis. The two recorded here are
+representative; the broader set (`is_null` folding, non-null join
+key elimination, output-schema propagation through `Expr.subst`)
+follows the same shape. -/
+
+/-- `coalesce(a :: rest)` collapses to `a` when `a` evaluates to a
+concrete (non-`null`, non-`err`) value. Bare Datum form. -/
+theorem evalCoalesce_cons_of_concrete (d : Datum) (rest : List Datum)
+    (h_notnull : d ≠ .null) (h_noterr : ¬d.IsErr) :
+    evalCoalesce (d :: rest) = d := by
+  cases d with
+  | bool _ => rfl
+  | int _ => rfl
+  | null => exact absurd rfl h_notnull
+  | err _ => exact absurd True.intro h_noterr
+
+/-- `Expr`-level corollary: `coalesce(a, b)` equals `a` whenever
+`a` evaluates to a concrete value on `row`. Schema-rider: when the
+schema certifies `a`'s output column is `nullable = false` and
+`errable = false`, the hypothesis is discharged for every row
+satisfying the input schema. -/
+theorem eval_coalesce_pair_of_a_concrete
+    {a b : Expr} {row : Row}
+    (h_notnull : eval row a ≠ .null) (h_noterr : ¬(eval row a).IsErr) :
+    eval row (.coalesce [a, b]) = eval row a := by
+  simp only [eval, List.map_cons, List.map_nil]
+  exact evalCoalesce_cons_of_concrete _ _ h_notnull h_noterr
+
+/-! ## Schema combinators
+
+The schema for a stream produced by an operator is built from the
+input schemas. The combinators here cover the operators currently
+proved in `Mz/StreamN.lean`. -/
+
+namespace Schema
+
+/-- Concatenate two schemas. The output's `cols` is the append of
+the inputs' `cols`; `rowErrFree` is preserved iff both inputs are.
+
+This is the schema produced by `StreamN.cross` and is the
+structural counterpart to `Vector.append`. -/
+def append {n m : Nat} (a : Schema n) (b : Schema m) : Schema (n + m) :=
+  { cols := a.cols ++ b.cols
+    rowErrFree := a.rowErrFree && b.rowErrFree }
+
+end Schema
+
+namespace StreamN
+
+variable {n m : Nat}
+
+/-- `cross` preserves `NoRowErr`: when both inputs are row-err-free,
+the cross's `err_diff` is `0` by the bilinear formula. -/
+theorem NoRowErr_cross
+    {sL : StreamN n} {sR : StreamN m}
+    (hL : NoRowErr sL) (hR : NoRowErr sR) :
+    NoRowErr (cross sL sR) := by
+  intro rec hrec
+  -- Every record in `cross sL sR` is `crossOne recL recR` for some
+  -- `recL ∈ sL`, `recR ∈ sR`. Both originals have err_diff = 0, so
+  -- the bilinear formula gives 0 for the product.
+  induction sL with
+  | nil => cases hrec
+  | cons recL sLR ih =>
+    rw [cross_cons_left] at hrec
+    rcases List.mem_append.mp hrec with hmap | htail
+    · -- rec is crossOne recL recR for some recR ∈ sR.
+      obtain ⟨recR, hrecR_mem, hrec_eq⟩ := List.mem_map.mp hmap
+      have hL0 : recL.err_diff = 0 := hL recL (List.mem_cons_self)
+      have hR0 : recR.err_diff = 0 := hR recR hrecR_mem
+      rw [← hrec_eq]
+      show (crossOne recL recR).err_diff = 0
+      simp only [crossOne]
+      rw [hL0, hR0]; ring
+    · -- rec is in cross sLR sR.
+      have hL' : NoRowErr sLR := by
+        intro r hr
+        exact hL r (List.mem_cons_of_mem _ hr)
+      exact ih hL' htail
+
+end StreamN
+
 end Mz
