@@ -14,3 +14,4 @@ import Mz.Stream
 import Mz.Equiv
 import Mz.EquivBounded
 import Mz.StreamN
+import Mz.Schema
