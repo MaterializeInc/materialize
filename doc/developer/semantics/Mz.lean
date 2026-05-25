@@ -15,3 +15,4 @@ import Mz.Equiv
 import Mz.EquivBounded
 import Mz.StreamN
 import Mz.Schema
+import Mz.OutputType
