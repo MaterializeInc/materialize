@@ -23,9 +23,12 @@ This module defines three relations the design doc
 * `Datum.eqErrSet a b` — error-set equivalence. Collapses all `.err`
   payloads into a single equivalence class. Symmetric, reflexive,
   transitive.
-* `Datum.refines a b` — partial order with errors as the least
-  element. An optimizer rewrite `e1 → e2` is sound under the "no
-  spurious errors" posture iff `eval e1 ⊑ eval e2` pointwise.
+* `Datum.refines a b` — preorder with errors as the least element.
+  Not a partial order: antisymmetry fails because `.err e1 ⊑ .err e2`
+  and `.err e2 ⊑ .err e1` both hold for distinct payloads `e1 ≠ e2`.
+  The induced equivalence (two-way refinement) is `eqErrSet`. An
+  optimizer rewrite `e1 → e2` is sound under the "no spurious
+  errors" posture iff `eval e1 ⊑ eval e2` pointwise.
 * `Datum.refinesDual a b` — the dual order with errors as the top.
   The "spurious errors permitted" (PostgreSQL) posture is sound under
   this preorder.
@@ -146,11 +149,21 @@ theorem Datum.refines_trans {a b c : Datum}
 /-! ## Dual refinement preorder (errors as top)
 
 `a ⊒ b` iff `a = b` or `b` is some `.err _`. Errors are the
-greatest-defined element under this dual order. The "spurious errors
-permitted" (PostgreSQL) posture is sound under this preorder: an
-optimizer may rewrite `e1 → e2` if `eval e1 ⊒ eval e2` pointwise,
-which permits introducing errors for values the original evaluation
-order would have produced. -/
+greatest-defined element under this dual order.
+
+Posture sketched as "spurious errors permitted (PostgreSQL)". A
+caveat on that label: PG's actual stance is not the unconditional
+form "any rewrite that adds an error is admissible." PG permits
+errors that surface as side effects of its evaluation strategy
+(e.g. evaluation of a sub-expression whose value would not have
+been needed), but it does not endorse rewrites that *gratuitously
+inject* errors into previously error-free expressions. A pure
+`refinesDual` posture is strictly broader than PG. The relation
+that matches Materialize's intended stance — "errors that some
+legal evaluation order would produce are admissible; errors no
+evaluation order would produce are not" — needs a non-deterministic
+`eval` that returns a *set* of `Datum`s, which is out of scope for
+this preorder layer. -/
 
 /-- Dual refinement preorder on `Datum` with errors as top. -/
 def Datum.refinesDual (a b : Datum) : Prop :=

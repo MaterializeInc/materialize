@@ -25,7 +25,19 @@ cleanly. It is the dual of the strict-function rule documented in
 `Mz/Strict.lean`: strict functions promote `err` above `null` in the
 result of a per-cell computation; `coalesce` is non-strict and
 demotes `err` below `null`.
--/
+
+This is a deliberate divergence from PG: PG's `coalesce(NULL, 1/0)`
+evaluates `1/0` (because no non-null value has been seen) and errors;
+this skeleton's `evalCoalesce [.null, .err DivByZero]` returns
+`.null`. The divergence is recorded in the design doc's *SQL error
+semantics → Non-strict functions* section.
+
+Left-to-right evaluation order is part of the semantics, not an
+implementation choice. `evalCoalesce` is order-sensitive: swapping
+adjacent operands changes the result whenever one is `.null` and the
+other is `.bool _ / .int _`. The unspecified-evaluation-order
+caveats in `model.md`'s *Equivalence relations* discussion do not
+apply here — `coalesce`, like `CASE`, has SQL-pinned order. -/
 
 namespace Mz
 

@@ -21,6 +21,13 @@ pushdown statement is degenerate on the err side.
 `Expr.subst` is mutually recursive with `Expr.substArgs` so Lean's
 structural-recursion checker handles the nested-list constructors
 (`andN`, `orN`, `coalesce`) without an explicit termination measure.
+
+`eval_subst` is unconditional (no column-bound hypothesis on `p` or
+`es`) because `Env.get` is total: out-of-bounds index → `.null`
+(`Mz/PrimEval.lean`'s `Env.get`). A future model that turns
+out-of-bounds into a cell error rather than `.null` will need to
+re-state `eval_subst` with a column-bound hypothesis matching
+`colReferencesBoundedBy`.
 -/
 
 namespace Mz

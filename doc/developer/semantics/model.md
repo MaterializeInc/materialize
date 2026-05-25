@@ -233,6 +233,52 @@ Collection scope is documented in the design doc and historically had
 a `DiffWithError` mechanization that was removed at restart; it can be
 reintroduced as a flag if a forcing function appears.
 
+### Divergence from PostgreSQL: `coalesce` rescues errors
+
+PG's `coalesce(NULL, 1/0)` evaluates `1/0` (no non-null seen yet)
+and raises an error.
+This skeleton's `evalCoalesce [.null, .err DivByZero] = .null`:
+the "null beats err" tiebreaker promotes `.null` over `.err` when
+no concrete value is reached.
+The all-null case matches PG; the mixed-null-and-err case does not.
+
+This is a deliberate proposal recorded in the design doc's *SQL
+error semantics → Non-strict functions* section: it generalizes
+PG `coalesce` so that an err can be rescued the same way a `null`
+can.
+The consequence — Materialize silently rescues errors PG would
+surface — is the single largest behavioral departure in this
+catalog, and depends on the design doc's rule that errors are
+stronger than `null` for *strict* functions but weaker for
+`coalesce`'s rescue role.
+
+### Cell-to-row escalation policy
+
+The two scopes (cell-error in `row`, row-error via `err_diff`) are
+modeled as independent; an operator decides per-update whether a
+cell error escalates to a row error.
+Current per-operator rule in `Mz/Collection.lean`:
+
+* `filter` — predicate `eval` returning `.err _` migrates `diff` into
+  `err_diff` (`filterOne` case `.err _`). Cells inside `row` are
+  unchanged, so a cell error that didn't reach the predicate stays
+  cell-scoped.
+* `project` — applies `eval` pointwise; a cell that evaluates to
+  `.err _` lands in the output cell. `err_diff` is unchanged.
+  Cell errors do *not* escalate to row errors under `project`.
+* `cross` — concatenates rows verbatim; bilinear err-diff combines
+  the row-level err multiplicities of the two sides. Cells are not
+  inspected; cell errors do not escalate.
+* `negate`, `unionAll` — multiplicity-only; cells are not inspected;
+  no escalation.
+
+Open: `Reduce` and sinks, neither of which is modeled at this
+layer. A sink cannot emit a row containing `Datum::Error` to a
+downstream system, so its rule must be to escalate cell-err to
+row-err. `Reduce`'s rule depends on the aggregate; `SUM` is
+strict (cell-err → row-err) per the design doc, `COUNT(*)`
+counts the row regardless, `COUNT(expr)` is strict on the expr.
+
 ### Two-diff vs separate-collection encoding
 
 Materialize's runtime today carries each logical collection as two
@@ -290,9 +336,25 @@ Counterexamples (mechanized in `Mz/EquivBounded.lean`,
 `Mz/Equiv.lean`):
 * `evalAnd` not commutative on err / err inputs (left-bias).
 * `evalPlusBounded` not associative at the bounded-int boundary.
+  The main `evalPlus` is on Lean's unbounded `Int` and is
+  associative; the bounded form lives in `Mz/EquivBounded.lean` and
+  surfaces the boundary counterexample needed by the design-doc
+  argument that errors force a non-equality relation.
 * `filter_cross_pushdown_left` unsound when right collection has
   `err_diff > 0` (witnessed by
   `filterOne_cross_pushdown_left_unsound`).
+  This is the canonical case where the encoding choice (two-diff
+  vs separate-collection) determines whether the rewrite holds.
+  Any encoding in which err multiplicity participates in the
+  cross's multiplication rule produces this gap — the separate-
+  collection encoding avoids it precisely because errs do not
+  multiply against data on its cross.
+  The skeleton chose two-diff for the cleaner bilinear cross rule
+  and accepts the pushdown obstruction as the cost; the rewrite
+  ships either under `eraseErr` (interior), under a static
+  `rowErrFree` schema fact, or — eventually — under a lifted
+  `refines`. See `transforms.md` "Filter / project / cross
+  pushdown" for the three windows.
 
 ### Error-set equivalence (`eqErrSet`)
 
@@ -327,12 +389,24 @@ is not yet underwritten.
 `a.refinesDual b := a = b ∨ b.IsErr`.
 The reverse direction of `refines`.
 
-Posture: "spurious errors permitted" (PostgreSQL).
-Transformed result may add errors the original did not have.
+Posture sketched as "spurious errors permitted (PostgreSQL)".
+This label is approximate: PG's actual stance permits errors that
+surface as side effects of its evaluation strategy (e.g., the
+inactive arm of a `CASE` PG happened to evaluate) but does not
+endorse rewrites that *gratuitously inject* errors into previously
+error-free expressions.
+A pure `refinesDual` posture is strictly broader than PG.
+Materialize's intended posture is closer to "errors that some
+legal evaluation order would produce are admissible; errors no
+order would produce are not" — the right object for that is a
+non-determinism semantics where `eval` returns a *set* of `Datum`s
+per evaluation order, which is out of scope at the `Datum`-level
+preorder layer.
+
 Pushdown `filter_cross_pushdown_left` is unsound under this posture
 (RHS loses an error LHS had, which the posture forbids).
 
-### Data-side erasure (`eraseErr`)
+### Data-side erasure (`eraseErr`) — interior lemma, not a user-facing relation
 
 `recA.eraseErr.diff = recB.eraseErr.diff ∧ rows equal`, ignoring
 `err_diff`.
@@ -344,10 +418,16 @@ branch of the predicate evaluation
 `List.map`).
 What it costs: erases the user-visible distinction between "row
 filtered out" and "row errored".
-For Materialize, errors are observable, so full erasure is too
-coarse for the user-facing surface.
-It is a useful interior relation for proving that a rewrite preserves
-the data side, with the err side handled separately.
+
+For Materialize, errors are observable in the runtime's error
+collection, so `eraseErr` cannot underwrite any rewrite the user
+can see.
+It is strictly an interior fact: a rewrite that preserves
+`eraseErr` still has to be paired with an err-side argument
+(`refines`, schema-driven `rowErrFree`, or a non-determinism
+quotient) before it ships.
+The summary table at the end of this file lists `eraseErr` for
+completeness, but it is not a candidate user-facing surface.
 
 ### Per-error-payload diff (open alternative)
 
@@ -369,13 +449,13 @@ Lean evidence accumulated before the restart:
 | Layer / variant            | Mechanization                | Sound under                | Open under                                |
 | -------------------------- | ---------------------------- | -------------------------- | ----------------------------------------- |
 | `Datum`                    | `Mz/Datum.lean`              | —                          | overflow / decode / division-by-zero only |
-| `Expr.eval`                | `Mz/Eval.lean`               | `=`                        | strict eval order (no non-determinism)    |
+| `Expr.eval`                | `Mz/Eval.lean`               | `=` (on unbounded `Int`)   | strict eval order (no non-determinism); bounded-int counter at `Mz/EquivBounded.lean` |
 | `RowN n = Vector Datum n`  | `Mz/Collection.lean`         | `=`                        | indexed-arity reasoning verified          |
 | `Collection n` (two-diff)  | `Mz/Collection.lean`         | `=` on data side           | err side under `eraseErr` / `refines`     |
 | `eqErrSet`                 | `Mz/Equiv.lean`              | err / err commutativity    | bounded-int assoc, pushdown over cross    |
 | `refines`                  | `Mz/Equiv.lean`              | pushdown LHS → RHS (plausibly; lift to `Collection` open) | rewrites that add err                     |
 | `refinesDual`              | `Mz/Equiv.lean`              | rewrites that add err      | pushdown over cross                       |
-| `eraseErr` (data-only)     | `Mz/Collection.lean`         | filter / cross pushdown    | err-side surfacing                        |
+| `eraseErr` (interior lemma) | `Mz/Collection.lean`        | filter / cross pushdown — data side only | not a user-facing relation; must pair with err-side argument |
 | `NoRowErr` precondition    | `Mz/Collection.lean`         | pushdown under `=`         | filter preservation needs static pred     |
 | `Schema n` (sketch)        | `Mz/Schema.lean`             | coalesce id, cross row-err | project output-schema rules               |
 | `Expr.outputType`          | `Mz/OutputType.lean`         | `=` on `.lit` and `.col`   | non-foundational constructors weakest     |

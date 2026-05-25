@@ -14,14 +14,24 @@ evaluator first evaluates every operand and then hands the resulting
 `List.attach` so that Lean's structural recursion checker can see
 each element of `args` as a subterm of the enclosing `Expr`.
 
-Modeling note on laziness: in the runtime, the boolean fragment short-
+Modeling note on laziness: in PG, the boolean fragment short-
 circuits — once a `FALSE` is seen, the rest of the `AND` operands are
 not evaluated. In this total skeleton, every `eval env e` is a total
-function of its inputs, and the absorption theorems in
-`Mz/Variadic.lean` guarantee that strict evaluation produces the same
-`Datum` as the lazy runtime would. A future iteration that introduces
-effects (resource usage, partiality, observability) will need to
-reintroduce the laziness explicitly.
+function of its inputs.
+
+The absorption theorems in `Mz/Variadic.lean` guarantee that strict
+evaluation produces the same `Datum` as a lazy runtime *whenever the
+absorbing operand appears before the erroring one in the operand list*.
+The other order produces a different observable: on
+`[1/0, .bool false]`, strict eval yields `.err divisionByZero`
+because every operand is pre-evaluated; a lazy `AND` reading
+left-to-right would error the same way; a *reordered* lazy `AND`
+that hits the `.bool false` first would short-circuit and yield
+`.bool false`. The strict model here matches Materialize's runtime
+(which is also strict at this layer), not PG short-circuit semantics.
+A future iteration that introduces effects (resource usage,
+partiality, observability) will need to reintroduce the laziness
+explicitly.
 -/
 
 namespace Mz
