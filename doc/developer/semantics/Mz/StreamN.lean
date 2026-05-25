@@ -464,4 +464,120 @@ theorem filter_cross_pushdown_left_data
 
 end StreamN
 
+/-! ## Schema predicates
+
+The pushdown obligation `filter_cross_pushdown_left` fails under
+strict equality because cross's err-diff bilinear formula carries
+the term `recL.diff · recR.err_diff`; filter zeroes `recL.diff`
+before the cross and drops the contribution. The simplest schema
+fact that closes the obligation is "the right stream has no
+row-level errors": with `recR.err_diff = 0` for every right record,
+the offending term vanishes and the pushdown holds at strict
+equality.
+
+This section defines `NoRowErr` as a propositional predicate on
+records and streams, and discharges the pushdown under it. The
+predicate is intentionally minimal — a single equality on
+`err_diff`. The full schema extension envisioned in `model.md`
+("schema tracks per-column nullability and errability") is a
+strictly stronger structure; this predicate is the slice of it
+that the pushdown actually needs.
+
+The natural next step is a `Schema n` structure with `nullable`
+and `errable` per column, plus a `rowErrFree` flag. `NoRowErr`
+would then become a derived property of the schema lifted
+pointwise to records. Until that lift lands, the predicate stands
+on its own. -/
+
+/-- A record has no row-level error multiplicity. Cell-level
+errors inside `row` are not constrained here — that is the
+separate "cell-err-free" condition the schema's `errable` bit
+will eventually carry. -/
+def StreamRecordN.NoRowErr (rec : StreamRecordN n) : Prop :=
+  rec.err_diff = 0
+
+namespace StreamN
+
+variable {n m k : Nat}
+
+/-- A stream's records all have zero row-level err multiplicity. -/
+def NoRowErr (s : StreamN n) : Prop :=
+  ∀ rec ∈ s, rec.err_diff = 0
+
+@[simp] theorem NoRowErr_nil : NoRowErr ([] : StreamN n) := by
+  intro _ h; cases h
+
+theorem NoRowErr_cons {rec : StreamRecordN n} {s : StreamN n} :
+    NoRowErr (rec :: s) ↔ rec.err_diff = 0 ∧ NoRowErr s := by
+  constructor
+  · intro h
+    refine ⟨h rec ?_, ?_⟩
+    · exact List.mem_cons_self
+    · intro r hr
+      exact h r (List.mem_cons_of_mem _ hr)
+  · rintro ⟨h0, hs⟩ r hr
+    rw [List.mem_cons] at hr
+    cases hr with
+    | inl h => rw [h]; exact h0
+    | inr h => exact hs _ h
+
+/-! ## Pushdown under strict equality on err-free right -/
+
+/-- Per-record pushdown under strict equality, given the right
+record has no row-level err multiplicity. The offending term
+`recL.diff · recR.err_diff` in cross's err-diff formula vanishes,
+and every branch of `filterOne` reconciles by `ring`. -/
+private theorem filterOne_cross_pushdown_left_strict
+    (p : Expr) (hp : p.colReferencesBoundedBy n = true)
+    (recL : StreamRecordN n) (recR : StreamRecordN m)
+    (hR : recR.err_diff = 0) :
+    filterOne p (crossOne recL recR)
+      = crossOne (filterOne p recL) recR := by
+  have heval := eval_crossOne_left_bounded p hp recL recR
+  unfold filterOne
+  rw [heval]
+  cases eval recL.row.toList p with
+  | bool b =>
+    cases b with
+    | true => rfl
+    | false =>
+      simp only [crossOne]
+      refine StreamRecordN.mk.injEq .. |>.mpr ⟨rfl, ?_, ?_⟩
+      · ring
+      · rw [hR]; ring
+  | int _ =>
+    simp only [crossOne]
+    refine StreamRecordN.mk.injEq .. |>.mpr ⟨rfl, ?_, ?_⟩
+    · ring
+    · rw [hR]; ring
+  | null =>
+    simp only [crossOne]
+    refine StreamRecordN.mk.injEq .. |>.mpr ⟨rfl, ?_, ?_⟩
+    · ring
+    · rw [hR]; ring
+  | err _ =>
+    simp only [crossOne]
+    refine StreamRecordN.mk.injEq .. |>.mpr ⟨rfl, ?_, ?_⟩
+    · ring
+    · rw [hR]; ring
+
+/-- Stream-level pushdown under strict equality, given the right
+stream is row-err-free. -/
+theorem filter_cross_pushdown_left_strict
+    (p : Expr) (hp : p.colReferencesBoundedBy n = true)
+    (sL : StreamN n) (sR : StreamN m) (hR : NoRowErr sR) :
+    filter p (cross sL sR) = cross (filter p sL) sR := by
+  induction sL with
+  | nil => rfl
+  | cons recL sLR ih =>
+    rw [cross_cons_left, filter_append, filter_cons,
+        cross_cons_left, ih]
+    congr 1
+    rw [filter, List.map_map]
+    apply List.map_congr_left
+    intro recR hrecR
+    exact filterOne_cross_pushdown_left_strict p hp recL recR (hR recR hrecR)
+
+end StreamN
+
 end Mz
