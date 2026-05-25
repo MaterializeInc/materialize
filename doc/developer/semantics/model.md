@@ -8,9 +8,9 @@ It complements the design doc at
 discursive; this file is a layered catalog plus honest notes on what
 each variant buys and what it costs.
 
-The model has four layers — `Datum`, `Expression`, `Row`, `Collection`
-— and a separate dimension of error semantics that cuts across all
-of them.
+The model has five layers — `Datum`, `Expression`, `Row`, `Schema`,
+`Collection` — and a separate dimension of error semantics that cuts
+across all of them.
 The skeleton deliberately models a single *collection version* in
 the sense of `../platform/formalism.md`: a multiset of rows with
 diff multiplicities, no time dimension.
@@ -233,6 +233,43 @@ Collection scope is documented in the design doc and historically had
 a `DiffWithError` mechanization that was removed at restart; it can be
 reintroduced as a flag if a forcing function appears.
 
+### Two-diff vs separate-collection encoding
+
+Materialize's runtime today carries each logical collection as two
+timely streams: `data : Stream<(Row, Int)>` and
+`errs : Stream<(DataflowError, Int)>`.
+The skeleton's two-diff form and the runtime's separate-collection
+form are denotationally close but not equivalent:
+
+* Forward (two-diff → separate-collection) drops the originating
+  row from each err update; the err side carries a synthesized
+  `DataflowError` payload, either built from the row's cell errors
+  or a generic one.
+* Reverse (separate-collection → two-diff) drops the structured
+  `DataflowError` payload; the err side carries the originating row
+  plus `err_diff`.
+
+Neither is a strict superset; the encodings carry orthogonal extra
+information.
+The skeleton chooses two-diff because the bilinear cross rule lifts
+cleanly from the separate-collection product
+(`cross (dL, eL) (dR, eR) = (dL × dR, dL × eR ∪ eL × dR ∪ eL × eR)`)
+and a single `(diff, err_diff)` record subsumes the "row exists in
+both data and error" case that separate-collection splits across
+two arrangements.
+
+The skeleton retains the right to project to separate-collection in
+the future.
+The load-bearing invariant for that projection is that *the err
+side of every operator preserves the row carrier*.
+`filterOne` honors this (predicate errs migrate `diff → err_diff`
+and keep `row` unchanged); `crossOne` honors it (output row is the
+append regardless of which side carried the err); the
+*Row-scoped errors via carrier replacement* alternative in the
+design doc is rejected precisely because it breaks the invariant.
+See the design doc's *Sum-type row carrier* alternative for the
+encoding closest to the runtime's separate-collection form.
+
 ## Equivalence relations explored
 
 SQL leaves evaluation order unspecified outside `CASE`, `AND` / `OR`
@@ -277,8 +314,13 @@ Asymmetric.
 
 Posture: "no spurious errors" — the transformed result has no errors
 the original did not have.
-Pushdown `filter_cross_pushdown_left` is sound in the LHS → RHS
-direction (LHS errs, RHS doesn't) but unsound in reverse.
+Pushdown `filter_cross_pushdown_left` is plausibly sound in the
+LHS → RHS direction (LHS errs, RHS doesn't), unsound in reverse.
+The lift of `Datum.refines` to `Update` / `Collection` (pointwise or
+otherwise) is not yet mechanized — and `Mz/Equiv.lean`'s
+counterexample-discussion comment flags that even `eqErrSet` lifted
+pointwise fails on update-level carrier shape, so the plausibility
+is not yet underwritten.
 
 ### Dual refinement preorder (`refinesDual`, errors as top)
 
@@ -331,7 +373,7 @@ Lean evidence accumulated before the restart:
 | `RowN n = Vector Datum n`  | `Mz/Collection.lean`         | `=`                        | indexed-arity reasoning verified          |
 | `Collection n` (two-diff)  | `Mz/Collection.lean`         | `=` on data side           | err side under `eraseErr` / `refines`     |
 | `eqErrSet`                 | `Mz/Equiv.lean`              | err / err commutativity    | bounded-int assoc, pushdown over cross    |
-| `refines`                  | `Mz/Equiv.lean`              | pushdown LHS → RHS         | rewrites that add err                     |
+| `refines`                  | `Mz/Equiv.lean`              | pushdown LHS → RHS (plausibly; lift to `Collection` open) | rewrites that add err                     |
 | `refinesDual`              | `Mz/Equiv.lean`              | rewrites that add err      | pushdown over cross                       |
 | `eraseErr` (data-only)     | `Mz/Collection.lean`         | filter / cross pushdown    | err-side surfacing                        |
 | `NoRowErr` precondition    | `Mz/Collection.lean`         | pushdown under `=`         | filter preservation needs static pred     |
