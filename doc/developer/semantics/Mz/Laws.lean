@@ -37,49 +37,57 @@ two-sided identity for `evalOr`. The proofs verify each cell of the
 non-identity argument. Identities are the seed values used by the
 variadic fold in `Mz/Variadic.lean`. -/
 
-theorem evalAnd_true_left (d : Datum) : evalAnd (.bool true) d = d := by
+theorem evalAnd_true_left (d : Datum) (h : ¬d.IsInt) :
+    evalAnd (.bool true) d = d := by
   cases d with
   | bool b => cases b <;> rfl
-  | int  _ => rfl
+  | int  _ => exact (h trivial).elim
   | null   => rfl
   | err _  => rfl
 
-theorem evalAnd_true_right (d : Datum) : evalAnd d (.bool true) = d := by
+theorem evalAnd_true_right (d : Datum) (h : ¬d.IsInt) :
+    evalAnd d (.bool true) = d := by
   cases d with
   | bool b => cases b <;> rfl
-  | int  _ => rfl
+  | int  _ => exact (h trivial).elim
   | null   => rfl
   | err _  => rfl
 
-theorem evalOr_false_left (d : Datum) : evalOr (.bool false) d = d := by
+theorem evalOr_false_left (d : Datum) (h : ¬d.IsInt) :
+    evalOr (.bool false) d = d := by
   cases d with
   | bool b => cases b <;> rfl
-  | int  _ => rfl
+  | int  _ => exact (h trivial).elim
   | null   => rfl
   | err _  => rfl
 
-theorem evalOr_false_right (d : Datum) : evalOr d (.bool false) = d := by
+theorem evalOr_false_right (d : Datum) (h : ¬d.IsInt) :
+    evalOr d (.bool false) = d := by
   cases d with
   | bool b => cases b <;> rfl
-  | int  _ => rfl
+  | int  _ => exact (h trivial).elim
   | null   => rfl
   | err _  => rfl
 
-/-! ## Idempotence -/
+/-! ## Idempotence
 
-theorem evalAnd_idem (d : Datum) : evalAnd d d = d := by
+After the codomain tightening of `evalAnd` / `evalOr`
+(non-boolean operands route to `.null`), the universal form
+`evalAnd d d = d` is no longer true on `.int` (the result is
+`.null`). The hypothesis `¬d.IsInt` excludes the case. SQL `AND`
+is boolean-typed, so this matches the SQL semantics. -/
+
+theorem evalAnd_idem (d : Datum) (h : ¬d.IsInt) : evalAnd d d = d := by
   cases d with
   | bool b => cases b <;> rfl
-  | int  n => show (if n = n then Datum.int n else Datum.null) = .int n
-              rw [if_pos rfl]
+  | int  _ => exact (h trivial).elim
   | null   => rfl
   | err _  => rfl
 
-theorem evalOr_idem (d : Datum) : evalOr d d = d := by
+theorem evalOr_idem (d : Datum) (h : ¬d.IsInt) : evalOr d d = d := by
   cases d with
   | bool b => cases b <;> rfl
-  | int  n => show (if n = n then Datum.int n else Datum.null) = .int n
-              rw [if_pos rfl]
+  | int  _ => exact (h trivial).elim
   | null   => rfl
   | err _  => rfl
 
@@ -102,16 +110,10 @@ theorem evalAnd_comm_of_no_err
     | int  _  => cases b₁ <;> rfl
     | null    => cases b₁ <;> rfl
     | err _   => exact (h₂ trivial).elim
-  | int n =>
+  | int _ =>
     cases d₂ with
     | bool b₂ => cases b₂ <;> rfl
-    | int  m  =>
-      by_cases h : n = m
-      · subst h; rfl
-      · have h' : ¬m = n := fun h_eq => h h_eq.symm
-        show (if n = m then Datum.int n else Datum.null)
-            = (if m = n then Datum.int m else Datum.null)
-        rw [if_neg h, if_neg h']
+    | int  _  => rfl
     | null    => rfl
     | err _   => exact (h₂ trivial).elim
   | null =>
@@ -132,16 +134,10 @@ theorem evalOr_comm_of_no_err
     | int  _  => cases b₁ <;> rfl
     | null    => cases b₁ <;> rfl
     | err _   => exact (h₂ trivial).elim
-  | int n =>
+  | int _ =>
     cases d₂ with
     | bool b₂ => cases b₂ <;> rfl
-    | int  m  =>
-      by_cases h : n = m
-      · subst h; rfl
-      · have h' : ¬m = n := fun h_eq => h h_eq.symm
-        show (if n = m then Datum.int n else Datum.null)
-            = (if m = n then Datum.int m else Datum.null)
-        rw [if_neg h, if_neg h']
+    | int  _  => rfl
     | null    => rfl
     | err _   => exact (h₂ trivial).elim
   | null =>
@@ -163,25 +159,27 @@ error-free. -/
 theorem eval_and_comm_of_no_might_error
     {a b : Expr} {env : Env}
     (ha : ¬(a.might_error = true)) (hb : ¬(b.might_error = true))
+    (haInt : ¬(eval env a).IsInt) (hbInt : ¬(eval env b).IsInt)
     (hEnv : env.ErrFree) :
     eval env (.and a b) = eval env (.and b a) := by
   have hae := might_error_sound a env ha hEnv
   have hbe := might_error_sound b env hb hEnv
   show eval env (Expr.andN [a, b]) = eval env (Expr.andN [b, a])
   simp only [eval, List.map_cons, List.map_nil, evalAndN]
-  rw [evalAnd_true_right, evalAnd_true_right]
+  rw [evalAnd_true_right _ hbInt, evalAnd_true_right _ haInt]
   exact evalAnd_comm_of_no_err hae hbe
 
 theorem eval_or_comm_of_no_might_error
     {a b : Expr} {env : Env}
     (ha : ¬(a.might_error = true)) (hb : ¬(b.might_error = true))
+    (haInt : ¬(eval env a).IsInt) (hbInt : ¬(eval env b).IsInt)
     (hEnv : env.ErrFree) :
     eval env (.or a b) = eval env (.or b a) := by
   have hae := might_error_sound a env ha hEnv
   have hbe := might_error_sound b env hb hEnv
   show eval env (Expr.orN [a, b]) = eval env (Expr.orN [b, a])
   simp only [eval, List.map_cons, List.map_nil, evalOrN]
-  rw [evalOr_false_right, evalOr_false_right]
+  rw [evalOr_false_right _ hbInt, evalOr_false_right _ haInt]
   exact evalOr_comm_of_no_err hae hbe
 
 end Mz

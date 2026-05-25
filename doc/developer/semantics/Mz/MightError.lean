@@ -29,12 +29,10 @@ theorem evalAnd_not_err
     | int  _  => cases b₁ <;> (intro h; cases h)
     | null    => cases b₁ <;> (intro h; cases h)
     | err _   => exact (h₂ trivial).elim
-  | int n =>
+  | int _ =>
     cases d₂ with
     | bool b₂ => cases b₂ <;> (intro h; cases h)
-    | int  m  =>
-      show ¬(if n = m then Datum.int n else Datum.null).IsErr
-      split <;> (intro h; cases h)
+    | int  _  => intro h; cases h
     | null    => intro h; cases h
     | err _   => exact (h₂ trivial).elim
   | null =>
@@ -55,12 +53,10 @@ theorem evalOr_not_err
     | int  _  => cases b₁ <;> (intro h; cases h)
     | null    => cases b₁ <;> (intro h; cases h)
     | err _   => exact (h₂ trivial).elim
-  | int n =>
+  | int _ =>
     cases d₂ with
     | bool b₂ => cases b₂ <;> (intro h; cases h)
-    | int  m  =>
-      show ¬(if n = m then Datum.int n else Datum.null).IsErr
-      split <;> (intro h; cases h)
+    | int  _  => intro h; cases h
     | null    => intro h; cases h
     | err _   => exact (h₂ trivial).elim
   | null =>

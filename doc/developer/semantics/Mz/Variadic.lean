@@ -41,13 +41,13 @@ theorem evalOrN_cons (d : Datum) (ds : List Datum) :
 theorem evalAndN_nil : evalAndN [] = .bool true := rfl
 theorem evalOrN_nil  : evalOrN  [] = .bool false := rfl
 
-theorem evalAndN_singleton (d : Datum) : evalAndN [d] = d := by
+theorem evalAndN_singleton (d : Datum) (h : ¬d.IsInt) : evalAndN [d] = d := by
   show evalAnd d (.bool true) = d
-  exact evalAnd_true_right d
+  exact evalAnd_true_right d h
 
-theorem evalOrN_singleton (d : Datum) : evalOrN [d] = d := by
+theorem evalOrN_singleton (d : Datum) (h : ¬d.IsInt) : evalOrN [d] = d := by
   show evalOr d (.bool false) = d
-  exact evalOr_false_right d
+  exact evalOr_false_right d h
 
 /-! ## Binary equivalence
 
@@ -56,15 +56,15 @@ This is the bridge that lets every binary theorem in
 `Mz/Boolean.lean` and `Mz/Laws.lean` carry over to the variadic
 operators on lists of length two. -/
 
-theorem evalAndN_binary (a b : Datum) :
+theorem evalAndN_binary (a b : Datum) (hb : ¬b.IsInt) :
     evalAndN [a, b] = evalAnd a b := by
   show evalAnd a (evalAnd b (.bool true)) = evalAnd a b
-  rw [evalAnd_true_right]
+  rw [evalAnd_true_right _ hb]
 
-theorem evalOrN_binary (a b : Datum) :
+theorem evalOrN_binary (a b : Datum) (hb : ¬b.IsInt) :
     evalOrN [a, b] = evalOr a b := by
   show evalOr a (evalOr b (.bool false)) = evalOr a b
-  rw [evalOr_false_right]
+  rw [evalOr_false_right _ hb]
 
 /-! ## Absorption
 

@@ -26,11 +26,22 @@ namespace Mz
 
 /-- AND evaluation table. Pattern order encodes the absorption
 hierarchy `FALSE > ERROR > NULL > TRUE`. Non-boolean operands
-(`.int _`) are preserved when paired with the identity element
-`.bool true` (or another `.int`), so the algebraic laws
-`evalAnd_true_left/right` and `evalAnd_idem` hold universally.
-SQL would reject `.int` in `AND` at type-check time; the
-skeleton's semantics is a coherent total extension. -/
+(`.int _`) route to `.null` via the catch-all — the codomain of
+`evalAnd` on a `Datum × Datum` argument is the boolean fragment
+`{.bool _, .null, .err _}`.
+
+Modeling note: in production, a type-mismatched operand to `AND`
+would be caught by the planner type-checker; if it slipped past,
+Materialize would panic, escalating the row to the error
+collection. The skeleton routes to `.null` instead, which keeps
+the row in the data collection — a sound over-approximation of
+the panic-and-escalate behavior because any rewrite sound under
+`.null` is also sound under panic (panic strictly removes
+observable rows). Using `.null` lets the skeleton stay total
+without introducing a `typeMismatch` `EvalError` variant.
+
+Laws on arbitrary `Datum` operands (`evalAnd_true_left/right`,
+`evalAnd_idem`) carry a `¬IsInt` hypothesis as a result. -/
 def evalAnd : Datum → Datum → Datum
   | .bool false, _         => .bool false
   | _, .bool false         => .bool false
@@ -39,13 +50,11 @@ def evalAnd : Datum → Datum → Datum
   | .null, _               => .null
   | _, .null               => .null
   | .bool true, .bool true => .bool true
-  | .bool true, .int n     => .int n
-  | .int n, .bool true     => .int n
-  | .int n, .int m         => if n = m then .int n else .null
+  | _, _                   => .null
 
 /-- OR evaluation table. Mirror of `evalAnd` with `TRUE` as the
-dominant absorber: `TRUE > ERROR > NULL > FALSE`. Identity on
-`.int` operands paired with the identity element `.bool false`. -/
+dominant absorber: `TRUE > ERROR > NULL > FALSE`. Non-boolean
+operands route to `.null`; codomain is the boolean fragment. -/
 def evalOr : Datum → Datum → Datum
   | .bool true, _            => .bool true
   | _, .bool true            => .bool true
@@ -54,9 +63,7 @@ def evalOr : Datum → Datum → Datum
   | .null, _                 => .null
   | _, .null                 => .null
   | .bool false, .bool false => .bool false
-  | .bool false, .int n      => .int n
-  | .int n, .bool false      => .int n
-  | .int n, .int m           => if n = m then .int n else .null
+  | _, _                     => .null
 
 /-- NOT evaluation table. Strict on `null` and `err`. Numeric
 operands pass through unchanged so that `evalNot` stays

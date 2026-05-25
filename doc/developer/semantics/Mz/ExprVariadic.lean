@@ -51,17 +51,19 @@ theorem eval_orN_nil (env : Env) :
     eval env (.orN []) = .bool false := by
   rw [eval_orN]; rfl
 
-theorem eval_andN_singleton (env : Env) (a : Expr) :
+theorem eval_andN_singleton (env : Env) (a : Expr)
+    (h : ¬(eval env a).IsInt) :
     eval env (.andN [a]) = eval env a := by
   rw [eval_andN]
   show evalAndN [eval env a] = eval env a
-  exact evalAndN_singleton (eval env a)
+  exact evalAndN_singleton (eval env a) h
 
-theorem eval_orN_singleton (env : Env) (a : Expr) :
+theorem eval_orN_singleton (env : Env) (a : Expr)
+    (h : ¬(eval env a).IsInt) :
     eval env (.orN [a]) = eval env a := by
   rw [eval_orN]
   show evalOrN [eval env a] = eval env a
-  exact evalOrN_singleton (eval env a)
+  exact evalOrN_singleton (eval env a) h
 
 theorem eval_andN_binary (env : Env) (a b : Expr) :
     eval env (.andN [a, b]) = eval env (.and a b) := rfl

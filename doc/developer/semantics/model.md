@@ -40,8 +40,18 @@ Numeric, string, and temporal types are intentionally omitted.
 
 The four-valued absorption order is `FALSE > ERROR > NULL > TRUE` for
 `AND` (and the dual for `OR`), encoded in `evalAnd` / `evalOr`.
-The `Datum.IsErr` predicate is the propositional witness for "this
-cell errored".
+Non-boolean operands (`.int _`) route to `.null` via the catch-all,
+closing the codomain of `evalAnd` / `evalOr` to the boolean fragment
+`{.bool _, .null, .err _}`. In production, a type-mismatched operand
+to `AND` would be caught by the planner type-checker or, failing
+that, would panic at runtime — the skeleton's `.null` route is a
+sound over-approximation of panic-and-escalate for optimizer
+rewrites (any rewrite sound under `.null` is also sound under
+panic, because panic strictly removes observable rows).
+The `Datum.IsErr` and `Datum.IsInt` predicates are the propositional
+witnesses for "this cell errored" and "this cell holds an integer";
+laws on arbitrary `Datum` operands of `evalAnd` / `evalOr` carry a
+`¬IsInt` hypothesis to rule out the `.null`-routing case.
 
 ## Expression
 

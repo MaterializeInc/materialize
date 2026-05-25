@@ -54,4 +54,17 @@ instance : DecidablePred Datum.IsErr := by
   intro d
   cases d <;> unfold Datum.IsErr <;> infer_instance
 
+/-- Propositional predicate "this datum is an integer". Used as a
+hypothesis on the boolean evaluators (`evalAnd`, `evalOr`) which
+route non-boolean operands to `.null` rather than passing them
+through — laws stated on arbitrary `Datum` need to rule out the
+`.int` case. -/
+def Datum.IsInt : Datum → Prop
+  | .int _ => True
+  | _      => False
+
+instance : DecidablePred Datum.IsInt := by
+  intro d
+  cases d <;> unfold Datum.IsInt <;> infer_instance
+
 end Mz
