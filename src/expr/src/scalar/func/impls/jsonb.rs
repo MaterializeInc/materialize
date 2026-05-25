@@ -452,6 +452,11 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
                     info.insert("connection_id", json!(conn_id));
                 }
 
+                let is_debezium = matches!(
+                    stmt.envelope,
+                    Some(mz_sql_parser::ast::SourceEnvelope::Debezium)
+                );
+
                 if let Some(envelope) = stmt.envelope {
                     use mz_sql_parser::ast::SourceEnvelope::*;
                     let envelope_type = match envelope {
@@ -466,6 +471,11 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
                 if let Some(format_spec) = stmt.format {
                     match &format_spec {
                         FormatSpecifier::Bare(fmt) => {
+                            // Debezium sources with a single format spec implicitly use
+                            // the same format for both key and value.
+                            if is_debezium {
+                                info.insert("key_format", json!(format_name(fmt)));
+                            }
                             info.insert("value_format", json!(format_name(fmt)));
                         }
                         FormatSpecifier::KeyValue { key, value } => {
@@ -489,8 +499,19 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
                     "source"
                 }
             }
-            CreateSubsource(_) => {
-                info.insert("source_type", json!("subsource"));
+            CreateSubsource(stmt) => {
+                use mz_sql_parser::ast::CreateSubsourceOptionName;
+                let is_progress = stmt
+                    .with_options
+                    .iter()
+                    .any(|o| matches!(o.name, CreateSubsourceOptionName::Progress));
+                let source_type = if is_progress { "progress" } else { "subsource" };
+                info.insert("source_type", json!(source_type));
+
+                if let Some(of_source) = stmt.of_source {
+                    let of_source_id = get_item_id(of_source)?;
+                    info.insert("of_source_id", json!(of_source_id));
+                }
 
                 "subsource"
             }
