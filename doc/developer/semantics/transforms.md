@@ -190,6 +190,116 @@ laws that downstream collection rewrites depend on.
 * Substitution laws on `colShift` and `colReferencesBoundedBy`
   (`Mz/ColRefs.lean`).
 
+## Scalar rewrites driving operator simplification
+
+Local rewrite rules on `MirScalarExpr` that the Rust optimizer
+applies to a fixed point (`src/expr/src/scalar/reduce.rs` and the
+sibling `unary`/`binary`/`variadic`/`if_then` modules).
+Each rewrite is an `Expr`-level equivalence; downstream operators
+benefit because `filter p`, `project es`, and `Reduce` all consume
+`eval ... p` or `eval ... es.get i`.
+The catalog below uses the relation `=` on `Datum` under the
+existing `Mz/Eval.lean` evaluator unless noted.
+
+### Generic folds
+
+| Rewrite | Statement | Status |
+| --- | --- | --- |
+| `constant_fold` | all-literal operands → evaluate to a literal | implicit via `Expr.eval`; no standalone theorem stating "fold-when-all-args-literal" — open if the optimizer wants to cite one |
+| `null_propagate` | strict func + any operand `.null` → `.null` | partial (`Mz/Strict.lean` `NullPropagatingBinary` / `NullStrictUnary` for the modeled funcs) |
+| `err_propagate` | strict func + any operand `.err _` → `.err _` | partial (`Mz/Strict.lean` `ErrPropagatingBinary` / `ErrStrictUnary` for the modeled funcs) |
+
+### Boolean fragment
+
+| Rewrite | Statement | Status |
+| --- | --- | --- |
+| `not_not` | `Not(Not x) = x` | mechanized (`Mz/Boolean.lean` `not_not`) |
+| `not_binary_negate` | `Not(a <op> b) = a <neg-op> b` for `op ∈ {<, ≤, =, ≠, ...}` | open (per-`BinaryFunc::negate` rewrites; need a per-op equivalence pair) |
+| `demorgan` | `Not(And ...) = Or (Not ...)`; dual for `Or` | open |
+| `andN_flatten` | nested `andN` chains flatten to one variadic | open (existing variadic shape is already flat; the Rust source-form rewrite is structural and is unnecessary in this skeleton) |
+| `andN_canonicalize` | dedup operands; drop `true`; absorb `false`; sort | partial (`Mz/Variadic.lean` `evalAndN_false_absorbs` + identity); full canonicalization is open |
+| `orN_canonicalize` | dual of above | partial (`Mz/Variadic.lean` `evalOrN_true_absorbs` + identity) |
+| `undistribute_and_or` | factor common conjuncts/disjuncts across `Or`/`And` | open |
+
+### If-then
+
+| Rewrite | Statement | Status |
+| --- | --- | --- |
+| `if_lit_true` | `if .bool true then t else e = t` | mechanized (case of `evalIfThen` in `Mz/Eval.lean`) |
+| `if_lit_false_or_null` | `if .bool false then t else e = e`; `if .null then t else e = e` | mechanized (cases of `evalIfThen`) |
+| `if_lit_err` | `if .err e then _ else _ = .err e` | mechanized (case of `evalIfThen`) |
+| `if_equal_arms` | `if c then t else t = t` | open |
+| `if_bool_arm` | `if c then true else e = (c IS NOT NULL ∧ c) ∨ e` and three duals | open; preserves the asymmetric NULL handling that `evalIfThen` already encodes |
+| `if_arm_factor_unary` | `if c then f x else f y = f (if c then x else y)` | open |
+| `if_arm_factor_binary_shared` | `if c then f(a,x) else f(a,y) = f(a, if c then x else y)` and right-shared mirror | open |
+
+### Coalesce
+
+| Rewrite | Statement | Status |
+| --- | --- | --- |
+| `coalesce_all_null` | `coalesce(null, ..., null) = null` | mechanized (`Mz/Coalesce.lean` `coalesce_nil` + variadic walk in `PrimEval.lean`) |
+| `coalesce_drop_null` | drop `.null` operands; preserve order | open |
+| `coalesce_truncate_after_concrete` | truncate after first operand known non-null non-err | mechanized at the head (`Mz/Schema.lean` `evalCoalesce_cons_of_concrete`); generalization across an arbitrary prefix is open |
+| `coalesce_dedup` | dedup adjacent duplicate operands | open |
+| `coalesce_singleton` | `coalesce(a) = a` | mechanized (`Mz/Coalesce.lean` `coalesce_singleton_*`) |
+
+### Schema-aware scalar folds
+
+| Rewrite | Statement | Status |
+| --- | --- | --- |
+| `is_null_non_nullable` | `IsNull e = .bool false` when `Expr.outputType e .nullable = false` | open (would ride on `Mz/OutputType.lean` once `IsNull` is added to `Expr`; `IsNull` is currently not modeled) |
+| `is_null_decompose` | `IsNull(f a b) = IsNull a ∨ IsNull b` when `f` is null-propagating | open |
+
+### Out of scope at the scalar layer
+
+* **Records and `RecordGet`/`RecordCreate` rewrites.** `Datum` does
+  not model records; rewrites of the form
+  `RecordGet(i)(RecordCreate(args)) = args[i]` and the
+  `record_create(...) = record_create(...) → AND` decomposition
+  require lifting `Datum` to nested values.
+* **Lists and `ListCreate`/`ListIndex` partial evaluation.** Same
+  reason.
+* **Date / time / timezone / regex / like / format
+  specialization.** These rewrites bake a literal argument into a
+  unary-func variant. The substitution is semantic (`f c x =
+  (specialize f c) x`) but each func is type-specific and not
+  modeled at the four-valued-plus-`Int` `Datum` layer.
+* **`Eq` / `NotEq` argument canonical ordering.** Cosmetic
+  reordering with no semantic content beyond `eqErrSet`
+  commutativity (already discussed in `model.md`).
+
+## From the lowering (MIR → LIR)
+
+Operator-level transforms that the Rust lowering pipeline
+(`src/compute-types/src/plan/lowering.rs`) applies as it converts
+`MirRelationExpr` to `Plan`.
+The lowering bundles map/filter/project into a canonical MFP form
+and threads it through every absorbing operator, so most of these
+are *fusion* and *absorption* rules.
+
+| Rewrite | Statement | Status |
+| --- | --- | --- |
+| `mfp_canonicalize` | every `(Map | Filter | Project)*` chain fuses into a single `MapFilterProject(map_exprs, filter_preds, project_perm)`; composition is associative with identity | open (requires an MFP datatype on `Collection`; the per-operator pieces — `filter ∘ filter` fusion, `project ∘ project` via `eval_subst`, `filter_project_pushdown` — are listed elsewhere in this file) |
+| `empty_input_collapse` | when an operator's input is provably the empty collection, the whole subtree is `∅` | partial — pointwise `filter_nil`, `project_nil`, `cross_nil_left`/`right`, `negate_nil` mechanized; the "if input provably empty, replace subtree" meta-statement is open |
+| `predicate_split_around_op` | when `op` admits some conjuncts and not others (e.g. `Join`, `Reduce` cannot absorb temporal predicates), split `p = p_keep ∧ p_push`; push only `p_push` inside | open; requires an "operator-admissible predicate" static analysis (analogue of `colReferencesBoundedBy` for temporal-freeness) |
+| `mfp_into_reduce` | `Reduce ∘ MFP_after = Reduce_with_post_MFP` when `MFP_after` is non-temporal and operates only on Reduce-produced columns | open (requires `Reduce`) |
+| `reduce_unnest_list_fusion` | `FlatMap UnnestList ∘ Project[k] ∘ Reduce window_fn = Reduce_with_unnested_output`; changes the rule "Reduce emits one row per group" — semantically a different operator | open (requires `Reduce`, `FlatMap`, and window-function aggregates) |
+
+### Out of scope from the lowering
+
+* **Arrangements and `AvailableCollections`.** `ArrangeBy`
+  insertion / fusion, key selection, `permutation_for_arrangement`,
+  thinning. The same collection in two arrangements is the same
+  multiset; the denotational spec is invariant.
+* **`has_future_updates` propagation.** Time dimension; defer with
+  the rest of the time-stripped layer's omissions.
+* **`GetPlan` selection** (`PassArrangements` / `Arrangement` /
+  `Collection`) and **`IndexedFilter` / `Delta` / `Differential`
+  join implementation choices.** Physical planning; all produce
+  the same multiset.
+* **`LiteralConstraints` extraction for indexed sources.** Useful
+  but requires modeling indexed sources at this layer.
+
 ## Out of scope at this layer
 
 * **Consolidation.** Folding updates to the same `(row, time)`
