@@ -1,4 +1,5 @@
 import Mz.PrimEval
+import Mz.Strict
 
 /-!
 # Equivalence relations on `Datum` under reorderable SQL evaluation
@@ -145,6 +146,92 @@ theorem Datum.refines_trans {a b c : Datum}
   cases h₁ with
   | inl h => subst h; exact h₂
   | inr ha => exact Or.inr ha
+
+/-! ## Compositionality of `refines` under err-strict primitives
+
+The compositionality lemma — `a.refines a' → b.refines b' → (f a
+b).refines (f a' b')` — is the gating prerequisite for lifting
+`refines` from `Datum` to `Expr`: without it, a rewrite
+`evalPlus (.err _) x ⊑ evalPlus 1 x` cannot be composed inside a
+larger expression because `evalPlus`-of-refining-arguments has no
+known relation to `evalPlus`-of-original-arguments.
+
+The proof is the same for every err-propagating binary primitive:
+if either input is `.err _`, the output is `.err _` (so refines
+holds via `.err`-refines-anything); otherwise both refinements
+must be equalities and the outputs are syntactically equal. The
+generic form `refines_cong_binary` captures this; the specific
+instances for `evalPlus` / `evalMinus` / `evalTimes` / `evalDivide`
+/ `evalEq` / `evalLt` fall out as corollaries of the matching
+`ErrPropagatingBinary` instance in `Mz/Strict.lean`. -/
+
+/-- Generic compositionality: any err-propagating binary preserves
+refinement. -/
+theorem Datum.refines_cong_binary
+    {f : Datum → Datum → Datum} (hf : ErrPropagatingBinary f)
+    {a a' b b' : Datum}
+    (ha : a.refines a') (hb : b.refines b') :
+    (f a b).refines (f a' b') := by
+  cases ha with
+  | inl heq_a =>
+    subst heq_a
+    cases hb with
+    | inl heq_b =>
+      subst heq_b
+      exact Datum.refines_refl _
+    | inr hb_err =>
+      exact Or.inr (hf.right a b hb_err)
+  | inr ha_err =>
+    exact Or.inr (hf.left a b ha_err)
+
+/-- `evalNot` preserves refinement. `evalNot` is strict on `.err`. -/
+theorem evalNot_refines_cong
+    {a a' : Datum} (h : a.refines a') :
+    (evalNot a).refines (evalNot a') := by
+  cases h with
+  | inl heq => subst heq; exact Datum.refines_refl _
+  | inr ha_err =>
+    cases a with
+    | err _ => exact Or.inr trivial
+    | bool _ => cases ha_err
+    | int _ => cases ha_err
+    | null => cases ha_err
+
+/-- `evalPlus` preserves refinement. -/
+theorem evalPlus_refines_cong
+    {a a' b b' : Datum} (ha : a.refines a') (hb : b.refines b') :
+    (evalPlus a b).refines (evalPlus a' b') :=
+  Datum.refines_cong_binary evalPlus_errPropagating ha hb
+
+/-- `evalMinus` preserves refinement. -/
+theorem evalMinus_refines_cong
+    {a a' b b' : Datum} (ha : a.refines a') (hb : b.refines b') :
+    (evalMinus a b).refines (evalMinus a' b') :=
+  Datum.refines_cong_binary evalMinus_errPropagating ha hb
+
+/-- `evalTimes` preserves refinement. -/
+theorem evalTimes_refines_cong
+    {a a' b b' : Datum} (ha : a.refines a') (hb : b.refines b') :
+    (evalTimes a b).refines (evalTimes a' b') :=
+  Datum.refines_cong_binary evalTimes_errPropagating ha hb
+
+/-- `evalDivide` preserves refinement. -/
+theorem evalDivide_refines_cong
+    {a a' b b' : Datum} (ha : a.refines a') (hb : b.refines b') :
+    (evalDivide a b).refines (evalDivide a' b') :=
+  Datum.refines_cong_binary evalDivide_errPropagating ha hb
+
+/-- `evalEq` preserves refinement. -/
+theorem evalEq_refines_cong
+    {a a' b b' : Datum} (ha : a.refines a') (hb : b.refines b') :
+    (evalEq a b).refines (evalEq a' b') :=
+  Datum.refines_cong_binary evalEq_errPropagating ha hb
+
+/-- `evalLt` preserves refinement. -/
+theorem evalLt_refines_cong
+    {a a' b b' : Datum} (ha : a.refines a') (hb : b.refines b') :
+    (evalLt a b).refines (evalLt a' b') :=
+  Datum.refines_cong_binary evalLt_errPropagating ha hb
 
 /-! ## Dual refinement preorder (errors as top)
 

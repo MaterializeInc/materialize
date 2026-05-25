@@ -190,7 +190,20 @@ def evalLt : Datum → Datum → Datum
 abbrev Env := List Datum
 
 /-- Reading an out-of-bounds column yields `NULL`. Defined by
-primitive recursion to keep inductive proofs simple. -/
+primitive recursion to keep inductive proofs simple.
+
+**Load-bearing.** The `.null`-on-OOB fallback is consumed by
+`Mz/Subst.lean` (`Expr.subst` substitutes `.lit .null` for OOB
+references so `eval_subst` is unconditional) and by
+`Mz/OutputType.lean` (`Expr.outputType (.col i)` returns
+`{nullable := true, errable := false}` on OOB indices). A future
+iteration that changes `Env.get` to return `.err _` on OOB —
+defensible for catching planner bugs — must synchronously flip
+the OOB substitution literal in `Expr.subst` and the OOB output
+schema in `Expr.outputType` from `errable := false` to
+`errable := true`, plus restate `eval_subst` with a column-bound
+hypothesis. The dependency is implicit; document it if a forcing
+function appears. -/
 def Env.get : Env → Nat → Datum
   | [],          _     => .null
   | d :: _,      0     => d

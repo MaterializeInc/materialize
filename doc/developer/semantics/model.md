@@ -231,6 +231,49 @@ Time, consolidation, distinct, and aggregate are out of scope at
 this layer.
 Lifting to a timed collection is additive on top.
 
+### Order-sensitivity caveat
+
+`Collection n` is a `List (Update n)`, so the canonical equivalence
+is list equality.
+Two collections that are user-observably equal as multisets but
+enumerate updates in different orders are *distinct* under `=`.
+Concretely, `unionAll a b` and `unionAll b a` are different lists
+even though every downstream consumer treats them as equal.
+
+Every "sound under `=`" claim in `transforms.md` is therefore sound
+up to the specific list order the operator produces.
+Pushdown lemmas at `=` succeed because both sides enumerate updates
+in the same order; a fusion that reshapes the enumeration would
+not state at `=`.
+The natural next step is a `Collection.Equiv` permutation-quotient
+(via `List.Perm`) with `=` as a strictly stronger relation used as
+a proof shortcut.
+That work is open; until it lands, `unionAll` commutativity, `cross`
+factor reordering, and any consolidation-style rewrite remain
+unstatable.
+
+### Retraction caveat
+
+`Update.diff` and `Update.err_diff` are `Int`, retractable to model
+differential-dataflow consolidation.
+The model never quotients by consolidation, so a collection
+`[(r, 1, 0), (r, -1, 0)]` is *not* equal to `[]` under `=` even
+though the user observes them as the same.
+Negative diffs propagate through operators correctly but no
+theorem witnesses that they cancel — that requires consolidation,
+deferred with the time dimension.
+
+This has a second-order effect on the `refines` lift in
+`Mz/Collection.lean`.
+`Update.refines` says `a.diff = b.diff ∧ a.err_diff ≥ b.err_diff`,
+and `filter_cross_pushdown_left_refines` would close unconditionally
+if `recL.diff * recR.err_diff ≥ 0`.
+On non-negative diffs that's trivial; on signed `Int` diffs it's a
+real side condition (`SignOK`).
+The frontier is in the diff signature, not the relation — quotienting
+by consolidation first (or restricting to non-negative diffs) makes
+the lift unconditional.
+
 ## Errors
 
 Three error scopes, mostly orthogonal:
@@ -377,7 +420,7 @@ Counterexamples (mechanized in `Mz/EquivBounded.lean`,
   multiply against data on its cross.
   The skeleton chose two-diff for the cleaner bilinear cross rule
   and accepts the pushdown obstruction as the cost; the rewrite
-  ships either under `eraseErr` (interior), under a static
+  ships either under `eraseRowErr` (interior), under a static
   `rowErrFree` schema fact, or — eventually — under a lifted
   `refines`. See `transforms.md` "Filter / project / cross
   pushdown" for the three windows.
@@ -447,27 +490,36 @@ preorder layer.
 Pushdown `filter_cross_pushdown_left` is unsound under this posture
 (RHS loses an error LHS had, which the posture forbids).
 
-### Data-side erasure (`eraseErr`) — interior lemma, not a user-facing relation
+### Row-level err erasure (`eraseRowErr`) — interior lemma, not a user-facing relation
 
-`recA.eraseErr.diff = recB.eraseErr.diff ∧ rows equal`, ignoring
+`recA.eraseRowErr.diff = recB.eraseRowErr.diff ∧ rows equal`, ignoring
 `err_diff`.
 Equivalence relation.
+
+**Scope.** `eraseRowErr` zeroes only the row-level err multiplicity
+(`err_diff`). The `row` carrier is preserved verbatim — *cell-level
+errors inside the row are not erased*. Two updates with the same
+multiplicities but different `.err _` cells in `row` are still
+distinguished under this relation. The name was `eraseErr` in an
+earlier iteration; the rename to `eraseRowErr` captures the scope
+honestly. Rewrites that flip a `.bool false` cell to an `.err _`
+cell are *not* admitted by `eraseRowErr`.
 
 What it buys: `filter_cross_pushdown_left_data` closes for every
 branch of the predicate evaluation
 (`filterOne_cross_pushdown_left_data` per update, lifted via
 `List.map`).
 What it costs: erases the user-visible distinction between "row
-filtered out" and "row errored".
+filtered out" and "row errored" *at the row-multiplicity level*.
 
 For Materialize, errors are observable in the runtime's error
-collection, so `eraseErr` cannot underwrite any rewrite the user
-can see.
+collection, so `eraseRowErr` cannot underwrite any rewrite the user
+can see at the row-multiplicity dimension.
 It is strictly an interior fact: a rewrite that preserves
-`eraseErr` still has to be paired with an err-side argument
+`eraseRowErr` still has to be paired with an err-side argument
 (`refines`, schema-driven `rowErrFree`, or a non-determinism
 quotient) before it ships.
-The summary table at the end of this file lists `eraseErr` for
+The summary table at the end of this file lists `eraseRowErr` for
 completeness, but it is not a candidate user-facing surface.
 
 ### Non-determinism (`LegalEval`, foundation sketched)
@@ -529,7 +581,7 @@ Lean evidence accumulated before the restart:
 * `predicate_pushdown` over `Cross(L, R)` is provably *unsound* under
   this encoding (counterexample mechanized then preserved in branch
   history; documented in `Mz/Equiv.lean` counterexamples docstring).
-  This is the same finding the two-diff `eraseErr` analysis
+  This is the same finding the two-diff `eraseRowErr` analysis
   re-derives: the err side does not commute with cross under any
   encoding that multiplies err multiplicity against data multiplicity.
 
@@ -540,11 +592,11 @@ Lean evidence accumulated before the restart:
 | `Datum`                    | `Mz/Datum.lean`              | —                          | overflow / decode / division-by-zero only |
 | `Expr.eval`                | `Mz/Eval.lean`               | `=` (on unbounded `Int`)   | strict eval order (no non-determinism); bounded-int counter at `Mz/EquivBounded.lean` |
 | `RowN n = Vector Datum n`  | `Mz/Collection.lean`         | `=`                        | indexed-arity reasoning verified          |
-| `Collection n` (two-diff)  | `Mz/Collection.lean`         | `=` on data side           | err side under `eraseErr` / `refines`     |
+| `Collection n` (two-diff)  | `Mz/Collection.lean`         | `=` on data side           | err side under `eraseRowErr` / `refines`     |
 | `eqErrSet`                 | `Mz/Equiv.lean`              | err / err commutativity    | bounded-int assoc, pushdown over cross    |
 | `refines`                  | `Mz/Equiv.lean` + `Mz/Collection.lean` | pushdown LHS → RHS under `SignOK` side condition | rewrites that add err; unconditional pushdown |
 | `refinesDual`              | `Mz/Equiv.lean`              | rewrites that add err      | pushdown over cross                       |
-| `eraseErr` (interior lemma) | `Mz/Collection.lean`        | filter / cross pushdown — data side only | not a user-facing relation; must pair with err-side argument |
+| `eraseRowErr` (interior lemma) | `Mz/Collection.lean`        | filter / cross pushdown — data side only | not a user-facing relation; must pair with err-side argument |
 | `NoRowErr` precondition    | `Mz/Collection.lean`         | pushdown under `=`         | filter preservation needs static pred     |
 | `Schema n` (sketch)        | `Mz/Schema.lean`             | coalesce id, cross row-err | project output-schema rules               |
 | `Expr.outputType`          | `Mz/OutputType.lean`         | `=` on `.lit` and `.col`   | non-foundational constructors weakest     |

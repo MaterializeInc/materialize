@@ -424,26 +424,31 @@ transformation is sound under any equivalence that ignores
 
 end Collection
 
-/-- Data-side erasure: forget the err multiplicity. Two updates are
-"data equivalent" iff their `eraseErr` projections coincide. -/
-@[inline] def Update.eraseErr (rec : Update n) : Update n :=
+/-- Row-level err erasure: zero out the `err_diff` multiplicity.
+The `row` carrier is preserved verbatim, so cell-level errors
+(`.err _` inside `row`) are *not* erased — this is intentional.
+The relation captures "two updates are equivalent on the data
+side, ignoring row-level err counts" while keeping cell errors
+observable. The first-pass name `eraseErr` was misleading; this
+relation targets the row-level multiplicity dimension specifically. -/
+@[inline] def Update.eraseRowErr (rec : Update n) : Update n :=
   { row := rec.row, diff := rec.diff, err_diff := 0 }
 
 namespace Collection
 
 variable {n m k : Nat}
 
-/-- Collection-level erasure: map `eraseErr` over every update. -/
-@[inline] def eraseErrAll (s : Collection n) : Collection n :=
-  s.map Update.eraseErr
+/-- Collection-level erasure: map `eraseRowErr` over every update. -/
+@[inline] def eraseRowErrAll (s : Collection n) : Collection n :=
+  s.map Update.eraseRowErr
 
 /-- Per-update pushdown holds under data-side erasure: the row and
 data multiplicity agree on every branch of `filterOne`. -/
 theorem filterOne_cross_pushdown_left_data
     (p : Expr) (hp : p.colReferencesBoundedBy n = true)
     (recL : Update n) (recR : Update m) :
-    (filterOne p (crossOne recL recR)).eraseErr
-      = (crossOne (filterOne p recL) recR).eraseErr := by
+    (filterOne p (crossOne recL recR)).eraseRowErr
+      = (crossOne (filterOne p recL) recR).eraseRowErr := by
   have heval := eval_crossOne_left_bounded p hp recL recR
   unfold filterOne
   rw [heval]
@@ -452,19 +457,19 @@ theorem filterOne_cross_pushdown_left_data
     cases b with
     | true => rfl
     | false =>
-      simp only [Update.eraseErr, crossOne]
+      simp only [Update.eraseRowErr, crossOne]
       refine Update.mk.injEq .. |>.mpr ⟨rfl, ?_, rfl⟩
       ring
   | int _ =>
-    simp only [Update.eraseErr, crossOne]
+    simp only [Update.eraseRowErr, crossOne]
     refine Update.mk.injEq .. |>.mpr ⟨rfl, ?_, rfl⟩
     ring
   | null =>
-    simp only [Update.eraseErr, crossOne]
+    simp only [Update.eraseRowErr, crossOne]
     refine Update.mk.injEq .. |>.mpr ⟨rfl, ?_, rfl⟩
     ring
   | err _ =>
-    simp only [Update.eraseErr, crossOne]
+    simp only [Update.eraseRowErr, crossOne]
     refine Update.mk.injEq .. |>.mpr ⟨rfl, ?_, rfl⟩
     ring
 
@@ -475,9 +480,9 @@ multiplicities diverge. -/
 theorem filter_cross_pushdown_left_data
     (p : Expr) (hp : p.colReferencesBoundedBy n = true)
     (sL : Collection n) (sR : Collection m) :
-    eraseErrAll (filter p (cross sL sR))
-      = eraseErrAll (cross (filter p sL) sR) := by
-  unfold eraseErrAll
+    eraseRowErrAll (filter p (cross sL sR))
+      = eraseRowErrAll (cross (filter p sL) sR) := by
+  unfold eraseRowErrAll
   induction sL with
   | nil => rfl
   | cons recL sLR ih =>
@@ -485,13 +490,13 @@ theorem filter_cross_pushdown_left_data
         filter_cons, cross_cons_left, List.map_append,
         ih]
     congr 1
-    -- prefix: filter p (sR.map (crossOne recL)) ↦ eraseErr
-    --      vs sR.map (crossOne (filterOne p recL)) ↦ eraseErr
+    -- prefix: filter p (sR.map (crossOne recL)) ↦ eraseRowErr
+    --      vs sR.map (crossOne (filterOne p recL)) ↦ eraseRowErr
     rw [filter, List.map_map, List.map_map, List.map_map]
     apply List.map_congr_left
     intro recR _
-    show (filterOne p (crossOne recL recR)).eraseErr
-        = (crossOne (filterOne p recL) recR).eraseErr
+    show (filterOne p (crossOne recL recR)).eraseRowErr
+        = (crossOne (filterOne p recL) recR).eraseRowErr
     exact filterOne_cross_pushdown_left_data p hp recL recR
 
 end Collection

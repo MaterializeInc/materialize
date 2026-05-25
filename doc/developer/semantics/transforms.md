@@ -23,7 +23,7 @@ The catalog below tags each with the *strongest* relation under
 which it has been mechanized or is expected to hold.
 
 * `=` — strict equality on collections, update-by-update.
-* `eraseErr` — data-side erasure: ignore `err_diff`, compare `row`
+* `eraseRowErr` — data-side erasure: ignore `err_diff`, compare `row`
   and `diff`.
 * `refines` — errors-as-bottom: transformed result has no error the
   original did not have.
@@ -64,7 +64,7 @@ with the empty collection.
 | --- | --- | --- |
 | `negate_negate` | `negate (negate s) = s` | `=` |
 | `filter_idem` (open) | `filter p (filter p s) = filter p s` | `=` |
-| `filter_filter_comm` (open) | `filter p (filter q s) = filter q (filter p s)` | `=` when both predicates are cell-err-free; otherwise an err-multiplicity reorder under `eraseErr` |
+| `filter_filter_comm` (open) | `filter p (filter q s) = filter q (filter p s)` | `=` when both predicates are cell-err-free; otherwise an err-multiplicity reorder under `eraseRowErr` |
 
 ## Filter / project / cross pushdown
 
@@ -76,7 +76,7 @@ against data multiplicities.
 
 | Transform | Statement | Relation |
 | --- | --- | --- |
-| `filter_cross_pushdown_left` | `filter p (cross l r) = cross (filter p l) r` when `p`'s columns are bounded by `l`'s arity | unsound under `=` (counterexample `filterOne_cross_pushdown_left_unsound`); sound under `eraseErr` (`filter_cross_pushdown_left_data`); sound under `=` given `NoRowErr r` (`filter_cross_pushdown_left_strict`); sound under `Collection.refines` LHS → RHS given `SignOK l r` (`filter_cross_pushdown_left_refines`) |
+| `filter_cross_pushdown_left` | `filter p (cross l r) = cross (filter p l) r` when `p`'s columns are bounded by `l`'s arity | unsound under `=` (counterexample `filterOne_cross_pushdown_left_unsound`); sound under `eraseRowErr` (`filter_cross_pushdown_left_data`); sound under `=` given `NoRowErr r` (`filter_cross_pushdown_left_strict`); sound under `Collection.refines` LHS → RHS given `SignOK l r` (`filter_cross_pushdown_left_refines`) |
 | `filter_cross_pushdown_right` (open) | symmetric, via `colShift` to realign the predicate; substrate `eval_append_right_shift` mechanized in `Mz/ColRefs.lean` | mirror of the left form |
 | `project_cross_pushdown` (open) | `project es (cross l r) = cross (project es_l l) (project es_r r)` when `es` splits cleanly into left and right column-sets | expected `=` when the split is clean |
 | `filter_project_pushdown` (open) | `filter p (project es s) = project es (filter (p.subst es) s)` | data side under `=` via `eval_subst`; err side asks the same multiplicity question as the cross pushdown |
@@ -86,7 +86,7 @@ multiplicities (`dL · eR + eL · dR + eL · eR`). A filter that zeroes
 `dL` before the cross drops the `dL · eR` term that the post-cross
 filter preserves. Three recovery windows:
 
-* **Data-side equivalence (`eraseErr`).** Drop `err_diff` from the
+* **Data-side equivalence (`eraseRowErr`).** Drop `err_diff` from the
   comparison. Sound; loses the user-visible "row errored" signal.
 * **`NoRowErr` precondition.** Assume the right collection has
   `err_diff = 0` on every update. Sound at `=`. Discharged by a
