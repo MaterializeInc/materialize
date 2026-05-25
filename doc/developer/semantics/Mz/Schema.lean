@@ -1,6 +1,8 @@
 import Mz.StreamN
+import Mz.MightError
 import Mathlib.Data.Vector.Defs
 import Mathlib.Data.Vector.Basic
+import Mathlib.Data.Vector.Mem
 
 /-!
 # Schema sketch
@@ -62,11 +64,11 @@ def free (n : Nat) : Schema n :=
 
 /-- The schema certifies no cell-level errors. -/
 def cellErrFree (sch : Schema n) : Prop :=
-  ∀ i : Fin n, ¬(sch.cols.get i).errable
+  ∀ i : Fin n, (sch.cols.get i).errable = false
 
 /-- The schema certifies no `null` values. -/
 def notNullable (sch : Schema n) : Prop :=
-  ∀ i : Fin n, ¬(sch.cols.get i).nullable
+  ∀ i : Fin n, (sch.cols.get i).nullable = false
 
 end Schema
 
@@ -160,6 +162,56 @@ end Schema
 namespace StreamN
 
 variable {n m : Nat}
+
+/-- Bridge: a row that satisfies a cell-err-free schema has every
+cell not-`IsErr`. Lets `might_error_sound` consume the schema fact
+as its `Env.ErrFree` precondition. -/
+theorem RowSatisfies.toList_ErrFree
+    {sch : Schema n} {row : RowN n}
+    (hsat : RowSatisfies sch row) (hcef : sch.cellErrFree) :
+    Env.ErrFree row.toList := by
+  intro d hd
+  rw [List.Vector.mem_iff_get] at hd
+  obtain ⟨i, hi⟩ := hd
+  have herr := (hsat i).2 (hcef i)
+  rw [← hi]; exact herr
+
+/-- `filter` preserves `NoRowErr` when the predicate is statically
+err-free against the input cell schema. Combines
+`might_error_sound` (predicate produces no err on err-free env) with
+the schema bridge above. -/
+theorem NoRowErr_filter
+    {sch : Schema n} {s : StreamN n}
+    (p : Expr) (hp : ¬p.might_error = true)
+    (hcef : sch.cellErrFree) (hsat : s.Satisfies sch) (h_norow : NoRowErr s) :
+    NoRowErr (filter p s) := by
+  intro rec hrec
+  unfold filter at hrec
+  rw [List.mem_map] at hrec
+  obtain ⟨rec0, hrec0_mem, hrec0_eq⟩ := hrec
+  -- `rec` is `filterOne p rec0` for some `rec0 ∈ s`.
+  have hsat0 : rec0.Satisfies sch := hsat rec0 hrec0_mem
+  have h_norow0 : rec0.err_diff = 0 := h_norow rec0 hrec0_mem
+  -- Predicate evaluates to a non-err Datum.
+  have h_env : Env.ErrFree rec0.row.toList :=
+    RowSatisfies.toList_ErrFree hsat0.1 hcef
+  have h_not_err : ¬(eval rec0.row.toList p).IsErr :=
+    might_error_sound p _ hp h_env
+  -- Case-split on the eval result; every non-err branch leaves
+  -- `err_diff` unchanged at 0.
+  rw [← hrec0_eq]
+  show (filterOne p rec0).err_diff = 0
+  unfold filterOne
+  cases h : eval rec0.row.toList p with
+  | bool b =>
+    cases b with
+    | true => exact h_norow0
+    | false => exact h_norow0
+  | int _ => exact h_norow0
+  | null => exact h_norow0
+  | err _ =>
+    rw [h] at h_not_err
+    exact absurd True.intro h_not_err
 
 /-- `cross` preserves `NoRowErr`: when both inputs are row-err-free,
 the cross's `err_diff` is `0` by the bilinear formula. -/
