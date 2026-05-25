@@ -41,6 +41,11 @@ from materialize.mzcompose.services.sql_server import (
     setup_sql_server_testing,
 )
 from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.toxiproxy import (
+    Toxiproxy,
+    set_consensus_latency,
+    setup_consensus_toxiproxy,
+)
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.ui import CommandFailureCausedUIError
 
@@ -56,13 +61,14 @@ SERVICES = [
     Kafka(),
     SchemaRegistry(),
     CockroachOrPostgresMetadata(),
+    Toxiproxy(),
     Mz(app_password=""),
     Materialized(
         name="mz_old",
         sanity_restart=False,
         deploy_generation=0,
         system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
-        external_metadata_store=True,
+        external_metadata_store="toxiproxy",
         default_replication_factor=2,
     ),
     Materialized(
@@ -71,7 +77,7 @@ SERVICES = [
         deploy_generation=1,
         system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
         restart="on-failure",
-        external_metadata_store=True,
+        external_metadata_store="toxiproxy",
         default_replication_factor=2,
     ),
     Testdrive(
@@ -177,6 +183,7 @@ def workflow_default(c: Composition) -> None:
 def workflow_read_only(c: Composition) -> None:
     """Verify read-only mode."""
     c.down(destroy_volumes=True)
+    setup_consensus_toxiproxy(c, metadata_store=c.metadata_store())
     c.up(
         "zookeeper",
         "kafka",
@@ -326,11 +333,12 @@ def workflow_read_only(c: Composition) -> None:
         Materialized(
             name="mz_old",
             deploy_generation=1,
-            external_metadata_store=True,
+            external_metadata_store="toxiproxy",
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
             default_replication_factor=2,
         )
     ):
+        set_consensus_latency(c, latency_ms=500, jitter_ms=200)
         c.up("mz_old")
 
         c.testdrive(dedent(f"""
@@ -412,7 +420,7 @@ def workflow_read_only(c: Composition) -> None:
             ],
             deploy_generation=1,
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
-            external_metadata_store=True,
+            external_metadata_store="toxiproxy",
             default_replication_factor=2,
         )
     ):
@@ -496,6 +504,7 @@ def workflow_read_only(c: Composition) -> None:
 def workflow_basic(c: Composition) -> None:
     """Verify basic 0dt deployment flow."""
     c.down(destroy_volumes=True)
+    setup_consensus_toxiproxy(c, metadata_store=c.metadata_store())
     c.up(
         "zookeeper",
         "kafka",
@@ -649,6 +658,7 @@ def workflow_basic(c: Composition) -> None:
 
     # Start new Materialize in a new deploy generation, which will cause
     # Materialize to boot in read-only mode.
+    set_consensus_latency(c, latency_ms=500, jitter_ms=200)
     c.up("mz_new")
 
     # Verify against new Materialize that it is in read-only mode
@@ -1031,6 +1041,7 @@ def workflow_basic(c: Composition) -> None:
 def workflow_kafka_source_rehydration(c: Composition) -> None:
     """Verify Kafka source rehydration in 0dt deployment"""
     c.down(destroy_volumes=True)
+    setup_consensus_toxiproxy(c, metadata_store=c.metadata_store())
     c.up(
         "zookeeper",
         "kafka",
@@ -1085,7 +1096,7 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
             deploy_generation=1,
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
             restart="on-failure",
-            external_metadata_store=True,
+            external_metadata_store="toxiproxy",
             default_replication_factor=2,
         ),
         Testdrive(
@@ -1098,6 +1109,7 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
             default_timeout=DEFAULT_TIMEOUT,
         ),
     ):
+        set_consensus_latency(c, latency_ms=500, jitter_ms=200)
         c.up("mz_new")
         start_time = time.time()
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
@@ -1147,6 +1159,7 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
 def workflow_kafka_source_rehydration_large_initial(c: Composition) -> None:
     """Verify Kafka source rehydration in 0dt deployment"""
     c.down(destroy_volumes=True)
+    setup_consensus_toxiproxy(c, metadata_store=c.metadata_store())
     c.up(
         "zookeeper",
         "kafka",
@@ -1200,7 +1213,7 @@ def workflow_kafka_source_rehydration_large_initial(c: Composition) -> None:
             deploy_generation=1,
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
             restart="on-failure",
-            external_metadata_store=True,
+            external_metadata_store="toxiproxy",
             default_replication_factor=2,
         ),
         Testdrive(
@@ -1213,6 +1226,7 @@ def workflow_kafka_source_rehydration_large_initial(c: Composition) -> None:
             default_timeout=DEFAULT_TIMEOUT,
         ),
     ):
+        set_consensus_latency(c, latency_ms=500, jitter_ms=200)
         c.up("mz_new")
         start_time = time.time()
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
@@ -1262,6 +1276,7 @@ def workflow_kafka_source_rehydration_large_initial(c: Composition) -> None:
 def workflow_pg_source_rehydration(c: Composition) -> None:
     """Verify Postgres source rehydration in 0dt deployment"""
     c.down(destroy_volumes=True)
+    setup_consensus_toxiproxy(c, metadata_store=c.metadata_store())
     c.up("postgres", "mz_old", Service("testdrive", idle=True))
     setup(c)
 
@@ -1323,7 +1338,7 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
             deploy_generation=1,
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
             restart="on-failure",
-            external_metadata_store=True,
+            external_metadata_store="toxiproxy",
             default_replication_factor=2,
         ),
         Testdrive(
@@ -1336,6 +1351,7 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
             default_timeout=DEFAULT_TIMEOUT,
         ),
     ):
+        set_consensus_latency(c, latency_ms=500, jitter_ms=200)
         c.up("mz_new")
         start_time = time.time()
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
@@ -1386,6 +1402,7 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
 def workflow_mysql_source_rehydration(c: Composition) -> None:
     """Verify MySQL source rehydration in 0dt deployment"""
     c.down(destroy_volumes=True)
+    setup_consensus_toxiproxy(c, metadata_store=c.metadata_store())
     c.up("mysql", "mz_old", Service("testdrive", idle=True))
     setup(c)
 
@@ -1446,7 +1463,7 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
             deploy_generation=1,
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
             restart="on-failure",
-            external_metadata_store=True,
+            external_metadata_store="toxiproxy",
             default_replication_factor=2,
         ),
         Testdrive(
@@ -1459,6 +1476,7 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
             default_timeout=DEFAULT_TIMEOUT,
         ),
     ):
+        set_consensus_latency(c, latency_ms=500, jitter_ms=200)
         c.up("mz_new")
         start_time = time.time()
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
@@ -1509,6 +1527,7 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
 def workflow_sql_server_source_rehydration(c: Composition) -> None:
     """Verify SQL Server source rehydration in 0dt deployment"""
     c.down(destroy_volumes=True)
+    setup_consensus_toxiproxy(c, metadata_store=c.metadata_store())
     c.up("sql-server", "mz_old", Service("testdrive", idle=True))
     setup(c)
     setup_sql_server_testing(c)
@@ -1576,7 +1595,7 @@ def workflow_sql_server_source_rehydration(c: Composition) -> None:
             deploy_generation=1,
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
             restart="on-failure",
-            external_metadata_store=True,
+            external_metadata_store="toxiproxy",
             default_replication_factor=2,
         ),
         Testdrive(
@@ -1589,6 +1608,7 @@ def workflow_sql_server_source_rehydration(c: Composition) -> None:
             default_timeout=DEFAULT_TIMEOUT,
         ),
     ):
+        set_consensus_latency(c, latency_ms=500, jitter_ms=200)
         c.up("mz_new")
         start_time = time.time()
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
@@ -1646,6 +1666,7 @@ def workflow_kafka_source_failpoint(c: Composition) -> None:
     status in mz_source_statuses is marked as 'running', indicating that the
     source has rehydrated correctly despite the injected failure."""
     c.down(destroy_volumes=True)
+    setup_consensus_toxiproxy(c, metadata_store=c.metadata_store())
     # Start the required services.
     c.up(
         "zookeeper",
@@ -1661,7 +1682,7 @@ def workflow_kafka_source_failpoint(c: Composition) -> None:
             sanity_restart=False,
             deploy_generation=0,
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
-            external_metadata_store=True,
+            external_metadata_store="toxiproxy",
             environment_extra=["FAILPOINTS=fail_state_multi_put=return"],
             default_replication_factor=2,
         )
@@ -1698,7 +1719,7 @@ def workflow_kafka_source_failpoint(c: Composition) -> None:
             deploy_generation=1,
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
             restart="on-failure",
-            external_metadata_store=True,
+            external_metadata_store="toxiproxy",
             default_replication_factor=2,
         ),
         Testdrive(
@@ -1711,6 +1732,7 @@ def workflow_kafka_source_failpoint(c: Composition) -> None:
             default_timeout=DEFAULT_TIMEOUT,
         ),
     ):
+        set_consensus_latency(c, latency_ms=500, jitter_ms=200)
         c.up("mz_new")
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
         c.promote_mz("mz_new")
@@ -1779,6 +1801,7 @@ def workflow_builtin_schema_migrations_replacement(c: Composition) -> None:
         raise RuntimeError(f"no shard found for item {item_id}")
 
     c.down(destroy_volumes=True)
+    setup_consensus_toxiproxy(c, metadata_store=c.metadata_store())
     c.up("mz_old")
     c.sql(
         "CREATE MATERIALIZED VIEW mv AS SELECT name FROM mz_tables",
@@ -1806,12 +1829,13 @@ def workflow_builtin_schema_migrations_replacement(c: Composition) -> None:
             deploy_generation=1,
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
             restart="on-failure",
-            external_metadata_store=True,
+            external_metadata_store="toxiproxy",
             force_migrations="replacement",
             healthcheck=LEADER_STATUS_HEALTHCHECK,
             default_replication_factor=2,
         ),
     ):
+        set_consensus_latency(c, latency_ms=500, jitter_ms=200)
         c.up("mz_new")
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
         c.promote_mz("mz_new")
@@ -1862,6 +1886,7 @@ def workflow_builtin_schema_migrations_evolution(c: Composition) -> None:
         raise RuntimeError(f"no shard found for item {item_id}")
 
     c.down(destroy_volumes=True)
+    setup_consensus_toxiproxy(c, metadata_store=c.metadata_store())
     c.up("mz_old")
     c.sql(
         "CREATE MATERIALIZED VIEW mv AS SELECT name FROM mz_tables",
@@ -1889,12 +1914,13 @@ def workflow_builtin_schema_migrations_evolution(c: Composition) -> None:
             deploy_generation=1,
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
             restart="on-failure",
-            external_metadata_store=True,
+            external_metadata_store="toxiproxy",
             force_migrations="evolution",
             healthcheck=LEADER_STATUS_HEALTHCHECK,
             default_replication_factor=2,
         ),
     ):
+        set_consensus_latency(c, latency_ms=500, jitter_ms=200)
         c.up("mz_new")
 
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
@@ -1932,6 +1958,7 @@ def workflow_materialized_view_correction_pruning(c: Composition) -> None:
     """
 
     c.down(destroy_volumes=True)
+    setup_consensus_toxiproxy(c, metadata_store=c.metadata_store())
     c.up("mz_old")
 
     c.sql(
@@ -1950,6 +1977,7 @@ def workflow_materialized_view_correction_pruning(c: Composition) -> None:
         service="mz_old",
     )
 
+    set_consensus_latency(c, latency_ms=500, jitter_ms=200)
     c.up("mz_new")
     c.sql("SELECT * FROM mv LIMIT 1", service="mz_new")
 
@@ -2024,6 +2052,7 @@ def setup(c: Composition) -> None:
 
 def workflow_upsert_sources(c: Composition) -> None:
     c.down(destroy_volumes=True)
+    setup_consensus_toxiproxy(c, metadata_store=c.metadata_store())
     c.up(
         "zookeeper",
         "kafka",
@@ -2079,6 +2108,7 @@ def workflow_upsert_sources(c: Composition) -> None:
     for thread in threads:
         thread.start()
 
+    set_consensus_latency(c, latency_ms=500, jitter_ms=200)
     i = 1
     while datetime.now() < end_time:
         with c.override(
@@ -2088,7 +2118,7 @@ def workflow_upsert_sources(c: Composition) -> None:
                 deploy_generation=i,
                 system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
                 restart="on-failure",
-                external_metadata_store=True,
+                external_metadata_store="toxiproxy",
                 default_replication_factor=2,
             ),
             Testdrive(
@@ -2117,6 +2147,7 @@ def workflow_upsert_sources(c: Composition) -> None:
 def workflow_ddl(c: Composition) -> None:
     """Verify basic 0dt deployment flow with DDLs running during the 0dt deployment."""
     c.down(destroy_volumes=True)
+    setup_consensus_toxiproxy(c, metadata_store=c.metadata_store())
     c.up(
         "zookeeper",
         "kafka",
@@ -2271,6 +2302,7 @@ def workflow_ddl(c: Composition) -> None:
 
     # Start new Materialize in a new deploy generation, which will cause
     # Materialize to boot in read-only mode.
+    set_consensus_latency(c, latency_ms=500, jitter_ms=200)
     c.up("mz_new")
 
     # Verify against new Materialize that it is in read-only mode
@@ -2662,6 +2694,7 @@ def workflow_stuck_collection(c: Composition) -> None:
     """Verify that stuck collections don't hold up a 0dt deployment."""
 
     c.down(destroy_volumes=True)
+    setup_consensus_toxiproxy(c, metadata_store=c.metadata_store())
 
     c.up("mz_old")
 
@@ -2684,6 +2717,7 @@ def workflow_stuck_collection(c: Composition) -> None:
         service="mz_old",
     )
 
+    set_consensus_latency(c, latency_ms=500, jitter_ms=200)
     c.up("mz_new")
     c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
     c.promote_mz("mz_new")
@@ -2699,6 +2733,7 @@ def workflow_ddl_detection_with_id_pool(c: Composition) -> None:
     not the allocator counter, to correctly detect new objects.
     """
     c.down(destroy_volumes=True)
+    setup_consensus_toxiproxy(c, metadata_store=c.metadata_store())
     c.up(
         "mz_old",
     )
@@ -2727,6 +2762,7 @@ def workflow_ddl_detection_with_id_pool(c: Composition) -> None:
     )
 
     # Start mz_new in read-only mode (deploy_generation=1).
+    set_consensus_latency(c, latency_ms=500, jitter_ms=200)
     c.up("mz_new")
 
     # Wait briefly for mz_new to boot and take its initial snapshot of IDs.

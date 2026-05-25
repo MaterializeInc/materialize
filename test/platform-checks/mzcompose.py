@@ -22,6 +22,7 @@ from materialize.checks.all_checks import *  # noqa: F401 F403
 from materialize.checks.checks import Check
 from materialize.checks.executors import MzcomposeExecutor, MzcomposeExecutorParallel
 from materialize.checks.features import Features
+from materialize.checks.mzcompose_actions import StartMz
 from materialize.checks.scenarios import *  # noqa: F401 F403
 from materialize.checks.scenarios import Scenario, SystemVarChange
 from materialize.checks.scenarios_backup_restore import *  # noqa: F401 F403
@@ -46,6 +47,11 @@ from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive as TestdriveService
+from materialize.mzcompose.services.toxiproxy import (
+    Toxiproxy,
+    set_consensus_latency,
+    setup_consensus_toxiproxy,
+)
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.util import all_subclasses
 
@@ -56,7 +62,7 @@ def create_mzs(
     azurite: bool,
     default_replication_factor: int,
     additional_system_parameter_defaults: dict[str, str] | None = None,
-    external_metadata_store: bool = True,
+    external_metadata_store: str | bool = "toxiproxy",
     external_blob_store: bool = True,
 ) -> list[TestdriveService | Materialized]:
     return [
@@ -99,6 +105,7 @@ SERVICES = [
         # Workaround for database-issues#5899
         restart="on-failure:5",
     ),
+    Toxiproxy(),
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
     Azurite(),
     Mc(),
@@ -255,6 +262,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = parser.parse_args()
     features = Features(args.features)
 
+    # The argparse flag is a bool; route True to the toxiproxy proxy so the
+    # consensus connection flows through it (matching the create_mzs default).
+    external_metadata_store: str | bool = (
+        "toxiproxy" if args.external_metadata_store else False
+    )
+
     if args.scenario:
         assert args.scenario in globals(), f"scenario {args.scenario} does not exist"
         scenarios = [globals()[args.scenario]]
@@ -283,15 +296,25 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         assert len(x) == 2, f"--system-param '{val}' should be the format <key>=<val>"
         additional_system_parameter_defaults[x[0]] = x[1]
 
+    # StartMz (invoked by each scenario) creates its own materialized
+    # override and previously hardcoded external_metadata_store=True.
+    # Inform it of our flag so --no-external-metadata-store actually
+    # disables external metadata storage, and route through toxiproxy
+    # when enabled.
+    StartMz.external_metadata_store_default = external_metadata_store
+
     with c.override(
         *create_mzs(
             features.azurite_enabled(),
             args.default_replication_factor,
             additional_system_parameter_defaults,
             external_blob_store=args.external_blob_store,
-            external_metadata_store=args.external_metadata_store,
+            external_metadata_store=external_metadata_store,
         )
     ):
+        if external_metadata_store == "toxiproxy":
+            setup_consensus_toxiproxy(c, metadata_store=c.metadata_store())
+            set_consensus_latency(c, latency_ms=500, jitter_ms=200)
         executor = MzcomposeExecutor(composition=c)
         for scenario_class in scenarios:
             assert issubclass(

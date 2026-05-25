@@ -16,6 +16,7 @@ import sys
 import threading
 import time
 from collections import Counter, defaultdict
+from collections.abc import Callable
 
 import psycopg
 
@@ -71,6 +72,7 @@ def run(
     composition: Composition | None,
     azurite: bool,
     sanity_restart: bool,
+    on_setup_complete: "Callable[[], None] | None" = None,
 ) -> None:
     num_threads = num_threads or os.cpu_count() or 10
 
@@ -159,6 +161,9 @@ def run(
             assert composition
             database.create(Executor(rng, cur, None, database), composition)
         conn.close()
+
+    if on_setup_complete is not None:
+        on_setup_complete()
 
     workers = []
     threads = []

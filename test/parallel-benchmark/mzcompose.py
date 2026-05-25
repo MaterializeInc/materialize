@@ -43,6 +43,10 @@ from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.toxiproxy import (
+    Toxiproxy,
+    setup_consensus_toxiproxy,
+)
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.mzcompose.test_result import (
     FailedTestExecutionError,
@@ -110,6 +114,7 @@ SERVICES = [
     Materialized(),
     Testdrive(),
     Mz(app_password=""),
+    Toxiproxy(),
 ]
 
 
@@ -444,7 +449,7 @@ def run_once(
                 image=f"{image_registry()}/materialized:{tag}" if tag else None,
                 default_size=args.size,
                 soft_assertions=False,
-                external_metadata_store=True,
+                external_metadata_store="toxiproxy",
                 external_blob_store=True,
                 # TODO: Better azurite support detection
                 blob_store_is_azure=args.azurite and bool(tag),
@@ -483,6 +488,7 @@ def run_once(
                 mz_string = f"{mz_version} ({target.host})"
             else:
                 print("~~~ Starting up services")
+                setup_consensus_toxiproxy(c, metadata_store="cockroach")
                 c.up(*service_names, Service("testdrive", idle=True))
                 c.verify_build_profile()
 
@@ -548,7 +554,12 @@ def run_once(
                 print(
                     "~~~ Resetting services to prevent interference between scenarios"
                 )
-                services = service_names + ["cockroach", "testdrive", "minio"]
+                services = service_names + [
+                    "cockroach",
+                    "testdrive",
+                    "minio",
+                    "toxiproxy",
+                ]
                 c.kill(*services)
                 c.rm(*services, destroy_volumes=True)
                 c.rm_volumes("mzdata")

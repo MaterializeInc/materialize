@@ -31,6 +31,11 @@ from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMet
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.toxiproxy import (
+    Toxiproxy,
+    consensus_latency,
+    setup_consensus_toxiproxy,
+)
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.ui import UIError
 
@@ -58,6 +63,7 @@ SERVICES = [
     ),
     testdrive_no_reset,
     CockroachOrPostgresMetadata(),
+    Toxiproxy(),
 ]
 
 
@@ -231,18 +237,21 @@ def workflow_stash(c: Composition) -> None:
     )
     c.rm_volumes("mzdata", force=True)
 
-    with c.override(Materialized(external_metadata_store=True)):
-        c.up(c.metadata_store())
+    with c.override(Materialized(external_metadata_store="toxiproxy")):
+        setup_consensus_toxiproxy(c, metadata_store=c.metadata_store())
 
         c.up("materialized")
 
         cursor = c.sql_cursor()
         cursor.execute("CREATE TABLE a (i INT)")
 
-        c.stop(c.metadata_store())
-        c.up(c.metadata_store())
+        # Inject latency only around the metadata-store restart, not during
+        # initial object creation.
+        with consensus_latency(c, latency_ms=500, jitter_ms=200):
+            c.stop(c.metadata_store())
+            c.up(c.metadata_store())
 
-        cursor.execute("CREATE TABLE b (i INT)")
+            cursor.execute("CREATE TABLE b (i INT)")
 
         # No implicit restart as sanity check here, will panic:
         # https://github.com/MaterializeInc/database-issues/issues/6168

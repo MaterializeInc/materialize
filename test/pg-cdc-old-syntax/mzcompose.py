@@ -40,7 +40,10 @@ from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.toxiproxy import Toxiproxy
+from materialize.mzcompose.services.toxiproxy import (
+    Toxiproxy,
+    setup_consensus_toxiproxy,
+)
 from materialize.source_table_migration import (
     verify_sources_after_source_table_migration,
 )
@@ -445,7 +448,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
         mz_old = Materialized(
             name="materialized",
             volumes_extra=volumes_extra,
-            external_metadata_store=True,
+            external_metadata_store="toxiproxy",
             external_blob_store=True,
             additional_system_parameter_defaults={
                 "log_filter": "mz_storage::source::postgres=trace,info"
@@ -456,7 +459,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
         mz_new = Materialized(
             name="materialized",
             volumes_extra=volumes_extra,
-            external_metadata_store=True,
+            external_metadata_store="toxiproxy",
             external_blob_store=True,
             additional_system_parameter_defaults={
                 "log_filter": "mz_storage::source::postgres=trace,info",
@@ -465,6 +468,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
             default_replication_factor=2,
         )
         with c.override(mz_old, create_postgres(pg_version=pg_version)):
+            setup_consensus_toxiproxy(c, metadata_store=c.metadata_store())
             c.up("materialized", "test-certs", "postgres")
 
             print(f"Running {file} with mz_old")
@@ -484,9 +488,11 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
                 c.kill("materialized", wait=True)
                 c.kill("postgres", wait=True)
                 c.kill(METADATA_STORE, wait=True)
+                c.kill("toxiproxy", wait=True)
                 c.rm("materialized")
                 c.rm(METADATA_STORE)
                 c.rm("postgres")
+                c.rm("toxiproxy")
                 c.rm_volumes("mzdata")
 
 
