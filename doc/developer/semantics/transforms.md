@@ -76,8 +76,8 @@ against data multiplicities.
 
 | Transform | Statement | Relation |
 | --- | --- | --- |
-| `filter_cross_pushdown_left` | `filter p (cross l r) = cross (filter p l) r` when `p`'s columns are bounded by `l`'s arity | unsound under `=` (counterexample `filterOne_cross_pushdown_left_unsound`); sound under `eraseErr` (`filter_cross_pushdown_left_data`); sound under `=` given `NoRowErr r` (`filter_cross_pushdown_left_strict`); sound under `refines` LHS → RHS |
-| `filter_cross_pushdown_right` (open) | symmetric, via `colShift` to realign the predicate | mirror of the left form |
+| `filter_cross_pushdown_left` | `filter p (cross l r) = cross (filter p l) r` when `p`'s columns are bounded by `l`'s arity | unsound under `=` (counterexample `filterOne_cross_pushdown_left_unsound`); sound under `eraseErr` (`filter_cross_pushdown_left_data`); sound under `=` given `NoRowErr r` (`filter_cross_pushdown_left_strict`); plausibly sound under `refines` LHS → RHS (open — `Datum.refines` not yet lifted to `Update`/`Collection`) |
+| `filter_cross_pushdown_right` (open) | symmetric, via `colShift` to realign the predicate; substrate `eval_append_right_shift` mechanized in `Mz/ColRefs.lean` | mirror of the left form |
 | `project_cross_pushdown` (open) | `project es (cross l r) = cross (project es_l l) (project es_r r)` when `es` splits cleanly into left and right column-sets | expected `=` when the split is clean |
 | `filter_project_pushdown` (open) | `filter p (project es s) = project es (filter (p.subst es) s)` | data side under `=` via `eval_subst`; err side asks the same multiplicity question as the cross pushdown |
 
@@ -92,7 +92,11 @@ filter preserves. Three recovery windows:
   `err_diff = 0` on every update. Sound at `=`. Discharged by a
   schema's `rowErrFree` bit (`NoRowErr_of_satisfies_rowErrFree`).
 * **`refines` posture.** Allow the transformed side to lose
-  errors. Sound LHS → RHS only.
+  errors. Plausibly sound LHS → RHS only, but the lift of
+  `Datum.refines` to `Update` / `Collection` is not yet
+  mechanized; the comment block at `Mz/Equiv.lean` lines 267-296
+  also flags carrier-row shape mismatches under `eqErrSet`
+  lifted pointwise, so the plausibility is not yet underwritten.
 
 ## Substitution
 
@@ -103,9 +107,32 @@ form:
 
 | Transform | Statement | Relation |
 | --- | --- | --- |
-| `eval_subst` | `eval row (p.subst es) = eval (es.map (eval row)) p` | `=` on `Datum` |
+| `eval_subst` | `eval env (p.subst es) = eval (es.map (eval env)) p`, unconditionally on `env : Env` and `es : List Expr` | `=` |
 
 This is the substrate for the project pushdown above.
+
+## Column-pruning
+
+Dropping a column nothing reads must be invisible.
+The kernel lemma is mechanized; the lift to operators on
+`Collection` is open.
+
+| Transform | Statement | Relation |
+| --- | --- | --- |
+| `eval_replaceAt_of_unused` | replacing the value at an unused column index leaves `eval` unchanged (`Mz/ColRefs.lean`) | `=` |
+| `project_drop_unused` (open) | `project es s = project es s'` where `s'` is `s` with an unused-by-`es` column erased | `=` via lifting `eval_replaceAt_of_unused` over the collection |
+| `filter_drop_unused` (open) | symmetric, for a column unused by the filter predicate | `=` |
+
+## Eval-on-append substrates
+
+Two mechanized facts in `Mz/ColRefs.lean` underwrite the pushdown
+rewrites; they are not operator-level transforms in themselves but
+are what makes the pushdown statable.
+
+| Lemma | Statement | Used by |
+| --- | --- | --- |
+| `eval_append_left_of_bounded` | `eval (envL ++ envR) p = eval envL p` when `p`'s columns are bounded by `envL.length` | `filter_cross_pushdown_left_*` (via `eval_crossOne_left_bounded`) |
+| `eval_append_right_shift` | `eval (envL ++ envR) (p.colShift envL.length) = eval envR p` | substrate for the open right-side pushdown |
 
 ## Negate and cross bilinearity
 
