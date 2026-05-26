@@ -1478,9 +1478,9 @@ impl CsrConnection {
                     .connect(
                         storage_configuration,
                         host,
-                        // Default to the default http port, but this
-                        // could default to 8081...
-                        self.url.port().unwrap_or(80),
+                        // Honor the URL scheme's default port (443 for https,
+                        // 80 for http) if no explicit port was provided.
+                        self.url.port_or_known_default().unwrap_or(80),
                         in_task,
                     )
                     .await
