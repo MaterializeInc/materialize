@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { CloseIcon } from "@chakra-ui/icons";
+import { ChevronRightIcon, CloseIcon } from "@chakra-ui/icons";
 import { Button, HStack, Spacer, useTheme } from "@chakra-ui/react";
 import { useAtom, useAtomValue } from "jotai";
 import React, { useMemo } from "react";
@@ -18,8 +18,8 @@ import {
   quoteIdentifier,
 } from "~/api/materialize";
 import { getSchemaNameFromSearchPath } from "~/api/materialize/useSchemas";
-import SchemaSelect, { SchemaOption } from "~/components/SchemaSelect";
-import SearchableSelect from "~/components/SearchableSelect/SearchableSelect";
+import BreadcrumbPicker from "~/components/BreadcrumbPicker";
+import { SchemaOption } from "~/components/SchemaSelect";
 import { useAllClusters } from "~/store/allClusters";
 import { useAllSchemas } from "~/store/allSchemas";
 import BookOpenIcon from "~/svg/BookOpenIcon";
@@ -32,20 +32,20 @@ export interface WorksheetHeaderProps {
   onRunCommand: (sql: string) => void;
 }
 
-/** Builds the SET commands needed to switch to a different schema (and database if changed). */
-function createSchemaSelectionCommand(
+/** Builds the SET statements needed to switch to a different schema (and database if changed). */
+function createSchemaSelectionCommands(
   newOption: SchemaOption,
   currentOption?: SchemaOption | null,
-) {
-  let command = "";
+): string[] {
+  const statements: string[] = [];
   if (
     newOption.databaseName &&
     (!currentOption || newOption.databaseName !== currentOption.databaseName)
   ) {
-    command = `SET database = ${quoteIdentifier(newOption.databaseName)}; `;
+    statements.push(`SET database = ${quoteIdentifier(newOption.databaseName)};`);
   }
-  command += `SET search_path = ${quoteIdentifier(newOption.name)};`;
-  return command;
+  statements.push(`SET search_path = ${quoteIdentifier(newOption.name)};`);
+  return statements;
 }
 
 const WorksheetHeader = ({ onRunCommand }: WorksheetHeaderProps) => {
@@ -65,25 +65,42 @@ const WorksheetHeader = ({ onRunCommand }: WorksheetHeaderProps) => {
     snapshotComplete: isSchemasSnapshotComplete,
   } = useAllSchemas({ includeSystemSchemas: false });
 
-  const clusterOptions = useMemo(
+  const clusterItems = useMemo(
     () =>
       clusters
         .filter(({ id }) => !isSystemId(id))
-        .map(({ name }) => ({ name }))
-        .sort((a, b) => a.name.localeCompare(b.name)),
+        .map(({ name }) => ({ id: name, label: name }))
+        .sort((a, b) => a.label.localeCompare(b.label)),
     [clusters],
   );
 
-  const schemaOptions = useMemo(() => {
-    if (!schemas) return [];
-    return schemas
-      .map(({ name, databaseName }) => ({
-        id: createNamespace(databaseName, name),
-        name,
-        databaseName,
-      }))
-      .sort((a, b) => a.id.localeCompare(b.id));
+  const schemaOptionsById = useMemo(() => {
+    const map = new Map<string, SchemaOption>();
+    if (!schemas) return map;
+    for (const { name, databaseName } of schemas) {
+      const id = createNamespace(databaseName, name);
+      map.set(id, { id, name, databaseName });
+    }
+    return map;
   }, [schemas]);
+
+  const schemaItems = useMemo(() => {
+    const currentDb = session.database;
+    return Array.from(schemaOptionsById.values())
+      .map((option) => ({
+        id: option.id,
+        label: option.databaseName
+          ? `${option.databaseName}.${option.name}`
+          : option.name,
+        group: option.databaseName ?? undefined,
+      }))
+      .sort((a, b) => {
+        const aCurrent = a.group === currentDb;
+        const bCurrent = b.group === currentDb;
+        if (aCurrent !== bCurrent) return aCurrent ? -1 : 1;
+        return a.id.localeCompare(b.id);
+      });
+  }, [schemaOptionsById, session.database]);
 
   const selectedSchemaOption = useMemo(() => {
     const schemaName = getSchemaNameFromSearchPath(session.searchPath, schemas);
@@ -100,49 +117,61 @@ const WorksheetHeader = ({ onRunCommand }: WorksheetHeaderProps) => {
     };
   }, [session.searchPath, session.database, schemas]);
 
+  const schemaTrigger = selectedSchemaOption
+    ? `${selectedSchemaOption.databaseName}.${selectedSchemaOption.name}`
+    : "Select schema";
+
   return (
     <HStack
       px="4"
-      py="4"
+      py="3"
       borderBottomWidth="1px"
       borderColor={colors.border.secondary}
-      spacing="3"
+      spacing="1"
     >
-      <SearchableSelect<{ name: string }>
-        label="Cluster"
+      <BreadcrumbPicker
+        trigger={session.cluster || "Select cluster"}
         ariaLabel="Cluster"
+        items={clusterItems}
+        selectedId={session.cluster}
+        onSelect={(item) => {
+          if (item.id === session.cluster) return;
+          onRunCommand(`SET cluster = ${quoteIdentifier(item.id)};`);
+        }}
+        isLoading={!isClustersSnapshotComplete}
         isDisabled={isClustersError}
-        placeholder="Select one"
-        options={clusterOptions}
-        onChange={(value) => {
-          if (value) {
-            onRunCommand(`SET cluster = ${quoteIdentifier(value.name)};`);
+        searchPlaceholder="Search clusters…"
+      />
+      <ChevronRightIcon
+        boxSize="3"
+        color={colors.foreground.tertiary}
+        aria-hidden
+      />
+      <BreadcrumbPicker
+        trigger={schemaTrigger}
+        ariaLabel="Schema"
+        items={schemaItems}
+        selectedId={selectedSchemaOption?.id}
+        onSelect={(item) => {
+          const newOption = schemaOptionsById.get(item.id);
+          if (!newOption) return;
+          if (
+            selectedSchemaOption &&
+            newOption.name === selectedSchemaOption.name &&
+            newOption.databaseName === selectedSchemaOption.databaseName
+          ) {
+            return;
+          }
+          for (const stmt of createSchemaSelectionCommands(
+            newOption,
+            selectedSchemaOption,
+          )) {
+            onRunCommand(stmt);
           }
         }}
-        value={{ name: session.cluster }}
-        isLoading={!isClustersSnapshotComplete}
-        containerWidth="280px"
-        menuWidth="280px"
-      />
-      <SchemaSelect
-        schemas={schemaOptions}
-        value={selectedSchemaOption}
-        onChange={(option) => {
-          if (!option) return;
-          const isSame =
-            selectedSchemaOption &&
-            option.name === selectedSchemaOption.name &&
-            option.databaseName === selectedSchemaOption.databaseName;
-          if (isSame) return;
-          onRunCommand(
-            createSchemaSelectionCommand(option, selectedSchemaOption),
-          );
-        }}
-        isDisabled={isSchemasError}
         isLoading={!isSchemasSnapshotComplete}
-        placeholder="Select a schema"
-        containerWidth="280px"
-        menuWidth="280px"
+        isDisabled={isSchemasError}
+        searchPlaceholder="Search schemas…"
       />
       <Spacer />
       <Button

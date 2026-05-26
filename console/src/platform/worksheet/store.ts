@@ -68,8 +68,8 @@ export const worksheetStatementsAtom = atom<StatementInfo[]>([]);
  */
 export type ExecutionState =
   | { status: "idle" }
-  | { status: "running"; statementIndex: number }
-  | { status: "streaming"; statementIndex: number };
+  | { status: "running"; statementIndex?: number }
+  | { status: "streaming"; statementIndex?: number };
 
 /** Current execution state. */
 export const worksheetExecutionAtom = atom<ExecutionState>({ status: "idle" });
@@ -125,6 +125,9 @@ export const worksheetExecuteAtom = atom<
 export interface InlineResult {
   kind: "success" | "error";
   message: string;
+  /** SQL text the result came from, used to detect that the statement at this
+   *  offset has changed (in which case the decoration is stale and skipped). */
+  sql: string;
 }
 
 /** Inline results keyed by statement byte offset. Rendered as Monaco ViewZones. */

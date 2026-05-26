@@ -166,7 +166,8 @@ const WorksheetEditor = React.forwardRef<
         parseContent(model);
       }
 
-      // Ctrl+Enter: execute the statement at the cursor position
+      // Ctrl+Enter: execute the statement at the cursor — or, if the cursor
+      // is not inside any parsed statement, the nearest preceding one.
       editor.addAction({
         id: "worksheet.executeCurrent",
         label: "Execute Current Statement",
@@ -178,15 +179,25 @@ const WorksheetEditor = React.forwardRef<
           if (!edModel) return;
           const cursorOffset = edModel.getOffsetAt(position);
           const stmts = statementsRef.current;
-          const stmt = stmts.find((s, i) => {
-            const nextOffset =
-              i < stmts.length - 1
-                ? stmts[i + 1].offset
-                : edModel.getValue().length;
-            return cursorOffset >= s.offset && cursorOffset < nextOffset;
-          });
-          if (stmt) {
-            onExecute(stmt.sql, stmt.kind, stmt.offset);
+
+          let target = stmts.find(
+            (s) =>
+              cursorOffset >= s.offset &&
+              cursorOffset < s.offset + s.sql.length,
+          );
+
+          if (!target) {
+            for (const s of stmts) {
+              const endOffset = s.offset + s.sql.length;
+              if (endOffset > cursorOffset) continue;
+              if (!target || endOffset > target.offset + target.sql.length) {
+                target = s;
+              }
+            }
+          }
+
+          if (target) {
+            onExecute(target.sql, target.kind, target.offset);
           }
         },
       });

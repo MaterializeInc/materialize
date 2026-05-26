@@ -37,6 +37,9 @@ export function useInlineResultDecorations(
       for (const [offset, result] of inlineResults) {
         const stmt = statements.find((s) => s.offset === offset);
         if (!stmt) continue;
+        // Skip stale decorations: the statement at this offset has been
+        // edited since the result was produced.
+        if (stmt.sql !== result.sql) continue;
 
         const isError = result.kind === "error";
 

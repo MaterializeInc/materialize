@@ -141,6 +141,7 @@ export function useSubscribe() {
                 next.set(offset, {
                   kind: "error",
                   message: result.payload.message,
+                  sql,
                 });
                 return next;
               });

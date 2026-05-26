@@ -18,6 +18,7 @@ import { useCurrentEnvironmentHttpAddress } from "~/store/environments";
 
 import type { WorkerToMainMessage } from "./executionWorkerTypes";
 import {
+  resultsPanelOpenAtom,
   worksheetCancelAtom,
   worksheetExecuteAtom,
   worksheetExecutionAtom,
@@ -104,12 +105,21 @@ export function useExecution() {
   const setNotice = useSetAtom(worksheetNoticeAtom);
   const setInlineResults = useSetAtom(worksheetInlineResultsAtom);
   const setSession = useSetAtom(worksheetSessionAtom);
+  const setResultsPanelOpen = useSetAtom(resultsPanelOpenAtom);
 
   const workerRef = useRef<Worker | null>(null);
   const sessionRef = useRef(session);
   const connectionIdRef = useRef<string | null>(null);
-  /** Tracks the kind and offset of the currently executing statement. */
-  const currentQueryRef = useRef<{ kind: string; offset: number } | null>(null);
+  /**
+   * Tracks the kind, SQL text, and editor offset of the currently executing
+   * statement. `offset` is undefined for queries not tied to a specific
+   * editor position (e.g. picker-driven `SET` commands).
+   */
+  const currentQueryRef = useRef<{
+    kind: string;
+    sql: string;
+    offset?: number;
+  } | null>(null);
 
   const [socketState, setSocketState] = useState<SocketState>({
     readyForQuery: false,
@@ -130,6 +140,7 @@ export function useExecution() {
     setSession,
     setSocketState,
     setNotice,
+    setResultsPanelOpen,
   });
   useEffect(() => {
     settersRef.current = {
@@ -139,8 +150,16 @@ export function useExecution() {
       setSession,
       setNotice,
       setSocketState,
+      setResultsPanelOpen,
     };
-  }, [setExecution, setResult, setInlineResults, setSession, setNotice]);
+  }, [
+    setExecution,
+    setResult,
+    setInlineResults,
+    setSession,
+    setNotice,
+    setResultsPanelOpen,
+  ]);
 
   // Initialize worker — only recreate when httpAddress changes
   useEffect(() => {
@@ -255,12 +274,15 @@ export function useExecution() {
               commandComplete: msg.commandComplete,
               durationMs,
             });
-          } else {
+          } else if (query.offset !== undefined) {
+            const offset = query.offset;
+            const sql = query.sql;
             setters.setInlineResults((prev) => {
               const next = new Map(prev);
-              next.set(query.offset, {
+              next.set(offset, {
                 kind: "success",
                 message: msg.commandComplete,
+                sql,
               });
               return next;
             });
@@ -299,15 +321,22 @@ export function useExecution() {
 
         case "error": {
           const query = currentQueryRef.current;
-          if (query) {
+          if (query && query.offset !== undefined) {
+            const offset = query.offset;
+            const sql = query.sql;
             setters.setInlineResults((prev) => {
               const next = new Map(prev);
-              next.set(query.offset, {
+              next.set(offset, {
                 kind: "error",
                 message: msg.error.message,
+                sql,
               });
               return next;
             });
+          } else {
+            // Error came from a query not tied to an editor statement
+            // (e.g. picker-driven SET). Surface it in the results panel.
+            setters.setResultsPanelOpen(true);
           }
           const errorParts = [msg.error.message];
           if (msg.error.detail) errorParts.push(msg.error.detail);
@@ -355,12 +384,15 @@ export function useExecution() {
   /**
    * Sends a SQL statement for execution. `offset` is the byte offset of the
    * statement in the editor, used to position inline result decorations.
+   * Omit `offset` for queries not tied to a specific editor statement
+   * (e.g. picker-driven SETs); errors from such queries surface in the
+   * results panel rather than as an inline decoration.
    */
   const execute = useCallback(
     async (
       sql: string,
       kind: string,
-      offset = 0,
+      offset?: number,
       options?: { cluster?: string; replica?: string },
     ) => {
       const worker = workerRef.current;
@@ -406,7 +438,7 @@ export function useExecution() {
         }
       }
 
-      currentQueryRef.current = { kind, offset };
+      currentQueryRef.current = { kind, sql, offset };
 
       setExecution({ status: "running", statementIndex: offset });
 

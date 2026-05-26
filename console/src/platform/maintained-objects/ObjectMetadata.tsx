@@ -13,7 +13,6 @@ import React from "react";
 import { ShowCreateObjectType } from "~/api/materialize/showCreate";
 import { LoadingContainer } from "~/components/LoadingContainer";
 import { ShowCreateBlock } from "~/components/ShowCreateBlock";
-import { ObjectColumnsList } from "~/platform/object-explorer/ObjectColumns";
 
 import { MaintainedObjectListItem } from "./queries";
 import { SourceDiagnostics } from "./SourceDiagnostics";
@@ -28,11 +27,6 @@ export const ObjectMetadata = ({ item }: ObjectMetadataProps) => {
   return (
     <VStack align="start" spacing={6} width="100%">
       {isSource && <SourceDiagnostics sourceId={item.id} />}
-      <ObjectColumnsList
-        databaseName={item.databaseName}
-        schemaName={item.schemaName}
-        name={item.name}
-      />
       <Box width="100%">
         <Text textStyle="heading-sm" mb={3}>
           SQL definition
