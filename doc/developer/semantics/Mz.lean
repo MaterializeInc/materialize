@@ -1,19 +1,22 @@
-import Mz.Datum
-import Mz.Expr
-import Mz.Eval
-import Mz.Boolean
-import Mz.MightError
-import Mz.Strict
-import Mz.Coalesce
-import Mz.Laws
-import Mz.Variadic
-import Mz.ExprVariadic
-import Mz.Subst
-import Mz.ColRefs
-import Mz.Equiv
-import Mz.EquivBounded
-import Mz.Collection
+-- Schema-level type definitions (ColType, ColSchema, Schema, EvalError)
+-- reused by the indexed model.
 import Mz.Schema
-import Mz.OutputType
-import Mz.Legal
-import Mz.WellTyped
+
+-- Indexed (GADT) model: Datum k, Expr sch k, Collection sch, etc.
+import Mz.Indexed.Datum
+import Mz.Indexed.PrimEval
+import Mz.Indexed.Boolean
+import Mz.Indexed.Laws
+import Mz.Indexed.Strict
+import Mz.Indexed.Variadic
+import Mz.Indexed.Coalesce
+import Mz.Indexed.Expr
+import Mz.Indexed.Eval
+import Mz.Indexed.Subst
+import Mz.Indexed.MightError
+import Mz.Indexed.OutputType
+import Mz.Indexed.Schema
+import Mz.Indexed.Collection
+import Mz.Indexed.Equiv
+import Mz.Indexed.EquivBounded
+import Mz.Indexed.Legal

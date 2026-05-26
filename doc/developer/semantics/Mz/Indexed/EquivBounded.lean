@@ -45,7 +45,8 @@ private theorem evalPlusBounded_one_neg_one (max : Int) (hmax : 0 ≤ max) :
     | inr h => omega
   rw [if_neg h]
   show (Datum.int ((1 : Int) + (-1)) : Datum .int) = Datum.int 0
-  norm_num
+  show Datum.int (1 + -1 : Int) = Datum.int 0
+  congr 1
 
 private theorem evalPlusBounded_rhs (max : Int) (hmax : 0 ≤ max) :
     evalPlusBounded max (.int max)
