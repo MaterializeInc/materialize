@@ -40,8 +40,8 @@ obligations before any runtime change.
 * **Schema** — `Schema` (per-column nullable/errable, collection-
   level `rowErrFree`); `OutputType` (per-`Expr` output schema with
   soundness theorem).
-* **Equivalence relations** — `Equiv` (`eqErrSet`, `refines`,
-  `refinesDual`), `EquivBounded` (bounded-arithmetic counterexample).
+* **Equivalence relations** — `Equiv` (`eqErrSet`, `refines`),
+  `EquivBounded` (bounded-arithmetic counterexample).
 
 ## Build
 

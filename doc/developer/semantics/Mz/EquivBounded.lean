@@ -27,13 +27,6 @@ this module discharges it as a live theorem:
   this is the conjunctive bound that distinguishes a preorder from an
   equivalence relation.
 
-* `evalPlusBounded_assoc_max_refinesDual` — the dual posture
-  ("spurious errors permitted") closes in the RHS ⊑ LHS direction:
-  a value-yielding order may always be replaced by an err-yielding
-  one. The asymmetry between `refines` and `refinesDual` is exactly
-  what determines which optimizer rewrites are sound under which
-  posture.
-
 The bound is symmetric (`[-max, max]`) for proof economy; widening
 to `[MIN_INT32, MAX_INT32]` is mechanical and does not change the
 counterexample.
@@ -152,21 +145,5 @@ theorem evalPlusBounded_assoc_max_not_refines_rev (max : Int) (hmax : 0 ≤ max)
   cases h with
   | inl h => cases h
   | inr h => cases h
-
-/-! ## Dual refinement (errors as top)
-
-Under the "spurious errors permitted" (PostgreSQL) posture, a
-value-yielding evaluation order may be replaced by an err-yielding
-one. RHS ⊑ LHS in the dual order. -/
-
-/-- RHS dual-refines LHS: by `refinesDual_err`. -/
-theorem evalPlusBounded_assoc_max_refinesDual (max : Int) (hmax : 0 ≤ max) :
-    Datum.refinesDual
-      (evalPlusBounded max (.int max)
-        (evalPlusBounded max (.int 1) (.int (-1))))
-      (evalPlusBounded max
-        (evalPlusBounded max (.int max) (.int 1)) (.int (-1))) := by
-  rw [evalPlusBounded_lhs, evalPlusBounded_rhs max hmax]
-  exact Datum.refinesDual_err (.int max) .overflow
 
 end Mz

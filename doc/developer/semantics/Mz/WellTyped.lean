@@ -18,23 +18,31 @@ type-mismatched arithmetic operands to `.null`, but rewrites that
 depend on the planner's type assumptions need an explicit
 predicate witnessing those assumptions.
 
-`WellTyped` is that predicate. The soundness theorem
-`eval_kind_of_wellTyped` connects it to the evaluator: a well-typed
-expression produces a `Datum` whose kind matches the expression's
-declared output kind (modulo the universal `.null` / `.err _`
-inhabitants, captured by `.top`).
+`WellTyped` is that predicate.
 
-## Scope
+## Two soundness directions
 
-This module lands the predicate and the kind-soundness theorem.
-The follow-on work — refining `Expr.outputType`'s `nullable` bit
-to be precise on well-typed inputs (the precision direction
-flagged in `review.md`) — rides on top and is left as a separate
-step. The conservative `nullable := true` for arithmetic that
-currently appears in `outputType` is sound because it admits the
-type-mismatch case; with `WellTyped`, the optimizer can derive a
-tighter `nullable := input-nullable-OR` rule, but that requires
-re-stating `outputType` to take the well-typedness hypothesis. -/
+The module exposes two soundness theorems that play complementary
+roles. They are independent — neither subsumes the other.
+
+* **Kind soundness** (`Expr.kind_of_eval`) — *unconditional*.
+  Under `RowSatisfiesKind`, every `Expr` evaluates to a `Datum`
+  whose kind is compatible with `Expr.outputKind`. No `WellTyped`
+  hypothesis required: `outputKind` is conservative enough on
+  variadic / conditional cases to close the proof.
+* **`outputType` precision under `WellTyped`** — *gated*.
+  `WellTyped` unlocks tighter `nullable` / `errable` rules that
+  `outputType` cannot state unconditionally. E.g.
+  `eval_not_satisfies_precise` shows `outputType (.not a)` preserves
+  the input's `nullable` bit when `outputKind a = .bool`, a
+  refinement that is false on the general (possibly `.int`-typed)
+  argument.
+
+The current module lands kind soundness; precision-direction
+refinements of `outputType` per non-foundational constructor are
+follow-up work. The conservative `nullable := true` for arithmetic
+that currently appears in `outputType` is sound because it admits
+the type-mismatch case. -/
 
 namespace Mz
 

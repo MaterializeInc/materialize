@@ -37,15 +37,14 @@ evaluator. Concretely:
   the implicit lazy semantics.
 
 Net: the observable semantics of `eval` is closer to a lazy
-evaluator than the strict surface might suggest. The
-`refines`/`refinesDual` postures in the design doc are framed as
-"evaluation-order reorderability under strict semantics"; readers
-should be aware that the actual evaluator is closer to lazy and the
-reorderability story differs. A future iteration that introduces
-effects (resource usage, partiality, observability) will need to
-reintroduce the laziness explicitly. The relational `Mz/Legal.lean`
-form is the natural next step for SQL-faithful evaluation-order
-reasoning.
+evaluator than the strict surface might suggest. The `refines`
+posture in the design doc is framed as "evaluation-order
+reorderability under strict semantics"; readers should be aware
+that the actual evaluator is closer to lazy and the reorderability
+story differs. A future iteration that introduces effects (resource
+usage, partiality, observability) will need to reintroduce the
+laziness explicitly. The relational `Mz/Legal.lean` form is the
+natural next step for SQL-faithful evaluation-order reasoning.
 -/
 
 namespace Mz

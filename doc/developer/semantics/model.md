@@ -722,28 +722,6 @@ operational regime before consolidation retracts) discharge
 strictly weaker than the `NoRowErr sR` precondition that the
 strict-equality form requires. The reverse direction is unsound.
 
-### Dual refinement preorder (`refinesDual`, errors as top)
-
-`a.refinesDual b := a = b ∨ b.IsErr`.
-The reverse direction of `refines`.
-
-Posture sketched as "spurious errors permitted (PostgreSQL)".
-This label is approximate: PG's actual stance permits errors that
-surface as side effects of its evaluation strategy (e.g., the
-inactive arm of a `CASE` PG happened to evaluate) but does not
-endorse rewrites that *gratuitously inject* errors into previously
-error-free expressions.
-A pure `refinesDual` posture is strictly broader than PG.
-Materialize's intended posture is closer to "errors that some
-legal evaluation order would produce are admissible; errors no
-order would produce are not" — the right object for that is a
-non-determinism semantics where `eval` returns a *set* of `Datum`s
-per evaluation order, which is out of scope at the `Datum`-level
-preorder layer.
-
-Pushdown `filter_cross_pushdown_left` is unsound under this posture
-(RHS loses an error LHS had, which the posture forbids).
-
 ### Row-level err erasure (`eraseRowErr`) — interior lemma, not a user-facing relation
 
 `recA.eraseRowErr.diff = recB.eraseRowErr.diff ∧ rows equal`, ignoring
@@ -849,7 +827,6 @@ Lean evidence accumulated before the restart:
 | `Collection n` (two-diff)  | `Mz/Collection.lean`         | `=` on data side           | err side under `eraseRowErr` / `refines`     |
 | `eqErrSet`                 | `Mz/Equiv.lean`              | err / err commutativity    | bounded-int assoc, pushdown over cross    |
 | `refines`                  | `Mz/Equiv.lean` + `Mz/Collection.lean` | pushdown LHS → RHS under `SignOK` side condition | rewrites that add err; unconditional pushdown |
-| `refinesDual`              | `Mz/Equiv.lean`              | rewrites that add err      | pushdown over cross                       |
 | `eraseRowErr` (interior lemma) | `Mz/Collection.lean`        | filter / cross pushdown — data side only | not a user-facing relation; must pair with err-side argument |
 | `NoRowErr` precondition    | `Mz/Collection.lean`         | pushdown under `=`         | filter preservation needs static pred     |
 | `Schema n` (sketch)        | `Mz/Schema.lean`             | coalesce id, cross row-err | project output-schema rules               |

@@ -293,7 +293,7 @@ theorem plus_comm_legal_errL_to_errR
 theorem plus_comm_legal_errR_to_errL
     {env : Env} {a b : Expr} {er : EvalError}
     (h : LegalEval env b (.err er)) :
-    LegalEval env (.plus a b) (.err er) :=
-  LegalEval.plusErrR h
+    LegalEval env (.plus b a) (.err er) :=
+  LegalEval.plusErrL h
 
 end Mz

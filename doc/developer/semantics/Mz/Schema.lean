@@ -86,13 +86,13 @@ def free (n : Nat) : Schema n :=
     kinds := List.Vector.replicate n ColKind.top
     rowErrFree := false }
 
-/-- The schema certifies no cell-level errors. -/
+/-- Collection-wide projection of the per-column `errable` bits:
+every column claims no `.err _` cells. The dual of the per-row
+`RowSatisfies` predicate at the schema level — used by
+`NoRowErr_filter` to bridge cell-err-freedom of inputs to row-err
+absence after the predicate-err migration. -/
 def cellErrFree (sch : Schema n) : Prop :=
   ∀ i : Fin n, (sch.cols.get i).errable = false
-
-/-- The schema certifies no `null` values. -/
-def notNullable (sch : Schema n) : Prop :=
-  ∀ i : Fin n, (sch.cols.get i).nullable = false
 
 end Schema
 
