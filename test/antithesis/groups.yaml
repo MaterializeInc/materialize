@@ -60,6 +60,14 @@ default_anytime:
   # only surfaces as the gc.rs:417 panic cascade — at the first
   # invariant violation rather than at the eventual SIGABRT.
   - defaults/anytime_persist_invariants
+  # Continuous probe asserting fault-recovery visibility on the
+  # universal antithesis_cluster: at least one timeline observes a
+  # replica going non-online and recovering, and at least one
+  # timeline observes a `SELECT 1` succeeding after a previous
+  # fault-shaped connect failure.  Fires the two `fault recovery: …`
+  # legacy property names that were 9× unfound across the May 25
+  # batch because no driver was actively polling for them.
+  - defaults/anytime_replica_status
 
 # Setup / driver scripts auto-added to every group.  The catalog,
 # persist, and reclock SUT-anchored properties don't need any
