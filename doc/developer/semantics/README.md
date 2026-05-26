@@ -70,7 +70,8 @@ top.
   (substitution + soundness), `Mz.MightError` (analyzer +
   per-primitive error-free lemmas), `Mz.OutputType` (per-`Expr`
   `ColSchema` derivation; `DatumSatisfies` / `RowSatisfies`
-  satisfaction predicates).
+  satisfaction predicates; `EnvErrFree_of_RowSatisfies` bridge;
+  `coalesce_collapse` schema-rider).
 * **Equivalences.** `Mz.Equiv` (`Datum.eqErrSet`, `Datum.refines`,
   compositionality, `evalAnd_err_err_eqErrSet_comm`),
   `Mz.EquivBounded` (bounded-arithmetic counterexample —
@@ -82,17 +83,17 @@ top.
   `unionAll`, `Row.refines` / `Update.refines` /
   `Collection.refines` Smyth-style lift, `NoRowErr` precondition,
   `NoRowErr_negate` / `NoRowErr_unionAll` / `NoRowErr_project` /
-  `NoRowErr_cross` propagation, `Collection.Equiv` (perm + merge +
-  drop_zero) with `unionAll_comm_equiv` and `negate_unionAll_self`
-  demonstrators, `filter_cross_pushdown_left_unsound`
-  counterexample.
+  `NoRowErr_cross` / `NoRowErr_filter` propagation,
+  `Collection.Equiv` (perm + merge + drop_zero) with
+  `unionAll_comm_equiv` and `negate_unionAll_self` demonstrators,
+  `filter_cross_pushdown_left_unsound` counterexample.
 
-**Still open** (round-4 regressions): `cross_assoc` (arity cast
-plumbing); `filter_cross_pushdown_left_*` recovery windows
-(strict via `NoRowErr`, data via `eraseRowErr`, refinement via
-`SignOK`); `eraseRowErr`; `NoRowErr_filter` (needs
-`RowSatisfies → EnvErrFree` bridge); `coalesce_collapse` /
-`eval_coalesce_pair_of_a_concrete`.
+**Still open**: `cross_assoc` (arity cast plumbing — Schema HEq
+under `Nat.add_assoc` + Vector append assoc);
+`filter_cross_pushdown_left_*` recovery windows (strict via
+`NoRowErr`, data via `eraseRowErr`, refinement via `SignOK`) —
+blocked on iota reduction of `filterOne`'s match auxiliary, see
+inline note in `Mz/Collection.lean`; `eraseRowErr`.
 
 ## Build
 
