@@ -135,6 +135,8 @@ pub fn set_backend(b: Backend) {
 /// File backend preserves capacity; swap backend moves the alloc into the handle.
 /// Empty input returns a `len == 0` handle of the active backend's variant
 /// (no I/O is performed in either backend).
+///
+/// Panics on I/O failure. Use [`try_pageout`] to surface the error.
 pub fn pageout(chunks: &mut [Vec<u64>]) -> Handle {
     match backend() {
         Backend::Swap => swap::pageout_swap(chunks),
@@ -142,8 +144,19 @@ pub fn pageout(chunks: &mut [Vec<u64>]) -> Handle {
     }
 }
 
+/// Fallible counterpart to [`pageout`]. Returns the underlying I/O error
+/// instead of panicking. The swap backend cannot fail at I/O, so this is
+/// equivalent to `Ok(pageout(chunks))` when [`backend`] is [`Backend::Swap`].
+pub fn try_pageout(chunks: &mut [Vec<u64>]) -> std::io::Result<Handle> {
+    match backend() {
+        Backend::Swap => Ok(swap::pageout_swap(chunks)),
+        Backend::File => file::try_pageout_file(chunks),
+    }
+}
+
 /// Reads multiple ranges. Output appended to `dst` in request order (concat).
-/// Panics if any range is out of bounds.
+/// Panics if any range is out of bounds, or on I/O failure. Use
+/// [`try_read_at_many`] for fallible reads.
 pub fn read_at_many(handle: &Handle, ranges: &[(usize, usize)], dst: &mut Vec<u64>) {
     match &handle.inner {
         HandleInner::Swap(_) => swap::read_at_swap(handle, ranges, dst),
@@ -151,17 +164,57 @@ pub fn read_at_many(handle: &Handle, ranges: &[(usize, usize)], dst: &mut Vec<u6
     }
 }
 
-/// Reads a single range. Convenience wrapper around `read_at_many`.
+/// Fallible counterpart to [`read_at_many`]. Bounds violations still panic
+/// (caller bug); I/O failures return `Err`.
+pub fn try_read_at_many(
+    handle: &Handle,
+    ranges: &[(usize, usize)],
+    dst: &mut Vec<u64>,
+) -> std::io::Result<()> {
+    match &handle.inner {
+        HandleInner::Swap(_) => {
+            swap::read_at_swap(handle, ranges, dst);
+            Ok(())
+        }
+        HandleInner::File(_) => file::try_read_at_file(handle, ranges, dst),
+    }
+}
+
+/// Reads a single range. Convenience wrapper around [`read_at_many`].
 pub fn read_at(handle: &Handle, offset: usize, len: usize, dst: &mut Vec<u64>) {
     read_at_many(handle, &[(offset, len)], dst);
 }
 
+/// Fallible counterpart to [`read_at`].
+pub fn try_read_at(
+    handle: &Handle,
+    offset: usize,
+    len: usize,
+    dst: &mut Vec<u64>,
+) -> std::io::Result<()> {
+    try_read_at_many(handle, &[(offset, len)], dst)
+}
+
 /// Consumes handle, writing the entire payload into `dst` (cleared first), then reclaims storage.
 /// Swap fast path: single-chunk handle into empty `dst` swaps in place, no copy.
+///
+/// Panics on I/O failure. Use [`try_take`] to surface the error.
 pub fn take(handle: Handle, dst: &mut Vec<u64>) {
     match &handle.inner {
         HandleInner::Swap(_) => swap::take_swap(handle, dst),
         HandleInner::File(_) => file::take_file(handle, dst),
+    }
+}
+
+/// Fallible counterpart to [`take`]. On I/O error the handle is consumed and
+/// `dst` may hold partial data; the scratch file is unlinked on inner drop.
+pub fn try_take(handle: Handle, dst: &mut Vec<u64>) -> std::io::Result<()> {
+    match &handle.inner {
+        HandleInner::Swap(_) => {
+            swap::take_swap(handle, dst);
+            Ok(())
+        }
+        HandleInner::File(_) => file::try_take_file(handle, dst),
     }
 }
 

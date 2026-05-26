@@ -15,7 +15,10 @@
 
 #![cfg(feature = "pager")]
 
-use mz_ore::pager::{Backend, Handle, pageout, read_at, set_backend, set_scratch_dir, take};
+use mz_ore::pager::{
+    Backend, Handle, pageout, read_at, set_backend, set_scratch_dir, take, try_pageout,
+    try_read_at, try_take,
+};
 use tempfile::tempdir;
 
 fn ensure_scratch() {
@@ -75,6 +78,35 @@ fn empty_input_yields_zero_len_handle() {
     let h = pageout(&mut chunks);
     assert_eq!(h.len(), 0);
     assert!(h.is_empty());
+}
+
+#[test] // allow(test-attribute)
+fn try_api_swap_round_trip() {
+    set_backend(Backend::Swap);
+    let payload: Vec<u64> = (0..128).collect();
+    let mut chunks = [payload.clone()];
+    let h = try_pageout(&mut chunks).expect("swap pageout cannot fail");
+
+    let mut dst = Vec::new();
+    try_read_at(&h, 0, payload.len(), &mut dst).expect("swap read_at cannot fail");
+    assert_eq!(dst, payload);
+
+    let mut dst2 = Vec::new();
+    try_take(h, &mut dst2).expect("swap take cannot fail");
+    assert_eq!(dst2, payload);
+}
+
+#[test] // allow(test-attribute)
+fn try_api_file_round_trip() {
+    ensure_scratch();
+    set_backend(Backend::File);
+    let payload: Vec<u64> = (0..256).collect();
+    let mut chunks = [payload.clone()];
+    let h = try_pageout(&mut chunks).expect("file pageout should succeed on healthy scratch");
+    let mut dst = Vec::new();
+    try_take(h, &mut dst).expect("file take should succeed on healthy scratch");
+    assert_eq!(dst, payload);
+    set_backend(Backend::Swap);
 }
 
 #[test] // allow(test-attribute)

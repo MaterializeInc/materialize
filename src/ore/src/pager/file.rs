@@ -14,17 +14,20 @@
 // limitations under the License.
 
 //! File backend for the pager. See `mz_ore::pager` for the public API.
+//!
+//! Stale-scratch cleanup is intentionally out of scope: production runs on
+//! Kubernetes with per-pod ephemeral volumes, so a crashed predecessor's
+//! files are reclaimed with the volume. Local dev tooling is responsible
+//! for sweeping leftovers from crashed processes.
 
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::IoSlice;
-use std::os::unix::io::{AsRawFd, IntoRawFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use crate::cast::CastFrom;
 use crate::pager::Handle;
-use crate::pager::swap::pageout_swap;
 
 static SCRATCH_DIR: OnceLock<PathBuf> = OnceLock::new();
 static SUBDIR: OnceLock<PathBuf> = OnceLock::new();
@@ -32,10 +35,6 @@ static SCRATCH_ID: AtomicU64 = AtomicU64::new(0);
 /// Serializes `set_scratch_dir` callers so init failures can be retried on
 /// the next call. A plain `Once` would burn the only retry opportunity.
 static INIT_LOCK: Mutex<()> = Mutex::new(());
-/// Holds the exclusive `flock` on this process's `lock` file. Leaked into a
-/// static so the kernel keeps the lock for the entire process lifetime and
-/// drops it automatically on exit (including hard crashes).
-static OWN_LOCK_FD: OnceLock<RawFd> = OnceLock::new();
 
 /// Configures the scratch directory for the file backend.
 ///
@@ -57,8 +56,8 @@ pub fn set_scratch_dir(root: PathBuf) {
     }
     match init_subdir(&root) {
         Ok(()) => {
-            // SAFETY of `let _ =`: we hold INIT_LOCK and just verified the
-            // OnceLock is empty above, so this set always wins.
+            // We hold INIT_LOCK and just verified the OnceLock is empty above,
+            // so this set always wins.
             let _ = SCRATCH_DIR.set(root);
         }
         Err(err) => {
@@ -76,101 +75,8 @@ fn init_subdir(root: &Path) -> std::io::Result<()> {
     let pid = std::process::id();
     let subdir = root.join(format!("mz-pager-{pid}-{nonce:016x}"));
     std::fs::create_dir_all(&subdir)?;
-    // Acquire an exclusive advisory lock on a marker file inside the subdir.
-    // The lock is kept for the lifetime of the process; the reaper in any
-    // other process can probe this lock to determine whether the owner is
-    // still alive, which avoids the PID-reuse race that plagues a naive
-    // /proc-based liveness check.
-    let lock_path = subdir.join("lock");
-    let lock_file = OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(true)
-        .open(&lock_path)?;
-    let fd = lock_file.into_raw_fd();
-    // SAFETY: `fd` was just produced by `into_raw_fd` on a successfully opened
-    // `File`; the kernel guarantees it is a valid open file descriptor here.
-    let r = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
-    if r != 0 {
-        let err = std::io::Error::last_os_error();
-        // SAFETY: `fd` is still valid; nothing else has consumed it.
-        unsafe {
-            libc::close(fd);
-        }
-        return Err(err);
-    }
-    // Stash the fd so the lock stays held until process exit.
-    if OWN_LOCK_FD.set(fd).is_err() {
-        // Already set on a prior successful init: release the duplicate lock.
-        // SAFETY: `fd` is still valid here; we own it.
-        unsafe {
-            libc::close(fd);
-        }
-    }
     let _ = SUBDIR.set(subdir);
-    reap_stale(root);
     Ok(())
-}
-
-/// Sweeps `root` for subdirectories left behind by predecessors that crashed
-/// or were killed. Ownership is determined via `flock` on the per-subdir
-/// `lock` file: if we can acquire it non-blocking, the owner is gone.
-fn reap_stale(root: &Path) {
-    let entries = match std::fs::read_dir(root) {
-        Ok(e) => e,
-        Err(err) => {
-            tracing::warn!(?root, %err, "mz_ore::pager: scratch dir scan failed");
-            return;
-        }
-    };
-    let own_subdir = SUBDIR.get();
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else { continue };
-        if !name.starts_with("mz-pager-") {
-            continue;
-        }
-        let path = entry.path();
-        if own_subdir.is_some_and(|s| s.as_path() == path) {
-            continue;
-        }
-        match owner_is_dead(&path) {
-            Ok(true) => {
-                if let Err(err) = std::fs::remove_dir_all(&path) {
-                    tracing::warn!(?path, %err, "mz_ore::pager: reap failed");
-                }
-            }
-            Ok(false) => {
-                // Another live process owns this subdir; leave it alone.
-            }
-            Err(err) => {
-                tracing::warn!(?path, %err, "mz_ore::pager: ownership probe failed");
-            }
-        }
-    }
-}
-
-/// Returns `Ok(true)` if no live process holds the per-subdir lock; `Ok(false)`
-/// if a holder is still alive. `Err` if the lock file is missing or the probe
-/// itself failed (the directory may be in mid-creation; leave it alone).
-fn owner_is_dead(subdir: &Path) -> std::io::Result<bool> {
-    let lock_path = subdir.join("lock");
-    let file = OpenOptions::new().read(true).write(true).open(&lock_path)?;
-    let fd = file.as_raw_fd();
-    // SAFETY: `fd` was produced from a successfully opened `File`; the
-    // lifetime of `file` keeps it valid for the duration of this call.
-    let r = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
-    if r == 0 {
-        // We acquired the lock; closing `file` at end of scope releases it.
-        Ok(true)
-    } else {
-        let err = std::io::Error::last_os_error();
-        match err.raw_os_error() {
-            Some(libc::EWOULDBLOCK) => Ok(false),
-            _ => Err(err),
-        }
-    }
 }
 
 pub(crate) fn scratch_path(id: u64) -> PathBuf {
@@ -221,13 +127,16 @@ impl Drop for FileInner {
     }
 }
 
-pub(crate) fn pageout_file(chunks: &mut [Vec<u64>]) -> Handle {
+/// Fallible counterpart to [`pageout_file`]. Returns the underlying I/O error
+/// instead of falling back to a different backend, so callers can distinguish
+/// "scratch volume is broken" from "everything is fine."
+pub(crate) fn try_pageout_file(chunks: &mut [Vec<u64>]) -> std::io::Result<Handle> {
     let total: usize = chunks.iter().map(|c| c.len()).sum();
     if total == 0 {
         // Honor the backend invariant: an empty handle from the file backend
         // is still a file-variant handle. No file is created on disk; drop
         // short-circuits when `len_u64s == 0`.
-        return Handle::from_file(FileInner::new(alloc_scratch_id(), 0));
+        return Ok(Handle::from_file(FileInner::new(alloc_scratch_id(), 0)));
     }
     let id = alloc_scratch_id();
     let path = scratch_path(id);
@@ -236,14 +145,20 @@ pub(crate) fn pageout_file(chunks: &mut [Vec<u64>]) -> Handle {
             for c in chunks.iter_mut() {
                 c.clear();
             }
-            Handle::from_file(FileInner::new(id, total))
+            Ok(Handle::from_file(FileInner::new(id, total)))
         }
         Err(err) => {
-            tracing::warn!(?path, %err, "mz_ore::pager: file pageout failed; falling back to swap");
+            // Best-effort cleanup; ignore secondary errors here so we surface
+            // the primary write error to the caller.
             let _ = std::fs::remove_file(&path);
-            pageout_swap(chunks)
+            Err(err)
         }
     }
+}
+
+pub(crate) fn pageout_file(chunks: &mut [Vec<u64>]) -> Handle {
+    try_pageout_file(chunks)
+        .unwrap_or_else(|err| panic!("mz_ore::pager: file pageout failed: {err}"))
 }
 
 fn write_chunks(path: &Path, chunks: &[Vec<u64>]) -> std::io::Result<()> {
@@ -272,12 +187,19 @@ fn write_all_vectored(mut file: &File, mut slices: &mut [IoSlice<'_>]) -> std::i
     Ok(())
 }
 
-pub(crate) fn read_at_file(handle: &Handle, ranges: &[(usize, usize)], dst: &mut Vec<u64>) {
+/// Fallible counterpart to [`read_at_file`]. Returns `Err` instead of
+/// panicking on I/O failure (open/pread errors). Bounds violations and
+/// non-file handles still panic — those are caller bugs, not I/O failures.
+pub(crate) fn try_read_at_file(
+    handle: &Handle,
+    ranges: &[(usize, usize)],
+    dst: &mut Vec<u64>,
+) -> std::io::Result<()> {
     use std::os::unix::fs::FileExt;
 
     let inner = handle
         .file_inner()
-        .expect("read_at_file called on non-file handle");
+        .expect("try_read_at_file called on non-file handle");
     let total = inner.len_u64s;
     for &(off, len) in ranges {
         let end = off.checked_add(len).expect("range offset+len overflow");
@@ -289,13 +211,12 @@ pub(crate) fn read_at_file(handle: &Handle, ranges: &[(usize, usize)], dst: &mut
     // Empty handle: all ranges must be `(_, 0)` after the bounds check above,
     // so there is no I/O to perform. Skip opening the (nonexistent) file.
     if total == 0 {
-        return;
+        return Ok(());
     }
     let path = scratch_path(inner.id);
-    let file = match File::open(&path) {
-        Ok(f) => f,
-        Err(err) => panic!("mz_ore::pager: failed to open scratch file {path:?}: {err}"),
-    };
+    let file = File::open(&path).map_err(|err| {
+        std::io::Error::new(err.kind(), format!("mz_ore::pager: open {path:?}: {err}"))
+    })?;
 
     let coalesced = coalesce(ranges);
     for (range_idx, (off, len)) in coalesced.iter().copied().enumerate() {
@@ -313,22 +234,34 @@ pub(crate) fn read_at_file(handle: &Handle, ranges: &[(usize, usize)], dst: &mut
             let pos = byte_off + u64::cast_from(filled);
             let n = file
                 .read_at(&mut buf[filled..byte_len], pos)
-                .unwrap_or_else(|err| {
-                    panic!(
-                        "mz_ore::pager: pread failed at {path:?} pos={pos} \
+                .map_err(|err| {
+                    std::io::Error::new(
+                        err.kind(),
+                        format!(
+                            "mz_ore::pager: pread {path:?} pos={pos} \
                          (range #{range_idx}, off={off} len={len}): {err}",
+                        ),
                     )
-                });
+                })?;
             if n == 0 {
-                panic!(
-                    "mz_ore::pager: pread short read at {path:?} pos={pos} \
-                     (range #{range_idx}, off={off} len={len}): \
-                     filled {filled} of {byte_len} bytes for this range",
-                );
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    format!(
+                        "mz_ore::pager: pread short read at {path:?} pos={pos} \
+                         (range #{range_idx}, off={off} len={len}): \
+                         filled {filled} of {byte_len} bytes for this range",
+                    ),
+                ));
             }
             filled += n;
         }
     }
+    Ok(())
+}
+
+pub(crate) fn read_at_file(handle: &Handle, ranges: &[(usize, usize)], dst: &mut Vec<u64>) {
+    try_read_at_file(handle, ranges, dst)
+        .unwrap_or_else(|err| panic!("mz_ore::pager: read_at_file failed: {err}"));
 }
 
 fn coalesce(ranges: &[(usize, usize)]) -> Vec<(usize, usize)> {
@@ -345,39 +278,60 @@ fn coalesce(ranges: &[(usize, usize)]) -> Vec<(usize, usize)> {
     out
 }
 
-pub(crate) fn take_file(handle: Handle, dst: &mut Vec<u64>) {
+/// Fallible counterpart to [`take_file`]. Returns `Err` instead of panicking
+/// on I/O failure. The handle is consumed in either case; on `Err`, `dst` may
+/// hold partial data and the scratch file is unlinked when the inner is
+/// dropped.
+pub(crate) fn try_take_file(handle: Handle, dst: &mut Vec<u64>) -> std::io::Result<()> {
     use std::os::unix::fs::FileExt;
 
     let inner = handle
         .into_file_inner()
-        .expect("take_file called on non-file handle");
+        .expect("try_take_file called on non-file handle");
     dst.clear();
     if inner.len_u64s == 0 {
         // Empty handle: no file exists; nothing to read or unlink.
         drop(inner);
-        return;
+        return Ok(());
     }
     let path = scratch_path(inner.id);
-    let file = File::open(&path).unwrap_or_else(|err| panic!("pager take: open {path:?}: {err}"));
+    let file = File::open(&path).map_err(|err| {
+        std::io::Error::new(
+            err.kind(),
+            format!("mz_ore::pager: take open {path:?}: {err}"),
+        )
+    })?;
     dst.resize(inner.len_u64s, 0);
     let buf: &mut [u8] = bytemuck::cast_slice_mut(dst.as_mut_slice());
     let buf_len = buf.len();
     let mut filled = 0;
     while filled < buf_len {
         let pos = u64::cast_from(filled);
-        let n = file.read_at(&mut buf[filled..], pos).unwrap_or_else(|err| {
-            panic!("mz_ore::pager: take pread failed at {path:?} pos={pos}: {err}")
-        });
+        let n = file.read_at(&mut buf[filled..], pos).map_err(|err| {
+            std::io::Error::new(
+                err.kind(),
+                format!("mz_ore::pager: take pread {path:?} pos={pos}: {err}"),
+            )
+        })?;
         if n == 0 {
-            panic!(
-                "mz_ore::pager: take short read at {path:?}: filled {filled} of {buf_len} bytes",
-            );
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                format!(
+                    "mz_ore::pager: take short read at {path:?}: filled {filled} of {buf_len} bytes",
+                ),
+            ));
         }
         filled += n;
     }
     drop(file);
     // FileInner::drop will unlink the scratch file.
     drop(inner);
+    Ok(())
+}
+
+pub(crate) fn take_file(handle: Handle, dst: &mut Vec<u64>) {
+    try_take_file(handle, dst)
+        .unwrap_or_else(|err| panic!("mz_ore::pager: take_file failed: {err}"));
 }
 
 #[cfg(test)]
@@ -486,6 +440,19 @@ mod backend_tests {
         take_file(h, &mut dst);
         assert!(dst.is_empty());
     }
+
+    #[mz_ore::test]
+    fn try_read_at_file_surfaces_missing_file() {
+        setup_dir();
+        let mut chunks = [vec![1u64, 2, 3]];
+        let h = pageout_file(&mut chunks);
+        // Concurrently unlink the scratch file out from under us.
+        let path = scratch_path(h.file_inner().unwrap().id);
+        std::fs::remove_file(&path).expect("unlink scratch");
+        let mut dst = Vec::new();
+        let err = try_read_at_file(&h, &[(0, 3)], &mut dst).expect_err("should surface ENOENT");
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    }
 }
 
 #[cfg(test)]
@@ -515,8 +482,5 @@ mod tests {
                 .unwrap()
                 .starts_with("mz-pager-")
         );
-        // The marker lock file must exist and be flocked by us.
-        let lock = subdir.join("lock");
-        assert!(lock.exists(), "lock marker should exist");
     }
 }
