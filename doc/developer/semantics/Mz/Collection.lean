@@ -414,14 +414,17 @@ The proof requires a substitution-aware predicate lift
 of `filterOne` under each `eval` case.
 
 The mechanization is blocked on iota reduction of `filterOne`'s
-match auxiliary. After `cases hev : eval recL.row p_left`, the
-matches in the goal don't reduce — `unfold filterOne`,
-`simp [filterOne]`, `change`, per-case rewrite lemmas, and
-`generalize` + `clear` all fail. The blockage is at the
-elaboration of `filterOne.match_1`; resolving requires either
-marking it reducible, routing via the auto-generated equation
-lemmas, or rewriting `filterOne` to dispatch via `Datum.casesOn`
-explicitly. Left as follow-up.
+match auxiliary after `cases hev : eval recL.row p_left`. Tried:
+`unfold filterOne`, `simp [filterOne]`, `change`, per-case
+rewrite lemmas, `generalize` + `clear`, marking `filterOne`
+`@[reducible]`. None expose the iota-reduced match arm. The
+match scrutinizing `Datum.err e✝` (post-cases substitution)
+stays opaque even after `rw [hev]`. The fix likely requires
+either marking the auto-generated `filterOne.match_1` reducible
+(separate from `filterOne` itself), routing via the auto-gen
+`filterOne.eq_*` equation lemmas via `simp only`, or rewriting
+`filterOne` to dispatch via explicit `Datum.casesOn`. Left as
+follow-up.
 
 The counterexample (`filter_cross_pushdown_left_unsound`) remains
 the load-bearing demonstration of the un-recovered direction. -/
