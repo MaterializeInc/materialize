@@ -139,6 +139,82 @@ theorem unionAll_assoc {sch : Schema n} (a b c : Collection sch) :
     unionAll (unionAll a b) c = unionAll a (unionAll b c) :=
   List.append_assoc a b c
 
+/-! ## Cross product
+
+`crossOne` combines two updates with the bilinear diff rule
+`(d, e) * (d', e') = (d*d', d*e' + e*d' + e*e')`. The result's
+row spans the appended schema's columns. The Mathlib-level
+helper lemmas establish that the appended schema's per-column
+type agrees with the left or right schema as appropriate. -/
+
+private theorem Schema.types_get_append_left
+    {n m : Nat} (sch_l : Schema n) (sch_r : Schema m)
+    (i : Fin (n + m)) (h : i.val < n) :
+    (Schema.append sch_l sch_r).types.get i =
+    sch_l.types.get ⟨i.val, h⟩ := by
+  rcases sch_l with ⟨_, ⟨ll, hll⟩, _⟩
+  rcases sch_r with ⟨_, ⟨lr, _⟩, _⟩
+  rcases i with ⟨v, _⟩
+  show (ll ++ lr).get ⟨v, _⟩ = ll.get ⟨v, _⟩
+  simp only [List.get_eq_getElem, List.getElem_append]
+  rw [dif_pos (by rw [hll]; exact h : v < ll.length)]
+
+private theorem Schema.types_get_append_right
+    {n m : Nat} (sch_l : Schema n) (sch_r : Schema m)
+    (i : Fin (n + m)) (h : ¬i.val < n) :
+    (Schema.append sch_l sch_r).types.get i =
+    sch_r.types.get ⟨i.val - n, by have := i.isLt; omega⟩ := by
+  rcases sch_l with ⟨_, ⟨ll, hll⟩, _⟩
+  rcases sch_r with ⟨_, ⟨lr, hlr⟩, _⟩
+  rcases i with ⟨v, hv⟩
+  show (ll ++ lr).get ⟨v, _⟩ = lr.get ⟨v - n, _⟩
+  simp only [List.get_eq_getElem, List.getElem_append]
+  rw [dif_neg (by rw [hll]; exact h : ¬v < ll.length)]
+  congr 1
+  rw [hll]
+
+/-- One-update cross step. Bilinear err rule on the diffs;
+combined row spans the appended schema. -/
+def crossOne {sch_l : Schema n} {sch_r : Schema m}
+    (recL : Update sch_l) (recR : Update sch_r) :
+    Update (Schema.append sch_l sch_r) :=
+  { row := fun i =>
+      if h : i.val < n then
+        (Schema.types_get_append_left sch_l sch_r i h) ▸
+          recL.row ⟨i.val, h⟩
+      else
+        (Schema.types_get_append_right sch_l sch_r i h) ▸
+          recR.row ⟨i.val - n, by have := i.isLt; omega⟩
+    diff := recL.diff * recR.diff
+    err_diff := recL.diff * recR.err_diff
+              + recL.err_diff * recR.diff
+              + recL.err_diff * recR.err_diff }
+
+/-- Cross product of two collections. Cartesian product of
+updates via `crossOne`. Schema is the append. -/
+def cross {sch_l : Schema n} {sch_r : Schema m}
+    (l : Collection sch_l) (r : Collection sch_r) :
+    Collection (Schema.append sch_l sch_r) :=
+  l.flatMap (fun recL => r.map (crossOne recL))
+
+theorem cross_nil_left {sch_l : Schema n} {sch_r : Schema m}
+    (r : Collection sch_r) :
+    cross ([] : Collection sch_l) r = [] := rfl
+
+theorem cross_nil_right {sch_l : Schema n} {sch_r : Schema m}
+    (l : Collection sch_l) :
+    cross l ([] : Collection sch_r) = [] := by
+  unfold cross
+  induction l with
+  | nil => rfl
+  | cons hd tl ih =>
+    show List.map (crossOne hd) [] ++ tl.flatMap (fun recL => List.map (crossOne recL) []) = []
+    simp
+
+theorem cross_cons_left {sch_l : Schema n} {sch_r : Schema m}
+    (recL : Update sch_l) (sL : Collection sch_l) (sR : Collection sch_r) :
+    cross (recL :: sL) sR = sR.map (crossOne recL) ++ cross sL sR := rfl
+
 /-! ## NoRowErr precondition -/
 
 /-- An update is `NoRowErr` when its row-error multiplicity is
@@ -200,6 +276,25 @@ theorem NoRowErr_project {sch_in : Schema n} {sch_out : Schema m}
   rw [← hrec'_eq]
   show rec'.err_diff = 0
   exact h_rec'
+
+theorem NoRowErr_cross {sch_l : Schema n} {sch_r : Schema m}
+    {l : Collection sch_l} {r : Collection sch_r}
+    (hl : NoRowErr l) (hr : NoRowErr r) :
+    NoRowErr (cross l r) := by
+  intro rec hrec
+  unfold cross at hrec
+  rw [List.mem_flatMap] at hrec
+  obtain ⟨recL, hL_mem, hrec_in⟩ := hrec
+  rw [List.mem_map] at hrec_in
+  obtain ⟨recR, hR_mem, hrec_eq⟩ := hrec_in
+  have hL := hl recL hL_mem
+  have hR := hr recR hR_mem
+  show rec.err_diff = 0
+  rw [← hrec_eq]
+  show recL.diff * recR.err_diff
+       + recL.err_diff * recR.diff
+       + recL.err_diff * recR.err_diff = 0
+  rw [hL, hR]; simp
 
 /-! ## Row refinement
 
