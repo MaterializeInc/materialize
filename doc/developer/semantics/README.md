@@ -88,13 +88,19 @@ top.
   `unionAll_comm_equiv` and `negate_unionAll_self` demonstrators,
   `filter_cross_pushdown_left_unsound` counterexample.
 
-**Arity-cast scaffolding** (Mz.Schema): `Vector.cast_val`,
-`Vector.cast_eq_append_assoc`, `Schema.cast_mk`, and the
-composable `Schema.append_assoc_heq`. Ready to consume by
-`Collection.cross_assoc`.
+**Arity-cast scaffolding** (Mz.Schema + Mz.Collection):
+`Vector.cast_val`, `Vector.cast_eq_append_assoc`,
+`Schema.cast_mk`, `Schema.append_assoc_heq`, `Update.cast`,
+`Collection.cast`, `cast_rfl`, `crossOne_diff_assoc`,
+`crossOne_err_diff_assoc`, `crossOne_diff_eq`,
+`crossOne_err_diff_eq`. The bilinear err-rule polynomial
+identity closes by `ring`.
 
-**Still open**: `Collection.cross_assoc` (lift Schema HEq to
-Collection HEq + bilinear err-rule associativity);
+**Still open**: `Collection.cross_assoc` — row-component
+equality at index `Fin (n + (m + k))` requires Fin-index
+manipulation under three nested `▸` casts
+(`Schema.types_get_append_left/right` at two nesting levels),
+plus the inductive lift over Collection;
 `filter_cross_pushdown_left_*` recovery windows (strict via
 `NoRowErr`, data via `eraseRowErr`, refinement via `SignOK`) —
 blocked on iota reduction of `filterOne`'s match auxiliary, see
