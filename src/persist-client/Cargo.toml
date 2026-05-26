@@ -68,6 +68,7 @@ tracing.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
+base64.workspace = true
 criterion.workspace = true
 datadriven = { workspace = true, features = ["async"] }
 futures-task.workspace = true

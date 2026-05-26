@@ -4423,4 +4423,90 @@ pub(crate) mod tests {
             prop_assert_eq!(parsed, Ok(runid));
         });
     }
+
+    // PER-16 regression: add_rollup is not idempotent against a retry that
+    // sees the slot emptied between attempts.
+    //
+    // Scenario:
+    //   1. machine.add_rollup((seqno, &R)) is called. Inner CAS attempt
+    //      reads state at v_a (slot empty), inserts R at slot, CAS commits
+    //      at v_a+1 — but the response is observed as Indeterminate
+    //      (e.g., minio/postgres network fault under heavy fault injection).
+    //   2. Outer apply_unbatched_idempotent_cmd retries.
+    //   3. Between attempts, GC runs and calls remove_rollups, clearing the
+    //      slot at some v_b (with v_b > v_a+1).
+    //   4. The retry's compute_next_state runs against fresh state at v_b
+    //      (after fetch_and_update_state). Slot is empty. work_fn inserts
+    //      the SAME &R again. CAS commits at v_b+1 with another Insert.
+    //
+    // Result: the diff stream contains two byte-identical Insert(R) events
+    // at v_a+1 and v_b+1, and later a Delete event for R at v_c+1 when GC
+    // runs again. When a future GC walks [v_a+1, v_c+1), rollup_deletes()
+    // yields R.key twice, tripping the dup-key panic at gc.rs:569.
+    //
+    // This test simulates the state-level moves directly: insert-remove-insert
+    // with byte-identical HollowRollup. Without a fix, the second insert
+    // succeeds and state.rollups winds up referencing the same blob again.
+    #[mz_ore::test]
+    fn per16_add_rollup_idempotent_against_remove_retry() {
+        let mut state = TypedState::<String, String, u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            ShardId::new(),
+            "".to_owned(),
+            0,
+        );
+
+        let rollup_seqno = SeqNo(258);
+        let rollup = HollowRollup {
+            key: PartialRollupKey::new(rollup_seqno, &RollupId::new()),
+            encoded_size_bytes: Some(86404),
+        };
+
+        // 1. First insert succeeds because the slot is empty.
+        let first = state.collections.add_rollup((rollup_seqno, &rollup));
+        assert!(matches!(first, Continue(true)));
+        assert_eq!(
+            state.collections.rollups.get(&rollup_seqno).map(|r| &r.key),
+            Some(&rollup.key)
+        );
+
+        // 2. Concurrent GC removes the rollup we just added.
+        let removed =
+            state
+                .collections
+                .remove_rollups(&[(rollup_seqno, rollup.key.clone())]);
+        assert!(matches!(removed, Continue(_)));
+        assert!(!state.collections.rollups.contains_key(&rollup_seqno));
+
+        // 3. Retry with the SAME (rollup_seqno, &rollup) — mimicking the
+        //    captured arg in apply_unbatched_idempotent_cmd's work_fn after
+        //    an Indeterminate response on the first attempt.
+        //
+        //    The bug: this succeeds, re-inserting the same blob reference.
+        //    The desired behaviour: applied=false (no_op), caller deletes
+        //    the orphan blob.
+        let second = state.collections.add_rollup((rollup_seqno, &rollup));
+
+        assert!(
+            matches!(second, Continue(false)),
+            "PER-16: add_rollup must not re-insert a rollup whose key has \
+             previously been deleted from state in this shard's lifetime. \
+             Got {:?}; state.rollups now = {:?}",
+            second,
+            state.collections.rollups,
+        );
+
+        // Defensive: state.rollups must not have any entry referencing the
+        // rollup we re-tried, anywhere.
+        assert!(
+            !state
+                .collections
+                .rollups
+                .values()
+                .any(|r| r.key == rollup.key),
+            "PER-16: rollup key {:?} resurfaced in state.rollups: {:?}",
+            rollup.key,
+            state.collections.rollups,
+        );
+    }
 }

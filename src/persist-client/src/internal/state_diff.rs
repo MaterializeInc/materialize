@@ -1706,4 +1706,229 @@ mod tests {
             Err("replacement didn't overlap any batches"),
         );
     }
+
+    // PER-16 diagnostic: decode a dump of base64-encoded ProtoStateDiffs (one per
+    // line, formatted "<seqno>:<base64>"), print each diff's rollups field, and
+    // flag duplicate PartialRollupKey delete yields across the whole stream.
+    // Run with:
+    //   PER16_DIFFS=/tmp/s8fd01015_diffs.reconstructed \
+    //     cargo test -p mz-persist-client per16_decode -- --ignored --nocapture
+    #[mz_ore::test]
+    #[ignore]
+    fn per16_decode() {
+        use std::collections::{BTreeMap, HashMap};
+        use std::fs::File;
+        use std::io::{BufRead, BufReader};
+
+        use base64::prelude::*;
+        use bytes::Bytes;
+
+        use crate::internal::paths::PartialRollupKey;
+        use crate::internal::state::HollowRollup;
+
+        let path = std::env::var("PER16_DIFFS").expect("PER16_DIFFS env var required");
+        let file = File::open(&path).expect("open input");
+        let reader = BufReader::new(file);
+
+        let build_version = semver::Version::new(99, 99, 99);
+
+        // For each PartialRollupKey we see as a delete (Delete.from or Update.from),
+        // record the list of (diff_seqno_to, slot_seqno) where it appeared.
+        let mut delete_occurrences: HashMap<PartialRollupKey, Vec<(u64, u64)>> = HashMap::new();
+        // Same for inserts (Insert.to or Update.to), for cross-reference.
+        let mut insert_occurrences: HashMap<PartialRollupKey, Vec<(u64, u64)>> = HashMap::new();
+
+        let mut total_diffs = 0;
+        let mut diffs_with_rollup_changes = 0;
+
+        for line in reader.lines() {
+            let line = line.expect("read line");
+            let mut parts = line.splitn(2, ':');
+            let seqno: u64 = parts.next().unwrap().trim().parse().expect("parse seqno");
+            let b64 = parts.next().expect("missing base64 part");
+            let bytes = BASE64_STANDARD
+                .decode(b64.trim().as_bytes())
+                .expect("base64 decode");
+
+            let diff: StateDiff<u64> = StateDiff::decode(&build_version, Bytes::from(bytes));
+            total_diffs += 1;
+
+            if diff.rollups.is_empty() {
+                continue;
+            }
+            diffs_with_rollup_changes += 1;
+
+            println!(
+                "seqno={} (from {} -> {}), {} rollup field entries:",
+                seqno,
+                diff.seqno_from.0,
+                diff.seqno_to.0,
+                diff.rollups.len()
+            );
+            for d in &diff.rollups {
+                let slot = d.key.0;
+                match &d.val {
+                    Insert(to) => {
+                        println!(
+                            "  slot={} Insert {:?} size={:?}",
+                            slot, to.key, to.encoded_size_bytes
+                        );
+                        insert_occurrences
+                            .entry(to.key.clone())
+                            .or_default()
+                            .push((diff.seqno_to.0, slot));
+                    }
+                    Update(from, to) => {
+                        println!(
+                            "  slot={} Update from {:?} size={:?} -> {:?} size={:?}",
+                            slot,
+                            from.key,
+                            from.encoded_size_bytes,
+                            to.key,
+                            to.encoded_size_bytes
+                        );
+                        delete_occurrences
+                            .entry(from.key.clone())
+                            .or_default()
+                            .push((diff.seqno_to.0, slot));
+                        insert_occurrences
+                            .entry(to.key.clone())
+                            .or_default()
+                            .push((diff.seqno_to.0, slot));
+                    }
+                    Delete(from) => {
+                        println!(
+                            "  slot={} Delete {:?} size={:?}",
+                            slot, from.key, from.encoded_size_bytes
+                        );
+                        delete_occurrences
+                            .entry(from.key.clone())
+                            .or_default()
+                            .push((diff.seqno_to.0, slot));
+                    }
+                }
+            }
+            // Also dump the raw HollowRollup values from this diff for forensic
+            // comparison — full byte equality of repeated entries proves
+            // serialization-level dup rather than coincidence.
+            for d in &diff.rollups {
+                println!("    raw: {:?}", d);
+            }
+        }
+
+        println!(
+            "\n=== summary: {} diffs total, {} with rollup changes ===",
+            total_diffs, diffs_with_rollup_changes
+        );
+
+        // The actual question for PER-16: any key that appears as a delete more than once?
+        let mut dup_deletes: BTreeMap<PartialRollupKey, Vec<(u64, u64)>> = BTreeMap::new();
+        for (k, v) in &delete_occurrences {
+            if v.len() > 1 {
+                dup_deletes.insert(k.clone(), v.clone());
+            }
+        }
+
+        // Walk the diffs forward starting from an empty rollups map and simulate
+        // applying each rollup-mutating diff. Print the rollups map state right
+        // before each Insert/Update/Delete so we can verify that the
+        // pre-conditions for each event make sense.
+        {
+            let mut simulated_rollups: BTreeMap<u64, HollowRollup> = BTreeMap::new();
+            let file = File::open(&path).expect("re-open input");
+            let reader = BufReader::new(file);
+            for line in reader.lines() {
+                let line = line.expect("read line");
+                let mut parts = line.splitn(2, ':');
+                let seqno: u64 = parts.next().unwrap().trim().parse().unwrap();
+                let b64 = parts.next().unwrap();
+                let bytes = BASE64_STANDARD.decode(b64.trim().as_bytes()).unwrap();
+                let diff: StateDiff<u64> = StateDiff::decode(&build_version, Bytes::from(bytes));
+                if diff.rollups.is_empty() {
+                    continue;
+                }
+                println!(
+                    "\nseqno={} pre-state rollups: {:?}",
+                    seqno,
+                    simulated_rollups.keys().collect::<Vec<_>>()
+                );
+                for d in &diff.rollups {
+                    let slot = d.key.0;
+                    match &d.val {
+                        Insert(to) => {
+                            let prev = simulated_rollups.insert(slot, to.clone());
+                            if let Some(prev) = prev {
+                                println!(
+                                    "  !!! Insert at slot {} but slot was already populated with key={:?}",
+                                    slot, prev.key
+                                );
+                            }
+                        }
+                        Update(from, to) => {
+                            let prev = simulated_rollups.insert(slot, to.clone());
+                            if prev.as_ref().map(|x| &x.key) != Some(&from.key) {
+                                println!(
+                                    "  !!! Update at slot {}: from.key={:?} but state had key={:?}",
+                                    slot,
+                                    from.key,
+                                    prev.as_ref().map(|x| &x.key)
+                                );
+                            }
+                        }
+                        Delete(from) => {
+                            let prev = simulated_rollups.remove(&slot);
+                            if prev.as_ref().map(|x| &x.key) != Some(&from.key) {
+                                println!(
+                                    "  !!! Delete at slot {}: from.key={:?} but state had key={:?}",
+                                    slot,
+                                    from.key,
+                                    prev.as_ref().map(|x| &x.key)
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            println!(
+                "\nfinal simulated rollups: {:?}",
+                simulated_rollups
+                    .iter()
+                    .map(|(k, v)| (k, &v.key))
+                    .collect::<Vec<_>>()
+            );
+        }
+
+        if dup_deletes.is_empty() {
+            println!(
+                "\nno duplicate Delete events for any PartialRollupKey across {} diffs",
+                total_diffs
+            );
+        } else {
+            println!("\n!!! DUPLICATE DELETES (the dup-key panic root cause) !!!");
+            for (k, occurrences) in &dup_deletes {
+                println!("  key={:?}", k);
+                for (seqno_to, slot) in occurrences {
+                    println!("    deleted at diff seqno_to={}, slot={}", seqno_to, slot);
+                }
+            }
+        }
+
+        // Also list keys that appear both as Insert and Delete (could indicate cycles).
+        let mut both: BTreeMap<PartialRollupKey, (Vec<(u64, u64)>, Vec<(u64, u64)>)> =
+            BTreeMap::new();
+        for (k, ins) in &insert_occurrences {
+            if let Some(del) = delete_occurrences.get(k) {
+                both.insert(k.clone(), (ins.clone(), del.clone()));
+            }
+        }
+        if !both.is_empty() {
+            println!("\nkeys with both Insert and Delete events (possible re-insert cycles):");
+            for (k, (ins, del)) in &both {
+                println!(
+                    "  key={:?} inserts={:?} deletes={:?}",
+                    k, ins, del
+                );
+            }
+        }
+    }
 }
