@@ -7278,7 +7278,7 @@ name = "mz-pgcopy"
 version = "0.0.0"
 dependencies = [
  "bytes",
- "csv",
+ "csv-core",
  "itertools 0.14.0",
  "mz-ore",
  "mz-pgrepr",
