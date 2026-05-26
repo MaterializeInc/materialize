@@ -365,6 +365,85 @@ Collection scope is documented in the design doc and historically had
 a `DiffWithError` mechanization that was removed at restart; it can be
 reintroduced as a flag if a forcing function appears.
 
+### Type-mismatch routing: `.null` vs `.err typeMismatch`
+
+The total evaluator handles type-mismatched operands (e.g.
+`evalNot (.int 5)`, `evalAnd (.bool true) (.int 5)`) via a
+catch-all that routes to `.null`.
+Modeling note in `Mz/PrimEval.lean` calls this a sound
+over-approximation of panic: any rewrite sound under `.null` is
+also sound under panic, because panic strictly removes
+observable rows.
+
+Alternative: route to `.err typeMismatch` (with a new
+`EvalError.typeMismatch` variant).
+The two routings trade which schema bit picks up the conservative
+pollution:
+
+| Bit | `.null` route (current) | `.err` route (alternative) |
+| --- | --- | --- |
+| `nullable` | conservative `true` on every operator whose catch-all is reachable | clean — operators preserve input `nullable` |
+| `errable` | clean — type-mismatch doesn't pollute `errable` | conservative `true` on every operator whose catch-all is reachable |
+
+Other trade-offs:
+
+* **Runtime fidelity.** `.err` is closer to Materialize's
+  runtime panic — cell-to-row escalation at sinks would push the
+  row out of the data stream, ≈ panic. `.null` keeps the row in
+  the data stream with a null cell, which is *less* like panic
+  but admits more downstream rewrites.
+* **`evalNot_not_err` flips.** Under `.err` route,
+  `evalNot (.int n) = .err typeMismatch`, so the existing lemma
+  `¬a.IsErr → ¬(evalNot a).IsErr` fails on `.int` inputs.
+  `Mz/MightError.lean`'s analyzer would have to look at operand
+  types to know when `.not` can err — coupling err analysis to
+  type analysis.
+* **`coalesce` semantics shift.** Under `.null` route,
+  `coalesce(.not (.int 5), NULL) = .null`. Under `.err` route,
+  `coalesce(.err typeMismatch, NULL) = .null` (per the
+  "`null` beats `err`" tiebreak), so `coalesce` rescues type
+  errors. Possibly intended; possibly surprising.
+
+### Error-category separation: implementation bugs vs data-dependent runtime errors
+
+Conflating type-mismatch errors with data-dependent runtime
+errors (overflow, division-by-zero, decode failures) under a
+single `EvalError` tag — or a single `errable` schema bit —
+obscures a real distinction:
+
+* **Implementation-bug errors** — type mismatches.
+  A function might be analyzed as `¬might_error` and still
+  produce an error on invalid input types, but only because the
+  planner failed to reject the expression upstream.
+  These are signs of a bug above the evaluator, not of valid
+  data hitting a hazard.
+  Production handles them by panic.
+* **Data-dependent runtime errors** — overflow,
+  division-by-zero, decode failures, etc.
+  Predictable from operands and operator semantics; appear on
+  some data inputs and not others.
+  Production handles them by escalating the row to the error
+  collection.
+
+The current model collapses both into `.err _` with the same
+`Datum.IsErr` predicate.
+`might_error` analyzes the data-dependent category; type errors
+are out-of-scope for that analyzer.
+A future refinement could split `EvalError` into
+`EvalError.runtime` vs `EvalError.implementationBug` (or carry a
+severity tag), letting the schema's `errable` bit track only the
+former and giving `might_error` a precise type discipline.
+Until that lands, the two routings (`.null` vs
+`.err typeMismatch`) are the practical choice and both pick the
+same conservative trade.
+
+Current decision: stay with `.null` for proof tractability.
+Document the alternative.
+Revisit if the design doc commits to cell-to-row escalation at
+sinks for type errors, which would force the `.err` route as the
+right model — or if the error-category split lands, which would
+remove the `errable`-pollution concern entirely.
+
 ### Divergence from PostgreSQL: `coalesce` rescues errors
 
 PG's `coalesce(NULL, 1/0)` evaluates `1/0` (no non-null seen yet)
