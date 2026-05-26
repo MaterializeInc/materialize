@@ -1756,6 +1756,7 @@ class FlipFlagsAction(Action):
             "kafka_poll_max_wait",
             "kafka_default_aws_privatelink_endpoint_identification_algorithm",
             "kafka_buffered_event_resize_threshold_elements",
+            "kafka_low_watermark_check",
             "mysql_replication_heartbeat_interval",
             "postgres_fetch_slot_resume_lsn_interval",
             "pg_schema_validation_interval",
