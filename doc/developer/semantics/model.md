@@ -444,6 +444,118 @@ sinks for type errors, which would force the `.err` route as the
 right model — or if the error-category split lands, which would
 remove the `errable`-pollution concern entirely.
 
+### Implementations of the error-category split
+
+Three places to land the distinction between implementation-bug
+errors (panic) and data-dependent runtime errors.
+
+#### (A) New `Datum` constructor `.panic`
+
+A fifth `Datum` variant alongside `.bool`, `.int`, `.null`,
+`.err`.
+
+**Gains.**
+Absolute distinction at the cell level.
+`Datum.IsErr` / `Datum.IsPanic` split cleanly.
+Under `WellTyped`, `eval e ≠ .panic` is a provable invariant
+giving the optimizer a strong "no implementation bug at this
+point" guarantee.
+Schema bits separate: `errable` tracks `.err _` (data-dependent),
+a separate `panicable` (or implicit "always false under
+WellTyped") tracks `.panic`.
+
+**Costs.**
+Cascade through every case-bash in the skeleton.
+`evalNot` / `evalAnd` / `evalOr` / `evalPlus` etc. each grow a
+`.panic` arm.
+~30–50 existing theorems in `Mz/Strict.lean` / `Mz/Boolean.lean`
+/ `Mz/Laws.lean` / `Mz/MightError.lean` / `Mz/Equiv.lean` /
+`Mz/WellTyped.lean` each grow case-bash arms.
+The four-valued absorption lattice becomes five-valued
+(`PANIC > FALSE > ERROR > NULL > TRUE`?
+or `.panic` as absorbing top?), requiring re-verification of
+every absorption proof.
+`refines` and `eqErrSet` need placement decisions
+(`.panic` below `.err` for "even more bottom", or above for
+"absorbing top").
+`might_error` splits into `might_error` / `might_panic` — two
+analyzers.
+
+#### (B) Collection-scoped absorbing marker
+
+`.panic` lives only at the *collection* scope, encoded as the
+absorbing element on the diff (`DiffWithGlobal.panic`).
+Cell-level expressions don't produce `.panic`; operators
+escalate cell-level mishaps to the collection scope when they
+detect an implementation bug.
+
+**Gains.**
+No `Datum` cascade.
+`Datum` stays four-valued; all existing theorems unchanged.
+Honest: implementation bugs aren't per-row; they poison the
+dataflow at the timestamp where they appear.
+Slots into the design doc's existing `DiffWithGlobal`
+absorbing-marker structure (currently spec-only post-restart).
+`might_error` stays focused on the data-dependent category.
+
+**Costs.**
+Requires mechanizing the absorbing-diff machinery (deferred at
+restart).
+Cell-level `evalNot (.int 5)` still needs a routing decision —
+`.null` (current) or `.err typeMismatch` (alternative);
+collection scope kicks in only when an operator escalates a
+cell-level mishap to "this whole collection is invalid".
+Doesn't help at the `Expr` layer where most analysis happens —
+collection scope is reached via operator escalation, not by
+`eval` directly.
+
+#### (C) `EvalError.implementationBug` variant
+
+Same `Datum.err _` carrier, new payload kind.
+`IsPanic` becomes a discriminator on the payload:
+`IsPanic := match (.err e) => e matches .implementationBug
+| _ => False`.
+
+**Gains.**
+Minimal cascade.
+`Datum.err _` already exists; the discrimination lives in the
+`EvalError` sum.
+Cell-level routing stays uniform —
+`evalNot (.int _) = .err .implementationBug`.
+`might_error` analyzes only the non-bug variants by definition.
+
+**Costs.**
+Conflates at the carrier level — readers see `.err _` everywhere,
+the distinction lives in the payload (easy to miss).
+`coalesce`'s rescue rule must distinguish bug-errs from
+runtime-errs (don't rescue panic).
+`Coalesce.go` updates.
+Existing `evalPlus_errPropagating` etc. now propagate both
+categories under one tag — proofs unchanged, but the *meaning*
+of `.err`-propagation is now overloaded.
+
+#### Recommendation
+
+(C) as the cheap immediate step, (B) as the eventual right
+model, (A) only if a forcing function appears.
+
+(C) gives the category distinction without cascading through
+every theorem.
+The semantic story stays single-tagged but the optimizer can
+reason about "is this err a bug or runtime?" via the payload.
+Future refactor to (B) is additive: once the absorbing-diff
+machinery is mechanized, bug-errs at cell-scope can escalate to
+the collection scope at operator boundaries.
+
+(A) buys the strongest type-level distinction but the
+proof-engineering cost is real.
+Worth it only if downstream tooling needs the bit at the
+`Datum` level — e.g., a user-facing `is_panic(x)` predicate
+distinct from `is_error(x)`, or schema-level `panicable` columns.
+
+No code change in the current skeleton; the alternatives are
+documented as forking decisions.
+
 ### Divergence from PostgreSQL: `coalesce` rescues errors
 
 PG's `coalesce(NULL, 1/0)` evaluates `1/0` (no non-null seen yet)
