@@ -25,8 +25,8 @@ predicate witnessing those assumptions.
 The module exposes two soundness theorems that play complementary
 roles. They are independent — neither subsumes the other.
 
-* **Kind soundness** (`Expr.kind_of_eval`) — *unconditional*.
-  Under `RowSatisfiesKind`, every `Expr` evaluates to a `Datum`
+* **Kind soundness** (`Expr.type_of_eval`) — *unconditional*.
+  Under `RowSatisfiesType`, every `Expr` evaluates to a `Datum`
   whose kind is compatible with `Expr.outputKind`. No `WellTyped`
   hypothesis required: `outputKind` is conservative enough on
   variadic / conditional cases to close the proof.
@@ -50,7 +50,7 @@ namespace Mz
 
 /-- The kind a concrete `Datum` exhibits. `.null` and `.err _`
 inhabit every kind; reported as `.top`. -/
-def Datum.kind : Datum → ColKind
+def Datum.type : Datum → ColType
   | .bool _ => .bool
   | .int _  => .int
   | .null   => .top
@@ -58,7 +58,7 @@ def Datum.kind : Datum → ColKind
 
 /-! ## Kind compatibility
 
-`ColKind.compatible actual expected = true` reads "an operand of
+`ColType.compatible actual expected = true` reads "an operand of
 kind `actual` can be used where the operator expects `expected`".
 
 * `.top` accepts everything on either side: an operand of unknown
@@ -67,21 +67,21 @@ kind `actual` can be used where the operator expects `expected`".
 * Concrete-concrete: must match exactly.
 
 This is reflexive and symmetric (a Bool relation, decidable). -/
-def ColKind.compatible : ColKind → ColKind → Bool
+def ColType.compatible : ColType → ColType → Bool
   | .top,  _    => true
   | _,    .top  => true
   | .bool, .bool => true
   | .int,  .int  => true
   | _,    _    => false
 
-@[simp] theorem ColKind.compatible_top_left (k : ColKind) :
-    ColKind.compatible .top k = true := by cases k <;> rfl
+@[simp] theorem ColType.compatible_top_left (k : ColType) :
+    ColType.compatible .top k = true := by cases k <;> rfl
 
-@[simp] theorem ColKind.compatible_top_right (k : ColKind) :
-    ColKind.compatible k .top = true := by cases k <;> rfl
+@[simp] theorem ColType.compatible_top_right (k : ColType) :
+    ColType.compatible k .top = true := by cases k <;> rfl
 
-theorem ColKind.compatible_refl (k : ColKind) :
-    ColKind.compatible k k = true := by cases k <;> rfl
+theorem ColType.compatible_refl (k : ColType) :
+    ColType.compatible k k = true := by cases k <;> rfl
 
 /-! ## Output kind of an `Expr`
 
@@ -89,13 +89,13 @@ What kind a well-typed `Expr` produces. Variadic and conditional
 forms whose output kind depends on operand structure default to
 `.top`; tighter rules ride on a future per-operand `kindJoin`. -/
 
-def Expr.outputKind {n : Nat} (sch : Schema n) : Expr → ColKind
+def Expr.outputKind {n : Nat} (sch : Schema n) : Expr → ColType
   | .lit (.bool _) => .bool
   | .lit (.int _)  => .int
   | .lit .null     => .top
   | .lit (.err _)  => .top
   | .col i =>
-    if h : i < n then sch.kinds.get ⟨i, h⟩ else .top
+    if h : i < n then sch.types.get ⟨i, h⟩ else .top
   | .not _    => .bool
   | .plus _ _  => .int
   | .minus _ _ => .int
@@ -116,10 +116,10 @@ recursions over `Expr`. Optimizers wanting full output information
 record below collapses them into a single API call. -/
 
 /-- Bundled per-`Expr` output schema: column-bit metadata
-(`nullable / errable`) plus kind. -/
+(`nullable / errable`) plus type. -/
 structure FullColSchema where
   col : ColSchema
-  kind : ColKind
+  type : ColType
   deriving Inhabited
 
 /-- Compute the bundled output schema for an expression in one
@@ -127,13 +127,13 @@ call. The components agree with `Expr.outputType` and
 `Expr.outputKind`; this is just a packaging convenience. -/
 def Expr.outputSchema {n : Nat} (sch : Schema n) (e : Expr) : FullColSchema :=
   { col := Expr.outputType sch e
-    kind := Expr.outputKind sch e }
+    type := Expr.outputKind sch e }
 
 @[simp] theorem Expr.outputSchema_col {n : Nat} (sch : Schema n) (e : Expr) :
     (Expr.outputSchema sch e).col = Expr.outputType sch e := rfl
 
-@[simp] theorem Expr.outputSchema_kind {n : Nat} (sch : Schema n) (e : Expr) :
-    (Expr.outputSchema sch e).kind = Expr.outputKind sch e := rfl
+@[simp] theorem Expr.outputSchema_type {n : Nat} (sch : Schema n) (e : Expr) :
+    (Expr.outputSchema sch e).type = Expr.outputKind sch e := rfl
 
 /-! ## `WellTyped` predicate
 
@@ -155,10 +155,10 @@ def Expr.WellTyped {n : Nat} (sch : Schema n) : Expr → Prop
   | .col i => i < n
   | .not a =>
     Expr.WellTyped sch a
-    ∧ ColKind.compatible (Expr.outputKind sch a) .bool = true
+    ∧ ColType.compatible (Expr.outputKind sch a) .bool = true
   | .ifThen c t e =>
     Expr.WellTyped sch c ∧ Expr.WellTyped sch t ∧ Expr.WellTyped sch e
-    ∧ ColKind.compatible (Expr.outputKind sch c) .bool = true
+    ∧ ColType.compatible (Expr.outputKind sch c) .bool = true
   | .andN args =>
     Expr.WellTypedArgsAllBool sch args
   | .orN args =>
@@ -167,26 +167,26 @@ def Expr.WellTyped {n : Nat} (sch : Schema n) : Expr → Prop
     Expr.WellTypedArgs sch args
   | .plus a b =>
     Expr.WellTyped sch a ∧ Expr.WellTyped sch b
-    ∧ ColKind.compatible (Expr.outputKind sch a) .int = true
-    ∧ ColKind.compatible (Expr.outputKind sch b) .int = true
+    ∧ ColType.compatible (Expr.outputKind sch a) .int = true
+    ∧ ColType.compatible (Expr.outputKind sch b) .int = true
   | .minus a b =>
     Expr.WellTyped sch a ∧ Expr.WellTyped sch b
-    ∧ ColKind.compatible (Expr.outputKind sch a) .int = true
-    ∧ ColKind.compatible (Expr.outputKind sch b) .int = true
+    ∧ ColType.compatible (Expr.outputKind sch a) .int = true
+    ∧ ColType.compatible (Expr.outputKind sch b) .int = true
   | .times a b =>
     Expr.WellTyped sch a ∧ Expr.WellTyped sch b
-    ∧ ColKind.compatible (Expr.outputKind sch a) .int = true
-    ∧ ColKind.compatible (Expr.outputKind sch b) .int = true
+    ∧ ColType.compatible (Expr.outputKind sch a) .int = true
+    ∧ ColType.compatible (Expr.outputKind sch b) .int = true
   | .divide a b =>
     Expr.WellTyped sch a ∧ Expr.WellTyped sch b
-    ∧ ColKind.compatible (Expr.outputKind sch a) .int = true
-    ∧ ColKind.compatible (Expr.outputKind sch b) .int = true
+    ∧ ColType.compatible (Expr.outputKind sch a) .int = true
+    ∧ ColType.compatible (Expr.outputKind sch b) .int = true
   | .eq a b =>
     Expr.WellTyped sch a ∧ Expr.WellTyped sch b
-    ∧ ColKind.compatible (Expr.outputKind sch a) (Expr.outputKind sch b) = true
+    ∧ ColType.compatible (Expr.outputKind sch a) (Expr.outputKind sch b) = true
   | .lt a b =>
     Expr.WellTyped sch a ∧ Expr.WellTyped sch b
-    ∧ ColKind.compatible (Expr.outputKind sch a) (Expr.outputKind sch b) = true
+    ∧ ColType.compatible (Expr.outputKind sch a) (Expr.outputKind sch b) = true
 
 /-- Mutual: every operand of a variadic well-typed structurally. -/
 def Expr.WellTypedArgs {n : Nat} (sch : Schema n) : List Expr → Prop
@@ -198,7 +198,7 @@ def Expr.WellTypedArgsAllBool {n : Nat} (sch : Schema n) : List Expr → Prop
   | [] => True
   | a :: rest =>
     Expr.WellTyped sch a
-    ∧ ColKind.compatible (Expr.outputKind sch a) .bool = true
+    ∧ ColType.compatible (Expr.outputKind sch a) .bool = true
     ∧ Expr.WellTypedArgsAllBool sch rest
 
 end
@@ -210,25 +210,25 @@ with the schema's declared kind for that column. (Cells holding
 `.null` / `.err _` always pass — they have `.top` kind, which is
 compatible with any expected.) -/
 
-def RowSatisfiesKind {n : Nat} (sch : Schema n) (row : RowN n) : Prop :=
+def RowSatisfiesType {n : Nat} (sch : Schema n) (row : RowN n) : Prop :=
   ∀ i : Fin n,
-    ColKind.compatible (row.get i).kind (sch.kinds.get i) = true
+    ColType.compatible (row.get i).type (sch.types.get i) = true
 
 /-! ## Bundled satisfaction predicate
 
 Precision-direction lemmas (`eval_not_satisfies_precise` and its
 successors for arithmetic / comparison) need *both* per-column
 satisfaction predicates — the `nullable / errable` claim of
-`RowSatisfies` and the `kind` claim of `RowSatisfiesKind`. Each
+`RowSatisfies` and the `kind` claim of `RowSatisfiesType`. Each
 new lemma would otherwise thread two hypotheses; bundling them
 once collapses the API. -/
 
 /-- A row satisfies the full schema iff it satisfies both the
 column-bit schema (`RowSatisfies`) and the kind schema
-(`RowSatisfiesKind`). Use this as the input hypothesis for any
+(`RowSatisfiesType`). Use this as the input hypothesis for any
 precision-direction lemma over `Expr.outputType`. -/
 def RowSatisfiesFull {n : Nat} (sch : Schema n) (row : RowN n) : Prop :=
-  RowSatisfies sch row ∧ RowSatisfiesKind sch row
+  RowSatisfies sch row ∧ RowSatisfiesType sch row
 
 /-- Project to the column-bit half. -/
 theorem RowSatisfiesFull.toSat {n : Nat} {sch : Schema n} {row : RowN n}
@@ -236,11 +236,11 @@ theorem RowSatisfiesFull.toSat {n : Nat} {sch : Schema n} {row : RowN n}
 
 /-- Project to the kind half. -/
 theorem RowSatisfiesFull.toKind {n : Nat} {sch : Schema n} {row : RowN n}
-    (h : RowSatisfiesFull sch row) : RowSatisfiesKind sch row := h.2
+    (h : RowSatisfiesFull sch row) : RowSatisfiesType sch row := h.2
 
 /-- Constructor. -/
 theorem RowSatisfiesFull.mk {n : Nat} {sch : Schema n} {row : RowN n}
-    (hsat : RowSatisfies sch row) (hrk : RowSatisfiesKind sch row) :
+    (hsat : RowSatisfies sch row) (hrk : RowSatisfiesType sch row) :
     RowSatisfiesFull sch row := ⟨hsat, hrk⟩
 
 /-! ## Primitive codomain lemmas
@@ -251,23 +251,23 @@ input `Datum` constructors; each branch yields a result whose
 `kind` is compatible with the expected `outputKind`. -/
 
 private theorem kind_evalNot (a : Datum) :
-    ColKind.compatible (evalNot a).kind .bool = true := by
+    ColType.compatible (evalNot a).type .bool = true := by
   cases a <;> rfl
 
 private theorem kind_evalPlus (a b : Datum) :
-    ColKind.compatible (evalPlus a b).kind .int = true := by
+    ColType.compatible (evalPlus a b).type .int = true := by
   cases a <;> cases b <;> rfl
 
 private theorem kind_evalMinus (a b : Datum) :
-    ColKind.compatible (evalMinus a b).kind .int = true := by
+    ColType.compatible (evalMinus a b).type .int = true := by
   cases a <;> cases b <;> rfl
 
 private theorem kind_evalTimes (a b : Datum) :
-    ColKind.compatible (evalTimes a b).kind .int = true := by
+    ColType.compatible (evalTimes a b).type .int = true := by
   cases a <;> cases b <;> rfl
 
 private theorem kind_evalDivide (a b : Datum) :
-    ColKind.compatible (evalDivide a b).kind .int = true := by
+    ColType.compatible (evalDivide a b).type .int = true := by
   cases a with
   | err _ => rfl
   | null => cases b <;> rfl
@@ -278,19 +278,19 @@ private theorem kind_evalDivide (a b : Datum) :
     | null => rfl
     | bool _ => rfl
     | int m =>
-      show ColKind.compatible
+      show ColType.compatible
           (if m = 0 then Datum.err EvalError.divisionByZero
-           else Datum.int (n / m)).kind .int = true
+           else Datum.int (n / m)).type .int = true
       by_cases h : m = 0
       · rw [if_pos h]; rfl
       · rw [if_neg h]; rfl
 
 private theorem kind_evalEq (a b : Datum) :
-    ColKind.compatible (evalEq a b).kind .bool = true := by
+    ColType.compatible (evalEq a b).type .bool = true := by
   cases a <;> cases b <;> rfl
 
 private theorem kind_evalLt (a b : Datum) :
-    ColKind.compatible (evalLt a b).kind .bool = true := by
+    ColType.compatible (evalLt a b).type .bool = true := by
   cases a <;> cases b <;> rfl
 
 /-- `evalAnd`'s output kind is always compatible with `.bool`, no
@@ -298,7 +298,7 @@ matter the inputs. The codomain of `evalAnd` is bounded by
 `{.bool _, .null, .err _}` after the tightening that routes
 non-boolean operands to `.null`. -/
 private theorem kind_evalAnd (a b : Datum) :
-    ColKind.compatible (evalAnd a b).kind .bool = true := by
+    ColType.compatible (evalAnd a b).type .bool = true := by
   cases a with
   | bool b₁ =>
     cases b with
@@ -326,7 +326,7 @@ private theorem kind_evalAnd (a b : Datum) :
     | err _  => rfl
 
 private theorem kind_evalOr (a b : Datum) :
-    ColKind.compatible (evalOr a b).kind .bool = true := by
+    ColType.compatible (evalOr a b).type .bool = true := by
   cases a with
   | bool b₁ =>
     cases b with
@@ -354,24 +354,24 @@ private theorem kind_evalOr (a b : Datum) :
     | err _  => rfl
 
 private theorem kind_evalAndN (args : List Datum) :
-    ColKind.compatible (evalAndN args).kind .bool = true := by
+    ColType.compatible (evalAndN args).type .bool = true := by
   induction args with
   | nil => rfl
   | cons hd tl _ih =>
-    show ColKind.compatible (evalAnd hd (evalAndN tl)).kind .bool = true
+    show ColType.compatible (evalAnd hd (evalAndN tl)).type .bool = true
     exact kind_evalAnd hd (evalAndN tl)
 
 private theorem kind_evalOrN (args : List Datum) :
-    ColKind.compatible (evalOrN args).kind .bool = true := by
+    ColType.compatible (evalOrN args).type .bool = true := by
   induction args with
   | nil => rfl
   | cons hd tl _ih =>
-    show ColKind.compatible (evalOr hd (evalOrN tl)).kind .bool = true
+    show ColType.compatible (evalOr hd (evalOrN tl)).type .bool = true
     exact kind_evalOr hd (evalOrN tl)
 
 /-! ## Kind soundness
 
-Under `RowSatisfiesKind`, every `Expr` evaluates to a `Datum`
+Under `RowSatisfiesType`, every `Expr` evaluates to a `Datum`
 whose kind is compatible with the expression's `outputKind`.
 
 The proof is structural recursion on `Expr`. `.lit` and `.col`
@@ -384,20 +384,20 @@ operand structure.
 No `WellTyped` hypothesis required: `outputKind` is conservative
 enough on the variadic / conditional cases (`.ifThen`, `.coalesce`
 both fall through to `.top`) that the theorem closes unconditionally
-modulo `RowSatisfiesKind`. The `WellTyped` predicate's value is in
+modulo `RowSatisfiesType`. The `WellTyped` predicate's value is in
 unlocking *precision* refinements of `outputType` (the
 `nullable := OR-of-inputs` tightening), not in this kind-soundness
 direction. -/
 
 /-- Any datum's kind is compatible with `.top`. -/
 private theorem kind_compat_top (d : Datum) :
-    ColKind.compatible d.kind .top = true := by
+    ColType.compatible d.type .top = true := by
   cases d <;> rfl
 
-theorem Expr.kind_of_eval {n : Nat} (sch : Schema n) (row : RowN n)
-    (hrk : RowSatisfiesKind sch row) :
+theorem Expr.type_of_eval {n : Nat} (sch : Schema n) (row : RowN n)
+    (hrk : RowSatisfiesType sch row) :
     ∀ (e : Expr),
-      ColKind.compatible (eval row.toList e).kind
+      ColType.compatible (eval row.toList e).type
         (Expr.outputKind sch e) = true
   | .lit d => by
     simp only [eval, Expr.outputKind]
@@ -446,16 +446,16 @@ theorem Expr.kind_of_eval {n : Nat} (sch : Schema n) (row : RowN n)
 /-! ## Bundled soundness
 
 `eval_satisfies_outputSchema` packages the column-bit half
-(`eval_satisfies_outputType`) and the kind half (`Expr.kind_of_eval`)
+(`eval_satisfies_outputType`) and the kind half (`Expr.type_of_eval`)
 into one statement. Callers that need both pieces — and especially
 precision-direction lemmas downstream — should consume this bundle
 to avoid threading two hypotheses and two soundness invocations. -/
 
 /-- A `Datum` satisfies a `FullColSchema` iff it satisfies the
 column bits (`DatumSatisfies` on the `nullable / errable` half)
-and the kind side (`ColKind.compatible` on the kind half). -/
+and the kind side (`ColType.compatible` on the kind half). -/
 def DatumSatisfiesFull (fcs : FullColSchema) (d : Datum) : Prop :=
-  DatumSatisfies fcs.col d ∧ ColKind.compatible d.kind fcs.kind = true
+  DatumSatisfies fcs.col d ∧ ColType.compatible d.type fcs.type = true
 
 /-- Bundled soundness: evaluating `e` on a row satisfying the full
 schema produces a `Datum` satisfying `Expr.outputSchema sch e`. -/
@@ -463,7 +463,7 @@ theorem eval_satisfies_outputSchema {n : Nat} (sch : Schema n) (row : RowN n)
     (hfull : RowSatisfiesFull sch row) (e : Expr) :
     DatumSatisfiesFull (Expr.outputSchema sch e) (eval row.toList e) :=
   ⟨eval_satisfies_outputType sch row hfull.toSat e,
-   Expr.kind_of_eval sch row hfull.toKind e⟩
+   Expr.type_of_eval sch row hfull.toKind e⟩
 
 /-! ## Precision direction on `Expr.outputType`
 
@@ -474,7 +474,7 @@ precise rule under well-typing (input output-kind `.bool`, ruling
 out `.int`) preserves the input's `nullable` bit.
 
 `eval_not_satisfies_precise` below states it: when
-`outputKind a = .bool` and `RowSatisfiesKind` holds, `.not a`
+`outputKind a = .bool` and `RowSatisfiesType` holds, `.not a`
 satisfies the *precise* schema `outputType a`, not the weakened
 `outputType (.not a)`. Optimizers that can prove the precondition
 get the tighter schema; the weakened rule remains the safe default
@@ -491,7 +491,7 @@ its own per-case proof; `.not` is the demonstration. -/
 `.not a` satisfies the precise schema `outputType a`, not the
 weakened `outputType (.not a)`. Consumes the bundled
 `RowSatisfiesFull` so callers don't need to thread `RowSatisfies`
-and `RowSatisfiesKind` separately. -/
+and `RowSatisfiesType` separately. -/
 theorem eval_not_satisfies_precise
     {n : Nat} (sch : Schema n) (row : RowN n)
     (hfull : RowSatisfiesFull sch row)
@@ -500,10 +500,10 @@ theorem eval_not_satisfies_precise
   have hsat := hfull.toSat
   have hrk := hfull.toKind
   have ihsat := eval_satisfies_outputType sch row hsat a
-  have ihkind := Expr.kind_of_eval sch row hrk a
+  have ihkind := Expr.type_of_eval sch row hrk a
   rw [hkind] at ihkind
-  -- ihkind : ColKind.compatible (eval row.toList a).kind .bool = true
-  -- So (eval row.toList a).kind ∈ {.bool, .top}, i.e., eval is in
+  -- ihkind : ColType.compatible (eval row.toList a).type .bool = true
+  -- So (eval row.toList a).type ∈ {.bool, .top}, i.e., eval is in
   -- {.bool _, .null, .err _}. The `.int _` case is ruled out.
   refine ⟨?_, ?_⟩
   · intro hN
@@ -534,13 +534,13 @@ theorem eval_not_satisfies_precise
 
 /-! ## Open follow-ups
 
-* `Expr.kind_of_eval`. Under `RowSatisfiesKind sch row`, the eval
+* `Expr.type_of_eval`. Under `RowSatisfiesType sch row`, the eval
   result's kind is compatible with `Expr.outputKind sch e`. Each
   non-`.col` arm closes by observing that the matching primitive
   evaluator's codomain falls within
   `{outputKind, .top}` — `evalPlus` returns `.int _ / .null /
   .err _`, whose kinds are `{.int, .top, .top}`, all compatible
-  with `.int`. The `.col` arm uses `RowSatisfiesKind`. The proof
+  with `.int`. The `.col` arm uses `RowSatisfiesType`. The proof
   is structural recursion; the variadic and conditional cases
   default to `.top` and close trivially.
 

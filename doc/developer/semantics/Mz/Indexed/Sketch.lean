@@ -5,7 +5,7 @@ import Mz.Schema
 # Sketch: intrinsically-typed `Expr` (GADT) prototype
 
 A self-contained proof-of-concept exploring whether an indexed
-inductive `Expr : ColKind → Type` simplifies the model by making
+inductive `Expr : ColType → Type` simplifies the model by making
 ill-typed expressions structurally unconstructible.
 
 The untyped `Mz/Expr.lean` model carries a separate `WellTyped`
@@ -48,7 +48,7 @@ The `.null` / `.err` constructors are universally quantified over
 the kind index. Pattern matching on a `Datum k` for known `k`
 prunes the constructors not inhabiting that kind. -/
 
-inductive Datum : ColKind → Type
+inductive Datum : ColType → Type
   | bool (b : Bool) : Datum .bool
   | int (n : Int) : Datum .int
   | null : Datum k
@@ -69,23 +69,23 @@ the type-system enforcing it. -/
 -- is the standard Lean 4 idiom for variadic constructors on
 -- indexed inductives (`Lean.Expr` uses the same pattern).
 mutual
-  inductive Expr : ColKind → Type
-    | lit {k : ColKind} (d : Datum k) : Expr k
+  inductive Expr : ColType → Type
+    | lit {k : ColType} (d : Datum k) : Expr k
     | not  : Expr .bool → Expr .bool
     | plus : Expr .int → Expr .int → Expr .int
     | minus : Expr .int → Expr .int → Expr .int
     | times : Expr .int → Expr .int → Expr .int
     | divide : Expr .int → Expr .int → Expr .int
-    | eq {k : ColKind} : Expr k → Expr k → Expr .bool
-    | lt {k : ColKind} : Expr k → Expr k → Expr .bool
+    | eq {k : ColType} : Expr k → Expr k → Expr .bool
+    | lt {k : ColType} : Expr k → Expr k → Expr .bool
     | andN (args : ExprList .bool) : Expr .bool
     | orN  (args : ExprList .bool) : Expr .bool
-    | ifThen {k : ColKind} (c : Expr .bool) (t e : Expr k) : Expr k
-    | coalesce {k : ColKind} (args : ExprList k) : Expr k
+    | ifThen {k : ColType} (c : Expr .bool) (t e : Expr k) : Expr k
+    | coalesce {k : ColType} (args : ExprList k) : Expr k
 
-  inductive ExprList : ColKind → Type
-    | nil {k : ColKind} : ExprList k
-    | cons {k : ColKind} : Expr k → ExprList k → ExprList k
+  inductive ExprList : ColType → Type
+    | nil {k : ColType} : ExprList k
+    | cons {k : ColType} : Expr k → ExprList k → ExprList k
 end
 
 /-! ## Primitive evaluators
@@ -150,7 +150,7 @@ def evalDivide : Datum .int → Datum .int → Datum .int
 /-- Equality on a single kind. Returns a `Datum .bool`. The kind
 parameter is shared across both operands by construction — the
 ill-typed mix `evalEq (.bool true) (.int 5)` simply doesn't type. -/
-def evalEq {k : ColKind} : Datum k → Datum k → Datum .bool
+def evalEq {k : ColType} : Datum k → Datum k → Datum .bool
   | .err e, _        => .err e
   | _, .err e        => .err e
   | .null, _         => .null
@@ -158,7 +158,7 @@ def evalEq {k : ColKind} : Datum k → Datum k → Datum .bool
   | .bool x, .bool y => .bool (decide (x = y))
   | .int n,  .int m  => .bool (decide (n = m))
 
-def evalLt {k : ColKind} : Datum k → Datum k → Datum .bool
+def evalLt {k : ColType} : Datum k → Datum k → Datum .bool
   | .err e, _        => .err e
   | _, .err e        => .err e
   | .null, _         => .null
@@ -166,7 +166,7 @@ def evalLt {k : ColKind} : Datum k → Datum k → Datum .bool
   | .bool x, .bool y => .bool (decide (x < y))
   | .int n,  .int m  => .bool (decide (n < m))
 
-def evalIfThen {k : ColKind} : Datum .bool → Datum k → Datum k → Datum k
+def evalIfThen {k : ColType} : Datum .bool → Datum k → Datum k → Datum k
   | .bool true,  dt, _  => dt
   | .bool false, _,  de => de
   | .null,       _,  _  => .null
@@ -185,24 +185,24 @@ def evalOrN : List (Datum .bool) → Datum .bool
 /-- `coalesce` on the indexed model. All operands share kind `k`,
 so the type-mismatch handling that plagued the untyped model is
 gone. Two-pass shape mirrors `Mz/PrimEval.lean`. -/
-def Datum.isNullB {k : ColKind} : Datum k → Bool
+def Datum.isNullB {k : ColType} : Datum k → Bool
   | .null => true
   | _     => false
 
-def Coalesce.firstConcrete {k : ColKind} : List (Datum k) → Option (Datum k)
+def Coalesce.firstConcrete {k : ColType} : List (Datum k) → Option (Datum k)
   | []           => none
   | .bool b :: _ => some (.bool b)
   | .int n :: _  => some (.int n)
   | _ :: rest    => Coalesce.firstConcrete rest
 
-def Coalesce.residue {k : ColKind} : List (Datum k) → Datum k
+def Coalesce.residue {k : ColType} : List (Datum k) → Datum k
   | []              => .null
   | .null :: _      => .null
   | .err e :: rest  =>
     if rest.any Datum.isNullB then .null else .err e
   | _ :: rest       => Coalesce.residue rest
 
-def evalCoalesce {k : ColKind} (ds : List (Datum k)) : Datum k :=
+def evalCoalesce {k : ColType} (ds : List (Datum k)) : Datum k :=
   match Coalesce.firstConcrete ds with
   | some d => d
   | none   => Coalesce.residue ds
@@ -212,7 +212,7 @@ def evalCoalesce {k : ColKind} (ds : List (Datum k)) : Datum k :=
 No environment for now (no `.col`). Closed expressions only. -/
 
 mutual
-  def eval : {k : ColKind} → Expr k → Datum k
+  def eval : {k : ColType} → Expr k → Datum k
     | _, .lit d        => d
     | _, .not a        => evalNot (eval a)
     | _, .plus a b     => evalPlus (eval a) (eval b)
@@ -226,7 +226,7 @@ mutual
     | _, .ifThen c t e => evalIfThen (eval c) (eval t) (eval e)
     | _, .coalesce args => evalCoalesce (evalList args)
 
-  def evalList : {k : ColKind} → ExprList k → List (Datum k)
+  def evalList : {k : ColType} → ExprList k → List (Datum k)
     | _, .nil       => []
     | _, .cons a as => eval a :: evalList as
 end
@@ -306,13 +306,13 @@ gating whether this generalizes to the full model:
   (sch.kinds.get i)`. This makes `Expr` indexed not only by its
   output kind but also by the *schema* it references against,
   parameterizing the inductive: `inductive Expr (sch : Schema n) :
-  ColKind → Type`. The cost cascades through substitution
+  ColType → Type`. The cost cascades through substitution
   (`Expr.subst` must move between schemas — every projection /
   filter operator changes the input schema), column-shift
   reasoning in `Mz/ColRefs.lean`, and `Subst.lean`'s soundness.
   This is the load-bearing question. A partial mitigation: keep
   `.col` parameterized by an explicit kind argument `.col (i : Nat)
-  (k : ColKind) : Expr k` with a separate runtime
+  (k : ColType) : Expr k` with a separate runtime
   `WellSchemed sch e` predicate that says the kind argument
   agrees with `sch.kinds.get i`. That recovers the simplification
   for the operator-side machinery and pays the schema cost only

@@ -62,7 +62,7 @@ flowchart TD
   E --> OK[outputKind]
   E --> WT[WellTyped]
   E --> ME[might_error]
-  S[Schema n] --> RS[RowSatisfies / RowSatisfiesKind]
+  S[Schema n] --> RS[RowSatisfies / RowSatisfiesType]
   OT --> SF[Schema facts]
   OK --> SF
   WT --> SF
@@ -217,21 +217,21 @@ column or row-level invariants:
 
 Per-column type kind in `Mz/Schema.lean`:
 
-* `ColKind { bool | int | top }` — SQL type tag per column.
+* `ColType { bool | int | top }` — SQL type tag per column.
   `.top` is the unconstrained / permissive kind (matches any
   expected; captures `.null` / `.err _` literals and untyped
   columns).
-* `Schema.kinds : List.Vector ColKind n` — additive field;
+* `Schema.types : List.Vector ColType n` — additive field;
   defaults to `.top` per column in `Schema.free`.
 * `Schema.append` concatenates kinds along with cols.
 
 Structural type-correctness in `Mz/WellTyped.lean`:
 
-* `Datum.kind d : ColKind` — maps a concrete `Datum` to its
+* `Datum.type d : ColType` — maps a concrete `Datum` to its
   observable kind (`.null` / `.err _` ↦ `.top`).
-* `ColKind.compatible actual expected` — Bool predicate, reflexive
+* `ColType.compatible actual expected` — Bool predicate, reflexive
   and `.top`-permissive in both positions.
-* `Expr.outputKind sch e : ColKind` — the kind the expression
+* `Expr.outputKind sch e : ColType` — the kind the expression
   produces; precise on `.lit` and the boolean / arithmetic
   fragment, `.top` for conditional and variadic-coalesce.
 * `Expr.WellTyped sch e : Prop` — recursive predicate that each
@@ -240,10 +240,10 @@ Structural type-correctness in `Mz/WellTyped.lean`:
   arithmetic consumes int; `.eq` / `.lt` require same kind on
   both sides). Variadic via mutual recursion through
   `WellTypedArgs` / `WellTypedArgsAllBool`.
-* `RowSatisfiesKind sch row` — every cell's kind compatible with
+* `RowSatisfiesType sch row` — every cell's kind compatible with
   the schema's declared kind for that column.
-* `Expr.kind_of_eval` — soundness theorem: under
-  `RowSatisfiesKind`, `(eval row.toList e).kind` is compatible
+* `Expr.type_of_eval` — soundness theorem: under
+  `RowSatisfiesType`, `(eval row.toList e).kind` is compatible
   with `Expr.outputKind sch e` for every expression. Structural
   recursion on `Expr`; each non-`.col` arm closes via a
   primitive-codomain lemma (`kind_evalPlus`, `kind_evalAnd`,
@@ -268,7 +268,7 @@ outputType(a).errable }` is honest under the tightened `evalNot`
 (which routes `.int → .null`), but is *misleading* on its own:
 for non-null bool or err inputs, evalNot does *not* produce
 `.null`. Under the precondition `outputKind a = .bool` (which
-rules out `.int` via `kind_of_eval`), the precise schema
+rules out `.int` via `type_of_eval`), the precise schema
 `outputType a` is satisfied by `.not a` — preserving both bits
 of the input. Optimizers that establish the precondition get the
 tighter schema; the conservative form remains the safe default
@@ -799,7 +799,7 @@ Relations and analyses a planner can cite today.
 | `NoRowErr` precondition    | `Mz/Collection.lean`         | pushdown under `=`         | filter preservation needs static pred     |
 | `Schema n` (sketch)        | `Mz/Schema.lean`             | coalesce id, cross row-err | project output-schema rules               |
 | `Expr.outputType`          | `Mz/OutputType.lean`         | `=` on `.lit` and `.col`   | non-foundational constructors weakest     |
-| `Expr.WellTyped`           | `Mz/WellTyped.lean`          | structural predicate + `kind_of_eval` soundness | precision direction on `outputType` open |
+| `Expr.WellTyped`           | `Mz/WellTyped.lean`          | structural predicate + `type_of_eval` soundness | precision direction on `outputType` open |
 
 ### Sketches and history
 
