@@ -261,10 +261,16 @@ existing `Mz/Eval.lean` evaluator unless noted.
 
 ### Schema-aware scalar folds
 
+Many of these require `Expr.WellTyped sch e` as a precondition —
+without it, the four-valued evaluator routes type-mismatched
+operands to `.null`, and the schema-driven `nullable := false`
+conclusion can't be drawn.
+
 | Rewrite | Statement | Status |
 | --- | --- | --- |
 | `is_null_non_nullable` | `IsNull e = .bool false` when `Expr.outputType e .nullable = false` | open (would ride on `Mz/OutputType.lean` once `IsNull` is added to `Expr`; `IsNull` is currently not modeled) |
-| `is_null_decompose` | `IsNull(f a b) = IsNull a ∨ IsNull b` when `f` is null-propagating | open |
+| `is_null_decompose` | `IsNull(f a b) = IsNull a ∨ IsNull b` when `f` is null-propagating | open; needs `WellTyped` to rule out type-mismatch routing |
+| `outputType_precision` (open) | under `WellTyped sch e`, arithmetic / comparison `outputType` tightens `nullable := OR-of-inputs.nullable` (no spurious `.null` from type-mismatch) | open; `WellTyped` predicate landed in `Mz/WellTyped.lean`, precision direction rides on it |
 
 ### Out of scope at the scalar layer
 

@@ -151,6 +151,41 @@ column or row-level invariants:
 * `NoRowErr_negate` — `(-0 : Int) = 0`, so a zero `err_diff`
   stays zero.
 
+Per-column type kind in `Mz/Schema.lean`:
+
+* `ColKind { bool | int | top }` — SQL type tag per column.
+  `.top` is the unconstrained / permissive kind (matches any
+  expected; captures `.null` / `.err _` literals and untyped
+  columns).
+* `Schema.kinds : List.Vector ColKind n` — additive field;
+  defaults to `.top` per column in `Schema.free`.
+* `Schema.append` concatenates kinds along with cols.
+
+Structural type-correctness in `Mz/WellTyped.lean`:
+
+* `Datum.kind d : ColKind` — maps a concrete `Datum` to its
+  observable kind (`.null` / `.err _` ↦ `.top`).
+* `ColKind.compatible actual expected` — Bool predicate, reflexive
+  and `.top`-permissive in both positions.
+* `Expr.outputKind sch e : ColKind` — the kind the expression
+  produces; precise on `.lit` and the boolean / arithmetic
+  fragment, `.top` for conditional and variadic-coalesce.
+* `Expr.WellTyped sch e : Prop` — recursive predicate that each
+  operator's operands have kinds compatible with what the
+  operator expects (`.not` / `.andN` / `.orN` consume bool;
+  arithmetic consumes int; `.eq` / `.lt` require same kind on
+  both sides). Variadic via mutual recursion through
+  `WellTypedArgs` / `WellTypedArgsAllBool`.
+* `RowSatisfiesKind sch row` — every cell's kind compatible with
+  the schema's declared kind for that column.
+
+`WellTyped` is what the optimizer needs to cite to invoke the
+precision direction on `outputType`: under `WellTyped`,
+type-mismatched operands are ruled out, and `outputType`'s
+conservative `nullable := true` for arithmetic can be tightened
+to `nullable := OR-of-inputs.nullable`. The precision direction
+itself is open; the predicate is the gate.
+
 Output-schema propagation for `Expr` lives in `Mz/OutputType.lean`:
 
 * `DatumSatisfies cs d` — `Datum` satisfies a `ColSchema` iff the
@@ -600,6 +635,7 @@ Lean evidence accumulated before the restart:
 | `NoRowErr` precondition    | `Mz/Collection.lean`         | pushdown under `=`         | filter preservation needs static pred     |
 | `Schema n` (sketch)        | `Mz/Schema.lean`             | coalesce id, cross row-err | project output-schema rules               |
 | `Expr.outputType`          | `Mz/OutputType.lean`         | `=` on `.lit` and `.col`   | non-foundational constructors weakest     |
+| `Expr.WellTyped`           | `Mz/WellTyped.lean`          | structural predicate + `ColKind`/`outputKind` | kind-soundness theorem and precision direction on `outputType` |
 | Per-payload `(Int×ErrCnt)` | preserved in branch history  | `=` on commutative-monoid  | pushdown over cross                       |
 | `LegalEval` (non-det sketch) | `Mz/Legal.lean`            | foundation + binary err-side commutativity | variadic short-circuit; data-side comm; collection lift |
 | Collection-scoped diff     | spec-only post-restart       | —                          | not currently mechanized                  |

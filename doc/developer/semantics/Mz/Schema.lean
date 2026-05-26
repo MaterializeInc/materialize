@@ -38,9 +38,30 @@ structure ColSchema where
   errable : Bool
   deriving DecidableEq, Inhabited
 
+/-- SQL type kind a column may hold (or expression may produce).
+
+* `.bool` — boolean fragment (`.bool _`, plus `.null` / `.err _`).
+* `.int` — integer fragment (`.int _`, plus `.null` / `.err _`).
+* `.top` — unconstrained: any kind (`.null` / `.err _` literals
+  alone, untyped columns, expressions whose kind depends on data).
+
+`.top` is permissive: it is compatible with any expected kind (the
+caller doesn't know; SQL `NULL` and `ERROR` inhabit every SQL
+type). A column whose schema kind is `.top` is therefore usable
+in any operator slot — well-typing accepts it. A column whose
+schema kind is `.bool` is usable only in slots expecting `.bool`. -/
+inductive ColKind
+  | bool
+  | int
+  | top
+  deriving DecidableEq, Inhabited
+
 /-- Schema for an `n`-arity collection:
 
-* `cols` — per-column metadata.
+* `cols` — per-column metadata (nullable / errable bits).
+* `kinds` — per-column type kind. Defaults to `.top`
+  (unconstrained); an analyzer that tracks SQL types tightens to
+  `.bool` or `.int` per column.
 * `rowErrFree` — the collection-level claim that no update carries
   positive `err_diff`. Modeled as a `Bool` flag so the schema can
   be combined / refined by the optimizer; the matching propositional
@@ -51,15 +72,18 @@ A schema with `rowErrFree = false` makes no claim about
 with any `err_diff` in that case. -/
 structure Schema (n : Nat) where
   cols : List.Vector ColSchema n
+  kinds : List.Vector ColKind n
   rowErrFree : Bool
   deriving Inhabited
 
 namespace Schema
 
 /-- The information-free schema: every column nullable and errable,
-no row-error claim. The starting point for any analysis. -/
+kinds unconstrained, no row-error claim. The starting point for
+any analysis. -/
 def free (n : Nat) : Schema n :=
   { cols := List.Vector.replicate n { nullable := true, errable := true }
+    kinds := List.Vector.replicate n ColKind.top
     rowErrFree := false }
 
 /-- The schema certifies no cell-level errors. -/
@@ -155,6 +179,7 @@ This is the schema produced by `Collection.cross` and is the
 structural counterpart to `Vector.append`. -/
 def append {n m : Nat} (a : Schema n) (b : Schema m) : Schema (n + m) :=
   { cols := a.cols ++ b.cols
+    kinds := a.kinds ++ b.kinds
     rowErrFree := a.rowErrFree && b.rowErrFree }
 
 end Schema
