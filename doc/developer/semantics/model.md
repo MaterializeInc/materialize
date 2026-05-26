@@ -16,6 +16,34 @@ specification — Y itself may change.
 Such claims are flagged inline with "design-doc-derived" so they
 can be re-examined when the design doc evolves.
 
+## GADT migration
+
+The Lean model uses **schema-indexed (GADT) inductive types**:
+
+* `Datum : ColType → Type` — scalar value indexed by its kind.
+  `.bool` only inhabits `Datum .bool`; `.int` only inhabits
+  `Datum .int`; `.null` and `.err _` are universal.
+* `Expr (sch : Schema n) : ColType → Type` — expression typed by
+  input schema and output type. Variadic constructors use a
+  mutual `ExprList sch k`.
+* `Update sch` / `Collection sch` — schema-indexed collection
+  layer.
+
+The type system enforces kind correctness at construction:
+`Expr.not (.lit (.int 5))` fails to type-check.
+
+The `WellTyped` predicate, the `outputKind` / `RowSatisfiesType`
+predicates, and the `¬d.IsInt` hypotheses on boolean/arithmetic
+laws — all artifacts of the untyped predecessor model — are
+subsumed by the GADT and no longer present. Evaluators have
+closed codomains (no catch-all `_ , _ => .null` routing): `evalAnd`
+operates on `Datum .bool × Datum .bool → Datum .bool`, etc.
+
+This file describes the semantic model. Where the architecture
+diagram below mentions `outputKind` or `WellTyped`, those refer
+to the *concepts* — output type, well-typing — that the GADT
+encodes structurally rather than as separate predicates.
+
 The model has five layers — `Datum`, `Expression`, `Row`, `Schema`,
 `Collection` — and a separate dimension of error semantics that cuts
 across all of them.
@@ -32,51 +60,49 @@ optimizer can pick from and the rewrites each enables.
 The model has four kinds of object, each at a layer of the
 catalog:
 
-* **Analyses** live at the `Expr` layer.
-  `Expr.outputType`, `Expr.outputKind`, `Expr.WellTyped`, and
-  `Expr.might_error` consume an expression and a `Schema n` and
-  produce per-expression schema facts (errable bit, kind, type
-  correctness, error reachability).
-* **Schema facts** live at the `Schema n` / `Collection n` layer.
-  `Schema.cellErrFree`, `Schema.rowErrFree`, `RowSatisfies`,
-  `Collection.NoRowErr`.
-  Combinators (`Schema.append`, `NoRowErr_filter`,
-  `NoRowErr_unionAll`, …) propagate facts through operators.
-* **Preconditions** sit on operator rewrites.
-  `filter_cross_pushdown_left_strict` requires `NoRowErr`.
-  `filter_cross_pushdown_left_refines` weakens that to `SignOK`.
-  Future schema-driven scalar folds require `WellTyped` and an
-  `outputType` precision bit.
-* **Relations** pick which rewrites are admissible.
-  `=` is the strict surface; `eqErrSet`, `refines`, `LegalEquiv`
-  are progressive relaxations.
-  Each precondition discharged by a schema fact unlocks a rewrite
-  under one or more relations.
+* **Type-level discipline** lives in the indexing of `Datum`,
+  `Expr`, `Update`, and `Collection`. `Expr (sch : Schema n) :
+  ColType → Type` enforces kind correctness; ill-typed expressions
+  are unconstructible. The `outputType` of an `Expr` is its index,
+  trivially.
+* **Analyses** at the `Expr` layer that derive *additional* facts
+  beyond the type: `Expr.outputCols` (nullable / errable bits),
+  `Expr.might_error` (error reachability). These layer on top of
+  the GADT — they refine, not replace, the structural typing.
+* **Schema facts** at the `Schema n` / `Collection n` layer:
+  `Schema.cellErrFree`, `Schema.rowErrFree`, `EnvSatisfies`,
+  `Collection.NoRowErr`. Combinators (`Schema.append`,
+  `NoRowErr_filter`, `NoRowErr_unionAll`) propagate facts through
+  operators.
+* **Preconditions** on operator rewrites discharged by schema
+  facts. `filter_cross_pushdown_left_strict` requires `NoRowErr`;
+  `filter_cross_pushdown_left_refines` weakens to `SignOK`.
+* **Relations** pick which rewrites are admissible. `=` is the
+  strict surface; `eqErrSet`, `refines`, `LegalEquiv` are
+  progressive relaxations. `Collection.Equiv` quotients by
+  permutation + consolidation for retraction-based rewrites.
 
-The load-bearing dependency graph: *analyses → schema facts →
+The load-bearing dependency graph: *GADT structure (type) +
+analyses (errable / err-reachability) → schema facts →
 preconditions → relation-tagged rewrites*.
 
 ```mermaid
 flowchart TD
-  E[Expr] --> OT[outputType]
-  E --> OK[outputKind]
-  E --> WT[WellTyped]
-  E --> ME[might_error]
-  S[Schema n] --> RS[RowSatisfies / RowSatisfiesType]
-  OT --> SF[Schema facts]
-  OK --> SF
-  WT --> SF
+  T[GADT: Expr sch k] -.kind enforced by index.-> K[output kind]
+  T --> OC[outputCols]
+  T --> ME[might_error]
+  S[Schema sch] --> ES[EnvSatisfies]
+  OC --> SF[Schema facts]
   ME --> SF
-  RS --> SF
+  ES --> SF
   SF --> P1[NoRowErr precondition]
   SF --> P2[SignOK precondition]
-  SF --> P3[WellTyped + outputType precision]
   P1 --> R1[= pushdown]
   P2 --> R2[refines pushdown]
-  P3 --> R3[schema-driven scalar folds]
-  C[Collection n] -.lift.-> R1
+  C[Collection sch] -.lift.-> R1
   C -.lift.-> R2
   L[LegalEval] -.sketch.-> R4[LegalEquiv rewrites]
+  CE[Collection.Equiv: perm + merge + drop_zero] --> R5[retraction-based rewrites]
 ```
 
 The catalog below walks the layers (Datum → Expression → Row →
