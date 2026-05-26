@@ -1,5 +1,6 @@
 import Mz.Expr
 import Mz.Eval
+import Mz.MightError
 
 /-!
 # Output column schema for indexed `Expr`
@@ -74,5 +75,110 @@ mutual
     | _, .orN _  => { nullable := true, errable := true }
     | _, .coalesce _ => { nullable := true, errable := true }
 end
+
+/-! ## Soundness
+
+`eval_satisfies_outputCols`: evaluating `e` on a `RowSatisfies`
+env produces a `Datum` satisfying `Expr.outputCols sch e`.
+Mechanical structural recursion over `Expr`; the
+err-side reasoning consumes the `evalX_not_err` lemmas from
+`Mz/MightError.lean`. Nullable bit stays `true` on the
+non-foundational constructors (the catch-all routing to `.null` is
+absent from the GADT codomain — `evalAnd : Datum .bool → Datum
+.bool → Datum .bool` cannot produce a non-`.bool / .null / .err`,
+so the conservative `nullable := true` on these constructors
+remains the right default until a precision-direction refinement
+under additional hypotheses lands). -/
+
+/-- A binary-op `errable`-OR rule packaging step: given `not_err`
+for the primitive plus per-input satisfaction, conclude
+satisfaction of the OR rule. -/
+private theorem binOp_satisfies
+    {ka kb kc : ColType}
+    {f : Datum ka → Datum kb → Datum kc}
+    {da : Datum ka} {db : Datum kb}
+    {csa csb : ColSchema}
+    (hsata : DatumSatisfies csa da) (hsatb : DatumSatisfies csb db)
+    (hNotErr : ¬da.IsErr → ¬db.IsErr → ¬(f da db).IsErr) :
+    DatumSatisfies
+      { nullable := true, errable := csa.errable || csb.errable }
+      (f da db) := by
+  refine ⟨?_, ?_⟩
+  · intro h; cases h
+  · intro hErr
+    simp only [Bool.or_eq_false_iff] at hErr
+    exact hNotErr (hsata.2 hErr.1) (hsatb.2 hErr.2)
+
+theorem eval_satisfies_outputCols {n : Nat} {sch : Schema n}
+    (env : Env sch) (hsat : RowSatisfies sch env) :
+    {k : ColType} → (e : Expr sch k) →
+      DatumSatisfies (Expr.outputCols e) (eval env e)
+  | _, .lit (.bool _) => by
+    simp only [eval, Expr.outputCols]
+    refine ⟨?_, ?_⟩ <;> (intro _ h; cases h)
+  | _, .lit (.int _) => by
+    simp only [eval, Expr.outputCols]
+    refine ⟨?_, ?_⟩ <;> (intro _ h; cases h)
+  | _, .lit .null => by
+    simp only [eval, Expr.outputCols]
+    refine ⟨?_, ?_⟩
+    · intro h; cases h
+    · intro _ h; cases h
+  | _, .lit (.err _) => by
+    simp only [eval, Expr.outputCols]
+    refine ⟨?_, ?_⟩
+    · intro _ h; cases h
+    · intro h; cases h
+  | _, .col i => by
+    simp only [eval, Expr.outputCols]
+    exact hsat i
+  | _, .not a => by
+    have iha := eval_satisfies_outputCols env hsat a
+    simp only [eval, Expr.outputCols]
+    refine ⟨?_, ?_⟩
+    · intro h; cases h
+    · intro hErr
+      have ha_noterr : ¬(eval env a).IsErr := iha.2 hErr
+      exact evalNot_not_err ha_noterr
+  | _, .ifThen c t e => by
+    have ihc := eval_satisfies_outputCols env hsat c
+    have iht := eval_satisfies_outputCols env hsat t
+    have ihe := eval_satisfies_outputCols env hsat e
+    simp only [eval, Expr.outputCols]
+    refine ⟨?_, ?_⟩
+    · intro h; cases h
+    · intro hErr
+      simp only [Bool.or_eq_false_iff] at hErr
+      obtain ⟨⟨hc, ht⟩, he⟩ := hErr
+      exact evalIfThen_not_err (ihc.2 hc) (iht.2 ht) (ihe.2 he)
+  | _, .plus a b => by
+    have iha := eval_satisfies_outputCols env hsat a
+    have ihb := eval_satisfies_outputCols env hsat b
+    simp only [eval, Expr.outputCols]
+    exact binOp_satisfies iha ihb (fun ha hb => evalPlus_not_err ha hb)
+  | _, .minus a b => by
+    have iha := eval_satisfies_outputCols env hsat a
+    have ihb := eval_satisfies_outputCols env hsat b
+    simp only [eval, Expr.outputCols]
+    exact binOp_satisfies iha ihb (fun ha hb => evalMinus_not_err ha hb)
+  | _, .times a b => by
+    have iha := eval_satisfies_outputCols env hsat a
+    have ihb := eval_satisfies_outputCols env hsat b
+    simp only [eval, Expr.outputCols]
+    exact binOp_satisfies iha ihb (fun ha hb => evalTimes_not_err ha hb)
+  | _, .divide _ _ => DatumSatisfies.weakest _
+  | _, .eq a b => by
+    have iha := eval_satisfies_outputCols env hsat a
+    have ihb := eval_satisfies_outputCols env hsat b
+    simp only [eval, Expr.outputCols]
+    exact binOp_satisfies iha ihb (fun ha hb => evalEq_not_err ha hb)
+  | _, .lt a b => by
+    have iha := eval_satisfies_outputCols env hsat a
+    have ihb := eval_satisfies_outputCols env hsat b
+    simp only [eval, Expr.outputCols]
+    exact binOp_satisfies iha ihb (fun ha hb => evalLt_not_err ha hb)
+  | _, .andN _ => DatumSatisfies.weakest _
+  | _, .orN _ => DatumSatisfies.weakest _
+  | _, .coalesce _ => DatumSatisfies.weakest _
 
 end Mz
