@@ -78,6 +78,20 @@ fn empty_input_yields_zero_len_handle() {
 }
 
 #[test] // allow(test-attribute)
+fn empty_input_file_backend_round_trip() {
+    ensure_scratch();
+    set_backend(Backend::File);
+    let mut chunks: [Vec<u64>; 0] = [];
+    let h = pageout(&mut chunks);
+    assert_eq!(h.len(), 0);
+    assert!(h.is_empty());
+    let mut dst = vec![42u64];
+    take(h, &mut dst);
+    assert!(dst.is_empty());
+    set_backend(Backend::Swap);
+}
+
+#[test] // allow(test-attribute)
 fn scatter_round_trip() {
     set_backend(Backend::Swap);
     let mut chunks = [vec![1u64, 2, 3], vec![4, 5], vec![6, 7, 8, 9]];

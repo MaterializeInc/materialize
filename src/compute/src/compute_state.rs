@@ -288,6 +288,19 @@ impl ComputeState {
             lgalloc::lgalloc_set_config(lgalloc::LgAlloc::new().disable());
         }
 
+        // Pager backend selection follows scratch-directory availability:
+        // a scratch dir means the file backend; no scratch dir means swap.
+        // `set_scratch_dir` and `set_backend` are both idempotent, so calling
+        // on every `apply_worker_config` tick is safe. The pager module is
+        // only compiled on Unix targets (`mz_ore::pager` is `cfg(unix)`).
+        #[cfg(unix)]
+        if let Some(path) = &self.context.scratch_directory {
+            mz_ore::pager::set_scratch_dir(path.clone());
+            mz_ore::pager::set_backend(mz_ore::pager::Backend::File);
+        } else {
+            mz_ore::pager::set_backend(mz_ore::pager::Backend::Swap);
+        }
+
         crate::memory_limiter::apply_limiter_config(config);
 
         mz_ore::region::ENABLE_LGALLOC_REGION.store(

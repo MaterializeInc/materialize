@@ -40,7 +40,11 @@ impl SwapInner {
     }
 
     pub(crate) fn total_len(&self) -> usize {
-        *self.prefix.last().unwrap_or(&0)
+        // `new` always pushes the initial 0, so `prefix` has at least one element.
+        *self
+            .prefix
+            .last()
+            .expect("SwapInner::prefix invariant: at least [0]")
     }
 }
 
@@ -63,21 +67,39 @@ fn madvise_cold(chunk: &[u64]) {
     let page = page_size();
     let base_ptr = chunk.as_ptr();
     let base_addr = base_ptr.addr();
-    let len_bytes = chunk.len() * std::mem::size_of::<u64>();
-    let aligned_start_addr = (base_addr + page - 1) & !(page - 1);
-    let aligned_end_addr = (base_addr + len_bytes) & !(page - 1);
+    // `Vec<u64>` cannot exceed `isize::MAX` bytes, so this multiplication
+    // cannot overflow on any supported target. Use `checked_mul` for
+    // defense-in-depth: a corrupted length should fail loudly, not wrap.
+    let Some(len_bytes) = chunk.len().checked_mul(std::mem::size_of::<u64>()) else {
+        return;
+    };
+    // Round the start up and the end down to page boundaries. Both additions
+    // use `checked_add` so that an allocation sitting near the top of the
+    // address space can never silently wrap into a tiny range.
+    let Some(start_unaligned) = base_addr.checked_add(page - 1) else {
+        return;
+    };
+    let Some(end_unaligned) = base_addr.checked_add(len_bytes) else {
+        return;
+    };
+    let aligned_start_addr = start_unaligned & !(page - 1);
+    let aligned_end_addr = end_unaligned & !(page - 1);
     if aligned_end_addr <= aligned_start_addr {
         return;
     }
     let aligned_len = aligned_end_addr - aligned_start_addr;
-    // SAFETY: `aligned_start_addr` lies within `[base_addr, base_addr+len_bytes]`,
-    // i.e. inside the live `&[u64]`. Reconstructing the pointer via `byte_add`
-    // preserves provenance.
+    // SAFETY: `aligned_start_addr` lies in `[base_addr, base_addr + len_bytes]`
+    // by construction (rounding up the start cannot exceed `end_unaligned`,
+    // which equals `base_addr + len_bytes`; the early-return above guarantees
+    // `start ≤ end`). That interval is exactly the range covered by the live
+    // `&[u64]`, so `byte_add` stays in-bounds and preserves provenance.
     let aligned_ptr = unsafe { base_ptr.byte_add(aligned_start_addr - base_addr) }
         .cast::<libc::c_void>()
         .cast_mut();
     // SAFETY: pointer/length describe a fully page-aligned subrange contained
-    // within the live `&[u64]`. `MADV_COLD` does not mutate the contents.
+    // within the live `&[u64]` (justified above). `MADV_COLD` is non-mutating;
+    // it only signals reclaim preference to the kernel, so concurrent reads
+    // of the slice remain sound.
     unsafe {
         libc::madvise(aligned_ptr, aligned_len, libc::MADV_COLD);
     }
@@ -91,11 +113,6 @@ fn page_size() -> usize {
     // SAFETY: `sysconf` with a valid argument is safe.
     let raw = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
     usize::try_from(raw).expect("page size is positive and fits usize")
-}
-
-#[cfg(not(target_os = "linux"))]
-fn page_size() -> usize {
-    4096
 }
 
 pub(crate) fn read_at_swap(handle: &Handle, ranges: &[(usize, usize)], dst: &mut Vec<u64>) {

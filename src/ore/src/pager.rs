@@ -42,7 +42,7 @@ impl Handle {
     /// Returns the logical length of the handle's payload in `u64`s.
     pub fn len(&self) -> usize {
         match &self.inner {
-            HandleInner::Swap(s) => *s.prefix.last().unwrap_or(&0),
+            HandleInner::Swap(s) => s.total_len(),
             HandleInner::File(f) => f.len_u64s,
         }
     }
@@ -133,11 +133,9 @@ pub fn set_backend(b: Backend) {
 /// Scatter pageout. Logical layout = chunks concatenated in order.
 /// After return, each `Vec` in `chunks` is empty.
 /// File backend preserves capacity; swap backend moves the alloc into the handle.
-/// Empty input returns a `len == 0` handle and performs no I/O.
+/// Empty input returns a `len == 0` handle of the active backend's variant
+/// (no I/O is performed in either backend).
 pub fn pageout(chunks: &mut [Vec<u64>]) -> Handle {
-    if total_len(chunks) == 0 {
-        return Handle::from_swap(SwapInner::new(Vec::new()));
-    }
     match backend() {
         Backend::Swap => swap::pageout_swap(chunks),
         Backend::File => file::pageout_file(chunks),
@@ -165,10 +163,6 @@ pub fn take(handle: Handle, dst: &mut Vec<u64>) {
         HandleInner::Swap(_) => swap::take_swap(handle, dst),
         HandleInner::File(_) => file::take_file(handle, dst),
     }
-}
-
-fn total_len(chunks: &[Vec<u64>]) -> usize {
-    chunks.iter().map(|c| c.len()).sum()
 }
 
 #[cfg(test)]
