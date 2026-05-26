@@ -34,8 +34,8 @@ SELECT mz_unsafe.mz_sleep(8)
 query IT
 SELECT id, global_id FROM mz_internal.mz_dataflow_global_ids ORDER BY id, global_id;
 ----
-5  u2
-5  u3
+6  u2
+6  u3
 
 query TI
 SELECT global_id, lir_id FROM mz_internal.mz_lir_mapping ORDER BY global_id, lir_id DESC;
@@ -119,17 +119,17 @@ SELECT mz_unsafe.mz_sleep(8)
 query IT
 SELECT id, global_id FROM mz_internal.mz_dataflow_global_ids ORDER BY id, global_id;
 ----
-10  t52
+11  t62
 
 
 query TI
 SELECT global_id, lir_id FROM mz_internal.mz_lir_mapping ORDER BY global_id, lir_id DESC;
 ----
-t52  5
-t52  4
-t52  3
-t52  2
-t52  1
+t62  5
+t62  4
+t62  3
+t62  2
+t62  1
 
 ## attribution queries
 
@@ -142,11 +142,11 @@ SELECT global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS
 GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY global_id, lir_id DESC;
 ----
-t52  5  NULL  Differential␠Join␠%0␠»␠%1
-t52  4  5  ␠␠Arrange␠(#0{y})
-t52  3  4  ␠␠␠␠Read␠u4
-t52  2  5  ␠␠Arrange␠(#0{x})
-t52  1  2  ␠␠␠␠Read␠u4
+t62  5  NULL  Differential␠Join␠%0␠»␠%1
+t62  4  5  ␠␠Arrange␠(#0{y})
+t62  3  4  ␠␠␠␠Read␠u4
+t62  2  5  ␠␠Arrange␠(#0{x})
+t62  1  2  ␠␠␠␠Read␠u4
 
 # omitting pg_size_pretty(sum(size)) as size
 query TIIT
@@ -157,11 +157,11 @@ SELECT global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS
 GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY global_id, lir_id DESC;
 ----
-t52  5  NULL  Differential␠Join␠%0␠»␠%1
-t52  4  5  ␠␠Arrange␠(#0{y})
-t52  3  4  ␠␠␠␠Read␠u4
-t52  2  5  ␠␠Arrange␠(#0{x})
-t52  1  2  ␠␠␠␠Read␠u4
+t62  5  NULL  Differential␠Join␠%0␠»␠%1
+t62  4  5  ␠␠Arrange␠(#0{y})
+t62  3  4  ␠␠␠␠Read␠u4
+t62  2  5  ␠␠Arrange␠(#0{x})
+t62  1  2  ␠␠␠␠Read␠u4
 
 statement ok
 DROP TABLE u CASCADE;
@@ -417,26 +417,26 @@ SELECT global_id, REPEAT(' ', nesting * 2) || operator AS operator
 FROM mz_internal.mz_lir_mapping mlm
 ORDER BY global_id, lir_id DESC;
 ----
-t77  Returning␠Distinct␠GroupAggregate
-t77  ␠␠Union
-t77  ␠␠␠␠Differential␠Join␠%0␠»␠%1
-t77  ␠␠␠␠␠␠Arrange␠(#0{messageid})
-t77  ␠␠␠␠␠␠␠␠Stream␠l0
-t77  ␠␠␠␠␠␠Arranged␠u15
-t77  ␠␠␠␠Arranged␠u13
-t77  With␠Recursive␠l0␠=␠Unarranged␠Raw␠Stream
-t77  ␠␠Distinct␠GroupAggregate
-t77  ␠␠␠␠Union
-t77  ␠␠␠␠␠␠Differential␠Join␠%0␠»␠%1
-t77  ␠␠␠␠␠␠␠␠Arrange␠(#0{messageid})
-t77  ␠␠␠␠␠␠␠␠␠␠Read␠l0
-t77  ␠␠␠␠␠␠␠␠Arrange␠(#1{parentcommentid})
-t77  ␠␠␠␠␠␠␠␠␠␠Arranged␠u15
-t77  ␠␠␠␠␠␠Differential␠Join␠%1␠»␠%0
-t77  ␠␠␠␠␠␠␠␠Arranged␠u13
-t77  ␠␠␠␠␠␠␠␠Arrange␠(#1{parentpostid})
-t77  ␠␠␠␠␠␠␠␠␠␠Arranged␠u15
-t77  ␠␠␠␠␠␠Arranged␠u13
+t79  Returning␠Distinct␠GroupAggregate
+t79  ␠␠Union
+t79  ␠␠␠␠Differential␠Join␠%0␠»␠%1
+t79  ␠␠␠␠␠␠Arrange␠(#0{messageid})
+t79  ␠␠␠␠␠␠␠␠Stream␠l0
+t79  ␠␠␠␠␠␠Arranged␠u15
+t79  ␠␠␠␠Arranged␠u13
+t79  With␠Recursive␠l0␠=␠Unarranged␠Raw␠Stream
+t79  ␠␠Distinct␠GroupAggregate
+t79  ␠␠␠␠Union
+t79  ␠␠␠␠␠␠Differential␠Join␠%0␠»␠%1
+t79  ␠␠␠␠␠␠␠␠Arrange␠(#0{messageid})
+t79  ␠␠␠␠␠␠␠␠␠␠Read␠l0
+t79  ␠␠␠␠␠␠␠␠Arrange␠(#1{parentcommentid})
+t79  ␠␠␠␠␠␠␠␠␠␠Arranged␠u15
+t79  ␠␠␠␠␠␠Differential␠Join␠%1␠»␠%0
+t79  ␠␠␠␠␠␠␠␠Arranged␠u13
+t79  ␠␠␠␠␠␠␠␠Arrange␠(#1{parentpostid})
+t79  ␠␠␠␠␠␠␠␠␠␠Arranged␠u15
+t79  ␠␠␠␠␠␠Arranged␠u13
 u10  Arrange␠(#1{person1id})
 u10  ␠␠Stream␠u9
 u11  Arrange␠(#2{person2id})
@@ -458,7 +458,7 @@ u21  ␠␠Read␠l0
 u21  ␠␠Stream␠l0
 u21  With␠l0␠=␠Map/Filter/Project
 u21  ␠␠Accumulable␠GroupAggregate
-u21  ␠␠␠␠Delta␠Join␠[%0␠»␠%1␠»␠%2][%1␠»␠%0␠»␠%2][%2␠»␠%0␠»␠%1]
+u21  ␠␠␠␠Delta␠Join␠[%0␠»␠%1␠»␠%2]␠[%1␠»␠%0␠»␠%2]␠[%2␠»␠%0␠»␠%1]
 u21  ␠␠␠␠␠␠Arranged␠u9
 u21  ␠␠␠␠␠␠Arranged␠u17
 u21  ␠␠␠␠␠␠Arrange␠(empty␠key)␠(#1{parentmessageid})
@@ -490,7 +490,7 @@ u23  ␠␠␠␠␠␠Arrange␠(#1{dst})
 u23  ␠␠␠␠␠␠␠␠Read␠l3
 u23  l4␠=␠Non-monotonic␠TopK
 u23  ␠␠Union
-u23  ␠␠␠␠Delta␠Join␠[%0␠»␠%2␠»␠%1][%1␠»␠%0␠»␠%2][%2␠»␠%0␠»␠%1]
+u23  ␠␠␠␠Delta␠Join␠[%0␠»␠%2␠»␠%1]␠[%1␠»␠%0␠»␠%2]␠[%2␠»␠%0␠»␠%1]
 u23  ␠␠␠␠␠␠Arranged␠l1
 u23  ␠␠␠␠␠␠Arranged␠l2
 u23  ␠␠␠␠␠␠Arrange␠(empty␠key)␠(#1{dst})
@@ -501,7 +501,7 @@ u23  ␠␠␠␠␠␠␠␠Constant␠(1␠rows)
 u23  ␠␠␠␠␠␠Arranged␠l0
 u23  l3␠=␠Non-monotonic␠TopK
 u23  ␠␠Union
-u23  ␠␠␠␠Delta␠Join␠[%0␠»␠%2␠»␠%1][%1␠»␠%0␠»␠%2][%2␠»␠%0␠»␠%1]
+u23  ␠␠␠␠Delta␠Join␠[%0␠»␠%2␠»␠%1]␠[%1␠»␠%0␠»␠%2]␠[%2␠»␠%0␠»␠%1]
 u23  ␠␠␠␠␠␠Arranged␠l1
 u23  ␠␠␠␠␠␠Arranged␠l2
 u23  ␠␠␠␠␠␠Arrange␠(empty␠key)␠(#1{dst})
@@ -592,7 +592,7 @@ materialize.public.v2_idx_x  u26  2
 materialize.public.v2_idx_x  u27  2
 materialize.public.v_idx_x  u28  5
 materialize.public.v_idx_x  u29  2
-materialize.public.w  t90  5
+materialize.public.w  t88  5
 
 # explain analyze SQL generation
 
@@ -1210,7 +1210,7 @@ FROM
     mz_introspection.mz_mappable_objects AS mo
         LEFT JOIN object_memory_totals AS omt USING(global_id)
 ORDER BY
-    total_memory DESC NULLS LAST,
+    omt.total_memory DESC NULLS LAST,
     total_records DESC NULLS LAST,
     mo.name DESC;
 EOF
@@ -1274,7 +1274,7 @@ FROM
         LEFT JOIN object_memory_totals AS omt USING(global_id)
         LEFT JOIN object_cpu_totals AS oct USING(global_id)
 ORDER BY
-    total_memory DESC NULLS LAST,
+    omt.total_memory DESC NULLS LAST,
     total_records DESC NULLS LAST,
     total_elapsed DESC NULLS LAST,
     mo.name DESC;
@@ -1507,7 +1507,7 @@ ORDER BY
     worker_id,
     max_operator_memory_ratio DESC NULLS LAST,
     max_operator_records_ratio DESC NULLS LAST,
-    worker_memory DESC NULLS LAST,
+    om.worker_memory DESC NULLS LAST,
     worker_records DESC NULLS LAST,
     mo.name DESC;
 EOF

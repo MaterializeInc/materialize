@@ -523,22 +523,36 @@ Explained Query:
       Distinct project=[#0{col_null}, #1{col_not_null}] // { types: "(r_int32?, r_int32)" }
         ReadStorage materialize.public.int_table // { types: "(r_int32?, r_int32)" }
   Return // { types: "(r_bool?, r_bool, r_bool?, r_bool?, r_bool?, r_bool?)" }
-    Project (#5, #4, #7, #8, #6, #6) // { types: "(r_bool?, r_bool, r_bool?, r_bool?, r_bool?, r_bool?)" }
-      Map ((#0{col_null} = 1), (#0{col_null} = #1{col_not_null}), null, null) // { types: "(r_int32?, r_int32, r_int32?, r_int32, r_bool, r_bool?, r_bool?, r_bool?, r_bool?)" }
-        Join on=(#0{col_null} = #2{col_null} AND #1{col_not_null} = #3{col_not_null}) type=differential // { types: "(r_int32?, r_int32, r_int32?, r_int32, r_bool)" }
-          ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(r_int32?, r_int32)" }
-            ReadStorage materialize.public.int_table // { types: "(r_int32?, r_int32)" }
-          ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(r_int32?, r_int32, r_bool)" }
-            Union // { types: "(r_int32?, r_int32, r_bool)" }
-              Filter (#1{col_not_null} = 1) // { types: "(r_int32?, r_int32, r_bool)" }
-                Map (true) // { types: "(r_int32?, r_int32, r_bool)" }
-                  Get l0 // { types: "(r_int32?, r_int32)" }
-              Map (false) // { types: "(r_int32?, r_int32, r_bool)" }
-                Union // { types: "(r_int32?, r_int32)" }
-                  Negate // { types: "(r_int32?, r_int32)" }
-                    Filter (#1{col_not_null} = 1) // { types: "(r_int32?, r_int32)" }
-                      Get l0 // { types: "(r_int32?, r_int32)" }
-                  Get l0 // { types: "(r_int32?, r_int32)" }
+    Project (#4, #7, #10, #13, #16, #19) // { types: "(r_bool?, r_bool, r_bool?, r_bool?, r_bool?, r_bool?)" }
+      Join on=(#0{col_null} = #2{col_null} = #5{col_null} = #8{col_null} = #11{col_null} = #14{col_null} = #17{col_null} AND #1{col_not_null} = #3{col_not_null} = #6{col_not_null} = #9{col_not_null} = #12{col_not_null} = #15{col_not_null} = #18{col_not_null}) type=delta // { types: "(r_int32?, r_int32, r_int32?, r_int32, r_bool?, r_int32?, r_int32, r_bool, r_int32?, r_int32, r_bool?, r_int32?, r_int32, r_bool?, r_int32?, r_int32, r_bool?, r_int32?, r_int32, r_bool?)" }
+        ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(r_int32?, r_int32)" }
+          ReadStorage materialize.public.int_table // { types: "(r_int32?, r_int32)" }
+        ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(r_int32?, r_int32, r_bool?)" }
+          FlatMap eval_relation(#0{col_null}) // { types: "(r_int32?, r_int32, r_bool?)" }
+            Get l0 // { types: "(r_int32?, r_int32)" }
+        ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(r_int32?, r_int32, r_bool)" }
+          Union // { types: "(r_int32?, r_int32, r_bool)" }
+            Filter (#1{col_not_null} = 1) // { types: "(r_int32?, r_int32, r_bool)" }
+              Map (true) // { types: "(r_int32?, r_int32, r_bool)" }
+                Get l0 // { types: "(r_int32?, r_int32)" }
+            Map (false) // { types: "(r_int32?, r_int32, r_bool)" }
+              Union // { types: "(r_int32?, r_int32)" }
+                Negate // { types: "(r_int32?, r_int32)" }
+                  Filter (#1{col_not_null} = 1) // { types: "(r_int32?, r_int32)" }
+                    Get l0 // { types: "(r_int32?, r_int32)" }
+                Get l0 // { types: "(r_int32?, r_int32)" }
+        ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(r_int32?, r_int32, r_bool?)" }
+          FlatMap eval_relation(#0{col_null}) // { types: "(r_int32?, r_int32, r_bool?)" }
+            Get l0 // { types: "(r_int32?, r_int32)" }
+        ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(r_int32?, r_int32, r_bool?)" }
+          FlatMap eval_relation(#1{col_not_null}) // { types: "(r_int32?, r_int32, r_bool?)" }
+            Get l0 // { types: "(r_int32?, r_int32)" }
+        ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(r_int32?, r_int32, r_bool?)" }
+          FlatMap eval_relation(#0{col_null}, #1{col_not_null}) // { types: "(r_int32?, r_int32, r_bool?)" }
+            Get l0 // { types: "(r_int32?, r_int32)" }
+        ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(r_int32?, r_int32, r_bool?)" }
+          FlatMap eval_relation(#0{col_null}, #1{col_not_null}) // { types: "(r_int32?, r_int32, r_bool?)" }
+            Get l0 // { types: "(r_int32?, r_int32)" }
 
 Source materialize.public.int_table
 
@@ -556,22 +570,36 @@ Explained Query:
       Distinct project=[#0{col_null}, #1{col_not_null}] // { types: "(r_int32?, r_int32)" }
         ReadStorage materialize.public.int_table // { types: "(r_int32?, r_int32)" }
   Return // { types: "(r_bool?, r_bool, r_bool?, r_bool?, r_bool?, r_bool?)" }
-    Project (#5, #4, #8, #9, #6, #7) // { types: "(r_bool?, r_bool, r_bool?, r_bool?, r_bool?, r_bool?)" }
-      Map ((1 > #0{col_null}), (#0{col_null} > #1{col_not_null}), (#1{col_not_null} > #0{col_null}), null, null) // { types: "(r_int32?, r_int32, r_int32?, r_int32, r_bool, r_bool?, r_bool?, r_bool?, r_bool?, r_bool?)" }
-        Join on=(#0{col_null} = #2{col_null} AND #1{col_not_null} = #3{col_not_null}) type=differential // { types: "(r_int32?, r_int32, r_int32?, r_int32, r_bool)" }
-          ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(r_int32?, r_int32)" }
-            ReadStorage materialize.public.int_table // { types: "(r_int32?, r_int32)" }
-          ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(r_int32?, r_int32, r_bool)" }
-            Union // { types: "(r_int32?, r_int32, r_bool)" }
-              Filter (1 > #1{col_not_null}) // { types: "(r_int32?, r_int32, r_bool)" }
-                Map (true) // { types: "(r_int32?, r_int32, r_bool)" }
-                  Get l0 // { types: "(r_int32?, r_int32)" }
-              Map (false) // { types: "(r_int32?, r_int32, r_bool)" }
-                Union // { types: "(r_int32?, r_int32)" }
-                  Negate // { types: "(r_int32?, r_int32)" }
-                    Filter (1 > #1{col_not_null}) // { types: "(r_int32?, r_int32)" }
-                      Get l0 // { types: "(r_int32?, r_int32)" }
-                  Get l0 // { types: "(r_int32?, r_int32)" }
+    Project (#4, #7, #10, #13, #16, #19) // { types: "(r_bool?, r_bool, r_bool?, r_bool?, r_bool?, r_bool?)" }
+      Join on=(#0{col_null} = #2{col_null} = #5{col_null} = #8{col_null} = #11{col_null} = #14{col_null} = #17{col_null} AND #1{col_not_null} = #3{col_not_null} = #6{col_not_null} = #9{col_not_null} = #12{col_not_null} = #15{col_not_null} = #18{col_not_null}) type=delta // { types: "(r_int32?, r_int32, r_int32?, r_int32, r_bool?, r_int32?, r_int32, r_bool, r_int32?, r_int32, r_bool?, r_int32?, r_int32, r_bool?, r_int32?, r_int32, r_bool?, r_int32?, r_int32, r_bool?)" }
+        ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(r_int32?, r_int32)" }
+          ReadStorage materialize.public.int_table // { types: "(r_int32?, r_int32)" }
+        ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(r_int32?, r_int32, r_bool?)" }
+          FlatMap eval_relation(#0{col_null}) // { types: "(r_int32?, r_int32, r_bool?)" }
+            Get l0 // { types: "(r_int32?, r_int32)" }
+        ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(r_int32?, r_int32, r_bool)" }
+          Union // { types: "(r_int32?, r_int32, r_bool)" }
+            Filter (1 > #1{col_not_null}) // { types: "(r_int32?, r_int32, r_bool)" }
+              Map (true) // { types: "(r_int32?, r_int32, r_bool)" }
+                Get l0 // { types: "(r_int32?, r_int32)" }
+            Map (false) // { types: "(r_int32?, r_int32, r_bool)" }
+              Union // { types: "(r_int32?, r_int32)" }
+                Negate // { types: "(r_int32?, r_int32)" }
+                  Filter (1 > #1{col_not_null}) // { types: "(r_int32?, r_int32)" }
+                    Get l0 // { types: "(r_int32?, r_int32)" }
+                Get l0 // { types: "(r_int32?, r_int32)" }
+        ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(r_int32?, r_int32, r_bool?)" }
+          FlatMap eval_relation(#0{col_null}) // { types: "(r_int32?, r_int32, r_bool?)" }
+            Get l0 // { types: "(r_int32?, r_int32)" }
+        ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(r_int32?, r_int32, r_bool?)" }
+          FlatMap eval_relation(#1{col_not_null}) // { types: "(r_int32?, r_int32, r_bool?)" }
+            Get l0 // { types: "(r_int32?, r_int32)" }
+        ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(r_int32?, r_int32, r_bool?)" }
+          FlatMap eval_relation(#0{col_null}, #1{col_not_null}) // { types: "(r_int32?, r_int32, r_bool?)" }
+            Get l0 // { types: "(r_int32?, r_int32)" }
+        ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(r_int32?, r_int32, r_bool?)" }
+          FlatMap eval_relation(#0{col_null}, #1{col_not_null}) // { types: "(r_int32?, r_int32, r_bool?)" }
+            Get l0 // { types: "(r_int32?, r_int32)" }
 
 Source materialize.public.int_table
 
@@ -588,11 +616,14 @@ Explained Query:
       Distinct project=[#0{col_null}, #1{col_not_null}] // { types: "(r_int32?, r_int32)" }
         ReadStorage materialize.public.int_table // { types: "(r_int32?, r_int32)" }
   Return // { types: "(r_bool?, r_bool, r_bool?, r_bool?, r_bool?, r_bool?)" }
-    Project (#5, #8..=#10, #6, #7) // { types: "(r_bool?, r_bool, r_bool?, r_bool?, r_bool?, r_bool?)" }
-      Map ((1 < #0{col_null}), (#0{col_null} < #1{col_not_null}), (#1{col_not_null} < #0{col_null}), NOT(#4), null, null) // { types: "(r_int32?, r_int32, r_int32?, r_int32, r_bool, r_bool?, r_bool?, r_bool?, r_bool, r_bool?, r_bool?)" }
-        Join on=(#0{col_null} = #2{col_null} AND #1{col_not_null} = #3{col_not_null}) type=differential // { types: "(r_int32?, r_int32, r_int32?, r_int32, r_bool)" }
+    Project (#4, #20, #10, #13, #16, #19) // { types: "(r_bool?, r_bool, r_bool?, r_bool?, r_bool?, r_bool?)" }
+      Map (NOT(#7)) // { types: "(r_int32?, r_int32, r_int32?, r_int32, r_bool?, r_int32?, r_int32, r_bool, r_int32?, r_int32, r_bool?, r_int32?, r_int32, r_bool?, r_int32?, r_int32, r_bool?, r_int32?, r_int32, r_bool?, r_bool)" }
+        Join on=(#0{col_null} = #2{col_null} = #5{col_null} = #8{col_null} = #11{col_null} = #14{col_null} = #17{col_null} AND #1{col_not_null} = #3{col_not_null} = #6{col_not_null} = #9{col_not_null} = #12{col_not_null} = #15{col_not_null} = #18{col_not_null}) type=delta // { types: "(r_int32?, r_int32, r_int32?, r_int32, r_bool?, r_int32?, r_int32, r_bool, r_int32?, r_int32, r_bool?, r_int32?, r_int32, r_bool?, r_int32?, r_int32, r_bool?, r_int32?, r_int32, r_bool?)" }
           ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(r_int32?, r_int32)" }
             ReadStorage materialize.public.int_table // { types: "(r_int32?, r_int32)" }
+          ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(r_int32?, r_int32, r_bool?)" }
+            FlatMap eval_relation(#0{col_null}) // { types: "(r_int32?, r_int32, r_bool?)" }
+              Get l0 // { types: "(r_int32?, r_int32)" }
           ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(r_int32?, r_int32, r_bool)" }
             Union // { types: "(r_int32?, r_int32, r_bool)" }
               Filter (1 >= #1{col_not_null}) // { types: "(r_int32?, r_int32, r_bool)" }
@@ -604,6 +635,18 @@ Explained Query:
                     Filter (1 >= #1{col_not_null}) // { types: "(r_int32?, r_int32)" }
                       Get l0 // { types: "(r_int32?, r_int32)" }
                   Get l0 // { types: "(r_int32?, r_int32)" }
+          ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(r_int32?, r_int32, r_bool?)" }
+            FlatMap eval_relation(#0{col_null}) // { types: "(r_int32?, r_int32, r_bool?)" }
+              Get l0 // { types: "(r_int32?, r_int32)" }
+          ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(r_int32?, r_int32, r_bool?)" }
+            FlatMap eval_relation(#1{col_not_null}) // { types: "(r_int32?, r_int32, r_bool?)" }
+              Get l0 // { types: "(r_int32?, r_int32)" }
+          ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(r_int32?, r_int32, r_bool?)" }
+            FlatMap eval_relation(#0{col_null}, #1{col_not_null}) // { types: "(r_int32?, r_int32, r_bool?)" }
+              Get l0 // { types: "(r_int32?, r_int32)" }
+          ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(r_int32?, r_int32, r_bool?)" }
+            FlatMap eval_relation(#0{col_null}, #1{col_not_null}) // { types: "(r_int32?, r_int32, r_bool?)" }
+              Get l0 // { types: "(r_int32?, r_int32)" }
 
 Source materialize.public.int_table
 
@@ -639,61 +682,19 @@ EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBO
 Explained Query:
   With
     cte l0 =
-      Project (#1{col_not_null}) // { types: "(r_int32)" }
+      Distinct project=[#0{col_null}, #1{col_not_null}] // { types: "(r_int32?, r_int32)" }
         ReadStorage materialize.public.int_table // { types: "(r_int32?, r_int32)" }
-    cte l1 =
-      Distinct project=[#0{col_not_null}] // { types: "(r_int32)" }
-        Get l0 // { types: "(r_int32)" }
-    cte l2 =
-      FlatMap wrap1(#0{col_not_null}, null) // { types: "(r_int32, r_int32?)" }
-        Get l1 // { types: "(r_int32)" }
-    cte l3 =
-      Reduce group_by=[#0{col_not_null}] aggregates=[any((#1{right_col0_0} = 1))] // { types: "(r_int32, r_bool?)" }
-        Get l2 // { types: "(r_int32, r_int32?)" }
-    cte l4 =
-      Union // { types: "(r_int32, r_bool?)" }
-        Get l3 // { types: "(r_int32, r_bool?)" }
-        Map (false) // { types: "(r_int32, r_bool)" }
-          Union // { types: "(r_int32)" }
-            Negate // { types: "(r_int32)" }
-              Project (#0{col_not_null}) // { types: "(r_int32)" }
-                Get l3 // { types: "(r_int32, r_bool?)" }
-            Get l1 // { types: "(r_int32)" }
-    cte l5 =
-      Reduce group_by=[#0{col_not_null}] aggregates=[all((#1{right_col0_2} = 1))] // { types: "(r_int32, r_bool?)" }
-        Get l2 // { types: "(r_int32, r_int32?)" }
-    cte l6 =
-      Union // { types: "(r_int32, r_bool?)" }
-        Get l5 // { types: "(r_int32, r_bool?)" }
-        Map (true) // { types: "(r_int32, r_bool)" }
-          Union // { types: "(r_int32)" }
-            Negate // { types: "(r_int32)" }
-              Project (#0{col_not_null}) // { types: "(r_int32)" }
-                Get l5 // { types: "(r_int32, r_bool?)" }
-            Get l1 // { types: "(r_int32)" }
   Return // { types: "(r_bool?, r_bool?, r_bool?)" }
-    Project (#2{any}, #4{all}, #2{any}) // { types: "(r_bool?, r_bool?, r_bool?)" }
-      Join on=(#0{col_not_null} = #1{col_not_null} = #3{col_not_null}) type=delta // { types: "(r_int32, r_int32, r_bool?, r_int32, r_bool?)" }
-        ArrangeBy keys=[[#0{col_not_null}]] // { types: "(r_int32)" }
-          Get l0 // { types: "(r_int32)" }
-        ArrangeBy keys=[[#0{col_not_null}]] // { types: "(r_int32, r_bool?)" }
-          Union // { types: "(r_int32, r_bool?)" }
-            Get l4 // { types: "(r_int32, r_bool?)" }
-            Map (null) // { types: "(r_int32, r_bool?)" }
-              Union // { types: "(r_int32)" }
-                Negate // { types: "(r_int32)" }
-                  Project (#0{col_not_null}) // { types: "(r_int32)" }
-                    Get l4 // { types: "(r_int32, r_bool?)" }
-                Get l1 // { types: "(r_int32)" }
-        ArrangeBy keys=[[#0{col_not_null}]] // { types: "(r_int32, r_bool?)" }
-          Union // { types: "(r_int32, r_bool?)" }
-            Get l6 // { types: "(r_int32, r_bool?)" }
-            Map (null) // { types: "(r_int32, r_bool?)" }
-              Union // { types: "(r_int32)" }
-                Negate // { types: "(r_int32)" }
-                  Project (#0{col_not_null}) // { types: "(r_int32)" }
-                    Get l6 // { types: "(r_int32, r_bool?)" }
-                Get l1 // { types: "(r_int32)" }
+    Project (#4, #7, #4) // { types: "(r_bool?, r_bool?, r_bool?)" }
+      Join on=(#0{col_null} = #2{col_null} = #5{col_null} AND #1{col_not_null} = #3{col_not_null} = #6{col_not_null}) type=delta // { types: "(r_int32?, r_int32, r_int32?, r_int32, r_bool?, r_int32?, r_int32, r_bool?)" }
+        ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(r_int32?, r_int32)" }
+          ReadStorage materialize.public.int_table // { types: "(r_int32?, r_int32)" }
+        ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(r_int32?, r_int32, r_bool?)" }
+          FlatMap eval_relation(#1{col_not_null}) // { types: "(r_int32?, r_int32, r_bool?)" }
+            Get l0 // { types: "(r_int32?, r_int32)" }
+        ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(r_int32?, r_int32, r_bool?)" }
+          FlatMap eval_relation(#1{col_not_null}) // { types: "(r_int32?, r_int32, r_bool?)" }
+            Get l0 // { types: "(r_int32?, r_int32)" }
 
 Source materialize.public.int_table
 

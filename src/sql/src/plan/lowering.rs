@@ -2050,7 +2050,7 @@ fn is_rowwise_candidate(inner: &HirRelationExpr) -> bool {
 
 /// Authoritative check that `body` (a decorrelated subquery rooted at the
 /// placeholder `Get(Local(placeholder))`) can be evaluated row-by-row by
-/// [`mz_expr::relation::eval::eval_relation_with_input`].
+/// [`mz_expr::eval::eval_relation_with_input`].
 ///
 /// `body` is evaluable iff it references no stored collection, contains no
 /// recursion or arrangements, contains no unmaterializable functions, every
