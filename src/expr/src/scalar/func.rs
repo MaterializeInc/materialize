@@ -181,7 +181,13 @@ fn add_float64(a: f64, b: f64) -> Result<f64, EvalError> {
     }
 }
 
-#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
+// `Interval` is lex-ordered (months, days, micros), but adding an interval to a
+// timestamp adds *calendar* months (with day-clamping) which does not respect
+// that ordering: e.g. `i1 = {0 months, 31 days}` is lex-less than
+// `i2 = {1 month, 0 days}`, but `2024-01-31 + i1 = 2024-03-02` is greater than
+// `2024-01-31 + i2 = 2024-02-29`. Day-clamping plus preserved sub-day time also
+// breaks monotonicity in the first argument near month boundaries.
+#[sqlfunc(is_monotone = "(false, false)", is_infix_op = true, sqlname = "+")]
 fn add_timestamp_interval(
     a: CheckedTimestamp<NaiveDateTime>,
     b: Interval,
@@ -189,7 +195,7 @@ fn add_timestamp_interval(
     add_timestamplike_interval(a, b)
 }
 
-#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
+#[sqlfunc(is_monotone = "(false, false)", is_infix_op = true, sqlname = "+")]
 fn add_timestamp_tz_interval(
     a: CheckedTimestamp<DateTime<Utc>>,
     b: Interval,
@@ -212,7 +218,8 @@ where
     Ok(CheckedTimestamp::from_timestamplike(T::from_date_time(dt))?)
 }
 
-#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "-")]
+// See `add_timestamp_interval` for why this is not monotone.
+#[sqlfunc(is_monotone = "(false, false)", is_infix_op = true, sqlname = "-")]
 fn sub_timestamp_interval(
     a: CheckedTimestamp<NaiveDateTime>,
     b: Interval,
@@ -220,7 +227,7 @@ fn sub_timestamp_interval(
     sub_timestamplike_interval(a, b)
 }
 
-#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "-")]
+#[sqlfunc(is_monotone = "(false, false)", is_infix_op = true, sqlname = "-")]
 fn sub_timestamp_tz_interval(
     a: CheckedTimestamp<DateTime<Utc>>,
     b: Interval,
@@ -249,7 +256,12 @@ fn add_date_time(
     Ok(CheckedTimestamp::from_timestamplike(dt)?)
 }
 
-#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
+// Monotone in `date` (dates have no sub-day component, so day-clamping at month
+// boundaries only causes results to collapse, never to reverse), but not in
+// `interval`: e.g. `{0 months, 31 days}` is lex-less than `{1 month, 0 days}`,
+// but adding the former to `2024-01-31` gives `2024-03-02` while the latter
+// gives `2024-02-29`.
+#[sqlfunc(is_monotone = "(true, false)", is_infix_op = true, sqlname = "+")]
 fn add_date_interval(
     date: Date,
     interval: Interval,
@@ -852,8 +864,9 @@ fn sub_interval(a: Interval, b: Interval) -> Result<Interval, EvalError> {
         .ok_or_else(|| EvalError::IntervalOutOfRange(format!("{a} - {b}").into()))
 }
 
+// See `add_date_interval` for why this is not monotone in `interval`.
 #[sqlfunc(
-    is_monotone = "(true, true)",
+    is_monotone = "(true, false)",
     is_infix_op = true,
     sqlname = "-",
     propagates_nulls = true
@@ -2036,7 +2049,12 @@ where
     Ok(CheckedTimestamp::from_timestamplike(res)?)
 }
 
-#[sqlfunc(is_monotone = "(true, true)", sqlname = "bin_unix_epoch_timestamp")]
+// Non-monotone in `stride`: the result is `origin + floor((source - origin) /
+// stride) * stride`. For a fixed source like `2024-01-01 12:00:00`, a 1-day
+// stride bins to `2024-01-01 00:00:00`, but a 2-day stride bins to
+// `2023-12-31 00:00:00` — i.e. the lex-larger interval produces an earlier
+// timestamp. Monotone in `source`.
+#[sqlfunc(is_monotone = "(false, true)", sqlname = "bin_unix_epoch_timestamp")]
 fn date_bin_timestamp(
     stride: Interval,
     source: CheckedTimestamp<NaiveDateTime>,
@@ -2047,7 +2065,8 @@ fn date_bin_timestamp(
     date_bin(stride, source, origin)
 }
 
-#[sqlfunc(is_monotone = "(true, true)", sqlname = "bin_unix_epoch_timestamptz")]
+// See `date_bin_timestamp` for why this is not monotone in `stride`.
+#[sqlfunc(is_monotone = "(false, true)", sqlname = "bin_unix_epoch_timestamptz")]
 fn date_bin_timestamp_tz(
     stride: Interval,
     source: CheckedTimestamp<DateTime<Utc>>,
