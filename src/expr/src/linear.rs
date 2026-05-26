@@ -501,7 +501,7 @@ impl MapFilterProject {
                         let mut prev: BTreeSet<_> = mfps[0]
                             .expressions
                             .iter()
-                            .filter(|e| e.support().iter().max() < Some(&input_arity))
+                            .filter(|e| e.support().last() < Some(&input_arity))
                             .collect();
                         let mut next = BTreeSet::default();
                         for mfp in mfps[1..].iter() {
@@ -565,7 +565,7 @@ impl MapFilterProject {
                         .predicates
                         .iter()
                         .map(|(_, e)| e)
-                        .filter(|e| e.support().iter().max() < Some(&input_arity))
+                        .filter(|e| e.support().last() < Some(&input_arity))
                         .collect();
                     let mut next = BTreeSet::default();
                     for mfp in mfps[1..].iter() {
@@ -855,6 +855,8 @@ impl MapFilterProject {
     }
 
     /// Lists input columns whose values are used in outputs.
+    ///
+    /// You can use `BTreeSet::last()` to extract the maximum demanded column from the set.
     ///
     /// It is entirely appropriate to determine the demand of an instance
     /// and then both apply a projection to the subject of the instance and
@@ -1184,7 +1186,7 @@ impl MapFilterProject {
 
         // Restore predicate order invariants.
         for (pos, pred) in self.predicates.iter_mut() {
-            *pos = pred.support().into_iter().max().map(|x| x + 1).unwrap_or(0);
+            *pos = pred.support().last().map(|x| *x + 1).unwrap_or(0);
         }
     }
 
