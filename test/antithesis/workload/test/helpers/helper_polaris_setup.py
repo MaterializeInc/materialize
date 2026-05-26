@@ -46,7 +46,6 @@ import time
 
 import helper_logging
 import requests
-
 from antithesis.assertions import reachable
 
 LOG = helper_logging.setup_logging("first.polaris_setup")
@@ -107,9 +106,7 @@ def wait_for_polaris() -> None:
         except requests.RequestException as exc:
             LOG.debug("polaris health probe failed: %s", exc)
         time.sleep(HEALTH_POLL_INTERVAL_S)
-    raise RuntimeError(
-        f"polaris did not report healthy within {HEALTH_TIMEOUT_S}s"
-    )
+    raise RuntimeError(f"polaris did not report healthy within {HEALTH_TIMEOUT_S}s")
 
 
 def create_bucket() -> None:
@@ -156,9 +153,7 @@ def get_polaris_token() -> str:
     resp.raise_for_status()
     token = resp.json().get("access_token")
     if not token:
-        raise RuntimeError(
-            f"polaris oauth response missing access_token: {resp.text}"
-        )
+        raise RuntimeError(f"polaris oauth response missing access_token: {resp.text}")
     return token
 
 

@@ -42,6 +42,7 @@ import time
 import helper_logging
 import helper_pg_upstream
 import helper_random
+from antithesis.assertions import always, sometimes
 from helper_pg import query_retry
 from helper_pg_source import (
     SOURCE_NAME,
@@ -49,8 +50,6 @@ from helper_pg_source import (
     UPSTREAM_SCHEMA,
     UPSTREAM_TABLE,
 )
-
-from antithesis.assertions import always, sometimes
 
 LOG = helper_logging.setup_logging("driver.pg_cdc")
 

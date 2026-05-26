@@ -30,7 +30,6 @@ import sys
 import helper_iceberg
 import helper_logging
 import helper_polaris_setup
-
 from antithesis.assertions import reachable
 
 LOG = helper_logging.setup_logging("first.iceberg_setup")

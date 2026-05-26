@@ -65,18 +65,12 @@ async fn create_connection(temp_path: PathBuf) -> Result<Connection, anyhow::Err
                 // an `iceberg_duckdb_cpp_init` exception when LOADing
                 // iceberg.  Pre-load avro so iceberg's init finds it
                 // already-resident in the duckdb process.
-                conn.execute_batch(&format!(
-                    "LOAD '{ext_dir}/avro.duckdb_extension';"
-                ))
-                .context("loading pre-staged avro extension")?;
-                conn.execute_batch(&format!(
-                    "LOAD '{ext_dir}/iceberg.duckdb_extension';"
-                ))
-                .context("loading pre-staged iceberg extension")?;
-                conn.execute_batch(&format!(
-                    "LOAD '{ext_dir}/httpfs.duckdb_extension';"
-                ))
-                .context("loading pre-staged httpfs extension")?;
+                conn.execute_batch(&format!("LOAD '{ext_dir}/avro.duckdb_extension';"))
+                    .context("loading pre-staged avro extension")?;
+                conn.execute_batch(&format!("LOAD '{ext_dir}/iceberg.duckdb_extension';"))
+                    .context("loading pre-staged iceberg extension")?;
+                conn.execute_batch(&format!("LOAD '{ext_dir}/httpfs.duckdb_extension';"))
+                    .context("loading pre-staged httpfs extension")?;
                 return Ok::<_, anyhow::Error>(conn);
             }
 

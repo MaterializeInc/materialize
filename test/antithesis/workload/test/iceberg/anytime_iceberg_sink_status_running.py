@@ -48,7 +48,6 @@ import time
 
 import helper_iceberg
 import helper_logging
-
 from antithesis.assertions import always, sometimes
 
 LOG = helper_logging.setup_logging("driver.iceberg_sink_status_running")
@@ -106,7 +105,9 @@ def main() -> int:
         {"sink": helper_iceberg.SINK_NAME, "samples": samples},
     )
 
-    LOG.info("sink status check done; %d samples (saw_running=%s)", samples, saw_running)
+    LOG.info(
+        "sink status check done; %d samples (saw_running=%s)", samples, saw_running
+    )
     return 0
 
 

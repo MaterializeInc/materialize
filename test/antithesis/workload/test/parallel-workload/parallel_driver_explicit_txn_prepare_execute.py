@@ -65,10 +65,9 @@ import time
 import helper_logging
 import helper_random
 import psycopg
+from antithesis.assertions import always, sometimes
 from helper_fault_tolerance import looks_like_fault
 from helper_pg import connect
-
-from antithesis.assertions import always, sometimes
 
 LOG = helper_logging.setup_logging("driver.explicit_txn_prepare_execute")
 
@@ -158,10 +157,7 @@ def _run_explicit_txn(batch_id: str, mv_name: str) -> tuple[bool, str | None]:
                     f"PREPARE p_table AS "
                     f"SELECT count(*) FROM {TABLE_NAME} WHERE id > $1"
                 )
-                cur.execute(
-                    f"PREPARE p_mv AS "
-                    f"SELECT n, s FROM {mv_name}"
-                )
+                cur.execute(f"PREPARE p_mv AS " f"SELECT n, s FROM {mv_name}")
 
                 # Interleave EXECUTEs and direct SELECTs so both peek
                 # paths fire against the same stored-read-hold context.

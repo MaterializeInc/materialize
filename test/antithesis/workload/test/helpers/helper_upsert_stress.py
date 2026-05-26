@@ -29,7 +29,7 @@ import logging
 import os
 
 from helper_kafka import ensure_topic
-from helper_pg import create_source_idempotent, execute_retry
+from helper_pg import create_source_idempotent
 from helper_upsert_source import CONNECTION_NAME, ensure_kafka_connection
 from helper_upsert_stress_const import (
     NUM_PARTITIONS,
@@ -76,6 +76,4 @@ def ensure_upsert_stress_source() -> None:
         f"ENVELOPE UPSERT",
         SOURCE_UPSERT_STRESS,
     )
-    LOG.info(
-        "ensure_upsert_stress_source: ready (source=%s)", SOURCE_UPSERT_STRESS
-    )
+    LOG.info("ensure_upsert_stress_source: ready (source=%s)", SOURCE_UPSERT_STRESS)

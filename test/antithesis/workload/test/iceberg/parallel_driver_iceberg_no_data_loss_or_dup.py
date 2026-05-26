@@ -50,9 +50,8 @@ import time
 import helper_iceberg
 import helper_logging
 import helper_random
-from helper_pg import execute_retry, query_one_retry, query_retry
-
 from antithesis.assertions import always, sometimes
+from helper_pg import execute_retry, query_one_retry, query_retry
 
 LOG = helper_logging.setup_logging("driver.iceberg_no_loss_or_dup")
 
@@ -258,7 +257,9 @@ def main() -> int:
         # before bailing.  Even without an observed progress tick the
         # commit may have landed (stats can lag the actual commit by
         # the worker-stats-flush interval).
-        LOG.info("sink progress not observed; continuing to iceberg verification anyway")
+        LOG.info(
+            "sink progress not observed; continuing to iceberg verification anyway"
+        )
 
     # Count check: exactly the SS-148 target.  A double-commit shows up
     # here as `observed > expected`; a stall shows up as
@@ -345,7 +346,9 @@ def main() -> int:
         },
     )
 
-    LOG.info("driver done; asserted on %d rows for batch_id=%s", len(expected), batch_id)
+    LOG.info(
+        "driver done; asserted on %d rows for batch_id=%s", len(expected), batch_id
+    )
     return 0
 
 

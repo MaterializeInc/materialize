@@ -48,6 +48,7 @@ from __future__ import annotations
 import sys
 
 import helper_logging
+from antithesis.assertions import reachable
 from helper_pg import execute_retry, query_retry
 from helper_pw_hot import (
     CLUSTER,
@@ -56,8 +57,6 @@ from helper_pw_hot import (
     MV_SUM_NAME,
     TABLE_NAME,
 )
-
-from antithesis.assertions import reachable
 
 LOG = helper_logging.setup_logging("first.pw_hot_objects_setup")
 

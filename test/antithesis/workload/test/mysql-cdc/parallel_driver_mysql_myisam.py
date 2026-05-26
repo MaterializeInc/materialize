@@ -53,6 +53,7 @@ import time
 import helper_logging
 import helper_mysql
 import helper_random
+from antithesis.assertions import always, sometimes
 from helper_mysql_source import (
     MYSQL_DATABASE,
     MYSQL_TABLE_MYISAM,
@@ -62,8 +63,6 @@ from helper_mysql_source import (
     TABLE_NAME_MYISAM,
 )
 from helper_pg import query_retry
-
-from antithesis.assertions import always, sometimes
 
 LOG = helper_logging.setup_logging("driver.mysql_myisam")
 

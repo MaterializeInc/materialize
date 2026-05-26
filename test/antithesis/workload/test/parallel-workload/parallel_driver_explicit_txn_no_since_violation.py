@@ -66,10 +66,9 @@ import time
 import helper_logging
 import helper_random
 import psycopg
+from antithesis.assertions import always, sometimes
 from helper_fault_tolerance import looks_like_fault
 from helper_pg import connect
-
-from antithesis.assertions import always, sometimes
 
 LOG = helper_logging.setup_logging("driver.explicit_txn")
 

@@ -179,6 +179,4 @@ def wait_until_ready(timeout_s: float = 300.0) -> None:
         except Exception as exc:  # noqa: BLE001
             LOG.info("waiting for sql-server %s: %s", SQL_SERVER_HOST, exc)
             time.sleep(2)
-    raise TimeoutError(
-        f"SQL Server at {SQL_SERVER_HOST} not ready after {timeout_s}s"
-    )
+    raise TimeoutError(f"SQL Server at {SQL_SERVER_HOST} not ready after {timeout_s}s")

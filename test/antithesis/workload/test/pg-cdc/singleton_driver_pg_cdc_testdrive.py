@@ -44,7 +44,6 @@ import sys
 import helper_logging
 import helper_random
 import helper_testdrive
-
 from antithesis.assertions import always, sometimes
 
 LOG = helper_logging.setup_logging("driver.pg_cdc_testdrive")

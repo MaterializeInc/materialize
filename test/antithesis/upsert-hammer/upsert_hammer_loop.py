@@ -139,9 +139,7 @@ def _run_one_session(tombstone_prob: float) -> None:
     permanently broken by a long fault window is replaced rather than
     bringing the container down.
     """
-    producer, tracker = make_producer(
-        client_id=f"antithesis-hammer-{INSTANCE_ID}"
-    )
+    producer, tracker = make_producer(client_id=f"antithesis-hammer-{INSTANCE_ID}")
     keys = [f"hk{i:02d}" for i in range(DISTINCT_KEYS)]
 
     produced = 0
@@ -154,9 +152,7 @@ def _run_one_session(tombstone_prob: float) -> None:
             payload: bytes | None = None
             is_tombstone = True
         else:
-            payload = (
-                f"v{random_int(0, DISTINCT_VALUES - 1):04d}".encode("utf-8")
-            )
+            payload = f"v{random_int(0, DISTINCT_VALUES - 1):04d}".encode()
             is_tombstone = False
 
         # Retry-on-BufferError loop.  `Local: Queue full` is normal

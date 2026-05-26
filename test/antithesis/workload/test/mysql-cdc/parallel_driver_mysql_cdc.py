@@ -39,10 +39,9 @@ import time
 import helper_logging
 import helper_mysql
 import helper_random
+from antithesis.assertions import always, sometimes
 from helper_mysql_source import SOURCE_BASENAME, SOURCE_NAME, TABLE_NAME
 from helper_pg import query_retry
-
-from antithesis.assertions import always, sometimes
 
 LOG = helper_logging.setup_logging("driver.mysql_cdc")
 

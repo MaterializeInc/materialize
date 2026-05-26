@@ -29,9 +29,8 @@ import sys
 
 import helper_logging
 import helper_random
-from helper_pg import execute_internal_retry
-
 from antithesis.assertions import sometimes
+from helper_pg import execute_internal_retry
 
 LOG = helper_logging.setup_logging("first.select_upsert_implementation")
 

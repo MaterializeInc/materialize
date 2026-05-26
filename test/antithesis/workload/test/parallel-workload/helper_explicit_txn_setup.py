@@ -39,9 +39,8 @@ from __future__ import annotations
 import sys
 
 import helper_logging
-from helper_pg import execute_retry, query_retry
-
 from antithesis.assertions import reachable
+from helper_pg import execute_retry, query_retry
 
 LOG = helper_logging.setup_logging("first.explicit_txn_setup")
 

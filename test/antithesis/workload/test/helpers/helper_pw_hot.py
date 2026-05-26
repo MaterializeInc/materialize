@@ -72,7 +72,6 @@ SINCE_VIOLATION_PATTERNS = (
 # the canonical list shared across every Antithesis driver. We expose
 # `is_transient` here as a thin alias so callers in this module don't
 # need to import from two helpers.
-from helper_fault_tolerance import looks_like_fault as is_transient
 
 
 def matches_any(msg: str, patterns: tuple[str, ...]) -> bool:

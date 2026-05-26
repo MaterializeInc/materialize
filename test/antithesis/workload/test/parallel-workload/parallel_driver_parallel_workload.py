@@ -51,6 +51,7 @@ from typing import Any
 import helper_logging
 import helper_random
 import psycopg
+from antithesis.assertions import always, sometimes
 from helper_fault_tolerance import looks_like_fault
 from helper_pg import (
     CONNECT_TIMEOUT_S,
@@ -62,7 +63,6 @@ from helper_pg import (
     PGUSER_INTERNAL,
 )
 
-from antithesis.assertions import always, sometimes
 from materialize.data_ingest.query_error import QueryError
 from materialize.parallel_workload import executor as _pw_executor
 from materialize.parallel_workload.action import (
@@ -467,9 +467,7 @@ class _AntithesisCancelAction(CancelAction):
     """
 
     def run(self, exe: Executor) -> bool:
-        eligible = [
-            w for w in self.workers if w.exe is not None and w.exe.pg_pid != -1
-        ]
+        eligible = [w for w in self.workers if w.exe is not None and w.exe.pg_pid != -1]
         if not eligible:
             time.sleep(0.1)
             return False

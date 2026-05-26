@@ -39,6 +39,7 @@ import time
 import helper_logging
 import helper_random
 import helper_sql_server_upstream as sql_server
+from antithesis.assertions import always, sometimes
 from helper_pg import query_retry
 from helper_sql_server_source import (
     SOURCE_BASENAME,
@@ -47,8 +48,6 @@ from helper_sql_server_source import (
     UPSTREAM_SCHEMA,
     UPSTREAM_TABLE,
 )
-
-from antithesis.assertions import always, sometimes
 
 LOG = helper_logging.setup_logging("driver.sql_server_cdc")
 

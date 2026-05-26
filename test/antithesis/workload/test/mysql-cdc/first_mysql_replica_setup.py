@@ -30,9 +30,8 @@ import time
 
 import helper_logging
 import helper_mysql
-from helper_mysql_source import ensure_mysql_cdc_source
-
 from antithesis.assertions import reachable, sometimes
+from helper_mysql_source import ensure_mysql_cdc_source
 
 LOG = helper_logging.setup_logging("first.mysql_replica_setup")
 

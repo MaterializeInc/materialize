@@ -45,9 +45,8 @@ import sys
 import helper_logging
 import helper_random
 import helper_testdrive
-from helper_pg import execute_internal_retry, query_retry
-
 from antithesis.assertions import always, sometimes
+from helper_pg import execute_internal_retry, query_retry
 
 LOG = helper_logging.setup_logging("driver.sql_server_cdc_testdrive")
 

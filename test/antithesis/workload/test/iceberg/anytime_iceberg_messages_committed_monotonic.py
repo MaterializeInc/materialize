@@ -44,7 +44,6 @@ import time
 
 import helper_iceberg
 import helper_logging
-
 from antithesis.assertions import always
 
 LOG = helper_logging.setup_logging("driver.iceberg_messages_committed_monotonic")

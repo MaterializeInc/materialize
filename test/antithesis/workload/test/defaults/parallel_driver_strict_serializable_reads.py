@@ -82,6 +82,7 @@ from typing import NamedTuple
 import helper_logging
 import helper_random
 import psycopg
+from antithesis.assertions import always, sometimes
 from helper_pg import (
     PGDATABASE,
     PGHOST,
@@ -90,8 +91,6 @@ from helper_pg import (
     execute_retry,
 )
 from helper_table_mv import MV_NAME, TABLE_MV_INPUT, ensure_table_and_mv
-
-from antithesis.assertions import always, sometimes
 
 LOG = helper_logging.setup_logging("driver.strict_serializable_reads")
 

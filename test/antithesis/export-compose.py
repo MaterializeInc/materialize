@@ -433,9 +433,7 @@ def register_referenced_named_volumes(compose: dict[str, Any]) -> None:
             top_level[name] = None
 
 
-def filter_to_group(
-    compose: dict[str, Any], manifest: Manifest, group: Group
-) -> None:
+def filter_to_group(compose: dict[str, Any], manifest: Manifest, group: Group) -> None:
     """Drop services not in `group`, then prune dangling depends_on refs.
 
     Mutates `compose` in place. Validates that every service the group
@@ -583,9 +581,7 @@ def main() -> None:
     parser.add_argument(
         "--group",
         required=True,
-        help=(
-            "Workload group to emit. Must be a key in test/antithesis/groups.yaml."
-        ),
+        help=("Workload group to emit. Must be a key in test/antithesis/groups.yaml."),
     )
     parser.add_argument(
         "--no-antithesis",

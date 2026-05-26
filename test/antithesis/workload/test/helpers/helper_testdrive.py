@@ -73,7 +73,6 @@ SQL_SERVER_PASSWORD = os.environ.get("SQL_SERVER_PASSWORD", "RPSsql12345")
 # something" means.  Re-exported here as `TRANSIENT_PATTERNS` for
 # backwards-compatibility with any external caller that imported the
 # module-level tuple before the extraction.
-from helper_fault_tolerance import FAULT_PATTERNS as TRANSIENT_PATTERNS
 from helper_fault_tolerance import looks_like_fault
 
 # `$ skip-if` directive removal regex. testdrive parses skip-if as:
@@ -173,7 +172,9 @@ def run(
         # Append the target last; a `\n` between parts so a non-newline-
         # terminated prelude doesn't merge with the next file's first line.
         rewritten = "\n".join([*parts, rewritten])
-    return _run_content(rewritten, label=td_file, timeout_s=timeout_s, extra_args=extra_args)
+    return _run_content(
+        rewritten, label=td_file, timeout_s=timeout_s, extra_args=extra_args
+    )
 
 
 def run_inline(
@@ -192,7 +193,9 @@ def run_inline(
     `content` is fed to testdrive verbatim — skip-if-true stripping does
     not apply.  `label` is logged for triage but is otherwise opaque.
     """
-    return _run_content(content, label=label, timeout_s=timeout_s, extra_args=extra_args)
+    return _run_content(
+        content, label=label, timeout_s=timeout_s, extra_args=extra_args
+    )
 
 
 def _run_content(
@@ -274,9 +277,11 @@ def _run_content(
         LOG.warning("testdrive %s timed out after %.0fs", label, timeout_s)
         result = TestdriveResult(
             exit_code=124,
-            stdout=exc.stdout.decode()
-            if isinstance(exc.stdout, bytes)
-            else (exc.stdout or ""),
+            stdout=(
+                exc.stdout.decode()
+                if isinstance(exc.stdout, bytes)
+                else (exc.stdout or "")
+            ),
             stderr=(
                 exc.stderr.decode()
                 if isinstance(exc.stderr, bytes)
@@ -301,4 +306,3 @@ def _run_content(
         len(result.stderr),
     )
     return result
-
