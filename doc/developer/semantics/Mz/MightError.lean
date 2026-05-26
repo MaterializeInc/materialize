@@ -221,4 +221,232 @@ end
 def EnvErrFree {n : Nat} {sch : Schema n} (env : Env sch) : Prop :=
   ∀ i : Fin n, ¬(env i).IsErr
 
+/-! ## Coalesce safety
+
+When at least one operand is not an err, `evalCoalesce` returns a
+non-err `Datum`. The dispatch on `Coalesce.firstConcrete` splits
+cleanly: a hit is concrete (not err); a miss means every operand
+is `.null` or `.err`, the safe witness must be `.null`, and
+`residue` returns `.null`. -/
+
+theorem Coalesce.firstConcrete_not_err {k : ColType} :
+    ∀ (ds : List (Datum k)) (d : Datum k),
+      Coalesce.firstConcrete ds = some d → ¬d.IsErr
+  | [], _, h => by simp [Coalesce.firstConcrete] at h
+  | .bool _ :: _, _, h => by
+    simp only [Coalesce.firstConcrete, Option.some.injEq] at h
+    subst h; intro hErr; cases hErr
+  | .int _ :: _, _, h => by
+    simp only [Coalesce.firstConcrete, Option.some.injEq] at h
+    subst h; intro hErr; cases hErr
+  | .null :: rest, d, h => by
+    simp only [Coalesce.firstConcrete] at h
+    exact Coalesce.firstConcrete_not_err rest d h
+  | .err _ :: rest, d, h => by
+    simp only [Coalesce.firstConcrete] at h
+    exact Coalesce.firstConcrete_not_err rest d h
+
+theorem Coalesce.firstConcrete_none_no_concrete {k : ColType} :
+    ∀ (ds : List (Datum k)),
+      Coalesce.firstConcrete ds = none →
+      ∀ d ∈ ds, d.isNullB = true ∨ d.IsErr
+  | [], _, d, hmem => by cases hmem
+  | .bool _ :: _, h, _, _ => by
+    simp only [Coalesce.firstConcrete] at h; cases h
+  | .int _ :: _, h, _, _ => by
+    simp only [Coalesce.firstConcrete] at h; cases h
+  | .null :: rest, h, d, hmem => by
+    simp only [Coalesce.firstConcrete] at h
+    cases hmem with
+    | head _ => exact Or.inl rfl
+    | tail _ htl => exact Coalesce.firstConcrete_none_no_concrete rest h d htl
+  | .err _ :: rest, h, d, hmem => by
+    simp only [Coalesce.firstConcrete] at h
+    cases hmem with
+    | head _ => exact Or.inr True.intro
+    | tail _ htl => exact Coalesce.firstConcrete_none_no_concrete rest h d htl
+
+theorem Coalesce.residue_eq_null_of_null_mem {k : ColType} :
+    ∀ (ds : List (Datum k)),
+      (∃ d ∈ ds, d.isNullB = true) → Coalesce.residue ds = .null
+  | [], h => by obtain ⟨_, hmem, _⟩ := h; cases hmem
+  | .null :: _, _ => rfl
+  | .bool _ :: rest, h => by
+    simp only [Coalesce.residue]
+    apply Coalesce.residue_eq_null_of_null_mem rest
+    obtain ⟨d, hmem, hd⟩ := h
+    cases hmem with
+    | head _ => cases hd
+    | tail _ htl => exact ⟨d, htl, hd⟩
+  | .int _ :: rest, h => by
+    simp only [Coalesce.residue]
+    apply Coalesce.residue_eq_null_of_null_mem rest
+    obtain ⟨d, hmem, hd⟩ := h
+    cases hmem with
+    | head _ => cases hd
+    | tail _ htl => exact ⟨d, htl, hd⟩
+  | .err _ :: rest, h => by
+    simp only [Coalesce.residue]
+    have h_any : rest.any Datum.isNullB = true := by
+      obtain ⟨d, hmem, hd⟩ := h
+      cases hmem with
+      | head _ => cases hd
+      | tail _ htl => rw [List.any_eq_true]; exact ⟨d, htl, hd⟩
+    rw [if_pos h_any]
+
+theorem evalCoalesce_not_err_of_some_safe {k : ColType}
+    {ds : List (Datum k)} (h : ∃ d ∈ ds, ¬d.IsErr) :
+    ¬(evalCoalesce ds).IsErr := by
+  show ¬(match Coalesce.firstConcrete ds with
+         | some d => d
+         | none => Coalesce.residue ds).IsErr
+  cases hfc : Coalesce.firstConcrete ds with
+  | some d =>
+    exact Coalesce.firstConcrete_not_err ds d hfc
+  | none =>
+    have h_all := Coalesce.firstConcrete_none_no_concrete ds hfc
+    obtain ⟨d, hd_mem, hd_safe⟩ := h
+    have hd_cases := h_all d hd_mem
+    have h_null_in : ∃ d ∈ ds, d.isNullB = true := by
+      cases hd_cases with
+      | inl hd_null => exact ⟨d, hd_mem, hd_null⟩
+      | inr hd_err => exact absurd hd_err hd_safe
+    rw [Coalesce.residue_eq_null_of_null_mem ds h_null_in]
+    intro hErr; cases hErr
+
+/-! ## Variadic safety
+
+`evalAndN` / `evalOrN` are not err when no operand is err. The
+absorption rule (`FALSE` for AND, `TRUE` for OR) means err can be
+absorbed away even if present; the no-err premise makes the
+conclusion stronger and more usable downstream. -/
+
+theorem evalAndN_not_err_of_all_safe :
+    ∀ (ds : List (Datum .bool)), (∀ d ∈ ds, ¬d.IsErr) →
+      ¬(evalAndN ds).IsErr
+  | [], _ => fun h => by cases h
+  | hd :: tl, hall => by
+    have hhd : ¬hd.IsErr := hall hd (List.Mem.head _)
+    have htl : ∀ d ∈ tl, ¬d.IsErr :=
+      fun d hd_mem => hall d (List.Mem.tail _ hd_mem)
+    have h_tl_safe : ¬(evalAndN tl).IsErr := evalAndN_not_err_of_all_safe tl htl
+    show ¬(evalAnd hd (evalAndN tl)).IsErr
+    exact evalAnd_not_err hhd h_tl_safe
+
+theorem evalOrN_not_err_of_all_safe :
+    ∀ (ds : List (Datum .bool)), (∀ d ∈ ds, ¬d.IsErr) →
+      ¬(evalOrN ds).IsErr
+  | [], _ => fun h => by cases h
+  | hd :: tl, hall => by
+    have hhd : ¬hd.IsErr := hall hd (List.Mem.head _)
+    have htl : ∀ d ∈ tl, ¬d.IsErr :=
+      fun d hd_mem => hall d (List.Mem.tail _ hd_mem)
+    have h_tl_safe : ¬(evalOrN tl).IsErr := evalOrN_not_err_of_all_safe tl htl
+    show ¬(evalOr hd (evalOrN tl)).IsErr
+    exact evalOr_not_err hhd h_tl_safe
+
+/-! ## Soundness of the `might_error` analyzer
+
+If `might_error e = false` and the environment is `EnvErrFree`,
+then `eval env e` is not an error. Mutual with `args_might_error_sound`
+for the variadic constructors. -/
+
+mutual
+  theorem might_error_sound {n : Nat} {sch : Schema n} (env : Env sch)
+      (hEnv : EnvErrFree env) :
+      {k : ColType} → (e : Expr sch k) →
+        Expr.might_error e = false → ¬(eval env e).IsErr
+    | _, .lit d, h => by
+      cases d with
+      | bool _ => intro hErr; cases hErr
+      | int _  => intro hErr; cases hErr
+      | null   => intro hErr; cases hErr
+      | err _  => simp [Expr.might_error] at h
+    | _, .col i, _ => hEnv i
+    | _, .not a, h => by
+      simp only [Expr.might_error] at h
+      have iha := might_error_sound env hEnv a h
+      show ¬(evalNot (eval env a)).IsErr
+      exact evalNot_not_err iha
+    | _, .plus a b, h => by
+      simp only [Expr.might_error, Bool.or_eq_false_iff] at h
+      have iha := might_error_sound env hEnv a h.1
+      have ihb := might_error_sound env hEnv b h.2
+      show ¬(evalPlus (eval env a) (eval env b)).IsErr
+      exact evalPlus_not_err iha ihb
+    | _, .minus a b, h => by
+      simp only [Expr.might_error, Bool.or_eq_false_iff] at h
+      have iha := might_error_sound env hEnv a h.1
+      have ihb := might_error_sound env hEnv b h.2
+      show ¬(evalMinus (eval env a) (eval env b)).IsErr
+      exact evalMinus_not_err iha ihb
+    | _, .times a b, h => by
+      simp only [Expr.might_error, Bool.or_eq_false_iff] at h
+      have iha := might_error_sound env hEnv a h.1
+      have ihb := might_error_sound env hEnv b h.2
+      show ¬(evalTimes (eval env a) (eval env b)).IsErr
+      exact evalTimes_not_err iha ihb
+    | _, .divide _ _, h => by simp [Expr.might_error] at h
+    | _, .eq a b, h => by
+      simp only [Expr.might_error, Bool.or_eq_false_iff] at h
+      have iha := might_error_sound env hEnv a h.1
+      have ihb := might_error_sound env hEnv b h.2
+      show ¬(evalEq (eval env a) (eval env b)).IsErr
+      exact evalEq_not_err iha ihb
+    | _, .lt a b, h => by
+      simp only [Expr.might_error, Bool.or_eq_false_iff] at h
+      have iha := might_error_sound env hEnv a h.1
+      have ihb := might_error_sound env hEnv b h.2
+      show ¬(evalLt (eval env a) (eval env b)).IsErr
+      exact evalLt_not_err iha ihb
+    | _, .ifThen c t e, h => by
+      simp only [Expr.might_error, Bool.or_eq_false_iff] at h
+      have ihc := might_error_sound env hEnv c h.1.1
+      have iht := might_error_sound env hEnv t h.1.2
+      have ihe := might_error_sound env hEnv e h.2
+      show ¬(evalIfThen (eval env c) (eval env t) (eval env e)).IsErr
+      exact evalIfThen_not_err ihc iht ihe
+    | _, .andN args, h => by
+      simp only [Expr.might_error] at h
+      have ih_args := args_might_error_sound env hEnv args h
+      show ¬(evalAndN (evalList env args)).IsErr
+      exact evalAndN_not_err_of_all_safe _ ih_args
+    | _, .orN args, h => by
+      simp only [Expr.might_error] at h
+      have ih_args := args_might_error_sound env hEnv args h
+      show ¬(evalOrN (evalList env args)).IsErr
+      exact evalOrN_not_err_of_all_safe _ ih_args
+    | _, .coalesce args, h => by
+      simp only [Expr.might_error] at h
+      have ih_args := args_might_error_sound env hEnv args h
+      show ¬(evalCoalesce (evalList env args)).IsErr
+      cases hargs : evalList env args with
+      | nil =>
+        intro hRes
+        simp [evalCoalesce, Coalesce.firstConcrete, Coalesce.residue,
+              Datum.IsErr] at hRes
+      | cons hd tl =>
+        have hd_safe : ¬hd.IsErr := by
+          apply ih_args hd
+          rw [hargs]; exact List.Mem.head tl
+        exact evalCoalesce_not_err_of_some_safe ⟨hd, List.Mem.head tl, hd_safe⟩
+
+  /-- Mutual: every element of `evalList env args` is non-err when
+  every arg has `might_error = false`. -/
+  theorem args_might_error_sound {n : Nat} {sch : Schema n} (env : Env sch)
+      (hEnv : EnvErrFree env) :
+      {k : ColType} → (args : ExprList sch k) →
+        ExprList.argsMightError args = false →
+        ∀ d ∈ evalList env args, ¬d.IsErr
+    | _, .nil, _, d, hmem => by cases hmem
+    | _, .cons a as, h, d, hmem => by
+      simp only [ExprList.argsMightError, Bool.or_eq_false_iff] at h
+      have iha := might_error_sound env hEnv a h.1
+      have ihas := args_might_error_sound env hEnv as h.2
+      show ¬d.IsErr
+      cases hmem with
+      | head _ => exact iha
+      | tail _ htl => exact ihas d htl
+end
+
 end Mz

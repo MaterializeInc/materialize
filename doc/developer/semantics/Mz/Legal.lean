@@ -88,4 +88,115 @@ inductive LegalEval {n : Nat} {sch : Schema n}
   | coalesceD {k : ColType} {args : ExprList sch k} :
       LegalEval env (.coalesce args) (eval env (.coalesce args))
 
+/-! ## Soundness: deterministic `eval` is one legal outcome -/
+
+/-- The deterministic `eval` produces a `LegalEval` outcome. Bridge
+between the deterministic surface and the relational semantics:
+every theorem about `eval` lifts to a witness that one particular
+admissible outcome is the one `eval` produces. -/
+theorem legal_of_eval {n : Nat} {sch : Schema n} (env : Env sch) :
+    {k : ColType} → (e : Expr sch k) → LegalEval env e (eval env e)
+  | _, .lit d        => LegalEval.lit d
+  | _, .col i        => LegalEval.col i
+  | _, .not a        => LegalEval.notC (legal_of_eval env a)
+  | _, .plus a b     => LegalEval.plusOk (legal_of_eval env a) (legal_of_eval env b)
+  | _, .minus a b    => LegalEval.minusOk (legal_of_eval env a) (legal_of_eval env b)
+  | _, .times a b    => LegalEval.timesOk (legal_of_eval env a) (legal_of_eval env b)
+  | _, .divide a b   => LegalEval.divideOk (legal_of_eval env a) (legal_of_eval env b)
+  | _, .eq a b       => LegalEval.eqOk (legal_of_eval env a) (legal_of_eval env b)
+  | _, .lt a b       => LegalEval.ltOk (legal_of_eval env a) (legal_of_eval env b)
+  | _, .ifThen c t e =>
+    -- ifThen reduces to evalIfThen on eval c; depends on the value.
+    -- Cases on (eval env c); each lands on a distinct constructor.
+    match h : eval env c with
+    | .bool true  =>
+      have hc : LegalEval env c (.bool true) := h ▸ legal_of_eval env c
+      have : eval env (.ifThen c t e) = eval env t := by
+        show evalIfThen (eval env c) (eval env t) (eval env e) = eval env t
+        rw [h]; rfl
+      this ▸ LegalEval.ifTrue hc (legal_of_eval env t)
+    | .bool false =>
+      have hc : LegalEval env c (.bool false) := h ▸ legal_of_eval env c
+      have : eval env (.ifThen c t e) = eval env e := by
+        show evalIfThen (eval env c) (eval env t) (eval env e) = eval env e
+        rw [h]; rfl
+      this ▸ LegalEval.ifFalse hc (legal_of_eval env e)
+    | .null        =>
+      have hc : LegalEval env c .null := h ▸ legal_of_eval env c
+      have : eval env (.ifThen c t e) = .null := by
+        show evalIfThen (eval env c) (eval env t) (eval env e) = .null
+        rw [h]; rfl
+      this ▸ LegalEval.ifNull hc
+    | .err er      =>
+      have hc : LegalEval env c (.err er) := h ▸ legal_of_eval env c
+      have : eval env (.ifThen c t e) = .err er := by
+        show evalIfThen (eval env c) (eval env t) (eval env e) = .err er
+        rw [h]; rfl
+      this ▸ LegalEval.ifErr hc
+  | _, .andN args    => LegalEval.andND
+  | _, .orN args     => LegalEval.orND
+  | _, .coalesce args => LegalEval.coalesceD
+
+/-! ## Motivating theorem: binary err-payload non-determinism
+
+`(.err e₁) + (.err e₂)` admits both payloads. The deterministic
+`evalPlus` picks the left bias; the relational form recovers the
+symmetry that strict equality on the deterministic output loses. -/
+
+theorem legal_plus_err_either {n : Nat} {sch : Schema n}
+    (env : Env sch) (e₁ e₂ : EvalError) :
+    LegalEval env (Expr.plus (.lit (.err e₁)) (.lit (.err e₂))) (.err e₁)
+    ∧ LegalEval env (Expr.plus (.lit (.err e₁)) (.lit (.err e₂))) (.err e₂) := by
+  refine ⟨?_, ?_⟩
+  · exact LegalEval.plusErrL (LegalEval.lit (.err e₁))
+  · exact LegalEval.plusErrR (LegalEval.lit (.err e₂))
+
+/-! ## Err-side commutativity of `.plus` -/
+
+theorem plus_comm_legal_errL_to_errR {n : Nat} {sch : Schema n}
+    {env : Env sch} {a b : Expr sch .int} {er : EvalError}
+    (h : LegalEval env a (.err er)) :
+    LegalEval env (.plus b a) (.err er) :=
+  LegalEval.plusErrR h
+
+theorem plus_comm_legal_errR_to_errL {n : Nat} {sch : Schema n}
+    {env : Env sch} {a b : Expr sch .int} {er : EvalError}
+    (h : LegalEval env b (.err er)) :
+    LegalEval env (.plus b a) (.err er) :=
+  LegalEval.plusErrL h
+
+/-! ## Candidate equivalence relations on `Expr`
+
+`LegalEquiv` is set-equality on `LegalEval`-admissible outcomes;
+`LegalSubsume` is set-inclusion (the "no spurious errors" posture). -/
+
+/-- Two expressions are `LegalEquiv` iff they admit the same set
+of legal outcomes. -/
+def LegalEquiv {n : Nat} {sch : Schema n} {k : ColType}
+    (env : Env sch) (e₁ e₂ : Expr sch k) : Prop :=
+  ∀ d, LegalEval env e₁ d ↔ LegalEval env e₂ d
+
+/-- `e₁` is subsumed by `e₂` iff every admissible outcome of `e₁`
+is also admissible for `e₂`. Matches the "no spurious errors"
+posture: a rewrite `e₁ → e₂` is sound if every error the rewritten
+form can produce was already producible by the original. -/
+def LegalSubsume {n : Nat} {sch : Schema n} {k : ColType}
+    (env : Env sch) (e₁ e₂ : Expr sch k) : Prop :=
+  ∀ d, LegalEval env e₁ d → LegalEval env e₂ d
+
+theorem LegalEquiv.refl {n : Nat} {sch : Schema n} {k : ColType}
+    (env : Env sch) (e : Expr sch k) : LegalEquiv env e e :=
+  fun _ => Iff.rfl
+
+theorem LegalEquiv.symm {n : Nat} {sch : Schema n} {k : ColType}
+    {env : Env sch} {e₁ e₂ : Expr sch k}
+    (h : LegalEquiv env e₁ e₂) : LegalEquiv env e₂ e₁ :=
+  fun d => (h d).symm
+
+theorem LegalEquiv.trans {n : Nat} {sch : Schema n} {k : ColType}
+    {env : Env sch} {e₁ e₂ e₃ : Expr sch k}
+    (h₁ : LegalEquiv env e₁ e₂) (h₂ : LegalEquiv env e₂ e₃) :
+    LegalEquiv env e₁ e₃ :=
+  fun d => Iff.trans (h₁ d) (h₂ d)
+
 end Mz

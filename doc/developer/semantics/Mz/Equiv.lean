@@ -32,6 +32,31 @@ theorem Datum.eqErrSet_symm {k : ColType} {a b : Datum k}
 theorem Datum.eqErrSet_of_eq {k : ColType} {a b : Datum k}
     (h : a = b) : a.eqErrSet b := Or.inl h
 
+/-- `eqErrSet` is reflexive on err / err regardless of payload
+mismatch. The cell that strict equality cannot reach. -/
+theorem Datum.eqErrSet_err_err {k : ColType} (e₁ e₂ : EvalError) :
+    Datum.eqErrSet (.err e₁ : Datum k) (.err e₂) :=
+  Or.inr ⟨True.intro, True.intro⟩
+
+/-! ## Counterexample: `evalAnd` is not strictly commutative on err / err
+
+`evalAnd` on `Datum .bool` is left-biased on errors. With distinct
+err payloads, strict equality fails; `eqErrSet` recovers
+commutativity. -/
+
+theorem evalAnd_err_err (e₁ e₂ : EvalError) :
+    evalAnd (.err e₁) (.err e₂) = (.err e₁ : Datum .bool) := rfl
+
+theorem evalAnd_err_err_swap (e₁ e₂ : EvalError) :
+    evalAnd (.err e₂) (.err e₁) = (.err e₂ : Datum .bool) := rfl
+
+/-- Under `eqErrSet`, `evalAnd` commutes on err / err inputs even
+when the inner payloads differ. -/
+theorem evalAnd_err_err_eqErrSet_comm (e₁ e₂ : EvalError) :
+    (evalAnd (.err e₁) (.err e₂) : Datum .bool).eqErrSet
+    (evalAnd (.err e₂) (.err e₁)) :=
+  Or.inr ⟨True.intro, True.intro⟩
+
 /-! ## Refinement preorder (errors as bottom) -/
 
 /-- Refinement preorder on `Datum k`: `a ⊑ b` iff `a = b` or `a`
