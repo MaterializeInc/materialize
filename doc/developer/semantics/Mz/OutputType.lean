@@ -74,10 +74,14 @@ def Expr.outputType {n : Nat} (sch : Schema n) : Expr → ColSchema
     if h : i < n then sch.cols.get ⟨i, h⟩
     else { nullable := true, errable := false }
   | .not a =>
-    -- After tightening evalNot to route .int to .null, the
-    -- output may be .null even when input is non-null (.int
-    -- input → .null output). Conservative `nullable := true`;
-    -- `errable` propagates from input.
+    -- `errable` propagates from `a` (`evalNot` is strict on
+    -- `.err _`). `nullable := true` is conservative: it admits
+    -- the `.int → .null` route in `evalNot`'s catch-all, which
+    -- can produce `.null` even from a non-null `.int` input.
+    -- The precise rule under well-typing (input output-kind
+    -- `.bool`, ruling out `.int`) preserves the input's
+    -- `nullable` bit; see `eval_not_satisfies_precise` in
+    -- `Mz/WellTyped.lean`.
     { nullable := true
       errable := (Expr.outputType sch a).errable }
   | .ifThen c t e =>

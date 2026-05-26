@@ -192,14 +192,27 @@ Structural type-correctness in `Mz/WellTyped.lean`:
   a result.
 
 `WellTyped` is what the optimizer needs to cite to invoke the
-precision direction on `outputType`: under `WellTyped`,
+precision direction on `outputType`: under well-typing,
 type-mismatched operands are ruled out, and `outputType`'s
-conservative `nullable := true` for arithmetic can be tightened
-to `nullable := OR-of-inputs.nullable`. The precision direction
-itself is open; the predicate is the gate, `kind_of_eval` is the
-foundation, and the tightening rides on a per-constructor
-case-analysis that shows well-typed inputs never hit the
-catch-all `.null` route in the primitive evaluators.
+conservative `nullable := true` for the `.int → .null` catch-all
+routes can be tightened to `nullable := input.nullable`.
+
+The first instance — `eval_not_satisfies_precise` in
+`Mz/WellTyped.lean` — demonstrates the pattern. The conservative
+rule `outputType (.not a) = { nullable := true, errable :=
+outputType(a).errable }` is honest under the tightened `evalNot`
+(which routes `.int → .null`), but is *misleading* on its own:
+for non-null bool or err inputs, evalNot does *not* produce
+`.null`. Under the precondition `outputKind a = .bool` (which
+rules out `.int` via `kind_of_eval`), the precise schema
+`outputType a` is satisfied by `.not a` — preserving both bits
+of the input. Optimizers that establish the precondition get the
+tighter schema; the conservative form remains the safe default
+for arms that can't.
+
+The arithmetic / comparison constructors follow the same
+pattern; each needs its own per-case proof. `.not` is the
+demonstration; the rest are queued.
 
 Output-schema propagation for `Expr` lives in `Mz/OutputType.lean`:
 

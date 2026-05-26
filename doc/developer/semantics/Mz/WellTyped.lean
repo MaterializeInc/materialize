@@ -379,6 +379,69 @@ theorem Expr.kind_of_eval {n : Nat} (sch : Schema n) (row : RowN n)
     simp only [eval, Expr.outputKind]
     exact kind_evalLt _ _
 
+/-! ## Precision direction on `Expr.outputType`
+
+The conservative `outputType (.not a) = { nullable := true,
+errable := outputType(a).errable }` in `Mz/OutputType.lean`
+admits the `.int → .null` route in `evalNot`'s catch-all. The
+precise rule under well-typing (input output-kind `.bool`, ruling
+out `.int`) preserves the input's `nullable` bit.
+
+`eval_not_satisfies_precise` below states it: when
+`outputKind a = .bool` and `RowSatisfiesKind` holds, `.not a`
+satisfies the *precise* schema `outputType a`, not the weakened
+`outputType (.not a)`. Optimizers that can prove the precondition
+get the tighter schema; the weakened rule remains the safe default
+for arms that can't.
+
+This is the simplest instance of the precision-direction follow-up
+on `outputType`. The same pattern applies to the arithmetic /
+comparison constructors: under well-typing (operands' output-kind
+`.int` or both same kind), the catch-all `.null` route is ruled
+out and `nullable` propagates from inputs. Each constructor needs
+its own per-case proof; `.not` is the demonstration. -/
+
+/-- Precise: under well-typing forcing `outputKind a = .bool`,
+`.not a` satisfies the precise schema `outputType a`, not the
+weakened `outputType (.not a)`. -/
+theorem eval_not_satisfies_precise
+    {n : Nat} (sch : Schema n) (row : RowN n)
+    (hsat : RowSatisfies sch row) (hrk : RowSatisfiesKind sch row)
+    (a : Expr) (hkind : Expr.outputKind sch a = .bool) :
+    DatumSatisfies (Expr.outputType sch a) (eval row.toList (.not a)) := by
+  have ihsat := eval_satisfies_outputType sch row hsat a
+  have ihkind := Expr.kind_of_eval sch row hrk a
+  rw [hkind] at ihkind
+  -- ihkind : ColKind.compatible (eval row.toList a).kind .bool = true
+  -- So (eval row.toList a).kind ∈ {.bool, .top}, i.e., eval is in
+  -- {.bool _, .null, .err _}. The `.int _` case is ruled out.
+  refine ⟨?_, ?_⟩
+  · intro hN
+    have ha_notnull : eval row.toList a ≠ .null := ihsat.1 hN
+    intro hRes
+    simp only [eval] at hRes
+    -- hRes : evalNot (eval row.toList a) = .null
+    cases h : eval row.toList a with
+    | bool b =>
+      rw [h] at hRes
+      cases b <;> (simp only [evalNot] at hRes; cases hRes)
+    | int _ =>
+      -- ihkind says kind compatible with .bool; .int's kind is .int,
+      -- not compatible. Contradiction.
+      rw [h] at ihkind
+      cases ihkind
+    | null  =>
+      exact ha_notnull h
+    | err _ =>
+      rw [h] at hRes
+      simp only [evalNot] at hRes
+      cases hRes
+  · intro hErr
+    have ha_noterr : ¬(eval row.toList a).IsErr := ihsat.2 hErr
+    show ¬(eval row.toList (.not a)).IsErr
+    simp only [eval]
+    exact evalNot_not_err ha_noterr
+
 /-! ## Open follow-ups
 
 * `Expr.kind_of_eval`. Under `RowSatisfiesKind sch row`, the eval
