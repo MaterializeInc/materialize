@@ -921,7 +921,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             return self.as_specific_collection(key.as_deref(), config_set);
         }
 
-        let max_demand = mfp.demand().iter().max().map(|x| *x + 1).unwrap_or(0);
+        let max_demand = mfp.demand().last().map(|x| *x + 1).unwrap_or(0);
         mfp.permute_fn(|c| c, max_demand);
         mfp.optimize();
         let mfp_plan = mfp.into_plan().unwrap();

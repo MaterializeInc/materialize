@@ -1150,8 +1150,8 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         let range: BTreeSet<_> = range.iter().map(|(i, _)| *i).collect();
 
         // This is the range of hollow batches that we will replace.
-        let min = *range.iter().min().unwrap();
-        let max = *range.iter().max().unwrap();
+        let min = *range.first().unwrap();
+        let max = *range.last().unwrap();
         let replacement_range = min..max + 1;
 
         // We need to replace a range of parts. Here we don't care about the run_indices
