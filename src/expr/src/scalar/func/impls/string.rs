@@ -35,7 +35,7 @@ use crate::func::{binary, regexp_match_static};
 use crate::scalar::func::{
     EagerUnaryFunc, LazyUnaryFunc, array_create_scalar, regexp_split_to_array_re,
 };
-use crate::{EvalError, MirScalarExpr, UnaryFunc, like_pattern};
+use crate::{Eval, EvalError, MirScalarExpr, UnaryFunc, like_pattern};
 
 #[sqlfunc(
     sqlname = "text_to_boolean",
@@ -360,7 +360,7 @@ impl LazyUnaryFunc for CastStringToArray {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'a impl Eval,
     ) -> Result<Datum<'a>, EvalError> {
         let a = a.eval(datums, temp_storage)?;
         if a.is_null() {
@@ -448,7 +448,7 @@ impl LazyUnaryFunc for CastStringToList {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'a impl Eval,
     ) -> Result<Datum<'a>, EvalError> {
         let a = a.eval(datums, temp_storage)?;
         if a.is_null() {
@@ -542,7 +542,7 @@ impl LazyUnaryFunc for CastStringToMap {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'a impl Eval,
     ) -> Result<Datum<'a>, EvalError> {
         let a = a.eval(datums, temp_storage)?;
         if a.is_null() {
@@ -712,7 +712,7 @@ impl LazyUnaryFunc for CastStringToRange {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'a impl Eval,
     ) -> Result<Datum<'a>, EvalError> {
         let a = a.eval(datums, temp_storage)?;
         if a.is_null() {
@@ -879,7 +879,7 @@ impl LazyUnaryFunc for CastStringToInt2Vector {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'a impl Eval,
     ) -> Result<Datum<'a>, EvalError> {
         let a = a.eval(datums, temp_storage)?;
         if a.is_null() {
@@ -1121,7 +1121,7 @@ impl LazyUnaryFunc for RegexpMatch {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'a impl Eval,
     ) -> Result<Datum<'a>, EvalError> {
         let haystack = a.eval(datums, temp_storage)?;
         if haystack.is_null() {
@@ -1194,7 +1194,7 @@ impl LazyUnaryFunc for RegexpSplitToArray {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'a impl Eval,
     ) -> Result<Datum<'a>, EvalError> {
         let haystack = a.eval(datums, temp_storage)?;
         if haystack.is_null() {

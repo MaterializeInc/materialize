@@ -25,7 +25,7 @@ use mz_compute_types::dyncfgs::{
 };
 use mz_compute_types::plan::{ArrangementStrategy, AvailableCollections};
 use mz_dyncfg::ConfigSet;
-use mz_expr::{Id, MapFilterProject, MirScalarExpr};
+use mz_expr::{Eval, Id, MapFilterProject, MirScalarExpr};
 use mz_ore::soft_assert_or_log;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};

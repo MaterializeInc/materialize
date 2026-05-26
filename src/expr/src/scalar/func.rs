@@ -3007,7 +3007,7 @@ mod test {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::MirScalarExpr;
+    use crate::{Eval, MirScalarExpr};
 
     #[mz_ore::test]
     fn add_interval_months() {

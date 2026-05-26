@@ -51,7 +51,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::iter::FromIterator;
 
 use mz_expr::visit::Visit;
-use mz_expr::{AggregateExpr, JoinInputMapper, MirRelationExpr, MirScalarExpr};
+use mz_expr::{AggregateExpr, Columns, JoinInputMapper, MirRelationExpr, MirScalarExpr};
 
 use crate::TransformCtx;
 use crate::analysis::equivalences::EquivalenceClasses;

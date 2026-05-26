@@ -40,6 +40,7 @@ use mz_repr::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::Eval;
 use crate::func::CaseLiteral;
 use crate::func::{
     MAX_STRING_FUNC_RESULT_BYTES, array_create_scalar, build_regex, date_bin, parse_timezone,
@@ -76,7 +77,7 @@ impl LazyVariadicFunc for And {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        exprs: &'a [MirScalarExpr],
+        exprs: &'a [impl Eval],
     ) -> Result<Datum<'a>, EvalError> {
         // If any is false, then return false. Else, if any is null, then return null. Else, return true.
         let mut null = false;
@@ -497,7 +498,7 @@ impl LazyVariadicFunc for Coalesce {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        exprs: &'a [MirScalarExpr],
+        exprs: &'a [impl Eval],
     ) -> Result<Datum<'a>, EvalError> {
         for e in exprs {
             let d = e.eval(datums, temp_storage)?;
@@ -692,7 +693,7 @@ impl LazyVariadicFunc for ErrorIfNull {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        exprs: &'a [MirScalarExpr],
+        exprs: &'a [impl Eval],
     ) -> Result<Datum<'a>, EvalError> {
         let first = exprs[0].eval(datums, temp_storage)?;
         match first {
@@ -749,7 +750,7 @@ impl LazyVariadicFunc for Greatest {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        exprs: &'a [MirScalarExpr],
+        exprs: &'a [impl Eval],
     ) -> Result<Datum<'a>, EvalError> {
         let datums = fallible_iterator::convert(exprs.iter().map(|e| e.eval(datums, temp_storage)));
         Ok(datums
@@ -888,7 +889,7 @@ impl LazyVariadicFunc for Least {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        exprs: &'a [MirScalarExpr],
+        exprs: &'a [impl Eval],
     ) -> Result<Datum<'a>, EvalError> {
         let datums = fallible_iterator::convert(exprs.iter().map(|e| e.eval(datums, temp_storage)));
         Ok(datums
@@ -1149,7 +1150,7 @@ impl LazyVariadicFunc for Or {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        exprs: &'a [MirScalarExpr],
+        exprs: &'a [impl Eval],
     ) -> Result<Datum<'a>, EvalError> {
         // If any is true, then return true. Else, if any is null, then return null. Else, return false.
         let mut null = false;
@@ -1591,7 +1592,7 @@ pub(crate) trait LazyVariadicFunc: fmt::Display {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        exprs: &'a [MirScalarExpr],
+        exprs: &'a [impl Eval],
     ) -> Result<Datum<'a>, EvalError>;
 
     /// The output SqlColumnType of this function.
@@ -1664,7 +1665,7 @@ impl<T: EagerVariadicFunc> LazyVariadicFunc for T {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        exprs: &'a [MirScalarExpr],
+        exprs: &'a [impl Eval],
     ) -> Result<Datum<'a>, EvalError> {
         let mut datums = exprs.iter().map(|e| e.eval(datums, temp_storage));
         match T::Input::try_from_iter(&mut datums) {

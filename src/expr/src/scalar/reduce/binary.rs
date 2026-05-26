@@ -17,12 +17,11 @@ use mz_repr::adt::datetime::DateTimeUnits;
 use mz_repr::adt::regex::Regex;
 use mz_repr::{Datum, ReprColumnType, ReprScalarType, RowArena};
 
-use crate::EvalError;
-use crate::MirScalarExpr;
 use crate::scalar::func::format::DateTimeFormat;
 use crate::scalar::func::variadic::And;
 use crate::scalar::func::{self, BinaryFunc, UnaryFunc, VariadicFunc, parse_timezone};
 use crate::scalar::like_pattern;
+use crate::{Eval, EvalError, MirScalarExpr};
 
 pub(super) fn reduce_call_binary(
     e: &mut MirScalarExpr,

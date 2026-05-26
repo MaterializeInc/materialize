@@ -17,9 +17,10 @@ use std::{fmt, str};
 
 use mz_repr::{Datum, InputDatumType, OutputDatumType, ReprColumnType, RowArena, SqlColumnType};
 
+use crate::Eval;
+use crate::EvalError;
 use crate::scalar::func::RedactSql;
 use crate::scalar::func::impls::*;
-use crate::{EvalError, MirScalarExpr};
 
 /// A description of an SQL unary function that has the ability to lazy evaluate its arguments
 // This trait will eventually be annotated with #[enum_dispatch] to autogenerate the UnaryFunc enum
@@ -28,7 +29,7 @@ pub trait LazyUnaryFunc {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'a impl Eval,
     ) -> Result<Datum<'a>, EvalError>;
 
     /// The output SqlColumnType of this function.
@@ -160,7 +161,7 @@ impl<T: EagerUnaryFunc> LazyUnaryFunc for T {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'a impl Eval,
     ) -> Result<Datum<'a>, EvalError> {
         match T::Input::<'_>::try_from_result(a.eval(datums, temp_storage)) {
             // If we can convert to the input type then we call the function
@@ -558,7 +559,7 @@ mod test {
     use itertools::Itertools;
     use mz_repr::{PropDatum, SqlScalarType};
 
-    use crate::like_pattern;
+    use crate::{MirScalarExpr, like_pattern};
 
     use super::*;
 

@@ -16,11 +16,11 @@ use mz_ore::collections::CollectionExt;
 use mz_pgtz::timezone::TimezoneSpec;
 use mz_repr::{Datum, ReprColumnType, ReprScalarType, RowArena, SqlScalarType};
 
-use crate::MirScalarExpr;
 use crate::scalar::func::variadic::{Coalesce, ListCreate, ListIndex};
 use crate::scalar::func::{
     self, BinaryFunc, UnaryFunc, VariadicFunc, parse_timezone, regexp_replace_parse_flags,
 };
+use crate::{Eval, MirScalarExpr};
 
 pub(super) fn reduce_call_variadic(
     e: &mut MirScalarExpr,

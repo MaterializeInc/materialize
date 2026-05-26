@@ -12,6 +12,7 @@ use std::fmt::Debug;
 
 use mz_repr::{Datum, ReprColumnType, ReprRelationType, ReprScalarType, Row, RowArena};
 
+use crate::Eval;
 use crate::scalar::func::variadic::And;
 use crate::{
     BinaryFunc, EvalError, MapFilterProject, MfpPlan, MirScalarExpr, UnaryFunc,

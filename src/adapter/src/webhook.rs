@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
+use mz_expr::Eval;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Row, RowArena};
 use mz_secrets::SecretsReader;

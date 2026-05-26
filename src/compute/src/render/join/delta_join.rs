@@ -26,7 +26,7 @@ use mz_compute_types::dyncfgs::ENABLE_HALF_JOIN2;
 use mz_compute_types::plan::join::JoinClosure;
 use mz_compute_types::plan::join::delta_join::{DeltaJoinPlan, DeltaPathPlan, DeltaStagePlan};
 use mz_dyncfg::ConfigSet;
-use mz_expr::MirScalarExpr;
+use mz_expr::{Eval, MirScalarExpr};
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
