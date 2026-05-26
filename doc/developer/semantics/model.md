@@ -57,7 +57,7 @@ catalog:
 * **Type-level discipline** lives in the indexing of `Datum`,
   `Expr`, `Update`, and `Collection`. `Expr (sch : Schema n) :
   ColType → Type` enforces kind correctness; ill-typed expressions
-  are unconstructible. The `outputType` of an `Expr` is its index,
+  are unconstructible. The output type of an `Expr` is its index,
   trivially.
 * **Analyses** at the `Expr` layer that derive *additional* facts
   beyond the type: `Expr.outputCols` (nullable / errable bits),
@@ -105,219 +105,159 @@ relations and the rewrites they admit.
 
 ## Datum
 
-`Datum` is the cell-level value type.
-The skeleton currently models the four-valued lattice
-`{TRUE, FALSE, NULL, ERROR}` plus integers:
+`Datum` is the cell-level value type, **indexed by its kind**:
 
 ```
-inductive Datum
-  | bool (b : Bool)
-  | int  (n : Int)
-  | null
-  | err  (e : EvalError)
+inductive Datum : ColType → Type
+  | bool (b : Bool) : Datum .bool
+  | int (n : Int)   : Datum .int
+  | null            : Datum k
+  | err (e : EvalError) : Datum k
 ```
+
+`Datum .bool` admits `.bool _`, `.null`, `.err _` only — no `.int`
+in this fragment by construction. Same for `Datum .int`. `.null`
+and `.err _` are universal: they inhabit every kind. The `.top`
+kind admits only `.null` / `.err _` (the unconstrained /
+polymorphic case).
 
 `EvalError` is the cell-scoped error payload — currently
 `.divisionByZero` and `.overflow`, with the production list
 (`src/expr/src/scalar.rs`) much larger.
-Numeric, string, and temporal types are intentionally omitted.
 
-The four-valued absorption order is `FALSE > ERROR > NULL > TRUE` for
-`AND` (and the dual for `OR`), encoded in `evalAnd` / `evalOr`.
-Non-boolean operands (`.int _`) route to `.null` via the catch-all,
-closing the codomain of `evalAnd` / `evalOr` to the boolean fragment
-`{.bool _, .null, .err _}`. In production, a type-mismatched operand
-to `AND` would be caught by the planner type-checker or, failing
-that, would panic at runtime — the skeleton's `.null` route is a
-sound over-approximation of panic-and-escalate for optimizer
-rewrites (any rewrite sound under `.null` is also sound under
-panic, because panic strictly removes observable rows).
-The `Datum.IsErr` and `Datum.IsInt` predicates are the propositional
-witnesses for "this cell errored" and "this cell holds an integer";
-laws on arbitrary `Datum` operands of `evalAnd` / `evalOr` carry a
-`¬IsInt` hypothesis to rule out the `.null`-routing case.
+The four-valued absorption order is `FALSE > ERROR > NULL > TRUE`
+for `AND` (and the dual for `OR`), encoded in `evalAnd` / `evalOr`
+on `Datum .bool × Datum .bool → Datum .bool`. The codomain is
+closed by the indexing — no catch-all `_ , _ => .null` route. The
+`Datum.IsErr` and `Datum.IsNull` predicates witness err / null
+membership; algebraic laws (`not_not`, identity, idempotence,
+conditional commutativity) state without a `¬d.IsInt` hypothesis
+because `Datum .bool` rules out `.int` at the type level.
 
 ## Expression
 
-`Expr` is the AST for scalar computations:
+`Expr` is the AST for scalar computations, **schema-indexed**:
 
 ```
-inductive Expr
-  | lit (d : Datum)
-  | col (i : Nat)
-  | not (a : Expr)
-  | ifThen (c t e : Expr)
-  | andN (args : List Expr)
-  | orN  (args : List Expr)
-  | coalesce (args : List Expr)
-  | plus / minus / times / divide (a b : Expr)
-  | eq / lt (a b : Expr)
+inductive Expr (sch : Schema n) : ColType → Type
+  | lit {k} (d : Datum k) : Expr sch k
+  | col (i : Fin n)       : Expr sch (sch.types.get i)
+  | not  : Expr sch .bool → Expr sch .bool
+  | plus : Expr sch .int → Expr sch .int → Expr sch .int
+  | minus / times / divide : analogous
+  | eq {k} : Expr sch k → Expr sch k → Expr sch .bool
+  | lt {k} : Expr sch k → Expr sch k → Expr sch .bool
+  | andN (args : ExprList sch .bool) : Expr sch .bool
+  | orN  (args : ExprList sch .bool) : Expr sch .bool
+  | ifThen {k} (c : Expr sch .bool) (t e : Expr sch k) : Expr sch k
+  | coalesce {k} (args : ExprList sch k) : Expr sch k
 ```
 
-Binary `Expr.and` / `Expr.or` are sugar over the variadic `andN [a, b]`
-/ `orN [a, b]` to match the Rust `MirScalarExpr` variadic-only shape.
-Evaluation is the big-step `eval : Env → Expr → Datum`, with
-`Env := List Datum` as the positional column lookup.
+Mutual with `ExprList sch k` to satisfy Lean's nested-inductive
+restriction on variadic constructors. The schema indexing makes
+ill-typed expressions structurally unconstructible — `Expr.not
+(.lit (.int 5))` fails to type-check because `Expr.not` requires
+`Expr sch .bool`.
+
+The big-step evaluator is mutual with `evalList`:
+
+```
+eval     : (env : Env sch) → Expr sch k → Datum k
+evalList : (env : Env sch) → ExprList sch k → List (Datum k)
+```
+
+with `Env sch := (i : Fin n) → Datum (sch.types.get i)` — a typed
+lookup function whose cells agree with the schema's declared
+types. No out-of-bounds case; column indices are `Fin n`.
 
 Static analyses:
-* `might_error` — conservatively decides whether an expression can
-  raise a cell error.
-  Short-circuits literal-false / literal-true absorption and
-  literal-nonzero divisors.
-* `colReferencesBoundedBy n` — every `.col i` has `i < n`.
-  Used as the column-bound hypothesis for predicate pushdown across
-  joins.
-* `colShift k` — adds `k` to every column reference.
-  Used to realign a right-side predicate against the joined env.
-* `colReferencesUnused n` — column `n` is never read.
-  Used for column-pruning rewrites.
+
+* `might_error : Expr sch k → Bool` — conservatively decides
+  whether an expression can raise a cell error. Soundness in
+  `Mz/MightError.lean`: `might_error_sound` (mutual with
+  `args_might_error_sound`) — `might_error e = false` plus
+  `EnvErrFree env` implies `¬(eval env e).IsErr`.
+
+Column-reference analyses (`colReferencesBoundedBy`, `colShift`,
+`colReferencesUnused`) of the untyped predecessor are subsumed by
+the GADT: column references use `Fin n` indices, so out-of-bounds
+is unconstructible; column shifting between schemas falls out of
+`Subst` (schema-transforming substitution). No `ColRefs` module in
+the current model.
 
 ## Row
 
-A row is a length-`n` positional vector of `Datum`s, where the arity
-`n` lives in the type:
+A row is a typed lookup function:
 
 ```
-RowN n = List.Vector Datum n
+Env sch := (i : Fin n) → Datum (sch.types.get i)
 ```
 
-The evaluator's `Env = List Datum` is the row "as seen by `eval`":
-the arity disappears when the row is handed to a scalar evaluator,
-because `eval` is total on `List Datum` (out-of-bounds column
-references return `.null` via `Env.get`).
-The bridge is `row.toList`.
-`Env.get_eq_list_get` and `Env.get_eq_null_of_ge` in
-`Mz/PrimEval.lean` capture the evaluator's column-lookup contract.
-
-The indexed form makes arity mismatches unspeakable and surfaces
-arity-rewriting obligations (`cross_assoc` needs the cast
-`n + m + k = n + (m + k)` via `List.Vector.congr`).
+Each cell carries the kind declared by `sch.types`. Arity is
+enforced at the type level (every `Fin n` is in range); ill-arity
+rows are unconstructible. There is no separate `RowN n` /
+`row.toList` distinction — the schema-indexed function is the
+row, and `eval` consumes it directly.
 
 ## Schema
 
-Per-column nullability and errability bits plus a collection-level
-row-error flag, modeled in `Mz/Schema.lean`. The structural
-counterpart to Materialize's `RelationType` on the Rust side.
+Schemas are the structural counterpart to Materialize's
+`RelationType`. `Mz/Schema.lean` carries the type-level
+definitions (no theorems — predicates that touch values live
+elsewhere):
 
 * `ColSchema { nullable, errable : Bool }` — per-column metadata.
-* `Schema n { cols : Vector ColSchema n, rowErrFree : Bool }` — the
-  schema as a whole.
+* `ColType { bool | int | top }` — per-column SQL type tag.
+  `.top` is unconstrained (matches any expected; captures `.null`
+  / `.err _` literals).
+* `Schema n { cols : Vector ColSchema n, types : Vector ColType n,
+  rowErrFree : Bool }`.
 * `Schema.free n` — information-free starting point.
-* `Schema.append a b` — concatenation, produced by `cross`.
+* `Schema.append a b` — concatenation along all three components.
+* `Schema.cellErrFree sch` — every column claims `errable = false`.
 
-Propositional satisfaction:
+`Schema.types` flows through the GADT type-level indexing of
+`Datum`, `Expr`, `Env`, `Update`, `Collection`. Type discipline is
+structural — ill-typed expressions and ill-shaped rows are
+unconstructible.
 
-* `RowSatisfies sch row` — `¬nullable → row[i] ≠ .null` and
-  `¬errable → ¬(row[i]).IsErr` per column.
-* `Update.Satisfies sch rec` — row satisfies the column bits *and*
-  `sch.rowErrFree → rec.err_diff = 0`.
-* `Collection.Satisfies sch s` — every update satisfies.
+Propositional satisfaction (in `Mz/OutputType.lean`):
 
-Schema discharges optimizer obligations whose soundness depends on
-column or row-level invariants:
+* `DatumSatisfies cs d` — `Datum k` satisfies a `ColSchema` iff
+  `cs.nullable = false → ¬d.IsNull` and `cs.errable = false →
+  ¬d.IsErr`. Kind compatibility is structural (the index `k`).
+* `RowSatisfies sch env` — every cell's `Datum` satisfies the
+  corresponding `ColSchema`.
 
-* `NoRowErr_of_satisfies_rowErrFree` — bridge to
-  `filter_cross_pushdown_left_strict`'s precondition.
-* `evalCoalesce_cons_of_concrete` + `eval_coalesce_pair_of_a_concrete`
-  — `coalesce(a, b) = a` when `a` evaluates to a concrete (non-null,
-  non-err) value. Schema rider: when `a`'s output column has
-  `nullable = false` and `errable = false`, the precondition is
-  immediate.
-* `NoRowErr_cross` — `cross` preserves row-err-freedom.
-* `NoRowErr_filter` — `filter` preserves row-err-freedom when the
-  predicate is statically err-free on the input cell schema.
-  Combines `might_error_sound` with the schema → `Env.ErrFree`
-  bridge `RowSatisfies.toList_ErrFree`.
-* `NoRowErr_project` — `project` preserves row-err-freedom
-  unconditionally (`projectOne` rewrites `row` but leaves
-  `err_diff` untouched).
-* `NoRowErr_unionAll` — list concatenation; conjunctive.
-* `NoRowErr_negate` — `(-0 : Int) = 0`, so a zero `err_diff`
-  stays zero.
+The `WellTyped` predicate of the untyped predecessor model is
+subsumed by the GADT. `Expr.outputKind` disappears as a separate
+function — the kind is the index `k` of `Expr sch k`. The
+`RowSatisfiesType` / `kind_of_eval` companions are gone for the
+same reason.
 
-Per-column type kind in `Mz/Schema.lean`:
+`Expr.outputCols sch e : ColSchema` in `Mz/OutputType.lean`
+derives the output `(nullable, errable)` bits per `Expr`. Precise
+on `.lit`, `.col`, and `.not` (preserves both bits). Tight
+`errable`-OR-of-inputs on `.plus` / `.minus` / `.times`, `.eq` /
+`.lt`, and `.ifThen` (OR over three arms). `.divide` is always
+errable. Variadic `.andN` / `.orN` / `.coalesce` remain
+conservative (mutual-recursion lifts are open follow-ups).
+Soundness theorem `eval_satisfies_outputCols` is open — most
+constructor cases are mechanical but not yet ported from the
+untyped predecessor (round-4 review regression).
 
-* `ColType { bool | int | top }` — SQL type tag per column.
-  `.top` is the unconstrained / permissive kind (matches any
-  expected; captures `.null` / `.err _` literals and untyped
-  columns).
-* `Schema.types : List.Vector ColType n` — additive field;
-  defaults to `.top` per column in `Schema.free`.
-* `Schema.append` concatenates kinds along with cols.
+NoRowErr propagation through schema-preserving / -transforming
+operators (mechanized in `Mz/Collection.lean`):
 
-Structural type-correctness in `Mz/WellTyped.lean`:
+* `NoRowErr_negate` — schema-preserving; `(-0 : Int) = 0`.
+* `NoRowErr_unionAll` — conjunctive over the input collections.
+* `NoRowErr_project` — schema-transforming; `projectOne` leaves
+  `err_diff` untouched.
 
-* `Datum.type d : ColType` — maps a concrete `Datum` to its
-  observable kind (`.null` / `.err _` ↦ `.top`).
-* `ColType.compatible actual expected` — Bool predicate, reflexive
-  and `.top`-permissive in both positions.
-* `Expr.outputKind sch e : ColType` — the kind the expression
-  produces; precise on `.lit` and the boolean / arithmetic
-  fragment, `.top` for conditional and variadic-coalesce.
-* `Expr.WellTyped sch e : Prop` — recursive predicate that each
-  operator's operands have kinds compatible with what the
-  operator expects (`.not` / `.andN` / `.orN` consume bool;
-  arithmetic consumes int; `.eq` / `.lt` require same kind on
-  both sides). Variadic via mutual recursion through
-  `WellTypedArgs` / `WellTypedArgsAllBool`.
-* `RowSatisfiesType sch row` — every cell's kind compatible with
-  the schema's declared kind for that column.
-* `Expr.type_of_eval` — soundness theorem: under
-  `RowSatisfiesType`, `(eval row.toList e).kind` is compatible
-  with `Expr.outputKind sch e` for every expression. Structural
-  recursion on `Expr`; each non-`.col` arm closes via a
-  primitive-codomain lemma (`kind_evalPlus`, `kind_evalAnd`,
-  etc.) showing that the matching evaluator returns a `Datum`
-  whose kind falls in `{outputKind, .top}` regardless of inputs.
-  Required tightening `evalNot` to route `.int` to `.null` so its
-  codomain is bounded by the boolean fragment; the existing
-  `outputType (.not a)` rule weakened from "preserves both bits"
-  to `{ nullable := true, errable := outputType(a).errable }` as
-  a result.
-
-`WellTyped` is what the optimizer needs to cite to invoke the
-precision direction on `outputType`: under well-typing,
-type-mismatched operands are ruled out, and `outputType`'s
-conservative `nullable := true` for the `.int → .null` catch-all
-routes can be tightened to `nullable := input.nullable`.
-
-The first instance — `eval_not_satisfies_precise` in
-`Mz/WellTyped.lean` — demonstrates the pattern. The conservative
-rule `outputType (.not a) = { nullable := true, errable :=
-outputType(a).errable }` is honest under the tightened `evalNot`
-(which routes `.int → .null`), but is *misleading* on its own:
-for non-null bool or err inputs, evalNot does *not* produce
-`.null`. Under the precondition `outputKind a = .bool` (which
-rules out `.int` via `type_of_eval`), the precise schema
-`outputType a` is satisfied by `.not a` — preserving both bits
-of the input. Optimizers that establish the precondition get the
-tighter schema; the conservative form remains the safe default
-for arms that can't.
-
-The arithmetic / comparison constructors follow the same
-pattern; each needs its own per-case proof. `.not` is the
-demonstration; the rest are queued.
-
-Output-schema propagation for `Expr` lives in `Mz/OutputType.lean`:
-
-* `DatumSatisfies cs d` — `Datum` satisfies a `ColSchema` iff the
-  `nullable = false` and `errable = false` claims of the schema are
-  respected by the datum.
-* `Expr.outputType sch e` — derives the output `ColSchema` from
-  the input schema. Precise rules for `.lit`, `.col`, and `.not`
-  (preserves both bits). Tight `errable`-OR-of-inputs rules for
-  `.plus`/`.minus`/`.times`, `.eq`/`.lt`, and `.ifThen` (OR over
-  three arms). `nullable := true` on these because the
-  four-valued lattice routes type-mismatched operands to `.null`
-  even when no input is nullable (e.g. `evalPlus (.bool true)
-  (.int 5) = .null`). `.divide` stays conservative (always
-  errable for division-by-zero). Variadic `.andN`/`.orN`/
-  `.coalesce` remain conservative — mutual-recursion lifts are
-  open follow-ups.
-* `eval_satisfies_outputType` — soundness theorem. Recursive on
-  `Expr` (structural recursion via `match`); each tightened arm
-  consumes the matching strictness lemma from `Mz/MightError.lean`
-  (`evalNot_not_err`, `evalPlus_not_err`, etc.).
+`NoRowErr_filter` and `NoRowErr_cross` are open — they need
+`filter` / `cross` machinery that depends on
+`Schema.types`-level append lemmas. Round-4 regression; tracked
+in `transforms.md`.
 
 Open obligations on the schema side are listed in
 `transforms.md` (sections *Schema-driven rewrites* and
@@ -327,46 +267,50 @@ of what is and isn't mechanized at the schema layer.
 ## Collection
 
 A collection is a multiset of rows carrying data and err
-multiplicities.
-It is the time-stripped slice of `../platform/formalism.md`'s
-time-varying collection: a single collection version.
-Each entry is an `Update n` (named to match `formalism.md`'s
-update-triple vocabulary, minus the time field):
+multiplicities, **schema-indexed**:
 
 ```
-structure Update (n : Nat) where
-  row : RowN n
+structure Update {n : Nat} (sch : Schema n) where
+  row : Env sch  -- typed lookup; each cell has the kind sch.types.get i
   diff : Int      -- data multiplicity, retractable
   err_diff : Int  -- err multiplicity, retractable
+
+abbrev Collection {n : Nat} (sch : Schema n) := List (Update sch)
 ```
 
 Both diffs are ordinary `Int`s, retractable to model
-differential-dataflow consolidation.
-An update with `(diff, err_diff) = (1, 0)` is a valid output;
-`(0, 1)` is an erred output; `(1, 1)` is both (rare but representable
-under the encoding).
-`Collection n = List (Update n)`.
+differential-dataflow consolidation. An update with `(diff,
+err_diff) = (1, 0)` is a valid output; `(0, 1)` is an erred
+output; `(1, 1)` is both (rare but representable). It is the
+time-stripped slice of `../platform/formalism.md`'s time-varying
+collection: a single collection version.
 
-Operators on collections:
-* `filter` — preserves `row`, zeroes `diff`, migrates to `err_diff` on
-  an `.err` predicate result.
-* `project` — applies the projection expression vector pointwise,
-  preserving multiplicities; output arity is the projection vector
-  length.
-* `cross` — concatenates rows; multiplies `diff`s; the cross's
-  `err_diff` is the bilinear sum
-  `dL · eR + eL · dR + eL · eR`.
-  Output arity is `n + m`.
-* `negate`, `unionAll` — pointwise multiplicity negation and list
-  concatenation.
+Operators are typed by their input / output schemas:
+
+* `filter (p : Expr sch .bool) : Collection sch → Collection sch`
+  — schema-preserving. `filterOne` evaluates the predicate per
+  update: `.bool true` passes through; `.bool false` / `.null`
+  zero `diff`; `.err _` migrates `diff` to `err_diff`.
+* `project (es : (i : Fin m) → Expr sch_in (sch_out.types.get i))
+  : Collection sch_in → Collection sch_out` — schema-transforming
+  by the projection vector's output types.
+* `negate`, `unionAll` — schema-preserving; pointwise multiplicity
+  negation and list concatenation. `negate_negate` proved.
+  `unionAll_assoc` proved.
+* `cross : Collection sch_l → Collection sch_r → Collection
+  (Schema.append sch_l sch_r)` — **open**. The schema-indexed
+  cross requires `Schema.append`-level type casts for the row
+  combinator (env-append at `Fin (n+m)`); the untyped predecessor
+  had `cross` mechanized including `cross_assoc` and the bilinear
+  err rule, but the schema-indexed port is pending. Tracked as
+  the load-bearing follow-up for the pushdown story.
 
 Time, consolidation, distinct, and aggregate are out of scope at
-this layer.
-Lifting to a timed collection is additive on top.
+this layer. Lifting to a timed collection is additive on top.
 
 ### Order-sensitivity and retraction (`Collection.Equiv`)
 
-`Collection n = List (Update n)` under `=` is too fine for
+`Collection sch = List (Update sch)` under `=` is too fine for
 user-observable semantics on two axes:
 
 * **Order.** `unionAll a b` and `unionAll b a` are distinct lists
@@ -648,20 +592,18 @@ Counterexamples (mechanized in `Mz/EquivBounded.lean`,
   surfaces the boundary counterexample needed by the design-doc
   argument that errors force a non-equality relation.
 * `filter_cross_pushdown_left` unsound when right collection has
-  `err_diff > 0` (witnessed by
-  `filterOne_cross_pushdown_left_unsound`).
-  This is the canonical case where the encoding choice (two-diff
-  vs separate-collection) determines whether the rewrite holds.
-  Any encoding in which err multiplicity participates in the
-  cross's multiplication rule produces this gap — the separate-
-  collection encoding avoids it precisely because errs do not
-  multiply against data on its cross.
-  The skeleton chose two-diff for the cleaner bilinear cross rule
-  and accepts the pushdown obstruction as the cost; the rewrite
-  ships either under `eraseRowErr` (interior), under a static
-  `rowErrFree` schema fact, or — eventually — under a lifted
-  `refines`. See `transforms.md` "Filter / project / cross
-  pushdown" for the three windows.
+  `err_diff > 0`. **Open** in the indexed model: the canonical
+  counterexample (`filterOne_cross_pushdown_left_unsound`), the
+  three soundness windows (strict via `NoRowErr`, data-side via
+  `eraseRowErr`, refinement via `SignOK`), and `eraseRowErr`
+  itself were all mechanized in the untyped predecessor. The
+  GADT migration dropped these — they depend on `cross`, which
+  needs `Schema.append`-level row composition that is not yet
+  ported. The encoding insight is unchanged: any encoding in
+  which err multiplicity participates in cross's multiplication
+  rule produces this gap; the separate-collection encoding avoids
+  it precisely because errs do not multiply against data on its
+  cross.
 
 ### Error-set equivalence (`eqErrSet`)
 
@@ -694,49 +636,30 @@ mechanized in `Mz/Collection.lean`:
 * `Collection.refines` — recursive pointwise on equal-length
   lists.
 
-Pushdown `filter_cross_pushdown_left` is **mechanized at the
-collection level** under a sign side condition
+Pushdown `filter_cross_pushdown_left` under a sign side condition
 `SignOK sL sR := ∀ recL ∈ sL, ∀ recR ∈ sR, 0 ≤ recL.diff *
-recR.err_diff` (`filter_cross_pushdown_left_refines`). The
-condition is needed because cross's catch-all branch gives
-`LHS.err_diff − RHS.err_diff = recL.diff * recR.err_diff`, which
-may be negative under `Int` retractions; non-negative diffs (the
-operational regime before consolidation retracts) discharge
-`SignOK` trivially. The lift is therefore *not* unconditional, but
-strictly weaker than the `NoRowErr sR` precondition that the
-strict-equality form requires. The reverse direction is unsound.
+recR.err_diff` (intended theorem name
+`filter_cross_pushdown_left_refines`) is **open** in the indexed
+model. The condition is needed because cross's catch-all branch
+gives `LHS.err_diff − RHS.err_diff = recL.diff * recR.err_diff`,
+which may be negative under `Int` retractions; non-negative diffs
+(the operational regime before consolidation retracts) discharge
+`SignOK` trivially. The untyped predecessor mechanized this; the
+schema-indexed port is pending the `cross` definition.
 
-### Row-level err erasure (`eraseRowErr`) — interior lemma, not a user-facing relation
+### `eraseRowErr` — interior lemma (open in indexed model)
 
-`recA.eraseRowErr.diff = recB.eraseRowErr.diff ∧ rows equal`, ignoring
-`err_diff`.
-Equivalence relation.
+An equivalence relation that zeroes only the row-level err
+multiplicity (`err_diff`) while preserving the `row` carrier
+verbatim — cell-level errors inside the row are not erased. The
+untyped predecessor used `eraseRowErr` to close
+`filter_cross_pushdown_left_data` (the data-side half of the
+pushdown story) and as an interior step paired with an err-side
+argument before any rewrite ships.
 
-**Scope.** `eraseRowErr` zeroes only the row-level err multiplicity
-(`err_diff`). The `row` carrier is preserved verbatim — *cell-level
-errors inside the row are not erased*. Two updates with the same
-multiplicities but different `.err _` cells in `row` are still
-distinguished under this relation. The name was `eraseErr` in an
-earlier iteration; the rename to `eraseRowErr` captures the scope
-honestly. Rewrites that flip a `.bool false` cell to an `.err _`
-cell are *not* admitted by `eraseRowErr`.
-
-What it buys: `filter_cross_pushdown_left_data` closes for every
-branch of the predicate evaluation
-(`filterOne_cross_pushdown_left_data` per update, lifted via
-`List.map`).
-What it costs: erases the user-visible distinction between "row
-filtered out" and "row errored" *at the row-multiplicity level*.
-
-For Materialize, errors are observable in the runtime's error
-collection, so `eraseRowErr` cannot underwrite any rewrite the user
-can see at the row-multiplicity dimension.
-It is strictly an interior fact: a rewrite that preserves
-`eraseRowErr` still has to be paired with an err-side argument
-(`refines`, schema-driven `rowErrFree`, or a non-determinism
-quotient) before it ships.
-The summary table at the end of this file lists `eraseRowErr` for
-completeness, but it is not a candidate user-facing surface.
+**Status:** not mechanized in the indexed model. Round-4
+regression; depends on `cross`. The relation is straightforward
+to port once `cross` lands.
 
 ### Non-determinism (`LegalEval`, foundation sketched)
 
@@ -809,17 +732,17 @@ Relations and analyses a planner can cite today.
 
 | Layer / variant            | Mechanization                | Sound under                | Open under                                |
 | -------------------------- | ---------------------------- | -------------------------- | ----------------------------------------- |
-| `Datum`                    | `Mz/Datum.lean`              | —                          | overflow / decode / division-by-zero only |
-| `Expr.eval`                | `Mz/Eval.lean`               | `=` (on unbounded `Int`)   | strict eval order (no non-determinism); bounded-int counter at `Mz/EquivBounded.lean` |
-| `RowN n = Vector Datum n`  | `Mz/Collection.lean`         | `=`                        | indexed-arity reasoning verified          |
-| `Collection n` (two-diff)  | `Mz/Collection.lean`         | `=` on data side           | err side under `eraseRowErr` / `refines` |
-| `eqErrSet`                 | `Mz/Equiv.lean`              | err / err commutativity    | bounded-int assoc, pushdown over cross    |
-| `refines`                  | `Mz/Equiv.lean` + `Mz/Collection.lean` | pushdown LHS → RHS under `SignOK` side condition | rewrites that add err; unconditional pushdown |
+| `Datum k` (indexed)        | `Mz/Datum.lean`              | type discipline structural | overflow / decode / division-by-zero only |
+| `Expr sch k` (GADT)        | `Mz/Expr.lean` + `Mz/Eval.lean` | `=` on closed exprs (unbounded `Int`); WellTyped subsumed by GADT | bounded-int counter at `Mz/EquivBounded.lean` |
+| `Env sch`                  | `Mz/Eval.lean`               | typed lookup, no OOB case  | —                                         |
+| `Collection sch` (two-diff)| `Mz/Collection.lean`         | `=` on data side (`filter` / `project` / `negate` / `unionAll`) | `cross` open — `Schema.append` row composition pending |
+| `eqErrSet`                 | `Mz/Equiv.lean`              | err / err commutativity (`evalAnd_err_err_eqErrSet_comm`) | bounded-int assoc, pushdown over cross |
+| `refines` (`Datum`)        | `Mz/Equiv.lean`              | compositionality (`refines_cong_binary`, per-op corollaries) | rewrites that add err |
+| `refines` (`Row` / `Update` / `Collection`) | `Mz/Collection.lean` | Smyth-style lift + refl / trans | pushdown lift open (depends on `cross`) |
 | `Collection.Equiv`         | `Mz/Collection.lean`         | `unionAll` commutativity; `negate s ++ s ≈ []` retraction | most `=`-tagged rewrites not yet migrated |
-| `NoRowErr` precondition    | `Mz/Collection.lean`         | pushdown under `=`         | filter preservation needs static pred     |
-| `Schema n` (sketch)        | `Mz/Schema.lean`             | coalesce id, cross row-err | project output-schema rules               |
-| `Expr.outputType`          | `Mz/OutputType.lean`         | `=` on `.lit` and `.col`   | non-foundational constructors weakest     |
-| `Expr.WellTyped`           | `Mz/WellTyped.lean`          | structural predicate + `type_of_eval` soundness | precision direction on `outputType` open |
+| `NoRowErr` precondition    | `Mz/Collection.lean`         | discharged by `negate` / `unionAll` / `project` propagation | `filter` / `cross` propagation open |
+| `Expr.outputCols`          | `Mz/OutputType.lean`         | per-`Expr` `ColSchema` derivation | `eval_satisfies_outputCols` soundness open |
+| `might_error` + soundness  | `Mz/MightError.lean`         | `might_error_sound` + `evalCoalesce_not_err_of_some_safe` + variadic safety | — |
 
 ### Sketches and history
 
@@ -829,8 +752,8 @@ preserved for the design-doc record.
 
 | Layer / variant            | Status                       | What it buys                                | What's missing                            |
 | -------------------------- | ---------------------------- | ------------------------------------------- | ----------------------------------------- |
-| `eraseRowErr`              | `Mz/Collection.lean`, interior lemma | filter / cross pushdown — data side only | not user-facing; must pair with err-side argument |
-| `LegalEval`                | `Mz/Legal.lean`, foundation  | binary err-payload non-determinism, err-side commutativity | variadic short-circuit, data-side comm, collection lift |
+| `eraseRowErr`              | spec-only (untyped predecessor had it) | filter / cross pushdown — data side only | not yet ported to indexed model; depends on `cross` |
+| `LegalEval`                | `Mz/Legal.lean`, foundation  | binary err-payload non-determinism, err-side commutativity, `legal_of_eval`, `LegalEquiv` / `LegalSubsume` | variadic short-circuit, data-side comm, collection lift |
 | Per-payload `(Int×ErrCnt)` | branch history               | `=` on commutative-monoid                    | pushdown over cross provably unsound      |
 | Collection-scoped diff     | spec-only (design doc §"Global-scoped errors") | absorbing-marker semantics for global failures | not mechanized                            |
 

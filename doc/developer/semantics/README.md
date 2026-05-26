@@ -72,11 +72,26 @@ top.
   `ColSchema` derivation; `DatumSatisfies` / `RowSatisfies`
   satisfaction predicates).
 * **Equivalences.** `Mz.Equiv` (`Datum.eqErrSet`, `Datum.refines`,
-  compositionality), `Mz.EquivBounded` (bounded-arithmetic
-  counterexample), `Mz.Legal` (non-deterministic `LegalEval`).
-* **Collection layer.** `Mz.Collection` (`Update sch`,
-  `Collection sch`, `filter`, `project`, `cross` [deferred],
-  `negate`, `unionAll`, `NoRowErr`).
+  compositionality, `evalAnd_err_err_eqErrSet_comm`),
+  `Mz.EquivBounded` (bounded-arithmetic counterexample —
+  `evalPlusBounded_assoc_max_*`), `Mz.Legal` (non-deterministic
+  `LegalEval`, `legal_of_eval`, `legal_plus_err_either`,
+  `LegalEquiv` / `LegalSubsume`).
+* **Collection layer.** `Mz.Collection` — `Update sch`,
+  `Collection sch`, `filter`, `project`, `negate`, `unionAll`,
+  `Row.refines` / `Update.refines` / `Collection.refines` Smyth-
+  style lift, `NoRowErr` precondition, `NoRowErr_negate` /
+  `NoRowErr_unionAll` / `NoRowErr_project` propagation,
+  `Collection.Equiv` (perm + merge + drop_zero) with
+  `unionAll_comm_equiv` and `negate_unionAll_self` demonstrators.
+
+**Open** (round-4 regressions to port from the untyped
+predecessor): `cross` + `cross_assoc` (depends on `Schema.append`
+row composition); `filter_cross_pushdown_left_*` (the canonical
+counterexample + three soundness windows); `eraseRowErr`;
+`eval_satisfies_outputCols` (output-schema soundness);
+`NoRowErr_filter` / `NoRowErr_cross`; `coalesce_collapse` /
+`eval_coalesce_pair_of_a_concrete`.
 
 ## Build
 

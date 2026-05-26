@@ -76,32 +76,30 @@ The skeleton has uncovered a soundness gap on `filter ∘ cross`
 which other pushdowns share if they multiply err multiplicities
 against data multiplicities.
 
-| Transform | Statement | Relation |
+| Transform | Statement | Status |
 | --- | --- | --- |
-| `filter_cross_pushdown_left` | `filter p (cross l r) = cross (filter p l) r` when `p`'s columns are bounded by `l`'s arity | unsound under `=` (counterexample `filterOne_cross_pushdown_left_unsound`); sound under `eraseRowErr` (`filter_cross_pushdown_left_data`); sound under `=` given `NoRowErr r` (`filter_cross_pushdown_left_strict`); sound under `Collection.refines` LHS → RHS given `SignOK l r` (`filter_cross_pushdown_left_refines`) |
-| `filter_cross_pushdown_right` (open) | symmetric, via `colShift` to realign the predicate; substrate `eval_append_right_shift` mechanized in `Mz/ColRefs.lean` | mirror of the left form |
+| `filter_cross_pushdown_left` (open) | `filter p (cross l r) = cross (filter p l) r` when `p`'s columns are bounded by `l`'s arity | **open in indexed model.** Counterexample (`filterOne_cross_pushdown_left_unsound`) and three soundness windows (strict via `NoRowErr`, data-side via `eraseRowErr`, refinement via `SignOK`) were all mechanized in the untyped predecessor; not yet ported. Depends on `cross` (also open). |
+| `filter_cross_pushdown_right` (open) | symmetric, via `colShift` to realign the predicate | mirror of the left form |
 | `project_cross_pushdown` (open) | `project es (cross l r) = cross (project es_l l) (project es_r r)` when `es` splits cleanly into left and right column-sets | expected `=` when the split is clean |
 | `filter_project_pushdown` (open) | `filter p (project es s) = project es (filter (p.subst es) s)` | data side under `=` via `eval_subst`; err side asks the same multiplicity question as the cross pushdown |
 
 The pushdown gap. `cross`'s err-diff is bilinear in data and err
 multiplicities (`dL · eR + eL · dR + eL · eR`). A filter that zeroes
 `dL` before the cross drops the `dL · eR` term that the post-cross
-filter preserves. Three recovery windows:
+filter preserves. Three recovery windows (all mechanized in the
+untyped predecessor; not yet ported to the indexed model):
 
-* **Data-side equivalence (`eraseRowErr`).** Drop `err_diff` from the
-  comparison. Sound; loses the user-visible "row errored" signal.
+* **Data-side equivalence (`eraseRowErr`).** Drop `err_diff` from
+  the comparison. Sound; loses the user-visible "row errored"
+  signal.
 * **`NoRowErr` precondition.** Assume the right collection has
-  `err_diff = 0` on every update. Sound at `=`. Discharged by a
-  schema's `rowErrFree` bit (`NoRowErr_of_satisfies_rowErrFree`).
+  `err_diff = 0` on every update. Sound at `=`. Intended discharge
+  via schema-fact bridge.
 * **`refines` posture.** Allow the transformed side to lose
-  errors. Mechanized in `Mz/Collection.lean`
-  (`filter_cross_pushdown_left_refines`) under a sign side
+  errors. Intended theorem name
+  `filter_cross_pushdown_left_refines` under a sign side
   condition `SignOK l r := ∀ recL ∈ l, ∀ recR ∈ r,
-  0 ≤ recL.diff * recR.err_diff`. The condition is needed because
-  cross's catch-all branch produces
-  `LHS.err_diff − RHS.err_diff = recL.diff * recR.err_diff`, which
-  may be negative under `Int` retractions. Non-negative-diff
-  collections discharge `SignOK` trivially.
+  0 ≤ recL.diff * recR.err_diff`.
 
 ## Substitution
 
@@ -118,26 +116,33 @@ This is the substrate for the project pushdown above.
 
 ## Column-pruning
 
-Dropping a column nothing reads must be invisible.
-The kernel lemma is mechanized; the lift to operators on
-`Collection` is open.
+Dropping a column nothing reads must be invisible. With the GADT,
+column references use `Fin n` indices; out-of-bounds is
+unconstructible. Column-pruning rewrites that need to reshape the
+schema (drop column `i` and reindex the rest) are
+schema-transforming and handled via `Subst` with a smaller schema.
 
-| Transform | Statement | Relation |
+| Transform | Statement | Status |
 | --- | --- | --- |
-| `eval_replaceAt_of_unused` | replacing the value at an unused column index leaves `eval` unchanged (`Mz/ColRefs.lean`) | `=` |
-| `project_drop_unused` (open) | `project es s = project es s'` where `s'` is `s` with an unused-by-`es` column erased | `=` via lifting `eval_replaceAt_of_unused` over the collection |
-| `filter_drop_unused` (open) | symmetric, for a column unused by the filter predicate | `=` |
+| `project_drop_unused` (open) | `project es s = project es s'` where `s'` is `s` with an unused-by-`es` column erased | open; substrate is `Subst` and `Schema.append` lemmas |
+| `filter_drop_unused` (open) | symmetric, for a column unused by the filter predicate | open |
+
+Column-reference analyses of the untyped predecessor
+(`colReferencesBoundedBy`, `colShift`, `colReferencesUnused`,
+`eval_replaceAt_of_unused`) are subsumed by the GADT — `.col i`
+uses `Fin n` and `Subst` is schema-transforming.
 
 ## Eval-on-append substrates
 
-Two mechanized facts in `Mz/ColRefs.lean` underwrite the pushdown
-rewrites; they are not operator-level transforms in themselves but
-are what makes the pushdown statable.
+Pre-GADT, these were lemmas about untyped `Env` (list) append. In
+the indexed model, the analogue is `Env.append` over schema-typed
+lookups, with `Schema.append`-level type casts. Not yet
+mechanized; tracked with `cross`.
 
-| Lemma | Statement | Used by |
+| Lemma (open) | Statement | Used by |
 | --- | --- | --- |
-| `eval_append_left_of_bounded` | `eval (envL ++ envR) p = eval envL p` when `p`'s columns are bounded by `envL.length` | `filter_cross_pushdown_left_*` (via `eval_crossOne_left_bounded`) |
-| `eval_append_right_shift` | `eval (envL ++ envR) (p.colShift envL.length) = eval envR p` | substrate for the open right-side pushdown |
+| `Env.append_left` (open) | accessing index `i < n` of an appended env returns the left cell | `cross`'s row composition |
+| `Env.append_right` (open) | accessing index `n ≤ i < n + m` returns the right cell at `i - n` | `cross`'s row composition |
 
 ## Negate and cross bilinearity
 
@@ -157,13 +162,13 @@ Each entry assumes the input collection satisfies a `Schema n` (see
 
 | Transform | Statement | Schema premise |
 | --- | --- | --- |
-| `coalesce_collapse` | `coalesce(a, b) = a` when `a` evaluates concrete | `a`'s `outputType` has `nullable = false ∧ errable = false`; mechanized via `eval_coalesce_pair_of_a_concrete` |
-| `NoRowErr_filter` | `filter p` preserves `NoRowErr s` | `s` satisfies a schema with `cellErrFree`, and `p.might_error = false` |
-| `NoRowErr_cross` | `cross l r` preserves `NoRowErr l ∧ NoRowErr r` | unconditional |
-| `NoRowErr_project` | `project es s` preserves `NoRowErr s` | unconditional |
-| `NoRowErr_unionAll` | `unionAll a b` preserves `NoRowErr a ∧ NoRowErr b` | unconditional |
-| `NoRowErr_negate` | `negate s` preserves `NoRowErr s` | unconditional |
-| `is_null_fold` (open) | `is_null(a) = false` when `a`'s column is non-nullable | `a`'s `outputType.nullable = false` |
+| `coalesce_collapse` (open) | `coalesce(a, b) = a` when `a` evaluates concrete | open; untyped predecessor mechanized via `eval_coalesce_pair_of_a_concrete`. Indexed re-port pending |
+| `NoRowErr_filter` (open) | `filter p` preserves `NoRowErr s` when `p.might_error = false` over `s` | open; needs `RowSatisfies → EnvErrFree` bridge ported |
+| `NoRowErr_cross` (open) | `cross l r` preserves `NoRowErr l ∧ NoRowErr r` | open; depends on `cross` |
+| `NoRowErr_project` | `project es s` preserves `NoRowErr s` | mechanized (unconditional) |
+| `NoRowErr_unionAll` | `unionAll a b` preserves `NoRowErr a ∧ NoRowErr b` | mechanized (conjunctive) |
+| `NoRowErr_negate` | `negate s` preserves `NoRowErr s` | mechanized (unconditional) |
+| `is_null_fold` (open) | `is_null(a) = false` when `a`'s column is non-nullable | `a`'s `outputCols.nullable = false` |
 | `non_null_join_key` (open) | join key need not check NULL | both sides' key columns are non-nullable |
 | `schema_filter` (open) | `filter p s` output schema preserves `s.cols`, sets `rowErrFree` from `p`'s err-freedom | `p.might_error = false` over `s` |
 | `schema_project` (open) | `project es s` output schema lifts `Expr.outputType` over the projection vector | unconditional |
@@ -172,13 +177,13 @@ Each entry assumes the input collection satisfies a `Schema n` (see
 
 ## Output-schema propagation
 
-`Expr.outputType sch e` derives the output `ColSchema` for a scalar
-expression on a row satisfying input schema `sch`.
-The mechanized soundness statement is:
+`Expr.outputCols sch e` derives the output `ColSchema` for a
+schema-indexed `Expr`. Soundness theorem is open in the indexed
+model.
 
-| Transform | Statement |
-| --- | --- |
-| `eval_satisfies_outputType` | `DatumSatisfies (Expr.outputType sch e) (eval row.toList e)` whenever `row` satisfies `sch` |
+| Transform | Statement | Status |
+| --- | --- | --- |
+| `eval_satisfies_outputCols` (open) | `DatumSatisfies (Expr.outputCols sch e) (eval env e)` whenever `env : Env sch` satisfies `sch` | open; untyped predecessor had `eval_satisfies_outputType` |
 
 Per-constructor precision (`Mz/OutputType.lean`):
 * `.lit` / `.col` — precise.
