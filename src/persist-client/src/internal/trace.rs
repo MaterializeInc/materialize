@@ -1147,11 +1147,12 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             return ApplyMergeResult::NotAppliedNoMatch;
         }
 
-        let range: BTreeSet<_> = range.iter().map(|(i, _)| *i).collect();
-
         // This is the range of hollow batches that we will replace.
-        let min = *range.first().unwrap();
-        let max = *range.last().unwrap();
+        let (min, max) = match range.iter().map(|(i, _)| *i).minmax() {
+            itertools::MinMaxResult::NoElements => return ApplyMergeResult::NotAppliedNoMatch,
+            itertools::MinMaxResult::OneElement(elt) => (elt, elt),
+            itertools::MinMaxResult::MinMax(min, max) => (min, max),
+        };
         let replacement_range = min..max + 1;
 
         // We need to replace a range of parts. Here we don't care about the run_indices

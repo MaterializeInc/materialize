@@ -856,6 +856,8 @@ impl MapFilterProject {
 
     /// Lists input columns whose values are used in outputs.
     ///
+    /// You can use `BTreeSet::last()` to extract the maximum demanded column from the set.
+    ///
     /// It is entirely appropriate to determine the demand of an instance
     /// and then both apply a projection to the subject of the instance and
     /// `self.permute` this instance.
