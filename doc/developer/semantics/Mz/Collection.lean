@@ -269,6 +269,25 @@ theorem crossOne_err_diff_assoc (dL eL dM eM dR eR : Int) :
     = dL * (dM * eR + eM * dR + eM * eR) + eL * (dM * dR)
       + eL * (dM * eR + eM * dR + eM * eR) := by ring
 
+/-- `crossOne`'s `diff` field is associative. The schemas differ on
+the two sides (cross of crosses lives at appended-twice arity); the
+`diff` field projects to `Int` regardless, so Eq is well-typed. -/
+theorem crossOne_diff_eq {n m k : Nat}
+    {sl : Schema n} {sm : Schema m} {sk : Schema k}
+    (a : Update sl) (b : Update sm) (c : Update sk) :
+    (crossOne (crossOne a b) c).diff = (crossOne a (crossOne b c)).diff := by
+  unfold crossOne
+  ring
+
+/-- `crossOne`'s `err_diff` field is associative on the bilinear rule. -/
+theorem crossOne_err_diff_eq {n m k : Nat}
+    {sl : Schema n} {sm : Schema m} {sk : Schema k}
+    (a : Update sl) (b : Update sm) (c : Update sk) :
+    (crossOne (crossOne a b) c).err_diff =
+    (crossOne a (crossOne b c)).err_diff := by
+  unfold crossOne
+  ring
+
 /-! ## Cross associativity (open — row component)
 
 With `Schema.append_assoc_heq` + `Update.cast` / `Collection.cast`
