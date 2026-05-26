@@ -105,6 +105,15 @@ pub const KAFKA_POLL_MAX_WAIT: Config<Duration> = Config::new(
     available.",
 );
 
+/// Whether to check the low watermark for Kafka sources and error if the start offset/resume
+/// upper has been compacted away.
+pub const KAFKA_LOW_WATERMARK_CHECK: Config<bool> = Config::new(
+    "kafka_low_watermark_check",
+    true,
+    "Whether to check the low watermark for Kafka sources and error if the start \
+    offset/resume upper has been compacted away.",
+);
+
 pub const KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM: Config<&'static str> =
     Config::new(
         "kafka_default_aws_privatelink_endpoint_identification_algorithm",
@@ -365,6 +374,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS)
         .add(&KAFKA_CLIENT_ID_ENRICHMENT_RULES)
         .add(&KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM)
+        .add(&KAFKA_LOW_WATERMARK_CHECK)
         .add(&KAFKA_POLL_MAX_WAIT)
         .add(&KAFKA_RETRY_BACKOFF)
         .add(&KAFKA_RETRY_BACKOFF_MAX)
