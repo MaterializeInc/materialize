@@ -40,12 +40,11 @@ DEFAULT_GROUP = "combined"
 
 
 def script_path(entry: str) -> str:
-    # Manifest entries are `<template>/<basename>`; bash scripts
-    # (anytime_health_check) are .sh, everything else .py.  Keep the
-    # extension special-case here so the manifest stays brief.
+    # Manifest entries are `<template>/<basename>`; today every entry
+    # resolves to a `.py` file.  If a `.sh` driver appears in future
+    # this is the place to special-case it.
     template, basename = entry.split("/", 1)
-    ext = ".sh" if basename == "anytime_health_check" else ".py"
-    return f"{template}/{basename}{ext}"
+    return f"{template}/{basename}.py"
 
 
 def main() -> int:

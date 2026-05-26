@@ -142,6 +142,30 @@ FAULT_PATTERNS: tuple[str, ...] = (
     # HikariCP-style (polaris's connection pool) exhaustion when the
     # JDBC upstream stays paused longer than the pool's wait budget.
     "Acquisition timeout while waiting for new connection",
+    # Polaris's IllegalStateException wording when its embedded
+    # postgres-backed metadata DB is mid-restart after a fault and its
+    # service-layer reads the schema version before bootstrap finishes.
+    # Surfaces through materialized's `CREATE CONNECTION TO ICEBERG
+    # CATALOG (...)` validation as
+    # `failed to list namespaces: DataInvalid, context: { type:
+    # IllegalStateException, code: 500 } => Failed to retrieve schema
+    # version`.  Distinct from `Failed to execute http request` (which
+    # fires when Polaris's TCP socket is unreachable); this is "Polaris
+    # is up but its DB schema isn't yet ready".
+    "Failed to retrieve schema version",
+    # ---- Materialize timestamp / since transients --------------------
+    # Materialize rejects a query whose chosen `AS OF` is below the
+    # storage input's since.  Outside fault injection the planner picks
+    # AS OF >= since by construction; under fault windows, however,
+    # materialized restarts (or a replica failover) can let persist
+    # compaction advance since past a timestamp a long-lived driver
+    # already witnessed and would otherwise reuse on reconnect.  Today
+    # the `singleton_driver_subscribe_correctness` consumer thread is
+    # the in-tree caller most likely to hit this — it saves the latest
+    # PROGRESS timestamp and uses it as AS OF on every reconnect; if a
+    # fault window's downtime exceeds the durable since-pin lifetime
+    # the reconnect query is rejected with this exact wording.
+    "could not find a valid timestamp for the query",
 )
 
 
