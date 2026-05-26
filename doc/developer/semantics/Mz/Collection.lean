@@ -296,6 +296,61 @@ theorem NoRowErr_cross {sch_l : Schema n} {sch_r : Schema m}
        + recL.err_diff * recR.err_diff = 0
   rw [hL, hR]; simp
 
+/-! ## Filter / cross pushdown — counterexample
+
+The canonical soundness gap for `filter (cross l r) = cross (filter
+l) r`. cross's err-diff is bilinear in data and err multiplicities:
+`(dL, eL) * (dR, eR) = (dL · dR, dL · eR + eL · dR + eL · eR)`.
+
+A filter that zeroes `dL` before the cross drops the `dL · eR`
+term that the post-cross filter preserves. Witnessed concretely
+on `Schema.free 0` (empty schemas), where `Env` is the unique
+empty function, with a `.lit (.bool false)` predicate. -/
+
+theorem filter_cross_pushdown_left_unsound :
+    ∃ (n m : Nat) (sch_l : Schema n) (sch_r : Schema m)
+      (l : Collection sch_l) (r : Collection sch_r)
+      (p_comb : Expr (Schema.append sch_l sch_r) .bool)
+      (p_left : Expr sch_l .bool),
+      filter p_comb (cross l r) ≠
+      cross (filter p_left l) r := by
+  refine ⟨0, 0, Schema.free 0, Schema.free 0,
+    [{ row := fun i => i.elim0, diff := 1, err_diff := 0 }],
+    [{ row := fun i => i.elim0, diff := 0, err_diff := 1 }],
+    .lit (.bool false), .lit (.bool false), ?_⟩
+  intro h
+  -- LHS computes:
+  -- cross [recL] [recR] = [crossOne recL recR]
+  --   crossOne.diff = 1 * 0 = 0
+  --   crossOne.err_diff = 1*1 + 0*0 + 0*1 = 1
+  -- filter .bool-false: data=0 → diff=0, err_diff=1.
+  -- So LHS = [{row=..., diff=0, err_diff=1}].
+  --
+  -- RHS computes:
+  -- filter .bool-false [recL] = [{row=recL.row, diff=0, err_diff=0}]
+  -- cross [...] [recR]:
+  --   crossOne.diff = 0 * 0 = 0
+  --   crossOne.err_diff = 0*1 + 0*0 + 0*1 = 0
+  -- So RHS = [{row=..., diff=0, err_diff=0}].
+  --
+  -- LHS.head.err_diff = 1, RHS.head.err_diff = 0. Contradiction.
+  have hLHS : (filter (.lit (.bool false))
+    (cross [({ row := fun i => i.elim0, diff := 1, err_diff := 0 } :
+              Update (Schema.free 0))]
+           [({ row := fun i => i.elim0, diff := 0, err_diff := 1 } :
+              Update (Schema.free 0))])).head?.map (·.err_diff)
+    = some 1 := by decide
+  have hRHS : (cross
+    (filter (.lit (.bool false))
+      [({ row := fun i => i.elim0, diff := 1, err_diff := 0 } :
+         Update (Schema.free 0))])
+    [({ row := fun i => i.elim0, diff := 0, err_diff := 1 } :
+       Update (Schema.free 0))]).head?.map (·.err_diff)
+    = some 0 := by decide
+  rw [h] at hLHS
+  rw [hLHS] at hRHS
+  cases hRHS
+
 /-! ## Row refinement
 
 Pointwise refinement on `Env sch` cells. Lifts `Datum.refines` to
