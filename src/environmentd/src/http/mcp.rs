@@ -1009,20 +1009,10 @@ async fn read_data_product(
     // Parse and safely quote the name for SQL interpolation.
     let safe_name = safe_data_product_name(name)?;
 
-    // Lookup query: serves as the existence check (we still error
-    // `DataProductNotFound` on an empty result) and at the same time
-    // recovers the catalog cluster for auto-routing along with whether the
-    // calling role has `USAGE` on it. `mz_mcp_data_products` filters by
-    // `SELECT` on the object but not by cluster privileges, so a role may
-    // legitimately see a data product whose home cluster it cannot use;
-    // when that happens we fall back to the session default rather than
-    // emit `SET CLUSTER` followed by a hard `permission denied` failure.
-    //
-    // `mz_mcp_data_products` can hold multiple rows per object_name when a
-    // product is indexed on multiple clusters. The `ORDER BY` picks the
-    // best candidate deterministically: prefer a cluster the role can
-    // actually use, then break ties alphabetically. Callers can override
-    // the choice via `cluster_override`.
+    // Existence check + recover the cluster for auto-routing. The view
+    // filters by SELECT on the object but not by cluster privileges, so we
+    // also fetch USAGE on the cluster and prefer a usable one in ORDER BY
+    // (an MV indexed on multiple clusters can appear more than once).
     let lookup_query = format!(
         "SELECT \
              cluster, \
@@ -1052,11 +1042,10 @@ async fn read_data_product(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
-    // Override beats everything. Otherwise auto-route to the catalog
-    // cluster only when the role has `USAGE` on it; without `USAGE` the
-    // `SET CLUSTER` would succeed but the subsequent `SELECT` would fail
-    // with a `permission denied`, so we leave the read on the session
-    // default — slower (no index) but correct.
+    // Override > catalog (when usable) > session default. Skipping
+    // auto-route on missing USAGE keeps the read on a cluster the role
+    // can actually use; SET CLUSTER itself would succeed but the SELECT
+    // would then fail with `permission denied for CLUSTER`.
     let target_cluster = cluster_override.or_else(|| {
         if has_cluster_usage {
             catalog_cluster
@@ -1089,12 +1078,9 @@ async fn read_data_product(
 /// READ ONLY` transaction so the cluster choice is scoped to this read
 /// and does not leak into the session.
 ///
-/// When `target_cluster` is `None` we emit a single bare `SELECT` instead
-/// of opening a transaction. This case is reached for restricted roles
-/// that have `SELECT` on the data product but not `USAGE` on its home
-/// cluster: rather than `SET CLUSTER` to a cluster the role cannot use
-/// (which would hard-fail), [`read_data_product`] falls back to the
-/// session default and accepts the suboptimal-but-correct read.
+/// `target_cluster: None` emits a bare `SELECT` on the session default —
+/// the fallback when the role lacks `USAGE` on the data product's home
+/// cluster (see [`read_data_product`]).
 fn build_read_query(safe_name: &str, limit: u32, target_cluster: Option<&str>) -> String {
     match target_cluster {
         Some(cluster) => format!(
