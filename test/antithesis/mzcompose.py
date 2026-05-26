@@ -562,6 +562,38 @@ SERVICES = [
             "unsafe_enable_unorchestrated_cluster_replicas": "true",
         },
     ),
+    # Second `materialized` instance, brought up only by the `deploy`
+    # workload group, exists to exercise zero-downtime-deploy and
+    # txn-wal-fencing properties under Antithesis fault injection.
+    #
+    # Shares the postgres-metadata catalog and the minio persist blob
+    # store with the primary `materialized`, so the two instances are
+    # racing on the same durable state — exactly the topology
+    # `test/0dt` and `test/txn-wal-fencing` use.  The `deploy_generation=1`
+    # (vs the primary's implicit 0) puts this instance into read-only
+    # mode at startup: it rehydrates from the shared catalog and serves
+    # SELECTs but rejects writes with `cannot write in read-only mode`.
+    #
+    # Property surface this enables (today the deploy group ships a
+    # single driver against it; more can layer on later):
+    #   * read-only safety — writes to materialized2 must never
+    #     succeed regardless of which client connects to it.
+    #   * shared-state liveness — a row INSERT'd against the primary
+    #     becomes visible on materialized2 within bounded time.
+    Materialized(
+        name="materialized2",
+        external_blob_store=True,
+        external_metadata_store=True,
+        metadata_store="postgres-metadata",
+        unsafe_mode=True,
+        soft_assertions=True,
+        sanity_restart=False,
+        support_external_clusterd=True,
+        deploy_generation=1,
+        additional_system_parameter_defaults={
+            "unsafe_enable_unorchestrated_cluster_replicas": "true",
+        },
+    ),
     FaultOrchestrator(),
     Workload(),
 ]

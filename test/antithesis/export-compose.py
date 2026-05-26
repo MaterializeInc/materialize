@@ -86,6 +86,7 @@ MATERIALIZE_IMAGES = {
     "antithesis-workload-upsert-stress": "${ANTITHESIS_WORKLOAD_IMAGE}",
     "antithesis-workload-platform-checks": "${ANTITHESIS_WORKLOAD_IMAGE}",
     "antithesis-workload-workload-replay": "${ANTITHESIS_WORKLOAD_IMAGE}",
+    "antithesis-workload-deploy": "${ANTITHESIS_WORKLOAD_IMAGE}",
     "antithesis-workload-combined": "${ANTITHESIS_WORKLOAD_IMAGE}",
     # Standalone hammer image — only referenced by the `upsert-stress`
     # group's compose, but the placeholder is always emitted in `.env`
