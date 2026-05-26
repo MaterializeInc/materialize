@@ -32,6 +32,7 @@ from materialize.util import PropagatingThread
 from materialize.workload_replay.config import (
     LOCATION,
     SEED_RANGE,
+    additional_system_parameter_defaults,
     cluster_replica_sizes,
 )
 from materialize.workload_replay.data import (
@@ -316,6 +317,12 @@ def benchmark(
     settings = workload.get("settings", {})
     if not settings.get("scale_data", True):
         factor_initial_data = 1.0
+    else:
+        # A workload can shrink itself further via
+        # `settings.factor_initial_data_multiplier` — useful when a single
+        # captured workload is dramatically larger than the rest and would
+        # blow past the CI timeout at the global factor.
+        factor_initial_data *= settings.get("factor_initial_data_multiplier", 1.0)
 
     print_workload_stats(file, workload)
 
@@ -328,7 +335,7 @@ def benchmark(
             cluster_replica_size=cluster_replica_sizes,
             ports=[6875, 6874, 6876, 6877, 6878, 6880, 6881, 26257],
             environment_extra=["MZ_NO_BUILTIN_CONSOLE=0"],
-            additional_system_parameter_defaults={"enable_rbac_checks": "false"},
+            additional_system_parameter_defaults=additional_system_parameter_defaults,
         )
     ):
         stats_old = test(
@@ -362,7 +369,7 @@ def benchmark(
             cluster_replica_size=cluster_replica_sizes,
             ports=[6875, 6874, 6876, 6877, 6878, 6880, 6881, 26257],
             environment_extra=["MZ_NO_BUILTIN_CONSOLE=0"],
-            additional_system_parameter_defaults={"enable_rbac_checks": "false"},
+            additional_system_parameter_defaults=additional_system_parameter_defaults,
         )
     ):
         stats_new = test(

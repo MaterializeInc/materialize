@@ -597,12 +597,26 @@ impl SpecialUnary {
 }
 
 /// A binary function we've added special-case handling for; including:
-/// - A two-argument function, taking and returning [ResultSpec]s. This overrides the
-///   default function-handling logic entirely.
+/// - Either a complete override of [ResultSpec] computation, or a way to
+///   compute monotonicity dynamically from the input specs.
 /// - Metadata on whether / not this function is pushdownable. See [Trace].
 struct SpecialBinary {
-    map_fn: for<'a> fn(ResultSpec<'a>, ResultSpec<'a>) -> ResultSpec<'a>,
+    handler: SpecialBinaryHandler,
     pushdownable: (bool, bool),
+}
+
+/// How a [SpecialBinary] computes the output [ResultSpec].
+enum SpecialBinaryHandler {
+    /// Completely override the spec computation; the default flat-map machinery
+    /// is bypassed.
+    Override(for<'a> fn(ResultSpec<'a>, ResultSpec<'a>) -> ResultSpec<'a>),
+    /// Use the default flat-map machinery, but with a monotonicity verdict that
+    /// depends on the input specs. This lets us claim monotonicity for cases
+    /// the static [LazyBinaryFunc::is_monotone] annotation can't safely claim:
+    /// for instance, `t + INTERVAL '1' day` is monotone in `t`, but `t + i`
+    /// generally isn't (the calendar-month / day-clamping arithmetic in
+    /// `add_timestamp_interval` is non-monotone when `i.months != 0`).
+    DynamicMonotone(fn(&ResultSpec<'_>, &ResultSpec<'_>) -> (bool, bool)),
 }
 
 impl SpecialBinary {
@@ -687,18 +701,55 @@ impl SpecialBinary {
             })
         }
 
+        /// `add_timestamp_interval` and friends do calendar-month arithmetic
+        /// with day-clamping, which is non-monotone in either argument when
+        /// `interval.months != 0`. But when `interval.months == 0` the
+        /// operation reduces to adding a fixed number of microseconds, which
+        /// *is* monotone in both arguments. The static `is_monotone`
+        /// annotation has to pick the conservative answer; this dynamic check
+        /// recovers filter pushdown for the common case of literal
+        /// `INTERVAL '<N>' day`-style predicates.
+        fn timestamp_plus_interval_monotone(
+            _left: &ResultSpec<'_>,
+            right: &ResultSpec<'_>,
+        ) -> (bool, bool) {
+            let months_zero = matches!(
+                &right.values,
+                Values::Within(Datum::Interval(a), Datum::Interval(b))
+                    if a == b && a.months == 0,
+            );
+            if months_zero {
+                (true, true)
+            } else {
+                (false, false)
+            }
+        }
+
         match func {
             BinaryFunc::JsonbGetString(_) => Some(SpecialBinary {
-                map_fn: |l, r| jsonb_get_string(l, r, false),
+                handler: SpecialBinaryHandler::Override(|l, r| jsonb_get_string(l, r, false)),
                 pushdownable: (true, false),
             }),
             BinaryFunc::JsonbGetStringStringify(_) => Some(SpecialBinary {
-                map_fn: |l, r| jsonb_get_string(l, r, true),
+                handler: SpecialBinaryHandler::Override(|l, r| jsonb_get_string(l, r, true)),
                 pushdownable: (true, false),
             }),
             BinaryFunc::Eq(_) => Some(SpecialBinary {
-                map_fn: eq,
+                handler: SpecialBinaryHandler::Override(eq),
                 pushdownable: (true, true),
+            }),
+            BinaryFunc::AddTimestampInterval(_)
+            | BinaryFunc::AddTimestampTzInterval(_)
+            | BinaryFunc::SubTimestampInterval(_)
+            | BinaryFunc::SubTimestampTzInterval(_) => Some(SpecialBinary {
+                handler: SpecialBinaryHandler::DynamicMonotone(timestamp_plus_interval_monotone),
+                // For [Trace]: we *might* be pushdownable in the first argument
+                // (we are when the interval is a literal with no months). The
+                // interval argument is reported as non-pushdownable so that
+                // `t_col +/- col_interval` doesn't get routed through pushdown
+                // for no benefit; if both sides are constants the predicate
+                // collapses anyway.
+                pushdownable: (true, false),
             }),
             _ => None,
         }
@@ -879,24 +930,36 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
         left: Self::Summary,
         right: Self::Summary,
     ) -> Self::Summary {
-        let (left_monotonic, right_monotonic) = func.is_monotone();
         let fallible = func.could_error() || left.range.fallible || right.range.fallible;
 
-        let mapped_spec = if let Some(special) = SpecialBinary::for_func(func) {
-            (special.map_fn)(left.range, right.range)
-        } else {
-            let mut expr = MirScalarExpr::CallBinary {
-                func: func.clone(),
-                expr1: Box::new(Self::placeholder(left.col_type.clone())),
-                expr2: Box::new(Self::placeholder(right.col_type.clone())),
-            };
-            left.range.flat_map(left_monotonic, |left_result| {
-                Self::set_argument(&mut expr, 0, left_result);
-                right.range.flat_map(right_monotonic, |right_result| {
-                    Self::set_argument(&mut expr, 1, right_result);
-                    self.eval_result(expr.eval(&[], self.arena))
+        let special = SpecialBinary::for_func(func);
+        let (left_monotonic, right_monotonic) = match &special {
+            Some(SpecialBinary {
+                handler: SpecialBinaryHandler::DynamicMonotone(monotone_fn),
+                ..
+            }) => monotone_fn(&left.range, &right.range),
+            _ => func.is_monotone(),
+        };
+
+        let mapped_spec = match special {
+            Some(SpecialBinary {
+                handler: SpecialBinaryHandler::Override(f),
+                ..
+            }) => f(left.range, right.range),
+            _ => {
+                let mut expr = MirScalarExpr::CallBinary {
+                    func: func.clone(),
+                    expr1: Box::new(Self::placeholder(left.col_type.clone())),
+                    expr2: Box::new(Self::placeholder(right.col_type.clone())),
+                };
+                left.range.flat_map(left_monotonic, |left_result| {
+                    Self::set_argument(&mut expr, 0, left_result);
+                    right.range.flat_map(right_monotonic, |right_result| {
+                        Self::set_argument(&mut expr, 1, right_result);
+                        self.eval_result(expr.eval(&[], self.arena))
+                    })
                 })
-            })
+            }
         };
 
         let col_type = func.output_type(&[left.col_type, right.col_type]);
@@ -972,6 +1035,59 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
             .intersect(ResultSpec::has_type(&col_type, true));
 
         ColumnSpec { col_type, range }
+    }
+
+    /// Override the default implementations of [Self::mfp_filter] and
+    /// [Self::mfp_plan_filter] so that the fallibility of MFP expressions
+    /// surfaces in the result, even when the expression's result column isn't
+    /// referenced by a predicate or temporal bound.
+    ///
+    /// The runtime MFP evaluator runs every expression once all the preceding
+    /// predicates pass (see [`crate::SafeMfpPlan::evaluate_inner`]), so an
+    /// expression that errors on the actual data will turn the whole row into
+    /// an `Err` — even if no predicate or bound mentions that expression. The
+    /// default `mfp_filter` / `mfp_plan_filter` only AND together the
+    /// predicates and bounds, so the AND result misses the expression's
+    /// `fallible` flag and persist filter pushdown can wrongly discard a part
+    /// that actually produces error rows. See database-issues#9656.
+    fn mfp_filter(&self, mfp: &MapFilterProject) -> Self::Summary {
+        let mfp_eval = MfpEval::new(self, mfp.input_arity, &mfp.expressions);
+        let predicates = mfp
+            .predicates
+            .iter()
+            .map(|(_, e)| mfp_eval.expr(e))
+            .collect();
+        let mut result = self.variadic(&And.into(), predicates);
+        if mfp_eval.expressions.iter().any(|s| s.range.fallible) {
+            result.range.fallible = true;
+        }
+        result
+    }
+
+    fn mfp_plan_filter(&self, plan: &MfpPlan) -> Self::Summary {
+        let mfp_eval = MfpEval::new(self, plan.mfp.input_arity, &plan.mfp.expressions);
+        let mut results: Vec<_> = plan
+            .mfp
+            .predicates
+            .iter()
+            .map(|(_, e)| mfp_eval.expr(e))
+            .collect();
+        let mz_now = mfp_eval.unmaterializable(&UnmaterializableFunc::MzNow);
+        for bound in &plan.lower_bounds {
+            let bound_range = mfp_eval.expr(bound);
+            let result = mfp_eval.binary(&BinaryFunc::Lte(func::Lte), bound_range, mz_now.clone());
+            results.push(result);
+        }
+        for bound in &plan.upper_bounds {
+            let bound_range = mfp_eval.expr(bound);
+            let result = mfp_eval.binary(&BinaryFunc::Gte(func::Gte), bound_range, mz_now.clone());
+            results.push(result);
+        }
+        let mut result = self.variadic(&And.into(), results);
+        if mfp_eval.expressions.iter().any(|s| s.range.fallible) {
+            result.range.fallible = true;
+        }
+        result
     }
 }
 
@@ -1447,6 +1563,53 @@ mod tests {
         });
     }
 
+    /// Regression test for database-issues#9656.
+    ///
+    /// The interpreter must surface the fallibility of MFP expressions that
+    /// aren't referenced by any predicate or temporal bound. The runtime MFP
+    /// evaluator runs every expression once predicates pass, so an expression
+    /// that errors on the actual data makes the whole row an `Err` — and
+    /// `filter_result` must keep the part to emit that error.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_mfp_unreferenced_fallible_expression() {
+        use crate::scalar::func::CastStringToUuid;
+
+        // MFP: one expression that always errors on the input range, and one
+        // predicate that always passes. The expression's result column is
+        // *not* referenced by the predicate, so the default interpreter
+        // implementation would AND together just `True` and miss the
+        // fallibility.
+        let mfp = MapFilterProject {
+            expressions: vec![MirScalarExpr::CallUnary {
+                func: UnaryFunc::CastStringToUuid(CastStringToUuid),
+                expr: Box::new(MirScalarExpr::column(0)),
+            }],
+            predicates: vec![(
+                1,
+                MirScalarExpr::literal_ok(Datum::True, ReprScalarType::Bool),
+            )],
+            projection: vec![0, 1],
+            input_arity: 1,
+        };
+
+        let relation = ReprRelationType::new(vec![ReprScalarType::String.nullable(false)]);
+        let arena = RowArena::new();
+        let mut interpreter = ColumnSpecs::new(&relation, &arena);
+        // "not-a-uuid" is in the stats range and definitely doesn't parse as a UUID.
+        interpreter.push_column(
+            0,
+            ResultSpec::value_between(Datum::String("not-a-uuid"), Datum::String("not-a-uuid")),
+        );
+        let spec = interpreter.mfp_filter(&mfp);
+        assert!(
+            spec.range.may_fail(),
+            "an MFP expression that errors on the stats range must propagate \
+             fallibility, otherwise persist filter pushdown can wrongly discard \
+             a part that produces error rows",
+        );
+    }
+
     #[mz_ore::test]
     fn test_mfp() {
         // Regression test for https://github.com/MaterializeInc/database-issues/issues/5736
@@ -1761,6 +1924,493 @@ mod tests {
         assert!(!range_out.may_contain(Datum::True));
         assert!(range_out.may_contain(Datum::False));
         assert!(range_out.may_contain(Datum::Null));
+    }
+
+    /// Regression test for database-issues#9656.
+    ///
+    /// Adding an `Interval` to a `Timestamp` is non-monotone in the interval
+    /// argument: the lex order of intervals (months, days, micros) does not
+    /// respect calendar-month arithmetic with day-clamping. The interpreter
+    /// must therefore not assume monotonicity, otherwise persist filter
+    /// pushdown can incorrectly conclude that a part has no matching rows.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_add_timestamp_interval_non_monotone() {
+        use chrono::NaiveDateTime;
+        use mz_repr::adt::interval::Interval;
+        use mz_repr::adt::timestamp::CheckedTimestamp;
+        use mz_repr::{Datum, Row};
+
+        let arena = RowArena::new();
+
+        // The setup: a timestamp literal `t = 2024-01-31 00:00:00`, and an
+        // interval column whose stats-range spans
+        // `[{0 months, 31 days, 0 us}, {1 month, 0 days, 0 us}]`. In lex order,
+        // the 31-day interval is the lower bound and the 1-month interval is
+        // the upper bound. The function values at the endpoints are:
+        //   t + {0,31,0} = 2024-03-02
+        //   t + {1, 0,0} = 2024-02-29
+        // But an *interior* interval like {0, 60, 0} maps to 2024-03-31, which
+        // lies far outside `[Feb 29, Mar 2]`. Under the (incorrect) monotone
+        // assumption, the interpreter would conclude the output is in that
+        // narrow window, and rule out predicates like `>= 2024-03-15`.
+        let ts_lit = |s: &str| {
+            let mut row = Row::default();
+            row.packer().push(Datum::Timestamp(
+                CheckedTimestamp::from_timestamplike(
+                    NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S").unwrap(),
+                )
+                .unwrap(),
+            ));
+            MirScalarExpr::Literal(Ok(row), ReprScalarType::Timestamp.nullable(false))
+        };
+        let interval = |months: i32, days: i32, micros: i64| {
+            Datum::Interval(Interval {
+                months,
+                days,
+                micros,
+            })
+        };
+
+        // Expression: `(timestamp_lit + interval_col) >= 2024-03-15`.
+        let expr = ts_lit("2024-01-31T00:00:00")
+            .call_binary(MirScalarExpr::column(0), AddTimestampInterval)
+            .call_binary(ts_lit("2024-03-15T00:00:00"), Gte);
+
+        let relation = ReprRelationType::new(vec![ReprScalarType::Interval.nullable(false)]);
+        let mut interpreter = ColumnSpecs::new(&relation, &arena);
+        interpreter.push_column(
+            0,
+            ResultSpec::value_between(interval(0, 31, 0), interval(1, 0, 0)),
+        );
+
+        let range_out = interpreter.expr(&expr).range;
+        // The actual data may include e.g. `{0, 60, 0}` → 2024-03-31, which
+        // satisfies `>= 2024-03-15`. The interpreter must admit `True` so that
+        // filter pushdown does not skip the part. Under the buggy
+        // `(true, true)` annotation, the output range would be
+        // `[Feb 29, Mar 2]`, all of which is `< Mar 15`, and the interpreter
+        // would (wrongly) admit only `False`.
+        assert!(
+            range_out.may_contain(Datum::True),
+            "interpreter incorrectly ruled out matching rows; \
+             add_timestamp_interval is not monotone in the interval argument",
+        );
+    }
+
+    /// Companion test to `test_add_timestamp_interval_non_monotone`: when the
+    /// interval argument is a literal with `months == 0`, the function reduces
+    /// to a pure linear shift in microseconds and *is* monotone in the
+    /// timestamp. The dynamic-monotonicity handler in `SpecialBinary` should
+    /// recover the tight output range in that case, so that filter pushdown
+    /// can still narrow predicates like `t - INTERVAL '1' day < literal`.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_timestamp_plus_interval_dynamic_monotone() {
+        use chrono::NaiveDateTime;
+        use mz_repr::adt::interval::Interval;
+        use mz_repr::adt::timestamp::CheckedTimestamp;
+        use mz_repr::{Datum, Row};
+
+        let arena = RowArena::new();
+
+        let ts = |s: &str| {
+            Datum::Timestamp(
+                CheckedTimestamp::from_timestamplike(
+                    NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S").unwrap(),
+                )
+                .unwrap(),
+            )
+        };
+        let interval_lit = |months: i32, days: i32, micros: i64| {
+            let mut row = Row::default();
+            row.packer().push(Datum::Interval(Interval {
+                months,
+                days,
+                micros,
+            }));
+            MirScalarExpr::Literal(Ok(row), ReprScalarType::Interval.nullable(false))
+        };
+
+        let relation = ReprRelationType::new(vec![ReprScalarType::Timestamp.nullable(false)]);
+
+        // (a) `t_col - INTERVAL '1' day < 2024-01-15`, with `t_col` ranging
+        // over `[2024-01-15, 2024-01-20]`. With the days-only interval, the
+        // subtraction is monotone, so endpoints alone determine the output:
+        // [2024-01-14, 2024-01-19]. Only `2024-01-14` satisfies `< 2024-01-15`,
+        // so both True and False are reachable.
+        {
+            let expr = MirScalarExpr::column(0)
+                .call_binary(interval_lit(0, 1, 0), SubTimestampInterval)
+                .call_binary(
+                    MirScalarExpr::Literal(
+                        Ok({
+                            let mut r = Row::default();
+                            r.packer().push(ts("2024-01-15T00:00:00"));
+                            r
+                        }),
+                        ReprScalarType::Timestamp.nullable(false),
+                    ),
+                    Lt,
+                );
+            let mut interpreter = ColumnSpecs::new(&relation, &arena);
+            interpreter.push_column(
+                0,
+                ResultSpec::value_between(ts("2024-01-15T00:00:00"), ts("2024-01-20T00:00:00")),
+            );
+            let range_out = interpreter.expr(&expr).range;
+            assert!(
+                range_out.may_contain(Datum::True),
+                "day-only interval should preserve tight bounds",
+            );
+            assert!(
+                range_out.may_contain(Datum::False),
+                "day-only interval should preserve tight bounds",
+            );
+        }
+
+        // (b) Same predicate, but with `t_col` strictly *after* the literal:
+        // `[2024-01-17, 2024-01-20]`. Output of `t - 1 day`:
+        // `[2024-01-16, 2024-01-19]`, none of which is `< 2024-01-15`. The
+        // interpreter must rule out `True`.
+        {
+            let expr = MirScalarExpr::column(0)
+                .call_binary(interval_lit(0, 1, 0), SubTimestampInterval)
+                .call_binary(
+                    MirScalarExpr::Literal(
+                        Ok({
+                            let mut r = Row::default();
+                            r.packer().push(ts("2024-01-15T00:00:00"));
+                            r
+                        }),
+                        ReprScalarType::Timestamp.nullable(false),
+                    ),
+                    Lt,
+                );
+            let mut interpreter = ColumnSpecs::new(&relation, &arena);
+            interpreter.push_column(
+                0,
+                ResultSpec::value_between(ts("2024-01-17T00:00:00"), ts("2024-01-20T00:00:00")),
+            );
+            let range_out = interpreter.expr(&expr).range;
+            assert!(
+                !range_out.may_contain(Datum::True),
+                "day-only interval should narrow out impossible matches",
+            );
+        }
+
+        // (c) With a *month*-bearing literal interval, the operation is no
+        // longer monotone (day-clamping), so the dynamic-monotonicity handler
+        // must fall back to `anything()` — the interpreter cannot rule out
+        // either outcome even when the column range is narrow.
+        {
+            let expr = MirScalarExpr::column(0)
+                .call_binary(interval_lit(1, 0, 0), SubTimestampInterval)
+                .call_binary(
+                    MirScalarExpr::Literal(
+                        Ok({
+                            let mut r = Row::default();
+                            r.packer().push(ts("2024-01-15T00:00:00"));
+                            r
+                        }),
+                        ReprScalarType::Timestamp.nullable(false),
+                    ),
+                    Lt,
+                );
+            let mut interpreter = ColumnSpecs::new(&relation, &arena);
+            interpreter.push_column(
+                0,
+                ResultSpec::value_between(ts("2024-01-17T00:00:00"), ts("2024-01-20T00:00:00")),
+            );
+            let range_out = interpreter.expr(&expr).range;
+            assert!(
+                range_out.may_contain(Datum::True),
+                "month-bearing interval must conservatively admit True",
+            );
+            assert!(
+                range_out.may_contain(Datum::False),
+                "month-bearing interval must conservatively admit False",
+            );
+        }
+    }
+
+    /// Regression test for `date_bin_timestamp`, which is non-monotone in the
+    /// `stride` argument: a larger stride can bin a source timestamp to an
+    /// *earlier* result than a smaller stride, because the bin alignment to
+    /// the unix epoch depends on the stride magnitude rather than on lex order.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_date_bin_timestamp_non_monotone() {
+        use chrono::NaiveDateTime;
+        use mz_repr::adt::interval::Interval;
+        use mz_repr::adt::timestamp::CheckedTimestamp;
+        use mz_repr::{Datum, Row};
+
+        let arena = RowArena::new();
+
+        let ts_lit = |s: &str| {
+            let mut row = Row::default();
+            row.packer().push(Datum::Timestamp(
+                CheckedTimestamp::from_timestamplike(
+                    NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S").unwrap(),
+                )
+                .unwrap(),
+            ));
+            MirScalarExpr::Literal(Ok(row), ReprScalarType::Timestamp.nullable(false).into())
+        };
+        let interval = |months: i32, days: i32, micros: i64| {
+            Datum::Interval(Interval {
+                months,
+                days,
+                micros,
+            })
+        };
+
+        // Expression: `date_bin(stride_col, 2024-01-01 12:00:00) >= 2024-01-01`.
+        // stride_col ranges over `[1 day, 2 days]`.
+        // - 1 day stride → bins to 2024-01-01 00:00:00 (satisfies `>=`).
+        // - 2 day stride → bins to 2023-12-31 00:00:00 (does not).
+        // Under the buggy `(true, true)` annotation, both endpoint evaluations
+        // give the same boolean answer (`>=` is monotone), so depending on which
+        // way the comparisons fall the interpreter could end up wrongly ruling
+        // out one outcome. The non-monotone fix forces a conservative
+        // `anything()` for the binned value.
+        let expr = MirScalarExpr::column(0)
+            .call_binary(ts_lit("2024-01-01T12:00:00"), DateBinTimestamp)
+            .call_binary(ts_lit("2024-01-01T00:00:00"), Gte);
+
+        let relation = ReprRelationType::new(vec![ReprScalarType::Interval.nullable(false)]);
+        let mut interpreter = ColumnSpecs::new(&relation, &arena);
+        interpreter.push_column(
+            0,
+            ResultSpec::value_between(interval(0, 1, 0), interval(0, 2, 0)),
+        );
+
+        let range_out = interpreter.expr(&expr).range;
+        // The actual data may include a 1-day stride for which the predicate
+        // holds, and a 2-day stride for which it doesn't, so both outcomes are
+        // reachable.
+        assert!(
+            range_out.may_contain(Datum::True),
+            "date_bin is not monotone in the stride argument; \
+             interpreter must not rule out matching rows",
+        );
+        assert!(
+            range_out.may_contain(Datum::False),
+            "interpreter must not rule out non-matching rows either",
+        );
+    }
+
+    /// Regression test for `age_timestamp`, which is non-monotone in the first
+    /// argument: the Postgres-style calendar-aware age computation does not
+    /// respect the lex order of `Interval` results when the input crosses a
+    /// month boundary.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_age_timestamp_non_monotone_in_first_arg() {
+        use chrono::NaiveDateTime;
+        use mz_repr::adt::interval::Interval;
+        use mz_repr::adt::timestamp::CheckedTimestamp;
+        use mz_repr::{Datum, Row};
+
+        let arena = RowArena::new();
+
+        let ts_lit = |s: &str| {
+            let mut row = Row::default();
+            row.packer().push(Datum::Timestamp(
+                CheckedTimestamp::from_timestamplike(
+                    NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S").unwrap(),
+                )
+                .unwrap(),
+            ));
+            MirScalarExpr::Literal(Ok(row), ReprScalarType::Timestamp.nullable(false).into())
+        };
+        let interval = |months: i32, days: i32, micros: i64| {
+            Datum::Interval(Interval {
+                months,
+                days,
+                micros,
+            })
+        };
+
+        // Expression: `age(a_col, 2024-02-15) >= '1 month 16 days'`.
+        // a_col stats: [2024-03-31, 2024-05-01].
+        //   age(2024-03-31, 2024-02-15) = {1 month, 16 days}  ← satisfies `>=`
+        //   age(2024-05-01, 2024-02-15) = {2 months, 15 days} ← satisfies `>=`
+        // Interior a = 2024-04-01:
+        //   age(2024-04-01, 2024-02-15) = {1 month, 15 days}  ← does NOT satisfy.
+        // Under the buggy `(true, true)` annotation, the interpreter would
+        // bound the output of `age` by its endpoint values — lex-range
+        // `[(1m,16d), (2m,15d)]` — and conclude the `>=` predicate is always
+        // True, ruling out parts whose true rows would evaluate False.
+        let expr = MirScalarExpr::column(0)
+            .call_binary(ts_lit("2024-02-15T00:00:00"), AgeTimestamp)
+            .call_binary(
+                MirScalarExpr::Literal(
+                    Ok({
+                        let mut row = Row::default();
+                        row.packer().push(interval(1, 16, 0));
+                        row
+                    }),
+                    ReprScalarType::Interval.nullable(false).into(),
+                ),
+                Gte,
+            );
+
+        let relation = ReprRelationType::new(vec![ReprScalarType::Timestamp.nullable(false)]);
+        let mut interpreter = ColumnSpecs::new(&relation, &arena);
+        let lo = {
+            let mut row = Row::default();
+            row.packer().push(Datum::Timestamp(
+                CheckedTimestamp::from_timestamplike(
+                    NaiveDateTime::parse_from_str("2024-03-31T00:00:00", "%Y-%m-%dT%H:%M:%S")
+                        .unwrap(),
+                )
+                .unwrap(),
+            ));
+            row
+        };
+        let hi = {
+            let mut row = Row::default();
+            row.packer().push(Datum::Timestamp(
+                CheckedTimestamp::from_timestamplike(
+                    NaiveDateTime::parse_from_str("2024-05-01T00:00:00", "%Y-%m-%dT%H:%M:%S")
+                        .unwrap(),
+                )
+                .unwrap(),
+            ));
+            row
+        };
+        interpreter.push_column(
+            0,
+            ResultSpec::value_between(lo.unpack_first(), hi.unpack_first()),
+        );
+
+        let range_out = interpreter.expr(&expr).range;
+        assert!(
+            range_out.may_contain(Datum::False),
+            "age_timestamp is not monotone in the first argument; \
+             interpreter must not rule out non-matching rows",
+        );
+    }
+
+    /// Regression test for `age_timestamp`, which is non-monotone in the
+    /// second argument: the result has a V-shape at `a == b` because the
+    /// algorithm flips sign when `a < b`, so the same interval can be produced
+    /// by `b` values on either side of `a`.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_age_timestamp_non_monotone_in_second_arg() {
+        use chrono::NaiveDateTime;
+        use mz_repr::adt::interval::Interval;
+        use mz_repr::adt::timestamp::CheckedTimestamp;
+        use mz_repr::{Datum, Row};
+
+        let arena = RowArena::new();
+
+        let ts_lit = |s: &str| {
+            let mut row = Row::default();
+            row.packer().push(Datum::Timestamp(
+                CheckedTimestamp::from_timestamplike(
+                    NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S").unwrap(),
+                )
+                .unwrap(),
+            ));
+            MirScalarExpr::Literal(Ok(row), ReprScalarType::Timestamp.nullable(false).into())
+        };
+        let interval = |months: i32, days: i32, micros: i64| {
+            Datum::Interval(Interval {
+                months,
+                days,
+                micros,
+            })
+        };
+
+        // Expression: `age(2024-02-29, b_col) >= '-1 month, -1 day'`.
+        // b_col stats: [2024-03-30, 2024-04-01].
+        //   age(2024-02-29, 2024-03-30) = {-1 month, -1 day, 0}  ← satisfies `>=`
+        //   age(2024-02-29, 2024-04-01) = {-1 month, -1 day, 0}  ← satisfies `>=`
+        // Interior b = 2024-03-31:
+        //   age(2024-02-29, 2024-03-31) = {-1 month, -2 days, 0} ← does NOT satisfy.
+        // The carry logic in `age` borrows a *whole month worth of days* when
+        // the day field goes negative, which (after the sign-revert at the
+        // end) makes the result dip non-monotonically as `b` crosses a month
+        // boundary. Both endpoints lex-coincide above the interior dip, so
+        // under the buggy `(true, true)` annotation the interpreter would
+        // conclude the predicate is always True.
+        let expr = ts_lit("2024-02-29T00:00:00")
+            .call_binary(MirScalarExpr::column(0), AgeTimestamp)
+            .call_binary(
+                MirScalarExpr::Literal(
+                    Ok({
+                        let mut row = Row::default();
+                        row.packer().push(interval(-1, -1, 0));
+                        row
+                    }),
+                    ReprScalarType::Interval.nullable(false).into(),
+                ),
+                Gte,
+            );
+
+        let relation = ReprRelationType::new(vec![ReprScalarType::Timestamp.nullable(false)]);
+        let mut interpreter = ColumnSpecs::new(&relation, &arena);
+        let lo = {
+            let mut row = Row::default();
+            row.packer().push(Datum::Timestamp(
+                CheckedTimestamp::from_timestamplike(
+                    NaiveDateTime::parse_from_str("2024-03-30T00:00:00", "%Y-%m-%dT%H:%M:%S")
+                        .unwrap(),
+                )
+                .unwrap(),
+            ));
+            row
+        };
+        let hi = {
+            let mut row = Row::default();
+            row.packer().push(Datum::Timestamp(
+                CheckedTimestamp::from_timestamplike(
+                    NaiveDateTime::parse_from_str("2024-04-01T00:00:00", "%Y-%m-%dT%H:%M:%S")
+                        .unwrap(),
+                )
+                .unwrap(),
+            ));
+            row
+        };
+        interpreter.push_column(
+            0,
+            ResultSpec::value_between(lo.unpack_first(), hi.unpack_first()),
+        );
+
+        // Sanity-check the counterexample: endpoint and interior values.
+        let a = CheckedTimestamp::from_timestamplike(
+            NaiveDateTime::parse_from_str("2024-02-29T00:00:00", "%Y-%m-%dT%H:%M:%S").unwrap(),
+        )
+        .unwrap();
+        let b_lo = CheckedTimestamp::from_timestamplike(
+            NaiveDateTime::parse_from_str("2024-03-30T00:00:00", "%Y-%m-%dT%H:%M:%S").unwrap(),
+        )
+        .unwrap();
+        let b_mid = CheckedTimestamp::from_timestamplike(
+            NaiveDateTime::parse_from_str("2024-03-31T00:00:00", "%Y-%m-%dT%H:%M:%S").unwrap(),
+        )
+        .unwrap();
+        let b_hi = CheckedTimestamp::from_timestamplike(
+            NaiveDateTime::parse_from_str("2024-04-01T00:00:00", "%Y-%m-%dT%H:%M:%S").unwrap(),
+        )
+        .unwrap();
+        let age_lo = a.age(&b_lo).unwrap();
+        let age_mid = a.age(&b_mid).unwrap();
+        let age_hi = a.age(&b_hi).unwrap();
+        assert_eq!((age_lo.months, age_lo.days, age_lo.micros), (-1, -1, 0));
+        assert_eq!((age_mid.months, age_mid.days, age_mid.micros), (-1, -2, 0));
+        assert_eq!((age_hi.months, age_hi.days, age_hi.micros), (-1, -1, 0));
+
+        let range_out = interpreter.expr(&expr).range;
+        assert!(
+            range_out.may_contain(Datum::False),
+            "age_timestamp is not monotone in the second argument; \
+             interpreter must not rule out non-matching rows",
+        );
     }
 
     #[mz_ore::test]
