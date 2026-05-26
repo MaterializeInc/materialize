@@ -1031,7 +1031,8 @@ async fn read_data_product(
          FROM mz_internal.mz_mcp_data_products \
          WHERE object_name = {} \
          ORDER BY \
-             (cluster IS NOT NULL AND has_cluster_usage) DESC, \
+             (cluster IS NOT NULL \
+                 AND has_cluster_privilege(cluster, 'USAGE')) DESC, \
              cluster NULLS LAST \
          LIMIT 1",
         escaped_string_literal(name)
