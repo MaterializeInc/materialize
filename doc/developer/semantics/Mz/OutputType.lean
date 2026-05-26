@@ -181,4 +181,15 @@ theorem eval_satisfies_outputCols {n : Nat} {sch : Schema n}
   | _, .orN _ => DatumSatisfies.weakest _
   | _, .coalesce _ => DatumSatisfies.weakest _
 
+/-! ## RowSatisfies → EnvErrFree bridge
+
+If every column of the schema is statically `errable := false` and
+the row satisfies the schema, then no cell is an `.err _`. The
+bridge that `NoRowErr_filter` consumes: row-level err-freeness is
+a corollary of the schema-driven analysis on the input collection. -/
+
+theorem EnvErrFree_of_RowSatisfies {n : Nat} {sch : Schema n} (env : Env sch)
+    (hsat : RowSatisfies sch env) (hcell : sch.cellErrFree) : EnvErrFree env :=
+  fun i => (hsat i).2 (hcell i)
+
 end Mz

@@ -1,6 +1,8 @@
 import Mz.Schema
 import Mz.Eval
 import Mz.Equiv
+import Mz.MightError
+import Mz.OutputType
 
 /-!
 # Schema-indexed `Collection`
@@ -295,6 +297,55 @@ theorem NoRowErr_cross {sch_l : Schema n} {sch_r : Schema m}
        + recL.err_diff * recR.diff
        + recL.err_diff * recR.err_diff = 0
   rw [hL, hR]; simp
+
+/-! ## NoRowErr through filter
+
+`filter` migrates `rec.diff` to `rec.err_diff` whenever the
+predicate evaluates to `.err _`. So `NoRowErr (filter p s)`
+requires the predicate to never err per-row.
+
+Two forms:
+
+* `NoRowErr_filter` — directly takes per-row `¬(eval rec.row p).IsErr`.
+* `NoRowErr_filter_of_might_error_false` — derives the per-row
+  premise from the static analyzer `Expr.might_error p = false`
+  plus per-row `EnvErrFree`. The schema-driven discharge via
+  `EnvErrFree_of_RowSatisfies` lives in `Mz/OutputType.lean`. -/
+
+theorem NoRowErr_filter {sch : Schema n} (p : Expr sch .bool)
+    {s : Collection sch}
+    (hNoErr : NoRowErr s)
+    (hPredSafe : ∀ rec ∈ s, ¬(eval rec.row p).IsErr) :
+    NoRowErr (filter p s) := by
+  intro rec hrec
+  unfold filter at hrec
+  rw [List.mem_map] at hrec
+  obtain ⟨rec', hrec'_mem, hrec'_eq⟩ := hrec
+  have h_err' := hNoErr rec' hrec'_mem
+  have h_psafe := hPredSafe rec' hrec'_mem
+  show rec.err_diff = 0
+  rw [← hrec'_eq]
+  show (filterOne p rec').err_diff = 0
+  unfold filterOne
+  cases hev : eval rec'.row p with
+  | bool b =>
+    cases b
+    · show rec'.err_diff = 0; exact h_err'
+    · show rec'.err_diff = 0; exact h_err'
+  | null => show rec'.err_diff = 0; exact h_err'
+  | err e =>
+    exfalso
+    apply h_psafe
+    rw [hev]; trivial
+
+theorem NoRowErr_filter_of_might_error_false {sch : Schema n}
+    (p : Expr sch .bool) {s : Collection sch}
+    (hNoErr : NoRowErr s)
+    (hPred : Expr.might_error p = false)
+    (hRows : ∀ rec ∈ s, EnvErrFree rec.row) :
+    NoRowErr (filter p s) :=
+  NoRowErr_filter p hNoErr
+    (fun rec hrec => might_error_sound rec.row (hRows rec hrec) p hPred)
 
 /-! ## Filter / cross pushdown — counterexample
 
