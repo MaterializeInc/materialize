@@ -11,7 +11,7 @@
 // source code is subject to the terms of the PostgreSQL license, a copy of
 // which can be found in the LICENSE file at the root of this repository.
 
-//! A trait for things that can evaluate (`MirScalarExpr`, `LirScalarExpr`).
+//! A trait for things that can evaluate (`MirScalarExpr`, but eventually `LirScalarExpr`).
 
 use mz_repr::{Datum, RowArena};
 

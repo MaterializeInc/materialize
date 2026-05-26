@@ -159,7 +159,7 @@ macro_rules! derive_unary {
                 &'a self,
                 datums: &[Datum<'a>],
                 temp_storage: &'a RowArena,
-                a: &'a impl crate::func::eval::Eval,
+                a: &'a impl Eval,
             ) -> Result<Datum<'a>, EvalError> {
                 match self {
                     $(Self::$name(f) => f.eval(datums, temp_storage, a),)*

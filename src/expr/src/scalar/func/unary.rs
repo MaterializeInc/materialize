@@ -17,8 +17,8 @@ use std::{fmt, str};
 
 use mz_repr::{Datum, InputDatumType, OutputDatumType, ReprColumnType, RowArena, SqlColumnType};
 
+use crate::Eval;
 use crate::EvalError;
-use crate::func::Eval;
 use crate::scalar::func::RedactSql;
 use crate::scalar::func::impls::*;
 

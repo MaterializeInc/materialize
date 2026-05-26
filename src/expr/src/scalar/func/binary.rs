@@ -12,8 +12,8 @@
 use mz_ore::assert_none;
 use mz_repr::{Datum, InputDatumType, OutputDatumType, ReprColumnType, RowArena, SqlColumnType};
 
+use crate::Eval;
 use crate::EvalError;
-use crate::func::Eval;
 
 /// A description of an SQL binary function that has the ability to lazy evaluate its arguments
 // This trait will eventually be annotated with #[enum_dispatch] to autogenerate the UnaryFunc enum
@@ -190,9 +190,9 @@ mod derive {
 
     use mz_repr::{Datum, ReprColumnType, RowArena, SqlColumnType};
 
-    use crate::EvalError;
     use crate::scalar::func::binary::LazyBinaryFunc;
     use crate::scalar::func::*;
+    use crate::{Eval, EvalError};
 
     derive_binary! {
         AddInt16(AddInt16),

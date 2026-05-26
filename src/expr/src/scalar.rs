@@ -37,13 +37,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::explain::{HumanizedExplain, HumanizerMode};
 pub use crate::scalar::columns::Columns;
-pub use crate::scalar::func::Eval;
+pub use crate::scalar::eval::Eval;
 use crate::scalar::func::variadic::{And, Or};
 use crate::scalar::func::{BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc};
 use crate::scalar::proto_eval_error::proto_incompatible_array_dimensions::ProtoDims;
 use crate::visit::{Visit, VisitChildren};
 
 pub mod columns;
+pub mod eval;
 pub mod func;
 pub mod like_pattern;
 mod reduce;

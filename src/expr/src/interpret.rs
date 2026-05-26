@@ -12,12 +12,13 @@ use std::fmt::Debug;
 
 use mz_repr::{Datum, ReprColumnType, ReprRelationType, ReprScalarType, Row, RowArena};
 
-use crate::func::Eval;
+use crate::Eval;
 use crate::scalar::func::variadic::And;
 use crate::{
     BinaryFunc, EvalError, MapFilterProject, MfpPlan, MirScalarExpr, UnaryFunc,
     UnmaterializableFunc, VariadicFunc, func,
 };
+
 /// An inclusive range of non-null datum values.
 #[derive(Clone, Eq, PartialEq, Debug)]
 enum Values<'a> {

@@ -40,8 +40,8 @@ use mz_repr::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::Eval;
 use crate::func::CaseLiteral;
-use crate::func::Eval;
 use crate::func::{
     MAX_STRING_FUNC_RESULT_BYTES, array_create_scalar, build_regex, date_bin, parse_timezone,
     regexp_match_static, regexp_replace_parse_flags, regexp_split_to_array_re, stringify_datum,

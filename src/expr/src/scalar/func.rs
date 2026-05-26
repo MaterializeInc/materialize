@@ -53,7 +53,6 @@ use num::traits::CheckedNeg;
 use crate::scalar::func::format::DateTimeFormat;
 use crate::{EvalError, like_pattern};
 
-pub mod eval;
 #[macro_use]
 mod macros;
 mod binary;
@@ -65,7 +64,6 @@ mod unmaterializable;
 pub mod variadic;
 
 pub use binary::BinaryFunc;
-pub use eval::Eval;
 pub use impls::*;
 pub use unary::{EagerUnaryFunc, LazyUnaryFunc, UnaryFunc};
 pub use unmaterializable::UnmaterializableFunc;
@@ -3009,7 +3007,7 @@ mod test {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::MirScalarExpr;
+    use crate::{Eval, MirScalarExpr};
 
     #[mz_ore::test]
     fn add_interval_months() {

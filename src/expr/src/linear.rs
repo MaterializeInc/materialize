@@ -1550,9 +1550,8 @@ pub mod util {
             .enumerate()
             .filter_map(|(i, key_col)| key_col.as_column().map(|c| (c, i)))
             .collect();
-        let key_len = key.len();
 
-        let mut input_cursor = key_len;
+        let mut input_cursor = key.len();
         let permutation = (0..unthinned_arity)
             .map(|c| {
                 if let Some(c) = columns_in_key.get(&c) {
@@ -1609,7 +1608,7 @@ pub mod plan {
     use mz_repr::{Datum, Diff, Row, RowArena};
     use serde::{Deserialize, Serialize};
 
-    use crate::func::Eval;
+    use crate::Eval;
     use crate::{BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, UnaryFunc, func};
 
     /// A wrapper type which indicates it is safe to simply evaluate all expressions.

@@ -15,7 +15,7 @@ use mz_repr::adt::array::{Array, ArrayDimension};
 use mz_repr::{Datum, DatumList, Row, RowArena, RowPacker, SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
 
-use crate::func::Eval;
+use crate::Eval;
 use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
 use crate::{EvalError, MirScalarExpr};
 

@@ -25,8 +25,8 @@ use mz_lowertest::MzReflect;
 use mz_repr::{Datum, Row, RowArena, SqlColumnType};
 use serde::{Deserialize, Serialize};
 
+use crate::Eval;
 use crate::EvalError;
-use crate::func::Eval;
 use crate::scalar::func::variadic::LazyVariadicFunc;
 
 /// A single entry in a [`CaseLiteral`] lookup table: a literal `Row` value

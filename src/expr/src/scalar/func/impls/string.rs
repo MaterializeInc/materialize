@@ -31,11 +31,11 @@ use mz_repr::{Datum, RowArena, SqlColumnType, SqlScalarType, strconv};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::func::{Eval, binary, regexp_match_static};
+use crate::func::{binary, regexp_match_static};
 use crate::scalar::func::{
     EagerUnaryFunc, LazyUnaryFunc, array_create_scalar, regexp_split_to_array_re,
 };
-use crate::{EvalError, MirScalarExpr, UnaryFunc, like_pattern};
+use crate::{Eval, EvalError, MirScalarExpr, UnaryFunc, like_pattern};
 
 #[sqlfunc(
     sqlname = "text_to_boolean",

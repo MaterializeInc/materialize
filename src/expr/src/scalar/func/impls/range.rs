@@ -15,8 +15,8 @@ use mz_repr::adt::range::Range;
 use mz_repr::{Datum, RowArena, SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
 
+use crate::Eval;
 use crate::EvalError;
-use crate::func::Eval;
 use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
 
 #[derive(
