@@ -78,19 +78,20 @@ top.
   `LegalEval`, `legal_of_eval`, `legal_plus_err_either`,
   `LegalEquiv` / `LegalSubsume`).
 * **Collection layer.** `Mz.Collection` — `Update sch`,
-  `Collection sch`, `filter`, `project`, `negate`, `unionAll`,
-  `Row.refines` / `Update.refines` / `Collection.refines` Smyth-
-  style lift, `NoRowErr` precondition, `NoRowErr_negate` /
-  `NoRowErr_unionAll` / `NoRowErr_project` propagation,
-  `Collection.Equiv` (perm + merge + drop_zero) with
-  `unionAll_comm_equiv` and `negate_unionAll_self` demonstrators.
+  `Collection sch`, `filter`, `project`, `cross`, `negate`,
+  `unionAll`, `Row.refines` / `Update.refines` /
+  `Collection.refines` Smyth-style lift, `NoRowErr` precondition,
+  `NoRowErr_negate` / `NoRowErr_unionAll` / `NoRowErr_project` /
+  `NoRowErr_cross` propagation, `Collection.Equiv` (perm + merge +
+  drop_zero) with `unionAll_comm_equiv` and `negate_unionAll_self`
+  demonstrators, `filter_cross_pushdown_left_unsound`
+  counterexample.
 
-**Open** (round-4 regressions to port from the untyped
-predecessor): `cross` + `cross_assoc` (depends on `Schema.append`
-row composition); `filter_cross_pushdown_left_*` (the canonical
-counterexample + three soundness windows); `eraseRowErr`;
-`eval_satisfies_outputCols` (output-schema soundness);
-`NoRowErr_filter` / `NoRowErr_cross`; `coalesce_collapse` /
+**Still open** (round-4 regressions): `cross_assoc` (arity cast
+plumbing); `filter_cross_pushdown_left_*` recovery windows
+(strict via `NoRowErr`, data via `eraseRowErr`, refinement via
+`SignOK`); `eraseRowErr`; `NoRowErr_filter` (needs
+`RowSatisfies → EnvErrFree` bridge); `coalesce_collapse` /
 `eval_coalesce_pair_of_a_concrete`.
 
 ## Build

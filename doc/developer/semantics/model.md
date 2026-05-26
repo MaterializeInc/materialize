@@ -298,12 +298,15 @@ Operators are typed by their input / output schemas:
   negation and list concatenation. `negate_negate` proved.
   `unionAll_assoc` proved.
 * `cross : Collection sch_l → Collection sch_r → Collection
-  (Schema.append sch_l sch_r)` — **open**. The schema-indexed
-  cross requires `Schema.append`-level type casts for the row
-  combinator (env-append at `Fin (n+m)`); the untyped predecessor
-  had `cross` mechanized including `cross_assoc` and the bilinear
-  err rule, but the schema-indexed port is pending. Tracked as
-  the load-bearing follow-up for the pushdown story.
+  (Schema.append sch_l sch_r)` — schema-transforming via
+  `Schema.append`. `crossOne` combines two updates with the
+  bilinear diff rule `(d, e) * (d', e') = (d*d', d*e' + e*d' +
+  e*e')`. Row composition uses
+  `Schema.types_get_append_left` / `_right` helper lemmas to
+  cast between `(sch_l.append sch_r).types.get i` and
+  `sch_l.types.get ⟨i.val, h⟩` (or right-side analog). `cross_assoc`
+  is open — needs `n + m + k = n + (m + k)` arity-cast plumbing
+  through `Schema.append`.
 
 Time, consolidation, distinct, and aggregate are out of scope at
 this layer. Lifting to a timed collection is additive on top.
@@ -592,18 +595,16 @@ Counterexamples (mechanized in `Mz/EquivBounded.lean`,
   surfaces the boundary counterexample needed by the design-doc
   argument that errors force a non-equality relation.
 * `filter_cross_pushdown_left` unsound when right collection has
-  `err_diff > 0`. **Open** in the indexed model: the canonical
-  counterexample (`filterOne_cross_pushdown_left_unsound`), the
-  three soundness windows (strict via `NoRowErr`, data-side via
-  `eraseRowErr`, refinement via `SignOK`), and `eraseRowErr`
-  itself were all mechanized in the untyped predecessor. The
-  GADT migration dropped these — they depend on `cross`, which
-  needs `Schema.append`-level row composition that is not yet
-  ported. The encoding insight is unchanged: any encoding in
-  which err multiplicity participates in cross's multiplication
-  rule produces this gap; the separate-collection encoding avoids
-  it precisely because errs do not multiply against data on its
-  cross.
+  `err_diff > 0`. **Counterexample mechanized**:
+  `filter_cross_pushdown_left_unsound` in `Mz/Collection.lean`
+  witnesses concrete `l`, `r`, predicate where LHS preserves an
+  err the RHS drops. The three recovery windows (strict via
+  `NoRowErr`, data-side via `eraseRowErr`, refinement via
+  `SignOK`) are **open** in the indexed model — proofs require
+  reasoning across cross's row composition and substitution-aware
+  predicate evaluation, deferred. The encoding insight is
+  unchanged: any encoding in which err multiplicity participates
+  in cross's multiplication rule produces this gap.
 
 ### Error-set equivalence (`eqErrSet`)
 
@@ -735,13 +736,13 @@ Relations and analyses a planner can cite today.
 | `Datum k` (indexed)        | `Mz/Datum.lean`              | type discipline structural | overflow / decode / division-by-zero only |
 | `Expr sch k` (GADT)        | `Mz/Expr.lean` + `Mz/Eval.lean` | `=` on closed exprs (unbounded `Int`); WellTyped subsumed by GADT | bounded-int counter at `Mz/EquivBounded.lean` |
 | `Env sch`                  | `Mz/Eval.lean`               | typed lookup, no OOB case  | —                                         |
-| `Collection sch` (two-diff)| `Mz/Collection.lean`         | `=` on data side (`filter` / `project` / `negate` / `unionAll`) | `cross` open — `Schema.append` row composition pending |
+| `Collection sch` (two-diff)| `Mz/Collection.lean`         | `=` on data side (`filter` / `project` / `cross` / `negate` / `unionAll`); pushdown counterexample (`filter_cross_pushdown_left_unsound`) | `cross_assoc` arity cast; pushdown recovery windows (strict / data / refines) |
 | `eqErrSet`                 | `Mz/Equiv.lean`              | err / err commutativity (`evalAnd_err_err_eqErrSet_comm`) | bounded-int assoc, pushdown over cross |
 | `refines` (`Datum`)        | `Mz/Equiv.lean`              | compositionality (`refines_cong_binary`, per-op corollaries) | rewrites that add err |
 | `refines` (`Row` / `Update` / `Collection`) | `Mz/Collection.lean` | Smyth-style lift + refl / trans | pushdown lift open (depends on `cross`) |
 | `Collection.Equiv`         | `Mz/Collection.lean`         | `unionAll` commutativity; `negate s ++ s ≈ []` retraction | most `=`-tagged rewrites not yet migrated |
-| `NoRowErr` precondition    | `Mz/Collection.lean`         | discharged by `negate` / `unionAll` / `project` propagation | `filter` / `cross` propagation open |
-| `Expr.outputCols`          | `Mz/OutputType.lean`         | per-`Expr` `ColSchema` derivation | `eval_satisfies_outputCols` soundness open |
+| `NoRowErr` precondition    | `Mz/Collection.lean`         | discharged by `negate` / `unionAll` / `project` / `cross` propagation | `filter` propagation open (needs `RowSatisfies → EnvErrFree` bridge) |
+| `Expr.outputCols`          | `Mz/OutputType.lean`         | per-`Expr` `ColSchema` derivation + `eval_satisfies_outputCols` soundness | precision direction (variadic / `.divide` static-safe-divisor) open |
 | `might_error` + soundness  | `Mz/MightError.lean`         | `might_error_sound` + `evalCoalesce_not_err_of_some_safe` + variadic safety | — |
 
 ### Sketches and history

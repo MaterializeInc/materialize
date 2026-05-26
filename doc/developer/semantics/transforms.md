@@ -78,7 +78,7 @@ against data multiplicities.
 
 | Transform | Statement | Status |
 | --- | --- | --- |
-| `filter_cross_pushdown_left` (open) | `filter p (cross l r) = cross (filter p l) r` when `p`'s columns are bounded by `l`'s arity | **open in indexed model.** Counterexample (`filterOne_cross_pushdown_left_unsound`) and three soundness windows (strict via `NoRowErr`, data-side via `eraseRowErr`, refinement via `SignOK`) were all mechanized in the untyped predecessor; not yet ported. Depends on `cross` (also open). |
+| `filter_cross_pushdown_left` | `filter p (cross l r) = cross (filter p l) r` when `p`'s columns are bounded by `l`'s arity | **Counterexample mechanized** as `filter_cross_pushdown_left_unsound` in `Mz/Collection.lean` (concrete `Schema.free 0` witness with `.lit (.bool false)` predicate). Three recovery windows (strict via `NoRowErr r`, data-side via `eraseRowErr`, refinement via `SignOK`) are open in the indexed model — proofs require substitution-aware predicate evaluation across the cross's combined schema. |
 | `filter_cross_pushdown_right` (open) | symmetric, via `colShift` to realign the predicate | mirror of the left form |
 | `project_cross_pushdown` (open) | `project es (cross l r) = cross (project es_l l) (project es_r r)` when `es` splits cleanly into left and right column-sets | expected `=` when the split is clean |
 | `filter_project_pushdown` (open) | `filter p (project es s) = project es (filter (p.subst es) s)` | data side under `=` via `eval_subst`; err side asks the same multiplicity question as the cross pushdown |
@@ -163,8 +163,8 @@ Each entry assumes the input collection satisfies a `Schema n` (see
 | Transform | Statement | Schema premise |
 | --- | --- | --- |
 | `coalesce_collapse` (open) | `coalesce(a, b) = a` when `a` evaluates concrete | open; untyped predecessor mechanized via `eval_coalesce_pair_of_a_concrete`. Indexed re-port pending |
-| `NoRowErr_filter` (open) | `filter p` preserves `NoRowErr s` when `p.might_error = false` over `s` | open; needs `RowSatisfies → EnvErrFree` bridge ported |
-| `NoRowErr_cross` (open) | `cross l r` preserves `NoRowErr l ∧ NoRowErr r` | open; depends on `cross` |
+| `NoRowErr_filter` (open) | `filter p` preserves `NoRowErr s` when `p.might_error = false` over `s` | open; needs `RowSatisfies → EnvErrFree` bridge |
+| `NoRowErr_cross` | `cross l r` preserves `NoRowErr l ∧ NoRowErr r` | mechanized (`ring` closes the bilinear err-diff at zero inputs) |
 | `NoRowErr_project` | `project es s` preserves `NoRowErr s` | mechanized (unconditional) |
 | `NoRowErr_unionAll` | `unionAll a b` preserves `NoRowErr a ∧ NoRowErr b` | mechanized (conjunctive) |
 | `NoRowErr_negate` | `negate s` preserves `NoRowErr s` | mechanized (unconditional) |
@@ -183,7 +183,7 @@ model.
 
 | Transform | Statement | Status |
 | --- | --- | --- |
-| `eval_satisfies_outputCols` (open) | `DatumSatisfies (Expr.outputCols sch e) (eval env e)` whenever `env : Env sch` satisfies `sch` | open; untyped predecessor had `eval_satisfies_outputType` |
+| `eval_satisfies_outputCols` | `DatumSatisfies (Expr.outputCols e) (eval env e)` whenever `env : Env sch` satisfies `sch` | mechanized in `Mz/OutputType.lean`; structural recursion + `evalX_not_err` lemmas from `MightError` |
 
 Per-constructor precision (`Mz/OutputType.lean`):
 * `.lit` / `.col` — precise.
