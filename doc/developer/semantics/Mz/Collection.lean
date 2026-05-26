@@ -284,4 +284,71 @@ theorem refines_of_eq {n : Nat} {sch : Schema n}
 
 end Collection
 
+/-! ## Consolidated equivalence (`Collection.Equiv`)
+
+`Collection sch = List (Update sch)` under `=` distinguishes order
+and unconsolidated pairs that the user observes as the same.
+`Collection.Equiv` is the smallest equivalence relation closed
+under permutation, same-row diff consolidation, and zero-update
+dropping.
+
+Demonstrators:
+
+* `unionAll_comm_equiv` — `unionAll a b ≈ unionAll b a` via perm.
+* `negate_unionAll_self` — `unionAll (negate s) s ≈ []` via perm +
+  merge + drop_zero. The load-bearing retraction identity that
+  strict `=` cannot witness (`[(r, 1, 0), (r, -1, 0)] ≠ []` under
+  `=`). -/
+
+namespace Collection
+
+variable {n : Nat}
+
+/-- Smallest equivalence on collections closed under permutation,
+same-row diff consolidation, and zero-update dropping. -/
+inductive Equiv {sch : Schema n} :
+    Collection sch → Collection sch → Prop
+  | refl (s : Collection sch) : Equiv s s
+  | symm {a b : Collection sch} : Equiv a b → Equiv b a
+  | trans {a b c : Collection sch} : Equiv a b → Equiv b c → Equiv a c
+  | perm {a b : Collection sch} : a.Perm b → Equiv a b
+  | merge (row : Env sch) (d₁ e₁ d₂ e₂ : Int) (rest : Collection sch) :
+      Equiv
+        (⟨row, d₁, e₁⟩ :: ⟨row, d₂, e₂⟩ :: rest)
+        (⟨row, d₁ + d₂, e₁ + e₂⟩ :: rest)
+  | drop_zero (row : Env sch) (rest : Collection sch) :
+      Equiv (⟨row, 0, 0⟩ :: rest) rest
+
+/-- `unionAll` is commutative under `Collection.Equiv` (perm only). -/
+theorem unionAll_comm_equiv {sch : Schema n} (a b : Collection sch) :
+    Equiv (unionAll a b) (unionAll b a) :=
+  Equiv.perm List.perm_append_comm
+
+/-- `negate s` cancels `s` under `Collection.Equiv`. Pair every
+update with its negation (perm), merge to a zero update, drop. -/
+theorem negate_unionAll_self {sch : Schema n} (s : Collection sch) :
+    Equiv (unionAll (negate s) s) ([] : Collection sch) := by
+  induction s with
+  | nil => exact Equiv.refl []
+  | cons rec rest ih =>
+    rcases rec with ⟨row, d, e⟩
+    show Equiv
+      (⟨row, -d, -e⟩ :: negate rest ++ ⟨row, d, e⟩ :: rest)
+      ([] : Collection sch)
+    have hperm :
+        (⟨row, -d, -e⟩ :: negate rest ++ ⟨row, d, e⟩ :: rest :
+          Collection sch).Perm
+        (⟨row, -d, -e⟩ :: ⟨row, d, e⟩ :: (negate rest ++ rest)) := by
+      show (⟨row, -d, -e⟩ :: (negate rest ++ ⟨row, d, e⟩ :: rest)).Perm
+           (⟨row, -d, -e⟩ :: ⟨row, d, e⟩ :: (negate rest ++ rest))
+      exact List.Perm.cons _ List.perm_middle
+    refine Equiv.trans (Equiv.perm hperm) ?_
+    refine Equiv.trans (Equiv.merge row (-d) (-e) d e (negate rest ++ rest)) ?_
+    have h_d : (-d : Int) + d = 0 := by omega
+    have h_e : (-e : Int) + e = 0 := by omega
+    rw [h_d, h_e]
+    exact Equiv.trans (Equiv.drop_zero row (negate rest ++ rest)) ih
+
+end Collection
+
 end Mz
