@@ -159,7 +159,12 @@ const Editor = forwardRef<FocusableElement, EditorProps>(
     useEffect(() => {
       if (!currentView) return;
       if (autoFocus) {
-        currentView.focus();
+        // Defer focus to the next frame so the editor has been laid out before
+        // drawSelection measures the cursor. Otherwise Firefox leaves the
+        // synthetic caret positioned at 0,0 and invisible until the first
+        // keystroke triggers a re-measure (CNS-73).
+        const id = requestAnimationFrame(() => currentView.focus());
+        return () => cancelAnimationFrame(id);
       }
     }, [currentView, autoFocus]);
 
