@@ -39,23 +39,7 @@ in a subquery.
 <td><blue>Materialize SQL</blue></td>
 <td class="copyableCode">
 
-Use a subquery that uses the [MIN()](/sql/functions/#min) or
-[MAX()](/sql/functions/#max) aggregate function.
-
-<br>
-<div style="background-color: var(--code-block)">
-
-```mzsql
-SELECT tableA.fieldA, tableA.fieldB, minmax.Z
- FROM tableA,
- (SELECT fieldA,
-    MIN(fieldZ),
-    MAX(fieldZ)
- FROM tableA
- GROUP BY fieldA) minmax
-WHERE tableA.fieldA = minmax.fieldA
-ORDER BY fieldA ... ;
-```
+{{% include-from-yaml data="idiomatic_mzsql/patterns_window_functions" name="first-value" field="syntax_idiomatic" %}}
 
 </td>
 </tr>
@@ -64,23 +48,8 @@ ORDER BY fieldA ... ;
 <td><red>Anti-pattern</red> ❌</td>
 <td>
 
-<red>Avoid the use of [`FIRST_VALUE() OVER (PARTITION BY ... ORDER BY ...)`
-window function](/sql/functions/#first_value) for first value within groups
-queries.</red>
+{{% include-from-yaml data="idiomatic_mzsql/patterns_window_functions" name="first-value" field="syntax_anti_pattern" %}}
 
-<br>
-<div style="background-color: var(--code-block)">
-
-```nofmt
--- Anti-pattern. Avoid. --
-SELECT fieldA, fieldB,
- FIRST_VALUE(fieldZ) OVER (PARTITION BY fieldA ORDER BY ...),
- FIRST_VALUE(fieldZ) OVER (PARTITION BY fieldA ORDER BY ... DESC)
-FROM tableA
-ORDER BY fieldA, ...;
-```
-
-</div>
 </td>
 </tr>
 
@@ -139,17 +108,7 @@ value if ordered by ascending price values).
 <td><blue>Materialize SQL</blue> ✅</td>
 <td class="copyableCode">
 
-```mzsql
-SELECT o.order_id, minmax.lowest_price, o.item, o.price,
-  o.price - minmax.lowest_price AS diff_lowest_price
-FROM orders_view o,
-      (SELECT order_id,
-         MIN(price) AS lowest_price
-      FROM orders_view
-      GROUP BY order_id) minmax
-WHERE o.order_id = minmax.order_id
-ORDER BY o.order_id, o.item;
-```
+{{% include-from-yaml data="idiomatic_mzsql/patterns_window_functions" name="first-value" field="extra_example_idiomatic_min" %}}
 
 </td>
 </tr>
@@ -157,27 +116,8 @@ ORDER BY o.order_id, o.item;
 <td><red>Anti-pattern</red> ❌</td>
 <td>
 
-<red>Avoid the use of [`FIRST_VALUE() OVER (PARTITION BY ... ORDER BY ...)`
-window function](/sql/functions/#first_value) for first value within groups queries.</red>
+{{% include-from-yaml data="idiomatic_mzsql/patterns_window_functions" name="first-value" field="extra_example_anti_pattern_min" %}}
 
-<br>
-<div style="background-color: var(--code-block)">
-
-
-```nofmt
--- Anti-pattern --
-SELECT order_id,
-  FIRST_VALUE(price)
-    OVER (PARTITION BY order_id ORDER BY price) AS lowest_price,
-  item,
-  price,
-  price - FIRST_VALUE(price)
-    OVER (PARTITION BY order_id ORDER BY price) AS diff_lowest_price
-FROM orders_view
-ORDER BY order_id, item;
-```
-
-</div>
 </td>
 </tr>
 </tbody>
@@ -203,17 +143,7 @@ value if ordered by descending price values).
 <td><blue>Materialize SQL</blue> ✅</td>
 <td class="copyableCode">
 
-```mzsql
-SELECT o.order_id, minmax.highest_price, o.item, o.price,
-  o.price - minmax.highest_price AS diff_highest_price
-FROM orders_view o,
-      (SELECT order_id,
-         MAX(price) AS highest_price
-      FROM orders_view
-      GROUP BY order_id) minmax
-WHERE o.order_id = minmax.order_id
-ORDER BY o.order_id, o.item;
-```
+{{% include-from-yaml data="idiomatic_mzsql/patterns_window_functions" name="first-value" field="extra_example_idiomatic_max" %}}
 
 </td>
 </tr>
@@ -221,31 +151,10 @@ ORDER BY o.order_id, o.item;
 <td><red>Anti-pattern</red> ❌</td>
 <td>
 
-<red>Avoid the use of [`FIRST_VALUE() OVER (PARTITION BY ... ORDER BY ...)`
-window function](/sql/functions/#first_value) for first value within groups
-queries.</red>
+{{% include-from-yaml data="idiomatic_mzsql/patterns_window_functions" name="first-value" field="extra_example_anti_pattern_max" %}}
 
-<br>
-<div style="background-color: var(--code-block)">
-
-
-```nofmt
--- Anti-pattern --
-SELECT order_id,
-  FIRST_VALUE(price)
-    OVER (PARTITION BY order_id ORDER BY price DESC) AS highest_price,
-  item,
-  price,
-  price - FIRST_VALUE(price)
-    OVER (PARTITION BY order_id ORDER BY price DESC) AS diff_highest_price
-FROM orders_view
-ORDER BY order_id, item;
-```
-
-</div>
 </td>
 </tr>
-
 </tbody>
 </table>
 
@@ -257,7 +166,7 @@ in the order and these prices. The example uses a subquery that groups by the
 `order_id` and selects `MIN(price)` as the lowest price (i.e., first
 value if ordered by price values) and `MAX(price)` as the
 highest price (i.e., first
-value if ordered by descending price values)
+value if ordered by descending price values).
 
 <table>
 <thead>
@@ -271,20 +180,7 @@ value if ordered by descending price values)
 <td><blue>Materialize SQL</blue> ✅</td>
 <td class="copyableCode">
 
-
-```mzsql
-SELECT o.order_id, minmax.lowest_price, minmax.highest_price, o.item, o.price,
-  o.price - minmax.lowest_price AS diff_lowest_price,
-  o.price - minmax.highest_price AS diff_highest_price
-FROM orders_view o,
-      (SELECT order_id,
-         MIN(price) AS lowest_price,
-         MAX(price) AS highest_price
-      FROM orders_view
-      GROUP BY order_id) minmax
-WHERE o.order_id = minmax.order_id
-ORDER BY o.order_id, o.item;
-```
+{{% include-from-yaml data="idiomatic_mzsql/patterns_window_functions" name="first-value" field="example_idiomatic" %}}
 
 </td>
 </tr>
@@ -292,31 +188,8 @@ ORDER BY o.order_id, o.item;
 <td><red>Anti-pattern</red> ❌</td>
 <td>
 
-<red>Avoid the use of [`FIRST_VALUE() OVER (PARTITION BY ... ORDER BY ...)`
-window function](/sql/functions/#first_value) for first value within groups
-queries.</red>
+{{% include-from-yaml data="idiomatic_mzsql/patterns_window_functions" name="first-value" field="example_anti_pattern" %}}
 
-<br>
-<div style="background-color: var(--code-block)">
-
-
-```nofmt
--- Anti-pattern --
-SELECT order_id,
-  FIRST_VALUE(price)
-    OVER (PARTITION BY order_id ORDER BY price) AS lowest_price,
-  FIRST_VALUE(price)
-    OVER (PARTITION BY order_id ORDER BY price DESC) AS highest_price,
-  item,
-  price,
-  price - FIRST_VALUE(price)
-    OVER (PARTITION BY order_id ORDER BY price) AS diff_lowest_price,
-  price - FIRST_VALUE(price)
-    OVER (PARTITION BY order_id ORDER BY price DESC) AS diff_highest_price
-FROM orders_view
-ORDER BY order_id, item;
-```
-</div>
 </td>
 </tr>
 </tbody>
