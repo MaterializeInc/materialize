@@ -408,24 +408,23 @@ Soundness recovery under `NoRowErr l ∧ NoRowErr r`. The
 counterexample above exploits the bilinear err-diff rule's mixed
 terms `d_L · e_R` and `e_L · d_R`; under both sides being
 `NoRowErr`, every cross-multiplied err-diff term vanishes
-pre-cross, so the pre- and post-cross filter should agree on the
-data. The proof requires a substitution-aware predicate lift
+pre-cross, so the pre- and post-cross filter agree on data.
+The proof requires a substitution-aware predicate lift
 (`p_comb (recL ++ recR) ≃ p_left recL`) plus pointwise inversion
 of `filterOne` under each `eval` case.
 
-The mechanization tripped on iota reduction of `filterOne`'s match
-auxiliary after `unfold filterOne; rw [hLR]; cases hev :` — the
-match scrutinizing `Datum.err e✝` (post-cases substitution)
-remained unreduced even after `generalize` + `clear`. Worked
-around with explicit per-case rewrite lemmas in
-`hFilterLHS` / `hFilterRHS` but those triggered the same blocked
-iota at the call-site `show Update.mk _ _ _ = Update.mk _ _ _`.
-The blockage is presumably the match-auxiliary `filterOne.match_1`
-not being marked `@[reducible]`; resolving requires either marking
-or `simp only [filterOne]` with the auto-generated `eq_*` lemmas.
+The mechanization is blocked on iota reduction of `filterOne`'s
+match auxiliary. After `cases hev : eval recL.row p_left`, the
+matches in the goal don't reduce — `unfold filterOne`,
+`simp [filterOne]`, `change`, per-case rewrite lemmas, and
+`generalize` + `clear` all fail. The blockage is at the
+elaboration of `filterOne.match_1`; resolving requires either
+marking it reducible, routing via the auto-generated equation
+lemmas, or rewriting `filterOne` to dispatch via `Datum.casesOn`
+explicitly. Left as follow-up.
 
-Left as open; the counterexample (`filter_cross_pushdown_left_unsound`)
-remains the load-bearing demonstration. -/
+The counterexample (`filter_cross_pushdown_left_unsound`) remains
+the load-bearing demonstration of the un-recovered direction. -/
 
 /-! ## Row refinement
 
