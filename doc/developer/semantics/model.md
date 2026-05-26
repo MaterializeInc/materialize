@@ -242,9 +242,20 @@ on `.lit`, `.col`, and `.not` (preserves both bits). Tight
 `.lt`, and `.ifThen` (OR over three arms). `.divide` is always
 errable. Variadic `.andN` / `.orN` / `.coalesce` remain
 conservative (mutual-recursion lifts are open follow-ups).
-Soundness theorem `eval_satisfies_outputCols` is open — most
-constructor cases are mechanical but not yet ported from the
-untyped predecessor (round-4 review regression).
+Soundness theorem `eval_satisfies_outputCols` is mechanized in
+`Mz/OutputType.lean` via structural recursion + `evalX_not_err`
+lemmas from `MightError`.
+
+`EnvErrFree_of_RowSatisfies` (in `Mz/OutputType.lean`) bridges
+`Schema.cellErrFree` + `RowSatisfies sch env` to `EnvErrFree env`
+— the substrate that `NoRowErr_filter` consumes.
+
+`coalesce_collapse` (in `Mz/OutputType.lean`) is the
+schema-rider: if the head argument of `.coalesce` has
+`outputCols` with both `nullable := false` and `errable := false`,
+then on a `RowSatisfies` env the coalesce collapses to the head.
+Supporting Datum-level lemma `evalCoalesce_cons_concrete` in
+`Mz/Coalesce.lean`.
 
 NoRowErr propagation through schema-preserving / -transforming
 operators (mechanized in `Mz/Collection.lean`):
@@ -253,11 +264,13 @@ operators (mechanized in `Mz/Collection.lean`):
 * `NoRowErr_unionAll` — conjunctive over the input collections.
 * `NoRowErr_project` — schema-transforming; `projectOne` leaves
   `err_diff` untouched.
-
-`NoRowErr_filter` and `NoRowErr_cross` are open — they need
-`filter` / `cross` machinery that depends on
-`Schema.types`-level append lemmas. Round-4 regression; tracked
-in `transforms.md`.
+* `NoRowErr_cross` — bilinear err-diff vanishes when both sides'
+  `err_diff = 0`; `ring` closes.
+* `NoRowErr_filter` — directly takes `∀ rec ∈ s, ¬(eval rec.row
+  p).IsErr`. Companion `NoRowErr_filter_of_might_error_false`
+  discharges that premise via `Expr.might_error p = false` plus
+  per-row `EnvErrFree` (discharged in turn by
+  `EnvErrFree_of_RowSatisfies`).
 
 Open obligations on the schema side are listed in
 `transforms.md` (sections *Schema-driven rewrites* and
@@ -304,9 +317,14 @@ Operators are typed by their input / output schemas:
   e*e')`. Row composition uses
   `Schema.types_get_append_left` / `_right` helper lemmas to
   cast between `(sch_l.append sch_r).types.get i` and
-  `sch_l.types.get ⟨i.val, h⟩` (or right-side analog). `cross_assoc`
-  is open — needs `n + m + k = n + (m + k)` arity-cast plumbing
-  through `Schema.append`.
+  `sch_l.types.get ⟨i.val, h⟩` (or right-side analog).
+  `cross_assoc` is partially mechanized: arity-cast scaffolding
+  landed (`Schema.append_assoc_heq`, `Update.cast`,
+  `Collection.cast`, `cast_rfl`) plus the multiplicity components
+  (`crossOne_diff_eq`, `crossOne_err_diff_eq` via `ring`). Row
+  component requires Fin-index manipulation under three nested
+  `▸` casts (`Schema.types_get_append_left` / `_right` at two
+  nesting levels) — open.
 
 Time, consolidation, distinct, and aggregate are out of scope at
 this layer. Lifting to a timed collection is additive on top.
@@ -736,13 +754,13 @@ Relations and analyses a planner can cite today.
 | `Datum k` (indexed)        | `Mz/Datum.lean`              | type discipline structural | overflow / decode / division-by-zero only |
 | `Expr sch k` (GADT)        | `Mz/Expr.lean` + `Mz/Eval.lean` | `=` on closed exprs (unbounded `Int`); WellTyped subsumed by GADT | bounded-int counter at `Mz/EquivBounded.lean` |
 | `Env sch`                  | `Mz/Eval.lean`               | typed lookup, no OOB case  | —                                         |
-| `Collection sch` (two-diff)| `Mz/Collection.lean`         | `=` on data side (`filter` / `project` / `cross` / `negate` / `unionAll`); pushdown counterexample (`filter_cross_pushdown_left_unsound`) | `cross_assoc` arity cast; pushdown recovery windows (strict / data / refines) |
+| `Collection sch` (two-diff)| `Mz/Collection.lean`         | `=` on data side (`filter` / `project` / `cross` / `negate` / `unionAll`); pushdown counterexample (`filter_cross_pushdown_left_unsound`); arity-cast scaffolding (`Update.cast`, `Collection.cast`, `crossOne_diff_eq` / `_err_diff_eq`) | `cross_assoc` row-component (Fin-index manipulation); pushdown recovery windows (strict / data / refines) |
 | `eqErrSet`                 | `Mz/Equiv.lean`              | err / err commutativity (`evalAnd_err_err_eqErrSet_comm`) | bounded-int assoc, pushdown over cross |
 | `refines` (`Datum`)        | `Mz/Equiv.lean`              | compositionality (`refines_cong_binary`, per-op corollaries) | rewrites that add err |
 | `refines` (`Row` / `Update` / `Collection`) | `Mz/Collection.lean` | Smyth-style lift + refl / trans | pushdown lift open (depends on `cross`) |
 | `Collection.Equiv`         | `Mz/Collection.lean`         | `unionAll` commutativity; `negate s ++ s ≈ []` retraction | most `=`-tagged rewrites not yet migrated |
-| `NoRowErr` precondition    | `Mz/Collection.lean`         | discharged by `negate` / `unionAll` / `project` / `cross` propagation | `filter` propagation open (needs `RowSatisfies → EnvErrFree` bridge) |
-| `Expr.outputCols`          | `Mz/OutputType.lean`         | per-`Expr` `ColSchema` derivation + `eval_satisfies_outputCols` soundness | precision direction (variadic / `.divide` static-safe-divisor) open |
+| `NoRowErr` precondition    | `Mz/Collection.lean`         | discharged by `negate` / `unionAll` / `project` / `cross` / `filter` propagation; `EnvErrFree_of_RowSatisfies` bridge in `Mz/OutputType.lean` | — |
+| `Expr.outputCols`          | `Mz/OutputType.lean`         | per-`Expr` `ColSchema` derivation + `eval_satisfies_outputCols` soundness; `coalesce_collapse` schema-rider | precision direction (variadic / `.divide` static-safe-divisor) open |
 | `might_error` + soundness  | `Mz/MightError.lean`         | `might_error_sound` + `evalCoalesce_not_err_of_some_safe` + variadic safety | — |
 
 ### Sketches and history

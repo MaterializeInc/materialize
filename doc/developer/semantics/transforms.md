@@ -56,8 +56,8 @@ with the empty collection.
 | --- | --- | --- |
 | `unionAll_assoc` | `(a ⊎ b) ⊎ c = a ⊎ (b ⊎ c)` | `=` |
 | `unionAll_comm_equiv` | `unionAll a b ≈ unionAll b a` | `Collection.Equiv` (perm only); fails at `=` |
-| `cross_assoc` | `cross (cross a b) c = castCollection h (cross a (cross b c))` | `=` modulo arity cast `n+m+k = n+(m+k)` |
-| `crossOne_assoc` | update-level cross associativity, same cast | `=` |
+| `cross_assoc` | `cross (cross a b) c = castCollection h (cross a (cross b c))` | partial — arity-cast scaffolding (`Schema.append_assoc_heq`, `Update.cast`, `Collection.cast`, `cast_rfl`) + multiplicity components (`crossOne_diff_eq`, `crossOne_err_diff_eq`) mechanized; row component open |
+| `crossOne_assoc` | update-level cross associativity, same cast | partial — `crossOne_diff_eq` and `crossOne_err_diff_eq` close `diff` / `err_diff` fields; row component open |
 | `negate_unionAll_self` | `unionAll (negate s) s ≈ []` | `Collection.Equiv` (perm + merge + drop_zero); fails at `=` (no consolidation) |
 
 ## Involution / idempotence
@@ -135,14 +135,16 @@ uses `Fin n` and `Subst` is schema-transforming.
 ## Eval-on-append substrates
 
 Pre-GADT, these were lemmas about untyped `Env` (list) append. In
-the indexed model, the analogue is `Env.append` over schema-typed
-lookups, with `Schema.append`-level type casts. Not yet
-mechanized; tracked with `cross`.
+the indexed model, the analogue is the type-level
+`Schema.types_get_append_left` / `_right` (in `Mz/Collection.lean`)
+showing the appended schema's per-column type agrees with the
+left or right schema at the appropriate index. These cast the
+`Datum` kinds in `crossOne`'s row composition.
 
-| Lemma (open) | Statement | Used by |
+| Lemma | Statement | Used by |
 | --- | --- | --- |
-| `Env.append_left` (open) | accessing index `i < n` of an appended env returns the left cell | `cross`'s row composition |
-| `Env.append_right` (open) | accessing index `n ≤ i < n + m` returns the right cell at `i - n` | `cross`'s row composition |
+| `Schema.types_get_append_left` | `i.val < n` ⇒ `(append a b).types.get i = a.types.get ⟨i.val, h⟩` | `crossOne`'s row composition |
+| `Schema.types_get_append_right` | `¬(i.val < n)` ⇒ `(append a b).types.get i = b.types.get ⟨i.val - n, _⟩` | `crossOne`'s row composition |
 
 ## Negate and cross bilinearity
 
@@ -162,8 +164,8 @@ Each entry assumes the input collection satisfies a `Schema n` (see
 
 | Transform | Statement | Schema premise |
 | --- | --- | --- |
-| `coalesce_collapse` (open) | `coalesce(a, b) = a` when `a` evaluates concrete | open; untyped predecessor mechanized via `eval_coalesce_pair_of_a_concrete`. Indexed re-port pending |
-| `NoRowErr_filter` (open) | `filter p` preserves `NoRowErr s` when `p.might_error = false` over `s` | open; needs `RowSatisfies → EnvErrFree` bridge |
+| `coalesce_collapse` | `coalesce(a, args...) = a` when `a` has `outputCols.nullable = false ∧ outputCols.errable = false` | mechanized in `Mz/OutputType.lean`; supporting Datum lemma `evalCoalesce_cons_concrete` in `Mz/Coalesce.lean` |
+| `NoRowErr_filter` | `filter p` preserves `NoRowErr s` when predicate is per-row err-free | mechanized in `Mz/Collection.lean` (`NoRowErr_filter` direct + `NoRowErr_filter_of_might_error_false` corollary); `RowSatisfies → EnvErrFree` bridge as `EnvErrFree_of_RowSatisfies` in `Mz/OutputType.lean` |
 | `NoRowErr_cross` | `cross l r` preserves `NoRowErr l ∧ NoRowErr r` | mechanized (`ring` closes the bilinear err-diff at zero inputs) |
 | `NoRowErr_project` | `project es s` preserves `NoRowErr s` | mechanized (unconditional) |
 | `NoRowErr_unionAll` | `unionAll a b` preserves `NoRowErr a ∧ NoRowErr b` | mechanized (conjunctive) |
@@ -171,7 +173,7 @@ Each entry assumes the input collection satisfies a `Schema n` (see
 | `is_null_fold` (open) | `is_null(a) = false` when `a`'s column is non-nullable | `a`'s `outputCols.nullable = false` |
 | `non_null_join_key` (open) | join key need not check NULL | both sides' key columns are non-nullable |
 | `schema_filter` (open) | `filter p s` output schema preserves `s.cols`, sets `rowErrFree` from `p`'s err-freedom | `p.might_error = false` over `s` |
-| `schema_project` (open) | `project es s` output schema lifts `Expr.outputType` over the projection vector | unconditional |
+| `schema_project` (open) | `project es s` output schema lifts `Expr.outputCols` over the projection vector | unconditional |
 | `schema_cross` (open) | `cross l r` output schema is `Schema.append l_sch r_sch` | unconditional |
 | `cellErrFree_propagation` (open) | `cellErrFree` of output of `filter` / `project` / `cross` from `cellErrFree` inputs, modulo per-cell err analysis on projection expressions | per-operator |
 
@@ -213,11 +215,11 @@ Open output-schema obligations:
 * Cell-error-free row schema: an analogue of `NoRowErr` for the
   per-cell `Datum.IsErr` condition. Distinct from `NoRowErr`
   (row-level err multiplicity).
-* Precision direction on `Expr.outputType` per non-foundational
-  constructor — `eval_not_satisfies_precise` in `Mz/WellTyped.lean`
-  is the demonstration; arithmetic / comparison constructors
-  follow the same pattern (each needs its own per-case proof under
-  `WellTyped`).
+* Precision direction on `Expr.outputCols` per non-foundational
+  constructor — arithmetic / comparison constructors follow the
+  `evalX_not_err` pattern (each needs its own per-case proof).
+  GADT discipline subsumes the `WellTyped` precondition the
+  untyped predecessor required.
 
 ## Constructor-level laws
 
@@ -231,8 +233,10 @@ laws that downstream collection rewrites depend on.
 * `evalPlus` associativity over unbounded `Int`; failure of
   associativity at the bounded-int boundary
   (`Mz/EquivBounded.lean`).
-* Substitution laws on `colShift` and `colReferencesBoundedBy`
-  (`Mz/ColRefs.lean`).
+* Substitution at the `Subst` layer (`Mz/Subst.lean`):
+  schema-transforming substitution. Column-shift / bounded-by
+  analyses of the untyped predecessor are subsumed by the GADT
+  (`.col i` uses `Fin n`, OOB is unconstructible).
 
 ## Scalar rewrites driving operator simplification
 
@@ -283,22 +287,25 @@ existing `Mz/Eval.lean` evaluator unless noted.
 | --- | --- | --- |
 | `coalesce_all_null` | `coalesce(null, ..., null) = null` | mechanized (`Mz/Coalesce.lean` `coalesce_nil` + variadic walk in `PrimEval.lean`) |
 | `coalesce_drop_null` | drop `.null` operands; preserve order | open |
-| `coalesce_truncate_after_concrete` | truncate after first operand known non-null non-err | mechanized at the head (`Mz/Schema.lean` `evalCoalesce_cons_of_concrete`); generalization across an arbitrary prefix is open |
+| `coalesce_truncate_after_concrete` | truncate after first operand known non-null non-err | mechanized at the head (`Mz/Coalesce.lean` `evalCoalesce_cons_concrete`); generalization across an arbitrary prefix is open |
 | `coalesce_dedup` | dedup adjacent duplicate operands | open |
 | `coalesce_singleton` | `coalesce(a) = a` | mechanized (`Mz/Coalesce.lean` `coalesce_singleton_*`) |
 
 ### Schema-aware scalar folds
 
-Many of these require `Expr.WellTyped sch e` as a precondition —
-without it, the four-valued evaluator routes type-mismatched
-operands to `.null`, and the schema-driven `nullable := false`
-conclusion can't be drawn.
+Under the GADT, type discipline is structural and the
+`WellTyped` precondition the untyped predecessor required is
+subsumed. The four-valued evaluator no longer routes
+type-mismatched operands through a catch-all (`evalAnd` /
+`evalOr` / `evalNot` have closed codomains by construction), so
+the precision-direction tightening is now stateable directly on
+`Expr.outputCols` without a separate well-typing premise.
 
 | Rewrite | Statement | Status |
 | --- | --- | --- |
-| `is_null_non_nullable` | `IsNull e = .bool false` when `Expr.outputType e .nullable = false` | open (would ride on `Mz/OutputType.lean` once `IsNull` is added to `Expr`; `IsNull` is currently not modeled) |
-| `is_null_decompose` | `IsNull(f a b) = IsNull a ∨ IsNull b` when `f` is null-propagating | open; needs `WellTyped` to rule out type-mismatch routing |
-| `outputType_precision` (open) | under `WellTyped sch e`, arithmetic / comparison `outputType` tightens `nullable := OR-of-inputs.nullable` (no spurious `.null` from type-mismatch) | open; `WellTyped` predicate landed in `Mz/WellTyped.lean`, precision direction rides on it |
+| `is_null_non_nullable` | `IsNull e = .bool false` when `Expr.outputCols e .nullable = false` | open (would ride on `Mz/OutputType.lean` once `IsNull` is added to `Expr`; `IsNull` is currently not modeled) |
+| `is_null_decompose` | `IsNull(f a b) = IsNull a ∨ IsNull b` when `f` is null-propagating | open |
+| `outputCols_precision` (open) | arithmetic / comparison `outputCols` tightens `nullable := OR-of-inputs.nullable` | open; structural recursion under the GADT |
 
 ### Out of scope at the scalar layer
 
