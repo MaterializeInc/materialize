@@ -158,6 +158,42 @@ NUM_THREADS = int(os.environ.get("PW_THREADS", "4"))
 # feature (more independent reproductions per failure).
 CLUSTERD_POOL_SIZE = int(os.environ.get("CLUSTERD_POOL_SIZE", "2"))
 
+# Cross-invocation slot-claim ledger.  Each invocation writes the slot
+# index it picked to this file (one decimal int per line) so the
+# `full multi-replica pool claim` assertion can detect when the union
+# of claims across a timeline covers every slot in the pool.  The
+# workload container's local FS is private per timeline, so the file
+# is the right granularity — Antithesis's deterministic-hypervisor
+# snapshots include it.
+_POOL_CLAIM_LEDGER = "/tmp/antithesis-pool-claims.txt"
+
+
+def _record_pool_claim(slot: int) -> set[int]:
+    """Append `slot` to the cross-invocation claim ledger and return the
+    set of all slots claimed so far in this timeline.
+
+    Best-effort: the ledger is advisory (drives a Sometimes-shape
+    coverage check), not a correctness invariant.  Any IOError is
+    logged and treated as "nothing prior on disk" — the current claim
+    still counts.
+    """
+    seen = {slot}
+    try:
+        with open(_POOL_CLAIM_LEDGER, "a+", encoding="utf-8") as f:
+            f.write(f"{slot}\n")
+            f.flush()
+            f.seek(0)
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        seen.add(int(line))
+                    except ValueError:
+                        pass
+    except OSError as exc:
+        LOG.debug("pool-claim ledger write failed: %s", exc)
+    return seen
+
 
 def _alter_system(cur: psycopg.Cursor[Any], stmt: str) -> None:
     try:
@@ -651,6 +687,31 @@ def main() -> int:
         pool_slot,
         cluster_name,
     )
+
+    # Coverage anchors for pool-slot claim.  Without these the test/antithesis
+    # pool-cluster topology is untestable as a property: the original
+    # `parallel workload: clusterd pool slots claimed` /
+    # `parallel workload: full multi-replica pool claim` history entries
+    # were registered but never wired to a `sometimes(...)` site, so they
+    # showed up as 8× / 6× unfound across the May 25 batch.  The first
+    # fires every invocation (always reaches this code path); the second
+    # fires once a single timeline has touched every slot index — a
+    # genuine coverage milestone for the pool topology.
+    claimed_slots = _record_pool_claim(pool_slot)
+    sometimes(
+        True,
+        "parallel workload: clusterd pool slots claimed",
+        {"pool_slot": pool_slot, "pool_size": CLUSTERD_POOL_SIZE},
+    )
+    sometimes(
+        len(claimed_slots) >= CLUSTERD_POOL_SIZE,
+        "parallel workload: full multi-replica pool claim",
+        {
+            "pool_size": CLUSTERD_POOL_SIZE,
+            "slots_claimed": sorted(claimed_slots),
+        },
+    )
+
     return _run_invocation(seed, rng, cluster_name)
 
 
